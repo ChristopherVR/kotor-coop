@@ -1239,13 +1239,39 @@ internal static unsafe class Odyssey
     private static readonly delegate* unmanaged[Thiscall]<nint, int, ExoString*, int, void> LocStringAddStringFn =
         (delegate* unmanaged[Thiscall]<nint, int, ExoString*, int, void>)0x005EA340;
 
+    /// <summary>CSWSCreature + this = client twin CSWCObject*, 0 until the twin is made.</summary>
+    private const int CreClientTwin = 0x224;
+
+    /// <summary>True once the engine has created this creature's render-side twin, which is
+    /// what carries the name to the selection band.</summary>
+    public static bool HasClientTwin(nint creature) =>
+        creature != 0 && *(nint*)(creature + CreClientTwin) != 0;
+
+    /// <summary>The CSWCCreature vtable — the guard that a twin is really a creature twin
+    /// before its GetName-side name fields are written.</summary>
+    private const nint ClientCreatureVtable = 0x0074F5F8;
+
+    // CSWCCreature::SetName(CExoString* first, CExoString* last). This is what the
+    // selection band actually renders (via GetName, vtable +0x70). Both strings are copied
+    // with the engine allocator, so stack locals are fine; the last name must be a non-null
+    // empty string, not a null pointer.
+    private static readonly delegate* unmanaged[Thiscall]<nint, ExoString*, ExoString*, void> ClientSetNameFn =
+        (delegate* unmanaged[Thiscall]<nint, ExoString*, ExoString*, void>)0x0060D600;
+
     /// <summary>
-    /// Sets a creature's first name — what the selection band above its head shows. A
-    /// spawned phantom otherwise has no name at all and the band stays blank (the
-    /// commoner blueprint defines none), which reads as "nothing there" during play.
+    /// Sets a creature's first name — the selection band above its head — on BOTH the
+    /// server locstring and the client twin.
     ///
-    /// MAIN THREAD ONLY. Call before the client twin exists (right after spawn) so every
-    /// copy the engine makes carries the name from the start.
+    /// The twin write is the load-bearing half, and it is why the earlier "AddString ran
+    /// but nothing showed" was a mystery: the band renders from a plain CExoString cached
+    /// on the client twin, and the engine's per-frame appearance diff has no "name changed"
+    /// bit — a name reaches the twin exactly once, in the object's first update. Writing
+    /// only the server locstring after that update never reaches the band. The server half
+    /// still matters (saves, feedback text, GetFullName, the combat log read it), so both
+    /// are written.
+    ///
+    /// Idempotent — re-assert it after a module transition (the twin is recreated) and
+    /// whenever the twin first appears. MAIN THREAD ONLY.
     /// </summary>
     public static bool SetCreatureFirstName(nint creature, byte* nameAscii, int length)
     {
@@ -1260,13 +1286,26 @@ internal static unsafe class Odyssey
             return false;
         }
 
-        nint locString = stats + StatsFirstName;
-        ClearLocStringFn(locString);
-
         // Length is capacity (strlen + 1), matching what the engine's own CExoString
         // constructor from char* stores. nameAscii must be null-terminated.
         ExoString text = new() { CString = (nint)nameAscii, Length = (uint)(length + 1) };
+
+        // Server half: the localized string GetFullName and the save writer read.
+        nint locString = stats + StatsFirstName;
+        ClearLocStringFn(locString);
         LocStringAddStringFn(locString, 0, &text, 0);
+
+        // Client half: the plain string the band renders. Skipped safely until the twin
+        // exists — the first GameObjUpdate then carries the name from the server locstring
+        // just written.
+        nint twin = *(nint*)(creature + CreClientTwin);
+        if (twin != 0 && *(nint*)twin == ClientCreatureVtable)
+        {
+            byte emptyByte = 0;
+            ExoString empty = new() { CString = (nint)(&emptyByte), Length = 1 };
+            ClientSetNameFn(twin, &text, &empty);
+        }
+
         return true;
     }
 

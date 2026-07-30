@@ -82,6 +82,11 @@ internal sealed unsafe class PhantomController(SharedBlockView block)
     /// <summary>FNV hash of the resref last equipped per (phantom, equip slot); 0 = none.</summary>
     private readonly uint[,] _appliedEquip = new uint[SharedBlock.SlotCapacity, SharedBlock.EquipCount];
 
+    /// <summary>True once the phantom's name has been written to its CLIENT TWIN, which is
+    /// what the selection band renders. Spawn writes the server locstring, but the twin
+    /// does not exist yet then, so the name is re-asserted once the twin appears.</summary>
+    private readonly bool[] _twinNamed = new bool[SharedBlock.SlotCapacity];
+
     private int _phantomCount;
     private double _lastStep;
     private int _spawnCooldownFrames;
@@ -107,6 +112,8 @@ internal sealed unsafe class PhantomController(SharedBlockView block)
             _repathCooldown[i] = 0;
             _down[i] = false;
             _peerInCombat[i] = false;
+
+            _twinNamed[i] = false;
 
             for (int j = 0; j < SharedBlock.EquipCount; j++)
             {
@@ -221,6 +228,7 @@ internal sealed unsafe class PhantomController(SharedBlockView block)
 
             ApplyAppearance(phantom, remote.Appearance);
             ApplyEquipment(i);
+            ApplyName(i, phantom);
 
             // The peer left combat: release every local creature still locked onto their
             // phantom. The phantom is min-1-hp, so it never reads dead and an attacker
@@ -391,6 +399,42 @@ internal sealed unsafe class PhantomController(SharedBlockView block)
             }
 
             return;
+        }
+    }
+
+    /// <summary>
+    /// Re-asserts the phantom's name until it has reached the CLIENT TWIN, which is what
+    /// the selection band renders. The name is set at spawn on the server locstring, but
+    /// the twin does not exist yet then and the engine only carries a name to the twin on
+    /// its first update — so this catches the moment the twin appears (and after a module
+    /// transition recreates it). Once written, it latches and costs one pointer read a step.
+    /// </summary>
+    private void ApplyName(int slot, nint phantom)
+    {
+        if (_twinNamed[slot])
+        {
+            return;
+        }
+
+        byte* name = block.GetRemoteName(slot);
+        int length = 0;
+        while (length < SharedBlock.NameLength - 1 && name[length] != 0)
+        {
+            length++;
+        }
+
+        if (length == 0)
+        {
+            return;
+        }
+
+        // SetCreatureFirstName writes the twin when it exists; treat the name as done only
+        // once the twin is actually present, so a pre-twin call does not latch prematurely.
+        Odyssey.SetCreatureFirstName(phantom, name, length);
+
+        if (Odyssey.HasClientTwin(phantom))
+        {
+            _twinNamed[slot] = true;
         }
     }
 
