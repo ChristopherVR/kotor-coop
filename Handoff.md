@@ -124,6 +124,28 @@ of that.
     in the end). Root cause not identified; a human clicking the menu always works. This
     unreliability is the operational argument for the in-process load above.
 
+### 0.3 Fourth addendum, remote session (same evening, ~21:10): verification attempt, yielded
+
+The remote session attempted the live two-instance pass of everything built and stopped
+after colliding with this session's own live work. State worth having:
+
+- **The v7 plugin (with menu-load) is installed in BOTH game directories** as of 21:01.
+- **The LoadPCAutoSave replay crashes the game**: three swkotor.exe Application-log
+  crashes 20:58–21:01 (both sessions' tests), plugin log ending at
+  `menu: panel added, calling LoadPCAutoSave` every time. `agent load --load-via-menu`
+  now forces the old click route as an escape hatch until the replay is fixed.
+- **The two sessions were killing each other's processes.** The remote session's
+  instance (pid 23864, 21:03) died about when this session launched pid 26408 (21:05);
+  earlier the remote session killed this session's demo agents as "strays" (trap 12).
+  Until single-session ownership is possible, check process ancestry and recent
+  StartTimes before killing anything named swkotor or KotorCoop.Agent.
+- **Nothing from the v7 tranche has had its live pass yet**: travel-follow, name
+  plates, death poses, journal merge, client damage floors, shared pause. The plan is
+  scripted and cheap once two instances are up: `tools/blockpoke.ps1` fires travel and
+  journal requests straight into a block, `sethp.ps1` stages damage/death,
+  `sendkey.ps1` a real space-bar pause; the expected log lines are in each
+  controller's LogFew strings.
+
 ### 0.2 Third addendum, remote session, second tranche (same evening, ~20:45)
 
 ⚠ **Shared-block collision warning for the load-path plan above:** the "spare space at
