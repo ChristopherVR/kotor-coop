@@ -2,7 +2,7 @@ namespace KotorCoop.Plugin;
 
 /// <summary>One remote peer as published by the external agent.</summary>
 internal readonly record struct RemoteView(
-    bool Active, uint PeerId, Vec3 Position, float Facing, uint Animation, uint Appearance);
+    bool Active, uint PeerId, Vec3 Position, float Facing, int Health, uint Animation, uint Appearance);
 
 /// <summary>One enemy's authoritative state, as published by the owning peer.</summary>
 internal readonly record struct EnemyView(uint ObjectId, ushort CurrentHealth, ushort MaxHealth, bool Dead);
@@ -135,9 +135,14 @@ internal sealed unsafe class SharedBlockView(byte* baseAddress)
                 Z = *(float*)(slot + 0x10),
             },
             *(float*)(slot + 0x14),
+            *(int*)(slot + 0x18),
             *(uint*)(slot + 0x1C),
             *(uint*)(slot + 0x38));
     }
+
+    /// <summary>Pointer to a peer's null-terminated ascii name (24 bytes).</summary>
+    public byte* GetRemoteName(int index) =>
+        baseAddress + SharedBlock.SlotsOffset + (index * SharedBlock.SlotStride) + 0x20;
 
     // ---- ground items -----------------------------------------------------------
 

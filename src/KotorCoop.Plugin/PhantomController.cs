@@ -396,6 +396,21 @@ internal sealed unsafe class PhantomController(SharedBlockView block)
             ApplyAppearance(creature, owner.Appearance);
         }
 
+        // Name it after its player, same reasoning: set before the twin exists so every
+        // copy the engine makes carries it. Without a first name the selection band above
+        // the phantom is blank (trap 16) and clicking a teammate shows nothing.
+        byte* name = block.GetRemoteName(_phantomCount);
+        int nameLength = 0;
+        while (nameLength < SharedBlock.NameLength - 1 && name[nameLength] != 0)
+        {
+            nameLength++;
+        }
+
+        if (nameLength > 0)
+        {
+            Odyssey.SetCreatureFirstName(creature, name, nameLength);
+        }
+
         _phantoms[_phantomCount] = creature;
         _phantomIds[_phantomCount] = objectId;
         _phantomCount++;

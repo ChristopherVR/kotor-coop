@@ -991,6 +991,54 @@ internal static unsafe class Odyssey
         return area != 0 && *(byte*)(area + AreaTransPending) != 0;
     }
 
+    // ---- creature naming ---------------------------------------------------------
+
+    /// <summary>CSWSCreatureStats + this = first_name, a CExoLocString (symbol database).
+    /// CSWSCreature::GetFirstName (0x004F8310) returns exactly this address.</summary>
+    private const int StatsFirstName = 0x34;
+
+    // CExoLocString::ClearLocString: empties the localized string in place.
+    private static readonly delegate* unmanaged[Thiscall]<nint, void> ClearLocStringFn =
+        (delegate* unmanaged[Thiscall]<nint, void>)0x005E9EA0;
+
+    // CExoLocString::AddString(int nID, CExoString* text, int gender). Verified against
+    // the engine's own rename flow at 0x00521B4C, which calls AddString(0, &str, 0) on a
+    // fresh CExoLocString and assigns it onto stats+0x34; operating on the field in place
+    // skips the temp. The text is copied by the engine, so a stack-local source is fine.
+    private static readonly delegate* unmanaged[Thiscall]<nint, int, ExoString*, int, void> LocStringAddStringFn =
+        (delegate* unmanaged[Thiscall]<nint, int, ExoString*, int, void>)0x005EA340;
+
+    /// <summary>
+    /// Sets a creature's first name — what the selection band above its head shows. A
+    /// spawned phantom otherwise has no name at all and the band stays blank (the
+    /// commoner blueprint defines none), which reads as "nothing there" during play.
+    ///
+    /// MAIN THREAD ONLY. Call before the client twin exists (right after spawn) so every
+    /// copy the engine makes carries the name from the start.
+    /// </summary>
+    public static bool SetCreatureFirstName(nint creature, byte* nameAscii, int length)
+    {
+        if (creature == 0 || length <= 0)
+        {
+            return false;
+        }
+
+        nint stats = Deref(creature + CreStats);
+        if (stats == 0)
+        {
+            return false;
+        }
+
+        nint locString = stats + StatsFirstName;
+        ClearLocStringFn(locString);
+
+        // Length is capacity (strlen + 1), matching what the engine's own CExoString
+        // constructor from char* stores. nameAscii must be null-terminated.
+        ExoString text = new() { CString = (nint)nameAscii, Length = (uint)(length + 1) };
+        LocStringAddStringFn(locString, 0, &text, 0);
+        return true;
+    }
+
     // ---- module travel -----------------------------------------------------------
 
     // CServerExoApp::SetMoveToModuleString(CExoString*): assigns the destination module

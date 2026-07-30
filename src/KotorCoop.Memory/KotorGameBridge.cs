@@ -82,6 +82,7 @@ public sealed class KotorGameBridge : IGameBridge
     private const int BlockSlots = 0x50;
     private const int BlockSlotStride = 0x40;
     private const int BlockSlotCapacity = 8;
+    private const int BlockSlotNameLength = 24;
     private const int BlockFrameCounter = 0x250;
     private const int BlockCommand = 0x254;
     private const int BlockPlayerCreature = 0x258;
@@ -487,6 +488,11 @@ public sealed class KotorGameBridge : IGameBridge
             // to make the phantom RUN when its player runs; without it every phantom
             // walked at 1.6 u/s after a player moving at 3.96, which read as pure lag.
             ok &= _memory.TryWrite(slot + 0x1C, peer.State.Animation);
+
+            // The peer's name, which the plugin sets as the phantom's first name so the
+            // selection band identifies who is standing there instead of showing nothing.
+            ok &= _memory.TryWriteAsciiString(slot + 0x20, peer.Name, BlockSlotNameLength);
+
             ok &= _memory.TryWrite(slot + 0x38, peer.State.Appearance);
 
             // Visible equipment, as blueprint resrefs the plugin equips on the phantom.
