@@ -149,6 +149,67 @@ because a stalled load leaves a black screen the click fallback cannot rescue.
     in the end). Root cause not identified; a human clicking the menu always works. This
     unreliability is the operational argument for the in-process load above.
 
+### 0.4 Fifth addendum, remote session (~22:20): first live results for the v7 tranche
+
+Two instances were brought up and both agents connected, so parts of the tranche now
+have live evidence. **Read 0.5 first for the input oracle** — it is what made the
+session start at all.
+
+**Verified live (two instances, pids 60396 host / 65268 client, Endar Spire):**
+
+- **Phantoms spawn both ways with the v7 plugin**, same object id `0x12D` in both, and
+  the agents' dashboards saw each other (`remote peers (1)`, `25 known (25 alive)`).
+- **The 7.4 phantom redesign is exactly as intended, read out of live memory in BOTH
+  instances**: `plot=0`, `min1hp=1`, `+0x9F0 = 0xFFFB` (attack bit `0x04` cleared),
+  `appearance=114` (the PC's row). This is the first live confirmation that a phantom is
+  damageable-but-unkillable rather than an immortal aggro sink.
+- **Encounter disabling, focus-pause suppression and auto-pause suppression** all logged
+  on both sides as before.
+
+**Found and FIXED live — shared pause was pausing the wrong half.** The plugin was
+calling `SetPauseState` correctly and logging re-assertions, yet the pause bit read back
+clear within a frame; a raw memory write behaved identically, which proved it was the
+engine rather than the mod. Cause: **the client keeps its own pause mask at
+`CClientExoAppInternal + 0x1CC` with its own world timers**, and reconciles the server
+back to it every frame. A real pause holds both halves.
+`Odyssey.SetPlayerPause` now drives `CClientExoApp::SetPauseState` (`0x005ED650`) and the
+server together, and `EngineGlobals.TryReadPauseMask` reports the union of the two masks.
+Built and unit-tested; the live re-test did not fit in this session.
+
+**Not verified, and suspect: phantom name plates.** The locstring at `stats+0x34` does
+change (count fields go 1 where an untouched creature's are 0), so `AddString` runs — but
+the stored text could not be found by walking the internal, and the control creature
+(Trask, whose band reads "TRASK" in game) has an entirely EMPTY locstring, i.e. real
+names come from a **TLK strref**, not inline text. So the inline-string approach may be
+the wrong mechanism even when it succeeds. Next step: find how `CExoLocStringInternal`
+stores an inline string (or set a strref instead), and confirm visually by selecting the
+phantom.
+
+**Still unverified live** (needs a stable session): travel-follow, death poses, journal
+merge, client damage floors, and the pause fix above.
+
+### 0.5 The menu-input oracle (this is the one to remember)
+
+Trap 25's "menu input intermittently dead" is diagnosable after all, and the diagnosis is
+cheap. **The game's own GUI hit-test predicts it perfectly.** Write the game cursor
+(`CClientExoAppInternal + 0x3C8/+0x3CC`), send a net-zero relative mouse wiggle so the
+game re-hit-tests, then read the control under the cursor at `CSWGuiManager + 0x08`
+(`[0x7A39F4]`):
+
+```
+hover != 0  ->  every load attempt that followed succeeded ON THE FIRST TRY (2/2 instances)
+hover == 0  ->  every load attempt failed (8+ attempts), activation cycles included
+```
+
+Two operational consequences, both now encoded in `tools\`:
+
+1. **A minimise/restore activation cycle sometimes revives input and sometimes does not.**
+   When it does, `hover` goes non-zero and loading works immediately; when it does not,
+   no amount of clicking recovers that process. **Relaunch instead of retrying.**
+2. `tools\inputalive.ps1` is the probe (exit 0 = alive), and `tools\session.ps1` is an
+   unattended two-instance bring-up that probes, relaunches dead instances, loads both
+   saves and starts both agents. That replaces the hand-holding `demo.ps1` flow.
+
 ### 0.3 Fourth addendum, remote session (same evening, ~21:10): verification attempt, yielded
 
 The remote session attempted the live two-instance pass of everything built and stopped

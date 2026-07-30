@@ -99,7 +99,7 @@ function Start-InstanceWithRetries {
     for ($try = 1; $try -le 5; $try++) {
         $result = Start-Instance -Path $Path -Instance $Instance -X $X
         if ($result) { return $result }
-        Write-Warning "instance $Instance: relaunch $try"
+        Write-Warning "instance ${Instance}: relaunch $try"
     }
 
     throw "instance $Instance never came up with working menu input after 5 launches"
