@@ -1000,6 +1000,74 @@ internal static unsafe class Odyssey
         return area != 0 && *(byte*)(area + AreaTransPending) != 0;
     }
 
+    // ---- main-menu Co-op button --------------------------------------------------
+    //
+    // The dormant BTN_WARP on the main menu is rebound to start co-op. See
+    // docs/research/connect-flow.md. This is guarded engine-call code and only runs when
+    // the agent opts in (coop.ini menu_button=1), because it wants live verification.
+
+    /// <summary>CClientExoAppInternal + this = CSWGuiMainMenu*, null outside the menu.</summary>
+    private const int ClientInternalMainMenuOffset = 0x280;
+
+    /// <summary>CSWGuiMainMenu + this = the BTN_WARP control pointer (dev-only, blank text).</summary>
+    private const int MainMenuWarpButton = 0x1248;
+
+    /// <summary>GUI input events: 0x27 = mouse click, 0x2D = A / Enter.</summary>
+    public const int GuiEventClick = 0x27;
+    public const int GuiEventAccept = 0x2D;
+
+    // CSWGuiControl::AddEvent(this, int eventId, void* owner, void* fn). Same eventId
+    // replaces; a null fn removes. thiscall, ret 0xC.
+    private static readonly delegate* unmanaged[Thiscall]<nint, int, nint, nint, void> AddEventFn =
+        (delegate* unmanaged[Thiscall]<nint, int, nint, nint, void>)0x0041AB20;
+
+    /// <summary>The main-menu object, or 0 when not on the menu.</summary>
+    public static nint GetMainMenu()
+    {
+        nint client = GetClient();
+        if (client == 0)
+        {
+            return 0;
+        }
+
+        nint internalClient = Deref(client + AppClientOffset);
+        return internalClient == 0 ? 0 : *(nint*)(internalClient + ClientInternalMainMenuOffset);
+    }
+
+    /// <summary>
+    /// Binds a callback to the main menu's dormant Co-op (BTN_WARP) control for both the
+    /// click and accept events. The callback is a thiscall stub the engine invokes as
+    /// <c>fn(owner /*ecx*/, firingControl /*stack*/)</c>. Returns false (harmlessly) if the
+    /// menu or the control is not resolvable.
+    ///
+    /// MAIN THREAD ONLY.
+    /// </summary>
+    public static bool BindCoopMenuButton(nint owner, nint callback)
+    {
+        nint menu = GetMainMenu();
+        if (menu == 0)
+        {
+            return false;
+        }
+
+        nint button = *(nint*)(menu + MainMenuWarpButton);
+
+        // Sanity-guard the control pointer before calling into it: a plausible heap
+        // pointer, 4-aligned, whose vtable slot is also a plausible pointer. A wrong offset
+        // would otherwise call AddEvent on garbage.
+        if (!LooksLikeHeapPointer(button) || !LooksLikeHeapPointer(*(nint*)button))
+        {
+            return false;
+        }
+
+        AddEventFn(button, GuiEventClick, owner, callback);
+        AddEventFn(button, GuiEventAccept, owner, callback);
+        return true;
+    }
+
+    private static bool LooksLikeHeapPointer(nint p) =>
+        p is > 0x10000 and < 0x7FFF0000 && (p & 3) == 0;
+
     // ---- map markers -------------------------------------------------------------
     //
     // A peer's position shows on the M-screen map as a map-note pin. The map's draw code

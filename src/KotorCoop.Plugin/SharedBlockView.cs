@@ -288,6 +288,26 @@ internal sealed unsafe class SharedBlockView(byte* baseAddress)
         set => *I32(SharedBlock.OffsetJournalStatus) = value;
     }
 
+    // ---- in-game connect --------------------------------------------------------
+
+    public uint ConnectSerial
+    {
+        get => *U32(SharedBlock.OffsetConnectSerial);
+        set => *U32(SharedBlock.OffsetConnectSerial) = value;
+    }
+
+    /// <summary>Pointer to the null-terminated typed host IP (40 bytes).</summary>
+    public byte* ConnectHost => baseAddress + SharedBlock.OffsetConnectHost;
+
+    public uint ConnectStatus
+    {
+        get => *U32(SharedBlock.OffsetConnectStatus);
+        set => *U32(SharedBlock.OffsetConnectStatus) = value;
+    }
+
+    /// <summary>Agent-written: nonzero enables the in-game Co-op menu button.</summary>
+    public bool ConnectMenuEnabled => *U32(SharedBlock.OffsetConnectEnable) != 0;
+
     public ItemSlotView GetItemSlot(int index) =>
         new(baseAddress + SharedBlock.OffsetItemSlots + (index * SharedBlock.ItemSlotStride));
 

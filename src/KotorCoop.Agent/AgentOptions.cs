@@ -121,6 +121,13 @@ public sealed record AgentOptions
     /// with --no-party-sync for split play or if solo mode misbehaves live.</summary>
     public bool SyncParty { get; init; } = true;
 
+    /// <summary>
+    /// Wait for the in-game Co-op menu button before connecting, taking the host/join
+    /// details from coop.ini beside the game. Lets the player start co-op from the menu
+    /// rather than the session beginning the moment the agent launches.
+    /// </summary>
+    public bool MenuConnect { get; init; }
+
     public const string DefaultGamePath =
         @"C:\Program Files (x86)\Steam\steamapps\common\swkotor\swkotor.exe";
 
@@ -175,6 +182,7 @@ public sealed record AgentOptions
         bool allowDifferentSave = false;
         string password = string.Empty;
         bool syncParty = true;
+        bool menuConnect = false;
         string? dropFile = null;
 
         for (int i = 1; i < args.Length; i++)
@@ -275,6 +283,10 @@ public sealed record AgentOptions
                     syncParty = false;
                     break;
 
+                case "--menu":
+                    menuConnect = true;
+                    break;
+
                 case "--drop-file":
                     dropFile = Next();
                     break;
@@ -322,6 +334,7 @@ public sealed record AgentOptions
             AllowDifferentSave = allowDifferentSave,
             Password = password,
             SyncParty = syncParty,
+            MenuConnect = menuConnect,
             DropFile = dropFile,
         };
     }
@@ -423,6 +436,11 @@ public sealed record AgentOptions
                                companions (Trask, Carth...) and clients freeze their own
                                copies and mirror the host's, so companions stay one
                                synchronised set instead of two that drift.
+          --menu               wait for the in-game Co-op menu button before connecting,
+                               taking host/join details from coop.ini beside the game
+                               (mode, host, port, password, name, menu_button). Lets the
+                               player start co-op from the menu instead of the session
+                               beginning the moment the agent launches.
           --allow-different-save  join a peer on a different save. Enemies, doors and
                                items are not shared (their object ids would not line up),
                                but phantoms, appearance, equipment and journal still work.

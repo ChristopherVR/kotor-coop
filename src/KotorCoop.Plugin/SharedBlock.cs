@@ -47,7 +47,7 @@ internal struct SharedBlock
     /// existing offset profiles keep working. The plugin control fields live AFTER that
     /// range, which is why the block is larger than the profile knows about.
     /// </summary>
-    public const int TotalSize = 0x9C0;
+    public const int TotalSize = 0xA00;
 
     public const int ProfileVisibleSize = 0x250;
 
@@ -261,6 +261,37 @@ internal struct SharedBlock
     public const int OffsetMenuLoadModule = 0x9B0;
 
     public const int MenuLoadModuleLength = 16;
+
+    // ---- in-game Connect flow (version 8) -----------------------------------------
+    //
+    // The plugin rebinds the dormant main-menu BTN_WARP to "Co-op". When the player
+    // clicks it — or enters a host IP in the reused save-name panel — the plugin bumps
+    // the connect serial (and, for the interactive panel, writes the typed host). The
+    // agent, attached and waiting, sees the serial change and starts the session from
+    // coop.ini (with the typed host overriding coop.ini's if present).
+
+    /// <summary>Plugin -&gt; agent. Bumped when the player asks to connect.</summary>
+    public const int OffsetConnectSerial = 0x9C0;
+
+    /// <summary>Plugin -&gt; agent. Host IP typed in-game, null-terminated ascii; empty means
+    /// use coop.ini's value.</summary>
+    public const int OffsetConnectHost = 0x9C4;
+
+    public const int ConnectHostLength = 40;
+
+    /// <summary>Agent -&gt; plugin. 0 idle, 1 connecting, 2 connected, 3 failed — for the
+    /// menu to show a status line.</summary>
+    public const int OffsetConnectStatus = 0x9EC;
+
+    public const uint ConnectStatusIdle = 0;
+    public const uint ConnectStatusConnecting = 1;
+    public const uint ConnectStatusConnected = 2;
+    public const uint ConnectStatusFailed = 3;
+
+    /// <summary>Agent -&gt; plugin. Nonzero opts into the main-menu Co-op button. Off by
+    /// default (the block is zero-initialised), so the GUI rebind — engine-call code that
+    /// wants live verification — never runs unless coop.ini enables it.</summary>
+    public const int OffsetConnectEnable = 0x9F0;
 
     public const int ItemSlotCapacity = 8;
 

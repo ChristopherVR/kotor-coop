@@ -1,0 +1,26 @@
+; coop.ini — copy to your game directory (beside swkotor.exe) and edit.
+;
+; The agent reads this when run with --menu, and connects when the player presses the
+; in-game Co-op button. The password lives here rather than being typed in-game because
+; KOTOR's text field has no masking (see docs/research/connect-flow.md).
+
+[coop]
+
+; host = start a session others join; join = connect to a host.
+mode = join
+
+; For mode = join: the host's address. Ignored when hosting.
+host = 192.168.1.20
+
+; UDP port. Host and client must match.
+port = 27140
+
+; Session password. Empty = open session. A host admits only clients that match.
+password =
+
+; Name shown to the other players. Optional.
+name = Malak
+
+; Enable the main-menu "Co-op" button. Off by default because the menu rebind is engine
+; code awaiting live verification; set to 1 once confirmed on your build.
+menu_button = 0

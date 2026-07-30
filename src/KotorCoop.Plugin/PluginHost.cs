@@ -29,6 +29,7 @@ internal static unsafe class PluginHost
     private static JournalController? _journal;
     private static MapMarkerController? _mapMarkers;
     private static MenuLoadController? _menuLoad;
+    private static ConnectMenuController? _connectMenu;
     private static Thread? _worker;
     private static volatile bool _running = true;
 
@@ -67,6 +68,7 @@ internal static unsafe class PluginHost
             _doors = new DoorController(_view);
             _travel = new TravelController(_view);
             _menuLoad = new MenuLoadController(_view);
+            _connectMenu = new ConnectMenuController(_view);
             _pause = new PauseController(_view);
             _journal = new JournalController(_view);
             _mapMarkers = new MapMarkerController(_view);
@@ -120,7 +122,7 @@ internal static unsafe class PluginHost
         Unsafe.InitBlockUnaligned(_block, 0, SharedBlock.TotalSize);
 
         _block->Magic = SharedBlock.MagicValue;
-        _block->Version = 7;
+        _block->Version = 8;
 
         // A guard dword after the version. Magic plus version alone was not selective
         // enough: a scan once matched something else at a lower address and the agent
@@ -151,9 +153,11 @@ internal static unsafe class PluginHost
     /// </summary>
     private static void OnFrame()
     {
-        // Before the epoch gate, deliberately: a menu-load request can only be serviced
-        // at the main menu, which is exactly where the gate returns early (no server).
+        // Before the epoch gate, deliberately: these run at the main menu, which is exactly
+        // where the gate returns early (no server) — the menu-load replay and the Co-op
+        // button both live there.
         _menuLoad?.OnFrame();
+        _connectMenu?.OnFrame();
 
         if (!Odyssey.TryGetWorldEpoch(out ulong epoch))
         {
@@ -263,6 +267,7 @@ internal static unsafe class PluginHost
         _pause?.Invalidate();
         _journal?.Invalidate();
         _mapMarkers?.Invalidate();
+        _connectMenu?.Invalidate();
     }
 
     private static void WorkerLoop()

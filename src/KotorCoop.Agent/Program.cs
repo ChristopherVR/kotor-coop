@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Net;
 using KotorCoop.Memory;
 using KotorCoop.Protocol;
 using KotorCoop.Session;
@@ -277,12 +278,105 @@ internal static class Program
         return string.Join(", ", parts);
     }
 
+    /// <summary>
+    /// Enables the in-game Co-op button and waits for the player to press it, then resolves
+    /// the connection from coop.ini (the button may also carry a typed host IP, which wins).
+    /// Returns go=false if cancelled before a connect was chosen.
+    /// </summary>
+    private static async Task<(bool Go, CoopMode Mode, IPEndPoint? Host, string Name, string Password)>
+        WaitForMenuConnectAsync(IGameBridge bridge, int processId, AgentOptions options, CancellationToken token)
+    {
+        CoopMode mode = options.Mode;
+        IPEndPoint? host = options.HostEndPoint;
+        string name = options.Name;
+        string password = options.Password;
+
+        CoopConfig? config = null;
+        try
+        {
+            using Process game = Process.GetProcessById(processId);
+            string? gameDir = Path.GetDirectoryName(game.MainModule?.FileName);
+            if (gameDir is not null)
+            {
+                config = CoopConfig.TryLoad(CoopConfig.PathFor(gameDir));
+            }
+        }
+        catch
+        {
+            // No coop.ini: the command-line options stand in for it.
+        }
+
+        // Only the KOTOR bridge exposes the plugin block the button lives in.
+        if (bridge is not KotorGameBridge kotor || !kotor.EnableConnectMenu(config?.MenuButton ?? false))
+        {
+            Console.WriteLine("in-game Co-op button unavailable (no plugin); waiting for a connect signal is skipped.");
+            // Without the plugin there is nothing to wait on — connect immediately from
+            // whatever config we have.
+            return ApplyConfig(true);
+        }
+
+        Console.WriteLine(config?.MenuButton == true
+            ? "press the Co-op button in the game's main menu to connect..."
+            : "waiting for a connect request (coop.ini menu_button=1 adds the menu button)...");
+
+        while (!token.IsCancellationRequested)
+        {
+            if (kotor.TryTakeConnectRequest(out string typedHost))
+            {
+                kotor.SetConnectStatus(SharedBlockConnectStatusConnecting);
+                (bool go, CoopMode m, IPEndPoint? h, string n, string p) = ApplyConfig(true);
+
+                // A host IP typed in-game overrides coop.ini's.
+                if (typedHost.Length > 0 && IPEndPoint.TryParse(
+                        typedHost.Contains(':') ? typedHost : $"{typedHost}:{options.Port}", out IPEndPoint? typed))
+                {
+                    m = CoopMode.Join;
+                    h = typed;
+                }
+
+                return (go, m, h, n, p);
+            }
+
+            try
+            {
+                await Task.Delay(200, token).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                break;
+            }
+        }
+
+        return (false, CoopMode.None, null, name, password);
+
+        (bool, CoopMode, IPEndPoint?, string, string) ApplyConfig(bool go)
+        {
+            if (config is null)
+            {
+                return (go, mode, host, name, password);
+            }
+
+            return (
+                go,
+                config.Host ? CoopMode.Host : CoopMode.Join,
+                config.Host ? null : config.ResolveEndPoint(),
+                config.Name ?? name,
+                config.Password.Length > 0 ? config.Password : password);
+        }
+    }
+
+    /// <summary>Mirror of SharedBlock.ConnectStatusConnecting for the agent side.</summary>
+    private const uint SharedBlockConnectStatusConnecting = 1;
+
     private static async Task<int> RunAsync(AgentOptions options)
     {
         if (options.Mode == CoopMode.None)
         {
-            Console.Error.WriteLine("Specify --host or --join <host[:port]>.");
-            return 1;
+            if (!options.MenuConnect)
+            {
+                Console.Error.WriteLine("Specify --host or --join <host[:port]>, or --menu to connect from the game.");
+                return 1;
+            }
         }
 
         using ProcessMemory memory = OpenTarget(options, writable: !options.ReadOnlyAttach);
@@ -296,6 +390,44 @@ internal static class Program
 
         Console.WriteLine(diagnostic);
 
+        using CancellationTokenSource cts = new();
+        Console.CancelKeyPress += (_, eventArgs) =>
+        {
+            eventArgs.Cancel = true;
+            cts.Cancel();
+        };
+
+        // The in-game Connect flow: enable the menu button and wait for the player to press
+        // it, taking the host/join details from coop.ini. Falls through to the command-line
+        // options when coop.ini is absent.
+        CoopMode mode = options.Mode;
+        IPEndPoint? hostEndPoint = options.HostEndPoint;
+        string playerName = options.Name;
+        string password = options.Password;
+
+        if (options.MenuConnect)
+        {
+            (bool go, mode, hostEndPoint, playerName, password) =
+                await WaitForMenuConnectAsync(bridge, memory.ProcessId, options, cts.Token).ConfigureAwait(false);
+
+            if (!go)
+            {
+                return 0; // cancelled before connecting
+            }
+        }
+
+        if (mode == CoopMode.None)
+        {
+            Console.Error.WriteLine("no connection was chosen.");
+            return 1;
+        }
+
+        if (mode == CoopMode.Join && hostEndPoint is null)
+        {
+            Console.Error.WriteLine("join requested but no host address is set (coop.ini host=...).");
+            return 1;
+        }
+
         // Fingerprint this install so a mod mismatch with the peer is caught at join time.
         // Best-effort: a digest that could not be computed compares as "unchecked" and
         // never blocks a session.
@@ -303,17 +435,17 @@ internal static class Program
 
         SessionSettings settings = new()
         {
-            PlayerName = options.Name,
+            PlayerName = playerName,
             Port = options.Port,
             TickRate = options.TickRate,
             Digest = digest,
             AllowDifferentSave = options.AllowDifferentSave,
-            Password = options.Password,
+            Password = password,
         };
 
-        using ICoopSession session = options.Mode == CoopMode.Host
+        using ICoopSession session = mode == CoopMode.Host
             ? new CoopHost(settings)
-            : new CoopClient(settings, options.HostEndPoint!);
+            : new CoopClient(settings, hostEndPoint!);
 
         CoopAgent agent = new(bridge, session, new AgentSettings
         {
@@ -322,13 +454,6 @@ internal static class Program
             FollowHostModule = options.FollowHostModule,
             SyncParty = options.SyncParty,
         });
-
-        using CancellationTokenSource cts = new();
-        Console.CancelKeyPress += (_, eventArgs) =>
-        {
-            eventArgs.Cancel = true;
-            cts.Cancel();
-        };
 
         Task agentTask = agent.RunAsync(cts.Token);
         AgentDashboard dashboard = new(agent, options.DropFile);

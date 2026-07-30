@@ -134,8 +134,15 @@ public sealed class KotorGameBridge : IGameBridge
     private const int BlockJournalApplied = 0x99C;
     private const int BlockJournalTagLength = 32;
 
-    /// <summary>16-byte signature: "KOCOOP01" + version 7 + guard 0xC0FFEE01.</summary>
-    public const string PluginSignature = "4B 4F 43 4F 4F 50 30 31 07 00 00 00 01 EE FF C0";
+    // In-game Connect flow, mirroring SharedBlock version 8.
+    private const int BlockConnectSerial = 0x9C0;
+    private const int BlockConnectHost = 0x9C4;
+    private const int BlockConnectHostLength = 40;
+    private const int BlockConnectStatus = 0x9EC;
+    private const int BlockConnectEnable = 0x9F0;
+
+    /// <summary>16-byte signature: "KOCOOP01" + version 8 + guard 0xC0FFEE01.</summary>
+    public const string PluginSignature = "4B 4F 43 4F 4F 50 30 31 08 00 00 00 01 EE FF C0";
 
     /// <summary>Agent's view of which coop item id occupies each plugin item slot.</summary>
     private readonly uint[] _itemSlotIds = new uint[BlockItemCapacity];
@@ -1241,6 +1248,55 @@ public sealed class KotorGameBridge : IGameBridge
     public bool TrySetRemotePause(bool desired) =>
         _pluginBlock != 0
         && _memory.TryWrite(_pluginBlock + BlockRemotePauseDesired, desired ? 1u : 0u);
+
+    // ---- in-game Connect flow --------------------------------------------------
+
+    private uint _lastConnectSerial;
+
+    /// <summary>Opts the plugin into the main-menu Co-op button and remembers the current
+    /// request serial so the first poll does not fire spuriously.</summary>
+    public bool EnableConnectMenu(bool enabled)
+    {
+        if (_pluginBlock == 0)
+        {
+            return false;
+        }
+
+        _memory.TryReadUInt32(_pluginBlock + BlockConnectSerial, out _lastConnectSerial);
+        return _memory.TryWrite(_pluginBlock + BlockConnectEnable, enabled ? 1u : 0u);
+    }
+
+    /// <summary>
+    /// True (once) when the player has pressed the Co-op button since the last check.
+    /// <paramref name="typedHost"/> receives any host IP entered in-game (empty when the
+    /// button carries no address, i.e. coop.ini decides).
+    /// </summary>
+    public bool TryTakeConnectRequest(out string typedHost)
+    {
+        typedHost = string.Empty;
+
+        if (_pluginBlock == 0
+            || !_memory.TryReadUInt32(_pluginBlock + BlockConnectSerial, out uint serial)
+            || serial == _lastConnectSerial)
+        {
+            return false;
+        }
+
+        _lastConnectSerial = serial;
+
+        Span<byte> buffer = stackalloc byte[BlockConnectHostLength];
+        if (_memory.TryRead(_pluginBlock + BlockConnectHost, buffer))
+        {
+            int end = buffer.IndexOf((byte)0);
+            typedHost = System.Text.Encoding.ASCII.GetString(buffer[..(end < 0 ? buffer.Length : end)]);
+        }
+
+        return true;
+    }
+
+    /// <summary>Reports the connect status back to the plugin (for a menu status line).</summary>
+    public bool SetConnectStatus(uint status) =>
+        _pluginBlock != 0 && _memory.TryWrite(_pluginBlock + BlockConnectStatus, status);
 
     // ---- module travel ---------------------------------------------------------
 
