@@ -126,6 +126,25 @@ internal sealed unsafe class MenuLoadController(SharedBlockView block)
     private static readonly delegate* unmanaged[Thiscall]<nint, nint, void> LoadPCAutoSave =
         (delegate* unmanaged[Thiscall]<nint, nint, void>)0x006CA250;
 
+    // ---- phase 3: the pump the menu loop never provides --------------------------
+    //
+    // Global::UpdateScreen only calls the server's MainLoop and both netlayer pumps
+    // when its SECOND argument is 1, and the main-menu outer loop never passes it. A
+    // server created at the menu therefore sits unserviced forever: the module load
+    // request is queued, no frames are processed, no player joins — the exact stall
+    // both 4.2 and this controller hit. Until the world exists, we ARE the loop.
+
+    private static readonly delegate* unmanaged[Thiscall]<nint, void> ServerMainLoop =
+        (delegate* unmanaged[Thiscall]<nint, void>)0x004AE860;
+
+    /// <summary>CNetLayer::ProcessReceivedFrames(direction): 1 = server, 0 = client.</summary>
+    private static readonly delegate* unmanaged[Thiscall]<nint, int, void> ProcessReceivedFrames =
+        (delegate* unmanaged[Thiscall]<nint, int, void>)0x005D57D0;
+
+    /// <summary>CExoString::CStrConstructor(char* text) — engine-owned copy.</summary>
+    private static readonly delegate* unmanaged[Thiscall]<nint, nint, nint> ExoStringFromCStr =
+        (delegate* unmanaged[Thiscall]<nint, nint, nint>)0x005E5A90;
+
     /// <summary>Serial already acted on, so one request fires exactly one load.</summary>
     private uint _firedSerial;
 
@@ -140,11 +159,22 @@ internal sealed unsafe class MenuLoadController(SharedBlockView block)
     /// </summary>
     private long _phase2NotBeforeMs;
 
-    /// <summary>How long the loopback connect gets before the load is fired.</summary>
-    private const int ConnectGraceMs = 4000;
+    /// <summary>
+    /// How long the loopback connect gets before the load is fired. The connect turned
+    /// out to be near-synchronous — the four-second grace of the diagnosis era is not
+    /// needed — but one second of margin costs nothing.
+    /// </summary>
+    private const int ConnectGraceMs = 1000;
 
-    /// <summary>The dummy list entry passed to LoadPCAutoSave; must outlive phase 2.</summary>
-    private readonly byte[] _entry = new byte[0x400];
+    /// <summary>
+    /// The stand-in save-list entry, allocated on the ENGINE heap: LoadModule receives
+    /// this pointer and reads it during and after our calls, so it must never move —
+    /// a managed array pinned only inside a fixed block would.
+    /// </summary>
+    private nint _entryNative;
+
+    /// <summary>True once LoadPCAutoSave has been asked for and we are pumping.</summary>
+    private bool _pumping;
 
     public void OnFrame()
     {
@@ -154,7 +184,34 @@ internal sealed unsafe class MenuLoadController(SharedBlockView block)
             return;
         }
 
-        // Phase 2: the loopback session has had real time to complete; fire the load.
+        // Phase 3: the load is in flight. Once ExecuteLoadModule has armed the app
+        // transition state ([appManager+0x14] head nonzero), the game's OWN outer loop
+        // services the load — pumping the server ourselves on top of that double-steps
+        // the module finalisation and crashes the game one frame after the world
+        // appears (measured: 0xc0000005 at world-up with the pump active). So here we
+        // only WATCH: ack when the world exists, report if the game gave up.
+        if (_pumping)
+        {
+            if (Odyssey.HasPlayer)
+            {
+                _pumping = false;
+                block.MenuLoadStatus = 0;
+                block.MenuLoadApplied = serial;
+                PluginHost.Log("menu: the world is up");
+                return;
+            }
+
+            if (Environment.TickCount64 >= _nextDiagnosticMs)
+            {
+                _nextDiagnosticMs = Environment.TickCount64 + 3000;
+                LogLoadState("while waiting for the world");
+            }
+
+            return;
+        }
+
+        // Phase 2 window: a short breather between the connect and the load. No manual
+        // pumping — see phase 3 for why that crashes.
         if (_panel != 0)
         {
             if (Odyssey.HasServer && Environment.TickCount64 < _phase2NotBeforeMs)
@@ -165,6 +222,7 @@ internal sealed unsafe class MenuLoadController(SharedBlockView block)
             nint panel = _panel;
             _panel = 0;
             FirePhase2(panel, serial);
+            _pumping = true;
             return;
         }
 
@@ -222,31 +280,66 @@ internal sealed unsafe class MenuLoadController(SharedBlockView block)
             return 3;
         }
 
+        // Deliberately NOT shown: the panel exists only as LoadPCAutoSave's `this`.
+        // Registering it (AddPanel) and popping a modal that is not there
+        // (PopModalPanel — in retail it pops the real save-list screen) both leave the
+        // GUI stack wrong for the menu teardown that happens at world-up, which is the
+        // prime suspect for the 0xc0000005 one frame after the world appeared.
         PluginHost.Log("menu: constructing the save panel");
         SaveLoadCtor(panel, guiManager, 0, 1);
-        AddPanel(guiManager, panel, 2, 1);
-
-        int* menuState = (int*)(menu + MenuStateBits);
-        *menuState = (*menuState & ~0x300) | 0x400;
 
         PluginHost.Log("menu: staging the load screen");
         ResetSessionStartTime();
         SetGlobalUnpauseableState(GetInGameGui(client), 1);
-        PopModalPanel(guiManager);
         HideSWInGameGui(GetInGameGui(client), 0);
 
-        fixed (byte* entry = _entry)
+        if (_entryNative == 0)
         {
-            new Span<byte>(entry, _entry.Length).Clear();
-
-            // The flag bits the real branch tests on its list entry: 0x10 selects the
-            // autosave path and 0x20 gates the save-info handoff.
-            *(uint*)(entry + 0x1C4) = 0x30;
-
-            ExoString empty = default;
-            SetLoadScreenByModuleName(client, (ExoString*)(entry + 0x1F0));
-            SetLoadMusic(client, &empty);
+            _entryNative = OperatorNew(0x400);
         }
+
+        if (_entryNative == 0)
+        {
+            return 5;
+        }
+
+        byte* entry = (byte*)_entryNative;
+        new Span<byte>(entry, 0x400).Clear();
+
+        // The MODULE NAME at entry+0x00 is the load's actual argument:
+        // ExecuteLoadModule forwards the entry pointer verbatim and
+        // CServerExoAppInternal::LoadModule reads it as a CExoString and loads THAT
+        // module. An empty name here was the whole silent stall. The agent read the
+        // name out of the staged save's ERF and published it in the block.
+        byte* moduleName = block.MenuLoadModule;
+        if (moduleName[0] == 0)
+        {
+            return 7;
+        }
+
+        ExoStringFromCStr((nint)entry, (nint)moduleName);
+
+        // The flag bits the real branch tests on its list entry: 0x10 selects the
+        // autosave path and 0x20 gates the save-info handoff.
+        *(uint*)(entry + 0x1C4) = 0x30;
+
+        // The DIRECTORY NAME at +0x210 is what LoadModule actually loads from —
+        // ExecuteLoadModule forwards this entry verbatim, and an empty name here is
+        // exactly the silent nothing-loads stall. Built with the engine's own string
+        // constructor so the buffer belongs to the engine heap.
+        byte* dirName = stackalloc byte[24];
+        int n = 0;
+        foreach (char c in "000001 - AUTOSAVE")
+        {
+            dirName[n++] = (byte)c;
+        }
+
+        dirName[n] = 0;
+        ExoStringFromCStr((nint)(entry + 0x210), (nint)dirName);
+
+        ExoString empty = default;
+        SetLoadScreenByModuleName(client, (ExoString*)(entry + 0x1F0));
+        SetLoadMusic(client, &empty);
 
         ShowLoadScreen(client, 1, 1, 0);
         SetLoadBarProgress(client, 0, 1);
@@ -261,7 +354,12 @@ internal sealed unsafe class MenuLoadController(SharedBlockView block)
             return 4;
         }
 
-        ExoString address = default;
+        // The retail code passes a CONSTRUCTED empty string (valid pointer to "\0") as
+        // the session address, not a null CString — a null here makes the netlayer's
+        // string handling reject the connect silently, which leaves the load waiting
+        // for a player that never joins.
+        byte zero = 0;
+        ExoString address = new() { CString = (nint)(&zero), Length = 0 };
         ExoString nameStorage = default;
         nint name = GetClientName(client, &nameStorage);
         int sessionByte = *(byte*)SessionBytePtr;
@@ -295,10 +393,43 @@ internal sealed unsafe class MenuLoadController(SharedBlockView block)
         DisableInput(client);
 
         PluginHost.Log("menu: calling LoadPCAutoSave");
-        fixed (byte* entry = _entry)
+        LoadPCAutoSave(panel, _entryNative);
+        LogLoadState("immediately after LoadPCAutoSave");
+    }
+
+    private long _nextDiagnosticMs;
+
+    /// <summary>One line of the load's actual state, for bisecting the stall.</summary>
+    private static void LogLoadState(string when)
+    {
+        nint appManager = *(nint*)AppManagerPtr;
+        nint server = appManager == 0 ? 0 : *(nint*)(appManager + AppServerOffset);
+        nint serverInternal = server == 0 ? 0 : *(nint*)(server + InternalOffset);
+        nint stats = appManager == 0 ? 0 : *(nint*)(appManager + 0x14);
+
+        int loading = serverInternal == 0 ? -1 : *(int*)(serverInternal + 0x100B4);
+        int mode = serverInternal == 0 ? -1 : *(int*)(serverInternal + 0x10008);
+        int players = serverInternal == 0 ? -1 : *(int*)(serverInternal + 0x10064 + 8);
+        int statsHead = stats == 0 ? -1 : *(int*)stats;
+        int statsMode = stats == 0 ? -1 : *(int*)(stats + 4);
+
+        string module = "?";
+        if (serverInternal != 0)
         {
-            LoadPCAutoSave(panel, (nint)entry);
+            nint info = *(nint*)(serverInternal + 0x10004);
+            if (info != 0)
+            {
+                nint text = *(nint*)(info + 0xFC);
+                uint length = *(uint*)(info + 0x100);
+                module = text != 0 && length is > 0 and <= 32
+                    ? System.Text.Encoding.ASCII.GetString((byte*)text, (int)length)
+                    : "(empty)";
+            }
         }
+
+        PluginHost.Log(
+            $"menu: state {when}: loading={loading} mode={mode} players={players} "
+            + $"module={module} appstate=[{statsHead},{statsMode}]");
     }
 
     /// <summary>Client vtable slot +0x10 hands back the CNetLayer.</summary>

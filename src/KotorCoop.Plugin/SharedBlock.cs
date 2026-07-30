@@ -256,6 +256,12 @@ internal struct SharedBlock
     /// <summary>Plugin -&gt; agent. 0 = ok, otherwise the failure code.</summary>
     public const int OffsetMenuLoadStatus = 0x9AC;
 
+    /// <summary>Agent -&gt; plugin. Module the staged save stands in, null-terminated
+    /// ascii — the engine's LoadModule takes this name as its argument.</summary>
+    public const int OffsetMenuLoadModule = 0x9B0;
+
+    public const int MenuLoadModuleLength = 16;
+
     public const int ItemSlotCapacity = 8;
 
     public const int ItemResrefLength = 16;

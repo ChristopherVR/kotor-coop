@@ -82,10 +82,17 @@ public static class SaveLoader
         bool pluginRouteRequested =
             !viaMenuClicks && Environment.GetEnvironmentVariable("KOTORCOOP_PLUGIN_LOAD") == "1";
 
-        if (pluginRouteRequested && TryLoadViaPlugin(game, memory, lifecycle, slotIndex, out string pluginDiagnostic))
+        if (pluginRouteRequested)
         {
-            diagnostic = pluginDiagnostic;
-            return true;
+            if (TryLoadViaPlugin(game, memory, lifecycle, slotIndex, out string pluginDiagnostic))
+            {
+                diagnostic = pluginDiagnostic;
+                return true;
+            }
+
+            // Say WHY before falling back to clicking, or the plugin route's failures
+            // are indistinguishable from it never having been tried.
+            Console.WriteLine($"plugin load route failed: {pluginDiagnostic}");
         }
 
         if (!TryWaitForWindow(game, TimeSpan.FromSeconds(30), out int width, out int height))

@@ -20,7 +20,62 @@ public static class PluginMenuLoader
     private const int BlockMenuLoadSerial = 0x9A4;
     private const int BlockMenuLoadApplied = 0x9A8;
     private const int BlockMenuLoadStatus = 0x9AC;
+    private const int BlockMenuLoadModule = 0x9B0;
+    private const int BlockMenuLoadModuleLength = 16;
     private const int BlockHeartbeat = 0x4C;
+
+    /// <summary>
+    /// Reads which module a save is standing in, from SAVEGAME.sav's ERF key list: the
+    /// entry typed 2055 (.sav) IS the module (e.g. END_M01AA). The engine's LoadModule
+    /// takes this name as its argument — an empty name is the silent stall.
+    /// </summary>
+    public static bool TryReadSaveModuleName(string saveDirectory, out string moduleName)
+    {
+        moduleName = string.Empty;
+        string erfPath = Path.Combine(saveDirectory, "SAVEGAME.sav");
+
+        try
+        {
+            using FileStream stream = File.OpenRead(erfPath);
+            using BinaryReader reader = new(stream);
+
+            byte[] magic = reader.ReadBytes(8);
+            if (magic.Length < 8)
+            {
+                return false;
+            }
+
+            stream.Position = 0x10;
+            int entryCount = reader.ReadInt32();
+            stream.Position = 0x18;
+            int keyListOffset = reader.ReadInt32();
+
+            stream.Position = keyListOffset;
+            for (int i = 0; i < entryCount && i < 4096; i++)
+            {
+                byte[] resref = reader.ReadBytes(16);
+                reader.ReadUInt32();
+                ushort resType = reader.ReadUInt16();
+                reader.ReadUInt16();
+
+                // 2057 is what the retail GOG build writes for the module .sav inside
+                // SAVEGAME.sav (measured); 2055 is what older restype tables claim.
+                if (resType is 2057 or 2055)
+                {
+                    int length = Array.IndexOf(resref, (byte)0);
+                    moduleName = System.Text.Encoding.ASCII
+                        .GetString(resref, 0, length < 0 ? resref.Length : length);
+                    return moduleName.Length > 0;
+                }
+            }
+        }
+        catch (Exception)
+        {
+            return false;
+        }
+
+        return false;
+    }
 
     /// <summary>
     /// Copies the save directory holding slot <paramref name="slotIndex"/> (0-based, in
@@ -53,7 +108,11 @@ public static class PluginMenuLoader
         }
 
         DirectoryInfo source = saves[slotIndex];
-        string autosave = Path.Combine(savesDirectory, "000000 - AUTOSAVE");
+
+        // LoadPCAutoSave formats its target as Format("%06d - %s", 1, "AUTOSAVE") —
+        // id 1, not 0. Staging "000000 - AUTOSAVE" produced a load that got as far as
+        // SetLoadingModule(1) and then silently bailed with no module target set.
+        string autosave = Path.Combine(savesDirectory, "000001 - AUTOSAVE");
 
         try
         {
@@ -126,6 +185,31 @@ public static class PluginMenuLoader
             return false;
         }
 
+        // The module the staged save stands in; the engine's LoadModule needs the name.
+        string savesDirectory = string.Empty;
+        try
+        {
+            using var process = System.Diagnostics.Process.GetProcessById(memory.ProcessId);
+            savesDirectory = Path.Combine(
+                Path.GetDirectoryName(process.MainModule?.FileName) ?? string.Empty,
+                "saves", "000001 - AUTOSAVE");
+        }
+        catch (Exception)
+        {
+        }
+
+        if (!TryReadSaveModuleName(savesDirectory, out string moduleName))
+        {
+            diagnostic = $"could not read the module name from {savesDirectory}";
+            return false;
+        }
+
+        if (!memory.TryWriteAsciiString(block + BlockMenuLoadModule, moduleName, BlockMenuLoadModuleLength))
+        {
+            diagnostic = "could not write the module name";
+            return false;
+        }
+
         // Continue from whatever serial the block holds — the plugin outlives agents.
         if (!memory.TryReadUInt32(block + BlockMenuLoadSerial, out uint serial)
             || !memory.TryWrite(block + BlockMenuLoadSerial, serial + 1))
@@ -134,7 +218,7 @@ public static class PluginMenuLoader
             return false;
         }
 
-        diagnostic = $"load request {serial + 1} sent to the plugin";
+        diagnostic = $"load request {serial + 1} sent to the plugin (module {moduleName})";
         return true;
     }
 

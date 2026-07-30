@@ -251,6 +251,9 @@ internal sealed unsafe class SharedBlockView(byte* baseAddress)
         set => *I32(SharedBlock.OffsetMenuLoadStatus) = value;
     }
 
+    /// <summary>Pointer to the null-terminated module name for the menu load (16 bytes).</summary>
+    public byte* MenuLoadModule => baseAddress + SharedBlock.OffsetMenuLoadModule;
+
     // ---- shared pause -----------------------------------------------------------
 
     /// <summary>Agent-written: nonzero while any remote peer holds a pause.</summary>
