@@ -100,6 +100,12 @@ public sealed record AgentOptions
     /// </summary>
     public bool FollowHostModule { get; init; } = true;
 
+    /// <summary>
+    /// Load saves by clicking the menu instead of the in-process replay. Escape hatch:
+    /// the replay currently crashes the game inside LoadPCAutoSave (2026-07-30).
+    /// </summary>
+    public bool LoadViaMenuClicks { get; init; }
+
     public const string DefaultGamePath =
         @"C:\Program Files (x86)\Steam\steamapps\common\swkotor\swkotor.exe";
 
@@ -150,6 +156,7 @@ public sealed record AgentOptions
         int phantoms = 4;
         bool filterByModule = true;
         bool followHostModule = true;
+        bool loadViaMenuClicks = false;
         string? dropFile = null;
 
         for (int i = 1; i < args.Length; i++)
@@ -234,6 +241,10 @@ public sealed record AgentOptions
                     followHostModule = false;
                     break;
 
+                case "--load-via-menu":
+                    loadViaMenuClicks = true;
+                    break;
+
                 case "--drop-file":
                     dropFile = Next();
                     break;
@@ -277,6 +288,7 @@ public sealed record AgentOptions
             Phantoms = phantoms,
             FilterByModule = filterByModule,
             FollowHostModule = followHostModule,
+            LoadViaMenuClicks = loadViaMenuClicks,
             DropFile = dropFile,
         };
     }

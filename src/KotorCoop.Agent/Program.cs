@@ -151,7 +151,8 @@ internal static class Program
         using Process game = Process.GetProcessById(memory.ProcessId);
 
         bool loaded = SaveLoader.TryLoadSave(
-            game, memory, options.LoadSave - 1, TimeSpan.FromSeconds(180), out string diagnostic);
+            game, memory, options.LoadSave - 1, TimeSpan.FromSeconds(180), out string diagnostic,
+            options.LoadViaMenuClicks);
 
         Console.WriteLine(diagnostic);
         return loaded ? 0 : 1;

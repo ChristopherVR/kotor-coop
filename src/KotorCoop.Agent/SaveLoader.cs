@@ -46,7 +46,8 @@ public static class SaveLoader
     /// exists. <paramref name="slotIndex"/> is zero-based from the top of the save list.
     /// </summary>
     public static bool TryLoadSave(
-        Process game, ProcessMemory memory, int slotIndex, TimeSpan timeout, out string diagnostic)
+        Process game, ProcessMemory memory, int slotIndex, TimeSpan timeout, out string diagnostic,
+        bool viaMenuClicks = false)
     {
         GameLifecycle lifecycle = new(memory);
         DateTime deadline = DateTime.UtcNow + timeout;
@@ -72,7 +73,12 @@ public static class SaveLoader
         // game's thread, so it needs no window focus, no cursor and no clicks — menu
         // input injection is intermittently dead in ways that resisted diagnosis
         // (Handoff trap 25). Clicking survives below only as the no-plugin fallback.
-        if (TryLoadViaPlugin(game, memory, lifecycle, slotIndex, out string pluginDiagnostic))
+        //
+        // viaMenuClicks skips it entirely: as of 2026-07-30 the replay CRASHES the game
+        // inside LoadPCAutoSave (two for two, both instances — see the plugin log ending
+        // at "panel added, calling LoadPCAutoSave"), and a crashed game leaves the click
+        // fallback nothing to click on.
+        if (!viaMenuClicks && TryLoadViaPlugin(game, memory, lifecycle, slotIndex, out string pluginDiagnostic))
         {
             diagnostic = pluginDiagnostic;
             return true;
