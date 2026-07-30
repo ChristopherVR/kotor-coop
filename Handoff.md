@@ -84,6 +84,24 @@ backbone regardless.
 24. **`Read-Host` in a non-interactive `demo.ps1` run dies instead of waiting.** The
     script's instance-2 fallback prompt assumes a human terminal.
 
+### 0.1 Second addendum, parallel remote session (same evening)
+
+A remote session ran concurrently with the one above and added, on top of its work:
+
+- **The repo is now under git** (task 7.8): baseline commit of the whole working state,
+  then one commit per feature. `tools/__pycache__` is ignored; `tools/kotor1_0_3.db` is
+  committed.
+- **Tasks 40-42** (travel-together, phantom name plates, death-pose replication) — all
+  engine detail in **4.11**. These bumped the shared block to **version 6, TotalSize
+  0x980** (superseding the "version 5 / 0x920" note above): travel request at `0x920`
+  (serial u32, module char[32] `0x924`, waypoint char[32] `0x944`, applied u32 `0x964`,
+  status i32 `0x968`). Plugin and agents must be rebuilt together and `dinput8.dll`
+  reinstalled in BOTH game directories before the next live run.
+- 105 tests pass (9 new for the follow-the-host policy in `TravelPumpTests`).
+- ⚠ The remote session killed stray `KotorCoop.Agent` processes at ~19:50 and ~19:54 to
+  unblock builds (trap 12). If those belonged to a live run of this session, that is why
+  it died; the two `swkotor.exe` instances were left untouched.
+
 ---
 
 ## 1. Current state
@@ -110,6 +128,10 @@ single-instance guard is a named mutex, not DRM, and the GOG build has no DRM at
 | **Phantom is neutral + plot, so it is not an aggro sink** | **working, verified** |
 | **Auto-pause suppressed** | **working, verified** (`0x17000` -> `0x00000`) |
 | World/quest state replication | code done; the table reads correctly live, cross-instance replication untested |
+| Epoch invalidation, door sync, encounters off, equipment sync | **built** — see addendum 0 for what was verified live |
+| **Module-transition following (travel together)** | **built** (SharedBlock v6, TravelController; see 4.11), untested in game |
+| **Phantom name plates (peer's name in the selection band)** | **built** (see 4.11), untested in game |
+| **Player death mirrored as a phantom death pose** | **built** (ambient state 4; see 4.11), untested in game |
 
 Evidence from the two-instance run of 2026-07-30 (pids 35464 and 61108, both on the Endar
 Spire, `area1`):
@@ -319,6 +341,7 @@ file. Read them in this order; use the numbers to search.
 | 4.8 | module transitions destroy everything, and the counters reset |
 | 4.9 | reading the game's own data files |
 | 4.10 | dialogue silently disarms every enemy, and it collides with combat authority |
+| 4.11 | module travel, creature naming, and the death-pose route (built 2026-07-30 evening) |
 
 ### 4.0 An unfocused instance DOES pause, and the plugin has to stop it
 
@@ -428,6 +451,46 @@ Do not be misled by `IgnoreConversationStartRange` (`CServerExoAppInternal + 0x1
 has exactly one reader and only suppresses proximity culling of *bark bubbles*. The real
 range gate is `GetIsInUseRange` (`0x004F6000`), and failing it queues a move rather than
 refusing the conversation.
+
+### 4.11 Module travel, creature naming, and the death-pose route
+
+Three engine surfaces verified and wired up on the evening of 2026-07-30. All three ship
+in **SharedBlock version 6** (the block grew to `0x980`; the agent's scan signature now
+carries `06`), so both the plugin and the agents must be rebuilt together, and the copies
+of `dinput8.dll` in BOTH game directories must be reinstalled before the next live run.
+
+**Module travel** — `CServerExoApp::SetMoveToModulePending` (`0x004AECC0`) is a plain
+dword store to `internal+0x10080`; `SetMoveToModuleString` (`0x004AECD0`) and
+`SetMoveToModuleStartWaypoint` (`0x004AED30`) assign `CExoString`s at `internal+0x10084`
+and `+0x1008C` through `CExoString::operator=` (`0x005E5C50`), which copies with the
+engine's own allocator, so stack-local sources are safe. The engine's MainLoop notices
+the pending flag and runs the entire transition. Wired as: client agents follow the
+host's module (`CoopAgent.PumpTravel` — host-led only so no ping-pong, debounced 15 s,
+never into `stunt*` modules, never into the `areaXX` fallback name, not while the local
+player is in dialogue, `--no-follow` disables). The plugin's `TravelController` flushes
+every spawned phantom and item BEFORE raising the pending flag, because
+`StoreCurrentModule` would bake them into the outgoing module (4.8).
+
+**Creature naming** — a creature's first name (the selection band) is a `CExoLocString`
+at `stats+0x34` (`CSWSCreature::GetFirstName`, `0x004F8310`, returns exactly that
+address). The engine's own rename flow (call site `0x00521B4C`) builds it with
+`CExoLocString::AddString(0, &exoString, 0)` (`0x005EA340`, `__thiscall`, args pushed as
+`nID`, `CExoString*`, `gender`); the plugin does `ClearLocString` (`0x005E9EA0`) +
+`AddString` in place on the field, right after spawn so the client twin is created with
+the name already set. The agent writes each peer's name into the remote slot's 24-byte
+name field, which had been reserved since version 1 and never used.
+
+**Death pose** — the client's animation sync rejects all three death constants written to
+`+0xD4` (trap 21b). The working route: `CSWSCreature::SetAmbientAnimationState`
+(`0x004EFEF0`, a byte store to `+0x4C4`) then re-issue idle `0x2710` through the
+`SetAnimation` vtable slot, which remaps the idle through the ambient state using the
+jump table at `0x004F0F50`. That table, decoded from the exe: states 3/4/14 produce the
+death poses `0x2718`/`0x2716`/`0x27AC`; values outside 2..14 fall through to the normal
+idle, so **state 1 stands the creature back up**. `PhantomController` drops a phantom
+when its player's health is `<= 0` (clearing the action queue first, or a queued move
+stands the body back up) and raises it on recovery. The health read in the bridge is now
+**signed** — a downed PC's hit points go negative (threshold -10), and the old unsigned
+read reported -3 as 65533.
 
 ### 4.7 World and quest state — where KOTOR keeps it
 
@@ -1419,6 +1482,9 @@ cutscene will move that instance's camera and party while the peer keeps playing
 | 37 | Client encounters disabled | **built** (addendum 0) |
 | 38 | Movement fidelity: run gait, 0.6u resend, facing, snap | **built**, awaiting live feel-check (addendum 0) |
 | 39 | Equipment sync v1: armor + weapons on the phantom | **built**, untested live; watch for proficiency refusals (addendum 0) |
+| 40 | Travel together: clients follow the host across modules | **built, untested in game**, 4.11 (SharedBlock v6) |
+| 41 | Phantom name plates: peer's name in the selection band | **built, untested in game**, 4.11 |
+| 42 | Player death mirrored as a phantom death pose | **built, untested in game**, 4.11 |
 | 40 | In-game Connect flow (plugin-driven save load, then a .gui mod) | designed; CSWGuiSaveLoad::LoadGame 0x6CB0E0, see 4.6 |
 | 41 | Map presence: peers as map-note waypoints | idea recorded, unverified |
 
