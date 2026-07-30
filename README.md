@@ -29,15 +29,38 @@ Both players, each in their own full game:
   release it.
 - **Go down together**: a player at zero health drops their phantom into a real death
   pose on the other side, and it stands back up on recovery.
+- **See each other on the map**: each peer is a live pin on the M-screen map, riding the
+  engine's own map-note waypoints — no interface hacking.
 
 An unfocused or minimised instance keeps simulating (the plugin suppresses the focus
 pause), which is what makes one-machine testing practical at all.
 
-Verified live: two GOG instances on one machine, phantoms both ways, appearance and
-equipment, item drop/pickup, enemy health/death mirroring, door unlock propagation.
-The newest tranche (travel-follow, name plates, death poses, journal, shared pause,
-client damage) is built and unit-tested; its live two-instance pass is in progress —
-see `Handoff.md` for the precise per-feature status.
+### Mods work, even mismatched ones
+
+Two players do not have to run the same mods. At join time each side fingerprints its
+install — the executable, the override folder, `appearance.2da`, the journal, the string
+table — and the two compare notes. The result is a **per-channel** decision, not
+all-or-nothing:
+
+- a different **executable** is refused (every engine address is per-binary);
+- a different **`appearance.2da`** just drops the appearance sync (the phantom keeps a
+  default look) rather than risk painting the wrong body;
+- a different **save** or a mod-**edited module** drops the object-id-keyed channels
+  (enemies, doors, items) for that module while phantoms, journal and the rest continue;
+- a different **global-variable table** drops shared quest state (its keys would name
+  different variables);
+- differing **override folders** — the normal case for two modded installs — just
+  produce a warning that explains any gear or item that does not appear.
+
+Everything co-op ships as a game file uses a `k_coop_` name, so it can never collide with
+a mod, and only ever adds to the override folder.
+
+Verified live: two GOG instances on one machine — phantoms both ways, appearance and
+equipment, run-gait, item drop/pickup, enemy health/death mirroring, door unlock
+propagation. The compatibility handshake, map presence, name plates and world-digest are
+unit-tested (142 tests) with their live two-instance pass pending a stable
+unattended-load path. See `Handoff.md` and `docs/research/` for the precise per-feature
+status and the reverse-engineering behind each.
 
 ## Requirements
 
@@ -126,9 +149,11 @@ src/KotorCoop.Memory     OpenProcess, AOB scanner, engine bridge, offset profile
 src/KotorCoop.Session    UDP transport, host/client, interpolation, stores, agent pump
 src/KotorCoop.Agent      CLI: launch, load, run, scan, track, info
 src/KotorCoop.Plugin     in-process plugin (NativeAOT win-x86, installs as dinput8.dll)
+src/KotorCoop.Memory     OpenProcess, scanner, engine bridge, GameFiles/ (KEY/BIF/GFF/2DA/TLK)
 src/KotorCoop.MockGame   stand-in game process for testing without KOTOR
 tests/KotorCoop.Tests    unit + loopback integration tests
-profiles/                JSON offset profiles (mock + legacy paths)
+profiles/                JSON offset profiles; profiles/override ships k_coop_ game files
+docs/research/           verified reverse-engineering write-ups behind each feature
 tools/                   RE helpers, demo scripts, the kotor1_0_3 symbol database
 ```
 
@@ -138,10 +163,13 @@ tools/                   RE helpers, demo scripts, the kotor1_0_3 symbol databas
   each gets the full conversation; outcomes converge through the globals/journal
   channels, but rewards can duplicate. While a player is mid-conversation the session
   freezes enemy publication for them (the engine disarms hostiles during dialogue).
-- **Party members are not reconciled yet** — each instance runs its own copies.
+- **Party members are not reconciled yet** — each instance runs its own copies. The
+  design (an ownership split via the engine's solo-mode flag) is in
+  `docs/research/party-reconciliation.md`, pending live measurement.
 - **Item identity is a blueprint resref**: upgrades and charges don't travel yet.
-- **Two-instance startup still shows the menu briefly** and instance 2's automated
-  save-load is unreliable (menu input injection is flaky; the in-process load path is
-  mapped in `Handoff.md` addendum 0 and is the planned fix, together with an in-game
-  Connect menu).
+- **The world-time compatibility check covers the globals catalogue**; save-identity and
+  per-module GIT digests (to also gate on a mod-edited module) are a planned follow-up.
+- **Unattended startup**: the in-process save load (no menu clicking) reaches the world
+  but a login step after it is still being finished (`Handoff.md`); menu-click loading
+  works but is a focus-lottery.
 - KOTOR 2 is untouched, and only GOG v1.0.3 addresses are known.
