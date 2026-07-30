@@ -131,6 +131,12 @@ public sealed class CoopAgent(IGameBridge bridge, ICoopSession session, AgentSet
             return;
         }
 
+        // Each channel is gated on the negotiated capability set: a mod difference that
+        // would corrupt a channel disables that channel for the session (a different
+        // globals catalogue drops world state; a different save drops enemies/doors/items)
+        // while everything unaffected keeps working. Full set until a peer is judged.
+        SessionCapabilities caps = session.Capabilities;
+
         // Only filter when both ends actually know their module. A profile that has not
         // located the module-name field reports an empty string, and treating "unknown"
         // as "somewhere else" would hide every peer and look exactly like a broken
@@ -139,13 +145,14 @@ public sealed class CoopAgent(IGameBridge bridge, ICoopSession session, AgentSet
             ? [.. peers.Where(p => p.State.Module.Length == 0 || p.IsInModule(local.Module))]
             : peers;
 
-        LastWriteSucceeded = bridge.TryWriteRemotePeers(visible);
+        // Mask the per-avatar fields a mod mismatch makes unsafe BEFORE they reach the
+        // game. A different appearance.2da means a replicated row index could paint the
+        // wrong body or index off the end (a crash), so the appearance is cleared and the
+        // phantom keeps its blueprint look; a cleared row and empty resrefs are exactly
+        // what the plugin already treats as "leave it alone".
+        visible = MaskAvatarFields(visible, caps);
 
-        // Each channel is gated on the negotiated capability set: a mod difference that
-        // would corrupt a channel disables that channel for the session (a different
-        // globals catalogue drops world state; a different save drops enemies/doors/items)
-        // while everything unaffected keeps working. Full set until a peer is judged.
-        SessionCapabilities caps = session.Capabilities;
+        LastWriteSucceeded = bridge.TryWriteRemotePeers(visible);
 
         PumpItems(local, caps);
         PumpEnemies(local, caps);
@@ -154,6 +161,43 @@ public sealed class CoopAgent(IGameBridge bridge, ICoopSession session, AgentSet
         PumpDoors(caps);
         PumpTravel(local, peers);
         PumpPause(peers);
+    }
+
+    /// <summary>
+    /// Clears the avatar fields the negotiated capabilities forbid, so a mod mismatch
+    /// cannot reach the game as a bad appearance row or a wrong-item equip. Returns the
+    /// list unchanged when everything is permitted, which is the common case.
+    /// </summary>
+    private static IReadOnlyList<RemotePeer> MaskAvatarFields(
+        IReadOnlyList<RemotePeer> peers, SessionCapabilities caps)
+    {
+        bool appearance = (caps & SessionCapabilities.Appearance) != 0;
+        bool equipment = (caps & SessionCapabilities.Equipment) != 0;
+
+        if (appearance && equipment)
+        {
+            return peers;
+        }
+
+        RemotePeer[] masked = new RemotePeer[peers.Count];
+        for (int i = 0; i < peers.Count; i++)
+        {
+            PlayerState state = peers[i].State;
+
+            if (!appearance)
+            {
+                state = state with { Appearance = 0 };
+            }
+
+            if (!equipment)
+            {
+                state = state with { EquippedBody = "", EquippedRightWeapon = "", EquippedLeftWeapon = "" };
+            }
+
+            masked[i] = peers[i] with { State = state };
+        }
+
+        return masked;
     }
 
     /// <summary>
