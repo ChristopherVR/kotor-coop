@@ -135,7 +135,7 @@ public sealed class KotorGameBridge : IGameBridge
     private const int BlockJournalTagLength = 32;
 
     /// <summary>16-byte signature: "KOCOOP01" + version 7 + guard 0xC0FFEE01.</summary>
-    private const string PluginSignature = "4B 4F 43 4F 4F 50 30 31 07 00 00 00 01 EE FF C0";
+    public const string PluginSignature = "4B 4F 43 4F 4F 50 30 31 07 00 00 00 01 EE FF C0";
 
     /// <summary>Agent's view of which coop item id occupies each plugin item slot.</summary>
     private readonly uint[] _itemSlotIds = new uint[BlockItemCapacity];

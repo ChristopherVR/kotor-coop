@@ -162,7 +162,8 @@ public static class GameLauncher
 
         try
         {
-            using ProcessMemory memory = ProcessMemory.Attach(game.Id, writable: false);
+            // Writable: the plugin-driven load route writes a request into the shared block.
+            using ProcessMemory memory = ProcessMemory.Attach(game.Id, writable: true);
 
             bool loaded = SaveLoader.TryLoadSave(
                 game, memory, options.LoadSave - 1, TimeSpan.FromSeconds(180), out string diagnostic);

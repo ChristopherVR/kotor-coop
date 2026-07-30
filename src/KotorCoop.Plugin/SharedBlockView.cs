@@ -234,6 +234,23 @@ internal sealed unsafe class SharedBlockView(byte* baseAddress)
         set => *I32(SharedBlock.OffsetTravelStatus) = value;
     }
 
+    // ---- menu save load ---------------------------------------------------------
+
+    /// <summary>Agent-written request serial; pending while ahead of MenuLoadApplied.</summary>
+    public uint MenuLoadSerial => *U32(SharedBlock.OffsetMenuLoadSerial);
+
+    public uint MenuLoadApplied
+    {
+        get => *U32(SharedBlock.OffsetMenuLoadApplied);
+        set => *U32(SharedBlock.OffsetMenuLoadApplied) = value;
+    }
+
+    public int MenuLoadStatus
+    {
+        get => *I32(SharedBlock.OffsetMenuLoadStatus);
+        set => *I32(SharedBlock.OffsetMenuLoadStatus) = value;
+    }
+
     // ---- shared pause -----------------------------------------------------------
 
     /// <summary>Agent-written: nonzero while any remote peer holds a pause.</summary>

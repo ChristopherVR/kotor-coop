@@ -27,6 +27,7 @@ internal static unsafe class PluginHost
     private static TravelController? _travel;
     private static PauseController? _pause;
     private static JournalController? _journal;
+    private static MenuLoadController? _menuLoad;
     private static Thread? _worker;
     private static volatile bool _running = true;
 
@@ -64,6 +65,7 @@ internal static unsafe class PluginHost
             _combat = new CombatController(_view);
             _doors = new DoorController(_view);
             _travel = new TravelController(_view);
+            _menuLoad = new MenuLoadController(_view);
             _pause = new PauseController(_view);
             _journal = new JournalController(_view);
 
@@ -146,6 +148,10 @@ internal static unsafe class PluginHost
     /// </summary>
     private static void OnFrame()
     {
+        // Before the epoch gate, deliberately: a menu-load request can only be serviced
+        // at the main menu, which is exactly where the gate returns early (no server).
+        _menuLoad?.OnFrame();
+
         if (!Odyssey.TryGetWorldEpoch(out ulong epoch))
         {
             // No world, or a transition mid-flight. Drop everything now, so nothing runs

@@ -145,7 +145,9 @@ internal static class Program
             return 1;
         }
 
-        using ProcessMemory memory = OpenTarget(options, writable: false);
+        // Writable: the plugin-driven load route writes a request into the shared block.
+        // Menu clicking (the fallback) never needed it, which is why this was read-only.
+        using ProcessMemory memory = OpenTarget(options, writable: true);
         using Process game = Process.GetProcessById(memory.ProcessId);
 
         bool loaded = SaveLoader.TryLoadSave(

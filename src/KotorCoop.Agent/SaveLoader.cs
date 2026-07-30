@@ -68,6 +68,16 @@ public static class SaveLoader
             return phase == GamePhase.InWorld;
         }
 
+        // The in-process route first: the plugin replays the GUI's own load path on the
+        // game's thread, so it needs no window focus, no cursor and no clicks — menu
+        // input injection is intermittently dead in ways that resisted diagnosis
+        // (Handoff trap 25). Clicking survives below only as the no-plugin fallback.
+        if (TryLoadViaPlugin(game, memory, lifecycle, slotIndex, out string pluginDiagnostic))
+        {
+            diagnostic = pluginDiagnostic;
+            return true;
+        }
+
         if (!TryWaitForWindow(game, TimeSpan.FromSeconds(30), out int width, out int height))
         {
             diagnostic = "the game never produced a window to click on";
@@ -133,6 +143,76 @@ public static class SaveLoader
         }
 
         return GameInput.ClickClient(game, (int)(width * fractionX), (int)(height * fractionY));
+    }
+
+    /// <summary>
+    /// Stages the wanted save as the autosave, asks the plugin to fire the engine's own
+    /// autosave-load path, and waits for the world. False (with the reason) when the
+    /// plugin is absent or refused — the caller falls back to menu clicking.
+    /// </summary>
+    private static bool TryLoadViaPlugin(
+        Process game, ProcessMemory memory, GameLifecycle lifecycle, int slotIndex, out string diagnostic)
+    {
+        string? gameDirectory;
+        try
+        {
+            gameDirectory = Path.GetDirectoryName(game.MainModule?.FileName);
+        }
+        catch (Exception ex)
+        {
+            diagnostic = $"cannot resolve the game directory: {ex.Message}";
+            return false;
+        }
+
+        if (gameDirectory is null)
+        {
+            diagnostic = "cannot resolve the game directory";
+            return false;
+        }
+
+        if (!PluginMenuLoader.TryStageSaveAsAutosave(gameDirectory, slotIndex, out string staging))
+        {
+            diagnostic = staging;
+            return false;
+        }
+
+        if (!PluginMenuLoader.TryRequestLoad(memory, out nint block, out string request))
+        {
+            diagnostic = request;
+            return false;
+        }
+
+        Console.WriteLine($"{staging}; {request}");
+
+        DateTime deadline = DateTime.UtcNow + TimeSpan.FromSeconds(90);
+        while (DateTime.UtcNow < deadline)
+        {
+            if (lifecycle.GetPhase() == GamePhase.InWorld)
+            {
+                diagnostic = "loaded through the plugin (no input injection)";
+                return true;
+            }
+
+            // A non-zero status is the plugin telling us the fire itself failed —
+            // no point waiting the full window on it.
+            if (PluginMenuLoader.TryReadStatus(memory, block, out _, out int status) && status != 0)
+            {
+                diagnostic = $"the plugin refused the load (failure {status})";
+                return false;
+            }
+
+            game.Refresh();
+            if (game.HasExited)
+            {
+                diagnostic = "the game exited while loading";
+                return false;
+            }
+
+            Thread.Sleep(500);
+        }
+
+        diagnostic = "the plugin accepted the load but no world appeared within 90s";
+        return false;
     }
 
     private static bool TryWaitForWindow(Process game, TimeSpan timeout, out int width, out int height)

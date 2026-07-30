@@ -237,6 +237,25 @@ internal struct SharedBlock
 
     public const int JournalTagLength = 32;
 
+    // ---- menu save load (version 7, tail padding) ---------------------------------
+    //
+    // Loads a save from the MAIN MENU with no input injection: the agent copies the
+    // wanted save over the autosave slot on disk ("000000 - AUTOSAVE" — a save is just a
+    // directory), then bumps the serial. The plugin, on a frame where no server exists
+    // yet (i.e. the main menu), replays the GUI's own load path: construct
+    // CSWGuiSaveLoad and call LoadPCAutoSave, which builds its own save-info from the
+    // AUTOSAVE literals and drives CServerExoApp::ExecuteLoadModule. This replaces menu
+    // clicking, which proved intermittently and unexplainably dead (trap 25).
+
+    /// <summary>Agent -&gt; plugin. Bumped once per load request; written last.</summary>
+    public const int OffsetMenuLoadSerial = 0x9A4;
+
+    /// <summary>Plugin -&gt; agent. Serial of the last request acted on.</summary>
+    public const int OffsetMenuLoadApplied = 0x9A8;
+
+    /// <summary>Plugin -&gt; agent. 0 = ok, otherwise the failure code.</summary>
+    public const int OffsetMenuLoadStatus = 0x9AC;
+
     public const int ItemSlotCapacity = 8;
 
     public const int ItemResrefLength = 16;
