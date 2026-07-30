@@ -1,242 +1,147 @@
 # kotor-coop
 
-A .NET proof of concept for co-op in Star Wars: Knights of the Old Republic.
+Seamless-style two-player co-op for **Star Wars: Knights of the Old Republic** (retail
+GOG build), in C#. Two full copies of the game run side by side — locally or across a
+network — and an external agent plus a tiny in-process plugin bridge them into one shared
+world, the way FromSoftware's Seamless Co-op mod bridges Elden Ring.
 
-It is an **external agent**: it attaches to the game with `OpenProcess` /
-`ReadProcessMemory` / `WriteProcessMemory`, reads the local player out of memory,
-replicates it over UDP, and writes remote players back in. Nothing is injected, no DLL is
-loaded into the game, and no game file is modified.
+No game file is modified. The plugin installs as a `dinput8.dll` proxy the game loads
+itself; everything else attaches from outside with `OpenProcess`.
 
-Everything above the memory layer is game-agnostic. Everything game-specific is a JSON
-offset profile in [`profiles/`](profiles).
+## What works today
 
-## Status
+Both players, each in their own full game:
 
-| Piece                                                             | State                     |
-| ----------------------------------------------------------------- | ------------------------- |
-| Transport, session, interpolation, world-flag sync                | done, tested              |
-| Memory layer (scanner, pointer chains, profiles, read/write)      | done, tested against a live process |
-| Two-instance co-op against the mock harness                       | **working, verified**     |
-| Offset discovery tooling (`autotrack`, `scan`, `int`, `find`, `near`) | done                  |
-| **Reading the real player position out of live swkotor.exe**      | **working, verified**     |
-| Facing, health and module name from swkotor.exe                   | not yet located           |
-| A durable (restart-proof) KOTOR profile                           | needs a multi-level pointer chain |
-| Drawing a second player inside KOTOR                              | **not done** - see [limits](#what-this-does-not-do) |
+- **See each other** as a real engine creature ("phantom") wearing the other player's
+  actual appearance, armor and weapons, with their name in the selection band, walking
+  and running at true speed on the real walkmesh.
+- **Travel together**: when the host crosses into another area, the client follows
+  through the engine's own module-transition path (the same machinery the built-in
+  `warp` cheat uses). `--no-follow` opts out.
+- **Fight the same fight**: enemy health and death are host-authoritative and mirrored
+  live; clients stream their local damage back and the host merges it in, so both
+  players' hits count. Enemies replicate as absolute health, never damage numbers,
+  because each instance applies its own difficulty modifiers.
+- **Share the world**: dropped items materialise on the other side as real, clickable
+  objects and vanish when picked up; doors open and unlock for both; the story globals
+  and the quest journal merge upward, so one quest line advances for everyone.
+- **Pause together**: either player's pause pauses both worlds, and only the pauser can
+  release it.
+- **Go down together**: a player at zero health drops their phantom into a real death
+  pose on the other side, and it stands back up on recovery.
 
-### Two-instance co-op: where it actually stands
+An unfocused or minimised instance keeps simulating (the plugin suppresses the focus
+pause), which is what makes one-machine testing practical at all.
 
-Bridging **live KOTOR to a second peer over the network works today**. The mock peer
-renders your real character walking around, streamed over UDP:
+Verified live: two GOG instances on one machine, phantoms both ways, appearance and
+equipment, item drop/pickup, enemy health/death mirroring, door unlock propagation.
+The newest tranche (travel-follow, name plates, death poses, journal, shared pause,
+client damage) is built and unit-tested; its live two-instance pass is in progress —
+see `Handoff.md` for the precise per-feature status.
 
+## Requirements
+
+- Windows, .NET 10 SDK; MSVC x86 toolset for the plugin (NativeAOT `win-x86`).
+- **The DRM-free GOG build of KOTOR 1** (v1.0.3). The Steam copy's DRM wrapper refuses
+  a second instance and its packed binary defeats static analysis; the GOG build has
+  neither problem. Every engine address in the plugin is verified against this exact
+  binary (no ASLR, so addresses are absolute and stable).
+- For two instances on one machine: a second copy of the game directory. The retail
+  single-instance guard is just a named mutex; `agent launch --instance 2` starts the
+  second copy with the mutex renamed in memory.
+
+## Quick start
+
+```powershell
+dotnet build KotorCoop.slnx
+pwsh src\KotorCoop.Plugin\build.ps1 -Install -GameDir 'C:\GOG Games\Star Wars KOTOR (GOG)'
+# copy the same dinput8.dll into the second game directory too
+
+pwsh tools\demo.ps1          # launch both instances, load saves, connect the agents
+pwsh tools\demo.ps1 -Stop    # shut everything down
 ```
-1 Lanik   pos (134.79, 97.84)  ->  (133.50, 98.82)  ->  (132.63, 99.49)
+
+By hand, the pieces are:
+
+```powershell
+$agent = "src\KotorCoop.Agent\bin\Debug\net10.0-windows\KotorCoop.Agent.exe"
+
+& $agent launch --windowed --load-save 1 --game-path 'C:\GOG Games\...\swkotor.exe'
+& $agent launch --instance 2 --game-path 'D:\Games\swkotor-gog-p2\swkotor.exe'
+
+# one agent per instance; --pid because two swkotor.exe are running
+& $agent run --pid <pid1> --kotor --host --port 27140 --name Revan
+& $agent run --pid <pid2> --kotor --join 127.0.0.1:27140 --name Malak
 ```
 
-Two *KOTOR* instances seeing each other does not work yet, blocked by two separate things:
+No game handy? `KotorCoop.MockGame` is a stand-in process the agent drives through the
+identical code path:
 
-| Blocker | Status |
-| --- | --- |
-| **Steam DRM refuses a second instance.** From the original directory a second process exits with code 0 in 0.3s. From a copied directory it gets further but the Steam stub fails with "Application load error 5:0000065434", and `steam_appid.txt` plus `SteamAppId`/`SteamGameId` env vars do not satisfy it. | **Not solvable here.** Going further means defeating the DRM wrapper, which is out of scope. Use a DRM-free (GOG) copy, or run the second instance on another machine or VM: the agent is already networked and does not care. |
-| **Nothing in KOTOR to draw a remote player as.** Stock KOTOR has no spare creature object to drive. | Open. The promising route is hijacking a party member (Carth is in the party and is a real creature in the world), but the follow-AI will contend with the writes, and his live creature record has not been located yet. |
-
-The first is an environment problem with known workarounds. The second is the real
-engineering, and it is the same wall described in [what this does not do](#what-this-does-not-do).
-
-### Reading live KOTOR
-
-The agent has been run against a real save (Taris, character "Lanik Star") and read the
-live player position while the character walked:
-
-```
-KotorCoop agent  KOTOR 1 (session-scoped) [pid 37324 swkotor, x86] anchor=0x23066A04
-session  hosting on 0.0.0.0:27055
-memory   read ok
-local    pos (117.79, 89.31)  ->  (119.40, 90.64)  ->  (122.27, 91.81)  ->  (128.48, 87.60)
-```
-
-73 unit and integration tests pass, including a real host/client pair over loopback UDP
-and a full attach-scan-read-write cycle against a separate live process.
-
-## Quick start: co-op in two terminals, no game required
-
-`KotorCoop.MockGame` is a stand-in game process. It allocates a player structure in
-unmanaged memory and renders whatever remote avatars the agent writes back into it. The
-agent attaches to it with the same code path it uses on `swkotor.exe`, so this exercises
-the real scanner and the real memory reads and writes.
-
-```bash
-dotnet build
-
-# terminal 1
+```powershell
 dotnet run --project src/KotorCoop.MockGame -- --host --name Revan
-
-# terminal 2
 dotnet run --project src/KotorCoop.MockGame -- --join 127.0.0.1 --name Malak
-```
-
-Both windows show a top-down map. `@` is you, numbers are other players.
-
-```
-WASD  move          M  change module (tests the area filter)
-Q/E   turn          F  toggle a shared world flag
-                    X  take damage
-                    Esc quit
-```
-
-Walk around in one window and watch the other. Press `F` in either and the flag flips in
-both: that is the world progression channel, not just avatar replication.
-
-## Testing against the real game
-
-```bash
-# 1. launch KOTOR windowed (backs up swkotor.ini first)
-dotnet run --project src/KotorCoop.Agent -- launch --windowed
-
-# 2. load a save, take control of your character
-
-# 3. find your coordinates and watch them live
-dotnet run --project src/KotorCoop.Agent -- track --process swkotor
-```
-
-`track` runs a guided differential scan: it takes every float in the process that could be
-a world coordinate, then asks you to walk, stop, walk, stop, keeping only the addresses
-that behave the way a position does. A few rounds cuts millions of candidates to a
-handful. It then prints your coordinates live as you move, plus a profile snippet.
-
-Full walkthrough, including turning a session-scoped address into a durable pointer path:
-[`docs/FINDING-OFFSETS.md`](docs/FINDING-OFFSETS.md).
-
-Your install is already identified: Steam `swkotor.exe` v1.0.3, x86, image base
-`0x400000`, **no ASLR**, entry point inside a `.bind` packer section. See
-[`profiles/kotor1.json`](profiles/kotor1.json).
-
-## Commands
-
-```
-KotorCoop.Agent
-  launch    start KOTOR, optionally windowed
-  track     guided offset discovery + live position readout
-  run       attach and run the co-op loop against a completed profile
-  scan      raw interactive memory scanner
-  info      modules and memory regions of a target
-  profiles  list offset profiles
-
-KotorCoop.MockGame
-  --host / --join <host[:port]>   run a session
-  --name --port --module --tick --interp
-  --auto --exit-after <s>         unattended runs, for scripted verification
 ```
 
 ## How it works
 
 ```
-   swkotor.exe                    KotorCoop.Agent                    network
-  +-------------+     read       +-----------------+
-  |  player     | -------------> |  ProfileGame    |  PlayerState
-  |  structure  |                |  Bridge         | -----------+
-  |             | <------------- |  (JSON offsets) |            |
-  +-------------+     write      +-----------------+            v
-                                                        +----------------+
-                                 +-----------------+    |  CoopHost      |
-                                 |  SnapshotBuffer | <--|  or CoopClient | <--> UDP
-                                 |  (interpolate)  |    |                |
-                                 +-----------------+    |  EventFlagStore|
-                                                        +----------------+
+ swkotor.exe  (x86)                agent (x64, external)              network
++-------------------+   found by   +------------------+
+| dinput8.dll proxy |  signature   |  KotorGameBridge |   PlayerState,
+|  (C# NativeAOT)   | <----------> |  reads player,   |   items, enemies,   UDP
+|  SharedBlock      |    scan      |  writes peers    | <----------------> peers
+|  frame hook       |              |  runs the        |   flags, journal
+|  engine calls     |              |  CoopSession     |
++-------------------+              +------------------+
 ```
 
-- **Star relay, not mesh.** Clients talk only to the host, which broadcasts the combined
-  world. One machine decides what is true. Same trade FromSoftware's netcode makes.
-- **Avatars are unreliable, world flags are reliable.** A lost position update is
-  superseded 50 ms later; "the door is open" is retransmitted until acknowledged.
-- **Remote players are interpolated on a 100 ms delay**, never extrapolated. That is the
-  difference between a smooth remote avatar and the rubber-banding Seamless Co-op players
-  complain about.
-- **A 4-byte flag version rides every snapshot.** Clients detect divergence from that and
-  request a full flag set only when it actually differs.
+- **Division of labour**: all discovery is external (the agent scans for the creature
+  vtable, reads state, runs the UDP session); all engine calls are in-process (the
+  plugin hooks the `SwapBuffers` IAT slot for a main-thread per-frame callback and
+  calls the engine's own NWScript machinery: `CreateObject`, `ActionMoveToLocation`,
+  `CreateItemOnFloor`, `SetState`, ...). The two halves meet at a versioned shared
+  block the plugin allocates and the agent finds by signature.
+- **Star relay, not mesh.** Clients talk only to the host; one machine decides what is
+  true. Same trade FromSoftware makes.
+- **Avatars stream, world truth is reliable.** Positions are unreliable and superseded
+  every 50 ms; flags, items, doors and journal entries are retransmitted until acked,
+  with version tripwires in every snapshot for divergence repair.
+- **Everything monotonic merges upward** (quest states, door states, globals), so
+  replayed or reordered packets can never walk the world backwards.
+- **Authority is explicit**: your character is yours alone; enemies are the host's
+  (clients' copies are pinned at 1 hp and mirror the host's outcomes, with client
+  damage merged in host-side); a phantom belongs to its player and cannot be killed
+  locally, only knocked about.
 
-More detail: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
-
-## What this does not do
-
-Being blunt about the gap, because it is the whole difficulty of the project:
-
-**Reading KOTOR is a scanning exercise. Writing a second player into it is not.** Stock
-KOTOR has no spare creature slot to drive and no concept of a remote entity, so there is
-nothing to write a remote avatar into. `profiles/kotor1.json` is therefore read-only and
-the agent honestly reports `write: n/a`. Getting past that means spawning and driving a
-real creature through the engine's own object system, which is a reverse engineering
-project, not a configuration change.
-
-Also out of scope here: dialogue arbitration (KOTOR's conversation system is a blocking
-full-screen cinematic built around one local player), combat state, module transition
-gating, inventory, and save handling.
-
-The realistic long-term path for actual KOTOR co-op is
-[reone](https://github.com/seedhartha/reone), an open-source reimplementation of the
-Odyssey engine, where multiplayer is an ordinary large feature rather than an
-archaeology project. This repository is the honest version of what an external agent can
-do against the retail binary.
-
-## The in-process plugin
-
-External memory access can read KOTOR perfectly but cannot write to it usefully: the
-position field is a per-frame mirror the engine rewrites 63 times a second (measured), so
-writes never reach the simulation. Anything that creates or moves a remote player has to
-run *inside* the process and go through the engine's own functions.
-
-`src/KotorCoop.Plugin` is that in-process half, and it is **C#** - .NET 10's NativeAOT
-supports `win-x86`, which is what makes a managed plugin possible inside a 32-bit game
-from 2003.
-
-It is built as `dinput8.dll` and installed beside `swkotor.exe`. Windows searches the
-executable's own directory before the system directory for a DLL that is not a KnownDLL,
-so **the game loads it itself**: no injector, no `CreateRemoteThread`, nothing to keep
-running. All six DirectInput exports are re-implemented and forwarded to the real system
-DLL; `DirectInput8Create` is the hook point, because the game calls it during startup.
-
-```bash
-# build only
-pwsh src/KotorCoop.Plugin/build.ps1
-
-# build and install into the game directory
-pwsh src/KotorCoop.Plugin/build.ps1 -Install
-
-# remove it again
-pwsh src/KotorCoop.Plugin/build.ps1 -Uninstall
-```
-
-Verified working end to end:
-
-```
-[19:20:17.344] forwarding to C:\WINDOWS\system32\dinput8.dll (module 0x714F0000)
-[19:20:17.344] === KotorCoop plugin loaded into pid 28524 ===
-[19:20:17.345] shared block at 0xFFD0000 (592 bytes)
-[19:20:17.345] worker thread started
-```
-
-The plugin publishes a `SharedBlock` whose layout is byte-identical to the mock harness's
-`GameStateBlock`, so the existing tested scanner and `ProfileGameBridge` drive it with
-**no new .NET code** - `profiles/plugin.json` is a near copy of `profiles/mockgame.json`.
-The agent locates it by signature scan (1 hit, exact match with the plugin's own log) and
-reads a heartbeat that distinguishes a live plugin from a stale block in freed memory.
-
-The build script refuses to install a non-x86 image, because an x64 DLL would simply fail
-to load and the symptom - game runs, plugin never appears - looks exactly like a code bug.
+`Handoff.md` is the deep documentation: verified engine addresses and structures,
+traps (each of which cost real time), per-feature status, and the research trail.
+`docs/re/` holds the underlying reverse-engineering notes; `tools/` the helper scripts
+and the symbol-database queries everything was derived from.
 
 ## Layout
 
 ```
 src/KotorCoop.Protocol   wire format: packets, codec, player state
-src/KotorCoop.Memory     OpenProcess, AOB scanner, pointer chains, offset profiles
-src/KotorCoop.Session    UDP transport, host/client, interpolation, world flags
-src/KotorCoop.Agent      CLI: launch, autotrack, track, run, scan, info
-src/KotorCoop.MockGame   stand-in game process for testing without KOTOR
+src/KotorCoop.Memory     OpenProcess, AOB scanner, engine bridge, offset profiles
+src/KotorCoop.Session    UDP transport, host/client, interpolation, stores, agent pump
+src/KotorCoop.Agent      CLI: launch, load, run, scan, track, info
 src/KotorCoop.Plugin     in-process plugin (NativeAOT win-x86, installs as dinput8.dll)
-tests/KotorCoop.Tests    73 tests
-profiles/                JSON offset profiles
+src/KotorCoop.MockGame   stand-in game process for testing without KOTOR
+tests/KotorCoop.Tests    unit + loopback integration tests
+profiles/                JSON offset profiles (mock + legacy paths)
+tools/                   RE helpers, demo scripts, the kotor1_0_3 symbol database
 ```
 
-## Requirements
+## Honest limitations
 
-.NET 10 SDK, Windows. The agent must run as the same user that launched the game (or
-elevated), or `OpenProcess` returns access denied.
+- **Dialogue and cutscenes are per-player.** Both players can talk to the same NPC and
+  each gets the full conversation; outcomes converge through the globals/journal
+  channels, but rewards can duplicate. While a player is mid-conversation the session
+  freezes enemy publication for them (the engine disarms hostiles during dialogue).
+- **Party members are not reconciled yet** — each instance runs its own copies.
+- **Item identity is a blueprint resref**: upgrades and charges don't travel yet.
+- **Two-instance startup still shows the menu briefly** and instance 2's automated
+  save-load is unreliable (menu input injection is flaky; the in-process load path is
+  mapped in `Handoff.md` addendum 0 and is the planned fix, together with an in-game
+  Connect menu).
+- KOTOR 2 is untouched, and only GOG v1.0.3 addresses are known.
