@@ -21,7 +21,12 @@ public sealed class CoopHost : ICoopSession
         public required string Name;
         public PlayerState LastState = PlayerState.Empty;
         public long LastSeenMs;
-        public SessionCapabilities Capabilities = SessionCapabilities.All;
+
+        /// <summary>The install-time verdict from this peer's Hello digest.</summary>
+        public CompatibilityVerdict InstallVerdict = new(RefusalReason.None, SessionCapabilities.All, []);
+
+        /// <summary>The peer's global-variable catalogue digest, 0 until it reports one.</summary>
+        public uint WorldGlobals;
     }
 
     public const uint HostPeerId = 1;
@@ -155,6 +160,27 @@ public sealed class CoopHost : ICoopSession
     }
 
     private CompatibilityVerdict? _compatibility;
+    private uint _localWorldGlobals;
+
+    public void PublishWorldDigest(uint globalsCatalogue) => _localWorldGlobals = globalsCatalogue;
+
+    /// <summary>
+    /// This peer's effective capabilities: its install verdict, refined by whether its
+    /// in-world globals catalogue matches the host's. Both digests must be resolved
+    /// (non-zero) before a difference counts — an unresolved catalogue is "unknown", not a
+    /// mismatch.
+    /// </summary>
+    private CompatibilityVerdict EffectiveVerdict(PeerConnection peer)
+    {
+        bool globalsMismatch = _localWorldGlobals != 0 && peer.WorldGlobals != 0
+            && _localWorldGlobals != peer.WorldGlobals;
+
+        return ContentCompatibility.ApplyWorldMismatch(
+            peer.InstallVerdict,
+            globalsCatalogueMismatch: globalsMismatch,
+            saveIdentityMismatch: false,
+            moduleGitMismatch: false);
+    }
 
     /// <summary>
     /// The narrowest capability set across all admitted peers. One peer running a mod that
@@ -170,7 +196,7 @@ public sealed class CoopHost : ICoopSession
                 SessionCapabilities caps = SessionCapabilities.All;
                 foreach (PeerConnection peer in _peers.Values)
                 {
-                    caps &= peer.Capabilities;
+                    caps &= EffectiveVerdict(peer).Allowed;
                 }
 
                 return caps;
@@ -279,6 +305,7 @@ public sealed class CoopHost : ICoopSession
         }
 
         BroadcastEnemies(now, recipients);
+        BroadcastWorldDigest(now, recipients);
         _buffer.PruneStale(now, _settings.PeerTimeoutMs);
     }
 
@@ -302,6 +329,34 @@ public sealed class CoopHost : ICoopSession
         }
 
         int length = PacketCodec.Write(_sendBuffer, new EnemySnapshotPacket(now, enemies));
+        if (length == 0)
+        {
+            return;
+        }
+
+        foreach (PeerConnection peer in recipients)
+        {
+            _channel.Send(peer.EndPoint, _sendBuffer.AsSpan(0, length));
+        }
+    }
+
+    /// <summary>
+    /// Sends the host's in-world digest so each client can judge the globals-catalogue
+    /// match from its side too. Cheap and stable, so a low rate is plenty; sent only once
+    /// the host's catalogue has resolved.
+    /// </summary>
+    private long _lastWorldDigestMs;
+
+    private void BroadcastWorldDigest(long now, List<PeerConnection> recipients)
+    {
+        uint globals = _localWorldGlobals;
+        if (globals == 0 || recipients.Count == 0 || now - _lastWorldDigestMs < 1000)
+        {
+            return;
+        }
+
+        _lastWorldDigestMs = now;
+        int length = PacketCodec.Write(_sendBuffer, new WorldDigestPacket(HostPeerId, globals));
         if (length == 0)
         {
             return;
@@ -380,6 +435,10 @@ public sealed class CoopHost : ICoopSession
                 HandleEnemyReport(span, now);
                 break;
 
+            case PacketType.WorldDigest:
+                HandleWorldDigest(span);
+                break;
+
             case PacketType.Ping:
                 HandlePing(datagram.From, span, now);
                 break;
@@ -434,7 +493,7 @@ public sealed class CoopHost : ICoopSession
             if (existing is not null)
             {
                 existing.LastSeenMs = now;
-                existing.Capabilities = verdict.Allowed;
+                existing.InstallVerdict = verdict;
                 assignedId = existing.Id;
             }
             else
@@ -457,7 +516,7 @@ public sealed class CoopHost : ICoopSession
                     EndPoint = from,
                     Name = string.IsNullOrWhiteSpace(hello.PlayerName) ? $"peer{assignedId}" : hello.PlayerName,
                     LastSeenMs = now,
-                    Capabilities = verdict.Allowed,
+                    InstallVerdict = verdict,
                 };
             }
         }
@@ -614,6 +673,24 @@ public sealed class CoopHost : ICoopSession
             if (start + ProtocolConstants.MaxJournalEntriesPerPacket >= entries.Count)
             {
                 break;
+            }
+        }
+    }
+
+    private void HandleWorldDigest(ReadOnlySpan<byte> span)
+    {
+        if (PacketCodec.ReadWorldDigest(span) is not { } report)
+        {
+            _channel.NoteMalformed();
+            return;
+        }
+
+        lock (_gate)
+        {
+            if (_peers.TryGetValue(report.PeerId, out PeerConnection? peer))
+            {
+                peer.WorldGlobals = report.GlobalsCatalogue;
+                _compatibility = EffectiveVerdict(peer);
             }
         }
     }

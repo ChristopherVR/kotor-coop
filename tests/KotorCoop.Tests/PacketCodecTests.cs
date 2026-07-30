@@ -47,6 +47,16 @@ public class PacketCodecTests
     }
 
     [Fact]
+    public void WorldDigestRoundTrips()
+    {
+        Span<byte> buffer = stackalloc byte[ProtocolConstants.MaxPacketSize];
+        WorldDigestPacket original = new(2, 0xDEADBEEF);
+
+        int length = PacketCodec.Write(buffer, original);
+        Assert.Equal(original, PacketCodec.ReadWorldDigest(buffer[..length]));
+    }
+
+    [Fact]
     public void EnemyReportRoundTrips()
     {
         Span<byte> buffer = stackalloc byte[ProtocolConstants.MaxPacketSize];

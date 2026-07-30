@@ -131,6 +131,11 @@ public sealed class CoopAgent(IGameBridge bridge, ICoopSession session, AgentSet
             return;
         }
 
+        // Report our in-world content fingerprint so a mismatch only knowable once a save
+        // is loaded (the globals catalogue) refines the capabilities below. Cheap and
+        // stable; the session rate-limits what actually goes on the wire.
+        session.PublishWorldDigest(bridge.GlobalsCatalogueDigest);
+
         // Each channel is gated on the negotiated capability set: a mod difference that
         // would corrupt a channel disables that channel for the session (a different
         // globals catalogue drops world state; a different save drops enemies/doors/items)

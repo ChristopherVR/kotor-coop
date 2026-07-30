@@ -60,6 +60,8 @@ public class PausePumpTests
 
         public JournalStore Journal { get; } = new();
 
+        public void PublishWorldDigest(uint globalsCatalogue) { }
+
         public bool IsEnemyAuthority => false;
 
         public SessionStats GetStats() => new();

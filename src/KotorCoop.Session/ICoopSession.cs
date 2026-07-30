@@ -65,6 +65,14 @@ public interface ICoopSession : IDisposable
     /// </summary>
     IReadOnlyList<EnemyState> GetEnemyReports(string module);
 
+    /// <summary>
+    /// Announces this instance's in-world content fingerprint (currently the
+    /// global-variable catalogue digest, 0 until resolved). Sent to the peer so a mismatch
+    /// only knowable in-world refines the negotiated capabilities. Cheap to call every
+    /// pump; the session only puts it on the wire when it changes or periodically.
+    /// </summary>
+    void PublishWorldDigest(uint globalsCatalogue);
+
     /// <summary>The shared quest journal, merged upward across every player.</summary>
     JournalStore Journal { get; }
 

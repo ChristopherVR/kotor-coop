@@ -103,6 +103,8 @@ public class TravelPumpTests
 
         public JournalStore Journal { get; } = new();
 
+        public void PublishWorldDigest(uint globalsCatalogue) { }
+
         public void SetJournalEntry(string questTag, int state) => Journal.Merge(questTag, state);
 
         public SessionCapabilities Capabilities { get; set; } = SessionCapabilities.All;

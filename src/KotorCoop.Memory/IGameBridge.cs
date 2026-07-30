@@ -41,6 +41,13 @@ public interface IGameBridge : IDisposable
     /// </summary>
     List<uint> CollectVanishedItems() => [];
 
+    /// <summary>
+    /// A digest of the global-variable catalogue (0 when unresolved or unsupported).
+    /// Exchanged in-world so two saves whose catalogues differ — whose (type, index) keys
+    /// would name different variables — do not silently corrupt each other's quest state.
+    /// </summary>
+    uint GlobalsCatalogueDigest => 0;
+
     /// <summary>False when this bridge cannot see the game's world/quest state.</summary>
     bool SupportsWorldState => false;
 

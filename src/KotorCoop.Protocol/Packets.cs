@@ -102,6 +102,15 @@ public sealed record EnemySnapshotPacket(long ServerTimeMs, IReadOnlyList<EnemyS
 public sealed record EnemyReportPacket(uint PeerId, string Module, IReadOnlyList<EnemyState> Enemies);
 
 /// <summary>
+/// A peer's in-world content fingerprint, sent both ways once a save is loaded and
+/// repeated periodically. <paramref name="GlobalsCatalogue"/> is a digest of the
+/// global-variable catalogue (0 until resolved); a mismatch means the two saves' (type,
+/// index) keys name different variables, which would silently corrupt quest state, so the
+/// world-state and door channels are dropped when it differs.
+/// </summary>
+public sealed record WorldDigestPacket(uint PeerId, uint GlobalsCatalogue);
+
+/// <summary>
 /// A quest journal advance: entry <paramref name="QuestTag"/> reached
 /// <paramref name="State"/>. States only rise (the engine itself refuses to lower one),
 /// so the merge is a max and replays are harmless.

@@ -41,11 +41,47 @@ public sealed class CoopClient : ICoopSession
     private long _lastInboundMs;
     private double _roundTripMs;
     private string _rejectReason = string.Empty;
+    private CompatibilityVerdict? _installVerdict;
     private CompatibilityVerdict? _compatibility;
+    private uint _localWorldGlobals;
+    private uint _hostWorldGlobals;
+    private long _lastWorldDigestMs;
 
     public SessionCapabilities Capabilities => _compatibility?.Allowed ?? SessionCapabilities.All;
 
     public CompatibilityVerdict? Compatibility => _compatibility;
+
+    public void PublishWorldDigest(uint globalsCatalogue)
+    {
+        if (globalsCatalogue == _localWorldGlobals)
+        {
+            return;
+        }
+
+        _localWorldGlobals = globalsCatalogue;
+        RefineCompatibility();
+    }
+
+    /// <summary>
+    /// Recomputes the client's verdict from the install compare plus the in-world
+    /// globals-catalogue match. Both digests must be resolved before a difference counts.
+    /// </summary>
+    private void RefineCompatibility()
+    {
+        if (_installVerdict is not { } install)
+        {
+            return;
+        }
+
+        bool globalsMismatch = _localWorldGlobals != 0 && _hostWorldGlobals != 0
+            && _localWorldGlobals != _hostWorldGlobals;
+
+        _compatibility = ContentCompatibility.ApplyWorldMismatch(
+            install,
+            globalsCatalogueMismatch: globalsMismatch,
+            saveIdentityMismatch: false,
+            moduleGitMismatch: false);
+    }
 
     public CoopClient(SessionSettings settings, IPEndPoint hostEndPoint)
     {
@@ -270,6 +306,18 @@ public sealed class CoopClient : ICoopSession
             SendJournalOp(op);
         }
 
+        // Report our in-world digest so the host can judge the globals match. Stable, so a
+        // low rate is plenty; only once our catalogue has resolved.
+        if (_localWorldGlobals != 0 && now - _lastWorldDigestMs >= 1000)
+        {
+            _lastWorldDigestMs = now;
+            int length = PacketCodec.Write(_sendBuffer, new WorldDigestPacket(_localPeerId, _localWorldGlobals));
+            if (length > 0)
+            {
+                _channel.Send(_hostEndPoint, _sendBuffer.AsSpan(0, length));
+            }
+        }
+
         _buffer.PruneStale(now, _settings.PeerTimeoutMs);
     }
 
@@ -459,6 +507,15 @@ public sealed class CoopClient : ICoopSession
 
                 break;
 
+            case PacketType.WorldDigest:
+                if (PacketCodec.ReadWorldDigest(span) is { } hostDigest)
+                {
+                    _hostWorldGlobals = hostDigest.GlobalsCatalogue;
+                    RefineCompatibility();
+                }
+
+                break;
+
             case PacketType.ItemSnapshot:
                 if (PacketCodec.ReadItemSnapshot(span) is { } itemSnapshot)
                 {
@@ -503,7 +560,9 @@ public sealed class CoopClient : ICoopSession
             // same capability set (so both ends gate the same channels) and the same
             // warnings to show. Computed identically, so the two agree without negotiating.
             ContentCompatibility.AllowDifferentSave = _settings.AllowDifferentSave;
-            _compatibility = ContentCompatibility.Compare(_settings.Digest, welcome.Digest);
+            _installVerdict = ContentCompatibility.Compare(_settings.Digest, welcome.Digest);
+            _compatibility = _installVerdict;
+            RefineCompatibility();
         }
     }
 

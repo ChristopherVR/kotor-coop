@@ -210,6 +210,91 @@ public class SessionIntegrationTests
     }
 
     [Fact]
+    public async Task AGlobalsCatalogueMismatchDropsWorldStateBothWays()
+    {
+        // Two players on different saves (or different global-variable mods) must not fuse
+        // each other's quest flags. The install digests match here (same exe etc.), so the
+        // drop must come entirely from the in-world catalogue exchange.
+        using CoopHost host = new(new SessionSettings { PlayerName = "Revan", Port = 0, TickRate = 30 });
+        using CoopClient client = new(
+            new SessionSettings { PlayerName = "Malak", TickRate = 30 },
+            new IPEndPoint(IPAddress.Loopback, host.ListenEndPoint.Port));
+
+        using CancellationTokenSource cts = new(Timeout + TimeSpan.FromSeconds(15));
+        Task hostTask = host.RunAsync(cts.Token);
+        Task clientTask = client.RunAsync(cts.Token);
+
+        PlayerState state = new(Vector3f.Zero, 0f, "end_m01aa", 100, 0);
+        void Publish()
+        {
+            host.PublishLocalState(state);
+            client.PublishLocalState(state);
+            host.PublishWorldDigest(0x1111_1111);       // the two catalogues differ
+            client.PublishWorldDigest(0x2222_2222);
+        }
+
+        Assert.True(await WaitForAsync(() => client.IsConnected, Timeout, Publish));
+
+        // Both ends must independently narrow the capability set — world state and doors
+        // off, phantoms still on.
+        Assert.True(
+            await WaitForAsync(
+                () => (host.Capabilities & SessionCapabilities.WorldState) == 0
+                    && (client.Capabilities & SessionCapabilities.WorldState) == 0,
+                Timeout,
+                Publish),
+            "world state was not dropped on a globals-catalogue mismatch");
+
+        Assert.NotEqual(SessionCapabilities.None, host.Capabilities & SessionCapabilities.Phantoms);
+        Assert.NotEqual(SessionCapabilities.None, client.Capabilities & SessionCapabilities.Phantoms);
+
+        await cts.CancelAsync();
+        await Task.WhenAll(hostTask, clientTask);
+    }
+
+    [Fact]
+    public async Task MatchingCataloguesKeepTheFullCapabilitySet()
+    {
+        using CoopHost host = new(new SessionSettings { PlayerName = "Revan", Port = 0, TickRate = 30 });
+        using CoopClient client = new(
+            new SessionSettings { PlayerName = "Malak", TickRate = 30 },
+            new IPEndPoint(IPAddress.Loopback, host.ListenEndPoint.Port));
+
+        using CancellationTokenSource cts = new(Timeout + TimeSpan.FromSeconds(15));
+        Task hostTask = host.RunAsync(cts.Token);
+        Task clientTask = client.RunAsync(cts.Token);
+
+        PlayerState state = new(Vector3f.Zero, 0f, "end_m01aa", 100, 0);
+        void Publish()
+        {
+            host.PublishLocalState(state);
+            client.PublishLocalState(state);
+            host.PublishWorldDigest(0xABCD_1234);       // identical catalogues
+            client.PublishWorldDigest(0xABCD_1234);
+        }
+
+        Assert.True(await WaitForAsync(() => client.IsConnected, Timeout, Publish));
+
+        // Give the digests a couple of exchange rounds, then confirm nothing was dropped.
+        Assert.True(await WaitForAsync(
+            () => client.Compatibility is not null,
+            Timeout,
+            Publish));
+
+        for (int i = 0; i < 10; i++)
+        {
+            Publish();
+            await Task.Delay(50);
+        }
+
+        Assert.Equal(SessionCapabilities.All, host.Capabilities);
+        Assert.Equal(SessionCapabilities.All, client.Capabilities);
+
+        await cts.CancelAsync();
+        await Task.WhenAll(hostTask, clientTask);
+    }
+
+    [Fact]
     public async Task ClientEnemyReportsReachTheHost()
     {
         using CoopHost host = new(new SessionSettings { PlayerName = "Revan", Port = 0, TickRate = 30 });

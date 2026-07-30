@@ -350,6 +350,28 @@ public static class PacketCodec
         return new EnemyReportPacket(peerId, module, enemies);
     }
 
+    public static int Write(Span<byte> buffer, WorldDigestPacket packet)
+    {
+        PacketWriter w = new(buffer);
+        w.WriteHeader(PacketType.WorldDigest);
+        w.WriteUInt32(packet.PeerId);
+        w.WriteUInt32(packet.GlobalsCatalogue);
+        return w.Failed ? 0 : w.Position;
+    }
+
+    public static WorldDigestPacket? ReadWorldDigest(ReadOnlySpan<byte> buffer)
+    {
+        PacketReader r = new(buffer);
+        if (r.ReadHeader() != PacketType.WorldDigest)
+        {
+            return null;
+        }
+
+        uint peerId = r.ReadUInt32();
+        uint globals = r.ReadUInt32();
+        return r.Failed ? null : new WorldDigestPacket(peerId, globals);
+    }
+
     public static int Write(Span<byte> buffer, JournalOpPacket packet)
     {
         PacketWriter w = new(buffer);

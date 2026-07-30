@@ -754,6 +754,9 @@ public sealed class KotorGameBridge : IGameBridge
 
     public uint GlobalCatalogueDigest => _globals.CatalogueDigest;
 
+    /// <summary>The catalogue digest for the compatibility handshake; 0 until resolved.</summary>
+    public uint GlobalsCatalogueDigest => _globals.IsResolved ? _globals.CatalogueDigest : 0;
+
     /// <summary>
     /// Locates the global variable table and takes the baseline snapshot. Called from
     /// TryResolve, since the catalogue is fixed for as long as a save is loaded.

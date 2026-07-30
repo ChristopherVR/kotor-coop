@@ -74,4 +74,12 @@ public enum PacketType : byte
     /// client's whole fight would be cosmetic.
     /// </summary>
     EnemyReport = 22,
+
+    /// <summary>
+    /// both ways: a fingerprint of the in-world state that only becomes knowable once a
+    /// save is loaded (the global-variable catalogue). Exchanged so a mismatch the
+    /// install digest could not see — the catalogue is read from game memory, not files —
+    /// refines the negotiated capabilities.
+    /// </summary>
+    WorldDigest = 23,
 }
