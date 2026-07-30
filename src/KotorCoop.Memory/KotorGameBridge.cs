@@ -1465,41 +1465,100 @@ public sealed class KotorGameBridge : IGameBridge
         return true;
     }
 
+    /// <summary>CSWSItem vtable; every 4-byte occurrence in private memory is an item.</summary>
+    private const uint ItemVtable = 0x00748DA0;
+
+    /// <summary>objectId -&gt; lowercased tag, rebuilt when an id is not found.</summary>
+    private readonly Dictionary<uint, string> _itemTags = [];
+
     /// <summary>
     /// Reads the tag of the item equipped in an inventory slot, lowercased so it can be
-    /// used as a blueprint resref on the far side. Empty when the slot is empty or
-    /// anything on the pointer chain is unreadable.
+    /// used as a blueprint resref on the far side. Empty when the slot is empty or the
+    /// item cannot be resolved.
     ///
-    /// The slot may hold either a CSWSItem base or the CSWSObject embedded at +0x10 —
-    /// the same two-shape hazard the ground-item code hit — so the object id position
-    /// decides which layout is in hand before the tag is trusted.
+    /// ⚠ A CSWInventory slot holds an OBJECT ID, not a pointer. Measured live: the PC's
+    /// body and right-weapon slots read 0xC9 and 0xCA. Dereferencing them as pointers
+    /// silently produced empty strings for every slot, which looked exactly like "the
+    /// player has nothing equipped" — the first live run of equipment sync published
+    /// three empty resrefs and nothing was ever equipped on a phantom.
+    ///
+    /// Ids are resolved through a tag cache built by scanning for the CSWSItem vtable,
+    /// because the external agent has no GetGameObject. Both item layouts are accepted
+    /// (id at +0x14 = CSWSItem base, at +0x04 = the CSWSObject inside it).
     /// </summary>
     private string ReadEquippedResref(nint creature, int slotOffset)
     {
         if (!_memory.TryReadPointer(creature + OffInventory, out nint inventory) || inventory == 0
-            || !_memory.TryReadPointer(inventory + slotOffset, out nint item) || item == 0)
+            || !_memory.TryReadUInt32(inventory + slotOffset, out uint itemId)
+            || itemId is 0 or >= 0x7F000000)
         {
             return string.Empty;
         }
 
-        // CSWSItem base: object id at +0x14, tag at +0x28. Embedded CSWSObject: id at
-        // +0x04, tag at +0x18.
-        nint tagAddress;
-        if (_memory.TryReadUInt32(item + 0x14, out uint idAtBase) && idAtBase is > 0 and < 0x7F000000)
+        if (_itemTags.TryGetValue(itemId, out string? cached))
         {
-            tagAddress = item + 0x28;
-        }
-        else if (_memory.TryReadUInt32(item + 0x04, out uint idAtObject) && idAtObject is > 0 and < 0x7F000000)
-        {
-            tagAddress = item + 0x18;
-        }
-        else
-        {
-            return string.Empty;
+            return cached;
         }
 
-        string tag = ReadExoString(tagAddress);
-        return tag.Length is 0 or > 16 ? string.Empty : tag.ToLowerInvariant();
+        RebuildItemTagCache();
+        return _itemTags.TryGetValue(itemId, out string? found) ? found : string.Empty;
+    }
+
+    /// <summary>
+    /// Trims a tag down to a usable blueprint resref: lowercase, and cut at the first
+    /// character a resref cannot contain. A CExoString's length can include the
+    /// terminating null (and occasionally trailing junk), which produced resrefs like
+    /// "g_a_clothes01\0" — the engine's CreateItemOnObject then found no blueprint and
+    /// the equip was refused with failure 7 while the name LOOKED right in the log.
+    /// </summary>
+    private static string SanitiseResref(string tag)
+    {
+        int end = 0;
+        while (end < tag.Length && end < 16)
+        {
+            char c = char.ToLowerInvariant(tag[end]);
+            if (!(char.IsAsciiLetterOrDigit(c) || c == '_'))
+            {
+                break;
+            }
+
+            end++;
+        }
+
+        return tag[..end].ToLowerInvariant();
+    }
+
+    private void RebuildItemTagCache()
+    {
+        _itemTags.Clear();
+
+        BytePattern pattern = BytePattern.FromBytes(BitConverter.GetBytes(ItemVtable));
+        PatternScanner scanner = new(_memory);
+
+        foreach (nint address in scanner.ScanAll(pattern, ScanScope.PrivateCommitted, limit: 512))
+        {
+            uint id;
+            nint tagAddress;
+
+            if (_memory.TryReadUInt32(address + 0x14, out id) && id is > 0 and < 0x7F000000)
+            {
+                tagAddress = address + 0x28;
+            }
+            else if (_memory.TryReadUInt32(address + 0x04, out id) && id is > 0 and < 0x7F000000)
+            {
+                tagAddress = address + 0x18;
+            }
+            else
+            {
+                continue;
+            }
+
+            string tag = SanitiseResref(ReadExoString(tagAddress));
+            if (tag.Length > 0)
+            {
+                _itemTags[id] = tag;
+            }
+        }
     }
 
     /// <summary>Reads a CExoString: a char* and a length, not a null-terminated buffer.</summary>
