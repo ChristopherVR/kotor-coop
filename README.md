@@ -31,6 +31,12 @@ Both players, each in their own full game:
   pose on the other side, and it stands back up on recovery.
 - **See each other on the map**: each peer is a live pin on the M-screen map, riding the
   engine's own map-note waypoints — no interface hacking.
+- **Share one party**: the host drives the companions (Trask, Carth...) with the game's own
+  AI and each client freezes and mirrors them, so they stay one synchronised group instead
+  of two that drift. `--no-party-sync` opts out.
+- **Connect from the game**: a "Co-op" button on the main menu starts the session from a
+  `coop.ini` (host/join, address, password, name). A password keeps strangers out; a
+  dropped player reconnects automatically and keeps their slot.
 
 An unfocused or minimised instance keeps simulating (the plugin suppresses the focus
 pause), which is what makes one-machine testing practical at all.

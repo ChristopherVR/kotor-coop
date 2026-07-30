@@ -8,6 +8,37 @@ no other dependencies. C# throughout.
 
 ---
 
+## 0c. CONNECTION + PARTY BUILD, 2026-07-31 (later) — party sync, password, reconnect, Connect menu
+
+⚠ **Protocol is version 5, shared block is version 8.** Rebuild both agents and reinstall
+the plugin in both game folders before the next live run. Four features, all unit-tested
+(156 tests), none yet live-verified:
+
+- **Party reconciliation** (companions no longer drift). Host-authoritative: the host's own
+  engine AI drives Trask/Carth and publishes their state (`PartySnapshot`, keyed by NPC
+  ROSTER SLOT — slot is save-stable, object id is not). Each client freezes its own party
+  with the engine solo-mode flag (`partyTable+0x190`, verified via SetSoloMode disasm at
+  0x00565500) and mirrors the host's positions (writes stick because solo mode stops the
+  follow AI — trap 3). Agent-side (KotorGameBridge), no plugin change. Party is a
+  SessionCapability dropped on a save mismatch. Default on, `--no-party-sync` escape hatch.
+  Freeze released on shutdown. Risk: solo-mode behaviour is inferred not measured (first
+  live test: set `+0x190=1` in one instance and play 5 min). Death-swap (player controlling
+  a companion after a PC death) is a known unhandled edge. Full design:
+  `docs/research/party-reconciliation.md`.
+- **Session password**: Hello carries `SessionPassword.Hash`; a host with a password sends
+  a typed `E_PASSWORD` reject to a wrong one. `--password`.
+- **Automatic reconnect**: the client detects link loss (no inbound for the peer timeout)
+  and re-handshakes; the host matches a returning Hello by the client's stable nonce and
+  restores its slot (same id/name, no doubled phantom, no ghost). Survives a host crash or
+  a network blip in-game.
+- **In-game Connect menu** (foundation): the plugin rebinds the dormant main-menu BTN_WARP
+  to "Co-op" (`AddEvent 0x0041AB20`, events 0x27/0x2D → a thiscall stub bumping a connect
+  serial); the agent `--menu` mode reads `coop.ini` (mode/host/port/password/name) and
+  connects on the press. OPT-IN via `coop.ini menu_button=1`, guarded, because the GUI
+  rebind is unverified engine code. The interactive in-game IP-entry panel (reuse
+  `CSWGuiSaveNamePanel`, typed string at panel+0x548, intercept OK) is designed in
+  `docs/research/connect-flow.md` and is the remaining piece.
+
 ## 0b. "PROPER CO-OP" BUILD, 2026-07-31 — research + mod-compat + map + name plates
 
 Five parallel research deep-dives (all in `docs/research/`, verified against the GOG
