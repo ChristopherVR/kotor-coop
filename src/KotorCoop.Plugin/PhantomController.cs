@@ -168,6 +168,15 @@ internal sealed unsafe class PhantomController(SharedBlockView block)
 
         if (block.Command != SharedBlock.CommandSpawnAndDrive)
         {
+            // Idle (a disconnect): despawn any phantoms so a player who left does not leave
+            // a frozen body behind. One per frame keeps it cheap; reset the bookkeeping once
+            // the last body is gone.
+            if (_phantomCount > 0 && !FlushOneBody())
+            {
+                _phantomCount = 0;
+                block.PhantomCount = 0;
+            }
+
             return;
         }
 

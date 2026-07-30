@@ -308,6 +308,22 @@ internal sealed unsafe class SharedBlockView(byte* baseAddress)
     /// <summary>Agent-written: nonzero enables the in-game Co-op menu button.</summary>
     public bool ConnectMenuEnabled => *U32(SharedBlock.OffsetConnectEnable) != 0;
 
+    // ---- in-game console --------------------------------------------------------
+
+    public uint ConsoleSerial
+    {
+        get => *U32(SharedBlock.OffsetConsoleSerial);
+        set => *U32(SharedBlock.OffsetConsoleSerial) = value;
+    }
+
+    /// <summary>Pointer to the null-terminated console command line (96 bytes).</summary>
+    public byte* ConsoleCommand => baseAddress + SharedBlock.OffsetConsoleCommand;
+
+    public uint ConsoleReplySerial => *U32(SharedBlock.OffsetConsoleReplySerial);
+
+    /// <summary>Pointer to the null-terminated status reply for the console (96 bytes).</summary>
+    public byte* ConsoleReply => baseAddress + SharedBlock.OffsetConsoleReply;
+
     public ItemSlotView GetItemSlot(int index) =>
         new(baseAddress + SharedBlock.OffsetItemSlots + (index * SharedBlock.ItemSlotStride));
 

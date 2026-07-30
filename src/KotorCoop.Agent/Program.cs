@@ -433,32 +433,41 @@ internal static class Program
         // never blocks a session.
         ContentDigest digest = ComputeInstallDigest(memory.ProcessId);
 
-        SessionSettings settings = new()
-        {
-            PlayerName = playerName,
-            Port = options.Port,
-            TickRate = options.TickRate,
-            Digest = digest,
-            AllowDifferentSave = options.AllowDifferentSave,
-            Password = password,
-        };
+        // The player name is fixed for the process; the in-game console can vary only the
+        // password (per connect), so the settings factory closes over the resolved name.
+        string effectiveName = playerName;
 
-        using ICoopSession session = mode == CoopMode.Host
-            ? new CoopHost(settings)
-            : new CoopClient(settings, hostEndPoint!);
-
-        CoopAgent agent = new(bridge, session, new AgentSettings
+        AgentSettings agentSettings = new()
         {
             PollRate = options.TickRate,
             FilterByModule = options.FilterByModule,
             FollowHostModule = options.FollowHostModule,
             SyncParty = options.SyncParty,
-        });
+        };
 
-        Task agentTask = agent.RunAsync(cts.Token);
-        AgentDashboard dashboard = new(agent, options.DropFile);
+        using SessionManager manager = new(bridge, agentSettings);
+
+        SessionSettings SettingsFor(string sessionPassword) => new()
+        {
+            PlayerName = effectiveName,
+            Port = options.Port,
+            TickRate = options.TickRate,
+            Digest = digest,
+            AllowDifferentSave = options.AllowDifferentSave,
+            Password = sessionPassword,
+        };
+
+        CoopCommandDispatcher dispatcher = new(manager, bridge, options.Port, SettingsFor);
+
+        // The initial connection goes through the manager directly; every later connect,
+        // disconnect and reconnect arrives through the dispatcher (the ~ console or the menu
+        // button) and swaps the session under the running dashboard.
+        manager.Connect(mode == CoopMode.Host, mode == CoopMode.Host ? null : hostEndPoint, SettingsFor(password));
+
+        Task dispatchTask = dispatcher.RunAsync(cts.Token);
+        AgentDashboard dashboard = new(manager, bridge, options.DropFile);
         await dashboard.RunAsync(cts.Token).ConfigureAwait(false);
-        await agentTask.ConfigureAwait(false);
+        await dispatchTask.ConfigureAwait(false);
 
         return 0;
     }

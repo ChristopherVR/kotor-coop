@@ -47,7 +47,7 @@ internal struct SharedBlock
     /// existing offset profiles keep working. The plugin control fields live AFTER that
     /// range, which is why the block is larger than the profile knows about.
     /// </summary>
-    public const int TotalSize = 0xA00;
+    public const int TotalSize = 0xA80;
 
     public const int ProfileVisibleSize = 0x250;
 
@@ -292,6 +292,28 @@ internal struct SharedBlock
     /// default (the block is zero-initialised), so the GUI rebind — engine-call code that
     /// wants live verification — never runs unless coop.ini enables it.</summary>
     public const int OffsetConnectEnable = 0x9F0;
+
+    // ---- in-game console (version 9) ----------------------------------------------
+    //
+    // The ~ console writes a full command line ("connect 1.2.3.4", "disconnect",
+    // "reconnect", "connect 1.2.3.4 secret") which the agent parses and runs through the
+    // session manager. The agent echoes status/log lines back for the console to render.
+
+    /// <summary>Plugin -&gt; agent. Bumped when a console command is entered; written last.</summary>
+    public const int OffsetConsoleSerial = 0x9F4;
+
+    /// <summary>Plugin -&gt; agent. The command line, null-terminated ascii.</summary>
+    public const int OffsetConsoleCommand = 0x9F8;
+
+    public const int ConsoleCommandLength = 96;
+
+    /// <summary>Agent -&gt; plugin. Bumped when a status/log line is posted for the console.</summary>
+    public const int OffsetConsoleReplySerial = 0xA58;
+
+    /// <summary>Agent -&gt; plugin. The latest status line, null-terminated ascii.</summary>
+    public const int OffsetConsoleReply = 0xA5C;
+
+    public const int ConsoleReplyLength = 96;
 
     public const int ItemSlotCapacity = 8;
 

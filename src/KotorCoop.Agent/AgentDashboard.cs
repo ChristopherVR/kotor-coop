@@ -4,8 +4,13 @@ using KotorCoop.Session;
 
 namespace KotorCoop.Agent;
 
-/// <summary>Console readout for the run command, plus the demo drop key.</summary>
-public sealed class AgentDashboard(CoopAgent agent, string? dropFile = null)
+/// <summary>
+/// Console readout for the run command, plus the demo drop key. Reads the live agent from
+/// the <see cref="SessionManager"/> each tick rather than holding a fixed one, so the view
+/// follows connect/disconnect/reconnect: between sessions there is no agent and the readout
+/// says so instead of rendering stale peers.
+/// </summary>
+public sealed class AgentDashboard(SessionManager manager, IGameBridge bridge, string? dropFile = null)
 {
     /// <summary>
     /// What the D key drops, cycling. KOTOR 1 has no native drop-item UI, so the demo
@@ -123,6 +128,13 @@ public sealed class AgentDashboard(CoopAgent agent, string? dropFile = null)
     /// </summary>
     private void PickUpNearest()
     {
+        CoopAgent? agent = manager.Agent;
+        if (agent is null)
+        {
+            _lastDropNote = "pickup: not connected";
+            return;
+        }
+
         if (agent.Bridge is not KotorGameBridge kotor)
         {
             _lastDropNote = "pickup needs --kotor";
@@ -144,6 +156,13 @@ public sealed class AgentDashboard(CoopAgent agent, string? dropFile = null)
 
     private void Drop(string? requestedResref)
     {
+        CoopAgent? agent = manager.Agent;
+        if (agent is null)
+        {
+            _lastDropNote = "drop: not connected";
+            return;
+        }
+
         PlayerState local = agent.LastLocalState;
         if (!local.IsPlausible || !agent.LastReadSucceeded)
         {
@@ -176,12 +195,21 @@ public sealed class AgentDashboard(CoopAgent agent, string? dropFile = null)
 
     private void Render()
     {
+        CoopAgent? agent = manager.Agent;
+
+        WriteLine($"KotorCoop agent  {bridge.Description}");
+        WriteLine(string.Empty);
+
+        if (agent is null)
+        {
+            RenderDisconnected();
+            return;
+        }
+
         SessionStats stats = agent.Session.GetStats();
         PlayerState local = agent.LastLocalState;
         IReadOnlyList<RemotePeer> peers = agent.LastPeers;
 
-        WriteLine($"KotorCoop agent  {agent.Bridge.Description}");
-        WriteLine(string.Empty);
         WriteLine($"session  {stats.Status}");
         WriteLine($"         peers {stats.PeerCount}  rtt {stats.RoundTripMs:F1}ms  tx {stats.PacketsSent}  rx {stats.PacketsReceived}  malformed {stats.PacketsDropped}");
         WriteLine($"         flags v{stats.FlagVersion} ({agent.Session.Flags.Count} known)  pending ops {stats.PendingFlagOps}");
@@ -256,6 +284,24 @@ public sealed class AgentDashboard(CoopAgent agent, string? dropFile = null)
         WriteLine(string.Empty);
         WriteLine("* = in a different module, so not written into the game.");
         WriteLine("[D] drop an item at your feet   [P] pick the first one up.   Ctrl+C to stop.");
+    }
+
+    /// <summary>Steady-state readout while no session is live (between connects).</summary>
+    private void RenderDisconnected()
+    {
+        WriteLine($"session  {manager.Phase.ToString().ToLowerInvariant()} - {manager.Detail}");
+        WriteLine(string.Empty);
+        WriteLine("not connected.");
+        WriteLine(string.Empty);
+        WriteLine("In-game: press ~ and type  connect <ip> [password] | reconnect | help");
+
+        // Keep the frame height stable so the previous, taller frame is fully overwritten.
+        for (int i = 0; i < 18; i++)
+        {
+            WriteLine(string.Empty);
+        }
+
+        WriteLine("Ctrl+C to stop.");
     }
 
     private static void WriteLine(string text)

@@ -141,8 +141,16 @@ public sealed class KotorGameBridge : IGameBridge
     private const int BlockConnectStatus = 0x9EC;
     private const int BlockConnectEnable = 0x9F0;
 
-    /// <summary>16-byte signature: "KOCOOP01" + version 8 + guard 0xC0FFEE01.</summary>
-    public const string PluginSignature = "4B 4F 43 4F 4F 50 30 31 08 00 00 00 01 EE FF C0";
+    // In-game console command channel, mirroring SharedBlock version 9.
+    private const int BlockConsoleSerial = 0x9F4;
+    private const int BlockConsoleCommand = 0x9F8;
+    private const int BlockConsoleCommandLength = 96;
+    private const int BlockConsoleReplySerial = 0xA58;
+    private const int BlockConsoleReply = 0xA5C;
+    private const int BlockConsoleReplyLength = 96;
+
+    /// <summary>16-byte signature: "KOCOOP01" + version 9 + guard 0xC0FFEE01.</summary>
+    public const string PluginSignature = "4B 4F 43 4F 4F 50 30 31 09 00 00 00 01 EE FF C0";
 
     /// <summary>Agent's view of which coop item id occupies each plugin item slot.</summary>
     private readonly uint[] _itemSlotIds = new uint[BlockItemCapacity];
@@ -481,6 +489,24 @@ public sealed class KotorGameBridge : IGameBridge
         _pluginBlock != 0
         && _memory.TryReadUInt32(_pluginBlock + BlockRemotePauseApplied, out uint applied)
         && applied != 0;
+
+    /// <summary>
+    /// Clears the co-op state the plugin is driving so a disconnect leaves a clean game:
+    /// zero remote peers (the plugin despawns the phantoms it spawned for them), the party
+    /// freeze released, and the spawn command set idle. Best-effort — a disconnect must
+    /// never throw.
+    /// </summary>
+    public void ClearCoopState()
+    {
+        if (_pluginBlock != 0)
+        {
+            _memory.TryWrite(_pluginBlock + BlockRemoteCount, 0u);
+            _memory.TryWrite(_pluginBlock + BlockEnemyCount, 0u);
+            _memory.TryWrite(_pluginBlock + BlockCommand, (uint)0);
+        }
+
+        ReleasePartyFreeze();
+    }
 
     public bool TryWriteRemotePeers(IReadOnlyList<RemotePeer> peers)
     {
@@ -1297,6 +1323,47 @@ public sealed class KotorGameBridge : IGameBridge
     /// <summary>Reports the connect status back to the plugin (for a menu status line).</summary>
     public bool SetConnectStatus(uint status) =>
         _pluginBlock != 0 && _memory.TryWrite(_pluginBlock + BlockConnectStatus, status);
+
+    private uint _lastConsoleSerial;
+    private uint _consoleReplySerial;
+
+    /// <summary>
+    /// True (once) when the in-game console has entered a new command line since the last
+    /// check; <paramref name="commandLine"/> receives it (e.g. "connect 1.2.3.4 secret").
+    /// </summary>
+    public bool TryTakeConsoleCommand(out string commandLine)
+    {
+        commandLine = string.Empty;
+
+        if (_pluginBlock == 0
+            || !_memory.TryReadUInt32(_pluginBlock + BlockConsoleSerial, out uint serial)
+            || serial == _lastConsoleSerial)
+        {
+            return false;
+        }
+
+        _lastConsoleSerial = serial;
+
+        if (_memory.TryReadAsciiString(_pluginBlock + BlockConsoleCommand, BlockConsoleCommandLength, out string raw))
+        {
+            commandLine = raw.Trim();
+        }
+
+        return commandLine.Length > 0;
+    }
+
+    /// <summary>Posts a status line for the in-game console to display.</summary>
+    public bool PostConsoleReply(string line)
+    {
+        if (_pluginBlock == 0)
+        {
+            return false;
+        }
+
+        bool ok = _memory.TryWriteAsciiString(_pluginBlock + BlockConsoleReply, line, BlockConsoleReplyLength);
+        ok &= _memory.TryWrite(_pluginBlock + BlockConsoleReplySerial, ++_consoleReplySerial);
+        return ok;
+    }
 
     // ---- module travel ---------------------------------------------------------
 

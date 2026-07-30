@@ -24,6 +24,13 @@ public interface IGameBridge : IDisposable
     bool TryWriteRemotePeers(IReadOnlyList<RemotePeer> peers);
 
     /// <summary>
+    /// Tears down the in-game co-op state on disconnect: no remote peers, no phantoms, the
+    /// party freeze released. So a disconnected player is left in a clean single-player
+    /// game rather than staring at a frozen phantom of someone who left.
+    /// </summary>
+    void ClearCoopState() { }
+
+    /// <summary>
     /// False when this bridge has no way to materialise ground items in the game. The
     /// defaults make item sync purely opt-in so profile bridges need no changes.
     /// </summary>
