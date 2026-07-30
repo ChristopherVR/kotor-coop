@@ -1,0 +1,23 @@
+# Research (2026-07-31)
+
+Five parallel deep-dives into the retail GOG binary and game files, feeding the
+"proper co-op experience" build. Each is verified against `swkotor.exe` (GOG, disk ==
+memory) or the symbol DB / game files, not folklore. Nothing in the game install was
+modified.
+
+| File | Topic | Headline |
+| --- | --- | --- |
+| [name-plates.md](name-plates.md) | phantom name in the selection band | server write was correct; must ALSO write the client twin (band never re-transmits names). No TLK. |
+| [map-presence.md](map-presence.md) | peer on the map | map reads waypoint position live/frame — a directly-constructed peer-pin waypoint, moved per tick. ~150 lines, no asset. Bonus: shared fog reveal. |
+| [override-surfaces.md](override-surfaces.md) | game files vs plugin | ship `k_coop_phantom.utc` (blanks stock AI, fixes equip profs, sets min1hp/faction); main-menu = hybrid; never ship 2DA/TLK. |
+| [party-reconciliation.md](party-reconciliation.md) | companions drift | ownership split via solo mode + explicit ActionFollowLeader, keyed by NPC slot. Corrects trap 5 (commandable≠stop). Medium, needs live measurement. |
+| [mod-compatibility.md](mod-compatibility.md) | different mods per peer | 20 assumptions (several C); two-phase digest handshake; wire the already-computed globals digest first. |
+
+Priority order for implementation (value / risk):
+1. **Name plates client-twin write** — small, closes a wrong claim, verifiable in memory.
+2. **Map presence** — small, no protocol, high visible value.
+3. **k_coop_phantom.utc + shrink MarkAsRemotePlayer** — small, mod-safe, fixes equip risk.
+4. **Mod-compat hardening** — wire the globals digest; failure-code + latch for missing
+   blueprint (#3); clamp appearance rows (#2); exe hash (#5). Medium.
+5. **Digest handshake** — protocol v4, needs the C# game-file readers. Medium-large.
+6. **Party reconciliation** — medium, gated on live solo-mode measurement.
