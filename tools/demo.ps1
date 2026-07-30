@@ -69,9 +69,32 @@ if (-not $SkipLaunch) {
     & $agent load --pid $second.Id --load-save $Save
 
     if ($LASTEXITCODE -ne 0) {
-        Write-Warning 'instance 2 did not auto-load. Load a save in that window by hand, then press Enter.'
+        # Menu input injection fails intermittently (traps 22 and 25); a real
+        # activation cycle — minimise then restore — is the one thing known to revive
+        # it. Retry a few times before falling back to a human.
+        $movewin = Join-Path $PSScriptRoot 'movewin.ps1'
+        for ($attempt = 1; $attempt -le 4 -and $LASTEXITCODE -ne 0; $attempt++) {
+            Write-Warning "instance 2 auto-load failed; activation-cycling the window (retry $attempt/4)"
+            & $movewin -ProcId $second.Id -Minimize
+            Start-Sleep -Seconds 2
+            & $movewin -ProcId $second.Id -Restore
+            Start-Sleep -Seconds 3
+            & $agent load --pid $second.Id --load-save $Save
+        }
+    }
+
+    if ($LASTEXITCODE -ne 0) {
         & (Join-Path $PSScriptRoot 'movewin.ps1') -ProcId $second.Id -X 830 -Y 0
-        Read-Host | Out-Null
+        if ([Console]::IsInputRedirected) {
+            # Non-interactive run (trap 24: Read-Host would die, not wait). Leave the
+            # menu up and keep going; the agent attaches once a save is loaded by
+            # whatever drives this script.
+            Write-Warning 'instance 2 did not auto-load and no human is attached; continuing without it.'
+        }
+        else {
+            Write-Warning 'instance 2 did not auto-load. Load a save in that window by hand, then press Enter.'
+            Read-Host | Out-Null
+        }
     }
 }
 
