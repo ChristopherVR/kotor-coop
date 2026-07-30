@@ -22,6 +22,7 @@ $ErrorActionPreference = 'Stop'
 $root = Split-Path $PSScriptRoot -Parent
 $agent = Join-Path $root 'src\KotorCoop.Agent\bin\Debug\net10.0-windows\KotorCoop.Agent.exe'
 $movewin = Join-Path $PSScriptRoot 'movewin.ps1'
+$inputalive = Join-Path $PSScriptRoot 'inputalive.ps1'
 
 if ($Stop) {
     Get-Process KotorCoop.Agent -ErrorAction SilentlyContinue | Stop-Process -Force -Confirm:$false
@@ -63,29 +64,49 @@ function Start-Instance {
     & $movewin -ProcId $procId -X $X -Y 0 | Out-Null
     "instance $Instance is pid $procId"
 
-    # The activation cycle only sticks once the MENU is actually up (the window exists
-    # many seconds earlier, through the logo movies), and a cycle done too early is
-    # undone by the next activation change. So: cycle, try, repeat — cheap and immune to
-    # whatever the launch timing happens to be on the day.
-    for ($attempt = 1; $attempt -le 4; $attempt++) {
-        Start-Sleep -Seconds ($attempt -eq 1 ? 15 : 5)
+    # Wait for the menu (the window exists many seconds earlier, through the logo
+    # movies), then activation-cycle and ASK THE GAME whether its menu input is alive
+    # before clicking. Trap 25's dead-input state is undiagnosable from the outside but
+    # perfectly predicted by the GUI hit-test — see tools\inputalive.ps1. Clicking a dead
+    # instance never recovers; relaunching is what works, so that is what this does.
+    Start-Sleep -Seconds 15
 
-        & $movewin -ProcId $procId -Minimize | Out-Null
-        Start-Sleep -Seconds 2
-        & $movewin -ProcId $procId -Restore | Out-Null
+    & $movewin -ProcId $procId -Minimize | Out-Null
+    Start-Sleep -Seconds 2
+    & $movewin -ProcId $procId -Restore | Out-Null
+    Start-Sleep -Seconds 3
+
+    & $inputalive -ProcId $procId | Out-Null
+    if ($LASTEXITCODE -ne 0) {
+        Write-Warning "instance $Instance has dead menu input; relaunching it"
+        Stop-Process -Id $procId -Force -Confirm:$false
         Start-Sleep -Seconds 3
-
-        & $agent load --pid $procId --load-save $Save --load-via-menu | Out-Null
-        if ($LASTEXITCODE -eq 0) { return $procId }
-
-        Write-Warning "instance $Instance load attempt $attempt failed; re-activating"
+        return $null
     }
 
-    throw "instance $Instance did not load save $Save"
+    & $agent load --pid $procId --load-save $Save --load-via-menu | Out-Null
+    if ($LASTEXITCODE -eq 0) { return $procId }
+
+    Write-Warning "instance $Instance reported live input but did not load; relaunching"
+    Stop-Process -Id $procId -Force -Confirm:$false
+    Start-Sleep -Seconds 3
+    return $null
 }
 
-$pid1 = Start-Instance -Path $Game1 -Instance 1 -X 0
-$pid2 = Start-Instance -Path $Game2 -Instance 2 -X 830
+function Start-InstanceWithRetries {
+    param([string]$Path, [int]$Instance, [int]$X)
+
+    for ($try = 1; $try -le 5; $try++) {
+        $result = Start-Instance -Path $Path -Instance $Instance -X $X
+        if ($result) { return $result }
+        Write-Warning "instance $Instance: relaunch $try"
+    }
+
+    throw "instance $Instance never came up with working menu input after 5 launches"
+}
+
+$pid1 = Start-InstanceWithRetries -Path $Game1 -Instance 1 -X 0
+$pid2 = Start-InstanceWithRetries -Path $Game2 -Instance 2 -X 830
 
 "both instances in-world: $pid1 (host) and $pid2 (client)"
 
