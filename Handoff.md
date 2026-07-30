@@ -1922,3 +1922,33 @@ propagation (7.1), and the ownership guard that makes a peer's avatar unkillable
 friendly (7.4). Combat across instances is completely unexplored and is the largest open
 question — enemies are per-instance, so each player currently fights their own private
 copy of every encounter, and fixing that means choosing an authority for enemy state.
+
+---
+
+## Addendum 0d — runtime command layer + in-game ~ console (block v9)
+
+Built on top of addendum 0c (party sync, password, reconnect, Connect menu):
+
+- **Session lifecycle is now runtime-controllable.** `SessionManager` (KotorCoop.Session)
+  owns connect/disconnect/reconnect and creates one `CoopAgent` per session;
+  `Program.RunAsync` now drives it through `CoopCommandDispatcher` instead of a single
+  process-lived session. Disconnect cancels the agent, disposes the session and calls the
+  new `IGameBridge.ClearCoopState()` (zeroes remote/enemy counts, releases the party
+  freeze). `AgentDashboard` reads the live agent from the manager each tick.
+- **In-game ~ console** (task 23). Reuses KOTOR's native Aurora dev console rather than
+  building input/rendering or guessing a console-callback ABI (that would crash the game).
+  The plugin sets `EnableCheats=1` in swkotor.ini so `~` opens the console with its keyboard
+  grab, then `ConsoleController` READS the engine command buffer `0x007A3A4C` — remembering
+  it from the frame before Enter so the engine's clear can't race it — and routes co-op
+  verbs into the block console channel. Replies paint via `PrintStringScreenPos 0x0044CCA0`.
+  Commands: `connect <ip> [password] | host | disconnect | reconnect | status | help`; a
+  password rejection becomes an on-screen "connect <ip> <password>" prompt.
+- **SharedBlock is v9** — console command/reply channel appended (serial + 96-byte line each
+  way) at 0x9F4..0xA7C; plugin signature bumped 08 → 09. Total size 0xA80.
+- Full RE write-up: docs/research/console-overlay.md. 181 tests pass; plugin
+  NativeAOT-publishes to a correct x86 dinput8.dll.
+
+**Live-verification gaps (all fail safe — cosmetic or no-route, never a crash):** console
+text coordinates (centered 0.01-scaled space, guessed), the remember-previous-frame capture
+timing vs the real message/frame order, and that the native console renders at the main menu.
+These join the existing "built, untested in game" items and task 11 (live two-instance pass).
