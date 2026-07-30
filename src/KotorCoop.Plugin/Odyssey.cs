@@ -1311,10 +1311,68 @@ internal static unsafe class Odyssey
         return true;
     }
 
-    /// <summary>The player's own pause toggle (space bar). See EngineGlobals on the agent
-    /// side; the shared-pause mirror uses this same bit so either player can pause both
-    /// worlds.</summary>
+    /// <summary>The player's own pause toggle. See EngineGlobals on the agent side; the
+    /// shared-pause mirror uses this same bit so either player can pause both worlds.</summary>
     public const int PauseReasonPlayer = 0x01;
+
+    // CClientExoApp::SetPauseState(int nMask, int bValue). The CLIENT keeps its own pause
+    // mask and its own world timers, entirely separate from the server's — verified live:
+    // pausing only the server left the bit cleared again within a frame, because the
+    // client drives the pair back to agreement. Both halves must be set together.
+    private static readonly delegate* unmanaged[Thiscall]<nint, int, int, void> ClientSetPauseStateFn =
+        (delegate* unmanaged[Thiscall]<nint, int, int, void>)0x005ED650;
+
+    /// <summary>CClientExoAppInternal + this = the client's own pause-reason bitmask.</summary>
+    private const int ClientPauseMaskOffset = 0x1CC;
+
+    /// <summary>Reads the client's pause-reason bitmask, or 0 when there is no client.</summary>
+    public static int GetClientPauseMask()
+    {
+        nint client = GetClient();
+        if (client == 0)
+        {
+            return 0;
+        }
+
+        nint internalClient = Deref(client + AppClientOffset);
+        return internalClient == 0 ? 0 : *(byte*)(internalClient + ClientPauseMaskOffset);
+    }
+
+    /// <summary>
+    /// Sets or clears a pause reason on BOTH the client and the server, which is what a
+    /// real pause does. Pausing one alone does not hold: the two keep separate masks and
+    /// separate world timers, and they reconcile against each other every frame.
+    ///
+    /// Returns true when this call changed something, so a caller can log an edge rather
+    /// than every re-assertion.
+    ///
+    /// MAIN THREAD ONLY.
+    /// </summary>
+    public static bool SetPlayerPause(bool paused)
+    {
+        int value = paused ? 1 : 0;
+        bool changed = false;
+
+        nint client = GetClient();
+        if (client != 0 && ((GetClientPauseMask() & PauseReasonPlayer) != 0) != paused)
+        {
+            ClientSetPauseStateFn(client, PauseReasonPlayer, value);
+            changed = true;
+        }
+
+        nint server = GetServer();
+        if (server != 0 && ((GetPauseMask() & PauseReasonPlayer) != 0) != paused)
+        {
+            SetPauseStateFn(server, PauseReasonPlayer, value);
+            changed = true;
+        }
+
+        return changed;
+    }
+
+    /// <summary>True when the player-pause reason is held on either half.</summary>
+    public static bool IsPlayerPaused =>
+        ((GetPauseMask() | GetClientPauseMask()) & PauseReasonPlayer) != 0;
 
     /// <summary>
     /// Sets one pause reason through the engine's own setter, so CWorldTimer actually

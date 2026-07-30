@@ -107,12 +107,34 @@ public static class EngineGlobals
     /// <summary>Window-not-focused; also used by scripts and dialogue.</summary>
     public const byte PauseReasonFocus = 0x02;
 
-    /// <summary>Reads the pause-reason bitmask, 0 when no world (or nothing paused).</summary>
+    /// <summary>CClientExoAppInternal + this = the client's own pause-reason bitmask.</summary>
+    private const int ClientPauseMaskOffset = 0x1CC;
+
+    /// <summary>
+    /// Reads the pause-reason bitmask. The client and the server keep SEPARATE masks and
+    /// separate world timers, and a real pause holds both — so this reports the union,
+    /// and a peer's pause is detected however it was entered.
+    /// </summary>
     public static bool TryReadPauseMask(ProcessMemory memory, out byte mask)
     {
         mask = 0;
-        return TryGetServerInternal(memory, out nint serverInternal)
-            && memory.TryRead(serverInternal + PauseMaskOffset, out mask);
+        bool any = false;
+
+        if (TryGetServerInternal(memory, out nint serverInternal)
+            && memory.TryRead(serverInternal + PauseMaskOffset, out byte serverMask))
+        {
+            mask |= serverMask;
+            any = true;
+        }
+
+        if (TryGetClientInternal(memory, out nint clientInternal)
+            && memory.TryRead(clientInternal + ClientPauseMaskOffset, out byte clientMask))
+        {
+            mask |= clientMask;
+            any = true;
+        }
+
+        return any;
     }
 
     private static bool TryStep(ProcessMemory memory, nint root, int offset, out nint result)

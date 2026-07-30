@@ -52,9 +52,9 @@ internal sealed class PauseController(SharedBlockView block)
 
         if (desired)
         {
-            // Set on entry, and re-asserted every pass after that: the local player can
-            // clear the shared bit with the space bar, but the pause belongs to the peer.
-            bool freshlySet = Odyssey.SetPauseReason(Odyssey.PauseReasonPlayer);
+            // Set on entry, and re-asserted every pass after that: local input can clear
+            // the shared bit, but the pause belongs to the peer who took it.
+            bool changed = Odyssey.SetPlayerPause(true);
 
             if (!_applied)
             {
@@ -62,7 +62,7 @@ internal sealed class PauseController(SharedBlockView block)
                 block.RemotePauseApplied = 1;
                 LogFew("pause: mirroring a peer's pause");
             }
-            else if (freshlySet)
+            else if (changed)
             {
                 LogFew("pause: re-asserted (local input tried to clear a peer's pause)");
             }
@@ -74,7 +74,7 @@ internal sealed class PauseController(SharedBlockView block)
         {
             _applied = false;
             block.RemotePauseApplied = 0;
-            Odyssey.ClearPauseReason(Odyssey.PauseReasonPlayer);
+            Odyssey.SetPlayerPause(false);
             LogFew("pause: peer released their pause");
         }
     }

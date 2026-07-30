@@ -133,11 +133,15 @@ internal sealed unsafe class MenuLoadController(SharedBlockView block)
     private nint _panel;
 
     /// <summary>
-    /// Frames left before phase 2. The loopback connect started in phase 1 completes
-    /// asynchronously in the game's own MainLoop; calling the load in the same frame is
-    /// the current suspect for the transition stalling, so the load waits ~2 s of frames.
+    /// WALL-CLOCK time before which phase 2 must not fire. The loopback connect started
+    /// in phase 1 completes asynchronously in the game's own MainLoop. The first
+    /// two-phase attempt counted FRAMES (600), which at the menu's unthrottled render
+    /// rate elapsed in ~0.2 s — not a grace period at all. Milliseconds, not frames.
     /// </summary>
-    private int _connectGraceFrames;
+    private long _phase2NotBeforeMs;
+
+    /// <summary>How long the loopback connect gets before the load is fired.</summary>
+    private const int ConnectGraceMs = 4000;
 
     /// <summary>The dummy list entry passed to LoadPCAutoSave; must outlive phase 2.</summary>
     private readonly byte[] _entry = new byte[0x400];
@@ -150,12 +154,11 @@ internal sealed unsafe class MenuLoadController(SharedBlockView block)
             return;
         }
 
-        // Phase 2: the loopback session has had frames to complete; fire the load.
+        // Phase 2: the loopback session has had real time to complete; fire the load.
         if (_panel != 0)
         {
-            if (Odyssey.HasServer && _connectGraceFrames > 0)
+            if (Odyssey.HasServer && Environment.TickCount64 < _phase2NotBeforeMs)
             {
-                _connectGraceFrames--;
                 return;
             }
 
@@ -265,9 +268,9 @@ internal sealed unsafe class MenuLoadController(SharedBlockView block)
         StartConnectToSession(GetNetLayer(client), 0, name, &address, 0x0A, sessionByte);
         RequestStatus(GetSWCMessage(client));
 
-        PluginHost.Log("menu: connect started; letting the game pump it before the load");
+        PluginHost.Log($"menu: connect started; giving it {ConnectGraceMs} ms of real pumping before the load");
         _panel = panel;
-        _connectGraceFrames = 600;
+        _phase2NotBeforeMs = Environment.TickCount64 + ConnectGraceMs;
         return 0;
     }
 
