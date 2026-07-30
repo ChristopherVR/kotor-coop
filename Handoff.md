@@ -124,6 +124,53 @@ of that.
     in the end). Root cause not identified; a human clicking the menu always works. This
     unreliability is the operational argument for the in-process load above.
 
+### 0.2 Third addendum, remote session, second tranche (same evening, ~20:45)
+
+⚠ **Shared-block collision warning for the load-path plan above:** the "spare space at
+`0x970-0x97C`" reserved for the load request/ack fields is spare no longer — **shared
+block version 7** (committed 31ffa96) occupies `0x96C-0x9A4`. Current v7 map, all new
+fields beyond v6:
+
+```
+0x96C  u32  agent -> plugin   remote-pause desired (any peer holds a pause)
+0x970  u32  plugin -> agent   remote-pause applied (echo guard for flag publication)
+0x974  u32  agent -> plugin   journal request serial (written LAST)
+0x978  32b  agent -> plugin   journal quest tag, ascii
+0x998  i32  agent -> plugin   journal state
+0x99C  u32  plugin -> agent   journal applied serial
+0x9A0  i32  plugin -> agent   journal status
+TotalSize 0x9C0 — free space for the load request/ack: 0x9A4-0x9BC.
+```
+
+Built this tranche (all committed, 118 tests pass, plugin builds; **untested in game**):
+
+- **Journal replication** (quest merge): reliable JournalOp/Ack + version tripwire in
+  the world snapshot + multi-part snapshot repair — the flag channel's shape with a
+  string payload. Agent reads entries externally (`internal+0x1B770` party table,
+  journal list at `+0x11C`: `{SJournalEntry* data, int size}`, tag CExoString `@+0x18`,
+  state `@+0x20`, stride 0x3C — derived from GetState/SetState disassembly); apply goes
+  through the plugin: `CSWSJournal::SetState` (`0x005C5A40`, thiscall
+  `(CExoString* tag, int state, int bOverrideHigher=0)`), which also refreshes the GUI.
+- **Client damage counts**: clients stream their enemy census to the host
+  (EnemyReport, module-scoped, 2 s freshness); the host floors its own enemies at the
+  reported minimum (never below 1; death stays host-side). Fixed two latent bugs:
+  enemy health read UNSIGNED (an overkilled enemy at -5 hp read as 65531, alive), and
+  phantom exclusion relied on the plot flag the redesign below removes — now by object
+  id from the block's phantom list.
+- **Phantom vulnerability** (7.4's design, replacing plot): no plot, min-1-hp, attack
+  bit (`+0x9F0 & ~4`) cleared, `PacifyCreature` (`0x004FD960`, thiscall, no args) on
+  the owner leaving combat or going down. The owner's in-combat state travels in the
+  new **PlayerState flags dword** (bit0 dialogue, bit1 paused, bit2 combat; slot
+  `+0x3C`).
+- **Shared pause**: either player's pause pauses both. Player pause is mask bit 0x01
+  (`TogglePauseState 0x004BA610` → internal `SetPauseState 0x004B8110`, which drives
+  `CWorldTimer::PauseWorldTimer` at `0x004ADFF0`). Plugin `PauseController` holds/
+  re-asserts the bit via `SetPauseState(1, x)` while any peer's own-pause flag is up;
+  the mirrored pause is excluded from republication by an edge-latch in the bridge plus
+  the `0x970` echo-guard field. Only the pauser can release.
+- **Wire protocol bumped to version 3** (PlayerState flags + journal + reports), so
+  old agents are cleanly rejected at Hello rather than desyncing.
+
 ### 0.1 Second addendum, parallel remote session (same evening)
 
 A remote session ran concurrently with the one above and added, on top of its work:
@@ -1525,8 +1572,12 @@ cutscene will move that instance's camera and party while the peer keeps playing
 | 40 | Travel together: clients follow the host across modules | **built, untested in game**, 4.11 (SharedBlock v6) |
 | 41 | Phantom name plates: peer's name in the selection band | **built, untested in game**, 4.11 |
 | 42 | Player death mirrored as a phantom death pose | **built, untested in game**, 4.11 |
-| 40 | In-game Connect flow (plugin-driven save load, then a .gui mod) | designed; CSWGuiSaveLoad::LoadGame 0x6CB0E0, see 4.6 |
-| 41 | Map presence: peers as map-note waypoints | idea recorded, unverified |
+| 43 | In-game Connect flow (plugin-driven save load, then a .gui mod) | designed; CSWGuiSaveLoad::LoadGame 0x6CB0E0, see 4.6 and addendum 0's load path — ⚠ block offsets moved, see 0.2 |
+| 44 | Map presence: peers as map-note waypoints | idea recorded, unverified |
+| 45 | Journal replication (quest merge) | **built, untested in game**, addendum 0.2 |
+| 46 | Client damage counts on the host (enemy report min-merge) | **built, untested in game**, addendum 0.2 |
+| 47 | Shared pause across instances | **built, untested in game**, addendum 0.2 |
+| 48 | Phantom vulnerability without the aggro sink (no plot, min1hp, pacify) | **built, untested in game**, addendum 0.2 |
 
 ---
 
