@@ -991,6 +991,53 @@ internal static unsafe class Odyssey
         return area != 0 && *(byte*)(area + AreaTransPending) != 0;
     }
 
+    // ---- death pose --------------------------------------------------------------
+
+    /// <summary>
+    /// Ambient animation states. CSWSCreature::SetAnimation remaps the idle (0x2710)
+    /// through the state byte at creature+0x4C4 using the jump table at 0x004F0F50:
+    /// states 3, 4 and 14 produce the three death poses (0x2718, 0x2716, 0x27AC); values
+    /// outside the 2..14 table fall through to the plain idle, so 1 is "normal".
+    /// </summary>
+    public const int AmbientStateNormal = 1;
+    public const int AmbientStateDead = 4;
+
+    // CSWSCreature::SetAmbientAnimationState(byte). Plain store to +0x4C4, with a quirk:
+    // for states 3/4 it substitutes 14 when the current animation is one of the
+    // kneeling/prone set, which is exactly the behaviour we want anyway.
+    private static readonly delegate* unmanaged[Thiscall]<nint, int, void> SetAmbientAnimationStateFn =
+        (delegate* unmanaged[Thiscall]<nint, int, void>)0x004EFEF0;
+
+    /// <summary>
+    /// Lays a creature down in a death pose, or stands it back up. The animation field
+    /// cannot do this: the client's animation sync explicitly rejects all three death
+    /// constants (trap 21b), so a raw 0x2716 write does nothing at all. The engine's own
+    /// route is the ambient state plus a re-issued idle, which SetAnimation then remaps
+    /// into the pose — and pushes to the render side.
+    ///
+    /// MAIN THREAD ONLY.
+    /// </summary>
+    public static void SetDownState(nint creature, bool down)
+    {
+        if (creature == 0)
+        {
+            return;
+        }
+
+        SetAmbientAnimationStateFn(creature, down ? AmbientStateDead : AmbientStateNormal);
+        SetAnimation(creature, AnimIdle);
+    }
+
+    /// <summary>Empties a creature's action queue (a queued move would stand a "dead"
+    /// phantom back up mid-pose). MAIN THREAD ONLY.</summary>
+    public static void ClearActions(nint creature)
+    {
+        if (creature != 0)
+        {
+            ClearAllActionsFn(creature, 1);
+        }
+    }
+
     // ---- creature naming ---------------------------------------------------------
 
     /// <summary>CSWSCreatureStats + this = first_name, a CExoLocString (symbol database).

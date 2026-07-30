@@ -359,7 +359,10 @@ public sealed class KotorGameBridge : IGameBridge
             facing = Angles.Normalize(MathF.Atan2(orientation.Y, orientation.X));
         }
 
-        int health = _memory.TryRead(creature + OffCurrentHitPoints, out ushort currentHp) ? currentHp : 0;
+        // SIGNED on purpose: a downed player's hit points go negative (the PC death
+        // threshold is -10), and an unsigned read would turn -3 into 65533 — reading as
+        // "alive and thriving" to every peer at the exact moment it matters most.
+        int health = _memory.TryRead(creature + OffCurrentHitPoints, out short currentHp) ? currentHp : 0;
         int maxHealth = _memory.TryRead(creature + OffMaxHitPoints, out ushort maxHp) ? maxHp : 0;
         _memory.TryReadUInt32(creature + OffAnimation, out uint animation);
 

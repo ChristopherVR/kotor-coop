@@ -59,6 +59,10 @@ internal sealed unsafe class PhantomController(SharedBlockView block)
     private readonly Vec3[] _lastGoal = new Vec3[SharedBlock.SlotCapacity];
     private readonly int[] _repathCooldown = new int[SharedBlock.SlotCapacity];
 
+    /// <summary>True while the phantom is lying in a death pose because its player is at
+    /// zero health. Tracked so the pose is set once, not re-issued every step.</summary>
+    private readonly bool[] _down = new bool[SharedBlock.SlotCapacity];
+
     /// <summary>FNV hash of the resref last equipped per (phantom, equip slot); 0 = none.</summary>
     private readonly uint[,] _appliedEquip = new uint[SharedBlock.SlotCapacity, SharedBlock.EquipCount];
 
@@ -83,6 +87,7 @@ internal sealed unsafe class PhantomController(SharedBlockView block)
             _phantomIds[i] = 0;
             _lastGoal[i] = default;
             _repathCooldown[i] = 0;
+            _down[i] = false;
 
             for (int j = 0; j < SharedBlock.EquipCount; j++)
             {
@@ -192,6 +197,33 @@ internal sealed unsafe class PhantomController(SharedBlockView block)
 
             ApplyAppearance(phantom, remote.Appearance);
             ApplyEquipment(i);
+
+            // A player at zero health lies where they fell, and their phantom does the
+            // same — otherwise a downed teammate looks alive and well in your game while
+            // their screen shows a death. The pose comes back off the moment the peer's
+            // health does, so a revive (or a respawned host) stands the phantom up.
+            bool down = remote.Health <= 0;
+            if (down != _down[i])
+            {
+                _down[i] = down;
+
+                if (down)
+                {
+                    // Stop mid-stride first: a queued move action executing after the
+                    // pose would stand the body straight back up.
+                    Odyssey.ClearActions(phantom);
+                }
+
+                Odyssey.SetDownState(phantom, down);
+                PluginHost.Log(down
+                    ? $"phantom 0x{_phantomIds[i]:X}: down (player at 0 hp)"
+                    : $"phantom 0x{_phantomIds[i]:X}: back up");
+            }
+
+            if (down)
+            {
+                continue;
+            }
 
             if (_repathCooldown[i] > 0)
             {
