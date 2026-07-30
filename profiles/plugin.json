@@ -1,0 +1,52 @@
+{
+  // Offset profile for the in-process plugin (src/KotorCoop.Plugin, installed as
+  // dinput8.dll beside swkotor.exe).
+  //
+  // This is deliberately almost identical to mockgame.json. The plugin publishes a block
+  // with the same layout and the same magic signature, so the already-tested memory
+  // scanner and ProfileGameBridge drive it with no new .NET code at all. The agent does
+  // not need to know whether it is talking to the mock harness or to a plugin living
+  // inside the real game.
+  //
+  // Unlike kotor1-session.json, nothing here is a heap address discovered by scanning:
+  // the plugin allocates the block itself and marks it, so this profile keeps working
+  // across restarts and save loads.
+  "name": "KOTOR 1 via in-process plugin",
+  "notes": "Requires the plugin installed as dinput8.dll in the game directory. Build and install with src/KotorCoop.Plugin/build.ps1 -Install.",
+  "processNames": ["swkotor"],
+
+  "anchor": {
+    // Magic "KOCOOP01" followed by the uint32 version field. Including the version is
+    // what stops the scan matching the bare string constant inside the plugin's own data.
+    "mode": "PatternScan",
+    "pattern": "4B 4F 43 4F 4F 50 30 31 01 00 00 00 01 EE FF C0",
+    "scope": "PrivateCommitted",
+    "displacement": 0,
+    "dereferenceAnchor": false,
+    "pointerChain": []
+  },
+
+  "layout": {
+    "position": 16,
+    "facing": 28,
+    "moduleName": 32,
+    "moduleNameLength": 32,
+    "health": 64,
+    "animation": 68
+  },
+
+  "remotes": {
+    "count": 72,
+    "slots": 80,
+    "stride": 64,
+    "capacity": 8,
+    "active": 0,
+    "peerId": 4,
+    "position": 8,
+    "facing": 20,
+    "health": 24,
+    "animation": 28,
+    "name": 32,
+    "nameLength": 32
+  }
+}

@@ -1,0 +1,59 @@
+{
+  // KOTOR 1 (Steam v1.0.3) - SESSION-SCOPED profile.
+  //
+  // Discovered live against pid 37324, save "Game 1", Taris Upper City South,
+  // character "Lanik Star" (Soldier L2, Vitality 25/28, XP 3155).
+  //
+  // How it was found, because the method matters more than the number:
+  //   1. Read the character sheet from a screenshot: XP 3155, attributes 16/14/14/10/12/10.
+  //   2. Exact int32 scan for 3155 -> 8 hits (a float scan gives millions and never
+  //      converges: the process is ~200 MB of graphics buffers full of float triples).
+  //   3. AOB scan for the attribute bytes "10 0E 0E 0A 0C 0A" -> 8 hits.
+  //   4. Cross-referenced the two: 0x23066B60 (XP) and 0x23066B3C (attributes) are 0x24
+  //      apart, so that allocation is the player's creature record. A memory dump
+  //      confirmed it: attributes at +0x3C and +0x42, Vitality 25/28 at +0x54,
+  //      XP at +0x60, portrait resref "po_pmhc3" at +0x78.
+  //   5. Walked the character and diffed the surrounding bytes. Exactly two floats moved:
+  //      0x23066A04 (113.518 -> 114.397) and 0x23066A08 (82.369 -> 82.367).
+  //
+  // WARNING: "absoluteAddress" is a heap address. It is valid only for the run of the
+  // game it was discovered in, and becomes garbage after a restart or a save load. It is
+  // committed as evidence that the bridge reads the real game, not as a usable profile.
+  //
+  // For a durable profile the object must be reached from a static global. Single-level
+  // pointer search found 8 pointers to this object, none inside swkotor.exe's image
+  // (0x400000-0x8C3000), so it needs a multi-level chain. The nearest hit was
+  // 0x18866CCC -> object + 0x44, which puts the real object base at 0x230669C0.
+  "name": "KOTOR 1 (session-scoped, Lanik Star)",
+  "notes": "Proof that the bridge reads live KOTOR. Re-discover the address after any restart.",
+  "processNames": ["swkotor"],
+
+  "anchor": {
+    "mode": "Absolute",
+    "absoluteAddress": 587622916,
+    "displacement": 0,
+    "dereferenceAnchor": false,
+    "pointerChain": []
+  },
+
+  "layout": {
+    // Three consecutive floats at the anchor: x, y, z. z is a height and reads ~0 on
+    // Taris Upper City, which is flat.
+    "position": 0,
+
+    // Not yet identified:
+    //   facing - candidate at anchor-0x10 (-0.91, looks like cos of a heading), unverified.
+    //   health - Vitality lives at creature+0x54 as two uint16 (current, max). The profile
+    //            schema only reads int32, so it would decode as 0x001C0019. Needs a
+    //            uint16 field type before it can be wired up.
+    //   moduleName - not located yet.
+    "facing": null,
+    "moduleName": null,
+    "moduleNameLength": 16,
+    "health": null,
+    "animation": null
+  }
+
+  // No "remotes": stock KOTOR has no spare creature slot to drive, so the agent is
+  // read-only here and reports "write: n/a". See docs/ARCHITECTURE.md.
+}

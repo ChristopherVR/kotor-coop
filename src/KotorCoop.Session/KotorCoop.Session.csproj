@@ -1,0 +1,8 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <ItemGroup>
+    <ProjectReference Include="..\KotorCoop.Protocol\KotorCoop.Protocol.csproj" />
+    <ProjectReference Include="..\KotorCoop.Memory\KotorCoop.Memory.csproj" />
+  </ItemGroup>
+
+</Project>

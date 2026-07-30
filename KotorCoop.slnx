@@ -1,0 +1,12 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/KotorCoop.Agent/KotorCoop.Agent.csproj" />
+    <Project Path="src/KotorCoop.Memory/KotorCoop.Memory.csproj" />
+    <Project Path="src/KotorCoop.MockGame/KotorCoop.MockGame.csproj" />
+    <Project Path="src/KotorCoop.Protocol/KotorCoop.Protocol.csproj" />
+    <Project Path="src/KotorCoop.Session/KotorCoop.Session.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/KotorCoop.Tests/KotorCoop.Tests.csproj" />
+  </Folder>
+</Solution>

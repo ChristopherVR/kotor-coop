@@ -1,0 +1,44 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    The in-process half of the co-op mod, compiled to a native 32-bit DLL with NativeAOT.
+
+    swkotor.exe is x86, so anything loaded into it must be x86. .NET 10's NativeAOT does
+    support win-x86, which is what makes it possible to write this in C# instead of C++.
+
+    The output is named dinput8.dll on purpose. The game loads DirectInput from the
+    system directory today, and Windows searches the executable's own directory first for
+    a DLL that is not a KnownDLL. Dropping this beside swkotor.exe therefore gets it
+    loaded by the game itself: no injector, no CreateRemoteThread, nothing to keep alive.
+    Every export is re-implemented here and forwarded to the real system DLL.
+
+    Build with build.ps1, which imports the MSVC x86 environment first. NativeAOT shells
+    out to link.exe and vswhere.exe, and neither is reachable outside a developer shell.
+  -->
+  <PropertyGroup>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <RuntimeIdentifier>win-x86</RuntimeIdentifier>
+    <Platforms>x86</Platforms>
+
+    <PublishAot>true</PublishAot>
+    <NativeLib>Shared</NativeLib>
+    <AssemblyName>dinput8</AssemblyName>
+
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <LangVersion>latest</LangVersion>
+
+    <!-- Keep the DLL small and its startup cheap; it loads inside a 2003 game. -->
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <UseSystemResourceKeys>true</UseSystemResourceKeys>
+    <StackTraceSupport>false</StackTraceSupport>
+    <EventSourceSupport>false</EventSourceSupport>
+    <OptimizationPreference>Size</OptimizationPreference>
+
+    <!-- Not part of the normal solution build; publish explicitly via build.ps1. -->
+    <IsPublishable>true</IsPublishable>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+</Project>

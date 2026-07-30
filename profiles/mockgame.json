@@ -1,0 +1,43 @@
+{
+  // Offset profile for the mock harness (KotorCoop.MockGame).
+  //
+  // The anchor pattern is the block's 8-byte magic marker followed by its uint32 version
+  // field. Including the version makes the signature 12 bytes, which avoids matching the
+  // bare "KOCOOP01" string constant that also exists in the assembly's own data.
+  "name": "KotorCoop mock harness",
+  "notes": "Reference profile. Every offset here is known-good, so a failure against this profile means the memory layer is broken, not the offsets.",
+  "processNames": ["KotorCoop.MockGame"],
+
+  "anchor": {
+    "mode": "PatternScan",
+    "pattern": "4B 4F 43 4F 4F 50 30 31 01 00 00 00 01 EE FF C0",
+    "scope": "PrivateCommitted",
+    "displacement": 0,
+    "dereferenceAnchor": false,
+    "pointerChain": []
+  },
+
+  "layout": {
+    "position": 16,
+    "facing": 28,
+    "moduleName": 32,
+    "moduleNameLength": 32,
+    "health": 64,
+    "animation": 68
+  },
+
+  "remotes": {
+    "count": 72,
+    "slots": 80,
+    "stride": 64,
+    "capacity": 8,
+    "active": 0,
+    "peerId": 4,
+    "position": 8,
+    "facing": 20,
+    "health": 24,
+    "animation": 28,
+    "name": 32,
+    "nameLength": 32
+  }
+}

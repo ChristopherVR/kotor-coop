@@ -1,0 +1,64 @@
+{
+  // Offset profile for Star Wars: Knights of the Old Republic (Steam, swkotor.exe v1.0.3).
+  //
+  // INCOMPLETE ON PURPOSE. The offsets below are unknown and must be discovered on your
+  // own install; this file refuses to load until "layout.position" is filled in, which is
+  // deliberate. A profile that guessed would silently read garbage floats and look like a
+  // networking bug.
+  //
+  // Fill it in with:  dotnet run --project src/KotorCoop.Agent -- scan --process swkotor
+  // Full walkthrough: docs/FINDING-OFFSETS.md
+  //
+  // Verified facts about this executable (from its PE header):
+  //   MD5           06B34D1B8A1ECEFBAAD0BF5E26556C71
+  //   Machine       x86 (32-bit) -> pointer chains are 4 bytes wide
+  //   ImageBase     0x00400000
+  //   SizeOfImage   0x004C3000
+  //   DllCharacteristics 0x0000 -> NO ASLR, so absolute addresses are stable across runs
+  //   Sections      .text  0x00401000 (0x33B1D0)
+  //                 .rdata 0x0073D000 (0x04FBFE)
+  //                 .data  0x0078D000 (0x0A8498)   <- static globals live here
+  //                 .rsrc  0x00836000
+  //                 .bind  0x0086D000              <- entry point is in here
+  //
+  // The entry point sits inside ".bind", which is a packer/DRM stub. The bytes of .text
+  // on disk are therefore not guaranteed to be the bytes in memory, so code signatures
+  // must be scanned against the LIVE process. Data offsets are unaffected.
+  //
+  // Because there is no ASLR you can use mode "Absolute" with a raw address once found.
+  // Prefer "ModuleOffset" anyway: it survives running under a loader that does relocate.
+  "name": "KOTOR 1 (Steam, v1.0.3)",
+  "notes": "Template. Run the scan command to fill in layout.position, then the remaining fields.",
+  "processNames": ["swkotor"],
+
+  "anchor": {
+    // Once you have found a static pointer to the player object, set:
+    //   "mode": "ModuleOffset", "module": "swkotor.exe", "moduleOffset": <rva of the global>,
+    //   "dereferenceAnchor": true, "pointerChain": [ ...offsets from the scan... ]
+    "mode": "ModuleOffset",
+    "module": "swkotor.exe",
+    "moduleOffset": 0,
+    "displacement": 0,
+    "dereferenceAnchor": true,
+    "pointerChain": []
+  },
+
+  "layout": {
+    // Odyssey stores object positions as three consecutive floats. Find the x offset and
+    // the other two follow it. null means "not discovered yet".
+    "position": null,
+    "facing": null,
+    "moduleName": null,
+    "moduleNameLength": 16,
+    "health": null,
+    "animation": null
+  }
+
+  // "remotes" is intentionally absent.
+  //
+  // Reading the local player out of KOTOR is a scanning exercise. WRITING a second player
+  // into it is a different and much larger problem: stock KOTOR has no spare creature
+  // slot to drive, so there is nothing to write to. Until a remote avatar can actually be
+  // spawned, this profile stays read-only and the agent reports "write: n/a".
+  // See docs/ARCHITECTURE.md, "What this proof of concept does not do".
+}
