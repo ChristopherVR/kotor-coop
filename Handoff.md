@@ -99,6 +99,52 @@ the 0x1160-byte `CSWGuiSaveLoad`, and shows it via `0x0040BC70(owner, panel, 2, 
 so driving it requires `PopulateGameList` (`0x006CC160`) — the autosave route avoids all
 of that.
 
+**STATUS 2026-07-31: the load WORKS. The world comes up with no input injection.**
+What remains is a crash ~0.5 s later, now fully characterised (see below). Two bugs were
+found and fixed to get here, both worth knowing:
+
+1. **The autosave slot is `000001 - AUTOSAVE`, not `000000`.** LoadPCAutoSave formats
+   `Format("%06d - %s", 1, "AUTOSAVE")`. Staging to `000000` produced a load that reached
+   `SetLoadingModule(1)` and then silently did nothing — no module, no error.
+2. **The save-list entry's MODULE NAME at `entry+0x00` is the load's real argument.**
+   `ExecuteLoadModule` forwards the entry verbatim and `CServerExoAppInternal::LoadModule`
+   (`0x004B95B0`) reads `[ebp+8]` as a `CExoString` and loads THAT module. A zeroed entry
+   = an empty name = the silent stall. The agent reads the name from the staged save's
+   `SAVEGAME.sav` ERF key list (the entry whose restype is **2057** — the module `.sav`;
+   note `tools/kotorfiles.py` claims 2055, which is wrong for this build) and publishes it
+   in the shared block at `0x9B0`; the plugin builds it with `CExoString::CStrConstructor`
+   (`0x005E5A90`) into `entry+0x00`. Also required: the entry must live on the ENGINE heap
+   (`operator_new`), not a pinned managed array — LoadModule keeps the pointer.
+
+**The remaining crash, measured not guessed.** A vectored-exception probe
+(`CrashProbe.cs`, kept in the plugin — it logs faulting address, EIP and image-range
+stack values on the first access violation) caught it exactly:
+
+```
+CRASH: access violation at 0x5272D8, eip 0x5272D8
+stack: 0x527D7F 0x4B1634 0x5D5852 0x4BAC36
+       HandlePlayerToServerMessage <- HandleMessage <- ProcessReceivedFrames <- MainLoop
+```
+
+`0x5272D8` is inside `CSWSMessage::HandlePlayerToServerParty` (`0x00526910`): it calls
+`CSWSPlayer::GetGameObject` (`0x00561080`), then vtable `+0x30`, then
+`CSWSCreature::GetFaction` (`0x00513FC0`), and dereferences the result — which is null
+because **the server has no logged-in player character**. `players=0` in the diagnostics
+throughout confirms it. The missing step is the client's login: the retail flow has the
+server send `StartStartNewModule`, the client's
+`HandleServerToPlayerModule_EndStartNewModule` (`0x00652860`) reply with
+`SendPlayerToServerLogin_LoginIFOCharacter` (`0x00678030`), and only then do party
+messages have a player to resolve. Dropping our own `RequestStatus` did NOT help (tested),
+so the next step is to drive the login explicitly — either call
+`SendPlayerToServerLogin_LoginIFOCharacter` once the module is up, or find why the
+server's `EndStartNewModule` notification is not reaching the client over the loopback.
+
+Two things that made it worse and are now avoided: **do not** manually pump
+`ServerMainLoop`/`ProcessReceivedFrames` once the load is armed (the game's own outer loop
+services it; double-stepping crashed it at world-up), and **do not** `AddPanel`/
+`PopModalPanel` the stand-in save panel (it only needs to exist as LoadPCAutoSave's
+`this`).
+
 **Implementation state (2026-07-30, late):** built as `MenuLoadController` (plugin) +
 `PluginMenuLoader` (agent) + `SaveLoader.TryLoadViaPlugin`, request fields at shared
 block `0x9A4/0x9A8/0x9AC`. The full replayed branch (0x6CB256..0x6CB3E8, every callee

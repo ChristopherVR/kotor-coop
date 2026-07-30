@@ -364,7 +364,13 @@ internal sealed unsafe class MenuLoadController(SharedBlockView block)
         nint name = GetClientName(client, &nameStorage);
         int sessionByte = *(byte*)SessionBytePtr;
         StartConnectToSession(GetNetLayer(client), 0, name, &address, 0x0A, sessionByte);
-        RequestStatus(GetSWCMessage(client));
+
+        // RequestStatus is deliberately NOT sent. In retail it rides a connection whose
+        // player is already logged in; sent from here it opens the status/party exchange
+        // before the server has a player game object, and the server's
+        // HandlePlayerToServerParty then dereferences a null faction
+        // (CSWSPlayer::GetGameObject -> GetFaction -> `mov ecx,[eax]` at 0x5272D8) about
+        // half a second after the world appears. Captured by the crash probe.
 
         PluginHost.Log($"menu: connect started; giving it {ConnectGraceMs} ms of real pumping before the load");
         _panel = panel;

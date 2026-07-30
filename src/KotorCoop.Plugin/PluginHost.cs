@@ -89,6 +89,7 @@ internal static unsafe class PluginHost
 
             _worker.Start();
             Log("worker thread started");
+            CrashProbe.Install();
         }
         catch (Exception ex)
         {
