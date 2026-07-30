@@ -95,6 +95,28 @@ public class ConsoleCommandTests
     }
 
     [Fact]
+    public void SayCapturesTheWholeMessage()
+    {
+        CoopCommand c = ConsoleCommand.Parse("say on my way to the bridge");
+        Assert.Equal(CoopCommandKind.Say, c.Kind);
+        Assert.Equal("on my way to the bridge", c.Address);
+    }
+
+    [Fact]
+    public void SayWithoutAMessageIsInvalid()
+    {
+        Assert.Equal(CoopCommandKind.Invalid, ConsoleCommand.Parse("say").Kind);
+    }
+
+    [Theory]
+    [InlineData("chat hello")]
+    [InlineData("msg hello")]
+    public void ChatAndMsgAreAliasesForSay(string line)
+    {
+        Assert.Equal(CoopCommandKind.Say, ConsoleCommand.Parse(line).Kind);
+    }
+
+    [Fact]
     public void ResolvesLiteralAddressWithDefaultPort()
     {
         CoopCommand c = ConsoleCommand.Parse("connect 10.0.0.5");

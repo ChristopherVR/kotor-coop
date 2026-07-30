@@ -94,5 +94,9 @@ public class DialogueArbiterTests
         DialogueRequestPacket request = new(4, true, "Bastila", "We should not be here.");
         int reqLength = PacketCodec.Write(buffer, request);
         Assert.Equal(request, PacketCodec.ReadDialogueRequest(buffer[..reqLength]));
+
+        ChatPacket chat = new(4, "Bastila", "regroup at the door");
+        int chatLength = PacketCodec.Write(buffer, chat);
+        Assert.Equal(chat, PacketCodec.ReadChat(buffer[..chatLength]));
     }
 }

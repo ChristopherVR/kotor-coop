@@ -70,6 +70,10 @@ public class PausePumpTests
 
         public DialogueState GetDialogue() => DialogueState.Idle;
 
+        public void SendChat(string text) { }
+
+        public System.Collections.Generic.IReadOnlyList<ChatMessage> DrainChat() => [];
+
         public bool IsEnemyAuthority => false;
 
         public SessionStats GetStats() => new();

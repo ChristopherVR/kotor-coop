@@ -517,6 +517,60 @@ public class SessionIntegrationTests
     }
 
     [Fact]
+    public async Task ChatRelaysBetweenTwoClientsThroughTheHost()
+    {
+        using CoopHost host = new(new SessionSettings { PlayerName = "Revan", Port = 0, TickRate = 30 });
+        using CoopClient malak = new(
+            new SessionSettings { PlayerName = "Malak", TickRate = 30 },
+            new IPEndPoint(IPAddress.Loopback, host.ListenEndPoint.Port));
+        using CoopClient bastila = new(
+            new SessionSettings { PlayerName = "Bastila", TickRate = 30 },
+            new IPEndPoint(IPAddress.Loopback, host.ListenEndPoint.Port));
+
+        using CancellationTokenSource cts = new(Timeout + TimeSpan.FromSeconds(15));
+        Task hostTask = host.RunAsync(cts.Token);
+        Task malakTask = malak.RunAsync(cts.Token);
+        Task bastilaTask = bastila.RunAsync(cts.Token);
+
+        PlayerState state = new(Vector3f.Zero, 0f, "end_m01aa", 100, 0);
+        void Publish()
+        {
+            host.PublishLocalState(state);
+            malak.PublishLocalState(state);
+            bastila.PublishLocalState(state);
+        }
+
+        Assert.True(await WaitForAsync(() => malak.IsConnected && bastila.IsConnected, Timeout, Publish));
+
+        // Malak says something: the host and the OTHER client receive it; Malak does not get
+        // his own line back (he echoes it locally).
+        malak.SendChat("regroup at the door");
+
+        List<ChatMessage> bastilaHeard = [];
+        List<ChatMessage> hostHeard = [];
+        List<ChatMessage> malakHeard = [];
+        Assert.True(
+            await WaitForAsync(
+                () =>
+                {
+                    bastilaHeard.AddRange(bastila.DrainChat());
+                    hostHeard.AddRange(host.DrainChat());
+                    malakHeard.AddRange(malak.DrainChat());
+                    return bastilaHeard.Any(m => m.Text == "regroup at the door")
+                        && hostHeard.Any(m => m.Text == "regroup at the door");
+                },
+                Timeout,
+                Publish),
+            "the chat line did not reach the host and the other client");
+
+        Assert.All(bastilaHeard, m => Assert.Equal("Malak", m.Name));
+        Assert.DoesNotContain(malakHeard, m => m.Text == "regroup at the door");
+
+        await cts.CancelAsync();
+        await Task.WhenAll(hostTask, malakTask, bastilaTask);
+    }
+
+    [Fact]
     public async Task GarbageTrafficDoesNotDisturbTheHost()
     {
         using CoopHost host = new(new SessionSettings { PlayerName = "Revan", Port = 0, TickRate = 30 });

@@ -113,6 +113,10 @@ public class TravelPumpTests
 
         public DialogueState GetDialogue() => DialogueState.Idle;
 
+        public void SendChat(string text) { }
+
+        public System.Collections.Generic.IReadOnlyList<ChatMessage> DrainChat() => [];
+
         public void SetJournalEntry(string questTag, int state) => Journal.Merge(questTag, state);
 
         public SessionCapabilities Capabilities { get; set; } = SessionCapabilities.All;

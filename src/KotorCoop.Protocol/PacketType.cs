@@ -103,4 +103,11 @@ public enum PacketType : byte
     /// already owns it, releasing it on end, and ignoring a claim while another peer owns it.
     /// </summary>
     DialogueRequest = 26,
+
+    /// <summary>
+    /// peer -> host, then host -> everyone else: a short text message. The players cannot see
+    /// each other's screens, so this is the coordination channel; the host relays in the star
+    /// topology, and the sender shows its own line locally.
+    /// </summary>
+    Chat = 27,
 }

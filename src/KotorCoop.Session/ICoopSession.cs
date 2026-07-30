@@ -90,6 +90,15 @@ public interface ICoopSession : IDisposable
     /// <summary>The authoritative conversation token — who, if anyone, is mid-dialogue.</summary>
     DialogueState GetDialogue();
 
+    /// <summary>Sends a short text message to the other players. Empty/whitespace is ignored.</summary>
+    void SendChat(string text);
+
+    /// <summary>
+    /// Returns and clears the chat messages received since the last call, oldest first. The
+    /// sender's own lines are not returned here — the caller echoes them on send.
+    /// </summary>
+    IReadOnlyList<ChatMessage> DrainChat();
+
     /// <summary>The shared quest journal, merged upward across every player.</summary>
     JournalStore Journal { get; }
 

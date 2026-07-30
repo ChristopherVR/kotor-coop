@@ -41,6 +41,11 @@ Both players, each in their own full game:
   `connect <ip> [password]`, `disconnect` or `reconnect` at any time — the session is torn
   down and rebuilt live, no restart. If the host wants a password you didn't give, the
   console prompts you to retype it. Status and co-op replies print on-screen while it's open.
+- **Talk to each other**: `say <message>` in the ~ console sends a line to the other players
+  (the host relays it), so you can coordinate without seeing each other's screens.
+- **Know who's mid-conversation**: dialogue is arbitrated by a single token — one player at a
+  time owns a story conversation, so two players can't open conflicting ones and race the
+  plot flags. Everyone sees who holds it.
 
 An unfocused or minimised instance keeps simulating (the plugin suppresses the focus
 pause), which is what makes one-machine testing practical at all.

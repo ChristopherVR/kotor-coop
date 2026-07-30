@@ -1,5 +1,6 @@
 using System.Net;
 using KotorCoop.Memory;
+using KotorCoop.Protocol;
 using KotorCoop.Session;
 
 namespace KotorCoop.Agent;
@@ -39,6 +40,7 @@ public sealed class CoopCommandDispatcher(
                 manager.Poll();
                 DrainInputs();
                 ReflectPhase();
+                DrainChat();
             }
         }
         catch (OperationCanceledException)
@@ -108,6 +110,19 @@ public sealed class CoopCommandDispatcher(
                 manager.Reconnect();
                 break;
 
+            case CoopCommandKind.Say:
+                if (manager.Current is { } session && command.Address is { Length: > 0 } message)
+                {
+                    session.SendChat(message);
+                    Reply($"you: {message}"); // echo locally; peers get it over the wire
+                }
+                else
+                {
+                    Reply("not connected - nothing to say to");
+                }
+
+                break;
+
             case CoopCommandKind.Status:
                 Reply($"{manager.Phase.ToString().ToLowerInvariant()} - {manager.Detail}");
                 break;
@@ -169,6 +184,20 @@ public sealed class CoopCommandDispatcher(
             case SessionPhase.Disconnected:
                 Reply("disconnected");
                 break;
+        }
+    }
+
+    /// <summary>Surfaces chat received from peers on the in-game console and stdout.</summary>
+    private void DrainChat()
+    {
+        if (manager.Current is not { } session)
+        {
+            return;
+        }
+
+        foreach (ChatMessage message in session.DrainChat())
+        {
+            Reply($"{message.Name}: {message.Text}");
         }
     }
 

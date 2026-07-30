@@ -23,6 +23,9 @@ public enum CoopCommandKind
     /// <summary>Print the current session status.</summary>
     Status,
 
+    /// <summary>Send a chat line to the other players; the text is in <see cref="CoopCommand.Address"/>.</summary>
+    Say,
+
     /// <summary>List the available commands.</summary>
     Help,
 
@@ -150,6 +153,11 @@ public static class ConsoleCommand
             case "reconnect" or "rc":
                 return new CoopCommand(CoopCommandKind.Reconnect);
 
+            case "say" or "chat" or "msg":
+                return rest.Length == 0
+                    ? new CoopCommand(CoopCommandKind.Invalid, Error: "say needs a message, e.g. say on my way")
+                    : new CoopCommand(CoopCommandKind.Say, Address: string.Join(' ', rest));
+
             case "status" or "stat":
                 return new CoopCommand(CoopCommandKind.Status);
 
@@ -163,5 +171,5 @@ public static class ConsoleCommand
 
     /// <summary>One-line help listing the commands, for the overlay and dashboard.</summary>
     public const string HelpText =
-        "commands: connect <ip[:port]> [password] | host [password] | disconnect | reconnect | status | help";
+        "commands: connect <ip[:port]> [password] | host [password] | disconnect | reconnect | say <msg> | status | help";
 }

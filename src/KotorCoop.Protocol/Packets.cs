@@ -121,6 +121,15 @@ public sealed record EnemyReportPacket(uint PeerId, string Module, IReadOnlyList
 /// <summary>host -> all: the authoritative conversation token (see <see cref="DialogueState"/>).</summary>
 public sealed record DialogueSnapshotPacket(long ServerTimeMs, DialogueState State);
 
+/// <summary>One received chat line, for a small on-screen/console log.</summary>
+public sealed record ChatMessage(uint PeerId, string Name, string Text);
+
+/// <summary>
+/// A text message from one player. Sent to the host, which relays it to every other peer.
+/// The sender does not receive its own back — it echoes locally on send.
+/// </summary>
+public sealed record ChatPacket(uint FromPeerId, string Name, string Text);
+
 /// <summary>
 /// peer -> host: this peer's local conversation status. <paramref name="Active"/> true =
 /// "I have entered a conversation" (a claim), false = "I have left it" (a release). The

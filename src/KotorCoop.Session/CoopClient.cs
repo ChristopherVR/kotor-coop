@@ -190,6 +190,63 @@ public sealed class CoopClient : ICoopSession
         }
     }
 
+    private readonly Queue<ChatMessage> _chatInbox = new();
+    private readonly Queue<string> _chatOutbox = new();
+
+    public void SendChat(string text)
+    {
+        text = text?.Trim() ?? string.Empty;
+        if (text.Length == 0)
+        {
+            return;
+        }
+
+        // Queued for the tick loop, which owns the send buffer.
+        lock (_gate)
+        {
+            _chatOutbox.Enqueue(text);
+        }
+    }
+
+    public IReadOnlyList<ChatMessage> DrainChat()
+    {
+        lock (_gate)
+        {
+            if (_chatInbox.Count == 0)
+            {
+                return [];
+            }
+
+            ChatMessage[] drained = [.. _chatInbox];
+            _chatInbox.Clear();
+            return drained;
+        }
+    }
+
+    private void FlushChat()
+    {
+        while (true)
+        {
+            string text;
+            lock (_gate)
+            {
+                if (_chatOutbox.Count == 0)
+                {
+                    return;
+                }
+
+                text = _chatOutbox.Dequeue();
+            }
+
+            int length = PacketCodec.Write(
+                _sendBuffer, new ChatPacket(_localPeerId, _settings.PlayerName, text));
+            if (length > 0)
+            {
+                _channel.Send(_hostEndPoint, _sendBuffer.AsSpan(0, length));
+            }
+        }
+    }
+
     public void ReportEnemies(string module, IReadOnlyList<EnemyState> enemies)
     {
         if (_localPeerId == 0 || enemies.Count == 0)
@@ -342,6 +399,7 @@ public sealed class CoopClient : ICoopSession
 
         SendStateUpdate(now);
         SendDialogueRequest();
+        FlushChat();
 
         if (now - _lastPingMs >= PingIntervalMs)
         {
@@ -619,6 +677,17 @@ public sealed class CoopClient : ICoopSession
                     lock (_gate)
                     {
                         _dialogue = dialogue.State;
+                    }
+                }
+
+                break;
+
+            case PacketType.Chat:
+                if (PacketCodec.ReadChat(span) is { } chat)
+                {
+                    lock (_gate)
+                    {
+                        _chatInbox.Enqueue(new ChatMessage(chat.FromPeerId, chat.Name, chat.Text));
                     }
                 }
 
