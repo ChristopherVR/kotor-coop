@@ -8,6 +8,55 @@ no other dependencies. C# throughout.
 
 ---
 
+## 0b. "PROPER CO-OP" BUILD, 2026-07-31 — research + mod-compat + map + name plates
+
+Five parallel research deep-dives (all in `docs/research/`, verified against the GOG
+binary) drove a build pass. ⚠ **Protocol bumped to version 4** — Hello/Welcome now carry a
+content digest, so an agent from before this bump is cleanly rejected. Rebuild both agents.
+
+**Mod compatibility — the user's headline requirement, now real.** The audit
+(`docs/research/mod-compatibility.md`) found 20 vanilla-data assumptions, several
+corruption-class, and the globals digest that the docs claimed protected quest state was
+*computed but never compared*. Built:
+- **C# game-file readers** (`src/KotorCoop.Memory/GameFiles/`: KEY/BIF, GFF, 2DA, TLK,
+  ERF/RIM), ported from `tools/kotorfiles.py`, verified byte-identical to it (appearance.2da
+  509 rows, global.jrl 101 categories under restype **utw not jrl** in this build, dialog.tlk
+  49265 entries).
+- **A content-digest handshake** (`ContentDigest`, `ContentCompatibility`,
+  `SessionCapabilities` in the protocol assembly; `InstallDigest` in memory). The agent
+  fingerprints its install (exe ends+size, override/modules census, appearance.2da rows+labels,
+  global.jrl tags, dialog.tlk header) and carries it in Hello/Welcome. `Compare` judges it
+  identically on host and client into a capability set: **refuse** a different exe; **degrade**
+  the specific channel a mismatch invalidates (a different appearance.2da drops the appearance
+  write, a different save/GIT drops enemies+doors+items, a different globals catalogue drops
+  world state+doors); **warn** for the expected case of two differently-modded override folders.
+  The agent's pump gates every channel on its bit, and masks appearance/equipment on the peer
+  write when their capability is off. `--allow-different-save` relaxes a save mismatch.
+- Audit fixes folded in: version-mismatch now sends a typed Reject (was silence);
+  equipment-slot object-id bug (slots hold ids not pointers — that fix is in `0a` too); the
+  phantom blueprint now tries a chain (`k_coop_phantom` then `n_commm`) and **latches
+  "phantoms unavailable"** after 5 misses instead of retrying forever with an unbounded
+  game-thread log; the phantom faction is **forced Neutral** rather than trusted from the
+  blueprint (a modded `n_commm` faction would resurrect the aggro sink).
+
+**Map presence** (`MapMarkerController`, `docs/research/map-presence.md`). Each peer is a
+map-note waypoint on the M-screen map, constructed directly (the NWScript CreateObject
+routine has an engine bug for waypoints — makes the object, returns OBJECT_INVALID) and
+moved per tick; the map's own draw re-reads the position every frame, so no GUI patching.
+No new protocol. Fog-of-war reveal deferred (its areaMap pointer is not DB-verified).
+
+**Name plates FIXED** (`docs/research/name-plates.md`) — and this corrects `0.4`/`4.11`,
+which had recorded them as suspect on a TLK theory. The band renders from a plain CExoString
+on the **client twin**, and the engine's per-frame diff has no name-changed bit, so a name
+reaches the twin exactly once (first update). `SetCreatureFirstName` now writes the twin
+(`CSWCCreature::SetName 0x0060D600`) as well as the server locstring; `PhantomController`
+re-asserts until the twin appears. No TLK needed — substrings beat the strref.
+
+**Still designed-not-built:** `k_coop_phantom.utc` (the override blueprint the chain already
+prefers — needs a GFF writer), party reconciliation (`docs/research/party-reconciliation.md`
+— gated on live solo-mode measurement), the world-time half of the digest (globals catalogue
++ save + GIT per module). All in `docs/research/`.
+
 ## 0a. LIVE VERIFICATION, 2026-07-31 (pids 68952 host / 54536 client, both GOG, Endar Spire)
 
 Everything below was observed in a real two-instance session, not inferred.
