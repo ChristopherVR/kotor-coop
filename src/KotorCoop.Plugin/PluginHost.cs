@@ -27,6 +27,7 @@ internal static unsafe class PluginHost
     private static TravelController? _travel;
     private static PauseController? _pause;
     private static JournalController? _journal;
+    private static MapMarkerController? _mapMarkers;
     private static MenuLoadController? _menuLoad;
     private static Thread? _worker;
     private static volatile bool _running = true;
@@ -68,6 +69,7 @@ internal static unsafe class PluginHost
             _menuLoad = new MenuLoadController(_view);
             _pause = new PauseController(_view);
             _journal = new JournalController(_view);
+            _mapMarkers = new MapMarkerController(_view);
 
             // Install the frame hook from here because DirectInput8Create - our caller - is
             // verified to run on the game's main thread during startup. Installing from the
@@ -198,7 +200,12 @@ internal static unsafe class PluginHost
                 return;
             }
 
-            _items?.FlushOneBody();
+            if (_items is { } items && items.FlushOneBody())
+            {
+                return;
+            }
+
+            _mapMarkers?.FlushOneBody();
             return;
         }
 
@@ -227,6 +234,11 @@ internal static unsafe class PluginHost
                 return;
             }
 
+            if (_mapMarkers is { } markers && markers.FlushOneBody())
+            {
+                return;
+            }
+
             travel.Execute();
             return;
         }
@@ -237,6 +249,7 @@ internal static unsafe class PluginHost
         _doors?.OnFrame();
         _pause?.OnFrame();
         _journal?.OnFrame();
+        _mapMarkers?.OnFrame();
     }
 
     private static void InvalidateAll(string reason)
@@ -249,6 +262,7 @@ internal static unsafe class PluginHost
         _travel?.Invalidate();
         _pause?.Invalidate();
         _journal?.Invalidate();
+        _mapMarkers?.Invalidate();
     }
 
     private static void WorkerLoop()

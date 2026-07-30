@@ -991,6 +991,126 @@ internal static unsafe class Odyssey
         return area != 0 && *(byte*)(area + AreaTransPending) != 0;
     }
 
+    // ---- map markers -------------------------------------------------------------
+    //
+    // A peer's position shows on the M-screen map as a map-note pin. The map's draw code
+    // (CSWGuiMapHider::Draw) re-reads each map-note waypoint's position field EVERY frame
+    // and converts it to a pixel, so a waypoint whose +0x90 we move per tick moves its pin
+    // live — no GUI patching. The waypoint is constructed DIRECTLY rather than through the
+    // NWScript CreateObject routine, because that routine has an engine bug for waypoints:
+    // it makes the object but forgets to return its id (returns OBJECT_INVALID).
+
+    /// <summary>CSWSWaypoint total size, for the engine allocator.</summary>
+    private const int WaypointSize = 0x240;
+
+    /// <summary>CSWSWaypoint + this = HasMapNote (nonzero -&gt; the map includes it).</summary>
+    private const int WaypointHasMapNote = 0x228;
+
+    /// <summary>CSWSWaypoint + this = MapNoteEnabled (nonzero -&gt; the pin is drawn), re-read
+    /// every frame by the map draw.</summary>
+    private const int WaypointMapNoteEnabled = 0x22C;
+
+    // Global::operator_new(size) — the engine allocator, so the object can be freed by the
+    // engine's own teardown.
+    private static readonly delegate* unmanaged[Cdecl]<int, nint> OperatorNewFn =
+        (delegate* unmanaged[Cdecl]<int, nint>)0x006FA7E6;
+
+    // CSWSWaypoint::Constructor(this, objectId). Passing 0x7F000000 makes the constructor
+    // allocate a real object id through AddInternalObject, exactly as creature spawning does.
+    private static readonly delegate* unmanaged[Thiscall]<nint, uint, nint> WaypointCtorFn =
+        (delegate* unmanaged[Thiscall]<nint, uint, nint>)0x005C7E70;
+
+    // CSWSWaypoint::AddToArea(this, area, x, y, z, bStore). Appends the object id to the
+    // area's object array, which is what the map's InitializeMapNotes scans.
+    private static readonly delegate* unmanaged[Thiscall]<nint, nint, float, float, float, int, void> WaypointAddToAreaFn =
+        (delegate* unmanaged[Thiscall]<nint, nint, float, float, float, int, void>)0x005C8580;
+
+    // CSWSWaypoint::RemoveFromArea(this, area). Half of teardown; the destructor is the
+    // other half.
+    private static readonly delegate* unmanaged[Thiscall]<nint, nint, void> WaypointRemoveFromAreaFn =
+        (delegate* unmanaged[Thiscall]<nint, nint, void>)0x005C8350;
+
+    /// <summary>The server-side area of the loaded module, or 0.</summary>
+    private static nint GetAreaPointer()
+    {
+        nint server = GetServer();
+        if (server == 0)
+        {
+            return 0;
+        }
+
+        nint module = GetModuleFn(server);
+        return module == 0 ? 0 : Deref(module + ModuleAreaOffset);
+    }
+
+    /// <summary>
+    /// Creates a map-note waypoint at a position and returns its object id (0 on failure).
+    /// The pin appears on the map screen next time it is opened (the map snapshots note
+    /// MEMBERSHIP on open, but reads each note's POSITION live), so spawn it at area load.
+    ///
+    /// MAIN THREAD ONLY.
+    /// </summary>
+    public static uint SpawnMapMarker(Vec3 position, out nint waypoint)
+    {
+        waypoint = 0;
+
+        nint area = GetAreaPointer();
+        if (area == 0)
+        {
+            return ObjectInvalid;
+        }
+
+        nint wp = OperatorNewFn(WaypointSize);
+        if (wp == 0)
+        {
+            return ObjectInvalid;
+        }
+
+        WaypointCtorFn(wp, 0x7F000000);
+        SetPositionFn(wp, &position, 1, 1, 0);
+        WaypointAddToAreaFn(wp, area, position.X, position.Y, position.Z, 0);
+
+        *(int*)(wp + WaypointHasMapNote) = 1;
+        *(int*)(wp + WaypointMapNoteEnabled) = 1;
+
+        waypoint = wp;
+        return *(uint*)(wp + 0x04);
+    }
+
+    /// <summary>Moves a map marker; its pin follows on the next map draw. MAIN THREAD ONLY.</summary>
+    public static void MoveMapMarker(nint waypoint, Vec3 position)
+    {
+        if (waypoint != 0)
+        {
+            *(Vec3*)(waypoint + ObjPosition) = position;
+        }
+    }
+
+    /// <summary>
+    /// Destroys a map marker through the engine: remove from the area, then the object's
+    /// own deleting destructor (vtable slot 0, flag 1). Required in the pre-store flush
+    /// window — a waypoint left in the area is serialised into the saved module.
+    ///
+    /// MAIN THREAD ONLY.
+    /// </summary>
+    public static void DestroyMapMarker(nint waypoint)
+    {
+        if (waypoint == 0)
+        {
+            return;
+        }
+
+        nint area = GetAreaPointer();
+        if (area != 0)
+        {
+            WaypointRemoveFromAreaFn(waypoint, area);
+        }
+
+        nint vtable = *(nint*)waypoint;
+        var destructor = (delegate* unmanaged[Thiscall]<nint, int, void>)(*(nint*)vtable);
+        destructor(waypoint, 1);
+    }
+
     // ---- death pose --------------------------------------------------------------
 
     /// <summary>
