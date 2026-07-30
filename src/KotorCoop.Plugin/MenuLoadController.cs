@@ -129,6 +129,19 @@ internal sealed unsafe class MenuLoadController(SharedBlockView block)
     /// <summary>Serial already acted on, so one request fires exactly one load.</summary>
     private uint _firedSerial;
 
+    /// <summary>The constructed save panel, alive between phase 1 and phase 2.</summary>
+    private nint _panel;
+
+    /// <summary>
+    /// Frames left before phase 2. The loopback connect started in phase 1 completes
+    /// asynchronously in the game's own MainLoop; calling the load in the same frame is
+    /// the current suspect for the transition stalling, so the load waits ~2 s of frames.
+    /// </summary>
+    private int _connectGraceFrames;
+
+    /// <summary>The dummy list entry passed to LoadPCAutoSave; must outlive phase 2.</summary>
+    private readonly byte[] _entry = new byte[0x400];
+
     public void OnFrame()
     {
         uint serial = block.MenuLoadSerial;
@@ -137,8 +150,23 @@ internal sealed unsafe class MenuLoadController(SharedBlockView block)
             return;
         }
 
-        // A server exists: either the load we fired has begun (mission accomplished) or
-        // the game was never at the menu and the request is moot. Both are acks.
+        // Phase 2: the loopback session has had frames to complete; fire the load.
+        if (_panel != 0)
+        {
+            if (Odyssey.HasServer && _connectGraceFrames > 0)
+            {
+                _connectGraceFrames--;
+                return;
+            }
+
+            nint panel = _panel;
+            _panel = 0;
+            FirePhase2(panel, serial);
+            return;
+        }
+
+        // A server exists before phase 1 even ran: the game was never at the menu and
+        // the request is moot. Ack it.
         if (Odyssey.HasServer)
         {
             block.MenuLoadStatus = 0;
@@ -148,9 +176,6 @@ internal sealed unsafe class MenuLoadController(SharedBlockView block)
 
         if (_firedSerial == serial)
         {
-            // Fired; the transition takes a while to produce a server. Note UpdateScreen
-            // inside the branch re-enters the frame hook — this early-out is what makes
-            // that re-entry harmless.
             return;
         }
 
@@ -163,19 +188,21 @@ internal sealed unsafe class MenuLoadController(SharedBlockView block)
 
         _firedSerial = serial;
 
-        int failure = Fire(menu);
-        PluginHost.Log(failure == 0
-            ? "menu: autosave load fired; waiting for the world"
-            : $"menu: autosave load refused (failure {failure})");
-
+        int failure = FirePhase1(menu);
         if (failure != 0)
         {
+            PluginHost.Log($"menu: autosave load refused (failure {failure})");
             block.MenuLoadStatus = failure;
             block.MenuLoadApplied = serial;
         }
     }
 
-    private static int Fire(nint menu)
+    /// <summary>
+    /// Everything up to and including the loopback connect: panel, load screen, server.
+    /// Returns with the panel parked so the game's MainLoop can pump the connection for
+    /// a couple of seconds before phase 2 asks for the actual load.
+    /// </summary>
+    private int FirePhase1(nint menu)
     {
         nint appManager = *(nint*)AppManagerPtr;
         nint client = appManager == 0 ? 0 : *(nint*)(appManager + AppClientOffset);
@@ -199,22 +226,25 @@ internal sealed unsafe class MenuLoadController(SharedBlockView block)
         int* menuState = (int*)(menu + MenuStateBits);
         *menuState = (*menuState & ~0x300) | 0x400;
 
-        // A zeroed stand-in for the save-list entry the GUI would normally pass. Only
-        // its loading-screen name (+0x1F0) and flags are read on this path, and empty
-        // reads select defaults; the save identity itself comes from the AUTOSAVE
-        // literals inside LoadPCAutoSave.
-        byte* entry = stackalloc byte[0x400];
-        new Span<byte>(entry, 0x400).Clear();
-
         PluginHost.Log("menu: staging the load screen");
         ResetSessionStartTime();
         SetGlobalUnpauseableState(GetInGameGui(client), 1);
         PopModalPanel(guiManager);
         HideSWInGameGui(GetInGameGui(client), 0);
 
-        ExoString empty = default;
-        SetLoadScreenByModuleName(client, (ExoString*)(entry + 0x1F0));
-        SetLoadMusic(client, &empty);
+        fixed (byte* entry = _entry)
+        {
+            new Span<byte>(entry, _entry.Length).Clear();
+
+            // The flag bits the real branch tests on its list entry: 0x10 selects the
+            // autosave path and 0x20 gates the save-info handoff.
+            *(uint*)(entry + 0x1C4) = 0x30;
+
+            ExoString empty = default;
+            SetLoadScreenByModuleName(client, (ExoString*)(entry + 0x1F0));
+            SetLoadMusic(client, &empty);
+        }
+
         ShowLoadScreen(client, 1, 1, 0);
         SetLoadBarProgress(client, 0, 1);
         UpdateScreen(0x3D088889, 0, 0);
@@ -228,9 +258,6 @@ internal sealed unsafe class MenuLoadController(SharedBlockView block)
             return 4;
         }
 
-        PauseWorldTimer(ClientGetWorldTimer(client));
-        PauseWorldTimer(ServerGetWorldTimer(server));
-
         ExoString address = default;
         ExoString nameStorage = default;
         nint name = GetClientName(client, &nameStorage);
@@ -238,12 +265,37 @@ internal sealed unsafe class MenuLoadController(SharedBlockView block)
         StartConnectToSession(GetNetLayer(client), 0, name, &address, 0x0A, sessionByte);
         RequestStatus(GetSWCMessage(client));
 
+        PluginHost.Log("menu: connect started; letting the game pump it before the load");
+        _panel = panel;
+        _connectGraceFrames = 600;
+        return 0;
+    }
+
+    /// <summary>Pauses the world timers, locks input, and asks for the load itself.</summary>
+    private void FirePhase2(nint panel, uint serial)
+    {
+        nint appManager = *(nint*)AppManagerPtr;
+        nint client = appManager == 0 ? 0 : *(nint*)(appManager + AppClientOffset);
+        nint server = appManager == 0 ? 0 : *(nint*)(appManager + AppServerOffset);
+
+        if (client == 0 || server == 0)
+        {
+            PluginHost.Log("menu: phase 2 lost the client or server; giving up");
+            block.MenuLoadStatus = 5;
+            block.MenuLoadApplied = serial;
+            return;
+        }
+
+        PauseWorldTimer(ClientGetWorldTimer(client));
+        PauseWorldTimer(ServerGetWorldTimer(server));
         SetInputClass(client, 0, 1);
         DisableInput(client);
 
         PluginHost.Log("menu: calling LoadPCAutoSave");
-        LoadPCAutoSave(panel, (nint)entry);
-        return 0;
+        fixed (byte* entry = _entry)
+        {
+            LoadPCAutoSave(panel, (nint)entry);
+        }
     }
 
     /// <summary>Client vtable slot +0x10 hands back the CNetLayer.</summary>

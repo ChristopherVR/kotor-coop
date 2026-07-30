@@ -69,16 +69,20 @@ public static class SaveLoader
             return phase == GamePhase.InWorld;
         }
 
-        // The in-process route first: the plugin replays the GUI's own load path on the
-        // game's thread, so it needs no window focus, no cursor and no clicks — menu
-        // input injection is intermittently dead in ways that resisted diagnosis
-        // (Handoff trap 25). Clicking survives below only as the no-plugin fallback.
+        // The in-process route: the plugin replays the GUI's own load path on the game's
+        // thread, so it needs no window focus, no cursor and no clicks — menu input
+        // injection is intermittently dead in ways that resisted diagnosis (trap 25).
         //
-        // viaMenuClicks skips it entirely: as of 2026-07-30 the replay CRASHES the game
-        // inside LoadPCAutoSave (two for two, both instances — see the plugin log ending
-        // at "panel added, calling LoadPCAutoSave"), and a crashed game leaves the click
-        // fallback nothing to click on.
-        if (!viaMenuClicks && TryLoadViaPlugin(game, memory, lifecycle, slotIndex, out string pluginDiagnostic))
+        // OPT-IN for now (KOTORCOOP_PLUGIN_LOAD=1): the replay no longer crashes — the
+        // full LoadGame branch is reproduced, server + loopback session included — but
+        // the module transition is never serviced (black load screen, no world; see the
+        // Handoff addendum for the two remaining leads). A stalled load leaves nothing
+        // for the click fallback to click on, so it must not be the default until it
+        // completes.
+        bool pluginRouteRequested =
+            !viaMenuClicks && Environment.GetEnvironmentVariable("KOTORCOOP_PLUGIN_LOAD") == "1";
+
+        if (pluginRouteRequested && TryLoadViaPlugin(game, memory, lifecycle, slotIndex, out string pluginDiagnostic))
         {
             diagnostic = pluginDiagnostic;
             return true;

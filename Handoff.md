@@ -99,6 +99,31 @@ the 0x1160-byte `CSWGuiSaveLoad`, and shows it via `0x0040BC70(owner, panel, 2, 
 so driving it requires `PopulateGameList` (`0x006CC160`) — the autosave route avoids all
 of that.
 
+**Implementation state (2026-07-30, late):** built as `MenuLoadController` (plugin) +
+`PluginMenuLoader` (agent) + `SaveLoader.TryLoadViaPlugin`, request fields at shared
+block `0x9A4/0x9A8/0x9AC`. The full replayed branch (0x6CB256..0x6CB3E8, every callee
+identified by DB — panel ctor + AddPanel, ResetCurrentSessionStartTim,
+SetGlobalUnpauseableState, PopModalPanel, HideSWInGameGui, SetLoadScreenByModuleName,
+SetLoadMusic, ShowLoadScreen, SetLoadBarProgress, UpdateScreen, **CreateServer**, both
+world-timer pauses, **CNetLayer::StartConnectToSession(0, clientName, "", 10,
+byte[0x74C540]) — the loopback connect 4.2 was missing**,
+SendPlayerToServerStatus_RequestStatus, SetInputClass(0,1), DisableInput,
+LoadPCAutoSave(panel, dummyEntry)) now **fires without crashing**: server created, world
+timer runs, load-state accepted. What it does not yet do is finish: **the module
+transition is never serviced** — black screen, no module, no creatures, indefinitely.
+Two leads, in order: (1) the loopback connect completes asynchronously and needs real
+pumping between connect and load. A two-phase split WAS tried (fire the connect, return
+to the game, call LoadPCAutoSave later) but the grace was measured in frames — 600
+frames passed in 0.2 s because the menu renders unthrottled — so the variant actually
+tested gave the connect only 200 ms; retry with a WALL-CLOCK delay (3-5 s) and, better,
+find the CNetLayer "connected" flag and gate on it. (2) compare against
+`CSWGuiMainMenu::OnModulePicked` / the `warp` path, which reaches a world from the menu
+without a save at all. A zeroed 0x400 dummy entry with flags `+0x1C4 = 0x30` was tried;
+no change. Earlier one-line attempts (bare LoadPCAutoSave with no preamble) CRASH the
+game — the server-null deref 4.2 predicted — so the preamble is definitely
+load-bearing. The route is OPT-IN via `KOTORCOOP_PLUGIN_LOAD=1` until it completes,
+because a stalled load leaves a black screen the click fallback cannot rescue.
+
 **New traps:**
 
 22. **A game window that has never been foreground-activated ignores all injected input**
