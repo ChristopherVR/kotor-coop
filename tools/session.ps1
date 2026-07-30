@@ -62,7 +62,10 @@ function Start-Instance {
     } while ($proc -and $proc.MainWindowHandle -eq [IntPtr]::Zero -and (Get-Date) -lt $windowDeadline)
 
     & $movewin -ProcId $procId -X $X -Y 0 | Out-Null
-    "instance $Instance is pid $procId"
+
+    # Write-Host, not a bare string: anything written to the success stream becomes part
+    # of this function's return value, and a pid plus a status line is not a pid.
+    Write-Host "instance $Instance is pid $procId"
 
     # Wait for the menu (the window exists many seconds earlier, through the logo
     # movies), then activation-cycle and ASK THE GAME whether its menu input is alive
@@ -108,7 +111,7 @@ function Start-InstanceWithRetries {
 $pid1 = Start-InstanceWithRetries -Path $Game1 -Instance 1 -X 0
 $pid2 = Start-InstanceWithRetries -Path $Game2 -Instance 2 -X 830
 
-"both instances in-world: $pid1 (host) and $pid2 (client)"
+Write-Host "both instances in-world: $pid1 (host) and $pid2 (client)"
 
 if ($NoAgents) { return }
 
