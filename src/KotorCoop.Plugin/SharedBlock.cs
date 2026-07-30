@@ -20,6 +20,9 @@ internal struct RemoteSlot
 
     /// <summary>appearance.2da row of the remote player, so their phantom looks like them.</summary>
     [FieldOffset(0x38)] public uint Appearance;
+
+    /// <summary>PlayerState flags: 1 in-dialogue, 2 paused, 4 in-combat.</summary>
+    [FieldOffset(0x3C)] public uint Flags;
 }
 
 /// <summary>
@@ -44,7 +47,7 @@ internal struct SharedBlock
     /// existing offset profiles keep working. The plugin control fields live AFTER that
     /// range, which is why the block is larger than the profile knows about.
     /// </summary>
-    public const int TotalSize = 0x980;
+    public const int TotalSize = 0x9C0;
 
     public const int ProfileVisibleSize = 0x250;
 
@@ -197,6 +200,43 @@ internal struct SharedBlock
 
     public const int TravelNameLength = 32;
 
+    // ---- shared pause + journal (version 7) ---------------------------------------
+    //
+    // Pause: either player's pause pauses both instances. The agent writes "a remote
+    // peer holds a pause"; the plugin applies it through the engine's own
+    // SetPauseState(1, ...) so CWorldTimer actually stops, and reports back whether the
+    // pause bit it holds is on the peers' behalf — which the agent needs so a mirrored
+    // pause is not republished as this player's own (two instances would latch each
+    // other paused forever).
+    //
+    // Journal: quest entries merge upward across the session. The agent reads entries
+    // externally; applying one must run in-process because CSWSJournal::SetState is what
+    // refreshes the GUI. One request at a time — journal updates are rare.
+
+    /// <summary>Agent -&gt; plugin. Nonzero while any remote peer holds a pause.</summary>
+    public const int OffsetRemotePauseDesired = 0x96C;
+
+    /// <summary>Plugin -&gt; agent. Nonzero while the plugin holds the pause bit on the
+    /// peers' behalf.</summary>
+    public const int OffsetRemotePauseApplied = 0x970;
+
+    /// <summary>Agent -&gt; plugin. Bumped once per journal request; written LAST.</summary>
+    public const int OffsetJournalSerial = 0x974;
+
+    /// <summary>Agent -&gt; plugin. Quest tag, null-terminated ascii.</summary>
+    public const int OffsetJournalTag = 0x978;
+
+    /// <summary>Agent -&gt; plugin. Desired quest state (plot stage).</summary>
+    public const int OffsetJournalState = 0x998;
+
+    /// <summary>Plugin -&gt; agent. Serial of the last journal request acted on.</summary>
+    public const int OffsetJournalApplied = 0x99C;
+
+    /// <summary>Plugin -&gt; agent. 0 = ok, otherwise the failure code.</summary>
+    public const int OffsetJournalStatus = 0x9A0;
+
+    public const int JournalTagLength = 32;
+
     public const int ItemSlotCapacity = 8;
 
     public const int ItemResrefLength = 16;
@@ -220,7 +260,8 @@ internal struct SharedBlock
     /// Part of the agent's 16-byte scan signature, so bumping this intentionally severs
     /// old agents: version 2 added the ground-item slots and the appearance field,
     /// version 3 the enemy array, version 4 the door slots, version 5 the equipment
-    /// resrefs, version 6 the module-travel request.
+    /// resrefs, version 6 the module-travel request, version 7 shared pause, journal
+    /// apply and the per-peer flags dword.
     /// </summary>
     [FieldOffset(0x08)] public uint Version;
     [FieldOffset(0x0C)] public uint Reserved;

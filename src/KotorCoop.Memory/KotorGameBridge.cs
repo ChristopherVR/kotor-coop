@@ -88,6 +88,7 @@ public sealed class KotorGameBridge : IGameBridge
     private const int BlockPlayerCreature = 0x258;
     private const int BlockPhantomCount = 0x25C;
     private const int BlockLastStatus = 0x260;
+    private const int BlockPhantomIds = 0x264;
     private const int BlockKeepAliveUnfocused = 0x268;
     private const int BlockPausesCleared = 0x26C;
     private const int BlockPickUpRequest = 0x280;
@@ -124,8 +125,17 @@ public sealed class KotorGameBridge : IGameBridge
     private const int BlockTravelWaypoint = 0x944;
     private const int BlockTravelNameLength = 32;
 
-    /// <summary>16-byte signature: "KOCOOP01" + version 6 + guard 0xC0FFEE01.</summary>
-    private const string PluginSignature = "4B 4F 43 4F 4F 50 30 31 06 00 00 00 01 EE FF C0";
+    // Shared pause + journal apply, mirroring SharedBlock version 7.
+    private const int BlockRemotePauseDesired = 0x96C;
+    private const int BlockRemotePauseApplied = 0x970;
+    private const int BlockJournalSerial = 0x974;
+    private const int BlockJournalTag = 0x978;
+    private const int BlockJournalState = 0x998;
+    private const int BlockJournalApplied = 0x99C;
+    private const int BlockJournalTagLength = 32;
+
+    /// <summary>16-byte signature: "KOCOOP01" + version 7 + guard 0xC0FFEE01.</summary>
+    private const string PluginSignature = "4B 4F 43 4F 4F 50 30 31 07 00 00 00 01 EE FF C0";
 
     /// <summary>Agent's view of which coop item id occupies each plugin item slot.</summary>
     private readonly uint[] _itemSlotIds = new uint[BlockItemCapacity];
@@ -396,7 +406,7 @@ public sealed class KotorGameBridge : IGameBridge
 
         state = new PlayerState(
             position, facing, module, health, animation, appearance, maxHealth,
-            body, rightWeapon, leftWeapon);
+            body, rightWeapon, leftWeapon, ReadLocalFlags(creature));
 
         if (!state.IsPlausible)
         {
@@ -408,6 +418,62 @@ public sealed class KotorGameBridge : IGameBridge
         _consecutiveFailures = 0;
         return true;
     }
+
+    /// <summary>CSWSCreature + this = in-combat dword.</summary>
+    private const int OffInCombat = 0x4E0;
+
+    /// <summary>Latches "this player paused the game themselves" across the window where
+    /// a peer's mirrored pause shares the same engine bit.</summary>
+    private bool _ownPauseLatched;
+
+    /// <summary>
+    /// The presence bits that travel with the avatar: talking, paused, fighting.
+    ///
+    /// The pause bit is the player's OWN pause only. When the plugin is holding the pause
+    /// bit on a remote peer's behalf, that mirrored pause must not be republished as
+    /// ours — two instances would each mirror the other and latch paused forever. The
+    /// engine has one bit for both, so "own" is decided when the bit RISES: set while no
+    /// mirror was applied means the player did it, and that verdict is latched until the
+    /// bit clears.
+    /// </summary>
+    private uint ReadLocalFlags(nint creature)
+    {
+        uint flags = 0;
+
+        if (IsInDialogue)
+        {
+            flags |= PlayerState.FlagInDialogue;
+        }
+
+        bool paused = EngineGlobals.TryReadPauseMask(_memory, out byte pauseMask)
+            && (pauseMask & EngineGlobals.PauseReasonPlayer) != 0;
+
+        if (!paused)
+        {
+            _ownPauseLatched = false;
+        }
+        else if (!IsRemotePauseApplied)
+        {
+            _ownPauseLatched = true;
+        }
+
+        if (_ownPauseLatched)
+        {
+            flags |= PlayerState.FlagPaused;
+        }
+
+        if (_memory.TryReadInt32(creature + OffInCombat, out int inCombat) && inCombat != 0)
+        {
+            flags |= PlayerState.FlagInCombat;
+        }
+
+        return flags;
+    }
+
+    private bool IsRemotePauseApplied =>
+        _pluginBlock != 0
+        && _memory.TryReadUInt32(_pluginBlock + BlockRemotePauseApplied, out uint applied)
+        && applied != 0;
 
     public bool TryWriteRemotePeers(IReadOnlyList<RemotePeer> peers)
     {
@@ -497,6 +563,7 @@ public sealed class KotorGameBridge : IGameBridge
             ok &= _memory.TryWriteAsciiString(slot + 0x20, peer.Name, BlockSlotNameLength);
 
             ok &= _memory.TryWrite(slot + 0x38, peer.State.Appearance);
+            ok &= _memory.TryWrite(slot + 0x3C, peer.State.Flags);
 
             // Visible equipment, as blueprint resrefs the plugin equips on the phantom.
             nint equip = _pluginBlock + BlockEquipSlots + (i * BlockEquipStride);
@@ -1045,6 +1112,133 @@ public sealed class KotorGameBridge : IGameBridge
         return disabled;
     }
 
+    // ---- journal ---------------------------------------------------------------
+
+    /// <summary>CServerExoAppInternal + this = party table (embedded CSWPartyTable).</summary>
+    private const int PartyTableOffset = 0x1B770;
+
+    /// <summary>CSWPartyTable + this = quest journal { SJournalEntry* data; int size; int cap }.</summary>
+    private const int PartyTableJournal = 0x11C;
+
+    private const int JournalEntryStride = 0x3C;
+    private const int JournalEntryTag = 0x18;    // CExoString { char* @0, len @4 }
+    private const int JournalEntryState = 0x20;
+
+    /// <summary>What this game's journal held when last scanned (or what we last applied),
+    /// so only genuine advances are announced and nothing echoes.</summary>
+    private readonly Dictionary<string, int> _journalShadow = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>Reading is external; applying goes through the plugin (SetState must run
+    /// on the game's thread, and it is also what refreshes the journal GUI).</summary>
+    public bool SupportsJournalSync => _pluginBlock != 0;
+
+    public List<KeyValuePair<string, int>> CollectChangedJournal()
+    {
+        List<KeyValuePair<string, int>> changes = [];
+
+        foreach ((string tag, int state) in ReadJournalEntries())
+        {
+            if (_journalShadow.TryGetValue(tag, out int known) && known >= state)
+            {
+                continue;
+            }
+
+            _journalShadow[tag] = state;
+            changes.Add(new KeyValuePair<string, int>(tag, state));
+        }
+
+        return changes;
+    }
+
+    /// <summary>
+    /// Asks the plugin to advance a quest entry. One request in flight at a time —
+    /// journal changes are rare, and the pump retries every tick until the plugin has
+    /// caught up. Returns false when the game is already at or past the state.
+    /// </summary>
+    public bool TryApplyJournalEntry(string questTag, int state)
+    {
+        if (_pluginBlock == 0
+            || string.IsNullOrEmpty(questTag)
+            || questTag.Length >= BlockJournalTagLength)
+        {
+            return false;
+        }
+
+        if (_journalShadow.TryGetValue(questTag, out int known) && known >= state)
+        {
+            return false;
+        }
+
+        // Only one request slot; wait for the plugin to acknowledge the previous one.
+        if (!_memory.TryReadUInt32(_pluginBlock + BlockJournalSerial, out uint serial)
+            || !_memory.TryReadUInt32(_pluginBlock + BlockJournalApplied, out uint appliedSerial)
+            || serial != appliedSerial)
+        {
+            return false;
+        }
+
+        bool ok = _memory.TryWriteAsciiString(_pluginBlock + BlockJournalTag, questTag, BlockJournalTagLength);
+        ok &= _memory.TryWrite(_pluginBlock + BlockJournalState, state);
+
+        // Serial last, so the plugin never sees a half-written request.
+        ok &= _memory.TryWrite(_pluginBlock + BlockJournalSerial, serial + 1);
+
+        if (ok)
+        {
+            // Optimistic: the engine's own SetState refuses to lower a state, so even a
+            // failed apply cannot make this shadow wrong in a way that loses progress.
+            _journalShadow[questTag] = state;
+        }
+
+        return ok;
+    }
+
+    private IEnumerable<(string Tag, int State)> ReadJournalEntries()
+    {
+        if (!EngineGlobals.TryGetServerInternal(_memory, out nint serverInternal))
+        {
+            yield break;
+        }
+
+        nint journal = serverInternal + PartyTableOffset + PartyTableJournal;
+
+        if (!_memory.TryReadPointer(journal, out nint data) || data == 0
+            || !_memory.TryReadInt32(journal + 4, out int count)
+            || count is <= 0 or > 512)
+        {
+            yield break;
+        }
+
+        for (int i = 0; i < count; i++)
+        {
+            nint entry = data + (i * JournalEntryStride);
+            string tag = ReadExoString(entry + JournalEntryTag);
+
+            if (tag.Length is 0 or >= BlockJournalTagLength)
+            {
+                continue;
+            }
+
+            if (!_memory.TryReadInt32(entry + JournalEntryState, out int state))
+            {
+                continue;
+            }
+
+            yield return (tag, state);
+        }
+    }
+
+    // ---- shared pause ----------------------------------------------------------
+
+    /// <summary>Pause sync needs the plugin: only an in-process SetPauseState call
+    /// actually stops the world timer.</summary>
+    public bool SupportsPauseSync => _pluginBlock != 0;
+
+    /// <summary>Tells the plugin whether any remote peer currently holds a pause.</summary>
+    public bool TrySetRemotePause(bool desired) =>
+        _pluginBlock != 0
+        && _memory.TryWrite(_pluginBlock + BlockRemotePauseDesired, desired ? 1u : 0u);
+
     // ---- module travel ---------------------------------------------------------
 
     /// <summary>Travel needs the in-process plugin: the warp is an engine call.</summary>
@@ -1103,14 +1297,24 @@ public sealed class KotorGameBridge : IGameBridge
     /// from the player, which is the same test the engine's own targeting uses, and it
     /// keeps party members, neutral NPCs and other players' phantoms out of the list.
     /// </summary>
+    /// <summary>Addresses from the latest <see cref="ReadEnemies"/>, so applying a peer's
+    /// floors does not need a second full memory scan in the same tick.</summary>
+    private readonly Dictionary<uint, nint> _enemyAddresses = [];
+
     public List<EnemyState> ReadEnemies()
     {
         List<EnemyState> enemies = [];
+        _enemyAddresses.Clear();
 
         if (_player is null || !TryReadFaction(_player.Address, out int playerFaction))
         {
             return enemies;
         }
+
+        // Phantoms are no longer plot-flagged (7.4's redesign: they take visible damage
+        // now), so they must be excluded by id or a teammate's body would be published
+        // as an enemy, pinned, and mirrored.
+        HashSet<uint>? phantomIds = ReadPhantomObjectIds();
 
         foreach (CreatureRef creature in EnumerateCreatures())
         {
@@ -1119,8 +1323,13 @@ public sealed class KotorGameBridge : IGameBridge
                 continue;
             }
 
-            // A plot creature here is one of our own phantoms, or something the module
-            // declares un-killable. Either way its health is not ours to replicate.
+            if (phantomIds is not null && phantomIds.Contains(creature.ObjectId))
+            {
+                continue;
+            }
+
+            // A plot creature is something the module declares un-killable; its health
+            // is not ours to replicate.
             if (_memory.TryReadInt32(creature.Address + OffPlot, out int plot) && plot != 0)
             {
                 continue;
@@ -1131,13 +1340,69 @@ public sealed class KotorGameBridge : IGameBridge
                 continue;
             }
 
-            _memory.TryRead(creature.Address + OffCurrentHitPoints, out ushort current);
+            // Signed: an overkilled enemy sits at negative hit points, and an unsigned
+            // read would report it as 65531 hp and alive — the death would never
+            // replicate.
+            _memory.TryRead(creature.Address + OffCurrentHitPoints, out short current);
             _memory.TryRead(creature.Address + OffMaxHitPoints, out ushort max);
 
-            enemies.Add(new EnemyState(creature.ObjectId, current, max, current == 0));
+            _enemyAddresses[creature.ObjectId] = creature.Address;
+            enemies.Add(new EnemyState(
+                creature.ObjectId, (ushort)Math.Max((int)current, 0), max, current <= 0));
         }
 
         return enemies;
+    }
+
+    /// <summary>The plugin's live phantom object ids, or null when no plugin is attached.</summary>
+    private HashSet<uint>? ReadPhantomObjectIds()
+    {
+        if (_pluginBlock == 0)
+        {
+            return null;
+        }
+
+        HashSet<uint>? ids = null;
+        for (int i = 0; i < BlockSlotCapacity; i++)
+        {
+            if (_memory.TryReadUInt32(_pluginBlock + BlockPhantomIds + (i * 4), out uint id) && id != 0)
+            {
+                (ids ??= []).Add(id);
+            }
+        }
+
+        return ids;
+    }
+
+    /// <summary>
+    /// Lowers this instance's enemies to a peer's reported health where the peer's is
+    /// lower — the min-merge that makes a client's damage count. A raw health write is
+    /// the engine's own idiom here (there is no dirty flag for health; the update path
+    /// diffs it every tick), and death stays this side's call: reports never go below 1
+    /// because client copies are pinned, so the killing blow is always local.
+    /// </summary>
+    public int TryApplyEnemyFloors(IReadOnlyList<EnemyState> reports)
+    {
+        int applied = 0;
+
+        foreach (EnemyState report in reports)
+        {
+            if (report.Dead || !_enemyAddresses.TryGetValue(report.ObjectId, out nint address))
+            {
+                continue;
+            }
+
+            int floor = Math.Max(1, (int)report.CurrentHealth);
+
+            if (_memory.TryRead(address + OffCurrentHitPoints, out short current)
+                && floor < current
+                && _memory.TryWrite(address + OffCurrentHitPoints, floor))
+            {
+                applied++;
+            }
+        }
+
+        return applied;
     }
 
     /// <summary>

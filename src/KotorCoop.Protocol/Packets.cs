@@ -21,6 +21,7 @@ public sealed record WorldSnapshotPacket(
     long ServerTimeMs,
     uint FlagVersion,
     uint ItemVersion,
+    uint JournalVersion,
     IReadOnlyList<SnapshotEntry> Entries);
 
 /// <summary>
@@ -91,3 +92,27 @@ public sealed record EnemyState(uint ObjectId, ushort CurrentHealth, ushort MaxH
 /// instance, so replaying "took 7 damage" on the far side does not produce 7.
 /// </summary>
 public sealed record EnemySnapshotPacket(long ServerTimeMs, IReadOnlyList<EnemyState> Enemies);
+
+/// <summary>
+/// A client's local view of enemy health, sent each tick, unreliable. The module rides
+/// along because enemy object ids reset across transitions — the host must never apply
+/// a report from a client standing in a different (or stale) module.
+/// </summary>
+public sealed record EnemyReportPacket(uint PeerId, string Module, IReadOnlyList<EnemyState> Enemies);
+
+/// <summary>
+/// A quest journal advance: entry <paramref name="QuestTag"/> reached
+/// <paramref name="State"/>. States only rise (the engine itself refuses to lower one),
+/// so the merge is a max and replays are harmless.
+/// </summary>
+public sealed record JournalOpPacket(uint OriginPeerId, uint OpSequence, string QuestTag, int State);
+
+public sealed record JournalAckPacket(uint OpSequence);
+
+public sealed record JournalSyncRequestPacket(uint PeerId, uint KnownVersion);
+
+/// <summary>
+/// The authoritative journal. A journal longer than one datagram is sent as several of
+/// these in one burst, each carrying the same version.
+/// </summary>
+public sealed record JournalSnapshotPacket(uint Version, IReadOnlyList<KeyValuePair<string, int>> Entries);

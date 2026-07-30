@@ -5,8 +5,19 @@ public static class ProtocolConstants
     /// <summary>Two byte magic ('K','C') so stray traffic on the port is discarded cheaply.</summary>
     public const ushort Magic = 0x4B43;
 
-    /// <summary>Bumped on any wire-format change. Mismatched peers are rejected at Hello.</summary>
-    public const byte Version = 2;
+    /// <summary>Bumped on any wire-format change. Mismatched peers are rejected at Hello.
+    /// Version 3: PlayerState flags dword, journal channel, client enemy reports.</summary>
+    public const byte Version = 3;
+
+    /// <summary>Journal quest tags are resrefs plus a little slack.</summary>
+    public const int MaxJournalTagLength = 32;
+
+    /// <summary>
+    /// Journal entries per snapshot datagram: tag (up to 33 bytes) + state (4) each, so
+    /// 28 stays inside <see cref="MaxPacketSize"/>. A longer journal is sent as several
+    /// snapshot packets in one burst.
+    /// </summary>
+    public const int MaxJournalEntriesPerPacket = 28;
 
     /// <summary>Odyssey resource references are at most 16 characters.</summary>
     public const int MaxResrefLength = 16;

@@ -97,6 +97,24 @@ public static class EngineGlobals
         return true;
     }
 
+    /// <summary>CServerExoAppInternal + this = the byte of pause-reason bits.</summary>
+    private const int PauseMaskOffset = 0x10078;
+
+    /// <summary>The player's own pause toggle (space bar / pause button). Set and cleared
+    /// through TogglePauseState (0x004BA610) -&gt; SetPauseState (0x004B8110).</summary>
+    public const byte PauseReasonPlayer = 0x01;
+
+    /// <summary>Window-not-focused; also used by scripts and dialogue.</summary>
+    public const byte PauseReasonFocus = 0x02;
+
+    /// <summary>Reads the pause-reason bitmask, 0 when no world (or nothing paused).</summary>
+    public static bool TryReadPauseMask(ProcessMemory memory, out byte mask)
+    {
+        mask = 0;
+        return TryGetServerInternal(memory, out nint serverInternal)
+            && memory.TryRead(serverInternal + PauseMaskOffset, out mask);
+    }
+
     private static bool TryStep(ProcessMemory memory, nint root, int offset, out nint result)
     {
         result = 0;

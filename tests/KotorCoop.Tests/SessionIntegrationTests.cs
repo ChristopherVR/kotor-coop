@@ -160,6 +160,95 @@ public class SessionIntegrationTests
     }
 
     [Fact]
+    public async Task JournalEntriesMergeInBothDirections()
+    {
+        using CoopHost host = new(new SessionSettings { PlayerName = "Revan", Port = 0, TickRate = 30 });
+        using CoopClient client = new(
+            new SessionSettings { PlayerName = "Malak", TickRate = 30 },
+            new IPEndPoint(IPAddress.Loopback, host.ListenEndPoint.Port));
+
+        using CancellationTokenSource cts = new(Timeout + TimeSpan.FromSeconds(20));
+        Task hostTask = host.RunAsync(cts.Token);
+        Task clientTask = client.RunAsync(cts.Token);
+
+        PlayerState state = new(Vector3f.Zero, 0f, "end_m01aa", 100, 0);
+        void Publish()
+        {
+            host.PublishLocalState(state);
+            client.PublishLocalState(state);
+        }
+
+        Assert.True(await WaitForAsync(() => client.IsConnected, Timeout, Publish));
+
+        // The client advances a quest: the reliable op must reach the host.
+        client.SetJournalEntry("k_swg_bastila", 20);
+        Assert.True(
+            await WaitForAsync(
+                () => host.Journal.Snapshot().Any(e => e.Key == "k_swg_bastila" && e.Value == 20),
+                Timeout,
+                Publish),
+            "journal entry set by the client never reached the host");
+
+        // The host advances further: the client resyncs via the version tripwire, and
+        // the merge must never lower what the client already has.
+        host.SetJournalEntry("k_swg_bastila", 30);
+        host.SetJournalEntry("tat_duelling", 10);
+        Assert.True(
+            await WaitForAsync(
+                () => client.Journal.Snapshot().Any(e => e.Key == "k_swg_bastila" && e.Value == 30)
+                    && client.Journal.Snapshot().Any(e => e.Key == "tat_duelling" && e.Value == 10),
+                Timeout,
+                Publish),
+            "journal entries set by the host never reached the client");
+
+        Assert.True(
+            await WaitForAsync(() => client.Journal.Version == host.Journal.Version, Timeout, Publish),
+            "journal versions never converged");
+
+        await cts.CancelAsync();
+        await Task.WhenAll(hostTask, clientTask);
+    }
+
+    [Fact]
+    public async Task ClientEnemyReportsReachTheHost()
+    {
+        using CoopHost host = new(new SessionSettings { PlayerName = "Revan", Port = 0, TickRate = 30 });
+        using CoopClient client = new(
+            new SessionSettings { PlayerName = "Malak", TickRate = 30 },
+            new IPEndPoint(IPAddress.Loopback, host.ListenEndPoint.Port));
+
+        using CancellationTokenSource cts = new(Timeout + TimeSpan.FromSeconds(10));
+        Task hostTask = host.RunAsync(cts.Token);
+        Task clientTask = client.RunAsync(cts.Token);
+
+        PlayerState state = new(Vector3f.Zero, 0f, "end_m01aa", 100, 0);
+        List<EnemyState> report = [new(0x14, 3, 15, false)];
+
+        void Publish()
+        {
+            host.PublishLocalState(state);
+            client.PublishLocalState(state);
+            client.ReportEnemies("end_m01aa", report);
+        }
+
+        Assert.True(await WaitForAsync(() => client.IsConnected, Timeout, Publish));
+
+        // The host must see the client's floor for its own module...
+        Assert.True(
+            await WaitForAsync(
+                () => host.GetEnemyReports("end_m01aa").Any(e => e.ObjectId == 0x14 && e.CurrentHealth == 3),
+                Timeout,
+                Publish),
+            "the client's enemy report never reached the host");
+
+        // ...and never for a different module, where the same ids name strangers.
+        Assert.DoesNotContain(host.GetEnemyReports("tar_m02aa"), e => e.ObjectId == 0x14);
+
+        await cts.CancelAsync();
+        await Task.WhenAll(hostTask, clientTask);
+    }
+
+    [Fact]
     public async Task TwoClientsSeeEachOtherThroughTheHost()
     {
         using CoopHost host = new(new SessionSettings { PlayerName = "Revan", Port = 0, TickRate = 30 });

@@ -71,6 +71,16 @@ public interface IGameBridge : IDisposable
     /// </summary>
     bool TryWriteDoorStates(IReadOnlyList<KeyValuePair<uint, sbyte>> flags) => false;
 
+    /// <summary>False when this bridge cannot mirror a peer's pause into the game.</summary>
+    bool SupportsPauseSync => false;
+
+    /// <summary>
+    /// Holds (or releases) a pause on the peers' behalf. Either player pausing pauses
+    /// both worlds — anything else lets one side act in a world the other believes is
+    /// frozen.
+    /// </summary>
+    bool TrySetRemotePause(bool desired) => false;
+
     /// <summary>False when this bridge cannot warp the local player between modules.</summary>
     bool SupportsTravel => false;
 
@@ -107,4 +117,23 @@ public interface IGameBridge : IDisposable
     /// stop local fighting from killing anything the owner still considers alive.
     /// </summary>
     bool TryWriteEnemies(IReadOnlyList<EnemyState> enemies) => false;
+
+    /// <summary>
+    /// Enemy-authority side only: lowers own enemies to a peer's reported health where
+    /// the peer's is lower. This is what makes a client's damage real. Returns how many
+    /// enemies were lowered.
+    /// </summary>
+    int TryApplyEnemyFloors(IReadOnlyList<EnemyState> reports) => 0;
+
+    /// <summary>False when this bridge cannot see or drive the quest journal.</summary>
+    bool SupportsJournalSync => false;
+
+    /// <summary>Journal entries that advanced locally since the last call.</summary>
+    List<KeyValuePair<string, int>> CollectChangedJournal() => [];
+
+    /// <summary>
+    /// Advances a journal entry to a peer's state through the game's own path. Must be a
+    /// no-op (returning false) when the game is already at or past that state.
+    /// </summary>
+    bool TryApplyJournalEntry(string questTag, int state) => false;
 }

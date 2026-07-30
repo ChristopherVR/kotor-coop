@@ -16,12 +16,31 @@ public readonly record struct PlayerState(
     int MaxHealth = 0,
     string EquippedBody = "",
     string EquippedRightWeapon = "",
-    string EquippedLeftWeapon = "")
+    string EquippedLeftWeapon = "",
+    uint Flags = 0)
 {
+    /// <summary>The player is in a conversation. Enemy publication freezes for them, and
+    /// peers' UIs can say "talking" instead of showing a statue.</summary>
+    public const uint FlagInDialogue = 1;
+
+    /// <summary>The player has the game paused (their own pause, not one mirrored from a
+    /// peer — mirrored pauses are excluded at the source or two instances would latch
+    /// each other paused forever).</summary>
+    public const uint FlagPaused = 2;
+
+    /// <summary>The player's character is in combat (creature +0x4E0).</summary>
+    public const uint FlagInCombat = 4;
+
     public static PlayerState Empty { get; } = new(Vector3f.Zero, 0f, string.Empty, 0, 0);
 
     /// <summary>Rejects NaN/infinite reads, which is what a bad offset profile produces.</summary>
     public bool IsPlausible => Position.IsFinite && float.IsFinite(Facing);
+
+    public bool IsInDialogue => (Flags & FlagInDialogue) != 0;
+
+    public bool IsPaused => (Flags & FlagPaused) != 0;
+
+    public bool IsInCombat => (Flags & FlagInCombat) != 0;
 }
 
 /// <summary>A remote player as seen locally, after interpolation.</summary>

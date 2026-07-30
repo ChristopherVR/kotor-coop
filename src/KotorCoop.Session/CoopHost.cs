@@ -108,6 +108,51 @@ public sealed class CoopHost : ICoopSession
 
     private IReadOnlyList<EnemyState> _enemies = [];
 
+    /// <summary>Latest enemy report per client, so a client's damage can be merged in.</summary>
+    private sealed record EnemyReport(string Module, IReadOnlyList<EnemyState> Enemies, long ReceivedMs);
+
+    private readonly Dictionary<uint, EnemyReport> _enemyReports = [];
+
+    /// <summary>Reports older than this are stale — the client left, or changed module
+    /// and its ids name strangers now.</summary>
+    private const int EnemyReportFreshMs = 2000;
+
+    public void ReportEnemies(string module, IReadOnlyList<EnemyState> enemies)
+    {
+        // The host does not report to itself; its own engine is the authority.
+    }
+
+    public IReadOnlyList<EnemyState> GetEnemyReports(string module)
+    {
+        long now = SessionClock.NowMs;
+        List<EnemyState> merged = [];
+
+        lock (_gate)
+        {
+            foreach (EnemyReport report in _enemyReports.Values)
+            {
+                if (now - report.ReceivedMs > EnemyReportFreshMs
+                    || !string.Equals(report.Module, module, StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                merged.AddRange(report.Enemies);
+            }
+        }
+
+        return merged;
+    }
+
+    public JournalStore Journal { get; } = new();
+
+    public void SetJournalEntry(string questTag, int state)
+    {
+        // Host-authoritative, like flags: merge locally, clients pick it up through the
+        // journal version in the next world snapshot.
+        Journal.Merge(questTag, state);
+    }
+
     public SessionStats GetStats()
     {
         int peerCount;
@@ -194,7 +239,7 @@ public sealed class CoopHost : ICoopSession
             recipients = [.. _peers.Values];
         }
 
-        WorldSnapshotPacket snapshot = new(now, Flags.Version, Items.Version, entries);
+        WorldSnapshotPacket snapshot = new(now, Flags.Version, Items.Version, Journal.Version, entries);
         int length = PacketCodec.Write(_sendBuffer, snapshot);
         if (length == 0)
         {
@@ -294,6 +339,18 @@ public sealed class CoopHost : ICoopSession
 
             case PacketType.ItemSyncRequest:
                 HandleItemSyncRequest(datagram.From, span);
+                break;
+
+            case PacketType.JournalOp:
+                HandleJournalOp(datagram.From, span);
+                break;
+
+            case PacketType.JournalSyncRequest:
+                HandleJournalSyncRequest(datagram.From, span);
+                break;
+
+            case PacketType.EnemyReport:
+                HandleEnemyReport(span, now);
                 break;
 
             case PacketType.Ping:
@@ -458,6 +515,77 @@ public sealed class CoopHost : ICoopSession
         if (length > 0)
         {
             _channel.Send(from, _replyBuffer.AsSpan(0, length));
+        }
+    }
+
+    private void HandleJournalOp(IPEndPoint from, ReadOnlySpan<byte> span)
+    {
+        if (PacketCodec.ReadJournalOp(span) is not { } op)
+        {
+            _channel.NoteMalformed();
+            return;
+        }
+
+        Journal.Merge(op.QuestTag, op.State);
+
+        // Ack unconditionally: a duplicate op means the previous ack was lost.
+        int length = PacketCodec.Write(_replyBuffer, new JournalAckPacket(op.OpSequence));
+        if (length > 0)
+        {
+            _channel.Send(from, _replyBuffer.AsSpan(0, length));
+        }
+    }
+
+    private void HandleJournalSyncRequest(IPEndPoint from, ReadOnlySpan<byte> span)
+    {
+        if (PacketCodec.ReadJournalSyncRequest(span) is null)
+        {
+            _channel.NoteMalformed();
+            return;
+        }
+
+        // A journal longer than one datagram goes out as several packets, each carrying
+        // the full version. If a part is lost the client's version still matches and the
+        // gap survives until the next journal change bumps the version — the same
+        // truncation trade the flag snapshot already makes, acceptable because ops are
+        // the primary path and snapshots only repair.
+        List<KeyValuePair<string, int>> entries = Journal.Snapshot();
+        uint version = Journal.Version;
+
+        for (int start = 0; ; start += ProtocolConstants.MaxJournalEntriesPerPacket)
+        {
+            List<KeyValuePair<string, int>> part =
+                [.. entries.Skip(start).Take(ProtocolConstants.MaxJournalEntriesPerPacket)];
+
+            int length = PacketCodec.Write(_replyBuffer, new JournalSnapshotPacket(version, part));
+            if (length > 0)
+            {
+                _channel.Send(from, _replyBuffer.AsSpan(0, length));
+            }
+
+            if (start + ProtocolConstants.MaxJournalEntriesPerPacket >= entries.Count)
+            {
+                break;
+            }
+        }
+    }
+
+    private void HandleEnemyReport(ReadOnlySpan<byte> span, long now)
+    {
+        if (PacketCodec.ReadEnemyReport(span) is not { } report)
+        {
+            _channel.NoteMalformed();
+            return;
+        }
+
+        lock (_gate)
+        {
+            if (!_peers.ContainsKey(report.PeerId))
+            {
+                return;
+            }
+
+            _enemyReports[report.PeerId] = new EnemyReport(report.Module, report.Enemies, now);
         }
     }
 

@@ -25,6 +25,8 @@ internal static unsafe class PluginHost
     private static CombatController? _combat;
     private static DoorController? _doors;
     private static TravelController? _travel;
+    private static PauseController? _pause;
+    private static JournalController? _journal;
     private static Thread? _worker;
     private static volatile bool _running = true;
 
@@ -62,6 +64,8 @@ internal static unsafe class PluginHost
             _combat = new CombatController(_view);
             _doors = new DoorController(_view);
             _travel = new TravelController(_view);
+            _pause = new PauseController(_view);
+            _journal = new JournalController(_view);
 
             // Install the frame hook from here because DirectInput8Create - our caller - is
             // verified to run on the game's main thread during startup. Installing from the
@@ -111,7 +115,7 @@ internal static unsafe class PluginHost
         Unsafe.InitBlockUnaligned(_block, 0, SharedBlock.TotalSize);
 
         _block->Magic = SharedBlock.MagicValue;
-        _block->Version = 6;
+        _block->Version = 7;
 
         // A guard dword after the version. Magic plus version alone was not selective
         // enough: a scan once matched something else at a lower address and the agent
@@ -224,6 +228,8 @@ internal static unsafe class PluginHost
         _items?.OnFrame();
         _combat?.OnFrame();
         _doors?.OnFrame();
+        _pause?.OnFrame();
+        _journal?.OnFrame();
     }
 
     private static void InvalidateAll(string reason)
@@ -234,6 +240,8 @@ internal static unsafe class PluginHost
         _combat?.Invalidate();
         _doors?.Invalidate();
         _travel?.Invalidate();
+        _pause?.Invalidate();
+        _journal?.Invalidate();
     }
 
     private static void WorkerLoop()

@@ -142,10 +142,72 @@ public sealed class CoopAgent(IGameBridge bridge, ICoopSession session, AgentSet
         LastWriteSucceeded = bridge.TryWriteRemotePeers(visible);
 
         PumpItems(local);
-        PumpEnemies();
+        PumpEnemies(local);
         PumpWorldState();
+        PumpJournal();
         PumpDoors();
         PumpTravel(local, peers);
+        PumpPause(peers);
+    }
+
+    /// <summary>
+    /// Carries the quest journal both ways: local advances are announced to the session
+    /// (reliably, merge-up), and anything the session knows that this game does not is
+    /// applied through the engine's own SetState, which refreshes the journal GUI. This
+    /// plus the globals channel is what makes a quest one quest instead of two parallel
+    /// ones.
+    /// </summary>
+    private void PumpJournal()
+    {
+        if (!bridge.SupportsJournalSync)
+        {
+            return;
+        }
+
+        foreach (KeyValuePair<string, int> change in bridge.CollectChangedJournal())
+        {
+            session.SetJournalEntry(change.Key, change.Value);
+        }
+
+        foreach (KeyValuePair<string, int> entry in session.Journal.Snapshot())
+        {
+            // The bridge keeps its own shadow and skips entries the game already has, so
+            // this is a cheap no-op almost every tick.
+            bridge.TryApplyJournalEntry(entry.Key, entry.Value);
+        }
+    }
+
+    private bool _remotePauseHeld;
+
+    /// <summary>
+    /// Either player's pause pauses both worlds. Each peer publishes its OWN pause in its
+    /// state flags (mirrored pauses are excluded at the source); this side asks the
+    /// plugin to hold the engine's pause while any peer's flag is up. The pauser is the
+    /// only one who can release it — a local space-bar press against a mirrored pause is
+    /// re-asserted by the plugin.
+    /// </summary>
+    private void PumpPause(IReadOnlyList<RemotePeer> peers)
+    {
+        if (!bridge.SupportsPauseSync)
+        {
+            return;
+        }
+
+        bool anyPeerPaused = false;
+        for (int i = 0; i < peers.Count; i++)
+        {
+            if (peers[i].State.IsPaused)
+            {
+                anyPeerPaused = true;
+                break;
+            }
+        }
+
+        if (anyPeerPaused != _remotePauseHeld && bridge.TrySetRemotePause(anyPeerPaused))
+        {
+            _remotePauseHeld = anyPeerPaused;
+            Log?.Invoke(anyPeerPaused ? "a peer paused; pausing with them" : "peer pause released");
+        }
     }
 
     /// <summary>
@@ -309,7 +371,7 @@ public sealed class CoopAgent(IGameBridge bridge, ICoopSession session, AgentSet
     /// Health is replicated absolutely rather than as damage, because each instance applies
     /// its own difficulty multipliers and resistances to a damage number.
     /// </summary>
-    private void PumpEnemies()
+    private void PumpEnemies(in PlayerState local)
     {
         if (!bridge.SupportsEnemySync)
         {
@@ -325,6 +387,16 @@ public sealed class CoopAgent(IGameBridge bridge, ICoopSession session, AgentSet
             if (!bridge.IsInDialogue)
             {
                 session.PublishEnemies(bridge.ReadEnemies());
+            }
+
+            // Where a client's damage becomes real: its copies are pinned at 1 hp, so
+            // its whole fight would be cosmetic unless the host lowers its own enemies
+            // to the client's floor. Min-merge — an enemy is as hurt as ANY instance
+            // says it is.
+            int floored = bridge.TryApplyEnemyFloors(session.GetEnemyReports(local.Module));
+            if (floored > 0)
+            {
+                Log?.Invoke($"applied a peer's damage to {floored} enemy(ies)");
             }
 
             return;
@@ -344,6 +416,14 @@ public sealed class CoopAgent(IGameBridge bridge, ICoopSession session, AgentSet
         if (enemies.Count > 0)
         {
             bridge.TryWriteEnemies(enemies);
+        }
+
+        // Report our own view so damage dealt here counts. Not during dialogue — the
+        // disarm makes the local fight unrepresentative, and health is the only field
+        // that matters anyway.
+        if (!bridge.IsInDialogue)
+        {
+            session.ReportEnemies(local.Module, bridge.ReadEnemies());
         }
     }
 

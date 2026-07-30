@@ -6,7 +6,62 @@ namespace KotorCoop.Tests;
 public class PacketCodecTests
 {
     private static readonly PlayerState SampleState =
-        new(new Vector3f(12.5f, -3.25f, 0.75f), 1.75f, "end_m01aa", 87, 42);
+        new(new Vector3f(12.5f, -3.25f, 0.75f), 1.75f, "end_m01aa", 87, 42,
+            Flags: PlayerState.FlagInDialogue | PlayerState.FlagInCombat);
+
+    [Fact]
+    public void JournalPacketsRoundTrip()
+    {
+        Span<byte> buffer = stackalloc byte[ProtocolConstants.MaxPacketSize];
+
+        JournalOpPacket op = new(2, 17, "k_swg_bastila", 30);
+        int opLength = PacketCodec.Write(buffer, op);
+        Assert.Equal(op, PacketCodec.ReadJournalOp(buffer[..opLength]));
+
+        JournalAckPacket ack = new(17);
+        int ackLength = PacketCodec.Write(buffer, ack);
+        Assert.Equal(ack, PacketCodec.ReadJournalAck(buffer[..ackLength]));
+
+        JournalSyncRequestPacket request = new(2, 5);
+        int requestLength = PacketCodec.Write(buffer, request);
+        Assert.Equal(request, PacketCodec.ReadJournalSyncRequest(buffer[..requestLength]));
+    }
+
+    [Fact]
+    public void FullJournalSnapshotPartFitsInOneDatagram()
+    {
+        Span<byte> buffer = stackalloc byte[ProtocolConstants.MaxPacketSize];
+
+        List<KeyValuePair<string, int>> entries = [.. Enumerable
+            .Range(0, ProtocolConstants.MaxJournalEntriesPerPacket)
+            .Select(i => new KeyValuePair<string, int>(
+                new string('q', ProtocolConstants.MaxJournalTagLength) + i, i * 10))];
+
+        int length = PacketCodec.Write(buffer, new JournalSnapshotPacket(9, entries));
+        Assert.True(length > 0, "worst-case journal snapshot part must fit inside one packet");
+
+        JournalSnapshotPacket? decoded = PacketCodec.ReadJournalSnapshot(buffer[..length]);
+        Assert.NotNull(decoded);
+        Assert.Equal(9u, decoded.Version);
+        Assert.Equal(ProtocolConstants.MaxJournalEntriesPerPacket, decoded.Entries.Count);
+    }
+
+    [Fact]
+    public void EnemyReportRoundTrips()
+    {
+        Span<byte> buffer = stackalloc byte[ProtocolConstants.MaxPacketSize];
+
+        EnemyReportPacket original = new(2, "end_m01aa",
+            [new EnemyState(0x14, 3, 15, false), new EnemyState(0x17, 1, 12, false)]);
+
+        int length = PacketCodec.Write(buffer, original);
+        EnemyReportPacket? decoded = PacketCodec.ReadEnemyReport(buffer[..length]);
+
+        Assert.NotNull(decoded);
+        Assert.Equal(2u, decoded.PeerId);
+        Assert.Equal("end_m01aa", decoded.Module);
+        Assert.Equal(original.Enemies, decoded.Enemies);
+    }
 
     [Fact]
     public void HelloRoundTrips()
@@ -38,6 +93,7 @@ public class PacketCodecTests
         // Floats must survive bit-exact: these are game coordinates, not display values.
         Assert.Equal(SampleState.Position, decoded.State.Position);
         Assert.Equal(SampleState.Facing, decoded.State.Facing);
+        Assert.Equal(SampleState.Flags, decoded.State.Flags);
         Assert.Equal(SampleState.Module, decoded.State.Module);
         Assert.Equal(SampleState.Health, decoded.State.Health);
         Assert.Equal(SampleState.Animation, decoded.State.Animation);
@@ -55,7 +111,7 @@ public class PacketCodecTests
             new(3, "Bastila", SampleState with { Position = new Vector3f(1f, 2f, 3f) }),
         ];
 
-        WorldSnapshotPacket original = new(555L, 9, 4, entries);
+        WorldSnapshotPacket original = new(555L, 9, 4, 7, entries);
         int length = PacketCodec.Write(buffer, original);
 
         WorldSnapshotPacket? decoded = PacketCodec.ReadWorldSnapshot(buffer[..length]);
@@ -64,6 +120,7 @@ public class PacketCodecTests
         Assert.Equal(555L, decoded.ServerTimeMs);
         Assert.Equal(9u, decoded.FlagVersion);
         Assert.Equal(4u, decoded.ItemVersion);
+        Assert.Equal(7u, decoded.JournalVersion);
         Assert.Equal(3, decoded.Entries.Count);
         Assert.Equal("Malak", decoded.Entries[1].Name);
         Assert.Equal("tar_m02aa", decoded.Entries[1].State.Module);
@@ -82,7 +139,7 @@ public class PacketCodecTests
                 new string('n', ProtocolConstants.MaxStringLength),
                 SampleState with { Module = new string('m', ProtocolConstants.MaxStringLength) }))];
 
-        int length = PacketCodec.Write(buffer, new WorldSnapshotPacket(1, 1, 1, entries));
+        int length = PacketCodec.Write(buffer, new WorldSnapshotPacket(1, 1, 1, 1, entries));
 
         // A snapshot that does not fit would be silently dropped every tick.
         Assert.True(length > 0, "worst-case snapshot must fit inside one packet");

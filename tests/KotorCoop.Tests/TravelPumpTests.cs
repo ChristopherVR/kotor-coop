@@ -95,6 +95,16 @@ public class TravelPumpTests
 
         public IReadOnlyList<EnemyState> GetEnemies() => [];
 
+        public void ReportEnemies(string module, IReadOnlyList<EnemyState> enemies)
+        {
+        }
+
+        public IReadOnlyList<EnemyState> GetEnemyReports(string module) => [];
+
+        public JournalStore Journal { get; } = new();
+
+        public void SetJournalEntry(string questTag, int state) => Journal.Merge(questTag, state);
+
         public Task RunAsync(CancellationToken cancellationToken) => Task.CompletedTask;
 
         public void Dispose()

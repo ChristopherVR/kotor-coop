@@ -67,6 +67,38 @@ clicking, and the map should show the other player (candidate: engine waypoints 
 notes moved per-tick). NWScript has no networking, so the dinput8 plugin remains the
 backbone regardless.
 
+**The engine-side load path, finally mapped (supersedes the dead end in 4.2).**
+The route 4.2 could not find is `CServerExoApp::ExecuteLoadModule(saveInfo*)` at
+**`0x004AEBF0`** — SendLoadGameRequest was a red herring; the GUI never relies on the
+message being serviced. The working sequence, read out of
+`CSWGuiSaveLoad::LoadPCAutoSave` (`0x006CA250`, thiscall, one arg = save entry) and its
+call site in `LoadGame` (`0x006CB0E0`):
+
+1. `CClientExoApp::SetInputClass` (`0x005EDA60`) / `DisableInput` (`0x005EDBE0`), and
+   `SetLoadStep(4, 0x17)` (`0x005EDFD0`) — the loading-screen GUI state.
+2. `CServerExoApp::UnloadModule` (`0x004AE8A0`), then `0x004AED00(1)`.
+3. `CServerExoApp::SetDoingStartNewModule(1)` (`0x004AF090`).
+4. `ExecuteLoadModule(saveInfo)` — the actual transition.
+
+`LoadPCAutoSave` also shows how to build the `saveInfo` without the GUI list: it
+allocates **0xD0** bytes via `operator new` (`0x006FA7E6`), constructs it with
+`0x005DD9C0`, and fills it from the literals `"AUTOSAVE"`/`"%06d - %s"` (`0x007455A0`) and
+the `"SAVES:"` alias (`0x00745174`) — i.e. directory `000000 - AUTOSAVE`. So the
+no-input-injection load is: copy the co-op save over the autosave slot on disk (a save is
+just a directory of 5 files), construct `CSWGuiSaveLoad` (`0x006CC680`, args
+`(owner=[mainmenu+0x18], 0, 1)`; main menu object at `clientInternal+0x280`, only at the
+main menu) and call `LoadPCAutoSave` — or skip the panel entirely and replicate its body.
+Spare shared-block space at `0x970-0x97C` is reserved for the request/ack fields; the
+handler must run BEFORE PluginHost's epoch gate, which returns early whenever there is no
+server (i.e. exactly at the main menu). Not yet implemented — needs crash-testing.
+
+Also mapped for the same flow: `CSWGuiMainMenu::OnLoadSaveGame` (`0x0067B1A0`, thiscall,
+arg = a control whose `+0x4C` must be non-zero) validates `mainmenu+0x140C`, allocates
+the 0x1160-byte `CSWGuiSaveLoad`, and shows it via `0x0040BC70(owner, panel, 2, 1)`.
+`CSWGuiSaveLoad::LoadGame` takes a populated LIST ENTRY (flags `+0x1C4`, name `+0x210`),
+so driving it requires `PopulateGameList` (`0x006CC160`) — the autosave route avoids all
+of that.
+
 **New traps:**
 
 22. **A game window that has never been foreground-activated ignores all injected input**
@@ -83,6 +115,14 @@ backbone regardless.
     hit test — untested further once minimise/restore fixed the root cause).
 24. **`Read-Host` in a non-interactive `demo.ps1` run dies instead of waiting.** The
     script's instance-2 fallback prompt assumes a human terminal.
+25. **Menu input injection is intermittently dead even with the game foreground and the
+    window activation-cycled.** Observed repeatedly on the evening of 2026-07-30: the
+    same fresh-launch + `agent load` sequence succeeded five times and then failed five
+    times across both instances, with `GetForegroundWindow` returning the game and the
+    plugin forwarding DirectInput correctly (an A/B with the plugin removed also
+    succeeded once and proved nothing — the failures did not correlate with the plugin
+    in the end). Root cause not identified; a human clicking the menu always works. This
+    unreliability is the operational argument for the in-process load above.
 
 ### 0.1 Second addendum, parallel remote session (same evening)
 

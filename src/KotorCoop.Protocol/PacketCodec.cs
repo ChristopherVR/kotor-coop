@@ -55,6 +55,7 @@ public static class PacketCodec
         w.WriteInt64(packet.ServerTimeMs);
         w.WriteUInt32(packet.FlagVersion);
         w.WriteUInt32(packet.ItemVersion);
+        w.WriteUInt32(packet.JournalVersion);
 
         int count = Math.Min(packet.Entries.Count, ProtocolConstants.MaxPeers);
         w.WriteUInt8((byte)count);
@@ -246,6 +247,182 @@ public static class PacketCodec
         return new EnemySnapshotPacket(serverTime, enemies);
     }
 
+    public static int Write(Span<byte> buffer, EnemyReportPacket packet)
+    {
+        PacketWriter w = new(buffer);
+        w.WriteHeader(PacketType.EnemyReport);
+        w.WriteUInt32(packet.PeerId);
+        w.WriteString(packet.Module, ProtocolConstants.MaxModuleLength);
+
+        int count = Math.Min(packet.Enemies.Count, ProtocolConstants.MaxEnemies);
+        w.WriteUInt8((byte)count);
+
+        for (int i = 0; i < count; i++)
+        {
+            EnemyState enemy = packet.Enemies[i];
+            w.WriteUInt32(enemy.ObjectId);
+            w.WriteUInt16(enemy.CurrentHealth);
+            w.WriteUInt16(enemy.MaxHealth);
+            w.WriteBool(enemy.Dead);
+        }
+
+        return w.Failed ? 0 : w.Position;
+    }
+
+    public static EnemyReportPacket? ReadEnemyReport(ReadOnlySpan<byte> buffer)
+    {
+        PacketReader r = new(buffer);
+        if (r.ReadHeader() != PacketType.EnemyReport)
+        {
+            return null;
+        }
+
+        uint peerId = r.ReadUInt32();
+        string module = r.ReadString();
+        byte count = r.ReadUInt8();
+
+        if (r.Failed || count > ProtocolConstants.MaxEnemies)
+        {
+            return null;
+        }
+
+        List<EnemyState> enemies = new(count);
+        for (int i = 0; i < count; i++)
+        {
+            uint objectId = r.ReadUInt32();
+            ushort current = r.ReadUInt16();
+            ushort max = r.ReadUInt16();
+            bool dead = r.ReadBool();
+
+            if (r.Failed)
+            {
+                return null;
+            }
+
+            enemies.Add(new EnemyState(objectId, current, max, dead));
+        }
+
+        return new EnemyReportPacket(peerId, module, enemies);
+    }
+
+    public static int Write(Span<byte> buffer, JournalOpPacket packet)
+    {
+        PacketWriter w = new(buffer);
+        w.WriteHeader(PacketType.JournalOp);
+        w.WriteUInt32(packet.OriginPeerId);
+        w.WriteUInt32(packet.OpSequence);
+        w.WriteString(packet.QuestTag, ProtocolConstants.MaxJournalTagLength);
+        w.WriteInt32(packet.State);
+        return w.Failed ? 0 : w.Position;
+    }
+
+    public static JournalOpPacket? ReadJournalOp(ReadOnlySpan<byte> buffer)
+    {
+        PacketReader r = new(buffer);
+        if (r.ReadHeader() != PacketType.JournalOp)
+        {
+            return null;
+        }
+
+        uint origin = r.ReadUInt32();
+        uint opSeq = r.ReadUInt32();
+        string tag = r.ReadString();
+        int state = r.ReadInt32();
+        return r.Failed || tag.Length == 0 ? null : new JournalOpPacket(origin, opSeq, tag, state);
+    }
+
+    public static int Write(Span<byte> buffer, JournalAckPacket packet)
+    {
+        PacketWriter w = new(buffer);
+        w.WriteHeader(PacketType.JournalAck);
+        w.WriteUInt32(packet.OpSequence);
+        return w.Failed ? 0 : w.Position;
+    }
+
+    public static JournalAckPacket? ReadJournalAck(ReadOnlySpan<byte> buffer)
+    {
+        PacketReader r = new(buffer);
+        if (r.ReadHeader() != PacketType.JournalAck)
+        {
+            return null;
+        }
+
+        uint opSeq = r.ReadUInt32();
+        return r.Failed ? null : new JournalAckPacket(opSeq);
+    }
+
+    public static int Write(Span<byte> buffer, JournalSyncRequestPacket packet)
+    {
+        PacketWriter w = new(buffer);
+        w.WriteHeader(PacketType.JournalSyncRequest);
+        w.WriteUInt32(packet.PeerId);
+        w.WriteUInt32(packet.KnownVersion);
+        return w.Failed ? 0 : w.Position;
+    }
+
+    public static JournalSyncRequestPacket? ReadJournalSyncRequest(ReadOnlySpan<byte> buffer)
+    {
+        PacketReader r = new(buffer);
+        if (r.ReadHeader() != PacketType.JournalSyncRequest)
+        {
+            return null;
+        }
+
+        uint peerId = r.ReadUInt32();
+        uint version = r.ReadUInt32();
+        return r.Failed ? null : new JournalSyncRequestPacket(peerId, version);
+    }
+
+    public static int Write(Span<byte> buffer, JournalSnapshotPacket packet)
+    {
+        PacketWriter w = new(buffer);
+        w.WriteHeader(PacketType.JournalSnapshot);
+        w.WriteUInt32(packet.Version);
+
+        int count = Math.Min(packet.Entries.Count, ProtocolConstants.MaxJournalEntriesPerPacket);
+        w.WriteUInt16((ushort)count);
+
+        for (int i = 0; i < count; i++)
+        {
+            KeyValuePair<string, int> entry = packet.Entries[i];
+            w.WriteString(entry.Key, ProtocolConstants.MaxJournalTagLength);
+            w.WriteInt32(entry.Value);
+        }
+
+        return w.Failed ? 0 : w.Position;
+    }
+
+    public static JournalSnapshotPacket? ReadJournalSnapshot(ReadOnlySpan<byte> buffer)
+    {
+        PacketReader r = new(buffer);
+        if (r.ReadHeader() != PacketType.JournalSnapshot)
+        {
+            return null;
+        }
+
+        uint version = r.ReadUInt32();
+        ushort count = r.ReadUInt16();
+        if (r.Failed || count > ProtocolConstants.MaxJournalEntriesPerPacket)
+        {
+            return null;
+        }
+
+        List<KeyValuePair<string, int>> entries = new(count);
+        for (int i = 0; i < count; i++)
+        {
+            string tag = r.ReadString();
+            int state = r.ReadInt32();
+            if (r.Failed || tag.Length == 0)
+            {
+                return null;
+            }
+
+            entries.Add(new KeyValuePair<string, int>(tag, state));
+        }
+
+        return new JournalSnapshotPacket(version, entries);
+    }
+
     private static void WriteGroundItem(ref PacketWriter w, GroundItem item)
     {
         w.WriteUInt32(item.ItemId);
@@ -331,6 +508,7 @@ public static class PacketCodec
         long serverTime = r.ReadInt64();
         uint flagVersion = r.ReadUInt32();
         uint itemVersion = r.ReadUInt32();
+        uint journalVersion = r.ReadUInt32();
         byte count = r.ReadUInt8();
 
         if (r.Failed || count > ProtocolConstants.MaxPeers)
@@ -352,7 +530,7 @@ public static class PacketCodec
             entries.Add(new SnapshotEntry(peerId, name, state));
         }
 
-        return new WorldSnapshotPacket(serverTime, flagVersion, itemVersion, entries);
+        return new WorldSnapshotPacket(serverTime, flagVersion, itemVersion, journalVersion, entries);
     }
 
     public static FlagOpPacket? ReadFlagOp(ReadOnlySpan<byte> buffer)

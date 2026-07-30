@@ -52,6 +52,25 @@ public interface ICoopSession : IDisposable
     /// <summary>Client only: the host's latest enemy list. Empty on the host.</summary>
     IReadOnlyList<EnemyState> GetEnemies();
 
+    /// <summary>
+    /// Client only: report this instance's local view of enemy health so the host can
+    /// merge the damage in. Without this a client's fighting is cosmetic — its copies
+    /// are pinned at 1 hp and the next mirror would erase its damage.
+    /// </summary>
+    void ReportEnemies(string module, IReadOnlyList<EnemyState> enemies);
+
+    /// <summary>
+    /// Host only: every client's latest enemy report for the given module, fresh ones
+    /// only. The host applies each as a floor (min-merge) on its own enemies.
+    /// </summary>
+    IReadOnlyList<EnemyState> GetEnemyReports(string module);
+
+    /// <summary>The shared quest journal, merged upward across every player.</summary>
+    JournalStore Journal { get; }
+
+    /// <summary>Announces a quest journal advance. Delivered reliably.</summary>
+    void SetJournalEntry(string questTag, int state);
+
     Task RunAsync(CancellationToken cancellationToken);
 }
 

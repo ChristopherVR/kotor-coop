@@ -2,7 +2,17 @@ namespace KotorCoop.Plugin;
 
 /// <summary>One remote peer as published by the external agent.</summary>
 internal readonly record struct RemoteView(
-    bool Active, uint PeerId, Vec3 Position, float Facing, int Health, uint Animation, uint Appearance);
+    bool Active, uint PeerId, Vec3 Position, float Facing, int Health, uint Animation,
+    uint Appearance, uint Flags)
+{
+    public const uint FlagInDialogue = 1;
+    public const uint FlagPaused = 2;
+    public const uint FlagInCombat = 4;
+
+    public bool InCombat => (Flags & FlagInCombat) != 0;
+
+    public bool Paused => (Flags & FlagPaused) != 0;
+}
 
 /// <summary>One enemy's authoritative state, as published by the owning peer.</summary>
 internal readonly record struct EnemyView(uint ObjectId, ushort CurrentHealth, ushort MaxHealth, bool Dead);
@@ -137,7 +147,8 @@ internal sealed unsafe class SharedBlockView(byte* baseAddress)
             *(float*)(slot + 0x14),
             *(int*)(slot + 0x18),
             *(uint*)(slot + 0x1C),
-            *(uint*)(slot + 0x38));
+            *(uint*)(slot + 0x38),
+            *(uint*)(slot + 0x3C));
     }
 
     /// <summary>Pointer to a peer's null-terminated ascii name (24 bytes).</summary>
@@ -221,6 +232,40 @@ internal sealed unsafe class SharedBlockView(byte* baseAddress)
     {
         get => *I32(SharedBlock.OffsetTravelStatus);
         set => *I32(SharedBlock.OffsetTravelStatus) = value;
+    }
+
+    // ---- shared pause -----------------------------------------------------------
+
+    /// <summary>Agent-written: nonzero while any remote peer holds a pause.</summary>
+    public bool RemotePauseDesired => *U32(SharedBlock.OffsetRemotePauseDesired) != 0;
+
+    /// <summary>Plugin-written: nonzero while the pause bit is held on the peers' behalf.
+    /// The agent reads this to avoid republishing a mirrored pause as this player's own.</summary>
+    public uint RemotePauseApplied
+    {
+        get => *U32(SharedBlock.OffsetRemotePauseApplied);
+        set => *U32(SharedBlock.OffsetRemotePauseApplied) = value;
+    }
+
+    // ---- journal ----------------------------------------------------------------
+
+    public uint JournalSerial => *U32(SharedBlock.OffsetJournalSerial);
+
+    /// <summary>Pointer to the null-terminated quest tag (32 bytes).</summary>
+    public byte* JournalTag => baseAddress + SharedBlock.OffsetJournalTag;
+
+    public int JournalState => *I32(SharedBlock.OffsetJournalState);
+
+    public uint JournalApplied
+    {
+        get => *U32(SharedBlock.OffsetJournalApplied);
+        set => *U32(SharedBlock.OffsetJournalApplied) = value;
+    }
+
+    public int JournalStatus
+    {
+        get => *I32(SharedBlock.OffsetJournalStatus);
+        set => *I32(SharedBlock.OffsetJournalStatus) = value;
     }
 
     public ItemSlotView GetItemSlot(int index) =>

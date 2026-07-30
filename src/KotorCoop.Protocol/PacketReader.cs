@@ -132,8 +132,9 @@ public ref struct PacketReader
         string body = ReadString();
         string rightWeapon = ReadString();
         string leftWeapon = ReadString();
+        uint flags = ReadUInt32();
         return new PlayerState(
             position, facing, module, health, animation, appearance, maxHealth,
-            body, rightWeapon, leftWeapon);
+            body, rightWeapon, leftWeapon, flags);
     }
 }

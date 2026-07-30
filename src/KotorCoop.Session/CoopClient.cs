@@ -14,6 +14,7 @@ public sealed class CoopClient : ICoopSession
     private const int PingIntervalMs = 1000;
     private const int FlagResyncIntervalMs = 500;
     private const int ItemResyncIntervalMs = 500;
+    private const int JournalResyncIntervalMs = 500;
 
     private readonly SessionSettings _settings;
     private readonly IPEndPoint _hostEndPoint;
@@ -21,6 +22,7 @@ public sealed class CoopClient : ICoopSession
     private readonly SnapshotBuffer _buffer;
     private readonly ReliableFlagSender _flagSender = new();
     private readonly ReliableItemSender _itemSender = new();
+    private readonly ReliableJournalSender _journalSender = new();
     private readonly Lock _gate = new();
     private readonly uint _nonce;
 
@@ -34,6 +36,7 @@ public sealed class CoopClient : ICoopSession
     private long _lastPingMs;
     private long _lastFlagRequestMs;
     private long _lastItemRequestMs;
+    private long _lastJournalRequestMs;
     private uint _nextItemSequence = 1;
     private long _lastInboundMs;
     private double _roundTripMs;
@@ -103,6 +106,43 @@ public sealed class CoopClient : ICoopSession
     }
 
     private IReadOnlyList<EnemyState> _enemies = [];
+
+    public void ReportEnemies(string module, IReadOnlyList<EnemyState> enemies)
+    {
+        if (_localPeerId == 0 || enemies.Count == 0)
+        {
+            return;
+        }
+
+        // Unreliable and re-sent every tick, like the state update it travels beside: a
+        // lost report costs one tick of staleness on the host's floor, nothing more.
+        int length = PacketCodec.Write(_sendBuffer, new EnemyReportPacket(_localPeerId, module, enemies));
+        if (length > 0)
+        {
+            _channel.Send(_hostEndPoint, _sendBuffer.AsSpan(0, length));
+        }
+    }
+
+    public IReadOnlyList<EnemyState> GetEnemyReports(string module) => [];
+
+    public JournalStore Journal { get; } = new();
+
+    public void SetJournalEntry(string questTag, int state)
+    {
+        // Applied locally straight away — the local player just watched the quest
+        // advance; the host's version confirms and redistributes it.
+        if (!Journal.Merge(questTag, state))
+        {
+            return;
+        }
+
+        if (_localPeerId == 0)
+        {
+            return;
+        }
+
+        SendJournalOp(_journalSender.Enqueue(_localPeerId, questTag, state, SessionClock.NowMs));
+    }
 
     public void RemoveItem(uint itemId)
     {
@@ -220,6 +260,11 @@ public sealed class CoopClient : ICoopSession
             SendItemOp(op);
         }
 
+        foreach (JournalOpPacket op in _journalSender.CollectDue(now))
+        {
+            SendJournalOp(op);
+        }
+
         _buffer.PruneStale(now, _settings.PeerTimeoutMs);
     }
 
@@ -273,6 +318,15 @@ public sealed class CoopClient : ICoopSession
     }
 
     private void SendItemOp(ItemOpPacket op)
+    {
+        int length = PacketCodec.Write(_sendBuffer, op);
+        if (length > 0)
+        {
+            _channel.Send(_hostEndPoint, _sendBuffer.AsSpan(0, length));
+        }
+    }
+
+    private void SendJournalOp(JournalOpPacket op)
     {
         int length = PacketCodec.Write(_sendBuffer, op);
         if (length > 0)
@@ -370,6 +424,24 @@ public sealed class CoopClient : ICoopSession
 
                 break;
 
+            case PacketType.JournalAck:
+                if (PacketCodec.ReadJournalAck(span) is { } journalAck)
+                {
+                    _journalSender.Acknowledge(journalAck.OpSequence);
+                }
+
+                break;
+
+            case PacketType.JournalSnapshot:
+                if (PacketCodec.ReadJournalSnapshot(span) is { } journalSnapshot)
+                {
+                    // Merge, never replace: journal states are monotonic, and a snapshot
+                    // must not lower an entry a local advance just raised.
+                    Journal.MergeSnapshot(journalSnapshot.Entries, journalSnapshot.Version);
+                }
+
+                break;
+
             case PacketType.EnemySnapshot:
                 if (PacketCodec.ReadEnemySnapshot(span) is { } enemySnapshot)
                 {
@@ -461,6 +533,22 @@ public sealed class CoopClient : ICoopSession
         {
             _lastItemRequestMs = now;
             int length = PacketCodec.Write(_replyBuffer, new ItemSyncRequestPacket(_localPeerId, Items.Version));
+            if (length > 0)
+            {
+                _channel.Send(_hostEndPoint, _replyBuffer.AsSpan(0, length));
+            }
+        }
+
+        // Journal tripwire, gated on our own ops being acked for the same reason as
+        // items: the merge itself is monotonic, but the version numbers only settle once
+        // in-flight ops have landed.
+        if (snapshot.JournalVersion != Journal.Version
+            && _journalSender.PendingCount == 0
+            && now - _lastJournalRequestMs >= JournalResyncIntervalMs)
+        {
+            _lastJournalRequestMs = now;
+            int length = PacketCodec.Write(
+                _replyBuffer, new JournalSyncRequestPacket(_localPeerId, Journal.Version));
             if (length > 0)
             {
                 _channel.Send(_hostEndPoint, _replyBuffer.AsSpan(0, length));

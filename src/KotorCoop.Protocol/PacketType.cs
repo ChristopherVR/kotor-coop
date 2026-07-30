@@ -54,4 +54,24 @@ public enum PacketType : byte
     /// tick. The host owns enemy state; clients mirror it and cannot kill anything locally.
     /// </summary>
     EnemySnapshot = 17,
+
+    /// <summary>peer -> host: advance a quest journal entry. Retransmitted until acked.</summary>
+    JournalOp = 18,
+
+    /// <summary>host -> peer: journal op received, stop retransmitting.</summary>
+    JournalAck = 19,
+
+    /// <summary>client -> host: my journal version is stale, send me the full set.</summary>
+    JournalSyncRequest = 20,
+
+    /// <summary>host -> client: the authoritative journal (possibly split over packets).</summary>
+    JournalSnapshot = 21,
+
+    /// <summary>
+    /// client -> host: my local view of enemy health, sent each tick. The host merges
+    /// downward (an enemy is as hurt as ANY instance says it is), which is what makes a
+    /// client's damage real — client copies are pinned at 1 hp, so without this a
+    /// client's whole fight would be cosmetic.
+    /// </summary>
+    EnemyReport = 22,
 }

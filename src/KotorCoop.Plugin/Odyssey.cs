@@ -1038,6 +1038,61 @@ internal static unsafe class Odyssey
         }
     }
 
+    // ---- journal -----------------------------------------------------------------
+
+    /// <summary>CServerExoAppInternal + this = party table (embedded CSWPartyTable).</summary>
+    private const int PartyTableOffset = 0x1B770;
+
+    /// <summary>CSWPartyTable + this = quest journal, CExoArrayList&lt;SJournalEntry&gt;
+    /// { SJournalEntry* data; int size; int capacity }.</summary>
+    private const int PartyTableJournal = 0x11C;
+
+    // CSWSJournal::SetState(CExoString* tag, int state, int bOverrideHigher). Walks the
+    // entry list comparing tags case-insensitively, updates or appends, and sends the
+    // journal-updated message so the GUI refreshes — which is exactly why applying a
+    // peer's quest state must go through this call and not a raw entry write.
+    private static readonly delegate* unmanaged[Thiscall]<nint, ExoString*, int, int, void> JournalSetStateFn =
+        (delegate* unmanaged[Thiscall]<nint, ExoString*, int, int, void>)0x005C5A40;
+
+    /// <summary>
+    /// Advances a quest journal entry to the given state through the engine's own path.
+    /// bOverrideHigher stays 0, so the engine's refusal to lower a quest state holds and
+    /// the cross-instance merge stays monotonic even against a replayed packet.
+    ///
+    /// MAIN THREAD ONLY.
+    /// </summary>
+    public static bool SetJournalState(byte* tagAscii, int tagLength, int state, out int failure)
+    {
+        failure = 0;
+
+        if (tagLength <= 0)
+        {
+            failure = 1;
+            return false;
+        }
+
+        nint server = GetServer();
+        if (server == 0)
+        {
+            failure = 2;
+            return false;
+        }
+
+        nint internalServer = Deref(server + AppServerOffsetInternal);
+        if (internalServer == 0)
+        {
+            failure = 3;
+            return false;
+        }
+
+        nint journal = internalServer + PartyTableOffset + PartyTableJournal;
+
+        // Length is capacity (strlen + 1), the engine's own CExoString convention.
+        ExoString tag = new() { CString = (nint)tagAscii, Length = (uint)(tagLength + 1) };
+        JournalSetStateFn(journal, &tag, state, 0);
+        return true;
+    }
+
     // ---- creature naming ---------------------------------------------------------
 
     /// <summary>CSWSCreatureStats + this = first_name, a CExoLocString (symbol database).
@@ -1256,6 +1311,35 @@ internal static unsafe class Odyssey
         return true;
     }
 
+    /// <summary>The player's own pause toggle (space bar). See EngineGlobals on the agent
+    /// side; the shared-pause mirror uses this same bit so either player can pause both
+    /// worlds.</summary>
+    public const int PauseReasonPlayer = 0x01;
+
+    /// <summary>
+    /// Sets one pause reason through the engine's own setter, so CWorldTimer actually
+    /// stops (a raw bit write would flag the pause without pausing anything). Returns
+    /// false when there is no server, or the reason was already set.
+    ///
+    /// MAIN THREAD ONLY.
+    /// </summary>
+    public static bool SetPauseReason(int mask)
+    {
+        if ((GetPauseMask() & mask) != 0)
+        {
+            return false;
+        }
+
+        nint server = GetServer();
+        if (server == 0)
+        {
+            return false;
+        }
+
+        SetPauseStateFn(server, mask, 1);
+        return true;
+    }
+
     /// <summary>
     /// Puts a real, clickable item on the ground by calling the engine's own NWScript
     /// CreateItemOnFloor(string sTemplate, location lLoc, int bUseAppearAnimation).
@@ -1411,9 +1495,17 @@ internal static unsafe class Odyssey
         return true;
     }
 
+    /// <summary>Bit 0x04 of creature+0x9F0: attacking permitted. Cleared on phantoms so a
+    /// stray hostile action can never make one swing at this instance's world.</summary>
+    private const int CreAttackPermittedBit = 0x04;
+
+    // CSWSCreature::PacifyCreature: walks the area object list and releases everything
+    // whose combat round is targeting this creature. __thiscall, no arguments.
+    private static readonly delegate* unmanaged[Thiscall]<nint, void> PacifyCreatureFn =
+        (delegate* unmanaged[Thiscall]<nint, void>)0x004FD960;
+
     /// <summary>
-    /// Marks a spawned creature as belonging to a remote player, so this instance can
-    /// neither kill it nor be drawn into fighting it.
+    /// Marks a spawned creature as belonging to a remote player.
     ///
     /// The phantom keeps its blueprint faction. `n_commm` ships as faction 5 (Neutral),
     /// which reads as roughly 50 reputation in both directions: enemies ignore it and the
@@ -1422,20 +1514,39 @@ internal static unsafe class Odyssey
     /// It deliberately does NOT take the local player's faction, which an earlier version
     /// did. Faction 0 is PLAYER, so that made enemies treat the phantom exactly as they
     /// treat a PC — a valid, hostile target. Combined with plot, which zeroes all incoming
-    /// damage, the result is an immortal aggro sink: `CreateNewAttackActions` only releases
-    /// a target that reads dead, a plot creature's health never moves, so the first enemy
-    /// to pick a phantom attacks it forever and stops attacking the real player. Setting
-    /// the fields was verified; the combat consequence was not, and that is how it slipped
-    /// through.
+    /// damage, the result was an immortal aggro sink: `CreateNewAttackActions` only
+    /// releases a target that reads dead, a plot creature's health never moves, so the
+    /// first enemy to pick a phantom attacked it forever.
     ///
-    /// Plot stays: the remote player is the only authority on whether their character is
-    /// alive, and letting this instance kill its local copy would be a disagreement with
-    /// no way back.
+    /// The current shape (7.4's design): NO plot — plot zeroes every incoming damage
+    /// component, so splash damage would visibly bounce off a teammate — but min-1-hp,
+    /// so this instance still cannot kill a body only the remote player has authority
+    /// over. min1hp alone re-creates the aggro lock (the target never reads dead), which
+    /// is why <see cref="PacifyPhantom"/> exists and is called whenever the owning peer
+    /// leaves combat or goes down. The attack bit is cleared so the phantom can never
+    /// swing back and start a fight of its own.
     /// </summary>
     public static void MarkAsRemotePlayer(nint phantom)
     {
-        *(int*)(phantom + ObjPlot) = 1;
+        *(int*)(phantom + ObjPlot) = 0;
+        *(int*)(phantom + ObjMinOneHitPoint) = 1;
         *(int*)(phantom + ObjDeadSelectable) = 0;
+        *(int*)(phantom + CreMovePermitted) &= ~CreAttackPermittedBit;
+    }
+
+    /// <summary>
+    /// Releases every local creature currently locked onto this phantom. Required
+    /// whenever the owning peer leaves combat (or goes down): a min-1-hp body never
+    /// reads dead, so nothing would ever let go on its own.
+    ///
+    /// MAIN THREAD ONLY.
+    /// </summary>
+    public static void PacifyPhantom(nint phantom)
+    {
+        if (phantom != 0)
+        {
+            PacifyCreatureFn(phantom);
+        }
     }
 
     /// <summary>

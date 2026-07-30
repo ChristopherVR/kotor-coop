@@ -143,6 +143,7 @@ public ref struct PacketWriter
         WriteString(state.EquippedBody, ProtocolConstants.MaxResrefLength);
         WriteString(state.EquippedRightWeapon, ProtocolConstants.MaxResrefLength);
         WriteString(state.EquippedLeftWeapon, ProtocolConstants.MaxResrefLength);
+        WriteUInt32(state.Flags);
     }
 
     public void WriteName(string? value) => WriteString(value, ProtocolConstants.MaxNameLength);

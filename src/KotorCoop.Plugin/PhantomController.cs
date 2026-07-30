@@ -63,6 +63,11 @@ internal sealed unsafe class PhantomController(SharedBlockView block)
     /// zero health. Tracked so the pose is set once, not re-issued every step.</summary>
     private readonly bool[] _down = new bool[SharedBlock.SlotCapacity];
 
+    /// <summary>The peer's in-combat flag last step, so leaving combat is an edge: that
+    /// is when local enemies locked onto the phantom must be released — a min-1-hp body
+    /// never reads dead, so nothing lets go on its own (7.4).</summary>
+    private readonly bool[] _peerInCombat = new bool[SharedBlock.SlotCapacity];
+
     /// <summary>FNV hash of the resref last equipped per (phantom, equip slot); 0 = none.</summary>
     private readonly uint[,] _appliedEquip = new uint[SharedBlock.SlotCapacity, SharedBlock.EquipCount];
 
@@ -88,6 +93,7 @@ internal sealed unsafe class PhantomController(SharedBlockView block)
             _lastGoal[i] = default;
             _repathCooldown[i] = 0;
             _down[i] = false;
+            _peerInCombat[i] = false;
 
             for (int j = 0; j < SharedBlock.EquipCount; j++)
             {
@@ -198,6 +204,17 @@ internal sealed unsafe class PhantomController(SharedBlockView block)
             ApplyAppearance(phantom, remote.Appearance);
             ApplyEquipment(i);
 
+            // The peer left combat: release every local creature still locked onto their
+            // phantom. The phantom is min-1-hp, so it never reads dead and an attacker
+            // would otherwise hold the lock forever (the aggro-sink failure of 7.4).
+            bool peerInCombat = remote.InCombat;
+            if (_peerInCombat[i] && !peerInCombat)
+            {
+                Odyssey.PacifyPhantom(phantom);
+            }
+
+            _peerInCombat[i] = peerInCombat;
+
             // A player at zero health lies where they fell, and their phantom does the
             // same — otherwise a downed teammate looks alive and well in your game while
             // their screen shows a death. The pose comes back off the moment the peer's
@@ -210,8 +227,10 @@ internal sealed unsafe class PhantomController(SharedBlockView block)
                 if (down)
                 {
                     // Stop mid-stride first: a queued move action executing after the
-                    // pose would stand the body straight back up.
+                    // pose would stand the body straight back up. And release anything
+                    // attacking the body — it cannot die, so nothing lets go on its own.
                     Odyssey.ClearActions(phantom);
+                    Odyssey.PacifyPhantom(phantom);
                 }
 
                 Odyssey.SetDownState(phantom, down);
