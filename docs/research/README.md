@@ -12,6 +12,7 @@ modified.
 | [override-surfaces.md](override-surfaces.md) | game files vs plugin | ship `k_coop_phantom.utc` (blanks stock AI, fixes equip profs, sets min1hp/faction); main-menu = hybrid; never ship 2DA/TLK. |
 | [party-reconciliation.md](party-reconciliation.md) | companions drift | ownership split via solo mode + explicit ActionFollowLeader, keyed by NPC slot. Corrects trap 5 (commandable≠stop). Medium, needs live measurement. |
 | [mod-compatibility.md](mod-compatibility.md) | different mods per peer | 20 assumptions (several C); two-phase digest handshake; wire the already-computed globals digest first. |
+| [connect-flow.md](connect-flow.md) | in-game Connect UI | achievable — rebind BTN_WARP, reuse CSWGuiSaveNamePanel as an IP prompt (real editbox at panel+0x548); no password masking (keep it in coop.ini). |
 
 Priority order for implementation (value / risk):
 1. **Name plates client-twin write** — small, closes a wrong claim, verifiable in memory.
