@@ -329,6 +329,15 @@ internal static unsafe class Odyssey
             failure = 8;
         }
 
+        // The engine returns OBJECT_INVALID with a success status when the template does
+        // not resolve — a blueprint a mod removed or renamed. Give that its own code so the
+        // caller can latch "phantoms unavailable" instead of retrying a missing resref
+        // forever (and hammering the log on the game thread).
+        if (objectId == ObjectInvalid && failure == 0)
+        {
+            failure = 9;
+        }
+
         return objectId;
     }
 
@@ -1682,12 +1691,18 @@ internal static unsafe class Odyssey
     private static readonly delegate* unmanaged[Thiscall]<nint, void> PacifyCreatureFn =
         (delegate* unmanaged[Thiscall]<nint, void>)0x004FD960;
 
+    /// <summary>repute.2da row 5 — the Neutral faction, ~50 reputation both ways.</summary>
+    private const ushort FactionNeutral = 5;
+
     /// <summary>
     /// Marks a spawned creature as belonging to a remote player.
     ///
-    /// The phantom keeps its blueprint faction. `n_commm` ships as faction 5 (Neutral),
-    /// which reads as roughly 50 reputation in both directions: enemies ignore it and the
-    /// local party ignores it.
+    /// The faction is FORCED to Neutral rather than trusted from the blueprint. The stock
+    /// `n_commm` ships Neutral, but a mod that edits its faction — or a co-op blueprint
+    /// with a different one — would make enemies evaluate the phantom as a real target
+    /// and, combined with min-1-hp below, recreate the immortal aggro sink 7.4 removed.
+    /// The forced write costs a pointer read and makes the property independent of what is
+    /// installed.
     ///
     /// It deliberately does NOT take the local player's faction, which an earlier version
     /// did. Faction 0 is PLAYER, so that made enemies treat the phantom exactly as they
@@ -1710,6 +1725,12 @@ internal static unsafe class Odyssey
         *(int*)(phantom + ObjMinOneHitPoint) = 1;
         *(int*)(phantom + ObjDeadSelectable) = 0;
         *(int*)(phantom + CreMovePermitted) &= ~CreAttackPermittedBit;
+
+        nint stats = Deref(phantom + CreStats);
+        if (stats != 0)
+        {
+            *(ushort*)(stats + StatsFactionId) = FactionNeutral;
+        }
     }
 
     /// <summary>

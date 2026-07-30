@@ -10,8 +10,19 @@ namespace KotorCoop.Plugin;
 /// </summary>
 internal sealed unsafe class PhantomController(SharedBlockView block)
 {
-    /// <summary>Blueprint for the phantom body: a generic male commoner.</summary>
-    private const string Template = "n_commm";
+    /// <summary>
+    /// Blueprints tried in order for a phantom body. The co-op blueprint shipped in
+    /// override (min-1-hp, neutral, no stock AI, equip proficiencies) is preferred; a
+    /// generic male commoner is the fallback for an install without the override file.
+    /// A resref a mod removed simply drops to the next; only when none resolve does
+    /// spawning latch off.
+    /// </summary>
+    private static readonly string[] Templates = ["k_coop_phantom", "n_commm"];
+
+    /// <summary>Consecutive spawn attempts that produced no body before phantoms are
+    /// declared unavailable and the retry stops. Without this a missing blueprint retries
+    /// every 30 frames forever, hammering the log on the game thread.</summary>
+    private const int MaxSpawnFailures = 5;
 
     // There used to be a WalkUnitsPerSecond constant of 5.4 here, described as bounding how
     // far a phantom may travel per frame. It bounded nothing: the value it fed was computed
@@ -77,6 +88,8 @@ internal sealed unsafe class PhantomController(SharedBlockView block)
     private int _equipCooldownFrames;
     private int _stepsLogged;
     private int _equipsLogged;
+    private int _spawnFailures;
+    private bool _spawnDisabled;
 
     /// <summary>
     /// Forgets every phantom without touching the engine. Called when the module has
@@ -105,6 +118,11 @@ internal sealed unsafe class PhantomController(SharedBlockView block)
 
         _phantomCount = 0;
         block.PhantomCount = 0;
+
+        // A new module may ship the blueprint the last one lacked, and a transient failure
+        // clears — so give spawning a fresh start rather than staying latched off forever.
+        _spawnFailures = 0;
+        _spawnDisabled = false;
     }
 
     /// <summary>
@@ -169,7 +187,7 @@ internal sealed unsafe class PhantomController(SharedBlockView block)
         {
             _spawnCooldownFrames--;
         }
-        else if (_phantomCount < wanted)
+        else if (_phantomCount < wanted && !_spawnDisabled)
         {
             TrySpawnOne(player);
             _spawnCooldownFrames = 30;
@@ -414,14 +432,43 @@ internal sealed unsafe class PhantomController(SharedBlockView block)
 
         Vec3 facing = new() { X = 1f, Y = 0f, Z = 0f };
 
-        uint objectId = Odyssey.SpawnCreature(Template, spawnPosition, facing, out int failure);
+        // Try each blueprint until one resolves. A missing resref (a mod removed the
+        // co-op blueprint, or even the stock commoner) returns failure 9; only when every
+        // template fails does spawning give up.
+        uint objectId = Odyssey.ObjectInvalid;
+        int failure = 0;
+        foreach (string template in Templates)
+        {
+            objectId = Odyssey.SpawnCreature(template, spawnPosition, facing, out failure);
+            if (objectId != Odyssey.ObjectInvalid)
+            {
+                break;
+            }
+        }
+
         block.LastStatus = failure;
 
         if (objectId == Odyssey.ObjectInvalid)
         {
-            PluginHost.Log($"spawn refused (failure code {failure})");
+            // Latch after a few consecutive misses so a blueprint no install has does not
+            // retry every 30 frames forever, writing to the log on the game thread each
+            // time. Invalidate() (a module change) clears the latch for a fresh try.
+            if (++_spawnFailures >= MaxSpawnFailures && !_spawnDisabled)
+            {
+                _spawnDisabled = true;
+                PluginHost.Log(
+                    $"phantoms unavailable: no blueprint spawned after {_spawnFailures} tries "
+                    + $"(last failure {failure}); is a phantom blueprint present?");
+            }
+            else if (_spawnFailures < MaxSpawnFailures)
+            {
+                PluginHost.Log($"spawn refused (failure code {failure}); retry {_spawnFailures}/{MaxSpawnFailures}");
+            }
+
             return;
         }
+
+        _spawnFailures = 0;
 
         // CreateObject returns an id, not a pointer. Resolve it by locating the creature
         // whose object id matches; the plugin is in-process so this is a direct read.
