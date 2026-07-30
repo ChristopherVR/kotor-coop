@@ -1,0 +1,18 @@
+# KOTOR game-file assets are binary GFF/2DA/etc. — never apply text/EOL conversion, or
+# the byte-for-byte checks (and the game's own loader) would see corrupted files.
+*.utc binary
+*.uti binary
+*.utp binary
+*.utd binary
+*.utw binary
+*.utt binary
+*.git binary
+*.gff binary
+*.2da binary
+*.mod binary
+*.erf binary
+*.rim binary
+*.tlk binary
+*.bif binary
+*.key binary
+*.db binary
