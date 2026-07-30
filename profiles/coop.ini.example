@@ -1,8 +1,9 @@
 ; coop.ini — copy to your game directory (beside swkotor.exe) and edit.
 ;
 ; The agent reads this when run with --menu, and connects when the player presses the
-; in-game Co-op button. The password lives here rather than being typed in-game because
-; KOTOR's text field has no masking (see docs/research/connect-flow.md).
+; in-game Co-op button. You can also connect at any time from the game's own console:
+; press ~ and type  connect <ip> [password] | disconnect | reconnect  (see
+; docs/research/console-overlay.md). The password can be typed after connect, or kept here.
 
 [coop]
 

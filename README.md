@@ -37,6 +37,10 @@ Both players, each in their own full game:
 - **Connect from the game**: a "Co-op" button on the main menu starts the session from a
   `coop.ini` (host/join, address, password, name). A password keeps strangers out; a
   dropped player reconnects automatically and keeps their slot.
+- **Type commands in-game**: press `~` for the game's own console and type
+  `connect <ip> [password]`, `disconnect` or `reconnect` at any time — the session is torn
+  down and rebuilt live, no restart. If the host wants a password you didn't give, the
+  console prompts you to retype it. Status and co-op replies print on-screen while it's open.
 
 An unfocused or minimised instance keeps simulating (the plugin suppresses the focus
 pause), which is what makes one-machine testing practical at all.
