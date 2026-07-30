@@ -66,6 +66,10 @@ public class PausePumpTests
 
         public System.Collections.Generic.IReadOnlyList<PartyMemberState> GetPartyMembers() => [];
 
+        public void PublishDialogue(bool active, string speakerName, string line) { }
+
+        public DialogueState GetDialogue() => DialogueState.Idle;
+
         public bool IsEnemyAuthority => false;
 
         public SessionStats GetStats() => new();

@@ -264,6 +264,12 @@ public sealed class AgentDashboard(SessionManager manager, IGameBridge bridge, s
             $"enemies  {enemies.Count} known ({alive} alive, {dead} dead)   "
             + (agent.Session.IsEnemyAuthority ? "THIS instance is authoritative" : "mirroring the host"));
 
+        DialogueState convo = agent.Session.GetDialogue();
+        string convoWho = convo.OwnerPeerId == agent.Session.LocalPeerId
+            ? "you are"
+            : $"peer {convo.OwnerPeerId} is";
+        WriteLine($"dialogue {(convo.Active ? $"{convoWho} in a conversation" + (convo.SpeakerName.Length > 0 ? $" ({convo.SpeakerName})" : string.Empty) : "none")}");
+
         List<GroundItem> items = agent.Session.Items.Snapshot();
         WriteLine(string.Empty);
         WriteLine($"ground items ({items.Count})  {_lastDropNote}");

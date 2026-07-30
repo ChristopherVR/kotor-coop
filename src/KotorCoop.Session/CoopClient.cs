@@ -164,6 +164,32 @@ public sealed class CoopClient : ICoopSession
         }
     }
 
+    /// <summary>The host's authoritative conversation token, as last received.</summary>
+    private DialogueState _dialogue = DialogueState.Idle;
+
+    /// <summary>This client's local conversation status, sent to the host each tick.</summary>
+    private bool _localDialogueActive;
+    private string _localDialogueSpeaker = string.Empty;
+    private string _localDialogueLine = string.Empty;
+
+    public void PublishDialogue(bool active, string speakerName, string line)
+    {
+        lock (_gate)
+        {
+            _localDialogueActive = active;
+            _localDialogueSpeaker = speakerName ?? string.Empty;
+            _localDialogueLine = line ?? string.Empty;
+        }
+    }
+
+    public DialogueState GetDialogue()
+    {
+        lock (_gate)
+        {
+            return _dialogue;
+        }
+    }
+
     public void ReportEnemies(string module, IReadOnlyList<EnemyState> enemies)
     {
         if (_localPeerId == 0 || enemies.Count == 0)
@@ -315,6 +341,7 @@ public sealed class CoopClient : ICoopSession
         }
 
         SendStateUpdate(now);
+        SendDialogueRequest();
 
         if (now - _lastPingMs >= PingIntervalMs)
         {
@@ -365,6 +392,31 @@ public sealed class CoopClient : ICoopSession
             new HelloPacket(
                 _settings.PlayerName, module, _nonce, _settings.Digest,
                 SessionPassword.Hash(_settings.Password)));
+        if (length > 0)
+        {
+            _channel.Send(_hostEndPoint, _sendBuffer.AsSpan(0, length));
+        }
+    }
+
+    /// <summary>
+    /// Sends this client's conversation status every tick, idle or not — same "state, not
+    /// events" rule as the avatar update, so a released token is never lost to a dropped
+    /// packet. The host's arbiter turns it into token grants/updates/releases.
+    /// </summary>
+    private void SendDialogueRequest()
+    {
+        bool active;
+        string speaker;
+        string line;
+        lock (_gate)
+        {
+            active = _localDialogueActive;
+            speaker = _localDialogueSpeaker;
+            line = _localDialogueLine;
+        }
+
+        int length = PacketCodec.Write(
+            _sendBuffer, new DialogueRequestPacket(_localPeerId, active, speaker, line));
         if (length > 0)
         {
             _channel.Send(_hostEndPoint, _sendBuffer.AsSpan(0, length));
@@ -556,6 +608,17 @@ public sealed class CoopClient : ICoopSession
                     lock (_gate)
                     {
                         _party = party.Members;
+                    }
+                }
+
+                break;
+
+            case PacketType.DialogueSnapshot:
+                if (PacketCodec.ReadDialogueSnapshot(span) is { } dialogue)
+                {
+                    lock (_gate)
+                    {
+                        _dialogue = dialogue.State;
                     }
                 }
 

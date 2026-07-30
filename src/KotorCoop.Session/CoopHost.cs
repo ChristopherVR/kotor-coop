@@ -131,6 +131,36 @@ public sealed class CoopHost : ICoopSession
 
     public IReadOnlyList<PartyMemberState> GetPartyMembers() => [];
 
+    /// <summary>The single conversation token; the host is the sole arbiter.</summary>
+    private DialogueState _dialogue = DialogueState.Idle;
+
+    public void PublishDialogue(bool active, string speakerName, string line)
+    {
+        lock (_gate)
+        {
+            // The host's own claim goes through the same arbiter as a client's, so ownership
+            // and the serial are decided in exactly one place.
+            _dialogue = DialogueArbiter.Apply(_dialogue, HostPeerId, active, speakerName, line);
+        }
+    }
+
+    public DialogueState GetDialogue()
+    {
+        lock (_gate)
+        {
+            return _dialogue;
+        }
+    }
+
+    /// <summary>Drops the token if the peer that held it has gone. Called on disconnect.</summary>
+    private void ReleaseDialogueIfOwnedBy(uint peerId)
+    {
+        if (_dialogue.IsOwnedBy(peerId))
+        {
+            _dialogue = new DialogueState(false, 0, _dialogue.Serial + 1, string.Empty, string.Empty);
+        }
+    }
+
     /// <summary>Latest enemy report per client, so a client's damage can be merged in.</summary>
     private sealed record EnemyReport(string Module, IReadOnlyList<EnemyState> Enemies, long ReceivedMs);
 
@@ -293,6 +323,7 @@ public sealed class CoopHost : ICoopSession
                 {
                     _peers.Remove(id);
                     _buffer.Remove(id);
+                    ReleaseDialogueIfOwnedBy(id);
                 }
             }
 
@@ -323,6 +354,7 @@ public sealed class CoopHost : ICoopSession
 
         BroadcastEnemies(now, recipients);
         BroadcastParty(now, recipients);
+        BroadcastDialogue(now, recipients);
         BroadcastWorldDigest(now, recipients);
         _buffer.PruneStale(now, _settings.PeerTimeoutMs);
     }
@@ -377,6 +409,36 @@ public sealed class CoopHost : ICoopSession
         }
 
         int length = PacketCodec.Write(_sendBuffer, new PartySnapshotPacket(now, party));
+        if (length == 0)
+        {
+            return;
+        }
+
+        foreach (PeerConnection peer in recipients)
+        {
+            _channel.Send(peer.EndPoint, _sendBuffer.AsSpan(0, length));
+        }
+    }
+
+    /// <summary>
+    /// Broadcasts the conversation token every tick, unconditionally (even when idle), so a
+    /// client that joined or reconnected mid-conversation converges on the current owner and
+    /// a released token is not missed. One tiny packet per tick is negligible.
+    /// </summary>
+    private void BroadcastDialogue(long now, List<PeerConnection> recipients)
+    {
+        if (recipients.Count == 0)
+        {
+            return;
+        }
+
+        DialogueState state;
+        lock (_gate)
+        {
+            state = _dialogue;
+        }
+
+        int length = PacketCodec.Write(_sendBuffer, new DialogueSnapshotPacket(now, state));
         if (length == 0)
         {
             return;
@@ -485,6 +547,10 @@ public sealed class CoopHost : ICoopSession
 
             case PacketType.WorldDigest:
                 HandleWorldDigest(span);
+                break;
+
+            case PacketType.DialogueRequest:
+                HandleDialogueRequest(span);
                 break;
 
             case PacketType.Ping:
@@ -766,6 +832,25 @@ public sealed class CoopHost : ICoopSession
         }
     }
 
+    private void HandleDialogueRequest(ReadOnlySpan<byte> span)
+    {
+        if (PacketCodec.ReadDialogueRequest(span) is not { } request)
+        {
+            _channel.NoteMalformed();
+            return;
+        }
+
+        lock (_gate)
+        {
+            // Only a known peer may move the token, and only for its own peer id.
+            if (_peers.ContainsKey(request.PeerId))
+            {
+                _dialogue = DialogueArbiter.Apply(
+                    _dialogue, request.PeerId, request.Active, request.SpeakerName, request.Line);
+            }
+        }
+    }
+
     private void HandleEnemyReport(ReadOnlySpan<byte> span, long now)
     {
         if (PacketCodec.ReadEnemyReport(span) is not { } report)
@@ -810,6 +895,7 @@ public sealed class CoopHost : ICoopSession
         lock (_gate)
         {
             _peers.Remove(bye.PeerId);
+            ReleaseDialogueIfOwnedBy(bye.PeerId);
         }
 
         _buffer.Remove(bye.PeerId);

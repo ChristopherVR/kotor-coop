@@ -118,6 +118,17 @@ public sealed record PartySnapshotPacket(long ServerTimeMs, IReadOnlyList<PartyM
 /// </summary>
 public sealed record EnemyReportPacket(uint PeerId, string Module, IReadOnlyList<EnemyState> Enemies);
 
+/// <summary>host -> all: the authoritative conversation token (see <see cref="DialogueState"/>).</summary>
+public sealed record DialogueSnapshotPacket(long ServerTimeMs, DialogueState State);
+
+/// <summary>
+/// peer -> host: this peer's local conversation status. <paramref name="Active"/> true =
+/// "I have entered a conversation" (a claim), false = "I have left it" (a release). The
+/// host's arbiter decides what actually happens to the shared token.
+/// </summary>
+public sealed record DialogueRequestPacket(
+    uint PeerId, bool Active, string SpeakerName, string Line);
+
 /// <summary>
 /// A peer's in-world content fingerprint, sent both ways once a save is loaded and
 /// repeated periodically. <paramref name="GlobalsCatalogue"/> is a digest of the

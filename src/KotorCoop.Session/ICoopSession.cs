@@ -79,6 +79,17 @@ public interface ICoopSession : IDisposable
     /// <summary>Client only: the host's latest party companions. Empty on the host.</summary>
     IReadOnlyList<PartyMemberState> GetPartyMembers();
 
+    /// <summary>
+    /// Announces this instance's local conversation status. <paramref name="active"/> true
+    /// means the local player has entered a conversation; the session runs it through the
+    /// host's arbiter. Speaker/line are the spectate payload (empty until the plugin can read
+    /// the live conversation). Cheap to call every tick.
+    /// </summary>
+    void PublishDialogue(bool active, string speakerName, string line);
+
+    /// <summary>The authoritative conversation token — who, if anyone, is mid-dialogue.</summary>
+    DialogueState GetDialogue();
+
     /// <summary>The shared quest journal, merged upward across every player.</summary>
     JournalStore Journal { get; }
 

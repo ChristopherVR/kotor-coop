@@ -409,6 +409,70 @@ public static class PacketCodec
         return new PartySnapshotPacket(serverTime, members);
     }
 
+    public static int Write(Span<byte> buffer, DialogueSnapshotPacket packet)
+    {
+        PacketWriter w = new(buffer);
+        w.WriteHeader(PacketType.DialogueSnapshot);
+        w.WriteInt64(packet.ServerTimeMs);
+
+        DialogueState s = packet.State;
+        w.WriteBool(s.Active);
+        w.WriteUInt32(s.OwnerPeerId);
+        w.WriteUInt32(s.Serial);
+        w.WriteName(s.SpeakerName);
+        w.WriteString(s.Line, ProtocolConstants.MaxDialogueLineLength);
+
+        return w.Failed ? 0 : w.Position;
+    }
+
+    public static DialogueSnapshotPacket? ReadDialogueSnapshot(ReadOnlySpan<byte> buffer)
+    {
+        PacketReader r = new(buffer);
+        if (r.ReadHeader() != PacketType.DialogueSnapshot)
+        {
+            return null;
+        }
+
+        long serverTime = r.ReadInt64();
+        bool active = r.ReadBool();
+        uint owner = r.ReadUInt32();
+        uint serial = r.ReadUInt32();
+        string speaker = r.ReadString();
+        string line = r.ReadString();
+
+        return r.Failed
+            ? null
+            : new DialogueSnapshotPacket(serverTime, new DialogueState(active, owner, serial, speaker, line));
+    }
+
+    public static int Write(Span<byte> buffer, DialogueRequestPacket packet)
+    {
+        PacketWriter w = new(buffer);
+        w.WriteHeader(PacketType.DialogueRequest);
+        w.WriteUInt32(packet.PeerId);
+        w.WriteBool(packet.Active);
+        w.WriteName(packet.SpeakerName);
+        w.WriteString(packet.Line, ProtocolConstants.MaxDialogueLineLength);
+
+        return w.Failed ? 0 : w.Position;
+    }
+
+    public static DialogueRequestPacket? ReadDialogueRequest(ReadOnlySpan<byte> buffer)
+    {
+        PacketReader r = new(buffer);
+        if (r.ReadHeader() != PacketType.DialogueRequest)
+        {
+            return null;
+        }
+
+        uint peerId = r.ReadUInt32();
+        bool active = r.ReadBool();
+        string speaker = r.ReadString();
+        string line = r.ReadString();
+
+        return r.Failed ? null : new DialogueRequestPacket(peerId, active, speaker, line);
+    }
+
     public static int Write(Span<byte> buffer, WorldDigestPacket packet)
     {
         PacketWriter w = new(buffer);

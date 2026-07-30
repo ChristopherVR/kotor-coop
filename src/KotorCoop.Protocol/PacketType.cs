@@ -89,4 +89,18 @@ public enum PacketType : byte
     /// these so companions do not drift into two versions.
     /// </summary>
     PartySnapshot = 24,
+
+    /// <summary>
+    /// host -> all: the authoritative conversation token — who, if anyone, is mid-dialogue,
+    /// with a serial and the spectate line. Broadcast each tick so late/reconnecting peers
+    /// converge.
+    /// </summary>
+    DialogueSnapshot = 25,
+
+    /// <summary>
+    /// peer -> host: "I am (not) in a conversation, here is my current line." The host runs
+    /// it through the arbiter — granting the token if free, updating it if the requester
+    /// already owns it, releasing it on end, and ignoring a claim while another peer owns it.
+    /// </summary>
+    DialogueRequest = 26,
 }

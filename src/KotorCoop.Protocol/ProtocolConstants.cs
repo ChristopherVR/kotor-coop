@@ -8,8 +8,9 @@ public static class ProtocolConstants
     /// <summary>Bumped on any wire-format change. Mismatched peers are rejected at Hello.
     /// Version 3: PlayerState flags dword, journal channel, client enemy reports.
     /// Version 4: content digest on Hello/Welcome for mod-compatibility handshaking.
-    /// Version 5: session password hash on Hello; party-member snapshot channel.</summary>
-    public const byte Version = 5;
+    /// Version 5: session password hash on Hello; party-member snapshot channel.
+    /// Version 6: dialogue ownership token (snapshot + request channels).</summary>
+    public const byte Version = 6;
 
     /// <summary>Journal quest tags are resrefs plus a little slack.</summary>
     public const int MaxJournalTagLength = 32;
@@ -39,6 +40,10 @@ public static class ProtocolConstants
     /// <summary>Party companions the host replicates. KOTOR allows two active at once; a
     /// little headroom costs nothing.</summary>
     public const int MaxPartyMembers = 4;
+
+    /// <summary>The spectate line carried on the dialogue token. Capped at the wire string
+    /// limit; a longer subtitle is simply truncated for the spectator.</summary>
+    public const int MaxDialogueLineLength = MaxStringLength;
 
     /// <summary>magic(2) + version(1) + type(1)</summary>
     public const int HeaderSize = 4;

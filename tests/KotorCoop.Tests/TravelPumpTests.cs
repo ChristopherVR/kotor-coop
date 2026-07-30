@@ -109,6 +109,10 @@ public class TravelPumpTests
 
         public System.Collections.Generic.IReadOnlyList<PartyMemberState> GetPartyMembers() => [];
 
+        public void PublishDialogue(bool active, string speakerName, string line) { }
+
+        public DialogueState GetDialogue() => DialogueState.Idle;
+
         public void SetJournalEntry(string questTag, int state) => Journal.Merge(questTag, state);
 
         public SessionCapabilities Capabilities { get; set; } = SessionCapabilities.All;

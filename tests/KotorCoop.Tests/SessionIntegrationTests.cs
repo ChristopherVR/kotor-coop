@@ -415,6 +415,108 @@ public class SessionIntegrationTests
     }
 
     [Fact]
+    public async Task TheDialogueTokenIsHeldByOneOwnerAtATime()
+    {
+        using CoopHost host = new(new SessionSettings { PlayerName = "Revan", Port = 0, TickRate = 30 });
+        using CoopClient malak = new(
+            new SessionSettings { PlayerName = "Malak", TickRate = 30 },
+            new IPEndPoint(IPAddress.Loopback, host.ListenEndPoint.Port));
+        using CoopClient bastila = new(
+            new SessionSettings { PlayerName = "Bastila", TickRate = 30 },
+            new IPEndPoint(IPAddress.Loopback, host.ListenEndPoint.Port));
+
+        using CancellationTokenSource cts = new(Timeout + TimeSpan.FromSeconds(15));
+        Task hostTask = host.RunAsync(cts.Token);
+        Task malakTask = malak.RunAsync(cts.Token);
+        Task bastilaTask = bastila.RunAsync(cts.Token);
+
+        PlayerState state = new(Vector3f.Zero, 0f, "end_m01aa", 100, 0);
+
+        bool malakTalking = false;
+        bool bastilaTalking = false;
+        void Publish()
+        {
+            host.PublishLocalState(state);
+            malak.PublishLocalState(state);
+            bastila.PublishLocalState(state);
+            malak.PublishDialogue(malakTalking, "Trask", "");
+            bastila.PublishDialogue(bastilaTalking, "Carth", "");
+        }
+
+        Assert.True(await WaitForAsync(() => malak.IsConnected && bastila.IsConnected, Timeout, Publish));
+
+        // Malak enters a conversation: the token becomes his everywhere.
+        malakTalking = true;
+        Assert.True(
+            await WaitForAsync(() => host.GetDialogue().IsOwnedBy(malak.LocalPeerId), Timeout, Publish),
+            "the host never granted the token to the first speaker");
+        Assert.True(
+            await WaitForAsync(() => bastila.GetDialogue().IsOwnedBy(malak.LocalPeerId), Timeout, Publish),
+            "the other client never saw the token owner");
+
+        // Bastila tries to talk too: she is refused while Malak holds it.
+        bastilaTalking = true;
+        for (int i = 0; i < 15; i++)
+        {
+            Publish();
+            await Task.Delay(20);
+        }
+
+        Assert.True(host.GetDialogue().IsOwnedBy(malak.LocalPeerId), "the token changed hands while still held");
+
+        // Malak leaves: now Bastila (still asking) is granted it.
+        malakTalking = false;
+        Assert.True(
+            await WaitForAsync(() => host.GetDialogue().IsOwnedBy(bastila.LocalPeerId), Timeout, Publish),
+            "the token was not handed to the waiting speaker after release");
+
+        await cts.CancelAsync();
+        await Task.WhenAll(hostTask, malakTask, bastilaTask);
+    }
+
+    [Fact]
+    public async Task TheDialogueTokenIsReleasedWhenTheOwnerLeaves()
+    {
+        using CoopHost host = new(new SessionSettings { PlayerName = "Revan", Port = 0, TickRate = 30 });
+        using CoopClient malak = new(
+            new SessionSettings { PlayerName = "Malak", TickRate = 30 },
+            new IPEndPoint(IPAddress.Loopback, host.ListenEndPoint.Port));
+
+        using CancellationTokenSource hostCts = new(Timeout + TimeSpan.FromSeconds(20));
+        // The client runs on its own token so we can stop it mid-session to model a peer
+        // that walked away (or crashed) mid-conversation.
+        using CancellationTokenSource malakCts = new();
+        Task hostTask = host.RunAsync(hostCts.Token);
+        Task malakTask = malak.RunAsync(malakCts.Token);
+
+        PlayerState state = new(Vector3f.Zero, 0f, "end_m01aa", 100, 0);
+        void Publish()
+        {
+            host.PublishLocalState(state);
+            malak.PublishLocalState(state);
+            malak.PublishDialogue(true, "Trask", "");
+        }
+
+        Assert.True(await WaitForAsync(() => malak.IsConnected, Timeout, Publish));
+        Assert.True(
+            await WaitForAsync(() => host.GetDialogue().IsOwnedBy(malak.LocalPeerId), Timeout, Publish),
+            "the token was never granted");
+
+        // The owner goes away; the host must free the token (cleanly via Bye, or via peer
+        // timeout), or a crash mid-conversation would wedge everyone else.
+        await malakCts.CancelAsync();
+        await malakTask;
+
+        Assert.True(
+            await WaitForAsync(() => !host.GetDialogue().Active, TimeSpan.FromSeconds(12),
+                () => host.PublishLocalState(state)),
+            "the token was not released after the owner left");
+
+        await hostCts.CancelAsync();
+        await hostTask;
+    }
+
+    [Fact]
     public async Task GarbageTrafficDoesNotDisturbTheHost()
     {
         using CoopHost host = new(new SessionSettings { PlayerName = "Revan", Port = 0, TickRate = 30 });

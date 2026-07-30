@@ -173,6 +173,7 @@ public sealed class CoopAgent(IGameBridge bridge, ICoopSession session, AgentSet
         PumpItems(local, caps);
         PumpEnemies(local, caps);
         PumpParty(caps);
+        PumpDialogue(local, caps);
         PumpWorldState(caps);
         PumpJournal(caps);
         PumpDoors(caps);
@@ -205,6 +206,26 @@ public sealed class CoopAgent(IGameBridge bridge, ICoopSession session, AgentSet
         // A client: freeze the local party AI and mirror the host's companions. The freeze
         // is re-asserted inside TryWritePartyMembers every pass.
         bridge.TryWritePartyMembers(session.GetPartyMembers());
+    }
+
+    /// <summary>
+    /// Publishes whether the local player is in a conversation, so the session can hold a
+    /// single arbitrated dialogue token. The in-dialogue bit is already read into the local
+    /// player's flags, so this needs no extra engine read. The spectate payload (speaker and
+    /// line) is empty until the plugin can read the live conversation; the ownership token is
+    /// useful on its own — it is what tells a peer "someone else is mid-story, hold off".
+    ///
+    /// Acting on the token (spectating or suppressing a conflicting conversation) is the
+    /// plugin's job and is gated on that RE work; the agent's part is to keep it truthful.
+    /// </summary>
+    private void PumpDialogue(in PlayerState local, SessionCapabilities caps)
+    {
+        if ((caps & SessionCapabilities.Dialogue) == 0)
+        {
+            return;
+        }
+
+        session.PublishDialogue(local.IsInDialogue, string.Empty, string.Empty);
     }
 
     /// <summary>

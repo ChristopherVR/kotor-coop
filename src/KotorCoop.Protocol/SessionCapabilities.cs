@@ -49,5 +49,10 @@ public enum SessionCapabilities
     /// copies. Keyed by NPC slot, so it needs the same save (dropped on a save mismatch).</summary>
     Party = 1 << 8,
 
-    All = Phantoms | WorldState | Doors | Enemies | GroundItems | Journal | Appearance | Equipment | Party,
+    /// <summary>The conversation ownership token (who is mid-dialogue). Content-independent —
+    /// it carries a peer id and a text line, not save-keyed ids — so it survives almost any
+    /// mod difference; only a total refusal (empty set) drops it.</summary>
+    Dialogue = 1 << 9,
+
+    All = Phantoms | WorldState | Doors | Enemies | GroundItems | Journal | Appearance | Equipment | Party | Dialogue,
 }
