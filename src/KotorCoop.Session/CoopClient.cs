@@ -41,6 +41,11 @@ public sealed class CoopClient : ICoopSession
     private long _lastInboundMs;
     private double _roundTripMs;
     private string _rejectReason = string.Empty;
+    private CompatibilityVerdict? _compatibility;
+
+    public SessionCapabilities Capabilities => _compatibility?.Allowed ?? SessionCapabilities.All;
+
+    public CompatibilityVerdict? Compatibility => _compatibility;
 
     public CoopClient(SessionSettings settings, IPEndPoint hostEndPoint)
     {
@@ -276,7 +281,8 @@ public sealed class CoopClient : ICoopSession
             module = _localState.Module;
         }
 
-        int length = PacketCodec.Write(_sendBuffer, new HelloPacket(_settings.PlayerName, module, _nonce));
+        int length = PacketCodec.Write(
+            _sendBuffer, new HelloPacket(_settings.PlayerName, module, _nonce, _settings.Digest));
         if (length > 0)
         {
             _channel.Send(_hostEndPoint, _sendBuffer.AsSpan(0, length));
@@ -491,6 +497,13 @@ public sealed class CoopClient : ICoopSession
         if (_localPeerId == 0)
         {
             _localPeerId = welcome.AssignedPeerId;
+
+            // Judge compatibility from our side too, from the host's digest in the Welcome.
+            // The host already refused an incompatible client; this gives the client the
+            // same capability set (so both ends gate the same channels) and the same
+            // warnings to show. Computed identically, so the two agree without negotiating.
+            ContentCompatibility.AllowDifferentSave = _settings.AllowDifferentSave;
+            _compatibility = ContentCompatibility.Compare(_settings.Digest, welcome.Digest);
         }
     }
 

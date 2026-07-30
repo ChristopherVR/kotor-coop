@@ -141,11 +141,17 @@ public sealed class CoopAgent(IGameBridge bridge, ICoopSession session, AgentSet
 
         LastWriteSucceeded = bridge.TryWriteRemotePeers(visible);
 
-        PumpItems(local);
-        PumpEnemies(local);
-        PumpWorldState();
-        PumpJournal();
-        PumpDoors();
+        // Each channel is gated on the negotiated capability set: a mod difference that
+        // would corrupt a channel disables that channel for the session (a different
+        // globals catalogue drops world state; a different save drops enemies/doors/items)
+        // while everything unaffected keeps working. Full set until a peer is judged.
+        SessionCapabilities caps = session.Capabilities;
+
+        PumpItems(local, caps);
+        PumpEnemies(local, caps);
+        PumpWorldState(caps);
+        PumpJournal(caps);
+        PumpDoors(caps);
         PumpTravel(local, peers);
         PumpPause(peers);
     }
@@ -157,9 +163,9 @@ public sealed class CoopAgent(IGameBridge bridge, ICoopSession session, AgentSet
     /// plus the globals channel is what makes a quest one quest instead of two parallel
     /// ones.
     /// </summary>
-    private void PumpJournal()
+    private void PumpJournal(SessionCapabilities caps)
     {
-        if (!bridge.SupportsJournalSync)
+        if (!bridge.SupportsJournalSync || (caps & SessionCapabilities.Journal) == 0)
         {
             return;
         }
@@ -311,9 +317,9 @@ public sealed class CoopAgent(IGameBridge bridge, ICoopSession session, AgentSet
     /// visible desync co-op can produce; door values are monotonic (closed to open,
     /// locked to unlocked, anything to destroyed), so the merge semantics fit exactly.
     /// </summary>
-    private void PumpDoors()
+    private void PumpDoors(SessionCapabilities caps)
     {
-        if (!bridge.SupportsDoorSync)
+        if (!bridge.SupportsDoorSync || (caps & SessionCapabilities.Doors) == 0)
         {
             return;
         }
@@ -339,8 +345,13 @@ public sealed class CoopAgent(IGameBridge bridge, ICoopSession session, AgentSet
     /// the two instances converge regardless of packet order and neither can drag the other
     /// backwards through a quest.
     /// </summary>
-    private void PumpWorldState()
+    private void PumpWorldState(SessionCapabilities caps)
     {
+        if ((caps & SessionCapabilities.WorldState) == 0)
+        {
+            return;
+        }
+
         if (!bridge.SupportsWorldState)
         {
             return;
@@ -371,9 +382,9 @@ public sealed class CoopAgent(IGameBridge bridge, ICoopSession session, AgentSet
     /// Health is replicated absolutely rather than as damage, because each instance applies
     /// its own difficulty multipliers and resistances to a damage number.
     /// </summary>
-    private void PumpEnemies(in PlayerState local)
+    private void PumpEnemies(in PlayerState local, SessionCapabilities caps)
     {
-        if (!bridge.SupportsEnemySync)
+        if (!bridge.SupportsEnemySync || (caps & SessionCapabilities.Enemies) == 0)
         {
             return;
         }
@@ -432,9 +443,9 @@ public sealed class CoopAgent(IGameBridge bridge, ICoopSession session, AgentSet
     /// whatever the store says is on the ground, and anything the game reports as picked
     /// up locally is announced back so it vanishes for everyone else too.
     /// </summary>
-    private void PumpItems(in PlayerState local)
+    private void PumpItems(in PlayerState local, SessionCapabilities caps)
     {
-        if (!bridge.SupportsGroundItems)
+        if (!bridge.SupportsGroundItems || (caps & SessionCapabilities.GroundItems) == 0)
         {
             return;
         }

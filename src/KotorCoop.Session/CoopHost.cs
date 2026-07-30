@@ -21,6 +21,7 @@ public sealed class CoopHost : ICoopSession
         public required string Name;
         public PlayerState LastState = PlayerState.Empty;
         public long LastSeenMs;
+        public SessionCapabilities Capabilities = SessionCapabilities.All;
     }
 
     public const uint HostPeerId = 1;
@@ -152,6 +153,32 @@ public sealed class CoopHost : ICoopSession
         // journal version in the next world snapshot.
         Journal.Merge(questTag, state);
     }
+
+    private CompatibilityVerdict? _compatibility;
+
+    /// <summary>
+    /// The narrowest capability set across all admitted peers. One peer running a mod that
+    /// drops a channel drops it for the whole session — the host cannot publish enemy
+    /// state to a client that would apply it to the wrong creatures.
+    /// </summary>
+    public SessionCapabilities Capabilities
+    {
+        get
+        {
+            lock (_gate)
+            {
+                SessionCapabilities caps = SessionCapabilities.All;
+                foreach (PeerConnection peer in _peers.Values)
+                {
+                    caps &= peer.Capabilities;
+                }
+
+                return caps;
+            }
+        }
+    }
+
+    public CompatibilityVerdict? Compatibility => _compatibility;
 
     public SessionStats GetStats()
     {
@@ -378,6 +405,24 @@ public sealed class CoopHost : ICoopSession
             return;
         }
 
+        // Content compatibility is judged before admission. A refusal (different exe, or a
+        // different save when that is not allowed) is sent as a typed Reject so the client
+        // stops retrying and can tell the player why, rather than hanging on a silent host.
+        ContentCompatibility.AllowDifferentSave = _settings.AllowDifferentSave;
+        CompatibilityVerdict verdict = ContentCompatibility.Compare(_settings.Digest, hello.Digest);
+        _compatibility = verdict;
+
+        if (!verdict.Admitted)
+        {
+            int rejectLength = PacketCodec.Write(_replyBuffer, new RejectPacket(verdict.Summary));
+            if (rejectLength > 0)
+            {
+                _channel.Send(from, _replyBuffer.AsSpan(0, rejectLength));
+            }
+
+            return;
+        }
+
         uint assignedId;
 
         lock (_gate)
@@ -389,6 +434,7 @@ public sealed class CoopHost : ICoopSession
             if (existing is not null)
             {
                 existing.LastSeenMs = now;
+                existing.Capabilities = verdict.Allowed;
                 assignedId = existing.Id;
             }
             else
@@ -411,11 +457,13 @@ public sealed class CoopHost : ICoopSession
                     EndPoint = from,
                     Name = string.IsNullOrWhiteSpace(hello.PlayerName) ? $"peer{assignedId}" : hello.PlayerName,
                     LastSeenMs = now,
+                    Capabilities = verdict.Allowed,
                 };
             }
         }
 
-        WelcomePacket welcome = new(assignedId, _sessionId, (byte)_settings.TickRate, ProtocolConstants.MaxPeers);
+        WelcomePacket welcome = new(
+            assignedId, _sessionId, (byte)_settings.TickRate, ProtocolConstants.MaxPeers, _settings.Digest);
         int length = PacketCodec.Write(_replyBuffer, welcome);
         if (length > 0)
         {

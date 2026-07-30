@@ -71,6 +71,19 @@ public interface ICoopSession : IDisposable
     /// <summary>Announces a quest journal advance. Delivered reliably.</summary>
     void SetJournalEntry(string questTag, int state);
 
+    /// <summary>
+    /// The replication channels this session is currently allowed to use, after content
+    /// compatibility with the peer(s) has been judged. Starts at <see
+    /// cref="SessionCapabilities.All"/> and narrows if a mod mismatch is detected. The
+    /// agent's pump consults this before each channel so a differently-modded pair still
+    /// plays, minus whatever their difference makes unsafe.
+    /// </summary>
+    SessionCapabilities Capabilities { get; }
+
+    /// <summary>The current compatibility verdict, for surfacing on the dashboard. Null
+    /// until a peer has been evaluated.</summary>
+    CompatibilityVerdict? Compatibility { get; }
+
     Task RunAsync(CancellationToken cancellationToken);
 }
 
@@ -85,4 +98,16 @@ public sealed record SessionSettings
     public int InterpolationDelayMs { get; init; } = ProtocolConstants.DefaultInterpolationDelayMs;
 
     public int PeerTimeoutMs { get; init; } = ProtocolConstants.PeerTimeoutMs;
+
+    /// <summary>
+    /// This install's content fingerprint, announced to the peer so a mod mismatch that
+    /// would corrupt shared state is caught at join time. Defaults to
+    /// <see cref="ContentDigest.Unknown"/> (agents without game-file access, and the mock
+    /// harness), which compares as "unchecked" and never blocks a session.
+    /// </summary>
+    public ContentDigest Digest { get; init; } = ContentDigest.Unknown;
+
+    /// <summary>Whether to admit a peer whose save differs, degrading to id-independent
+    /// channels instead of refusing. Mirrors <see cref="ContentCompatibility.AllowDifferentSave"/>.</summary>
+    public bool AllowDifferentSave { get; init; }
 }

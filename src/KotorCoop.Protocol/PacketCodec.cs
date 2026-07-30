@@ -15,6 +15,7 @@ public static class PacketCodec
         w.WriteName(packet.PlayerName);
         w.WriteString(packet.Module, ProtocolConstants.MaxModuleLength);
         w.WriteUInt32(packet.ClientNonce);
+        WriteDigest(ref w, packet.Digest);
         return w.Failed ? 0 : w.Position;
     }
 
@@ -26,7 +27,51 @@ public static class PacketCodec
         w.WriteUInt32(packet.SessionId);
         w.WriteUInt8(packet.TickRate);
         w.WriteUInt8(packet.MaxPeers);
+        WriteDigest(ref w, packet.Digest);
         return w.Failed ? 0 : w.Position;
+    }
+
+    private static void WriteDigest(ref PacketWriter w, in ContentDigest digest)
+    {
+        w.WriteUInt8(ContentDigest.CurrentScheme);
+        w.WriteUInt16(digest.KnownMask);
+        w.WriteUInt32(digest.ExeDigest);
+        w.WriteUInt32(digest.OverrideCensus);
+        w.WriteUInt16(digest.OverrideCount);
+        w.WriteUInt32(digest.TwoDaDigest);
+        w.WriteUInt32(digest.AppearanceDigest);
+        w.WriteUInt16(digest.AppearanceRows);
+        w.WriteUInt32(digest.TlkDigest);
+        w.WriteUInt32(digest.TlkEntryCount);
+        w.WriteUInt32(digest.JournalDigest);
+        w.WriteUInt32(digest.ModulesCensus);
+    }
+
+    private static ContentDigest ReadDigest(ref PacketReader r)
+    {
+        byte scheme = r.ReadUInt8();
+        ushort knownMask = r.ReadUInt16();
+        uint exe = r.ReadUInt32();
+        uint overrideCensus = r.ReadUInt32();
+        ushort overrideCount = r.ReadUInt16();
+        uint twoDa = r.ReadUInt32();
+        uint appearance = r.ReadUInt32();
+        ushort appearanceRows = r.ReadUInt16();
+        uint tlk = r.ReadUInt32();
+        uint tlkCount = r.ReadUInt32();
+        uint journal = r.ReadUInt32();
+        uint modules = r.ReadUInt32();
+
+        // An unrecognised scheme means a build we cannot interpret the fields of; treat it
+        // as "no information" rather than misreading, so it warns instead of corrupting.
+        if (scheme != ContentDigest.CurrentScheme)
+        {
+            return ContentDigest.Unknown;
+        }
+
+        return new ContentDigest(
+            knownMask, exe, overrideCensus, overrideCount, twoDa, appearance, appearanceRows,
+            tlk, tlkCount, journal, modules);
     }
 
     public static int Write(Span<byte> buffer, RejectPacket packet)
@@ -441,6 +486,29 @@ public static class PacketCodec
         return reader.Failed ? PacketType.None : type;
     }
 
+    /// <summary>
+    /// Reads magic and type WITHOUT rejecting on a version mismatch, so a peer running a
+    /// different co-op version can be answered with a typed Reject instead of silence. The
+    /// version is returned separately; <paramref name="version"/> differing from
+    /// <see cref="ProtocolConstants.Version"/> is exactly the case the strict
+    /// <see cref="PeekType"/> hides. Still returns <see cref="PacketType.None"/> for
+    /// non-ours traffic (wrong magic).
+    /// </summary>
+    public static PacketType PeekTypeAnyVersion(ReadOnlySpan<byte> buffer, out byte version)
+    {
+        PacketReader reader = new(buffer);
+        ushort magic = reader.ReadUInt16();
+        version = reader.ReadUInt8();
+        byte type = reader.ReadUInt8();
+
+        if (reader.Failed || magic != ProtocolConstants.Magic)
+        {
+            return PacketType.None;
+        }
+
+        return Enum.IsDefined((PacketType)type) ? (PacketType)type : PacketType.None;
+    }
+
     public static HelloPacket? ReadHello(ReadOnlySpan<byte> buffer)
     {
         PacketReader r = new(buffer);
@@ -452,7 +520,8 @@ public static class PacketCodec
         string name = r.ReadString();
         string module = r.ReadString();
         uint nonce = r.ReadUInt32();
-        return r.Failed ? null : new HelloPacket(name, module, nonce);
+        ContentDigest digest = ReadDigest(ref r);
+        return r.Failed ? null : new HelloPacket(name, module, nonce, digest);
     }
 
     public static WelcomePacket? ReadWelcome(ReadOnlySpan<byte> buffer)
@@ -467,7 +536,8 @@ public static class PacketCodec
         uint sessionId = r.ReadUInt32();
         byte tickRate = r.ReadUInt8();
         byte maxPeers = r.ReadUInt8();
-        return r.Failed ? null : new WelcomePacket(peerId, sessionId, tickRate, maxPeers);
+        ContentDigest digest = ReadDigest(ref r);
+        return r.Failed ? null : new WelcomePacket(peerId, sessionId, tickRate, maxPeers, digest);
     }
 
     public static RejectPacket? ReadReject(ReadOnlySpan<byte> buffer)

@@ -96,6 +96,10 @@ public class PausePumpTests
         {
         }
 
+        public SessionCapabilities Capabilities => SessionCapabilities.All;
+
+        public CompatibilityVerdict? Compatibility => null;
+
         public Task RunAsync(CancellationToken cancellationToken) => Task.CompletedTask;
 
         public void Dispose()

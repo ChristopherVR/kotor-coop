@@ -105,6 +105,10 @@ public class TravelPumpTests
 
         public void SetJournalEntry(string questTag, int state) => Journal.Merge(questTag, state);
 
+        public SessionCapabilities Capabilities { get; set; } = SessionCapabilities.All;
+
+        public CompatibilityVerdict? Compatibility => null;
+
         public Task RunAsync(CancellationToken cancellationToken) => Task.CompletedTask;
 
         public void Dispose()

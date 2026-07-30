@@ -67,7 +67,7 @@ public class PacketCodecTests
     public void HelloRoundTrips()
     {
         Span<byte> buffer = stackalloc byte[ProtocolConstants.MaxPacketSize];
-        HelloPacket original = new("Revan", "end_m01aa", 12345);
+        HelloPacket original = new("Revan", "end_m01aa", 12345, ContentDigest.Unknown);
 
         int length = PacketCodec.Write(buffer, original);
         Assert.True(length > 0);
@@ -285,11 +285,16 @@ public class PacketCodecTests
     public void WrongProtocolVersionIsRejected()
     {
         Span<byte> buffer = stackalloc byte[ProtocolConstants.MaxPacketSize];
-        int length = PacketCodec.Write(buffer, new HelloPacket("Revan", "end_m01aa", 1));
+        int length = PacketCodec.Write(buffer, new HelloPacket("Revan", "end_m01aa", 1, ContentDigest.Unknown));
 
         buffer[2] = ProtocolConstants.Version + 1;
 
         Assert.Equal(PacketType.None, PacketCodec.PeekType(buffer[..length]));
+
+        // But the lenient peek still recognises it as a Hello, so the host can answer a
+        // version-mismatched client with a typed Reject instead of silence.
+        Assert.Equal(PacketType.Hello, PacketCodec.PeekTypeAnyVersion(buffer[..length], out byte version));
+        Assert.Equal(ProtocolConstants.Version + 1, version);
     }
 
     [Fact]
@@ -308,7 +313,7 @@ public class PacketCodecTests
         Span<byte> buffer = stackalloc byte[ProtocolConstants.MaxPacketSize];
         string huge = new('x', 500);
 
-        int length = PacketCodec.Write(buffer, new HelloPacket(huge, huge, 1));
+        int length = PacketCodec.Write(buffer, new HelloPacket(huge, huge, 1, ContentDigest.Unknown));
         HelloPacket? decoded = PacketCodec.ReadHello(buffer[..length]);
 
         Assert.NotNull(decoded);
@@ -320,7 +325,7 @@ public class PacketCodecTests
     public void NonAsciiNamesSurvive()
     {
         Span<byte> buffer = stackalloc byte[ProtocolConstants.MaxPacketSize];
-        HelloPacket original = new("Zaalbaräö", "end_m01aa", 1);
+        HelloPacket original = new("Zaalbaräö", "end_m01aa", 1, ContentDigest.Unknown);
 
         int length = PacketCodec.Write(buffer, original);
         HelloPacket? decoded = PacketCodec.ReadHello(buffer[..length]);
