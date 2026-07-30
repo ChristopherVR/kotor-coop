@@ -200,6 +200,14 @@ public sealed class CoopAgent(IGameBridge bridge, ICoopSession session, AgentSet
             return;
         }
 
+        // "areaXX" is the bridge's fallback when the module NAME could not be read (a
+        // transition in flight on the host's side). It is an object id, not a module, and
+        // asking the engine to load it would fail at best. Wait for the real name.
+        if (IsFallbackModuleName(target))
+        {
+            return;
+        }
+
         long now = SessionClock.NowMs;
         if (string.Equals(target, _lastTravelRequest, StringComparison.OrdinalIgnoreCase)
             && now < _travelRetryAtMs)
@@ -213,6 +221,26 @@ public sealed class CoopAgent(IGameBridge bridge, ICoopSession session, AgentSet
             _travelRetryAtMs = now + settings.FollowRetryMs;
             Log?.Invoke($"following the host to '{target}'");
         }
+    }
+
+    /// <summary>True for "area1F"-style names: the bridge's stand-in when the real module
+    /// name was unreadable, built from an object id that names nothing on disk.</summary>
+    private static bool IsFallbackModuleName(string module)
+    {
+        if (module.Length <= 4 || !module.StartsWith("area", StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        for (int i = 4; i < module.Length; i++)
+        {
+            if (!Uri.IsHexDigit(module[i]))
+            {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     /// <summary>

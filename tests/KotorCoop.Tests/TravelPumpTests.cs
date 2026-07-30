@@ -182,6 +182,20 @@ public class TravelPumpTests
     }
 
     [Fact]
+    public void FallbackAreaNamesAreNeverFollowedInto()
+    {
+        // "area1F" is the bridge's stand-in when the host's module name was unreadable
+        // (a transition in flight); it names nothing on disk. A real module that merely
+        // starts with "area" would be fine — only the pure hex-suffix form is held back.
+        (CoopAgent agent, TravelBridge bridge, StubSession session) = Build();
+        session.Peers.Add(HostPeer("area1F"));
+
+        agent.PumpOnce();
+
+        Assert.Empty(bridge.Requests);
+    }
+
+    [Fact]
     public void NoRequestWhileTheLocalPlayerIsInDialogue()
     {
         (CoopAgent agent, TravelBridge bridge, StubSession session) = Build();
