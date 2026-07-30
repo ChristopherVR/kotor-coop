@@ -24,6 +24,7 @@ internal static unsafe class PluginHost
     private static FocusKeeper? _focus;
     private static CombatController? _combat;
     private static DoorController? _doors;
+    private static TravelController? _travel;
     private static Thread? _worker;
     private static volatile bool _running = true;
 
@@ -60,6 +61,7 @@ internal static unsafe class PluginHost
             _focus = new FocusKeeper(_view);
             _combat = new CombatController(_view);
             _doors = new DoorController(_view);
+            _travel = new TravelController(_view);
 
             // Install the frame hook from here because DirectInput8Create - our caller - is
             // verified to run on the game's main thread during startup. Installing from the
@@ -109,7 +111,7 @@ internal static unsafe class PluginHost
         Unsafe.InitBlockUnaligned(_block, 0, SharedBlock.TotalSize);
 
         _block->Magic = SharedBlock.MagicValue;
-        _block->Version = 5;
+        _block->Version = 6;
 
         // A guard dword after the version. Magic plus version alone was not selective
         // enough: a scan once matched something else at a lower address and the agent
@@ -198,6 +200,26 @@ internal static unsafe class PluginHost
             InvalidateAll("transition flushed but not taken");
         }
 
+        if (_travel is { HasPendingRequest: true } travel)
+        {
+            // A session-commanded module move. Same rule as a door transition: everything
+            // this plugin spawned must be gone before the outgoing area is stored, or it
+            // becomes a permanent resident of the saved module. One destroy per frame
+            // until clean, then the warp itself.
+            if (_controller is { } phantoms && phantoms.FlushOneBody())
+            {
+                return;
+            }
+
+            if (_items is { } items && items.FlushOneBody())
+            {
+                return;
+            }
+
+            travel.Execute();
+            return;
+        }
+
         _controller?.OnFrame();
         _items?.OnFrame();
         _combat?.OnFrame();
@@ -211,6 +233,7 @@ internal static unsafe class PluginHost
         _items?.Invalidate();
         _combat?.Invalidate();
         _doors?.Invalidate();
+        _travel?.Invalidate();
     }
 
     private static void WorkerLoop()

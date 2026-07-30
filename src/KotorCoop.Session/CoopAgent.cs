@@ -14,6 +14,18 @@ public sealed record AgentSettings
     /// meaningful position in your copy of the Endar Spire.
     /// </summary>
     public bool FilterByModule { get; init; } = true;
+
+    /// <summary>
+    /// When true, a client automatically travels to whatever module the host is in, the
+    /// way a summoned phantom follows the world's owner. The host never follows anyone —
+    /// it owns enemies and encounters, so its module is where the shared world happens.
+    /// </summary>
+    public bool FollowHostModule { get; init; } = true;
+
+    /// <summary>How long to wait before re-requesting the same module, in milliseconds.
+    /// A module load takes several seconds; re-sending during one would queue a second
+    /// transition on arrival.</summary>
+    public int FollowRetryMs { get; init; } = 15_000;
 }
 
 /// <summary>
@@ -29,6 +41,8 @@ public sealed class CoopAgent(IGameBridge bridge, ICoopSession session, AgentSet
     private readonly object _snapshotGate = new();
     private PlayerState _lastLocalState = PlayerState.Empty;
     private IReadOnlyList<RemotePeer> _lastPeers = [];
+    private string _lastTravelRequest = string.Empty;
+    private long _travelRetryAtMs;
 
     public IGameBridge Bridge => bridge;
 
@@ -131,6 +145,74 @@ public sealed class CoopAgent(IGameBridge bridge, ICoopSession session, AgentSet
         PumpEnemies();
         PumpWorldState();
         PumpDoors();
+        PumpTravel(local, peers);
+    }
+
+    /// <summary>
+    /// Keeps a client in the host's module. When the host crosses into another area, the
+    /// client warps after it through the game's own transition path; a client whose own
+    /// door leads somewhere the host is not gets brought back the same way. That is the
+    /// Souls-seamless rule — the world follows its owner — and it is one-directional by
+    /// construction, so two instances can never chase each other in a loop.
+    /// </summary>
+    private void PumpTravel(in PlayerState local, IReadOnlyList<RemotePeer> peers)
+    {
+        if (!settings.FollowHostModule
+            || session.IsEnemyAuthority
+            || !bridge.SupportsTravel
+            || local.Module.Length == 0)
+        {
+            return;
+        }
+
+        // Never yank the player out of a conversation; the module mismatch survives
+        // until the next pump anyway.
+        if (bridge.IsInDialogue)
+        {
+            return;
+        }
+
+        RemotePeer? host = null;
+        for (int i = 0; i < peers.Count; i++)
+        {
+            if (peers[i].PeerId == CoopHost.HostPeerId)
+            {
+                host = peers[i];
+                break;
+            }
+        }
+
+        string target = host?.State.Module ?? string.Empty;
+
+        if (target.Length == 0 || host!.IsInModule(local.Module))
+        {
+            // Together (or the host is unreadable): clear the debounce so the next real
+            // separation acts immediately.
+            _lastTravelRequest = string.Empty;
+            return;
+        }
+
+        // Stunt modules stage cutscenes. The host will be dumped back into a real module
+        // when its scene ends; following it in would trap this player in someone else's
+        // cinematic.
+        if (target.StartsWith("stunt", StringComparison.OrdinalIgnoreCase))
+        {
+            return;
+        }
+
+        long now = SessionClock.NowMs;
+        if (string.Equals(target, _lastTravelRequest, StringComparison.OrdinalIgnoreCase)
+            && now < _travelRetryAtMs)
+        {
+            return;
+        }
+
+        if (bridge.TryRequestTravel(target))
+        {
+            _lastTravelRequest = target;
+            _travelRetryAtMs = now + settings.FollowRetryMs;
+            Log?.Invoke($"following the host to '{target}'");
+        }
     }
 
     /// <summary>

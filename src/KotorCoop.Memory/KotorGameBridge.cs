@@ -117,8 +117,14 @@ public sealed class KotorGameBridge : IGameBridge
     private const int BlockEnemyCapacity = 32;
     private const uint EnemyFlagDead = 1;
 
-    /// <summary>16-byte signature: "KOCOOP01" + version 5 + guard 0xC0FFEE01.</summary>
-    private const string PluginSignature = "4B 4F 43 4F 4F 50 30 31 05 00 00 00 01 EE FF C0";
+    // Module travel, mirroring SharedBlock version 6.
+    private const int BlockTravelSerial = 0x920;
+    private const int BlockTravelModule = 0x924;
+    private const int BlockTravelWaypoint = 0x944;
+    private const int BlockTravelNameLength = 32;
+
+    /// <summary>16-byte signature: "KOCOOP01" + version 6 + guard 0xC0FFEE01.</summary>
+    private const string PluginSignature = "4B 4F 43 4F 4F 50 30 31 06 00 00 00 01 EE FF C0";
 
     /// <summary>Agent's view of which coop item id occupies each plugin item slot.</summary>
     private readonly uint[] _itemSlotIds = new uint[BlockItemCapacity];
@@ -1028,6 +1034,35 @@ public sealed class KotorGameBridge : IGameBridge
         // repeated every pump for a module that simply has none.
         _encounterModule = module;
         return disabled;
+    }
+
+    // ---- module travel ---------------------------------------------------------
+
+    /// <summary>Travel needs the in-process plugin: the warp is an engine call.</summary>
+    public bool SupportsTravel => _pluginBlock != 0;
+
+    /// <summary>
+    /// Asks the plugin to move this instance to another module through the engine's own
+    /// move-to-module path. Fire-and-forget: the plugin flushes everything it spawned
+    /// first (so nothing is serialised into the stored module on the way out), then the
+    /// engine's MainLoop performs the transition exactly as the shipped `warp` cheat does.
+    /// </summary>
+    public bool TryRequestTravel(string module, string waypoint = "")
+    {
+        if (_pluginBlock == 0 || string.IsNullOrEmpty(module) || module.Length >= BlockTravelNameLength)
+        {
+            return false;
+        }
+
+        bool ok = _memory.TryWriteAsciiString(_pluginBlock + BlockTravelModule, module, BlockTravelNameLength);
+        ok &= _memory.TryWriteAsciiString(_pluginBlock + BlockTravelWaypoint, waypoint, BlockTravelNameLength);
+
+        // Serial last, so the plugin never observes a half-written request. Continue from
+        // whatever the block already holds: the plugin outlives the agent, and restarting
+        // from zero would replay whichever request the previous agent left behind.
+        ok &= _memory.TryReadUInt32(_pluginBlock + BlockTravelSerial, out uint serial);
+        ok &= _memory.TryWrite(_pluginBlock + BlockTravelSerial, serial + 1);
+        return ok;
     }
 
     // ---- enemies ---------------------------------------------------------------

@@ -44,7 +44,7 @@ internal struct SharedBlock
     /// existing offset profiles keep working. The plugin control fields live AFTER that
     /// range, which is why the block is larger than the profile knows about.
     /// </summary>
-    public const int TotalSize = 0x920;
+    public const int TotalSize = 0x980;
 
     public const int ProfileVisibleSize = 0x250;
 
@@ -171,6 +171,32 @@ internal struct SharedBlock
     public const int EquipLeftWeapon = 2;
     public const int EquipCount = 3;
 
+    // ---- module travel (version 6) -----------------------------------------------
+    //
+    // Seamless travel: when the session decides this instance should follow a peer into
+    // another module, the agent writes the destination and bumps the serial. The plugin
+    // executes the move through the engine's own warp path (SetMoveToModuleString +
+    // SetMoveToModulePending, the machinery the shipped `warp` cheat uses) — after
+    // flushing everything it has spawned, because StoreCurrentModule serialises the live
+    // area on the way out and a leftover phantom would become a permanent NPC there.
+
+    /// <summary>Agent -&gt; plugin. Bumped once per travel request; written last.</summary>
+    public const int OffsetTravelSerial = 0x920;
+
+    /// <summary>Agent -&gt; plugin. Destination module name, null-terminated ascii.</summary>
+    public const int OffsetTravelModule = 0x924;
+
+    /// <summary>Agent -&gt; plugin. Optional start waypoint tag, null-terminated ascii.</summary>
+    public const int OffsetTravelWaypoint = 0x944;
+
+    /// <summary>Plugin -&gt; agent. Serial of the last request acted on.</summary>
+    public const int OffsetTravelApplied = 0x964;
+
+    /// <summary>Plugin -&gt; agent. 0 = ok, otherwise the failure code of the last request.</summary>
+    public const int OffsetTravelStatus = 0x968;
+
+    public const int TravelNameLength = 32;
+
     public const int ItemSlotCapacity = 8;
 
     public const int ItemResrefLength = 16;
@@ -193,7 +219,8 @@ internal struct SharedBlock
     /// <summary>
     /// Part of the agent's 16-byte scan signature, so bumping this intentionally severs
     /// old agents: version 2 added the ground-item slots and the appearance field,
-    /// version 3 the enemy array, version 4 the door slots.
+    /// version 3 the enemy array, version 4 the door slots, version 5 the equipment
+    /// resrefs, version 6 the module-travel request.
     /// </summary>
     [FieldOffset(0x08)] public uint Version;
     [FieldOffset(0x0C)] public uint Reserved;

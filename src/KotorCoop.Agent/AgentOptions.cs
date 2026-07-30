@@ -93,6 +93,13 @@ public sealed record AgentOptions
     /// </summary>
     public bool FilterByModule { get; init; } = true;
 
+    /// <summary>
+    /// When joining, automatically travel to whatever module the host is in — the
+    /// Souls-seamless "the world follows its owner" rule. Off with --no-follow for
+    /// deliberately split play.
+    /// </summary>
+    public bool FollowHostModule { get; init; } = true;
+
     public const string DefaultGamePath =
         @"C:\Program Files (x86)\Steam\steamapps\common\swkotor\swkotor.exe";
 
@@ -142,6 +149,7 @@ public sealed record AgentOptions
         bool useKotorBridge = false;
         int phantoms = 4;
         bool filterByModule = true;
+        bool followHostModule = true;
         string? dropFile = null;
 
         for (int i = 1; i < args.Length; i++)
@@ -222,6 +230,10 @@ public sealed record AgentOptions
                     filterByModule = false;
                     break;
 
+                case "--no-follow":
+                    followHostModule = false;
+                    break;
+
                 case "--drop-file":
                     dropFile = Next();
                     break;
@@ -264,6 +276,7 @@ public sealed record AgentOptions
             UseKotorBridge = useKotorBridge,
             Phantoms = phantoms,
             FilterByModule = filterByModule,
+            FollowHostModule = followHostModule,
             DropFile = dropFile,
         };
     }
@@ -353,6 +366,10 @@ public sealed record AgentOptions
           --port <n>           listen/target port (default 27015)
           --tick <n>           poll and network rate in Hz (default 20)
           --read-only          attach without write access
+          --no-follow          do not automatically travel to the host's module when
+                               joining. By default a client follows the host through
+                               area transitions the way a summoned phantom follows the
+                               world's owner.
           --drop-file <path>   watch this path for a drop request. Write a blueprint
                                resref into it (or create it empty for the default cycle)
                                and the item is dropped at your feet and shared with every

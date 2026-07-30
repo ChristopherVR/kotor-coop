@@ -194,6 +194,30 @@ internal sealed unsafe class SharedBlockView(byte* baseAddress)
             *(slot + 0x05) != 0);
     }
 
+    // ---- module travel ----------------------------------------------------------
+
+    /// <summary>Agent-written request serial; a request is pending while it is ahead of
+    /// <see cref="TravelApplied"/>.</summary>
+    public uint TravelSerial => *U32(SharedBlock.OffsetTravelSerial);
+
+    /// <summary>Pointer to the null-terminated destination module name (32 bytes).</summary>
+    public byte* TravelModule => baseAddress + SharedBlock.OffsetTravelModule;
+
+    /// <summary>Pointer to the null-terminated start waypoint tag (32 bytes).</summary>
+    public byte* TravelWaypoint => baseAddress + SharedBlock.OffsetTravelWaypoint;
+
+    public uint TravelApplied
+    {
+        get => *U32(SharedBlock.OffsetTravelApplied);
+        set => *U32(SharedBlock.OffsetTravelApplied) = value;
+    }
+
+    public int TravelStatus
+    {
+        get => *I32(SharedBlock.OffsetTravelStatus);
+        set => *I32(SharedBlock.OffsetTravelStatus) = value;
+    }
+
     public ItemSlotView GetItemSlot(int index) =>
         new(baseAddress + SharedBlock.OffsetItemSlots + (index * SharedBlock.ItemSlotStride));
 

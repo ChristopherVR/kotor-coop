@@ -991,6 +991,126 @@ internal static unsafe class Odyssey
         return area != 0 && *(byte*)(area + AreaTransPending) != 0;
     }
 
+    // ---- module travel -----------------------------------------------------------
+
+    // CServerExoApp::SetMoveToModuleString(CExoString*): assigns the destination module
+    // name into CServerExoAppInternal+0x10084 through CExoString::operator= (0x005E5C50),
+    // so the engine copies the characters with its own allocator — a stack-local source
+    // string is safe. Verified by disassembly against the GOG image (disk == memory).
+    private static readonly delegate* unmanaged[Thiscall]<nint, ExoString*, void> SetMoveToModuleStringFn =
+        (delegate* unmanaged[Thiscall]<nint, ExoString*, void>)0x004AECD0;
+
+    // CServerExoApp::SetMoveToModuleStartWaypoint(CExoString*): same shape, +0x1008C.
+    private static readonly delegate* unmanaged[Thiscall]<nint, ExoString*, void> SetMoveToModuleStartWaypointFn =
+        (delegate* unmanaged[Thiscall]<nint, ExoString*, void>)0x004AED30;
+
+    // CServerExoApp::SetMoveToModulePending(int): plain dword store to +0x10080. The
+    // engine's own MainLoop notices it and performs the entire transition.
+    private static readonly delegate* unmanaged[Thiscall]<nint, int, void> SetMoveToModulePendingFn =
+        (delegate* unmanaged[Thiscall]<nint, int, void>)0x004AECC0;
+
+    /// <summary>
+    /// True when the live module's name equals the given ascii name, ignoring case. Reads
+    /// the CServerInfo module-name string (the same one the epoch hashes), so it is only
+    /// meaningful while the world is stable.
+    /// </summary>
+    public static bool ModuleNameEquals(byte* ascii, int length)
+    {
+        nint server = GetServer();
+        if (server == 0)
+        {
+            return false;
+        }
+
+        nint internalServer = Deref(server + AppServerOffsetInternal);
+        if (internalServer == 0)
+        {
+            return false;
+        }
+
+        nint serverInfo = Deref(internalServer + ServerInfoOffset);
+        if (serverInfo == 0)
+        {
+            return false;
+        }
+
+        nint text = Deref(serverInfo + ServerInfoModuleName);
+        if (text == 0)
+        {
+            return false;
+        }
+
+        for (int i = 0; i < length; i++)
+        {
+            byte live = *(byte*)(text + i);
+            byte want = ascii[i];
+
+            // Fold A-Z onto a-z; module names are plain ascii resrefs.
+            if ((uint)(live - 'A') <= 'Z' - 'A')
+            {
+                live += 0x20;
+            }
+
+            if ((uint)(want - 'A') <= 'Z' - 'A')
+            {
+                want += 0x20;
+            }
+
+            if (live != want || live == 0)
+            {
+                return false;
+            }
+        }
+
+        return *(byte*)(text + length) == 0;
+    }
+
+    /// <summary>
+    /// Sends this instance to another module through the engine's own warp path: set the
+    /// destination string and optional start waypoint, then raise the pending flag. The
+    /// engine's MainLoop performs the whole transition with every invariant intact —
+    /// party collection, save-out of the old area, loading screen, entry placement —
+    /// because this is exactly what the shipped `warp` cheat calls.
+    ///
+    /// The caller must flush plugin-spawned objects FIRST: the transition stores the
+    /// outgoing area, and anything left standing becomes a permanent resident of it.
+    ///
+    /// MAIN THREAD ONLY.
+    /// </summary>
+    public static bool TravelToModule(
+        byte* moduleAscii, int moduleLength, byte* waypointAscii, int waypointLength, out int failure)
+    {
+        failure = 0;
+
+        nint server = GetServer();
+        if (server == 0)
+        {
+            failure = 1;
+            return false;
+        }
+
+        if (moduleLength <= 0)
+        {
+            failure = 2;
+            return false;
+        }
+
+        ExoString module = new() { CString = (nint)moduleAscii, Length = (uint)moduleLength };
+        SetMoveToModuleStringFn(server, &module);
+
+        // Always written, even when empty: a stale waypoint from a previous request would
+        // otherwise aim this transition at a tag that does not exist in the destination.
+        ExoString waypoint = new()
+        {
+            CString = waypointLength > 0 ? (nint)waypointAscii : 0,
+            Length = (uint)Math.Max(waypointLength, 0),
+        };
+        SetMoveToModuleStartWaypointFn(server, &waypoint);
+
+        SetMoveToModulePendingFn(server, 1);
+        return true;
+    }
+
     /// <summary>
     /// True when the server can hand back a player creature, which is the cheapest
     /// "are we actually in a world" test available.

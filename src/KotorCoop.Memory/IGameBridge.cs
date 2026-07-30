@@ -71,6 +71,16 @@ public interface IGameBridge : IDisposable
     /// </summary>
     bool TryWriteDoorStates(IReadOnlyList<KeyValuePair<uint, sbyte>> flags) => false;
 
+    /// <summary>False when this bridge cannot warp the local player between modules.</summary>
+    bool SupportsTravel => false;
+
+    /// <summary>
+    /// Sends the local player to another module through the game's own transition path.
+    /// This is what keeps a client in the host's module — travelling together is the
+    /// difference between shared co-op and two parallel campaigns.
+    /// </summary>
+    bool TryRequestTravel(string module, string waypoint = "") => false;
+
     /// <summary>False when this bridge cannot see or drive enemy health.</summary>
     bool SupportsEnemySync => false;
 

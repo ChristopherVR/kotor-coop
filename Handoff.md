@@ -8,6 +8,84 @@ no other dependencies. C# throughout.
 
 ---
 
+## 0. Addendum, session of 2026-07-30 (evening)
+
+Everything below the line was true at handoff; this section is what changed since.
+
+**Built and verified live (two GOG instances):**
+
+- **Epoch invalidation** (was 7.9's two latent bugs). `PluginHost.OnFrame` now opens with
+  `Odyssey.TryGetWorldEpoch` — gate on `loading_module == 0 && server_mode == 2`, epoch =
+  object-array pointer (replaced by `UnloadModule`) + FNV of the module name from
+  `CServerInfo+0xFC`. On change every controller's state is dropped before anything runs.
+  Pre-store flush: `CSWSModule+0x220 -> CSWSArea+0x2C4 trans_pending` opens a ~150-frame
+  window in which phantoms and replicated items are destroyed (one per frame) so
+  `StoreCurrentModule` cannot bake them into the save.
+- **The module filter now uses the real module name** (`EngineGlobals.TryReadModuleName`,
+  `serverInternal+0x10004 -> +0xFC`), not `area{id:X}` — area ids recycle across modules.
+  Side effect: KOTOR and the mock now agree on module names (trap 8 partly obsolete).
+- **Door sync, verified live** (unlock leg). Doors ride the existing reliable max-merge
+  flag channel: key `0x44<<24 | moduleHash8<<16 | objectId`, value
+  `openState(0-2, 3=destroyed) | 4 unlocked` — monotonic by construction. Agent scans the
+  `CSWSDoor` vtable `0x7498B0` (open `+0x2CC`, locked `+0x2C4`), baselines silently per
+  module, diffs. Plugin `DoorController` applies: unlock is a byte write; open goes
+  through `SetOpenState(state, deferred=1)` (verified by disasm: writes pending `+0x2CD`,
+  plays the swing via vtable `+0x7C`) with a forced `MoveToNextOpenState` (`0x589680`,
+  commits state + walkmesh) if the engine has not committed after ~3 s. Verified: unlock
+  written in instance 1 propagated and logged `door 0x46: unlocked on the session's
+  authority` in instance 2 within ~5 s. The open leg is coded but was not observed live.
+- **Client-side encounters disabled** (`active`=0 `+0x238`, `started`=1 `+0x278`,
+  vtable `0x749D98`), once per module, on every non-enemy-authority peer.
+- **Dialogue guard** (7.9 step 0) was already built and wired; confirmed present.
+- **Item drop regression-tested** on the new build: replicated in <1 s both ways.
+
+**Built after live user feedback, needs live verification:**
+
+- **Movement fidelity.** The phantom now runs when its player runs (the peer's raw
+  animation travels in the slot at `+0x1C`, previously never written; walk `0x2712` is
+  the only walking gait), goal-resend threshold dropped 2.5 -> 0.6 units with a 5-step
+  re-path cooldown, facing is mirrored on arrival, and a phantom >15 units adrift snaps
+  via `SetPosition` instead of walking a catch-up.
+- **Equipment sync v1.** `PlayerState` gained three resref strings (body armor, right
+  weapon, left weapon), read from `CSWSCreature+0xA2C -> CSWInventory` (slot pointers at
+  `+0x4 + 4*slot`: body `+0x08`, right `+0x14`, left `+0x18`; item tag lowercased as the
+  resref). The plugin equips the phantom for real: `CreateItemOnObject` (`0x52F570`) then
+  `ActionEquipItem` (`0x5355F0`, instant, OBJECT_SELF redirected), both resolved by
+  handler-address scan. Missing resref (peer has a mod we lack) fails soft at create.
+  ⚠ Untested risk: `n_commm` may lack proficiency/armor feats and refuse some equips —
+  watch for `equip: ... refused` in the plugin log; fallback is calling
+  `CSWSCreature::EquipItem` (`0x4feb90`) directly, which needs its 5 args disassembled.
+- **Shared block is now version 5** (signature `... 05 00 00 00 ...`), `TotalSize 0x920`:
+  door slots at `0x690/0x698`, equip resrefs at `0x7A0` (8 peers x 3 x 16 ascii).
+  `tools/pluginstate.ps1` now matches any version.
+
+**User direction (recorded in auto-memory too):** sync *everything* visible (equipment,
+map presence), movement must feel real-time, expect users to have mods, prefer
+game-integration over memory-editing — an in-game "Connect" main-menu flow (via 4.6's
+direct GUI-event firing plus an override `.gui` mod) should replace external menu
+clicking, and the map should show the other player (candidate: engine waypoints with map
+notes moved per-tick). NWScript has no networking, so the dinput8 plugin remains the
+backbone regardless.
+
+**New traps:**
+
+22. **A game window that has never been foreground-activated ignores all injected input**
+    — `DeactivateRenderWindow` ran `SetInputActive(0)` and nothing re-enabled it. The
+    menu renders, `GetForegroundWindow` can even report the game, clicks and hovers do
+    nothing, and no in-game cursor is rendered (that absence is the tell). Fix: a real
+    activation cycle — minimise then restore the window — then input lands. This is what
+    "cannot drive the menu: foreground pid is 0" degenerates into after a transient
+    focus failure at launch.
+23. **The game's menu cursor can be positioned by writing `CClientExoAppInternal+0x3C8/+0x3CC`
+    from outside**, then clicking with button-only `SendInput`. But hover/hit state only
+    refreshes on a real mouse-move event, so send a net-zero relative wiggle between the
+    write and the click (`scratchpad/menuclick.ps1` had this working except the final
+    hit test — untested further once minimise/restore fixed the root cause).
+24. **`Read-Host` in a non-interactive `demo.ps1` run dies instead of waiting.** The
+    script's instance-2 fallback prompt assumes a human terminal.
+
+---
+
 ## 1. Current state
 
 **Two live KOTOR instances now play co-op.** The old environmental blocker is gone: the
@@ -1335,8 +1413,14 @@ cutscene will move that instance's camera and party while the peer keeps playing
 | 29 | Doors, placeables, containers, triggers | researching |
 | 30 | Game data file readers (KEY/BIF, RIM, GFF, 2DA) | **done**: `tools\kotorfiles.py`, 4.9 |
 | 31 | World/quest globals replicated | **code done, untested in game**, 4.7 |
-| 32 | Doors / placeables / containers | designed, not built — highest-value next build, 7.9 |
-| 33 | Module transitions: epoch invalidation + pre-store flush | designed, **not built — see the two live bugs in 7.9** |
+| 32 | Doors / placeables / containers | doors **built**; unlock leg **verified live** (addendum 0); placeables/containers open |
+| 33 | Module transitions: epoch invalidation + pre-store flush | **built** (addendum 0); a real door/trigger transition not yet exercised live |
+| 36 | Freeze enemy publication during dialogue | **done** (was 7.9 step 0) |
+| 37 | Client encounters disabled | **built** (addendum 0) |
+| 38 | Movement fidelity: run gait, 0.6u resend, facing, snap | **built**, awaiting live feel-check (addendum 0) |
+| 39 | Equipment sync v1: armor + weapons on the phantom | **built**, untested live; watch for proficiency refusals (addendum 0) |
+| 40 | In-game Connect flow (plugin-driven save load, then a .gui mod) | designed; CSWGuiSaveLoad::LoadGame 0x6CB0E0, see 4.6 |
+| 41 | Map presence: peers as map-note waypoints | idea recorded, unverified |
 
 ---
 

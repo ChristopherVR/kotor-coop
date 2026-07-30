@@ -245,6 +245,7 @@ internal static class Program
         {
             PollRate = options.TickRate,
             FilterByModule = options.FilterByModule,
+            FollowHostModule = options.FollowHostModule,
         });
 
         using CancellationTokenSource cts = new();
