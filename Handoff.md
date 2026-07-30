@@ -8,6 +8,49 @@ no other dependencies. C# throughout.
 
 ---
 
+## 0a. LIVE VERIFICATION, 2026-07-31 (pids 68952 host / 54536 client, both GOG, Endar Spire)
+
+Everything below was observed in a real two-instance session, not inferred.
+
+| Capability | Result |
+| --- | --- |
+| Phantom spawn, both directions | ✅ `spawned phantom 1: id 0x12D` in both |
+| **Movement gait matches (the run fix)** | ✅ `move#1 ... -> goal (20.01,22.15) (run)` in both — previously always walked |
+| **Phantom tracking accuracy** | ✅ 2-4 units while the peer moves, **settles to 1.19 units** when they stop (was up to 2.5 + lag) |
+| **Equipment: body armour** | ✅ `equip: phantom 0x12D wears g_a_clothes01 (slot 1)` |
+| **Equipment: weapon** | ✅ `equip: phantom 0x12D wears g_w_shortswrd01 (slot 4)` |
+| Ground item drop | ✅ same object id `0x131`, same coords, 149 ms apart |
+| Door unlock replication | ✅ `door 0x43: unlocked on the session's authority`, confirmed by reading `+0x2C4` in the peer |
+| Focus keeper / auto-pause | ✅ both cleared on cue |
+
+Screenshot evidence: instance 1 renders the peer's phantom in the corridor wearing
+clothes with the short sword on its back, alongside the local PC and Trask.
+
+⚠ **The bug this run caught, and it is a big one for anyone reading inventory:
+`CSWInventory` slots hold OBJECT IDS, not pointers.** Measured live on the PC: body slot
+(`+0x08`) = `0xC9`, right weapon (`+0x14`) = `0xCA`. Dereferencing them as pointers is not
+a crash — it silently yields an empty tag for every slot, which reads exactly like "the
+player has nothing equipped", and the first live equipment run duly published three empty
+resrefs and equipped nothing. The external agent has no `GetGameObject`, so ids are
+resolved through a tag cache built by scanning the `CSWSItem` vtable `0x748DA0`
+(`KotorGameBridge.RebuildItemTagCache`).
+
+Second, smaller trap from the same run: **a `CExoString`'s length can include the
+terminating null**, so a tag arrives as `g_a_clothes01\0`. That is not a valid resref, the
+engine's `CreateItemOnObject` finds no blueprint, and the equip is refused with failure 7
+while the log line still LOOKS correct (`equip: g_a_clothes01? refused`). Resrefs are now
+truncated at the first character a resref cannot contain.
+
+Also fixed here: `tests/KotorCoop.Tests/PacketCodecTests.cs` had two `HelloPacket`
+constructions left over from before the content-digest field landed; they now pass
+`default`. 128/128 tests green.
+
+Startup note: instance 2 needed the trap-22 recovery again, and what finally worked was
+**minimise → restore → two throwaway clicks in the client area → `agent load`, all in one
+uninterrupted sequence**. Input goes stale again if anything else runs in between.
+
+---
+
 ## 0. Addendum, session of 2026-07-30 (evening)
 
 Everything below the line was true at handoff; this section is what changed since.
