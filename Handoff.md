@@ -1952,3 +1952,28 @@ Built on top of addendum 0c (party sync, password, reconnect, Connect menu):
 text coordinates (centered 0.01-scaled space, guessed), the remember-previous-frame capture
 timing vs the real message/frame order, and that the native console renders at the main menu.
 These join the existing "built, untested in game" items and task 11 (live two-instance pass).
+
+---
+
+## Addendum 0e — dialogue token + text chat (protocol v6/v7)
+
+- **Dialogue sync — host-arbitrated conversation token** (task 24, protocol v6). KOTOR
+  conversations are modal single-player; co-op needs both instances to agree on one owner or
+  two players race the plot flags a story conversation sets. `DialogueState` +
+  `DialogueArbiter` (pure, exhaustively tested): grant when free, update the spectate line
+  from the owner, ignore a contender while held (first speaker wins), release only from the
+  owner — and on owner disconnect/timeout, so a crash mid-conversation can't wedge everyone.
+  `DialogueSnapshot` (host->all, every tick) + `DialogueRequest` (peer->host each tick,
+  state-not-events). Capability bit `Dialogue` (content-independent). The agent publishes the
+  in-dialogue bit already present in `PlayerState.Flags`; dashboard shows who holds the token.
+- **Dialogue plugin work is deferred** (task 25) — see the new
+  docs/research/dialogue-sync.md (VERIFIED/INFERRED/NEEDS-LIVE tagged). Layer-1 detect is
+  static-safe; the current-entry-index field (`CSWSDialog+0x60..0x74`), the `CSWGuiDialog`
+  panel pointer, `CGuiInGame+0xB4` semantics, and a live `SelectReply 0x006A7110` round-trip
+  are all NEEDS-LIVE. Safe drive call when it's time: `CSWGuiDialog::SelectReply` (thiscall,
+  one int, verified ABI) from the SwapBuffers hook. The active `CSWSDialog*` is
+  `*(CSWSObject+0x34)`.
+- **Text chat** (protocol v7). `say <msg>` in the ~ console; the host relays in the star
+  topology; incoming lines render through the existing console reply path — no new plugin or
+  block code. Sender echoes locally, never receives its own back.
+- 196 tests pass. All builds (tests, Agent, plugin NativeAOT) clean.
