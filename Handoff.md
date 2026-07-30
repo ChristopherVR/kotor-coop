@@ -188,6 +188,37 @@ phantom.
 **Still unverified live** (needs a stable session): travel-follow, death poses, journal
 merge, client damage floors, and the pause fix above.
 
+### 0.6 Where the menu-input problem actually stands (end of the 22:30 session)
+
+The oracle in 0.5 is sound and the tooling around it is committed, but **be honest about
+the hit rate**: early in the evening two consecutive launches had live input and loaded
+first try; from ~21:55 onward *every* launch (six or more, both game directories) probed
+dead, with the main menu confirmed up and the window confirmed foreground. Three
+candidate causes were eliminated by measurement, and each elimination is worth keeping:
+
+1. **Not "probed too early."** The probe now waits for `CSWGuiMainMenu`
+   (`clientInternal + 0x280`) before judging, and a screenshot confirms the menu is
+   drawn. (This *was* a real self-inflicted bug first — it relaunched healthy instances
+   four times in a row before being fixed.)
+2. **Not "the window was in the background."** `SetForegroundWindow` is refused
+   *silently* for a detached/hidden caller, which is indistinguishable from the game
+   ignoring input; `inputalive.ps1` now forces foreground via `AttachThreadInput` + the
+   stray-ALT trick and **verifies** it, returning exit 2 ("result is not meaningful")
+   rather than a false "dead".
+3. **Not the plugin.** Dead instances behave identically with and without it (matches the
+   earlier A/B in trap 25).
+
+So the remaining suspect is genuinely inside the game's DirectInput acquisition, and the
+practical position is: **menu automation cannot be relied on at all right now**, while a
+human clicking Load Game → slot → Load still works instantly. That is the operational
+argument for finishing the in-process load path (addendum 0's `ExecuteLoadModule` route,
+which is crash-free and stalls only at the module transition) — it is not a nicety, it is
+the only unattended way in.
+
+`tools\verify.ps1` is written and ready: give it two in-world pids and it prints PASS/FAIL
+for phantom presence, the 7.4 ownership fields, appearance, the shared-pause hold/release
+across both masks, and a journal apply. It needs nothing but a session that started.
+
 ### 0.5 The menu-input oracle (this is the one to remember)
 
 Trap 25's "menu input intermittently dead" is diagnosable after all, and the diagnosis is

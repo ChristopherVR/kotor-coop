@@ -27,6 +27,33 @@ public class IA {
   [DllImport("kernel32.dll")] public static extern bool ReadProcessMemory(IntPtr h, IntPtr a, byte[] b, int n, out int r);
   [DllImport("kernel32.dll")] public static extern bool WriteProcessMemory(IntPtr h, IntPtr a, byte[] b, int n, out int w);
   [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr h);
+  [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
+  [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr h, int c);
+  [DllImport("user32.dll")] public static extern bool BringWindowToTop(IntPtr h);
+  [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr h, IntPtr pid);
+  [DllImport("user32.dll")] public static extern bool AttachThreadInput(uint from, uint to, bool attach);
+  [DllImport("kernel32.dll")] public static extern uint GetCurrentThreadId();
+  [DllImport("user32.dll")] public static extern void keybd_event(byte vk, byte scan, uint flags, IntPtr extra);
+
+  // Windows refuses SetForegroundWindow from a process that does not own the foreground,
+  // and refuses it SILENTLY — which is indistinguishable from "the game ignored us"
+  // unless the caller checks. A hidden/detached script is exactly that case. Attaching to
+  // the foreground window's input queue (plus a stray ALT, which clears the lock) is the
+  // documented way through.
+  public static bool ForceForeground(IntPtr hwnd){
+    if (GetForegroundWindow() == hwnd) return true;
+    uint fg = GetWindowThreadProcessId(GetForegroundWindow(), IntPtr.Zero);
+    uint me = GetCurrentThreadId();
+    AttachThreadInput(me, fg, true);
+    keybd_event(0x12, 0, 0, IntPtr.Zero);          // ALT down
+    keybd_event(0x12, 0, 2, IntPtr.Zero);          // ALT up
+    ShowWindow(hwnd, 9);                            // SW_RESTORE
+    BringWindowToTop(hwnd);
+    bool ok = SetForegroundWindow(hwnd);
+    AttachThreadInput(me, fg, false);
+    System.Threading.Thread.Sleep(400);
+    return GetForegroundWindow() == hwnd;
+  }
   [StructLayout(LayoutKind.Sequential)] public struct INPUT { public uint type; public MOUSEINPUT mi; public int p1, p2; }
   [StructLayout(LayoutKind.Sequential)] public struct MOUSEINPUT { public int dx, dy; public uint mouseData, dwFlags, time; public IntPtr dwExtraInfo; }
   [DllImport("user32.dll")] public static extern uint SendInput(uint n, INPUT[] i, int size);
@@ -46,10 +73,6 @@ public class IA {
 
 $proc = Get-Process -Id $ProcId -ErrorAction SilentlyContinue
 if (-not $proc) { Write-Error "process $ProcId not running"; exit 1 }
-if ($proc.MainWindowHandle -ne [IntPtr]::Zero) {
-    [IA]::SetForegroundWindow($proc.MainWindowHandle) | Out-Null
-    Start-Sleep -Milliseconds 400
-}
 
 $h = [IA]::OpenProcess(0x0438, $false, $ProcId)
 if ($h -eq [IntPtr]::Zero) { Write-Error "cannot open pid $ProcId"; exit 1 }
@@ -74,6 +97,16 @@ if (-not $mainMenu -or -not $gui) {
     [IA]::CloseHandle($h) | Out-Null
     'input probe: the main menu never came up'
     exit 1
+}
+
+# Foreground FIRST, and proven: the wiggle below is DirectInput, which only reaches a
+# foreground window. Probing a background window always reports "dead" no matter how
+# healthy the instance is.
+$proc.Refresh()
+if ($proc.MainWindowHandle -eq [IntPtr]::Zero -or -not [IA]::ForceForeground($proc.MainWindowHandle)) {
+    [IA]::CloseHandle($h) | Out-Null
+    'input probe: could not bring the game to the foreground (result is not meaningful)'
+    exit 2
 }
 
 [IA]::W32($h, $internal + 0x3C8, $X)
