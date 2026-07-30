@@ -106,6 +106,13 @@ public sealed record AgentOptions
     /// </summary>
     public bool LoadViaMenuClicks { get; init; }
 
+    /// <summary>
+    /// Admit a peer whose save differs, degrading to the mod-independent channels rather
+    /// than refusing. For deliberately split play where enemies, doors and items are not
+    /// expected to line up.
+    /// </summary>
+    public bool AllowDifferentSave { get; init; }
+
     public const string DefaultGamePath =
         @"C:\Program Files (x86)\Steam\steamapps\common\swkotor\swkotor.exe";
 
@@ -157,6 +164,7 @@ public sealed record AgentOptions
         bool filterByModule = true;
         bool followHostModule = true;
         bool loadViaMenuClicks = false;
+        bool allowDifferentSave = false;
         string? dropFile = null;
 
         for (int i = 1; i < args.Length; i++)
@@ -245,6 +253,10 @@ public sealed record AgentOptions
                     loadViaMenuClicks = true;
                     break;
 
+                case "--allow-different-save":
+                    allowDifferentSave = true;
+                    break;
+
                 case "--drop-file":
                     dropFile = Next();
                     break;
@@ -289,6 +301,7 @@ public sealed record AgentOptions
             FilterByModule = filterByModule,
             FollowHostModule = followHostModule,
             LoadViaMenuClicks = loadViaMenuClicks,
+            AllowDifferentSave = allowDifferentSave,
             DropFile = dropFile,
         };
     }
@@ -382,6 +395,10 @@ public sealed record AgentOptions
                                joining. By default a client follows the host through
                                area transitions the way a summoned phantom follows the
                                world's owner.
+          --allow-different-save  join a peer on a different save. Enemies, doors and
+                               items are not shared (their object ids would not line up),
+                               but phantoms, appearance, equipment and journal still work.
+                               Without this, a save mismatch is refused.
           --drop-file <path>   watch this path for a drop request. Write a blueprint
                                resref into it (or create it empty for the default cycle)
                                and the item is dropped at your feet and shared with every

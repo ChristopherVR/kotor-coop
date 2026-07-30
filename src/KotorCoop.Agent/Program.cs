@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using KotorCoop.Memory;
+using KotorCoop.Protocol;
 using KotorCoop.Session;
 
 namespace KotorCoop.Agent;
@@ -214,6 +215,68 @@ internal static class Program
         return new AutoTrackConsole(memory, game).Run();
     }
 
+    /// <summary>
+    /// Fingerprints the attached game's install for the compatibility handshake. Derives
+    /// the game directory from the process's own executable path, so it is correct whether
+    /// the game is GOG, Steam, or a second co-op copy. Returns <see
+    /// cref="ContentDigest.Unknown"/> if anything is unreadable — the session then treats
+    /// compatibility as unchecked rather than failing.
+    /// </summary>
+    private static ContentDigest ComputeInstallDigest(int processId)
+    {
+        try
+        {
+            using Process game = Process.GetProcessById(processId);
+            string? exePath = game.MainModule?.FileName;
+            string? gameDir = exePath is null ? null : Path.GetDirectoryName(exePath);
+
+            if (exePath is null || gameDir is null)
+            {
+                return ContentDigest.Unknown;
+            }
+
+            ContentDigest digest = InstallDigest.Compute(gameDir, exePath);
+            Console.WriteLine($"content digest: {DescribeDigest(digest)}");
+            return digest;
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"content digest unavailable ({ex.Message}); compatibility unchecked");
+            return ContentDigest.Unknown;
+        }
+    }
+
+    private static string DescribeDigest(ContentDigest d)
+    {
+        if (d.IsEmpty)
+        {
+            return "none (compatibility unchecked)";
+        }
+
+        List<string> parts = [];
+        if (d.Knows(ContentDigest.Field.Exe))
+        {
+            parts.Add($"exe {d.ExeDigest:X8}");
+        }
+
+        if (d.Knows(ContentDigest.Field.Appearance))
+        {
+            parts.Add($"{d.AppearanceRows} appearance rows");
+        }
+
+        if (d.Knows(ContentDigest.Field.Override))
+        {
+            parts.Add($"{d.OverrideCount} override file(s)");
+        }
+
+        if (d.Knows(ContentDigest.Field.Tlk))
+        {
+            parts.Add($"{d.TlkEntryCount} tlk entries");
+        }
+
+        return string.Join(", ", parts);
+    }
+
     private static async Task<int> RunAsync(AgentOptions options)
     {
         if (options.Mode == CoopMode.None)
@@ -233,11 +296,18 @@ internal static class Program
 
         Console.WriteLine(diagnostic);
 
+        // Fingerprint this install so a mod mismatch with the peer is caught at join time.
+        // Best-effort: a digest that could not be computed compares as "unchecked" and
+        // never blocks a session.
+        ContentDigest digest = ComputeInstallDigest(memory.ProcessId);
+
         SessionSettings settings = new()
         {
             PlayerName = options.Name,
             Port = options.Port,
             TickRate = options.TickRate,
+            Digest = digest,
+            AllowDifferentSave = options.AllowDifferentSave,
         };
 
         using ICoopSession session = options.Mode == CoopMode.Host
