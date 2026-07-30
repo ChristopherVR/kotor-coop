@@ -149,8 +149,9 @@ public static class ContentCompatibility
                 return Refuse(RefusalReason.SaveGame);
             }
 
-            caps &= ~(SessionCapabilities.Enemies | SessionCapabilities.Doors | SessionCapabilities.GroundItems);
-            warnings.Add("different save (allowed): enemies, doors and items are not shared");
+            caps &= ~(SessionCapabilities.Enemies | SessionCapabilities.Doors
+                | SessionCapabilities.GroundItems | SessionCapabilities.Party);
+            warnings.Add("different save (allowed): enemies, doors, items and party are not shared");
         }
         else if (moduleGitMismatch)
         {

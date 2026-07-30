@@ -36,6 +36,10 @@ public static class ProtocolConstants
     /// </summary>
     public const int MaxEnemies = 32;
 
+    /// <summary>Party companions the host replicates. KOTOR allows two active at once; a
+    /// little headroom costs nothing.</summary>
+    public const int MaxPartyMembers = 4;
+
     /// <summary>magic(2) + version(1) + type(1)</summary>
     public const int HeaderSize = 4;
 

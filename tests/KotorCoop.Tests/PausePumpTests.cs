@@ -62,6 +62,10 @@ public class PausePumpTests
 
         public void PublishWorldDigest(uint globalsCatalogue) { }
 
+        public void PublishParty(System.Collections.Generic.IReadOnlyList<PartyMemberState> members) { }
+
+        public System.Collections.Generic.IReadOnlyList<PartyMemberState> GetPartyMembers() => [];
+
         public bool IsEnemyAuthority => false;
 
         public SessionStats GetStats() => new();

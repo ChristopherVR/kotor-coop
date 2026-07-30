@@ -1440,6 +1440,165 @@ public sealed class KotorGameBridge : IGameBridge
         return ok;
     }
 
+    // ---- party companions ------------------------------------------------------
+    //
+    // The host owns the companions: its own engine AI drives them normally, and it just
+    // publishes where they are. Each client freezes its copies (solo mode) and mirrors the
+    // host's positions, so Trask/Carth are one synchronised set instead of two drifting
+    // ones. Companions are keyed by NPC ROSTER SLOT (0..8), which is identical across two
+    // instances of the same save; the runtime object id is not a reliable key here.
+
+    /// <summary>CSWPartyTable + this: companion count (max 2), then int[2] active NPC slot
+    /// indices at +0x04, int[9] spawned object id per slot at +0x0C, solo-mode flag at
+    /// +0x190. Verified by disassembly of SetSoloMode/GetNPCObject.</summary>
+    private const int PartyCount = 0x00;
+    private const int PartyActiveSlots = 0x04;
+    private const int PartyObjectIds = 0x0C;
+    private const int PartySoloMode = 0x190;
+    private const int PartyMaxCompanions = 2;
+    private const int PartyNpcSlots = 9;
+
+    private bool _partyFrozen;
+
+    public bool SupportsPartySync => _player is not null;
+
+    private bool TryGetPartyTable(out nint partyTable)
+    {
+        partyTable = 0;
+        if (!EngineGlobals.TryGetServerInternal(_memory, out nint serverInternal))
+        {
+            return false;
+        }
+
+        partyTable = serverInternal + PartyTableOffset;
+        return true;
+    }
+
+    /// <summary>
+    /// Reads the active companions and where the host's engine has them. Skips the PC (never
+    /// a companion) implicitly, because only the active NPC slots are read.
+    /// </summary>
+    public List<PartyMemberState> ReadPartyMembers()
+    {
+        List<PartyMemberState> members = [];
+
+        if (!TryGetPartyTable(out nint partyTable)
+            || !_memory.TryReadInt32(partyTable + PartyCount, out int count)
+            || count is <= 0 or > PartyMaxCompanions)
+        {
+            return members;
+        }
+
+        // Build an id -> address map once, rather than scanning per companion.
+        Dictionary<uint, nint> byId = [];
+        foreach (CreatureRef c in EnumerateCreatures())
+        {
+            byId[c.ObjectId] = c.Address;
+        }
+
+        for (int i = 0; i < count; i++)
+        {
+            if (!_memory.TryReadInt32(partyTable + PartyActiveSlots + (i * 4), out int slot)
+                || slot is < 0 or >= PartyNpcSlots)
+            {
+                continue;
+            }
+
+            if (!_memory.TryReadUInt32(partyTable + PartyObjectIds + (slot * 4), out uint objectId)
+                || objectId == 0x7F000000
+                || !byId.TryGetValue(objectId, out nint creature))
+            {
+                continue;
+            }
+
+            if (!TryReadVector(creature + OffPosition, out Vector3f position))
+            {
+                continue;
+            }
+
+            float facing = 0f;
+            if (TryReadVector(creature + OffOrientation, out Vector3f orientation))
+            {
+                facing = Angles.Normalize(MathF.Atan2(orientation.Y, orientation.X));
+            }
+
+            _memory.TryReadUInt32(creature + OffAnimation, out uint animation);
+            int health = _memory.TryRead(creature + OffCurrentHitPoints, out short hp) ? hp : 0;
+
+            members.Add(new PartyMemberState((byte)slot, position, facing, animation, health));
+        }
+
+        return members;
+    }
+
+    /// <summary>
+    /// Freezes the local party AI (solo mode) and mirrors the host's companions onto the
+    /// matching local creatures by slot. With the AI frozen nothing else drives the
+    /// companion, so an external position write sticks (see docs/re trap 3).
+    /// </summary>
+    public int TryWritePartyMembers(IReadOnlyList<PartyMemberState> members)
+    {
+        if (!TryGetPartyTable(out nint partyTable))
+        {
+            return 0;
+        }
+
+        // Hold solo mode every pass — the engine clears it when the last companion leaves,
+        // and the party AI script checks it to decide whether to issue follow orders.
+        _memory.TryWrite<byte>(partyTable + PartySoloMode, 1);
+        _partyFrozen = true;
+
+        if (members.Count == 0)
+        {
+            return 0;
+        }
+
+        Dictionary<uint, nint> byId = [];
+        foreach (CreatureRef c in EnumerateCreatures())
+        {
+            byId[c.ObjectId] = c.Address;
+        }
+
+        int placed = 0;
+        foreach (PartyMemberState m in members)
+        {
+            if (m.SlotIndex >= PartyNpcSlots
+                || !_memory.TryReadUInt32(partyTable + PartyObjectIds + (m.SlotIndex * 4), out uint objectId)
+                || objectId == 0x7F000000
+                || !byId.TryGetValue(objectId, out nint creature))
+            {
+                continue;
+            }
+
+            // Mirror position, facing (as an orientation vector), animation and health.
+            _memory.TryWrite(creature + OffPosition, m.Position.X);
+            _memory.TryWrite(creature + OffPosition + 4, m.Position.Y);
+            _memory.TryWrite(creature + OffPosition + 8, m.Position.Z);
+
+            _memory.TryWrite(creature + OffOrientation, MathF.Cos(m.Facing));
+            _memory.TryWrite(creature + OffOrientation + 4, MathF.Sin(m.Facing));
+
+            _memory.TryWrite(creature + OffAnimation, m.Animation);
+            if (m.Health > 0)
+            {
+                _memory.TryWrite<short>(creature + OffCurrentHitPoints, (short)Math.Min(m.Health, short.MaxValue));
+            }
+
+            placed++;
+        }
+
+        return placed;
+    }
+
+    public void ReleasePartyFreeze()
+    {
+        if (_partyFrozen && TryGetPartyTable(out nint partyTable))
+        {
+            _memory.TryWrite<byte>(partyTable + PartySoloMode, 0);
+            _partyFrozen = false;
+        }
+    }
+
     private bool TryReadFaction(nint creature, out int faction)
     {
         faction = -1;

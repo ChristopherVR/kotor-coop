@@ -82,4 +82,11 @@ public enum PacketType : byte
     /// refines the negotiated capabilities.
     /// </summary>
     WorldDigest = 23,
+
+    /// <summary>
+    /// host -> clients: the authoritative party companions, each keyed by NPC slot,
+    /// broadcast each tick. The host owns them; clients freeze their own copies and mirror
+    /// these so companions do not drift into two versions.
+    /// </summary>
+    PartySnapshot = 24,
 }

@@ -26,6 +26,13 @@ public sealed record AgentSettings
     /// A module load takes several seconds; re-sending during one would queue a second
     /// transition on arrival.</summary>
     public int FollowRetryMs { get; init; } = 15_000;
+
+    /// <summary>
+    /// When true, the party companions are reconciled: the host drives them and clients
+    /// freeze and mirror. Uses the engine's solo-mode flag, whose full behaviour is
+    /// inferred rather than measured, so it is an escape-hatchable default.
+    /// </summary>
+    public bool SyncParty { get; init; } = true;
 }
 
 /// <summary>
@@ -96,6 +103,10 @@ public sealed class CoopAgent(IGameBridge bridge, ICoopSession session, AgentSet
         {
         }
 
+        // Undo the party freeze so a single-player continuation is normal — leaving solo
+        // mode set would give the player companions that will not follow, with no cause.
+        bridge.ReleasePartyFreeze();
+
         await sessionTask.ConfigureAwait(false);
     }
 
@@ -161,11 +172,39 @@ public sealed class CoopAgent(IGameBridge bridge, ICoopSession session, AgentSet
 
         PumpItems(local, caps);
         PumpEnemies(local, caps);
+        PumpParty(caps);
         PumpWorldState(caps);
         PumpJournal(caps);
         PumpDoors(caps);
         PumpTravel(local, peers);
         PumpPause(peers);
+    }
+
+    /// <summary>
+    /// Keeps the party companions single and coherent. The host owns them — its own engine
+    /// AI drives Trask/Carth normally, and it just publishes where they are. Every client
+    /// freezes its own copies (solo mode) and mirrors the host's, so the companions are one
+    /// synchronised set rather than two that drift apart. Host-authoritative, so exactly one
+    /// instance's AI is ever in charge.
+    /// </summary>
+    private void PumpParty(SessionCapabilities caps)
+    {
+        if (!settings.SyncParty || !bridge.SupportsPartySync || (caps & SessionCapabilities.Party) == 0)
+        {
+            return;
+        }
+
+        if (session.IsEnemyAuthority)
+        {
+            // The host: publish, do not freeze. Its companions follow through the game's
+            // own AI exactly as in single-player.
+            session.PublishParty(bridge.ReadPartyMembers());
+            return;
+        }
+
+        // A client: freeze the local party AI and mirror the host's companions. The freeze
+        // is re-asserted inside TryWritePartyMembers every pass.
+        bridge.TryWritePartyMembers(session.GetPartyMembers());
     }
 
     /// <summary>

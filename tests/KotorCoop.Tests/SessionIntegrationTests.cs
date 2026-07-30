@@ -295,6 +295,48 @@ public class SessionIntegrationTests
     }
 
     [Fact]
+    public async Task TheHostsPartyReachesTheClient()
+    {
+        using CoopHost host = new(new SessionSettings { PlayerName = "Revan", Port = 0, TickRate = 30 });
+        using CoopClient client = new(
+            new SessionSettings { PlayerName = "Malak", TickRate = 30 },
+            new IPEndPoint(IPAddress.Loopback, host.ListenEndPoint.Port));
+
+        using CancellationTokenSource cts = new(Timeout + TimeSpan.FromSeconds(10));
+        Task hostTask = host.RunAsync(cts.Token);
+        Task clientTask = client.RunAsync(cts.Token);
+
+        PlayerState state = new(Vector3f.Zero, 0f, "end_m01aa", 100, 0);
+        List<PartyMemberState> party =
+        [
+            new PartyMemberState(0, new Vector3f(5f, 6f, -1f), 0.5f, 0x2712, 20),
+        ];
+
+        void Publish()
+        {
+            host.PublishLocalState(state);
+            client.PublishLocalState(state);
+            host.PublishParty(party);
+        }
+
+        Assert.True(await WaitForAsync(() => client.IsConnected, Timeout, Publish));
+
+        Assert.True(
+            await WaitForAsync(
+                () => client.GetPartyMembers().Any(m => m.SlotIndex == 0 && m.Position.X == 5f),
+                Timeout,
+                Publish),
+            "the host's party never reached the client");
+
+        // A client is never authoritative for the party, so its own publish is dropped.
+        client.PublishParty([new PartyMemberState(7, Vector3f.Zero, 0f, 0, 0)]);
+        Assert.DoesNotContain(host.GetPartyMembers(), m => m.SlotIndex == 7);
+
+        await cts.CancelAsync();
+        await Task.WhenAll(hostTask, clientTask);
+    }
+
+    [Fact]
     public async Task ClientEnemyReportsReachTheHost()
     {
         using CoopHost host = new(new SessionSettings { PlayerName = "Revan", Port = 0, TickRate = 30 });

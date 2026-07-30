@@ -149,6 +149,21 @@ public sealed class CoopClient : ICoopSession
 
     private IReadOnlyList<EnemyState> _enemies = [];
 
+    private IReadOnlyList<PartyMemberState> _party = [];
+
+    public void PublishParty(IReadOnlyList<PartyMemberState> members)
+    {
+        // Only the host is authoritative for the party; a client's own view is dropped.
+    }
+
+    public IReadOnlyList<PartyMemberState> GetPartyMembers()
+    {
+        lock (_gate)
+        {
+            return _party;
+        }
+    }
+
     public void ReportEnemies(string module, IReadOnlyList<EnemyState> enemies)
     {
         if (_localPeerId == 0 || enemies.Count == 0)
@@ -531,6 +546,17 @@ public sealed class CoopClient : ICoopSession
                 {
                     _hostWorldGlobals = hostDigest.GlobalsCatalogue;
                     RefineCompatibility();
+                }
+
+                break;
+
+            case PacketType.PartySnapshot:
+                if (PacketCodec.ReadPartySnapshot(span) is { } party)
+                {
+                    lock (_gate)
+                    {
+                        _party = party.Members;
+                    }
                 }
 
                 break;

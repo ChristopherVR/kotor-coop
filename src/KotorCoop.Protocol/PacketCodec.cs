@@ -351,6 +351,64 @@ public static class PacketCodec
         return new EnemyReportPacket(peerId, module, enemies);
     }
 
+    public static int Write(Span<byte> buffer, PartySnapshotPacket packet)
+    {
+        PacketWriter w = new(buffer);
+        w.WriteHeader(PacketType.PartySnapshot);
+        w.WriteInt64(packet.ServerTimeMs);
+
+        int count = Math.Min(packet.Members.Count, ProtocolConstants.MaxPartyMembers);
+        w.WriteUInt8((byte)count);
+
+        for (int i = 0; i < count; i++)
+        {
+            PartyMemberState m = packet.Members[i];
+            w.WriteUInt8(m.SlotIndex);
+            w.WriteVector3(m.Position);
+            w.WriteSingle(m.Facing);
+            w.WriteUInt32(m.Animation);
+            w.WriteInt32(m.Health);
+        }
+
+        return w.Failed ? 0 : w.Position;
+    }
+
+    public static PartySnapshotPacket? ReadPartySnapshot(ReadOnlySpan<byte> buffer)
+    {
+        PacketReader r = new(buffer);
+        if (r.ReadHeader() != PacketType.PartySnapshot)
+        {
+            return null;
+        }
+
+        long serverTime = r.ReadInt64();
+        byte count = r.ReadUInt8();
+
+        if (r.Failed || count > ProtocolConstants.MaxPartyMembers)
+        {
+            return null;
+        }
+
+        List<PartyMemberState> members = new(count);
+        for (int i = 0; i < count; i++)
+        {
+            byte slot = r.ReadUInt8();
+            Vector3f position = r.ReadVector3();
+            float facing = r.ReadSingle();
+            uint animation = r.ReadUInt32();
+            int health = r.ReadInt32();
+
+            if (r.Failed)
+            {
+                return null;
+            }
+
+            members.Add(new PartyMemberState(slot, position, facing, animation, health));
+        }
+
+        return new PartySnapshotPacket(serverTime, members);
+    }
+
     public static int Write(Span<byte> buffer, WorldDigestPacket packet)
     {
         PacketWriter w = new(buffer);

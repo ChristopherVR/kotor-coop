@@ -125,6 +125,27 @@ public interface IGameBridge : IDisposable
     /// </summary>
     bool TryWriteEnemies(IReadOnlyList<EnemyState> enemies) => false;
 
+    /// <summary>False when this bridge cannot see or drive party companions.</summary>
+    bool SupportsPartySync => false;
+
+    /// <summary>
+    /// Host side: reads the active party companions (keyed by NPC slot), whose movement
+    /// the host's own engine AI drives. The client mirrors these.
+    /// </summary>
+    List<PartyMemberState> ReadPartyMembers() => [];
+
+    /// <summary>
+    /// Client side: freezes the local party AI (solo mode) so companions do not follow or
+    /// act on their own, then mirrors the host's companions onto the matching local
+    /// creatures by slot. Returns how many were placed. The local PC — even if it is a
+    /// companion the player took control of after a death — is never mirrored.
+    /// </summary>
+    int TryWritePartyMembers(IReadOnlyList<PartyMemberState> members) => 0;
+
+    /// <summary>Client side: releases the solo-mode freeze this bridge asserted, so a
+    /// single-player continuation after the session is normal. Called on shutdown.</summary>
+    void ReleasePartyFreeze() { }
+
     /// <summary>
     /// Enemy-authority side only: lowers own enemies to a peer's reported health where
     /// the peer's is lower. This is what makes a client's damage real. Returns how many

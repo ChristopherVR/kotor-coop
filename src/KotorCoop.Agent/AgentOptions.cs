@@ -117,6 +117,10 @@ public sealed record AgentOptions
     /// presents it when joining. Empty is an open session.</summary>
     public string Password { get; init; } = string.Empty;
 
+    /// <summary>Reconcile party companions (host drives, clients freeze and mirror). Off
+    /// with --no-party-sync for split play or if solo mode misbehaves live.</summary>
+    public bool SyncParty { get; init; } = true;
+
     public const string DefaultGamePath =
         @"C:\Program Files (x86)\Steam\steamapps\common\swkotor\swkotor.exe";
 
@@ -170,6 +174,7 @@ public sealed record AgentOptions
         bool loadViaMenuClicks = false;
         bool allowDifferentSave = false;
         string password = string.Empty;
+        bool syncParty = true;
         string? dropFile = null;
 
         for (int i = 1; i < args.Length; i++)
@@ -266,6 +271,10 @@ public sealed record AgentOptions
                     password = Next() ?? password;
                     break;
 
+                case "--no-party-sync":
+                    syncParty = false;
+                    break;
+
                 case "--drop-file":
                     dropFile = Next();
                     break;
@@ -312,6 +321,7 @@ public sealed record AgentOptions
             LoadViaMenuClicks = loadViaMenuClicks,
             AllowDifferentSave = allowDifferentSave,
             Password = password,
+            SyncParty = syncParty,
             DropFile = dropFile,
         };
     }
@@ -409,6 +419,10 @@ public sealed record AgentOptions
                                password may join; on --join, the password to present.
                                A dropped client rejoins automatically when the link
                                returns, keeping its slot.
+          --no-party-sync      do not reconcile the party. By default the host drives the
+                               companions (Trask, Carth...) and clients freeze their own
+                               copies and mirror the host's, so companions stay one
+                               synchronised set instead of two that drift.
           --allow-different-save  join a peer on a different save. Enemies, doors and
                                items are not shared (their object ids would not line up),
                                but phantoms, appearance, equipment and journal still work.

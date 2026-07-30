@@ -105,6 +105,10 @@ public class TravelPumpTests
 
         public void PublishWorldDigest(uint globalsCatalogue) { }
 
+        public void PublishParty(System.Collections.Generic.IReadOnlyList<PartyMemberState> members) { }
+
+        public System.Collections.Generic.IReadOnlyList<PartyMemberState> GetPartyMembers() => [];
+
         public void SetJournalEntry(string questTag, int state) => Journal.Merge(questTag, state);
 
         public SessionCapabilities Capabilities { get; set; } = SessionCapabilities.All;

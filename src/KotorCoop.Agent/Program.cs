@@ -320,6 +320,7 @@ internal static class Program
             PollRate = options.TickRate,
             FilterByModule = options.FilterByModule,
             FollowHostModule = options.FollowHostModule,
+            SyncParty = options.SyncParty,
         });
 
         using CancellationTokenSource cts = new();

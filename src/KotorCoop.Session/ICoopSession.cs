@@ -73,6 +73,12 @@ public interface ICoopSession : IDisposable
     /// </summary>
     void PublishWorldDigest(uint globalsCatalogue);
 
+    /// <summary>Host only: publish the authoritative party companions. Ignored on a client.</summary>
+    void PublishParty(IReadOnlyList<PartyMemberState> members);
+
+    /// <summary>Client only: the host's latest party companions. Empty on the host.</summary>
+    IReadOnlyList<PartyMemberState> GetPartyMembers();
+
     /// <summary>The shared quest journal, merged upward across every player.</summary>
     JournalStore Journal { get; }
 

@@ -57,6 +57,24 @@ public class PacketCodecTests
     }
 
     [Fact]
+    public void PartySnapshotRoundTrips()
+    {
+        Span<byte> buffer = stackalloc byte[ProtocolConstants.MaxPacketSize];
+        PartySnapshotPacket original = new(999L,
+        [
+            new PartyMemberState(0, new Vector3f(10f, 20f, -1f), 1.5f, 0x2712, 25),
+            new PartyMemberState(3, new Vector3f(-4f, 8f, 0f), -2.1f, 0x2714, 12),
+        ]);
+
+        int length = PacketCodec.Write(buffer, original);
+        PartySnapshotPacket? decoded = PacketCodec.ReadPartySnapshot(buffer[..length]);
+
+        Assert.NotNull(decoded);
+        Assert.Equal(999L, decoded.ServerTimeMs);
+        Assert.Equal(original.Members, decoded.Members);
+    }
+
+    [Fact]
     public void EnemyReportRoundTrips()
     {
         Span<byte> buffer = stackalloc byte[ProtocolConstants.MaxPacketSize];

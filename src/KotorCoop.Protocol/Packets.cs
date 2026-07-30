@@ -96,6 +96,22 @@ public sealed record EnemyState(uint ObjectId, ushort CurrentHealth, ushort MaxH
 public sealed record EnemySnapshotPacket(long ServerTimeMs, IReadOnlyList<EnemyState> Enemies);
 
 /// <summary>
+/// One party companion as the host sees it. Keyed by <paramref name="SlotIndex"/> (the
+/// NPC roster slot, 0..8) rather than an object id, because the slot is identical across
+/// two instances of the same save while the runtime id is not. Absolute position, so a
+/// lost packet is superseded next tick.
+/// </summary>
+public readonly record struct PartyMemberState(
+    byte SlotIndex, Vector3f Position, float Facing, uint Animation, int Health);
+
+/// <summary>
+/// The host's authoritative party. In co-op the host owns the companions (its own engine
+/// AI drives them); every client freezes its own copies (solo mode) and mirrors these, so
+/// Trask and Carth do not drift into two uncoordinated versions.
+/// </summary>
+public sealed record PartySnapshotPacket(long ServerTimeMs, IReadOnlyList<PartyMemberState> Members);
+
+/// <summary>
 /// A client's local view of enemy health, sent each tick, unreliable. The module rides
 /// along because enemy object ids reset across transitions — the host must never apply
 /// a report from a client standing in a different (or stale) module.

@@ -119,6 +119,18 @@ public sealed class CoopHost : ICoopSession
 
     private IReadOnlyList<EnemyState> _enemies = [];
 
+    private IReadOnlyList<PartyMemberState> _party = [];
+
+    public void PublishParty(IReadOnlyList<PartyMemberState> members)
+    {
+        lock (_gate)
+        {
+            _party = members;
+        }
+    }
+
+    public IReadOnlyList<PartyMemberState> GetPartyMembers() => [];
+
     /// <summary>Latest enemy report per client, so a client's damage can be merged in.</summary>
     private sealed record EnemyReport(string Module, IReadOnlyList<EnemyState> Enemies, long ReceivedMs);
 
@@ -310,6 +322,7 @@ public sealed class CoopHost : ICoopSession
         }
 
         BroadcastEnemies(now, recipients);
+        BroadcastParty(now, recipients);
         BroadcastWorldDigest(now, recipients);
         _buffer.PruneStale(now, _settings.PeerTimeoutMs);
     }
@@ -334,6 +347,36 @@ public sealed class CoopHost : ICoopSession
         }
 
         int length = PacketCodec.Write(_sendBuffer, new EnemySnapshotPacket(now, enemies));
+        if (length == 0)
+        {
+            return;
+        }
+
+        foreach (PeerConnection peer in recipients)
+        {
+            _channel.Send(peer.EndPoint, _sendBuffer.AsSpan(0, length));
+        }
+    }
+
+    /// <summary>
+    /// Sends the authoritative party companions. Unreliable and repeated every tick, like
+    /// the enemy snapshot: the host owns companion movement through its own engine AI, and
+    /// each client mirrors this onto its frozen copies.
+    /// </summary>
+    private void BroadcastParty(long now, List<PeerConnection> recipients)
+    {
+        IReadOnlyList<PartyMemberState> party;
+        lock (_gate)
+        {
+            party = _party;
+        }
+
+        if (party.Count == 0 || recipients.Count == 0)
+        {
+            return;
+        }
+
+        int length = PacketCodec.Write(_sendBuffer, new PartySnapshotPacket(now, party));
         if (length == 0)
         {
             return;

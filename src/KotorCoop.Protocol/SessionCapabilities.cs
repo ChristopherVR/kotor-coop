@@ -45,5 +45,9 @@ public enum SessionCapabilities
     /// so a difference only means some items silently do not appear.</summary>
     Equipment = 1 << 7,
 
-    All = Phantoms | WorldState | Doors | Enemies | GroundItems | Journal | Appearance | Equipment,
+    /// <summary>Host-authoritative party companions mirrored onto the client's frozen
+    /// copies. Keyed by NPC slot, so it needs the same save (dropped on a save mismatch).</summary>
+    Party = 1 << 8,
+
+    All = Phantoms | WorldState | Doors | Enemies | GroundItems | Journal | Appearance | Equipment | Party,
 }
