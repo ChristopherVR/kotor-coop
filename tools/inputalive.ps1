@@ -54,14 +54,25 @@ if ($proc.MainWindowHandle -ne [IntPtr]::Zero) {
 $h = [IA]::OpenProcess(0x0438, $false, $ProcId)
 if ($h -eq [IntPtr]::Zero) { Write-Error "cannot open pid $ProcId"; exit 1 }
 
-$appMgr = [IA]::U32($h, 0x7A39FC)
-$client = if ($appMgr) { [IA]::U32($h, $appMgr + 4) } else { 0 }
-$internal = if ($client) { [IA]::U32($h, $client + 4) } else { 0 }
-$gui = [IA]::U32($h, 0x7A39F4)
+# WAIT FOR THE MENU FIRST. The window exists many seconds before the main menu does (the
+# logo movies play in between), and probing during them reports hover 0 for the entirely
+# innocent reason that there are no controls yet — which reads exactly like dead input
+# and gets a healthy instance relaunched forever. CSWGuiMainMenu at
+# CClientExoAppInternal + 0x280 is null until the menu is really up.
+$deadline = (Get-Date).AddSeconds(120)
+do {
+    $appMgr = [IA]::U32($h, 0x7A39FC)
+    $client = if ($appMgr) { [IA]::U32($h, $appMgr + 4) } else { 0 }
+    $internal = if ($client) { [IA]::U32($h, $client + 4) } else { 0 }
+    $mainMenu = if ($internal) { [IA]::U32($h, $internal + 0x280) } else { 0 }
+    $gui = [IA]::U32($h, 0x7A39F4)
+    if ($mainMenu -and $gui) { break }
+    Start-Sleep -Milliseconds 750
+} while ((Get-Date) -lt $deadline)
 
-if (-not $internal -or -not $gui) {
+if (-not $mainMenu -or -not $gui) {
     [IA]::CloseHandle($h) | Out-Null
-    'input probe: client not up yet'
+    'input probe: the main menu never came up'
     exit 1
 }
 
