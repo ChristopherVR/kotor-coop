@@ -30,6 +30,7 @@ internal static unsafe class PluginHost
     private static MapMarkerController? _mapMarkers;
     private static MenuLoadController? _menuLoad;
     private static ConnectMenuController? _connectMenu;
+    private static ConsoleController? _console;
     private static Thread? _worker;
     private static volatile bool _running = true;
 
@@ -54,6 +55,10 @@ internal static unsafe class PluginHost
 
             Log($"=== KotorCoop plugin loaded into pid {NativeMethods.GetCurrentProcessId()} ===");
 
+            // The in-game ~ console needs the engine's dev console, which is gated by
+            // EnableCheats in swkotor.ini. Enabling it is the game's own sanctioned surface.
+            EnsureCheatsEnabled(directory);
+
             if (!AllocateBlock())
             {
                 Log("FATAL: could not allocate the shared block");
@@ -69,6 +74,7 @@ internal static unsafe class PluginHost
             _travel = new TravelController(_view);
             _menuLoad = new MenuLoadController(_view);
             _connectMenu = new ConnectMenuController(_view);
+            _console = new ConsoleController(_view);
             _pause = new PauseController(_view);
             _journal = new JournalController(_view);
             _mapMarkers = new MapMarkerController(_view);
@@ -154,10 +160,11 @@ internal static unsafe class PluginHost
     private static void OnFrame()
     {
         // Before the epoch gate, deliberately: these run at the main menu, which is exactly
-        // where the gate returns early (no server) — the menu-load replay and the Co-op
-        // button both live there.
+        // where the gate returns early (no server) — the menu-load replay, the Co-op button
+        // and the ~ console all work at the menu as well as in-world.
         _menuLoad?.OnFrame();
         _connectMenu?.OnFrame();
+        _console?.OnFrame();
 
         if (!Odyssey.TryGetWorldEpoch(out ulong epoch))
         {
@@ -268,6 +275,7 @@ internal static unsafe class PluginHost
         _journal?.Invalidate();
         _mapMarkers?.Invalidate();
         _connectMenu?.Invalidate();
+        _console?.Invalidate();
     }
 
     private static void WorkerLoop()
@@ -338,6 +346,76 @@ internal static unsafe class PluginHost
         {
             char c = value[i];
             field[i] = c is >= (char)0x20 and <= (char)0x7E ? (byte)c : (byte)'?';
+        }
+    }
+
+    /// <summary>
+    /// Ensures <c>[Game Options] EnableCheats=1</c> in swkotor.ini so the grave/tilde key
+    /// opens the engine's developer console (which the co-op ~ overlay reads). Idempotent and
+    /// conservative: it touches only that one key, and does nothing if the ini is absent
+    /// (the game recreates it with cheats off, but never silently — the log says so).
+    /// </summary>
+    private static void EnsureCheatsEnabled(string directory)
+    {
+        try
+        {
+            string path = Path.Combine(directory, "swkotor.ini");
+            if (!File.Exists(path))
+            {
+                Log("swkotor.ini not found; set [Game Options] EnableCheats=1 to use the ~ console");
+                return;
+            }
+
+            List<string> lines = [.. File.ReadAllLines(path)];
+            int section = -1;
+            int keyLine = -1;
+
+            for (int i = 0; i < lines.Count; i++)
+            {
+                string trimmed = lines[i].Trim();
+                if (trimmed.StartsWith('[') && trimmed.EndsWith(']'))
+                {
+                    if (trimmed.Equals("[Game Options]", StringComparison.OrdinalIgnoreCase))
+                    {
+                        section = i;
+                    }
+                    else if (section >= 0 && keyLine < 0)
+                    {
+                        break; // left the section without finding the key
+                    }
+                }
+                else if (section >= 0 && trimmed.StartsWith("EnableCheats", StringComparison.OrdinalIgnoreCase))
+                {
+                    keyLine = i;
+                    break;
+                }
+            }
+
+            if (keyLine >= 0)
+            {
+                if (lines[keyLine].Trim().EndsWith('1'))
+                {
+                    return; // already enabled
+                }
+
+                lines[keyLine] = "EnableCheats=1";
+            }
+            else if (section >= 0)
+            {
+                lines.Insert(section + 1, "EnableCheats=1");
+            }
+            else
+            {
+                lines.Add("[Game Options]");
+                lines.Add("EnableCheats=1");
+            }
+
+            File.WriteAllLines(path, lines);
+            Log("enabled the developer console in swkotor.ini ([Game Options] EnableCheats=1)");
+        }
+        catch (Exception ex)
+        {
+            Log($"could not enable cheats in swkotor.ini: {ex.Message}");
         }
     }
 

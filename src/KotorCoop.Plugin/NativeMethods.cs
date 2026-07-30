@@ -36,6 +36,17 @@ internal static partial class NativeMethods
     [LibraryImport("kernel32.dll")]
     public static partial uint GetCurrentProcessId();
 
+    /// <summary>Virtual-key codes used by the console overlay's edge detection.</summary>
+    public const int VkReturn = 0x0D;
+
+    /// <summary>
+    /// Physical key state, independent of the message queue. The high bit is set while the
+    /// key is down. Used only to detect the Enter that submits a console line — reads no
+    /// engine state and cannot affect the game.
+    /// </summary>
+    [LibraryImport("user32.dll")]
+    public static partial short GetAsyncKeyState(int virtualKey);
+
     public static unsafe string GetSystemDirectoryPath()
     {
         char* buffer = stackalloc char[512];

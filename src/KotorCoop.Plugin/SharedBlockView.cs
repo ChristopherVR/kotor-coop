@@ -324,6 +324,25 @@ internal sealed unsafe class SharedBlockView(byte* baseAddress)
     /// <summary>Pointer to the null-terminated status reply for the console (96 bytes).</summary>
     public byte* ConsoleReply => baseAddress + SharedBlock.OffsetConsoleReply;
 
+    /// <summary>
+    /// Copies a null-terminated ASCII command line into the console channel and bumps the
+    /// serial, so the agent picks it up exactly once. <paramref name="length"/> is clamped to
+    /// leave room for the terminator.
+    /// </summary>
+    public void PublishConsoleCommand(byte* source, int length)
+    {
+        byte* dest = ConsoleCommand;
+        int count = Math.Clamp(length, 0, SharedBlock.ConsoleCommandLength - 1);
+
+        for (int i = 0; i < count; i++)
+        {
+            dest[i] = source[i];
+        }
+
+        dest[count] = 0;
+        ConsoleSerial++;
+    }
+
     public ItemSlotView GetItemSlot(int index) =>
         new(baseAddress + SharedBlock.OffsetItemSlots + (index * SharedBlock.ItemSlotStride));
 

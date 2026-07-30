@@ -1188,6 +1188,69 @@ internal static unsafe class Odyssey
         destructor(waypoint, 1);
     }
 
+    // ---- developer console -------------------------------------------------------
+
+    // The retail build still links the whole Aurora developer console. These are its live
+    // globals (see docs/research/console-overlay.md): the open flag, the command-line buffer
+    // it edits as the player types, and the caret index into that buffer.
+    private const nint ConsoleOpenFlagPtr = 0x007A3A40;
+    private const nint ConsoleBufferPtr = 0x007A3A4C;
+    private const nint ConsoleCaretPtr = 0x007A3A44;
+
+    /// <summary>Capacity of the engine's console command buffer (null-terminated, cap 500).</summary>
+    private const int ConsoleBufferCapacity = 0x1F4;
+
+    // Global::PrintStringScreenPos_UseTextureFont(str, x, y) — cdecl, caller-cleaned. It is
+    // self-contained: it saves/restores GL state, sets its own ortho from the live viewport
+    // and draws through the global texture font, so it needs no GUI control tree. x/y are in
+    // a centered, 0.01-scaled space (roughly screen-percent from the middle).
+    private static readonly delegate* unmanaged[Cdecl]<byte*, float, float, void> PrintStringScreenPosFn =
+        (delegate* unmanaged[Cdecl]<byte*, float, float, void>)0x0044CCA0;
+
+    /// <summary>True while the native developer console is open (grave/tilde toggled it).</summary>
+    public static bool IsConsoleOpen => *(int*)ConsoleOpenFlagPtr != 0;
+
+    /// <summary>Pointer to the engine's live console command-line buffer.</summary>
+    public static byte* ConsoleBuffer => (byte*)ConsoleBufferPtr;
+
+    /// <summary>
+    /// Empties the engine's console command line. Used after a co-op command is captured, so
+    /// the engine does not also try to run it as an (unknown) cheat verb on Enter.
+    /// </summary>
+    public static void ClearConsoleBuffer()
+    {
+        *(byte*)ConsoleBufferPtr = 0;
+        *(int*)ConsoleCaretPtr = 0;
+    }
+
+    /// <summary>Length of the null-terminated console buffer, clamped to its capacity.</summary>
+    public static int ConsoleBufferLength()
+    {
+        byte* p = (byte*)ConsoleBufferPtr;
+        int i = 0;
+        while (i < ConsoleBufferCapacity && p[i] != 0)
+        {
+            i++;
+        }
+
+        return i;
+    }
+
+    /// <summary>
+    /// Draws one null-terminated ASCII line through the engine's own text path. Position is
+    /// the centered, 0.01-scaled space the console uses. MAIN THREAD ONLY. Guarded: a null
+    /// pointer is skipped rather than passed on.
+    /// </summary>
+    public static void DrawTextAscii(byte* nulTerminated, float x, float y)
+    {
+        if (nulTerminated == null || *nulTerminated == 0)
+        {
+            return;
+        }
+
+        PrintStringScreenPosFn(nulTerminated, x, y);
+    }
+
     // ---- death pose --------------------------------------------------------------
 
     /// <summary>
