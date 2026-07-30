@@ -308,6 +308,7 @@ internal static class Program
             TickRate = options.TickRate,
             Digest = digest,
             AllowDifferentSave = options.AllowDifferentSave,
+            Password = options.Password,
         };
 
         using ICoopSession session = options.Mode == CoopMode.Host

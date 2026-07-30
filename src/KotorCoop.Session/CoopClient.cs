@@ -41,6 +41,7 @@ public sealed class CoopClient : ICoopSession
     private long _lastInboundMs;
     private double _roundTripMs;
     private string _rejectReason = string.Empty;
+    private bool _reconnecting;
     private CompatibilityVerdict? _installVerdict;
     private CompatibilityVerdict? _compatibility;
     private uint _localWorldGlobals;
@@ -243,7 +244,9 @@ public sealed class CoopClient : ICoopSession
                 ? $"rejected by host: {_rejectReason}"
                 : IsConnected
                     ? $"connected to {_hostEndPoint} as peer {_localPeerId}"
-                    : $"connecting to {_hostEndPoint}...",
+                    : _reconnecting
+                        ? $"reconnecting to {_hostEndPoint}..."
+                        : $"connecting to {_hostEndPoint}...",
         };
     }
 
@@ -271,6 +274,19 @@ public sealed class CoopClient : ICoopSession
     private void Tick()
     {
         long now = SessionClock.NowMs;
+
+        // Link-loss detection: once connected, silence longer than the peer timeout means
+        // the host is gone (crashed, left, or a network drop). Fall back to the handshake
+        // so the SAME client — same nonce — rejoins automatically when the host returns,
+        // and the host restores its slot rather than leaving a ghost. This is what makes
+        // "the host restarted" or "the router blipped" recoverable in-game.
+        if (IsConnected && _lastInboundMs != 0 && now - _lastInboundMs > _settings.PeerTimeoutMs)
+        {
+            _localPeerId = 0;
+            _rejectReason = string.Empty;
+            _reconnecting = true;
+            _lastInboundMs = 0;
+        }
 
         if (!IsConnected)
         {
@@ -330,7 +346,10 @@ public sealed class CoopClient : ICoopSession
         }
 
         int length = PacketCodec.Write(
-            _sendBuffer, new HelloPacket(_settings.PlayerName, module, _nonce, _settings.Digest));
+            _sendBuffer,
+            new HelloPacket(
+                _settings.PlayerName, module, _nonce, _settings.Digest,
+                SessionPassword.Hash(_settings.Password)));
         if (length > 0)
         {
             _channel.Send(_hostEndPoint, _sendBuffer.AsSpan(0, length));
@@ -554,6 +573,7 @@ public sealed class CoopClient : ICoopSession
         if (_localPeerId == 0)
         {
             _localPeerId = welcome.AssignedPeerId;
+            _reconnecting = false;
 
             // Judge compatibility from our side too, from the host's digest in the Welcome.
             // The host already refused an incompatible client; this gives the client the

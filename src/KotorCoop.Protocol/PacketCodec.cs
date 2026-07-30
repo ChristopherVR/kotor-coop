@@ -15,6 +15,7 @@ public static class PacketCodec
         w.WriteName(packet.PlayerName);
         w.WriteString(packet.Module, ProtocolConstants.MaxModuleLength);
         w.WriteUInt32(packet.ClientNonce);
+        w.WriteUInt32(packet.PasswordHash);
         WriteDigest(ref w, packet.Digest);
         return w.Failed ? 0 : w.Position;
     }
@@ -542,8 +543,9 @@ public static class PacketCodec
         string name = r.ReadString();
         string module = r.ReadString();
         uint nonce = r.ReadUInt32();
+        uint passwordHash = r.ReadUInt32();
         ContentDigest digest = ReadDigest(ref r);
-        return r.Failed ? null : new HelloPacket(name, module, nonce, digest);
+        return r.Failed ? null : new HelloPacket(name, module, nonce, digest, passwordHash);
     }
 
     public static WelcomePacket? ReadWelcome(ReadOnlySpan<byte> buffer)

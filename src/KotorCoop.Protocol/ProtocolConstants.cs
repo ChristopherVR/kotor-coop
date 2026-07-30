@@ -7,8 +7,9 @@ public static class ProtocolConstants
 
     /// <summary>Bumped on any wire-format change. Mismatched peers are rejected at Hello.
     /// Version 3: PlayerState flags dword, journal channel, client enemy reports.
-    /// Version 4: content digest on Hello/Welcome for mod-compatibility handshaking.</summary>
-    public const byte Version = 4;
+    /// Version 4: content digest on Hello/Welcome for mod-compatibility handshaking.
+    /// Version 5: session password hash on Hello; party-member snapshot channel.</summary>
+    public const byte Version = 5;
 
     /// <summary>Journal quest tags are resrefs plus a little slack.</summary>
     public const int MaxJournalTagLength = 32;

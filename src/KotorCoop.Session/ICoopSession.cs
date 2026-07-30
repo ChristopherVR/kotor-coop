@@ -118,4 +118,11 @@ public sealed record SessionSettings
     /// <summary>Whether to admit a peer whose save differs, degrading to id-independent
     /// channels instead of refusing. Mirrors <see cref="ContentCompatibility.AllowDifferentSave"/>.</summary>
     public bool AllowDifferentSave { get; init; }
+
+    /// <summary>
+    /// Session password. Empty means an open session. A host with a password admits only
+    /// clients that present the same one; a client sends it in its join request. Reduced
+    /// to a hash on the wire — a stranger-gate, not a security boundary.
+    /// </summary>
+    public string Password { get; init; } = string.Empty;
 }

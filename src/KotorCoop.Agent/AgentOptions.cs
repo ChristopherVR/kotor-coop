@@ -113,6 +113,10 @@ public sealed record AgentOptions
     /// </summary>
     public bool AllowDifferentSave { get; init; }
 
+    /// <summary>Session password. A host with one admits only clients that match; a client
+    /// presents it when joining. Empty is an open session.</summary>
+    public string Password { get; init; } = string.Empty;
+
     public const string DefaultGamePath =
         @"C:\Program Files (x86)\Steam\steamapps\common\swkotor\swkotor.exe";
 
@@ -165,6 +169,7 @@ public sealed record AgentOptions
         bool followHostModule = true;
         bool loadViaMenuClicks = false;
         bool allowDifferentSave = false;
+        string password = string.Empty;
         string? dropFile = null;
 
         for (int i = 1; i < args.Length; i++)
@@ -257,6 +262,10 @@ public sealed record AgentOptions
                     allowDifferentSave = true;
                     break;
 
+                case "--password":
+                    password = Next() ?? password;
+                    break;
+
                 case "--drop-file":
                     dropFile = Next();
                     break;
@@ -302,6 +311,7 @@ public sealed record AgentOptions
             FollowHostModule = followHostModule,
             LoadViaMenuClicks = loadViaMenuClicks,
             AllowDifferentSave = allowDifferentSave,
+            Password = password,
             DropFile = dropFile,
         };
     }
@@ -395,6 +405,10 @@ public sealed record AgentOptions
                                joining. By default a client follows the host through
                                area transitions the way a summoned phantom follows the
                                world's owner.
+          --password <text>    session password. On --host, only clients with the same
+                               password may join; on --join, the password to present.
+                               A dropped client rejoins automatically when the link
+                               returns, keeping its slot.
           --allow-different-save  join a peer on a different save. Enemies, doors and
                                items are not shared (their object ids would not line up),
                                but phantoms, appearance, equipment and journal still work.

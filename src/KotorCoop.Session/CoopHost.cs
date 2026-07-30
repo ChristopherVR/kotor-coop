@@ -19,6 +19,11 @@ public sealed class CoopHost : ICoopSession
         public required uint Id;
         public required IPEndPoint EndPoint;
         public required string Name;
+
+        /// <summary>The client's stable nonce, so a peer that reconnects from a new port
+        /// reclaims this slot instead of appearing as a second player.</summary>
+        public required uint Nonce;
+
         public PlayerState LastState = PlayerState.Empty;
         public long LastSeenMs;
 
@@ -464,6 +469,21 @@ public sealed class CoopHost : ICoopSession
             return;
         }
 
+        // Password gate first — the cheapest reason to turn a stranger away, and the one
+        // the player most wants a clear answer to. An open session (no password) matches
+        // any client, including one that supplies a password.
+        uint required = SessionPassword.Hash(_settings.Password);
+        if (required != SessionPassword.None && hello.PasswordHash != required)
+        {
+            int rejectLength = PacketCodec.Write(_replyBuffer, new RejectPacket("E_PASSWORD: wrong password"));
+            if (rejectLength > 0)
+            {
+                _channel.Send(from, _replyBuffer.AsSpan(0, rejectLength));
+            }
+
+            return;
+        }
+
         // Content compatibility is judged before admission. A refusal (different exe, or a
         // different save when that is not allowed) is sent as a typed Reject so the client
         // stops retrying and can tell the player why, rather than hanging on a silent host.
@@ -486,13 +506,20 @@ public sealed class CoopHost : ICoopSession
 
         lock (_gate)
         {
-            // Hello is retransmitted until Welcome lands, so a repeat from a known
-            // endpoint must return the same id rather than allocating a new peer.
-            PeerConnection? existing = _peers.Values.FirstOrDefault(p => p.EndPoint.Equals(from));
+            // Match a returning peer by its stable nonce first, then by endpoint. The nonce
+            // is what makes reconnection seamless: a client that dropped and came back —
+            // possibly from a new ephemeral port — reclaims its existing slot (same id,
+            // same name, its phantom never doubled) instead of joining as a stranger while
+            // its old slot lingers until timeout. Hello is also retransmitted until Welcome
+            // lands, so a plain repeat must return the same id too.
+            PeerConnection? existing =
+                _peers.Values.FirstOrDefault(p => p.Nonce == hello.ClientNonce)
+                ?? _peers.Values.FirstOrDefault(p => p.EndPoint.Equals(from));
 
             if (existing is not null)
             {
                 existing.LastSeenMs = now;
+                existing.EndPoint = from;
                 existing.InstallVerdict = verdict;
                 assignedId = existing.Id;
             }
@@ -515,6 +542,7 @@ public sealed class CoopHost : ICoopSession
                     Id = assignedId,
                     EndPoint = from,
                     Name = string.IsNullOrWhiteSpace(hello.PlayerName) ? $"peer{assignedId}" : hello.PlayerName,
+                    Nonce = hello.ClientNonce,
                     LastSeenMs = now,
                     InstallVerdict = verdict,
                 };

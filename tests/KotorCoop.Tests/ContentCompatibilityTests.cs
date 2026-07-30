@@ -148,7 +148,7 @@ public class ContentCompatibilityTests
         System.Span<byte> buffer = stackalloc byte[ProtocolConstants.MaxPacketSize];
         ContentDigest digest = Digest(exe: 0xDEADBEEF, appearance: 0xCAFE, appearanceRows: 512);
 
-        int length = PacketCodec.Write(buffer, new HelloPacket("Revan", "end_m01aa", 7, digest));
+        int length = PacketCodec.Write(buffer, new HelloPacket("Revan", "end_m01aa", 7, digest, SessionPassword.None));
         HelloPacket? decoded = PacketCodec.ReadHello(buffer[..length]);
 
         Assert.NotNull(decoded);
