@@ -41,6 +41,17 @@ if ($Uninstall) {
 
     $log = Join-Path $GameDir 'kotorcoop-plugin.log'
     if (Test-Path $log) { Remove-Item $log -Force; "removed $log" }
+
+    # Remove only the override assets we installed — every one is a k_coop_ resref, so
+    # this can never delete a user's mod file.
+    $overrideTarget = Join-Path $GameDir 'Override'
+    if (Test-Path $overrideTarget) {
+        foreach ($ours in Get-ChildItem $overrideTarget -File -Filter 'k_coop_*') {
+            Remove-Item $ours.FullName -Force
+            "removed override $($ours.FullName)"
+        }
+    }
+
     return
 }
 
@@ -82,6 +93,21 @@ if ($Install) {
     $target = Join-Path $GameDir 'dinput8.dll'
     Copy-Item $built.FullName $target -Force
     "installed -> $target"
+
+    # Deploy the co-op override assets (the phantom blueprint, etc.). Every file we ship
+    # uses a k_coop_ resref, so it can never collide with a user's mods; we only ever ADD
+    # to the override folder, never touch a file we did not put there.
+    $overrideSource = Join-Path (Split-Path (Split-Path $projectDir -Parent) -Parent) 'profiles\override'
+    if (Test-Path $overrideSource) {
+        $overrideTarget = Join-Path $GameDir 'Override'
+        if (-not (Test-Path $overrideTarget)) { New-Item -ItemType Directory -Path $overrideTarget | Out-Null }
+
+        foreach ($asset in Get-ChildItem $overrideSource -File) {
+            Copy-Item $asset.FullName (Join-Path $overrideTarget $asset.Name) -Force
+            "installed override -> $(Join-Path $overrideTarget $asset.Name)"
+        }
+    }
+
     ''
     'The game loads DirectInput from its own directory before the system one, so this'
     'is picked up on next launch. Nothing else was modified; remove it with -Uninstall.'
