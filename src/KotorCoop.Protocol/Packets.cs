@@ -76,6 +76,29 @@ public sealed record ItemOpPacket(
 
 public sealed record ItemAckPacket(uint OpSequence);
 
+/// <summary>
+/// One container-loot removal: item <paramref name="ItemId"/> is no longer inside container
+/// <paramref name="ContainerId"/>. Both are engine object ids, usable as cross-instance keys
+/// because both games load the same save and the engine assigns ids deterministically in GIT
+/// order — the same property doors and enemies rely on.
+/// </summary>
+public readonly record struct ContainerLootRemoval(uint ContainerId, uint ItemId);
+
+/// <summary>
+/// A container-loot removal op: the host took <paramref name="ItemId"/> out of container
+/// <paramref name="ContainerId"/>, so it must vanish from that container on the client too (or
+/// it could be picked up twice). Reliable via retransmit-until-ack, exactly like
+/// <see cref="ItemOpPacket"/>, but broadcast host -&gt; clients rather than client -&gt; host.
+/// </summary>
+public sealed record ContainerLootPacket(
+    uint OriginPeerId, uint OpSequence, uint ContainerId, uint ItemId);
+
+/// <summary>
+/// A client's acknowledgement of a <see cref="ContainerLootPacket"/>. Carries the acking
+/// peer id so the host, which broadcasts to several clients, can tell whose ack this is.
+/// </summary>
+public sealed record ContainerLootAckPacket(uint PeerId, uint OpSequence);
+
 public sealed record ItemSyncRequestPacket(uint PeerId, uint KnownVersion);
 
 public sealed record ItemSnapshotPacket(uint Version, IReadOnlyList<GroundItem> Items);

@@ -104,6 +104,16 @@ public sealed class CoopHost : ICoopSession
 
     public void RemoveItem(uint itemId) => Items.Remove(itemId);
 
+    private readonly ReliableLootSender _lootSender = new();
+
+    /// <summary>
+    /// The host looted an item from a shared container; broadcast the removal reliably so it
+    /// vanishes from every client's copy too. Enqueue-only — the tick loop, which owns the
+    /// send buffer, does the actual broadcasting and retransmits.
+    /// </summary>
+    public void PublishContainerLoot(uint containerId, uint itemId) =>
+        _lootSender.Enqueue(HostPeerId, containerId, itemId, SessionClock.NowMs);
+
     /// <summary>The host is the enemy authority: its fights are the ones that count.</summary>
     public bool IsEnemyAuthority => true;
 
@@ -470,9 +480,35 @@ public sealed class CoopHost : ICoopSession
         BroadcastParty(now, recipients);
         BroadcastDialogue(now, recipients);
         BroadcastProgression(now, recipients);
+        BroadcastContainerLoot(now, recipients);
         BroadcastWorldDigest(now, recipients);
         FlushChat(recipients);
         _buffer.PruneStale(now, _settings.PeerTimeoutMs);
+    }
+
+    /// <summary>
+    /// Retransmits container-loot removals to every client until each has acked. Reliable
+    /// rather than snapshot-broadcast: a removal is a one-shot fact, not a level in a state
+    /// that the next tick re-sends anyway, so it must survive a dropped packet. An op is
+    /// retired once every currently-connected client has confirmed it.
+    /// </summary>
+    private void BroadcastContainerLoot(long now, List<PeerConnection> recipients)
+    {
+        List<uint> recipientIds = [.. recipients.Select(p => p.Id)];
+
+        foreach (ContainerLootPacket op in _lootSender.CollectDue(recipientIds, now))
+        {
+            int length = PacketCodec.Write(_sendBuffer, op);
+            if (length == 0)
+            {
+                continue;
+            }
+
+            foreach (PeerConnection peer in recipients)
+            {
+                _channel.Send(peer.EndPoint, _sendBuffer.AsSpan(0, length));
+            }
+        }
     }
 
     /// <summary>
@@ -684,6 +720,14 @@ public sealed class CoopHost : ICoopSession
 
             case PacketType.ItemSyncRequest:
                 HandleItemSyncRequest(datagram.From, span);
+                break;
+
+            case PacketType.ContainerLootAck:
+                if (PacketCodec.ReadContainerLootAck(span) is { } lootAck)
+                {
+                    _lootSender.Acknowledge(lootAck.PeerId, lootAck.OpSequence);
+                }
+
                 break;
 
             case PacketType.JournalOp:

@@ -366,7 +366,7 @@ internal struct SharedBlock
     /// <summary>Agent -&gt; plugin. Bumped to wipe the on-screen overlay log.</summary>
     public const int OffsetChatClearSerial = 0xC60;
 
-    // ---- dialogue spectate (version 12, reserved region 0xC80..0xD00) --------------
+    // ---- dialogue spectate (version 12, region 0xC80..0xD00) ----------------------
     //
     // Plugin -> agent. On the token owner's instance the DialogueSpectateController reads
     // the current conversation's speaker + line off the live CSWSDialog each frame and
@@ -387,9 +387,22 @@ internal struct SharedBlock
     /// <summary>Plugin -&gt; agent. Bumped when the speaker/line pair changes; written last.</summary>
     public const int OffsetLocalDialogueSerial = 0xCE8;
 
-    // Reserved block regions for in-progress features, pre-allocated so their work does not
-    // have to change TotalSize/Version (avoids layout collisions):
-    //   0xD00..0xE00  container-loot removal (op ring)
+    // ---- container-loot removal (region 0xD00..0xE00) -----------------------------
+    //
+    // Chests and corpses are shared, so an item the host loots out of a container must vanish
+    // from the client's copy too or it could be taken twice. The agent declares the desired
+    // (container, item) removals for the local module; the plugin resolves each container and
+    // deletes the matching item through CSWSPlaceable::RemoveItem.
+
+    /// <summary>Agent -&gt; plugin. How many container-loot removals are valid.</summary>
+    public const int OffsetLootCount = 0xD00;
+
+    /// <summary>Agent -&gt; plugin. containerId u32 @0, itemId u32 @4.</summary>
+    public const int OffsetLootSlots = 0xD08;
+
+    public const int LootSlotStride = 0x08;
+
+    public const int LootCapacity = 24; // occupies 0xD08..0xDC8, inside the 0xD00..0xE00 region
 
     public const int ItemSlotCapacity = 8;
 

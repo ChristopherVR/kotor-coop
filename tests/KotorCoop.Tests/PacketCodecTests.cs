@@ -229,6 +229,20 @@ public class PacketCodecTests
     }
 
     [Fact]
+    public void ContainerLootPacketsRoundTrip()
+    {
+        Span<byte> buffer = stackalloc byte[ProtocolConstants.MaxPacketSize];
+
+        ContainerLootPacket op = new(1, 42, 0x0053, 0x00C9);
+        int opLength = PacketCodec.Write(buffer, op);
+        Assert.Equal(op, PacketCodec.ReadContainerLoot(buffer[..opLength]));
+
+        ContainerLootAckPacket ack = new(3, 42);
+        int ackLength = PacketCodec.Write(buffer, ack);
+        Assert.Equal(ack, PacketCodec.ReadContainerLootAck(buffer[..ackLength]));
+    }
+
+    [Fact]
     public void FullItemSnapshotFitsInOneDatagram()
     {
         Span<byte> buffer = stackalloc byte[ProtocolConstants.MaxPacketSize];

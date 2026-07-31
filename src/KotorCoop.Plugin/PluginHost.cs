@@ -25,6 +25,7 @@ internal static unsafe class PluginHost
     private static CombatController? _combat;
     private static DoorController? _doors;
     private static PlaceableController? _placeables;
+    private static LootController? _loot;
     private static TravelController? _travel;
     private static PauseController? _pause;
     private static JournalController? _journal;
@@ -75,6 +76,7 @@ internal static unsafe class PluginHost
             _combat = new CombatController(_view);
             _doors = new DoorController(_view);
             _placeables = new PlaceableController(_view);
+            _loot = new LootController(_view);
             _travel = new TravelController(_view);
             _menuLoad = new MenuLoadController(_view);
             _connectMenu = new ConnectMenuController(_view);
@@ -266,6 +268,7 @@ internal static unsafe class PluginHost
         _combat?.OnFrame();
         _doors?.OnFrame();
         _placeables?.OnFrame();
+        _loot?.OnFrame();
         _pause?.OnFrame();
         _journal?.OnFrame();
         _mapMarkers?.OnFrame();
@@ -283,6 +286,7 @@ internal static unsafe class PluginHost
         _combat?.Invalidate();
         _doors?.Invalidate();
         _placeables?.Invalidate();
+        _loot?.Invalidate();
         _travel?.Invalidate();
         _pause?.Invalidate();
         _journal?.Invalidate();

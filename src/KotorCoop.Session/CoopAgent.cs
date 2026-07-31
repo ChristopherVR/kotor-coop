@@ -186,6 +186,7 @@ public sealed class CoopAgent(IGameBridge bridge, ICoopSession session, AgentSet
         PumpJournal(caps);
         PumpDoors(caps);
         PumpPlaceables(caps);
+        PumpContainerLoot(caps);
         PumpTravel(local, peers);
         PumpPause(peers);
     }
@@ -529,6 +530,38 @@ public sealed class CoopAgent(IGameBridge bridge, ICoopSession session, AgentSet
         }
 
         bridge.TryWritePlaceableStates(session.Flags.Snapshot());
+    }
+
+    /// <summary>
+    /// Keeps shared containers (chests, corpses) from duplicating loot. The host detects an
+    /// item leaving a container and publishes the (container, item) removal reliably; the
+    /// client applies it to its own copy so the item cannot be taken a second time. One
+    /// direction only — loot is host-authoritative, exactly like enemies — and it shares the
+    /// Doors capability gate because it rests on the same object-id-across-the-same-save
+    /// assumption doors do.
+    /// </summary>
+    private void PumpContainerLoot(SessionCapabilities caps)
+    {
+        if (!bridge.SupportsContainerLoot || (caps & SessionCapabilities.Doors) == 0)
+        {
+            return;
+        }
+
+        if (session.IsEnemyAuthority)
+        {
+            // The host: detect items that left a container and announce their removal.
+            foreach (ContainerLootRemoval removal in bridge.CollectContainerLootRemovals())
+            {
+                session.PublishContainerLoot(removal.ContainerId, removal.ItemId);
+            }
+
+            return;
+        }
+
+        // A client: re-declare the host's known removals to the game so each looted item is
+        // deleted from this instance's copy of the container. Idempotent — an already-removed
+        // item resolves to a no-op.
+        bridge.TryWriteContainerLoot(session.ContainerLootRemovals);
     }
 
     /// <summary>

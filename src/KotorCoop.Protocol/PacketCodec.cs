@@ -211,6 +211,54 @@ public static class PacketCodec
         return w.Failed ? 0 : w.Position;
     }
 
+    public static int Write(Span<byte> buffer, ContainerLootPacket packet)
+    {
+        PacketWriter w = new(buffer);
+        w.WriteHeader(PacketType.ContainerLoot);
+        w.WriteUInt32(packet.OriginPeerId);
+        w.WriteUInt32(packet.OpSequence);
+        w.WriteUInt32(packet.ContainerId);
+        w.WriteUInt32(packet.ItemId);
+        return w.Failed ? 0 : w.Position;
+    }
+
+    public static ContainerLootPacket? ReadContainerLoot(ReadOnlySpan<byte> buffer)
+    {
+        PacketReader r = new(buffer);
+        if (r.ReadHeader() != PacketType.ContainerLoot)
+        {
+            return null;
+        }
+
+        uint origin = r.ReadUInt32();
+        uint opSeq = r.ReadUInt32();
+        uint containerId = r.ReadUInt32();
+        uint itemId = r.ReadUInt32();
+        return r.Failed ? null : new ContainerLootPacket(origin, opSeq, containerId, itemId);
+    }
+
+    public static int Write(Span<byte> buffer, ContainerLootAckPacket packet)
+    {
+        PacketWriter w = new(buffer);
+        w.WriteHeader(PacketType.ContainerLootAck);
+        w.WriteUInt32(packet.PeerId);
+        w.WriteUInt32(packet.OpSequence);
+        return w.Failed ? 0 : w.Position;
+    }
+
+    public static ContainerLootAckPacket? ReadContainerLootAck(ReadOnlySpan<byte> buffer)
+    {
+        PacketReader r = new(buffer);
+        if (r.ReadHeader() != PacketType.ContainerLootAck)
+        {
+            return null;
+        }
+
+        uint peerId = r.ReadUInt32();
+        uint opSeq = r.ReadUInt32();
+        return r.Failed ? null : new ContainerLootAckPacket(peerId, opSeq);
+    }
+
     public static int Write(Span<byte> buffer, ItemSyncRequestPacket packet)
     {
         PacketWriter w = new(buffer);
