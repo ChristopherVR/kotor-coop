@@ -121,6 +121,10 @@ public sealed record AgentOptions
     /// with --no-party-sync for split play or if solo mode misbehaves live.</summary>
     public bool SyncParty { get; init; } = true;
 
+    /// <summary>Share party gold and PC experience (host-authoritative absolute mirror).
+    /// Disable with --no-progression-sync to keep each player's own gold and level.</summary>
+    public bool SyncProgression { get; init; } = true;
+
     /// <summary>
     /// Wait for the in-game Co-op menu button before connecting, taking the host/join
     /// details from coop.ini beside the game. Lets the player start co-op from the menu
@@ -182,6 +186,7 @@ public sealed record AgentOptions
         bool allowDifferentSave = false;
         string password = string.Empty;
         bool syncParty = true;
+        bool syncProgression = true;
         bool menuConnect = false;
         string? dropFile = null;
 
@@ -283,6 +288,10 @@ public sealed record AgentOptions
                     syncParty = false;
                     break;
 
+                case "--no-progression-sync":
+                    syncProgression = false;
+                    break;
+
                 case "--menu":
                     menuConnect = true;
                     break;
@@ -334,6 +343,7 @@ public sealed record AgentOptions
             AllowDifferentSave = allowDifferentSave,
             Password = password,
             SyncParty = syncParty,
+            SyncProgression = syncProgression,
             MenuConnect = menuConnect,
             DropFile = dropFile,
         };
@@ -436,6 +446,10 @@ public sealed record AgentOptions
                                companions (Trask, Carth...) and clients freeze their own
                                copies and mirror the host's, so companions stay one
                                synchronised set instead of two that drift.
+          --no-progression-sync  do not share gold and experience. By default the host's
+                               party gold and PC experience are mirrored onto clients, so
+                               both parties level and spend together; disable to keep each
+                               player's own totals.
           --menu               wait for the in-game Co-op menu button before connecting,
                                taking host/join details from coop.ini beside the game
                                (mode, host, port, password, name, menu_button). Lets the

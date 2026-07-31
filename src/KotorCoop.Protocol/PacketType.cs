@@ -110,4 +110,12 @@ public enum PacketType : byte
     /// topology, and the sender shows its own line locally.
     /// </summary>
     Chat = 27,
+
+    /// <summary>
+    /// host -> clients: absolute shared progression (party gold and the PC's experience),
+    /// broadcast each tick. Host-authoritative — the host's values are truth and clients
+    /// overwrite their own, so both parties level and spend together. Absolute, never deltas:
+    /// every kill runs the XP/gold grant locally on both instances, so combining would double.
+    /// </summary>
+    ProgressionSnapshot = 28,
 }

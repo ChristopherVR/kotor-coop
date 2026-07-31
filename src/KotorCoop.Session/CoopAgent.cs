@@ -33,6 +33,13 @@ public sealed record AgentSettings
     /// inferred rather than measured, so it is an escape-hatchable default.
     /// </summary>
     public bool SyncParty { get; init; } = true;
+
+    /// <summary>
+    /// When true, party gold and PC experience are shared: the host publishes its absolute
+    /// values and clients overwrite their own, so both parties level and spend together.
+    /// Opinionated (it changes a client's own totals), so it is escape-hatchable.
+    /// </summary>
+    public bool SyncProgression { get; init; } = true;
 }
 
 /// <summary>
@@ -173,6 +180,7 @@ public sealed class CoopAgent(IGameBridge bridge, ICoopSession session, AgentSet
         PumpItems(local, caps);
         PumpEnemies(local, caps);
         PumpParty(caps);
+        PumpProgression(caps);
         PumpDialogue(local, caps);
         PumpWorldState(caps);
         PumpJournal(caps);
@@ -206,6 +214,39 @@ public sealed class CoopAgent(IGameBridge bridge, ICoopSession session, AgentSet
         // A client: freeze the local party AI and mirror the host's companions. The freeze
         // is re-asserted inside TryWritePartyMembers every pass.
         bridge.TryWritePartyMembers(session.GetPartyMembers());
+    }
+
+    /// <summary>
+    /// Shares progression: the host publishes its party gold and PC experience; a client
+    /// overwrites its own with the host's absolute values each tick, so the two parties level
+    /// and spend together. Absolute (not additive) because every kill grants XP/gold locally
+    /// on both instances — adding a client's own on top would double-count.
+    /// </summary>
+    private void PumpProgression(SessionCapabilities caps)
+    {
+        if (!settings.SyncProgression
+            || !bridge.SupportsProgressionSync
+            || (caps & SessionCapabilities.Progression) == 0)
+        {
+            return;
+        }
+
+        if (session.IsEnemyAuthority)
+        {
+            // The host is authoritative for progression too: publish, never mirror.
+            if (bridge.TryReadProgression(out uint gold, out uint experience))
+            {
+                session.PublishProgression(gold, experience);
+            }
+
+            return;
+        }
+
+        // A client: mirror the host's totals, once any have arrived.
+        if (session.TryGetProgression(out uint hostGold, out uint hostExperience))
+        {
+            bridge.TryWriteProgression(hostGold, hostExperience);
+        }
     }
 
     /// <summary>

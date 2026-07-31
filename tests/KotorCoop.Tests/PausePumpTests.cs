@@ -70,6 +70,15 @@ public class PausePumpTests
 
         public DialogueState GetDialogue() => DialogueState.Idle;
 
+        public void PublishProgression(uint gold, uint experience) { }
+
+        public bool TryGetProgression(out uint gold, out uint experience)
+        {
+            gold = 0;
+            experience = 0;
+            return false;
+        }
+
         public void SendChat(string text) { }
 
         public System.Collections.Generic.IReadOnlyList<ChatMessage> DrainChat() => [];

@@ -90,6 +90,15 @@ public interface ICoopSession : IDisposable
     /// <summary>The authoritative conversation token — who, if anyone, is mid-dialogue.</summary>
     DialogueState GetDialogue();
 
+    /// <summary>Host only: publish the party's gold and the PC's experience. Ignored on a client.</summary>
+    void PublishProgression(uint gold, uint experience);
+
+    /// <summary>
+    /// Client only: the host's latest gold and experience. Returns false until a snapshot has
+    /// arrived, so a client never mirrors zero over its own values before the first one.
+    /// </summary>
+    bool TryGetProgression(out uint gold, out uint experience);
+
     /// <summary>Sends a short text message to the other players. Empty/whitespace is ignored.</summary>
     void SendChat(string text);
 

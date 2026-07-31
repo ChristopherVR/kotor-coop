@@ -131,6 +131,28 @@ public sealed class CoopHost : ICoopSession
 
     public IReadOnlyList<PartyMemberState> GetPartyMembers() => [];
 
+    private uint _gold;
+    private uint _experience;
+    private bool _hasProgression;
+
+    public void PublishProgression(uint gold, uint experience)
+    {
+        lock (_gate)
+        {
+            _gold = gold;
+            _experience = experience;
+            _hasProgression = true;
+        }
+    }
+
+    /// <summary>The host is the source of progression; it never mirrors a peer's.</summary>
+    public bool TryGetProgression(out uint gold, out uint experience)
+    {
+        gold = 0;
+        experience = 0;
+        return false;
+    }
+
     /// <summary>The single conversation token; the host is the sole arbiter.</summary>
     private DialogueState _dialogue = DialogueState.Idle;
 
@@ -447,6 +469,7 @@ public sealed class CoopHost : ICoopSession
         BroadcastEnemies(now, recipients);
         BroadcastParty(now, recipients);
         BroadcastDialogue(now, recipients);
+        BroadcastProgression(now, recipients);
         BroadcastWorldDigest(now, recipients);
         FlushChat(recipients);
         _buffer.PruneStale(now, _settings.PeerTimeoutMs);
@@ -502,6 +525,43 @@ public sealed class CoopHost : ICoopSession
         }
 
         int length = PacketCodec.Write(_sendBuffer, new PartySnapshotPacket(now, party));
+        if (length == 0)
+        {
+            return;
+        }
+
+        foreach (PeerConnection peer in recipients)
+        {
+            _channel.Send(peer.EndPoint, _sendBuffer.AsSpan(0, length));
+        }
+    }
+
+    /// <summary>
+    /// Broadcasts the absolute shared progression each tick once the host has published it.
+    /// Like the enemy/party snapshots: a lost packet costs one tick and the next carries the
+    /// whole truth, and absolute values make replays idempotent.
+    /// </summary>
+    private void BroadcastProgression(long now, List<PeerConnection> recipients)
+    {
+        uint gold;
+        uint experience;
+        lock (_gate)
+        {
+            if (!_hasProgression)
+            {
+                return;
+            }
+
+            gold = _gold;
+            experience = _experience;
+        }
+
+        if (recipients.Count == 0)
+        {
+            return;
+        }
+
+        int length = PacketCodec.Write(_sendBuffer, new ProgressionSnapshotPacket(now, gold, experience));
         if (length == 0)
         {
             return;

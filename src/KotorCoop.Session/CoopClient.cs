@@ -190,6 +190,25 @@ public sealed class CoopClient : ICoopSession
         }
     }
 
+    private uint _gold;
+    private uint _experience;
+    private bool _hasProgression;
+
+    /// <summary>Only the host is authoritative for progression; a client's own view is dropped.</summary>
+    public void PublishProgression(uint gold, uint experience)
+    {
+    }
+
+    public bool TryGetProgression(out uint gold, out uint experience)
+    {
+        lock (_gate)
+        {
+            gold = _gold;
+            experience = _experience;
+            return _hasProgression;
+        }
+    }
+
     private readonly Queue<ChatMessage> _chatInbox = new();
     private readonly Queue<string> _chatOutbox = new();
 
@@ -688,6 +707,19 @@ public sealed class CoopClient : ICoopSession
                     lock (_gate)
                     {
                         _chatInbox.Enqueue(new ChatMessage(chat.FromPeerId, chat.Name, chat.Text));
+                    }
+                }
+
+                break;
+
+            case PacketType.ProgressionSnapshot:
+                if (PacketCodec.ReadProgressionSnapshot(span) is { } progression)
+                {
+                    lock (_gate)
+                    {
+                        _gold = progression.Gold;
+                        _experience = progression.Experience;
+                        _hasProgression = true;
                     }
                 }
 

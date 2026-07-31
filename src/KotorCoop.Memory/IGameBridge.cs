@@ -153,6 +153,21 @@ public interface IGameBridge : IDisposable
     /// single-player continuation after the session is normal. Called on shutdown.</summary>
     void ReleasePartyFreeze() { }
 
+    /// <summary>False when this bridge cannot see or drive party gold / PC experience.</summary>
+    bool SupportsProgressionSync => false;
+
+    /// <summary>Host side: reads the party's gold and the PC's experience.</summary>
+    bool TryReadProgression(out uint gold, out uint experience)
+    {
+        gold = 0;
+        experience = 0;
+        return false;
+    }
+
+    /// <summary>Client side: overwrites local gold and PC experience with the host's absolute
+    /// values, so both parties progress together.</summary>
+    bool TryWriteProgression(uint gold, uint experience) => false;
+
     /// <summary>
     /// Enemy-authority side only: lowers own enemies to a peer's reported health where
     /// the peer's is lower. This is what makes a client's damage real. Returns how many

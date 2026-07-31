@@ -121,6 +121,14 @@ public sealed record EnemyReportPacket(uint PeerId, string Module, IReadOnlyList
 /// <summary>host -> all: the authoritative conversation token (see <see cref="DialogueState"/>).</summary>
 public sealed record DialogueSnapshotPacket(long ServerTimeMs, DialogueState State);
 
+/// <summary>
+/// The host's absolute shared progression, broadcast each tick. Party <paramref name="Gold"/>
+/// and the PC's <paramref name="Experience"/> are whole values, not deltas — each instance
+/// grants XP/gold locally on every kill, so a client mirrors the host's totals rather than
+/// adding its own (which would double-count).
+/// </summary>
+public sealed record ProgressionSnapshotPacket(long ServerTimeMs, uint Gold, uint Experience);
+
 /// <summary>One received chat line, for a small on-screen/console log.</summary>
 public sealed record ChatMessage(uint PeerId, string Name, string Text);
 

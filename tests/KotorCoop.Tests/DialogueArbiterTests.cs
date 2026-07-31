@@ -98,5 +98,9 @@ public class DialogueArbiterTests
         ChatPacket chat = new(4, "Bastila", "regroup at the door");
         int chatLength = PacketCodec.Write(buffer, chat);
         Assert.Equal(chat, PacketCodec.ReadChat(buffer[..chatLength]));
+
+        ProgressionSnapshotPacket progression = new(987654321, 4200u, 15750u);
+        int progLength = PacketCodec.Write(buffer, progression);
+        Assert.Equal(progression, PacketCodec.ReadProgressionSnapshot(buffer[..progLength]));
     }
 }

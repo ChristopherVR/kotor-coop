@@ -478,6 +478,7 @@ internal static class Program
             FilterByModule = options.FilterByModule,
             FollowHostModule = options.FollowHostModule,
             SyncParty = options.SyncParty,
+            SyncProgression = options.SyncProgression,
         };
 
         using SessionManager manager = new(bridge, agentSettings);

@@ -54,5 +54,11 @@ public enum SessionCapabilities
     /// mod difference; only a total refusal (empty set) drops it.</summary>
     Dialogue = 1 << 9,
 
-    All = Phantoms | WorldState | Doors | Enemies | GroundItems | Journal | Appearance | Equipment | Party | Dialogue,
+    /// <summary>Shared party gold and PC experience. Plain scalars, not save-keyed ids, so it
+    /// is content-independent and survives a save/mod mismatch — the point is that two players
+    /// progress together regardless of their exact installs.</summary>
+    Progression = 1 << 10,
+
+    All = Phantoms | WorldState | Doors | Enemies | GroundItems | Journal | Appearance | Equipment
+        | Party | Dialogue | Progression,
 }

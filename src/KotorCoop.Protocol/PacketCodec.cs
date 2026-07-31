@@ -445,6 +445,32 @@ public static class PacketCodec
             : new DialogueSnapshotPacket(serverTime, new DialogueState(active, owner, serial, speaker, line));
     }
 
+    public static int Write(Span<byte> buffer, ProgressionSnapshotPacket packet)
+    {
+        PacketWriter w = new(buffer);
+        w.WriteHeader(PacketType.ProgressionSnapshot);
+        w.WriteInt64(packet.ServerTimeMs);
+        w.WriteUInt32(packet.Gold);
+        w.WriteUInt32(packet.Experience);
+
+        return w.Failed ? 0 : w.Position;
+    }
+
+    public static ProgressionSnapshotPacket? ReadProgressionSnapshot(ReadOnlySpan<byte> buffer)
+    {
+        PacketReader r = new(buffer);
+        if (r.ReadHeader() != PacketType.ProgressionSnapshot)
+        {
+            return null;
+        }
+
+        long serverTime = r.ReadInt64();
+        uint gold = r.ReadUInt32();
+        uint xp = r.ReadUInt32();
+
+        return r.Failed ? null : new ProgressionSnapshotPacket(serverTime, gold, xp);
+    }
+
     public static int Write(Span<byte> buffer, ChatPacket packet)
     {
         PacketWriter w = new(buffer);

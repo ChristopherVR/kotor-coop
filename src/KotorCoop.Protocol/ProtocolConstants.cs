@@ -10,8 +10,9 @@ public static class ProtocolConstants
     /// Version 4: content digest on Hello/Welcome for mod-compatibility handshaking.
     /// Version 5: session password hash on Hello; party-member snapshot channel.
     /// Version 6: dialogue ownership token (snapshot + request channels).
-    /// Version 7: text chat channel.</summary>
-    public const byte Version = 7;
+    /// Version 7: text chat channel.
+    /// Version 8: shared progression (party gold + PC experience).</summary>
+    public const byte Version = 8;
 
     /// <summary>Journal quest tags are resrefs plus a little slack.</summary>
     public const int MaxJournalTagLength = 32;

@@ -1644,6 +1644,79 @@ public sealed class KotorGameBridge : IGameBridge
         return true;
     }
 
+    // ---- shared progression (gold + experience) ---------------------------------
+    //
+    // See docs/research/progression-sync.md. Gold is a single party-table field (VERIFIED);
+    // experience hangs off the PC's stats block (the stats pointer is NEEDS-LIVE, but a wrong
+    // deref only makes WriteProcessMemory fail — a cross-process write to a bad address never
+    // corrupts the game).
+
+    /// <summary>partyTable + this = party gold (u32), verified from GetGold/SetGold.</summary>
+    private const int PartyGold = 0x0FC;
+
+    /// <summary>creature + this = CSWSCreatureStats* (NEEDS-LIVE).</summary>
+    private const int CreatureStatsPointer = 0x0A74;
+
+    /// <summary>stats + this = experience (u32).</summary>
+    private const int StatsExperience = 0x068;
+
+    /// <summary>The engine's own gold ceiling (SetGold clamps here).</summary>
+    private const uint GoldMax = 0x3B9AC9FF;
+
+    public bool SupportsProgressionSync => _player is not null;
+
+    /// <summary>Reads party gold and the PC's experience. Gold is required; experience is
+    /// best-effort (0 if the stats block cannot be resolved).</summary>
+    public bool TryReadProgression(out uint gold, out uint experience)
+    {
+        gold = 0;
+        experience = 0;
+
+        if (_player is null
+            || !TryGetPartyTable(out nint partyTable)
+            || !_memory.TryReadUInt32(partyTable + PartyGold, out gold))
+        {
+            return false;
+        }
+
+        TryReadPlayerExperience(out experience);
+        return true;
+    }
+
+    /// <summary>Overwrites party gold and the PC's experience with the host's absolute values.
+    /// Gold is authoritative; experience is best-effort (a bad stats pointer just fails the
+    /// write, never corrupts).</summary>
+    public bool TryWriteProgression(uint gold, uint experience)
+    {
+        if (_player is null || !TryGetPartyTable(out nint partyTable))
+        {
+            return false;
+        }
+
+        bool ok = _memory.TryWrite(partyTable + PartyGold, Math.Min(gold, GoldMax));
+
+        if (TryGetPlayerStats(out nint stats))
+        {
+            _memory.TryWrite(stats + StatsExperience, experience);
+        }
+
+        return ok;
+    }
+
+    private bool TryReadPlayerExperience(out uint experience)
+    {
+        experience = 0;
+        return TryGetPlayerStats(out nint stats) && _memory.TryReadUInt32(stats + StatsExperience, out experience);
+    }
+
+    private bool TryGetPlayerStats(out nint stats)
+    {
+        stats = 0;
+        return _player is not null
+            && _memory.TryReadPointer(_player.Address + CreatureStatsPointer, out stats)
+            && stats != 0;
+    }
+
     /// <summary>
     /// Reads the active companions and where the host's engine has them. Skips the PC (never
     /// a companion) implicitly, because only the active NPC slots are read.

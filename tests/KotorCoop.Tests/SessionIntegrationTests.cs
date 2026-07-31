@@ -517,6 +517,56 @@ public class SessionIntegrationTests
     }
 
     [Fact]
+    public async Task ProgressionMirrorsFromHostToClient()
+    {
+        using CoopHost host = new(new SessionSettings { PlayerName = "Revan", Port = 0, TickRate = 30 });
+        using CoopClient client = new(
+            new SessionSettings { PlayerName = "Malak", TickRate = 30 },
+            new IPEndPoint(IPAddress.Loopback, host.ListenEndPoint.Port));
+
+        using CancellationTokenSource cts = new(Timeout + TimeSpan.FromSeconds(10));
+        Task hostTask = host.RunAsync(cts.Token);
+        Task clientTask = client.RunAsync(cts.Token);
+
+        PlayerState state = new(Vector3f.Zero, 0f, "end_m01aa", 100, 0);
+        uint gold = 1000;
+        uint xp = 5000;
+        void Publish()
+        {
+            host.PublishLocalState(state);
+            client.PublishLocalState(state);
+            host.PublishProgression(gold, xp);
+        }
+
+        Assert.True(await WaitForAsync(() => client.IsConnected, Timeout, Publish));
+
+        // The client has none until the first snapshot arrives (so it never mirrors zero).
+        Assert.True(
+            await WaitForAsync(
+                () => client.TryGetProgression(out uint g, out uint x) && g == 1000 && x == 5000,
+                Timeout,
+                Publish),
+            "the host's gold/xp never reached the client");
+
+        // A later change propagates as the new absolute truth.
+        gold = 1750;
+        xp = 6200;
+        Assert.True(
+            await WaitForAsync(
+                () => client.TryGetProgression(out uint g, out uint x) && g == 1750 && x == 6200,
+                Timeout,
+                Publish),
+            "an updated progression total did not propagate");
+
+        // A client is never authoritative: its own publish is dropped, host keeps its truth.
+        client.PublishProgression(9u, 9u);
+        Assert.False(host.TryGetProgression(out _, out _));
+
+        await cts.CancelAsync();
+        await Task.WhenAll(hostTask, clientTask);
+    }
+
+    [Fact]
     public async Task ChatRelaysBetweenTwoClientsThroughTheHost()
     {
         using CoopHost host = new(new SessionSettings { PlayerName = "Revan", Port = 0, TickRate = 30 });
