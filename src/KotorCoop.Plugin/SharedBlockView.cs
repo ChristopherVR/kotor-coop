@@ -388,6 +388,21 @@ internal sealed unsafe class SharedBlockView(byte* baseAddress)
     /// <summary>Agent-written; bumped to wipe the overlay log.</summary>
     public uint ChatClearSerial => *U32(SharedBlock.OffsetChatClearSerial);
 
+    // ---- dialogue spectate ------------------------------------------------------
+
+    /// <summary>Pointer to the current dialogue speaker (40 bytes), plugin-written.</summary>
+    public byte* LocalDialogueSpeaker => baseAddress + SharedBlock.OffsetLocalDialogueSpeaker;
+
+    /// <summary>Pointer to the current dialogue line (64 bytes), plugin-written.</summary>
+    public byte* LocalDialogueLine => baseAddress + SharedBlock.OffsetLocalDialogueLine;
+
+    /// <summary>Plugin-written; bumped when the speaker/line pair changes.</summary>
+    public uint LocalDialogueSerial
+    {
+        get => *U32(SharedBlock.OffsetLocalDialogueSerial);
+        set => *U32(SharedBlock.OffsetLocalDialogueSerial) = value;
+    }
+
     public ItemSlotView GetItemSlot(int index) =>
         new(baseAddress + SharedBlock.OffsetItemSlots + (index * SharedBlock.ItemSlotStride));
 

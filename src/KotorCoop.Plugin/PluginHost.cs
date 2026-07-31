@@ -33,6 +33,7 @@ internal static unsafe class PluginHost
     private static ConnectMenuController? _connectMenu;
     private static ConsoleController? _console;
     private static ChatOverlayController? _chatOverlay;
+    private static DialogueSpectateController? _dialogueSpectate;
     private static Thread? _worker;
     private static volatile bool _running = true;
 
@@ -79,6 +80,7 @@ internal static unsafe class PluginHost
             _connectMenu = new ConnectMenuController(_view);
             _console = new ConsoleController(_view);
             _chatOverlay = new ChatOverlayController(_view);
+            _dialogueSpectate = new DialogueSpectateController(_view);
             _pause = new PauseController(_view);
             _journal = new JournalController(_view);
             _mapMarkers = new MapMarkerController(_view);
@@ -267,6 +269,10 @@ internal static unsafe class PluginHost
         _pause?.OnFrame();
         _journal?.OnFrame();
         _mapMarkers?.OnFrame();
+
+        // Read-only: publishes the owner's current conversation line for the other player to
+        // spectate. Runs in-world only (a conversation needs a live server + GUI).
+        _dialogueSpectate?.OnFrame();
     }
 
     private static void InvalidateAll(string reason)
