@@ -256,6 +256,11 @@ public sealed class CoopAgent(IGameBridge bridge, ICoopSession session, AgentSet
         // A client: freeze the local party AI and mirror the host's companions. The freeze
         // is re-asserted inside TryWritePartyMembers every pass.
         bridge.TryWritePartyMembers(session.GetPartyMembers());
+
+        // NOTE: the client control-lock (bridge.LockControlToPlayer) is NOT called yet — a live
+        // read showed the researched offset *(clientInternal+0x270) holds party member POSITIONS,
+        // not the controlled-character id, so the id field is not yet pinned down. Left uncalled
+        // (writing there could corrupt the formation struct) until the offset is verified live.
     }
 
     /// <summary>

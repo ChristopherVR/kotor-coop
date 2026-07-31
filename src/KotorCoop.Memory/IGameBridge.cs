@@ -197,6 +197,10 @@ public interface IGameBridge : IDisposable
     /// single-player continuation after the session is normal. Called on shutdown.</summary>
     void ReleasePartyFreeze() { }
 
+    /// <summary>Client side: pins player input control to the local PC so a client cannot take
+    /// over the host-owned companions. Object-id write, crash-proof. False if not resolvable.</summary>
+    bool LockControlToPlayer() => false;
+
     /// <summary>False when this bridge cannot see or drive party gold / PC experience.</summary>
     bool SupportsProgressionSync => false;
 

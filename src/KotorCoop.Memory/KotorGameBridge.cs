@@ -2231,6 +2231,52 @@ public sealed class KotorGameBridge : IGameBridge
         }
     }
 
+    // ---- client control lock ----------------------------------------------------
+    //
+    // The character the local player's input drives is decided by an OBJECT ID:
+    // CClientExoAppInternal + 0x270 = CSWParty*, and CSWParty + 0x24 = member[0].client_object_id
+    // (the controlled/leader). Every input/movement/camera site resolves that id through a
+    // null-safe id->object map, so writing an id there can never crash — a stale id just fails to
+    // resolve. The stable PC id is CClientExoAppInternal + 0x20 (player_creature_id), which
+    // ChangeCharacter never rewrites. See docs/research/client-control-lock.md.
+    //
+    // Solo mode already stops companions FOLLOWING but not being SELECTED, so a client player
+    // could still Tab/click to a shared, host-owned companion and fight the host's authority.
+    // Re-pinning member[0] to the PC each tick reverts any such switch within a frame.
+
+    /// <summary>CClientExoAppInternal + this = CSWParty*.</summary>
+    private const int ClientPartyPointer = 0x270;
+
+    /// <summary>CClientExoAppInternal + this = the stable player-creature object id.</summary>
+    private const int ClientPlayerCreatureId = 0x20;
+
+    /// <summary>CSWParty + this = member[0].client_object_id (the controlled/leader id).</summary>
+    private const int PartyControlledMemberId = 0x24;
+
+    /// <summary>
+    /// Pins the player's input control to their own PC, so a client cannot take over the shared,
+    /// host-owned companions. Object-id write only (crash-proof); a no-op while the PC is already
+    /// the controlled member. Call on clients each party pass.
+    /// </summary>
+    public bool LockControlToPlayer()
+    {
+        if (!EngineGlobals.TryGetClientInternal(_memory, out nint clientInternal)
+            || !_memory.TryReadUInt32(clientInternal + ClientPlayerCreatureId, out uint pcId)
+            || pcId == 0
+            || !_memory.TryReadPointer(clientInternal + ClientPartyPointer, out nint party)
+            || party == 0)
+        {
+            return false;
+        }
+
+        if (_memory.TryReadUInt32(party + PartyControlledMemberId, out uint controlled) && controlled == pcId)
+        {
+            return true; // already the PC — leave it alone
+        }
+
+        return _memory.TryWrite(party + PartyControlledMemberId, pcId);
+    }
+
     private bool TryReadFaction(nint creature, out int faction)
     {
         faction = -1;
