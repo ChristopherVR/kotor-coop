@@ -1227,12 +1227,14 @@ internal static unsafe class Odyssey
     /// <summary>Capacity of the engine's console command buffer (null-terminated, cap 500).</summary>
     private const int ConsoleBufferCapacity = 0x1F4;
 
-    // Global::PrintStringScreenPos_UseTextureFont(str, x, y) — cdecl, caller-cleaned. It is
-    // self-contained: it saves/restores GL state, sets its own ortho from the live viewport
-    // and draws through the global texture font, so it needs no GUI control tree. x/y are in
-    // a centered, 0.01-scaled space (roughly screen-percent from the middle).
-    private static readonly delegate* unmanaged[Cdecl]<byte*, float, float, void> PrintStringScreenPosFn =
-        (delegate* unmanaged[Cdecl]<byte*, float, float, void>)0x0044CCA0;
+    // Global::AurPostString(str, x, line, life) — cdecl, caller-cleaned; ENQUEUES a string
+    // node (new[0x434]) onto the render list and returns it. It never touches the texture font
+    // or GL, so it is safe to call from the SwapBuffers hook when the font is unbound — unlike
+    // the immediate PrintStringScreenPos, which faults there. UpdateScreen flushes the queue
+    // every frame (AurRenderStrings, ungated by the console flag), so a posted line renders on
+    // the next frame whether or not the console is open. See docs/research/text-render-queued.md.
+    private static readonly delegate* unmanaged[Cdecl]<byte*, int, int, float, nint> AurPostStringFn =
+        (delegate* unmanaged[Cdecl]<byte*, int, int, float, nint>)0x0044D490;
 
     /// <summary>True while the native developer console is open (grave/tilde toggled it).</summary>
     public static bool IsConsoleOpen => *(int*)ConsoleOpenFlagPtr != 0;
@@ -1263,104 +1265,61 @@ internal static unsafe class Odyssey
         return i;
     }
 
-    // The texture-font color PrintStringScreenPos reads: four floats in .data, default
-    // (1,1,1,1) = opaque white. The draw already brackets glyphs with GL_BLEND +
-    // (SRC_ALPHA, ONE_MINUS_SRC_ALPHA), so writing a lower alpha here genuinely fades the
-    // text (see docs/research/text-color-alpha.md). Writing .data floats has no call-ABI or
-    // crash risk; the only caveat is restoring white so shared subtitle/feedback text is not
-    // tinted.
-    private const nint FontColorR = 0x00798BB4;
-    private const nint FontColorG = 0x00798BB8;
-    private const nint FontColorB = 0x00798BBC;
-    private const nint FontColorA = 0x00798BC0;
+    // The queued render's text color: the string node captures its RGBA at enqueue time from
+    // these .data floats (NOT the 0x00798BB4 set the immediate path used). The A-channel pair
+    // is 0x0078E384/0x0078E374; writing them before a post fades that line. Restore to 1.0 so
+    // the game's own subtitles are not tinted. See docs/research/text-render-queued.md.
+    private const nint QueuedTextAlphaA = 0x0078E384;
+    private const nint QueuedTextAlphaB = 0x0078E374;
 
-    /// <summary>Sets the texture-font RGBA (0..1) for subsequent draws. MAIN THREAD ONLY.</summary>
-    public static void SetFontColor(float r, float g, float b, float a)
+    /// <summary>Sets the alpha (0..1) for subsequently posted lines. MAIN THREAD ONLY.</summary>
+    public static void SetQueuedTextAlpha(float a)
     {
-        *(float*)FontColorR = r;
-        *(float*)FontColorG = g;
-        *(float*)FontColorB = b;
-        *(float*)FontColorA = a;
+        *(float*)QueuedTextAlphaA = a;
+        *(float*)QueuedTextAlphaB = a;
     }
 
-    /// <summary>Restores the default opaque white, so other engine text is not tinted.</summary>
-    public static void ResetFontColor() => SetFontColor(1f, 1f, 1f, 1f);
-
-    // Console command registration (docs/research/console-register.md). Registering our verbs
-    // makes the engine console recognise them, so it no longer prints "function <x> not
-    // found", and the adapter blanks the output. A command entry is a zeroed block with the
-    // name inline at +0x00 and a pointer at +0x50 to an 8-byte functor {adapter vtable, our
-    // cdecl fnptr}; ConsoleFuncs_Add stores the entry POINTER without copying, so it must live
-    // for the process lifetime.
-    private static readonly delegate* unmanaged[Cdecl]<nint, void> ConsoleFuncsAddFn =
-        (delegate* unmanaged[Cdecl]<nint, void>)0x0044BA80;
-
-    /// <summary>The engine functor adapter vtable: a functor with this vtable and a cdecl
-    /// fnptr is invoked by the console as <c>void __cdecl(const char* args)</c>.</summary>
-    public const nint ConsoleAdapterVtable = 0x00741440;
-
-    /// <summary>Registers a prepared command entry (name @0, functor-ptr @0x50) with the
-    /// engine console. MAIN THREAD ONLY. The pointer is stored, not copied.</summary>
-    public static void RegisterConsoleEntry(nint entry) => ConsoleFuncsAddFn(entry);
-
-    // The texture-font table PrintStringScreenPos indexes into. It is only bound during the
-    // engine's own render pass (UpdateScreen), but our SwapBuffers hook fires on every
-    // main-loop swap (~317 Hz), most of which are NOT that pass — on those frames the table
-    // pointer is null and the draw faults dereferencing fontTable[index] (verified live: the
-    // crash was at 0x44CDE0, `mov edx,[eax+ecx*4]`). So the draw is gated on the full deref
-    // chain being valid; on a frame where the font is not bound we simply skip drawing.
-    private const nint FontTablePtr = 0x0083052C;
-    private const nint FontIndexPtr = 0x0078E358;
-
-    private static bool PlausiblePtr(nint p) => p >= 0x00010000 && p < 0x7FFF0000;
+    /// <summary>Restores opaque, so the game's own queued text is not tinted.</summary>
+    public static void ResetQueuedTextAlpha() => SetQueuedTextAlpha(1f);
 
     /// <summary>
-    /// True only when the engine's texture font is bound and its object/vtable chain is
-    /// readable — i.e. when calling <see cref="PrintStringScreenPosFn"/> is safe this frame.
-    /// Replicates the exact chain the draw dereferences, bailing on the first bad pointer.
+    /// Posts one null-terminated ASCII line to the engine's render queue at a text grid cell
+    /// (<paramref name="column"/>, <paramref name="row"/>), living <paramref name="life"/>
+    /// seconds (~10 frames per unit). Re-post every frame to keep it up; the ctor de-dups a
+    /// line at the same cell and the flush frees expired nodes, so re-posting does not leak.
+    /// Enqueue only — never touches the font — so it is safe from the SwapBuffers hook even
+    /// when the font is unbound. MAIN THREAD ONLY.
     /// </summary>
-    private static bool IsFontReady()
+    public static void PostTextLine(byte* nulTerminated, int column, int row, float life)
     {
-        nint table = *(nint*)FontTablePtr;
-        if (!PlausiblePtr(table))
+        if (nulTerminated != null && *nulTerminated != 0)
         {
-            return false;
+            AurPostStringFn(nulTerminated, column, row, life);
         }
-
-        uint index = *(uint*)FontIndexPtr;
-        if (index >= 32)
-        {
-            return false;
-        }
-
-        nint fontObj = *(nint*)(table + ((nint)index * 4));
-        if (!PlausiblePtr(fontObj))
-        {
-            return false;
-        }
-
-        nint inner = *(nint*)(fontObj + 0x1C);
-        if (!PlausiblePtr(inner))
-        {
-            return false;
-        }
-
-        return PlausiblePtr(*(nint*)inner); // the vtable the draw calls through
     }
 
-    /// <summary>
-    /// Draws one null-terminated ASCII line through the engine's own text path. Position is
-    /// the centered, 0.01-scaled space the console uses. MAIN THREAD ONLY. Skipped entirely on
-    /// a frame where the font is not bound, so it can never fault the game.
-    /// </summary>
-    public static void DrawTextAscii(byte* nulTerminated, float x, float y)
+    // Suppress the console's "function <x> not found" for our co-op verbs. Registering them in
+    // the command table did not take (the lookup at 0x0044BB90 never matched our entries), so
+    // instead blank the format string the not-found path prints: at 0x0044C4B5 the dispatcher
+    // does sprintf(buf, 0x0074145C /*"function %s not found"*/, verb). Making that string empty
+    // makes the message empty — nothing shown — while our buffer capture still routes the
+    // command. It also silences a real typo's message, which is an acceptable trade for a
+    // co-op console. One-byte patch to read-only .rdata, so unprotect around it.
+    private const nint NotFoundFormatString = 0x0074145C;
+
+    /// <summary>Blanks the "function %s not found" message. Idempotent. MAIN THREAD ONLY.</summary>
+    public static void SuppressConsoleNotFound()
     {
-        if (nulTerminated == null || *nulTerminated == 0 || !IsFontReady())
+        if (*(byte*)NotFoundFormatString == 0)
         {
-            return;
+            return; // already blanked
         }
 
-        PrintStringScreenPosFn(nulTerminated, x, y);
+        if (NativeMethods.VirtualProtect(NotFoundFormatString, (nuint)1, NativeMethods.PageReadWrite, out uint old))
+        {
+            *(byte*)NotFoundFormatString = 0;
+            NativeMethods.VirtualProtect(NotFoundFormatString, (nuint)1, old, out _);
+        }
     }
 
     // ---- death pose --------------------------------------------------------------

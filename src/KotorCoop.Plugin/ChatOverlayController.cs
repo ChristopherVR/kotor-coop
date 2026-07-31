@@ -7,10 +7,10 @@ namespace KotorCoop.Plugin;
 /// the lines with arrival timestamps and renders the recent ones, fading them out after a
 /// configurable delay so the screen is clear most of the time.
 ///
-/// Opacity is read from the config and will modulate the draw once an alpha-capable text path
-/// is wired (see docs/research/text-color-alpha.md). Until then the fade-out is what keeps the
-/// overlay unobtrusive; the text itself is drawn opaque via the verified
-/// <see cref="Odyssey.DrawTextAscii"/>. A wrong coordinate only mis-places text, never crashes.
+/// Lines are posted through the engine's queued text path (<see cref="Odyssey.PostTextLine"/>),
+/// which the engine flushes every frame while the font is bound — so an always-on overlay
+/// renders even with the console closed, and the enqueue never touches the font (no crash).
+/// Opacity is applied through the queued path's alpha (docs/research/text-render-queued.md).
 /// </summary>
 internal sealed unsafe class ChatOverlayController
 {
@@ -99,41 +99,40 @@ internal sealed unsafe class ChatOverlayController
             return;
         }
 
-        (float x, float topY, float bottomY, bool fromBottom) = Anchor(_block.ChatOverlayAnchor);
-        const float step = 6f;
+        (int column, int baseRow, bool fromBottom) = Anchor(_block.ChatOverlayAnchor);
 
         // Configured opacity as a real alpha, floored so an enabled overlay is never fully
-        // invisible. The font color must be restored to white afterwards so the game's own
-        // subtitles/feedback text are not tinted.
+        // invisible. Restore afterwards so the game's own subtitles/feedback text are opaque.
         float alpha = Math.Clamp(_block.ChatOverlayOpacity / 100f, 0.05f, 1f);
-        Odyssey.SetFontColor(1f, 1f, 1f, alpha);
+        Odyssey.SetQueuedTextAlpha(alpha);
 
         for (int j = 0; j < vcount; j++)
         {
             // j counts oldest -> newest among the visible lines.
             int slot = visible[vcount - 1 - j];
-            float y = fromBottom
-                ? bottomY + ((vcount - 1 - j) * step) // newest sits at the bottom
-                : topY - (j * step);                  // oldest sits at the top
+            int row = fromBottom
+                ? baseRow - (vcount - 1 - j) // newest sits at the bottom row
+                : baseRow + j;               // oldest sits at the top row
 
             fixed (byte* p = _lines[slot])
             {
-                Odyssey.DrawTextAscii(p, x, y);
+                Odyssey.PostTextLine(p, column, row, 0.5f);
             }
         }
 
-        Odyssey.ResetFontColor();
+        Odyssey.ResetQueuedTextAlpha();
     }
 
     /// <summary>
-    /// Screen anchor in the console's centered, 0.01-scaled space. Values are reasonable
-    /// guesses pending one live calibration pass (same basis as the ~ console overlay).
+    /// Screen anchor as a text-grid cell (column, base row). The engine uses rows 0-2 for the
+    /// console prompt/line, so these keep clear of it. Grid size is viewport-derived and wants
+    /// one live calibration pass, but a wrong value only mis-places text, never crashes.
     /// </summary>
-    private static (float X, float TopY, float BottomY, bool FromBottom) Anchor(uint anchor) => anchor switch
+    private static (int Column, int BaseRow, bool FromBottom) Anchor(uint anchor) => anchor switch
     {
-        1 => (15f, 86f, -84f, false),   // top-right
-        2 => (-95f, 86f, -84f, true),   // bottom-left
-        3 => (15f, 86f, -84f, true),    // bottom-right
-        _ => (-95f, 86f, -84f, false),  // top-left (default)
+        1 => (42, 4, false),   // top-right
+        2 => (1, 24, true),    // bottom-left
+        3 => (42, 24, true),   // bottom-right
+        _ => (1, 4, false),    // top-left (default)
     };
 }

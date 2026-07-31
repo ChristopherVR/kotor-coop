@@ -1,5 +1,3 @@
-using System.Runtime.CompilerServices;
-using System.Runtime.InteropServices;
 using System.Text;
 
 namespace KotorCoop.Plugin;
@@ -11,11 +9,11 @@ namespace KotorCoop.Plugin;
 ///
 /// The plugin READS the engine's live command buffer and Win32 key state to capture and route
 /// commands, and WRITES into the shared block. The engine owns the toggle, the on-screen input
-/// line, the caret and the keyboard grab (all provided once EnableCheats is set). It also
-/// registers the co-op verbs with the console's own command table (a verified, data-driven
-/// API — see docs/research/console-register.md) with a no-op handler, purely so the engine
-/// recognises them and does not print "function &lt;x&gt; not found"; the routing still happens
-/// through the buffer capture below.
+/// line, the caret and the keyboard grab (all provided once EnableCheats is set). Because our
+/// verbs are not in the engine's command table, the console would print "function &lt;x&gt; not
+/// found" for them; we suppress that by blanking the message's format string
+/// (<see cref="Odyssey.SuppressConsoleNotFound"/>). Replies render through the engine's queued
+/// text path (<see cref="Odyssey.PostTextLine"/>).
 ///
 /// Capture is decoupled from the exact Enter frame: the buffer the engine clears on Enter is
 /// remembered from the previous frame, so whichever runs first — the engine's Enter handling
@@ -73,10 +71,10 @@ internal sealed unsafe class ConsoleController
 
     public void OnFrame()
     {
-        if (!_registered)
+        if (!_suppressed)
         {
-            _registered = true;
-            RegisterCommands();
+            _suppressed = true;
+            Odyssey.SuppressConsoleNotFound();
         }
 
         CaptureReplies();
@@ -102,54 +100,7 @@ internal sealed unsafe class ConsoleController
         _pendingLength = 0;
     }
 
-    private bool _registered;
-
-    /// <summary>Blocks handed to the engine console; kept forever because the table stores our
-    /// pointers without copying (docs/research/console-register.md).</summary>
-    private static nint _functor;
-
-    /// <summary>
-    /// Registers each co-op verb with the engine console so it recognises them (no "function
-    /// not found") and the adapter blanks the output. The handler is a no-op — the command is
-    /// still captured and routed by <see cref="HandleEnter"/>; registration only suppresses
-    /// the engine's own dispatch complaint. MAIN THREAD ONLY.
-    /// </summary>
-    private void RegisterCommands()
-    {
-        // One shared functor: { engine adapter vtable, our cdecl handler }.
-        _functor = (nint)NativeMemory.AllocZeroed(8);
-        *(nint*)_functor = Odyssey.ConsoleAdapterVtable;
-        *(nint*)(_functor + 4) = (nint)(delegate* unmanaged[Cdecl]<nint, void>)&ConsoleCommandHandler;
-
-        foreach (string verb in Verbs)
-        {
-            // Zeroed entry: name inline at +0x00, functor pointer at +0x50. 0x60 bytes leaves
-            // room past the two read fields.
-            byte* entry = (byte*)NativeMemory.AllocZeroed(0x60);
-
-            int n = Math.Min(verb.Length, 0x4F);
-            for (int i = 0; i < n; i++)
-            {
-                entry[i] = (byte)verb[i];
-            }
-
-            *(nint*)(entry + 0x50) = _functor;
-            Odyssey.RegisterConsoleEntry((nint)entry);
-        }
-
-        PluginHost.Log($"console: registered {Verbs.Length} co-op commands");
-    }
-
-    /// <summary>
-    /// The engine console invokes this (via its functor adapter) when a registered verb is
-    /// entered. Deliberately empty: it exists so the engine finds the command and does not
-    /// print "function not found"; the real routing is done by the buffer capture. cdecl —
-    /// the adapter cleans the one argument, so a stdcall handler would corrupt the stack.
-    /// </summary>
-    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
-    private static void ConsoleCommandHandler(nint args)
-    {
-    }
+    private bool _suppressed;
 
     /// <summary>Snapshots the engine's live command line while it is non-empty.</summary>
     private void RememberCurrentLine()
@@ -235,28 +186,29 @@ internal sealed unsafe class ConsoleController
     }
 
     /// <summary>
-    /// Draws the hint and the recent reply lines. Positions are in the console's centered,
-    /// 0.01-scaled space; the exact values want one live calibration pass, but a wrong value
-    /// only mis-places text, it cannot crash.
+    /// Posts the hint and recent reply lines to the engine's text queue by grid row. The exact
+    /// grid size wants one live calibration pass, but a wrong value only mis-places text.
     /// </summary>
     private void Draw()
     {
-        const float x = -95f;
-        float y = 74f;
+        // Text grid rows: the engine draws the console prompt at row 0 and the command line at
+        // row 2, so our hint + reply log start below that. Re-posted every frame; ~0.5 s life
+        // covers a dropped frame without lingering. Column 1 keeps a small left margin.
+        const int column = 1;
+        const float life = 0.5f;
 
         fixed (byte* h = _hint)
         {
-            Odyssey.DrawTextAscii(h, x, y + 8f);
+            Odyssey.PostTextLine(h, column, 4, life);
         }
 
         int shown = Math.Min(_logCount, LogLines);
         for (int i = 0; i < shown; i++)
         {
-            // Oldest first, newest at the bottom.
             int index = (_logCount - shown + i) % LogLines;
             fixed (byte* line = _log[index])
             {
-                Odyssey.DrawTextAscii(line, x, y - (i * 6f));
+                Odyssey.PostTextLine(line, column, 6 + i, life);
             }
         }
     }

@@ -33,6 +33,10 @@ internal static partial class NativeMethods
     [LibraryImport("kernel32.dll", SetLastError = true)]
     public static partial nint VirtualAlloc(nint address, nuint size, uint allocationType, uint protect);
 
+    [LibraryImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static partial bool VirtualProtect(nint address, nuint size, uint newProtect, out uint oldProtect);
+
     [LibraryImport("kernel32.dll")]
     public static partial uint GetCurrentProcessId();
 

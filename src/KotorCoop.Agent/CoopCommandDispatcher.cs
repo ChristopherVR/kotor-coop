@@ -201,18 +201,18 @@ public sealed class CoopCommandDispatcher(
         }
     }
 
-    /// <summary>Status/log lines: the ~ console only.</summary>
+    /// <summary>
+    /// All co-op feedback — command replies and chat alike — goes to the always-on overlay as
+    /// well as the console reply line, because the console closes on Enter (so a reply that
+    /// arrives a tick later would never be seen there) and the overlay persists regardless.
+    /// </summary>
     private void Reply(string text)
-    {
-        Console.WriteLine($"[coop] {text}");
-        _kotor?.PostConsoleReply(text);
-    }
-
-    /// <summary>Chat lines: the ~ console AND the always-on chat overlay.</summary>
-    private void Chat(string text)
     {
         Console.WriteLine($"[coop] {text}");
         _kotor?.PostConsoleReply(text);
         _kotor?.PostChatLine(text);
     }
+
+    /// <summary>Alias kept for call sites that specifically mean a chat line.</summary>
+    private void Chat(string text) => Reply(text);
 }
