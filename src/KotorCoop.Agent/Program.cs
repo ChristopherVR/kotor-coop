@@ -358,6 +358,25 @@ internal static class Program
 
         while (!token.IsCancellationRequested)
         {
+            // Keep the in-game browser panel fed with what the LAN listener has found, so the
+            // list is live while the player is looking at it.
+            lastServers = browser.Servers;
+            kotor.PublishBrowserServers(
+                [.. lastServers.Select(s => (s.Name, s.Address, (byte)s.PlayerCount, (byte)s.MaxPlayers))]);
+
+            // The player picked a row in the panel and pressed Enter.
+            if (kotor.TryTakeBrowserConnect(out int picked))
+            {
+                if (picked >= 0 && picked < lastServers.Count)
+                {
+                    ServerInfo chosen = lastServers[picked];
+                    MenuReply(kotor, $"connecting to {chosen.Name} ({chosen.Address})");
+                    return (true, CoopMode.Join, chosen.EndPoint, name, password);
+                }
+
+                MenuReply(kotor, "that server is no longer listed");
+            }
+
             if (kotor.TryTakeConnectRequest(out string typedHost))
             {
                 kotor.SetConnectStatus(SharedBlockConnectStatusConnecting);

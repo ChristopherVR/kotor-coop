@@ -33,6 +33,7 @@ internal static unsafe class PluginHost
     private static MenuLoadController? _menuLoad;
     private static ConnectMenuController? _connectMenu;
     private static ChatInputController? _chatInput;
+    private static ServerBrowserController? _browser;
     private static ChatOverlayController? _chatOverlay;
     private static DialogueSpectateController? _dialogueSpectate;
     private static Thread? _worker;
@@ -81,6 +82,7 @@ internal static unsafe class PluginHost
             _menuLoad = new MenuLoadController(_view);
             _connectMenu = new ConnectMenuController(_view);
             _chatInput = new ChatInputController();
+            _browser = new ServerBrowserController(_view);
             _chatOverlay = new ChatOverlayController(_view);
             _dialogueSpectate = new DialogueSpectateController(_view);
             _pause = new PauseController(_view);
@@ -159,7 +161,7 @@ internal static unsafe class PluginHost
         Unsafe.InitBlockUnaligned(_block, 0, SharedBlock.TotalSize);
 
         _block->Magic = SharedBlock.MagicValue;
-        _block->Version = 12;
+        _block->Version = 13;
 
         // A guard dword after the version. Magic plus version alone was not selective
         // enough: a scan once matched something else at a lower address and the agent
@@ -196,6 +198,7 @@ internal static unsafe class PluginHost
     private static void MenuFrame()
     {
         _connectMenu?.OnFrame();
+        _browser?.OnFrame();
     }
 
     private static void OnFrame()

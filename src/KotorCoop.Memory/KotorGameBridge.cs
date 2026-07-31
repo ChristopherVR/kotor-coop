@@ -173,8 +173,8 @@ public sealed class KotorGameBridge : IGameBridge
     private const int BlockLocalDialogueLine = 0xCA8;
     private const int BlockLocalDialogueLineLength = 64;
 
-    /// <summary>16-byte signature: "KOCOOP01" + version 12 + guard 0xC0FFEE01.</summary>
-    public const string PluginSignature = "4B 4F 43 4F 4F 50 30 31 0C 00 00 00 01 EE FF C0";
+    /// <summary>16-byte signature: "KOCOOP01" + version 13 + guard 0xC0FFEE01.</summary>
+    public const string PluginSignature = "4B 4F 43 4F 4F 50 30 31 0D 00 00 00 01 EE FF C0";
 
     /// <summary>Agent's view of which coop item id occupies each plugin item slot.</summary>
     private readonly uint[] _itemSlotIds = new uint[BlockItemCapacity];
@@ -1725,6 +1725,97 @@ public sealed class KotorGameBridge : IGameBridge
         }
 
         return commandLine.Length > 0;
+    }
+
+    // ---- server browser ---------------------------------------------------------
+
+    private const int BlockBrowserOpen = 0xE00;
+    private const int BlockBrowserSelection = 0xE04;
+    private const int BlockBrowserCount = 0xE08;
+    private const int BlockBrowserConnectSerial = 0xE0C;
+    private const int BlockBrowserListSerial = 0xE10;
+    private const int BlockBrowserEntries = 0xE20;
+    private const int BlockBrowserEntryStride = 0x40;
+    private const int BlockBrowserEntryName = 0x00;
+    private const int BlockBrowserEntryNameLength = 32;
+    private const int BlockBrowserEntryAddress = 0x20;
+    private const int BlockBrowserEntryAddressLength = 24;
+    private const int BlockBrowserEntryPlayers = 0x38;
+    private const int BlockBrowserEntryMaxPlayers = 0x39;
+    private const int BlockBrowserCapacity = 8;
+
+    private uint _browserListSerial;
+    private uint _lastBrowserConnectSerial;
+    private string _lastBrowserSignature = string.Empty;
+
+    /// <summary>True while the in-game browser panel is on screen.</summary>
+    public bool BrowserOpen =>
+        _pluginBlock != 0
+        && _memory.TryReadUInt32(_pluginBlock + BlockBrowserOpen, out uint open)
+        && open != 0;
+
+    /// <summary>
+    /// Publishes the discovered servers for the in-game panel to draw. Writes the rows first and
+    /// the count last, so the plugin can never read a count that outruns the rows. A cheap
+    /// signature check keeps this from rewriting the same list every tick.
+    /// </summary>
+    public bool PublishBrowserServers(IReadOnlyList<(string Name, string Address, byte Players, byte MaxPlayers)> servers)
+    {
+        if (_pluginBlock == 0)
+        {
+            return false;
+        }
+
+        int count = Math.Min(servers.Count, BlockBrowserCapacity);
+
+        string signature = string.Join('|', servers.Take(count).Select(s => $"{s.Name}@{s.Address}:{s.Players}/{s.MaxPlayers}"));
+        if (signature == _lastBrowserSignature)
+        {
+            return true;
+        }
+
+        _lastBrowserSignature = signature;
+
+        for (int i = 0; i < count; i++)
+        {
+            nint entry = _pluginBlock + BlockBrowserEntries + (i * BlockBrowserEntryStride);
+            (string name, string address, byte players, byte max) = servers[i];
+
+            _memory.TryWriteAsciiString(entry + BlockBrowserEntryName, name, BlockBrowserEntryNameLength);
+            _memory.TryWriteAsciiString(entry + BlockBrowserEntryAddress, address, BlockBrowserEntryAddressLength);
+            _memory.TryWrite(entry + BlockBrowserEntryPlayers, players);
+            _memory.TryWrite(entry + BlockBrowserEntryMaxPlayers, max);
+        }
+
+        _memory.TryWrite(_pluginBlock + BlockBrowserCount, (uint)count);
+        return _memory.TryWrite(_pluginBlock + BlockBrowserListSerial, ++_browserListSerial);
+    }
+
+    /// <summary>
+    /// True (once) when the player confirmed a row in the panel; <paramref name="index"/> is the
+    /// chosen server. The plugin writes the selection before the serial, so a bumped serial
+    /// always pairs with the right index.
+    /// </summary>
+    public bool TryTakeBrowserConnect(out int index)
+    {
+        index = -1;
+
+        if (_pluginBlock == 0
+            || !_memory.TryReadUInt32(_pluginBlock + BlockBrowserConnectSerial, out uint serial)
+            || serial == _lastBrowserConnectSerial)
+        {
+            return false;
+        }
+
+        _lastBrowserConnectSerial = serial;
+
+        if (!_memory.TryReadUInt32(_pluginBlock + BlockBrowserSelection, out uint selection))
+        {
+            return false;
+        }
+
+        index = (int)selection;
+        return true;
     }
 
     /// <summary>Posts a status line for the in-game console to display.</summary>

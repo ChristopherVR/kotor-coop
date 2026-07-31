@@ -408,6 +408,38 @@ internal sealed unsafe class SharedBlockView(byte* baseAddress)
     /// <summary>Agent-written; bumped to wipe the overlay log.</summary>
     public uint ChatClearSerial => *U32(SharedBlock.OffsetChatClearSerial);
 
+    // ---- server browser ---------------------------------------------------------
+
+    /// <summary>Nonzero while the browser panel is on screen (plugin owns this).</summary>
+    public uint BrowserOpen
+    {
+        get => *U32(SharedBlock.OffsetBrowserOpen);
+        set => *U32(SharedBlock.OffsetBrowserOpen) = value;
+    }
+
+    /// <summary>The highlighted row (plugin owns this).</summary>
+    public uint BrowserSelection
+    {
+        get => *U32(SharedBlock.OffsetBrowserSelection);
+        set => *U32(SharedBlock.OffsetBrowserSelection) = value;
+    }
+
+    /// <summary>How many server rows the agent has published.</summary>
+    public uint BrowserCount => *U32(SharedBlock.OffsetBrowserCount);
+
+    /// <summary>Bumped by the agent whenever the list changes.</summary>
+    public uint BrowserListSerial => *U32(SharedBlock.OffsetBrowserListSerial);
+
+    /// <summary>Confirms the current selection; the agent connects. Selection is written first.</summary>
+    public void RequestBrowserConnect() => (*U32(SharedBlock.OffsetBrowserConnectSerial))++;
+
+    /// <summary>Asks the agent to prompt for a password for the current selection.</summary>
+    public void RequestBrowserPassword() => (*U32(SharedBlock.OffsetBrowserPasswordSerial))++;
+
+    /// <summary>Start of a server row's fixed-size record.</summary>
+    public byte* BrowserEntry(int index) =>
+        baseAddress + SharedBlock.OffsetBrowserEntries + (index * SharedBlock.BrowserEntryStride);
+
     // ---- dialogue spectate ------------------------------------------------------
 
     /// <summary>Pointer to the current dialogue speaker (40 bytes), plugin-written.</summary>

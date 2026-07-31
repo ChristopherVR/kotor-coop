@@ -86,8 +86,11 @@ internal sealed unsafe class ConnectMenuController
         {
             if (_instance is { } self)
             {
-                self._block.ConnectSerial++;
-                self.LogOnce("menu: Co-op clicked; asking the agent to connect");
+                // Open the server browser rather than connecting blind: bumping the connect
+                // serial made the agent dial coop.ini immediately, which would race the
+                // player's pick. The browser posts its own connect once a row is confirmed.
+                ServerBrowserController.RequestOpen();
+                self.LogOnce("menu: Co-op clicked; opening the server browser");
             }
         }
         catch

@@ -47,6 +47,12 @@ internal static partial class NativeMethods
     public const int VkPageUp = 0x21;
     public const int VkPageDown = 0x22;
 
+    /// <summary>Server-browser panel navigation.</summary>
+    public const int VkEscape = 0x1B;
+    public const int VkUp = 0x26;
+    public const int VkDown = 0x28;
+    public const int VkF9 = 0x78;
+
     /// <summary>
     /// Physical key state, independent of the message queue. The high bit is set while the
     /// key is down. Used only to detect the Enter that submits a console line — reads no

@@ -47,7 +47,7 @@ internal struct SharedBlock
     /// existing offset profiles keep working. The plugin control fields live AFTER that
     /// range, which is why the block is larger than the profile knows about.
     /// </summary>
-    public const int TotalSize = 0xF00;
+    public const int TotalSize = 0x1100;
 
     public const int ProfileVisibleSize = 0x250;
 
@@ -403,6 +403,48 @@ internal struct SharedBlock
     public const int LootSlotStride = 0x08;
 
     public const int LootCapacity = 24; // occupies 0xD08..0xDC8, inside the 0xD00..0xE00 region
+
+    // ---- server browser (version 13, region 0xE00..0x1100) ------------------------
+    //
+    // A real in-game browser: the agent publishes the LAN servers it has discovered, the plugin
+    // draws them as a panel (it can render at the main menu, where the engine's own GUI is not
+    // safely extensible) and lets the player pick one. The pick travels back as a request serial
+    // plus the chosen index, so the agent does the connecting through the same SessionManager
+    // path as a typed `connect`.
+
+    /// <summary>Plugin -&gt; agent. Nonzero while the browser panel is on screen.</summary>
+    public const int OffsetBrowserOpen = 0xE00;
+
+    /// <summary>Plugin -&gt; agent. The highlighted row (0-based).</summary>
+    public const int OffsetBrowserSelection = 0xE04;
+
+    /// <summary>Agent -&gt; plugin. How many server entries are valid.</summary>
+    public const int OffsetBrowserCount = 0xE08;
+
+    /// <summary>Plugin -&gt; agent. Bumped when the player confirms a row; the agent connects to
+    /// <see cref="OffsetBrowserSelection"/>. Written last, after the selection.</summary>
+    public const int OffsetBrowserConnectSerial = 0xE0C;
+
+    /// <summary>Agent -&gt; plugin. Bumped whenever the server list changes, so the panel can
+    /// redraw without diffing every entry.</summary>
+    public const int OffsetBrowserListSerial = 0xE10;
+
+    /// <summary>Plugin -&gt; agent. Bumped to ask for a password prompt for the selection.</summary>
+    public const int OffsetBrowserPasswordSerial = 0xE14;
+
+    /// <summary>Agent -&gt; plugin. Server entries: name[32], address[24], players u8, max u8.</summary>
+    public const int OffsetBrowserEntries = 0xE20;
+
+    public const int BrowserEntryStride = 0x40;
+    public const int BrowserEntryName = 0x00;
+    public const int BrowserEntryNameLength = 32;
+    public const int BrowserEntryAddress = 0x20;
+    public const int BrowserEntryAddressLength = 24;
+    public const int BrowserEntryPlayers = 0x38;
+    public const int BrowserEntryMaxPlayers = 0x39;
+
+    /// <summary>Rows the panel can show; occupies 0xE20..0x1020, inside the region.</summary>
+    public const int BrowserCapacity = 8;
 
     public const int ItemSlotCapacity = 8;
 
