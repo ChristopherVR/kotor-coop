@@ -144,6 +144,11 @@ public ref struct PacketWriter
         WriteString(state.EquippedRightWeapon, ProtocolConstants.MaxResrefLength);
         WriteString(state.EquippedLeftWeapon, ProtocolConstants.MaxResrefLength);
         WriteUInt32(state.Flags);
+
+        // The one-shot animation edge: id plus a sequence, so a repeated identical action
+        // still replays rather than being swallowed as "unchanged".
+        WriteUInt16(state.OneShotAnimation);
+        WriteUInt8(state.OneShotSequence);
     }
 
     public void WriteName(string? value) => WriteString(value, ProtocolConstants.MaxNameLength);

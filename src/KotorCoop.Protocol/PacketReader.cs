@@ -133,8 +133,10 @@ public ref struct PacketReader
         string rightWeapon = ReadString();
         string leftWeapon = ReadString();
         uint flags = ReadUInt32();
+        ushort oneShot = ReadUInt16();
+        byte oneShotSequence = ReadUInt8();
         return new PlayerState(
             position, facing, module, health, animation, appearance, maxHealth,
-            body, rightWeapon, leftWeapon, flags);
+            body, rightWeapon, leftWeapon, flags, oneShot, oneShotSequence);
     }
 }

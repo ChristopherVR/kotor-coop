@@ -93,6 +93,11 @@ internal sealed unsafe class PhantomController(SharedBlockView block)
     /// animation is issued once when it appears rather than restarted every frame.</summary>
     private readonly uint[] _lastAnim = new uint[SharedBlock.SlotCapacity];
 
+    /// <summary>Last one-shot sequence applied per slot, so each fires exactly once.</summary>
+    private readonly uint[] _lastOneShotSerial = new uint[SharedBlock.SlotCapacity];
+
+    private int _oneShotsLogged;
+
     /// <summary>True while the phantom is lying in a death pose because its player is at
     /// zero health. Tracked so the pose is set once, not re-issued every step.</summary>
     private readonly bool[] _down = new bool[SharedBlock.SlotCapacity];
@@ -305,6 +310,25 @@ internal sealed unsafe class PhantomController(SharedBlockView block)
             // Mirror the peer's played animation every frame (change-detected). It overlays
             // on the twin, so it does not fight the movement action below.
             MirrorAnimation(i, phantom, remote.Animation);
+
+            // One-shots (weapon draw, attack swings, flourish, injecting a stim) arrive as an
+            // EDGE rather than a level, because they finish between polls and some never touch
+            // an object field at all. Fire each exactly once, through the engine's own
+            // client-side call — a field write cannot do it (the engine's update handler drops
+            // repeats and skips the whole combat set outright).
+            uint oneShotSerial = block.GetRemoteOneShotSerial(i);
+            if (oneShotSerial != _lastOneShotSerial[i])
+            {
+                _lastOneShotSerial[i] = oneShotSerial;
+
+                ushort animation = (ushort)block.GetRemoteOneShotAnim(i);
+                if (animation != 0 && Odyssey.PlayOneShotAnimation(phantom, animation)
+                    && _oneShotsLogged < 5)
+                {
+                    _oneShotsLogged++;
+                    PluginHost.Log($"animation: played one-shot 0x{animation:X} on phantom 0x{_phantomIds[i]:X}");
+                }
+            }
 
             if (_repathCooldown[i] > 0)
             {

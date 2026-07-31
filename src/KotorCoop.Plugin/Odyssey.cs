@@ -1769,6 +1769,73 @@ internal static unsafe class Odyssey
     public static bool HasClientTwin(nint creature) =>
         creature != 0 && *(nint*)(creature + CreClientTwin) != 0;
 
+    /// <summary>A creature's render-side twin, or 0.</summary>
+    public static nint GetClientTwin(nint creature) =>
+        creature == 0 ? 0 : *(nint*)(creature + CreClientTwin);
+
+    /// <summary>
+    /// The LOCAL player's client twin, or 0. Used by the animation hook to tell the player's
+    /// own one-shots apart from every other creature's — the hook fires for every swing in
+    /// the area, so this must be cheap and must never call into the engine.
+    /// </summary>
+    public static nint GetLocalPlayerTwin()
+    {
+        nint server = GetServer();
+        if (server == 0)
+        {
+            return 0;
+        }
+
+        nint player = GetPlayerCreatureFn(server);
+        return player == 0 ? 0 : *(nint*)(player + CreClientTwin);
+    }
+
+    // ---- applying a peer's one-shot animation -------------------------------------
+
+    /// <summary>CSWCCreature vtable +0xA0 = AddFireForgetAnimation(uint anim, void* options).
+    /// The options pointer may be null; the engine then derives the duration from the
+    /// animation's own length divided by the twin's animation speed.</summary>
+    private const int TwinAddFireForgetSlot = 0xA0;
+
+    /// <summary>CSWCObject::AnimationFireAndForget(u16) — the engine's own classifier, so we
+    /// never need a hardcoded list of which ids are one-shots.</summary>
+    private static readonly delegate* unmanaged[Thiscall]<nint, ushort, int> AnimationFireAndForgetFn =
+        (delegate* unmanaged[Thiscall]<nint, ushort, int>)0x0063C380;
+
+    /// <summary>
+    /// Plays a peer's one-shot animation (a weapon draw, an attack swing, a flourish, an
+    /// injected stim) on a phantom, through the engine's own client-side call.
+    ///
+    /// A raw field write cannot do this job: the engine's own object-update handler drops
+    /// repeats and explicitly skips the entire combat animation set, and overlays have no
+    /// field at all. See docs/research/animation-and-minimap.md.
+    ///
+    /// MAIN THREAD ONLY.
+    /// </summary>
+    public static bool PlayOneShotAnimation(nint creature, ushort animation)
+    {
+        nint twin = GetClientTwin(creature);
+        if (twin == 0 || *(nint*)twin != ClientCreatureVtable)
+        {
+            return false;
+        }
+
+        // Only dispatch what the engine itself classifies as fire-and-forget: a looping or
+        // overlay id sent down this path parks in the twin's current-animation field with no
+        // expiry and wedges the body.
+        if (AnimationFireAndForgetFn(twin, animation) == 0)
+        {
+            return false;
+        }
+
+        nint vtable = *(nint*)twin;
+        var addFireForget =
+            (delegate* unmanaged[Thiscall]<nint, uint, nint, void>)(*(nint*)(vtable + TwinAddFireForgetSlot));
+
+        addFireForget(twin, animation, 0);
+        return true;
+    }
+
     /// <summary>The CSWCCreature vtable — the guard that a twin is really a creature twin
     /// before its GetName-side name fields are written.</summary>
     private const nint ClientCreatureVtable = 0x0074F5F8;

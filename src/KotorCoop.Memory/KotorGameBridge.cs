@@ -177,7 +177,7 @@ public sealed class KotorGameBridge : IGameBridge
     /// part of the pattern deliberately: an agent must not attach to a plugin whose block
     /// layout it does not know, and a stale pair fails to find each other rather than reading
     /// the wrong offsets.</summary>
-    public const string PluginSignature = "4B 4F 43 4F 4F 50 30 31 0F 00 00 00 01 EE FF C0";
+    public const string PluginSignature = "4B 4F 43 4F 4F 50 30 31 10 00 00 00 01 EE FF C0";
 
     /// <summary>Agent's view of which coop item id occupies each plugin item slot.</summary>
     private readonly uint[] _itemSlotIds = new uint[BlockItemCapacity];
@@ -496,9 +496,12 @@ public sealed class KotorGameBridge : IGameBridge
         string rightWeapon = ReadEquippedResref(creature, InvSlotRightWeapon);
         string leftWeapon = ReadEquippedResref(creature, InvSlotLeftWeapon);
 
+        RefreshOneShotAnimation();
+
         state = new PlayerState(
             position, facing, module, health, animation, appearance, maxHealth,
-            body, rightWeapon, leftWeapon, ReadLocalFlags(creature));
+            body, rightWeapon, leftWeapon, ReadLocalFlags(creature),
+            _oneShotAnimation, _oneShotSequence);
 
         if (!state.IsPlausible)
         {
@@ -688,6 +691,7 @@ public sealed class KotorGameBridge : IGameBridge
             }
 
             RemotePeer peer = peers[i];
+            WriteRemoteOneShot(i, peer.State);
             ok &= _memory.TryWrite(slot + 0x04, peer.PeerId);
             ok &= _memory.TryWrite(slot + 0x08, peer.State.Position.X);
             ok &= _memory.TryWrite(slot + 0x0C, peer.State.Position.Y);
@@ -1846,6 +1850,57 @@ public sealed class KotorGameBridge : IGameBridge
     private const int BlockBrowserEntryPlayers = 0x38;
     private const int BlockBrowserEntryMaxPlayers = 0x39;
     private const int BlockBrowserCapacity = 8;
+
+    // ---- one-shot animations (block version 16) ---------------------------------
+
+    private const int BlockLocalOneShotAnim = 0x1050;
+    private const int BlockLocalOneShotSerial = 0x1054;
+    private const int BlockRemoteOneShot = 0x1060;
+    private const int BlockRemoteOneShotStride = 0x08;
+
+    private uint _lastSeenOneShotSerial;
+    private byte _oneShotSequence;
+    private ushort _oneShotAnimation;
+
+    /// <summary>
+    /// The local player's most recent one-shot animation, as an EDGE. The plugin hooks the
+    /// engine's fire-and-forget dispatch (these finish between polls, so they cannot be
+    /// sampled) and bumps a serial; this turns that into a small sequence byte that rides the
+    /// per-tick state, so a repeated identical flourish still replicates.
+    /// </summary>
+    private void RefreshOneShotAnimation()
+    {
+        if (_pluginBlock == 0
+            || !_memory.TryReadUInt32(_pluginBlock + BlockLocalOneShotSerial, out uint serial)
+            || serial == _lastSeenOneShotSerial)
+        {
+            return;
+        }
+
+        _lastSeenOneShotSerial = serial;
+
+        if (_memory.TryReadUInt32(_pluginBlock + BlockLocalOneShotAnim, out uint animation))
+        {
+            _oneShotAnimation = (ushort)animation;
+            _oneShotSequence++;
+        }
+    }
+
+    /// <summary>Publishes a peer's one-shot into their slot; the plugin fires it once.</summary>
+    private void WriteRemoteOneShot(int slot, in PlayerState state)
+    {
+        if (_pluginBlock == 0 || state.OneShotAnimation == 0)
+        {
+            return;
+        }
+
+        nint at = _pluginBlock + BlockRemoteOneShot + (slot * BlockRemoteOneShotStride);
+
+        // Animation before serial: the plugin reads the serial last, so it can never see a
+        // bumped serial paired with a stale id.
+        _memory.TryWrite(at, (uint)state.OneShotAnimation);
+        _memory.TryWrite(at + 4, (uint)state.OneShotSequence);
+    }
 
     // ---- co-op death handling (block version 14) --------------------------------
 

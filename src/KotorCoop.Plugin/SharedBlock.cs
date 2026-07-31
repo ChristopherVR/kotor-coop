@@ -490,6 +490,28 @@ internal struct SharedBlock
     /// <summary>Agent -&gt; plugin. Hit points to stand the PC up with (0 = engine default).</summary>
     public const int OffsetReviveHitPoints = 0x1040;
 
+    // ---- one-shot animations (version 16, region 0x1050..0x1080) ------------------
+    //
+    // Weapon draws, attack swings, flourishes and item use are FIRE-AND-FORGET: dispatched,
+    // played and finished between two polls, and some never touch an object field at all.
+    // They are captured by hooking the engine's dispatch (AnimationHook) and carried as an
+    // EDGE — an id plus a sequence, so a repeated identical flourish still replicates —
+    // rather than as a level to be sampled. See docs/research/animation-and-minimap.md.
+
+    /// <summary>Plugin -&gt; agent. The local player's most recent one-shot animation id.</summary>
+    public const int OffsetLocalOneShotAnim = 0x1050;
+
+    /// <summary>Plugin -&gt; agent. Bumped per dispatch; a repeat of the same id still counts.</summary>
+    public const int OffsetLocalOneShotSerial = 0x1054;
+
+    /// <summary>Agent -&gt; plugin. Per remote slot: { u32 animation, u32 serial }. A parallel
+    /// array rather than a RemoteSlot field because the 0x40-byte slot is full.</summary>
+    public const int OffsetRemoteOneShot = 0x1060;
+
+    public const int RemoteOneShotStride = 0x08;
+    public const int RemoteOneShotAnim = 0x00;
+    public const int RemoteOneShotSerial = 0x04;
+
     public const int ItemSlotCapacity = 8;
 
     public const int ItemResrefLength = 16;

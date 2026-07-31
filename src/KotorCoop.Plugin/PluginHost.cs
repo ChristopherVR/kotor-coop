@@ -141,6 +141,18 @@ internal static unsafe class PluginHost
                 Log($"party faction guard NOT installed: {guardDiagnostic}");
             }
 
+            // One-shot animations (draws, swings, flourishes, item use) are dispatched and
+            // finished between polls, so they are captured by hooking the engine's own
+            // dispatch rather than sampled.
+            if (AnimationHook.Install(out string animationDiagnostic))
+            {
+                Log($"animations: {animationDiagnostic}");
+            }
+            else
+            {
+                Log($"animation hook NOT installed: {animationDiagnostic}");
+            }
+
             // Co-op death handling: suppress the control auto-swap and the game-over screen.
             // Both patches stay inert until the agent turns them on, so a plugin with no
             // session behaves exactly like stock KOTOR.
@@ -195,7 +207,7 @@ internal static unsafe class PluginHost
         Unsafe.InitBlockUnaligned(_block, 0, SharedBlock.TotalSize);
 
         _block->Magic = SharedBlock.MagicValue;
-        _block->Version = 15;
+        _block->Version = 16;
 
         // A guard dword after the version. Magic plus version alone was not selective
         // enough: a scan once matched something else at a lower address and the agent
@@ -350,6 +362,14 @@ internal static unsafe class PluginHost
 
             travel.Execute();
             return;
+        }
+
+        // Publish whatever one-shot animation the hook caught since the last frame, so the
+        // agent can ship it with this tick's state.
+        if (_view is { } view && AnimationHook.Sequence != view.LocalOneShotSerial)
+        {
+            view.LocalOneShotAnim = AnimationHook.LastAnimation;
+            view.LocalOneShotSerial = AnimationHook.Sequence;
         }
 
         // Death first among the world controllers: a downed player must be published (and a

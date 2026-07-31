@@ -490,6 +490,32 @@ internal sealed unsafe class SharedBlockView(byte* baseAddress)
         set => *U32(SharedBlock.OffsetReviveStatus) = value;
     }
 
+    // ---- one-shot animations -----------------------------------------------------
+
+    /// <summary>Plugin-written: the local player's most recent one-shot animation.</summary>
+    public uint LocalOneShotAnim
+    {
+        get => *U32(SharedBlock.OffsetLocalOneShotAnim);
+        set => *U32(SharedBlock.OffsetLocalOneShotAnim) = value;
+    }
+
+    /// <summary>Plugin-written: bumped per dispatch, so an identical repeat still replicates.</summary>
+    public uint LocalOneShotSerial
+    {
+        get => *U32(SharedBlock.OffsetLocalOneShotSerial);
+        set => *U32(SharedBlock.OffsetLocalOneShotSerial) = value;
+    }
+
+    /// <summary>Agent-written: a remote peer's latest one-shot animation id.</summary>
+    public uint GetRemoteOneShotAnim(int slot) =>
+        *(uint*)(baseAddress + SharedBlock.OffsetRemoteOneShot
+            + (slot * SharedBlock.RemoteOneShotStride) + SharedBlock.RemoteOneShotAnim);
+
+    /// <summary>Agent-written: its sequence, so the plugin fires it exactly once.</summary>
+    public uint GetRemoteOneShotSerial(int slot) =>
+        *(uint*)(baseAddress + SharedBlock.OffsetRemoteOneShot
+            + (slot * SharedBlock.RemoteOneShotStride) + SharedBlock.RemoteOneShotSerial);
+
     // ---- dialogue spectate ------------------------------------------------------
 
     /// <summary>Pointer to the current dialogue speaker (40 bytes), plugin-written.</summary>
