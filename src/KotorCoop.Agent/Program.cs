@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Net;
 using KotorCoop.Memory;
+using KotorCoop.Memory.GameFiles;
 using KotorCoop.Protocol;
 using KotorCoop.Session;
 
@@ -19,6 +20,7 @@ internal static class Program
                 AgentCommand.Launch => GameLauncher.Launch(options),
                 AgentCommand.Load => LoadSave(options),
                 AgentCommand.Profiles => ListProfiles(),
+                AgentCommand.InstallDataMods => InstallDataMods(options),
                 AgentCommand.Info => Info(options),
                 AgentCommand.Scan => Scan(options),
                 AgentCommand.Track => Track(options),
@@ -158,6 +160,36 @@ internal static class Program
 
         Console.WriteLine(diagnostic);
         return loaded ? 0 : 1;
+    }
+
+    /// <summary>
+    /// Runs the no-RE 2DA merge (repute.2da coop_player faction, appearance.2da coop_p2
+    /// body) against the install named by --game-path, which may be the game directory
+    /// or the exe inside it — the same flag launch already takes. Explicitly on demand
+    /// only: nothing else calls the installer, and the plugin does not use the new
+    /// faction row yet (that switch is gated on a live pass).
+    /// </summary>
+    private static int InstallDataMods(AgentOptions options)
+    {
+        string path = options.GamePath;
+        string? gameDirectory = Directory.Exists(path) ? path : Path.GetDirectoryName(path);
+
+        if (gameDirectory is null || !Directory.Exists(gameDirectory))
+        {
+            Console.Error.WriteLine($"game directory not found: {path} (use --game-path <dir or exe>)");
+            return 1;
+        }
+
+        DataModInstallResult result = DataModInstaller.Install(gameDirectory);
+
+        Console.WriteLine($"override:        {result.OverrideDirectory}");
+        Console.WriteLine(
+            $"repute.2da:      '{DataModInstaller.FactionLabel}' faction is row {result.FactionRowIndex}"
+            + (result.ReputeWritten ? " (merged and written)" : " (already present, unchanged)"));
+        Console.WriteLine(
+            $"appearance.2da:  '{DataModInstaller.AppearanceLabel}' body is row {result.AppearanceRowIndex}"
+            + (result.AppearanceWritten ? " (merged and written)" : " (already present, unchanged)"));
+        return 0;
     }
 
     private static int Scan(AgentOptions options)
