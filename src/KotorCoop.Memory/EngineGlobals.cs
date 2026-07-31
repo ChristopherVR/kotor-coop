@@ -74,7 +74,13 @@ public static class EngineGlobals
         // Only trust the string while the world is actually running; mid-transition the
         // name is being rewritten and could be read half-changed.
         if (!memory.TryReadInt32(serverInternal + LoadingModuleOffset, out int loading) || loading != 0
-            || !memory.TryReadInt32(serverInternal + ServerModeOffset, out int mode) || mode != 2)
+            // ⚠ The mode is a WORD, not a dword — the engine uses `cmp word ptr
+            // [esi+0x10008], 1` (0x4B6294). A 32-bit read picks up the adjacent field, whose
+            // contents depend on how the module was loaded: measured live, a click-loaded
+            // world read 0x00000002 but a plugin-loaded one read 0x555FFC02, so this gate
+            // failed and every module name fell back to "area{id}" — which then hid peers
+            // behind the module filter, looking exactly like a broken network layer.
+            || !memory.TryRead(serverInternal + ServerModeOffset, out ushort mode) || mode != 2)
         {
             return false;
         }

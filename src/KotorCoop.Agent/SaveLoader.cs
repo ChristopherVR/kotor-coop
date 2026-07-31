@@ -69,18 +69,23 @@ public static class SaveLoader
             return phase == GamePhase.InWorld;
         }
 
-        // The in-process route: the plugin replays the GUI's own load path on the game's
-        // thread, so it needs no window focus, no cursor and no clicks — menu input
-        // injection is intermittently dead in ways that resisted diagnosis (trap 25).
+        // The in-process route, and now the DEFAULT: the plugin replays the GUI's own load
+        // path on the game's thread, so it needs no window focus, no cursor and no clicks —
+        // menu input injection is intermittently dead in ways that resisted diagnosis
+        // (trap 25), and every mouse message is dropped outright unless the game window is
+        // the active one.
         //
-        // OPT-IN for now (KOTORCOOP_PLUGIN_LOAD=1): the replay no longer crashes — the
-        // full LoadGame branch is reproduced, server + loopback session included — but
-        // the module transition is never serviced (black load screen, no world; see the
-        // Handoff addendum for the two remaining leads). A stalled load leaves nothing
-        // for the click fallback to click on, so it must not be the default until it
-        // completes.
+        // It was opt-in while two defects remained, both now fixed and verified live: the
+        // world-up crash (the player arrived in no faction) and — the reason it could not be
+        // trusted — the replay loading a DEFAULT character instead of the saved one. With
+        // the login rerouted to the engine's own LoadPrimaryPlayer path, a plugin load now
+        // produces the same character, position and hit points as a click load.
+        // See docs/research/character-login-chain.md.
+        //
+        // KOTORCOOP_PLUGIN_LOAD=0 forces the old click route; the click route also remains
+        // the automatic fallback below if the plugin is absent or refuses.
         bool pluginRouteRequested =
-            !viaMenuClicks && Environment.GetEnvironmentVariable("KOTORCOOP_PLUGIN_LOAD") == "1";
+            !viaMenuClicks && Environment.GetEnvironmentVariable("KOTORCOOP_PLUGIN_LOAD") != "0";
 
         if (pluginRouteRequested)
         {

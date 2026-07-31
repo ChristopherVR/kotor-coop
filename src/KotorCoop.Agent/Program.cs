@@ -547,13 +547,10 @@ internal static class Program
     /// After a server is picked in the in-game browser: load the player's save, so "click a
     /// server, arrive in the world" is one action.
     ///
-    /// This deliberately uses the MENU-CLICK route rather than the plugin's in-process load
-    /// replay, despite the replay needing no window focus. Measured on both: the replay
-    /// brings the module up but with a DEFAULT character — the save's own PC never arrives
-    /// (the player lands at the module's start point with starting hit points), because the
-    /// replay reproduces the module transition and not the engine's character-login chain.
-    /// Clicking loads the actual save. See docs/research/world-up-faction-crash.md for the
-    /// login chain, which is what a future in-process route has to reproduce.
+    /// Uses the loader's default route, which is now the plugin's in-process replay: no
+    /// window focus, no cursor, no clicks. That matters here more than anywhere else,
+    /// because the player has just clicked a button in the game's own menu and the window
+    /// may well lose focus to the agent's own console a moment later.
     ///
     /// Best-effort: on any refusal the player just loads a save by hand, exactly as before
     /// this existed, and the session is already connected either way.
@@ -564,8 +561,7 @@ internal static class Program
         {
             using Process game = Process.GetProcessById(memory.ProcessId);
 
-            if (SaveLoader.TryLoadSave(
-                    game, memory, 0, TimeSpan.FromSeconds(180), out string diagnostic, viaMenuClicks: true))
+            if (SaveLoader.TryLoadSave(game, memory, 0, TimeSpan.FromSeconds(180), out string diagnostic))
             {
                 Console.WriteLine($"auto-load: {diagnostic}");
             }

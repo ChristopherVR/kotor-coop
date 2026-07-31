@@ -1105,8 +1105,15 @@ internal static unsafe class Odyssey
             return false;
         }
 
+        // ⚠ The mode is a WORD, not a dword: the engine itself uses
+        // `cmp word ptr [esi+0x10008], 1` (0x4B6294) and `mov word ptr [...], 2` (0x4B62B0).
+        // Reading 32 bits picks up the adjacent field, and whether that happens to be zero
+        // depends on how the module was loaded — measured live, a click-loaded world read
+        // 0x00000002 while a plugin-loaded one read 0x555FFC02, so the world gate silently
+        // failed (and the agent's identical mistake made every module read fall back to
+        // "area{id}", which in turn hid peers behind the module filter).
         if (*(int*)(internalServer + LoadingModuleOffset) != 0
-            || *(int*)(internalServer + ServerModeOffset) != 2)
+            || *(ushort*)(internalServer + ServerModeOffset) != 2)
         {
             return false;
         }

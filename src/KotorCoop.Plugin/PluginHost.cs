@@ -162,6 +162,11 @@ internal static unsafe class PluginHost
             _worker.Start();
             Log("worker thread started");
             CrashProbe.Install();
+
+            // Last, once everything the agent looks for exists: start the agent for this
+            // instance so installing the plugin is the whole installation. Opt-out in
+            // coop.ini; a missing agent executable is simply skipped.
+            AgentLauncher.EnsureRunning(directory);
         }
         catch (Exception ex)
         {

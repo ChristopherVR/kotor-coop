@@ -126,6 +126,25 @@ internal sealed unsafe class MenuLoadController(SharedBlockView block)
     private static readonly delegate* unmanaged[Thiscall]<nint, nint, void> LoadPCAutoSave =
         (delegate* unmanaged[Thiscall]<nint, nint, void>)0x006CA250;
 
+    /// <summary>
+    /// CServerExoApp::SetDoingStartNewModule(int) — writes serverInternal+0x1007C, the flag
+    /// RunModule forks the character login on. This one call is what makes the replay load
+    /// the SAVED character; see the comment at its call site.
+    /// </summary>
+    private static readonly delegate* unmanaged[Thiscall]<nint, int, void> SetDoingStartNewModule =
+        (delegate* unmanaged[Thiscall]<nint, int, void>)0x004AF090;
+
+    /// <summary>CServerExoAppInternal + this = the DoingStartNewModule flag.</summary>
+    private const int ServerDoingStartNewModule = 0x1007C;
+
+    /// <summary>
+    /// CServerExoAppInternal + this = the player list. ⚠ It is a POINTER, not an inline
+    /// list — probed live: +0x10064 holds a heap pointer and +0x1006C is 0, so the
+    /// "+8 is the count" reading below (kept only for the diagnostic line, which has always
+    /// printed 0 because of it) is wrong. Do not gate anything on it.
+    /// </summary>
+    private const int ServerPlayerListCount = 0x10064 + 8;
+
     // ---- phase 3: the pump the menu loop never provides --------------------------
     //
     // Global::UpdateScreen only calls the server's MainLoop and both netlayer pumps
@@ -176,6 +195,9 @@ internal sealed unsafe class MenuLoadController(SharedBlockView block)
     /// <summary>True once LoadPCAutoSave has been asked for and we are pumping.</summary>
     private bool _pumping;
 
+    /// <summary>True once the character login has been rerouted for this load.</summary>
+    private bool _loginRerouted;
+
     public void OnFrame()
     {
         // While the native browser panel is up, the main-menu object is freed (see
@@ -201,6 +223,43 @@ internal sealed unsafe class MenuLoadController(SharedBlockView block)
         // only WATCH: ack when the world exists, report if the game gave up.
         if (_pumping)
         {
+            // THE step that makes this load the player's actual character, and it has a
+            // window rather than a moment.
+            //
+            // LoadPCAutoSave leaves DoingStartNewModule set, and RunModule forks the
+            // character login on that flag. Set, it takes the new-game flavour, which reads
+            // the PC from `TEMP:pifo` — a file a manual save simply does not contain.
+            // LoadCharacterFromIFO then fails silently (its caller never checks the return),
+            // login is confirmed anyway, and InitiateModuleForPlayer manufactures a BLANK
+            // creature at the module's start point: the 1/1-hit-point stranger that used to
+            // arrive instead of the saved character, with no faction — which is exactly what
+            // the world-up crash was about.
+            //
+            // Cleared, RunModule takes LoadPrimaryPlayer instead — the path a menu click on
+            // a normal save uses — reading the PC out of the save's own module.ifo: real
+            // stats, items, saved position, and PostProcess, so the faction is set the
+            // engine's way.
+            //
+            // Cleared here rather than immediately after LoadPCAutoSave purely so it is the
+            // first thing each frame of the load window, which is comfortably before
+            // RunModule reads it at the mode 1->2 transition. The flag's only setter has
+            // already returned by now, so one clear is enough — the guard on it being
+            // non-zero just avoids a redundant call.
+            // See docs/research/character-login-chain.md.
+            if (!_loginRerouted)
+            {
+                nint appManagerNow = *(nint*)AppManagerPtr;
+                nint serverNow = appManagerNow == 0 ? 0 : *(nint*)(appManagerNow + AppServerOffset);
+                nint serverInternalNow = serverNow == 0 ? 0 : *(nint*)(serverNow + InternalOffset);
+
+                if (serverInternalNow != 0 && *(int*)(serverInternalNow + ServerDoingStartNewModule) != 0)
+                {
+                    SetDoingStartNewModule(serverNow, 0);
+                    _loginRerouted = true;
+                    PluginHost.Log("menu: routed the login to the saved character (LoadPrimaryPlayer)");
+                }
+            }
+
             if (Odyssey.HasPlayer)
             {
                 _pumping = false;
@@ -243,6 +302,7 @@ internal sealed unsafe class MenuLoadController(SharedBlockView block)
             _panel = 0;
             FirePhase2(panel, serial);
             _pumping = true;
+            _loginRerouted = false;
             return;
         }
 
@@ -420,6 +480,7 @@ internal sealed unsafe class MenuLoadController(SharedBlockView block)
 
         PluginHost.Log("menu: calling LoadPCAutoSave");
         LoadPCAutoSave(panel, _entryNative);
+
         LogLoadState("immediately after LoadPCAutoSave");
     }
 
