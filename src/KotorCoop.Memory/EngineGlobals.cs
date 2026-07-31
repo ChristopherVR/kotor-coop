@@ -99,7 +99,32 @@ public static class EngineGlobals
             return false;
         }
 
-        moduleName = System.Text.Encoding.ASCII.GetString(buffer);
+        // ⚠ A CExoString's length can INCLUDE its terminating null (the same trap that made
+        // equipment resrefs arrive as "g_a_clothes01\0" and be refused). A trailing null here
+        // is invisible in a log and harmless to the module FILTER — both peers carry the same
+        // junk byte, so the comparison still matches — but it is fatal to TRAVEL: the client
+        // asks the engine to load "end_m01ab\0", no such module exists, and the transition
+        // retries forever. Measured live as `travel: moving to module 'end_m01ab?'`.
+        // Cut at the first character a module name cannot contain.
+        int end = 0;
+        while (end < buffer.Length)
+        {
+            char c = (char)buffer[end];
+            bool valid = c is (>= 'a' and <= 'z') or (>= 'A' and <= 'Z') or (>= '0' and <= '9') or '_' or '-';
+            if (!valid)
+            {
+                break;
+            }
+
+            end++;
+        }
+
+        if (end == 0)
+        {
+            return false;
+        }
+
+        moduleName = System.Text.Encoding.ASCII.GetString(buffer, 0, end);
         return true;
     }
 

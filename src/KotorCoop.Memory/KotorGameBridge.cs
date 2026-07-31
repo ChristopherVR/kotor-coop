@@ -428,6 +428,18 @@ public sealed class KotorGameBridge : IGameBridge
     {
         state = PlayerState.Empty;
 
+        // Re-resolve when the cached creature stops looking like the player. A module
+        // transition frees every creature and the new module allocates its own, so a pointer
+        // cached across a travel lands in reused memory: measured live after following a host
+        // through a door, both agents reported pos (0,0,0) and hit points of 57/134 and
+        // 21544/21544 — plausible-looking garbage, which is the worst kind, because the
+        // phantom positions derived from it look like a network fault rather than a stale
+        // pointer. Two small reads per tick buy immunity to that.
+        if (_player is not null && !StillLooksLikeThePlayer(_player.Address))
+        {
+            _player = null;
+        }
+
         if (_player is null && !TryResolve(out _))
         {
             return false;
@@ -2577,6 +2589,20 @@ public sealed class KotorGameBridge : IGameBridge
 
         return true;
     }
+
+    /// <summary>
+    /// Cheap validity check for a cached player pointer: the object still carries the
+    /// creature vtable, and its stats block still says it is a PC. Both are what
+    /// <see cref="TryResolve"/> selected on, so anything that fails here is no longer the
+    /// object we resolved.
+    /// </summary>
+    private bool StillLooksLikeThePlayer(nint creature) =>
+        _memory.TryReadUInt32(creature, out uint vtable)
+        && vtable == CreatureVtable
+        && _memory.TryReadPointer(creature + OffCreatureStats, out nint stats)
+        && stats != 0
+        && _memory.TryReadInt32(stats + StatsIsPc, out int isPc)
+        && isPc != 0;
 
     private bool TryReadFaction(nint creature, out int faction)
     {
