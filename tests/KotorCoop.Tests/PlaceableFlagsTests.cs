@@ -45,11 +45,23 @@ public class PlaceableFlagsTests
     }
 
     [Fact]
+    public void ValueEncodesTheDisarmedBit()
+    {
+        sbyte value = PlaceableFlags.MakeValue(open: false, unlocked: false, disarmed: true);
+        Assert.True(PlaceableFlags.DisarmedOf(value));
+        Assert.False(PlaceableFlags.OpenOf(value));
+        Assert.False(PlaceableFlags.UnlockedOf(value));
+    }
+
+    [Fact]
     public void ValueIsMonotonicUnderTheStoreMaxMerge()
     {
-        // The reliable flag store keeps the max; opened|unlocked must dominate a bare open.
+        // The reliable flag store keeps the max; adding bits only ever raises the value, so a
+        // placeable that gains "unlocked" or "disarmed" never regresses.
         sbyte openOnly = PlaceableFlags.MakeValue(open: true, unlocked: false);
-        sbyte both = PlaceableFlags.MakeValue(open: true, unlocked: true);
-        Assert.True(both > openOnly);
+        sbyte openUnlocked = PlaceableFlags.MakeValue(open: true, unlocked: true);
+        sbyte all = PlaceableFlags.MakeValue(open: true, unlocked: true, disarmed: true);
+        Assert.True(openUnlocked > openOnly);
+        Assert.True(all > openUnlocked);
     }
 }

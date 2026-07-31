@@ -20,6 +20,7 @@ public static class PlaceableFlags
 
     public const sbyte OpenBit = 1;
     public const sbyte UnlockedBit = 2;
+    public const sbyte DisarmedBit = 4;
 
     public static uint MakeKey(byte moduleHash, uint objectId) =>
         TypeTag | ((uint)moduleHash << 16) | (objectId & 0xFFFF);
@@ -30,12 +31,14 @@ public static class PlaceableFlags
 
     public static uint ObjectIdOf(uint flagId) => flagId & 0xFFFF;
 
-    public static sbyte MakeValue(bool open, bool unlocked) =>
-        (sbyte)((open ? OpenBit : 0) | (unlocked ? UnlockedBit : 0));
+    public static sbyte MakeValue(bool open, bool unlocked, bool disarmed = false) =>
+        (sbyte)((open ? OpenBit : 0) | (unlocked ? UnlockedBit : 0) | (disarmed ? DisarmedBit : 0));
 
     public static bool OpenOf(sbyte value) => (value & OpenBit) != 0;
 
     public static bool UnlockedOf(sbyte value) => (value & UnlockedBit) != 0;
+
+    public static bool DisarmedOf(sbyte value) => (value & DisarmedBit) != 0;
 
     /// <summary>FNV-1a over the module name, folded to 8 bits — identical to the door hash so
     /// the two channels agree on a module's byte.</summary>

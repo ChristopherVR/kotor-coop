@@ -778,6 +778,7 @@ internal static unsafe class Odyssey
     private const nint PlaceableVtable = 0x007494D0;
     private const int PlaceableLocked = 0x260;
     private const int PlaceableOpen = 0x338;
+    private const int PlaceableTrap = 0x278; // "is trapped"; clearing = disarmed
 
     /// <summary>Resolves a placeable by object id, vtable-checked. 0 if absent or not one.</summary>
     public static nint ResolvePlaceable(uint objectId)
@@ -793,6 +794,10 @@ internal static unsafe class Odyssey
     public static bool IsPlaceableOpen(nint placeable) => *(int*)(placeable + PlaceableOpen) != 0;
 
     public static void SetPlaceableOpen(nint placeable) => *(int*)(placeable + PlaceableOpen) = 1;
+
+    public static bool IsPlaceableTrapped(nint placeable) => *(int*)(placeable + PlaceableTrap) != 0;
+
+    public static void DisarmPlaceable(nint placeable) => *(int*)(placeable + PlaceableTrap) = 0;
 
     public static byte GetDoorOpenState(nint door) => *(byte*)(door + DoorOpenState);
 

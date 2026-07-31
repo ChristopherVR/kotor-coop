@@ -1114,14 +1114,18 @@ public sealed class KotorGameBridge : IGameBridge
     /// <summary>CSWSPlaceable + this = open int (nonzero = opened/searched).</summary>
     private const int PlaceableOpenField = 0x338;
 
+    /// <summary>CSWSPlaceable + this = trap int (nonzero = trapped; cleared = disarmed).</summary>
+    private const int PlaceableTrapField = 0x278;
+
     // Placeable slots in the plugin's SharedBlock, version 11.
     private const int BlockPlaceableCount = 0xB58;
     private const int BlockPlaceableSlots = 0xB60;
     private const int BlockPlaceableStride = 0x08;
     private const int BlockPlaceableCapacity = 32;
 
-    private readonly Dictionary<uint, (byte Open, byte Locked)> _placeableShadow = [];
+    private readonly Dictionary<uint, (byte Open, byte Locked, byte Trapped)> _placeableShadow = [];
     private readonly Dictionary<uint, byte> _placeableBaselineLocked = [];
+    private readonly Dictionary<uint, byte> _placeableBaselineTrapped = [];
     private string _placeableModule = string.Empty;
     private byte _placeableModuleHash;
     private bool _placeableBaselined;
@@ -1149,6 +1153,7 @@ public sealed class KotorGameBridge : IGameBridge
             _placeableModuleHash = PlaceableFlags.HashModule(module);
             _placeableShadow.Clear();
             _placeableBaselineLocked.Clear();
+            _placeableBaselineTrapped.Clear();
             _placeableBaselined = false;
             _nextPlaceableScanTicks = 0;
         }
@@ -1169,27 +1174,30 @@ public sealed class KotorGameBridge : IGameBridge
             if (!_memory.TryReadUInt32(address + OffObjectId, out uint objectId)
                 || objectId is 0 or > 0xFFFF
                 || !_memory.TryReadInt32(address + PlaceableOpenField, out int openInt)
-                || !_memory.TryReadInt32(address + PlaceableLockedField, out int lockedInt))
+                || !_memory.TryReadInt32(address + PlaceableLockedField, out int lockedInt)
+                || !_memory.TryReadInt32(address + PlaceableTrapField, out int trapInt))
             {
                 continue;
             }
 
             byte open = openInt != 0 ? (byte)1 : (byte)0;
             byte locked = lockedInt != 0 ? (byte)1 : (byte)0;
+            byte trapped = trapInt != 0 ? (byte)1 : (byte)0;
 
             if (!_placeableBaselineLocked.ContainsKey(objectId))
             {
                 _placeableBaselineLocked[objectId] = locked;
+                _placeableBaselineTrapped[objectId] = trapped;
             }
 
-            if (_placeableShadow.TryGetValue(objectId, out (byte Open, byte Locked) last)
-                && last.Open == open && last.Locked == locked)
+            if (_placeableShadow.TryGetValue(objectId, out (byte Open, byte Locked, byte Trapped) last)
+                && last.Open == open && last.Locked == locked && last.Trapped == trapped)
             {
                 continue;
             }
 
             bool firstSighting = !_placeableShadow.ContainsKey(objectId);
-            _placeableShadow[objectId] = (open, locked);
+            _placeableShadow[objectId] = (open, locked, trapped);
 
             if (!_placeableBaselined && firstSighting)
             {
@@ -1197,9 +1205,10 @@ public sealed class KotorGameBridge : IGameBridge
             }
 
             bool unlockedDuringPlay = locked == 0 && _placeableBaselineLocked[objectId] != 0;
+            bool disarmedDuringPlay = trapped == 0 && _placeableBaselineTrapped.GetValueOrDefault(objectId) != 0;
             changed.Add(new KeyValuePair<uint, sbyte>(
                 PlaceableFlags.MakeKey(_placeableModuleHash, objectId),
-                PlaceableFlags.MakeValue(open != 0, unlockedDuringPlay)));
+                PlaceableFlags.MakeValue(open != 0, unlockedDuringPlay, disarmedDuringPlay)));
         }
 
         _placeableBaselined = true;
@@ -1238,6 +1247,7 @@ public sealed class KotorGameBridge : IGameBridge
             nint address = _pluginBlock + BlockPlaceableSlots + (slot * BlockPlaceableStride);
             ok &= _memory.TryWrite(address + 0x04, PlaceableFlags.OpenOf(flag.Value) ? (byte)1 : (byte)0);
             ok &= _memory.TryWrite(address + 0x05, PlaceableFlags.UnlockedOf(flag.Value) ? (byte)1 : (byte)0);
+            ok &= _memory.TryWrite(address + 0x06, PlaceableFlags.DisarmedOf(flag.Value) ? (byte)1 : (byte)0);
 
             // Object id last, so the plugin never reads a slot whose id and payload disagree.
             ok &= _memory.TryWrite(address + 0x00, PlaceableFlags.ObjectIdOf(flag.Key));

@@ -20,6 +20,9 @@ internal readonly record struct EnemyView(uint ObjectId, ushort CurrentHealth, u
 /// <summary>One door's desired state, as published by the agent for the local module.</summary>
 internal readonly record struct DoorView(uint ObjectId, byte OpenState, bool Unlocked);
 
+/// <summary>One placeable's desired state, as published by the agent for the local module.</summary>
+internal readonly record struct PlaceableView(uint ObjectId, bool Open, bool Unlocked, bool Disarmed);
+
 /// <summary>One desired ground item as published by the external agent.</summary>
 internal readonly unsafe struct ItemSlotView(byte* slot)
 {
@@ -219,15 +222,16 @@ internal sealed unsafe class SharedBlockView(byte* baseAddress)
         set => *U32(SharedBlock.OffsetPlaceableCount) = value;
     }
 
-    /// <summary>One placeable's desired state: objectId, opened, unlocked.</summary>
-    public DoorView GetPlaceable(int index)
+    /// <summary>One placeable's desired state: objectId, opened, unlocked, disarmed.</summary>
+    public PlaceableView GetPlaceable(int index)
     {
         byte* slot = baseAddress + SharedBlock.OffsetPlaceableSlots + (index * SharedBlock.PlaceableSlotStride);
 
-        return new DoorView(
+        return new PlaceableView(
             *(uint*)(slot + 0x00),
-            *(slot + 0x04),
-            *(slot + 0x05) != 0);
+            *(slot + 0x04) != 0,
+            *(slot + 0x05) != 0,
+            *(slot + 0x06) != 0);
     }
 
     // ---- module travel ----------------------------------------------------------

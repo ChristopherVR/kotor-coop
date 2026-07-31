@@ -47,7 +47,7 @@ internal sealed class PlaceableController(SharedBlockView block)
         }
     }
 
-    private void Apply(DoorView desired)
+    private void Apply(PlaceableView desired)
     {
         if (desired.ObjectId == 0 || desired.ObjectId == Odyssey.ObjectInvalid)
         {
@@ -60,14 +60,19 @@ internal sealed class PlaceableController(SharedBlockView block)
             return;
         }
 
-        // DoorView.Unlocked carries the placeable's unlocked bit; OpenState carries "opened".
         if (desired.Unlocked && Odyssey.IsPlaceableLocked(placeable))
         {
             Odyssey.UnlockPlaceable(placeable);
             LogFew($"placeable 0x{desired.ObjectId:X}: unlocked on the session's authority");
         }
 
-        if (desired.OpenState != 0 && !Odyssey.IsPlaceableOpen(placeable))
+        if (desired.Disarmed && Odyssey.IsPlaceableTrapped(placeable))
+        {
+            Odyssey.DisarmPlaceable(placeable);
+            LogFew($"placeable 0x{desired.ObjectId:X}: trap disarmed on the session's authority");
+        }
+
+        if (desired.Open && !Odyssey.IsPlaceableOpen(placeable))
         {
             Odyssey.SetPlaceableOpen(placeable);
             LogFew($"placeable 0x{desired.ObjectId:X}: marked opened on the session's authority");
