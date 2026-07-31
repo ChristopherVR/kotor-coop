@@ -14,6 +14,35 @@ phantoms both ways with body armour and weapon; map pins; the content digest agr
 identical installs; and death → a peer standing beside you → revive (`death: the local
 player is down` → `revive applied` → `topped up to 15 hp`, ~1 s, both games still running).
 
+**Sustained session, combat channel and reconnect (2026-08-01).**
+- **25-minute soak, two instances connected the whole time**: no new crash lines on either
+  side, both games and both agents up throughout, memory flat (host 190→191 MB; the client
+  and the agents actually ended *lower*), peer held continuously, and **0 malformed packets
+  out of 184,669 received / 76,769 sent**. No leak, no corruption, no drift.
+- **Enemy health mirrors**: damaged an enemy on the host (15→7) and the client's copy of the
+  same object id followed to 7. Note it took longer than one heavy pass — allow ~10 s before
+  calling a mirror broken.
+- **Enemy death replicates through the real death path**: killed it on the host, both
+  dashboards moved to `1 dead` and the client's plugin logged
+  `combat: killed 0xE on the owner's authority` — i.e. the client ran the engine's own kill,
+  it did not just copy a number.
+- **Automatic reconnect works unattended**: killing the host agent outright and restarting it
+  healed the session with no action on the client, and afterwards the full chain was
+  re-verified live — moving the host put the client's `coop_phantom` body at exactly
+  (24.00, 60.00). Enemy state stayed consistent across the break (`26 known, 25 alive, 1 dead`
+  on both).
+- **Real AI combat did occur**: left beside two hostile Sith soldiers, the host player was
+  worn down 12 → 1 hit points by the game's own AI, and the session stayed up throughout. The
+  player never fought back, because that needs input (see the limit below), so this is
+  one-sided combat — evidence the world is live under a session, not evidence of two players
+  fighting together.
+
+⚠ **The hard limit on autonomous testing: injected input does not reach the game at all.**
+Both were tested directly this session — mouse (the click loader still times out) and
+keyboard (holding W for 3 s moved the player 0 units). Nothing that requires a human at the
+controls can be self-verified: two players actually fighting, any dialogue or quest
+progression, and companion following. Those need a person playing.
+
 **Travelling together (2026-08-01).** The host warps, the client follows, and both arrive
 intact: `end_m01ab pos (50.02, 119.95) hp 12/0` on both, with each side respawning and
 equipping the other's phantom in the new module. Getting there took three fixes worth
