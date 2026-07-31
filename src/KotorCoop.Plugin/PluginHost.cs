@@ -32,7 +32,6 @@ internal static unsafe class PluginHost
     private static MapMarkerController? _mapMarkers;
     private static MenuLoadController? _menuLoad;
     private static ConnectMenuController? _connectMenu;
-    private static ConsoleController? _console;
     private static ChatOverlayController? _chatOverlay;
     private static DialogueSpectateController? _dialogueSpectate;
     private static Thread? _worker;
@@ -80,7 +79,6 @@ internal static unsafe class PluginHost
             _travel = new TravelController(_view);
             _menuLoad = new MenuLoadController(_view);
             _connectMenu = new ConnectMenuController(_view);
-            _console = new ConsoleController(_view);
             _chatOverlay = new ChatOverlayController(_view);
             _dialogueSpectate = new DialogueSpectateController(_view);
             _pause = new PauseController(_view);
@@ -97,6 +95,18 @@ internal static unsafe class PluginHost
             else
             {
                 Log($"frame hook NOT installed: {hookDiagnostic}");
+            }
+
+            // Intercept the console command interpreter so co-op verbs route to the block and
+            // are swallowed (no "function <x> not found"), while real typos still get flagged.
+            // Independent of the frame hook, so the co-op console works at the menu too.
+            if (FuncInterpHook.Install(_view, out string interpDiagnostic))
+            {
+                Log($"console interp hooked: {interpDiagnostic}");
+            }
+            else
+            {
+                Log($"console interp NOT hooked: {interpDiagnostic}");
             }
 
             _worker = new Thread(WorkerLoop)
@@ -172,7 +182,6 @@ internal static unsafe class PluginHost
         // and the ~ console all work at the menu as well as in-world.
         _menuLoad?.OnFrame();
         _connectMenu?.OnFrame();
-        _console?.OnFrame();
         _chatOverlay?.OnFrame();
 
         if (!Odyssey.TryGetWorldEpoch(out ulong epoch))
@@ -292,7 +301,6 @@ internal static unsafe class PluginHost
         _journal?.Invalidate();
         _mapMarkers?.Invalidate();
         _connectMenu?.Invalidate();
-        _console?.Invalidate();
     }
 
     private static void WorkerLoop()
