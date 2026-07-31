@@ -1286,14 +1286,59 @@ internal static unsafe class Odyssey
     /// <summary>Restores the default opaque white, so other engine text is not tinted.</summary>
     public static void ResetFontColor() => SetFontColor(1f, 1f, 1f, 1f);
 
+    // The texture-font table PrintStringScreenPos indexes into. It is only bound during the
+    // engine's own render pass (UpdateScreen), but our SwapBuffers hook fires on every
+    // main-loop swap (~317 Hz), most of which are NOT that pass — on those frames the table
+    // pointer is null and the draw faults dereferencing fontTable[index] (verified live: the
+    // crash was at 0x44CDE0, `mov edx,[eax+ecx*4]`). So the draw is gated on the full deref
+    // chain being valid; on a frame where the font is not bound we simply skip drawing.
+    private const nint FontTablePtr = 0x0083052C;
+    private const nint FontIndexPtr = 0x0078E358;
+
+    private static bool PlausiblePtr(nint p) => p >= 0x00010000 && p < 0x7FFF0000;
+
+    /// <summary>
+    /// True only when the engine's texture font is bound and its object/vtable chain is
+    /// readable — i.e. when calling <see cref="PrintStringScreenPosFn"/> is safe this frame.
+    /// Replicates the exact chain the draw dereferences, bailing on the first bad pointer.
+    /// </summary>
+    private static bool IsFontReady()
+    {
+        nint table = *(nint*)FontTablePtr;
+        if (!PlausiblePtr(table))
+        {
+            return false;
+        }
+
+        uint index = *(uint*)FontIndexPtr;
+        if (index >= 32)
+        {
+            return false;
+        }
+
+        nint fontObj = *(nint*)(table + ((nint)index * 4));
+        if (!PlausiblePtr(fontObj))
+        {
+            return false;
+        }
+
+        nint inner = *(nint*)(fontObj + 0x1C);
+        if (!PlausiblePtr(inner))
+        {
+            return false;
+        }
+
+        return PlausiblePtr(*(nint*)inner); // the vtable the draw calls through
+    }
+
     /// <summary>
     /// Draws one null-terminated ASCII line through the engine's own text path. Position is
-    /// the centered, 0.01-scaled space the console uses. MAIN THREAD ONLY. Guarded: a null
-    /// pointer is skipped rather than passed on.
+    /// the centered, 0.01-scaled space the console uses. MAIN THREAD ONLY. Skipped entirely on
+    /// a frame where the font is not bound, so it can never fault the game.
     /// </summary>
     public static void DrawTextAscii(byte* nulTerminated, float x, float y)
     {
-        if (nulTerminated == null || *nulTerminated == 0)
+        if (nulTerminated == null || *nulTerminated == 0 || !IsFontReady())
         {
             return;
         }
