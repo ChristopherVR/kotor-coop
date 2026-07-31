@@ -142,7 +142,46 @@ public sealed class GffWriterTests
         Assert.Throws<ArgumentException>(() => writer.Root.SetResRef("Tag", "a_resref_over_16_chars"));
     }
 
-    // ---- the generated blueprint -----------------------------------------------
+    // ---- the generated blueprints ----------------------------------------------
+
+    [Fact]
+    public void SpawnWaypointBlueprintCarriesTheStockWaypointFieldSet()
+    {
+        byte[] bytes = SpawnWaypointBlueprint.Build();
+        Gff utw = Gff.Parse(bytes);
+
+        Assert.Equal("UTW ", utw.FileType);
+
+        Assert.True(utw.Root.TryGetResRef("TemplateResRef", out string resref));
+        Assert.Equal("k_coop_spawn", resref);
+        Assert.True(utw.Root.TryGetString("Tag", out string tag));
+        Assert.Equal("k_coop_spawn", tag);
+
+        // Every field the stock waypoint struct carries must be present — the engine's loader
+        // reads them unconditionally, so a missing one is a load failure, not a default.
+        Assert.True(utw.Root.TryGetByte("Appearance", out byte appearance));
+        Assert.Equal(1, appearance);
+        Assert.True(utw.Root.TryGetString("LinkedTo", out string linkedTo));
+        Assert.Equal(string.Empty, linkedTo);
+
+        // No permanent map pin: the peer pin is a separate runtime waypoint.
+        Assert.True(utw.Root.TryGetByte("HasMapNote", out byte hasMapNote));
+        Assert.Equal(0, hasMapNote);
+        Assert.True(utw.Root.TryGetByte("MapNoteEnabled", out byte mapNoteEnabled));
+        Assert.Equal(0, mapNoteEnabled);
+
+        foreach (string field in (string[])["XPosition", "YPosition", "ZPosition", "YOrientation"])
+        {
+            Assert.True(utw.Root.TryGetFloat(field, out float value), field);
+            Assert.Equal(0f, value);
+        }
+
+        Assert.True(utw.Root.TryGetFloat("XOrientation", out float facing));
+        Assert.Equal(1f, facing);
+
+        // Deterministic: the installer compares bytes to decide whether to rewrite.
+        Assert.Equal(bytes, SpawnWaypointBlueprint.Build());
+    }
 
     [Fact]
     public void PhantomBlueprintCarriesTheCoopFieldSet()
@@ -227,20 +266,28 @@ public sealed class GffWriterTests
     {
         // profiles/override/k_coop_phantom.utc is a committed asset; it must stay in
         // lockstep with PhantomBlueprint.Build() or the installer ships stale bytes.
-        DirectoryInfo? directory = new(AppContext.BaseDirectory);
-        string? shipped = null;
+        Assert.Equal(PhantomBlueprint.Build(), File.ReadAllBytes(FindShipped("k_coop_phantom.utc")));
+    }
 
-        for (; directory is not null; directory = directory.Parent)
+    [Fact]
+    public void ShippedSpawnWaypointMatchesTheGenerator()
+    {
+        Assert.Equal(SpawnWaypointBlueprint.Build(), File.ReadAllBytes(FindShipped(SpawnWaypointBlueprint.FileName)));
+    }
+
+    /// <summary>Locates a committed profiles/override asset by walking up from the test binary.</summary>
+    private static string FindShipped(string fileName)
+    {
+        for (DirectoryInfo? directory = new(AppContext.BaseDirectory); directory is not null; directory = directory.Parent)
         {
-            string candidate = Path.Combine(directory.FullName, "profiles", "override", "k_coop_phantom.utc");
+            string candidate = Path.Combine(directory.FullName, "profiles", "override", fileName);
             if (File.Exists(candidate))
             {
-                shipped = candidate;
-                break;
+                return candidate;
             }
         }
 
-        Assert.NotNull(shipped);
-        Assert.Equal(PhantomBlueprint.Build(), File.ReadAllBytes(shipped));
+        Assert.Fail($"shipped asset not found: {fileName}");
+        return string.Empty;
     }
 }
