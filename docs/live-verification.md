@@ -14,9 +14,32 @@ phantoms both ways with body armour and weapon; map pins; the content digest agr
 identical installs; and death → a peer standing beside you → revive (`death: the local
 player is down` → `revive applied` → `topped up to 15 hp`, ~1 s, both games still running).
 
-Still unconfirmed live: party reconciliation (the Endar Spire opening script-locks Trask, so
-it needs a save where companions actually follow), the digest MISMATCH paths (both installs
-here are identical), fog-of-war reveal, and the phantom name plate visually (the phantom
+**Party reconciliation (2026-08-01).** Both halves measured, closing the design's open
+"inferred, not measured" risk:
+- **Solo mode is real and one-sided** — `partystate.ps1` reads `soloMode 0` on the host and
+  `soloMode 1` on the client, with the same companion (slot 0, id `0x127`) on both.
+- **The mirror actually drives the client's companion**, proven by a control rather than by
+  coincidence. Displacing the CLIENT's companion by writing its position: with the agents
+  running it converges back to the host's exact value within ~4 s; with the agents stopped it
+  stays where it was put for 6 s+. Two identical saves would place a companion identically,
+  so only the control distinguishes "mirrored" from "same script" — run it that way.
+- Not covered: companions actually FOLLOWING (the Endar Spire opening script-locks Trask, so
+  his AI never issues follow orders there). Needs a later save.
+
+**Content mismatch (2026-08-01).** Verified with a genuine difference — `install-datamods`
+run against ONE install only, giving it a real 510-row `appearance.2da` against the other's
+509:
+- host and client independently reached the SAME verdict (that agreement is the design
+  requirement): `compatible, 3 warning(s)` with `OFF: Appearance`;
+- the warnings name the cause in plain language ("appearance.2da differs; phantoms keep
+  their default appearance", "override folders differ (4 vs 2 files)…");
+- behaviour matched the verdict: phantoms still spawned and were equipped on both sides with
+  no appearance write, and enemies/movement/items carried on. The session was degraded, not
+  refused — which is the whole point of the policy.
+- Not covered: the REFUSE classes (different executable, different save). Those need two
+  genuinely different installs/saves and remain unit-test-only.
+
+Still unconfirmed live: fog-of-war reveal, and the phantom name plate visually (the phantom
 renders; the band was only observed on a nearby NPC).
 
 ## Bring it up
@@ -78,6 +101,20 @@ Logs land in `%TEMP%\kotorcoop-demo\agent1.log` / `agent2.log` and
 ## Party, journal, pause, world flags (Screen)
 - Companions stay one synchronised set; a quest advanced on one side appears on the other;
   either player's pause pauses both; an opened door/killed boss replicates.
+- `pwsh tools\partystate.ps1 -ProcId <pid>` prints the party table: companion count, the
+  spawned object id per roster slot, and the solo-mode flag. Expect `soloMode 0` on the host
+  and `1` on every client — that flag is what stops a client's own follow-AI fighting the
+  mirrored positions.
+
+## Content mismatch (Logs)
+- To exercise it deliberately, give the two installs a real difference:
+  `KotorCoop.Agent.exe install-datamods --game-path <ONE install>\swkotor.exe` rewrites that
+  side's `appearance.2da`. Remove the two `.2da` files from its `Override` afterwards to
+  restore parity.
+- Both dashboards should show the SAME `content` block — that host and client judge
+  identically is the design requirement, so compare them rather than trusting one.
+- Expect degradation, never a dead session: `OFF: Appearance` with phantoms still spawning
+  and being equipped.
 
 ## Dialogue token (Logs + Screen)
 - Start a conversation on one side. dashboard/agent shows `dialogue: <who> in a conversation`.

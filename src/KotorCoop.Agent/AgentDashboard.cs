@@ -215,6 +215,9 @@ public sealed class AgentDashboard(SessionManager manager, IGameBridge bridge, s
         WriteLine($"         flags v{stats.FlagVersion} ({agent.Session.Flags.Count} known)  pending ops {stats.PendingFlagOps}");
         WriteLine(string.Empty);
 
+
+        WriteContentSection(agent);
+
         string readStatus = agent.LastReadSucceeded ? "ok" : $"FAILING ({agent.ReadFailureCount} failures)";
         string writeStatus = agent.Bridge.CanWriteRemotes
             ? agent.LastWriteSucceeded ? "ok" : "FAILING"
@@ -308,6 +311,42 @@ public sealed class AgentDashboard(SessionManager manager, IGameBridge bridge, s
         }
 
         WriteLine("Ctrl+C to stop.");
+    }
+
+    /// <summary>
+    /// What the two installs agreed on. Without this the headline mod-compatibility feature
+    /// is invisible: a channel silently switched off (the peer's appearance, say, because
+    /// their appearance.2da differs) looks exactly like a bug, and the player has no way to
+    /// tell the difference. Says nothing while everything is on and nothing was warned
+    /// about, so the normal case costs no space.
+    /// </summary>
+    private static void WriteContentSection(CoopAgent agent)
+    {
+        CompatibilityVerdict? verdict = agent.Session.Compatibility;
+        if (verdict is null)
+        {
+            return;
+        }
+
+        SessionCapabilities off = SessionCapabilities.All & ~verdict.Allowed;
+        if (off == SessionCapabilities.None && verdict.Warnings.Count == 0)
+        {
+            return;
+        }
+
+        WriteLine($"content  {verdict.Summary}");
+
+        if (off != SessionCapabilities.None)
+        {
+            WriteLine($"         OFF: {off.ToString().Replace(", ", " ")}  (a mod/save difference makes these unsafe)");
+        }
+
+        for (int i = 0; i < verdict.Warnings.Count && i < 3; i++)
+        {
+            WriteLine($"         {verdict.Warnings[i]}");
+        }
+
+        WriteLine(string.Empty);
     }
 
     private static void WriteLine(string text)
