@@ -348,8 +348,13 @@ internal static class Program
         }
 
         Console.WriteLine(config?.MenuButton == true
-            ? "press the Co-op button in the game's main menu to connect..."
-            : "waiting for a connect request (coop.ini menu_button=1 adds the menu button)...");
+            ? "press the Co-op button in the game's main menu to connect (or use the ~ console: servers / connect <ip|#n> / host)..."
+            : "waiting for a connect request (coop.ini menu_button=1 adds the menu button; the ~ console also works)...");
+
+        // Listen for LAN beacons while we wait, so `servers` can list hosts at the menu.
+        using ServerDiscovery browser = new();
+        browser.StartListening();
+        IReadOnlyList<ServerInfo> lastServers = [];
 
         while (!token.IsCancellationRequested)
         {
@@ -367,6 +372,78 @@ internal static class Program
                 }
 
                 return (go, m, h, n, p);
+            }
+
+            // The ~ console also works while waiting at the menu — this is exactly where a
+            // server browser is most useful, and the FuncInterp hook routes console commands at
+            // the menu. Without this, `servers` / `connect <ip>` / `host` did nothing until a
+            // session already existed, because CoopCommandDispatcher only starts afterwards.
+            if (kotor.TryTakeConsoleCommand(out string consoleLine))
+            {
+                CoopCommand command = ConsoleCommand.Parse(consoleLine);
+                switch (command.Kind)
+                {
+                    case CoopCommandKind.Servers:
+                        IReadOnlyList<ServerInfo> found = browser.Servers;
+                        lastServers = found;
+                        if (found.Count == 0)
+                        {
+                            MenuReply(kotor, "no co-op servers found on the LAN (host one, or connect by IP)");
+                            break;
+                        }
+
+                        MenuReply(kotor, $"servers on the LAN ({found.Count}) - connect #n to join:");
+                        for (int i = 0; i < found.Count; i++)
+                        {
+                            MenuReply(kotor, $"  {i + 1}) {found[i].Name}  {found[i].Address}  ({found[i].PlayerCount}/{found[i].MaxPlayers})");
+                        }
+
+                        break;
+
+                    case CoopCommandKind.Host:
+                        MenuReply(kotor, "hosting...");
+                        return (true, CoopMode.Host, null, name,
+                            command.Password is { Length: > 0 } hp ? hp : password);
+
+                    case CoopCommandKind.Connect:
+                        // `connect #n` picks from the last listing; otherwise a typed address.
+                        if (command.Address is { Length: > 1 } pick && pick[0] == '#'
+                            && int.TryParse(pick[1..], out int index))
+                        {
+                            if (index < 1 || index > lastServers.Count)
+                            {
+                                MenuReply(kotor, $"no server #{index} - run `servers` first");
+                                break;
+                            }
+
+                            ServerInfo chosen = lastServers[index - 1];
+                            MenuReply(kotor, $"connecting to {chosen.Name} ({chosen.Address})");
+                            return (true, CoopMode.Join, chosen.EndPoint, name,
+                                command.Password is { Length: > 0 } cp1 ? cp1 : password);
+                        }
+
+                        if (command.TryResolveEndpoint(options.Port, out IPEndPoint typedEndpoint))
+                        {
+                            MenuReply(kotor, $"connecting to {typedEndpoint}");
+                            return (true, CoopMode.Join, typedEndpoint, name,
+                                command.Password is { Length: > 0 } cp2 ? cp2 : password);
+                        }
+
+                        MenuReply(kotor, $"could not resolve host '{command.Address}'");
+                        break;
+
+                    case CoopCommandKind.Status:
+                        MenuReply(kotor, "at the main menu - not connected");
+                        break;
+
+                    case CoopCommandKind.Help:
+                        MenuReply(kotor, ConsoleCommand.HelpText);
+                        break;
+
+                    case CoopCommandKind.Invalid:
+                        MenuReply(kotor, command.Error);
+                        break;
+                }
             }
 
             try
@@ -395,6 +472,18 @@ internal static class Program
                 config.Name ?? name,
                 config.Password.Length > 0 ? config.Password : password);
         }
+    }
+
+    /// <summary>
+    /// Echoes a menu-time console reply to stdout, the in-game console reply line and the chat
+    /// overlay — the same three places <see cref="CoopCommandDispatcher"/> uses once a session
+    /// exists, so the console behaves identically before and after connecting.
+    /// </summary>
+    private static void MenuReply(KotorGameBridge kotor, string text)
+    {
+        Console.WriteLine($"[coop] {text}");
+        kotor.PostConsoleReply(text);
+        kotor.PostChatLine(text);
     }
 
     /// <summary>Mirror of SharedBlock.ConnectStatusConnecting for the agent side.</summary>
