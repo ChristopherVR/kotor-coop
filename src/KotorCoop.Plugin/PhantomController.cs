@@ -162,6 +162,14 @@ internal sealed unsafe class PhantomController(SharedBlockView block)
             _down[i] = false;
             _peerInCombat[i] = false;
 
+            // A new world means the next position is not a continuation of the last one:
+            // start the smoothing from wherever the peer actually is rather than gliding
+            // across from a stale spot.
+            _smoothing[i] = false;
+            _shownAtTime[i] = 0;
+            _speedFromTime[i] = 0;
+            _peerSpeed[i] = 0f;
+
             _twinNamed[i] = false;
 
             for (int j = 0; j < SharedBlock.EquipCount; j++)
@@ -642,9 +650,60 @@ internal sealed unsafe class PhantomController(SharedBlockView block)
             }
         }
 
-        Odyssey.DrivePhantom(phantom, target, remote.Facing, _peerSpeed[slot]);
+        // SMOOTH toward the target instead of snapping onto it.
+        //
+        // This is what "floating / teleporting" was. Placing the body exactly on each
+        // received position means the only motion it ever has is a jump: it sits still
+        // between updates and then appears somewhere new, with nothing in between. Network
+        // jitter makes it worse, because the jumps are unevenly spaced.
+        //
+        // Chasing the target with a short time constant turns those discrete arrivals into
+        // continuous motion, at the cost of a fraction of the gap. A genuinely large jump —
+        // a teleport, a door, a peer who was off-screen — still snaps, because gliding
+        // across a room would look far stranger than a cut.
+        Vec3 shown = _shownPosition[slot];
+        float jdx = target.X - shown.X;
+        float jdy = target.Y - shown.Y;
+        float gapSquared = (jdx * jdx) + (jdy * jdy);
+
+        if (!_smoothing[slot] || gapSquared > SnapGapSquared)
+        {
+            _smoothing[slot] = true;
+            shown = target;
+        }
+        else
+        {
+            // Frame-rate independent: the same fraction of the gap closes per unit of time
+            // whatever the step rate happens to be.
+            float dt = (float)Math.Clamp(now - _shownAtTime[slot], 0.0, 0.25);
+            float alpha = _smoothingTauSeconds <= 0f ? 1f : 1f - MathF.Exp(-dt / _smoothingTauSeconds);
+
+            shown.X += jdx * alpha;
+            shown.Y += jdy * alpha;
+            shown.Z = target.Z;
+        }
+
+        _shownPosition[slot] = shown;
+        _shownAtTime[slot] = now;
+
+        Odyssey.DrivePhantom(phantom, shown, remote.Facing, _peerSpeed[slot]);
         _lastGoal[slot] = remote.Position;
     }
+
+    /// <summary>
+    /// How quickly the drawn position chases the received one. 60 ms closes most of a gap
+    /// within a couple of frames, so the body reads as moving rather than stepping, without
+    /// adding meaningful lag on top of the network.
+    /// </summary>
+    private readonly float _smoothingTauSeconds =
+        Math.Clamp(PluginConfig.ReadFloat("smooth_ms", 60f), 0f, 400f) / 1000f;
+
+    /// <summary>Past this the peer did not walk, they moved — cut instead of gliding.</summary>
+    private const float SnapGapSquared = 8f * 8f;
+
+    private readonly Vec3[] _shownPosition = new Vec3[SharedBlock.SlotCapacity];
+    private readonly double[] _shownAtTime = new double[SharedBlock.SlotCapacity];
+    private readonly bool[] _smoothing = new bool[SharedBlock.SlotCapacity];
 
     /// <summary>How close a phantom may get to the local player before it is pushed out.
     /// Roughly a body's width — enough that the camera never enters it.</summary>

@@ -246,7 +246,7 @@ public sealed class KotorGameBridge : IGameBridge
     /// <summary>How long a creature-address scan is reused. Long enough that scanning stops
     /// dominating the pump, short enough that a creature spawned mid-fight is picked up
     /// quickly.</summary>
-    private const int CreatureCacheMs = 5000;
+    private const int CreatureCacheMs = 15_000;
 
     private List<CreatureRef>? _creatureCache;
     private long _creatureCacheAtMs;
