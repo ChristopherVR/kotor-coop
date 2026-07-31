@@ -253,6 +253,17 @@ internal static unsafe class PluginHost
         _chatInput?.OnFrame();
         _chatOverlay?.OnFrame();
 
+        // Before the epoch gate, and before anything else touches the world: during a module
+        // transition there is a frame in which the server's module is destroyed but the
+        // client still holds one, and the engine's own map init dereferences the server
+        // module every frame without a null check. Closing the client's world here is what
+        // the engine's dump-player handler would do a frame later — see
+        // docs/research/travel-map-init-crash.md.
+        if (Odyssey.CloseClientWorldIfServerModuleGone())
+        {
+            Log("transition: closed the client world ahead of the map init");
+        }
+
         if (!Odyssey.TryGetWorldEpoch(out ulong epoch))
         {
             // No world, or a transition mid-flight. Drop everything now, so nothing runs

@@ -2787,6 +2787,55 @@ internal static unsafe class Odyssey
         return true;
     }
 
+    // ---- module-transition safety -------------------------------------------------
+    //
+    // The engine's in-world GUI rebuilds the minimap name every frame from the SERVER's
+    // module, and dereferences it with NO null check. A transition destroys the server
+    // module and only builds the replacement on the next server MainLoop frame — but the
+    // outer loop runs the CLIENT MainLoop first, so there is a window in which the map init
+    // reads a destroyed module and faults (measured: ~15 ms after the unload, in
+    // CResRef::CopyToString).
+    //
+    // Retail's protection is that the client tears its OWN world down first, which it does
+    // when it processes the server's queued "dump player" message. A plugin-driven
+    // transition can reach the window before that message is serviced, so the client is
+    // still holding a world it thinks is live. Doing what the engine's own handler does —
+    // calling CClientExoApp::UnloadModule — closes the window.
+    // See docs/research/travel-map-init-crash.md.
+
+    private static readonly delegate* unmanaged[Thiscall]<nint, nint> ClientGetModuleFn =
+        (delegate* unmanaged[Thiscall]<nint, nint>)0x005ED530;
+
+    private static readonly delegate* unmanaged[Thiscall]<nint, void> ClientUnloadModuleFn =
+        (delegate* unmanaged[Thiscall]<nint, void>)0x005ED430;
+
+    /// <summary>
+    /// Tears the CLIENT's world down when the SERVER's module is already gone — the exact
+    /// call the engine's own dump-player handler makes, just made a frame earlier than the
+    /// queued message would. Self-limiting: the engine's later call early-outs, and the
+    /// client rebuilds itself from the next Module_Info. Returns true if it acted.
+    ///
+    /// MAIN THREAD ONLY.
+    /// </summary>
+    public static bool CloseClientWorldIfServerModuleGone()
+    {
+        nint server = GetServer();
+        nint client = GetClient();
+        if (server == 0 || client == 0)
+        {
+            return false;
+        }
+
+        // Server module already destroyed, client still holding one: the unsafe window.
+        if (GetModuleFn(server) != 0 || ClientGetModuleFn(client) == 0)
+        {
+            return false;
+        }
+
+        ClientUnloadModuleFn(client);
+        return true;
+    }
+
     // ---- faction membership repair -----------------------------------------------
     //
     // A plugin-driven load brings the world up with the player creature in NO faction: the

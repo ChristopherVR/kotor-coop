@@ -8,10 +8,40 @@ no other dependencies. C# throughout.
 
 ---
 
-## 0g. ⚠ OPEN BUG: MODULE TRAVEL CRASHES, 2026-08-01
+## 0g. MODULE TRAVEL CRASHED — FOUND AND FIXED, 2026-08-01
 
-**Reproducible, and it is NOT a co-op feature.** A module transition requested through the
-travel channel kills the process ~15 ms later:
+**Fixed and verified**: the same travel that killed the process twice now completes, and the
+world comes up in the destination module with the character intact
+(`local module end_m01ab pos (50.02, 119.95) hp 12/0`).
+
+**Cause** (`docs/research/travel-map-init-crash.md`). `CSWGuiMainInterface::InitializeMap`
+runs every in-world frame, asks the SERVER for its module (`GetModule 0x4AE6B0`) and
+dereferences `module+0x30` to build the minimap name — **with no null check**. A transition
+destroys the server module in `UnloadModule 0x4B9240` and only builds the replacement on the
+next SERVER MainLoop frame, but the outer loop runs the CLIENT MainLoop first — that gap is
+the measured ~15 ms. Retail survives it only because the client tears its own world down
+first, which it does when it processes the server's queued dump-player message; a
+plugin-driven transition reaches the window before that message is serviced.
+
+**Fix**: `Odyssey.CloseClientWorldIfServerModuleGone`, called at the top of
+`PluginHost.OnFrame` before the epoch gate — when the server's module is gone but the client
+still holds one, call `CClientExoApp::UnloadModule 0x5ED430`, byte-for-byte what the engine's
+own dump-player handler does, just a frame earlier. Self-limiting: the engine's later call
+early-outs and the client rebuilds from the next Module_Info.
+
+Also settled by the same pass: **`TravelController` omits nothing** — the engine's own `warp`
+(`Global::warp 0x60AF50`) is only `SetMoveToModuleString` + `SetMoveToModulePending(1)`,
+which is exactly what it does. The `PanelExists`/`SetSWGuiStatus` frames in the original
+stack were stale locals; the real caller is a tail-call thunk (`CGuiInGame::InitializeMap
+0x62B0A0`) — worth remembering when reading this crash probe's stack dumps.
+
+⚠ Still NEEDS-LIVE: whether retail shares this latent window (no netlayer pump was found
+between the server unload and the next client MainLoop). The fix is correct either way; the
+doc has a two-run probe that settles it.
+
+### The original report, for context
+
+A module transition requested through the travel channel killed the process ~15 ms later:
 
 ```
 travel: moving to module 'end_m01ab' on the session's authority
@@ -31,14 +61,9 @@ is the transition itself on a world brought up by the in-process load replay, no
 replication code. Reproduce with
 `pwsh tools\blockpoke.ps1 -ProcId <pid> travel end_m01ab` after a plugin load.
 
-The obvious suspicion, and the same family as the two bugs 0f fixed, is that the load replay
-leaves some CLIENT-side area/main-interface state uninitialised that a normal load sets up —
-the faction bug and the wrong-character bug were both exactly that. Diagnosis is in
-`docs/research/travel-map-init-crash.md` (written by a background pass; read it before
-touching this). ⚠ **Not established**: whether a CLICK-loaded world also crashes here. That
-control could not be run because click-loading kept hitting the input-activation trap — it is
-the single most valuable next measurement, because it separates "the replay is incomplete"
-from "travel is broken generally".
+The suspicion at the time — that the load replay left client-side state uninitialised, the
+same family as the two bugs 0f fixed — was right in shape: the client was holding a world it
+had not been told to drop.
 
 ---
 

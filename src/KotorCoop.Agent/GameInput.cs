@@ -80,6 +80,15 @@ internal static partial class GameInput
     [LibraryImport("user32.dll", SetLastError = true)]
     private static partial uint SendInput(uint count, [In] Input[] inputs, int size);
 
+    [LibraryImport("user32.dll", EntryPoint = "PostMessageA", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static partial bool PostMessage(nint window, uint message, nint wParam, nint lParam);
+
+    private const uint WmMouseMove = 0x0200;
+    private const uint WmLeftButtonDown = 0x0201;
+    private const uint WmLeftButtonUp = 0x0202;
+    private const nint MkLeftButton = 0x0001;
+
     [LibraryImport("user32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
     private static partial bool SetForegroundWindow(nint window);
@@ -210,19 +219,31 @@ internal static partial class GameInput
             return false;
         }
 
-        // In windowed mode the client area is offset by the border and title bar, so a
-        // client point is not a screen point.
-        Point point = new() { X = clientX, Y = clientY };
-        if (!ClientToScreen(window, ref point))
+        // Posted, not synthesised. KOTOR reads the cursor position straight out of lParam in
+        // its own window proc — it does NOT accumulate DirectInput deltas into an internal
+        // cursor (docs/research/mouse-cursor-input.md) — so a posted message with the point
+        // in lParam lands exactly where we aim, in CLIENT coordinates, and the physical
+        // pointer is irrelevant.
+        //
+        // The SendInput version this replaces failed in two ways at once: it aimed at a
+        // virtual-desktop point rather than the client area, and it depended on the game
+        // being the foreground window, which it frequently is not while an agent is driving
+        // it. That combination is the intermittently-dead menu clicking recorded as trap 25.
+        //
+        // The move is posted first and separately: the window proc runs its hover hit-test on
+        // each input event, so the control under OUR coordinate is current before the button
+        // event arrives.
+        nint point = (clientY << 16) | (clientX & 0xFFFF);
+
+        if (!PostMessage(window, WmMouseMove, 0, point))
         {
             return false;
         }
 
-        MoveMouseToScreen(point.X, point.Y);
-        Thread.Sleep(140);
-        SendMouse(MouseEventLeftDown);
         Thread.Sleep(60);
-        SendMouse(MouseEventLeftUp);
+        PostMessage(window, WmLeftButtonDown, MkLeftButton, point);
+        Thread.Sleep(60);
+        PostMessage(window, WmLeftButtonUp, 0, point);
         return true;
     }
 
