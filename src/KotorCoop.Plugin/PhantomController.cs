@@ -64,11 +64,28 @@ internal sealed unsafe class PhantomController(SharedBlockView block)
     /// KOTOR's default movement IS the run, so run is the common case.</summary>
     private const uint AnimWalkValue = 0x2712;
 
+    // Movement animations the drive loop owns (they come from the walk/run action, not from
+    // mirroring the peer's field), and the death poses the down-state path owns. A phantom
+    // standing still mirrors any OTHER animation the peer is playing — attack swings, weapon
+    // flourishes, gestures, the "x" ready pose — so those show up across instances.
+    private const uint AnimIdleValue = 0x2710;
+    private const uint AnimRunValue = 0x2714;
+    private const uint AnimDeath1 = 0x2716;
+    private const uint AnimDeath2 = 0x2718;
+    private const uint AnimDeath3 = 0x27AC;
+
+    private static bool IsPlayableAnimation(uint anim) =>
+        anim is not (AnimIdleValue or AnimWalkValue or AnimRunValue or AnimDeath1 or AnimDeath2 or AnimDeath3);
+
     private readonly Stopwatch _clock = Stopwatch.StartNew();
     private readonly nint[] _phantoms = new nint[SharedBlock.SlotCapacity];
     private readonly uint[] _phantomIds = new uint[SharedBlock.SlotCapacity];
     private readonly Vec3[] _lastGoal = new Vec3[SharedBlock.SlotCapacity];
     private readonly int[] _repathCooldown = new int[SharedBlock.SlotCapacity];
+
+    /// <summary>The animation last mirrored onto each stationary phantom, so a played
+    /// animation is issued once when it appears rather than restarted every frame.</summary>
+    private readonly uint[] _lastAnim = new uint[SharedBlock.SlotCapacity];
 
     /// <summary>True while the phantom is lying in a death pose because its player is at
     /// zero health. Tracked so the pose is set once, not re-issued every step.</summary>
@@ -308,10 +325,13 @@ internal sealed unsafe class PhantomController(SharedBlockView block)
             {
                 // Standing on (or walking to) the right spot already. Once genuinely
                 // arrived, mirror the peer's facing — the engine leaves the phantom
-                // pointing along its final path segment otherwise.
+                // pointing along its final path segment otherwise — and play whatever
+                // animation the peer is doing while still (a flourish, an attack swing, the
+                // "x" ready pose). Not while catching up, or it would cancel the walk.
                 if (behindSquared < 0.35f * 0.35f)
                 {
                     Odyssey.SetFacing(phantom, remote.Facing);
+                    MirrorAnimation(i, phantom, remote.Animation);
                 }
 
                 continue;
@@ -324,6 +344,10 @@ internal sealed unsafe class PhantomController(SharedBlockView block)
 
             _lastGoal[i] = remote.Position;
             _repathCooldown[i] = RepathCooldownSteps;
+
+            // Movement owns the animation now; forget the mirrored one so it is re-applied
+            // once the phantom stops and the peer is still playing something.
+            _lastAnim[i] = 0;
 
             // Match the peer's gait: KOTOR's default movement is the run, so anything
             // that is not explicitly the walk animation runs. With the PC's appearance
@@ -348,6 +372,23 @@ internal sealed unsafe class PhantomController(SharedBlockView block)
                 PluginHost.Log($"move refused for 0x{_phantomIds[i]:X} (failure {failure})");
             }
         }
+    }
+
+    /// <summary>
+    /// Plays whatever animation the peer is doing onto a stationary phantom, once per change
+    /// (SetAnimation restarts the clip, so re-issuing it every frame would freeze it). A
+    /// movement or death value is not mirrored — those belong to the walk/run action and the
+    /// down-state pose — and when the peer returns to one of those the phantom returns to idle.
+    /// </summary>
+    private void MirrorAnimation(int slot, nint phantom, uint anim)
+    {
+        if (anim == _lastAnim[slot])
+        {
+            return;
+        }
+
+        _lastAnim[slot] = anim;
+        Odyssey.SetAnimation(phantom, IsPlayableAnimation(anim) ? (int)anim : Odyssey.AnimIdle);
     }
 
     /// <summary>Maps equip index in the shared block to the engine's inventory slot.</summary>

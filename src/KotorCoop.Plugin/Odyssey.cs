@@ -1286,6 +1286,23 @@ internal static unsafe class Odyssey
     /// <summary>Restores the default opaque white, so other engine text is not tinted.</summary>
     public static void ResetFontColor() => SetFontColor(1f, 1f, 1f, 1f);
 
+    // Console command registration (docs/research/console-register.md). Registering our verbs
+    // makes the engine console recognise them, so it no longer prints "function <x> not
+    // found", and the adapter blanks the output. A command entry is a zeroed block with the
+    // name inline at +0x00 and a pointer at +0x50 to an 8-byte functor {adapter vtable, our
+    // cdecl fnptr}; ConsoleFuncs_Add stores the entry POINTER without copying, so it must live
+    // for the process lifetime.
+    private static readonly delegate* unmanaged[Cdecl]<nint, void> ConsoleFuncsAddFn =
+        (delegate* unmanaged[Cdecl]<nint, void>)0x0044BA80;
+
+    /// <summary>The engine functor adapter vtable: a functor with this vtable and a cdecl
+    /// fnptr is invoked by the console as <c>void __cdecl(const char* args)</c>.</summary>
+    public const nint ConsoleAdapterVtable = 0x00741440;
+
+    /// <summary>Registers a prepared command entry (name @0, functor-ptr @0x50) with the
+    /// engine console. MAIN THREAD ONLY. The pointer is stored, not copied.</summary>
+    public static void RegisterConsoleEntry(nint entry) => ConsoleFuncsAddFn(entry);
+
     // The texture-font table PrintStringScreenPos indexes into. It is only bound during the
     // engine's own render pass (UpdateScreen), but our SwapBuffers hook fires on every
     // main-loop swap (~317 Hz), most of which are NOT that pass — on those frames the table
