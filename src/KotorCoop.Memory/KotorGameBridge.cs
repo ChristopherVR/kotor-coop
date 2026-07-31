@@ -326,8 +326,34 @@ public sealed class KotorGameBridge : IGameBridge
             {
                 _pluginBlock = candidate;
                 ResetItemSlots();
+                BaselineTakeSerials();
                 return;
             }
+        }
+    }
+
+    /// <summary>
+    /// Adopts the block's CURRENT take-serials as already-seen. The plugin outlives the
+    /// agent, so a restarted agent otherwise finds serials above its zero baselines and
+    /// replays the previous session's last console command and browser connect the moment
+    /// it attaches (observed live: a fresh agent immediately reported "that server is no
+    /// longer listed" from a click made minutes earlier).
+    /// </summary>
+    private void BaselineTakeSerials()
+    {
+        if (_memory.TryReadUInt32(_pluginBlock + BlockConsoleSerial, out uint console))
+        {
+            _lastConsoleSerial = console;
+        }
+
+        if (_memory.TryReadUInt32(_pluginBlock + BlockBrowserConnectSerial, out uint browser))
+        {
+            _lastBrowserConnectSerial = browser;
+        }
+
+        if (_memory.TryReadUInt32(_pluginBlock + BlockConnectSerial, out uint connect))
+        {
+            _lastConnectSerial = connect;
         }
     }
 
@@ -531,8 +557,22 @@ public sealed class KotorGameBridge : IGameBridge
             flags |= PlayerState.FlagInCombat;
         }
 
+        // Downed comes from the plugin, which asks the engine directly (GetDeadTemp): a
+        // party member at zero hit points is temp-dead, not dead, and hit points alone
+        // cannot distinguish "downed" from "the read failed".
+        if (IsLocalPlayerDowned)
+        {
+            flags |= PlayerState.FlagDowned;
+        }
+
         return flags;
     }
+
+    /// <summary>Plugin-published: the local PC is in the engine's temp-dead (downed) state.</summary>
+    public bool IsLocalPlayerDowned =>
+        _pluginBlock != 0
+        && _memory.TryReadUInt32(_pluginBlock + BlockLocalDowned, out uint downed)
+        && downed != 0;
 
     private bool IsRemotePauseApplied =>
         _pluginBlock != 0
@@ -1786,6 +1826,99 @@ public sealed class KotorGameBridge : IGameBridge
     private const int BlockBrowserEntryPlayers = 0x38;
     private const int BlockBrowserEntryMaxPlayers = 0x39;
     private const int BlockBrowserCapacity = 8;
+
+    // ---- co-op death handling (block version 14) --------------------------------
+
+    /// <summary>The plugin owns the suppressions and the revive; without it there is no
+    /// death mediation and the game behaves exactly as single-player.</summary>
+    public bool SupportsDeathHandling => _pluginBlock != 0;
+
+    private const int BlockLocalDowned = 0x1020;
+    private const int BlockLocalDownedSerial = 0x1024;
+    private const int BlockGameOverSerial = 0x1028;
+    private const int BlockSuppressGameOver = 0x102C;
+    private const int BlockSuppressSwap = 0x1030;
+    private const int BlockReviveSerial = 0x1034;
+    private const int BlockReviveApplied = 0x1038;
+    private const int BlockReviveStatus = 0x103C;
+    private const int BlockReviveHitPoints = 0x1040;
+
+    private uint _lastGameOverSerial;
+    private uint _reviveSerial;
+    private bool _deathBaselined;
+
+    /// <summary>
+    /// Turns the two death suppressions on (or off). While a session is live the game must
+    /// not swap control away from the player's own PC, nor drop this instance to the main
+    /// menu on a party wipe — the session decides that jointly. Clearing
+    /// <paramref name="suppressGameOver"/> lets the next attempt through, which is how a
+    /// genuine, synchronised wipe is delivered.
+    /// </summary>
+    public bool SetDeathSuppression(bool suppressGameOver, bool suppressSwap)
+    {
+        if (_pluginBlock == 0)
+        {
+            return false;
+        }
+
+        if (!_deathBaselined)
+        {
+            _deathBaselined = true;
+            _memory.TryReadUInt32(_pluginBlock + BlockGameOverSerial, out _lastGameOverSerial);
+            _memory.TryReadUInt32(_pluginBlock + BlockReviveSerial, out _reviveSerial);
+        }
+
+        bool ok = _memory.TryWrite(_pluginBlock + BlockSuppressGameOver, suppressGameOver ? 1u : 0u);
+        ok &= _memory.TryWrite(_pluginBlock + BlockSuppressSwap, suppressSwap ? 1u : 0u);
+        return ok;
+    }
+
+    /// <summary>
+    /// True (once) when the engine tried to show the game-over screen and the plugin
+    /// swallowed it — i.e. this instance's whole party is down. The caller decides whether
+    /// the session is genuinely wiped (every player down) or this player is waiting for a
+    /// rescue.
+    /// </summary>
+    public bool TryTakeGameOverAttempt()
+    {
+        if (_pluginBlock == 0
+            || !_memory.TryReadUInt32(_pluginBlock + BlockGameOverSerial, out uint serial)
+            || serial == _lastGameOverSerial)
+        {
+            return false;
+        }
+
+        _lastGameOverSerial = serial;
+        return true;
+    }
+
+    /// <summary>
+    /// Stands the local PC back up at <paramref name="hitPoints"/> (0 = the plugin's
+    /// default). Used when a peer has reached a downed player.
+    /// </summary>
+    public bool RequestRevive(int hitPoints = 0)
+    {
+        if (_pluginBlock == 0)
+        {
+            return false;
+        }
+
+        // Hit points before the serial: the plugin reads the serial last, so it can never
+        // see a bumped serial paired with a stale amount.
+        bool ok = _memory.TryWrite(_pluginBlock + BlockReviveHitPoints, (uint)Math.Max(hitPoints, 0));
+        ok &= _memory.TryWrite(_pluginBlock + BlockReviveSerial, ++_reviveSerial);
+        return ok;
+    }
+
+    /// <summary>The plugin's verdict on the last revive: 0 = applied, non-zero = refused.</summary>
+    public bool TryReadReviveStatus(out uint status)
+    {
+        status = 0;
+        return _pluginBlock != 0
+            && _memory.TryReadUInt32(_pluginBlock + BlockReviveApplied, out uint applied)
+            && applied == _reviveSerial
+            && _memory.TryReadUInt32(_pluginBlock + BlockReviveStatus, out status);
+    }
 
     private uint _browserListSerial;
     private uint _lastBrowserConnectSerial;

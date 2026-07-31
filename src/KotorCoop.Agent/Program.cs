@@ -543,6 +543,43 @@ internal static class Program
             (uint)config.ChatOverlayFadeMs);
     }
 
+    /// <summary>
+    /// After a menu-picked join: stage the newest save over the autosave slot and ask the
+    /// plugin to replay the engine's own load path, so "click a server, arrive in the world"
+    /// is one action. Best-effort — on any refusal the player just loads a save by hand, the
+    /// same as before this existed. The save-identity digest handshake catches a wrong pick.
+    /// </summary>
+    private static void AutoLoadAfterMenuConnect(ProcessMemory memory)
+    {
+        try
+        {
+            using Process game = Process.GetProcessById(memory.ProcessId);
+            string? gameDir = Path.GetDirectoryName(game.MainModule?.FileName);
+            if (gameDir is null)
+            {
+                return;
+            }
+
+            if (!PluginMenuLoader.TryStageSaveAsAutosave(gameDir, 0, out string staging))
+            {
+                Console.WriteLine($"auto-load skipped: {staging}");
+                return;
+            }
+
+            if (!PluginMenuLoader.TryRequestLoad(memory, out _, out string request))
+            {
+                Console.WriteLine($"auto-load skipped: {request}");
+                return;
+            }
+
+            Console.WriteLine($"auto-load: {staging}; {request}");
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"auto-load skipped: {ex.Message}");
+        }
+    }
+
     private static async Task<int> RunAsync(AgentOptions options)
     {
         if (options.Mode == CoopMode.None)
@@ -655,6 +692,15 @@ internal static class Program
         // disconnect and reconnect arrives through the dispatcher (the ~ console or the menu
         // button) and swaps the session under the running dashboard.
         manager.Connect(mode == CoopMode.Host, mode == CoopMode.Host ? null : hostEndPoint, SettingsFor(password));
+
+        // A join picked in the game's own menu should land the player in the world without
+        // another human step: stage the newest save as the autosave and fire the plugin's
+        // in-process load (the browser guarantees its panel is closed before the connect is
+        // handed over, so the menu is a plain, freshly rebuilt main menu here).
+        if (options.MenuConnect && mode == CoopMode.Join && !resolved)
+        {
+            _ = Task.Run(() => AutoLoadAfterMenuConnect(memory), cts.Token);
+        }
 
         Task dispatchTask = dispatcher.RunAsync(cts.Token);
         AgentDashboard dashboard = new(manager, bridge, options.DropFile);

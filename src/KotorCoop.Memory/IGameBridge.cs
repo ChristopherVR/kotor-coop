@@ -217,6 +217,24 @@ public interface IGameBridge : IDisposable
     /// over the host-owned companions. Object-id write, crash-proof. False if not resolvable.</summary>
     bool LockControlToPlayer() => false;
 
+    /// <summary>False when this bridge cannot mediate deaths (no plugin).</summary>
+    bool SupportsDeathHandling => false;
+
+    /// <summary>
+    /// Holds back the two engine reflexes a co-op session must arbitrate itself: the
+    /// game-over screen when this instance's whole party is down, and control auto-swapping
+    /// off the player's own PC. Clearing <paramref name="suppressGameOver"/> releases a
+    /// genuine, session-wide party wipe.
+    /// </summary>
+    bool SetDeathSuppression(bool suppressGameOver, bool suppressSwap) => false;
+
+    /// <summary>True (once) when the engine tried to end the game and the plugin swallowed
+    /// it — i.e. every party member on THIS instance is down.</summary>
+    bool TryTakeGameOverAttempt() => false;
+
+    /// <summary>Stands the local PC back up (a peer reached them). 0 = plugin default HP.</summary>
+    bool RequestRevive(int hitPoints = 0) => false;
+
     /// <summary>False when this bridge cannot see or drive party gold / PC experience.</summary>
     bool SupportsProgressionSync => false;
 

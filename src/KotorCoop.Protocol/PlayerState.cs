@@ -31,6 +31,14 @@ public readonly record struct PlayerState(
     /// <summary>The player's character is in combat (creature +0x4E0).</summary>
     public const uint FlagInCombat = 4;
 
+    /// <summary>
+    /// The player is DOWNED — at zero hit points and in the engine's "temp dead" state,
+    /// which party members enter instead of dying. They are not out of the session: the
+    /// engine stands them up once the area is clear, and a peer who reaches them can revive
+    /// them sooner. Rides the existing per-tick state, so no extra channel.
+    /// </summary>
+    public const uint FlagDowned = 8;
+
     public static PlayerState Empty { get; } = new(Vector3f.Zero, 0f, string.Empty, 0, 0);
 
     /// <summary>Rejects NaN/infinite reads, which is what a bad offset profile produces.</summary>
@@ -41,6 +49,8 @@ public readonly record struct PlayerState(
     public bool IsPaused => (Flags & FlagPaused) != 0;
 
     public bool IsInCombat => (Flags & FlagInCombat) != 0;
+
+    public bool IsDowned => (Flags & FlagDowned) != 0;
 }
 
 /// <summary>A remote player as seen locally, after interpolation.</summary>

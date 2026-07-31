@@ -178,6 +178,15 @@ internal sealed unsafe class MenuLoadController(SharedBlockView block)
 
     public void OnFrame()
     {
+        // While the native browser panel is up, the main-menu object is freed (see
+        // docs/research/native-browser-panel.md §2) and a load staged now would resolve
+        // dangling GUI. The browser hands its connect to the agent only after its panel is
+        // swept and the fresh menu exists, so deferring here costs at most a frame.
+        if (NativeBrowserController.IsOpen)
+        {
+            return;
+        }
+
         uint serial = block.MenuLoadSerial;
         if (serial == block.MenuLoadApplied)
         {

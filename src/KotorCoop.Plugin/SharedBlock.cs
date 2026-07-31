@@ -446,6 +446,46 @@ internal struct SharedBlock
     /// <summary>Rows the panel can show; occupies 0xE20..0x1020, inside the region.</summary>
     public const int BrowserCapacity = 8;
 
+    // ---- co-op death handling (version 14, region 0x1020..0x1080) -----------------
+    //
+    // KOTOR party members never truly die: at 0 HP they go "temp dead" and the engine
+    // itself stands them up once no hostile has been near for a few seconds. Two engine
+    // reflexes break co-op, and both are suppressed by byte-patch guards (DeathController):
+    // control auto-swapping to another party member, and the all-party-dead game-over that
+    // would drop ONE instance to the main menu while the peer plays on. This region carries
+    // the downed state to the agent, and the peers' verdicts back.
+    // See docs/research/death-handling.md.
+
+    /// <summary>Plugin -&gt; agent. Nonzero while the local PC is temp-dead (downed).</summary>
+    public const int OffsetLocalDowned = 0x1020;
+
+    /// <summary>Plugin -&gt; agent. Bumped each time the local PC goes down (edge, not level).</summary>
+    public const int OffsetLocalDownedSerial = 0x1024;
+
+    /// <summary>Plugin -&gt; agent. Bumped when the engine tried to raise game-over and we
+    /// swallowed it — the agent decides whether the whole session is wiped.</summary>
+    public const int OffsetGameOverSerial = 0x1028;
+
+    /// <summary>Agent -&gt; plugin. Nonzero suppresses the game-over screen (default on in a
+    /// session). Cleared to let a genuine, synchronised party wipe through.</summary>
+    public const int OffsetSuppressGameOver = 0x102C;
+
+    /// <summary>Agent -&gt; plugin. Nonzero suppresses control auto-swap on PC death (and the
+    /// Tab/portrait swap generally — the client control lock).</summary>
+    public const int OffsetSuppressSwap = 0x1030;
+
+    /// <summary>Agent -&gt; plugin. Bumped to revive the local PC (a peer reached them).</summary>
+    public const int OffsetReviveSerial = 0x1034;
+
+    /// <summary>Plugin -&gt; agent. Echoes the revive serial once applied.</summary>
+    public const int OffsetReviveApplied = 0x1038;
+
+    /// <summary>Plugin -&gt; agent. 0 = ok, else the revive failure code.</summary>
+    public const int OffsetReviveStatus = 0x103C;
+
+    /// <summary>Agent -&gt; plugin. Hit points to stand the PC up with (0 = engine default).</summary>
+    public const int OffsetReviveHitPoints = 0x1040;
+
     public const int ItemSlotCapacity = 8;
 
     public const int ItemResrefLength = 16;

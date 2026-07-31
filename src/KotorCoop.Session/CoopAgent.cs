@@ -203,6 +203,11 @@ public sealed class CoopAgent(IGameBridge bridge, ICoopSession session, AgentSet
         PumpTravel(local, peers);
         PumpPause(peers);
 
+        // Death is arbitrated every tick too: a rescue window measured in seconds cannot
+        // wait for the ~5 Hz heavy pass, and a swallowed game-over must be answered before
+        // the engine tries again on the next frame.
+        PumpDeath(local, visible);
+
         // Client-only, every tick: keep the player's input locked to their own PC (a cheap id
         // write) so an attempted switch to a shared, host-owned companion reverts within a frame
         // rather than waiting for the ~5 Hz heavy party pass. Host owns the companions; it is free
@@ -446,6 +451,110 @@ public sealed class CoopAgent(IGameBridge bridge, ICoopSession session, AgentSet
             Log?.Invoke(anyPeerPaused ? "a peer paused; pausing with them" : "peer pause released");
         }
     }
+
+    /// <summary>
+    /// Co-op death: nobody drops out of the session alone, and nobody is left alive alone in
+    /// a wiped one.
+    ///
+    /// KOTOR downs party members rather than killing them, and stands them up by itself once
+    /// the area is clear — that is kept. What this adds is the two-instance half:
+    ///
+    /// - **Rescue.** A downed player whose peer is standing beside them is revived at once,
+    ///   rather than waiting out the engine's own combat-clear timer. That is the co-op
+    ///   moment worth having: your partner comes to get you.
+    /// - **A wipe is unanimous.** When one instance's whole party falls, its game-over is
+    ///   swallowed and this instance simply lies there. Only when EVERY player is down does
+    ///   the suppression lift, and then it lifts on all of them, so both players get the
+    ///   game's own ending together instead of one being dropped to the main menu mid-fight.
+    ///
+    /// Both suppressions live in the plugin as inert byte patches until turned on here, so a
+    /// game with no session behaves exactly like stock KOTOR.
+    /// </summary>
+    private void PumpDeath(in PlayerState local, IReadOnlyList<RemotePeer> visible)
+    {
+        if (!bridge.SupportsDeathHandling)
+        {
+            return;
+        }
+
+        // A wipe needs every player down — including this one. A peer in another module is
+        // not part of this fight, but it is also not a corpse: it can still come back for
+        // us, so it counts as standing.
+        bool everyPeerDown = true;
+        for (int i = 0; i < visible.Count; i++)
+        {
+            if (!visible[i].State.IsDowned)
+            {
+                everyPeerDown = false;
+                break;
+            }
+        }
+
+        bool allDown = local.IsDowned && visible.Count > 0 && everyPeerDown;
+
+        // Hold the game-over unless the session really is wiped; always hold the control
+        // swap (it fights the control lock and hands a client the host's companions).
+        if (allDown != _sessionWiped || !_deathSuppressionSet)
+        {
+            _deathSuppressionSet = true;
+            _sessionWiped = allDown;
+            bridge.SetDeathSuppression(suppressGameOver: !allDown, suppressSwap: true);
+
+            if (allDown)
+            {
+                Log?.Invoke("every player is down; releasing the game-over screen for everyone");
+            }
+        }
+
+        // The engine tried to end the game here. With the suppression on that is only "this
+        // instance's party is down" — worth saying once, so a waiting player knows why they
+        // are lying on the floor instead of at the menu.
+        if (bridge.TryTakeGameOverAttempt() && !allDown)
+        {
+            Log?.Invoke("your party is down — a peer can still revive you");
+        }
+
+        // The rescue itself: a standing peer close enough to reach us.
+        if (!local.IsDowned)
+        {
+            _reviveRequested = false;
+            return;
+        }
+
+        if (_reviveRequested || allDown)
+        {
+            return; // already asked, or there is nobody left standing to do the reviving
+        }
+
+        for (int i = 0; i < visible.Count; i++)
+        {
+            RemotePeer peer = visible[i];
+            if (peer.State.IsDowned || !peer.IsInModule(local.Module))
+            {
+                continue;
+            }
+
+            if (peer.State.Position.DistanceTo(local.Position) <= ReviveRangeUnits)
+            {
+                _reviveRequested = true;
+                bridge.RequestRevive(ReviveHitPoints);
+                Log?.Invoke($"{peer.Name} revived you");
+                return;
+            }
+        }
+    }
+
+    /// <summary>How close a standing peer must be to pick a downed player up. Roughly a
+    /// couple of body-lengths — close enough to read as "they came to get you".</summary>
+    private const float ReviveRangeUnits = 3.5f;
+
+    /// <summary>Hit points a rescued player stands up with: enough to move and fight back,
+    /// little enough that being downed still cost something.</summary>
+    private const int ReviveHitPoints = 15;
+
+    private bool _deathSuppressionSet;
+    private bool _sessionWiped;
+    private bool _reviveRequested;
 
     /// <summary>
     /// Keeps a client in the host's module. When the host crosses into another area, the

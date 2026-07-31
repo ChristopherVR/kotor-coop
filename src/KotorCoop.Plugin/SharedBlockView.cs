@@ -440,6 +440,53 @@ internal sealed unsafe class SharedBlockView(byte* baseAddress)
     public byte* BrowserEntry(int index) =>
         baseAddress + SharedBlock.OffsetBrowserEntries + (index * SharedBlock.BrowserEntryStride);
 
+    // ---- co-op death handling ---------------------------------------------------
+
+    /// <summary>Plugin-written: nonzero while the local PC is downed (temp-dead).</summary>
+    public uint LocalDowned
+    {
+        get => *U32(SharedBlock.OffsetLocalDowned);
+        set => *U32(SharedBlock.OffsetLocalDowned) = value;
+    }
+
+    /// <summary>Plugin-written: bumped on each knock-down, so the agent can count them.</summary>
+    public uint LocalDownedSerial
+    {
+        get => *U32(SharedBlock.OffsetLocalDownedSerial);
+        set => *U32(SharedBlock.OffsetLocalDownedSerial) = value;
+    }
+
+    /// <summary>Plugin-written: bumped when a game-over was swallowed.</summary>
+    public uint GameOverSerial
+    {
+        get => *U32(SharedBlock.OffsetGameOverSerial);
+        set => *U32(SharedBlock.OffsetGameOverSerial) = value;
+    }
+
+    /// <summary>Agent-written: hold the game-over screen (cleared for a real party wipe).</summary>
+    public bool SuppressGameOver => *U32(SharedBlock.OffsetSuppressGameOver) != 0;
+
+    /// <summary>Agent-written: block control auto-swap (and Tab/portrait swapping).</summary>
+    public bool SuppressControlSwap => *U32(SharedBlock.OffsetSuppressSwap) != 0;
+
+    /// <summary>Agent-written: bumped to stand the local PC back up.</summary>
+    public uint ReviveSerial => *U32(SharedBlock.OffsetReviveSerial);
+
+    /// <summary>Agent-written: hit points for the revive (0 = the plugin's default).</summary>
+    public uint ReviveHitPoints => *U32(SharedBlock.OffsetReviveHitPoints);
+
+    public uint ReviveApplied
+    {
+        get => *U32(SharedBlock.OffsetReviveApplied);
+        set => *U32(SharedBlock.OffsetReviveApplied) = value;
+    }
+
+    public uint ReviveStatus
+    {
+        get => *U32(SharedBlock.OffsetReviveStatus);
+        set => *U32(SharedBlock.OffsetReviveStatus) = value;
+    }
+
     // ---- dialogue spectate ------------------------------------------------------
 
     /// <summary>Pointer to the current dialogue speaker (40 bytes), plugin-written.</summary>
