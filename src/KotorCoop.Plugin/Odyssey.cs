@@ -1207,6 +1207,89 @@ internal static unsafe class Odyssey
     private static bool LooksLikeHeapPointer(nint p) =>
         p is > 0x10000 and < 0x7FFF0000 && (p & 3) == 0;
 
+    // ---- forcing BTN_WARP visible at runtime -------------------------------------
+    //
+    // The retail menu constructor builds BTN_WARP, lays it out from the .gui (position + "Warp"
+    // text + adds it to the draw list), then DELIBERATELY re-hides it: at 0x0067C669 it clears
+    // bit1 (0x2) of control+0x44. That one bit gates BOTH drawing (CSWGuiPanel::Draw 0x0040B841
+    // `test [ctl+0x44],2`) and click hit-testing (CSWGuiControl::HitCheckMouse 0x004187C5). So a
+    // .gui Override can never surface it — but writing bit1 back each frame makes it draw AND
+    // clickable in one store, with no code patch. See docs/research/menu-button-runtime.md.
+
+    /// <summary>CSWGuiControl flags dword: bit1 0x2 = visible+hittable, bit5 0x20 = locked.</summary>
+    private const int ControlFlagsOffset = 0x44;
+    private const uint ControlFlagVisible = 0x2;
+    private const uint ControlFlagLocked = 0x20;
+
+    // The label lives in a CSWGuiText at button+0x154; its CSWGuiTextParams is at +0x18 -> +0x16C.
+    private const int ButtonTextParamsOffset = 0x16C;
+
+    // CSWGuiTextParams::SetText(this, CExoString* src) — sets the literal and str_ref = -1.
+    private static readonly delegate* unmanaged[Thiscall]<nint, byte*, void> TextParamsSetTextFn =
+        (delegate* unmanaged[Thiscall]<nint, byte*, void>)0x00415E00;
+    // CExoString::CExoString(const char*) / ~CExoString — build+free the temporary label string.
+    private static readonly delegate* unmanaged[Thiscall]<byte*, byte*, void> CExoStringCtorFn =
+        (delegate* unmanaged[Thiscall]<byte*, byte*, void>)0x005E5A90;
+    private static readonly delegate* unmanaged[Thiscall]<byte*, void> CExoStringDtorFn =
+        (delegate* unmanaged[Thiscall]<byte*, void>)0x005E5C20;
+
+    /// <summary>The main-menu Co-op control (dormant BTN_WARP), or 0 when not on the menu or
+    /// the pointer does not look like a live control. Guarded like BindCoopMenuButton.</summary>
+    public static nint GetCoopMenuButton()
+    {
+        nint menu = GetMainMenu();
+        if (menu == 0)
+        {
+            return 0;
+        }
+
+        nint button = *(nint*)(menu + MainMenuWarpButton);
+        return LooksLikeHeapPointer(button) && LooksLikeHeapPointer(*(nint*)button) ? button : 0;
+    }
+
+    /// <summary>Un-hides a control: sets the visible/hittable bit and clears the lock bit. Must
+    /// be re-applied each frame because a menu rebuild re-runs the ctor's hide. MAIN THREAD ONLY.</summary>
+    public static void SetControlVisible(nint control)
+    {
+        uint* flags = (uint*)(control + ControlFlagsOffset);
+        *flags = (*flags | ControlFlagVisible) & ~ControlFlagLocked;
+    }
+
+    /// <summary>Sets a button control's on-screen label via the engine's own SetText (which
+    /// refreshes the linked text object and pins str_ref to -1 so the literal wins). Builds a
+    /// temporary CExoString on the stack and frees it. Idempotent. MAIN THREAD ONLY.</summary>
+    public static void SetControlText(nint control, string ascii)
+    {
+        byte* s = stackalloc byte[16];
+        for (int i = 0; i < 16; i++)
+        {
+            s[i] = 0;
+        }
+
+        int n = ascii.Length;
+        byte* buf = stackalloc byte[64];
+        int count = n < 63 ? n : 63;
+        for (int i = 0; i < count; i++)
+        {
+            buf[i] = (byte)ascii[i];
+        }
+
+        buf[count] = 0;
+
+        CExoStringCtorFn(s, buf);
+        TextParamsSetTextFn(control + ButtonTextParamsOffset, s);
+        CExoStringDtorFn(s);
+    }
+
+    /// <summary>Binds the plugin's click/accept sink onto a resolved control (same-id AddEvent
+    /// replaces). Separated from <see cref="BindCoopMenuButton"/> so the caller can reuse a
+    /// control it already resolved. MAIN THREAD ONLY.</summary>
+    public static void BindControlClick(nint control, nint owner, nint callback)
+    {
+        AddEventFn(control, GuiEventClick, owner, callback);
+        AddEventFn(control, GuiEventAccept, owner, callback);
+    }
+
     // ---- map markers -------------------------------------------------------------
     //
     // A peer's position shows on the M-screen map as a map-note pin. The map's draw code

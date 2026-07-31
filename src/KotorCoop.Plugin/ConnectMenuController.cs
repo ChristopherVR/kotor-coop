@@ -22,53 +22,61 @@ internal sealed unsafe class ConnectMenuController
 
     public ConnectMenuController(SharedBlockView block) => _block = block;
 
-    /// <summary>Frames between attempts to bind the button; the menu object appears after
-    /// the logo movies, so a periodic retry catches it.</summary>
-    private const int IntervalFrames = 30;
-
     /// <summary>The one live controller, so the static thiscall callback the engine invokes
     /// can reach the block. There is a single plugin instance per process.</summary>
     private static ConnectMenuController? _instance;
 
-    private int _countdown;
-    private bool _bound;
+    private nint _lastButton;
+    private bool _branded;
     private int _logged;
 
     /// <summary>Reset when the menu is torn down (a load leaves the menu), so the button is
-    /// rebound on a return to the menu.</summary>
+    /// re-shown and rebound on a return to the menu.</summary>
     public void Invalidate()
     {
-        _bound = false;
+        _branded = false;
+        _lastButton = 0;
     }
 
     public void OnFrame()
     {
         _instance = this;
 
-        if (_countdown > 0)
-        {
-            _countdown--;
-            return;
-        }
-
-        _countdown = IntervalFrames;
-
         // Opt-in only, and only while the menu exists (a server means we are in a world,
-        // where BTN_WARP is not present).
-        if (!_block.ConnectMenuEnabled || _bound || Odyssey.HasServer)
+        // where the main menu — and BTN_WARP — is gone).
+        if (!_block.ConnectMenuEnabled || Odyssey.HasServer)
         {
+            _branded = false;
+            _lastButton = 0;
             return;
         }
 
-        if (Odyssey.GetMainMenu() == 0)
+        nint button = Odyssey.GetCoopMenuButton();
+        if (button == 0)
         {
-            return; // logo movies still playing
+            _branded = false;
+            _lastButton = 0;
+            return; // logo movies still playing, or not on the menu
         }
 
-        if (Odyssey.BindCoopMenuButton(0x1, (nint)(delegate* unmanaged[Thiscall]<nint, nint, void>)&OnCoopClicked))
+        // The menu ctor re-hides BTN_WARP every time it is (re)built, so the visible bit must
+        // be re-asserted each frame — this is the one write that makes it draw AND take clicks.
+        Odyssey.SetControlVisible(button);
+
+        // A changed control pointer means the menu was rebuilt (returned from a load); re-brand.
+        if (button != _lastButton)
         {
-            _bound = true;
-            LogOnce("menu: Co-op button bound");
+            _lastButton = button;
+            _branded = false;
+        }
+
+        if (!_branded)
+        {
+            _branded = true;
+            Odyssey.SetControlText(button, "Coop");
+            Odyssey.BindControlClick(
+                button, 0x1, (nint)(delegate* unmanaged[Thiscall]<nint, nint, void>)&OnCoopClicked);
+            LogOnce("menu: Co-op button shown, branded and bound");
         }
     }
 
