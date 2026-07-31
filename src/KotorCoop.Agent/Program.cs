@@ -544,35 +544,35 @@ internal static class Program
     }
 
     /// <summary>
-    /// After a menu-picked join: stage the newest save over the autosave slot and ask the
-    /// plugin to replay the engine's own load path, so "click a server, arrive in the world"
-    /// is one action. Best-effort — on any refusal the player just loads a save by hand, the
-    /// same as before this existed. The save-identity digest handshake catches a wrong pick.
+    /// After a server is picked in the in-game browser: load the player's save, so "click a
+    /// server, arrive in the world" is one action.
+    ///
+    /// This deliberately uses the MENU-CLICK route rather than the plugin's in-process load
+    /// replay, despite the replay needing no window focus. Measured on both: the replay
+    /// brings the module up but with a DEFAULT character — the save's own PC never arrives
+    /// (the player lands at the module's start point with starting hit points), because the
+    /// replay reproduces the module transition and not the engine's character-login chain.
+    /// Clicking loads the actual save. See docs/research/world-up-faction-crash.md for the
+    /// login chain, which is what a future in-process route has to reproduce.
+    ///
+    /// Best-effort: on any refusal the player just loads a save by hand, exactly as before
+    /// this existed, and the session is already connected either way.
     /// </summary>
     private static void AutoLoadAfterMenuConnect(ProcessMemory memory)
     {
         try
         {
             using Process game = Process.GetProcessById(memory.ProcessId);
-            string? gameDir = Path.GetDirectoryName(game.MainModule?.FileName);
-            if (gameDir is null)
-            {
-                return;
-            }
 
-            if (!PluginMenuLoader.TryStageSaveAsAutosave(gameDir, 0, out string staging))
+            if (SaveLoader.TryLoadSave(
+                    game, memory, 0, TimeSpan.FromSeconds(180), out string diagnostic, viaMenuClicks: true))
             {
-                Console.WriteLine($"auto-load skipped: {staging}");
-                return;
+                Console.WriteLine($"auto-load: {diagnostic}");
             }
-
-            if (!PluginMenuLoader.TryRequestLoad(memory, out _, out string request))
+            else
             {
-                Console.WriteLine($"auto-load skipped: {request}");
-                return;
+                Console.WriteLine($"auto-load skipped ({diagnostic}); load a save yourself and the session continues.");
             }
-
-            Console.WriteLine($"auto-load: {staging}; {request}");
         }
         catch (Exception ex)
         {

@@ -27,16 +27,23 @@ Both players, each in their own full game:
   and the quest journal merge upward, so one quest line advances for everyone.
 - **Pause together**: either player's pause pauses both worlds, and only the pauser can
   release it.
-- **Go down together**: a player at zero health drops their phantom into a real death
-  pose on the other side, and it stands back up on recovery.
+- **Go down together, and get each other back up**: a player at zero health drops their
+  phantom into a real death pose on the other side. KOTOR never truly kills a party member —
+  it downs them — so a partner who walks over picks you straight back up, and the game's own
+  recovery still applies if nobody is close. Nobody gets dropped to the main menu alone
+  either: a party wipe only ends the game once *every* player is down, and then it ends for
+  both of you together.
 - **See each other on the map**: each peer is a live pin on the M-screen map, riding the
   engine's own map-note waypoints — no interface hacking.
 - **Share one party**: the host drives the companions (Trask, Carth...) with the game's own
   AI and each client freezes and mirrors them, so they stay one synchronised group instead
   of two that drift. `--no-party-sync` opts out.
-- **Connect from the game**: a "Co-op" button on the main menu starts the session from a
-  `coop.ini` (host/join, address, password, name). A password keeps strangers out; a
-  dropped player reconnects automatically and keeps their slot.
+- **Connect from the game, in the game's own menu**: a "Co-op" button on the main menu opens
+  a real KOTOR panel — the same list widget the Load Game screen uses, with its native font,
+  borders and scrollbar — listing the co-op servers found on your network with their player
+  counts. Pick one, click Connect, and you join and load straight into the shared world. A
+  password keeps strangers out; a dropped player reconnects automatically and keeps their
+  slot. `coop.ini` still works for a fixed host if you prefer.
 - **Type commands in-game**: press `~` for the game's own console and type
   `connect <ip> [password]`, `disconnect` or `reconnect` at any time — the session is torn
   down and rebuilt live, no restart. If the host wants a password you didn't give, the
@@ -72,10 +79,11 @@ a mod, and only ever adds to the override folder.
 
 Verified live: two GOG instances on one machine — phantoms both ways, appearance and
 equipment, run-gait, item drop/pickup, enemy health/death mirroring, door unlock
-propagation. The compatibility handshake, map presence, name plates and world-digest are
-unit-tested (142 tests) with their live two-instance pass pending a stable
-unattended-load path. See `Handoff.md` and `docs/research/` for the precise per-feature
-status and the reverse-engineering behind each.
+propagation, the in-game server browser from opening the panel through to landing in the
+shared world, and going down and being revived by the other player. The compatibility
+handshake, map presence and name plates are unit-tested (265 tests) with their live
+two-instance pass still outstanding. See `Handoff.md` and `docs/research/` for the precise
+per-feature status and the reverse-engineering behind each.
 
 ## Requirements
 

@@ -8,6 +8,90 @@ no other dependencies. C# throughout.
 
 ---
 
+## 0e. NATIVE MENU + DEATH + THE LOAD CRASH FIXED, 2026-08-01
+
+⚠ **Shared block is version 14, protocol is version 9.** Rebuild both agents and reinstall
+the plugin in both game folders. The block signature now carries the version, so a
+mismatched pair fails to find each other instead of reading wrong offsets.
+
+**The headline: the whole join is now one click, in the game's own UI, and it works live.**
+Main menu → **Co-op** → a native panel listing the LAN servers → click **Connect** → the
+agent joins the host → the save loads → both players are in one world. Verified end to end
+this session (log excerpt, joiner instance):
+
+```
+native browser: row 0 confirmed; connect handed to the agent
+menu: constructing the save panel ... creating the server and loopback session
+menu: player faction repair returned 1
+menu: the world is up
+agent reports 1 remote peer(s)
+```
+
+- **The browser is a real KOTOR panel now, not overlay text** (`NativeBrowserController`,
+  `docs/research/native-browser-panel.md` — every ABI read out of the binary first). It
+  constructs the engine's own `CSWGuiSaveLoad`, clears the save rows, and fills the embedded
+  `CSWGuiListBox` with one engine-cloned row per discovered server; native font, borders,
+  scrollbar, mouse and keyboard. Rows are cloned through the engine's `Initialize_2` from the
+  listbox's own prototype, captions go through `SetText`, and `AddControls` transfers row
+  OWNERSHIP to the listbox — so a refresh is just another `AddControls` and teardown frees
+  everything. Two non-obvious facts drove the design: showing a child panel marks the MAIN
+  MENU for the manager's delete sweep (so `[clientInternal+0x280]` DANGLES while the browser
+  is up — `NativeBrowserController.IsOpen` gates the other menu controllers off), and the
+  stock **Back** button already performs a perfect close, so it is left wired on purpose.
+  The old queued-text browser survives as the in-world F9 panel and as the fallback if a
+  native guard ever refuses.
+- **⚠ The menu-load replay had to move to the MainLoop hook.** The SwapBuffers frame hook is
+  movie-gated at the menu and NEVER fires there — measured, the frame counter sits at 0 at a
+  settled menu — so a load request serviced from `OnFrame` sat forever. This is why the
+  in-process load looked dead in earlier sessions.
+- **THE WORLD-UP CRASH IS FIXED** (`docs/research/world-up-faction-crash.md`). Root cause: a
+  load driven from the menu brings the player up **in no faction** — `PostProcess` adds a PC
+  to the player faction but silently falls through when the faction-manager slot is not yet
+  populated, and nothing retries. `GetFaction` then returns null forever and the server's
+  object-update pass dereferences it ~0.4 s later (`0x5BF694` in `GetSingletonParty`, plus
+  six more windows like it). Fix: `Odyssey.EnsurePlayerFaction` makes the engine's own
+  `CSWSFaction::AddMember 0x5BFA70` call at world-up — byte for byte what `PostProcess`
+  would have done. One call closes every window; the game now runs indefinitely where it
+  used to fault in half a second. `PartyFactionGuard` (a byte patch routing a null faction in
+  `HandlePlayerToServerParty` onto the handler's own default-faction path) fixed the earlier
+  `0x5272D8` crash and stays installed as a canary.
+- **⚠ BUT: the in-process load produces a DEFAULT CHARACTER, not the save's.** Measured on
+  both instances: after the replay the PC stands at the module's start point with starting
+  hit points (`pos (15.42, 20.12) hp 1/1`) instead of the saved character (`(20.01, 22.15)
+  hp 12/0`). The replay reproduces the module transition but NOT the engine's character-login
+  chain (`EndStartNewModule → LoginIFOCharacter → LoadCharacterFromIFO(TEMP:pifo) →
+  PostProcess`), which is also exactly why the faction was missing. So the browser's
+  auto-load deliberately uses the **menu-click route**, which loads the real save. Anyone
+  reviving the in-process route must reproduce that login chain — the addresses are in the
+  crash doc.
+- **Co-op death handling** (`DeathController`, `docs/research/death-handling.md`), **verified
+  live**: HP forced to 0 on one instance produced `death: the local player is down` →
+  the peer standing beside them triggered `death: revive applied; the player stands up` →
+  `topped up to 15 hp`, all within a second, both instances still running. KOTOR downs party
+  members rather than killing them and stands them up itself once the area is clear; that is
+  kept. Co-op adds the rescue (a standing peer within ~3.5 units revives you immediately,
+  through the engine's own Resurrection effect — a raw HP write leaves a prone body with
+  zeroed AI flags, never ship that) and makes a wipe unanimous (one instance's game-over is
+  swallowed and only released when EVERY player is down, so nobody is dropped to the menu
+  mid-fight). Two byte patches, both verify-bytes-or-refuse and both INERT until the agent
+  turns them on. ⚠ `ChangeCharacter 0x5F6B60` is `ret 8` with a `sub esp,0xC; push esi;
+  mov esi,ecx` prologue — the first attempt assumed `push ebp` and was correctly refused by
+  the guard rather than corrupting anything.
+- **Save-identity + per-module GIT digests** complete the mod-compatibility handshake
+  (protocol v9): a different save refuses the id-keyed channels, a mod-edited module drops
+  enemies/doors/items for that module only and restores them in the next module where the
+  GITs agree. 265 tests pass.
+- Diagnostics: `tools\blockpoke.ps1` gained `browser` (list/open/close the panel) and
+  `death` (state, and `death revive` to fire a rescue by hand).
+
+**Trap, still live and worth knowing:** injected clicks are discarded unless the game window
+is the ACTIVE window (every mouse branch in the window proc is gated on `CExoInput::GetActive`).
+`PostMessageA(WM_LBUTTONDOWN/UP)` with the coordinate in `lParam` works and ignores the
+physical pointer (`docs/research/mouse-cursor-input.md`), but the activation gate still
+applies — a minimise/restore cycle is what reliably revives it.
+
+---
+
 ## 0c. CONNECTION + PARTY BUILD, 2026-07-31 (later) — party sync, password, reconnect, Connect menu
 
 ⚠ **Protocol is version 5, shared block is version 8.** Rebuild both agents and reinstall
