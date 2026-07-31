@@ -799,6 +799,118 @@ internal static unsafe class Odyssey
 
     public static void DisarmPlaceable(nint placeable) => *(int*)(placeable + PlaceableTrap) = 0;
 
+    // ---- container loot ----------------------------------------------------------
+    //
+    // A container's contents live in one CItemRepository* at CSWSPlaceable+0x36C (also
+    // corpses/body-bags). Its item list at repo+0x0C is a flat array of OBJECT IDS (DWORDs,
+    // not pointers); the count is at repo+0x10. RemoveItem deletes one. See
+    // docs/research/placeables-containers.md §2 (all VERIFIED there).
+
+    /// <summary>CSWSPlaceable + this = CItemRepository* (0 when it has no inventory).</summary>
+    private const int PlaceableRepository = 0x36C;
+
+    /// <summary>CItemRepository + this = flat array of item object ids (DWORDs).</summary>
+    private const int RepositoryItemArray = 0x0C;
+
+    /// <summary>CItemRepository + this = item count.</summary>
+    private const int RepositoryItemCount = 0x10;
+
+    // CSWSPlaceable::RemoveItem(CSWSItem*) 0x00584AC0 — the container "take" primitive
+    // (VERIFIED, clean thiscall). It confirms the item is in this placeable's repository
+    // (GetItemInRepository), unlinks the id, then detaches the item, so calling it for an
+    // item that is not in this container is itself a safe no-op. MAIN THREAD ONLY.
+    private static readonly delegate* unmanaged[Thiscall]<nint, nint, void> PlaceableRemoveItemFn =
+        (delegate* unmanaged[Thiscall]<nint, nint, void>)0x00584AC0;
+
+    /// <summary>
+    /// Resolves an item object id to its CSWSItem base, vtable-checked. Mirrors the two-shape
+    /// id logic the ground-item reader uses: GetGameObject may hand back the CSWSItem base
+    /// (id at +0x14) or the embedded CSWSObject (id at +0x04). Returns 0 if not a live item.
+    /// </summary>
+    private static nint ResolveItemBase(uint itemId)
+    {
+        nint server = GetServer();
+        if (server == 0)
+        {
+            return 0;
+        }
+
+        nint pointer = GetGameObjectFn(server, itemId);
+        if (pointer == 0)
+        {
+            return 0;
+        }
+
+        nint itemBase;
+        if (*(uint*)(pointer + 0x14) == itemId)
+        {
+            itemBase = pointer;
+        }
+        else if (*(uint*)(pointer + 0x04) == itemId)
+        {
+            itemBase = pointer - 0x10;
+        }
+        else
+        {
+            return 0;
+        }
+
+        return *(nint*)itemBase == ItemVtable ? itemBase : 0;
+    }
+
+    /// <summary>
+    /// Deletes item <paramref name="itemId"/> from placeable <paramref name="placeable"/>'s
+    /// container, if it is there. Confirms membership by scanning the repository's own id list
+    /// first, so a miss is a clean no-op that never calls into the engine, and every deref is
+    /// guarded. Returns true only when the item was found and RemoveItem was called.
+    ///
+    /// MAIN THREAD ONLY.
+    /// </summary>
+    public static bool RemoveContainerItem(nint placeable, uint itemId)
+    {
+        if (placeable == 0)
+        {
+            return false;
+        }
+
+        nint repo = *(nint*)(placeable + PlaceableRepository);
+        if (repo == 0)
+        {
+            return false;
+        }
+
+        int count = *(int*)(repo + RepositoryItemCount);
+        nint ids = *(nint*)(repo + RepositoryItemArray);
+        if (ids == 0 || count is <= 0 or > 4096)
+        {
+            return false;
+        }
+
+        bool present = false;
+        for (int i = 0; i < count; i++)
+        {
+            if (*(uint*)(ids + (nint)(i * 4)) == itemId)
+            {
+                present = true;
+                break;
+            }
+        }
+
+        if (!present)
+        {
+            return false;
+        }
+
+        nint item = ResolveItemBase(itemId);
+        if (item == 0)
+        {
+            return false;
+        }
+
+        PlaceableRemoveItemFn(placeable, item);
+        return true;
+    }
+
     public static byte GetDoorOpenState(nint door) => *(byte*)(door + DoorOpenState);
 
     public static byte GetDoorPendingOpenState(nint door) => *(byte*)(door + DoorPendingOpenState);

@@ -108,6 +108,19 @@ public interface ICoopSession : IDisposable
     /// </summary>
     IReadOnlyList<ChatMessage> DrainChat();
 
+    /// <summary>
+    /// Host only: announces that the host looted <paramref name="itemId"/> out of container
+    /// <paramref name="containerId"/>, delivered reliably to every client so the item vanishes
+    /// from their copy of the container too. A client is a no-op (loot is host-authoritative).
+    /// </summary>
+    void PublishContainerLoot(uint containerId, uint itemId) { }
+
+    /// <summary>
+    /// Client only: the (container, item) removals the host has announced, which the agent
+    /// re-declares to the game each tick. Empty on the host, which never mirrors loot.
+    /// </summary>
+    IReadOnlyList<ContainerLootRemoval> ContainerLootRemovals => [];
+
     /// <summary>The shared quest journal, merged upward across every player.</summary>
     JournalStore Journal { get; }
 

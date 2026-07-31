@@ -1,0 +1,77 @@
+namespace KotorCoop.Plugin;
+
+/// <summary>
+/// Deletes items the host has looted out of shared containers from this instance's copies, on
+/// the game's thread. A chest or corpse is the same object in both saves (same GIT order =&gt;
+/// same object ids), so a container's contents can be kept from duplicating: the agent declares
+/// the host's (container, item) removals for the local module, and this resolves each container
+/// and removes the matching item through <see cref="Odyssey.RemoveContainerItem"/>.
+///
+/// Removal only — never a deposit into the party, which would duplicate the item. Every resolve
+/// and deref is guarded; a miss (wrong module, item already gone, container not present) is a
+/// no-op, never a crash. Applying is idempotent, so the agent re-declaring the same set every
+/// tick is harmless.
+/// </summary>
+internal sealed class LootController(SharedBlockView block)
+{
+    /// <summary>Frames between passes; loot removals are rare and never urgent.</summary>
+    private const int IntervalFrames = 20;
+
+    private int _countdown;
+    private int _logged;
+
+    /// <summary>Forgets everything on a module change; ids now name different objects.</summary>
+    public void Invalidate() => block.LootCount = 0;
+
+    public void OnFrame()
+    {
+        if (_countdown > 0)
+        {
+            _countdown--;
+            return;
+        }
+
+        _countdown = IntervalFrames;
+
+        if (block.Command != SharedBlock.CommandSpawnAndDrive)
+        {
+            return;
+        }
+
+        uint count = Math.Min(block.LootCount, (uint)SharedBlock.LootCapacity);
+
+        for (int i = 0; i < count; i++)
+        {
+            Apply(block.GetLoot(i));
+        }
+    }
+
+    private void Apply(LootView desired)
+    {
+        if (desired.ContainerId is 0 || desired.ContainerId == Odyssey.ObjectInvalid
+            || desired.ItemId is 0 || desired.ItemId == Odyssey.ObjectInvalid)
+        {
+            return;
+        }
+
+        nint placeable = Odyssey.ResolvePlaceable(desired.ContainerId);
+        if (placeable == 0)
+        {
+            return;
+        }
+
+        if (Odyssey.RemoveContainerItem(placeable, desired.ItemId))
+        {
+            LogFew($"container 0x{desired.ContainerId:X}: removed looted item 0x{desired.ItemId:X} on the session's authority");
+        }
+    }
+
+    private void LogFew(string message)
+    {
+        if (_logged < 20)
+        {
+            _logged++;
+            PluginHost.Log(message);
+        }
+    }
+}

@@ -23,6 +23,10 @@ internal readonly record struct DoorView(uint ObjectId, byte OpenState, bool Unl
 /// <summary>One placeable's desired state, as published by the agent for the local module.</summary>
 internal readonly record struct PlaceableView(uint ObjectId, bool Open, bool Unlocked, bool Disarmed);
 
+/// <summary>One container-loot removal: item <see cref="ItemId"/> is to be deleted from
+/// container <see cref="ContainerId"/>.</summary>
+internal readonly record struct LootView(uint ContainerId, uint ItemId);
+
 /// <summary>One desired ground item as published by the external agent.</summary>
 internal readonly unsafe struct ItemSlotView(byte* slot)
 {
@@ -232,6 +236,22 @@ internal sealed unsafe class SharedBlockView(byte* baseAddress)
             *(slot + 0x04) != 0,
             *(slot + 0x05) != 0,
             *(slot + 0x06) != 0);
+    }
+
+    // ---- container loot ---------------------------------------------------------
+
+    /// <summary>Agent-written; the plugin zeroes it on a module change (ids name strangers).</summary>
+    public uint LootCount
+    {
+        get => *U32(SharedBlock.OffsetLootCount);
+        set => *U32(SharedBlock.OffsetLootCount) = value;
+    }
+
+    /// <summary>One container-loot removal: containerId, itemId.</summary>
+    public LootView GetLoot(int index)
+    {
+        byte* slot = baseAddress + SharedBlock.OffsetLootSlots + (index * SharedBlock.LootSlotStride);
+        return new LootView(*(uint*)(slot + 0x00), *(uint*)(slot + 0x04));
     }
 
     // ---- module travel ----------------------------------------------------------

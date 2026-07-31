@@ -23,6 +23,7 @@ public sealed class CoopClient : ICoopSession
     private readonly ReliableFlagSender _flagSender = new();
     private readonly ReliableItemSender _itemSender = new();
     private readonly ReliableJournalSender _journalSender = new();
+    private readonly ContainerLootStore _lootStore = new();
     private readonly Lock _gate = new();
     private readonly uint _nonce;
 
@@ -283,6 +284,14 @@ public sealed class CoopClient : ICoopSession
     }
 
     public IReadOnlyList<EnemyState> GetEnemyReports(string module) => [];
+
+    /// <summary>The host is authoritative for loot; a client only mirrors, never publishes.</summary>
+    public void PublishContainerLoot(uint containerId, uint itemId)
+    {
+    }
+
+    /// <summary>The container-loot removals received from the host, for the agent to apply.</summary>
+    public IReadOnlyList<ContainerLootRemoval> ContainerLootRemovals => _lootStore.Snapshot();
 
     public JournalStore Journal { get; } = new();
 
@@ -733,6 +742,10 @@ public sealed class CoopClient : ICoopSession
 
                 break;
 
+            case PacketType.ContainerLoot:
+                HandleContainerLoot(span);
+                break;
+
             case PacketType.Pong:
                 if (PacketCodec.ReadPong(span) is { } pong)
                 {
@@ -773,6 +786,29 @@ public sealed class CoopClient : ICoopSession
             _installVerdict = ContentCompatibility.Compare(_settings.Digest, welcome.Digest);
             _compatibility = _installVerdict;
             RefineCompatibility();
+        }
+    }
+
+    /// <summary>
+    /// Records a container-loot removal from the host and acks it. Acked unconditionally — a
+    /// duplicate op means our previous ack was lost — and the store dedups by op sequence, so
+    /// applying the removal twice is impossible even though the ack repeats.
+    /// </summary>
+    private void HandleContainerLoot(ReadOnlySpan<byte> span)
+    {
+        if (PacketCodec.ReadContainerLoot(span) is not { } op)
+        {
+            _channel.NoteMalformed();
+            return;
+        }
+
+        _lootStore.ApplyOp(op);
+
+        int length = PacketCodec.Write(
+            _replyBuffer, new ContainerLootAckPacket(_localPeerId, op.OpSequence));
+        if (length > 0)
+        {
+            _channel.Send(_hostEndPoint, _replyBuffer.AsSpan(0, length));
         }
     }
 

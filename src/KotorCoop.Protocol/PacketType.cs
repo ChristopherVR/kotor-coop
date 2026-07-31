@@ -118,4 +118,15 @@ public enum PacketType : byte
     /// every kill runs the XP/gold grant locally on both instances, so combining would double.
     /// </summary>
     ProgressionSnapshot = 28,
+
+    /// <summary>
+    /// host -> clients: an item was looted out of a shared container (chest/corpse), keyed by
+    /// (container, item) object id. Retransmitted until acked, like <see cref="ItemOp"/>, so a
+    /// removal is not lost. Host-authoritative: only the host detects and publishes these; a
+    /// client applies the removal to its copy of the container so the item cannot be taken twice.
+    /// </summary>
+    ContainerLoot = 29,
+
+    /// <summary>client -> host: container-loot op received, stop retransmitting to me.</summary>
+    ContainerLootAck = 30,
 }
