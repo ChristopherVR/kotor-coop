@@ -33,10 +33,17 @@ internal sealed unsafe class ConsoleController
 
     private readonly SharedBlockView _block;
 
-    // The console line as it stood on the previous frame, so an Enter that clears the engine
-    // buffer before we read still recovers the command.
+    // The console line as it stood while it was open, so an Enter that clears the engine
+    // buffer AND closes the console (both happen on Enter, before this frame-hook runs) still
+    // recovers the command. _pendingAge counts frames since it was last refreshed while open.
     private readonly byte[] _pending = new byte[SharedBlock.ConsoleCommandLength];
     private int _pendingLength;
+    private int _pendingAge;
+
+    /// <summary>Frames a remembered line may still be routed after the console closed. The
+    /// submit-Enter is seen within a frame or two of the close; longer would risk a later
+    /// gameplay Enter routing a stale line.</summary>
+    private const int PendingGraceFrames = 4;
 
     private bool _enterWasDown;
 
@@ -63,18 +70,20 @@ internal sealed unsafe class ConsoleController
     {
         CaptureReplies();
 
-        if (!Odyssey.IsConsoleOpen)
+        if (Odyssey.IsConsoleOpen)
         {
-            // Nothing to capture with the console closed, and the Enter that closed it must
-            // not read as a submit next time it opens.
-            _enterWasDown = (NativeMethods.GetAsyncKeyState(NativeMethods.VkReturn) & 0x8000) != 0;
-            _pendingLength = 0;
-            return;
+            RememberCurrentLine();
+            Draw();
+        }
+        else if (_pendingLength > 0)
+        {
+            _pendingAge++;
         }
 
-        RememberCurrentLine();
+        // Enter is handled whether or not the console still reads open: the engine clears the
+        // buffer and closes the console ON Enter, before this frame-hook runs, so the line
+        // must be the one remembered while it was open, not the (now-empty) live buffer.
         HandleEnter();
-        Draw();
     }
 
     public void Invalidate()
@@ -99,11 +108,14 @@ internal sealed unsafe class ConsoleController
         }
 
         _pendingLength = count;
+        _pendingAge = 0;
     }
 
     /// <summary>
-    /// On the rising edge of Enter, routes the remembered line if it is one of ours, then
-    /// clears the engine buffer so it is not also dispatched as an unknown cheat.
+    /// On the rising edge of Enter, routes the line remembered while the console was open (if
+    /// it is one of ours), then clears the engine buffer so it is not also dispatched as an
+    /// unknown cheat. Only a freshly-remembered line qualifies, so an Enter pressed in normal
+    /// play long after the console closed never routes a stale command.
     /// </summary>
     private void HandleEnter()
     {
@@ -111,23 +123,29 @@ internal sealed unsafe class ConsoleController
         bool rising = down && !_enterWasDown;
         _enterWasDown = down;
 
-        if (!rising || _pendingLength <= 0)
+        if (rising && _pendingLength > 0 && _pendingAge <= PendingGraceFrames)
         {
+            if (IsCoopCommand(_pending, _pendingLength))
+            {
+                fixed (byte* p = _pending)
+                {
+                    _block.PublishConsoleCommand(p, _pendingLength);
+                }
+
+                Odyssey.ClearConsoleBuffer();
+                PluginHost.Log($"console: routed a co-op command ({_pendingLength} chars)");
+            }
+
+            _pendingLength = 0;
             return;
         }
 
-        if (IsCoopCommand(_pending, _pendingLength))
+        // Drop a remembered line once the console has been closed for a few frames, so a
+        // later Enter in normal play cannot route it.
+        if (_pendingAge > PendingGraceFrames)
         {
-            fixed (byte* p = _pending)
-            {
-                _block.PublishConsoleCommand(p, _pendingLength);
-            }
-
-            Odyssey.ClearConsoleBuffer();
-            PluginHost.Log($"console: routed a co-op command ({_pendingLength} chars)");
+            _pendingLength = 0;
         }
-
-        _pendingLength = 0;
     }
 
     /// <summary>Pulls a new agent reply into the on-screen log ring.</summary>
