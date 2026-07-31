@@ -61,9 +61,16 @@ internal sealed unsafe class ConnectMenuController
         if (!_bound)
         {
             _bound = true;
+
+            // Relabel the stock dev text ("Warp") through the engine's own SetText, which also
+            // refreshes the linked text object and pins str_ref to -1 so the literal wins. Safe
+            // now that the control address is right — the earlier "relabel crash" was the same
+            // embedded-vs-pointer bug writing into the executable's static data.
+            Odyssey.SetControlText(button, "Co-op");
+
             Odyssey.BindControlClick(
                 button, 0x1, (nint)(delegate* unmanaged[Thiscall]<nint, nint, void>)&OnCoopClicked);
-            LogOnce("menu: Co-op button shown and bound");
+            LogOnce("menu: Co-op button shown, labelled and bound");
         }
     }
 
