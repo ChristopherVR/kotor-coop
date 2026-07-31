@@ -605,6 +605,28 @@ internal static unsafe class Odyssey
         return possessor == ObjectInvalid ? ItemFloorState.OnFloor : ItemFloorState.Held;
     }
 
+    // ---- appearance --------------------------------------------------------------
+
+    // CSWSCreature::UpdateAppearanceDependantInfo(this, int bStore) — rebuilds modeltype, the
+    // per-body-part model CExoStrings and the sibling appearance field from the appearance.2da
+    // row at creature+0xA60. The engine runs this after EVERY appearance-row change (Disguise,
+    // the replication message sites: `mov [esi+0xA60],cx; push 1; mov ecx,esi; call 0x4ED850`).
+    // A direct field poke that skips it leaves the body-part strings allocated for the OLD
+    // appearance, so a later equip's appearance rebuild reads a dangling CExoString and crashes
+    // in CompareNoCase. See docs/research/phantom-equip-crash.md.
+    private static readonly delegate* unmanaged[Thiscall]<nint, int, void> UpdateAppearanceDependantInfoFn =
+        (delegate* unmanaged[Thiscall]<nint, int, void>)0x004ED850;
+
+    /// <summary>Rebuilds a creature's appearance-derived state after its appearance.2da row was
+    /// changed directly, so nothing downstream holds a stale model string. MAIN THREAD ONLY.</summary>
+    public static void RebuildAppearance(nint creature)
+    {
+        if (creature != 0)
+        {
+            UpdateAppearanceDependantInfoFn(creature, 1);
+        }
+    }
+
     // ---- equipment ---------------------------------------------------------------
 
     /// <summary>CreateItemOnObject(string sTemplate, object oTarget, int nStackSize) -&gt; item.</summary>

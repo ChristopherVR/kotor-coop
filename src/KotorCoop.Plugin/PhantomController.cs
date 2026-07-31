@@ -497,10 +497,13 @@ internal sealed unsafe class PhantomController(SharedBlockView block)
     private const int CreAppearanceType = 0xA60;
 
     /// <summary>
-    /// Makes the phantom wear the remote player's appearance.2da row. Server-side is the
-    /// single source of truth: the engine's own appearance-update message notices the
-    /// change and pushes it to the render side next frame (docs/re/rendering.md section 5),
-    /// so this is a plain field write with no client call needed.
+    /// Makes the phantom wear the remote player's appearance.2da row. Writing the row field is
+    /// not enough on its own: the engine rebuilds a creature's model-type and per-body-part model
+    /// strings from that row via UpdateAppearanceDependantInfo after every change, so a bare poke
+    /// leaves the phantom holding body-part strings for its OLD (k_coop_phantom) appearance. A
+    /// later weapon equip then rebuilds the appearance, reads one of those stale strings and
+    /// crashes. Rebuild the derived state right after the write. See
+    /// docs/research/phantom-equip-crash.md.
     /// </summary>
     private static void ApplyAppearance(nint phantom, uint appearance)
     {
@@ -513,6 +516,7 @@ internal sealed unsafe class PhantomController(SharedBlockView block)
         if (*field != (ushort)appearance)
         {
             *field = (ushort)appearance;
+            Odyssey.RebuildAppearance(phantom);
         }
     }
 
