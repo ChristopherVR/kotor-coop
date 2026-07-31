@@ -214,8 +214,88 @@ public sealed class KotorGameBridge : IGameBridge
 
     // ---- discovery ------------------------------------------------------------
 
-    /// <summary>Finds every live creature by scanning for the vtable pointer.</summary>
+    /// <summary>
+    /// Finds every live creature by scanning for the vtable pointer, reusing the last result
+    /// for a short while.
+    ///
+    /// ⚠ The cache is not an optimisation, it is the difference between working and not. A
+    /// full scan of the game's committed memory takes on the order of the interval it was
+    /// being called at, so calling it fresh on every world-state pass consumed an entire CPU
+    /// core and starved the pump that replicates POSITION — measured end to end, a peer took
+    /// 3-7 seconds to move, and the pump ran at ~4 Hz instead of 60. Creature addresses are
+    /// stable while a module is loaded (the object array is rebuilt on load, which is what
+    /// <see cref="Invalidate"/> is for), so re-scanning several times a second bought nothing.
+    ///
+    /// Callers that need fresh FIELD values still get them: only the address list is cached,
+    /// and every read through those addresses is live.
+    /// </summary>
     public List<CreatureRef> EnumerateCreatures()
+    {
+        long nowMs = Environment.TickCount64;
+        if (_creatureCache is not null && nowMs - _creatureCacheAtMs < CreatureCacheMs)
+        {
+            return _creatureCache;
+        }
+
+        List<CreatureRef> scanned = ScanCreatures();
+        _creatureCache = scanned;
+        _creatureCacheAtMs = nowMs;
+        return scanned;
+    }
+
+    /// <summary>How long a creature-address scan is reused. Long enough that scanning stops
+    /// dominating the pump, short enough that a creature spawned mid-fight is picked up
+    /// quickly.</summary>
+    private const int CreatureCacheMs = 5000;
+
+    private List<CreatureRef>? _creatureCache;
+    private long _creatureCacheAtMs;
+
+    /// <summary>Drops the cached creature list — call when the world changes underneath it.</summary>
+    public void InvalidateCreatureCache()
+    {
+        _creatureCache = null;
+        _scanCache.Clear();
+    }
+
+    /// <summary>
+    /// A vtable scan whose ADDRESSES are reused for a while.
+    ///
+    /// Doors, placeables and containers do not move while a module is loaded, but each of
+    /// their state-collection passes was running its own full scan of the game's committed
+    /// memory — and they all run on the same world-state pass, so the agent was doing a
+    /// dozen full scans a second. Together with the item and creature scans that consumed a
+    /// whole CPU core and starved the loop that replicates POSITION, which is what made
+    /// everything appear to lag by seconds.
+    ///
+    /// Only the address list is cached; every field read through those addresses is live, so
+    /// a door opening is still seen on the next pass.
+    /// </summary>
+    private List<nint> CachedScan(uint vtable, int limit, int ttlMs)
+    {
+        long nowMs = Environment.TickCount64;
+
+        if (_scanCache.TryGetValue(vtable, out (List<nint> Hits, long AtMs) cached)
+            && nowMs - cached.AtMs < ttlMs)
+        {
+            return cached.Hits;
+        }
+
+        PatternScanner scanner = new(_memory);
+        List<nint> hits = scanner.ScanAll(
+            BytePattern.FromBytes(BitConverter.GetBytes(vtable)), ScanScope.PrivateCommitted, limit);
+
+        _scanCache[vtable] = (hits, nowMs);
+        return hits;
+    }
+
+    /// <summary>How long a world-object address scan is reused. These are static objects in a
+    /// loaded module, so this can be generous; a module change clears the cache.</summary>
+    private const int ObjectScanCacheMs = 30_000;
+
+    private readonly Dictionary<uint, (List<nint> Hits, long AtMs)> _scanCache = [];
+
+    private List<CreatureRef> ScanCreatures()
     {
         List<CreatureRef> creatures = [];
 
@@ -437,12 +517,34 @@ public sealed class KotorGameBridge : IGameBridge
         // pointer. Two small reads per tick buy immunity to that.
         if (_player is not null && !StillLooksLikeThePlayer(_player.Address))
         {
+            if (_playerLostLogged < 3)
+            {
+                _playerLostLogged++;
+                ResolveDiagnostic?.Invoke(DescribePlayerMismatch(_player.Address));
+            }
+
             _player = null;
         }
 
-        if (_player is null && !TryResolve(out _))
+        if (_player is null)
         {
-            return false;
+            // ⚠ RATE-LIMITED, and it has to be. Re-resolving means a full pattern scan of the
+            // game's committed memory — hundreds of milliseconds. Running that on every failed
+            // validation pinned a CPU core and dropped the pump from 60 Hz to under 3, which
+            // measured end to end as a peer taking 3-7 SECONDS to move. The validation above
+            // is cheap and correct; what was not affordable was acting on it immediately.
+            long nowMs = Environment.TickCount64;
+            if (nowMs - _lastResolveAttemptMs < ResolveRetryMs)
+            {
+                return false;
+            }
+
+            _lastResolveAttemptMs = nowMs;
+
+            if (!TryResolve(out _))
+            {
+                return false;
+            }
         }
 
         nint creature = _player!.Address;
@@ -486,6 +588,18 @@ public sealed class KotorGameBridge : IGameBridge
             && _memory.TryReadUInt32(creature + OffAreaId, out uint areaId))
         {
             module = $"area{areaId:X}";
+        }
+
+        // A module change rebuilds every object in the game, so every cached ADDRESS is now
+        // meaningless. The caches exist because scanning for them is what starved this pump;
+        // dropping them exactly here is what keeps them honest.
+        if (module.Length > 0 && !string.Equals(module, _cachedForModule, StringComparison.OrdinalIgnoreCase))
+        {
+            _cachedForModule = module;
+            InvalidateCreatureCache();
+            _itemTags.Clear();
+            _itemTagMisses.Clear();
+            _itemTagsBuiltAtMs = 0;
         }
 
         // Visible equipment travels as blueprint resrefs. An item's tag matches its
@@ -1158,10 +1272,7 @@ public sealed class KotorGameBridge : IGameBridge
 
         _nextDoorScanTicks = now + 1000;
 
-        BytePattern pattern = BytePattern.FromBytes(BitConverter.GetBytes(DoorVtable));
-        PatternScanner scanner = new(_memory);
-
-        foreach (nint address in scanner.ScanAll(pattern, ScanScope.PrivateCommitted, limit: 256))
+        foreach (nint address in CachedScan(DoorVtable, 256, ObjectScanCacheMs))
         {
             if (!_memory.TryReadUInt32(address + OffObjectId, out uint objectId)
                 || objectId is 0 or > 0xFFFF
@@ -1312,10 +1423,7 @@ public sealed class KotorGameBridge : IGameBridge
 
         _nextPlaceableScanTicks = now + 1000;
 
-        BytePattern pattern = BytePattern.FromBytes(BitConverter.GetBytes(PlaceableVtable));
-        PatternScanner scanner = new(_memory);
-
-        foreach (nint address in scanner.ScanAll(pattern, ScanScope.PrivateCommitted, limit: 512))
+        foreach (nint address in CachedScan(PlaceableVtable, 512, ObjectScanCacheMs))
         {
             if (!_memory.TryReadUInt32(address + OffObjectId, out uint objectId)
                 || objectId is 0 or > 0xFFFF
@@ -1468,12 +1576,9 @@ public sealed class KotorGameBridge : IGameBridge
 
         _nextLootScanTicks = now + 1000;
 
-        BytePattern pattern = BytePattern.FromBytes(BitConverter.GetBytes(PlaceableVtable));
-        PatternScanner scanner = new(_memory);
-
         HashSet<uint> seenContainers = [];
 
-        foreach (nint address in scanner.ScanAll(pattern, ScanScope.PrivateCommitted, limit: 512))
+        foreach (nint address in CachedScan(PlaceableVtable, 512, ObjectScanCacheMs))
         {
             if (!_memory.TryReadUInt32(address + OffObjectId, out uint containerId)
                 || containerId is 0 or > 0xFFFF)
@@ -1602,11 +1707,9 @@ public sealed class KotorGameBridge : IGameBridge
             return 0;
         }
 
-        BytePattern pattern = BytePattern.FromBytes(BitConverter.GetBytes(EncounterVtable));
-        PatternScanner scanner = new(_memory);
         int disabled = 0;
 
-        foreach (nint address in scanner.ScanAll(pattern, ScanScope.PrivateCommitted, limit: 128))
+        foreach (nint address in CachedScan(EncounterVtable, 128, ObjectScanCacheMs))
         {
             // Sanity: a real encounter has its object id where CSWSObject keeps it.
             if (!_memory.TryReadUInt32(address + OffObjectId, out uint objectId)
@@ -2651,6 +2754,40 @@ public sealed class KotorGameBridge : IGameBridge
     /// <see cref="TryResolve"/> selected on, so anything that fails here is no longer the
     /// object we resolved.
     /// </summary>
+    /// <summary>At most one full re-scan per second, no matter how often validation fails.</summary>
+    private const int ResolveRetryMs = 1000;
+
+    private long _lastResolveAttemptMs;
+    private int _playerLostLogged;
+
+    /// <summary>Optional sink for "why did the cached player stop validating" — the answer
+    /// decides whether the validation is too strict or the pointer really did go stale.</summary>
+    public Action<string>? ResolveDiagnostic { get; set; }
+
+    /// <summary>Names the specific check that failed, so this is diagnosable from a log
+    /// rather than by rebuilding with printfs.</summary>
+    private string DescribePlayerMismatch(nint creature)
+    {
+        if (!_memory.TryReadUInt32(creature, out uint vtable))
+        {
+            return $"player 0x{creature:X}: vtable unreadable";
+        }
+
+        if (vtable != CreatureVtable)
+        {
+            return $"player 0x{creature:X}: vtable 0x{vtable:X} != 0x{CreatureVtable:X}";
+        }
+
+        if (!_memory.TryReadPointer(creature + OffCreatureStats, out nint stats) || stats == 0)
+        {
+            return $"player 0x{creature:X}: stats pointer missing";
+        }
+
+        return !_memory.TryReadInt32(stats + StatsIsPc, out int isPc)
+            ? $"player 0x{creature:X}: is-PC flag unreadable"
+            : $"player 0x{creature:X}: is-PC flag is {isPc}";
+    }
+
     private bool StillLooksLikeThePlayer(nint creature) =>
         _memory.TryReadUInt32(creature, out uint vtable)
         && vtable == CreatureVtable
@@ -2722,9 +2859,49 @@ public sealed class KotorGameBridge : IGameBridge
             return cached;
         }
 
+        // ⚠ A MISS MUST NOT COST A SCAN. RebuildItemTagCache walks the game's committed
+        // memory looking for the item vtable; this method runs three times per tick (body,
+        // right hand, left hand), so a single id that never resolves — an empty slot holding
+        // a stale id, or an item whose tag cannot be read — meant three full memory scans
+        // EVERY TICK. That pinned a CPU core, dropped the pump from 60 Hz to about 4, and
+        // measured end to end as a peer taking 3-7 seconds to move. It was the single
+        // biggest cause of the "everything lags by seconds" report.
+        //
+        // So: remember the ids that did not resolve and never scan for them again, and
+        // rate-limit rebuilds regardless. A genuinely new item (one just picked up) is found
+        // by the next scheduled rebuild rather than instantly, which is imperceptible for
+        // what this feeds — the resref a peer's phantom wears.
+        if (_itemTagMisses.Contains(itemId))
+        {
+            return string.Empty;
+        }
+
+        long nowMs = Environment.TickCount64;
+        if (nowMs - _itemTagsBuiltAtMs < ItemTagRebuildMs)
+        {
+            return string.Empty;
+        }
+
+        _itemTagsBuiltAtMs = nowMs;
         RebuildItemTagCache();
-        return _itemTags.TryGetValue(itemId, out string? found) ? found : string.Empty;
+
+        if (_itemTags.TryGetValue(itemId, out string? found))
+        {
+            return found;
+        }
+
+        _itemTagMisses.Add(itemId);
+        return string.Empty;
     }
+
+    /// <summary>Minimum gap between item-tag scans, however many lookups miss.</summary>
+    private const int ItemTagRebuildMs = 15_000;
+
+    private readonly HashSet<uint> _itemTagMisses = [];
+
+    /// <summary>Which module the address caches were built for.</summary>
+    private string _cachedForModule = string.Empty;
+    private long _itemTagsBuiltAtMs;
 
     /// <summary>
     /// Trims a tag down to a usable blueprint resref: lowercase, and cut at the first
@@ -2753,6 +2930,10 @@ public sealed class KotorGameBridge : IGameBridge
     private void RebuildItemTagCache()
     {
         _itemTags.Clear();
+
+        // A fresh scan can resolve ids that missed before (an item just picked up), so the
+        // miss list must not outlive it.
+        _itemTagMisses.Clear();
 
         BytePattern pattern = BytePattern.FromBytes(BitConverter.GetBytes(ItemVtable));
         PatternScanner scanner = new(_memory);

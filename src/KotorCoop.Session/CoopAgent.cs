@@ -60,12 +60,14 @@ public sealed class CoopAgent(IGameBridge bridge, ICoopSession session, AgentSet
     private IReadOnlyList<RemotePeer> _lastPeers = [];
     private string _lastTravelRequest = string.Empty;
 
-    /// <summary>The heavy world-state pumps run once per this many ticks, so the per-tick
-    /// position/animation write stays at the full poll rate instead of being serialised behind
-    /// a dozen memory scans. At 20 Hz this puts world state at ~5 Hz — imperceptible, while the
-    /// phantom tracks in real time.</summary>
-    private const int HeavyPumpDivisor = 4;
-    private int _heavyCountdown = 1;
+    /// <summary>
+    /// Milliseconds between heavy world-state passes. 250 ms keeps enemies, items and doors
+    /// converging imperceptibly fast for a co-op session while leaving the thread free the
+    /// rest of the time for position updates, which are what the eye actually notices.
+    /// </summary>
+    private const int HeavyPumpIntervalMs = 250;
+
+    private long _lastHeavyPumpMs;
     private long _travelRetryAtMs;
 
     public IGameBridge Bridge => bridge;
@@ -221,18 +223,27 @@ public sealed class CoopAgent(IGameBridge bridge, ICoopSession session, AgentSet
             bridge.LockControlToPlayer();
         }
 
-        // --- heavy world-state path: run at ~1/HeavyPumpDivisor of the tick rate ---------
-        // The dozen memory-scanning syncs below cost far more per pass than the position
-        // write and do NOT need the full poll rate. Running them every tick serialised the
-        // whole pump behind them, collapsing the effective position rate and making the
-        // phantom lag. Staggering to ~5 Hz keeps position/animation real-time while world
-        // state still converges imperceptibly fast.
-        if (--_heavyCountdown > 0)
+        // --- heavy world-state path ------------------------------------------------------
+        //
+        // The syncs below scan the game's memory for creatures, items and doors. One pass
+        // costs orders of magnitude more than the position write above, and they share this
+        // thread with it — so their cadence decides how fresh a peer's POSITION is.
+        //
+        // ⚠ This is measured on a WALL CLOCK, not a tick count, and that distinction is the
+        // whole bug. Counting ticks ties the scan rate to the send rate, so raising the send
+        // rate to reduce latency multiplies the scans instead — at 60 Hz with a divisor of 4
+        // the heavy pass ran 15x a second, each pass outlasting its slot, and the loop simply
+        // never caught up. Measured end to end: a position took 3.5-7.4 SECONDS to travel
+        // from one game's memory to the other's. On a wall clock the scans stay at a fixed
+        // few per second no matter how fast state is sent, so the fast path is free to run at
+        // whatever rate the tick asks for.
+        long nowMs = Environment.TickCount64;
+        if (nowMs - _lastHeavyPumpMs < HeavyPumpIntervalMs)
         {
             return;
         }
 
-        _heavyCountdown = HeavyPumpDivisor;
+        _lastHeavyPumpMs = nowMs;
 
         // Report our in-world content fingerprint (the session rate-limits the wire
         // anyway). The save identity and the current module's GIT digest ride along with

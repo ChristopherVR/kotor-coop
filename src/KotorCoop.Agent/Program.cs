@@ -701,6 +701,13 @@ internal static class Program
             SyncPause = tuning?.PauseSync ?? true,
         };
 
+        // Surface why a cached player pointer stopped validating. Re-resolving costs a full
+        // memory scan, so if this fires repeatedly the validation is wrong, not the pointer.
+        if (bridge is KotorGameBridge resolveDiag)
+        {
+            resolveDiag.ResolveDiagnostic = message => Console.WriteLine($"[resolve] {message}");
+        }
+
         using SessionManager manager = new(bridge, agentSettings);
 
         SessionSettings SettingsFor(string sessionPassword) => new()
