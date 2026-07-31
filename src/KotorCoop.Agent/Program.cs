@@ -451,11 +451,22 @@ internal static class Program
 
         if (!resolved)
         {
-            Console.Error.WriteLine($"could not locate player state: {diagnostic}");
-            return 2;
-        }
+            // --menu waits at the MAIN MENU, where by definition no module is loaded and there
+            // is no player creature to find — so an unresolved bridge is the expected state, not
+            // a failure. The bridge re-resolves lazily once a save is loaded. Any other mode
+            // genuinely needs the player now.
+            if (!options.MenuConnect)
+            {
+                Console.Error.WriteLine($"could not locate player state: {diagnostic}");
+                return 2;
+            }
 
-        Console.WriteLine(diagnostic);
+            Console.WriteLine($"waiting at the main menu ({diagnostic}); player state resolves when a game loads.");
+        }
+        else
+        {
+            Console.WriteLine(diagnostic);
+        }
 
         using CancellationTokenSource cts = new();
         Console.CancelKeyPress += (_, eventArgs) =>

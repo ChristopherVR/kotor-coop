@@ -1255,8 +1255,20 @@ internal static unsafe class Odyssey
     private static readonly delegate* unmanaged[Thiscall]<byte*, void> CExoStringDtorFn =
         (delegate* unmanaged[Thiscall]<byte*, void>)0x005E5C20;
 
-    /// <summary>The main-menu Co-op control (dormant BTN_WARP), or 0 when not on the menu or
-    /// the pointer does not look like a live control. Guarded like BindCoopMenuButton.</summary>
+    /// <summary>CSWGuiButton vtable — identifies the embedded control and guards every write.</summary>
+    private const nint ButtonVtable = 0x0073E658;
+
+    /// <summary>
+    /// The main-menu Co-op control (the dormant BTN_WARP), or 0 when not on the menu.
+    ///
+    /// ⚠ BTN_WARP is EMBEDDED in CSWGuiMainMenu, not pointed to: the control object *begins* at
+    /// <c>mainMenu + 0x1248</c>, whose first dword is its vtable. Dereferencing that offset (as
+    /// this code originally did) yields the vtable CONSTANT 0x0073E658, which passes a naive
+    /// heap-pointer guard and sends every subsequent write into the executable's static data —
+    /// that, not any "uninitialised control", is what crashed the menu. Verified live: at the
+    /// correct address the object has the CSWGuiButton vtable and its real .gui extent, and the
+    /// visible-bit write is stable.
+    /// </summary>
     public static nint GetCoopMenuButton()
     {
         nint menu = GetMainMenu();
@@ -1265,8 +1277,10 @@ internal static unsafe class Odyssey
             return 0;
         }
 
-        nint button = *(nint*)(menu + MainMenuWarpButton);
-        return LooksLikeHeapPointer(button) && LooksLikeHeapPointer(*(nint*)button) ? button : 0;
+        // The control is AT this address. Confirm by its vtable rather than a range check, so a
+        // layout shift can never let us scribble somewhere arbitrary.
+        nint button = menu + MainMenuWarpButton;
+        return LooksLikeHeapPointer(button) && *(nint*)button == ButtonVtable ? button : 0;
     }
 
     /// <summary>Un-hides a control: sets the visible/hittable bit and clears the lock bit. Must

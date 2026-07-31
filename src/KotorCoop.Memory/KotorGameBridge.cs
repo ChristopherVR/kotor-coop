@@ -251,6 +251,13 @@ public sealed class KotorGameBridge : IGameBridge
     /// </summary>
     public bool TryResolve(out string diagnostic)
     {
+        // Find the plugin's shared block FIRST, before any world state. The block is created
+        // when the plugin loads and has nothing to do with a loaded module, so it must be
+        // discoverable at the main menu — that is exactly where the Co-op menu button lives and
+        // where the agent waits in --menu mode. Resolving it only after a player was found made
+        // the menu button impossible to enable (the early returns below fire at the menu).
+        TryFindPlugin();
+
         List<CreatureRef> creatures = EnumerateCreatures();
 
         if (creatures.Count == 0)

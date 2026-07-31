@@ -26,30 +26,45 @@ internal sealed unsafe class ConnectMenuController
     /// can reach the block. There is a single plugin instance per process.</summary>
     private static ConnectMenuController? _instance;
 
+    private bool _bound;
     private int _logged;
 
-    /// <summary>No-op while the button is shelved; kept for the controller contract.</summary>
-    public void Invalidate()
-    {
-    }
+    /// <summary>Rebind on a return to the menu (a load tears the menu down).</summary>
+    public void Invalidate() => _bound = false;
 
     public void OnFrame()
     {
         _instance = this;
 
-        // DISABLED — the main-menu Co-op button is shelved. Surfacing the engine's dormant
-        // BTN_WARP crashes the game: verified live that merely setting its visible bit (0x2 at
-        // control+0x44) faults the menu loop within a few seconds, because BTN_WARP is a
-        // dev-only control the retail menu never finishes initialising (no valid text object /
-        // border textures / navigable links), so drawing or hit-testing it dereferences
-        // uninitialised state. A .gui-file reposition never draws either (the ctor re-hides it
-        // after layout). A real button would need either full control initialisation or fresh
-        // GUI construction — both high-risk and out of scope. Until then, connect from the menu
-        // via the ~ console (`host` / `connect <ip>`), which works there through FuncInterpHook.
-        //
-        // Left wired (behind ConnectMenuEnabled, default off) so a future safe approach can slot
-        // in here; the resolve/un-hide helpers in Odyssey remain for that work.
-        return;
+        // Opt-in only, and only while the menu exists (a server means we are in a world, where
+        // the main menu — and BTN_WARP — is gone).
+        if (!_block.ConnectMenuEnabled || Odyssey.HasServer)
+        {
+            _bound = false;
+            return;
+        }
+
+        nint button = Odyssey.GetCoopMenuButton();
+        if (button == 0)
+        {
+            _bound = false;
+            return; // logo movies still playing, or not on the menu
+        }
+
+        // The menu constructor hides BTN_WARP immediately after running the .gui layout
+        // (0x0067C669 clears bit 0x2 of control+0x44), so the visible bit must be re-asserted —
+        // that single bit gates BOTH drawing and mouse hit-testing. The control is otherwise
+        // fully constructed: its flags differ from a working button's by exactly this bit, and
+        // its extent already places it one row below Quit.
+        Odyssey.SetControlVisible(button);
+
+        if (!_bound)
+        {
+            _bound = true;
+            Odyssey.BindControlClick(
+                button, 0x1, (nint)(delegate* unmanaged[Thiscall]<nint, nint, void>)&OnCoopClicked);
+            LogOnce("menu: Co-op button shown and bound");
+        }
     }
 
     /// <summary>
