@@ -85,6 +85,18 @@ public interface IGameBridge : IDisposable
     /// </summary>
     bool TryWriteDoorStates(IReadOnlyList<KeyValuePair<uint, sbyte>> flags) => false;
 
+    /// <summary>False when this bridge cannot see or drive placeable (chest/corpse) state.</summary>
+    bool SupportsPlaceableSync => false;
+
+    /// <summary>
+    /// Placeable states that advanced locally since the last call (opened, unlocked), as
+    /// placeable-typed world flags ready for the reliable flag channel.
+    /// </summary>
+    List<KeyValuePair<uint, sbyte>> CollectChangedPlaceableState() => [];
+
+    /// <summary>Publishes the session's placeable truth for the local module into the game.</summary>
+    bool TryWritePlaceableStates(IReadOnlyList<KeyValuePair<uint, sbyte>> flags) => false;
+
     /// <summary>False when this bridge cannot mirror a peer's pause into the game.</summary>
     bool SupportsPauseSync => false;
 

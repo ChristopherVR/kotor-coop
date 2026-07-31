@@ -24,6 +24,7 @@ internal static unsafe class PluginHost
     private static FocusKeeper? _focus;
     private static CombatController? _combat;
     private static DoorController? _doors;
+    private static PlaceableController? _placeables;
     private static TravelController? _travel;
     private static PauseController? _pause;
     private static JournalController? _journal;
@@ -72,6 +73,7 @@ internal static unsafe class PluginHost
             _focus = new FocusKeeper(_view);
             _combat = new CombatController(_view);
             _doors = new DoorController(_view);
+            _placeables = new PlaceableController(_view);
             _travel = new TravelController(_view);
             _menuLoad = new MenuLoadController(_view);
             _connectMenu = new ConnectMenuController(_view);
@@ -130,7 +132,7 @@ internal static unsafe class PluginHost
         Unsafe.InitBlockUnaligned(_block, 0, SharedBlock.TotalSize);
 
         _block->Magic = SharedBlock.MagicValue;
-        _block->Version = 10;
+        _block->Version = 11;
 
         // A guard dword after the version. Magic plus version alone was not selective
         // enough: a scan once matched something else at a lower address and the agent
@@ -261,6 +263,7 @@ internal static unsafe class PluginHost
         _items?.OnFrame();
         _combat?.OnFrame();
         _doors?.OnFrame();
+        _placeables?.OnFrame();
         _pause?.OnFrame();
         _journal?.OnFrame();
         _mapMarkers?.OnFrame();
@@ -273,6 +276,7 @@ internal static unsafe class PluginHost
         _items?.Invalidate();
         _combat?.Invalidate();
         _doors?.Invalidate();
+        _placeables?.Invalidate();
         _travel?.Invalidate();
         _pause?.Invalidate();
         _journal?.Invalidate();

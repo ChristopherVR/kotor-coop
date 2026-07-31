@@ -185,6 +185,7 @@ public sealed class CoopAgent(IGameBridge bridge, ICoopSession session, AgentSet
         PumpWorldState(caps);
         PumpJournal(caps);
         PumpDoors(caps);
+        PumpPlaceables(caps);
         PumpTravel(local, peers);
         PumpPause(peers);
     }
@@ -484,6 +485,30 @@ public sealed class CoopAgent(IGameBridge bridge, ICoopSession session, AgentSet
         }
 
         bridge.TryWriteDoorStates(session.Flags.Snapshot());
+    }
+
+    /// <summary>
+    /// The door channel's twin for placeables (chests, corpses, switches, containers): a
+    /// searched chest or unlocked container stays that way for both players. Rides the same
+    /// reliable flag store under a different tag, and shares the door capability gate because
+    /// it rests on the same object-id-across-the-same-save assumption.
+    /// </summary>
+    private void PumpPlaceables(SessionCapabilities caps)
+    {
+        if (!bridge.SupportsPlaceableSync || (caps & SessionCapabilities.Doors) == 0)
+        {
+            return;
+        }
+
+        foreach (KeyValuePair<uint, sbyte> change in bridge.CollectChangedPlaceableState())
+        {
+            if (session.Flags.Merge(change.Key, change.Value))
+            {
+                session.SetFlag(change.Key, change.Value);
+            }
+        }
+
+        bridge.TryWritePlaceableStates(session.Flags.Snapshot());
     }
 
     /// <summary>

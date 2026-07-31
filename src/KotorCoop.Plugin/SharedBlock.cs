@@ -47,7 +47,7 @@ internal struct SharedBlock
     /// existing offset profiles keep working. The plugin control fields live AFTER that
     /// range, which is why the block is larger than the profile knows about.
     /// </summary>
-    public const int TotalSize = 0xB80;
+    public const int TotalSize = 0xC80;
 
     public const int ProfileVisibleSize = 0x250;
 
@@ -343,6 +343,23 @@ internal struct SharedBlock
     public const int OffsetChatLine = 0xAD8;
 
     public const int ChatLineLength = 128; // occupies 0xAD8..0xB58
+
+    // ---- placeable state (version 11) --------------------------------------------
+    //
+    // Chests, corpses, switches and containers. Mirrors the door channel one-for-one: the
+    // agent writes the desired locked/open state per placeable id for the local module, and
+    // the plugin applies it. Unlike doors, placeables have no walkmesh coupling, so the
+    // apply is a plain field write with no engine call.
+
+    /// <summary>Agent -&gt; plugin. How many placeable entries are valid.</summary>
+    public const int OffsetPlaceableCount = 0xB58;
+
+    /// <summary>Agent -&gt; plugin. objectId u32 @0, open u8 @4, unlocked u8 @5.</summary>
+    public const int OffsetPlaceableSlots = 0xB60;
+
+    public const int PlaceableSlotStride = 0x08;
+
+    public const int PlaceableCapacity = 32; // occupies 0xB60..0xC60
 
     public const int ItemSlotCapacity = 8;
 

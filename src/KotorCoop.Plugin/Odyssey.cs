@@ -772,6 +772,28 @@ internal static unsafe class Odyssey
         return door != 0 && *(nint*)door == DoorVtable ? door : 0;
     }
 
+    // CSWSPlaceable. Unlike a door, a placeable has no walkmesh coupling, so mirroring its
+    // locked/open state is a plain field write — no engine call, no crash risk (see
+    // docs/research/placeables-containers.md). Both fields are ints, saved as bytes.
+    private const nint PlaceableVtable = 0x007494D0;
+    private const int PlaceableLocked = 0x260;
+    private const int PlaceableOpen = 0x338;
+
+    /// <summary>Resolves a placeable by object id, vtable-checked. 0 if absent or not one.</summary>
+    public static nint ResolvePlaceable(uint objectId)
+    {
+        nint placeable = ResolveServerObject(objectId);
+        return placeable != 0 && *(nint*)placeable == PlaceableVtable ? placeable : 0;
+    }
+
+    public static bool IsPlaceableLocked(nint placeable) => *(int*)(placeable + PlaceableLocked) != 0;
+
+    public static void UnlockPlaceable(nint placeable) => *(int*)(placeable + PlaceableLocked) = 0;
+
+    public static bool IsPlaceableOpen(nint placeable) => *(int*)(placeable + PlaceableOpen) != 0;
+
+    public static void SetPlaceableOpen(nint placeable) => *(int*)(placeable + PlaceableOpen) = 1;
+
     public static byte GetDoorOpenState(nint door) => *(byte*)(door + DoorOpenState);
 
     public static byte GetDoorPendingOpenState(nint door) => *(byte*)(door + DoorPendingOpenState);

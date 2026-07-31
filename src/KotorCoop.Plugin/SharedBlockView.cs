@@ -210,6 +210,26 @@ internal sealed unsafe class SharedBlockView(byte* baseAddress)
             *(slot + 0x05) != 0);
     }
 
+    // ---- placeables -------------------------------------------------------------
+
+    /// <summary>Agent-written; the plugin zeroes it on a module change (ids name strangers).</summary>
+    public uint PlaceableCount
+    {
+        get => *U32(SharedBlock.OffsetPlaceableCount);
+        set => *U32(SharedBlock.OffsetPlaceableCount) = value;
+    }
+
+    /// <summary>One placeable's desired state: objectId, opened, unlocked.</summary>
+    public DoorView GetPlaceable(int index)
+    {
+        byte* slot = baseAddress + SharedBlock.OffsetPlaceableSlots + (index * SharedBlock.PlaceableSlotStride);
+
+        return new DoorView(
+            *(uint*)(slot + 0x00),
+            *(slot + 0x04),
+            *(slot + 0x05) != 0);
+    }
+
     // ---- module travel ----------------------------------------------------------
 
     /// <summary>Agent-written request serial; a request is pending while it is ahead of
