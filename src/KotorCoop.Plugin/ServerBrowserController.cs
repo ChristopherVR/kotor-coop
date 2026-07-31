@@ -69,7 +69,7 @@ internal sealed unsafe class ServerBrowserController
         }
 
         // F9 toggles it in a loaded game, where there is no menu button.
-        bool openKey = (NativeMethods.GetAsyncKeyState(NativeMethods.VkF9) & 0x8000) != 0;
+        bool openKey = NativeMethods.IsKeyDownHere(NativeMethods.VkF9);
         if (openKey && !_openWasDown)
         {
             if (_open)
@@ -130,10 +130,10 @@ internal sealed unsafe class ServerBrowserController
     {
         int count = (int)Math.Min(_block.BrowserCount, (uint)SharedBlock.BrowserCapacity);
 
-        bool up = (NativeMethods.GetAsyncKeyState(NativeMethods.VkUp) & 0x8000) != 0;
-        bool down = (NativeMethods.GetAsyncKeyState(NativeMethods.VkDown) & 0x8000) != 0;
-        bool enter = (NativeMethods.GetAsyncKeyState(NativeMethods.VkReturn) & 0x8000) != 0;
-        bool esc = (NativeMethods.GetAsyncKeyState(NativeMethods.VkEscape) & 0x8000) != 0;
+        bool up = NativeMethods.IsKeyDownHere(NativeMethods.VkUp);
+        bool down = NativeMethods.IsKeyDownHere(NativeMethods.VkDown);
+        bool enter = NativeMethods.IsKeyDownHere(NativeMethods.VkReturn);
+        bool esc = NativeMethods.IsKeyDownHere(NativeMethods.VkEscape);
 
         if (up && !_upWasDown && _selection > 0)
         {

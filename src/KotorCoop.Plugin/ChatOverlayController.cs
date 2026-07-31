@@ -109,8 +109,8 @@ internal sealed unsafe class ChatOverlayController
     /// </summary>
     private void HandleScroll()
     {
-        bool up = (NativeMethods.GetAsyncKeyState(NativeMethods.VkPageUp) & 0x8000) != 0;
-        bool down = (NativeMethods.GetAsyncKeyState(NativeMethods.VkPageDown) & 0x8000) != 0;
+        bool up = NativeMethods.IsKeyDownHere(NativeMethods.VkPageUp);
+        bool down = NativeMethods.IsKeyDownHere(NativeMethods.VkPageDown);
 
         if (up && !_pageUpWasDown)
         {

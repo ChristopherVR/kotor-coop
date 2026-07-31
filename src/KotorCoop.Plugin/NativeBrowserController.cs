@@ -175,7 +175,7 @@ internal sealed unsafe class NativeBrowserController
             return;
         }
 
-        bool f9 = (NativeMethods.GetAsyncKeyState(NativeMethods.VkF9) & 0x8000) != 0;
+        bool f9 = NativeMethods.IsKeyDownHere(NativeMethods.VkF9);
         bool f9Pressed = f9 && !_f9WasDown;
         _f9WasDown = f9;
 
@@ -247,7 +247,7 @@ internal sealed unsafe class NativeBrowserController
         }
 
         // F9 closes too (retail Escape/Back already works via the stock handler).
-        bool f9 = (NativeMethods.GetAsyncKeyState(NativeMethods.VkF9) & 0x8000) != 0;
+        bool f9 = NativeMethods.IsKeyDownHere(NativeMethods.VkF9);
         if (f9 && !_f9WasDown)
         {
             _f9WasDown = f9;

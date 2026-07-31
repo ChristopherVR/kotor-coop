@@ -520,18 +520,37 @@ internal sealed unsafe class PhantomController(SharedBlockView block)
         }
     }
 
+    /// <summary>The old spawn spot: beside the local player, fanned out per phantom.</summary>
+    private Vec3 Offset(Vec3 playerPosition) => new()
+    {
+        X = playerPosition.X + 2.5f + (_phantomCount * 1.5f),
+        Y = playerPosition.Y + 1.5f,
+        Z = playerPosition.Z,
+    };
+
+    /// <summary>Rejects the all-zero position a slot carries before its first update, and any
+    /// NaN/infinity a bad read would produce.</summary>
+    private static bool IsPlausiblePosition(Vec3 p) =>
+        float.IsFinite(p.X) && float.IsFinite(p.Y) && float.IsFinite(p.Z)
+        && (p.X != 0f || p.Y != 0f);
+
     private void TrySpawnOne(nint player)
     {
-        Vec3 playerPosition = Odyssey.GetPosition(player);
+        // Spawn the body WHERE THE PEER ACTUALLY IS. This used to spawn at a fixed offset
+        // from the local player and let the walk logic carry it to the real position, which
+        // meant every phantom appeared next to you and then jogged across the room — the
+        // "initial positions are not synced" report. The peer is standing on their position,
+        // so it is by definition a valid walkmesh point, and ComputeSafeLocation inside
+        // CreateObject still searches outward from it.
+        //
+        // The local player is the fallback for the case where the slot has no plausible
+        // position yet (a peer that has connected but not yet published one).
+        RemoteView remote = block.GetRemote(_phantomCount);
+        Vec3 peerPosition = remote.Position;
 
-        // Offset from the player so the spawn point is certainly inside the walkmesh.
-        // ComputeSafeLocation inside CreateObject searches outward from here anyway.
-        Vec3 spawnPosition = new()
-        {
-            X = playerPosition.X + 2.5f + (_phantomCount * 1.5f),
-            Y = playerPosition.Y + 1.5f,
-            Z = playerPosition.Z,
-        };
+        Vec3 spawnPosition = IsPlausiblePosition(peerPosition)
+            ? peerPosition
+            : Offset(Odyssey.GetPosition(player));
 
         Vec3 facing = new() { X = 1f, Y = 0f, Z = 0f };
 
@@ -550,6 +569,24 @@ internal sealed unsafe class PhantomController(SharedBlockView block)
         }
 
         block.LastStatus = failure;
+
+        if (objectId == Odyssey.ObjectInvalid && IsPlausiblePosition(peerPosition))
+        {
+            // The peer's own position refused a body (a door frame, a lift, mid-transition
+            // geometry). Fall back to the old offset-from-the-player spot rather than losing
+            // the phantom entirely — a phantom in the wrong place beats no phantom.
+            Vec3 fallback = Offset(Odyssey.GetPosition(player));
+            foreach (string template in Templates)
+            {
+                objectId = Odyssey.SpawnCreature(template, fallback, facing, out failure);
+                if (objectId != Odyssey.ObjectInvalid)
+                {
+                    break;
+                }
+            }
+
+            block.LastStatus = failure;
+        }
 
         if (objectId == Odyssey.ObjectInvalid)
         {

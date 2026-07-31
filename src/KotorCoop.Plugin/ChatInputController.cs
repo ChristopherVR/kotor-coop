@@ -17,7 +17,7 @@ internal sealed unsafe class ChatInputController
 
     public void OnFrame()
     {
-        bool down = (NativeMethods.GetAsyncKeyState(NativeMethods.VkReturn) & 0x8000) != 0;
+        bool down = NativeMethods.IsKeyDownHere(NativeMethods.VkReturn);
         bool rising = down && !_enterWasDown;
         _enterWasDown = down;
 

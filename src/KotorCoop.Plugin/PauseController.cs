@@ -52,17 +52,26 @@ internal sealed class PauseController(SharedBlockView block)
 
         if (desired)
         {
-            // Set on entry, and re-asserted every pass after that: local input can clear
-            // the shared bit, but the pause belongs to the peer who took it.
-            bool changed = Odyssey.SetPlayerPause(true);
-
+            // ⚠ ORDER IS LOAD-BEARING: claim the pause as MIRRORED before setting the engine
+            // bit, and release the bit before disclaiming it. The engine has one "player
+            // paused" bit, and the agent decides whether it is this player's own pause by
+            // reading that bit together with this flag. Setting the bit first left a window
+            // in which the agent saw "paused, and nobody says it is mirrored" and concluded
+            // the local player had paused — so it published a pause of its own, the peer
+            // mirrored THAT, and both ends latched each other paused with no way back. That
+            // is the reported "stuck paused, can never unpause".
             if (!_applied)
             {
                 _applied = true;
                 block.RemotePauseApplied = 1;
+                Odyssey.SetPlayerPause(true);
                 LogFew("pause: mirroring a peer's pause");
+                return;
             }
-            else if (changed)
+
+            // Re-asserted every pass after that: local input can clear the shared bit, but
+            // the pause belongs to the peer who took it.
+            if (Odyssey.SetPlayerPause(true))
             {
                 LogFew("pause: re-asserted (local input tried to clear a peer's pause)");
             }
@@ -72,9 +81,9 @@ internal sealed class PauseController(SharedBlockView block)
 
         if (_applied)
         {
+            Odyssey.SetPlayerPause(false);
             _applied = false;
             block.RemotePauseApplied = 0;
-            Odyssey.SetPlayerPause(false);
             LogFew("pause: peer released their pause");
         }
     }

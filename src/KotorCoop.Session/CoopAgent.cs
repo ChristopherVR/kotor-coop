@@ -498,7 +498,14 @@ public sealed class CoopAgent(IGameBridge bridge, ICoopSession session, AgentSet
         {
             _deathSuppressionSet = true;
             _sessionWiped = allDown;
-            bridge.SetDeathSuppression(suppressGameOver: !allDown, suppressSwap: true);
+            // Swap suppression is a CLIENT-side lock, not a global one. It exists so a client
+            // cannot take over a companion the host's AI owns — but it blocks Tab and the
+            // portraits outright, so applying it to the host too left NOBODY able to switch
+            // character (reported from play). The host owns the companions and must stay free
+            // to control them.
+            bridge.SetDeathSuppression(
+                suppressGameOver: !allDown,
+                suppressSwap: !session.IsEnemyAuthority);
 
             if (allDown)
             {

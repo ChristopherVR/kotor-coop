@@ -55,11 +55,42 @@ internal static partial class NativeMethods
 
     /// <summary>
     /// Physical key state, independent of the message queue. The high bit is set while the
-    /// key is down. Used only to detect the Enter that submits a console line — reads no
-    /// engine state and cannot affect the game.
+    /// key is down. Reads no engine state and cannot affect the game.
+    ///
+    /// ⚠ It is also independent of FOCUS: it reports the keyboard, not this window's input.
+    /// With two instances on one machine that means every instance sees every keypress, so
+    /// pressing Enter in one game opened the chat prompt in BOTH. Always gate these reads on
+    /// <see cref="IsForeground"/>.
     /// </summary>
     [LibraryImport("user32.dll")]
     public static partial short GetAsyncKeyState(int virtualKey);
+
+    [LibraryImport("user32.dll")]
+    private static partial nint GetForegroundWindow();
+
+    [LibraryImport("user32.dll")]
+    private static partial uint GetWindowThreadProcessId(nint window, out uint processId);
+
+    /// <summary>
+    /// True when the foreground window belongs to THIS game process — i.e. keystrokes the
+    /// player is typing are meant for us. The single guard that keeps two instances on one
+    /// machine from both reacting to the same key.
+    /// </summary>
+    public static bool IsForeground()
+    {
+        nint window = GetForegroundWindow();
+        if (window == 0)
+        {
+            return false;
+        }
+
+        _ = GetWindowThreadProcessId(window, out uint processId);
+        return processId == GetCurrentProcessId();
+    }
+
+    /// <summary>Key-is-down, but only while this instance has the keyboard.</summary>
+    public static bool IsKeyDownHere(int virtualKey) =>
+        IsForeground() && (GetAsyncKeyState(virtualKey) & 0x8000) != 0;
 
     public static unsafe string GetSystemDirectoryPath()
     {
