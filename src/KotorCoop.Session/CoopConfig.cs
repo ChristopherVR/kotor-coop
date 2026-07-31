@@ -40,8 +40,9 @@ public sealed record CoopConfig
     /// <summary>Show the always-on in-game chat overlay.</summary>
     public bool ChatOverlay { get; init; } = true;
 
-    /// <summary>Chat overlay opacity, 0..100 (applied once an alpha-capable text draw is wired).</summary>
-    public int ChatOverlayOpacity { get; init; } = 35;
+    /// <summary>Chat overlay opacity, 0..100. 75 stays readable on the game's bright interiors;
+    /// lower it for a fainter overlay.</summary>
+    public int ChatOverlayOpacity { get; init; } = 75;
 
     /// <summary>Chat overlay corner: top-left, top-right, bottom-left, bottom-right.</summary>
     public string ChatOverlayAnchor { get; init; } = "bottom-left";
@@ -133,7 +134,7 @@ public sealed record CoopConfig
             ChatOverlay = !kv.ContainsKey("chat_overlay") || IsTruthy(kv.GetValueOrDefault("chat_overlay")),
             ChatOverlayOpacity = int.TryParse(kv.GetValueOrDefault("chat_overlay_opacity"), out int op)
                 ? Math.Clamp(op, 0, 100)
-                : 35,
+                : 75,
             ChatOverlayAnchor = kv.GetValueOrDefault("chat_overlay_anchor", "bottom-left"),
             ChatOverlayLines = int.TryParse(kv.GetValueOrDefault("chat_overlay_lines"), out int cl)
                 ? Math.Clamp(cl, 1, 12)

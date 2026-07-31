@@ -33,9 +33,9 @@ menu_button = 0
 ; Show the overlay at all.
 chat_overlay = 1
 
-; Opacity 0..100. Applied once an alpha-capable text draw is wired; until then the fade
-; is what keeps it unobtrusive.
-chat_overlay_opacity = 35
+; Opacity 0..100. 75 stays readable on the game's bright interiors; lower it for a fainter,
+; more transparent overlay.
+chat_overlay_opacity = 75
 
 ; Corner: top-left | top-right | bottom-left | bottom-right.
 chat_overlay_anchor = bottom-left

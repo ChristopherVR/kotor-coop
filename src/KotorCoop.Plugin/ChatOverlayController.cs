@@ -141,9 +141,12 @@ internal sealed unsafe class ChatOverlayController
     /// </summary>
     private static (int Column, int BaseRow, bool FromBottom) Anchor(uint anchor) => anchor switch
     {
-        1 => (42, 4, false),   // top-right
-        2 => (1, 16, true),    // bottom-left
-        3 => (42, 16, true),   // bottom-right
-        _ => (1, 4, false),    // top-left (default)
+        // Columns/rows are a text grid derived from the viewport (verified live: left column
+        // 3 clears the screen edge; the minimap fills the top-left corner and the party
+        // portraits the bottom-left, so the overlay sits in the clear band between them).
+        1 => (60, 11, false),  // top-right
+        2 => (3, 14, true),    // bottom-left
+        3 => (60, 14, true),   // bottom-right
+        _ => (3, 11, false),   // top-left (default)
     };
 }
