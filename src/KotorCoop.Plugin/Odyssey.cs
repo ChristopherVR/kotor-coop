@@ -2269,6 +2269,36 @@ internal static unsafe class Odyssey
         fn(creature, animation);
     }
 
+    // Fire-and-forget animations (draw weapon, attack swings, flourishes — the "x" key) live
+    // on the client twin's queue, not the server +0xD4 field, so SetAnimation cannot replay
+    // them reliably. CSWCCreature::AddFireForgetAnimation is the engine's own replication call
+    // for these (docs/research/animation-sync.md): thiscall(this=twin, uint anim, void* opts).
+    private static readonly delegate* unmanaged[Thiscall]<nint, uint, nint, void> AddFireForgetAnimationFn =
+        (delegate* unmanaged[Thiscall]<nint, uint, nint, void>)0x006183D0;
+
+    /// <summary>The current played animation on a creature's client twin (twin+0x48), or 0
+    /// when the twin does not exist yet. Reflects what the model is actually doing.</summary>
+    public static uint GetTwinCurrentAnimation(nint creature)
+    {
+        nint twin = *(nint*)(creature + CreClientTwin);
+        return twin == 0 ? 0 : *(uint*)(twin + 0x48);
+    }
+
+    /// <summary>
+    /// Queues a fire-and-forget animation (weapon draw, swing, flourish) on a creature's
+    /// client twin — the exact call the engine's own server→client replication makes, so it
+    /// replays one-shots that SetAnimation would drop. No-op until the twin exists. MAIN
+    /// THREAD ONLY.
+    /// </summary>
+    public static void PlayFireForget(nint creature, uint anim)
+    {
+        nint twin = *(nint*)(creature + CreClientTwin);
+        if (twin != 0)
+        {
+            AddFireForgetAnimationFn(twin, anim, 0);
+        }
+    }
+
     /// <summary>
     /// Advances a creature toward a target using the engine's own walk step, so the move is
     /// ground-snapped, walkmesh-aware and animated rather than a teleport.

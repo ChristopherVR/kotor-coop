@@ -296,6 +296,10 @@ internal sealed unsafe class PhantomController(SharedBlockView block)
                 continue;
             }
 
+            // Mirror the peer's played animation every frame (change-detected). It overlays
+            // on the twin, so it does not fight the movement action below.
+            MirrorAnimation(i, phantom, remote.Animation);
+
             if (_repathCooldown[i] > 0)
             {
                 _repathCooldown[i]--;
@@ -331,7 +335,6 @@ internal sealed unsafe class PhantomController(SharedBlockView block)
                 if (behindSquared < 0.35f * 0.35f)
                 {
                     Odyssey.SetFacing(phantom, remote.Facing);
-                    MirrorAnimation(i, phantom, remote.Animation);
                 }
 
                 continue;
@@ -344,10 +347,6 @@ internal sealed unsafe class PhantomController(SharedBlockView block)
 
             _lastGoal[i] = remote.Position;
             _repathCooldown[i] = RepathCooldownSteps;
-
-            // Movement owns the animation now; forget the mirrored one so it is re-applied
-            // once the phantom stops and the peer is still playing something.
-            _lastAnim[i] = 0;
 
             // Match the peer's gait: KOTOR's default movement is the run, so anything
             // that is not explicitly the walk animation runs. With the PC's appearance
@@ -375,10 +374,12 @@ internal sealed unsafe class PhantomController(SharedBlockView block)
     }
 
     /// <summary>
-    /// Plays whatever animation the peer is doing onto a stationary phantom, once per change
-    /// (SetAnimation restarts the clip, so re-issuing it every frame would freeze it). A
-    /// movement or death value is not mirrored — those belong to the walk/run action and the
-    /// down-state pose — and when the peer returns to one of those the phantom returns to idle.
+    /// Replays whatever animation the peer is doing (weapon draw, attack swing, flourish, the
+    /// "x" ready pose) onto the phantom, once per change. Applied as a fire-and-forget on the
+    /// phantom's client twin — the engine's own replication path — which overlays the pose
+    /// without cancelling the walk/run action, so it works whether the phantom is moving or
+    /// still. Gait, idle and the death poses are owned elsewhere and skipped; a one-shot
+    /// self-terminates back to idle, so nothing has to reset it.
     /// </summary>
     private void MirrorAnimation(int slot, nint phantom, uint anim)
     {
@@ -388,7 +389,11 @@ internal sealed unsafe class PhantomController(SharedBlockView block)
         }
 
         _lastAnim[slot] = anim;
-        Odyssey.SetAnimation(phantom, IsPlayableAnimation(anim) ? (int)anim : Odyssey.AnimIdle);
+
+        if (IsPlayableAnimation(anim))
+        {
+            Odyssey.PlayFireForget(phantom, anim);
+        }
     }
 
     /// <summary>Maps equip index in the shared block to the engine's inventory slot.</summary>

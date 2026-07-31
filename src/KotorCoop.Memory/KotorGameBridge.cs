@@ -36,6 +36,13 @@ public sealed class KotorGameBridge : IGameBridge
     private const int OffOrientation = 0x9C;  // Vector, 3 floats (Euler, not a quaternion)
     private const int OffAnimation = 0xD4;
 
+    // The server animation field (+0xD4) carries gait and scripted animations, but weapon
+    // draws / attack swings / flourishes (the "x" key) are fire-and-forget on the CLIENT twin
+    // and never reach it. The twin's current-animation field reflects what the model actually
+    // plays, so reading it captures those too. See docs/research/animation-sync.md.
+    private const int OffClientTwin = 0x224;    // CSWSCreature + this = client twin CSWCObject*
+    private const int OffTwinAnimation = 0x48;  // CSWCObject + this = current played animation
+
     /// <summary>
     /// Current hit points, u16. NOT +0xE0: that is the STORED MAX, which is why the
     /// dashboard used to read a health of 0 while the character sheet showed 25/28.
@@ -399,7 +406,7 @@ public sealed class KotorGameBridge : IGameBridge
         // "alive and thriving" to every peer at the exact moment it matters most.
         int health = _memory.TryRead(creature + OffCurrentHitPoints, out short currentHp) ? currentHp : 0;
         int maxHealth = _memory.TryRead(creature + OffMaxHitPoints, out ushort maxHp) ? maxHp : 0;
-        _memory.TryReadUInt32(creature + OffAnimation, out uint animation);
+        uint animation = ReadPlayedAnimation(creature);
 
         // The appearance.2da row travels with the avatar so the peer's phantom can wear
         // this player's actual look instead of the commoner blueprint.
@@ -461,6 +468,24 @@ public sealed class KotorGameBridge : IGameBridge
     /// mirror was applied means the player did it, and that verdict is latched until the
     /// bit clears.
     /// </summary>
+    /// <summary>
+    /// The animation to replicate: the client twin's current played animation when the twin
+    /// exists (captures weapon draws / swings / flourishes), else the server field (+0xD4,
+    /// gait and scripted animations). A zero twin animation falls back too, since the twin
+    /// reads 0 briefly around a spawn or transition.
+    /// </summary>
+    private uint ReadPlayedAnimation(nint creature)
+    {
+        if (_memory.TryReadPointer(creature + OffClientTwin, out nint twin) && twin != 0
+            && _memory.TryReadUInt32(twin + OffTwinAnimation, out uint twinAnim) && twinAnim != 0)
+        {
+            return twinAnim;
+        }
+
+        _memory.TryReadUInt32(creature + OffAnimation, out uint anim);
+        return anim;
+    }
+
     private uint ReadLocalFlags(nint creature)
     {
         uint flags = 0;
