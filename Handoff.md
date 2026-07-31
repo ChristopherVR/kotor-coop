@@ -8,11 +8,62 @@ no other dependencies. C# throughout.
 
 ---
 
+## 0f. THE WHOLE SESSION STARTS INSIDE THE GAME, 2026-08-01 (later)
+
+**Verified live, end to end, with no external commands and no injected clicks in the load
+path:** launch the game → the plugin starts the agent itself → **Co-op** on the main menu →
+a native panel → one player clicks **Host** (its save loads, it advertises on the LAN), the
+other player's panel lists it and they click **Connect** (their save loads, they join) →
+both spawn each other's phantom with equipment and a map pin. Both characters are the real
+saved ones.
+
+Three things landed to get there, on top of section 0e:
+
+- **The in-process load finally loads the SAVED character** (`docs/research/character-login-chain.md`).
+  `LoadPCAutoSave` leaves `DoingStartNewModule` set, and `RunModule` forks the character
+  login on that flag: set, it takes the new-game flavour, which reads the PC from
+  `TEMP:pifo` — **a file a manual save does not contain**. `LoadCharacterFromIFO` fails
+  silently (its caller never checks the return), login is confirmed anyway, and
+  `InitiateModuleForPlayer` manufactures a blank creature. That same path never calls
+  `PostProcess`, which is where the missing faction in 0e came from. Clearing the flag during
+  the load window (`MenuLoadController`, the `_loginRerouted` block) reroutes onto
+  `LoadPrimaryPlayer`, which reads the PC from the save's own `module.ifo`. Measured:
+  `pos (20.01, 22.15) hp 12/0` — identical to a click load; the default character was
+  `(15.42, 20.12) hp 1/1`. **The plugin route is now the DEFAULT loader**
+  (`KOTORCOOP_PLUGIN_LOAD=0` forces clicking; clicking remains the automatic fallback).
+- **⚠ A latent bug that was silently hiding peers: the server MODE at
+  `serverInternal+0x10008` is a WORD, not a dword** — the engine uses
+  `cmp word ptr [esi+0x10008], 1` (`0x4B6294`). Both the plugin and the agent read 32 bits,
+  picking up the adjacent field. A click-loaded world happened to read `0x00000002` so
+  nobody noticed; a plugin-loaded one reads `0x555FFC02`, which failed the world gate, made
+  every module name fall back to `area{id}`, and hid peers behind the module filter —
+  looking exactly like a broken network layer. Both sides now read 16 bits. **If a channel
+  ever "works sometimes", suspect a width like this before suspecting the network.**
+- **Host lives in the panel, and the agent starts itself.** The save screen's Delete button
+  (previously just hidden) is relabelled **Host** and rebound, so hosting and joining are one
+  screen. `AgentLauncher` starts `KotorCoop.Agent.exe` from the plugin with the game's own
+  pid (`coop.ini auto_start_agent=0` opts out; a missing executable is skipped). Installing
+  the plugin + agent + `coop.ini` into the game folder is now the whole installation.
+
+⚠ **Shared block is version 15.**
+
+**Panel coordinates, for anyone scripting clicks:** `saveload.gui` is 640×480 and the panel
+is **CENTERED, not scaled**, at 800×600 — screen = layout + (80, 60). Connect (`BTN_SAVELOAD`,
+layout centre 320,424) is at **(400, 484)**; Host (`BTN_DELETE`, 182,424) at **(262, 484)**.
+Getting this wrong looks exactly like a dead button.
+
+**Screenshot trap:** `tools\shot.ps1` returns a STALE frame after a minimise/restore — it
+captured the main menu for an instance that was demonstrably in-world (28 creatures, phantom
+alive, frames advancing). Trust the logs and memory over a capture; at the menu the capture
+is often black entirely.
+
+---
+
 ## 0e. NATIVE MENU + DEATH + THE LOAD CRASH FIXED, 2026-08-01
 
-⚠ **Shared block is version 14, protocol is version 9.** Rebuild both agents and reinstall
-the plugin in both game folders. The block signature now carries the version, so a
-mismatched pair fails to find each other instead of reading wrong offsets.
+⚠ **Superseded on the block version by 0f (now 15); protocol is version 9.** The block
+signature carries the version, so a mismatched pair fails to find each other instead of
+reading wrong offsets.
 
 **The headline: the whole join is now one click, in the game's own UI, and it works live.**
 Main menu → **Co-op** → a native panel listing the LAN servers → click **Connect** → the

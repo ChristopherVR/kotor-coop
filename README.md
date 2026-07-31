@@ -38,12 +38,14 @@ Both players, each in their own full game:
 - **Share one party**: the host drives the companions (Trask, Carth...) with the game's own
   AI and each client freezes and mirrors them, so they stay one synchronised group instead
   of two that drift. `--no-party-sync` opts out.
-- **Connect from the game, in the game's own menu**: a "Co-op" button on the main menu opens
-  a real KOTOR panel — the same list widget the Load Game screen uses, with its native font,
-  borders and scrollbar — listing the co-op servers found on your network with their player
-  counts. Pick one, click Connect, and you join and load straight into the shared world. A
-  password keeps strangers out; a dropped player reconnects automatically and keeps their
-  slot. `coop.ini` still works for a fixed host if you prefer.
+- **Start the whole thing from the game's own menu**: a "Co-op" button on the main menu
+  opens a real KOTOR panel — the same list widget the Load Game screen uses, with its native
+  font, borders and scrollbar. One player clicks **Host**; the other sees them listed with
+  their player count and clicks **Connect**. Both games load their own save and come up in
+  one shared world. No console, no command line, no alt-tabbing: the agent is started by the
+  mod itself when the game launches. A password keeps strangers out; a dropped player
+  reconnects automatically and keeps their slot. `coop.ini` still works for a fixed host if
+  you prefer.
 - **Type commands in-game**: press `~` for the game's own console and type
   `connect <ip> [password]`, `disconnect` or `reconnect` at any time — the session is torn
   down and rebuilt live, no restart. If the host wants a password you didn't give, the
@@ -77,13 +79,14 @@ all-or-nothing:
 Everything co-op ships as a game file uses a `k_coop_` name, so it can never collide with
 a mod, and only ever adds to the override folder.
 
-Verified live: two GOG instances on one machine — phantoms both ways, appearance and
-equipment, run-gait, item drop/pickup, enemy health/death mirroring, door unlock
-propagation, the in-game server browser from opening the panel through to landing in the
-shared world, and going down and being revived by the other player. The compatibility
-handshake, map presence and name plates are unit-tested (265 tests) with their live
-two-instance pass still outstanding. See `Handoff.md` and `docs/research/` for the precise
-per-feature status and the reverse-engineering behind each.
+Verified live on two GOG instances: the whole session started from inside the game (Host on
+one, Connect on the other, both loading their real saved characters with no injected
+clicks), phantoms both ways with appearance and equipment, run-gait, item drop/pickup,
+enemy health/death mirroring, door unlock propagation, map pins, and going down and being
+picked up by the other player. Party reconciliation and the mod-compatibility handshake are
+unit-tested (265 tests); the handshake has been observed agreeing on two identical installs
+but its mismatch paths have not had a live pass. See `Handoff.md` and `docs/research/` for
+the precise per-feature status and the reverse-engineering behind each.
 
 ## Requirements
 
@@ -101,8 +104,18 @@ per-feature status and the reverse-engineering behind each.
 ```powershell
 dotnet build KotorCoop.slnx
 pwsh src\KotorCoop.Plugin\build.ps1 -Install -GameDir 'C:\GOG Games\Star Wars KOTOR (GOG)'
-# copy the same dinput8.dll into the second game directory too
 
+# copy the agent next to the game so the mod can start it itself
+Copy-Item src\KotorCoop.Agent\bin\Debug\net10.0-windows\* 'C:\GOG Games\Star Wars KOTOR (GOG)' -Recurse -Force
+```
+
+Then just play: launch KOTOR, click **Co-op** on the main menu, and one of you presses
+**Host** while the other picks that server and presses **Connect**. Optionally drop a
+`coop.ini` beside the game to set your player name, a password, or a fixed host address.
+
+For development — two instances driven unattended on one machine:
+
+```powershell
 pwsh tools\demo.ps1          # launch both instances, load saves, connect the agents
 pwsh tools\demo.ps1 -Stop    # shut everything down
 ```
