@@ -8,6 +8,40 @@ no other dependencies. C# throughout.
 
 ---
 
+## 0g. ⚠ OPEN BUG: MODULE TRAVEL CRASHES, 2026-08-01
+
+**Reproducible, and it is NOT a co-op feature.** A module transition requested through the
+travel channel kills the process ~15 ms later:
+
+```
+travel: moving to module 'end_m01ab' on the session's authority
+epoch: world unloading; clearing phantom, item, combat and door state
+CRASH: access violation at 0x405F73, eip 0x405F73
+stack: 0x687E99 0x40BD7A 0x62AA6D 0x72F420 0x602FB8 0x7273A8 0x4046C2
+```
+
+`CResRef::CopyToString` (`0x405F70`) faulting on a null/garbage `this`, called from
+`CSWGuiMainInterface::InitializeMap` (`0x687E40+0x59`) ← `CGuiInGame::SetSWGuiStatus`
+(`0x62AA00+0x6D`) ← `CClientExoAppInternal::MainLoop`. So the CLIENT-side GUI is initialising
+the new module's map and finds a resref it cannot read.
+
+**Isolated already — do not re-do this:** it reproduces with **no co-op session, no peers, no
+phantoms and no map markers** (single instance, agent killed before the travel request). It
+is the transition itself on a world brought up by the in-process load replay, not the
+replication code. Reproduce with
+`pwsh tools\blockpoke.ps1 -ProcId <pid> travel end_m01ab` after a plugin load.
+
+The obvious suspicion, and the same family as the two bugs 0f fixed, is that the load replay
+leaves some CLIENT-side area/main-interface state uninitialised that a normal load sets up —
+the faction bug and the wrong-character bug were both exactly that. Diagnosis is in
+`docs/research/travel-map-init-crash.md` (written by a background pass; read it before
+touching this). ⚠ **Not established**: whether a CLICK-loaded world also crashes here. That
+control could not be run because click-loading kept hitting the input-activation trap — it is
+the single most valuable next measurement, because it separates "the replay is incomplete"
+from "travel is broken generally".
+
+---
+
 ## 0f. THE WHOLE SESSION STARTS INSIDE THE GAME, 2026-08-01 (later)
 
 **Verified live, end to end, with no external commands and no injected clicks in the load
@@ -46,6 +80,23 @@ Three things landed to get there, on top of section 0e:
   the plugin + agent + `coop.ini` into the game folder is now the whole installation.
 
 ⚠ **Shared block is version 15.**
+
+**Two things 0e/0f flagged as unproven are now measured (2026-08-01), details in
+`docs/live-verification.md`:**
+- **Party reconciliation.** Solo mode is real and one-sided — `tools\partystate.ps1` (new)
+  reads `soloMode 0` on the host, `1` on the client, same companion in the same roster slot.
+  The mirror was proven by a CONTROL, not a coincidence: displace the client's companion and
+  it converges back to the host's exact position in ~4 s with the agents running, and stays
+  put for 6 s+ with them stopped. Two identical saves place a companion identically, so the
+  control is the only thing that distinguishes mirroring from "same script" — always run it
+  that way. Companions actually FOLLOWING is still untested (Endar Spire script-locks Trask).
+- **The mod-mismatch path**, with a real difference rather than a fabricated digest:
+  `install-datamods` against one install only (510-row `appearance.2da` vs 509). Host and
+  client independently produced the SAME verdict — `compatible, 3 warning(s)`,
+  `OFF: Appearance` — and behaviour matched: phantoms still spawned and were equipped with no
+  appearance write. Degraded, not refused. The REFUSE classes (different exe/save) remain
+  unit-test-only. The verdict is now shown in the agent dashboard's `content` block; it used
+  to exist only on the session object, so a silently disabled channel looked like a bug.
 
 **Panel coordinates, for anyone scripting clicks:** `saveload.gui` is 640×480 and the panel
 is **CENTERED, not scaled**, at 800×600 — screen = layout + (80, 60). Connect (`BTN_SAVELOAD`,
