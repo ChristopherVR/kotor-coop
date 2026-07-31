@@ -72,15 +72,24 @@ public static class ProtocolConstants
 
     public const int DefaultPort = 27015;
 
-    /// <summary>State broadcast rate. 20 Hz matches what the Souls games replicate at.</summary>
-    public const int DefaultTickRate = 20;
+    /// <summary>
+    /// State broadcast rate. Raised from 20 Hz after play testing reported the peer lagging:
+    /// once the phantom is position-driven rather than walked to a goal, the tick interval is
+    /// visible latency rather than just goal freshness, so it is worth spending. The packets
+    /// are small and the expensive world-state scanning runs on its own divided-down pass.
+    /// </summary>
+    public const int DefaultTickRate = 30;
 
     /// <summary>
     /// How far in the past remote peers are rendered. Remote motion is interpolated
     /// between two received snapshots rather than extrapolated, which trades a fixed
     /// latency for the absence of rubber-banding.
+    ///
+    /// This is now the dominant term in how far behind a peer looks, so it is set just above
+    /// two tick intervals — enough that there is always a later snapshot to interpolate
+    /// towards on a LAN, without paying for jitter that a LAN does not have.
     /// </summary>
-    public const int DefaultInterpolationDelayMs = 100;
+    public const int DefaultInterpolationDelayMs = 80;
 
     public const int PeerTimeoutMs = 5000;
 

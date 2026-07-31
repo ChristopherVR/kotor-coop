@@ -3037,6 +3037,23 @@ internal static unsafe class Odyssey
         SetPositionFn(creature, &position, 1, 0, 0);
     }
 
+    /// <summary>
+    /// Moves a phantom to its peer's position for per-step tracking. Same engine setter as
+    /// <see cref="SnapTo"/> (so the render side's dirty bit is raised and the walkmesh/room
+    /// bookkeeping is the engine's own) but WITHOUT clearing actions: this runs ~60 times a
+    /// second, and clearing the action queue that often would also cancel the animation the
+    /// peer is mirroring onto the body.
+    ///
+    /// Safe to drive a phantom this way because it carries no AI — the co-op blueprint blanks
+    /// its scripts — and nothing else queues movement for it, so there is no engine-side
+    /// driver to fight. Do NOT use it on a real party member: their follow-AI rewrites
+    /// position every frame and would fight the write (see docs/re trap 3).
+    ///
+    /// MAIN THREAD ONLY.
+    /// </summary>
+    public static void SetPhantomPosition(nint creature, Vec3 position) =>
+        SetPositionFn(creature, &position, 1, 0, 0);
+
     /// <summary>Faces a creature along a world-space angle (0 = +X, counter-clockwise).</summary>
     public static void SetFacing(nint creature, float angle)
     {

@@ -320,55 +320,30 @@ internal sealed unsafe class PhantomController(SharedBlockView block)
                 continue;
             }
 
-            Vec3 last = _lastGoal[i];
-            float gdx = remote.Position.X - last.X;
-            float gdy = remote.Position.Y - last.Y;
-            bool goalMoved = ((gdx * gdx) + (gdy * gdy)) >= GoalResendDistanceSquared;
-
-            if (!goalMoved)
-            {
-                // Standing on (or walking to) the right spot already. Once genuinely
-                // arrived, mirror the peer's facing — the engine leaves the phantom
-                // pointing along its final path segment otherwise — and play whatever
-                // animation the peer is doing while still (a flourish, an attack swing, the
-                // "x" ready pose). Not while catching up, or it would cancel the walk.
-                if (behindSquared < 0.35f * 0.35f)
-                {
-                    Odyssey.SetFacing(phantom, remote.Facing);
-                }
-
-                continue;
-            }
-
-            if (_repathCooldown[i] > 0)
-            {
-                continue;
-            }
-
+            // POSITION-DRIVEN, not goal-driven. The phantom used to be walked to the peer's
+            // position with the engine's pathfinder, which cannot keep up by construction:
+            // the goal is already stale when it is issued (tick + interpolation + the resend
+            // threshold), and the phantom then has to physically walk that distance at the
+            // same speed the peer is moving, so it never closes the gap. Handoff 0a recorded
+            // the result as "2-4 units behind while moving"; from play it reads as the peer
+            // lagging seconds behind.
+            //
+            // Writing the position each step tracks exactly instead. The incoming positions
+            // are already smoothed by the session's interpolation buffer, so this is steady
+            // rather than jittery, and the peer's own animation is mirrored separately just
+            // above — so the body still runs or walks, it simply arrives where it should.
+            // The phantom carries no AI (the co-op blueprint blanks its scripts) and we no
+            // longer queue actions for it, so nothing competes for its position.
+            Odyssey.SetPhantomPosition(phantom, remote.Position);
+            Odyssey.SetFacing(phantom, remote.Facing);
             _lastGoal[i] = remote.Position;
-            _repathCooldown[i] = RepathCooldownSteps;
 
-            // Match the peer's gait: KOTOR's default movement is the run, so anything
-            // that is not explicitly the walk animation runs. With the PC's appearance
-            // row the phantom shares the player's exact walk/run rates, so matched gait
-            // means matched speed.
-            bool run = remote.Animation != AnimWalkValue;
-
-            if (Odyssey.MoveToLocation(_phantomIds[i], remote.Position, run, out int failure))
-            {
-                if (_stepsLogged < 10)
-                {
-                    _stepsLogged++;
-                    PluginHost.Log(
-                        $"move#{_stepsLogged} phantom 0x{_phantomIds[i]:X} at "
-                        + $"({at.X:F2},{at.Y:F2}) -> goal ({remote.Position.X:F2},{remote.Position.Y:F2})"
-                        + (run ? " (run)" : " (walk)"));
-                }
-            }
-            else if (_stepsLogged < 10)
+            if (_stepsLogged < 10 && behindSquared > 0.01f)
             {
                 _stepsLogged++;
-                PluginHost.Log($"move refused for 0x{_phantomIds[i]:X} (failure {failure})");
+                PluginHost.Log(
+                    $"track#{_stepsLogged} phantom 0x{_phantomIds[i]:X} ({at.X:F2},{at.Y:F2}) "
+                    + $"-> ({remote.Position.X:F2},{remote.Position.Y:F2})");
             }
         }
     }

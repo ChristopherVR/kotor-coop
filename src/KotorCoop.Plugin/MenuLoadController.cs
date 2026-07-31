@@ -137,6 +137,68 @@ internal sealed unsafe class MenuLoadController(SharedBlockView block)
     /// <summary>CServerExoAppInternal + this = the DoingStartNewModule flag.</summary>
     private const int ServerDoingStartNewModule = 0x1007C;
 
+    // ---- the client-side presentation hand-off ----------------------------------
+    //
+    // Loading the module is not the same as SHOWING it. The engine brings the world on
+    // screen from inside CClientExoAppInternal::MainLoop, but only once three client-side
+    // gates hold, and this replay reached none of them: the main menu was never marked for
+    // deletion (so it kept drawing over everything), the "display work pending" flag was
+    // never set (which alone disables the whole in-world block), and the in-game GUI was
+    // never built. The result was a correct, running world behind a main menu — reported
+    // from play as "still in the main menu" and "loading forever".
+    // See docs/research/ingame-gui-transition.md.
+
+    /// <summary>CClientExoApp::GetModule — the client's own module; 0 until it is ready.</summary>
+    private static readonly delegate* unmanaged[Thiscall]<nint, nint> GetClientModule =
+        (delegate* unmanaged[Thiscall]<nint, nint>)0x005ED530;
+
+    /// <summary>CClientExoApp::GetPlayerCreature — the client-side player.</summary>
+    private static readonly delegate* unmanaged[Thiscall]<nint, nint> GetClientPlayerCreature =
+        (delegate* unmanaged[Thiscall]<nint, nint>)0x005ED540;
+
+    /// <summary>CClientExoApp::SetAreaNotReadyToDisplay — re-arms MainLoop's in-world block.
+    /// Byte-for-byte what MainLoop itself writes during its own loading stall.</summary>
+    private static readonly delegate* unmanaged[Thiscall]<nint, int, void> SetAreaNotReadyToDisplay =
+        (delegate* unmanaged[Thiscall]<nint, int, void>)0x005EDAE0;
+
+    /// <summary>CClientExoApp::InitializeInGameGUI — builds the HUD (the only thing that
+    /// sets gui+0x108); retail reaches it through the Module_Info handler.</summary>
+    private static readonly delegate* unmanaged[Thiscall]<nint, void> InitializeInGameGUI =
+        (delegate* unmanaged[Thiscall]<nint, void>)0x005ED730;
+
+    /// <summary>CGuiInGame::SetSWGuiStatus(status, bDestroyPause) — status 1 = the HUD.</summary>
+    private static readonly delegate* unmanaged[Thiscall]<nint, int, int, void> SetSWGuiStatus =
+        (delegate* unmanaged[Thiscall]<nint, int, int, void>)0x0062AA00;
+
+    /// <summary>CGuiInGame::InitializeMap — the minimap. ⚠ Dereferences the SERVER module
+    /// unchecked, so it must only be called while one exists (the travel crash).</summary>
+    private static readonly delegate* unmanaged[Thiscall]<nint, void> InitializeMapGui =
+        (delegate* unmanaged[Thiscall]<nint, void>)0x0062B0A0;
+
+    private static readonly delegate* unmanaged[Thiscall]<nint, void> EnableInput =
+        (delegate* unmanaged[Thiscall]<nint, void>)0x005EDBF0;
+
+    /// <summary>CClientExoApp::HideLoadScreen(bSomething, bFade). Pops ONE modal panel per
+    /// call, so it must run exactly once.</summary>
+    private static readonly delegate* unmanaged[Thiscall]<nint, int, int, void> HideLoadScreen =
+        (delegate* unmanaged[Thiscall]<nint, int, int, void>)0x005EDA90;
+
+    /// <summary>CServerExoApp::GetModule — the gate for the map init above.</summary>
+    private static readonly delegate* unmanaged[Thiscall]<nint, nint> GetServerModule =
+        (delegate* unmanaged[Thiscall]<nint, nint>)0x004AE6B0;
+
+    /// <summary>CGuiInGame + this = the initialised flag; 0 means there is no HUD yet.</summary>
+    private const int InGameGuiInitialized = 0x108;
+
+    /// <summary>CGuiInGame + this = the status field; 1 once the HUD is up. The single best
+    /// "did the transition complete" read.</summary>
+    private const int InGameGuiStatus = 0x34;
+
+    /// <summary>Presentation handed over for this load; steps that pop panels run once.</summary>
+    private bool _presented;
+
+    private long _nextPresentLogMs;
+
     /// <summary>
     /// CServerExoAppInternal + this = the player list. ⚠ It is a POINTER, not an inline
     /// list — probed live: +0x10064 holds a heap pointer and +0x1006C is 0, so the
@@ -274,9 +336,18 @@ internal sealed unsafe class MenuLoadController(SharedBlockView block)
                     PluginHost.Log($"menu: player faction repair returned {faction}");
                 }
 
+                // The world EXISTS; it is not yet SHOWN. Hand the presentation over before
+                // acking, so the agent never reports a load that the player is still looking
+                // at a menu through.
+                if (!TryPresentWorld())
+                {
+                    _pumping = true; // still waiting on the client side; retry next frame
+                    return;
+                }
+
                 block.MenuLoadStatus = 0;
                 block.MenuLoadApplied = serial;
-                PluginHost.Log("menu: the world is up");
+                PluginHost.Log("menu: the world is up and on screen");
                 return;
             }
 
@@ -303,6 +374,7 @@ internal sealed unsafe class MenuLoadController(SharedBlockView block)
             FirePhase2(panel, serial);
             _pumping = true;
             _loginRerouted = false;
+            _presented = false;
             return;
         }
 
@@ -367,6 +439,14 @@ internal sealed unsafe class MenuLoadController(SharedBlockView block)
         // prime suspect for the 0xc0000005 one frame after the world appeared.
         PluginHost.Log("menu: constructing the save panel");
         SaveLoadCtor(panel, guiManager, 0, 1);
+
+        // Mark the MAIN MENU for the manager's delete sweep, which is the one thing retail's
+        // OnLoadSaveGame does that this replay never did — and the reason the menu kept
+        // drawing over the loaded world forever. The sweep unregisters and deletes it on the
+        // next Update. ⚠ After this, `menu` must never be read again: the destructor does not
+        // null [clientInternal+0x280].
+        *(uint*)(menu + MenuStateBits) = (*(uint*)(menu + MenuStateBits) & ~0x300u) | 0x400u;
+        PluginHost.Log("menu: main menu marked for teardown");
 
         PluginHost.Log("menu: staging the load screen");
         ResetSessionStartTime();
@@ -456,6 +536,96 @@ internal sealed unsafe class MenuLoadController(SharedBlockView block)
         _panel = panel;
         _phase2NotBeforeMs = Environment.TickCount64 + ConnectGraceMs;
         return 0;
+    }
+
+    /// <summary>
+    /// Puts the loaded world ON SCREEN: the step this replay was missing entirely.
+    ///
+    /// The engine does this itself, every frame, inside the client's MainLoop — but only once
+    /// its own gates hold, and a plugin-driven load reaches none of them. Step 2 below
+    /// (re-arming the display-pending flag) is on its own enough to make the engine perform
+    /// the rest exactly as retail; everything after it is idempotent belt-and-braces so the
+    /// world appears on THIS frame rather than the next one.
+    ///
+    /// Returns false while the client is not ready yet — the caller retries next frame. If it
+    /// never becomes ready, the two probes logged here ARE the diagnosis.
+    /// See docs/research/ingame-gui-transition.md.
+    /// </summary>
+    private bool TryPresentWorld()
+    {
+        if (_presented)
+        {
+            return true;
+        }
+
+        nint appManager = *(nint*)AppManagerPtr;
+        nint client = appManager == 0 ? 0 : *(nint*)(appManager + AppClientOffset);
+        nint server = appManager == 0 ? 0 : *(nint*)(appManager + AppServerOffset);
+        if (client == 0)
+        {
+            return false;
+        }
+
+        // 1. Wait for the CLIENT's own world. The server having a player says nothing about
+        //    whether the client has caught up, and every step below needs both.
+        nint clientModule = GetClientModule(client);
+        nint clientCreature = GetClientPlayerCreature(client);
+        if (clientModule == 0 || clientCreature == 0)
+        {
+            if (Environment.TickCount64 >= _nextPresentLogMs)
+            {
+                _nextPresentLogMs = Environment.TickCount64 + 3000;
+                PluginHost.Log(
+                    $"menu: waiting for the client world (module {(clientModule == 0 ? "-" : "ok")}, "
+                    + $"creature {(clientCreature == 0 ? "-" : "ok")})");
+            }
+
+            return false;
+        }
+
+        _presented = true;
+        nint gui = GetInGameGui(client);
+
+        // 2. Re-arm the engine's own in-world block. This alone is the fix; the rest just
+        //    stops us waiting a frame for it.
+        SetAreaNotReadyToDisplay(client, 1);
+
+        // 3. Build the HUD if the client never serviced the message that normally does it.
+        if (gui != 0 && *(int*)(gui + InGameGuiInitialized) == 0)
+        {
+            InitializeInGameGUI(client);
+        }
+
+        // 4. Show it.
+        if (gui != 0 && *(int*)(gui + InGameGuiInitialized) != 0)
+        {
+            SetSWGuiStatus(gui, 1, 1);
+
+            // 5. The minimap — ONLY with a live server module: it dereferences module+0x30
+            //    unchecked, which is precisely the travel crash.
+            if (server != 0 && GetServerModule(server) != 0)
+            {
+                InitializeMapGui(gui);
+            }
+        }
+
+        // 6. Give the player their controls back. Phase 2 disabled input the way retail does;
+        //    retail re-enables it from the MainLoop block we were never reaching.
+        SetInputClass(client, 0, 1);
+        EnableInput(client);
+
+        // 7. Drop the load screen. Exactly once — it pops one modal panel per call.
+        HideLoadScreen(client, 1, 1);
+
+        // 8. Undo phase 1's unpauseable hold.
+        if (gui != 0)
+        {
+            SetGlobalUnpauseableState(gui, 0);
+        }
+
+        int status = gui == 0 ? -1 : *(int*)(gui + InGameGuiStatus);
+        PluginHost.Log($"menu: presentation handed over (gui status {status}, expect 1)");
+        return true;
     }
 
     /// <summary>Pauses the world timers, locks input, and asks for the load itself.</summary>
