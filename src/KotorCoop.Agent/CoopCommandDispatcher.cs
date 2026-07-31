@@ -22,6 +22,14 @@ public sealed class CoopCommandDispatcher(
 {
     private readonly KotorGameBridge? _kotor = bridge as KotorGameBridge;
 
+    /// <summary>Listens for co-op servers on the LAN so `servers` can list them and
+    /// `connect #n` can dial one without an IP. Started on the first RunAsync tick.</summary>
+    private readonly ServerDiscovery _browser = new();
+    private bool _browsing;
+
+    /// <summary>The servers listed by the last `servers` command, so `connect #n` resolves.</summary>
+    private IReadOnlyList<ServerInfo> _lastServerList = [];
+
     /// <summary>The address of the last join attempt, so a password prompt can echo it back.</summary>
     private string? _pendingAddress;
 
@@ -31,6 +39,12 @@ public sealed class CoopCommandDispatcher(
     /// <summary>Polls the block for console/menu commands and reflects status until cancelled.</summary>
     public async Task RunAsync(CancellationToken cancellationToken)
     {
+        if (!_browsing)
+        {
+            _browsing = true;
+            _browser.StartListening();
+        }
+
         try
         {
             using PeriodicTimer timer = new(TimeSpan.FromMilliseconds(150));
@@ -127,6 +141,10 @@ public sealed class CoopCommandDispatcher(
                 _kotor?.PostChatClear();
                 break;
 
+            case CoopCommandKind.Servers:
+                ListServers();
+                break;
+
             case CoopCommandKind.Status:
                 Reply($"{manager.Phase.ToString().ToLowerInvariant()} - {manager.Detail}");
                 break;
@@ -139,6 +157,24 @@ public sealed class CoopCommandDispatcher(
 
     private void Join(string? address, string? password)
     {
+        // "connect #n" dials the n-th server from the last `servers` listing.
+        if (address is { Length: > 1 } && address[0] == '#'
+            && int.TryParse(address[1..], out int index))
+        {
+            if (index < 1 || index > _lastServerList.Count)
+            {
+                Reply($"no server #{index} - run `servers` first");
+                return;
+            }
+
+            ServerInfo chosen = _lastServerList[index - 1];
+            _pendingAddress = chosen.Address;
+            _promptedForPassword = false;
+            Reply($"connecting to {chosen.Name} ({chosen.Address})");
+            manager.Connect(host: false, chosen.EndPoint, settingsForPassword(password ?? string.Empty));
+            return;
+        }
+
         CoopCommand command = new(CoopCommandKind.Connect, address, password);
         if (!command.TryResolveEndpoint(defaultPort, out IPEndPoint endpoint))
         {
@@ -149,6 +185,24 @@ public sealed class CoopCommandDispatcher(
         _pendingAddress = address;
         _promptedForPassword = false;
         manager.Connect(host: false, endpoint, settingsForPassword(password ?? string.Empty));
+    }
+
+    /// <summary>Posts the LAN server list to the overlay, numbered for `connect #n`.</summary>
+    private void ListServers()
+    {
+        _lastServerList = _browser.Servers;
+        if (_lastServerList.Count == 0)
+        {
+            Reply("no co-op servers found on the LAN (host one, or connect by IP)");
+            return;
+        }
+
+        Reply($"servers on the LAN ({_lastServerList.Count}) - connect #n to join:");
+        for (int i = 0; i < _lastServerList.Count; i++)
+        {
+            ServerInfo s = _lastServerList[i];
+            Reply($"  {i + 1}) {s.Name}  {s.Address}  ({s.PlayerCount}/{s.MaxPlayers})");
+        }
     }
 
     /// <summary>

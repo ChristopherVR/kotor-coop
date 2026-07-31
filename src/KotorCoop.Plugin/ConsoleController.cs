@@ -26,8 +26,8 @@ internal sealed unsafe class ConsoleController
     /// sync with <c>ConsoleCommand.Parse</c> on the agent side.</summary>
     private static readonly string[] Verbs =
     [
-        "connect", "join", "host", "disconnect", "dc", "leave",
-        "reconnect", "rc", "say", "chat", "msg", "clear", "cls", "status", "help", "coop",
+        "connect", "join", "host", "disconnect", "dc", "leave", "reconnect", "rc",
+        "say", "chat", "msg", "clear", "cls", "servers", "browse", "list", "status", "help", "coop",
     ];
 
     private readonly SharedBlockView _block;

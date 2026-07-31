@@ -29,6 +29,9 @@ public enum CoopCommandKind
     /// <summary>Wipe the on-screen overlay log.</summary>
     Clear,
 
+    /// <summary>List the co-op servers discovered on the LAN.</summary>
+    Servers,
+
     /// <summary>List the available commands.</summary>
     Help,
 
@@ -164,6 +167,9 @@ public static class ConsoleCommand
             case "clear" or "cls":
                 return new CoopCommand(CoopCommandKind.Clear);
 
+            case "servers" or "browse" or "list":
+                return new CoopCommand(CoopCommandKind.Servers);
+
             case "status" or "stat":
                 return new CoopCommand(CoopCommandKind.Status);
 
@@ -177,5 +183,5 @@ public static class ConsoleCommand
 
     /// <summary>One-line help listing the commands, for the overlay and dashboard.</summary>
     public const string HelpText =
-        "commands: connect <ip[:port]> [password] | host | disconnect | reconnect | say <msg> | clear | status | help";
+        "commands: servers | connect <ip|#n> [password] | host | disconnect | reconnect | say <msg> | clear | status | help";
 }
