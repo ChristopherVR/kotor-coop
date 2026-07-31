@@ -34,6 +34,8 @@ internal static unsafe class PluginHost
     private static ConnectMenuController? _connectMenu;
     private static ChatInputController? _chatInput;
     private static ServerBrowserController? _browser;
+    private static NativeBrowserController? _nativeBrowser;
+    private static DeathController? _death;
     private static ChatOverlayController? _chatOverlay;
     private static DialogueSpectateController? _dialogueSpectate;
     private static Thread? _worker;
@@ -83,6 +85,8 @@ internal static unsafe class PluginHost
             _connectMenu = new ConnectMenuController(_view);
             _chatInput = new ChatInputController();
             _browser = new ServerBrowserController(_view);
+            _nativeBrowser = new NativeBrowserController(_view);
+            _death = new DeathController(_view);
             _chatOverlay = new ChatOverlayController(_view);
             _dialogueSpectate = new DialogueSpectateController(_view);
             _pause = new PauseController(_view);
@@ -124,6 +128,31 @@ internal static unsafe class PluginHost
                 Log($"menu frame hook NOT installed: {menuHookDiagnostic}");
             }
 
+            // The world-up party message crashes on a half-initialised player creature's
+            // null faction; the guard routes that one case onto the handler's own
+            // default-faction path. Required for the plugin-driven load (the browser's
+            // click-to-join lands through it).
+            if (PartyFactionGuard.Install(out string guardDiagnostic))
+            {
+                Log($"party faction guard: {guardDiagnostic}");
+            }
+            else
+            {
+                Log($"party faction guard NOT installed: {guardDiagnostic}");
+            }
+
+            // Co-op death handling: suppress the control auto-swap and the game-over screen.
+            // Both patches stay inert until the agent turns them on, so a plugin with no
+            // session behaves exactly like stock KOTOR.
+            if (DeathController.Install(out string deathDiagnostic))
+            {
+                Log($"death handling: {deathDiagnostic}");
+            }
+            else
+            {
+                Log($"death handling NOT installed: {deathDiagnostic}");
+            }
+
             _worker = new Thread(WorkerLoop)
             {
                 IsBackground = true,
@@ -161,7 +190,7 @@ internal static unsafe class PluginHost
         Unsafe.InitBlockUnaligned(_block, 0, SharedBlock.TotalSize);
 
         _block->Magic = SharedBlock.MagicValue;
-        _block->Version = 13;
+        _block->Version = 14;
 
         // A guard dword after the version. Magic plus version alone was not selective
         // enough: a scan once matched something else at a lower address and the agent
@@ -197,17 +226,25 @@ internal static unsafe class PluginHost
     /// </summary>
     private static void MenuFrame()
     {
+        // The native browser first: its IsOpen gate tells the others the main-menu object
+        // is currently freed (a shown child panel reclaims the menu until close rebuilds it).
+        _nativeBrowser?.OnFrame();
         _connectMenu?.OnFrame();
         _browser?.OnFrame();
+
+        // The menu-load replay lives HERE, not on the SwapBuffers hook: at the main menu the
+        // back-buffer swap is movie-gated and never fires (measured live: the frame counter
+        // stays 0 at a settled menu), so a load request serviced from OnFrame sat forever.
+        // MainLoop fires at the menu and in-world alike, on the same game thread.
+        _menuLoad?.OnFrame();
     }
 
     private static void OnFrame()
     {
         // Before the epoch gate, deliberately: these run at the main menu too, which is exactly
-        // where the gate returns early (no server) — the menu-load replay, the Enter chat prompt
-        // and the chat overlay. (The Co-op button runs on MainLoopHook; the ~ console routes
-        // through FuncInterpHook — both independent of this dormant-at-menu swap hook.)
-        _menuLoad?.OnFrame();
+        // where the gate returns early (no server) — the Enter chat prompt and the chat
+        // overlay. (The Co-op button, browsers and menu-load run on MainLoopHook — the swap
+        // hook is dormant at the menu; the ~ console routes through FuncInterpHook.)
         _chatInput?.OnFrame();
         _chatOverlay?.OnFrame();
 
@@ -299,6 +336,10 @@ internal static unsafe class PluginHost
             return;
         }
 
+        // Death first among the world controllers: a downed player must be published (and a
+        // pending revive applied) before the phantom/combat passes read the same creature.
+        _death?.OnFrame();
+
         _controller?.OnFrame();
         _items?.OnFrame();
         _combat?.OnFrame();
@@ -328,6 +369,7 @@ internal static unsafe class PluginHost
         _journal?.Invalidate();
         _mapMarkers?.Invalidate();
         _connectMenu?.Invalidate();
+        _death?.Invalidate();
     }
 
     private static void WorkerLoop()
