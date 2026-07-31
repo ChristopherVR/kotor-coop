@@ -12,7 +12,7 @@
 param(
     [string]$ProcessName = 'swkotor',
     [int]$ProcId = 0,
-    [Parameter(Position = 0)][ValidateSet('state', 'travel', 'journal', 'pause', 'browser')]
+    [Parameter(Position = 0)][ValidateSet('state', 'travel', 'journal', 'pause', 'browser', 'death')]
     [string]$Command = 'state',
     [Parameter(Position = 1)][string]$Arg1 = '',
     [Parameter(Position = 2)][int]$Arg2 = 0
@@ -117,6 +117,19 @@ switch ($Command) {
         WU32 0x96C ([uint32]$Arg2)
         if ($Arg1 -match '^\d+$') { WU32 0x96C ([uint32]$Arg1) }
         "remote-pause desired = $(U32 0x96C)"
+    }
+    'death' {
+        # `death` prints the co-op death state; `death revive` asks the plugin to stand the
+        # local PC back up (the same request a peer's rescue sends).
+        if ($Arg1 -eq 'revive') {
+            WU32 0x1040 ([uint32]$Arg2)
+            WU32 0x1034 ((U32 0x1034) + 1)
+            "revive requested (serial $(U32 0x1034), hp $(U32 0x1040))"
+        }
+        "  downed {0} (serial {1})  gameOverSerial {2}" -f (U32 0x1020), (U32 0x1024), (U32 0x1028)
+        "  suppress: gameOver {0}  swap {1}" -f (U32 0x102C), (U32 0x1030)
+        "  revive:   serial {0}  applied {1}  status {2}  hp {3}" -f `
+            (U32 0x1034), (U32 0x1038), (U32 0x103C), (U32 0x1040)
     }
     'browser' {
         # `browser` prints the panel state; `browser 1` / `browser 0` opens / closes the

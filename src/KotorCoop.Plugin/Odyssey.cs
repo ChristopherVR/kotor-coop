@@ -2780,6 +2780,80 @@ internal static unsafe class Odyssey
         return true;
     }
 
+    // ---- faction membership repair -----------------------------------------------
+    //
+    // A plugin-driven load brings the world up with the player creature in NO faction: the
+    // engine's own CSWSCreature::PostProcess adds a PC to the player faction, but silently
+    // falls through when the faction manager slot is not yet populated at the moment it
+    // runs. Nothing retries, so GetFaction keeps returning null — and seven unguarded
+    // dereferences downstream (six GetSingletonParty callers plus GetLeader) fault the
+    // instant the server updates client game objects, about half a second after the world
+    // appears. See docs/research/world-up-faction-crash.md.
+    //
+    // The repair is the engine's own membership call, on the engine's own objects, so every
+    // derived value (faction id on the stats block, the member array, the client broadcast)
+    // is rebuilt by the engine rather than poked by us.
+
+    private static readonly delegate* unmanaged[Thiscall]<nint, nint> GetCreatureFactionFn =
+        (delegate* unmanaged[Thiscall]<nint, nint>)0x00513FC0;
+
+    private static readonly delegate* unmanaged[Thiscall]<nint, nint> GetFactionManagerFn =
+        (delegate* unmanaged[Thiscall]<nint, nint>)0x004AEFC0;
+
+    /// <summary>CSWSFaction::AddMember(objectId, bSilent) — dedups, unlinks any stale
+    /// membership, appends, broadcasts the update and writes the stats faction id.</summary>
+    private static readonly delegate* unmanaged[Thiscall]<nint, uint, int, void> FactionAddMemberFn =
+        (delegate* unmanaged[Thiscall]<nint, uint, int, void>)0x005BFA70;
+
+    /// <summary>CFactionManager + this = the player faction.</summary>
+    private const int FactionManagerPlayerFaction = 0x18;
+
+    /// <summary>CGameObject + this = the object id.</summary>
+    private const int ObjectIdOffset = 0x04;
+
+    /// <summary>
+    /// Ensures the player creature belongs to a faction, repairing it through the engine's
+    /// own AddMember if not. Returns a short status for the log: 0 = nothing to do (already
+    /// in a faction), 1 = repaired, 2 = no player yet, 3 = no faction manager or no player
+    /// faction (new information — the world loaded without factions).
+    ///
+    /// MAIN THREAD ONLY.
+    /// </summary>
+    public static int EnsurePlayerFaction()
+    {
+        nint server = GetServer();
+        if (server == 0)
+        {
+            return 2;
+        }
+
+        nint creature = GetPlayerCreatureFn(server);
+        if (creature == 0)
+        {
+            return 2;
+        }
+
+        if (GetCreatureFactionFn(creature) != 0)
+        {
+            return 0;
+        }
+
+        nint manager = GetFactionManagerFn(server);
+        if (manager == 0)
+        {
+            return 3;
+        }
+
+        nint playerFaction = *(nint*)(manager + FactionManagerPlayerFaction);
+        if (playerFaction == 0)
+        {
+            return 3;
+        }
+
+        FactionAddMemberFn(playerFaction, *(uint*)(creature + ObjectIdOffset), 0);
+        return 1;
+    }
+
     // ---- downed state and revival ------------------------------------------------
     //
     // Party members (the PC included) never truly die: CSWSCreature::GetDead returns 0 for

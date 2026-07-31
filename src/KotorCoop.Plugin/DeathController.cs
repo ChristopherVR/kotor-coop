@@ -253,19 +253,25 @@ internal sealed unsafe class DeathController(SharedBlockView block)
 
     /// <summary>
     /// Prefixes ChangeCharacter with a test of the suppression flag: when set, it returns to
-    /// its caller immediately (the function is thiscall with one argument and callee-clean —
-    /// `ret 4` — so the early exit must clean the argument too).
+    /// its caller immediately. The function is callee-clean with two stack arguments
+    /// (`ret 8`, read from its epilogue), so the early exit must clean both — and it does so
+    /// before the prologue has touched esp, where the frame is still exactly [ret][arg][arg].
     /// </summary>
     private static bool InstallSwapGuard(out string diagnostic)
     {
         byte* site = (byte*)ChangeCharacter;
 
-        // The prologue we relocate: push ebp; mov ebp,esp — the canonical frame setup. Refuse
-        // anything else rather than patch a function we do not recognise.
-        if (site[0] != 0x55 || site[1] != 0x8B || site[2] != 0xEC)
+        // The 6 prologue bytes we relocate: sub esp,0xC; push esi; mov esi,ecx. Verified
+        // against the binary; refuse anything else rather than patch a function we do not
+        // recognise. (None of them is position-dependent, so they relocate verbatim.)
+        ReadOnlySpan<byte> prologue = [0x83, 0xEC, 0x0C, 0x56, 0x8B, 0xF1];
+        for (int i = 0; i < prologue.Length; i++)
         {
-            diagnostic = $"ChangeCharacter prologue is {site[0]:X2} {site[1]:X2} {site[2]:X2}";
-            return false;
+            if (site[i] != prologue[i])
+            {
+                diagnostic = $"ChangeCharacter prologue mismatch at +{i} ({site[i]:X2})";
+                return false;
+            }
         }
 
         nint stub = NativeMethods.VirtualAlloc(0, 48, MemCommitReserve, PageExecuteReadWrite);
@@ -284,14 +290,14 @@ internal sealed unsafe class DeathController(SharedBlockView block)
         n += 4;
         s[n++] = 0x00;
 
-        s[n++] = 0x74; s[n++] = 0x04;                        // jz -> run the original
-        s[n++] = 0xC2; s[n++] = 0x04; s[n++] = 0x00;         // ret 4  (suppressed)
-        s[n++] = 0x90;                                       // pad, keeps the jz target clean
+        s[n++] = 0x74; s[n++] = 0x03;                        // jz -> run the original
+        s[n++] = 0xC2; s[n++] = 0x08; s[n++] = 0x00;         // ret 8  (suppressed)
 
-        s[n++] = 0x55;                                       // push ebp     (relocated)
-        s[n++] = 0x8B; s[n++] = 0xEC;                        // mov ebp,esp  (relocated)
-        s[n++] = 0xE9;                                       // jmp ChangeCharacter+3
-        *(int*)(s + n) = (int)((ChangeCharacter + 3) - (stub + n + 4));
+        s[n++] = 0x83; s[n++] = 0xEC; s[n++] = 0x0C;         // sub esp,0xC  (relocated)
+        s[n++] = 0x56;                                       // push esi     (relocated)
+        s[n++] = 0x8B; s[n++] = 0xF1;                        // mov esi,ecx  (relocated)
+        s[n++] = 0xE9;                                       // jmp ChangeCharacter+6
+        *(int*)(s + n) = (int)((ChangeCharacter + 6) - (stub + n + 4));
 
         if (!NativeMethods.VirtualProtect(ChangeCharacter, (nuint)5, PageExecuteReadWrite, out uint old))
         {

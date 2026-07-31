@@ -204,6 +204,17 @@ internal sealed unsafe class MenuLoadController(SharedBlockView block)
             if (Odyssey.HasPlayer)
             {
                 _pumping = false;
+
+                // Before anything else touches the new world: a load driven from here brings
+                // the player up in NO faction, and the server's own object-update pass
+                // dereferences that faction about half a second later. Repaired through the
+                // engine's own membership call — see docs/research/world-up-faction-crash.md.
+                int faction = Odyssey.EnsurePlayerFaction();
+                if (faction != 0)
+                {
+                    PluginHost.Log($"menu: player faction repair returned {faction}");
+                }
+
                 block.MenuLoadStatus = 0;
                 block.MenuLoadApplied = serial;
                 PluginHost.Log("menu: the world is up");

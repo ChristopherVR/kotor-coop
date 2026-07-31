@@ -173,8 +173,11 @@ public sealed class KotorGameBridge : IGameBridge
     private const int BlockLocalDialogueLine = 0xCA8;
     private const int BlockLocalDialogueLineLength = 64;
 
-    /// <summary>16-byte signature: "KOCOOP01" + version 13 + guard 0xC0FFEE01.</summary>
-    public const string PluginSignature = "4B 4F 43 4F 4F 50 30 31 0D 00 00 00 01 EE FF C0";
+    /// <summary>16-byte signature: "KOCOOP01" + version 14 + guard 0xC0FFEE01. The version is
+    /// part of the pattern deliberately: an agent must not attach to a plugin whose block
+    /// layout it does not know, and a stale pair fails to find each other rather than reading
+    /// the wrong offsets.</summary>
+    public const string PluginSignature = "4B 4F 43 4F 4F 50 30 31 0E 00 00 00 01 EE FF C0";
 
     /// <summary>Agent's view of which coop item id occupies each plugin item slot.</summary>
     private readonly uint[] _itemSlotIds = new uint[BlockItemCapacity];
