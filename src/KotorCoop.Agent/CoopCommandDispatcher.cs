@@ -123,6 +123,10 @@ public sealed class CoopCommandDispatcher(
 
                 break;
 
+            case CoopCommandKind.Clear:
+                _kotor?.PostChatClear();
+                break;
+
             case CoopCommandKind.Status:
                 Reply($"{manager.Phase.ToString().ToLowerInvariant()} - {manager.Detail}");
                 break;

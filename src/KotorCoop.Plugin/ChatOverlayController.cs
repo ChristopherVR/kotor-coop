@@ -22,6 +22,7 @@ internal sealed unsafe class ChatOverlayController
 
     private int _count;
     private uint _lastSerial;
+    private uint _lastClearSerial;
 
     public ChatOverlayController(SharedBlockView block)
     {
@@ -34,6 +35,14 @@ internal sealed unsafe class ChatOverlayController
 
     public void OnFrame()
     {
+        // A bumped clear serial wipes the log (the `clear` command).
+        uint clear = _block.ChatClearSerial;
+        if (clear != _lastClearSerial)
+        {
+            _lastClearSerial = clear;
+            _count = 0;
+        }
+
         Capture();
 
         if (!_block.ChatOverlayEnabled || _count == 0)
@@ -125,14 +134,16 @@ internal sealed unsafe class ChatOverlayController
 
     /// <summary>
     /// Screen anchor as a text-grid cell (column, base row). The engine uses rows 0-2 for the
-    /// console prompt/line, so these keep clear of it. Grid size is viewport-derived and wants
-    /// one live calibration pass, but a wrong value only mis-places text, never crashes.
+    /// console prompt/line (reliably visible near the top), so the overlay sits just below.
+    /// "Bottom" uses a conservative mid-lower row rather than the screen edge, because the grid
+    /// height is viewport-derived and a large row can fall off-screen — which is exactly what
+    /// hid the overlay before. Wants one live calibration pass; a wrong value only mis-places.
     /// </summary>
     private static (int Column, int BaseRow, bool FromBottom) Anchor(uint anchor) => anchor switch
     {
         1 => (42, 4, false),   // top-right
-        2 => (1, 24, true),    // bottom-left
-        3 => (42, 24, true),   // bottom-right
+        2 => (1, 16, true),    // bottom-left
+        3 => (42, 16, true),   // bottom-right
         _ => (1, 4, false),    // top-left (default)
     };
 }

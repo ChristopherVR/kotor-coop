@@ -58,6 +58,8 @@ public class ConsoleCommandTests
     }
 
     [Theory]
+    [InlineData("clear", CoopCommandKind.Clear)]
+    [InlineData("cls", CoopCommandKind.Clear)]
     [InlineData("disconnect", CoopCommandKind.Disconnect)]
     [InlineData("dc", CoopCommandKind.Disconnect)]
     [InlineData("leave", CoopCommandKind.Disconnect)]

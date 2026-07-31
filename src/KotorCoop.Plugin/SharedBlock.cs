@@ -47,7 +47,7 @@ internal struct SharedBlock
     /// existing offset profiles keep working. The plugin control fields live AFTER that
     /// range, which is why the block is larger than the profile knows about.
     /// </summary>
-    public const int TotalSize = 0xC80;
+    public const int TotalSize = 0xF00;
 
     public const int ProfileVisibleSize = 0x250;
 
@@ -360,6 +360,16 @@ internal struct SharedBlock
     public const int PlaceableSlotStride = 0x08;
 
     public const int PlaceableCapacity = 32; // occupies 0xB60..0xC60
+
+    // ---- chat overlay clear (version 12) -----------------------------------------
+
+    /// <summary>Agent -&gt; plugin. Bumped to wipe the on-screen overlay log.</summary>
+    public const int OffsetChatClearSerial = 0xC60;
+
+    // Reserved block regions for in-progress features, pre-allocated so their work does not
+    // have to change TotalSize/Version (avoids layout collisions):
+    //   0xC80..0xD00  dialogue spectate (speaker + line + serial)
+    //   0xD00..0xE00  container-loot removal (op ring)
 
     public const int ItemSlotCapacity = 8;
 

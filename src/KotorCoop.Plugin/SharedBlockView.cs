@@ -385,6 +385,9 @@ internal sealed unsafe class SharedBlockView(byte* baseAddress)
     /// <summary>Pointer to the latest null-terminated chat line (128 bytes).</summary>
     public byte* ChatLine => baseAddress + SharedBlock.OffsetChatLine;
 
+    /// <summary>Agent-written; bumped to wipe the overlay log.</summary>
+    public uint ChatClearSerial => *U32(SharedBlock.OffsetChatClearSerial);
+
     public ItemSlotView GetItemSlot(int index) =>
         new(baseAddress + SharedBlock.OffsetItemSlots + (index * SharedBlock.ItemSlotStride));
 

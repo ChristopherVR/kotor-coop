@@ -165,9 +165,10 @@ public sealed class KotorGameBridge : IGameBridge
     private const int BlockChatSerial = 0xAD4;
     private const int BlockChatLine = 0xAD8;
     private const int BlockChatLineLength = 128;
+    private const int BlockChatClearSerial = 0xC60;
 
-    /// <summary>16-byte signature: "KOCOOP01" + version 11 + guard 0xC0FFEE01.</summary>
-    public const string PluginSignature = "4B 4F 43 4F 4F 50 30 31 0B 00 00 00 01 EE FF C0";
+    /// <summary>16-byte signature: "KOCOOP01" + version 12 + guard 0xC0FFEE01.</summary>
+    public const string PluginSignature = "4B 4F 43 4F 4F 50 30 31 0C 00 00 00 01 EE FF C0";
 
     /// <summary>Agent's view of which coop item id occupies each plugin item slot.</summary>
     private readonly uint[] _itemSlotIds = new uint[BlockItemCapacity];
@@ -1573,6 +1574,12 @@ public sealed class KotorGameBridge : IGameBridge
         ok &= _memory.TryWrite(_pluginBlock + BlockChatSerial, ++_chatSerial);
         return ok;
     }
+
+    private uint _chatClearSerial;
+
+    /// <summary>Wipes the in-game overlay log (the <c>clear</c> command).</summary>
+    public bool PostChatClear() =>
+        _pluginBlock != 0 && _memory.TryWrite(_pluginBlock + BlockChatClearSerial, ++_chatClearSerial);
 
     /// <summary>
     /// Writes the coop.ini-driven chat-overlay settings the plugin reads. <paramref

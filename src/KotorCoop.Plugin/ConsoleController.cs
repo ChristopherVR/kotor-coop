@@ -1,5 +1,3 @@
-using System.Text;
-
 namespace KotorCoop.Plugin;
 
 /// <summary>
@@ -12,8 +10,8 @@ namespace KotorCoop.Plugin;
 /// line, the caret and the keyboard grab (all provided once EnableCheats is set). Because our
 /// verbs are not in the engine's command table, the console would print "function &lt;x&gt; not
 /// found" for them; we suppress that by blanking the message's format string
-/// (<see cref="Odyssey.SuppressConsoleNotFound"/>). Replies render through the engine's queued
-/// text path (<see cref="Odyssey.PostTextLine"/>).
+/// (<see cref="Odyssey.SuppressConsoleNotFound"/>). This class does not render anything —
+/// replies and chat are shown by the always-on <see cref="ChatOverlayController"/>.
 ///
 /// Capture is decoupled from the exact Enter frame: the buffer the engine clears on Enter is
 /// remembered from the previous frame, so whichever runs first — the engine's Enter handling
@@ -29,10 +27,8 @@ internal sealed unsafe class ConsoleController
     private static readonly string[] Verbs =
     [
         "connect", "join", "host", "disconnect", "dc", "leave",
-        "reconnect", "rc", "say", "chat", "msg", "status", "help", "coop",
+        "reconnect", "rc", "say", "chat", "msg", "clear", "cls", "status", "help", "coop",
     ];
-
-    private const int LogLines = 6;
 
     private readonly SharedBlockView _block;
 
@@ -50,24 +46,7 @@ internal sealed unsafe class ConsoleController
 
     private bool _enterWasDown;
 
-    // A small ring of the agent's most recent reply lines, drawn while the console is open.
-    private readonly byte[][] _log = new byte[LogLines][];
-    private int _logCount;
-    private uint _lastReplySerial;
-
-    private readonly byte[] _hint;
-
-    public ConsoleController(SharedBlockView block)
-    {
-        _block = block;
-
-        for (int i = 0; i < LogLines; i++)
-        {
-            _log[i] = new byte[SharedBlock.ConsoleReplyLength];
-        }
-
-        _hint = AsciiLine("coop: connect <ip> [pw] | disconnect | reconnect | status");
-    }
+    public ConsoleController(SharedBlockView block) => _block = block;
 
     public void OnFrame()
     {
@@ -77,12 +56,9 @@ internal sealed unsafe class ConsoleController
             Odyssey.SuppressConsoleNotFound();
         }
 
-        CaptureReplies();
-
         if (Odyssey.IsConsoleOpen)
         {
             RememberCurrentLine();
-            Draw();
         }
         else if (_pendingLength > 0)
         {
@@ -159,60 +135,6 @@ internal sealed unsafe class ConsoleController
         }
     }
 
-    /// <summary>Pulls a new agent reply into the on-screen log ring.</summary>
-    private void CaptureReplies()
-    {
-        uint serial = _block.ConsoleReplySerial;
-        if (serial == _lastReplySerial)
-        {
-            return;
-        }
-
-        _lastReplySerial = serial;
-
-        byte[] target = _log[_logCount % LogLines];
-        byte* source = _block.ConsoleReply;
-        for (int i = 0; i < target.Length; i++)
-        {
-            target[i] = source[i];
-            if (source[i] == 0)
-            {
-                break;
-            }
-        }
-
-        target[^1] = 0;
-        _logCount++;
-    }
-
-    /// <summary>
-    /// Posts the hint and recent reply lines to the engine's text queue by grid row. The exact
-    /// grid size wants one live calibration pass, but a wrong value only mis-places text.
-    /// </summary>
-    private void Draw()
-    {
-        // Text grid rows: the engine draws the console prompt at row 0 and the command line at
-        // row 2, so our hint + reply log start below that. Re-posted every frame; ~0.5 s life
-        // covers a dropped frame without lingering. Column 1 keeps a small left margin.
-        const int column = 1;
-        const float life = 0.5f;
-
-        fixed (byte* h = _hint)
-        {
-            Odyssey.PostTextLine(h, column, 4, life);
-        }
-
-        int shown = Math.Min(_logCount, LogLines);
-        for (int i = 0; i < shown; i++)
-        {
-            int index = (_logCount - shown + i) % LogLines;
-            fixed (byte* line = _log[index])
-            {
-                Odyssey.PostTextLine(line, column, 6 + i, life);
-            }
-        }
-    }
-
     private static bool IsCoopCommand(byte[] buffer, int length)
     {
         int start = 0;
@@ -266,12 +188,4 @@ internal sealed unsafe class ConsoleController
 
     private static char ToLowerAscii(byte value) =>
         (char)(value is >= (byte)'A' and <= (byte)'Z' ? value + 32 : value);
-
-    private static byte[] AsciiLine(string text)
-    {
-        byte[] source = Encoding.ASCII.GetBytes(text);
-        byte[] result = new byte[source.Length + 1];
-        Array.Copy(source, result, source.Length);
-        return result; // already null-terminated by the extra byte
-    }
 }
