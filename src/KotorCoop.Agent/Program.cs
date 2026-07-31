@@ -364,6 +364,13 @@ internal static class Program
             kotor.PublishBrowserServers(
                 [.. lastServers.Select(s => (s.Name, s.Address, (byte)s.PlayerCount, (byte)s.MaxPlayers))]);
 
+            // The player chose to host from the panel rather than join a listed server.
+            if (kotor.TryTakeBrowserHost())
+            {
+                MenuReply(kotor, "hosting; the other player will see you in their list");
+                return (true, CoopMode.Host, null, name, password);
+            }
+
             // The player picked a row in the panel and pressed Enter.
             if (kotor.TryTakeBrowserConnect(out int picked))
             {
@@ -689,11 +696,11 @@ internal static class Program
         // button) and swaps the session under the running dashboard.
         manager.Connect(mode == CoopMode.Host, mode == CoopMode.Host ? null : hostEndPoint, SettingsFor(password));
 
-        // A join picked in the game's own menu should land the player in the world without
-        // another human step: stage the newest save as the autosave and fire the plugin's
-        // in-process load (the browser guarantees its panel is closed before the connect is
-        // handed over, so the menu is a plain, freshly rebuilt main menu here).
-        if (options.MenuConnect && mode == CoopMode.Join && !resolved)
+        // A session started from the game's own menu — hosting or joining — should land the
+        // player in the world without another human step. The browser guarantees its panel
+        // is closed before the choice is handed over, so the menu is a plain, freshly
+        // rebuilt main menu by the time this runs.
+        if (options.MenuConnect && !resolved)
         {
             _ = Task.Run(() => AutoLoadAfterMenuConnect(memory), cts.Token);
         }

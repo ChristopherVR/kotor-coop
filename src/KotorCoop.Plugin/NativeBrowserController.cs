@@ -101,7 +101,9 @@ internal sealed unsafe class NativeBrowserController
     private const int PanelProtoRow = 0xC00;       // listbox +0x2CC
     private const int PanelConnectButton = 0xC14;  // BTN_SAVELOAD control (embedded)
     private const int PanelConnectParams = 0xD80;
-    private const int PanelDeleteFlags = 0xFE0;    // BTN_DELETE +0x44
+    private const int PanelHostButton = 0xF9C;     // BTN_DELETE, repurposed as "Host"
+    private const int PanelHostParams = 0x1108;
+    private const int PanelHostFlags = 0xFE0;      // BTN_DELETE +0x44
     private const int PanelPlanetParams = 0x3DC;
     private const int PanelAreaParams = 0x51C;
     private const int PanelShotCaptionParams = 0x29C;
@@ -133,6 +135,7 @@ internal sealed unsafe class NativeBrowserController
     private nint _guiManager;
     private bool _closing;
     private bool _connectPending;
+    private bool _hostPending;
     private int _pendingSelection;
     private uint _shownListSerial;
     private int _serverRows;
@@ -215,6 +218,12 @@ internal sealed unsafe class NativeBrowserController
                 _block.BrowserSelection = (uint)_pendingSelection;
                 _block.RequestBrowserConnect();
                 Log($"native browser: row {_pendingSelection} confirmed; connect handed to the agent");
+            }
+            else if (_hostPending)
+            {
+                _hostPending = false;
+                _block.RequestBrowserHost();
+                Log("native browser: hosting; handed to the agent");
             }
             else
             {
@@ -317,12 +326,21 @@ internal sealed unsafe class NativeBrowserController
             return;
         }
 
-        // Repurpose before showing: title and buttons, hide Delete (bit1 of +0x44 gates both
-        // draw and hit-test), displace VerifyLoadGame on the Connect button (AddEvent same-id
-        // replaces), leave Back stock — its handler IS the clean close.
+        // Repurpose before showing: title and buttons, then displace the stock handlers
+        // (AddEvent replaces per event id). Back is left stock — its handler IS the clean
+        // close. The Delete button becomes "Host", so both halves of starting a session —
+        // hosting one and joining one — live in this single in-game screen.
         SetCaption(panel + PanelTitleParams, "CO-OP SERVERS");
         SetCaption(panel + PanelConnectParams, "Connect");
-        *(uint*)(panel + PanelDeleteFlags) &= ~2u;
+        SetCaption(panel + PanelHostParams, "Host");
+
+        // Its stock DeleteGame binding would delete a save; replace it before it can fire,
+        // and make sure the button is visible and hittable (bit1 gates both).
+        Odyssey.BindControlClick(
+            panel + PanelHostButton,
+            0x1,
+            (nint)(delegate* unmanaged[Thiscall]<nint, nint, void>)&OnHostClicked);
+        *(uint*)(panel + PanelHostFlags) |= 2u;
 
         Odyssey.BindControlClick(
             panel + PanelConnectButton,
@@ -539,6 +557,30 @@ internal sealed unsafe class NativeBrowserController
 
             self._pendingSelection = selected;
             self._connectPending = true;
+            self.Close();
+        }
+        catch
+        {
+            // A managed exception must never unwind into the engine's event dispatch.
+        }
+    }
+
+    /// <summary>
+    /// The Host button (the repurposed Delete control): start a session here instead of
+    /// joining someone else's. Same shape as <see cref="OnConnectClicked"/> — record and
+    /// close; the agent acts once the panel is gone.
+    /// </summary>
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvThiscall)])]
+    private static void OnHostClicked(nint owner, nint firingControl)
+    {
+        try
+        {
+            if (_instance is not { _panel: not 0, _closing: false } self)
+            {
+                return;
+            }
+
+            self._hostPending = true;
             self.Close();
         }
         catch

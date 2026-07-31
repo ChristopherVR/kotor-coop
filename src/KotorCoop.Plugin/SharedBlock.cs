@@ -432,6 +432,10 @@ internal struct SharedBlock
     /// <summary>Plugin -&gt; agent. Bumped to ask for a password prompt for the selection.</summary>
     public const int OffsetBrowserPasswordSerial = 0xE14;
 
+    /// <summary>Plugin -&gt; agent. Bumped when the player chooses HOST in the browser panel,
+    /// so both halves of starting a session live in the same in-game screen.</summary>
+    public const int OffsetBrowserHostSerial = 0xE18;
+
     /// <summary>Agent -&gt; plugin. Server entries: name[32], address[24], players u8, max u8.</summary>
     public const int OffsetBrowserEntries = 0xE20;
 

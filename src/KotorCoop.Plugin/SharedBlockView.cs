@@ -436,6 +436,9 @@ internal sealed unsafe class SharedBlockView(byte* baseAddress)
     /// <summary>Asks the agent to prompt for a password for the current selection.</summary>
     public void RequestBrowserPassword() => (*U32(SharedBlock.OffsetBrowserPasswordSerial))++;
 
+    /// <summary>The player chose to HOST rather than join a listed server.</summary>
+    public void RequestBrowserHost() => (*U32(SharedBlock.OffsetBrowserHostSerial))++;
+
     /// <summary>Start of a server row's fixed-size record.</summary>
     public byte* BrowserEntry(int index) =>
         baseAddress + SharedBlock.OffsetBrowserEntries + (index * SharedBlock.BrowserEntryStride);

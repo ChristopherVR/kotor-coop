@@ -177,7 +177,7 @@ public sealed class KotorGameBridge : IGameBridge
     /// part of the pattern deliberately: an agent must not attach to a plugin whose block
     /// layout it does not know, and a stale pair fails to find each other rather than reading
     /// the wrong offsets.</summary>
-    public const string PluginSignature = "4B 4F 43 4F 4F 50 30 31 0E 00 00 00 01 EE FF C0";
+    public const string PluginSignature = "4B 4F 43 4F 4F 50 30 31 0F 00 00 00 01 EE FF C0";
 
     /// <summary>Agent's view of which coop item id occupies each plugin item slot.</summary>
     private readonly uint[] _itemSlotIds = new uint[BlockItemCapacity];
@@ -352,6 +352,11 @@ public sealed class KotorGameBridge : IGameBridge
         if (_memory.TryReadUInt32(_pluginBlock + BlockBrowserConnectSerial, out uint browser))
         {
             _lastBrowserConnectSerial = browser;
+        }
+
+        if (_memory.TryReadUInt32(_pluginBlock + BlockBrowserHostSerial, out uint browserHost))
+        {
+            _lastBrowserHostSerial = browserHost;
         }
 
         if (_memory.TryReadUInt32(_pluginBlock + BlockConnectSerial, out uint connect))
@@ -1923,8 +1928,11 @@ public sealed class KotorGameBridge : IGameBridge
             && _memory.TryReadUInt32(_pluginBlock + BlockReviveStatus, out status);
     }
 
+    private const int BlockBrowserHostSerial = 0xE18;
+
     private uint _browserListSerial;
     private uint _lastBrowserConnectSerial;
+    private uint _lastBrowserHostSerial;
     private string _lastBrowserSignature = string.Empty;
 
     /// <summary>True while the in-game browser panel is on screen.</summary>
@@ -1994,6 +2002,23 @@ public sealed class KotorGameBridge : IGameBridge
         }
 
         index = (int)selection;
+        return true;
+    }
+
+    /// <summary>
+    /// True (once) when the player pressed HOST in the in-game browser panel rather than
+    /// picking a listed server.
+    /// </summary>
+    public bool TryTakeBrowserHost()
+    {
+        if (_pluginBlock == 0
+            || !_memory.TryReadUInt32(_pluginBlock + BlockBrowserHostSerial, out uint serial)
+            || serial == _lastBrowserHostSerial)
+        {
+            return false;
+        }
+
+        _lastBrowserHostSerial = serial;
         return true;
     }
 
