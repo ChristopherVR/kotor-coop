@@ -839,6 +839,49 @@ public sealed class KotorGameBridge : IGameBridge
     /// <summary>The catalogue digest for the compatibility handshake; 0 until resolved.</summary>
     public uint GlobalsCatalogueDigest => _globals.IsResolved ? _globals.CatalogueDigest : 0;
 
+    private SaveDigestCache? _saveDigests;
+    private bool _saveDigestsResolved;
+
+    /// <summary>
+    /// The file-side digest source for the world handshake, resolved once from the game
+    /// process's own executable path (correct whichever install this instance runs from —
+    /// GOG, Steam, or a second co-op copy). Null when the path cannot be read, in which
+    /// case both digests stay 0 = unknown, which only ever warns.
+    /// </summary>
+    private SaveDigestCache? SaveDigests
+    {
+        get
+        {
+            if (!_saveDigestsResolved)
+            {
+                _saveDigestsResolved = true;
+
+                try
+                {
+                    using var process = System.Diagnostics.Process.GetProcessById(_memory.ProcessId);
+                    string? gameDirectory = Path.GetDirectoryName(process.MainModule?.FileName);
+                    if (gameDirectory is not null)
+                    {
+                        _saveDigests = new SaveDigestCache(gameDirectory);
+                    }
+                }
+                catch (Exception)
+                {
+                    // No access to the process path: the save digests stay unknown.
+                }
+            }
+
+            return _saveDigests;
+        }
+    }
+
+    /// <summary>The staged/current save's identity digest for the world handshake; 0 until
+    /// (unless) resolved — see <see cref="SaveDigest"/>.</summary>
+    public uint SaveIdentityDigest => SaveDigests?.SaveIdentity ?? 0;
+
+    /// <summary>The named module's GIT-id digest for the world handshake; 0 when unknown.</summary>
+    public uint ModuleGitDigest(string module) => SaveDigests?.ModuleGit(module) ?? 0;
+
     /// <summary>
     /// Locates the global variable table and takes the baseline snapshot. Called from
     /// TryResolve, since the catalogue is fixed for as long as a save is loaded.
