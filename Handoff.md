@@ -8,6 +8,42 @@ no other dependencies. C# throughout.
 
 ---
 
+## 0h. ⚠ THE IN-PROCESS LOAD NEVER SHOWS THE WORLD — OPEN, AND IT INVALIDATES CLAIMS IN 0f
+
+**Observed by the user, confirmed by screenshot: after a plugin-driven load both instances
+are still displaying the MAIN MENU** — the host lit, the client faded to near-black
+mid-transition (which reads as "loading forever"). The simulation underneath is genuinely
+correct: creatures exist, the saved character is right, phantoms spawn and equip on both
+sides, the enemy channel replicates, game audio plays. **You simply never see any of it.**
+The presentation never leaves the menu, and `FirePhase2` also calls `SetInputClass(client,
+0, 1)` + `DisableInput(client)` and nothing ever re-enables them.
+
+⚠ **Correct these claims in 0f**: "both players are in one world" and the click-to-join flow
+being usable are WRONG as written. What was verified was the simulation and the network, not
+the presentation. The click loader (`KOTORCOOP_PLUGIN_LOAD=0`) renders correctly — verified
+by screenshot the same day, full in-game GUI, minimap, portraits — so **use the click route
+for anything a human will look at** until this is fixed.
+
+⚠ **Also correct the "injected input does not reach the game" conclusion** recorded in
+`docs/live-verification.md` and 0f. That test was run against a plugin-loaded instance, which
+was sitting at a menu with input explicitly disabled by our own load path. The conclusion is
+unsafe; re-run it against a click-loaded world before believing it.
+
+**Where to look.** The missing work is the client-side GUI transition the retail load performs
+once the module is up: tear down / hide the main menu, dismiss the load screen, and bring up
+the in-game GUI. `CGuiInGame::SetSWGuiStatus 0x62AA00` is almost certainly central — it is
+what calls `CSWGuiMainInterface::InitializeMap`, the function whose null-module dereference
+caused the travel crash in 0g, and that is the same in-game-GUI bring-up path. Related and
+already bound in `MenuLoadController`: `HideSWInGameGui 0x0062CBA0`, `ShowLoadScreen
+0x005EDA80`, `SetLoadStep 0x005EDFD0`, `SetInputClass 0x005EDA60`, `DisableInput 0x005EDBE0`.
+
+**Method note, worth internalising:** this was visible in screenshots twice and I explained it
+away as a stale-capture artefact because the memory state said the world was up. Memory state
+proves the simulation; only a screenshot proves the presentation. When they disagree, believe
+the screenshot.
+
+---
+
 ## 0g. MODULE TRAVEL CRASHED — FOUND AND FIXED, 2026-08-01
 
 **Fixed and verified**: the same travel that killed the process twice now completes, and the
