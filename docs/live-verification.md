@@ -14,6 +14,20 @@ phantoms both ways with body armour and weapon; map pins; the content digest agr
 identical installs; and death → a peer standing beside you → revive (`death: the local
 player is down` → `revive applied` → `topped up to 15 hp`, ~1 s, both games still running).
 
+**Travelling together (2026-08-01).** The host warps, the client follows, and both arrive
+intact: `end_m01ab pos (50.02, 119.95) hp 12/0` on both, with each side respawning and
+equipping the other's phantom in the new module. Getting there took three fixes worth
+knowing about, because each failed in a way that pointed somewhere else:
+- the transition **crashed** the process (the engine's map init dereferences the server's
+  module every frame with no null check, in a window a plugin-driven transition reaches
+  before the client has torn its own world down) — `docs/research/travel-map-init-crash.md`;
+- the module name carried a **trailing junk byte** (a CExoString length that includes its
+  terminating null), which the module filter tolerated but travel could not: the client
+  asked for `end_m01ab\0` and retried forever;
+- the agent kept a **stale player pointer** across the transition, reporting `pos (0,0,0)`
+  and hit points like `21544/21544` — plausible-looking garbage that reads as a network
+  fault. It now revalidates the cached creature every tick.
+
 **Party reconciliation (2026-08-01).** Both halves measured, closing the design's open
 "inferred, not measured" risk:
 - **Solo mode is real and one-sided** — `partystate.ps1` reads `soloMode 0` on the host and
@@ -23,8 +37,13 @@ player is down` → `revive applied` → `topped up to 15 hp`, ~1 s, both games 
   running it converges back to the host's exact value within ~4 s; with the agents stopped it
   stays where it was put for 6 s+. Two identical saves would place a companion identically,
   so only the control distinguishes "mirrored" from "same script" — run it that way.
-- Not covered: companions actually FOLLOWING (the Endar Spire opening script-locks Trask, so
-  his AI never issues follow orders there). Needs a later save.
+- Not covered: companions actually FOLLOWING. The Endar Spire opening script-locks Trask so
+  his AI never issues follow orders, and warping to `end_m01ab` does not help — the party
+  arrives with **zero** companions there (`partystate.ps1` reports `companions 0` on both
+  sides, and the `carth` creature in that module is a placed NPC, not a party member). This
+  genuinely needs a save from a real playthrough with an active following companion; it is
+  the one item here that cannot be manufactured. Solo mode is still correctly held on the
+  client even with an empty party, which is the failure mode that would matter.
 
 **Content mismatch (2026-08-01).** Verified with a genuine difference — `install-datamods`
 run against ONE install only, giving it a real 510-row `appearance.2da` against the other's

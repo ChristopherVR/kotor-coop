@@ -39,6 +39,23 @@ stack were stale locals; the real caller is a tail-call thunk (`CGuiInGame::Init
 between the server unload and the next client MainLoop). The fix is correct either way; the
 doc has a two-run probe that settles it.
 
+**Two more bugs sat behind it, both only visible by running the thing:**
+- **The module name carried a trailing junk byte.** A CExoString's length can include its
+  terminating null (the same trap as the `g_a_clothes01\0` equipment resrefs). Invisible in a
+  log, and harmless to the module FILTER — both peers carry the same junk and still compare
+  equal — but fatal to TRAVEL: the client asked the engine for `end_m01ab\0`, no such module,
+  and retried forever (`travel: moving to module 'end_m01ab?'`). `TryReadModuleName` now cuts
+  at the first character a module name cannot contain.
+- **The agent kept a stale player pointer across the transition.** A module change frees every
+  creature and the new module allocates its own, so the cached pointer lands in reused
+  memory: both agents reported `pos (0,0,0)` with hit points of `57/134` and `21544/21544` —
+  plausible-looking garbage, which is the worst kind, because the phantom positions derived
+  from it read as a network fault. The cached creature is revalidated each tick (creature
+  vtable + stats still saying PC) and re-resolved when it stops matching.
+
+**Result, verified live:** host warps, client follows, both arrive at
+`end_m01ab pos (50.02, 119.95) hp 12/0` and respawn each other's phantom there.
+
 ### The original report, for context
 
 A module transition requested through the travel channel killed the process ~15 ms later:
