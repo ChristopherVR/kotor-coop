@@ -226,8 +226,16 @@ public sealed class CoopAgent(IGameBridge bridge, ICoopSession session, AgentSet
 
         _heavyCountdown = HeavyPumpDivisor;
 
-        // Report our in-world content fingerprint (the session rate-limits the wire anyway).
-        session.PublishWorldDigest(bridge.GlobalsCatalogueDigest);
+        // Report our in-world content fingerprint (the session rate-limits the wire
+        // anyway). The save identity and the current module's GIT digest ride along with
+        // the globals catalogue: passing the LIVE module here is what makes the GIT
+        // comparison per-module — it re-judges itself on every module change, restoring
+        // the id-keyed channels wherever the two installs' GITs agree again.
+        session.PublishWorldDigest(new WorldDigest(
+            bridge.GlobalsCatalogueDigest,
+            bridge.SaveIdentityDigest,
+            local.Module,
+            bridge.ModuleGitDigest(local.Module)));
 
         PumpItems(local, caps);
         PumpEnemies(local, caps);

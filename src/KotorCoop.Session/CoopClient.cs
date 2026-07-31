@@ -45,28 +45,31 @@ public sealed class CoopClient : ICoopSession
     private bool _reconnecting;
     private CompatibilityVerdict? _installVerdict;
     private CompatibilityVerdict? _compatibility;
-    private uint _localWorldGlobals;
-    private uint _hostWorldGlobals;
+    private WorldDigest _localWorld = WorldDigest.Empty;
+    private WorldDigest _hostWorld = WorldDigest.Empty;
     private long _lastWorldDigestMs;
 
     public SessionCapabilities Capabilities => _compatibility?.Allowed ?? SessionCapabilities.All;
 
     public CompatibilityVerdict? Compatibility => _compatibility;
 
-    public void PublishWorldDigest(uint globalsCatalogue)
+    public void PublishWorldDigest(in WorldDigest digest)
     {
-        if (globalsCatalogue == _localWorldGlobals)
+        if (digest == _localWorld)
         {
             return;
         }
 
-        _localWorldGlobals = globalsCatalogue;
+        _localWorld = digest;
         RefineCompatibility();
     }
 
     /// <summary>
     /// Recomputes the client's verdict from the install compare plus the in-world
-    /// globals-catalogue match. Both digests must be resolved before a difference counts.
+    /// comparison (globals catalogue, save identity, current module's GIT). Each field
+    /// must be resolved on both sides before a difference counts, and the module fields
+    /// track the players — so this re-judges itself on every module change, restoring
+    /// channels wherever the two GITs agree again.
     /// </summary>
     private void RefineCompatibility()
     {
@@ -75,14 +78,13 @@ public sealed class CoopClient : ICoopSession
             return;
         }
 
-        bool globalsMismatch = _localWorldGlobals != 0 && _hostWorldGlobals != 0
-            && _localWorldGlobals != _hostWorldGlobals;
+        WorldDigestComparison mismatch = WorldDigest.Compare(_localWorld, _hostWorld);
 
         _compatibility = ContentCompatibility.ApplyWorldMismatch(
             install,
-            globalsCatalogueMismatch: globalsMismatch,
-            saveIdentityMismatch: false,
-            moduleGitMismatch: false);
+            mismatch.GlobalsCatalogueMismatch,
+            mismatch.SaveIdentityMismatch,
+            mismatch.ModuleGitMismatch);
     }
 
     public CoopClient(SessionSettings settings, IPEndPoint hostEndPoint)
@@ -450,12 +452,13 @@ public sealed class CoopClient : ICoopSession
             SendJournalOp(op);
         }
 
-        // Report our in-world digest so the host can judge the globals match. Stable, so a
-        // low rate is plenty; only once our catalogue has resolved.
-        if (_localWorldGlobals != 0 && now - _lastWorldDigestMs >= 1000)
+        // Report our in-world digest so the host can judge the world-time match (globals,
+        // save, module GIT). Mostly stable — only the module fields move, on a module
+        // change — so a low rate is plenty; only once at least one field has resolved.
+        if (!_localWorld.IsEmpty && now - _lastWorldDigestMs >= 1000)
         {
             _lastWorldDigestMs = now;
-            int length = PacketCodec.Write(_sendBuffer, new WorldDigestPacket(_localPeerId, _localWorldGlobals));
+            int length = PacketCodec.Write(_sendBuffer, new WorldDigestPacket(_localPeerId, _localWorld));
             if (length > 0)
             {
                 _channel.Send(_hostEndPoint, _sendBuffer.AsSpan(0, length));
@@ -682,7 +685,7 @@ public sealed class CoopClient : ICoopSession
             case PacketType.WorldDigest:
                 if (PacketCodec.ReadWorldDigest(span) is { } hostDigest)
                 {
-                    _hostWorldGlobals = hostDigest.GlobalsCatalogue;
+                    _hostWorld = hostDigest.Digest;
                     RefineCompatibility();
                 }
 

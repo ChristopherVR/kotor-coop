@@ -55,6 +55,22 @@ public interface IGameBridge : IDisposable
     /// </summary>
     uint GlobalsCatalogueDigest => 0;
 
+    /// <summary>
+    /// A digest of the identity of the save this session is playing — its module, its
+    /// Mod_NextObjId counters and its stored GIT object-id list (0 when unknown). Object
+    /// ids are only identical across instances because both engines dealt them from the
+    /// same save, so this is what the enemy/door/item channels' id assumption rests on.
+    /// </summary>
+    uint SaveIdentityDigest => 0;
+
+    /// <summary>
+    /// A digest of the object ids the named module's GIT hands out — from the save's
+    /// stored module state when this save has visited it, else predicted from the pristine
+    /// module file the engine would load (0 when unknown). Judged per module, because a
+    /// mod that edits one module's placements shifts ids there and nowhere else.
+    /// </summary>
+    uint ModuleGitDigest(string module) => 0;
+
     /// <summary>False when this bridge cannot see the game's world/quest state.</summary>
     bool SupportsWorldState => false;
 

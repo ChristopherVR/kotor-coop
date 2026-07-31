@@ -578,7 +578,10 @@ public static class PacketCodec
         PacketWriter w = new(buffer);
         w.WriteHeader(PacketType.WorldDigest);
         w.WriteUInt32(packet.PeerId);
-        w.WriteUInt32(packet.GlobalsCatalogue);
+        w.WriteUInt32(packet.Digest.GlobalsCatalogue);
+        w.WriteUInt32(packet.Digest.SaveIdentity);
+        w.WriteUInt32(packet.Digest.ModuleGit);
+        w.WriteString(packet.Digest.Module, ProtocolConstants.MaxModuleLength);
         return w.Failed ? 0 : w.Position;
     }
 
@@ -592,7 +595,12 @@ public static class PacketCodec
 
         uint peerId = r.ReadUInt32();
         uint globals = r.ReadUInt32();
-        return r.Failed ? null : new WorldDigestPacket(peerId, globals);
+        uint saveIdentity = r.ReadUInt32();
+        uint moduleGit = r.ReadUInt32();
+        string module = r.ReadString();
+        return r.Failed
+            ? null
+            : new WorldDigestPacket(peerId, new WorldDigest(globals, saveIdentity, module, moduleGit));
     }
 
     public static int Write(Span<byte> buffer, JournalOpPacket packet)

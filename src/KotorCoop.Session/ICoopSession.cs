@@ -66,12 +66,14 @@ public interface ICoopSession : IDisposable
     IReadOnlyList<EnemyState> GetEnemyReports(string module);
 
     /// <summary>
-    /// Announces this instance's in-world content fingerprint (currently the
-    /// global-variable catalogue digest, 0 until resolved). Sent to the peer so a mismatch
-    /// only knowable in-world refines the negotiated capabilities. Cheap to call every
-    /// pump; the session only puts it on the wire when it changes or periodically.
+    /// Announces this instance's in-world content fingerprint (globals catalogue, save
+    /// identity, current module + its GIT digest; each field 0/empty until resolved). Sent
+    /// to the peer so a mismatch only knowable in-world refines the negotiated
+    /// capabilities — and, because the module fields track wherever the player is standing,
+    /// re-judged on every module change. Cheap to call every pump; the session only puts
+    /// it on the wire when it changes or periodically.
     /// </summary>
-    void PublishWorldDigest(uint globalsCatalogue);
+    void PublishWorldDigest(in WorldDigest digest);
 
     /// <summary>Host only: publish the authoritative party companions. Ignored on a client.</summary>
     void PublishParty(IReadOnlyList<PartyMemberState> members);

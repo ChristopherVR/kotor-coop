@@ -229,8 +229,8 @@ public class SessionIntegrationTests
         {
             host.PublishLocalState(state);
             client.PublishLocalState(state);
-            host.PublishWorldDigest(0x1111_1111);       // the two catalogues differ
-            client.PublishWorldDigest(0x2222_2222);
+            host.PublishWorldDigest(new WorldDigest(0x1111_1111, 0, "end_m01aa", 0));  // the two catalogues differ
+            client.PublishWorldDigest(new WorldDigest(0x2222_2222, 0, "end_m01aa", 0));
         }
 
         Assert.True(await WaitForAsync(() => client.IsConnected, Timeout, Publish));
@@ -269,8 +269,9 @@ public class SessionIntegrationTests
         {
             host.PublishLocalState(state);
             client.PublishLocalState(state);
-            host.PublishWorldDigest(0xABCD_1234);       // identical catalogues
-            client.PublishWorldDigest(0xABCD_1234);
+            // Identical catalogues, identical saves, identical module GITs.
+            host.PublishWorldDigest(new WorldDigest(0xABCD_1234, 0xBEEF, "end_m01aa", 0xF00D));
+            client.PublishWorldDigest(new WorldDigest(0xABCD_1234, 0xBEEF, "end_m01aa", 0xF00D));
         }
 
         Assert.True(await WaitForAsync(() => client.IsConnected, Timeout, Publish));
@@ -286,6 +287,129 @@ public class SessionIntegrationTests
             Publish();
             await Task.Delay(50);
         }
+
+        Assert.Equal(SessionCapabilities.All, host.Capabilities);
+        Assert.Equal(SessionCapabilities.All, client.Capabilities);
+
+        await cts.CancelAsync();
+        await Task.WhenAll(hostTask, clientTask);
+    }
+
+    [Fact]
+    public async Task ASaveIdentityMismatchDegradesToIdIndependentChannelsWhenAllowed()
+    {
+        // Two deliberately different saves under --allow-different-save: the id-keyed
+        // channels (enemies/doors/items/party) must go, while the id-independent ones
+        // (phantoms, appearance, equipment, journal) keep the pair playing together.
+        using CoopHost host = new(new SessionSettings
+        {
+            PlayerName = "Revan", Port = 0, TickRate = 30, AllowDifferentSave = true,
+        });
+        using CoopClient client = new(
+            new SessionSettings { PlayerName = "Malak", TickRate = 30, AllowDifferentSave = true },
+            new IPEndPoint(IPAddress.Loopback, host.ListenEndPoint.Port));
+
+        using CancellationTokenSource cts = new(Timeout + TimeSpan.FromSeconds(15));
+        Task hostTask = host.RunAsync(cts.Token);
+        Task clientTask = client.RunAsync(cts.Token);
+
+        try
+        {
+            PlayerState state = new(Vector3f.Zero, 0f, "end_m01aa", 100, 0);
+            void Publish()
+            {
+                host.PublishLocalState(state);
+                client.PublishLocalState(state);
+                host.PublishWorldDigest(new WorldDigest(0xABCD, 0x1111_1111, "end_m01aa", 0));
+                client.PublishWorldDigest(new WorldDigest(0xABCD, 0x2222_2222, "end_m01aa", 0));
+            }
+
+            Assert.True(await WaitForAsync(() => client.IsConnected, Timeout, Publish));
+
+            Assert.True(
+                await WaitForAsync(
+                    () => (host.Capabilities & SessionCapabilities.Enemies) == 0
+                        && (client.Capabilities & SessionCapabilities.Enemies) == 0,
+                    Timeout,
+                    Publish),
+                "the id-keyed channels were not dropped on a save-identity mismatch");
+
+            foreach (SessionCapabilities caps in (SessionCapabilities[])[host.Capabilities, client.Capabilities])
+            {
+                Assert.Equal(SessionCapabilities.None, caps & SessionCapabilities.Doors);
+                Assert.Equal(SessionCapabilities.None, caps & SessionCapabilities.GroundItems);
+                Assert.Equal(SessionCapabilities.None, caps & SessionCapabilities.Party);
+                Assert.NotEqual(SessionCapabilities.None, caps & SessionCapabilities.Phantoms);
+                Assert.NotEqual(SessionCapabilities.None, caps & SessionCapabilities.Appearance);
+                Assert.NotEqual(SessionCapabilities.None, caps & SessionCapabilities.Equipment);
+                Assert.NotEqual(SessionCapabilities.None, caps & SessionCapabilities.Journal);
+            }
+        }
+        finally
+        {
+            // The compare policy is a process-wide static (set from each session's
+            // settings during its handshake); put the default back for the other tests.
+            ContentCompatibility.AllowDifferentSave = false;
+        }
+
+        await cts.CancelAsync();
+        await Task.WhenAll(hostTask, clientTask);
+    }
+
+    [Fact]
+    public async Task AModuleGitMismatchDropsIdChannelsThereAndRestoresInTheNextModule()
+    {
+        // One module's GIT differs (a mod edited its placements): enemies/doors/items go
+        // dark THERE, phantoms and chat stay. Walking into a module whose GITs agree must
+        // bring the channels back — the mismatch is per-module, not per-session.
+        using CoopHost host = new(new SessionSettings { PlayerName = "Revan", Port = 0, TickRate = 30 });
+        using CoopClient client = new(
+            new SessionSettings { PlayerName = "Malak", TickRate = 30 },
+            new IPEndPoint(IPAddress.Loopback, host.ListenEndPoint.Port));
+
+        using CancellationTokenSource cts = new(Timeout + TimeSpan.FromSeconds(15));
+        Task hostTask = host.RunAsync(cts.Token);
+        Task clientTask = client.RunAsync(cts.Token);
+
+        // Same save, same globals; only tar_m03aa's GIT disagrees.
+        WorldDigest hostWorld = new(0xABCD, 0xBEEF, "tar_m03aa", 0x1111);
+        WorldDigest clientWorld = new(0xABCD, 0xBEEF, "tar_m03aa", 0x2222);
+
+        PlayerState state = new(Vector3f.Zero, 0f, "tar_m03aa", 100, 0);
+        void Publish()
+        {
+            host.PublishLocalState(state);
+            client.PublishLocalState(state);
+            host.PublishWorldDigest(hostWorld);
+            client.PublishWorldDigest(clientWorld);
+        }
+
+        Assert.True(await WaitForAsync(() => client.IsConnected, Timeout, Publish));
+
+        Assert.True(
+            await WaitForAsync(
+                () => (host.Capabilities & SessionCapabilities.Enemies) == 0
+                    && (client.Capabilities & SessionCapabilities.Enemies) == 0,
+                Timeout,
+                Publish),
+            "the modded module's GIT mismatch never dropped the id-keyed channels");
+
+        Assert.Equal(SessionCapabilities.None, host.Capabilities & SessionCapabilities.Doors);
+        Assert.Equal(SessionCapabilities.None, client.Capabilities & SessionCapabilities.GroundItems);
+        Assert.NotEqual(SessionCapabilities.None, host.Capabilities & SessionCapabilities.Phantoms);
+        Assert.NotEqual(SessionCapabilities.None, client.Capabilities & SessionCapabilities.WorldState);
+
+        // Both players move on to a module whose GITs agree.
+        hostWorld = hostWorld with { Module = "tar_m04aa", ModuleGit = 0x3333 };
+        clientWorld = clientWorld with { Module = "tar_m04aa", ModuleGit = 0x3333 };
+
+        Assert.True(
+            await WaitForAsync(
+                () => (host.Capabilities & SessionCapabilities.Enemies) != 0
+                    && (client.Capabilities & SessionCapabilities.Enemies) != 0,
+                Timeout,
+                Publish),
+            "the id-keyed channels were not restored in the next (agreeing) module");
 
         Assert.Equal(SessionCapabilities.All, host.Capabilities);
         Assert.Equal(SessionCapabilities.All, client.Capabilities);

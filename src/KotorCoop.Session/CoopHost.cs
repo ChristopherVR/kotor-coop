@@ -30,8 +30,9 @@ public sealed class CoopHost : ICoopSession
         /// <summary>The install-time verdict from this peer's Hello digest.</summary>
         public CompatibilityVerdict InstallVerdict = new(RefusalReason.None, SessionCapabilities.All, []);
 
-        /// <summary>The peer's global-variable catalogue digest, 0 until it reports one.</summary>
-        public uint WorldGlobals;
+        /// <summary>The peer's in-world digest (globals catalogue, save identity, current
+        /// module + GIT), every field 0/empty until it reports one.</summary>
+        public WorldDigest World = WorldDigest.Empty;
     }
 
     public const uint HostPeerId = 1;
@@ -331,26 +332,27 @@ public sealed class CoopHost : ICoopSession
     }
 
     private CompatibilityVerdict? _compatibility;
-    private uint _localWorldGlobals;
+    private WorldDigest _localWorld = WorldDigest.Empty;
 
-    public void PublishWorldDigest(uint globalsCatalogue) => _localWorldGlobals = globalsCatalogue;
+    public void PublishWorldDigest(in WorldDigest digest) => _localWorld = digest;
 
     /// <summary>
-    /// This peer's effective capabilities: its install verdict, refined by whether its
-    /// in-world globals catalogue matches the host's. Both digests must be resolved
-    /// (non-zero) before a difference counts — an unresolved catalogue is "unknown", not a
-    /// mismatch.
+    /// This peer's effective capabilities: its install verdict, refined by the in-world
+    /// comparison (globals catalogue, save identity, and the GIT of the module both are
+    /// standing in). Per the Unknown-is-not-mismatch rule, a field must be resolved on
+    /// BOTH sides before a difference counts — and because the module fields follow the
+    /// players, walking into a module whose GITs agree restores the id-keyed channels a
+    /// previous module's mismatch dropped.
     /// </summary>
     private CompatibilityVerdict EffectiveVerdict(PeerConnection peer)
     {
-        bool globalsMismatch = _localWorldGlobals != 0 && peer.WorldGlobals != 0
-            && _localWorldGlobals != peer.WorldGlobals;
+        WorldDigestComparison mismatch = WorldDigest.Compare(_localWorld, peer.World);
 
         return ContentCompatibility.ApplyWorldMismatch(
             peer.InstallVerdict,
-            globalsCatalogueMismatch: globalsMismatch,
-            saveIdentityMismatch: false,
-            moduleGitMismatch: false);
+            mismatch.GlobalsCatalogueMismatch,
+            mismatch.SaveIdentityMismatch,
+            mismatch.ModuleGitMismatch);
     }
 
     /// <summary>
@@ -640,22 +642,23 @@ public sealed class CoopHost : ICoopSession
     }
 
     /// <summary>
-    /// Sends the host's in-world digest so each client can judge the globals-catalogue
-    /// match from its side too. Cheap and stable, so a low rate is plenty; sent only once
-    /// the host's catalogue has resolved.
+    /// Sends the host's in-world digest so each client can judge the world-time match
+    /// (globals, save, module GIT) from its side too. Cheap and mostly stable — only the
+    /// module fields move, and only on a module change — so a low rate is plenty; sent
+    /// only once at least one field has resolved.
     /// </summary>
     private long _lastWorldDigestMs;
 
     private void BroadcastWorldDigest(long now, List<PeerConnection> recipients)
     {
-        uint globals = _localWorldGlobals;
-        if (globals == 0 || recipients.Count == 0 || now - _lastWorldDigestMs < 1000)
+        WorldDigest world = _localWorld;
+        if (world.IsEmpty || recipients.Count == 0 || now - _lastWorldDigestMs < 1000)
         {
             return;
         }
 
         _lastWorldDigestMs = now;
-        int length = PacketCodec.Write(_sendBuffer, new WorldDigestPacket(HostPeerId, globals));
+        int length = PacketCodec.Write(_sendBuffer, new WorldDigestPacket(HostPeerId, world));
         if (length == 0)
         {
             return;
@@ -1027,7 +1030,7 @@ public sealed class CoopHost : ICoopSession
         {
             if (_peers.TryGetValue(report.PeerId, out PeerConnection? peer))
             {
-                peer.WorldGlobals = report.GlobalsCatalogue;
+                peer.World = report.Digest;
                 _compatibility = EffectiveVerdict(peer);
             }
         }

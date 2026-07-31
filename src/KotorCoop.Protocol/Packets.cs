@@ -171,12 +171,12 @@ public sealed record DialogueRequestPacket(
 
 /// <summary>
 /// A peer's in-world content fingerprint, sent both ways once a save is loaded and
-/// repeated periodically. <paramref name="GlobalsCatalogue"/> is a digest of the
-/// global-variable catalogue (0 until resolved); a mismatch means the two saves' (type,
-/// index) keys name different variables, which would silently corrupt quest state, so the
-/// world-state and door channels are dropped when it differs.
+/// repeated periodically (and re-evaluated on every module change, since
+/// <see cref="WorldDigest.Module"/>/<see cref="WorldDigest.ModuleGit"/> describe wherever
+/// the peer is standing now). Each mismatch degrades exactly the channels it invalidates —
+/// see <see cref="WorldDigest"/> for the per-field policy.
 /// </summary>
-public sealed record WorldDigestPacket(uint PeerId, uint GlobalsCatalogue);
+public sealed record WorldDigestPacket(uint PeerId, WorldDigest Digest);
 
 /// <summary>
 /// A quest journal advance: entry <paramref name="QuestTag"/> reached

@@ -60,7 +60,7 @@ public class PausePumpTests
 
         public JournalStore Journal { get; } = new();
 
-        public void PublishWorldDigest(uint globalsCatalogue) { }
+        public void PublishWorldDigest(in WorldDigest digest) { }
 
         public void PublishParty(System.Collections.Generic.IReadOnlyList<PartyMemberState> members) { }
 

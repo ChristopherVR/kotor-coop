@@ -50,10 +50,27 @@ public class PacketCodecTests
     public void WorldDigestRoundTrips()
     {
         Span<byte> buffer = stackalloc byte[ProtocolConstants.MaxPacketSize];
-        WorldDigestPacket original = new(2, 0xDEADBEEF);
+        WorldDigestPacket original = new(
+            2, new WorldDigest(0xDEADBEEF, 0x1234_5678, "end_m01aa", 0x9ABC_DEF0));
 
         int length = PacketCodec.Write(buffer, original);
         Assert.Equal(original, PacketCodec.ReadWorldDigest(buffer[..length]));
+    }
+
+    [Fact]
+    public void AnEmptyWorldDigestRoundTripsWithoutLosingItsEmptiness()
+    {
+        // A digest whose fields are all unresolved must arrive as exactly that — the
+        // receiver's Unknown-is-not-mismatch handling depends on the zeros surviving.
+        Span<byte> buffer = stackalloc byte[ProtocolConstants.MaxPacketSize];
+        WorldDigestPacket original = new(3, WorldDigest.Empty);
+
+        int length = PacketCodec.Write(buffer, original);
+        WorldDigestPacket? decoded = PacketCodec.ReadWorldDigest(buffer[..length]);
+
+        Assert.NotNull(decoded);
+        Assert.True(decoded.Digest.IsEmpty);
+        Assert.Equal(original, decoded);
     }
 
     [Fact]
