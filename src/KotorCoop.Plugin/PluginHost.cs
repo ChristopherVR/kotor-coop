@@ -111,6 +111,17 @@ internal static unsafe class PluginHost
                 Log($"console interp NOT hooked: {interpDiagnostic}");
             }
 
+            // A per-frame callback that also fires at the main menu (the SwapBuffers hook is
+            // dormant there behind the menu movie), used to drive the Co-op menu button.
+            if (MainLoopHook.Install(MenuFrame, out string menuHookDiagnostic))
+            {
+                Log($"menu frame hook installed: {menuHookDiagnostic}");
+            }
+            else
+            {
+                Log($"menu frame hook NOT installed: {menuHookDiagnostic}");
+            }
+
             _worker = new Thread(WorkerLoop)
             {
                 IsBackground = true,
@@ -177,13 +188,23 @@ internal static unsafe class PluginHost
     /// fixes were of exactly that shape — CombatController suppressing kills on recycled
     /// ids, and PhantomController calling through a vtable read from a freed object.
     /// </summary>
+    /// <summary>
+    /// Per-frame callback from <see cref="MainLoopHook"/>, which — unlike the SwapBuffers
+    /// <see cref="FrameHook"/> — also fires at the main menu (behind the menu movie the swap hook
+    /// is dormant). Used only to keep the Co-op menu button un-hidden and bound.
+    /// </summary>
+    private static void MenuFrame()
+    {
+        _connectMenu?.OnFrame();
+    }
+
     private static void OnFrame()
     {
-        // Before the epoch gate, deliberately: these run at the main menu, which is exactly
-        // where the gate returns early (no server) — the menu-load replay, the Co-op button
-        // and the ~ console all work at the menu as well as in-world.
+        // Before the epoch gate, deliberately: these run at the main menu too, which is exactly
+        // where the gate returns early (no server) — the menu-load replay, the Enter chat prompt
+        // and the chat overlay. (The Co-op button runs on MainLoopHook; the ~ console routes
+        // through FuncInterpHook — both independent of this dormant-at-menu swap hook.)
         _menuLoad?.OnFrame();
-        _connectMenu?.OnFrame();
         _chatInput?.OnFrame();
         _chatOverlay?.OnFrame();
 
