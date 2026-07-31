@@ -3129,6 +3129,73 @@ internal static unsafe class Odyssey
         SetPositionFn(creature, &position, 1, 0, 0);
     }
 
+    // ---- driving a phantom in real time -------------------------------------------
+    //
+    // The renderer does NOT read the server creature. It reads the client twin, and the twin
+    // does not take the server's position either — it EASES toward it over a fixed 512 ms
+    // budget (CSWCCreature::ResetDesiredPositionTimer writes 0x200 into twin+0x1E8, and that
+    // is the only value anything ever writes there). So a peer running at speed renders a
+    // permanent ~2 units behind where they actually are, no matter how perfectly the server
+    // object tracks. That is the larger half of the reported lag; the pathfinding walk was
+    // the smaller half.
+    //
+    // Driving both halves ourselves — the server position, and the twin's desired position
+    // with a zero budget so it snaps instead of easing — removes both. Writing the twin's
+    // desired position directly also sidesteps the engine's "visible to player" gate, so an
+    // off-screen phantom keeps tracking instead of freezing until someone looks at it.
+    // See docs/research/realtime-creature-movement.md.
+
+    /// <summary>CSWCCreature + this = the desired position the twin eases toward.</summary>
+    private const int TwinDesiredPosition = 0x1DC;
+
+    /// <summary>CSWCCreature + this = milliseconds it is allowed to take. 0 = snap.</summary>
+    private const int TwinDesiredPositionBudget = 0x1E8;
+
+    /// <summary>CSWSObject + this = the current animation the gait is read from.</summary>
+    private const int ObjAnimationField = 0xD4;
+
+    /// <summary>
+    /// Places a phantom exactly where its peer is, this frame, with the gait that matches how
+    /// fast they are actually moving.
+    ///
+    /// <paramref name="speed"/> is measured from the position stream rather than taken from
+    /// the peer's animation field, because it is the thing that decides walk-vs-run and the
+    /// animation field lags it.
+    ///
+    /// MAIN THREAD ONLY, and specifically from the SwapBuffers hook: that runs after both
+    /// main loops, so these writes are the last word before the next frame consumes them.
+    /// </summary>
+    public static void DrivePhantom(nint creature, Vec3 position, float facing, float speed)
+    {
+        bool moving = speed > 0.15f;
+        bool run = speed > 2.0f;
+
+        Vec3 direction = new() { X = MathF.Cos(facing), Y = MathF.Sin(facing), Z = 0f };
+        SetOrientationFn(creature, &direction);
+
+        int want = moving ? (run ? AnimRun : AnimWalk) : AnimIdle;
+        *(int*)(creature + CreRunFlag) = run ? 1 : 0;
+        *(int*)(creature + CreMoveState) = moving ? -1 : 1;
+
+        if (*(int*)(creature + ObjAnimationField) != want)
+        {
+            var setAnimation =
+                (delegate* unmanaged[Thiscall]<nint, int, void>)(*(nint*)(*(nint*)creature + VtableSetAnimation));
+            setAnimation(creature, want);
+        }
+
+        SetPositionFn(creature, &position, 1, 0, 0);
+
+        // The half that actually renders. Re-read the twin every frame — it is created and
+        // destroyed by the engine and a cached pointer would eventually be stale.
+        nint twin = *(nint*)(creature + CreClientTwin);
+        if (twin != 0)
+        {
+            *(Vec3*)(twin + TwinDesiredPosition) = position;
+            *(int*)(twin + TwinDesiredPositionBudget) = 0;
+        }
+    }
+
     /// <summary>Faces a creature along a world-space angle (0 = +X, counter-clockwise).</summary>
     public static void SetFacing(nint creature, float angle)
     {

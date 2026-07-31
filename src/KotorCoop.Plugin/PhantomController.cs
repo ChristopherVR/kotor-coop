@@ -45,26 +45,25 @@ internal sealed unsafe class PhantomController(SharedBlockView block)
     /// interpolation jitter does not thrash the pathfinder — churn is additionally capped
     /// by <see cref="RepathCooldownSteps"/>.
     /// </summary>
-    private const float GoalResendDistanceSquared = 0.25f * 0.25f;
+    private const float GoalResendDistanceSquared = 0.6f * 0.6f;
 
     /// <summary>
     /// Minimum steps (at ~60 Hz) between re-issued move actions per phantom. Re-queueing
     /// every tick resets the pathfinder continuously and the creature never gets anywhere;
     /// five steps ≈ 80 ms keeps the goal fresh without the churn.
     /// </summary>
-    private const int RepathCooldownSteps = 2;
+    private const int RepathCooldownSteps = 5;
 
     /// <summary>
-    /// How far the phantom may fall behind before it is PLACED rather than left to walk.
+    /// Beyond this the phantom is not lagging, it is lost (peer teleported, or the pathfinder
+    /// dead-ended). Snap instead of walking a 20-second catch-up.
     ///
-    /// This is the lever that actually bounds perceived lag. A pathfinding walk can never
-    /// close a gap against a peer moving at the same speed, so at 15 units the body simply
-    /// trailed for as long as the peer kept running — reported from play as the other player
-    /// being seconds behind. At ~3.5 units it stays in the same part of the room: close
-    /// enough to read as "with you", far enough that ordinary walking is still a smooth walk
-    /// and not a stutter of snaps.
+    /// ⚠ Do NOT lower this to "bound the lag". It was tried at 3.5 units and play-tested as
+    /// the character FLYING AROUND: during ordinary running the phantom is legitimately a few
+    /// units behind, so a low threshold fires a teleport every couple of seconds. A snap is
+    /// for recovery, not for tracking.
     /// </summary>
-    private const float SnapDistanceSquared = 3.5f * 3.5f;
+    private const float SnapDistanceSquared = 15f * 15f;
 
     /// <summary>The walk animation; anything else while moving is treated as a run.
     /// KOTOR's default movement IS the run, so run is the common case.</summary>
@@ -95,6 +94,9 @@ internal sealed unsafe class PhantomController(SharedBlockView block)
 
     /// <summary>Last one-shot sequence applied per slot, so each fires exactly once.</summary>
     private readonly uint[] _lastOneShotSerial = new uint[SharedBlock.SlotCapacity];
+
+    /// <summary>When each phantom was last driven, for measuring the peer's real speed.</summary>
+    private readonly double[] _lastDriveTime = new double[SharedBlock.SlotCapacity];
 
     private int _oneShotsLogged;
 
@@ -350,17 +352,22 @@ internal sealed unsafe class PhantomController(SharedBlockView block)
                 continue;
             }
 
-            // Walked by the ENGINE, with a hard bound on how far behind it may get.
+            // Walked by the engine's own pathfinder. This is the KNOWN-GOOD behaviour and it
+            // is deliberately back after two attempts to beat it made things worse in play:
             //
-            // Driving the position directly was tried and does not work: the setter needs the
-            // action queue cleared to commit, and issuing that per step never lets the engine
-            // finish applying the move — measured, the body sat still through a burst of
-            // writes and jumped only when the timing happened to line up. Restricting the
-            // write to once per received position was no better. So movement stays the
-            // engine's own pathfinding walk, which is smooth and reliable, and the lag is
-            // bounded by the SNAP above instead: a phantom more than a few units behind is
-            // placed rather than left to jog. SnapTo demonstrably commits, because it clears
-            // actions and then sets position as a single one-off.
+            //  - driving the position directly (server object, and later the client twin's
+            //    desired-position with a zero ease budget) rendered as the character FLYING
+            //    AROUND and out of sync. The theory behind it is sound and written up in
+            //    docs/research/realtime-creature-movement.md — the renderer really does read
+            //    the twin, and the twin really does ease over 512 ms — but a working
+            //    implementation needs to be developed against something that can SEE the
+            //    result, which a synthetic teleport test cannot;
+            //  - lowering the snap threshold to bound the lag produced the same complaint,
+            //    because during ordinary running the phantom is legitimately a few units back
+            //    and a low threshold just teleports it every couple of seconds.
+            //
+            // So: smooth and a little behind, rather than exact and jittery. The latency that
+            // IS safely removed lives elsewhere — tick rate and interpolation delay.
             Vec3 last = _lastGoal[i];
             float gdx = remote.Position.X - last.X;
             float gdy = remote.Position.Y - last.Y;
@@ -387,8 +394,7 @@ internal sealed unsafe class PhantomController(SharedBlockView block)
             _repathCooldown[i] = RepathCooldownSteps;
 
             // Match the peer's gait: KOTOR's default movement is the run, so anything that is
-            // not explicitly the walk animation runs. Sharing the player's appearance row
-            // means matched gait is matched speed.
+            // not explicitly the walk animation runs.
             bool run = remote.Animation != AnimWalkValue;
 
             if (Odyssey.MoveToLocation(_phantomIds[i], remote.Position, run, out int failure))
