@@ -102,6 +102,12 @@ internal sealed unsafe class ChatOverlayController
         (float x, float topY, float bottomY, bool fromBottom) = Anchor(_block.ChatOverlayAnchor);
         const float step = 6f;
 
+        // Configured opacity as a real alpha, floored so an enabled overlay is never fully
+        // invisible. The font color must be restored to white afterwards so the game's own
+        // subtitles/feedback text are not tinted.
+        float alpha = Math.Clamp(_block.ChatOverlayOpacity / 100f, 0.05f, 1f);
+        Odyssey.SetFontColor(1f, 1f, 1f, alpha);
+
         for (int j = 0; j < vcount; j++)
         {
             // j counts oldest -> newest among the visible lines.
@@ -115,6 +121,8 @@ internal sealed unsafe class ChatOverlayController
                 Odyssey.DrawTextAscii(p, x, y);
             }
         }
+
+        Odyssey.ResetFontColor();
     }
 
     /// <summary>

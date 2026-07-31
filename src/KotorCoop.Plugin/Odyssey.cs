@@ -1236,6 +1236,29 @@ internal static unsafe class Odyssey
         return i;
     }
 
+    // The texture-font color PrintStringScreenPos reads: four floats in .data, default
+    // (1,1,1,1) = opaque white. The draw already brackets glyphs with GL_BLEND +
+    // (SRC_ALPHA, ONE_MINUS_SRC_ALPHA), so writing a lower alpha here genuinely fades the
+    // text (see docs/research/text-color-alpha.md). Writing .data floats has no call-ABI or
+    // crash risk; the only caveat is restoring white so shared subtitle/feedback text is not
+    // tinted.
+    private const nint FontColorR = 0x00798BB4;
+    private const nint FontColorG = 0x00798BB8;
+    private const nint FontColorB = 0x00798BBC;
+    private const nint FontColorA = 0x00798BC0;
+
+    /// <summary>Sets the texture-font RGBA (0..1) for subsequent draws. MAIN THREAD ONLY.</summary>
+    public static void SetFontColor(float r, float g, float b, float a)
+    {
+        *(float*)FontColorR = r;
+        *(float*)FontColorG = g;
+        *(float*)FontColorB = b;
+        *(float*)FontColorA = a;
+    }
+
+    /// <summary>Restores the default opaque white, so other engine text is not tinted.</summary>
+    public static void ResetFontColor() => SetFontColor(1f, 1f, 1f, 1f);
+
     /// <summary>
     /// Draws one null-terminated ASCII line through the engine's own text path. Position is
     /// the centered, 0.01-scaled space the console uses. MAIN THREAD ONLY. Guarded: a null
