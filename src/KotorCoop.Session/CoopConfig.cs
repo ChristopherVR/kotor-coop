@@ -37,6 +37,29 @@ public sealed record CoopConfig
     /// by default — the GUI rebind is engine-call code that wants live verification.</summary>
     public bool MenuButton { get; init; }
 
+    /// <summary>
+    /// How often state is sent, in Hz. Every millisecond here is visible latency on the
+    /// peer's movement, so it is exposed for tuning: raise it if peers feel behind, lower it
+    /// if the network or CPU cannot keep up. 0 keeps the built-in default.
+    /// </summary>
+    public int TickRate { get; init; }
+
+    /// <summary>
+    /// How far in the past peers are rendered, in milliseconds. This is the OTHER half of
+    /// perceived lag and the one worth trying first: it buys smoothness by always having a
+    /// later snapshot to interpolate toward, which a LAN barely needs. 0 means "no buffer,
+    /// show the newest position" — lowest latency, and jittery only if packets arrive
+    /// unevenly. Negative means "keep the built-in default".
+    /// </summary>
+    public int InterpolationDelayMs { get; init; } = -1;
+
+    /// <summary>
+    /// Mirror a peer's pause into this game. On by default. Turn it off if a pause ever
+    /// sticks: without the mirror each game pauses only for its own player, which is worse
+    /// co-op but can never wedge.
+    /// </summary>
+    public bool PauseSync { get; init; } = true;
+
     /// <summary>Show the always-on in-game chat overlay.</summary>
     public bool ChatOverlay { get; init; } = true;
 
@@ -131,6 +154,13 @@ public sealed record CoopConfig
             Password = kv.GetValueOrDefault("password", string.Empty),
             Name = kv.GetValueOrDefault("name"),
             MenuButton = IsTruthy(kv.GetValueOrDefault("menu_button")),
+            TickRate = int.TryParse(kv.GetValueOrDefault("tick_rate"), out int tick)
+                ? Math.Clamp(tick, 5, 120)
+                : 0,
+            InterpolationDelayMs = int.TryParse(kv.GetValueOrDefault("interp_ms"), out int interp)
+                ? Math.Clamp(interp, 0, 500)
+                : -1,
+            PauseSync = !kv.ContainsKey("pause_sync") || IsTruthy(kv.GetValueOrDefault("pause_sync")),
             ChatOverlay = !kv.ContainsKey("chat_overlay") || IsTruthy(kv.GetValueOrDefault("chat_overlay")),
             ChatOverlayOpacity = int.TryParse(kv.GetValueOrDefault("chat_overlay_opacity"), out int op)
                 ? Math.Clamp(op, 0, 100)

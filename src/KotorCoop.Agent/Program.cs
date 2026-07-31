@@ -663,13 +663,42 @@ internal static class Program
         // password (per connect), so the settings factory closes over the resolved name.
         string effectiveName = playerName;
 
+        // coop.ini can override the two settings that decide how far behind a peer looks —
+        // the send rate and the interpolation buffer — plus pause mirroring, so they can be
+        // tuned by whoever is actually watching the screen rather than only at build time.
+        CoopConfig? tuning = null;
+        try
+        {
+            using Process game = Process.GetProcessById(memory.ProcessId);
+            string? gameDir = Path.GetDirectoryName(game.MainModule?.FileName);
+            if (gameDir is not null)
+            {
+                tuning = CoopConfig.TryLoad(CoopConfig.PathFor(gameDir));
+            }
+        }
+        catch
+        {
+            // No coop.ini: the command line and the built-in defaults stand.
+        }
+
+        int tickRate = tuning is { TickRate: > 0 } ? tuning.TickRate : options.TickRate;
+        int interpolationMs = tuning is { InterpolationDelayMs: >= 0 }
+            ? tuning.InterpolationDelayMs
+            : ProtocolConstants.DefaultInterpolationDelayMs;
+
+        if (tickRate != options.TickRate || interpolationMs != ProtocolConstants.DefaultInterpolationDelayMs)
+        {
+            Console.WriteLine($"tuning: {tickRate} Hz, {interpolationMs} ms interpolation (from coop.ini)");
+        }
+
         AgentSettings agentSettings = new()
         {
-            PollRate = options.TickRate,
+            PollRate = tickRate,
             FilterByModule = options.FilterByModule,
             FollowHostModule = options.FollowHostModule,
             SyncParty = options.SyncParty,
             SyncProgression = options.SyncProgression,
+            SyncPause = tuning?.PauseSync ?? true,
         };
 
         using SessionManager manager = new(bridge, agentSettings);
@@ -678,7 +707,8 @@ internal static class Program
         {
             PlayerName = effectiveName,
             Port = options.Port,
-            TickRate = options.TickRate,
+            TickRate = tickRate,
+            InterpolationDelayMs = interpolationMs,
             Digest = digest,
             AllowDifferentSave = options.AllowDifferentSave,
             Password = sessionPassword,

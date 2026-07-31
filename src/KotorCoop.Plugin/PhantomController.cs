@@ -95,8 +95,27 @@ internal sealed unsafe class PhantomController(SharedBlockView block)
     /// <summary>Last one-shot sequence applied per slot, so each fires exactly once.</summary>
     private readonly uint[] _lastOneShotSerial = new uint[SharedBlock.SlotCapacity];
 
-    /// <summary>When each phantom was last driven, for measuring the peer's real speed.</summary>
-    private readonly double[] _lastDriveTime = new double[SharedBlock.SlotCapacity];
+    /// <summary>Direct placement instead of a pathfinding walk (coop.ini movement=walk opts
+    /// out). This is the seamless mode; the walk is the conservative fallback.</summary>
+    private readonly bool _directMovement = !string.Equals(
+        PluginConfig.Read("movement"), "walk", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>Where each phantom's peer was when its speed window opened, and when.</summary>
+    private readonly Vec3[] _speedFrom = new Vec3[SharedBlock.SlotCapacity];
+    private readonly double[] _speedFromTime = new double[SharedBlock.SlotCapacity];
+
+    /// <summary>The peer's measured planar speed, smoothed over a window.</summary>
+    private readonly float[] _peerSpeed = new float[SharedBlock.SlotCapacity];
+
+    /// <summary>
+    /// How long a speed sample runs before it is committed. Measuring frame to frame is
+    /// useless here: the block only changes when the agent writes it (~30 Hz) while this loop
+    /// runs at 60, so half the samples see zero movement and the estimate collapses. A window
+    /// spans several updates and yields a steady number.
+    /// </summary>
+    private const double SpeedWindowSeconds = 0.15;
+
+    private bool _modeLogged;
 
     private int _oneShotsLogged;
 
@@ -344,7 +363,12 @@ internal sealed unsafe class PhantomController(SharedBlockView block)
 
             // Hopelessly behind means the peer teleported or the path dead-ended:
             // snap rather than walk a long catch-up nobody asked to watch.
-            if (behindSquared > SnapDistanceSquared)
+            //
+            // ⚠ Skipped entirely in direct mode. Leaving it active while also placing the body
+            // every frame is what made the first direct-drive attempt look like the character
+            // flying around: SnapTo clears the action queue and sets position, so the two
+            // writers fought each other several times a second.
+            if (!_directMovement && behindSquared > SnapDistanceSquared)
             {
                 Odyssey.SnapTo(phantom, remote.Position);
                 _lastGoal[i] = remote.Position;
@@ -352,22 +376,15 @@ internal sealed unsafe class PhantomController(SharedBlockView block)
                 continue;
             }
 
-            // Walked by the engine's own pathfinder. This is the KNOWN-GOOD behaviour and it
-            // is deliberately back after two attempts to beat it made things worse in play:
-            //
-            //  - driving the position directly (server object, and later the client twin's
-            //    desired-position with a zero ease budget) rendered as the character FLYING
-            //    AROUND and out of sync. The theory behind it is sound and written up in
-            //    docs/research/realtime-creature-movement.md — the renderer really does read
-            //    the twin, and the twin really does ease over 512 ms — but a working
-            //    implementation needs to be developed against something that can SEE the
-            //    result, which a synthetic teleport test cannot;
-            //  - lowering the snap threshold to bound the lag produced the same complaint,
-            //    because during ordinary running the phantom is legitimately a few units back
-            //    and a low threshold just teleports it every couple of seconds.
-            //
-            // So: smooth and a little behind, rather than exact and jittery. The latency that
-            // IS safely removed lives elsewhere — tick rate and interpolation delay.
+            if (_directMovement)
+            {
+                DriveDirect(i, phantom, remote, now);
+                continue;
+            }
+
+            // The engine's own pathfinding walk: smooth, and inherently a little behind,
+            // because a walk cannot close a gap against a peer moving at the same speed.
+            // Kept as the fallback (coop.ini movement=walk) because it is known-good.
             Vec3 last = _lastGoal[i];
             float gdx = remote.Position.X - last.X;
             float gdy = remote.Position.Y - last.Y;
@@ -563,6 +580,44 @@ internal sealed unsafe class PhantomController(SharedBlockView block)
         }
     }
 
+    /// <summary>
+    /// Places a phantom exactly where its peer is, every frame, instead of walking it there.
+    ///
+    /// This is the seamless path. It writes BOTH halves — the server object and the client
+    /// twin's desired position with a zero ease budget — because the renderer reads the twin,
+    /// and the twin otherwise eases toward the server position over a fixed 512 ms, which is a
+    /// permanent ~2-unit visual error at running speed no matter how well the server object
+    /// tracks. See docs/research/realtime-creature-movement.md.
+    ///
+    /// No move action is ever queued in this mode and the snap is disabled: both are writers
+    /// that would fight this one.
+    /// </summary>
+    private void DriveDirect(int slot, nint phantom, RemoteView remote, double now)
+    {
+        // Speed over a window, not frame to frame — see SpeedWindowSeconds.
+        if (_speedFromTime[slot] <= 0)
+        {
+            _speedFrom[slot] = remote.Position;
+            _speedFromTime[slot] = now;
+        }
+        else if (now - _speedFromTime[slot] >= SpeedWindowSeconds)
+        {
+            float wdx = remote.Position.X - _speedFrom[slot].X;
+            float wdy = remote.Position.Y - _speedFrom[slot].Y;
+            float travelled = MathF.Sqrt((wdx * wdx) + (wdy * wdy));
+            float measured = travelled / (float)(now - _speedFromTime[slot]);
+
+            // Clamped: a module change or a peer teleport would otherwise report a speed of
+            // hundreds and pin the gait to a permanent sprint.
+            _peerSpeed[slot] = MathF.Min(measured, 10f);
+            _speedFrom[slot] = remote.Position;
+            _speedFromTime[slot] = now;
+        }
+
+        Odyssey.DrivePhantom(phantom, remote.Position, remote.Facing, _peerSpeed[slot]);
+        _lastGoal[slot] = remote.Position;
+    }
+
     /// <summary>The old spawn spot: beside the local player, fanned out per phantom.</summary>
     private Vec3 Offset(Vec3 playerPosition) => new()
     {
@@ -579,6 +634,12 @@ internal sealed unsafe class PhantomController(SharedBlockView block)
 
     private void TrySpawnOne(nint player)
     {
+        if (!_modeLogged)
+        {
+            _modeLogged = true;
+            PluginHost.Log($"phantom movement: {(_directMovement ? "direct (seamless)" : "walk")}");
+        }
+
         // Spawn the body WHERE THE PEER ACTUALLY IS. This used to spawn at a fixed offset
         // from the local player and let the walk logic carry it to the real position, which
         // meant every phantom appeared next to you and then jogged across the room — the

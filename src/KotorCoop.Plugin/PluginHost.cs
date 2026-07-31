@@ -60,6 +60,10 @@ internal static unsafe class PluginHost
             string directory = NativeMethods.GetModuleDirectory("dinput8.dll");
             _logPath = Path.Combine(directory, "kotorcoop-plugin.log");
 
+            // Before any controller is constructed: several read their settings from coop.ini
+            // in their field initialisers.
+            PluginConfig.UseDirectory(directory);
+
             Log($"=== KotorCoop plugin loaded into pid {NativeMethods.GetCurrentProcessId()} ===");
 
             // The in-game ~ console needs the engine's dev console, which is gated by

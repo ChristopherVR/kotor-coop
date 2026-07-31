@@ -8,6 +8,9 @@ public sealed record AgentSettings
     /// <summary>How often the game's memory is sampled. Matches the network tick by default.</summary>
     public int PollRate { get; init; } = ProtocolConstants.DefaultTickRate;
 
+    /// <summary>Mirror a peer's pause into this game (coop.ini pause_sync=0 opts out).</summary>
+    public bool SyncPause { get; init; } = true;
+
     /// <summary>
     /// When true, remote players in a different module are not written into the game.
     /// KOTOR has exactly one module loaded at a time, so a peer on Taris has no
@@ -430,7 +433,7 @@ public sealed class CoopAgent(IGameBridge bridge, ICoopSession session, AgentSet
     /// </summary>
     private void PumpPause(IReadOnlyList<RemotePeer> peers)
     {
-        if (!bridge.SupportsPauseSync)
+        if (!settings.SyncPause || !bridge.SupportsPauseSync)
         {
             return;
         }
