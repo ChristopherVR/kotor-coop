@@ -56,6 +56,13 @@ public sealed class CoopAgent(IGameBridge bridge, ICoopSession session, AgentSet
     private PlayerState _lastLocalState = PlayerState.Empty;
     private IReadOnlyList<RemotePeer> _lastPeers = [];
     private string _lastTravelRequest = string.Empty;
+
+    /// <summary>The heavy world-state pumps run once per this many ticks, so the per-tick
+    /// position/animation write stays at the full poll rate instead of being serialised behind
+    /// a dozen memory scans. At 20 Hz this puts world state at ~5 Hz — imperceptible, while the
+    /// phantom tracks in real time.</summary>
+    private const int HeavyPumpDivisor = 4;
+    private int _heavyCountdown = 1;
     private long _travelRetryAtMs;
 
     public IGameBridge Bridge => bridge;
@@ -99,11 +106,30 @@ public sealed class CoopAgent(IGameBridge bridge, ICoopSession session, AgentSet
 
         using PeriodicTimer timer = new(TimeSpan.FromMilliseconds(1000.0 / settings.PollRate));
 
+        // Coarse pump-cost telemetry: if a pump takes anywhere near the tick budget it
+        // serialises the position loop, so surface the average/peak every ~5s to the log.
+        var sw = new System.Diagnostics.Stopwatch();
+        double budgetMs = 1000.0 / settings.PollRate;
+        long ticks = 0;
+        double sumMs = 0, maxMs = 0;
+
         try
         {
             while (await timer.WaitForNextTickAsync(cancellationToken).ConfigureAwait(false))
             {
+                sw.Restart();
                 PumpOnce();
+                double ms = sw.Elapsed.TotalMilliseconds;
+
+                ticks++;
+                sumMs += ms;
+                if (ms > maxMs) maxMs = ms;
+                if (ticks >= 100)
+                {
+                    Console.WriteLine(
+                        $"[pump] avg {sumMs / ticks:F1}ms  peak {maxMs:F1}ms  over {ticks} ticks (budget {budgetMs:F0}ms)");
+                    ticks = 0; sumMs = 0; maxMs = 0;
+                }
             }
         }
         catch (OperationCanceledException)
@@ -149,17 +175,13 @@ public sealed class CoopAgent(IGameBridge bridge, ICoopSession session, AgentSet
             return;
         }
 
-        // Report our in-world content fingerprint so a mismatch only knowable once a save
-        // is loaded (the globals catalogue) refines the capabilities below. Cheap and
-        // stable; the session rate-limits what actually goes on the wire.
-        session.PublishWorldDigest(bridge.GlobalsCatalogueDigest);
-
         // Each channel is gated on the negotiated capability set: a mod difference that
         // would corrupt a channel disables that channel for the session (a different
         // globals catalogue drops world state; a different save drops enemies/doors/items)
         // while everything unaffected keeps working. Full set until a peer is judged.
         SessionCapabilities caps = session.Capabilities;
 
+        // --- real-time path: player position + animation, EVERY tick --------------------
         // Only filter when both ends actually know their module. A profile that has not
         // located the module-name field reports an empty string, and treating "unknown"
         // as "somewhere else" would hide every peer and look exactly like a broken
@@ -177,6 +199,26 @@ public sealed class CoopAgent(IGameBridge bridge, ICoopSession session, AgentSet
 
         LastWriteSucceeded = bridge.TryWriteRemotePeers(visible);
 
+        // Pause and travel are cheap flag checks and must feel immediate.
+        PumpTravel(local, peers);
+        PumpPause(peers);
+
+        // --- heavy world-state path: run at ~1/HeavyPumpDivisor of the tick rate ---------
+        // The dozen memory-scanning syncs below cost far more per pass than the position
+        // write and do NOT need the full poll rate. Running them every tick serialised the
+        // whole pump behind them, collapsing the effective position rate and making the
+        // phantom lag. Staggering to ~5 Hz keeps position/animation real-time while world
+        // state still converges imperceptibly fast.
+        if (--_heavyCountdown > 0)
+        {
+            return;
+        }
+
+        _heavyCountdown = HeavyPumpDivisor;
+
+        // Report our in-world content fingerprint (the session rate-limits the wire anyway).
+        session.PublishWorldDigest(bridge.GlobalsCatalogueDigest);
+
         PumpItems(local, caps);
         PumpEnemies(local, caps);
         PumpParty(caps);
@@ -187,8 +229,6 @@ public sealed class CoopAgent(IGameBridge bridge, ICoopSession session, AgentSet
         PumpDoors(caps);
         PumpPlaceables(caps);
         PumpContainerLoot(caps);
-        PumpTravel(local, peers);
-        PumpPause(peers);
     }
 
     /// <summary>

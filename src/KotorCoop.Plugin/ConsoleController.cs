@@ -146,14 +146,12 @@ internal sealed unsafe class ConsoleController
             return;
         }
 
-        // Nothing to submit. If the console is closed and we are in a loaded module (not a menu
-        // and not mid-conversation, where Enter advances dialogue), open the chat prompt. The
-        // _consoleWasOpen guard means the Enter that just CLOSED an empty console does not
-        // immediately re-open it as a chat line.
-        if (!consoleOpen && !_consoleWasOpen && Odyssey.IsInGame && !Odyssey.IsConversationActive)
-        {
-            Odyssey.OpenChatInput();
-        }
+        // NOTE: the Enter-to-open-chat force-open (Odyssey.OpenChatInput) is DISABLED — it
+        // faulted in-world on the live build (one of the keyboard-grab __thiscall ABIs is wrong
+        // from the frame hook's context). Chat is still available via the `~` console + `say`.
+        // Re-enable only after the open sequence is verified safe with a debugger. Do NOT call
+        // OpenChatInput from here until then.
+        _ = consoleOpen;
     }
 
     private static bool IsCoopCommand(byte[] buffer, int length)
