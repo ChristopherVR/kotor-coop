@@ -250,15 +250,19 @@ public sealed class CoopAgent(IGameBridge bridge, ICoopSession session, AgentSet
         }
     }
 
+    /// <summary>Token serial of the last dialogue line surfaced to the local overlay, so a
+    /// peer's line is posted once per line rather than every tick.</summary>
+    private uint _lastSpectateSerial;
+
     /// <summary>
-    /// Publishes whether the local player is in a conversation, so the session can hold a
-    /// single arbitrated dialogue token. The in-dialogue bit is already read into the local
-    /// player's flags, so this needs no extra engine read. The spectate payload (speaker and
-    /// line) is empty until the plugin can read the live conversation; the ownership token is
-    /// useful on its own — it is what tells a peer "someone else is mid-story, hold off".
+    /// Publishes whether the local player is in a conversation (so the session can hold a
+    /// single arbitrated dialogue token) together with the spectate payload — the speaker and
+    /// line the plugin read off the live conversation. Then, when another peer owns an active
+    /// conversation and a real line has arrived, surfaces it on this player's always-on chat
+    /// overlay so they can spectate what the owner is hearing.
     ///
-    /// Acting on the token (spectating or suppressing a conflicting conversation) is the
-    /// plugin's job and is gated on that RE work; the agent's part is to keep it truthful.
+    /// The line is empty until the plugin resolves it (base-game TLK-only lines still read as
+    /// empty — see docs/research/dialogue-sync.md); the ownership token is useful on its own.
     /// </summary>
     private void PumpDialogue(in PlayerState local, SessionCapabilities caps)
     {
@@ -267,7 +271,23 @@ public sealed class CoopAgent(IGameBridge bridge, ICoopSession session, AgentSet
             return;
         }
 
-        session.PublishDialogue(local.IsInDialogue, string.Empty, string.Empty);
+        // What the local player is hearing, if anything, straight from the plugin's read.
+        bridge.TryReadLocalDialogue(out string speaker, out string line);
+        session.PublishDialogue(local.IsInDialogue, speaker, line);
+
+        // Spectate the other side: post a peer's current line to our overlay once per line,
+        // deduped on the token serial (the arbiter bumps it only when the line changes).
+        DialogueState token = session.GetDialogue();
+        if (token.IsHeldByAnotherThan(session.LocalPeerId)
+            && token.Line.Length > 0
+            && token.Serial != _lastSpectateSerial)
+        {
+            _lastSpectateSerial = token.Serial;
+            string text = token.SpeakerName.Length > 0
+                ? $"{token.SpeakerName}: {token.Line}"
+                : token.Line;
+            bridge.PostChatLine(text);
+        }
     }
 
     /// <summary>

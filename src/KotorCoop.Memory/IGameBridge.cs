@@ -127,6 +127,22 @@ public interface IGameBridge : IDisposable
     /// </summary>
     bool IsInDialogue => false;
 
+    /// <summary>
+    /// Reads what the local player is currently hearing in a conversation, for the
+    /// dialogue-spectate payload. Empty when not in a conversation, or when the plugin could
+    /// not resolve the live line. Default is "no dialogue read" for bridges without a plugin.
+    /// </summary>
+    bool TryReadLocalDialogue(out string speaker, out string line)
+    {
+        speaker = string.Empty;
+        line = string.Empty;
+        return false;
+    }
+
+    /// <summary>Posts one line to the always-on chat overlay (used to surface a peer's
+    /// dialogue). Default false when this bridge has no overlay.</summary>
+    bool PostChatLine(string line) => false;
+
     /// <summary>Reads every enemy in the module. Used by whichever peer owns them.</summary>
     List<EnemyState> ReadEnemies() => [];
 

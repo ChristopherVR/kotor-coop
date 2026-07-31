@@ -167,6 +167,12 @@ public sealed class KotorGameBridge : IGameBridge
     private const int BlockChatLineLength = 128;
     private const int BlockChatClearSerial = 0xC60;
 
+    // Dialogue spectate, mirroring SharedBlock version 12 (reserved region 0xC80..0xD00).
+    private const int BlockLocalDialogueSpeaker = 0xC80;
+    private const int BlockLocalDialogueSpeakerLength = 40;
+    private const int BlockLocalDialogueLine = 0xCA8;
+    private const int BlockLocalDialogueLineLength = 64;
+
     /// <summary>16-byte signature: "KOCOOP01" + version 12 + guard 0xC0FFEE01.</summary>
     public const string PluginSignature = "4B 4F 43 4F 4F 50 30 31 0C 00 00 00 01 EE FF C0";
 
@@ -1655,6 +1661,31 @@ public sealed class KotorGameBridge : IGameBridge
         EngineGlobals.TryGetClientInternal(_memory, out nint clientInternal)
         && _memory.TryReadInt32(clientInternal + ClientInputClass, out int inputClass)
         && inputClass == InputClassDialog;
+
+    /// <summary>
+    /// Reads the speaker + line the plugin has published for the local player's current
+    /// conversation (dialogue spectate). Empty until the plugin resolves a line; base-game
+    /// TLK-only lines read as empty, which the caller treats as "nothing to spectate".
+    /// </summary>
+    public bool TryReadLocalDialogue(out string speaker, out string line)
+    {
+        speaker = string.Empty;
+        line = string.Empty;
+
+        if (_pluginBlock == 0)
+        {
+            return false;
+        }
+
+        bool ok = _memory.TryReadAsciiString(
+            _pluginBlock + BlockLocalDialogueSpeaker, BlockLocalDialogueSpeakerLength, out speaker);
+        ok &= _memory.TryReadAsciiString(
+            _pluginBlock + BlockLocalDialogueLine, BlockLocalDialogueLineLength, out line);
+
+        speaker ??= string.Empty;
+        line ??= string.Empty;
+        return ok;
+    }
 
     /// <summary>
     /// Reads every hostile creature in the module. "Hostile" means a different faction

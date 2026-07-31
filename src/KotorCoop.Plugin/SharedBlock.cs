@@ -366,9 +366,29 @@ internal struct SharedBlock
     /// <summary>Agent -&gt; plugin. Bumped to wipe the on-screen overlay log.</summary>
     public const int OffsetChatClearSerial = 0xC60;
 
+    // ---- dialogue spectate (version 12, reserved region 0xC80..0xD00) --------------
+    //
+    // Plugin -> agent. On the token owner's instance the DialogueSpectateController reads
+    // the current conversation's speaker + line off the live CSWSDialog each frame and
+    // writes them here (see docs/research/dialogue-sync.md). The agent hands them to the
+    // session's dialogue token so the OTHER player can be shown what the owner is hearing.
+    // Reads are all guarded; an unresolvable line is written empty, never guessed.
+
+    /// <summary>Plugin -&gt; agent. Current speaker, null-terminated ascii.</summary>
+    public const int OffsetLocalDialogueSpeaker = 0xC80;
+
+    public const int LocalDialogueSpeakerLength = 40; // occupies 0xC80..0xCA8
+
+    /// <summary>Plugin -&gt; agent. Current line, null-terminated ascii.</summary>
+    public const int OffsetLocalDialogueLine = 0xCA8;
+
+    public const int LocalDialogueLineLength = 64; // occupies 0xCA8..0xCE8
+
+    /// <summary>Plugin -&gt; agent. Bumped when the speaker/line pair changes; written last.</summary>
+    public const int OffsetLocalDialogueSerial = 0xCE8;
+
     // Reserved block regions for in-progress features, pre-allocated so their work does not
     // have to change TotalSize/Version (avoids layout collisions):
-    //   0xC80..0xD00  dialogue spectate (speaker + line + serial)
     //   0xD00..0xE00  container-loot removal (op ring)
 
     public const int ItemSlotCapacity = 8;

@@ -1511,6 +1511,253 @@ internal static unsafe class Odyssey
         return true;
     }
 
+    // ---- dialogue spectate -------------------------------------------------------
+    //
+    // Read-only, main-thread. Per docs/research/dialogue-sync.md: the client
+    // "conversation active" flag is *(CGuiInGame + 0xB4); the two participants are object
+    // ids at gui+0x170 / gui+0x174; the live CSWSDialog is *(CSWSObject_owner + 0x34)
+    // (vtable 0x0074A618); each entry node carries a speaker CExoString @ +0x00 and a text
+    // CExoLocString @ +0x08. Every pointer is guarded — a null or garbage read bails to
+    // empty and never faults, because a crashing conversation is unacceptable (spectate
+    // only; the suppression lever is deliberately NOT implemented — it is NEEDS-LIVE).
+
+    /// <summary>CGuiInGame + this = nonzero while a conversation is on screen (client).</summary>
+    private const int GuiConversationActive = 0xB4;
+
+    /// <summary>CGuiInGame + this = the two dialog participants, as object ids.</summary>
+    private const int GuiParticipantA = 0x170;
+    private const int GuiParticipantB = 0x174;
+
+    /// <summary>CSWSObject + this = active CSWSDialog* while it runs a conversation, else null.</summary>
+    private const int ObjActiveDialog = 0x34;
+
+    /// <summary>CSWSDialog vtable — the guard that a +0x34 pointer really is a live dialog.</summary>
+    private const nint DialogVtable = 0x0074A618;
+
+    private const int DialogEntriesCount = 0x04; // int
+    private const int DialogEntries = 0x08;       // CSWSDialogEntry*, stride 0xB0
+    private const int DialogEntryStride = 0xB0;
+
+    /// <summary>
+    /// CSWSDialog + this = current on-screen entry index. NEEDS-LIVE: the RE pins the
+    /// current node state to the +0x60..+0x74 band but not the exact "index of the visible
+    /// line" dword, so this is a candidate. A wrong value only mis-selects a node — which is
+    /// bounds-checked against the entry count, so it can never fault — making it safe to
+    /// ship unverified and calibrate with one live probe.
+    /// </summary>
+    private const int DialogCurrentEntryIndexCandidate = 0x60;
+
+    // CSWSDialogNode (at the start of each entry): speaker CExoString @0, text CExoLocString @8.
+    private const int NodeSpeaker = 0x00;
+    private const int NodeText = 0x08;
+
+    /// <summary>Range-only pointer sanity (a char buffer need not be 4-aligned).</summary>
+    private static bool LooksLikeDataPointer(nint p) => p is > 0x10000 and < 0x7FFF0000;
+
+    /// <summary>
+    /// Reads the speaker and line of the conversation the local player is currently in, into
+    /// two caller-owned null-terminated ASCII buffers. Returns true when a conversation is on
+    /// screen (the buffers may still be empty if the current line could not be resolved),
+    /// false when the player is not in a conversation.
+    ///
+    /// Base-game lines are TLK StrRefs with no inline substring; those resolve to empty here
+    /// (resolving the TLK is out of scope). Custom / inline-text lines are read in full.
+    /// MAIN THREAD ONLY.
+    /// </summary>
+    public static bool TryReadActiveDialogue(byte* speaker, int speakerCap, byte* line, int lineCap)
+    {
+        if (speaker != null && speakerCap > 0)
+        {
+            speaker[0] = 0;
+        }
+
+        if (line != null && lineCap > 0)
+        {
+            line[0] = 0;
+        }
+
+        nint client = GetClient();
+        if (client == 0)
+        {
+            return false;
+        }
+
+        nint clientInternal = Deref(client + AppClientOffset);
+        if (!LooksLikeHeapPointer(clientInternal))
+        {
+            return false;
+        }
+
+        nint gui = Deref(clientInternal + 0x40);
+        if (!LooksLikeHeapPointer(gui))
+        {
+            return false;
+        }
+
+        if (*(int*)(gui + GuiConversationActive) == 0)
+        {
+            return false; // no conversation on screen
+        }
+
+        // The dialog hangs off whichever participant initiated it; try both.
+        nint dialog = FindActiveDialog(*(uint*)(gui + GuiParticipantA));
+        if (dialog == 0)
+        {
+            dialog = FindActiveDialog(*(uint*)(gui + GuiParticipantB));
+        }
+
+        if (dialog == 0)
+        {
+            return true; // active, but the owner/dialog was not resolvable -> empty
+        }
+
+        int count = *(int*)(dialog + DialogEntriesCount);
+        nint entries = Deref(dialog + DialogEntries);
+        if (count is <= 0 or > 100000 || !LooksLikeHeapPointer(entries))
+        {
+            return true;
+        }
+
+        int index = *(int*)(dialog + DialogCurrentEntryIndexCandidate);
+        if (index < 0 || index >= count)
+        {
+            return true; // unknown/out-of-range index (NEEDS-LIVE) -> empty, no crash
+        }
+
+        nint node = entries + (nint)(index * DialogEntryStride);
+        if (!LooksLikeHeapPointer(node))
+        {
+            return true;
+        }
+
+        if (speaker != null)
+        {
+            ReadExoStringInto(node + NodeSpeaker, speaker, speakerCap);
+        }
+
+        if (line != null)
+        {
+            ReadLocStringInto(node + NodeText, line, lineCap);
+        }
+
+        return true;
+    }
+
+    /// <summary>Resolves an object id to its live CSWSDialog*, or 0 (vtable-guarded).</summary>
+    private static nint FindActiveDialog(uint objectId)
+    {
+        if (objectId is 0 or ObjectInvalid)
+        {
+            return 0;
+        }
+
+        nint obj = ResolveServerObject(objectId);
+        if (obj == 0)
+        {
+            return 0;
+        }
+
+        nint dialog = Deref(obj + ObjActiveDialog);
+        return LooksLikeHeapPointer(dialog) && *(nint*)dialog == DialogVtable ? dialog : 0;
+    }
+
+    /// <summary>Copies a CExoString {char* @0, len @4} at <paramref name="field"/> into an
+    /// ASCII buffer. <paramref name="field"/> is a struct member address (already valid).</summary>
+    private static void ReadExoStringInto(nint field, byte* dest, int cap)
+    {
+        if (cap <= 0)
+        {
+            return;
+        }
+
+        dest[0] = 0;
+        CopyAsciiBounded(*(nint*)field, *(int*)(field + 4), dest, cap);
+    }
+
+    /// <summary>
+    /// Copies the first inline substring of a CExoLocString at <paramref name="field"/> into
+    /// an ASCII buffer. Chain (docs/research/name-plates.md): loc+0 -&gt; internal ; internal+4
+    /// count ; internal+0 list* ; list+0 head ; head+8 entry ; entry+4 char* ; entry+8 cap.
+    /// A StrRef-only line (no substring) leaves the buffer empty. Every hop is guarded.
+    /// </summary>
+    private static void ReadLocStringInto(nint field, byte* dest, int cap)
+    {
+        if (cap <= 0)
+        {
+            return;
+        }
+
+        dest[0] = 0;
+
+        nint intern = *(nint*)field;
+        if (!LooksLikeHeapPointer(intern))
+        {
+            return;
+        }
+
+        int subCount = *(int*)(intern + 4);
+        if (subCount is <= 0 or > 64)
+        {
+            return; // StrRef-only (or implausible) -> nothing inline to read
+        }
+
+        nint list = *(nint*)intern;
+        if (!LooksLikeHeapPointer(list))
+        {
+            return;
+        }
+
+        nint head = *(nint*)list;
+        if (!LooksLikeHeapPointer(head))
+        {
+            return;
+        }
+
+        nint entry = *(nint*)(head + 8);
+        if (!LooksLikeHeapPointer(entry))
+        {
+            return;
+        }
+
+        int capacity = *(int*)(entry + 8); // strlen + 1
+        CopyAsciiBounded(*(nint*)(entry + 4), capacity > 0 ? capacity - 1 : 0, dest, cap);
+    }
+
+    /// <summary>Copies up to <paramref name="len"/> printable ASCII bytes from a guarded char
+    /// pointer into <paramref name="dest"/>, null-terminated. Bounds every length.</summary>
+    private static void CopyAsciiBounded(nint chars, int len, byte* dest, int cap)
+    {
+        dest[0] = 0;
+        if (!LooksLikeDataPointer(chars) || len <= 0)
+        {
+            return;
+        }
+
+        if (len > cap - 1)
+        {
+            len = cap - 1;
+        }
+
+        if (len > 512)
+        {
+            len = 512; // hard ceiling regardless of a garbage capacity field
+        }
+
+        int n = 0;
+        for (int i = 0; i < len; i++)
+        {
+            byte b = *(byte*)(chars + i);
+            if (b == 0)
+            {
+                break;
+            }
+
+            dest[n++] = b is >= 0x20 and < 0x7F ? b : (byte)'?';
+        }
+
+        dest[n] = 0;
+    }
+
     // ---- module travel -----------------------------------------------------------
 
     // CServerExoApp::SetMoveToModuleString(CExoString*): assigns the destination module
