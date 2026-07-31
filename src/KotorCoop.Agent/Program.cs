@@ -368,6 +368,41 @@ internal static class Program
     /// <summary>Mirror of SharedBlock.ConnectStatusConnecting for the agent side.</summary>
     private const uint SharedBlockConnectStatusConnecting = 1;
 
+    /// <summary>
+    /// Pushes the always-on chat-overlay settings from coop.ini into the plugin block. Uses
+    /// defaults (overlay on, bottom-left) when coop.ini is absent. Only the KOTOR bridge
+    /// exposes the block, so it is a no-op otherwise.
+    /// </summary>
+    private static void ApplyChatOverlayConfig(IGameBridge bridge, int processId)
+    {
+        if (bridge is not KotorGameBridge kotor)
+        {
+            return;
+        }
+
+        CoopConfig config = new();
+        try
+        {
+            using Process game = Process.GetProcessById(processId);
+            string? gameDir = Path.GetDirectoryName(game.MainModule?.FileName);
+            if (gameDir is not null)
+            {
+                config = CoopConfig.TryLoad(CoopConfig.PathFor(gameDir)) ?? config;
+            }
+        }
+        catch
+        {
+            // No coop.ini or no access: the defaults stand.
+        }
+
+        kotor.SetChatOverlayConfig(
+            config.ChatOverlay,
+            (uint)config.ChatOverlayOpacity,
+            config.ChatOverlayAnchorCode,
+            (uint)config.ChatOverlayLines,
+            (uint)config.ChatOverlayFadeMs);
+    }
+
     private static async Task<int> RunAsync(AgentOptions options)
     {
         if (options.Mode == CoopMode.None)
@@ -458,6 +493,11 @@ internal static class Program
         };
 
         CoopCommandDispatcher dispatcher = new(manager, bridge, options.Port, SettingsFor);
+
+        // Push the coop.ini chat-overlay settings to the plugin (best-effort; defaults when
+        // there is no coop.ini). Independent of connection mode — the overlay is useful the
+        // moment a session is up.
+        ApplyChatOverlayConfig(bridge, memory.ProcessId);
 
         // The initial connection goes through the manager directly; every later connect,
         // disconnect and reconnect arrives through the dispatcher (the ~ console or the menu

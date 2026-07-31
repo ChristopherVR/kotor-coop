@@ -37,6 +37,30 @@ public sealed record CoopConfig
     /// by default — the GUI rebind is engine-call code that wants live verification.</summary>
     public bool MenuButton { get; init; }
 
+    /// <summary>Show the always-on in-game chat overlay.</summary>
+    public bool ChatOverlay { get; init; } = true;
+
+    /// <summary>Chat overlay opacity, 0..100 (applied once an alpha-capable text draw is wired).</summary>
+    public int ChatOverlayOpacity { get; init; } = 35;
+
+    /// <summary>Chat overlay corner: top-left, top-right, bottom-left, bottom-right.</summary>
+    public string ChatOverlayAnchor { get; init; } = "bottom-left";
+
+    /// <summary>Lines shown at once.</summary>
+    public int ChatOverlayLines { get; init; } = 5;
+
+    /// <summary>Milliseconds a line stays before it fades; 0 keeps it forever.</summary>
+    public int ChatOverlayFadeMs { get; init; } = 9000;
+
+    /// <summary>The anchor as the plugin's numeric code (0=TL, 1=TR, 2=BL, 3=BR).</summary>
+    public uint ChatOverlayAnchorCode => ChatOverlayAnchor.Trim().ToLowerInvariant() switch
+    {
+        "top-right" or "topright" or "tr" => 1,
+        "bottom-left" or "bottomleft" or "bl" => 2,
+        "bottom-right" or "bottomright" or "br" => 3,
+        _ => 0,
+    };
+
     /// <summary>The client endpoint implied by <see cref="HostAddress"/> and
     /// <see cref="Port"/>, or null if the address does not resolve.</summary>
     public IPEndPoint? ResolveEndPoint()
@@ -106,6 +130,17 @@ public sealed record CoopConfig
             Password = kv.GetValueOrDefault("password", string.Empty),
             Name = kv.GetValueOrDefault("name"),
             MenuButton = IsTruthy(kv.GetValueOrDefault("menu_button")),
+            ChatOverlay = !kv.ContainsKey("chat_overlay") || IsTruthy(kv.GetValueOrDefault("chat_overlay")),
+            ChatOverlayOpacity = int.TryParse(kv.GetValueOrDefault("chat_overlay_opacity"), out int op)
+                ? Math.Clamp(op, 0, 100)
+                : 35,
+            ChatOverlayAnchor = kv.GetValueOrDefault("chat_overlay_anchor", "bottom-left"),
+            ChatOverlayLines = int.TryParse(kv.GetValueOrDefault("chat_overlay_lines"), out int cl)
+                ? Math.Clamp(cl, 1, 12)
+                : 5,
+            ChatOverlayFadeMs = int.TryParse(kv.GetValueOrDefault("chat_overlay_fade_ms"), out int fm)
+                ? Math.Max(fm, 0)
+                : 9000,
         };
     }
 

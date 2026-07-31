@@ -343,6 +343,24 @@ internal sealed unsafe class SharedBlockView(byte* baseAddress)
         ConsoleSerial++;
     }
 
+    // ---- chat overlay -----------------------------------------------------------
+
+    public bool ChatOverlayEnabled => *U32(SharedBlock.OffsetChatOverlayEnabled) != 0;
+
+    /// <summary>Configured opacity, 0..100.</summary>
+    public uint ChatOverlayOpacity => *U32(SharedBlock.OffsetChatOverlayOpacity);
+
+    public uint ChatOverlayAnchor => *U32(SharedBlock.OffsetChatOverlayAnchor);
+
+    public uint ChatOverlayMaxLines => *U32(SharedBlock.OffsetChatOverlayMaxLines);
+
+    public uint ChatOverlayFadeMs => *U32(SharedBlock.OffsetChatOverlayFadeMs);
+
+    public uint ChatSerial => *U32(SharedBlock.OffsetChatSerial);
+
+    /// <summary>Pointer to the latest null-terminated chat line (128 bytes).</summary>
+    public byte* ChatLine => baseAddress + SharedBlock.OffsetChatLine;
+
     public ItemSlotView GetItemSlot(int index) =>
         new(baseAddress + SharedBlock.OffsetItemSlots + (index * SharedBlock.ItemSlotStride));
 

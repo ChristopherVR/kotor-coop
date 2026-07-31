@@ -91,6 +91,39 @@ public class CoopConfigTests
             Assert.Equal(KotorCoop.Protocol.ProtocolConstants.DefaultPort, c.Port);
             Assert.Equal(string.Empty, c.Password);
             Assert.False(c.MenuButton);
+
+            // Chat overlay defaults on when the file says nothing about it.
+            Assert.True(c.ChatOverlay);
+            Assert.Equal(2u, c.ChatOverlayAnchorCode); // bottom-left
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void ParsesChatOverlaySettings()
+    {
+        string path = WriteTemp("""
+            [coop]
+            mode = join
+            chat_overlay = 0
+            chat_overlay_opacity = 70
+            chat_overlay_anchor = top-right
+            chat_overlay_lines = 8
+            chat_overlay_fade_ms = 4000
+            """);
+
+        try
+        {
+            CoopConfig? c = CoopConfig.TryLoad(path);
+            Assert.NotNull(c);
+            Assert.False(c.ChatOverlay);
+            Assert.Equal(70, c.ChatOverlayOpacity);
+            Assert.Equal(1u, c.ChatOverlayAnchorCode); // top-right
+            Assert.Equal(8, c.ChatOverlayLines);
+            Assert.Equal(4000, c.ChatOverlayFadeMs);
         }
         finally
         {

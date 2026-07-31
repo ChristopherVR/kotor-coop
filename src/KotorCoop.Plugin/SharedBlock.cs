@@ -47,7 +47,7 @@ internal struct SharedBlock
     /// existing offset profiles keep working. The plugin control fields live AFTER that
     /// range, which is why the block is larger than the profile knows about.
     /// </summary>
-    public const int TotalSize = 0xA80;
+    public const int TotalSize = 0xB80;
 
     public const int ProfileVisibleSize = 0x250;
 
@@ -313,7 +313,36 @@ internal struct SharedBlock
     /// <summary>Agent -&gt; plugin. The latest status line, null-terminated ascii.</summary>
     public const int OffsetConsoleReply = 0xA5C;
 
-    public const int ConsoleReplyLength = 96;
+    public const int ConsoleReplyLength = 96; // occupies 0xA5C..0xABC
+
+    // ---- chat overlay (version 10) ------------------------------------------------
+    //
+    // An always-on, semi-transparent chat readout, independent of the ~ console. The agent
+    // pushes each chat line here and writes the coop.ini overlay config once; the plugin
+    // accumulates the lines and renders them with a fade-out.
+
+    /// <summary>Agent -&gt; plugin. Nonzero shows the overlay.</summary>
+    public const int OffsetChatOverlayEnabled = 0xAC0;
+
+    /// <summary>Agent -&gt; plugin. 0..100; applied once an alpha-capable text draw is wired.</summary>
+    public const int OffsetChatOverlayOpacity = 0xAC4;
+
+    /// <summary>Agent -&gt; plugin. Screen corner: 0=top-left, 1=top-right, 2=bottom-left, 3=bottom-right.</summary>
+    public const int OffsetChatOverlayAnchor = 0xAC8;
+
+    /// <summary>Agent -&gt; plugin. Maximum lines shown at once.</summary>
+    public const int OffsetChatOverlayMaxLines = 0xACC;
+
+    /// <summary>Agent -&gt; plugin. Milliseconds a line stays before it fades; 0 = never fade.</summary>
+    public const int OffsetChatOverlayFadeMs = 0xAD0;
+
+    /// <summary>Agent -&gt; plugin. Bumped when a new chat line is posted; written last.</summary>
+    public const int OffsetChatSerial = 0xAD4;
+
+    /// <summary>Agent -&gt; plugin. The latest chat line, null-terminated ascii.</summary>
+    public const int OffsetChatLine = 0xAD8;
+
+    public const int ChatLineLength = 128; // occupies 0xAD8..0xB58
 
     public const int ItemSlotCapacity = 8;
 

@@ -25,3 +25,23 @@ name = Malak
 ; Enable the main-menu "Co-op" button. Off by default because the menu rebind is engine
 ; code awaiting live verification; set to 1 once confirmed on your build.
 menu_button = 0
+
+; --- in-game chat overlay ---------------------------------------------------------
+; An always-on, unobtrusive readout of chat (say <msg> in the ~ console). Lines fade out
+; after a delay so the screen is clear the rest of the time.
+
+; Show the overlay at all.
+chat_overlay = 1
+
+; Opacity 0..100. Applied once an alpha-capable text draw is wired; until then the fade
+; is what keeps it unobtrusive.
+chat_overlay_opacity = 35
+
+; Corner: top-left | top-right | bottom-left | bottom-right.
+chat_overlay_anchor = bottom-left
+
+; How many lines to show at once (1..12).
+chat_overlay_lines = 5
+
+; Milliseconds a line stays before it fades. 0 = never fade.
+chat_overlay_fade_ms = 9000

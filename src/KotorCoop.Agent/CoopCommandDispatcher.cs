@@ -114,7 +114,7 @@ public sealed class CoopCommandDispatcher(
                 if (manager.Current is { } session && command.Address is { Length: > 0 } message)
                 {
                     session.SendChat(message);
-                    Reply($"you: {message}"); // echo locally; peers get it over the wire
+                    Chat($"you: {message}"); // echo locally; peers get it over the wire
                 }
                 else
                 {
@@ -197,13 +197,22 @@ public sealed class CoopCommandDispatcher(
 
         foreach (ChatMessage message in session.DrainChat())
         {
-            Reply($"{message.Name}: {message.Text}");
+            Chat($"{message.Name}: {message.Text}");
         }
     }
 
+    /// <summary>Status/log lines: the ~ console only.</summary>
     private void Reply(string text)
     {
         Console.WriteLine($"[coop] {text}");
         _kotor?.PostConsoleReply(text);
+    }
+
+    /// <summary>Chat lines: the ~ console AND the always-on chat overlay.</summary>
+    private void Chat(string text)
+    {
+        Console.WriteLine($"[coop] {text}");
+        _kotor?.PostConsoleReply(text);
+        _kotor?.PostChatLine(text);
     }
 }

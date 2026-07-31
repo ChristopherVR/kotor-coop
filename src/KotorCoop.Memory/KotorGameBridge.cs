@@ -149,8 +149,18 @@ public sealed class KotorGameBridge : IGameBridge
     private const int BlockConsoleReply = 0xA5C;
     private const int BlockConsoleReplyLength = 96;
 
-    /// <summary>16-byte signature: "KOCOOP01" + version 9 + guard 0xC0FFEE01.</summary>
-    public const string PluginSignature = "4B 4F 43 4F 4F 50 30 31 09 00 00 00 01 EE FF C0";
+    // Chat overlay channel + config, mirroring SharedBlock version 10.
+    private const int BlockChatOverlayEnabled = 0xAC0;
+    private const int BlockChatOverlayOpacity = 0xAC4;
+    private const int BlockChatOverlayAnchor = 0xAC8;
+    private const int BlockChatOverlayMaxLines = 0xACC;
+    private const int BlockChatOverlayFadeMs = 0xAD0;
+    private const int BlockChatSerial = 0xAD4;
+    private const int BlockChatLine = 0xAD8;
+    private const int BlockChatLineLength = 128;
+
+    /// <summary>16-byte signature: "KOCOOP01" + version 10 + guard 0xC0FFEE01.</summary>
+    public const string PluginSignature = "4B 4F 43 4F 4F 50 30 31 0A 00 00 00 01 EE FF C0";
 
     /// <summary>Agent's view of which coop item id occupies each plugin item slot.</summary>
     private readonly uint[] _itemSlotIds = new uint[BlockItemCapacity];
@@ -1362,6 +1372,43 @@ public sealed class KotorGameBridge : IGameBridge
 
         bool ok = _memory.TryWriteAsciiString(_pluginBlock + BlockConsoleReply, line, BlockConsoleReplyLength);
         ok &= _memory.TryWrite(_pluginBlock + BlockConsoleReplySerial, ++_consoleReplySerial);
+        return ok;
+    }
+
+    private uint _chatSerial;
+
+    /// <summary>Pushes one line to the always-on chat overlay (serial bumped last).</summary>
+    public bool PostChatLine(string line)
+    {
+        if (_pluginBlock == 0)
+        {
+            return false;
+        }
+
+        bool ok = _memory.TryWriteAsciiString(_pluginBlock + BlockChatLine, line, BlockChatLineLength);
+        ok &= _memory.TryWrite(_pluginBlock + BlockChatSerial, ++_chatSerial);
+        return ok;
+    }
+
+    /// <summary>
+    /// Writes the coop.ini-driven chat-overlay settings the plugin reads. <paramref
+    /// name="opacity"/> is 0..100; <paramref name="anchor"/> is 0=top-left, 1=top-right,
+    /// 2=bottom-left, 3=bottom-right.
+    /// </summary>
+    public bool SetChatOverlayConfig(bool enabled, uint opacity, uint anchor, uint maxLines, uint fadeMs)
+    {
+        if (_pluginBlock == 0)
+        {
+            return false;
+        }
+
+        bool ok = _memory.TryWrite(_pluginBlock + BlockChatOverlayOpacity, Math.Clamp(opacity, 0u, 100u));
+        ok &= _memory.TryWrite(_pluginBlock + BlockChatOverlayAnchor, Math.Min(anchor, 3u));
+        ok &= _memory.TryWrite(_pluginBlock + BlockChatOverlayMaxLines, Math.Clamp(maxLines, 1u, 12u));
+        ok &= _memory.TryWrite(_pluginBlock + BlockChatOverlayFadeMs, fadeMs);
+
+        // Enable flag last, so the plugin never reads a half-written config.
+        ok &= _memory.TryWrite(_pluginBlock + BlockChatOverlayEnabled, enabled ? 1u : 0u);
         return ok;
     }
 

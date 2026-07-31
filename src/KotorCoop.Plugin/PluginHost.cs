@@ -31,6 +31,7 @@ internal static unsafe class PluginHost
     private static MenuLoadController? _menuLoad;
     private static ConnectMenuController? _connectMenu;
     private static ConsoleController? _console;
+    private static ChatOverlayController? _chatOverlay;
     private static Thread? _worker;
     private static volatile bool _running = true;
 
@@ -75,6 +76,7 @@ internal static unsafe class PluginHost
             _menuLoad = new MenuLoadController(_view);
             _connectMenu = new ConnectMenuController(_view);
             _console = new ConsoleController(_view);
+            _chatOverlay = new ChatOverlayController(_view);
             _pause = new PauseController(_view);
             _journal = new JournalController(_view);
             _mapMarkers = new MapMarkerController(_view);
@@ -128,7 +130,7 @@ internal static unsafe class PluginHost
         Unsafe.InitBlockUnaligned(_block, 0, SharedBlock.TotalSize);
 
         _block->Magic = SharedBlock.MagicValue;
-        _block->Version = 9;
+        _block->Version = 10;
 
         // A guard dword after the version. Magic plus version alone was not selective
         // enough: a scan once matched something else at a lower address and the agent
@@ -165,6 +167,7 @@ internal static unsafe class PluginHost
         _menuLoad?.OnFrame();
         _connectMenu?.OnFrame();
         _console?.OnFrame();
+        _chatOverlay?.OnFrame();
 
         if (!Odyssey.TryGetWorldEpoch(out ulong epoch))
         {
