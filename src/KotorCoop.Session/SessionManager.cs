@@ -31,6 +31,9 @@ public sealed class SessionManager(IGameBridge bridge, AgentSettings agentSettin
     private CancellationTokenSource? _cts;
     private Task _running = Task.CompletedTask;
 
+    /// <summary>While hosting, broadcasts this server's presence so LAN browsers can list it.</summary>
+    private ServerDiscovery? _discovery;
+
     // The last connect parameters, so reconnect needs no arguments.
     private bool _lastHost;
     private IPEndPoint? _lastEndpoint;
@@ -99,6 +102,18 @@ public sealed class SessionManager(IGameBridge bridge, AgentSettings agentSettin
             _cts = cts;
             _running = agent.RunAsync(cts.Token);
 
+            // A host makes itself discoverable on the LAN so a browsing client can list it
+            // without being told an IP. The player count is read live off the session.
+            if (host)
+            {
+                _discovery = new ServerDiscovery();
+                _discovery.StartAdvertising(
+                    settings.PlayerName,
+                    settings.Port,
+                    (byte)KotorCoop.Protocol.ProtocolConstants.MaxPeers,
+                    () => (_session?.GetStats().PeerCount ?? 0) + 1);
+            }
+
             _phase = SessionPhase.Connecting;
             _detail = host ? $"hosting on port {settings.Port}" : $"connecting to {endpoint}";
             Log?.Invoke(_detail);
@@ -116,15 +131,20 @@ public sealed class SessionManager(IGameBridge bridge, AgentSettings agentSettin
         ICoopSession? session;
         Task running;
 
+        ServerDiscovery? discovery;
         lock (_gate)
         {
             cts = _cts;
             session = _session;
             running = _running;
+            discovery = _discovery;
             _cts = null;
             _session = null;
             _agent = null;
+            _discovery = null;
         }
+
+        discovery?.Dispose();
 
         if (cts is null)
         {
