@@ -12,7 +12,7 @@
 param(
     [string]$ProcessName = 'swkotor',
     [int]$ProcId = 0,
-    [Parameter(Position = 0)][ValidateSet('state', 'travel', 'journal', 'pause')]
+    [Parameter(Position = 0)][ValidateSet('state', 'travel', 'journal', 'pause', 'browser')]
     [string]$Command = 'state',
     [Parameter(Position = 1)][string]$Arg1 = '',
     [Parameter(Position = 2)][int]$Arg2 = 0
@@ -117,6 +117,19 @@ switch ($Command) {
         WU32 0x96C ([uint32]$Arg2)
         if ($Arg1 -match '^\d+$') { WU32 0x96C ([uint32]$Arg1) }
         "remote-pause desired = $(U32 0x96C)"
+    }
+    'browser' {
+        # `browser` prints the panel state; `browser 1` / `browser 0` opens / closes the
+        # native panel (the plugin honors the block as an external open/close request).
+        if ($Arg1 -match '^\d+$') { WU32 0xE00 ([uint32]$Arg1) }
+        "  browser: open {0}  selection {1}  count {2}  connectSerial {3}  listSerial {4}" -f `
+            (U32 0xE00), (U32 0xE04), (U32 0xE08), (U32 0xE0C), (U32 0xE10)
+        $count = [Math]::Min([int](U32 0xE08), 8)
+        for ($i = 0; $i -lt $count; $i++) {
+            $base = 0xE20 + ($i * 0x40)
+            "    {0}. {1}  {2}  ({3}/{4})" -f ($i + 1), (Ascii $base 32), (Ascii ($base + 0x20) 24), `
+                ([BP]::Read($h, $block + $base + 0x38, 1)[0]), ([BP]::Read($h, $block + $base + 0x39, 1)[0])
+        }
     }
 }
 

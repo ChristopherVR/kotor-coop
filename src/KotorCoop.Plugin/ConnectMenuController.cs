@@ -44,6 +44,17 @@ internal sealed unsafe class ConnectMenuController
             return;
         }
 
+        // While the native browser panel is up, the main-menu OBJECT IS FREED (the GUI
+        // manager's sweep reclaims it the moment a child screen shows — see
+        // docs/research/native-browser-panel.md §2). Resolving or writing the button now would
+        // touch dangling memory; the close path builds a fresh menu, whose button must then be
+        // re-shown and re-bound from scratch.
+        if (NativeBrowserController.IsOpen)
+        {
+            _bound = false;
+            return;
+        }
+
         nint button = Odyssey.GetCoopMenuButton();
         if (button == 0)
         {
@@ -89,7 +100,17 @@ internal sealed unsafe class ConnectMenuController
                 // Open the server browser rather than connecting blind: bumping the connect
                 // serial made the agent dial coop.ini immediately, which would race the
                 // player's pick. The browser posts its own connect once a row is confirmed.
-                ServerBrowserController.RequestOpen();
+                // The native game-menu panel is the browser; the text overlay only serves as
+                // the fallback if a native guard latched it off.
+                if (NativeBrowserController.Available)
+                {
+                    NativeBrowserController.RequestOpen();
+                }
+                else
+                {
+                    ServerBrowserController.RequestOpen();
+                }
+
                 self.LogOnce("menu: Co-op clicked; opening the server browser");
             }
         }

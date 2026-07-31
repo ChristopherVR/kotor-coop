@@ -48,6 +48,14 @@ internal sealed unsafe class ServerBrowserController
 
     public void OnFrame()
     {
+        // At the main menu the NATIVE panel (NativeBrowserController) is the browser now;
+        // this overlay serves the in-world F9 toggle (no main menu exists there for a native
+        // panel to attach to) and remains the fallback if a native guard latched it off.
+        if (!Odyssey.HasServer && NativeBrowserController.Available)
+        {
+            return;
+        }
+
         if (!_ticked)
         {
             _ticked = true;

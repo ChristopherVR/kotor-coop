@@ -1326,6 +1326,12 @@ internal static unsafe class Odyssey
         AddEventFn(control, GuiEventAccept, owner, callback);
     }
 
+    /// <summary>Binds ONLY the accept (Enter/A) event — used on browser listbox rows, where a
+    /// click must stay selection-only (the listbox forwards the click event to the selected
+    /// row, so a click binding would connect on single click). MAIN THREAD ONLY.</summary>
+    public static void BindControlAccept(nint control, nint owner, nint callback) =>
+        AddEventFn(control, GuiEventAccept, owner, callback);
+
     // ---- map markers -------------------------------------------------------------
     //
     // A peer's position shows on the M-screen map as a map-note pin. The map's draw code
@@ -2773,6 +2779,121 @@ internal static unsafe class Odyssey
 
         return true;
     }
+
+    // ---- downed state and revival ------------------------------------------------
+    //
+    // Party members (the PC included) never truly die: CSWSCreature::GetDead returns 0 for
+    // anyone in the party, and at HP <= 0 they enter "temp dead" instead — GetDeadTemp
+    // 0x004EF890. The engine's own TempDeathUpdate stands them back up once no hostile has
+    // been visible for a few seconds. Co-op keeps that machinery and only suppresses the
+    // control swap and the game-over screen. See docs/research/death-handling.md.
+
+    /// <summary>CSWSCreature::GetDeadTemp — true while a party member is downed.</summary>
+    private static readonly delegate* unmanaged[Thiscall]<nint, int> GetDeadTempFn =
+        (delegate* unmanaged[Thiscall]<nint, int>)0x004EF890;
+
+    /// <summary>CSWSCreature + this = is_raiseable; Resurrection is gated on it.</summary>
+    private const int CreatureIsRaiseable = 0xF0;
+
+    /// <summary>EffectResurrection() — zero arguments, builds a type-4 effect.</summary>
+    private const nint ExpectedEffectResurrection = 0x00533660;
+
+    private static int _routineEffectResurrection = -1;
+
+    /// <summary>True while the creature is downed (temp-dead). Party members only ever reach
+    /// this state; a non-party creature simply dies.</summary>
+    public static bool IsDowned(nint creature) => creature != 0 && GetDeadTempFn(creature) != 0;
+
+    /// <summary>
+    /// Stands a downed creature back up through the engine's own Resurrection effect — the
+    /// only path that restores the AI flags, clears the death animation and tears down a
+    /// death GUI. A raw hit-point write does none of that and leaves a prone body with
+    /// zeroed AI flags, so it is never used here.
+    ///
+    /// Hit points are NOT set in the same call: the effect handler may run deferred, and a
+    /// top-up landing while the target still reads dead would be dropped by the engine's own
+    /// "heal cannot touch the dead" rule. The caller applies them on a later tick.
+    ///
+    /// MAIN THREAD ONLY.
+    /// </summary>
+    public static bool ReviveCreature(uint objectId, out int failure)
+    {
+        failure = 0;
+
+        nint implementer = GetImplementer(out nint vm, out nint internalVm);
+        if (implementer == 0)
+        {
+            failure = 1;
+            return false;
+        }
+
+        nint table = Deref(implementer + CommandsTableOffset);
+        if (table == 0)
+        {
+            failure = 2;
+            return false;
+        }
+
+        if (_routineEffectResurrection < 0)
+        {
+            _routineEffectResurrection = FindRoutine(table, ExpectedEffectResurrection);
+            _routineApplyEffect = FindRoutine(table, ExpectedApplyEffectToObject);
+        }
+
+        if (_routineEffectResurrection < 0 || _routineApplyEffect < 0)
+        {
+            failure = 3;
+            return false;
+        }
+
+        if (*(int*)(internalVm + CallStackSizeOffset) != 0)
+        {
+            failure = 4;
+            return false;
+        }
+
+        int stackPointer = *(int*)(internalVm + StackPointerOffset);
+
+        // ApplyEffectToObject(nDurationType, eEffect, oTarget, fDuration), pushed in reverse
+        // declaration order with EffectResurrection dispatched in the middle so its effect
+        // lands exactly where the effect argument belongs — the KillCreature shape.
+        if (StackPushFloat(vm, 0f) == 0 || StackPushObject(vm, objectId) == 0)
+        {
+            failure = 5;
+            return false;
+        }
+
+        var effectResurrection = (delegate* unmanaged[Thiscall]<nint, int, int, int>)ExpectedEffectResurrection;
+        if (effectResurrection(implementer, _routineEffectResurrection, 0) != 0)
+        {
+            failure = 6;
+            return false;
+        }
+
+        if (StackPushInteger(vm, 0) == 0)
+        {
+            failure = 7;
+            return false;
+        }
+
+        var applyEffect = (delegate* unmanaged[Thiscall]<nint, int, int, int>)ExpectedApplyEffectToObject;
+        if (applyEffect(implementer, _routineApplyEffect, 4) != 0)
+        {
+            failure = 8;
+            return false;
+        }
+
+        if (*(int*)(internalVm + StackPointerOffset) != stackPointer)
+        {
+            failure = 9;
+        }
+
+        return true;
+    }
+
+    /// <summary>Makes a creature raiseable, which the Resurrection handler checks before it
+    /// does anything. The engine's own auto-revive writes this same flag raw.</summary>
+    public static void SetRaiseable(nint creature) => *(int*)(creature + CreatureIsRaiseable) = 1;
 
     /// <summary>
     /// Snaps a creature to a position through SetPosition (raises the dirty bit so the
