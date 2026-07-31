@@ -3038,21 +3038,29 @@ internal static unsafe class Odyssey
     }
 
     /// <summary>
-    /// Moves a phantom to its peer's position for per-step tracking. Same engine setter as
-    /// <see cref="SnapTo"/> (so the render side's dirty bit is raised and the walkmesh/room
-    /// bookkeeping is the engine's own) but WITHOUT clearing actions: this runs ~60 times a
-    /// second, and clearing the action queue that often would also cancel the animation the
-    /// peer is mirroring onto the body.
+    /// Moves a phantom to its peer's position for per-step tracking.
+    ///
+    /// ⚠ The action clear is REQUIRED, not decoration. Measured: calling the position setter
+    /// alone leaves the creature exactly where it was — the write is logged, the read is
+    /// unchanged — because the engine re-asserts position from the action/movement state.
+    /// Only clearing actions first makes it commit, which is why <see cref="SnapTo"/> always
+    /// did both. The caller skips this entirely when the body is already in place, so the
+    /// clear happens only on frames where the peer actually moved rather than 60 times a
+    /// second.
     ///
     /// Safe to drive a phantom this way because it carries no AI — the co-op blueprint blanks
-    /// its scripts — and nothing else queues movement for it, so there is no engine-side
-    /// driver to fight. Do NOT use it on a real party member: their follow-AI rewrites
-    /// position every frame and would fight the write (see docs/re trap 3).
+    /// its scripts — and nothing else queues movement for it. Do NOT use it on a real party
+    /// member: their follow-AI rewrites position every frame and would fight the write (see
+    /// docs/re trap 3). The mirrored animation is applied to the client twin, not the action
+    /// queue, so it survives the clear.
     ///
     /// MAIN THREAD ONLY.
     /// </summary>
-    public static void SetPhantomPosition(nint creature, Vec3 position) =>
+    public static void SetPhantomPosition(nint creature, Vec3 position)
+    {
+        ClearAllActionsFn(creature, 1);
         SetPositionFn(creature, &position, 1, 0, 0);
+    }
 
     /// <summary>Faces a creature along a world-space angle (0 = +X, counter-clockwise).</summary>
     public static void SetFacing(nint creature, float angle)

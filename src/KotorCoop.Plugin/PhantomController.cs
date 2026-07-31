@@ -45,20 +45,26 @@ internal sealed unsafe class PhantomController(SharedBlockView block)
     /// interpolation jitter does not thrash the pathfinder — churn is additionally capped
     /// by <see cref="RepathCooldownSteps"/>.
     /// </summary>
-    private const float GoalResendDistanceSquared = 0.6f * 0.6f;
+    private const float GoalResendDistanceSquared = 0.25f * 0.25f;
 
     /// <summary>
     /// Minimum steps (at ~60 Hz) between re-issued move actions per phantom. Re-queueing
     /// every tick resets the pathfinder continuously and the creature never gets anywhere;
     /// five steps ≈ 80 ms keeps the goal fresh without the churn.
     /// </summary>
-    private const int RepathCooldownSteps = 5;
+    private const int RepathCooldownSteps = 2;
 
     /// <summary>
-    /// Beyond this the phantom is not lagging, it is lost (peer teleported, or the
-    /// pathfinder dead-ended). Snap instead of walking a 20-second catch-up.
+    /// How far the phantom may fall behind before it is PLACED rather than left to walk.
+    ///
+    /// This is the lever that actually bounds perceived lag. A pathfinding walk can never
+    /// close a gap against a peer moving at the same speed, so at 15 units the body simply
+    /// trailed for as long as the peer kept running — reported from play as the other player
+    /// being seconds behind. At ~3.5 units it stays in the same part of the room: close
+    /// enough to read as "with you", far enough that ordinary walking is still a smooth walk
+    /// and not a stutter of snaps.
     /// </summary>
-    private const float SnapDistanceSquared = 15f * 15f;
+    private const float SnapDistanceSquared = 3.5f * 3.5f;
 
     /// <summary>The walk animation; anything else while moving is treated as a run.
     /// KOTOR's default movement IS the run, so run is the common case.</summary>
@@ -320,30 +326,62 @@ internal sealed unsafe class PhantomController(SharedBlockView block)
                 continue;
             }
 
-            // POSITION-DRIVEN, not goal-driven. The phantom used to be walked to the peer's
-            // position with the engine's pathfinder, which cannot keep up by construction:
-            // the goal is already stale when it is issued (tick + interpolation + the resend
-            // threshold), and the phantom then has to physically walk that distance at the
-            // same speed the peer is moving, so it never closes the gap. Handoff 0a recorded
-            // the result as "2-4 units behind while moving"; from play it reads as the peer
-            // lagging seconds behind.
+            // Walked by the ENGINE, with a hard bound on how far behind it may get.
             //
-            // Writing the position each step tracks exactly instead. The incoming positions
-            // are already smoothed by the session's interpolation buffer, so this is steady
-            // rather than jittery, and the peer's own animation is mirrored separately just
-            // above — so the body still runs or walks, it simply arrives where it should.
-            // The phantom carries no AI (the co-op blueprint blanks its scripts) and we no
-            // longer queue actions for it, so nothing competes for its position.
-            Odyssey.SetPhantomPosition(phantom, remote.Position);
-            Odyssey.SetFacing(phantom, remote.Facing);
-            _lastGoal[i] = remote.Position;
+            // Driving the position directly was tried and does not work: the setter needs the
+            // action queue cleared to commit, and issuing that per step never lets the engine
+            // finish applying the move — measured, the body sat still through a burst of
+            // writes and jumped only when the timing happened to line up. Restricting the
+            // write to once per received position was no better. So movement stays the
+            // engine's own pathfinding walk, which is smooth and reliable, and the lag is
+            // bounded by the SNAP above instead: a phantom more than a few units behind is
+            // placed rather than left to jog. SnapTo demonstrably commits, because it clears
+            // actions and then sets position as a single one-off.
+            Vec3 last = _lastGoal[i];
+            float gdx = remote.Position.X - last.X;
+            float gdy = remote.Position.Y - last.Y;
+            bool goalMoved = ((gdx * gdx) + (gdy * gdy)) >= GoalResendDistanceSquared;
 
-            if (_stepsLogged < 10 && behindSquared > 0.01f)
+            if (!goalMoved)
+            {
+                // Arrived: mirror the peer's facing, which the engine otherwise leaves
+                // pointing along the last path segment.
+                if (behindSquared < 0.35f * 0.35f)
+                {
+                    Odyssey.SetFacing(phantom, remote.Facing);
+                }
+
+                continue;
+            }
+
+            if (_repathCooldown[i] > 0)
+            {
+                continue;
+            }
+
+            _lastGoal[i] = remote.Position;
+            _repathCooldown[i] = RepathCooldownSteps;
+
+            // Match the peer's gait: KOTOR's default movement is the run, so anything that is
+            // not explicitly the walk animation runs. Sharing the player's appearance row
+            // means matched gait is matched speed.
+            bool run = remote.Animation != AnimWalkValue;
+
+            if (Odyssey.MoveToLocation(_phantomIds[i], remote.Position, run, out int failure))
+            {
+                if (_stepsLogged < 10)
+                {
+                    _stepsLogged++;
+                    PluginHost.Log(
+                        $"move#{_stepsLogged} phantom 0x{_phantomIds[i]:X} at "
+                        + $"({at.X:F2},{at.Y:F2}) -> goal ({remote.Position.X:F2},{remote.Position.Y:F2})"
+                        + (run ? " (run)" : " (walk)"));
+                }
+            }
+            else if (_stepsLogged < 10)
             {
                 _stepsLogged++;
-                PluginHost.Log(
-                    $"track#{_stepsLogged} phantom 0x{_phantomIds[i]:X} ({at.X:F2},{at.Y:F2}) "
-                    + $"-> ({remote.Position.X:F2},{remote.Position.Y:F2})");
+                PluginHost.Log($"move refused for 0x{_phantomIds[i]:X} (failure {failure})");
             }
         }
     }
