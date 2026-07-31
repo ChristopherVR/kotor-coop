@@ -14,6 +14,7 @@ public enum AgentCommand
     Load,
     Info,
     Profiles,
+    InstallDataMods,
 }
 
 public enum CoopMode
@@ -155,6 +156,7 @@ public sealed record AgentOptions
             "load" => AgentCommand.Load,
             "info" => AgentCommand.Info,
             "profiles" => AgentCommand.Profiles,
+            "install-datamods" => AgentCommand.InstallDataMods,
             _ => AgentCommand.Help,
         };
 
@@ -400,6 +402,12 @@ public sealed record AgentOptions
           scan      Raw interactive memory scanner, for when track is not enough.
           info      Print modules and memory regions of a target process.
           profiles  List available offset profiles.
+          install-datamods
+                    Merge the co-op 2DA rows into the install's Override: a friendly
+                    "coop_player" faction in repute.2da and a distinct "coop_p2" body
+                    in appearance.2da. Merges into the user's current tables (existing
+                    mod rows are preserved), is safe to re-run, and never touches
+                    dialog.tlk. Point it at the game with --game-path <dir or exe>.
 
         TARGET SELECTION
 
