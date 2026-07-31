@@ -1543,14 +1543,23 @@ internal static unsafe class Odyssey
 
     /// <summary>
     /// Force-opens the developer console pre-filled with <c>say&#160;</c> so a player can type a
-    /// chat line without knowing about the console. Replays the engine's open sequence on the
-    /// verified input singleton, then seeds the buffer and caret and raises the open flag. The
-    /// mod's existing Enter capture then routes the finished line as a co-op <c>say</c>. Every
-    /// call is a no-arg __thiscall on a verified global; the one nullable deref is guarded, and
-    /// the failure modes are benign (typing no-ops), never a crash. MAIN THREAD ONLY.
+    /// chat line without knowing about the console. Replays the engine's own open sequence
+    /// (verified against DoConsole 0x00401F00: latch → KeyboardModeOn → ClearEvents →
+    /// TurnOffKeyboardModal → open flag), then seeds the buffer/caret. The FuncInterp hook routes
+    /// the finished <c>say</c> line. Idempotent: bails if the console is already open so a real
+    /// grave keypress isn't double-toggled. MAIN THREAD ONLY (same thread the engine runs this on).
+    /// See docs/research/console-open-safe.md.
     /// </summary>
     public static void OpenChatInput()
     {
+        if (*(int*)ConsoleOpenFlagPtr != 0)
+        {
+            return; // already open — do not re-toggle
+        }
+
+        // Latch first, matching the engine order.
+        *(int*)KeyboardModalStatePtr = 1;
+
         nint input = Deref(InputSingletonPtr);
         if (input != 0)
         {
@@ -1558,13 +1567,19 @@ internal static unsafe class Odyssey
             ClearEventsFn(input);
         }
 
+        // Release the modal keyboard grab on the CLIENT object. The crash before was passing
+        // this = manager+4 (the address of the client field); the engine passes *(manager+4)
+        // (the client pointer). The thunk derefs [this+4] internally, so a wrong `this` here
+        // wrote through the server object and faulted. Deref it correctly.
         nint manager = Deref(AppManagerPtr);
         if (manager != 0)
         {
-            TurnOffKeyboardModalFn(manager + 4);
+            nint client = Deref(manager + 4);
+            if (client != 0)
+            {
+                TurnOffKeyboardModalFn(client);
+            }
         }
-
-        *(int*)KeyboardModalStatePtr = 1;
 
         // Seed "say " and place the caret after it, so whatever the player types becomes the
         // chat message and Enter routes it as `say <message>`.

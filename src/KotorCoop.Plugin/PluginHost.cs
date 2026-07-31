@@ -32,6 +32,7 @@ internal static unsafe class PluginHost
     private static MapMarkerController? _mapMarkers;
     private static MenuLoadController? _menuLoad;
     private static ConnectMenuController? _connectMenu;
+    private static ChatInputController? _chatInput;
     private static ChatOverlayController? _chatOverlay;
     private static DialogueSpectateController? _dialogueSpectate;
     private static Thread? _worker;
@@ -79,6 +80,7 @@ internal static unsafe class PluginHost
             _travel = new TravelController(_view);
             _menuLoad = new MenuLoadController(_view);
             _connectMenu = new ConnectMenuController(_view);
+            _chatInput = new ChatInputController();
             _chatOverlay = new ChatOverlayController(_view);
             _dialogueSpectate = new DialogueSpectateController(_view);
             _pause = new PauseController(_view);
@@ -182,6 +184,7 @@ internal static unsafe class PluginHost
         // and the ~ console all work at the menu as well as in-world.
         _menuLoad?.OnFrame();
         _connectMenu?.OnFrame();
+        _chatInput?.OnFrame();
         _chatOverlay?.OnFrame();
 
         if (!Odyssey.TryGetWorldEpoch(out ulong epoch))
