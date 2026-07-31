@@ -12,6 +12,24 @@ Read alongside `connect-flow.md` (BTN_WARP AddEvent rebind, `CSWGuiSaveNamePanel
 Tag key: **VERIFIED** = read from the binary here · **INFERRED** = deduced, not yet run ·
 **NEEDS-LIVE** = confirm on the running game before shipping.
 
+## ⚠ CORRECTION (verified live 2026-07-31) — BTN_WARP is EMBEDDED, not a pointer
+
+This document originally described BTN_WARP as `*(mainMenu + 0x1248)` → `CSWGuiButton*`. **That
+is wrong.** The control object *begins* at `mainMenu + 0x1248`; its first dword is the vtable.
+Dereferencing that offset yields the vtable CONSTANT `0x0073E658`, which passes a naive
+heap-pointer guard and sends every subsequent write into the executable's static data — the
+actual cause of the menu crash that got this feature shelved.
+
+Read live off the running game: object at `mainMenu+0x1248` has vtable `0x0073E658`, extent
+`(368, 443, 235, 29)` — matching `mainmenu8x6.gui`'s BTN_WARP exactly, i.e. **already one row
+below Quit** `(368,402)`, so no reposition is needed — and flags `0x0C` against a working
+button's `0x0E`. The control is FULLY CONSTRUCTED and differs by exactly the visible bit; the
+"dev control the retail menu never finishes initialising" theory below is superseded. Setting
+bit `0x2` at the correct address is stable and the button draws and binds.
+
+Everything else in this document (the ctor's hide at `0x0067C669`, the draw/hit gates, the flag
+bit meanings) held up. Use `menu + 0x1248` as the control address, never `*(menu + 0x1248)`.
+
 ## Headline — the whole mystery in three instructions
 
 The main-menu constructor `CSWGuiMainMenu::Constructor 0x0067C4C0` constructs BTN_WARP, runs
