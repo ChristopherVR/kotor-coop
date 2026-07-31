@@ -2004,3 +2004,36 @@ These join the existing "built, untested in game" items and task 11 (live two-in
   open-animation vtable slot `[vt+0x7C]` and the item-dispose tail are NEEDS-LIVE guessed-ABI
   paths — keep behind live verification; the field writes + RemoveItem are safe.
 - 198 tests pass. All builds (tests, Agent, plugin NativeAOT) clean.
+
+---
+
+## Addendum 0g — placeable state + trap disarm (block v11)
+
+The door channel's twin for placeables (chests, corpses, switches, containers), from
+docs/research/placeables-containers.md. Object-id keyed, same-save assumption, shares the
+Doors capability gate.
+
+- **PlaceableFlags** (tag 0x50, distinct from doors' 0x44, out of the globals namespace):
+  monotonic bits open(1) / unlocked(2) / disarmed(4), module-hashed + object-id keyed, rides
+  the existing reliable max-merge flag store.
+- **Bridge**: CollectChangedPlaceableState scans vtable `0x007494D0`, reads locked `+0x260`,
+  open `+0x338`, trap `+0x278`; silent per-module baseline; throttled 1/s like doors.
+  TryWritePlaceableStates fills block v11 placeable slots (0xB58 count, 0xB60 slots, id@0,
+  open@4, unlocked@5, disarmed@6). TotalSize 0xB80 -> 0xC80; signature 0A -> 0B.
+- **Plugin PlaceableController** mirrors DoorController but applies as **plain field writes**
+  (placeables have no walkmesh coupling): ResolvePlaceable(id) then write locked/trap/open.
+  No engine call, no crash risk. The cosmetic open-pose vtable call `[vt+0x7C]` is left out
+  (NEEDS-LIVE, desyncs nothing without it).
+- **Agent PumpPlaceables** shares the Doors gate.
+- **Deferred (task #29):** container-loot removal — needs a (container,item) transport and a
+  live pass on the verified `RemoveItem 0x00584AC0` round-trip. Trigger-mine disarm
+  (`CSWSTrigger +0x2CC/+0x2D0`) is NEEDS-LIVE too.
+- 206 tests pass. All builds (tests, Agent, plugin NativeAOT) clean.
+
+### Session channel tally (protocol v8, block v11)
+Phantoms · world/quest flags · doors · **placeables (open/locked/disarmed)** · enemies +
+client damage · ground items · journal · appearance · equipment · party · **dialogue token** ·
+**shared gold+XP** · pause · travel · map pins · name plates · **text chat + on-screen
+overlay** · session connect/disconnect/reconnect · in-game ~ console. Remaining big items are
+all live-gated: dialogue spectate/control (task #25), container loot (task #29), and the live
+two-instance verification pass (task #11).
