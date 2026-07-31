@@ -1434,6 +1434,67 @@ internal static unsafe class Odyssey
         }
     }
 
+    // ---- force-open the console as a chat prompt ----------------------------------
+
+    // Opening the console programmatically means replaying the engine's own open sequence so
+    // its WM_CHAR handler will route typed characters into the command buffer. The dispatch at
+    // HandleWMCharMessage 0x00402240 -> DoConsole 0x00401F00 gates on two flags — the
+    // CExoInput keyboard-mode flag and the console-open flag — and (verified) has NO EnableCheats
+    // gate, so a normal build can be driven into text-entry this way. The engine then translates
+    // keystrokes via Windows, renders the "> " input line for free, and Enter/Esc auto-release
+    // movement because the modal state at 0x007A3CB4 is set. See docs/research/chat-input-scroll.md.
+    private const nint InputSingletonPtr = 0x007A39E4;   // -> CExoInput*
+    private const nint KeyboardModalStatePtr = 0x007A3CB4;
+
+    // CExoInput::KeyboardModeOn / ::ClearEvents — __thiscall, no args, on the input singleton.
+    private static readonly delegate* unmanaged[Thiscall]<nint, void> KeyboardModeOnFn =
+        (delegate* unmanaged[Thiscall]<nint, void>)0x005DF520;
+    private static readonly delegate* unmanaged[Thiscall]<nint, void> ClearEventsFn =
+        (delegate* unmanaged[Thiscall]<nint, void>)0x005DF4E0;
+
+    // TurnOffKeyboardModal — __thiscall, no args, this = *(0x007A39FC) + 4 (a sub-object of the
+    // CAppManager). Releasing the modal keyboard grab is what makes movement keys resume after
+    // the line is submitted; guarded because the manager pointer can be null before the game loads.
+    private static readonly delegate* unmanaged[Thiscall]<nint, void> TurnOffKeyboardModalFn =
+        (delegate* unmanaged[Thiscall]<nint, void>)0x005EDA20;
+
+    /// <summary>
+    /// Force-opens the developer console pre-filled with <c>say&#160;</c> so a player can type a
+    /// chat line without knowing about the console. Replays the engine's open sequence on the
+    /// verified input singleton, then seeds the buffer and caret and raises the open flag. The
+    /// mod's existing Enter capture then routes the finished line as a co-op <c>say</c>. Every
+    /// call is a no-arg __thiscall on a verified global; the one nullable deref is guarded, and
+    /// the failure modes are benign (typing no-ops), never a crash. MAIN THREAD ONLY.
+    /// </summary>
+    public static void OpenChatInput()
+    {
+        nint input = Deref(InputSingletonPtr);
+        if (input != 0)
+        {
+            KeyboardModeOnFn(input);
+            ClearEventsFn(input);
+        }
+
+        nint manager = Deref(AppManagerPtr);
+        if (manager != 0)
+        {
+            TurnOffKeyboardModalFn(manager + 4);
+        }
+
+        *(int*)KeyboardModalStatePtr = 1;
+
+        // Seed "say " and place the caret after it, so whatever the player types becomes the
+        // chat message and Enter routes it as `say <message>`.
+        byte* buffer = (byte*)ConsoleBufferPtr;
+        buffer[0] = (byte)'s';
+        buffer[1] = (byte)'a';
+        buffer[2] = (byte)'y';
+        buffer[3] = (byte)' ';
+        buffer[4] = 0;
+        *(int*)ConsoleCaretPtr = 4;
+        *(int*)ConsoleOpenFlagPtr = 1;
+    }
+
     // ---- death pose --------------------------------------------------------------
 
     /// <summary>
@@ -1665,6 +1726,39 @@ internal static unsafe class Odyssey
 
     /// <summary>Range-only pointer sanity (a char buffer need not be 4-aligned).</summary>
     private static bool LooksLikeDataPointer(nint p) => p is > 0x10000 and < 0x7FFF0000;
+
+    /// <summary>The live in-game GUI (CGuiInGame), or 0 when not in a loaded module.</summary>
+    private static nint GetInGameGui()
+    {
+        nint client = GetClient();
+        if (client == 0)
+        {
+            return 0;
+        }
+
+        nint clientInternal = Deref(client + AppClientOffset);
+        if (!LooksLikeHeapPointer(clientInternal))
+        {
+            return 0;
+        }
+
+        nint gui = Deref(clientInternal + 0x40);
+        return LooksLikeHeapPointer(gui) ? gui : 0;
+    }
+
+    /// <summary>True while the player is in a loaded module (not a menu/load screen), so a chat
+    /// key should open the chat prompt rather than do nothing at the main menu.</summary>
+    public static bool IsInGame => GetInGameGui() != 0;
+
+    /// <summary>True while a conversation is on screen, so the chat key defers to dialogue.</summary>
+    public static bool IsConversationActive
+    {
+        get
+        {
+            nint gui = GetInGameGui();
+            return gui != 0 && *(int*)(gui + GuiConversationActive) != 0;
+        }
+    }
 
     /// <summary>
     /// Reads the speaker and line of the conversation the local player is currently in, into

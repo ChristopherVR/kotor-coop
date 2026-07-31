@@ -24,6 +24,15 @@ internal sealed unsafe class ChatOverlayController
     private uint _lastSerial;
     private uint _lastClearSerial;
 
+    // Scrollback: how many lines up from the newest the view is pinned. 0 means "live" (newest
+    // at the bottom, fading normally); >0 freezes the window on older lines and shows a scrollbar.
+    private int _scrollOffset;
+    private bool _pageUpWasDown;
+    private bool _pageDownWasDown;
+
+    // A short, reusable scratch buffer for the one-cell scrollbar glyphs.
+    private readonly byte[] _barCell = new byte[2];
+
     public ChatOverlayController(SharedBlockView block)
     {
         _block = block;
@@ -31,6 +40,8 @@ internal sealed unsafe class ChatOverlayController
         {
             _lines[i] = new byte[SharedBlock.ChatLineLength];
         }
+
+        _barCell[1] = 0;
     }
 
     public void OnFrame()
@@ -41,9 +52,11 @@ internal sealed unsafe class ChatOverlayController
         {
             _lastClearSerial = clear;
             _count = 0;
+            _scrollOffset = 0;
         }
 
         Capture();
+        HandleScroll();
 
         if (!_block.ChatOverlayEnabled || _count == 0)
         {
@@ -79,6 +92,43 @@ internal sealed unsafe class ChatOverlayController
         target[^1] = 0;
         _arrival[slot] = Environment.TickCount64;
         _count++;
+
+        // If the player is reading scrollback, keep the same lines in view as new ones arrive
+        // by pushing the window up one — rather than yanking it to the bottom mid-read.
+        if (_scrollOffset > 0)
+        {
+            _scrollOffset++;
+        }
+    }
+
+    /// <summary>
+    /// Page Up / Page Down scroll the history window; edge-detected so one press moves one line.
+    /// Read-only key state (like the Enter capture): it only moves our own view and cannot touch
+    /// the game. The offset is clamped so it can never scroll past the oldest stored line, and
+    /// Page Down past the newest returns to the live, fading view. See docs/research/chat-input-scroll.md.
+    /// </summary>
+    private void HandleScroll()
+    {
+        bool up = (NativeMethods.GetAsyncKeyState(NativeMethods.VkPageUp) & 0x8000) != 0;
+        bool down = (NativeMethods.GetAsyncKeyState(NativeMethods.VkPageDown) & 0x8000) != 0;
+
+        if (up && !_pageUpWasDown)
+        {
+            _scrollOffset++;
+        }
+
+        if (down && !_pageDownWasDown)
+        {
+            _scrollOffset--;
+        }
+
+        _pageUpWasDown = up;
+        _pageDownWasDown = down;
+
+        int maxLines = (int)Math.Clamp(_block.ChatOverlayMaxLines, 1u, (uint)Capacity);
+        int stored = Math.Min(_count, Capacity);
+        int maxScroll = Math.Max(0, stored - maxLines);
+        _scrollOffset = Math.Clamp(_scrollOffset, 0, maxScroll);
     }
 
     private void Draw()
@@ -86,16 +136,20 @@ internal sealed unsafe class ChatOverlayController
         long now = Environment.TickCount64;
         uint fadeMs = _block.ChatOverlayFadeMs;
         int maxLines = (int)Math.Clamp(_block.ChatOverlayMaxLines, 1u, (uint)Capacity);
+        int stored = Math.Min(_count, Capacity);
+        int oldestIdx = _count - stored;
+        bool scrolled = _scrollOffset > 0;
 
-        // Collect the visible slots newest -> oldest, stopping at the first faded line (older
-        // lines arrived earlier, so they are at least as faded).
-        Span<int> visible = stackalloc int[Capacity];
+        // The bottom-most visible line, walking up to maxLines from there. Live (offset 0) stops
+        // at the first faded line so the screen clears; while scrolling, fade is ignored so the
+        // history window stays fully readable.
+        int bottomIdx = (_count - 1) - _scrollOffset;
+        Span<int> visible = stackalloc int[Capacity]; // slots, newest(bottom) -> oldest(top)
         int vcount = 0;
-        int oldest = Math.Max(0, _count - Capacity);
-        for (int i = _count - 1; i >= oldest && vcount < maxLines; i--)
+        for (int i = bottomIdx; i >= oldestIdx && vcount < maxLines; i--)
         {
             int slot = i % Capacity;
-            if (fadeMs > 0 && now - _arrival[slot] > fadeMs)
+            if (!scrolled && fadeMs > 0 && now - _arrival[slot] > fadeMs)
             {
                 break;
             }
@@ -129,7 +183,46 @@ internal sealed unsafe class ChatOverlayController
             }
         }
 
+        // A scrollbar only while actually scrolling back — it marks position in the history and
+        // vanishes on return to the live view, keeping the idle overlay clean.
+        if (scrolled)
+        {
+            DrawScrollbar(stored, vcount, bottomIdx, oldestIdx, column, baseRow, fromBottom);
+        }
+
         Odyssey.ResetQueuedTextAlpha();
+    }
+
+    /// <summary>
+    /// Draws a one-column vertical scrollbar beside the visible lines: a filled thumb (<c>#</c>)
+    /// over a track (<c>:</c>), sized and positioned to show how far through the stored history
+    /// the window sits. The bar goes one cell to the left of the text (or just right of a
+    /// hard-left anchor) so it never overlaps the variable-length message text.
+    /// </summary>
+    private void DrawScrollbar(int stored, int vcount, int bottomIdx, int oldestIdx, int column, int baseRow, bool fromBottom)
+    {
+        int topIdx = bottomIdx - (vcount - 1);
+        int above = topIdx - oldestIdx;      // stored lines hidden above the window
+        int scrollable = stored - vcount;    // total lines that can be hidden either side
+        if (scrollable <= 0)
+        {
+            return;
+        }
+
+        int thumbSize = Math.Clamp((int)Math.Round((double)vcount * vcount / stored), 1, vcount);
+        int thumbTop = (int)Math.Round((double)(vcount - thumbSize) * above / scrollable);
+        int barColumn = column >= 3 ? column - 2 : column + 42;
+
+        for (int r = 0; r < vcount; r++)
+        {
+            // r counts top(oldest) -> bottom(newest); map to the same screen rows as the text.
+            int row = fromBottom ? baseRow - (vcount - 1 - r) : baseRow + r;
+            _barCell[0] = (byte)(r >= thumbTop && r < thumbTop + thumbSize ? '#' : ':');
+            fixed (byte* p = _barCell)
+            {
+                Odyssey.PostTextLine(p, barColumn, row, 0.5f);
+            }
+        }
     }
 
     /// <summary>

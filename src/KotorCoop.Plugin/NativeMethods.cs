@@ -43,6 +43,10 @@ internal static partial class NativeMethods
     /// <summary>Virtual-key codes used by the console overlay's edge detection.</summary>
     public const int VkReturn = 0x0D;
 
+    /// <summary>Page Up / Page Down, read-only, scroll the chat overlay's history window.</summary>
+    public const int VkPageUp = 0x21;
+    public const int VkPageDown = 0x22;
+
     /// <summary>
     /// Physical key state, independent of the message queue. The high bit is set while the
     /// key is down. Used only to detect the Enter that submits a console line — reads no

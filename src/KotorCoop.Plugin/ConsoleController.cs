@@ -45,6 +45,7 @@ internal sealed unsafe class ConsoleController
     private const int PendingGraceFrames = 4;
 
     private bool _enterWasDown;
+    private bool _consoleWasOpen;
 
     public ConsoleController(SharedBlockView block) => _block = block;
 
@@ -56,7 +57,8 @@ internal sealed unsafe class ConsoleController
             Odyssey.SuppressConsoleNotFound();
         }
 
-        if (Odyssey.IsConsoleOpen)
+        bool open = Odyssey.IsConsoleOpen;
+        if (open)
         {
             RememberCurrentLine();
         }
@@ -68,7 +70,9 @@ internal sealed unsafe class ConsoleController
         // Enter is handled whether or not the console still reads open: the engine clears the
         // buffer and closes the console ON Enter, before this frame-hook runs, so the line
         // must be the one remembered while it was open, not the (now-empty) live buffer.
-        HandleEnter();
+        HandleEnter(open);
+
+        _consoleWasOpen = open;
     }
 
     public void Invalidate()
@@ -99,18 +103,33 @@ internal sealed unsafe class ConsoleController
     }
 
     /// <summary>
-    /// On the rising edge of Enter, routes the line remembered while the console was open (if
-    /// it is one of ours), then clears the engine buffer so it is not also dispatched as an
-    /// unknown cheat. Only a freshly-remembered line qualifies, so an Enter pressed in normal
-    /// play long after the console closed never routes a stale command.
+    /// On the rising edge of Enter: first, route a freshly-remembered co-op line (the engine
+    /// clears+closes the console on Enter before this hook, so the line must be the remembered
+    /// one), clearing the engine buffer so it is not also dispatched as an unknown cheat. If
+    /// there is nothing to submit and the console is closed during gameplay, Enter instead opens
+    /// the console pre-filled with <c>say&#160;</c> so the player can type a chat line without
+    /// knowing the console exists — the universal press-Enter-to-chat convention.
     /// </summary>
-    private void HandleEnter()
+    private void HandleEnter(bool consoleOpen)
     {
         bool down = (NativeMethods.GetAsyncKeyState(NativeMethods.VkReturn) & 0x8000) != 0;
         bool rising = down && !_enterWasDown;
         _enterWasDown = down;
 
-        if (rising && _pendingLength > 0 && _pendingAge <= PendingGraceFrames)
+        if (!rising)
+        {
+            // Drop a remembered line once the console has been closed for a few frames, so a
+            // later Enter in normal play cannot route it.
+            if (_pendingAge > PendingGraceFrames)
+            {
+                _pendingLength = 0;
+            }
+
+            return;
+        }
+
+        // A fresh co-op line was captured while the console was open -> submit it.
+        if (_pendingLength > 0 && _pendingAge <= PendingGraceFrames)
         {
             if (IsCoopCommand(_pending, _pendingLength))
             {
@@ -127,11 +146,13 @@ internal sealed unsafe class ConsoleController
             return;
         }
 
-        // Drop a remembered line once the console has been closed for a few frames, so a
-        // later Enter in normal play cannot route it.
-        if (_pendingAge > PendingGraceFrames)
+        // Nothing to submit. If the console is closed and we are in a loaded module (not a menu
+        // and not mid-conversation, where Enter advances dialogue), open the chat prompt. The
+        // _consoleWasOpen guard means the Enter that just CLOSED an empty console does not
+        // immediately re-open it as a chat line.
+        if (!consoleOpen && !_consoleWasOpen && Odyssey.IsInGame && !Odyssey.IsConversationActive)
         {
-            _pendingLength = 0;
+            Odyssey.OpenChatInput();
         }
     }
 
