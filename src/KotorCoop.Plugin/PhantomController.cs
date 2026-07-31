@@ -602,25 +602,29 @@ internal sealed unsafe class PhantomController(SharedBlockView block)
     /// </summary>
     private void DriveDirect(int slot, nint phantom, RemoteView remote, double now, nint player)
     {
-        // Speed over a window, not frame to frame — see SpeedWindowSeconds.
-        if (_speedFromTime[slot] <= 0)
-        {
-            _speedFrom[slot] = remote.Position;
-            _speedFromTime[slot] = now;
-        }
-        else if (now - _speedFromTime[slot] >= SpeedWindowSeconds)
-        {
-            float wdx = remote.Position.X - _speedFrom[slot].X;
-            float wdy = remote.Position.Y - _speedFrom[slot].Y;
-            float travelled = MathF.Sqrt((wdx * wdx) + (wdy * wdy));
-            float measured = travelled / (float)(now - _speedFromTime[slot]);
+        // How far the peer actually moved since the last update — the honest signal for both
+        // "are they walking" and "how fast", independent of any estimate.
+        float mdx = remote.Position.X - _lastGoal[slot].X;
+        float mdy = remote.Position.Y - _lastGoal[slot].Y;
+        float moved = MathF.Sqrt((mdx * mdx) + (mdy * mdy));
 
-            // Clamped: a module change or a peer teleport would otherwise report a speed of
-            // hundreds and pin the gait to a permanent sprint.
-            _peerSpeed[slot] = MathF.Min(measured, 10f);
-            _speedFrom[slot] = remote.Position;
-            _speedFromTime[slot] = now;
+        // Speed is measured from that ACTUAL movement and smoothed, rather than sampled over
+        // a fixed window. The window version read 0.00 in practice — most windows closed on a
+        // frame where the block had not changed — so the gait never reached the run threshold
+        // and a sprinting peer walked.
+        if (moved > MovementEpsilon && _speedFromTime[slot] > 0)
+        {
+            float dt = (float)(now - _speedFromTime[slot]);
+            if (dt > 0.001f)
+            {
+                float instant = MathF.Min(moved / dt, 12f);
+                _peerSpeed[slot] = _peerSpeed[slot] <= 0f
+                    ? instant
+                    : (_peerSpeed[slot] * 0.7f) + (instant * 0.3f);
+            }
         }
+
+        _speedFromTime[slot] = now;
 
         // Keep the body out of the local player's camera. Exact placement means two players
         // standing on the same spot occupy the same space — and since both sides of a test
@@ -629,6 +633,7 @@ internal sealed unsafe class PhantomController(SharedBlockView block)
         // creature collision does not apply to a body we place directly, so the separation
         // has to be explicit. Only nudges when they would genuinely overlap, so it never
         // fights normal movement.
+
         Vec3 target = remote.Position;
         Vec3 mine = Odyssey.GetPosition(player);
         float sx = target.X - mine.X;
@@ -686,9 +691,31 @@ internal sealed unsafe class PhantomController(SharedBlockView block)
         _shownPosition[slot] = shown;
         _shownAtTime[slot] = now;
 
-        Odyssey.DrivePhantom(phantom, shown, remote.Facing, _peerSpeed[slot]);
+        // "Is the peer moving" is decided with HYSTERESIS, not by thresholding the speed
+        // estimate. Measured live, a bare threshold alternated run/idle several times a
+        // second, and because the engine only pushes an animation to the render side on
+        // change, the twin mostly ended up holding idle — the body glided with no run cycle,
+        // which is what "looks like the character is flying" was. Any movement at all starts
+        // the gait; it stops only after the peer has genuinely been still for a moment.
+        if (moved > MovementEpsilon)
+        {
+            _lastMovedAt[slot] = now;
+        }
+
+        bool moving = _lastMovedAt[slot] > 0 && (now - _lastMovedAt[slot]) < StillnessSeconds;
+
+        Odyssey.DrivePhantom(phantom, shown, remote.Facing, _peerSpeed[slot], moving);
         _lastGoal[slot] = remote.Position;
     }
+
+    /// <summary>Movement below this between updates is jitter, not walking.</summary>
+    private const float MovementEpsilon = 0.02f;
+
+    /// <summary>How long the peer must be still before the gait drops back to idle. Longer
+    /// than any plausible gap between updates, so a late packet cannot look like a stop.</summary>
+    private const double StillnessSeconds = 0.35;
+
+    private readonly double[] _lastMovedAt = new double[SharedBlock.SlotCapacity];
 
     /// <summary>
     /// How quickly the drawn position chases the received one. 60 ms closes most of a gap

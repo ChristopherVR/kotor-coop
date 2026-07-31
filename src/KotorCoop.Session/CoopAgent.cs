@@ -12,6 +12,17 @@ public sealed record AgentSettings
     public bool SyncPause { get; init; } = true;
 
     /// <summary>
+    /// ⚠ This is a LATENCY knob, not a freshness knob. A world-state pass still costs
+    /// hundreds of milliseconds when a cache expires inside it, and it shares this thread
+    /// with the position pump — so every pass is a gap in the peer's movement. Measured, those
+    /// gaps are what makes a running peer's gait flicker between run and idle, because the
+    /// engine only pushes an animation on change and the pump sees no movement across a stall.
+    /// A second between passes keeps doors and enemies converging fine while leaving movement
+    /// alone the rest of the time.
+    /// </summary>
+    public int HeavyPumpIntervalMs { get; init; } = 1000;
+
+    /// <summary>
     /// When true, remote players in a different module are not written into the game.
     /// KOTOR has exactly one module loaded at a time, so a peer on Taris has no
     /// meaningful position in your copy of the Endar Spire.
@@ -59,13 +70,6 @@ public sealed class CoopAgent(IGameBridge bridge, ICoopSession session, AgentSet
     private PlayerState _lastLocalState = PlayerState.Empty;
     private IReadOnlyList<RemotePeer> _lastPeers = [];
     private string _lastTravelRequest = string.Empty;
-
-    /// <summary>
-    /// Milliseconds between heavy world-state passes. 250 ms keeps enemies, items and doors
-    /// converging imperceptibly fast for a co-op session while leaving the thread free the
-    /// rest of the time for position updates, which are what the eye actually notices.
-    /// </summary>
-    private const int HeavyPumpIntervalMs = 250;
 
     private long _lastHeavyPumpMs;
     private long _travelRetryAtMs;
@@ -238,7 +242,7 @@ public sealed class CoopAgent(IGameBridge bridge, ICoopSession session, AgentSet
         // few per second no matter how fast state is sent, so the fast path is free to run at
         // whatever rate the tick asks for.
         long nowMs = Environment.TickCount64;
-        if (nowMs - _lastHeavyPumpMs < HeavyPumpIntervalMs)
+        if (nowMs - _lastHeavyPumpMs < settings.HeavyPumpIntervalMs)
         {
             return;
         }

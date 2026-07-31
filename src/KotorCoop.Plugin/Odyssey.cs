@@ -3174,9 +3174,14 @@ internal static unsafe class Odyssey
     /// MAIN THREAD ONLY, and specifically from the SwapBuffers hook: that runs after both
     /// main loops, so these writes are the last word before the next frame consumes them.
     /// </summary>
-    public static void DrivePhantom(nint creature, Vec3 position, float facing, float speed)
+    /// <param name="moving">Whether the peer is moving AT ALL, decided by the caller with
+    /// hysteresis. It is passed in rather than derived from <paramref name="speed"/> because
+    /// a threshold on an instantaneous estimate flickers, and a flickering gait is worse than
+    /// a wrong one: the engine only pushes an animation to the render side ON CHANGE, so a
+    /// value that alternates run/idle several times a second mostly arrives as idle — which
+    /// is exactly the body gliding along with no run cycle.</param>
+    public static void DrivePhantom(nint creature, Vec3 position, float facing, float speed, bool moving)
     {
-        bool moving = speed > 0.15f;
         bool run = speed > 2.0f;
 
         Vec3 direction = new() { X = MathF.Cos(facing), Y = MathF.Sin(facing), Z = 0f };
@@ -3202,8 +3207,43 @@ internal static unsafe class Odyssey
         {
             *(Vec3*)(twin + TwinDesiredPosition) = position;
             *(int*)(twin + TwinDesiredPositionBudget) = 0;
+
+            // ⚠ The gait must be set on the TWIN as well, through the twin's own setter.
+            //
+            // Setting it on the server object relies on the engine's object-update diff
+            // pushing it to the render side, and for a phantom we are position-driving that
+            // push never arrives: measured live, the server object held the run animation for
+            // seconds while the twin sat on idle the whole time. The renderer plays the
+            // twin's value, so the body moved with no run cycle — the character "flying"
+            // rather than running. A raw write to the field is overwritten within a frame;
+            // the engine's own setter (twin vtable +0x9C) is what sticks.
+            if (*(nint*)twin == ClientCreatureVtable
+                && *(ushort*)(twin + TwinCurrentAnimation) != (ushort)want)
+            {
+                var twinSetAnimation =
+                    (delegate* unmanaged[Thiscall]<nint, uint, int, void>)(*(nint*)(*(nint*)twin + TwinSetAnimationSlot));
+                twinSetAnimation(twin, (uint)want, 0);
+            }
+        }
+
+        if (_gaitLogged < 6)
+        {
+            _gaitLogged++;
+            nint t = *(nint*)(creature + CreClientTwin);
+            PluginHost.Log(
+                $"gait#{_gaitLogged}: speed {speed:F2} -> {(moving ? (run ? "run" : "walk") : "idle")} "
+                + $"(server anim 0x{*(int*)(creature + ObjAnimationField):X}, "
+                + $"twin anim 0x{(t == 0 ? 0 : *(ushort*)(t + TwinCurrentAnimation)):X})");
         }
     }
+
+    private static int _gaitLogged;
+
+    /// <summary>CSWCObject + this = the animation actually being rendered (u16).</summary>
+    private const int TwinCurrentAnimation = 0x48;
+
+    /// <summary>CSWCObject vtable +0x9C = SetAnimation(anim, flag) — the render-side setter.</summary>
+    private const int TwinSetAnimationSlot = 0x9C;
 
     /// <summary>Faces a creature along a world-space angle (0 = +X, counter-clockwise).</summary>
     public static void SetFacing(nint creature, float angle)
