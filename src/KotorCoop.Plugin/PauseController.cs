@@ -20,6 +20,10 @@ internal sealed class PauseController(SharedBlockView block)
 
     private int _countdown;
     private bool _applied;
+
+    /// <summary>The local player unpaused while a peer's pause was mirrored; honour it.</summary>
+    private bool _releasedLocally;
+
     private int _logged;
 
     /// <summary>
@@ -30,6 +34,7 @@ internal sealed class PauseController(SharedBlockView block)
     public void Invalidate()
     {
         _applied = false;
+        _releasedLocally = false;
         block.RemotePauseApplied = 0;
     }
 
@@ -63,28 +68,53 @@ internal sealed class PauseController(SharedBlockView block)
             if (!_applied)
             {
                 _applied = true;
+                _releasedLocally = false;
                 block.RemotePauseApplied = 1;
                 Odyssey.SetPlayerPause(true);
                 LogFew("pause: mirroring a peer's pause");
                 return;
             }
 
-            // Re-asserted every pass after that: local input can clear the shared bit, but
-            // the pause belongs to the peer who took it.
-            if (Odyssey.SetPlayerPause(true))
+            if (_releasedLocally)
             {
-                LogFew("pause: re-asserted (local input tried to clear a peer's pause)");
+                return;
             }
 
+            // EITHER player may release a shared pause.
+            //
+            // This used to re-assert the pause every pass, on the principle that it belongs
+            // to whoever took it. In play that reads as broken: you press the pause key, the
+            // game unpauses for ~50 ms, and the mirror slams it back on, so the second player
+            // simply cannot unpause and the banner appears stuck. Being unable to un-pause
+            // your own game is worse than the two games briefly disagreeing.
+            //
+            // So a local clear is taken as intent and honoured for the rest of this episode;
+            // the mirror re-engages next time the peer pauses afresh.
+            if (!Odyssey.IsPlayerPaused)
+            {
+                _releasedLocally = true;
+                block.RemotePauseApplied = 0;
+                LogFew("pause: released locally; not re-asserting the peer's pause");
+                return;
+            }
+
+            Odyssey.SetPlayerPause(true);
             return;
         }
 
         if (_applied)
         {
-            Odyssey.SetPlayerPause(false);
+            // Only force an unpause if WE are still holding the mirror. If the local player
+            // already released it, their own pause state is theirs to keep.
+            if (!_releasedLocally)
+            {
+                Odyssey.SetPlayerPause(false);
+                LogFew("pause: peer released their pause");
+            }
+
             _applied = false;
+            _releasedLocally = false;
             block.RemotePauseApplied = 0;
-            LogFew("pause: peer released their pause");
         }
     }
 

@@ -2388,20 +2388,29 @@ internal static unsafe class Odyssey
     public static bool SetPlayerPause(bool paused)
     {
         int value = paused ? 1 : 0;
-        bool changed = false;
 
+        bool clientWas = (GetClientPauseMask() & PauseReasonPlayer) != 0;
+        bool serverWas = (GetPauseMask() & PauseReasonPlayer) != 0;
+        bool changed = clientWas != paused || serverWas != paused;
+
+        // ⚠ Both halves are set UNCONDITIONALLY, not only the one that currently disagrees.
+        //
+        // The client mask drives the PAUSED banner and the server mask drives the world
+        // timer, and setting them independently let them diverge — which is exactly the
+        // reported "the game is clearly running but the PAUSED banner is still up". Once
+        // they disagree, the conditional form makes it permanent: each half looks correct
+        // against its own state, so neither is ever corrected. Writing both every time costs
+        // two setter calls and makes divergence impossible.
         nint client = GetClient();
-        if (client != 0 && ((GetClientPauseMask() & PauseReasonPlayer) != 0) != paused)
+        if (client != 0)
         {
             ClientSetPauseStateFn(client, PauseReasonPlayer, value);
-            changed = true;
         }
 
         nint server = GetServer();
-        if (server != 0 && ((GetPauseMask() & PauseReasonPlayer) != 0) != paused)
+        if (server != 0)
         {
             SetPauseStateFn(server, PauseReasonPlayer, value);
-            changed = true;
         }
 
         return changed;

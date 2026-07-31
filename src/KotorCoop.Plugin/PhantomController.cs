@@ -378,7 +378,7 @@ internal sealed unsafe class PhantomController(SharedBlockView block)
 
             if (_directMovement)
             {
-                DriveDirect(i, phantom, remote, now);
+                DriveDirect(i, phantom, remote, now, player);
                 continue;
             }
 
@@ -592,7 +592,7 @@ internal sealed unsafe class PhantomController(SharedBlockView block)
     /// No move action is ever queued in this mode and the snap is disabled: both are writers
     /// that would fight this one.
     /// </summary>
-    private void DriveDirect(int slot, nint phantom, RemoteView remote, double now)
+    private void DriveDirect(int slot, nint phantom, RemoteView remote, double now, nint player)
     {
         // Speed over a window, not frame to frame — see SpeedWindowSeconds.
         if (_speedFromTime[slot] <= 0)
@@ -614,9 +614,41 @@ internal sealed unsafe class PhantomController(SharedBlockView block)
             _speedFromTime[slot] = now;
         }
 
-        Odyssey.DrivePhantom(phantom, remote.Position, remote.Facing, _peerSpeed[slot]);
+        // Keep the body out of the local player's camera. Exact placement means two players
+        // standing on the same spot occupy the same space — and since both sides of a test
+        // load the same save, that is the FIRST thing that happens: the camera ends up inside
+        // the phantom and the screen fills with its clothing texture. The engine's own
+        // creature collision does not apply to a body we place directly, so the separation
+        // has to be explicit. Only nudges when they would genuinely overlap, so it never
+        // fights normal movement.
+        Vec3 target = remote.Position;
+        Vec3 mine = Odyssey.GetPosition(player);
+        float sx = target.X - mine.X;
+        float sy = target.Y - mine.Y;
+        float apartSquared = (sx * sx) + (sy * sy);
+
+        if (apartSquared < MinSeparation * MinSeparation)
+        {
+            float apart = MathF.Sqrt(apartSquared);
+            if (apart > 0.01f)
+            {
+                target.X = mine.X + (sx / apart * MinSeparation);
+                target.Y = mine.Y + (sy / apart * MinSeparation);
+            }
+            else
+            {
+                // Exactly co-located (a fresh load from the same save): pick a direction.
+                target.X = mine.X + MinSeparation;
+            }
+        }
+
+        Odyssey.DrivePhantom(phantom, target, remote.Facing, _peerSpeed[slot]);
         _lastGoal[slot] = remote.Position;
     }
+
+    /// <summary>How close a phantom may get to the local player before it is pushed out.
+    /// Roughly a body's width — enough that the camera never enters it.</summary>
+    private const float MinSeparation = 1.2f;
 
     /// <summary>The old spawn spot: beside the local player, fanned out per phantom.</summary>
     private Vec3 Offset(Vec3 playerPosition) => new()
