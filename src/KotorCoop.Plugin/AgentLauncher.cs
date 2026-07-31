@@ -68,14 +68,40 @@ internal static unsafe class AgentLauncher
     [DllImport("kernel32.dll", SetLastError = true)]
     private static extern bool CloseHandle(nint handle);
 
-    private const uint CreateNewConsole = 0x00000010;
-    private const uint DetachedProcess = 0x00000008;
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern nint CreateFileW(
+        string fileName,
+        uint desiredAccess,
+        uint shareMode,
+        ref SecurityAttributes securityAttributes,
+        uint creationDisposition,
+        uint flagsAndAttributes,
+        nint templateFile);
 
-    /// <summary>STARTUPINFO.wShowWindow: start the agent's console minimised, so the game
-    /// keeps the foreground (a console stealing focus at launch eats the player's first
-    /// clicks) while its status output stays available on the taskbar.</summary>
-    private const short ShowMinNoActive = 7;
-    private const uint UseShowWindow = 0x00000001;
+    [StructLayout(LayoutKind.Sequential)]
+    private struct SecurityAttributes
+    {
+        public int Length;
+        public nint SecurityDescriptor;
+        public int InheritHandle;
+    }
+
+    /// <summary>
+    /// No console at all. A console window — even one asked to open minimised and inactive —
+    /// takes the foreground away from the game as it appears, and KOTOR discards every mouse
+    /// message while it is not the active window, so the first clicks after launch are eaten.
+    /// That was measured: the click-based save loader started failing the moment the plugin
+    /// began launching the agent itself. The agent's output goes to a log beside the game
+    /// instead, and the player's real status readout is the in-game overlay and ~ console.
+    /// </summary>
+    private const uint CreateNoWindow = 0x08000000;
+
+    private const uint GenericWrite = 0x40000000;
+    private const uint FileShareReadWrite = 0x00000003;
+    private const uint CreateAlways = 2;
+    private const uint FileAttributeNormal = 0x00000080;
+    private const int UseStdHandles = 0x00000100;
+    private static readonly nint InvalidHandle = -1;
 
     private static bool _attempted;
 
@@ -115,22 +141,51 @@ internal static unsafe class AgentLauncher
             // than connecting immediately. The player chooses in-game.
             StringBuilder commandLine = new($"\"{agentPath}\" run --pid {pid} --kotor --menu{nameArgument}");
 
+            // The agent's dashboard writes to stdout; send it to a log beside the game. With
+            // stdout redirected the dashboard takes its "redirected" path, so it neither
+            // queries the console width nor polls for keys — both of which would throw
+            // without a console.
+            string logPath = Path.Combine(gameDirectory, "kotorcoop-agent.log");
+            SecurityAttributes inheritable = new()
+            {
+                Length = Marshal.SizeOf<SecurityAttributes>(),
+                SecurityDescriptor = 0,
+                InheritHandle = 1,
+            };
+
+            nint log = CreateFileW(
+                logPath, GenericWrite, FileShareReadWrite, ref inheritable,
+                CreateAlways, FileAttributeNormal, 0);
+
             StartupInfo startup = default;
             startup.Cb = sizeof(StartupInfo);
-            startup.Flags = (int)UseShowWindow;
-            startup.ShowWindow = ShowMinNoActive;
+
+            bool haveLog = log != InvalidHandle && log != 0;
+            if (haveLog)
+            {
+                startup.Flags = UseStdHandles;
+                startup.StdInput = 0;
+                startup.StdOutput = log;
+                startup.StdError = log;
+            }
 
             bool started = CreateProcessW(
                 null,
                 commandLine,
                 0,
                 0,
-                false,
-                CreateNewConsole,
+                haveLog,           // inherit handles only when there is one to inherit
+                CreateNoWindow,
                 0,
                 gameDirectory,
                 ref startup,
                 out ProcessInformation info);
+
+            if (haveLog)
+            {
+                // The child holds its own duplicate; this one has done its job.
+                CloseHandle(log);
+            }
 
             if (!started)
             {
@@ -142,7 +197,7 @@ internal static unsafe class AgentLauncher
             // game. Close both handles so the plugin holds no references to it.
             CloseHandle(info.Thread);
             CloseHandle(info.Process);
-            PluginHost.Log($"agent: started {Path.GetFileName(agentPath)} as pid {info.ProcessId}");
+            PluginHost.Log($"agent: started {Path.GetFileName(agentPath)} as pid {info.ProcessId}; log -> {Path.GetFileName(logPath)}");
         }
         catch (Exception ex)
         {
