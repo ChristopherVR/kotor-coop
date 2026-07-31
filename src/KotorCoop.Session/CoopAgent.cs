@@ -203,6 +203,16 @@ public sealed class CoopAgent(IGameBridge bridge, ICoopSession session, AgentSet
         PumpTravel(local, peers);
         PumpPause(peers);
 
+        // Client-only, every tick: keep the player's input locked to their own PC (a cheap id
+        // write) so an attempted switch to a shared, host-owned companion reverts within a frame
+        // rather than waiting for the ~5 Hz heavy party pass. Host owns the companions; it is free
+        // to control them.
+        if (settings.SyncParty && bridge.SupportsPartySync && !session.IsEnemyAuthority
+            && (caps & SessionCapabilities.Party) != 0)
+        {
+            bridge.LockControlToPlayer();
+        }
+
         // --- heavy world-state path: run at ~1/HeavyPumpDivisor of the tick rate ---------
         // The dozen memory-scanning syncs below cost far more per pass than the position
         // write and do NOT need the full poll rate. Running them every tick serialised the
@@ -254,13 +264,9 @@ public sealed class CoopAgent(IGameBridge bridge, ICoopSession session, AgentSet
         }
 
         // A client: freeze the local party AI and mirror the host's companions. The freeze
-        // is re-asserted inside TryWritePartyMembers every pass.
+        // is re-asserted inside TryWritePartyMembers every pass. (The input control-lock that
+        // stops the client controlling those companions runs every tick in the fast path.)
         bridge.TryWritePartyMembers(session.GetPartyMembers());
-
-        // NOTE: the client control-lock (bridge.LockControlToPlayer) is NOT called yet — a live
-        // read showed the researched offset *(clientInternal+0x270) holds party member POSITIONS,
-        // not the controlled-character id, so the id field is not yet pinned down. Left uncalled
-        // (writing there could corrupt the formation struct) until the offset is verified live.
     }
 
     /// <summary>

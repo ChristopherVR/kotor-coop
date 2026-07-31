@@ -2233,48 +2233,47 @@ public sealed class KotorGameBridge : IGameBridge
 
     // ---- client control lock ----------------------------------------------------
     //
-    // The character the local player's input drives is decided by an OBJECT ID:
-    // CClientExoAppInternal + 0x270 = CSWParty*, and CSWParty + 0x24 = member[0].client_object_id
-    // (the controlled/leader). Every input/movement/camera site resolves that id through a
-    // null-safe id->object map, so writing an id there can never crash — a stale id just fails to
-    // resolve. The stable PC id is CClientExoAppInternal + 0x20 (player_creature_id), which
-    // ChangeCharacter never rewrites. See docs/research/client-control-lock.md.
+    // The character the local player's input drives is a single object-id field at
+    // CClientExoAppInternal + 0x20. VERIFIED live by toggling control (Tab) and watching it flip:
+    //   0xFFFFFFFF                 = the PC / party leader is controlled
+    //   0x80000000 | <objectId>    = a party NPC (companion) is controlled
+    // The engine re-derives the cached controlled-creature pointer (+0x3C0) from this id each
+    // frame, so writing 0xFFFFFFFF back reverts companion control to the PC within a tick (proven:
+    // the write stuck and +0x3C0 returned to the PC). It is an id write resolved through a
+    // null-safe map, so it can never crash. See docs/research/client-control-lock.md.
     //
-    // Solo mode already stops companions FOLLOWING but not being SELECTED, so a client player
-    // could still Tab/click to a shared, host-owned companion and fight the host's authority.
-    // Re-pinning member[0] to the PC each tick reverts any such switch within a frame.
+    // Solo mode already stops companions FOLLOWING but not being SELECTED, so without this a
+    // client player could Tab/click to a shared, host-owned companion and fight the host's
+    // authority. We only revert an explicit party-NPC selection (high bit set, not all-ones), so
+    // a PC-controlled state (0xFFFFFFFF) or any non-party value is left untouched.
 
-    /// <summary>CClientExoAppInternal + this = CSWParty*.</summary>
-    private const int ClientPartyPointer = 0x270;
+    /// <summary>CClientExoAppInternal + this = the controlled-character id (PC = 0xFFFFFFFF).</summary>
+    private const int ControlledCharacterId = 0x20;
 
-    /// <summary>CClientExoAppInternal + this = the stable player-creature object id.</summary>
-    private const int ClientPlayerCreatureId = 0x20;
-
-    /// <summary>CSWParty + this = member[0].client_object_id (the controlled/leader id).</summary>
-    private const int PartyControlledMemberId = 0x24;
+    private const uint ControlPc = 0xFFFFFFFF;
+    private const uint ControlPartyNpcFlag = 0x80000000;
 
     /// <summary>
-    /// Pins the player's input control to their own PC, so a client cannot take over the shared,
-    /// host-owned companions. Object-id write only (crash-proof); a no-op while the PC is already
-    /// the controlled member. Call on clients each party pass.
+    /// Pins the player's input control to their own PC, reverting any switch to a shared,
+    /// host-owned companion. Object-id write only (crash-proof); a no-op while the PC (or any
+    /// non-companion) is controlled. Call on clients each party pass.
     /// </summary>
     public bool LockControlToPlayer()
     {
         if (!EngineGlobals.TryGetClientInternal(_memory, out nint clientInternal)
-            || !_memory.TryReadUInt32(clientInternal + ClientPlayerCreatureId, out uint pcId)
-            || pcId == 0
-            || !_memory.TryReadPointer(clientInternal + ClientPartyPointer, out nint party)
-            || party == 0)
+            || !_memory.TryReadUInt32(clientInternal + ControlledCharacterId, out uint controlled))
         {
             return false;
         }
 
-        if (_memory.TryReadUInt32(party + PartyControlledMemberId, out uint controlled) && controlled == pcId)
+        // Revert ONLY an explicit party-NPC selection (0x8000xxxx). PC control is 0xFFFFFFFF
+        // (all-ones) which we leave alone, as is any value without the party-NPC flag.
+        if (controlled != ControlPc && (controlled & ControlPartyNpcFlag) != 0)
         {
-            return true; // already the PC — leave it alone
+            return _memory.TryWrite(clientInternal + ControlledCharacterId, ControlPc);
         }
 
-        return _memory.TryWrite(party + PartyControlledMemberId, pcId);
+        return true;
     }
 
     private bool TryReadFaction(nint creature, out int faction)
