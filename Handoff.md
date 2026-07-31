@@ -2037,3 +2037,32 @@ client damage · ground items · journal · appearance · equipment · party · 
 overlay** · session connect/disconnect/reconnect · in-game ~ console. Remaining big items are
 all live-gated: dialogue spectate/control (task #25), container loot (task #29), and the live
 two-instance verification pass (task #11).
+
+---
+
+## Addendum 0h — overlay UX, dialogue spectate, container loot (block v12)
+
+- **Live pass fixes** (all verified live): the ~ console crash (null font-table deref in the
+  immediate `PrintStringScreenPos` from the SwapBuffers hook) -> switched overlay text to the
+  engine's QUEUED path (`AurPostString 0x0044D490`, flushed every frame by UpdateScreen,
+  never touches the font); the console-capture race (buffer cleared+console closed on Enter
+  before our hook) -> route the remembered line on the Enter edge regardless of open state;
+  "function <x> not found" (console-table registration didn't match our entries) -> blank the
+  message format string at `0x0074145C`. Overlay UX: `clear`/`cls` command (block clear-serial
+  at 0xC60), moved off-screen row 24 -> visible top rows, single always-on ChatOverlayController
+  as the sole display capped to last N, all feedback (replies+chat) routed to it.
+- **Animation sync**: the "x" draw / flourishes / attack swings are client-twin fire-and-forget
+  animations (not the server +0xD4 the bridge read). Bridge now reads the twin's current
+  animation (creature+0x224 -> twin+0x48); phantom replays via `AddFireForgetAnimation`
+  (twin vtable+0xA0, 0x006183D0). NEEDS-LIVE: twin+0x48 vs the F&F queue for repeats.
+- **Dialogue spectate** (task 25, DONE): owner plugin reads the live CSWSDialog speaker+line
+  (region 0xC80..0xD00), the token carries it, the peer sees `Speaker: line` on the overlay.
+  NEEDS-LIVE: current-entry-index (+0x60 guess, bounds-checked) and base-game TLK-StrRef lines
+  (resolve empty for now).
+- **Container-loot removal** (task 29, DONE): host diffs each placeable's CItemRepository
+  (+0x36C), broadcasts (container,item) removals reliably (ContainerLoot=29 / Ack=30), client
+  applies via VERIFIED `CSWSPlaceable::RemoveItem 0x00584AC0` (region 0xD00..0xE00). NEEDS-LIVE:
+  cross-instance item-id shape (+0x14) in a container + GIT-seeded id match.
+- Both features built by parallel worktree subagents from the research docs, merged clean.
+  Block still v12 / signature 0C (used pre-reserved regions). 217 tests pass; Agent + plugin
+  NativeAOT build. New research docs: text-render-queued, console-register, animation-sync.
