@@ -1977,3 +1977,30 @@ These join the existing "built, untested in game" items and task 11 (live two-in
   topology; incoming lines render through the existing console reply path — no new plugin or
   block code. Sender echoes locally, never receives its own back.
 - 196 tests pass. All builds (tests, Agent, plugin NativeAOT) clean.
+
+---
+
+## Addendum 0f — chat overlay, shared progression, three new research docs
+
+- **In-game chat overlay** (block v10). Always-on, semi-transparent chat readout independent
+  of the ~ console. Agent pushes each chat line + coop.ini config (chat_overlay / _opacity /
+  _anchor / _lines / _fade_ms) into the block; `ChatOverlayController` accumulates timestamped
+  lines and draws recent ones at a screen corner, fading them out. **Opacity is real**: the
+  texture-font color is four .data floats (RGBA 0x00798BB4..0x00798BC0, default white) and the
+  draw already alpha-blends, so `Odyssey.SetFontColor` writes the alpha before the lines and
+  restores white after — no new engine call (docs/research/text-color-alpha.md). Also fixed
+  SharedBlock TotalSize (the v9 console-reply field overran 0xA80; worked only via page
+  rounding). Signature 09 -> 0A.
+- **Shared progression** (protocol v8). Host-authoritative absolute gold + PC XP mirror so both
+  parties level/spend together. Gold = partyTable+0x0FC (VERIFIED); XP via the PC stats block
+  (pointer NEEDS-LIVE, but a bad deref only fails the cross-process write). Capability
+  `Progression` (content-independent); `--no-progression-sync` escape hatch.
+  docs/research/progression-sync.md.
+- **Research ready to build next:** docs/research/placeables-containers.md — placeable vtable
+  `0x007494D0`, state bytes locked `+0x260` / open `+0x338`, container `CItemRepository*` at
+  `+0x36C` (ids `+0x0C`, count `+0x10`), client apply via VERIFIED `CSWSPlaceable::RemoveItem
+  0x00584AC0`. Design: a `PlaceableController` mirroring `DoorController` one-for-one + loot
+  removals reusing the ground-item ItemOp envelope keyed (container, item). The placeable
+  open-animation vtable slot `[vt+0x7C]` and the item-dispose tail are NEEDS-LIVE guessed-ABI
+  paths — keep behind live verification; the field writes + RemoveItem are safe.
+- 198 tests pass. All builds (tests, Agent, plugin NativeAOT) clean.
