@@ -457,6 +457,32 @@ public static class PacketCodec
         return new PartySnapshotPacket(serverTime, members);
     }
 
+    /// <summary>The dialogue pick log: a single presence byte, then exactly
+    /// <see cref="DialogueState.PickLogBytes"/> raw bytes. Opaque to the wire — only the
+    /// two plugins interpret the entries.</summary>
+    private static void WritePickLog(ref PacketWriter w, byte[]? pickLog)
+    {
+        bool present = pickLog is { Length: DialogueState.PickLogBytes };
+        w.WriteUInt8(present ? (byte)1 : (byte)0);
+        if (present)
+        {
+            w.WriteBytes(pickLog);
+        }
+    }
+
+    private static byte[]? ReadPickLog(ref PacketReader r)
+    {
+        byte present = r.ReadUInt8();
+        if (r.Failed || present == 0)
+        {
+            return null;
+        }
+
+        byte[] log = new byte[DialogueState.PickLogBytes];
+        r.ReadBytes(log);
+        return r.Failed ? null : log;
+    }
+
     public static int Write(Span<byte> buffer, DialogueSnapshotPacket packet)
     {
         PacketWriter w = new(buffer);
@@ -472,6 +498,7 @@ public static class PacketCodec
         w.WriteString(s.PartnerTag, ProtocolConstants.MaxTagLength);
         w.WriteUInt32(s.ReplySerial);
         w.WriteInt32(s.ReplyIndex);
+        WritePickLog(ref w, s.PickLog);
 
         return w.Failed ? 0 : w.Position;
     }
@@ -493,12 +520,13 @@ public static class PacketCodec
         string partnerTag = r.ReadString();
         uint replySerial = r.ReadUInt32();
         int replyIndex = r.ReadInt32();
+        byte[]? pickLog = ReadPickLog(ref r);
 
         return r.Failed
             ? null
             : new DialogueSnapshotPacket(
                 serverTime,
-                new DialogueState(active, owner, serial, speaker, line, partnerTag, replySerial, replyIndex));
+                new DialogueState(active, owner, serial, speaker, line, partnerTag, replySerial, replyIndex, pickLog));
     }
 
     public static int Write(Span<byte> buffer, ProgressionSnapshotPacket packet)
@@ -564,6 +592,7 @@ public static class PacketCodec
         w.WriteString(packet.PartnerTag, ProtocolConstants.MaxTagLength);
         w.WriteUInt32(packet.ReplySerial);
         w.WriteInt32(packet.ReplyIndex);
+        WritePickLog(ref w, packet.PickLog);
 
         return w.Failed ? 0 : w.Position;
     }
@@ -583,10 +612,11 @@ public static class PacketCodec
         string partnerTag = r.ReadString();
         uint replySerial = r.ReadUInt32();
         int replyIndex = r.ReadInt32();
+        byte[]? pickLog = ReadPickLog(ref r);
 
         return r.Failed
             ? null
-            : new DialogueRequestPacket(peerId, active, speaker, line, partnerTag, replySerial, replyIndex);
+            : new DialogueRequestPacket(peerId, active, speaker, line, partnerTag, replySerial, replyIndex, pickLog);
     }
 
     public static int Write(Span<byte> buffer, WorldDigestPacket packet)

@@ -173,7 +173,8 @@ public sealed record DialogueRequestPacket(
     string Line,
     string PartnerTag = "",
     uint ReplySerial = 0,
-    int ReplyIndex = 0);
+    int ReplyIndex = 0,
+    byte[]? PickLog = null);
 
 /// <summary>
 /// A peer's in-world content fingerprint, sent both ways once a save is loaded and

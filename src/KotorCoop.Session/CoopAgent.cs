@@ -122,12 +122,40 @@ public sealed class CoopAgent(IGameBridge bridge, ICoopSession session, AgentSet
         long ticks = 0;
         double sumMs = 0, maxMs = 0;
 
+        // One bad tick must not end the session. The pump reads a live game's memory, and a
+        // transient failure — a module mid-store, an object freed between two reads — throws
+        // exactly when the game is doing something interesting. Killing the agent then is
+        // what the players experience as "the other character vanished and never came back":
+        // measured live, the joiner's agent silently exited mid-play and the host ran on
+        // alone. Log the tick's failure and keep pumping; give up only when it fails
+        // continuously for ~10 seconds, which means the game is actually gone.
+        int consecutiveFailures = 0;
+        int maxConsecutiveFailures = settings.PollRate * 10;
+
         try
         {
             while (await timer.WaitForNextTickAsync(cancellationToken).ConfigureAwait(false))
             {
                 sw.Restart();
-                PumpOnce();
+                try
+                {
+                    PumpOnce();
+                    consecutiveFailures = 0;
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException)
+                {
+                    if (++consecutiveFailures == 1 || consecutiveFailures % settings.PollRate == 0)
+                    {
+                        Log?.Invoke($"pump tick failed ({consecutiveFailures} in a row): {ex.Message}");
+                    }
+
+                    if (consecutiveFailures >= maxConsecutiveFailures)
+                    {
+                        Log?.Invoke("pump failing continuously; the game is gone, shutting down");
+                        break;
+                    }
+                }
+
                 double ms = sw.Elapsed.TotalMilliseconds;
 
                 ticks++;
@@ -337,6 +365,15 @@ public sealed class CoopAgent(IGameBridge bridge, ICoopSession session, AgentSet
     /// peer's line is posted once per line rather than every tick.</summary>
     private uint _lastSpectateSerial;
 
+    /// <summary>When the local player was last genuinely in a conversation, and who with —
+    /// held across the engine's between-entries flicker (see PumpDialogue).</summary>
+    private long _dialogueLastActiveMs;
+    private string _dialogueHeldPartnerTag = string.Empty;
+
+    /// <summary>How long a conversation may read inactive before it is reported over.
+    /// Longer than any between-entries gap, shorter than feels laggy on a real close.</summary>
+    private const long DialogueLingerMs = 1500;
+
     /// <summary>
     /// Publishes whether the local player is in a conversation (so the session can hold a
     /// single arbitrated dialogue token) together with the spectate payload — the speaker and
@@ -356,21 +393,59 @@ public sealed class CoopAgent(IGameBridge bridge, ICoopSession session, AgentSet
 
         // What the local player is hearing and doing, straight from the plugin's read.
         bridge.TryReadLocalDialogue(out string speaker, out string line);
-        bridge.TryReadLocalDialogueFollow(out string partnerTag, out uint replySerial, out int replyIndex);
-        session.PublishDialogue(local.IsInDialogue, speaker, line, partnerTag, replySerial, replyIndex);
+        bridge.TryReadLocalDialogueFollow(
+            out string partnerTag, out uint replySerial, out int replyIndex, out byte[] pickLog);
+
+        // Who owns a conversation right now, from the last broadcast. Read FIRST because it
+        // gates the local claim below.
+        DialogueState token = session.GetDialogue();
+        bool followingPeer = token.IsHeldByAnotherThan(session.LocalPeerId);
+
+        // ⚠ A follower's conversation is NOT a claim. While this instance follows a peer's
+        // conversation, its own client is genuinely "in a conversation" — the copy we
+        // opened. Publishing that as a claim made the roles flip at the end: the owner
+        // released, the follower's still-open copy grabbed the token, and the former owner
+        // dutifully started following its own conversation back — the follow/close ping-pong
+        // in the logs.
+        bool rawInDialogue = local.IsInDialogue && !followingPeer;
+
+        // ⚠ DEBOUNCED, because the engine's "conversation active" flag flickers off for a
+        // few frames between entries. Publishing those gaps released and re-granted the
+        // token several times inside one conversation, and the spectator tore its copy down
+        // and reopened it on every flicker. A conversation is only reported over once it
+        // has been gone for a moment; the partner tag is held through the gaps too.
+        long nowMs = Environment.TickCount64;
+        if (rawInDialogue)
+        {
+            _dialogueLastActiveMs = nowMs;
+            if (partnerTag.Length > 0)
+            {
+                _dialogueHeldPartnerTag = partnerTag;
+            }
+        }
+
+        bool active = rawInDialogue
+            || (_dialogueLastActiveMs > 0 && (nowMs - _dialogueLastActiveMs) < DialogueLingerMs);
+        if (!active)
+        {
+            _dialogueHeldPartnerTag = string.Empty;
+        }
+
+        session.PublishDialogue(
+            active, speaker, line,
+            active ? _dialogueHeldPartnerTag : string.Empty, replySerial, replyIndex, pickLog);
 
         // The other direction: when a peer owns a conversation, hand the plugin who they are
         // talking to and which reply they last picked, so this instance runs the SAME
         // conversation in the game's own dialogue UI and follows it. Written every tick
         // rather than on the serial edge — the plugin is level-triggered on these fields and
         // a dropped edge would strand a spectator outside the conversation.
-        DialogueState token = session.GetDialogue();
-        bool followingPeer = token.IsHeldByAnotherThan(session.LocalPeerId);
         bridge.WriteRemoteDialogue(
             followingPeer,
             followingPeer ? token.PartnerTag : string.Empty,
             followingPeer ? token.ReplySerial : 0,
-            followingPeer ? token.ReplyIndex : 0);
+            followingPeer ? token.ReplyIndex : 0,
+            followingPeer ? token.PickLog : null);
 
         _lastSpectateSerial = token.Serial;
     }

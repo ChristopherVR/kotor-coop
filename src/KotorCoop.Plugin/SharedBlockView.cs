@@ -562,6 +562,14 @@ internal sealed unsafe class SharedBlockView(byte* baseAddress)
     /// <summary>Agent-written; tag of the NPC to open the conversation against.</summary>
     public byte* RemoteDialoguePartnerTag => baseAddress + SharedBlock.OffsetRemoteDialoguePartnerTag;
 
+    /// <summary>Plugin-written pick-log entry base (serial u32, slot u32, lineHash u32).</summary>
+    public byte* LocalDialoguePick(int index) =>
+        baseAddress + SharedBlock.OffsetLocalDialoguePicks + (index * SharedBlock.DialoguePickStride);
+
+    /// <summary>Agent-written pick-log entry base for the conversation owner's picks.</summary>
+    public byte* RemoteDialoguePick(int index) =>
+        baseAddress + SharedBlock.OffsetRemoteDialoguePicks + (index * SharedBlock.DialoguePickStride);
+
     public ItemSlotView GetItemSlot(int index) =>
         new(baseAddress + SharedBlock.OffsetItemSlots + (index * SharedBlock.ItemSlotStride));
 

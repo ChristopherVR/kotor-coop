@@ -186,11 +186,17 @@ public sealed class KotorGameBridge : IGameBridge
     private const int BlockRemoteDialogueReplyIndex = 0x1230;
     private const int BlockRemoteDialoguePartnerTag = 0x1240;
 
-    /// <summary>16-byte signature: "KOCOOP01" + version 18 + guard 0xC0FFEE01. The version is
+    // The pick log (version 19): 8 entries x (serial, slot, lineHash), carried as an opaque
+    // 96-byte blob — the agent relays it, only the two plugins interpret it.
+    private const int BlockLocalDialoguePicks = 0x1260;
+    private const int BlockRemoteDialoguePicks = 0x12C0;
+    public const int DialoguePickLogBytes = 96;
+
+    /// <summary>16-byte signature: "KOCOOP01" + version 19 + guard 0xC0FFEE01. The version is
     /// part of the pattern deliberately: an agent must not attach to a plugin whose block
     /// layout it does not know, and a stale pair fails to find each other rather than reading
     /// the wrong offsets.</summary>
-    public const string PluginSignature = "4B 4F 43 4F 4F 50 30 31 12 00 00 00 01 EE FF C0";
+    public const string PluginSignature = "4B 4F 43 4F 4F 50 30 31 13 00 00 00 01 EE FF C0";
 
     /// <summary>Agent's view of which coop item id occupies each plugin item slot.</summary>
     private readonly uint[] _itemSlotIds = new uint[BlockItemCapacity];
@@ -2341,13 +2347,16 @@ public sealed class KotorGameBridge : IGameBridge
 
     /// <summary>
     /// Reads what a spectating peer needs to run the same conversation: the tag of the NPC
-    /// the local player is talking to, and the reply they last picked (serial + slot).
+    /// the local player is talking to, the reply they last picked (serial + slot), and the
+    /// pick LOG — recent picks each stamped with the line they were made on, opaque here.
     /// </summary>
-    public bool TryReadLocalDialogueFollow(out string partnerTag, out uint replySerial, out int replyIndex)
+    public bool TryReadLocalDialogueFollow(
+        out string partnerTag, out uint replySerial, out int replyIndex, out byte[] pickLog)
     {
         partnerTag = string.Empty;
         replySerial = 0;
         replyIndex = 0;
+        pickLog = [];
 
         if (_pluginBlock == 0)
         {
@@ -2359,6 +2368,12 @@ public sealed class KotorGameBridge : IGameBridge
         ok &= _memory.TryReadUInt32(_pluginBlock + BlockLocalDialogueReplySerial, out replySerial);
         ok &= _memory.TryReadInt32(_pluginBlock + BlockLocalDialogueReplyIndex, out replyIndex);
 
+        byte[] log = new byte[DialoguePickLogBytes];
+        if (_memory.TryRead(_pluginBlock + BlockLocalDialoguePicks, log))
+        {
+            pickLog = log;
+        }
+
         partnerTag ??= string.Empty;
         return ok;
     }
@@ -2368,7 +2383,7 @@ public sealed class KotorGameBridge : IGameBridge
     /// and follow the owner's picks. The active flag is written LAST: the plugin acts on it,
     /// and it must never see "follow a conversation" before it knows whose.
     /// </summary>
-    public bool WriteRemoteDialogue(bool active, string partnerTag, uint replySerial, int replyIndex)
+    public bool WriteRemoteDialogue(bool active, string partnerTag, uint replySerial, int replyIndex, byte[]? pickLog)
     {
         if (_pluginBlock == 0)
         {
@@ -2377,6 +2392,12 @@ public sealed class KotorGameBridge : IGameBridge
 
         bool ok = _memory.TryWriteAsciiString(
             _pluginBlock + BlockRemoteDialoguePartnerTag, partnerTag ?? string.Empty, BlockDialoguePartnerTagLength);
+
+        if (pickLog is { Length: DialoguePickLogBytes })
+        {
+            ok &= _memory.TryWrite(_pluginBlock + BlockRemoteDialoguePicks, pickLog);
+        }
+
         ok &= _memory.TryWrite(_pluginBlock + BlockRemoteDialogueReplyIndex, (uint)replyIndex);
         ok &= _memory.TryWrite(_pluginBlock + BlockRemoteDialogueReplySerial, replySerial);
         ok &= _memory.TryWrite(_pluginBlock + BlockRemoteDialogueActive, active ? 1u : 0u);

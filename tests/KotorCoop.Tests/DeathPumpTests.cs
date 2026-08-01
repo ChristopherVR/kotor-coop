@@ -91,7 +91,7 @@ public class DeathPumpTests
 
         public void PublishDialogue(
             bool active, string speakerName, string line,
-            string partnerTag = "", uint replySerial = 0, int replyIndex = 0) { }
+            string partnerTag = "", uint replySerial = 0, int replyIndex = 0, byte[]? pickLog = null) { }
 
         public DialogueState GetDialogue() => DialogueState.Idle;
 

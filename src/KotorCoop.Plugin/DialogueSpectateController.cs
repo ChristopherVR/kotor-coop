@@ -97,6 +97,13 @@ internal sealed unsafe class DialogueSpectateController(SharedBlockView block)
                 *line = 0;
                 *block.LocalDialoguePartnerTag = 0;
                 block.LocalDialogueSerial++;
+
+                // The pick log is per conversation: stale picks surviving into the next one
+                // would replay against lines they were never made on.
+                for (int i = 0; i < SharedBlock.DialoguePickCapacity; i++)
+                {
+                    *(uint*)block.LocalDialoguePick(i) = 0;
+                }
             }
 
             return;
@@ -108,9 +115,16 @@ internal sealed unsafe class DialogueSpectateController(SharedBlockView block)
         Odyssey.ReadDialoguePartnerTag(
             block.LocalDialoguePartnerTag, SharedBlock.LocalDialoguePartnerTagLength);
 
-        // Replies WE picked. Suppressed while following, so a replayed pick is not echoed.
+        // Replies WE picked, appended to the pick LOG with the hash of the line they were
+        // picked on. A pick is only meaningful on its line: replaying a slot number while
+        // the spectator's screen shows a different node walks them down the wrong branch,
+        // and a spectator that joined late needs the earlier picks too — one latest value
+        // cannot carry either. (Not recorded while following: those are replays, not ours.)
         if (!_following && DialogueReplyHook.Sequence != block.LocalDialogueReplySerial)
         {
+            uint lineHash = Hash(line, 2166136261u);
+            AppendLocalPick(DialogueReplyHook.Sequence, DialogueReplyHook.LastReplySlot, lineHash);
+
             block.LocalDialogueReplyIndex = DialogueReplyHook.LastReplySlot;
             block.LocalDialogueReplySerial = DialogueReplyHook.Sequence;
         }
@@ -121,6 +135,26 @@ internal sealed unsafe class DialogueSpectateController(SharedBlockView block)
             _lastLineHash = hash;
             block.LocalDialogueSerial++;
         }
+    }
+
+    /// <summary>Shifts the pick log up and writes the newest entry at the end, so the block
+    /// always carries the most recent <see cref="SharedBlock.DialoguePickCapacity"/> picks
+    /// in order.</summary>
+    private void AppendLocalPick(uint serial, int slot, uint lineHash)
+    {
+        for (int i = 0; i < SharedBlock.DialoguePickCapacity - 1; i++)
+        {
+            byte* from = block.LocalDialoguePick(i + 1);
+            byte* to = block.LocalDialoguePick(i);
+            *(uint*)to = *(uint*)from;
+            *(uint*)(to + 4) = *(uint*)(from + 4);
+            *(uint*)(to + 8) = *(uint*)(from + 8);
+        }
+
+        byte* last = block.LocalDialoguePick(SharedBlock.DialoguePickCapacity - 1);
+        *(uint*)(last + 4) = (uint)slot;
+        *(uint*)(last + 8) = lineHash;
+        *(uint*)last = serial; // serial last: a half-written entry reads as empty
     }
 
     /// <summary>Opens and drives this instance's copy of a peer's conversation.</summary>
@@ -134,12 +168,15 @@ internal sealed unsafe class DialogueSpectateController(SharedBlockView block)
                 _following = false;
                 _sawOpen = false;
                 _appliedReplySerial = 0;
-                _openAttempts = 0;
                 DialogueReplyHook.Suppressed = false;
                 Odyssey.SetCanSendDialog(true);
                 Odyssey.CloseDialogue();
             }
 
+            // The retry budget is PER CONVERSATION. Resetting it only after a successful
+            // follow left it spent forever once one open failed — measured live as the
+            // spectator silently ignoring every later conversation in the module.
+            _openAttempts = 0;
             return;
         }
 
@@ -158,14 +195,19 @@ internal sealed unsafe class DialogueSpectateController(SharedBlockView block)
                 return;
             }
 
-            _openAttempts++;
-            _nextOpenAttemptMs = Environment.TickCount64 + OpenRetryMs;
-
+            // ⚠ An empty tag is not an attempt. The token can go active a second or more
+            // before the owner's client resolves WHO they are talking to (the server walks
+            // them into range first), and counting those ticks against the budget burned all
+            // ten attempts before the tag ever arrived — measured live as the spectator
+            // never opening a conversation that then sat fully published in its block.
             ReadOnlySpan<byte> tag = TagSpan(block.RemoteDialoguePartnerTag);
             if (tag.IsEmpty)
             {
                 return; // the owner has not published who yet
             }
+
+            _openAttempts++;
+            _nextOpenAttemptMs = Environment.TickCount64 + OpenRetryMs;
 
             if (!Odyssey.StartDialogueWith(tag))
             {
@@ -179,7 +221,11 @@ internal sealed unsafe class DialogueSpectateController(SharedBlockView block)
 
             _following = true;
             _followingSinceMs = Environment.TickCount64;
-            _appliedReplySerial = block.RemoteDialogueReplySerial;
+
+            // Start from zero so the ENTIRE pick log replays: a spectator that joined after
+            // the owner had already picked catches up pick by pick, each on its own line.
+            _appliedReplySerial = 0;
+            _pendingPickSinceMs = 0;
             LogFew("dialogue: following the peer's conversation");
         }
 
@@ -227,25 +273,55 @@ internal sealed unsafe class DialogueSpectateController(SharedBlockView block)
         DialogueReplyHook.Suppressed = true;
         Odyssey.SetCanSendDialog(false);
 
-        // The owner picked: replay the same slot so our copy advances to the same node.
-        uint serial = block.RemoteDialogueReplySerial;
-        if (serial != _appliedReplySerial)
+        // Replay the owner's picks IN ORDER, each one once our own screen shows the line it
+        // was picked on. Entries auto-advance on both sides and a reply prompt WAITS, so the
+        // follower naturally arrives at each pick's line and stops there; matching on the
+        // line hash is what keeps a pick from firing on the wrong node. A pick whose line
+        // never appears (a VO skipped locally, a hash rarity) is applied anyway after a
+        // grace period — best effort beats stranding the conversation.
+        byte* next = null;
+        for (int i = 0; i < SharedBlock.DialoguePickCapacity; i++)
         {
-            int slot = block.RemoteDialogueReplyIndex;
-            if (Odyssey.SelectDialogueReply(slot))
+            byte* entry = block.RemoteDialoguePick(i);
+            uint serial = *(uint*)entry;
+            if (serial != 0 && serial > _appliedReplySerial)
             {
-                _appliedReplySerial = serial;
-                LogFew($"dialogue: followed the owner's reply {slot}");
-            }
-            else
-            {
-                // Our panel is not showing that slot (yet, or ever). Leave the serial
-                // unapplied so the next frame retries — a line that arrived late is normal,
-                // and dropping the pick would strand the two conversations apart.
-                LogFew($"dialogue: reply {slot} not selectable yet; will retry");
+                next = entry; // the log is ordered; the first unapplied entry is the oldest
+                break;
             }
         }
+
+        if (next == null)
+        {
+            _pendingPickSinceMs = 0;
+            return;
+        }
+
+        if (_pendingPickSinceMs == 0)
+        {
+            _pendingPickSinceMs = Environment.TickCount64;
+        }
+
+        uint pickSerial = *(uint*)next;
+        int slot = (int)*(uint*)(next + 4);
+        uint pickLineHash = *(uint*)(next + 8);
+
+        uint myLineHash = Hash(block.LocalDialogueLine, 2166136261u);
+        bool onThatLine = myLineHash == pickLineHash;
+        bool overdue = Environment.TickCount64 - _pendingPickSinceMs > PickGraceMs;
+
+        if ((onThatLine || overdue) && Odyssey.SelectDialogueReply(slot))
+        {
+            _appliedReplySerial = pickSerial;
+            _pendingPickSinceMs = 0;
+            LogFew($"dialogue: followed the owner's reply {slot}{(onThatLine ? "" : " (line unmatched, applied late)")}");
+        }
     }
+
+    /// <summary>How long a pick may wait for its line before it is applied regardless.</summary>
+    private const long PickGraceMs = 8000;
+
+    private long _pendingPickSinceMs;
 
     /// <summary>Attempts to open the peer's conversation before giving up. The NPC's client
     /// twin can lag its creature by a frame or two, and each attempt is a full sweep.</summary>

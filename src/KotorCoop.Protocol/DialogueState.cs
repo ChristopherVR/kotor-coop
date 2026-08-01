@@ -37,8 +37,12 @@ public readonly record struct DialogueState(
     string Line,
     string PartnerTag = "",
     uint ReplySerial = 0,
-    int ReplyIndex = 0)
+    int ReplyIndex = 0,
+    byte[]? PickLog = null)
 {
+    /// <summary>The pick log's fixed wire size: 8 entries x (serial, slot, lineHash).</summary>
+    public const int PickLogBytes = 96;
+
     public static DialogueState Idle { get; } = new(false, 0, 0, string.Empty, string.Empty);
 
     /// <summary>True when <paramref name="peerId"/> currently holds the conversation token.</summary>

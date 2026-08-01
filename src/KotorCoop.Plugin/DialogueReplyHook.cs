@@ -38,11 +38,18 @@ internal static unsafe class DialogueReplyHook
     public static uint Sequence { get; private set; }
 
     /// <summary>
-    /// Set while this instance is FOLLOWING someone else's conversation. Picks made then are
-    /// not ours to broadcast — they are the replays we are performing on our own panel, and
-    /// publishing them would echo back to the owner and advance their tree a second time.
+    /// Set while this instance is FOLLOWING someone else's conversation. While set, the
+    /// player's own reply clicks are BLOCKED outright — the spectator listens, the owner
+    /// chooses — and nothing is recorded for broadcast.
     /// </summary>
     public static bool Suppressed { get; set; }
+
+    /// <summary>
+    /// Set for the duration of our own replay call, so the one pick we dispatch on the
+    /// follower's panel passes through the block. Same-thread, same-call-chain: the flag is
+    /// read inside the call it brackets.
+    /// </summary>
+    public static bool AllowReplay { get; set; }
 
     public static bool Install(out string diagnostic)
     {
@@ -74,17 +81,25 @@ internal static unsafe class DialogueReplyHook
 
         // Entered by JMP, so esp still points at the caller's return address and the single
         // stack argument sits at [esp+4]. pushad shifts that by 0x20 -> [esp+0x24].
+        //
+        // The callback RETURNS whether the call may proceed: 0 blocks it (the spectator's
+        // own click while following), nonzero lets it through. The test runs on the raw
+        // return value BEFORE popad, and the blocked path pops the registers and returns
+        // callee-clean (ret 4) exactly as the real function would, so to the engine a
+        // blocked click is indistinguishable from a click that did nothing.
         s[n++] = 0x60;                                       // pushad
         s[n++] = 0xFF; s[n++] = 0xB4; s[n++] = 0x24;         // push dword [esp+0x24]  (slot)
         *(int*)(s + n) = 0x24;
         n += 4;
 
-        nint callback = (nint)(delegate* unmanaged[Cdecl]<int, void>)&OnSelectReply;
-        s[n++] = 0xE8;                                       // call OnSelectReply
+        nint callback = (nint)(delegate* unmanaged[Cdecl]<int, int>)&OnSelectReply;
+        s[n++] = 0xE8;                                       // call OnSelectReply -> eax
         *(int*)(s + n) = (int)(callback - (stub + n + 4));
         n += 4;
 
         s[n++] = 0x83; s[n++] = 0xC4; s[n++] = 0x04;         // add esp, 4  (cdecl cleanup)
+        s[n++] = 0x85; s[n++] = 0xC0;                        // test eax, eax
+        s[n++] = 0x74; s[n++] = (byte)(Prologue.Length + 6); // jz blocked (skip resume path)
         s[n++] = 0x61;                                       // popad
 
         for (int i = 0; i < Prologue.Length; i++)             // the relocated prologue
@@ -94,6 +109,10 @@ internal static unsafe class DialogueReplyHook
 
         s[n++] = 0xE9;                                       // jmp SelectReply+5
         *(int*)(s + n) = (int)(ResumeAt - (stub + n + 4));
+        n += 4;
+
+        s[n++] = 0x61;                                       // blocked: popad
+        s[n++] = 0xC2; s[n++] = 0x04; s[n++] = 0x00;         // ret 4
 
         if (!NativeMethods.VirtualProtect(SelectReply, 5, PageExecuteReadWrite, out uint old))
         {
@@ -111,19 +130,30 @@ internal static unsafe class DialogueReplyHook
     }
 
     /// <summary>
-    /// Runs inside the engine's call, before its own body. Records and returns — no engine
-    /// calls, no allocation, nothing that could throw, because this is the game's thread
+    /// Runs inside the engine's call, before its own body. Decides whether the call may
+    /// proceed (nonzero) and records the pick when it is the local player's own. No engine
+    /// calls, no allocation, nothing that could throw — this is the game's thread
     /// mid-dispatch.
     /// </summary>
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
-    private static void OnSelectReply(int slot)
+    private static int OnSelectReply(int slot)
     {
-        if (Suppressed || slot < 0)
+        if (AllowReplay)
         {
-            return;
+            return 1; // our own replay on the follower's panel: let through, do not record
         }
 
-        LastReplySlot = slot;
-        Sequence++;
+        if (Suppressed)
+        {
+            return 0; // a spectator's click: the owner chooses, nobody else
+        }
+
+        if (slot >= 0)
+        {
+            LastReplySlot = slot;
+            Sequence++;
+        }
+
+        return 1;
     }
 }

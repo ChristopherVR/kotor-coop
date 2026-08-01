@@ -26,7 +26,8 @@ public static class DialogueArbiter
         string line,
         string partnerTag = "",
         uint replySerial = 0,
-        int replyIndex = 0)
+        int replyIndex = 0,
+        byte[]? pickLog = null)
     {
         speaker ??= string.Empty;
         line ??= string.Empty;
@@ -38,7 +39,8 @@ public static class DialogueArbiter
             {
                 // Grant.
                 return new DialogueState(
-                    true, requesterPeerId, current.Serial + 1, speaker, line, partnerTag, replySerial, replyIndex);
+                    true, requesterPeerId, current.Serial + 1, speaker, line, partnerTag, replySerial, replyIndex,
+                    pickLog);
             }
 
             if (current.OwnerPeerId == requesterPeerId)
@@ -55,7 +57,8 @@ public static class DialogueArbiter
                 }
 
                 return new DialogueState(
-                    true, requesterPeerId, current.Serial + 1, speaker, line, partnerTag, replySerial, replyIndex);
+                    true, requesterPeerId, current.Serial + 1, speaker, line, partnerTag, replySerial, replyIndex,
+                    pickLog);
             }
 
             // Held by someone else: ignore the contender.

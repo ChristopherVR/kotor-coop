@@ -56,6 +56,17 @@ public ref struct PacketReader
         return Enum.IsDefined((PacketType)type) ? (PacketType)type : PacketType.None;
     }
 
+    /// <summary>Raw bytes into the caller's buffer, no length prefix — the counterpart of
+    /// <c>PacketWriter.WriteBytes</c> for fixed-size opaque payloads.</summary>
+    public void ReadBytes(Span<byte> destination)
+    {
+        ReadOnlySpan<byte> slice = Take(destination.Length);
+        if (!Failed)
+        {
+            slice.CopyTo(destination);
+        }
+    }
+
     public byte ReadUInt8()
     {
         ReadOnlySpan<byte> slice = Take(1);

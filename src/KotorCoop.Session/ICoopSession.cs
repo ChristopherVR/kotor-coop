@@ -89,7 +89,7 @@ public interface ICoopSession : IDisposable
     /// </summary>
     void PublishDialogue(
         bool active, string speakerName, string line,
-        string partnerTag = "", uint replySerial = 0, int replyIndex = 0);
+        string partnerTag = "", uint replySerial = 0, int replyIndex = 0, byte[]? pickLog = null);
 
     /// <summary>The authoritative conversation token — who, if anyone, is mid-dialogue.</summary>
     DialogueState GetDialogue();

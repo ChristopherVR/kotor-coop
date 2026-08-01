@@ -169,14 +169,14 @@ public sealed class CoopHost : ICoopSession
 
     public void PublishDialogue(
         bool active, string speakerName, string line,
-        string partnerTag = "", uint replySerial = 0, int replyIndex = 0)
+        string partnerTag = "", uint replySerial = 0, int replyIndex = 0, byte[]? pickLog = null)
     {
         lock (_gate)
         {
             // The host's own claim goes through the same arbiter as a client's, so ownership
             // and the serial are decided in exactly one place.
             _dialogue = DialogueArbiter.Apply(
-                _dialogue, HostPeerId, active, speakerName, line, partnerTag, replySerial, replyIndex);
+                _dialogue, HostPeerId, active, speakerName, line, partnerTag, replySerial, replyIndex, pickLog);
         }
     }
 
@@ -1054,7 +1054,7 @@ public sealed class CoopHost : ICoopSession
             {
                 _dialogue = DialogueArbiter.Apply(
                     _dialogue, request.PeerId, request.Active, request.SpeakerName, request.Line,
-                    request.PartnerTag, request.ReplySerial, request.ReplyIndex);
+                    request.PartnerTag, request.ReplySerial, request.ReplyIndex, request.PickLog);
             }
         }
     }

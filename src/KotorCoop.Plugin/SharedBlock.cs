@@ -47,7 +47,7 @@ internal struct SharedBlock
     /// existing offset profiles keep working. The plugin control fields live AFTER that
     /// range, which is why the block is larger than the profile knows about.
     /// </summary>
-    public const int TotalSize = 0x1300;
+    public const int TotalSize = 0x1400;
 
     public const int ProfileVisibleSize = 0x250;
 
@@ -425,6 +425,26 @@ internal struct SharedBlock
     public const int OffsetRemoteDialoguePartnerTag = 0x1240;
 
     public const int RemoteDialoguePartnerTagLength = 32; // occupies 0x1240..0x1260
+
+    // ---- dialogue pick log (version 19, region 0x1260..0x13E0) --------------------
+    //
+    // A reply pick is only meaningful ON THE LINE IT WAS PICKED FROM: replaying "slot 1"
+    // while the two screens show different nodes walks the spectator down the wrong branch,
+    // and a spectator that opened late (the owner had already picked twice) can never catch
+    // up from a single latest-pick value. So the owner publishes a small LOG of its recent
+    // picks, each stamped with the FNV hash of the line it was made on, and the spectator
+    // replays them in order, each one once its own screen reaches that line.
+
+    /// <summary>Entries: u32 serial, u32 slot, u32 lineHash. Serial 0 = empty.</summary>
+    public const int DialoguePickStride = 12;
+
+    public const int DialoguePickCapacity = 8;
+
+    /// <summary>Plugin -&gt; agent. The local player's recent picks. 0x1260..0x12C0.</summary>
+    public const int OffsetLocalDialoguePicks = 0x1260;
+
+    /// <summary>Agent -&gt; plugin. The conversation owner's recent picks. 0x12C0..0x1320.</summary>
+    public const int OffsetRemoteDialoguePicks = 0x12C0;
 
     // ---- container-loot removal (region 0xD00..0xE00) -----------------------------
     //

@@ -2287,7 +2287,17 @@ internal static unsafe class Odyssey
             return false;
         }
 
-        SelectReplyFn(panel, slot);
+        // Bracketed so the one pick we dispatch passes the follower's own-click block.
+        DialogueReplyHook.AllowReplay = true;
+        try
+        {
+            SelectReplyFn(panel, slot);
+        }
+        finally
+        {
+            DialogueReplyHook.AllowReplay = false;
+        }
+
         return true;
     }
 
@@ -3639,12 +3649,18 @@ internal static unsafe class Odyssey
                 // server→client animation sync handler (twin vtable +0x134) — the entry the
                 // engine's own dirty-push uses. It dispatches looping animations (run/walk/
                 // idle are looping) to the looping setter that writes twin+0x48, which
-                // AnimationUpdate re-asserts from every frame. My previous attempt called
-                // the plain setter (vtable +0x9C): it PLAYS the animation but does not own
-                // +0x48, so the very next AnimationUpdate re-asserted idle over it —
-                // measured live as the twin never leaving 0x2710 while the server held
-                // 0x2714.
-                if (*(ushort*)(twin + TwinCurrentAnimation) != (ushort)want)
+                // AnimationUpdate re-asserts from every frame. The plain setter (vtable
+                // +0x9C) plays the animation without owning +0x48 and the next frame
+                // reverted it — measured live as the twin never leaving idle.
+                //
+                // ⚠⚠ Assert only when OUR DESIRED GAIT CHANGES — never on "the twin shows
+                // something else". A one-shot (weapon flourish, stim, the X key) briefly
+                // takes over twin+0x48 while it plays, and the mismatch form re-asserted the
+                // run cycle within a frame, visibly cancelling every one-shot on the phantom
+                // — reported from play as "the X animation no longer shows". The engine
+                // restores the looping gait by itself when a one-shot ends, so leaving the
+                // field alone between gait changes costs nothing.
+                if (GaitChanged(creature, want))
                 {
                     var syncAnimation =
                         (delegate* unmanaged[Thiscall]<nint, uint, float, void>)(*(nint*)(*(nint*)twin + TwinAnimationSyncSlot));
@@ -3655,7 +3671,7 @@ internal static unsafe class Odyssey
                 // do not have. 1.0 plays the cycle at its authored rate; scale it by how fast
                 // the peer actually covers ground so the feet roughly match the floor.
                 float rate = moving
-                    ? Math.Clamp(speed / (run ? RunSpeedReference : WalkSpeedReference), 0.5f, 2.0f)
+                    ? Math.Clamp(speed / (run ? RunSpeedReference : WalkSpeedReference), 0.6f, 1.5f)
                     : 1.0f;
                 *(float*)(twin + TwinAnimationSpeedFactor) = rate;
             }
@@ -3678,6 +3694,54 @@ internal static unsafe class Odyssey
     }
 
     private static int _gaitLogTimer;
+
+    /// <summary>Last gait asserted per phantom, so the twin call fires on change only.
+    /// Fixed slots rather than a dictionary: at most a handful of phantoms exist, and this
+    /// runs on the game's frame hook where allocation is unwelcome.</summary>
+    private static readonly nint[] GaitCreature = new nint[8];
+    private static readonly int[] GaitLast = new int[8];
+
+    private static bool GaitChanged(nint creature, int want)
+    {
+        int free = -1;
+        for (int i = 0; i < GaitCreature.Length; i++)
+        {
+            if (GaitCreature[i] == creature)
+            {
+                if (GaitLast[i] == want)
+                {
+                    return false;
+                }
+
+                GaitLast[i] = want;
+                return true;
+            }
+
+            if (GaitCreature[i] == 0 && free < 0)
+            {
+                free = i;
+            }
+        }
+
+        int slot = free >= 0 ? free : 0;
+        GaitCreature[slot] = creature;
+        GaitLast[slot] = want;
+        return true;
+    }
+
+    /// <summary>Forget a creature's gait memory (call when a phantom is destroyed, so a
+    /// recycled pointer does not inherit stale state).</summary>
+    public static void ForgetGait(nint creature)
+    {
+        for (int i = 0; i < GaitCreature.Length; i++)
+        {
+            if (GaitCreature[i] == creature)
+            {
+                GaitCreature[i] = 0;
+                GaitLast[i] = 0;
+            }
+        }
+    }
 
     /// <summary>CSWCObject + this = the animation actually being rendered (u16).</summary>
     private const int TwinCurrentAnimation = 0x48;

@@ -155,6 +155,11 @@ internal sealed unsafe class PhantomController(SharedBlockView block)
     {
         for (int i = 0; i < _phantoms.Length; i++)
         {
+            if (_phantoms[i] != 0)
+            {
+                Odyssey.ForgetGait(_phantoms[i]);
+            }
+
             _phantoms[i] = 0;
             _phantomIds[i] = 0;
             _lastGoal[i] = default;
@@ -205,6 +210,7 @@ internal sealed unsafe class PhantomController(SharedBlockView block)
             }
 
             uint objectId = _phantomIds[i];
+            Odyssey.ForgetGait(_phantoms[i]);
             Odyssey.DestroyObjectById(objectId, out int failure);
             PluginHost.Log(failure == 0
                 ? $"flush: destroyed phantom 0x{objectId:X} before the module is stored"
@@ -612,19 +618,30 @@ internal sealed unsafe class PhantomController(SharedBlockView block)
         // a fixed window. The window version read 0.00 in practice — most windows closed on a
         // frame where the block had not changed — so the gait never reached the run threshold
         // and a sprinting peer walked.
-        if (moved > MovementEpsilon && _speedFromTime[slot] > 0)
+        //
+        // ⚠ The clock advances ONLY when a displacement is consumed. This runs per frame
+        // (hundreds of Hz) while the peer's position changes per network tick (~30 Hz), so
+        // most frames see no movement. Advancing the clock every frame divided each tick's
+        // full displacement by a single frame's dt — measured live as speeds of 5–8 u/s for
+        // a peer running at 3.96, so the legs churned at double speed, then half, and the
+        // body read as sliding across the floor. Sampling update-to-update yields the peer's
+        // true speed.
+        if (moved > MovementEpsilon)
         {
-            float dt = (float)(now - _speedFromTime[slot]);
-            if (dt > 0.001f)
+            if (_speedFromTime[slot] > 0)
             {
-                float instant = MathF.Min(moved / dt, 12f);
-                _peerSpeed[slot] = _peerSpeed[slot] <= 0f
-                    ? instant
-                    : (_peerSpeed[slot] * 0.7f) + (instant * 0.3f);
+                float dt = (float)(now - _speedFromTime[slot]);
+                if (dt > 0.001f)
+                {
+                    float instant = MathF.Min(moved / dt, 12f);
+                    _peerSpeed[slot] = _peerSpeed[slot] <= 0f
+                        ? instant
+                        : (_peerSpeed[slot] * 0.7f) + (instant * 0.3f);
+                }
             }
-        }
 
-        _speedFromTime[slot] = now;
+            _speedFromTime[slot] = now;
+        }
 
         // Keep the body out of the local player's camera. Exact placement means two players
         // standing on the same spot occupy the same space — and since both sides of a test

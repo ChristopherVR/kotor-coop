@@ -74,6 +74,17 @@ public ref struct PacketWriter
         }
     }
 
+    /// <summary>Raw bytes, no length prefix — for fixed-size opaque payloads whose length
+    /// both sides already agree on.</summary>
+    public void WriteBytes(ReadOnlySpan<byte> data)
+    {
+        Span<byte> slice = Take(data.Length);
+        if (!Failed)
+        {
+            data.CopyTo(slice);
+        }
+    }
+
     public void WriteInt32(int value)
     {
         Span<byte> slice = Take(4);

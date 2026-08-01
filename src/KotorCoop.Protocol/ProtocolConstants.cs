@@ -15,8 +15,11 @@ public static class ProtocolConstants
     /// Version 9: world digest carries save identity + per-module GIT digest.
     /// Version 10: dialogue token carries the partner tag and the owner's reply picks, so a
     /// spectator runs the same conversation in the game's own UI instead of reading a
-    /// transcript; the spectate line grew past the shared string cap.</summary>
-    public const byte Version = 10;
+    /// transcript; the spectate line grew past the shared string cap.
+    /// Version 11: the dialogue token carries the owner's pick LOG (each pick stamped with
+    /// the line it was made on) so a spectator replays picks on the right node and a late
+    /// joiner catches up.</summary>
+    public const byte Version = 11;
 
     /// <summary>Journal quest tags are resrefs plus a little slack.</summary>
     public const int MaxJournalTagLength = 32;
