@@ -2115,6 +2115,18 @@ internal static unsafe class Odyssey
     private static readonly delegate* unmanaged[Thiscall]<nint, int, int, void> ActionInitiateDialogFn =
         (delegate* unmanaged[Thiscall]<nint, int, int, void>)0x0060F620;
 
+    /// <summary>CClientExoApp::GetSWCMessage — the client's message pipe to the server.</summary>
+    private static readonly delegate* unmanaged[Thiscall]<nint, nint> GetSWCMessageFn =
+        (delegate* unmanaged[Thiscall]<nint, nint>)0x005ED6F0;
+
+    /// <summary>
+    /// CSWCMessage::SendPlayerToServerInput_Dialog(objectId) — "I want to talk to that
+    /// object". ret 4, one argument, and it self-guards on a conversation already being
+    /// active (0x00677EB3), so it cannot start a second one.
+    /// </summary>
+    private static readonly delegate* unmanaged[Thiscall]<nint, uint, void> SendDialogInputFn =
+        (delegate* unmanaged[Thiscall]<nint, uint, void>)0x00677EA0;
+
     private static readonly delegate* unmanaged[Thiscall]<nint, int, void> SelectReplyFn =
         (delegate* unmanaged[Thiscall]<nint, int, void>)0x006A7110;
 
@@ -2204,15 +2216,39 @@ internal static unsafe class Odyssey
             return false;
         }
 
-        nint twin = *(nint*)(creature + CreClientTwin);
-        if (twin == 0 || *(nint*)twin != ClientCreatureVtable)
+        nint client = GetClient();
+        if (client == 0)
         {
             return false;
         }
 
-        ActionInitiateDialogFn(twin, 0, 0);
+        nint message = GetSWCMessageFn(client);
+        if (message == 0)
+        {
+            return false;
+        }
+
+        // ⚠ Send the request DIRECTLY rather than through CSWCCreature::ActionInitiateDialog.
+        //
+        // The wrapper is what a mouse click runs, and it works for a click — but driven from
+        // here it left the conversation half-started: measured live, the client marked a
+        // conversation active while both participant ids stayed OBJECT_INVALID and no entry
+        // ever arrived. Its client-side gates (an unset selection, the creature's own
+        // interaction state) are satisfied by the act of clicking and not by us. The send
+        // itself is the part that reaches the server, takes one argument, and self-guards on
+        // a conversation already being active, so it is both the smaller and the safer half.
+        uint objectId = *(uint*)(creature + ObjIdOffset);
+        if (objectId is 0 or ObjectInvalid)
+        {
+            return false;
+        }
+
+        SendDialogInputFn(message, objectId);
         return true;
     }
+
+    /// <summary>CSWSObject + this = the object's id.</summary>
+    private const int ObjIdOffset = 0x04;
 
     /// <summary>The live conversation panel, or 0. Vtable-checked loosely: the dialog panel
     /// is subclassed (cinematic/computer variants), so only the reply-count field's

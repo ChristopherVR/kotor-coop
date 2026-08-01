@@ -41,7 +41,14 @@ internal sealed unsafe class DialogueSpectateController(SharedBlockView block)
 
     private long _followingSinceMs;
 
-    /// <summary>How long a followed conversation may stay empty before we back out.</summary>
+    /// <summary>Set once the followed conversation has actually appeared on screen.</summary>
+    private bool _sawOpen;
+
+    /// <summary>How long the request has to become a conversation. Generous: the server
+    /// walks the player into range first, exactly as it does for a click.</summary>
+    private const long FollowOpenTimeoutMs = 15000;
+
+    /// <summary>How long an OPEN conversation may stay empty before we back out.</summary>
     private const long FollowContentTimeoutMs = 3000;
 
     private int _logged;
@@ -57,6 +64,7 @@ internal sealed unsafe class DialogueSpectateController(SharedBlockView block)
         }
 
         _following = false;
+        _sawOpen = false;
         _hadDialogue = false;
         _lastLineHash = 0;
         _appliedReplySerial = 0;
@@ -124,6 +132,7 @@ internal sealed unsafe class DialogueSpectateController(SharedBlockView block)
             {
                 LogFew("dialogue: the owner ended the conversation; closing");
                 _following = false;
+                _sawOpen = false;
                 _appliedReplySerial = 0;
                 _openAttempts = 0;
                 DialogueReplyHook.Suppressed = false;
@@ -174,23 +183,43 @@ internal sealed unsafe class DialogueSpectateController(SharedBlockView block)
             LogFew("dialogue: following the peer's conversation");
         }
 
-        // ⚠ Bail out of a conversation that opened but never filled in.
+        // ⚠ "Requested" and "on screen" are different states, with different patience.
         //
-        // Measured live: the spectator's request reaches the point where the client marks a
-        // conversation active, but no entry ever arrives — no participants, no line, no
-        // replies — leaving a frozen shell that is WORSE than showing nothing, because the
-        // player's input class is in dialogue mode with nothing to click. Rather than trap
-        // them there, give it a moment and then back out cleanly.
-        if (!Odyssey.DialogueHasContent()
-            && Environment.TickCount64 - _followingSinceMs > FollowContentTimeoutMs)
+        // The request goes to the server, which resolves the participants, walks the player
+        // into conversation range and only then opens the conversation — the same approach a
+        // click performs. Treating the gap as failure closed conversations that were still
+        // arriving (measured: participants had resolved correctly and it was shut anyway).
+        // So a conversation that has not opened yet gets a long budget; one that HAS opened
+        // but stays empty gets a short one, because that is the frozen shell worth escaping.
+        bool open = Odyssey.IsConversationActive;
+        long waited = Environment.TickCount64 - _followingSinceMs;
+
+        if (open)
         {
-            LogFew("dialogue: the followed conversation never delivered a line; backing out");
+            _sawOpen = true;
+        }
+
+        bool giveUp = _sawOpen
+            ? open && !Odyssey.DialogueHasContent() && waited > FollowContentTimeoutMs
+            : waited > FollowOpenTimeoutMs;
+
+        if (giveUp)
+        {
+            LogFew(_sawOpen
+                ? "dialogue: the followed conversation never delivered a line; backing out"
+                : "dialogue: the peer's conversation never opened locally; backing out");
             _following = false;
+            _sawOpen = false;
             _openAttempts = MaxOpenAttempts; // do not thrash retrying the same failure
             DialogueReplyHook.Suppressed = false;
             Odyssey.SetCanSendDialog(true);
             Odyssey.CloseDialogue();
             return;
+        }
+
+        if (!open)
+        {
+            return; // still on its way; nothing to drive yet
         }
 
         // While following: never allowed to choose, re-asserted every frame because whether
