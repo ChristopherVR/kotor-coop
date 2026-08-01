@@ -167,17 +167,30 @@ public sealed class KotorGameBridge : IGameBridge
     private const int BlockChatLineLength = 128;
     private const int BlockChatClearSerial = 0xC60;
 
-    // Dialogue spectate, mirroring SharedBlock version 12 (reserved region 0xC80..0xD00).
+    // Dialogue spectate, mirroring SharedBlock version 12; version 17 moved the line to the
+    // 0x1100 region so a full-length dialogue sentence survives (was 64 bytes at 0xCA8).
     private const int BlockLocalDialogueSpeaker = 0xC80;
     private const int BlockLocalDialogueSpeakerLength = 40;
-    private const int BlockLocalDialogueLine = 0xCA8;
-    private const int BlockLocalDialogueLineLength = 64;
+    private const int BlockLocalDialogueLine = 0x1100;
+    private const int BlockLocalDialogueLineLength = 192;
 
-    /// <summary>16-byte signature: "KOCOOP01" + version 14 + guard 0xC0FFEE01. The version is
+    // Dialogue follow, mirroring SharedBlock version 18 (region 0x1200..0x1300). The peer
+    // runs the owner's conversation in the game's own UI, so what crosses is who they are
+    // talking to and which reply they picked — not text to print.
+    private const int BlockLocalDialoguePartnerTag = 0x1200;
+    private const int BlockDialoguePartnerTagLength = 32;
+    private const int BlockLocalDialogueReplySerial = 0x1220;
+    private const int BlockLocalDialogueReplyIndex = 0x1224;
+    private const int BlockRemoteDialogueActive = 0x1228;
+    private const int BlockRemoteDialogueReplySerial = 0x122C;
+    private const int BlockRemoteDialogueReplyIndex = 0x1230;
+    private const int BlockRemoteDialoguePartnerTag = 0x1240;
+
+    /// <summary>16-byte signature: "KOCOOP01" + version 18 + guard 0xC0FFEE01. The version is
     /// part of the pattern deliberately: an agent must not attach to a plugin whose block
     /// layout it does not know, and a stale pair fails to find each other rather than reading
     /// the wrong offsets.</summary>
-    public const string PluginSignature = "4B 4F 43 4F 4F 50 30 31 10 00 00 00 01 EE FF C0";
+    public const string PluginSignature = "4B 4F 43 4F 4F 50 30 31 12 00 00 00 01 EE FF C0";
 
     /// <summary>Agent's view of which coop item id occupies each plugin item slot.</summary>
     private readonly uint[] _itemSlotIds = new uint[BlockItemCapacity];
@@ -2323,6 +2336,50 @@ public sealed class KotorGameBridge : IGameBridge
 
         speaker ??= string.Empty;
         line ??= string.Empty;
+        return ok;
+    }
+
+    /// <summary>
+    /// Reads what a spectating peer needs to run the same conversation: the tag of the NPC
+    /// the local player is talking to, and the reply they last picked (serial + slot).
+    /// </summary>
+    public bool TryReadLocalDialogueFollow(out string partnerTag, out uint replySerial, out int replyIndex)
+    {
+        partnerTag = string.Empty;
+        replySerial = 0;
+        replyIndex = 0;
+
+        if (_pluginBlock == 0)
+        {
+            return false;
+        }
+
+        bool ok = _memory.TryReadAsciiString(
+            _pluginBlock + BlockLocalDialoguePartnerTag, BlockDialoguePartnerTagLength, out partnerTag);
+        ok &= _memory.TryReadUInt32(_pluginBlock + BlockLocalDialogueReplySerial, out replySerial);
+        ok &= _memory.TryReadInt32(_pluginBlock + BlockLocalDialogueReplyIndex, out replyIndex);
+
+        partnerTag ??= string.Empty;
+        return ok;
+    }
+
+    /// <summary>
+    /// Tells the plugin which conversation a peer owns, so it can open the same one locally
+    /// and follow the owner's picks. The active flag is written LAST: the plugin acts on it,
+    /// and it must never see "follow a conversation" before it knows whose.
+    /// </summary>
+    public bool WriteRemoteDialogue(bool active, string partnerTag, uint replySerial, int replyIndex)
+    {
+        if (_pluginBlock == 0)
+        {
+            return false;
+        }
+
+        bool ok = _memory.TryWriteAsciiString(
+            _pluginBlock + BlockRemoteDialoguePartnerTag, partnerTag ?? string.Empty, BlockDialoguePartnerTagLength);
+        ok &= _memory.TryWrite(_pluginBlock + BlockRemoteDialogueReplyIndex, (uint)replyIndex);
+        ok &= _memory.TryWrite(_pluginBlock + BlockRemoteDialogueReplySerial, replySerial);
+        ok &= _memory.TryWrite(_pluginBlock + BlockRemoteDialogueActive, active ? 1u : 0u);
         return ok;
     }
 

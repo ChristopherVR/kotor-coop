@@ -43,6 +43,9 @@ internal static partial class NativeMethods
     /// <summary>Virtual-key codes used by the console overlay's edge detection.</summary>
     public const int VkReturn = 0x0D;
 
+    /// <summary>The pause key; the plugin owns it (see PauseKeyController).</summary>
+    public const int VkSpace = 0x20;
+
     /// <summary>Page Up / Page Down, read-only, scroll the chat overlay's history window.</summary>
     public const int VkPageUp = 0x21;
     public const int VkPageDown = 0x22;

@@ -48,6 +48,15 @@ internal sealed class PauseController(SharedBlockView block)
 
         _countdown = IntervalFrames;
 
+        // Level-triggered repair for the edge-only engine state (see Odyssey.ReconcilePause):
+        // one missed edge otherwise leaves a permanent PAUSED banner and a dead pause key.
+        // Runs whether or not a session is active — the stuck state comes from the login
+        // chain and from mirror races, and both exist before a peer connects.
+        if (Odyssey.HasPlayer && Odyssey.ReconcilePause())
+        {
+            LogFew("pause: repaired stuck pause state (timers/banner vs masks)");
+        }
+
         if (block.Command != SharedBlock.CommandSpawnAndDrive)
         {
             return;

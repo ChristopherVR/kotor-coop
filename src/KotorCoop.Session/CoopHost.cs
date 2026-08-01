@@ -167,13 +167,16 @@ public sealed class CoopHost : ICoopSession
     /// <summary>The single conversation token; the host is the sole arbiter.</summary>
     private DialogueState _dialogue = DialogueState.Idle;
 
-    public void PublishDialogue(bool active, string speakerName, string line)
+    public void PublishDialogue(
+        bool active, string speakerName, string line,
+        string partnerTag = "", uint replySerial = 0, int replyIndex = 0)
     {
         lock (_gate)
         {
             // The host's own claim goes through the same arbiter as a client's, so ownership
             // and the serial are decided in exactly one place.
-            _dialogue = DialogueArbiter.Apply(_dialogue, HostPeerId, active, speakerName, line);
+            _dialogue = DialogueArbiter.Apply(
+                _dialogue, HostPeerId, active, speakerName, line, partnerTag, replySerial, replyIndex);
         }
     }
 
@@ -1050,7 +1053,8 @@ public sealed class CoopHost : ICoopSession
             if (_peers.ContainsKey(request.PeerId))
             {
                 _dialogue = DialogueArbiter.Apply(
-                    _dialogue, request.PeerId, request.Active, request.SpeakerName, request.Line);
+                    _dialogue, request.PeerId, request.Active, request.SpeakerName, request.Line,
+                    request.PartnerTag, request.ReplySerial, request.ReplyIndex);
             }
         }
     }

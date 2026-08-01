@@ -12,8 +12,11 @@ public static class ProtocolConstants
     /// Version 6: dialogue ownership token (snapshot + request channels).
     /// Version 7: text chat channel.
     /// Version 8: shared progression (party gold + PC experience).
-    /// Version 9: world digest carries save identity + per-module GIT digest.</summary>
-    public const byte Version = 9;
+    /// Version 9: world digest carries save identity + per-module GIT digest.
+    /// Version 10: dialogue token carries the partner tag and the owner's reply picks, so a
+    /// spectator runs the same conversation in the game's own UI instead of reading a
+    /// transcript; the spectate line grew past the shared string cap.</summary>
+    public const byte Version = 10;
 
     /// <summary>Journal quest tags are resrefs plus a little slack.</summary>
     public const int MaxJournalTagLength = 32;
@@ -44,9 +47,17 @@ public static class ProtocolConstants
     /// little headroom costs nothing.</summary>
     public const int MaxPartyMembers = 4;
 
-    /// <summary>The spectate line carried on the dialogue token. Capped at the wire string
-    /// limit; a longer subtitle is simply truncated for the spectator.</summary>
-    public const int MaxDialogueLineLength = MaxStringLength;
+    /// <summary>
+    /// The spectate line carried on the dialogue token.
+    ///
+    /// Deliberately larger than <see cref="MaxStringLength"/>: real KOTOR dialogue runs to
+    /// ~200 characters and the shared 63-byte cap cut the spectator's subtitle mid-word —
+    /// observed live as "Trask: That door's locked. I don't have the codes to open it, but
+    /// swit". The dialogue token is a single string in a packet of its own, so the extra
+    /// bytes cannot crowd out a peer snapshot. Still one length byte, so 255 is the hard
+    /// ceiling.
+    /// </summary>
+    public const int MaxDialogueLineLength = 220;
 
     /// <summary>magic(2) + version(1) + type(1)</summary>
     public const int HeaderSize = 4;
@@ -54,8 +65,14 @@ public static class ProtocolConstants
     /// <summary>Comfortably inside the smallest common path MTU, so we never fragment.</summary>
     public const int MaxPacketSize = 1200;
 
-    /// <summary>Length-prefixed strings use a single byte prefix. Absolute upper bound.</summary>
+    /// <summary>Default cap for the short identity fields (names, resrefs, tags), chosen so
+    /// a full snapshot with every one at maximum still fits a datagram. NOT the absolute
+    /// limit — see <see cref="MaxLengthPrefixedString"/>.</summary>
     public const int MaxStringLength = 63;
+
+    /// <summary>What a single length byte can express. The absolute upper bound on any
+    /// length-prefixed string, whatever cap the field itself declares.</summary>
+    public const int MaxLengthPrefixedString = 255;
 
     /// <summary>
     /// Per-field caps, chosen so a full <see cref="MaxPeers"/> snapshot with every string
@@ -69,6 +86,10 @@ public static class ProtocolConstants
     /// the snapshot.
     /// </summary>
     public const int MaxModuleLength = 32;
+
+    /// <summary>Object tags identify the NPC a shared conversation is with. Odyssey tags are
+    /// authored short; 32 matches the plugin's buffer.</summary>
+    public const int MaxTagLength = 32;
 
     public const int DefaultPort = 27015;
 

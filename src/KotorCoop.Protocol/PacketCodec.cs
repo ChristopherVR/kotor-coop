@@ -469,6 +469,9 @@ public static class PacketCodec
         w.WriteUInt32(s.Serial);
         w.WriteName(s.SpeakerName);
         w.WriteString(s.Line, ProtocolConstants.MaxDialogueLineLength);
+        w.WriteString(s.PartnerTag, ProtocolConstants.MaxTagLength);
+        w.WriteUInt32(s.ReplySerial);
+        w.WriteInt32(s.ReplyIndex);
 
         return w.Failed ? 0 : w.Position;
     }
@@ -486,11 +489,16 @@ public static class PacketCodec
         uint owner = r.ReadUInt32();
         uint serial = r.ReadUInt32();
         string speaker = r.ReadString();
-        string line = r.ReadString();
+        string line = r.ReadString(ProtocolConstants.MaxDialogueLineLength);
+        string partnerTag = r.ReadString();
+        uint replySerial = r.ReadUInt32();
+        int replyIndex = r.ReadInt32();
 
         return r.Failed
             ? null
-            : new DialogueSnapshotPacket(serverTime, new DialogueState(active, owner, serial, speaker, line));
+            : new DialogueSnapshotPacket(
+                serverTime,
+                new DialogueState(active, owner, serial, speaker, line, partnerTag, replySerial, replyIndex));
     }
 
     public static int Write(Span<byte> buffer, ProgressionSnapshotPacket packet)
@@ -553,6 +561,9 @@ public static class PacketCodec
         w.WriteBool(packet.Active);
         w.WriteName(packet.SpeakerName);
         w.WriteString(packet.Line, ProtocolConstants.MaxDialogueLineLength);
+        w.WriteString(packet.PartnerTag, ProtocolConstants.MaxTagLength);
+        w.WriteUInt32(packet.ReplySerial);
+        w.WriteInt32(packet.ReplyIndex);
 
         return w.Failed ? 0 : w.Position;
     }
@@ -568,9 +579,14 @@ public static class PacketCodec
         uint peerId = r.ReadUInt32();
         bool active = r.ReadBool();
         string speaker = r.ReadString();
-        string line = r.ReadString();
+        string line = r.ReadString(ProtocolConstants.MaxDialogueLineLength);
+        string partnerTag = r.ReadString();
+        uint replySerial = r.ReadUInt32();
+        int replyIndex = r.ReadInt32();
 
-        return r.Failed ? null : new DialogueRequestPacket(peerId, active, speaker, line);
+        return r.Failed
+            ? null
+            : new DialogueRequestPacket(peerId, active, speaker, line, partnerTag, replySerial, replyIndex);
     }
 
     public static int Write(Span<byte> buffer, WorldDigestPacket packet)

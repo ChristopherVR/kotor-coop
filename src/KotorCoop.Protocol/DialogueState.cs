@@ -11,17 +11,33 @@ namespace KotorCoop.Protocol;
 /// <see cref="OwnerPeerId"/>, and <see cref="Serial"/> ticks on every grant/update/release so
 /// clients can detect a change.
 ///
-/// <see cref="SpeakerName"/> and <see cref="Line"/> are the spectate payload: the current
-/// speaker and their line, so a non-owner can be shown what the owner is hearing. They are
-/// empty until the plugin can read the live conversation (that half is RE-gated); the
-/// ownership token is useful on its own.
+/// The spectate payload lets a non-owner run the SAME conversation locally, in the game's
+/// own dialogue UI, rather than being shown a transcript:
+///
+/// <list type="bullet">
+/// <item><see cref="PartnerTag"/> — the tag of the NPC the owner is talking to, so the
+/// spectator can open the identical conversation against its own copy of that creature.
+/// A tag rather than an object id: ids are per-load and a spectator that joined through a
+/// different path could resolve a different body.</item>
+/// <item><see cref="ReplySerial"/> / <see cref="ReplyIndex"/> — every reply the owner picks,
+/// as the slot index they clicked. Replaying the same slot on the spectator walks its copy
+/// of the .dlg down the identical branch, which is what keeps the two conversations on the
+/// same line. Only the owner may pick; the spectator's ability to commit a reply is turned
+/// off while it follows.</item>
+/// </list>
+///
+/// <see cref="SpeakerName"/> and <see cref="Line"/> remain as a diagnostic read of the
+/// owner's current line.
 /// </summary>
 public readonly record struct DialogueState(
     bool Active,
     uint OwnerPeerId,
     uint Serial,
     string SpeakerName,
-    string Line)
+    string Line,
+    string PartnerTag = "",
+    uint ReplySerial = 0,
+    int ReplyIndex = 0)
 {
     public static DialogueState Idle { get; } = new(false, 0, 0, string.Empty, string.Empty);
 

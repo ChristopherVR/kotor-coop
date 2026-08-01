@@ -47,7 +47,7 @@ internal struct SharedBlock
     /// existing offset profiles keep working. The plugin control fields live AFTER that
     /// range, which is why the block is larger than the profile knows about.
     /// </summary>
-    public const int TotalSize = 0x1100;
+    public const int TotalSize = 0x1300;
 
     public const int ProfileVisibleSize = 0x250;
 
@@ -379,13 +379,52 @@ internal struct SharedBlock
 
     public const int LocalDialogueSpeakerLength = 40; // occupies 0xC80..0xCA8
 
-    /// <summary>Plugin -&gt; agent. Current line, null-terminated ascii.</summary>
-    public const int OffsetLocalDialogueLine = 0xCA8;
+    /// <summary>Plugin -&gt; agent. Current line, null-terminated ascii. Version 17 moved it
+    /// to the 0x1100 region: real dialogue lines run to ~290 characters and the original
+    /// 64-byte slot cut them mid-sentence. (0xCA8..0xCE8 is now unused.)</summary>
+    public const int OffsetLocalDialogueLine = 0x1100;
 
-    public const int LocalDialogueLineLength = 64; // occupies 0xCA8..0xCE8
+    public const int LocalDialogueLineLength = 192; // occupies 0x1100..0x11C0
 
     /// <summary>Plugin -&gt; agent. Bumped when the speaker/line pair changes; written last.</summary>
     public const int OffsetLocalDialogueSerial = 0xCE8;
+
+    // ---- dialogue follow (version 18, region 0x1200..0x1300) ----------------------
+    //
+    // Spectating is the game's OWN dialogue UI on the non-owner's screen, not a transcript:
+    // the spectator opens the identical conversation against its own copy of the NPC and
+    // replays every reply the owner picks, so both screens sit on the same line. Only the
+    // owner may choose; the spectator's ability to commit a reply is switched off while it
+    // follows. See DialogueSpectateController and docs/research/dialogue-sync.md.
+
+    /// <summary>Plugin -&gt; agent. Tag of the NPC the local player is talking to. A TAG, not
+    /// an object id: ids are assigned per module load and the peer's copy of the same
+    /// creature can hold a different one.</summary>
+    public const int OffsetLocalDialoguePartnerTag = 0x1200;
+
+    public const int LocalDialoguePartnerTagLength = 32; // occupies 0x1200..0x1220
+
+    /// <summary>Plugin -&gt; agent. Bumped on every reply the local player picks.</summary>
+    public const int OffsetLocalDialogueReplySerial = 0x1220;
+
+    /// <summary>Plugin -&gt; agent. The reply SLOT the local player clicked. Slot rather than
+    /// node index: both instances run the same .dlg, so the same slot walks the same
+    /// branch, and the slot is what the engine's own reply call takes.</summary>
+    public const int OffsetLocalDialogueReplyIndex = 0x1224;
+
+    /// <summary>Agent -&gt; plugin. Nonzero while a PEER owns a conversation to follow.</summary>
+    public const int OffsetRemoteDialogueActive = 0x1228;
+
+    /// <summary>Agent -&gt; plugin. The owner's reply serial; a change means "replay a pick".</summary>
+    public const int OffsetRemoteDialogueReplySerial = 0x122C;
+
+    /// <summary>Agent -&gt; plugin. The slot to replay.</summary>
+    public const int OffsetRemoteDialogueReplyIndex = 0x1230;
+
+    /// <summary>Agent -&gt; plugin. Tag of the NPC to open the conversation against.</summary>
+    public const int OffsetRemoteDialoguePartnerTag = 0x1240;
+
+    public const int RemoteDialoguePartnerTagLength = 32; // occupies 0x1240..0x1260
 
     // ---- container-loot removal (region 0xD00..0xE00) -----------------------------
     //

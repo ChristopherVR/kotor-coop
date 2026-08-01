@@ -102,7 +102,13 @@ public ref struct PacketReader
         return new Vector3f(x, y, z);
     }
 
-    public string ReadString()
+    /// <summary>
+    /// Reads a length-prefixed UTF-8 string. <paramref name="maxLength"/> must match the cap
+    /// the writer used for this field: a field with its own larger budget (the dialogue
+    /// spectate line) passes it here too, or a legitimate long value would be rejected as
+    /// malformed and take the whole packet down with it.
+    /// </summary>
+    public string ReadString(int maxLength = ProtocolConstants.MaxStringLength)
     {
         byte length = ReadUInt8();
         if (Failed)
@@ -110,7 +116,7 @@ public ref struct PacketReader
             return string.Empty;
         }
 
-        if (length > ProtocolConstants.MaxStringLength)
+        if (length > maxLength)
         {
             Failed = true;
             return string.Empty;

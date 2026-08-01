@@ -108,10 +108,19 @@ public ref struct PacketWriter
         WriteSingle(value.Z);
     }
 
+    /// <summary>
+    /// Writes a length-prefixed UTF-8 string, truncated to <paramref name="maxLength"/>.
+    ///
+    /// The cap is whatever the caller asks for, bounded only by the single length byte —
+    /// it is NOT clamped to <see cref="ProtocolConstants.MaxStringLength"/>. That constant
+    /// is the default for the many short identity fields (names, resrefs, tags) whose
+    /// combined worst case has to fit one snapshot datagram; a field with its own budget,
+    /// like the dialogue spectate line, states its own larger cap and is respected.
+    /// </summary>
     public void WriteString(string? value, int maxLength = ProtocolConstants.MaxStringLength)
     {
         string text = value ?? string.Empty;
-        int limit = Math.Min(maxLength, ProtocolConstants.MaxStringLength);
+        int limit = Math.Min(maxLength, ProtocolConstants.MaxLengthPrefixedString);
         int byteCount = Encoding.UTF8.GetByteCount(text);
 
         while (byteCount > limit && text.Length > 0)

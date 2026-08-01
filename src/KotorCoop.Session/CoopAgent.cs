@@ -354,23 +354,25 @@ public sealed class CoopAgent(IGameBridge bridge, ICoopSession session, AgentSet
             return;
         }
 
-        // What the local player is hearing, if anything, straight from the plugin's read.
+        // What the local player is hearing and doing, straight from the plugin's read.
         bridge.TryReadLocalDialogue(out string speaker, out string line);
-        session.PublishDialogue(local.IsInDialogue, speaker, line);
+        bridge.TryReadLocalDialogueFollow(out string partnerTag, out uint replySerial, out int replyIndex);
+        session.PublishDialogue(local.IsInDialogue, speaker, line, partnerTag, replySerial, replyIndex);
 
-        // Spectate the other side: post a peer's current line to our overlay once per line,
-        // deduped on the token serial (the arbiter bumps it only when the line changes).
+        // The other direction: when a peer owns a conversation, hand the plugin who they are
+        // talking to and which reply they last picked, so this instance runs the SAME
+        // conversation in the game's own dialogue UI and follows it. Written every tick
+        // rather than on the serial edge — the plugin is level-triggered on these fields and
+        // a dropped edge would strand a spectator outside the conversation.
         DialogueState token = session.GetDialogue();
-        if (token.IsHeldByAnotherThan(session.LocalPeerId)
-            && token.Line.Length > 0
-            && token.Serial != _lastSpectateSerial)
-        {
-            _lastSpectateSerial = token.Serial;
-            string text = token.SpeakerName.Length > 0
-                ? $"{token.SpeakerName}: {token.Line}"
-                : token.Line;
-            bridge.PostChatLine(text);
-        }
+        bool followingPeer = token.IsHeldByAnotherThan(session.LocalPeerId);
+        bridge.WriteRemoteDialogue(
+            followingPeer,
+            followingPeer ? token.PartnerTag : string.Empty,
+            followingPeer ? token.ReplySerial : 0,
+            followingPeer ? token.ReplyIndex : 0);
+
+        _lastSpectateSerial = token.Serial;
     }
 
     /// <summary>

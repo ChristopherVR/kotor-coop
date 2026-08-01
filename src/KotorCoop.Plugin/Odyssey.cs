@@ -1984,6 +1984,36 @@ internal static unsafe class Odyssey
     /// (resolving the TLK is out of scope). Custom / inline-text lines are read in full.
     /// MAIN THREAD ONLY.
     /// </summary>
+    // The read surface is CGuiInGame's own dialogue HISTORY ring — the log every displayed
+    // line is appended to. Located live (2026-08-01) by finding the on-screen sentence in
+    // the heap and walking back to who held it:
+    //
+    //   gui + 0x1040  capacity (reads 0x40 = 64)
+    //   gui + 0x1054  first record; stride 0x10
+    //   record: { char* text; u32 len; char* speaker; u32 speakerLen }   (lens include the null)
+    //
+    // This beats reading the CSWSDialog tree on every axis: the text is already
+    // TLK-RESOLVED (a base-game line's CExoLocString carries only a StrRef, which is why
+    // the tree read produced empty lines), the speaker is the display name, and it works
+    // for every dialog variant — the cinematic letterbox panel stores its message somewhere
+    // else entirely, but every variant appends here.
+    //
+    // "Which line is current" falls out of change tracking: the newest line is the
+    // highest-offset slot that changed most recently. An append changes one slot (the
+    // newest); a shift-when-full changes many, of which the newest is the highest; a wrap
+    // changes exactly the newest. All three cases agree with this rule.
+
+    /// <summary>CGuiInGame + this = first record of the dialogue history ring.</summary>
+    private const int GuiDialogueRing = 0x1054;
+
+    private const int GuiDialogueRingSlots = 64;
+
+    private const int GuiDialogueRecordStride = 0x10;
+
+    private static readonly uint[] RingSignatures = new uint[GuiDialogueRingSlots];
+
+    private static int _ringNewest = -1;
+
     public static bool TryReadActiveDialogue(byte* speaker, int speakerCap, byte* line, int lineCap)
     {
         if (speaker != null && speakerCap > 0)
@@ -1996,22 +2026,32 @@ internal static unsafe class Odyssey
             line[0] = 0;
         }
 
-        nint client = GetClient();
-        if (client == 0)
+        nint gui = GetInGameGui();
+        if (gui == 0)
         {
+            _ringNewest = -1;
             return false;
         }
 
-        nint clientInternal = Deref(client + AppClientOffset);
-        if (!LooksLikeHeapPointer(clientInternal))
+        // Track ring changes EVERY frame, active or not, so the first frame of a
+        // conversation already knows which slot is newest (all populated slots differ from
+        // the zeroed signature table on the first pass; the highest wins, which is the
+        // newest under the append order observed live).
+        int changed = -1;
+        for (int i = 0; i < GuiDialogueRingSlots; i++)
         {
-            return false;
+            nint record = gui + GuiDialogueRing + i * GuiDialogueRecordStride;
+            uint signature = (uint)*(nint*)record ^ (uint)(*(int*)(record + 4) * 2654435761);
+            if (signature != RingSignatures[i])
+            {
+                RingSignatures[i] = signature;
+                changed = i;
+            }
         }
 
-        nint gui = Deref(clientInternal + 0x40);
-        if (!LooksLikeHeapPointer(gui))
+        if (changed >= 0)
         {
-            return false;
+            _ringNewest = changed;
         }
 
         if (*(int*)(gui + GuiConversationActive) == 0)
@@ -2019,48 +2059,246 @@ internal static unsafe class Odyssey
             return false; // no conversation on screen
         }
 
-        // The dialog hangs off whichever participant initiated it; try both.
-        nint dialog = FindActiveDialog(*(uint*)(gui + GuiParticipantA));
-        if (dialog == 0)
+        if (_ringNewest < 0)
         {
-            dialog = FindActiveDialog(*(uint*)(gui + GuiParticipantB));
+            return true; // active but no line seen yet -> empty
         }
 
-        if (dialog == 0)
-        {
-            return true; // active, but the owner/dialog was not resolvable -> empty
-        }
+        nint newest = gui + GuiDialogueRing + _ringNewest * GuiDialogueRecordStride;
 
-        int count = *(int*)(dialog + DialogEntriesCount);
-        nint entries = Deref(dialog + DialogEntries);
-        if (count is <= 0 or > 100000 || !LooksLikeHeapPointer(entries))
+        if (line != null)
         {
-            return true;
-        }
-
-        int index = *(int*)(dialog + DialogCurrentEntryIndexCandidate);
-        if (index < 0 || index >= count)
-        {
-            return true; // unknown/out-of-range index (NEEDS-LIVE) -> empty, no crash
-        }
-
-        nint node = entries + (nint)(index * DialogEntryStride);
-        if (!LooksLikeHeapPointer(node))
-        {
-            return true;
+            nint text = *(nint*)newest;
+            int textLen = *(int*)(newest + 4);
+            if (LooksLikeDataPointer(text) && textLen is > 1 and <= 0x400)
+            {
+                CopyAsciiBounded(text, textLen - 1, line, lineCap);
+            }
         }
 
         if (speaker != null)
         {
-            ReadExoStringInto(node + NodeSpeaker, speaker, speakerCap);
-        }
-
-        if (line != null)
-        {
-            ReadLocStringInto(node + NodeText, line, lineCap);
+            nint name = *(nint*)(newest + 8);
+            int nameLen = *(int*)(newest + 12);
+            if (LooksLikeDataPointer(name) && nameLen is > 1 and <= 0x40)
+            {
+                CopyAsciiBounded(name, nameLen - 1, speaker, speakerCap);
+            }
         }
 
         return true;
+    }
+
+    // ---- dialogue follow ---------------------------------------------------------
+    //
+    // The spectator runs the SAME conversation in the engine's own UI. Three levers:
+    //
+    //   open   CSWCCreature::ActionInitiateDialog (0x0060F620) on the NPC's client twin —
+    //          the exact path a click on that NPC takes, ending in
+    //          SendPlayerToServerInput_Dialog, so the server builds a real CSWSDialog.
+    //   follow CSWGuiDialog::SelectReply (0x006A7110, thiscall(int)) — the click-reply-N
+    //          entry. Replaying the owner's slot walks our copy of the same .dlg down the
+    //          same branch.
+    //   mute   CClientExoApp::SetCanSendDialog (0x005EDC80) — the spectator may not commit
+    //          a reply of its own. Written every frame while following, because whether the
+    //          engine re-sets it was never established.
+
+    /// <summary>CSWSObject + this = the object's tag (CExoString).</summary>
+    private const int ObjTag = 0x18;
+
+    /// <summary>CGuiInGame + this = the live CSWGuiDialog panel.</summary>
+    private const int GuiDialogPanel = 0x78;
+
+    /// <summary>CSWGuiDialog + this = how many reply slots are on screen.</summary>
+    private const int DialogPanelReplyCount = 0x6C;
+
+    private static readonly delegate* unmanaged[Thiscall]<nint, int, int, void> ActionInitiateDialogFn =
+        (delegate* unmanaged[Thiscall]<nint, int, int, void>)0x0060F620;
+
+    private static readonly delegate* unmanaged[Thiscall]<nint, int, void> SelectReplyFn =
+        (delegate* unmanaged[Thiscall]<nint, int, void>)0x006A7110;
+
+    private static readonly delegate* unmanaged[Thiscall]<nint, int, void> SetCanSendDialogFn =
+        (delegate* unmanaged[Thiscall]<nint, int, void>)0x005EDC80;
+
+    private static readonly delegate* unmanaged[Thiscall]<nint, void> CloseDialogFn =
+        (delegate* unmanaged[Thiscall]<nint, void>)0x006332B0;
+
+    /// <summary>Copies a creature's tag into an ASCII buffer. Empty when unavailable.</summary>
+    public static void ReadObjectTag(nint obj, byte* dest, int cap)
+    {
+        if (cap <= 0)
+        {
+            return;
+        }
+
+        dest[0] = 0;
+        if (obj == 0)
+        {
+            return;
+        }
+
+        ReadExoStringInto(obj + ObjTag, dest, cap);
+    }
+
+    /// <summary>The tag of whoever the local player is currently in conversation with, or
+    /// empty. Reads the client GUI's participant ids, skipping the player itself.</summary>
+    public static void ReadDialoguePartnerTag(byte* dest, int cap)
+    {
+        if (cap > 0)
+        {
+            dest[0] = 0;
+        }
+
+        nint gui = GetInGameGui();
+        if (gui == 0 || *(int*)(gui + GuiConversationActive) == 0)
+        {
+            return;
+        }
+
+        uint player = GetPlayerObjectId();
+        foreach (uint raw in stackalloc uint[] { *(uint*)(gui + GuiParticipantA), *(uint*)(gui + GuiParticipantB) })
+        {
+            // ⚠ The participant fields carry FLAG BITS above the object id. Measured live
+            // during a Trask conversation: the field read 0x80000127 while the creature's
+            // own id was 0x127, and 0xFFFFFFFF stood for the other (player) side. Resolving
+            // the raw value found nothing, so the partner tag came out empty and no
+            // spectator could ever open the conversation. Mask the top bit off.
+            uint id = raw & 0x7FFFFFFF;
+
+            if (id is 0 or ObjectInvalid or 0x7FFFFFFF || id == player)
+            {
+                continue;
+            }
+
+            nint obj = ResolveServerObject(id);
+            if (obj != 0)
+            {
+                ReadObjectTag(obj, dest, cap);
+                if (dest[0] != 0)
+                {
+                    return;
+                }
+            }
+        }
+    }
+
+    /// <summary>
+    /// Opens a conversation against the creature with <paramref name="tag"/>, exactly as a
+    /// click on it would. Returns false when the creature is not in this module, a
+    /// conversation is already running, or the twin does not exist yet.
+    ///
+    /// MAIN THREAD ONLY.
+    /// </summary>
+    public static bool StartDialogueWith(ReadOnlySpan<byte> tag)
+    {
+        nint gui = GetInGameGui();
+        if (gui == 0 || *(int*)(gui + GuiConversationActive) != 0)
+        {
+            return false; // no HUD, or we are already talking
+        }
+
+        nint creature = CreatureFinder.FindByTag(tag);
+        if (creature == 0)
+        {
+            return false;
+        }
+
+        nint twin = *(nint*)(creature + CreClientTwin);
+        if (twin == 0 || *(nint*)twin != ClientCreatureVtable)
+        {
+            return false;
+        }
+
+        ActionInitiateDialogFn(twin, 0, 0);
+        return true;
+    }
+
+    /// <summary>The live conversation panel, or 0. Vtable-checked loosely: the dialog panel
+    /// is subclassed (cinematic/computer variants), so only the reply-count field's
+    /// plausibility is trusted, and every use of it is bounds-checked anyway.</summary>
+    private static nint GetDialoguePanel()
+    {
+        nint gui = GetInGameGui();
+        if (gui == 0)
+        {
+            return 0;
+        }
+
+        nint panel = Deref(gui + GuiDialogPanel);
+        return LooksLikeHeapPointer(panel) ? panel : 0;
+    }
+
+    /// <summary>
+    /// Replays a reply the conversation's owner picked. Bounds-checked against the reply
+    /// count the panel is actually showing, so a slot from a diverged tree is dropped
+    /// rather than dispatched — SelectReply itself would reject it, but a stale index is a
+    /// signal worth not acting on.
+    ///
+    /// MAIN THREAD ONLY.
+    /// </summary>
+    public static bool SelectDialogueReply(int slot)
+    {
+        nint panel = GetDialoguePanel();
+        if (panel == 0)
+        {
+            return false;
+        }
+
+        int count = *(int*)(panel + DialogPanelReplyCount);
+        if (count is <= 0 or > 64 || slot < 0 || slot >= count)
+        {
+            return false;
+        }
+
+        SelectReplyFn(panel, slot);
+        return true;
+    }
+
+    /// <summary>Allows or forbids this client committing a dialogue reply.</summary>
+    public static void SetCanSendDialog(bool allowed)
+    {
+        nint client = GetClient();
+        if (client != 0)
+        {
+            SetCanSendDialogFn(client, allowed ? 1 : 0);
+        }
+    }
+
+    /// <summary>
+    /// True when the live conversation has actually been populated — a resolved participant
+    /// or something on the panel. A conversation the client has marked active but which no
+    /// entry ever reached reads as false, which is how a half-started one is detected.
+    /// </summary>
+    public static bool DialogueHasContent()
+    {
+        nint gui = GetInGameGui();
+        if (gui == 0 || *(int*)(gui + GuiConversationActive) == 0)
+        {
+            return false;
+        }
+
+        foreach (uint raw in stackalloc uint[] { *(uint*)(gui + GuiParticipantA), *(uint*)(gui + GuiParticipantB) })
+        {
+            uint id = raw & 0x7FFFFFFF;
+            if (id is not (0 or ObjectInvalid or 0x7FFFFFFF))
+            {
+                return true;
+            }
+        }
+
+        nint panel = GetDialoguePanel();
+        return panel != 0 && *(int*)(panel + DialogPanelReplyCount) > 0;
+    }
+
+    /// <summary>Closes the local conversation UI (used when the owner ends theirs).</summary>
+    public static void CloseDialogue()
+    {
+        nint gui = GetInGameGui();
+        if (gui != 0 && *(int*)(gui + GuiConversationActive) != 0)
+        {
+            CloseDialogFn(gui);
+        }
     }
 
     /// <summary>Resolves an object id to its live CSWSDialog*, or 0 (vtable-guarded).</summary>
@@ -2352,12 +2590,14 @@ internal static unsafe class Odyssey
     /// shared-pause mirror uses this same bit so either player can pause both worlds.</summary>
     public const int PauseReasonPlayer = 0x01;
 
-    // CClientExoApp::SetPauseState(int nMask, int bValue). The CLIENT keeps its own pause
-    // mask and its own world timers, entirely separate from the server's — verified live:
-    // pausing only the server left the bit cleared again within a frame, because the
-    // client drives the pair back to agreement. Both halves must be set together.
+    // CClientExoApp::SetPauseState(int nMask, int bValue). ⚠ DO NOT CALL. Its tail walks a
+    // notify list that is only valid on the engine's own call path; calling it from the
+    // plugin crashed both instances at 0x5E9BC9 (2026-08-01). SetPlayerPause assembles the
+    // client half from the individually-verified pieces instead. Kept for documentation.
+#pragma warning disable IDE0051, CS0414
     private static readonly delegate* unmanaged[Thiscall]<nint, int, int, void> ClientSetPauseStateFn =
         (delegate* unmanaged[Thiscall]<nint, int, int, void>)0x005ED650;
+#pragma warning restore IDE0051, CS0414
 
     /// <summary>CClientExoAppInternal + this = the client's own pause-reason bitmask.</summary>
     private const int ClientPauseMaskOffset = 0x1CC;
@@ -2393,32 +2633,174 @@ internal static unsafe class Odyssey
         bool serverWas = (GetPauseMask() & PauseReasonPlayer) != 0;
         bool changed = clientWas != paused || serverWas != paused;
 
-        // ⚠ Both halves are set UNCONDITIONALLY, not only the one that currently disagrees.
-        //
-        // The client mask drives the PAUSED banner and the server mask drives the world
-        // timer, and setting them independently let them diverge — which is exactly the
-        // reported "the game is clearly running but the PAUSED banner is still up". Once
-        // they disagree, the conditional form makes it permanent: each half looks correct
-        // against its own state, so neither is ever corrected. Writing both every time costs
-        // two setter calls and makes divergence impossible.
-        nint client = GetClient();
-        if (client != 0)
-        {
-            ClientSetPauseStateFn(client, PauseReasonPlayer, value);
-        }
-
+        // The SERVER half goes through the engine's own setter — it drives the server world
+        // timer and the simulation stop, and that entry has run from this plugin for days
+        // (FocusKeeper) without incident.
         nint server = GetServer();
         if (server != 0)
         {
             SetPauseStateFn(server, PauseReasonPlayer, value);
         }
 
+        // The CLIENT half must NOT go through CClientExoApp::SetPauseState. Measured live
+        // (2026-08-01): a direct call crashes in the notify walk at its tail
+        // (0x5F8240..0x5F825C), which iterates a list that is only valid on the engine's
+        // own call path — both instances died at 0x5E9BC9 within 65 ms of each other when
+        // the space handler here and the mirror on the peer used it. Everything that call
+        // maintains is individually safe with a verified body, so assemble it by hand:
+        // the mask byte is a plain flag, the world-timer pause is a one-field function,
+        // and the banner/GUI belief has its own setter.
+        nint clientInternal = GetClient() == 0 ? 0 : Deref(GetClient() + AppClientOffset);
+        if (clientInternal != 0)
+        {
+            byte* mask = (byte*)(clientInternal + ClientPauseMaskOffset);
+            if (paused)
+            {
+                *mask |= PauseReasonPlayer;
+            }
+            else
+            {
+                *mask &= unchecked((byte)~PauseReasonPlayer);
+            }
+        }
+
+        nint client = GetClient();
+        if (client != 0)
+        {
+            nint timer = ClientGetWorldTimerFn(client);
+            if (timer != 0)
+            {
+                if (paused)
+                {
+                    PauseWorldTimerFn(timer);
+                }
+                else
+                {
+                    UnpauseWorldTimerFn(timer);
+                }
+            }
+        }
+
+        nint gui = GetInGameGui();
+        if (gui != 0 && *(int*)(gui + 0x108) != 0)
+        {
+            SetPauseVisualsFn(gui, value, PauseReasonManual);
+        }
+
         return changed;
     }
+
+    /// <summary>The reason byte whose banner is the plain "PAUSED" (reason 1 would read
+    /// "ENEMY SIGHTED!" — the label jump table at 0x6C02BC maps 4 to the default strref).</summary>
+    private const int PauseReasonManual = 4;
 
     /// <summary>True when the player-pause reason is held on either half.</summary>
     public static bool IsPlayerPaused =>
         ((GetPauseMask() | GetClientPauseMask()) & PauseReasonPlayer) != 0;
+
+    // ---- pause-state reconciliation ---------------------------------------------
+    //
+    // The pause feature has THREE state holders that only ever move on edges: the two
+    // pause-reason masks (client + server), the world timers' paused flags, and the GUI's
+    // own belief at CGuiInGame+0xB3C — which is re-derived every frame from the CLIENT
+    // world timer's flag, arms the pause panel, and routes the space bar to "unpause"
+    // while set. SetPauseState early-outs when the mask bit already agrees, so a single
+    // missed edge (a raw mask write, a swallowed loopback message, a timer paused outside
+    // the setter) strands the holders in disagreement PERMANENTLY: the banner cannot
+    // clear and the space bar's unpause no-ops forever. Measured live on both instances.
+    // The cure is to be level-triggered somewhere: this reconciler drives every holder
+    // back to what the masks say, through the engine's own idempotent setters.
+
+    /// <summary>CGuiInGame + this = the GUI's own "the game is paused" belief.</summary>
+    private const int GuiBelievesPaused = 0xB3C;
+
+    /// <summary>CWorldTimer + this = 1 while paused. A flag, not a counter.</summary>
+    private const int WorldTimerPausedFlag = 0x24;
+
+    private static readonly delegate* unmanaged[Thiscall]<nint, nint> ClientGetWorldTimerFn =
+        (delegate* unmanaged[Thiscall]<nint, nint>)0x005ED4F0;
+
+    private static readonly delegate* unmanaged[Thiscall]<nint, nint> ServerGetWorldTimerFn =
+        (delegate* unmanaged[Thiscall]<nint, nint>)0x004AEDE0;
+
+    private static readonly delegate* unmanaged[Thiscall]<nint, void> PauseWorldTimerFn =
+        (delegate* unmanaged[Thiscall]<nint, void>)0x004ADFF0;
+
+    private static readonly delegate* unmanaged[Thiscall]<nint, void> UnpauseWorldTimerFn =
+        (delegate* unmanaged[Thiscall]<nint, void>)0x004AE030;
+
+    /// <summary>
+    /// CGuiInGame::SetPauseVisuals(bPaused, reasonByte) — the one function that moves the
+    /// GUI belief and the pause panel, normally reached only from message handlers.
+    /// Internally guarded on the HUD existing, and its show path routes correctly around
+    /// the map screen and conversations, so it is safe to call in any GUI state.
+    /// </summary>
+    private static readonly delegate* unmanaged[Thiscall]<nint, int, int, void> SetPauseVisualsFn =
+        (delegate* unmanaged[Thiscall]<nint, int, int, void>)0x0062DEF0;
+
+    /// <summary>
+    /// Drives the world timers and the GUI's pause belief back into agreement with the
+    /// pause masks. Returns true when something had to be repaired.
+    ///
+    /// MAIN THREAD ONLY.
+    /// </summary>
+    public static bool ReconcilePause()
+    {
+        nint client = GetClient();
+        nint server = GetServer();
+        nint gui = GetInGameGui();
+        if (client == 0 || server == 0 || gui == 0 || *(int*)(gui + 0x108) == 0)
+        {
+            return false;
+        }
+
+        // Never touch anything mid-load: the login chain pauses these timers ON PURPOSE
+        // for the duration of a module load, and resumes them itself at presentation.
+        nint internalServer = Deref(server + AppServerOffsetInternal);
+        if (internalServer == 0
+            || *(int*)(internalServer + 0x100B4) != 0     // module load in progress
+            || *(ushort*)(internalServer + 0x10008) != 2) // server mode: 2 = world running
+        {
+            return false;
+        }
+
+        int union = GetPauseMask() | GetClientPauseMask();
+        bool guiBelieves = *(int*)(gui + GuiBelievesPaused) != 0;
+        bool repaired = false;
+
+        if (union == 0)
+        {
+            // Nothing holds a pause, so nothing may stay paused. Resume the two timers the
+            // login chain manages (matching what it pauses) and clear the GUI belief.
+            nint clientTimer = ClientGetWorldTimerFn(client);
+            if (clientTimer != 0 && *(int*)(clientTimer + WorldTimerPausedFlag) != 0)
+            {
+                UnpauseWorldTimerFn(clientTimer);
+                repaired = true;
+            }
+
+            nint serverTimer = ServerGetWorldTimerFn(server);
+            if (serverTimer != 0 && *(int*)(serverTimer + WorldTimerPausedFlag) != 0)
+            {
+                UnpauseWorldTimerFn(serverTimer);
+                repaired = true;
+            }
+
+            if (guiBelieves)
+            {
+                SetPauseVisualsFn(gui, 0, 0);
+                repaired = true;
+            }
+        }
+        else if ((union & PauseReasonPlayer) != 0 && !guiBelieves)
+        {
+            // A real player pause with no banner: the show edge was missed.
+            SetPauseVisualsFn(gui, 1, PauseReasonManual);
+            repaired = true;
+        }
+
+        return repaired;
+    }
 
     /// <summary>
     /// Sets one pause reason through the engine's own setter, so CWorldTimer actually
@@ -3198,7 +3580,14 @@ internal static unsafe class Odyssey
             setAnimation(creature, want);
         }
 
-        SetPositionFn(creature, &position, 1, 0, 0);
+        // arg3 = 1 SUPPRESSES the position dirty bit, deliberately. When the bit is raised,
+        // the AI master's sync pass calls the twin's position handler, which (a) takes its
+        // own interpolation step against ours and (b) re-derives the animation playback rate
+        // via ComputeSpeedFactor — a function that returns 0.0 for any creature without a
+        // waypoint list, which a phantom never has. Rate 0.0 is a run cycle that never
+        // advances: the legs freeze mid-pose while the body slides — the "flying" look.
+        // We drive the twin ourselves below, so the engine's push is pure interference.
+        SetPositionFn(creature, &position, 1, 0, 1);
 
         // The half that actually renders. Re-read the twin every frame — it is created and
         // destroyed by the engine and a cached pointer would eventually be stale.
@@ -3208,42 +3597,75 @@ internal static unsafe class Odyssey
             *(Vec3*)(twin + TwinDesiredPosition) = position;
             *(int*)(twin + TwinDesiredPositionBudget) = 0;
 
-            // ⚠ The gait must be set on the TWIN as well, through the twin's own setter.
-            //
-            // Setting it on the server object relies on the engine's object-update diff
-            // pushing it to the render side, and for a phantom we are position-driving that
-            // push never arrives: measured live, the server object held the run animation for
-            // seconds while the twin sat on idle the whole time. The renderer plays the
-            // twin's value, so the body moved with no run cycle — the character "flying"
-            // rather than running. A raw write to the field is overwritten within a frame;
-            // the engine's own setter (twin vtable +0x9C) is what sticks.
-            if (*(nint*)twin == ClientCreatureVtable
-                && *(ushort*)(twin + TwinCurrentAnimation) != (ushort)want)
+            if (*(nint*)twin == ClientCreatureVtable)
             {
-                var twinSetAnimation =
-                    (delegate* unmanaged[Thiscall]<nint, uint, int, void>)(*(nint*)(*(nint*)twin + TwinSetAnimationSlot));
-                twinSetAnimation(twin, (uint)want, 0);
+                // ⚠ The gait must be set on the TWIN as well, and specifically through the
+                // server→client animation sync handler (twin vtable +0x134) — the entry the
+                // engine's own dirty-push uses. It dispatches looping animations (run/walk/
+                // idle are looping) to the looping setter that writes twin+0x48, which
+                // AnimationUpdate re-asserts from every frame. My previous attempt called
+                // the plain setter (vtable +0x9C): it PLAYS the animation but does not own
+                // +0x48, so the very next AnimationUpdate re-asserted idle over it —
+                // measured live as the twin never leaving 0x2710 while the server held
+                // 0x2714.
+                if (*(ushort*)(twin + TwinCurrentAnimation) != (ushort)want)
+                {
+                    var syncAnimation =
+                        (delegate* unmanaged[Thiscall]<nint, uint, float, void>)(*(nint*)(*(nint*)twin + TwinAnimationSyncSlot));
+                    syncAnimation(twin, (uint)want, *(float*)(creature + ObjAnimationBudget));
+                }
+
+                // The playback rate the engine would have computed from the waypoint list we
+                // do not have. 1.0 plays the cycle at its authored rate; scale it by how fast
+                // the peer actually covers ground so the feet roughly match the floor.
+                float rate = moving
+                    ? Math.Clamp(speed / (run ? RunSpeedReference : WalkSpeedReference), 0.5f, 2.0f)
+                    : 1.0f;
+                *(float*)(twin + TwinAnimationSpeedFactor) = rate;
             }
         }
 
-        if (_gaitLogged < 6)
+        _gaitLogTimer++;
+        if (_gaitLogTimer >= 240 && moving)
         {
-            _gaitLogged++;
+            _gaitLogTimer = 0;
             nint t = *(nint*)(creature + CreClientTwin);
+            nint mine = GetLocalPlayerTwin();
             PluginHost.Log(
-                $"gait#{_gaitLogged}: speed {speed:F2} -> {(moving ? (run ? "run" : "walk") : "idle")} "
-                + $"(server anim 0x{*(int*)(creature + ObjAnimationField):X}, "
-                + $"twin anim 0x{(t == 0 ? 0 : *(ushort*)(t + TwinCurrentAnimation)):X})");
+                $"gait: speed {speed:F2} -> {(run ? "run" : "walk")} "
+                + $"(server 0x{*(int*)(creature + ObjAnimationField):X}, "
+                + $"twin 0x{(t == 0 ? 0 : *(ushort*)(t + TwinCurrentAnimation)):X}, "
+                + $"rate {(t == 0 ? 0f : *(float*)(t + TwinAnimationSpeedFactor)):F2}, "
+                + $"my twin 0x{(mine == 0 ? 0 : *(ushort*)(mine + TwinCurrentAnimation)):X} "
+                + $"rate {(mine == 0 ? 0f : *(float*)(mine + TwinAnimationSpeedFactor)):F2})");
         }
     }
 
-    private static int _gaitLogged;
+    private static int _gaitLogTimer;
 
     /// <summary>CSWCObject + this = the animation actually being rendered (u16).</summary>
     private const int TwinCurrentAnimation = 0x48;
 
-    /// <summary>CSWCObject vtable +0x9C = SetAnimation(anim, flag) — the render-side setter.</summary>
-    private const int TwinSetAnimationSlot = 0x9C;
+    /// <summary>
+    /// CSWCObject vtable +0x134 = ClientServerSyncHandler_Animation(anim, budget) — the entry
+    /// the engine's server→client dirty-push calls. Routes looping animations to the setter
+    /// that owns twin+0x48; calling the plain setter (+0x9C) instead does not stick.
+    /// </summary>
+    private const int TwinAnimationSyncSlot = 0x134;
+
+    /// <summary>CSWSObject + this = float forwarded with the engine's animation sync.</summary>
+    private const int ObjAnimationBudget = 0xD8;
+
+    /// <summary>
+    /// CSWCCreature + this = animation playback-rate scale. The engine computes it from the
+    /// waypoint list (ComputeSpeedFactor) and gets 0.0 for a creature without one — frozen
+    /// legs — so a phantom's is written by us every frame instead.
+    /// </summary>
+    private const int TwinAnimationSpeedFactor = 0x1F8;
+
+    /// <summary>appearance.2da row 114 rundist / walkdist — world units per second at rate 1.0.</summary>
+    private const float RunSpeedReference = 3.96f;
+    private const float WalkSpeedReference = 1.6f;
 
     /// <summary>Faces a creature along a world-space angle (0 = +X, counter-clockwise).</summary>
     public static void SetFacing(nint creature, float angle)

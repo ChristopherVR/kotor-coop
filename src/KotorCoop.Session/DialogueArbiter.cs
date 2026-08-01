@@ -18,28 +18,44 @@ namespace KotorCoop.Session;
 /// </summary>
 public static class DialogueArbiter
 {
-    public static DialogueState Apply(DialogueState current, uint requesterPeerId, bool active, string speaker, string line)
+    public static DialogueState Apply(
+        DialogueState current,
+        uint requesterPeerId,
+        bool active,
+        string speaker,
+        string line,
+        string partnerTag = "",
+        uint replySerial = 0,
+        int replyIndex = 0)
     {
         speaker ??= string.Empty;
         line ??= string.Empty;
+        partnerTag ??= string.Empty;
 
         if (active)
         {
             if (!current.Active)
             {
                 // Grant.
-                return new DialogueState(true, requesterPeerId, current.Serial + 1, speaker, line);
+                return new DialogueState(
+                    true, requesterPeerId, current.Serial + 1, speaker, line, partnerTag, replySerial, replyIndex);
             }
 
             if (current.OwnerPeerId == requesterPeerId)
             {
-                // Update from the owner. Only bump the serial on a real change.
-                if (current.SpeakerName == speaker && current.Line == line)
+                // Update from the owner. Only bump the serial on a real change — and the
+                // reply serial counts as a change even when the line has not caught up yet,
+                // because it is what advances the spectator's own conversation.
+                if (current.SpeakerName == speaker
+                    && current.Line == line
+                    && current.PartnerTag == partnerTag
+                    && current.ReplySerial == replySerial)
                 {
                     return current;
                 }
 
-                return new DialogueState(true, requesterPeerId, current.Serial + 1, speaker, line);
+                return new DialogueState(
+                    true, requesterPeerId, current.Serial + 1, speaker, line, partnerTag, replySerial, replyIndex);
             }
 
             // Held by someone else: ignore the contender.

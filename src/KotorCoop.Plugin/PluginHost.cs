@@ -28,6 +28,7 @@ internal static unsafe class PluginHost
     private static LootController? _loot;
     private static TravelController? _travel;
     private static PauseController? _pause;
+    private static PauseKeyController? _pauseKey;
     private static JournalController? _journal;
     private static MapMarkerController? _mapMarkers;
     private static MenuLoadController? _menuLoad;
@@ -94,6 +95,7 @@ internal static unsafe class PluginHost
             _chatOverlay = new ChatOverlayController(_view);
             _dialogueSpectate = new DialogueSpectateController(_view);
             _pause = new PauseController(_view);
+            _pauseKey = new PauseKeyController();
             _journal = new JournalController(_view);
             _mapMarkers = new MapMarkerController(_view);
 
@@ -157,6 +159,29 @@ internal static unsafe class PluginHost
                 Log($"animation hook NOT installed: {animationDiagnostic}");
             }
 
+            // Which dialogue reply the player picks is dispatched and gone between frames,
+            // so it is captured by hooking the engine's own reply entry rather than sampled.
+            if (DialogueReplyHook.Install(out string replyDiagnostic))
+            {
+                Log($"dialogue: {replyDiagnostic}");
+            }
+            else
+            {
+                Log($"dialogue reply hook NOT installed: {replyDiagnostic}");
+            }
+
+            // The engine reverts any pause that lacks a valid "PausedBy" record within one
+            // tick, which in a loopback session is every pause there is — space bar, HUD
+            // button and mirror alike. See PauseSanityPatch.
+            if (PauseSanityPatch.Install(out string pausePatchDiagnostic))
+            {
+                Log($"pause: {pausePatchDiagnostic}");
+            }
+            else
+            {
+                Log($"pause sanity patch NOT installed: {pausePatchDiagnostic}");
+            }
+
             // Co-op death handling: suppress the control auto-swap and the game-over screen.
             // Both patches stay inert until the agent turns them on, so a plugin with no
             // session behaves exactly like stock KOTOR.
@@ -211,7 +236,7 @@ internal static unsafe class PluginHost
         Unsafe.InitBlockUnaligned(_block, 0, SharedBlock.TotalSize);
 
         _block->Magic = SharedBlock.MagicValue;
-        _block->Version = 16;
+        _block->Version = 18;
 
         // A guard dword after the version. Magic plus version alone was not selective
         // enough: a scan once matched something else at a lower address and the agent
@@ -387,6 +412,7 @@ internal static unsafe class PluginHost
         _placeables?.OnFrame();
         _loot?.OnFrame();
         _pause?.OnFrame();
+        _pauseKey?.OnFrame();
         _journal?.OnFrame();
         _mapMarkers?.OnFrame();
 

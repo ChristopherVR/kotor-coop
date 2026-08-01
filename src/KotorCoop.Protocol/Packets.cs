@@ -167,7 +167,13 @@ public sealed record ChatPacket(uint FromPeerId, string Name, string Text);
 /// host's arbiter decides what actually happens to the shared token.
 /// </summary>
 public sealed record DialogueRequestPacket(
-    uint PeerId, bool Active, string SpeakerName, string Line);
+    uint PeerId,
+    bool Active,
+    string SpeakerName,
+    string Line,
+    string PartnerTag = "",
+    uint ReplySerial = 0,
+    int ReplyIndex = 0);
 
 /// <summary>
 /// A peer's in-world content fingerprint, sent both ways once a save is loaded and

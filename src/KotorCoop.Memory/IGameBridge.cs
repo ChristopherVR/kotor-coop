@@ -171,6 +171,25 @@ public interface IGameBridge : IDisposable
         return false;
     }
 
+    /// <summary>
+    /// Reads what a spectating peer needs to run the SAME conversation locally: the tag of
+    /// the NPC the local player is talking to, and the reply they last picked. Default is
+    /// "nothing to follow" for bridges without a plugin.
+    /// </summary>
+    bool TryReadLocalDialogueFollow(out string partnerTag, out uint replySerial, out int replyIndex)
+    {
+        partnerTag = string.Empty;
+        replySerial = 0;
+        replyIndex = 0;
+        return false;
+    }
+
+    /// <summary>
+    /// Tells the game which conversation a peer owns, so this instance opens the same one
+    /// and follows the owner's picks without being able to choose. Default false.
+    /// </summary>
+    bool WriteRemoteDialogue(bool active, string partnerTag, uint replySerial, int replyIndex) => false;
+
     /// <summary>Posts one line to the always-on chat overlay (used to surface a peer's
     /// dialogue). Default false when this bridge has no overlay.</summary>
     bool PostChatLine(string line) => false;

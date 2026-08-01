@@ -174,14 +174,22 @@ public sealed class CoopClient : ICoopSession
     private bool _localDialogueActive;
     private string _localDialogueSpeaker = string.Empty;
     private string _localDialogueLine = string.Empty;
+    private string _localDialoguePartnerTag = string.Empty;
+    private uint _localDialogueReplySerial;
+    private int _localDialogueReplyIndex;
 
-    public void PublishDialogue(bool active, string speakerName, string line)
+    public void PublishDialogue(
+        bool active, string speakerName, string line,
+        string partnerTag = "", uint replySerial = 0, int replyIndex = 0)
     {
         lock (_gate)
         {
             _localDialogueActive = active;
             _localDialogueSpeaker = speakerName ?? string.Empty;
             _localDialogueLine = line ?? string.Empty;
+            _localDialoguePartnerTag = partnerTag ?? string.Empty;
+            _localDialogueReplySerial = replySerial;
+            _localDialogueReplyIndex = replyIndex;
         }
     }
 
@@ -497,15 +505,22 @@ public sealed class CoopClient : ICoopSession
         bool active;
         string speaker;
         string line;
+        string partnerTag;
+        uint replySerial;
+        int replyIndex;
         lock (_gate)
         {
             active = _localDialogueActive;
             speaker = _localDialogueSpeaker;
             line = _localDialogueLine;
+            partnerTag = _localDialoguePartnerTag;
+            replySerial = _localDialogueReplySerial;
+            replyIndex = _localDialogueReplyIndex;
         }
 
         int length = PacketCodec.Write(
-            _sendBuffer, new DialogueRequestPacket(_localPeerId, active, speaker, line));
+            _sendBuffer,
+            new DialogueRequestPacket(_localPeerId, active, speaker, line, partnerTag, replySerial, replyIndex));
         if (length > 0)
         {
             _channel.Send(_hostEndPoint, _sendBuffer.AsSpan(0, length));

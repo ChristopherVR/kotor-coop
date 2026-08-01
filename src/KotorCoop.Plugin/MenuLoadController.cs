@@ -103,6 +103,11 @@ internal sealed unsafe class MenuLoadController(SharedBlockView block)
     private static readonly delegate* unmanaged[Thiscall]<nint, void> PauseWorldTimer =
         (delegate* unmanaged[Thiscall]<nint, void>)0x004ADFF0;
 
+    /// <summary>CWorldTimer::UnpauseWorldTimer. The pause is a plain flag (timer+0x24), not
+    /// a counter, so pausing and resuming are both idempotent.</summary>
+    private static readonly delegate* unmanaged[Thiscall]<nint, void> UnpauseWorldTimer =
+        (delegate* unmanaged[Thiscall]<nint, void>)0x004AE030;
+
     private static readonly delegate* unmanaged[Thiscall]<nint, ExoString*, nint> GetClientName =
         (delegate* unmanaged[Thiscall]<nint, ExoString*, nint>)0x005ED490;
 
@@ -614,10 +619,24 @@ internal sealed unsafe class MenuLoadController(SharedBlockView block)
         SetInputClass(client, 0, 1);
         EnableInput(client);
 
-        // 7. Drop the load screen. Exactly once — it pops one modal panel per call.
+        // 7. Resume the world timers phase 2 paused. The engine's own presentation path
+        //    does this; ours must too, and skipping it is not cosmetic: the client GUI
+        //    re-derives its "paused" belief from this timer's flag EVERY frame, and while
+        //    the flag is stuck the pause panel is armed, the space bar is routed to
+        //    "unpause" — which early-outs because the pause mask is already clear — and
+        //    the game is left with a permanent PAUSED banner and a pause key that does
+        //    nothing. Measured live on both instances (gui+0xB3C == 1, all masks == 0).
+        if (server != 0)
+        {
+            UnpauseWorldTimer(ServerGetWorldTimer(server));
+        }
+
+        UnpauseWorldTimer(ClientGetWorldTimer(client));
+
+        // 8. Drop the load screen. Exactly once — it pops one modal panel per call.
         HideLoadScreen(client, 1, 1);
 
-        // 8. Undo phase 1's unpauseable hold.
+        // 9. Undo phase 1's unpauseable hold.
         if (gui != 0)
         {
             SetGlobalUnpauseableState(gui, 0);

@@ -531,6 +531,37 @@ internal sealed unsafe class SharedBlockView(byte* baseAddress)
         set => *U32(SharedBlock.OffsetLocalDialogueSerial) = value;
     }
 
+    // ---- dialogue follow --------------------------------------------------------
+
+    /// <summary>Tag (32 bytes) of the NPC the local player is talking to, plugin-written.</summary>
+    public byte* LocalDialoguePartnerTag => baseAddress + SharedBlock.OffsetLocalDialoguePartnerTag;
+
+    /// <summary>Plugin-written; bumped on every reply the local player picks.</summary>
+    public uint LocalDialogueReplySerial
+    {
+        get => *U32(SharedBlock.OffsetLocalDialogueReplySerial);
+        set => *U32(SharedBlock.OffsetLocalDialogueReplySerial) = value;
+    }
+
+    /// <summary>Plugin-written; the reply slot the local player clicked.</summary>
+    public int LocalDialogueReplyIndex
+    {
+        get => *(int*)U32(SharedBlock.OffsetLocalDialogueReplyIndex);
+        set => *(int*)U32(SharedBlock.OffsetLocalDialogueReplyIndex) = value;
+    }
+
+    /// <summary>Agent-written; nonzero while a peer owns a conversation to follow.</summary>
+    public bool RemoteDialogueActive => *U32(SharedBlock.OffsetRemoteDialogueActive) != 0;
+
+    /// <summary>Agent-written; a change means "the owner picked a reply, replay it".</summary>
+    public uint RemoteDialogueReplySerial => *U32(SharedBlock.OffsetRemoteDialogueReplySerial);
+
+    /// <summary>Agent-written; the reply slot to replay.</summary>
+    public int RemoteDialogueReplyIndex => *(int*)U32(SharedBlock.OffsetRemoteDialogueReplyIndex);
+
+    /// <summary>Agent-written; tag of the NPC to open the conversation against.</summary>
+    public byte* RemoteDialoguePartnerTag => baseAddress + SharedBlock.OffsetRemoteDialoguePartnerTag;
+
     public ItemSlotView GetItemSlot(int index) =>
         new(baseAddress + SharedBlock.OffsetItemSlots + (index * SharedBlock.ItemSlotStride));
 

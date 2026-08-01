@@ -66,7 +66,9 @@ public class PausePumpTests
 
         public System.Collections.Generic.IReadOnlyList<PartyMemberState> GetPartyMembers() => [];
 
-        public void PublishDialogue(bool active, string speakerName, string line) { }
+        public void PublishDialogue(
+            bool active, string speakerName, string line,
+            string partnerTag = "", uint replySerial = 0, int replyIndex = 0) { }
 
         public DialogueState GetDialogue() => DialogueState.Idle;
 

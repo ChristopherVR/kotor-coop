@@ -87,7 +87,9 @@ public interface ICoopSession : IDisposable
     /// host's arbiter. Speaker/line are the spectate payload (empty until the plugin can read
     /// the live conversation). Cheap to call every tick.
     /// </summary>
-    void PublishDialogue(bool active, string speakerName, string line);
+    void PublishDialogue(
+        bool active, string speakerName, string line,
+        string partnerTag = "", uint replySerial = 0, int replyIndex = 0);
 
     /// <summary>The authoritative conversation token — who, if anyone, is mid-dialogue.</summary>
     DialogueState GetDialogue();
