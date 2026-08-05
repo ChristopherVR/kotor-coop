@@ -2530,3 +2530,61 @@ up normally, enemy drive (23/25) and party drive (1) live on the client, zero cr
 across several minutes of runtime with the detour sitting on the conversation path. What
 this run could NOT exercise (inert save, no second human): an actual blocked click, the
 race back-off, and the spectate-follow bypass — those are the NEEDS-PLAY list from 0j.
+
+---
+
+## Addendum 0k — quests actually sync now (the journal pointer was never dereferenced), 2026-08-06
+
+Task #45 ("journal replication, built, untested in game") was not merely untested — it was
+**broken in both directions and it killed the host the first time anyone pulled the
+trigger**. Found by finally running it.
+
+**The bug.** `CSWPartyTable + 0x11C` **HOLDS A POINTER** to the CSWSJournal; it is not the
+journal. Both the plugin's write path and the agent's read path used `partyTable + 0x11C`
+as the array list itself, so `CSWSJournal::SetState` walked whatever followed it in the
+party table and faulted dereferencing a "tag" of `0xAE37C3BE`
+(`CRASH at 0x5E6491` inside `CExoString::CompareNoCase_2`, from the compare at
+`0x005C5AFF`). The engine settles it in three instructions: `CSWPartyTable::GetPartyJournal
+0x005633C0` is `mov eax,[esi+0x11C]`, reached from `CSWSCreature::GetJournal 0x004EDB00`
+-> `CServerExoApp::GetPartyTable 0x004AEE70` (`[server+4] + 0x1B770`, which independently
+confirms the party-table base). **Method note:** the crash address alone named the victim;
+the *fix* came from asking the binary how IT reaches the journal — the xref on SetState's
+callers took two minutes and removed all guessing.
+
+**The second bug, behind the first.** With the pointer fixed the update applied but the tag
+grew a byte per round trip (`'end_attack'`, `'end_attack\0'`, `'end_attack\0\0'`…) and the
+quest re-applied every ~3 s forever. A CExoString's length INCLUDES its terminating null —
+the engine's own entry stores 11 for "end_attack" — so `ReadExoString` was baking a `\0`
+into the string, which then went back out as the next request's tag and never matched the
+shadow. Same trap as the module name in 0g; `ReadExoString` now cuts at the first null.
+(This is the THIRD time this convention has cost a bug: module names, equipment resrefs,
+now journal tags. It is a property of the engine's strings, not of any one field.)
+
+**Also shipped**: `SetJournalState` validates before calling — array-list shape plus a real
+committed-memory probe (`NativeMethods.IsReadable`) on every entry tag, because `SetState`
+validates nothing. Verified in isolation: with the guard but before the pointer fix, the
+crash became `journal: 'k_cooptest' refused (failure 5)` and both instances survived.
+
+**VERIFIED LIVE, end to end.** Two instances, `blockpoke journal end_attack 25` on the host:
+both plugin logs report the apply exactly ONCE (`count: 1` each, clean tag, no loop), zero
+crashes, and both games' real journals read `entry 0: 'end_attack' state 25` — up from the
+baseline 20 both sides started at. **Quest state now genuinely replicates between two
+KOTOR instances.**
+
+### Cinematic actors (protocol v13)
+
+- Plot creatures now ride the presence census with a `Plot` flag: presence replicates (so a
+  scripted scene plays out identically on both screens) while the combat half skips them
+  entirely — no pin, no health mirror, no death, and a peer's damage report for one is
+  ignored on the owner (whose own census decides plot-ness; a peer cannot un-plot a body).
+- **The census no longer filters by faction.** It excluded "friendly" creatures, which is
+  exactly what a story NPC is — measured live: the client mirrored 24 of 25 creatures and
+  the missing one was `carth 0x2`. Now 25/25. The player, party and phantoms are still
+  excluded by their own explicit checks.
+- The 32-slot cap now sheds the least visible bodies: engine-flagged in-combat creatures
+  first (the honest fight signal — faction semantics are a matrix lookup an external agent
+  cannot make), then nearest-first from the local player.
+- NEEDS-LIVE: the plot path itself is wire-tested only — the Endar Spire start contains no
+  plot-flagged creature, so a module that does is required to see a scene driven end to end.
+
+268 tests; solution, Agent publish and plugin NativeAOT all clean.
