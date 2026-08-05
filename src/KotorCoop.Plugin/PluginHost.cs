@@ -174,6 +174,20 @@ internal static unsafe class PluginHost
                 Log($"dialogue reply hook NOT installed: {replyDiagnostic}");
             }
 
+            // One conversation for the whole session (the BG3 rule): while a peer holds the
+            // token, this instance cannot start a dialogue at all. The spectate follow is
+            // the one sanctioned exception (DialogueGateHook.Bypass).
+            DialogueGateHook.Enabled = PluginConfig.ReadBool("dialogue_exclusive", true);
+            if (DialogueGateHook.Install(out string gateDiagnostic))
+            {
+                Log($"dialogue: {gateDiagnostic}"
+                    + (DialogueGateHook.Enabled ? string.Empty : " (disabled by coop.ini)"));
+            }
+            else
+            {
+                Log($"dialogue gate NOT installed: {gateDiagnostic}");
+            }
+
             // The engine reverts any pause that lacks a valid "PausedBy" record within one
             // tick, which in a loopback session is every pause there is — space bar, HUD
             // button and mirror alike. See PauseSanityPatch.

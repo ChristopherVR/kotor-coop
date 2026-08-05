@@ -755,6 +755,14 @@ public sealed class KotorGameBridge : IGameBridge
     /// zero remote peers (the plugin despawns the phantoms it spawned for them), the party
     /// freeze released, and the spawn command set idle. Best-effort — a disconnect must
     /// never throw.
+    ///
+    /// The remote-dialogue flag matters most here: it is level-written by the agent every
+    /// tick, so once the agent is gone nothing else would ever lower it — and a spectator
+    /// mid-follow when the session died would stay locked out of its own replies forever.
+    /// Lowering it makes the plugin's spectate controller close the mirrored conversation
+    /// and restore reply control on its next frame. The presence counts are cleared for
+    /// the same staleness reason (their drives are also gated on the command, so this is
+    /// belt and braces).
     /// </summary>
     public void ClearCoopState()
     {
@@ -762,6 +770,9 @@ public sealed class KotorGameBridge : IGameBridge
         {
             _memory.TryWrite(_pluginBlock + BlockRemoteCount, 0u);
             _memory.TryWrite(_pluginBlock + BlockEnemyCount, 0u);
+            _memory.TryWrite(_pluginBlock + BlockEnemyPresenceCount, 0u);
+            _memory.TryWrite(_pluginBlock + BlockPartyPresenceCount, 0u);
+            _memory.TryWrite(_pluginBlock + BlockRemoteDialogueActive, 0u);
             _memory.TryWrite(_pluginBlock + BlockCommand, (uint)0);
         }
 
@@ -2134,6 +2145,9 @@ public sealed class KotorGameBridge : IGameBridge
 
     private const int BlockBrowserHostSerial = 0xE18;
 
+    /// <summary>Entry +0x3A: non-zero when the host requires a password (a lock marker in the row).</summary>
+    private const int BlockBrowserEntryLocked = 0x3A;
+
     private uint _browserListSerial;
     private uint _lastBrowserConnectSerial;
     private uint _lastBrowserHostSerial;
@@ -2150,7 +2164,8 @@ public sealed class KotorGameBridge : IGameBridge
     /// the count last, so the plugin can never read a count that outruns the rows. A cheap
     /// signature check keeps this from rewriting the same list every tick.
     /// </summary>
-    public bool PublishBrowserServers(IReadOnlyList<(string Name, string Address, byte Players, byte MaxPlayers)> servers)
+    public bool PublishBrowserServers(
+        IReadOnlyList<(string Name, string Address, byte Players, byte MaxPlayers, bool Locked, string Module)> servers)
     {
         if (_pluginBlock == 0)
         {
@@ -2159,7 +2174,8 @@ public sealed class KotorGameBridge : IGameBridge
 
         int count = Math.Min(servers.Count, BlockBrowserCapacity);
 
-        string signature = string.Join('|', servers.Take(count).Select(s => $"{s.Name}@{s.Address}:{s.Players}/{s.MaxPlayers}"));
+        string signature = string.Join('|', servers.Take(count)
+            .Select(s => $"{s.Name}@{s.Address}:{s.Players}/{s.MaxPlayers}:{(s.Locked ? 1 : 0)}:{s.Module}"));
         if (signature == _lastBrowserSignature)
         {
             return true;
@@ -2170,12 +2186,17 @@ public sealed class KotorGameBridge : IGameBridge
         for (int i = 0; i < count; i++)
         {
             nint entry = _pluginBlock + BlockBrowserEntries + (i * BlockBrowserEntryStride);
-            (string name, string address, byte players, byte max) = servers[i];
+            (string name, string address, byte players, byte max, bool locked, string module) = servers[i];
 
-            _memory.TryWriteAsciiString(entry + BlockBrowserEntryName, name, BlockBrowserEntryNameLength);
+            // The row has no space for the module string, so it rides in the name column as
+            // "Name [module]" — which is also exactly what a browsing player wants to read.
+            string caption = module.Length > 0 ? $"{name} [{module}]" : name;
+
+            _memory.TryWriteAsciiString(entry + BlockBrowserEntryName, caption, BlockBrowserEntryNameLength);
             _memory.TryWriteAsciiString(entry + BlockBrowserEntryAddress, address, BlockBrowserEntryAddressLength);
             _memory.TryWrite(entry + BlockBrowserEntryPlayers, players);
             _memory.TryWrite(entry + BlockBrowserEntryMaxPlayers, max);
+            _memory.TryWrite(entry + BlockBrowserEntryLocked, locked ? (byte)1 : (byte)0);
         }
 
         _memory.TryWrite(_pluginBlock + BlockBrowserCount, (uint)count);

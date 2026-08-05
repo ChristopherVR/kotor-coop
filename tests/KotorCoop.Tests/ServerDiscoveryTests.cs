@@ -24,6 +24,36 @@ public class ServerDiscoveryTests
     }
 
     [Fact]
+    public void LockedFlagAndModuleRideTheBeacon()
+    {
+        ServerBeacon beacon = new(2, 27140, 4, 8, "Endar Spire", Locked: true, Module: "end_m01aa");
+        Span<byte> buffer = stackalloc byte[ServerBeacon.MaxBytes];
+        int length = beacon.Write(buffer);
+        Assert.True(length > 0);
+        Assert.Equal(beacon, ServerBeacon.Read(buffer[..length]));
+    }
+
+    [Fact]
+    public void AVersionOneBeaconWithoutTheTailReadsAsUnlockedUnknownModule()
+    {
+        // A v1 sender stops after the name. The v2 reader must accept the datagram and
+        // default the fields it is missing rather than reject the host from the list.
+        ServerBeacon v1 = new(1, 27140, 2, 8, "Old Host");
+        Span<byte> buffer = stackalloc byte[ServerBeacon.MaxBytes];
+        int full = v1.Write(buffer);
+
+        int nameBytes = System.Text.Encoding.UTF8.GetByteCount("Old Host");
+        int v1Length = 8 + nameBytes; // cut the v2 tail off
+
+        Assert.True(full >= v1Length);
+        ServerBeacon? read = ServerBeacon.Read(buffer[..v1Length]);
+        Assert.NotNull(read);
+        Assert.False(read.Value.Locked);
+        Assert.Equal(string.Empty, read.Value.Module);
+        Assert.Equal("Old Host", read.Value.Name);
+    }
+
+    [Fact]
     public void ObservedServerUsesTheGamePortNotTheSourcePort()
     {
         ServerList list = new();

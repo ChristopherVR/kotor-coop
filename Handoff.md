@@ -2443,3 +2443,81 @@ Still genuinely NEEDS-PLAY (a human watching the screen): whether driven enemies
 right in motion during a real fight (gait, swing timing), stance mirroring, and the
 per-frame re-claim's effect on scripted sequences. The static/inert-enemy save cannot
 show those.
+
+---
+
+## Addendum 0j — the BG3 dialogue rule + server-browser review, 2026-08-06
+
+The user's ask: one conversation for the whole session (a la Baldur's Gate 3 — while any
+player talks, nobody else can start a dialogue), correct behaviour on mid-fight/mid-dialogue
+joins and on disconnects, and a review-and-finish pass on the server browser.
+
+### One conversation, enforced at the engine's front door
+
+The token arbiter alone only ignored a loser's CLAIM — the loser's conversation still ran
+locally and raced the plot flags (docs/research/dialogue-sync.md option 2 was the designed
+fix and sat unbuilt). Now shipped as **`DialogueGateHook`**: a verify-bytes detour on
+`CSWSObject::StartDialog 0x004CF490` that refuses every conversation start while a REMOTE
+peer holds the token. The one NEEDS-LIVE that blocked it — the return contract — is now
+settled STATICALLY: both call sites do `test eax,eax; je <cleanup>` (cleanup calls
+0x004F34A0 and completes), the epilogue is `ret 0xC` at 0x004CF8DF, and the guard runs
+before the SEH prologue is established, so the refusal is `xor eax,eax; ret 0xC` onto the
+engine's own failure path. Doc updated in place.
+
+Pieces around it, all in DialogueSpectateController:
+- **The bypass is LEVEL-based, not scoped.** The spectator's own follow-open is requested
+  via a server action and StartDialog fires FRAMES later — a try/finally around
+  StartDialogueWith would block our own follow. `Bypass` goes up at the follow request and
+  down when the follow ends/gives up/invalidates.
+- **The race window yields.** Two players clicking inside one token round-trip both open
+  before the gate can know; the loser now CLOSES its own conversation
+  (`Odyssey.CloseDialogue`) and follows the winner, instead of the old "whoever got there
+  first keeps theirs" coexistence.
+- **A refused click gets feedback**: on-screen "Another player is in a conversation"
+  (queued-text path) for 2.5 s plus a capped log line.
+- Kill switch: `dialogue_exclusive=0` in coop.ini.
+
+### Joins and disconnects, reviewed end to end
+
+- **Join mid-dialogue**: the host broadcasts the token every tick to every connected peer,
+  and the spectate controller replays the pick log FROM ZERO on follow — a late joiner
+  lands on the right node (this was protocol v11's whole point). The gate blocks them from
+  initiating from their first tick. ✓ already correct.
+- **Join mid-fight**: enemy census + presence are per-tick level state, encounters are
+  disabled before mirroring, deaths are a level not an event, one-shot serials are
+  primed-on-first-sight. ✓ already correct (and live-verified this morning). Edge noted:
+  an enemy whose corpse the host's module has fully cleaned up stops being published, so a
+  VERY late joiner could hold a live copy of a long-dead enemy; acceptable, recorded here.
+- **Owner client disconnects/times out**: host releases the token (Bye handler + the
+  5 s peer timeout both call ReleaseDialogueIfOwnedBy — covered by the existing
+  TheDialogueTokenIsReleasedWhenTheOwnerLeaves integration test), broadcast goes idle,
+  spectators close their mirrored copy. ✓ already correct.
+- **The session itself dies mid-follow (host gone, agent torn down)**: FOUND AND FIXED —
+  the remote-dialogue flag is level-written by the agent every tick, so with the agent gone
+  nothing ever lowered it and a mid-follow spectator stayed locked out of its own replies
+  forever. `KotorGameBridge.ClearCoopState` (run on every SessionManager.Disconnect) now
+  lowers it, plus the enemy/party presence counts for the same staleness reason.
+- **Reconnect of a mid-conversation owner**: token was released on timeout; their local
+  conversation still runs; their next publish re-claims and the spectators re-follow.
+  Self-healing, no code needed.
+
+### Server browser review (task: review and implement)
+
+Reviewed all three layers (beacons -> agent -> native panel/overlay). The flow itself was
+complete and live-verified previously; what it lacked was join-in-progress context, so a
+browsing player had no idea a listed game was mid-run, locked, or where. Shipped:
+
+- **Beacon v2** (back-compatible both directions, unit-tested): appends flags (bit 0 =
+  password required) + the host's CURRENT MODULE, read live per beacon alongside the live
+  player count. v1 datagrams parse as unlocked/unknown-module.
+- **Rows now read** `Name [end_m01aa]  ip:port  (2/8) *` — module folded into the name
+  column (the 0x40-byte entry has no room for a new string field; entry byte 0x3A carries
+  the new locked flag), asterisk = password prompt coming. Both the native saveload-panel
+  rows and the F9 overlay fallback show it.
+- SessionManager advertises locked (password set) + module via a live read of the bridge's
+  local state.
+
+268 tests (2 new beacon tests); solution + Agent publish + plugin NativeAOT all clean.
+NEEDS-PLAY: a real two-human pass on the gate (does a blocked click FEEL right; does a
+blocked scripted conversation retry rather than wedge a quest — the gate only fires while
+a peer is actively mid-conversation, which bounds the exposure).

@@ -202,6 +202,13 @@ internal sealed unsafe class ServerBrowserController
             n = Append(n, '/');
             n = Append(n, entry[SharedBlock.BrowserEntryMaxPlayers]);
             n = Append(n, ')');
+
+            // A locked host asks for a password after Connect; say so up front.
+            if (entry[SharedBlock.BrowserEntryLocked] != 0)
+            {
+                n = Append(n, " *");
+            }
+
             _line[n] = 0;
 
             fixed (byte* p = _line)

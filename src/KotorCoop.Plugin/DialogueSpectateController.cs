@@ -39,6 +39,10 @@ internal sealed unsafe class DialogueSpectateController(SharedBlockView block)
 
     private long _nextOpenAttemptMs;
 
+    /// <summary>While now is before this, a follow-open we requested is still in flight and
+    /// the dialogue gate must let StartDialog through for it.</summary>
+    private long _followOpenPendingUntilMs;
+
     private long _followingSinceMs;
 
     /// <summary>Set once the followed conversation has actually appeared on screen.</summary>
@@ -69,6 +73,9 @@ internal sealed unsafe class DialogueSpectateController(SharedBlockView block)
         _lastLineHash = 0;
         _appliedReplySerial = 0;
         _openAttempts = 0;
+        _followOpenPendingUntilMs = 0;
+        DialogueGateHook.Bypass = false;
+        DialogueGateHook.PeerHoldsConversation = false;
     }
 
     public void OnFrame()
@@ -157,9 +164,41 @@ internal sealed unsafe class DialogueSpectateController(SharedBlockView block)
         *(uint*)last = serial; // serial last: a half-written entry reads as empty
     }
 
+    /// <summary>Last <see cref="DialogueGateHook.BlockedCount"/> we showed feedback for.</summary>
+    private uint _seenBlocked;
+
+    private long _blockedNoticeUntilMs;
+
+    private readonly byte[] _notice = "Another player is in a conversation"u8.ToArray();
+
     /// <summary>Opens and drives this instance's copy of a peer's conversation.</summary>
     private void FollowRemote()
     {
+        // Feed the engine-side gate: while a peer owns the token, StartDialog is refused
+        // here (the BG3 rule). The one exception is our own follow of that conversation,
+        // whose open arrives from the server several frames after we request it — so the
+        // bypass is LEVEL-based: up from the follow request until the follow ends.
+        DialogueGateHook.PeerHoldsConversation = block.RemoteDialogueActive;
+        DialogueGateHook.Bypass =
+            _following || Environment.TickCount64 < _followOpenPendingUntilMs;
+
+        // A refused click deserves a visible answer, not silence: keep a short notice on
+        // screen after each blocked attempt.
+        if (DialogueGateHook.BlockedCount != _seenBlocked)
+        {
+            _seenBlocked = DialogueGateHook.BlockedCount;
+            _blockedNoticeUntilMs = Environment.TickCount64 + 2500;
+            LogFew("dialogue: blocked a local conversation start; a peer holds the token");
+        }
+
+        if (Environment.TickCount64 < _blockedNoticeUntilMs)
+        {
+            fixed (byte* p = _notice)
+            {
+                Odyssey.PostTextLine(p, 8, 4, 0.5f);
+            }
+        }
+
         if (!block.RemoteDialogueActive)
         {
             if (_following)
@@ -168,6 +207,7 @@ internal sealed unsafe class DialogueSpectateController(SharedBlockView block)
                 _following = false;
                 _sawOpen = false;
                 _appliedReplySerial = 0;
+                _followOpenPendingUntilMs = 0;
                 DialogueReplyHook.Suppressed = false;
                 Odyssey.SetCanSendDialog(true);
                 Odyssey.CloseDialogue();
@@ -180,14 +220,18 @@ internal sealed unsafe class DialogueSpectateController(SharedBlockView block)
             return;
         }
 
-        // Someone else owns a conversation. If we are already in one of our own, leave it
-        // alone — whoever got there first keeps their conversation, and the token arbiter
-        // has already decided that this instance is not the owner.
+        // Someone else owns a conversation while we are mid-one of our OWN: we lost the
+        // race (both sides clicked inside the same token round-trip — the engine-side gate
+        // cannot see a token that has not arrived yet). One conversation for the whole
+        // session means ours yields: close it and follow the winner's instead. Before this,
+        // the loser kept a private conversation whose plot flags raced the owner's.
         if (!_following)
         {
             if (_hadDialogue)
             {
-                return;
+                LogFew("dialogue: a peer won the conversation token; closing our own to follow");
+                Odyssey.CloseDialogue();
+                return; // follow once our own conversation has actually gone
             }
 
             if (Environment.TickCount64 < _nextOpenAttemptMs || _openAttempts >= MaxOpenAttempts)
@@ -208,6 +252,14 @@ internal sealed unsafe class DialogueSpectateController(SharedBlockView block)
 
             _openAttempts++;
             _nextOpenAttemptMs = Environment.TickCount64 + OpenRetryMs;
+
+            // Open the bypass BEFORE requesting: the request queues a server action and the
+            // engine only reaches StartDialog frames later (it walks the player into range
+            // first), so a scoped bypass around this call would miss its own open. The
+            // level-based bypass at the top of this method stays up for as long as the
+            // follow is pending or live.
+            _followOpenPendingUntilMs = Environment.TickCount64 + FollowOpenTimeoutMs;
+            DialogueGateHook.Bypass = true;
 
             if (!Odyssey.StartDialogueWith(tag))
             {
@@ -256,6 +308,7 @@ internal sealed unsafe class DialogueSpectateController(SharedBlockView block)
                 : "dialogue: the peer's conversation never opened locally; backing out");
             _following = false;
             _sawOpen = false;
+            _followOpenPendingUntilMs = 0;
             _openAttempts = MaxOpenAttempts; // do not thrash retrying the same failure
             DialogueReplyHook.Suppressed = false;
             Odyssey.SetCanSendDialog(true);

@@ -469,7 +469,9 @@ internal sealed unsafe class NativeBrowserController
         return entry;
     }
 
-    /// <summary>"1. Name  address  (players/max)" from the shared-block record.</summary>
+    /// <summary>"1. Name [module]  address  (players/max) *" from the shared-block record —
+    /// the module rides inside the name column (the agent folds it in) and the trailing
+    /// asterisk marks a password-locked host, so the prompt after Connect is no surprise.</summary>
     private string FormatEntry(byte[] scratch, int index)
     {
         byte* entry = _block.BrowserEntry(index);
@@ -485,6 +487,12 @@ internal sealed unsafe class NativeBrowserController
         scratch[n++] = (byte)'/';
         n = AppendCount(scratch, n, entry[SharedBlock.BrowserEntryMaxPlayers]);
         scratch[n++] = (byte)')';
+
+        if (entry[SharedBlock.BrowserEntryLocked] != 0)
+        {
+            scratch[n++] = (byte)' ';
+            scratch[n++] = (byte)'*';
+        }
 
         return System.Text.Encoding.ASCII.GetString(scratch, 0, n);
     }

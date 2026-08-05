@@ -103,7 +103,9 @@ public sealed class SessionManager(IGameBridge bridge, AgentSettings agentSettin
             _running = agent.RunAsync(cts.Token);
 
             // A host makes itself discoverable on the LAN so a browsing client can list it
-            // without being told an IP. The player count is read live off the session.
+            // without being told an IP. The player count and current module are read live,
+            // so a browser shows a game in progress (and where) rather than a stale lobby;
+            // the locked flag tells a browsing player a password prompt is coming.
             if (host)
             {
                 _discovery = new ServerDiscovery();
@@ -111,7 +113,9 @@ public sealed class SessionManager(IGameBridge bridge, AgentSettings agentSettin
                     settings.PlayerName,
                     settings.Port,
                     (byte)KotorCoop.Protocol.ProtocolConstants.MaxPeers,
-                    () => (_session?.GetStats().PeerCount ?? 0) + 1);
+                    () => (_session?.GetStats().PeerCount ?? 0) + 1,
+                    locked: settings.Password.Length > 0,
+                    module: () => bridge.TryReadLocalState(out var state) ? state.Module : string.Empty);
             }
 
             _phase = SessionPhase.Connecting;

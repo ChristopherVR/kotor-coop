@@ -362,7 +362,8 @@ internal static class Program
             // list is live while the player is looking at it.
             lastServers = browser.Servers;
             kotor.PublishBrowserServers(
-                [.. lastServers.Select(s => (s.Name, s.Address, (byte)s.PlayerCount, (byte)s.MaxPlayers))]);
+                [.. lastServers.Select(s =>
+                    (s.Name, s.Address, (byte)s.PlayerCount, (byte)s.MaxPlayers, s.Locked, s.Module))]);
 
             // The player chose to host from the panel rather than join a listed server.
             if (kotor.TryTakeBrowserHost())

@@ -5,8 +5,13 @@ using System.Text;
 
 namespace KotorCoop.Session;
 
-/// <summary>A co-op server as heard on the LAN, for the in-game browser.</summary>
-public sealed record ServerInfo(IPEndPoint EndPoint, string Name, int PlayerCount, int MaxPlayers, long LastSeenMs)
+/// <summary>A co-op server as heard on the LAN, for the in-game browser.
+/// <paramref name="Locked"/> means the host set a password; <paramref name="Module"/> is the
+/// module the host is currently standing in ("" at the menu / unknown), so a browsing player
+/// can see the game is in progress and where before joining.</summary>
+public sealed record ServerInfo(
+    IPEndPoint EndPoint, string Name, int PlayerCount, int MaxPlayers, long LastSeenMs,
+    bool Locked = false, string Module = "")
 {
     /// <summary>The address a client dials to join, as text.</summary>
     public string Address => $"{EndPoint.Address}:{EndPoint.Port}";
@@ -17,13 +22,27 @@ public sealed record ServerInfo(IPEndPoint EndPoint, string Name, int PlayerCoun
 /// hand-coded, like the game packets: the port is the GAME port (the discovery datagram's
 /// own source port is ephemeral), so a listener pairs the sender's address with this port to
 /// know where to connect.
+///
+/// Version 2 appends a flags byte (bit 0: password required) and the host's current module,
+/// both AFTER the v1 fields, so a v1 reader that stops at the name still parses a v2 beacon
+/// and a v2 reader treats a short (v1) datagram as unlocked/unknown-module.
 /// </summary>
-public readonly record struct ServerBeacon(byte Version, ushort GamePort, byte PlayerCount, byte MaxPlayers, string Name)
+public readonly record struct ServerBeacon(
+    byte Version, ushort GamePort, byte PlayerCount, byte MaxPlayers, string Name,
+    bool Locked = false, string Module = "")
 {
     /// <summary>'K','D' — distinct from the session channel's magic so stray traffic is ignored.</summary>
     public const ushort Magic = 0x4B44;
 
     public const int MaxNameLength = 40;
+
+    /// <summary>Odyssey module names are resrefs (16 chars).</summary>
+    public const int MaxModuleLength = 16;
+
+    private const byte FlagLocked = 1;
+
+    /// <summary>Largest datagram either version can produce.</summary>
+    public const int MaxBytes = 8 + MaxNameLength + 2 + MaxModuleLength;
 
     public int Write(Span<byte> buffer)
     {
@@ -34,7 +53,12 @@ public readonly record struct ServerBeacon(byte Version, ushort GamePort, byte P
 
         byte[] name = Encoding.UTF8.GetBytes(Name.Length > MaxNameLength ? Name[..MaxNameLength] : Name);
         int nameLen = Math.Min(name.Length, MaxNameLength);
-        if (buffer.Length < 8 + nameLen)
+
+        byte[] module = Encoding.UTF8.GetBytes(
+            Module.Length > MaxModuleLength ? Module[..MaxModuleLength] : Module);
+        int moduleLen = Math.Min(module.Length, MaxModuleLength);
+
+        if (buffer.Length < 8 + nameLen + 2 + moduleLen)
         {
             return 0;
         }
@@ -48,7 +72,12 @@ public readonly record struct ServerBeacon(byte Version, ushort GamePort, byte P
         buffer[6] = MaxPlayers;
         buffer[7] = (byte)nameLen;
         name.AsSpan(0, nameLen).CopyTo(buffer[8..]);
-        return 8 + nameLen;
+
+        int at = 8 + nameLen;
+        buffer[at++] = Locked ? FlagLocked : (byte)0;
+        buffer[at++] = (byte)moduleLen;
+        module.AsSpan(0, moduleLen).CopyTo(buffer[at..]);
+        return at + moduleLen;
     }
 
     public static ServerBeacon? Read(ReadOnlySpan<byte> buffer)
@@ -70,7 +99,23 @@ public readonly record struct ServerBeacon(byte Version, ushort GamePort, byte P
         }
 
         string name = Encoding.UTF8.GetString(buffer.Slice(8, nameLen));
-        return new ServerBeacon(version, gamePort, players, maxPlayers, name);
+
+        // The v2 tail is optional: a v1 beacon (or a truncated datagram) reads as an
+        // unlocked server in an unknown module rather than being rejected.
+        bool locked = false;
+        string module = string.Empty;
+        int at = 8 + nameLen;
+        if (buffer.Length >= at + 2)
+        {
+            locked = (buffer[at] & FlagLocked) != 0;
+            int moduleLen = buffer[at + 1];
+            if (moduleLen <= MaxModuleLength && buffer.Length >= at + 2 + moduleLen)
+            {
+                module = Encoding.UTF8.GetString(buffer.Slice(at + 2, moduleLen));
+            }
+        }
+
+        return new ServerBeacon(version, gamePort, players, maxPlayers, name, locked, module);
     }
 }
 
@@ -94,7 +139,9 @@ public sealed class ServerList
 
         lock (_gate)
         {
-            _servers[key] = new ServerInfo(endpoint, beacon.Name, beacon.PlayerCount, beacon.MaxPlayers, nowMs);
+            _servers[key] = new ServerInfo(
+                endpoint, beacon.Name, beacon.PlayerCount, beacon.MaxPlayers, nowMs,
+                beacon.Locked, beacon.Module);
         }
     }
 
@@ -155,12 +202,17 @@ public sealed class ServerDiscovery : IDisposable
     public IReadOnlyList<ServerInfo> Servers => _list.Snapshot(Environment.TickCount64);
 
     /// <summary>
-    /// Starts broadcasting this host's presence. <paramref name="playerCount"/> is read each
-    /// beacon so the list shows a live count.
+    /// Starts broadcasting this host's presence. <paramref name="playerCount"/> and
+    /// <paramref name="module"/> are read each beacon so the list shows a live count and
+    /// where the host currently is; <paramref name="locked"/> tells browsers a password
+    /// will be asked for before they dial.
     /// </summary>
-    public void StartAdvertising(string name, int gamePort, byte maxPlayers, Func<int> playerCount)
+    public void StartAdvertising(
+        string name, int gamePort, byte maxPlayers, Func<int> playerCount,
+        bool locked = false, Func<string>? module = null)
     {
-        _advertise = Task.Run(() => AdvertiseLoopAsync(name, gamePort, maxPlayers, playerCount, _cts.Token));
+        _advertise = Task.Run(
+            () => AdvertiseLoopAsync(name, gamePort, maxPlayers, playerCount, locked, module, _cts.Token));
     }
 
     /// <summary>Starts listening for host beacons and building the server list.</summary>
@@ -169,7 +221,9 @@ public sealed class ServerDiscovery : IDisposable
         _listen = Task.Run(() => ListenLoopAsync(_cts.Token));
     }
 
-    private async Task AdvertiseLoopAsync(string name, int gamePort, byte maxPlayers, Func<int> playerCount, CancellationToken token)
+    private async Task AdvertiseLoopAsync(
+        string name, int gamePort, byte maxPlayers, Func<int> playerCount,
+        bool locked, Func<string>? module, CancellationToken token)
     {
         using Socket socket = new(AddressFamily.InterNetwork, SocketType.Dgram, ProtocolType.Udp)
         {
@@ -177,7 +231,7 @@ public sealed class ServerDiscovery : IDisposable
         };
 
         IPEndPoint broadcast = new(IPAddress.Broadcast, _port);
-        byte[] buffer = new byte[8 + ServerBeacon.MaxNameLength];
+        byte[] buffer = new byte[ServerBeacon.MaxBytes];
 
         try
         {
@@ -185,7 +239,19 @@ public sealed class ServerDiscovery : IDisposable
             do
             {
                 int count = Math.Clamp(playerCount(), 0, 255);
-                ServerBeacon beacon = new(ProtocolConstantsVersion, (ushort)gamePort, (byte)count, maxPlayers, name);
+                string where;
+                try
+                {
+                    where = module?.Invoke() ?? string.Empty;
+                }
+                catch
+                {
+                    where = string.Empty; // a bridge read mid-transition must not kill the loop
+                }
+
+                ServerBeacon beacon = new(
+                    ProtocolConstantsVersion, (ushort)gamePort, (byte)count, maxPlayers, name,
+                    locked, where);
                 int length = beacon.Write(buffer);
                 if (length > 0)
                 {
@@ -232,7 +298,7 @@ public sealed class ServerDiscovery : IDisposable
             return; // another listener already holds the port; direct connect still works.
         }
 
-        byte[] buffer = new byte[8 + ServerBeacon.MaxNameLength];
+        byte[] buffer = new byte[ServerBeacon.MaxBytes];
         EndPoint any = new IPEndPoint(IPAddress.Any, 0);
 
         try
@@ -261,8 +327,10 @@ public sealed class ServerDiscovery : IDisposable
         }
     }
 
-    /// <summary>Beacon format version; bump with any wire change.</summary>
-    private const byte ProtocolConstantsVersion = 1;
+    /// <summary>Beacon format version; bump with any wire change. Version 2 appended the
+    /// locked flag and the host's module, back-compatibly (readers of either version parse
+    /// beacons of either version).</summary>
+    private const byte ProtocolConstantsVersion = 2;
 
     public void Dispose()
     {

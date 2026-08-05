@@ -560,6 +560,10 @@ internal struct SharedBlock
     public const int BrowserEntryPlayers = 0x38;
     public const int BrowserEntryMaxPlayers = 0x39;
 
+    /// <summary>Non-zero when the host requires a password; the row shows a lock marker so
+    /// the prompt that follows Connect is never a surprise.</summary>
+    public const int BrowserEntryLocked = 0x3A;
+
     /// <summary>Rows the panel can show; occupies 0xE20..0x1020, inside the region.</summary>
     public const int BrowserCapacity = 8;
 

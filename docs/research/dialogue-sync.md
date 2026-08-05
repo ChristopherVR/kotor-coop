@@ -269,9 +269,15 @@ Options, cleanest first:
    This is the single construct-and-load entry point (§1), reached only from
    `BeginConversation`. An inline detour that early-returns 0 on the non-owner would prevent
    the dialog object from ever being built there. **VERIFIED** it is the only construction
-   site; the **return-value contract** (callers treat 0 / non-continue as "no dialog") is
-   **INFERRED** and would need a live check before shipping a hook. Same NativeAOT-detour
-   caveat the console doc raised.
+   site. **UPDATE 2026-08-06: the return-value contract is now VERIFIED statically** —
+   disassembly of both call sites (`0x0052ED1C`, `0x0052ED66`) shows `test eax,eax; je
+   <cleanup>`, where the cleanup path calls `0x004F34A0(initiator, 0x7F000000, 0)` and
+   completes normally, i.e. returning 0 takes a failure path retail already ships. The
+   function's own epilogue is `ret 0xC` (`0x004CF8DF`), and the 13-byte SEH prologue
+   (`6A FF 68 9E 9D 71 00 64 A1 00 00 00 00`) relocates verbatim, so a guard that refuses
+   BEFORE the prologue runs is a plain `xor eax,eax; ret 0xC`. **Shipped** as
+   `DialogueGateHook` (verify-bytes-or-refuse; whether a blocked SCRIPTED conversation's
+   caller retries gracefully in play remains NEEDS-LIVE).
 
 3. **Freeze via input mode — LOW risk, coarse.** The known client input class field
    `CClientExoAppInternal+0x9C == 3` means "dialog mode" (given). Reading it is a free,
