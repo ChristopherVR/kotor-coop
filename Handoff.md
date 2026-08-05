@@ -2369,3 +2369,21 @@ recipe that made phantoms seamless. Design + risk register: docs/research/enemy-
   effects, forced commandable vs cutscenes, stance mirror, client attack targeting, perf
   at census cap.
 - 266 tests pass; solution, Agent publish and plugin NativeAOT x86 publish all clean.
+
+### 0i.1 — enemy one-shots (swings) ride the same channel, 2026-08-06 (later)
+
+Presence alone shows bodies in the right places; the strikes were still invisible. Now the
+animation hook (`InsertFireForgetAnimation 0x0063C760`) captures EVERY creature's
+fire-and-forget — not just the local player's — into a fixed 48-slot table keyed by object
+id (creature twins only, vtable-checked; doors/placeables come through the same site).
+Plugin publishes the table (block 0x1920..0x1C20, TotalSize -> 0x1E00); the owner's agent
+matches ids against its census and each `EnemyState` carries (one-shot serial, animation)
+— snapshot 35 B/enemy, full 32 still one datagram (asserted by test). The mirror's
+presence slots grew to stride 0x28 and `EnemyPresenceController` replays new serials via
+`PlayOneShotAnimation`, primed-on-first-sight so a join never replays a stale swing.
+**Echo guard**: `AnimationHook.Suppress` is held while the plugin itself applies any
+mirrored animation (`PlayOneShotAnimation` / `PlayFireForget`) because
+`AddFireForgetAnimation` reaches the hook site from inside the engine — without it every
+mirrored swing would be re-captured and bounce back to its owner. NEEDS-LIVE: that
+reentry path (suppress flag is cheap either way), and whether enemy swings visibly play
+on driven bodies. 266 tests; all three builds clean.

@@ -397,10 +397,21 @@ internal static unsafe class PluginHost
 
         // Publish whatever one-shot animation the hook caught since the last frame, so the
         // agent can ship it with this tick's state.
-        if (_view is { } view && AnimationHook.Sequence != view.LocalOneShotSerial)
+        if (_view is { } view)
         {
-            view.LocalOneShotAnim = AnimationHook.LastAnimation;
-            view.LocalOneShotSerial = AnimationHook.Sequence;
+            if (AnimationHook.Sequence != view.LocalOneShotSerial)
+            {
+                view.LocalOneShotAnim = AnimationHook.LastAnimation;
+                view.LocalOneShotSerial = AnimationHook.Sequence;
+            }
+
+            // And every other creature's, for the enemy channel: the owning agent matches
+            // these ids against its census and streams the swings with the presence tick.
+            for (int i = 0; i < SharedBlock.EnemyOneShotCapacity; i++)
+            {
+                AnimationHook.ReadCreatureSlot(i, out uint id, out uint anim, out uint serial);
+                view.SetEnemyOneShot(i, id, anim, serial);
+            }
         }
 
         // Death first among the world controllers: a downed player must be published (and a
@@ -434,6 +445,7 @@ internal static unsafe class PluginHost
         _items?.Invalidate();
         _combat?.Invalidate();
         _enemyPresence?.Invalidate();
+        AnimationHook.InvalidateCreatureTable();
         _doors?.Invalidate();
         _placeables?.Invalidate();
         _loot?.Invalidate();

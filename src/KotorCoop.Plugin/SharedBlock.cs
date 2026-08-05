@@ -47,7 +47,7 @@ internal struct SharedBlock
     /// existing offset profiles keep working. The plugin control fields live AFTER that
     /// range, which is why the block is larger than the profile knows about.
     /// </summary>
-    public const int TotalSize = 0x1A00;
+    public const int TotalSize = 0x1E00;
 
     public const int ProfileVisibleSize = 0x250;
 
@@ -149,10 +149,26 @@ internal struct SharedBlock
     public const int OffsetEnemyPresenceCount = 0x1400;
 
     /// <summary>Agent -&gt; plugin. id u32 @0, position 3xf32 @4, facing f32 @0x10,
-    /// animation u32 @0x14, flags u32 @0x18 (bit 0 dead). Occupies 0x1410..0x1810.</summary>
+    /// animation u32 @0x14, flags u32 @0x18 (bit 0 dead), one-shot serial u32 @0x1C,
+    /// one-shot animation u32 @0x20. Occupies 0x1410..0x1910.</summary>
     public const int OffsetEnemyPresenceSlots = 0x1410;
 
-    public const int EnemyPresenceStride = 0x20;
+    public const int EnemyPresenceStride = 0x28;
+
+    // ---- enemy one-shot capture (version 20) ------------------------------------
+    //
+    // Plugin -> agent: fire-and-forget animations (swings, parries, draws) captured per
+    // creature by the animation hook, so the enemy owner can stream them. Fixed table
+    // keyed by object id; a serial per entry makes repeats visible. The agent matches
+    // ids against its enemy census and ignores the rest (companions, neutral NPCs).
+
+    /// <summary>Plugin -&gt; agent. id u32 @0, animation u32 @4, serial u32 @8. Occupies
+    /// 0x1920..0x1C20.</summary>
+    public const int OffsetEnemyOneShotTable = 0x1920;
+
+    public const int EnemyOneShotStride = 0x10;
+
+    public const int EnemyOneShotCapacity = 48;
 
     // ---- door replication (version 4) -------------------------------------------
     //

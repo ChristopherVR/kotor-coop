@@ -18,9 +18,12 @@ internal readonly record struct RemoteView(
 internal readonly record struct EnemyView(uint ObjectId, ushort CurrentHealth, ushort MaxHealth, bool Dead);
 
 /// <summary>One enemy's presence — where the owning peer's engine has the body and what
-/// it is playing — as published for the drive controller.</summary>
+/// it is playing — as published for the drive controller. <see cref="OneShotSerial"/>
+/// advances each time the owner's copy plays a fire-and-forget (a swing, a parry), so the
+/// drive can replay exactly the new ones.</summary>
 internal readonly record struct EnemyPresenceView(
-    uint ObjectId, Vec3 Position, float Facing, uint Animation, bool Dead);
+    uint ObjectId, Vec3 Position, float Facing, uint Animation, bool Dead,
+    uint OneShotSerial, uint OneShotAnimation);
 
 /// <summary>One door's desired state, as published by the agent for the local module.</summary>
 internal readonly record struct DoorView(uint ObjectId, byte OpenState, bool Unlocked);
@@ -220,7 +223,21 @@ internal sealed unsafe class SharedBlockView(byte* baseAddress)
             },
             *(float*)(slot + 0x10),
             *(uint*)(slot + 0x14),
-            (*(uint*)(slot + 0x18) & SharedBlock.EnemyFlagDead) != 0);
+            (*(uint*)(slot + 0x18) & SharedBlock.EnemyFlagDead) != 0,
+            *(uint*)(slot + 0x1C),
+            *(uint*)(slot + 0x20));
+    }
+
+    /// <summary>Publishes one captured creature one-shot for the agent to read. The id is
+    /// written last so the agent never pairs an id with another creature's payload.</summary>
+    public void SetEnemyOneShot(int index, uint objectId, uint animation, uint serial)
+    {
+        byte* slot = baseAddress + SharedBlock.OffsetEnemyOneShotTable
+            + (index * SharedBlock.EnemyOneShotStride);
+
+        *(uint*)(slot + 0x04) = animation;
+        *(uint*)(slot + 0x08) = serial;
+        *(uint*)(slot + 0x00) = objectId;
     }
 
     // ---- equipment --------------------------------------------------------------

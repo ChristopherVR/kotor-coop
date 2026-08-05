@@ -1832,7 +1832,19 @@ internal static unsafe class Odyssey
         var addFireForget =
             (delegate* unmanaged[Thiscall]<nint, uint, nint, void>)(*(nint*)(vtable + TwinAddFireForgetSlot));
 
-        addFireForget(twin, animation, 0);
+        // The engine reaches InsertFireForgetAnimation from inside this call; without the
+        // suppression the mirrored animation would be captured as if this creature had
+        // played it itself and echo back to its owner.
+        AnimationHook.Suppress = true;
+        try
+        {
+            addFireForget(twin, animation, 0);
+        }
+        finally
+        {
+            AnimationHook.Suppress = false;
+        }
+
         return true;
     }
 
@@ -3848,7 +3860,18 @@ internal static unsafe class Odyssey
         nint twin = *(nint*)(creature + CreClientTwin);
         if (twin != 0)
         {
-            AddFireForgetAnimationFn(twin, anim, 0);
+            // Suppressed for the same reason as PlayOneShotAnimation: the engine reaches
+            // the capture hook from inside this call, and a mirrored animation must not be
+            // re-captured as this creature's own.
+            AnimationHook.Suppress = true;
+            try
+            {
+                AddFireForgetAnimationFn(twin, anim, 0);
+            }
+            finally
+            {
+                AnimationHook.Suppress = false;
+            }
         }
     }
 

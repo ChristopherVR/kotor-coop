@@ -49,6 +49,54 @@ internal static unsafe class AnimationHook
     public static uint Sequence => _sequence;
 
     /// <summary>
+    /// Set while the plugin itself replays a mirrored animation through
+    /// AddFireForgetAnimation, which reaches this hook's site from inside the engine. Without
+    /// it, every animation applied to a phantom or a driven enemy would be captured again and
+    /// echo back to its owner. Game thread only, so a plain bool is enough.
+    /// </summary>
+    public static bool Suppress;
+
+    // ---- other creatures' one-shots (enemy swings) --------------------------------
+    //
+    // The same hook sees every creature's fire-and-forget, so the owner of the enemy
+    // channel can capture swings, parries and draws per enemy and stream them. A fixed
+    // table keyed by server object id: 32 possible enemies plus headroom for companions
+    // and neutral NPCs that also swing (the agent only publishes ids in its enemy census,
+    // so extra entries are just ignored). Serials are per-entry so a repeat of the same
+    // animation still replicates.
+
+    public const int CreatureTableCapacity = 48;
+
+    private static readonly uint[] _creatureId = new uint[CreatureTableCapacity];
+    private static readonly uint[] _creatureAnim = new uint[CreatureTableCapacity];
+    private static readonly uint[] _creatureSerial = new uint[CreatureTableCapacity];
+
+    /// <summary>CSWCObject + this = its server object.</summary>
+    private const int TwinServerObject = 0xF8;
+
+    /// <summary>CSWCCreature vtable — doors, placeables and triggers insert fire-and-forget
+    /// animations through the same choke point and must not land in the creature table.</summary>
+    private const nint ClientCreatureVtable = 0x0074F5F8;
+
+    private const uint ObjectInvalid = 0x7F000000;
+
+    public static void ReadCreatureSlot(int index, out uint objectId, out uint animation, out uint serial)
+    {
+        objectId = _creatureId[index];
+        animation = _creatureAnim[index];
+        serial = _creatureSerial[index];
+    }
+
+    /// <summary>Drop every captured creature one-shot. Call on a module change — the ids
+    /// belong to freed creatures and their serials must not leak onto new bodies.</summary>
+    public static void InvalidateCreatureTable()
+    {
+        Array.Clear(_creatureId);
+        Array.Clear(_creatureAnim);
+        Array.Clear(_creatureSerial);
+    }
+
+    /// <summary>
     /// Installs the detour. Verify-bytes-or-refuse, like the rest of the plugin's patches:
     /// an unrecognised prologue means we do nothing rather than corrupt the engine.
     /// MAIN THREAD ONLY, once, at startup.
@@ -134,17 +182,71 @@ internal static unsafe class AnimationHook
     {
         try
         {
-            if (twin == 0 || twin != Odyssey.GetLocalPlayerTwin())
+            if (twin == 0 || Suppress)
             {
                 return;
             }
 
-            _lastAnimation = (ushort)animation;
-            _sequence++;
+            if (twin == Odyssey.GetLocalPlayerTwin())
+            {
+                _lastAnimation = (ushort)animation;
+                _sequence++;
+                return;
+            }
+
+            // Some other creature's one-shot. Only creatures — doors and placeables come
+            // through the same site — and only ones with a resolvable server identity.
+            if (*(nint*)twin != ClientCreatureVtable)
+            {
+                return;
+            }
+
+            nint server = *(nint*)(twin + TwinServerObject);
+            if (server == 0)
+            {
+                return;
+            }
+
+            uint objectId = *(uint*)(server + 0x04);
+            if (objectId is 0 or ObjectInvalid)
+            {
+                return;
+            }
+
+            RecordCreatureOneShot(objectId, animation);
         }
         catch
         {
             // Never let a managed fault unwind into the engine's animation dispatch.
         }
+    }
+
+    private static void RecordCreatureOneShot(uint objectId, uint animation)
+    {
+        int free = -1;
+        for (int i = 0; i < CreatureTableCapacity; i++)
+        {
+            if (_creatureId[i] == objectId)
+            {
+                _creatureAnim[i] = animation;
+                _creatureSerial[i]++;
+                return;
+            }
+
+            if (_creatureId[i] == 0 && free < 0)
+            {
+                free = i;
+            }
+        }
+
+        if (free >= 0)
+        {
+            _creatureId[free] = objectId;
+            _creatureAnim[free] = animation;
+            _creatureSerial[free] = 1;
+        }
+
+        // Table full: drop it. A lost swing is cosmetic; evicting a live entry would
+        // reset its serial and confuse the far side's dedupe.
     }
 }

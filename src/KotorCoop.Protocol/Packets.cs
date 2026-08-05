@@ -112,12 +112,16 @@ public sealed record ItemSnapshotPacket(uint Version, IReadOnlyList<GroundItem> 
 /// <paramref name="Position"/>, <paramref name="Facing"/> and <paramref name="Animation"/>
 /// are the owner's presence — where its engine has the body and what it is playing — so a
 /// mirroring instance can drive its copy to match instead of letting two AIs fight two
-/// private versions of the same battle. They ride only the snapshot (owner → everyone);
-/// a client's <see cref="EnemyReportPacket"/> carries health alone and leaves them default.
+/// private versions of the same battle. <paramref name="OneShotSerial"/> advances each
+/// time the enemy plays a fire-and-forget (a swing, a parry, a weapon draw), with the id
+/// in <paramref name="OneShotAnimation"/>, so the mirrored fight shows the strikes and
+/// not just the positions. All presence rides only the snapshot (owner → everyone); a
+/// client's <see cref="EnemyReportPacket"/> carries health alone and leaves them default.
 /// </summary>
 public sealed record EnemyState(
     uint ObjectId, ushort CurrentHealth, ushort MaxHealth, bool Dead,
-    Vector3f Position = default, float Facing = 0f, uint Animation = 0);
+    Vector3f Position = default, float Facing = 0f, uint Animation = 0,
+    uint OneShotSerial = 0, ushort OneShotAnimation = 0);
 
 /// <summary>
 /// The host's view of every enemy. Absolute health, never damage deltas: the engine

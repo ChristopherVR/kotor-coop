@@ -129,10 +129,17 @@ public sealed class KotorGameBridge : IGameBridge
     // Enemy presence (block version 20): the owner's position/facing/animation per enemy,
     // which the plugin drives the local copies to match. Slot i pairs with enemy slot i.
     // id u32 @0 (written last), x f32 @4, y @8, z @0xC, facing f32 @0x10, animation u32
-    // @0x14, flags u32 @0x18 (bit 0 dead), reserved @0x1C.
+    // @0x14, flags u32 @0x18 (bit 0 dead), one-shot serial u32 @0x1C, one-shot anim u32 @0x20.
     private const int BlockEnemyPresenceCount = 0x1400;
     private const int BlockEnemyPresenceSlots = 0x1410;
-    private const int BlockEnemyPresenceStride = 0x20;
+    private const int BlockEnemyPresenceStride = 0x28;
+
+    // Enemy one-shot capture (plugin -> agent, block version 20): fire-and-forget
+    // animations per creature from the plugin's hook. id u32 @0, animation u32 @4,
+    // serial u32 @8. The owner matches ids against its census when publishing.
+    private const int BlockEnemyOneShotTable = 0x1920;
+    private const int BlockEnemyOneShotStride = 0x10;
+    private const int BlockEnemyOneShotCapacity = 48;
 
     // Module travel, mirroring SharedBlock version 6.
     private const int BlockTravelSerial = 0x920;
@@ -2436,6 +2443,8 @@ public sealed class KotorGameBridge : IGameBridge
         // as an enemy, pinned, and mirrored.
         HashSet<uint>? phantomIds = ReadPhantomObjectIds();
 
+        Dictionary<uint, (uint Serial, ushort Animation)>? oneShots = ReadEnemyOneShots();
+
         foreach (CreatureRef creature in EnumerateCreatures())
         {
             if (creature.IsPlayer || creature.IsPartyMember || enemies.Count >= BlockEnemyCapacity)
@@ -2479,13 +2488,52 @@ public sealed class KotorGameBridge : IGameBridge
 
             _memory.TryReadUInt32(creature.Address + OffAnimation, out uint animation);
 
+            (uint oneShotSerial, ushort oneShotAnim) =
+                oneShots is not null && oneShots.TryGetValue(creature.ObjectId, out var shot)
+                    ? shot
+                    : (0u, (ushort)0);
+
             _enemyAddresses[creature.ObjectId] = creature.Address;
             enemies.Add(new EnemyState(
                 creature.ObjectId, (ushort)Math.Max((int)current, 0), max, current <= 0,
-                position, facing, animation));
+                position, facing, animation, oneShotSerial, oneShotAnim));
         }
 
         return enemies;
+    }
+
+    /// <summary>
+    /// The plugin's captured fire-and-forget table (swings, parries, draws), keyed by
+    /// object id, or null with no plugin attached. Ids that are not enemies (companions,
+    /// neutral NPCs also swing) are simply never matched by the census.
+    /// </summary>
+    private Dictionary<uint, (uint Serial, ushort Animation)>? ReadEnemyOneShots()
+    {
+        if (_pluginBlock == 0)
+        {
+            return null;
+        }
+
+        Dictionary<uint, (uint, ushort)>? shots = null;
+        for (int i = 0; i < BlockEnemyOneShotCapacity; i++)
+        {
+            nint slot = _pluginBlock + BlockEnemyOneShotTable + (i * BlockEnemyOneShotStride);
+
+            if (!_memory.TryReadUInt32(slot + 0x00, out uint id) || id == 0)
+            {
+                continue;
+            }
+
+            _memory.TryReadUInt32(slot + 0x04, out uint animation);
+            _memory.TryReadUInt32(slot + 0x08, out uint serial);
+
+            if (serial != 0)
+            {
+                (shots ??= [])[id] = (serial, (ushort)animation);
+            }
+        }
+
+        return shots;
     }
 
     /// <summary>The plugin's live phantom object ids, or null when no plugin is attached.</summary>
@@ -2576,6 +2624,8 @@ public sealed class KotorGameBridge : IGameBridge
             ok &= _memory.TryWrite(presence + 0x10, enemy.Facing);
             ok &= _memory.TryWrite(presence + 0x14, enemy.Animation);
             ok &= _memory.TryWrite(presence + 0x18, enemy.Dead ? EnemyFlagDead : 0u);
+            ok &= _memory.TryWrite(presence + 0x1C, enemy.OneShotSerial);
+            ok &= _memory.TryWrite(presence + 0x20, (uint)enemy.OneShotAnimation);
             ok &= _memory.TryWrite(presence + 0x00, enemy.ObjectId);
         }
 

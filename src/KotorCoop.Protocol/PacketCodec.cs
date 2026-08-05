@@ -304,6 +304,8 @@ public static class PacketCodec
             w.WriteVector3(enemy.Position);
             w.WriteSingle(enemy.Facing);
             w.WriteUInt32(enemy.Animation);
+            w.WriteUInt32(enemy.OneShotSerial);
+            w.WriteUInt16(enemy.OneShotAnimation);
         }
 
         return w.Failed ? 0 : w.Position;
@@ -335,13 +337,17 @@ public static class PacketCodec
             Vector3f position = r.ReadVector3();
             float facing = r.ReadSingle();
             uint animation = r.ReadUInt32();
+            uint oneShotSerial = r.ReadUInt32();
+            ushort oneShotAnimation = r.ReadUInt16();
 
             if (r.Failed)
             {
                 return null;
             }
 
-            enemies.Add(new EnemyState(objectId, current, max, dead, position, facing, animation));
+            enemies.Add(new EnemyState(
+                objectId, current, max, dead, position, facing, animation,
+                oneShotSerial, oneShotAnimation));
         }
 
         return new EnemySnapshotPacket(serverTime, enemies);

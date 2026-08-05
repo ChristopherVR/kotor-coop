@@ -19,9 +19,9 @@ public static class ProtocolConstants
     /// Version 11: the dialogue token carries the owner's pick LOG (each pick stamped with
     /// the line it was made on) so a spectator replays picks on the right node and a late
     /// joiner catches up.
-    /// Version 12: the enemy snapshot carries presence (position, facing, animation) so a
-    /// mirroring instance drives its copies to match the owner's fight instead of running
-    /// a private one. Reports still carry health alone.</summary>
+    /// Version 12: the enemy snapshot carries presence (position, facing, animation, and
+    /// per-enemy one-shot swings) so a mirroring instance drives its copies to match the
+    /// owner's fight instead of running a private one. Reports still carry health alone.</summary>
     public const byte Version = 12;
 
     /// <summary>Journal quest tags are resrefs plus a little slack.</summary>
@@ -44,8 +44,10 @@ public static class ProtocolConstants
     public const int MaxGroundItems = 16;
 
     /// <summary>
-    /// Enemies the owner replicates. 29 bytes each in the snapshot (id, health, death,
-    /// position, facing, animation), so 32 still fits one datagram with room to spare.
+    /// Enemies the owner replicates. 35 bytes each in the snapshot (id, health, death,
+    /// position, facing, animation, one-shot serial + id), so a full 32 is 1133 bytes
+    /// with the header — still inside one datagram, with no room for a further field.
+    /// The fit is asserted by a test.
     /// </summary>
     public const int MaxEnemies = 32;
 

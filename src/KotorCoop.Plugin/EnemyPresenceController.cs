@@ -55,6 +55,11 @@ internal sealed unsafe class EnemyPresenceController(SharedBlockView block)
     // Per-slot smoothing state, same shape as PhantomController.DriveDirect: measured
     // speed from consumed displacements, a shown position that chases the target, and
     // movement hysteresis so the gait cannot flicker.
+    // One-shot replay dedupe: the serial applied last, primed on first sight of a slot so
+    // a swing from before tracking began (a join, a module entry) is never replayed late.
+    private readonly uint[] _appliedOneShot = new uint[SharedBlock.EnemyCapacity];
+    private readonly bool[] _oneShotPrimed = new bool[SharedBlock.EnemyCapacity];
+
     private readonly Vec3[] _lastGoal = new Vec3[SharedBlock.EnemyCapacity];
     private readonly float[] _speed = new float[SharedBlock.EnemyCapacity];
     private readonly double[] _speedFromTime = new double[SharedBlock.EnemyCapacity];
@@ -189,6 +194,22 @@ internal sealed unsafe class EnemyPresenceController(SharedBlockView block)
         // contended writer that made direct placement look broken for a month.
         Odyssey.ClaimCreature(creature);
 
+        // Replay any NEW fire-and-forget the owner's copy played — the swings and parries
+        // that turn a mirrored fight from bodies-in-the-right-places into a fight.
+        if (!_oneShotPrimed[slot])
+        {
+            _oneShotPrimed[slot] = true;
+            _appliedOneShot[slot] = enemy.OneShotSerial;
+        }
+        else if (enemy.OneShotSerial != _appliedOneShot[slot])
+        {
+            _appliedOneShot[slot] = enemy.OneShotSerial;
+            if (enemy.OneShotAnimation != 0)
+            {
+                Odyssey.PlayOneShotAnimation(creature, (ushort)enemy.OneShotAnimation);
+            }
+        }
+
         Drive(slot, creature, enemy, now);
         return true;
     }
@@ -286,6 +307,8 @@ internal sealed unsafe class EnemyPresenceController(SharedBlockView block)
 
         _creature[slot] = 0;
         _trackedId[slot] = 0;
+        _appliedOneShot[slot] = 0;
+        _oneShotPrimed[slot] = false;
         _speed[slot] = 0f;
         _speedFromTime[slot] = 0;
         _shownPosition[slot] = default;
