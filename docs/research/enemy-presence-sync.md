@@ -80,24 +80,32 @@ follow-up if it reads as wrong in play.
 | `enemy_drive=0` in coop.ini | full kill switch back to health-only mirroring |
 | Implausible positions rejected (0,0 / NaN) | a half-written slot or failed read must not teleport a body |
 
-## NEEDS-LIVE checklist (the whole feature is one live pass away)
+## NEEDS-LIVE checklist — first pass run 2026-08-06 (Handoff 0i.3), same day as the design
 
-1. **Does a driven enemy render at the owner's position?** Same check as phantoms: log
-   `|server − twin|` per driven enemy; must be ~0 while `budget` reads 0.
+1. ~~**Does a driven enemy render at the owner's position?**~~ **VERIFIED LIVE**: two-instance
+   run, 27/27 tag-matched creatures at identical positions and health across the games,
+   and a probe of every client twin (`+0x224 -> +0x24`) against its server object read
+   **28/28 twins, worst gap 0.000**. Health mirroring onto a driven copy also intact
+   (`sethp` on the host reached the client within seconds).
 2. **Does re-claiming every frame starve anything that matters?** Watch for: script
    heartbeats that expect their queued actions to survive (patrol loops are expected to
    stop — that is the point — but a quest script wedging is not), and the perception
-   system spamming.
+   system spamming. No adverse signs on the inert Endar Spire save; a scripted module is
+   the real test.
 3. **Commandable forced to 1:** a cutscene that sets an enemy non-commandable gets it
    forced back. The dialogue skip should cover the visible cases; verify none leak.
 4. **The standing-stance mirror:** does applying the owner's `+0xD4` through the twin sync
    handler show combat-ready correctly, and does the `0x2710..0x27FF` band ever admit an
-   id that misbehaves?
+   id that misbehaves? Needs a human watching a real fight.
 5. **Client attack targeting:** the mirroring player clicking a driven enemy must still
    start their attack round normally (the enemy's own queue being empty should not matter
-   — targeting reads the body, not the queue — but verify).
-6. **Perf:** 32 enemies × (2 thiscalls + ~10 stores + a queue walk) per frame is nothing
-   on paper; confirm no measurable frame cost with the census at cap.
+   — targeting reads the body, not the queue — but verify in play).
+6. **Perf:** no measurable trouble in the live run (census 25, both instances smooth for
+   the duration); re-check only if a fuller module misbehaves.
+
+One census observation from the run, working as designed: an NPC that is party-followed on
+the MIRRORING side (`end_trask`, +0x4C0 non-zero there) is skipped by the enemy drive and
+owned by the party drive instead — that is why the client logged 24 of 25.
 
 ## Combat participation — the options this sets up, none built
 
