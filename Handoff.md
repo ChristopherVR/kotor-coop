@@ -2413,3 +2413,33 @@ network tick. Now the same block-and-drive shape as enemies:
   about +0x4C0 was about CLAIMING one as a phantom; here solo mode should keep the
   follow actions away — verify), and companion swings visibly playing. 266 tests; all
   three builds clean.
+
+### 0i.3 — LIVE VERIFIED, same day: presence sync works end to end, 2026-08-06
+
+Full unattended two-instance run (`tools\demo.ps1`, Endar Spire save 1, pids 7820 host /
+41636 client). **Both instances auto-loaded with no human click** — instance 2 came up via
+`agent load` on the first try, so 7.2's "never works for the second instance" appears to
+be superseded by the plugin-driven load path; downgrade that item after one more clean run.
+
+What the run proved, by memory read (worst case across ALL creatures):
+
+- Client log: `enemy drive: mirroring 24 of the owner's 25 enemies` and `party drive:
+  mirroring 1 of the host's companions`, within ~11 s of the world coming up.
+- **Cross-instance census agreement: 27 of 27 tag-matched creatures, 26 at distance
+  0.00 units, health identical on every one** (including Carth at 500 both sides). The
+  single 0.60 u outlier is a patrolling welder sampled seconds apart by two sequential
+  scans; the 25th unmirrored enemy is `end_trask 0x127`, party-followed on the client and
+  therefore skipped by the +0x4C0 guard by design — the party drive owns him instead, and
+  his position still matched exactly.
+- **The presentation followed, not just the simulation** (the 0h lesson applied): a probe
+  of every client creature's twin (`+0x224 -> +0x24`, the rendered position) against its
+  server object showed **28/28 twins present with worst gap 0.000**.
+- Interplay intact: `sethp 0x14 -> 6` on the host mirrored to 6 on the client's DRIVEN
+  copy within seconds — drive, min-1-hp pin and health mirror do not fight.
+- No crash, no errors in either plugin log across the whole run; both games shut down
+  clean via `demo.ps1 -Stop`.
+
+Still genuinely NEEDS-PLAY (a human watching the screen): whether driven enemies LOOK
+right in motion during a real fight (gait, swing timing), stance mirroring, and the
+per-frame re-claim's effect on scripted sequences. The static/inert-enemy save cannot
+show those.
