@@ -47,7 +47,7 @@ internal struct SharedBlock
     /// existing offset profiles keep working. The plugin control fields live AFTER that
     /// range, which is why the block is larger than the profile knows about.
     /// </summary>
-    public const int TotalSize = 0x1400;
+    public const int TotalSize = 0x1A00;
 
     public const int ProfileVisibleSize = 0x250;
 
@@ -136,6 +136,23 @@ internal struct SharedBlock
 
     /// <summary>Set in an enemy slot's flags when the owning peer says it is dead.</summary>
     public const uint EnemyFlagDead = 1;
+
+    // ---- enemy presence (version 20) --------------------------------------------
+    //
+    // The owner's position, facing and animation per enemy, so the mirroring instance
+    // drives its copies to the same spot instead of letting two AIs run two private
+    // versions of the same fight. Slot i pairs with enemy slot i (same pump writes both);
+    // the id is repeated here, written last, so a half-written slot never drives the
+    // wrong creature.
+
+    /// <summary>Agent -&gt; plugin. How many presence entries are valid.</summary>
+    public const int OffsetEnemyPresenceCount = 0x1400;
+
+    /// <summary>Agent -&gt; plugin. id u32 @0, position 3xf32 @4, facing f32 @0x10,
+    /// animation u32 @0x14, flags u32 @0x18 (bit 0 dead). Occupies 0x1410..0x1810.</summary>
+    public const int OffsetEnemyPresenceSlots = 0x1410;
+
+    public const int EnemyPresenceStride = 0x20;
 
     // ---- door replication (version 4) -------------------------------------------
     //

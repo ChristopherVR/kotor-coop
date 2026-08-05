@@ -2330,3 +2330,42 @@ two-instance verification pass (task #11).
 - Both features built by parallel worktree subagents from the research docs, merged clean.
   Block still v12 / signature 0C (used pre-reserved regions). 217 tests pass; Agent + plugin
   NativeAOT build. New research docs: text-render-queued, console-register, animation-sync.
+
+---
+
+## Addendum 0i — enemy presence sync (protocol v12, block v20), 2026-08-06
+
+The biggest remaining seam in "seamless": the enemy channel replicated outcomes only
+(health + death), so each instance's AI ran its own private version of every fight — same
+soldier, different place, different behaviour on the two screens. Now the owner streams
+each enemy's PRESENCE and the mirroring instance drives its copies to match, with the same
+recipe that made phantoms seamless. Design + risk register: docs/research/enemy-presence-sync.md.
+
+- **Wire (protocol v12)**: `EnemyState` gains Position/Facing/Animation, serialized in the
+  SNAPSHOT only — a client's `EnemyReport` still carries health alone (its positions are
+  never authoritative). 29 bytes/enemy; a full 32-enemy snapshot still fits one datagram.
+- **Owner side**: `ReadEnemies` also reads `+0x90` position, `+0x9C` orientation (→ facing
+  angle) and `+0xD4` looping animation — three extra external reads per enemy, all
+  long-verified offsets.
+- **Block v20** (signature `…14 00 00 00…`, TotalSize 0x1400 → 0x1A00): presence region
+  count @0x1400, 32 slots @0x1410 stride 0x20 (id last per slot), paired 1:1 with the
+  existing enemy slots and written by the same `TryWriteEnemies` pass.
+- **Plugin `EnemyPresenceController`** (mirror side, every frame): resolve + revalidate the
+  creature (id @+0x04, type @+0x08 == 5 — the 0g stale-pointer lesson), re-claim EVERY pass
+  (`ClaimCreature`: commandable, ClearAllActions, movement permitted — an armed MoveToPoint
+  is the contended writer from realtime-creature-movement §2.1), then the phantom drive:
+  measured speed, smoothed shown position, gait hysteresis, `Odyssey.DriveEnemy` →
+  `DriveBody` (shared with `DrivePhantom`; gait table widened 8 → 48). Standing enemies
+  hold the owner's looping id when it is in the 0x2710..0x27FF band, else idle.
+- **Deliberate model change**: on the mirroring instance enemies no longer act locally —
+  they are a presentation of the owner's fight. The mirroring player's damage still
+  min-merges as before. Enemy threat TO the mirroring player is combat-participation work,
+  with the option space recorded in the research doc (aggro-sink hazard and all).
+- **Guards**: dead → stop driving + forget; skip local phantom-id collisions (host
+  encounter spawns share the id range with local phantom spawns); skip party-follow
+  creatures and the player; whole pass skipped during a local conversation; positions
+  sanity-checked; `enemy_drive=0` kill switch in coop.ini.
+- **NEEDS-LIVE** (checklist in the doc): render-position check, per-frame re-claim side
+  effects, forced commandable vs cutscenes, stance mirror, client attack targeting, perf
+  at census cap.
+- 266 tests pass; solution, Agent publish and plugin NativeAOT x86 publish all clean.

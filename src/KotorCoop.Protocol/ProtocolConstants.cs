@@ -18,8 +18,11 @@ public static class ProtocolConstants
     /// transcript; the spectate line grew past the shared string cap.
     /// Version 11: the dialogue token carries the owner's pick LOG (each pick stamped with
     /// the line it was made on) so a spectator replays picks on the right node and a late
-    /// joiner catches up.</summary>
-    public const byte Version = 11;
+    /// joiner catches up.
+    /// Version 12: the enemy snapshot carries presence (position, facing, animation) so a
+    /// mirroring instance drives its copies to match the owner's fight instead of running
+    /// a private one. Reports still carry health alone.</summary>
+    public const byte Version = 12;
 
     /// <summary>Journal quest tags are resrefs plus a little slack.</summary>
     public const int MaxJournalTagLength = 32;
@@ -41,8 +44,8 @@ public static class ProtocolConstants
     public const int MaxGroundItems = 16;
 
     /// <summary>
-    /// Enemies whose health the host replicates. 9 bytes each on the wire, so this stays
-    /// comfortably inside one datagram.
+    /// Enemies the owner replicates. 29 bytes each in the snapshot (id, health, death,
+    /// position, facing, animation), so 32 still fits one datagram with room to spare.
     /// </summary>
     public const int MaxEnemies = 32;
 

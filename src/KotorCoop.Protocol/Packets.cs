@@ -108,8 +108,16 @@ public sealed record ItemSnapshotPacket(uint Version, IReadOnlyList<GroundItem> 
 /// id, which is usable as a cross-instance key because both games load the same save and
 /// the engine assigns ids deterministically in GIT order — verified live, the same Sith
 /// soldier is 0x14 in both instances.
+///
+/// <paramref name="Position"/>, <paramref name="Facing"/> and <paramref name="Animation"/>
+/// are the owner's presence — where its engine has the body and what it is playing — so a
+/// mirroring instance can drive its copy to match instead of letting two AIs fight two
+/// private versions of the same battle. They ride only the snapshot (owner → everyone);
+/// a client's <see cref="EnemyReportPacket"/> carries health alone and leaves them default.
 /// </summary>
-public sealed record EnemyState(uint ObjectId, ushort CurrentHealth, ushort MaxHealth, bool Dead);
+public sealed record EnemyState(
+    uint ObjectId, ushort CurrentHealth, ushort MaxHealth, bool Dead,
+    Vector3f Position = default, float Facing = 0f, uint Animation = 0);
 
 /// <summary>
 /// The host's view of every enemy. Absolute health, never damage deltas: the engine

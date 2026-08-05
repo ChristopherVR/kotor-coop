@@ -126,6 +126,14 @@ public sealed class KotorGameBridge : IGameBridge
     private const int BlockEnemyCapacity = 32;
     private const uint EnemyFlagDead = 1;
 
+    // Enemy presence (block version 20): the owner's position/facing/animation per enemy,
+    // which the plugin drives the local copies to match. Slot i pairs with enemy slot i.
+    // id u32 @0 (written last), x f32 @4, y @8, z @0xC, facing f32 @0x10, animation u32
+    // @0x14, flags u32 @0x18 (bit 0 dead), reserved @0x1C.
+    private const int BlockEnemyPresenceCount = 0x1400;
+    private const int BlockEnemyPresenceSlots = 0x1410;
+    private const int BlockEnemyPresenceStride = 0x20;
+
     // Module travel, mirroring SharedBlock version 6.
     private const int BlockTravelSerial = 0x920;
     private const int BlockTravelModule = 0x924;
@@ -192,11 +200,11 @@ public sealed class KotorGameBridge : IGameBridge
     private const int BlockRemoteDialoguePicks = 0x12C0;
     public const int DialoguePickLogBytes = 96;
 
-    /// <summary>16-byte signature: "KOCOOP01" + version 19 + guard 0xC0FFEE01. The version is
+    /// <summary>16-byte signature: "KOCOOP01" + version 20 + guard 0xC0FFEE01. The version is
     /// part of the pattern deliberately: an agent must not attach to a plugin whose block
     /// layout it does not know, and a stale pair fails to find each other rather than reading
     /// the wrong offsets.</summary>
-    public const string PluginSignature = "4B 4F 43 4F 4F 50 30 31 13 00 00 00 01 EE FF C0";
+    public const string PluginSignature = "4B 4F 43 4F 4F 50 30 31 14 00 00 00 01 EE FF C0";
 
     /// <summary>Agent's view of which coop item id occupies each plugin item slot.</summary>
     private readonly uint[] _itemSlotIds = new uint[BlockItemCapacity];
@@ -2458,9 +2466,23 @@ public sealed class KotorGameBridge : IGameBridge
             _memory.TryRead(creature.Address + OffCurrentHitPoints, out short current);
             _memory.TryRead(creature.Address + OffMaxHitPoints, out ushort max);
 
+            // Presence: where this engine has the body and what it is playing, so the
+            // mirroring side can drive its copy there. Best-effort — a failed read leaves
+            // the defaults, which the plugin's driver rejects as implausible.
+            TryReadVector(creature.Address + OffPosition, out Vector3f position);
+
+            float facing = 0f;
+            if (TryReadVector(creature.Address + OffOrientation, out Vector3f orientation))
+            {
+                facing = Angles.Normalize(MathF.Atan2(orientation.Y, orientation.X));
+            }
+
+            _memory.TryReadUInt32(creature.Address + OffAnimation, out uint animation);
+
             _enemyAddresses[creature.ObjectId] = creature.Address;
             enemies.Add(new EnemyState(
-                creature.ObjectId, (ushort)Math.Max((int)current, 0), max, current <= 0));
+                creature.ObjectId, (ushort)Math.Max((int)current, 0), max, current <= 0,
+                position, facing, animation));
         }
 
         return enemies;
@@ -2543,8 +2565,21 @@ public sealed class KotorGameBridge : IGameBridge
             // Object id last, so the plugin never reads a slot whose id and payload
             // belong to different enemies.
             ok &= _memory.TryWrite(slot + 0x00, enemy.ObjectId);
+
+            // The presence half, in its own region: the owner's position, facing and
+            // animation, which the plugin's driver moves the local copy to match. Same
+            // id-last discipline per slot.
+            nint presence = _pluginBlock + BlockEnemyPresenceSlots + (i * BlockEnemyPresenceStride);
+            ok &= _memory.TryWrite(presence + 0x04, enemy.Position.X);
+            ok &= _memory.TryWrite(presence + 0x08, enemy.Position.Y);
+            ok &= _memory.TryWrite(presence + 0x0C, enemy.Position.Z);
+            ok &= _memory.TryWrite(presence + 0x10, enemy.Facing);
+            ok &= _memory.TryWrite(presence + 0x14, enemy.Animation);
+            ok &= _memory.TryWrite(presence + 0x18, enemy.Dead ? EnemyFlagDead : 0u);
+            ok &= _memory.TryWrite(presence + 0x00, enemy.ObjectId);
         }
 
+        ok &= _memory.TryWrite(_pluginBlock + BlockEnemyPresenceCount, (uint)count);
         ok &= _memory.TryWrite(_pluginBlock + BlockEnemyCount, (uint)count);
         return ok;
     }

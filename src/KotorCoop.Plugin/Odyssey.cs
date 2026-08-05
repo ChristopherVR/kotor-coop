@@ -3611,11 +3611,37 @@ internal static unsafe class Odyssey
     public static void DrivePhantom(nint creature, Vec3 position, float facing, float speed, bool moving)
     {
         bool run = speed > 2.0f;
+        int want = moving ? (run ? AnimRun : AnimWalk) : AnimIdle;
+        DriveBody(creature, position, facing, speed, moving, want, run);
+    }
 
+    /// <summary>
+    /// Same drive as <see cref="DrivePhantom"/> for a creature the engine spawned itself —
+    /// an enemy mirrored from the owning peer. The one difference is the standing
+    /// animation: a phantom at rest is idle, but a mirrored enemy at rest should hold
+    /// whatever its owner's engine has it holding (combat-ready stance, casting loop), so
+    /// the owner's looping animation id is applied when it is plausible and idle when not.
+    /// While moving, the gait still comes from the measured stream speed — the owner's
+    /// field lags it, and a wrong gait reads worse than a wrong stance.
+    /// </summary>
+    public static void DriveEnemy(nint creature, Vec3 position, float facing, float speed, bool moving, uint ownerAnimation)
+    {
+        bool run = speed > 2.0f;
+
+        // NEEDS-LIVE: engine looping ids sit at 0x2710 (10000) and up; anything outside
+        // that band here is a read gone wrong or a one-shot that does not belong in a
+        // looping field, and idle is the safe substitute.
+        int want = moving
+            ? (run ? AnimRun : AnimWalk)
+            : (ownerAnimation is >= 0x2710 and < 0x2800 ? (int)ownerAnimation : AnimIdle);
+
+        DriveBody(creature, position, facing, speed, moving, want, run);
+    }
+
+    private static void DriveBody(nint creature, Vec3 position, float facing, float speed, bool moving, int want, bool run)
+    {
         Vec3 direction = new() { X = MathF.Cos(facing), Y = MathF.Sin(facing), Z = 0f };
         SetOrientationFn(creature, &direction);
-
-        int want = moving ? (run ? AnimRun : AnimWalk) : AnimIdle;
         *(int*)(creature + CreRunFlag) = run ? 1 : 0;
         *(int*)(creature + CreMoveState) = moving ? -1 : 1;
 
@@ -3695,11 +3721,11 @@ internal static unsafe class Odyssey
 
     private static int _gaitLogTimer;
 
-    /// <summary>Last gait asserted per phantom, so the twin call fires on change only.
-    /// Fixed slots rather than a dictionary: at most a handful of phantoms exist, and this
-    /// runs on the game's frame hook where allocation is unwelcome.</summary>
-    private static readonly nint[] GaitCreature = new nint[8];
-    private static readonly int[] GaitLast = new int[8];
+    /// <summary>Last gait asserted per driven creature, so the twin call fires on change
+    /// only. Fixed slots rather than a dictionary: at most 8 phantoms plus 32 mirrored
+    /// enemies exist, and this runs on the game's frame hook where allocation is unwelcome.</summary>
+    private static readonly nint[] GaitCreature = new nint[48];
+    private static readonly int[] GaitLast = new int[48];
 
     private static bool GaitChanged(nint creature, int want)
     {

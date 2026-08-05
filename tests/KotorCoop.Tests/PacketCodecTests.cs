@@ -286,11 +286,13 @@ public class PacketCodecTests
     {
         Span<byte> buffer = stackalloc byte[ProtocolConstants.MaxPacketSize];
 
+        // Presence (position, facing, animation) rides the snapshot: the mirroring
+        // instance drives its copies to these, so they must survive the wire exactly.
         List<EnemyState> enemies =
         [
-            new(0x14, 15, 15, false),
+            new(0x14, 15, 15, false, new Vector3f(46.78f, 33.27f, -1.27f), 1.57f, 0x2714),
             new(0x17, 0, 12, true),
-            new(0x29, 7, 15, false),
+            new(0x29, 7, 15, false, new Vector3f(-3.5f, 120.25f, 0f), -2.9f, 0x2710),
         ];
 
         int length = PacketCodec.Write(buffer, new EnemySnapshotPacket(1234, enemies));
@@ -299,6 +301,23 @@ public class PacketCodecTests
         Assert.NotNull(decoded);
         Assert.Equal(1234, decoded.ServerTimeMs);
         Assert.Equal(enemies, decoded.Enemies);
+    }
+
+    [Fact]
+    public void EnemyReportCarriesHealthAloneAndDropsPresence()
+    {
+        Span<byte> buffer = stackalloc byte[ProtocolConstants.MaxPacketSize];
+
+        // A client's report exists to carry its damage back to the owner. Its presence
+        // fields are whatever its local engine happens to show and must NOT reach the
+        // wire — the owner's own positions are the authoritative ones.
+        List<EnemyState> reported = [new(0x14, 9, 15, false, new Vector3f(1f, 2f, 3f), 0.5f, 0x2712)];
+
+        int length = PacketCodec.Write(buffer, new EnemyReportPacket(7, "end_m01aa", reported));
+        EnemyReportPacket? decoded = PacketCodec.ReadEnemyReport(buffer[..length]);
+
+        Assert.NotNull(decoded);
+        Assert.Equal(new EnemyState(0x14, 9, 15, false), decoded.Enemies[0]);
     }
 
     [Fact]

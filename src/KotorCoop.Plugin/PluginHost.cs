@@ -23,6 +23,7 @@ internal static unsafe class PluginHost
     private static ItemController? _items;
     private static FocusKeeper? _focus;
     private static CombatController? _combat;
+    private static EnemyPresenceController? _enemyPresence;
     private static DoorController? _doors;
     private static PlaceableController? _placeables;
     private static LootController? _loot;
@@ -82,6 +83,7 @@ internal static unsafe class PluginHost
             _items = new ItemController(_view);
             _focus = new FocusKeeper(_view);
             _combat = new CombatController(_view);
+            _enemyPresence = new EnemyPresenceController(_view);
             _doors = new DoorController(_view);
             _placeables = new PlaceableController(_view);
             _loot = new LootController(_view);
@@ -236,7 +238,7 @@ internal static unsafe class PluginHost
         Unsafe.InitBlockUnaligned(_block, 0, SharedBlock.TotalSize);
 
         _block->Magic = SharedBlock.MagicValue;
-        _block->Version = 19;
+        _block->Version = 20;
 
         // A guard dword after the version. Magic plus version alone was not selective
         // enough: a scan once matched something else at a lower address and the agent
@@ -408,6 +410,10 @@ internal static unsafe class PluginHost
         _controller?.OnFrame();
         _items?.OnFrame();
         _combat?.OnFrame();
+
+        // After the combat pass so a death applied this frame is respected (the presence
+        // slot's dead flag and the kill both come from the same owner tick).
+        _enemyPresence?.OnFrame();
         _doors?.OnFrame();
         _placeables?.OnFrame();
         _loot?.OnFrame();
@@ -427,6 +433,7 @@ internal static unsafe class PluginHost
         _controller?.Invalidate();
         _items?.Invalidate();
         _combat?.Invalidate();
+        _enemyPresence?.Invalidate();
         _doors?.Invalidate();
         _placeables?.Invalidate();
         _loot?.Invalidate();

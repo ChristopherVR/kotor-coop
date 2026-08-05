@@ -17,6 +17,11 @@ internal readonly record struct RemoteView(
 /// <summary>One enemy's authoritative state, as published by the owning peer.</summary>
 internal readonly record struct EnemyView(uint ObjectId, ushort CurrentHealth, ushort MaxHealth, bool Dead);
 
+/// <summary>One enemy's presence — where the owning peer's engine has the body and what
+/// it is playing — as published for the drive controller.</summary>
+internal readonly record struct EnemyPresenceView(
+    uint ObjectId, Vec3 Position, float Facing, uint Animation, bool Dead);
+
 /// <summary>One door's desired state, as published by the agent for the local module.</summary>
 internal readonly record struct DoorView(uint ObjectId, byte OpenState, bool Unlocked);
 
@@ -95,6 +100,11 @@ internal sealed unsafe class SharedBlockView(byte* baseAddress)
             *U32(SharedBlock.OffsetPhantomIds + (index * 4)) = objectId;
         }
     }
+
+    public uint GetPhantomId(int index) =>
+        index is >= 0 and < SharedBlock.SlotCapacity
+            ? *U32(SharedBlock.OffsetPhantomIds + (index * 4))
+            : 0;
 
     public void SetLocalState(Vec3 position, float facing, int health)
     {
@@ -185,6 +195,32 @@ internal sealed unsafe class SharedBlockView(byte* baseAddress)
             *(ushort*)(slot + 0x04),
             *(ushort*)(slot + 0x06),
             (*(uint*)(slot + 0x08) & SharedBlock.EnemyFlagDead) != 0);
+    }
+
+    /// <summary>Agent-written; zeroed by the plugin on a module transition like
+    /// <see cref="EnemyCount"/>, and for the same reason.</summary>
+    public uint EnemyPresenceCount
+    {
+        get => *U32(SharedBlock.OffsetEnemyPresenceCount);
+        set => *U32(SharedBlock.OffsetEnemyPresenceCount) = value;
+    }
+
+    public EnemyPresenceView GetEnemyPresence(int index)
+    {
+        byte* slot = baseAddress + SharedBlock.OffsetEnemyPresenceSlots
+            + (index * SharedBlock.EnemyPresenceStride);
+
+        return new EnemyPresenceView(
+            *(uint*)(slot + 0x00),
+            new Vec3
+            {
+                X = *(float*)(slot + 0x04),
+                Y = *(float*)(slot + 0x08),
+                Z = *(float*)(slot + 0x0C),
+            },
+            *(float*)(slot + 0x10),
+            *(uint*)(slot + 0x14),
+            (*(uint*)(slot + 0x18) & SharedBlock.EnemyFlagDead) != 0);
     }
 
     // ---- equipment --------------------------------------------------------------
