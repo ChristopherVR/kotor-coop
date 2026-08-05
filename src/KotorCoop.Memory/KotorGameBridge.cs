@@ -126,6 +126,10 @@ public sealed class KotorGameBridge : IGameBridge
     private const int BlockEnemyCapacity = 32;
     private const uint EnemyFlagDead = 1;
 
+    /// <summary>Un-killable by module rule (a cutscene actor): presence-only, the combat
+    /// half must not touch it.</summary>
+    private const uint EnemyFlagPlot = 2;
+
     // Enemy presence (block version 20): the owner's position/facing/animation per enemy,
     // which the plugin drives the local copies to match. Slot i pairs with enemy slot i.
     // id u32 @0 (written last), x f32 @4, y @8, z @0xC, facing f32 @0x10, animation u32
@@ -1783,7 +1787,9 @@ public sealed class KotorGameBridge : IGameBridge
     /// <summary>CServerExoAppInternal + this = party table (embedded CSWPartyTable).</summary>
     private const int PartyTableOffset = 0x1B770;
 
-    /// <summary>CSWPartyTable + this = quest journal { SJournalEntry* data; int size; int cap }.</summary>
+    /// <summary>CSWPartyTable + this = a POINTER to the CSWSJournal (whose own array list
+    /// { SJournalEntry* data; int size; int cap } sits at journal+0). Dereference it —
+    /// see the note in ReadJournalEntries for what reading it in place cost.</summary>
     private const int PartyTableJournal = 0x11C;
 
     private const int JournalEntryStride = 0x3C;
@@ -1866,7 +1872,16 @@ public sealed class KotorGameBridge : IGameBridge
             yield break;
         }
 
-        nint journal = serverInternal + PartyTableOffset + PartyTableJournal;
+        // ⚠ +0x11C HOLDS a pointer to the CSWSJournal; it is not the journal. Reading it as
+        // the array list itself made this enumerate whatever followed it in the party
+        // table — the same mistake that crashed the plugin's WRITE path on 2026-08-06.
+        // CSWPartyTable::GetPartyJournal 0x005633C0 is `mov eax,[esi+0x11C]` (VERIFIED),
+        // and the corrected chain was confirmed live: 1 entry, 'end_attack', state 20.
+        if (!_memory.TryReadPointer(serverInternal + PartyTableOffset + PartyTableJournal, out nint journal)
+            || journal == 0)
+        {
+            yield break;
+        }
 
         if (!_memory.TryReadPointer(journal, out nint data) || data == 0
             || !_memory.TryReadInt32(journal + 4, out int count)
@@ -2449,15 +2464,23 @@ public sealed class KotorGameBridge : IGameBridge
     /// floors does not need a second full memory scan in the same tick.</summary>
     private readonly Dictionary<uint, nint> _enemyAddresses = [];
 
+    /// <summary>Ids the module declares plot (un-killable). The combat half of the channel
+    /// must skip them everywhere — including a peer's damage reports.</summary>
+    private readonly HashSet<uint> _plotIds = [];
+
     public List<EnemyState> ReadEnemies()
     {
         List<EnemyState> enemies = [];
         _enemyAddresses.Clear();
+        _plotIds.Clear();
 
-        if (_player is null || !TryReadFaction(_player.Address, out int playerFaction))
+        if (_player is null)
         {
             return enemies;
         }
+
+        Vector3f playerPosition = default;
+        TryReadVector(_player.Address + OffPosition, out playerPosition);
 
         // Phantoms are no longer plot-flagged (7.4's redesign: they take visible damage
         // now), so they must be excluded by id or a teammate's body would be published
@@ -2466,9 +2489,16 @@ public sealed class KotorGameBridge : IGameBridge
 
         Dictionary<uint, (uint Serial, ushort Animation)>? oneShots = ReadCreatureOneShots();
 
+        // Two passes: collect every candidate, then keep the ones that matter most. A
+        // module can hold more creatures than the census cap, and truncating in scan
+        // order shed arbitrary bodies; hostiles go first (a fight that desyncs is worse
+        // than a bystander that does), then the nearest bystanders — which is also where
+        // scripted scenes play, next to the player watching them.
+        List<(EnemyState State, bool Fighting, float DistanceSquared)> candidates = [];
+
         foreach (CreatureRef creature in EnumerateCreatures())
         {
-            if (creature.IsPlayer || creature.IsPartyMember || enemies.Count >= BlockEnemyCapacity)
+            if (creature.IsPlayer || creature.IsPartyMember)
             {
                 continue;
             }
@@ -2478,17 +2508,25 @@ public sealed class KotorGameBridge : IGameBridge
                 continue;
             }
 
-            // A plot creature is something the module declares un-killable; its health
-            // is not ours to replicate.
-            if (_memory.TryReadInt32(creature.Address + OffPlot, out int plot) && plot != 0)
-            {
-                continue;
-            }
+            // A plot creature — usually a cutscene actor — is included for PRESENCE, so
+            // scripted scenes play out identically on both screens, but flagged so the
+            // combat half leaves its health alone: un-killable is the module's rule.
+            //
+            // No faction filter any more, deliberately. It once excluded "friendly" NPCs,
+            // but a story NPC in the player's faction (Carth on the Endar Spire bridge,
+            // pre-join companions generally) is EXACTLY a cutscene actor whose presence
+            // must sync — measured live: Carth was the one body the census dropped. The
+            // exclusions that mattered are explicit: the player and party by their own
+            // checks above, phantoms by id.
+            bool plot = _memory.TryReadInt32(creature.Address + OffPlot, out int plotFlag) && plotFlag != 0;
 
-            if (!TryReadFaction(creature.Address, out int faction) || faction == playerFaction)
-            {
-                continue;
-            }
+            // Priority signal, not a hostility oracle: a creature the engine itself has
+            // mid-combat-round must never be shed by the cap. Faction semantics are a
+            // matrix lookup we cannot make externally (docs/research/combat-participation.md
+            // §2), so the engine's own in-combat flag is the honest signal.
+            bool fighting = !plot
+                && _memory.TryReadInt32(creature.Address + OffInCombat, out int inCombat)
+                && inCombat != 0;
 
             // Signed: an overkilled enemy sits at negative hit points, and an unsigned
             // read would report it as 65531 hp and alive — the death would never
@@ -2514,14 +2552,38 @@ public sealed class KotorGameBridge : IGameBridge
                     ? shot
                     : (0u, (ushort)0);
 
+            float dx = position.X - playerPosition.X;
+            float dy = position.Y - playerPosition.Y;
+
+            candidates.Add((
+                new EnemyState(
+                    creature.ObjectId, (ushort)Math.Max((int)current, 0), max, current <= 0,
+                    position, facing, animation, oneShotSerial, oneShotAnim, plot),
+                fighting,
+                (dx * dx) + (dy * dy)));
+
             _enemyAddresses[creature.ObjectId] = creature.Address;
-            enemies.Add(new EnemyState(
-                creature.ObjectId, (ushort)Math.Max((int)current, 0), max, current <= 0,
-                position, facing, animation, oneShotSerial, oneShotAnim));
+        }
+
+        candidates.Sort((a, b) => a.Fighting != b.Fighting
+            ? (a.Fighting ? -1 : 1)
+            : a.DistanceSquared.CompareTo(b.DistanceSquared));
+
+        int count = Math.Min(candidates.Count, BlockEnemyCapacity);
+        for (int i = 0; i < count; i++)
+        {
+            EnemyState state = candidates[i].State;
+            if (state.Plot)
+            {
+                _plotIds.Add(state.ObjectId);
+            }
+
+            enemies.Add(state);
         }
 
         return enemies;
     }
+
 
     /// <summary>
     /// The plugin's captured fire-and-forget table (swings, parries, draws), keyed by
@@ -2595,6 +2657,13 @@ public sealed class KotorGameBridge : IGameBridge
                 continue;
             }
 
+            // A plot creature's health is the module's rule, not the session's — and OUR
+            // census decides plot-ness, never the report (a peer cannot un-plot a body).
+            if (_plotIds.Contains(report.ObjectId))
+            {
+                continue;
+            }
+
             int floor = Math.Max(1, (int)report.CurrentHealth);
 
             if (_memory.TryRead(address + OffCurrentHitPoints, out short current)
@@ -2627,9 +2696,11 @@ public sealed class KotorGameBridge : IGameBridge
             EnemyState enemy = enemies[i];
             nint slot = _pluginBlock + BlockEnemySlots + (i * BlockEnemyStride);
 
+            uint flags = (enemy.Dead ? EnemyFlagDead : 0u) | (enemy.Plot ? EnemyFlagPlot : 0u);
+
             ok &= _memory.TryWrite(slot + 0x04, enemy.CurrentHealth);
             ok &= _memory.TryWrite(slot + 0x06, enemy.MaxHealth);
-            ok &= _memory.TryWrite(slot + 0x08, enemy.Dead ? EnemyFlagDead : 0u);
+            ok &= _memory.TryWrite(slot + 0x08, flags);
 
             // Object id last, so the plugin never reads a slot whose id and payload
             // belong to different enemies.
@@ -2644,7 +2715,7 @@ public sealed class KotorGameBridge : IGameBridge
             ok &= _memory.TryWrite(presence + 0x0C, enemy.Position.Z);
             ok &= _memory.TryWrite(presence + 0x10, enemy.Facing);
             ok &= _memory.TryWrite(presence + 0x14, enemy.Animation);
-            ok &= _memory.TryWrite(presence + 0x18, enemy.Dead ? EnemyFlagDead : 0u);
+            ok &= _memory.TryWrite(presence + 0x18, flags);
             ok &= _memory.TryWrite(presence + 0x1C, enemy.OneShotSerial);
             ok &= _memory.TryWrite(presence + 0x20, (uint)enemy.OneShotAnimation);
             ok &= _memory.TryWrite(presence + 0x00, enemy.ObjectId);
@@ -3221,7 +3292,15 @@ public sealed class KotorGameBridge : IGameBridge
             return string.Empty;
         }
 
-        return System.Text.Encoding.ASCII.GetString(buffer);
+        // ⚠ A CExoString's length routinely INCLUDES its terminating null — the engine's
+        // own journal entries store 11 for "end_attack". Taking the length at face value
+        // put a trailing '\0' inside the string, and because that string is written back
+        // into the block and re-read as the next request's tag, every round trip added
+        // another byte: measured live as the tag growing 'end_attack\0', 'end_attack\0\0'
+        // … and the quest re-applying every few seconds because it never matched.
+        // Same trap as the module name in Handoff 0g; cut at the first null.
+        int end = Array.IndexOf(buffer, (byte)0);
+        return System.Text.Encoding.ASCII.GetString(buffer, 0, end >= 0 ? end : buffer.Length);
     }
 
     private void OnFailure()

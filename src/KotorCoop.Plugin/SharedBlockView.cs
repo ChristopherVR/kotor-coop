@@ -14,8 +14,10 @@ internal readonly record struct RemoteView(
     public bool Paused => (Flags & FlagPaused) != 0;
 }
 
-/// <summary>One enemy's authoritative state, as published by the owning peer.</summary>
-internal readonly record struct EnemyView(uint ObjectId, ushort CurrentHealth, ushort MaxHealth, bool Dead);
+/// <summary>One enemy's authoritative state, as published by the owning peer.
+/// <see cref="Plot"/> marks a presence-only cutscene actor the combat mirror must skip.</summary>
+internal readonly record struct EnemyView(
+    uint ObjectId, ushort CurrentHealth, ushort MaxHealth, bool Dead, bool Plot);
 
 /// <summary>One enemy's presence — where the owning peer's engine has the body and what
 /// it is playing — as published for the drive controller. <see cref="OneShotSerial"/>
@@ -204,7 +206,8 @@ internal sealed unsafe class SharedBlockView(byte* baseAddress)
             *(uint*)(slot + 0x00),
             *(ushort*)(slot + 0x04),
             *(ushort*)(slot + 0x06),
-            (*(uint*)(slot + 0x08) & SharedBlock.EnemyFlagDead) != 0);
+            (*(uint*)(slot + 0x08) & SharedBlock.EnemyFlagDead) != 0,
+            (*(uint*)(slot + 0x08) & SharedBlock.EnemyFlagPlot) != 0);
     }
 
     /// <summary>Agent-written; zeroed by the plugin on a module transition like

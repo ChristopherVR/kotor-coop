@@ -1694,8 +1694,20 @@ internal static unsafe class Odyssey
     /// <summary>CServerExoAppInternal + this = party table (embedded CSWPartyTable).</summary>
     private const int PartyTableOffset = 0x1B770;
 
-    /// <summary>CSWPartyTable + this = quest journal, CExoArrayList&lt;SJournalEntry&gt;
-    /// { SJournalEntry* data; int size; int capacity }.</summary>
+    /// <summary>
+    /// CSWPartyTable + this = a POINTER to the CSWSJournal — not the journal itself.
+    ///
+    /// ⚠ This cost a live crash (2026-08-06). The plugin passed `partyTable + 0x11C`, the
+    /// ADDRESS OF the pointer, so `CSWSJournal::SetState` walked whatever followed it in
+    /// the party table as an entry array and faulted dereferencing a "tag" of 0xAE37C3BE.
+    /// The engine's own accessor settles it: `CSWPartyTable::GetPartyJournal 0x005633C0`
+    /// is `mov eax,[esi+0x11C]` (VERIFIED), reached from `CSWSCreature::GetJournal
+    /// 0x004EDB00` -> `CServerExoApp::GetPartyTable 0x004AEE70` (`[server+4] + 0x1B770`,
+    /// which confirms the party-table base too).
+    ///
+    /// Verified live after the fix: `*(partyTable + 0x11C)` -> journal whose array list at
+    /// +0 reads { data, size 1, capacity 16 } with entry 0 tagged 'end_attack' state 20.
+    /// </summary>
     private const int PartyTableJournal = 0x11C;
 
     // CSWSJournal::SetState(CExoString* tag, int state, int bOverrideHigher). Walks the
@@ -1736,13 +1748,64 @@ internal static unsafe class Odyssey
             return false;
         }
 
-        nint journal = internalServer + PartyTableOffset + PartyTableJournal;
+        // Dereference: +0x11C HOLDS the journal pointer (see PartyTableJournal).
+        nint journal = Deref(internalServer + PartyTableOffset + PartyTableJournal);
+        if (journal == 0)
+        {
+            failure = 6;
+            return false;
+        }
+
+        // ⚠ VALIDATE THE LIST BEFORE HANDING IT TO THE ENGINE. This call crashed live
+        // (2026-08-06): CSWSJournal::SetState walks every existing entry comparing tags,
+        // and it faulted inside CExoString::CompareNoCase_2 at 0x005E6491 — the strlen
+        // over an ENTRY's own tag pointer, reached from the compare at 0x005C5AFF. That is
+        // the signature of a data pointer that is readable but not a journal array: the
+        // walk then dereferences a garbage tag. SetState has no validation of its own, so
+        // the guard has to live here.
+        //
+        // { SJournalEntry* data; int size; int capacity }, entries 0x3C bytes (the caller's
+        // own stride at 0x005C5B11), tag CExoString at +0x18 (its `lea ecx,[eax+edx+0x18]`).
+        if (!NativeMethods.IsReadable(journal))
+        {
+            failure = 4;
+            return false;
+        }
+
+        nint data = *(nint*)journal;
+        int size = *(int*)(journal + 4);
+        int capacity = *(int*)(journal + 8);
+
+        if (size < 0 || capacity < size || capacity > 4096
+            || (size > 0 && (data == 0 || !NativeMethods.IsReadable(data))))
+        {
+            failure = 4;
+            return false;
+        }
+
+        // Every entry the engine will walk must have a readable tag, or the walk faults
+        // before it ever reaches our string. Cheap: journals hold tens of entries.
+        for (int i = 0; i < size; i++)
+        {
+            nint entryTag = *(nint*)(data + (i * JournalEntryStride) + JournalEntryTag);
+            if (entryTag != 0 && !NativeMethods.IsReadable(entryTag))
+            {
+                failure = 5;
+                return false;
+            }
+        }
 
         // Length is capacity (strlen + 1), the engine's own CExoString convention.
         ExoString tag = new() { CString = (nint)tagAscii, Length = (uint)(tagLength + 1) };
         JournalSetStateFn(journal, &tag, state, 0);
         return true;
     }
+
+    /// <summary>SJournalEntry stride, from SetState's own walk (add ecx,0x3C).</summary>
+    private const int JournalEntryStride = 0x3C;
+
+    /// <summary>SJournalEntry + this = the tag CExoString (lea ecx,[eax+edx+0x18]).</summary>
+    private const int JournalEntryTag = 0x18;
 
     // ---- creature naming ---------------------------------------------------------
 

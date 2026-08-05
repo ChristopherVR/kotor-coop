@@ -21,8 +21,11 @@ public static class ProtocolConstants
     /// joiner catches up.
     /// Version 12: the enemy snapshot carries presence (position, facing, animation, and
     /// per-enemy one-shot swings) so a mirroring instance drives its copies to match the
-    /// owner's fight instead of running a private one. Reports still carry health alone.</summary>
-    public const byte Version = 12;
+    /// owner's fight instead of running a private one. Reports still carry health alone.
+    /// Version 13: the snapshot includes PLOT creatures (cutscene actors) with a plot flag
+    /// — presence-only, exempt from the combat half — so scripted scenes play out
+    /// identically on both screens.</summary>
+    public const byte Version = 13;
 
     /// <summary>Journal quest tags are resrefs plus a little slack.</summary>
     public const int MaxJournalTagLength = 32;
@@ -44,10 +47,12 @@ public static class ProtocolConstants
     public const int MaxGroundItems = 16;
 
     /// <summary>
-    /// Enemies the owner replicates. 35 bytes each in the snapshot (id, health, death,
-    /// position, facing, animation, one-shot serial + id), so a full 32 is 1133 bytes
-    /// with the header — still inside one datagram, with no room for a further field.
-    /// The fit is asserted by a test.
+    /// Creatures the owner replicates per snapshot. 36 bytes each (id, health, death,
+    /// position, facing, animation, one-shot serial + id, plot), so a full 32 is 1165
+    /// bytes with the header — inside one datagram with almost no slack; the fit is
+    /// asserted by a test. A module can hold more creatures than this: the census takes
+    /// hostiles first, then the nearest bystanders, so the cap sheds the least visible
+    /// bodies rather than arbitrary ones.
     /// </summary>
     public const int MaxEnemies = 32;
 

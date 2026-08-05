@@ -294,6 +294,9 @@ public class PacketCodecTests
             new(0x14, 15, 15, false, new Vector3f(46.78f, 33.27f, -1.27f), 1.57f, 0x2714, 3, 0x271B),
             new(0x17, 0, 12, true),
             new(0x29, 7, 15, false, new Vector3f(-3.5f, 120.25f, 0f), -2.9f, 0x2710),
+            // A cutscene actor: presence rides, and the plot flag must survive the wire so
+            // the mirroring side's combat half knows to leave it alone.
+            new(0x33, 8, 8, false, new Vector3f(12f, 34f, 0f), 0f, 0x2710, Plot: true),
         ];
 
         int length = PacketCodec.Write(buffer, new EnemySnapshotPacket(1234, enemies));

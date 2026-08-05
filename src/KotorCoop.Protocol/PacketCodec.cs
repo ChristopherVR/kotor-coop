@@ -306,6 +306,7 @@ public static class PacketCodec
             w.WriteUInt32(enemy.Animation);
             w.WriteUInt32(enemy.OneShotSerial);
             w.WriteUInt16(enemy.OneShotAnimation);
+            w.WriteBool(enemy.Plot);
         }
 
         return w.Failed ? 0 : w.Position;
@@ -339,6 +340,7 @@ public static class PacketCodec
             uint animation = r.ReadUInt32();
             uint oneShotSerial = r.ReadUInt32();
             ushort oneShotAnimation = r.ReadUInt16();
+            bool plot = r.ReadBool();
 
             if (r.Failed)
             {
@@ -347,7 +349,7 @@ public static class PacketCodec
 
             enemies.Add(new EnemyState(
                 objectId, current, max, dead, position, facing, animation,
-                oneShotSerial, oneShotAnimation));
+                oneShotSerial, oneShotAnimation, plot));
         }
 
         return new EnemySnapshotPacket(serverTime, enemies);

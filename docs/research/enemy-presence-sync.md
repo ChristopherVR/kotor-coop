@@ -107,6 +107,31 @@ One census observation from the run, working as designed: an NPC that is party-f
 the MIRRORING side (`end_trask`, +0x4C0 non-zero there) is skipped by the enemy drive and
 owned by the party drive instead — that is why the client logged 24 of 25.
 
+## Extension 2026-08-06 (later): plot creatures ride — scripted scenes sync
+
+The census originally excluded plot-flagged creatures ("its health is not ours to
+replicate") — which is exactly what most CUTSCENE ACTORS are, so scripted scenes played
+out differently on the two screens. Protocol v13 includes them with a `Plot` flag:
+
+- **Presence replicates like anyone else's** — the mirroring instance drives the body, so
+  a scripted walk/confrontation is blocked identically on both screens (the drive already
+  pauses during a local conversation, so the dialogue system keeps the stage when it wants
+  it).
+- **The combat half must never touch a plot creature**: no min-1-hp pin, no health mirror,
+  no death (`CombatController` skips on the flag), and a peer's damage REPORT for one is
+  ignored on the owner (`TryApplyEnemyFloors` checks the owner's own plot set — a peer
+  cannot un-plot a body). Un-killable is the module's rule; the session only agrees.
+- **The cap now sheds the right bodies.** A module can hold more creatures than the
+  32-slot snapshot; the census sorts engine-flagged in-combat creatures first (the honest
+  fight signal — faction semantics are a matrix lookup the external agent cannot make,
+  combat-participation.md §2), then everyone else nearest-first from the local player, and
+  truncates. A fight can no longer be shed in favour of a distant bystander.
+
+NEEDS-LIVE added: whether driving a plot actor mid-scripted-scene (outside a
+conversation) fights the script's own movement — the owner's positions win by design, but
+the visual result needs eyes; and a census-over-32 module to see the prioritisation shed
+gracefully.
+
 ## Combat participation — the options this sets up, none built
 
 The remaining seam: enemy threat to the mirroring player. Recorded so the next session

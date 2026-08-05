@@ -118,10 +118,17 @@ public sealed record ItemSnapshotPacket(uint Version, IReadOnlyList<GroundItem> 
 /// not just the positions. All presence rides only the snapshot (owner → everyone); a
 /// client's <see cref="EnemyReportPacket"/> carries health alone and leaves them default.
 /// </summary>
+/// <remarks>
+/// <paramref name="Plot"/> marks a creature the module declares un-killable — usually a
+/// cutscene actor. Its PRESENCE replicates like any other creature's, so scripted scenes
+/// play out identically on both screens, but the combat half of the channel must leave it
+/// alone: no min-1-hp pin, no health mirror, no death, and a client's damage report for it
+/// is ignored. Its health is the module's business, not the session's.
+/// </remarks>
 public sealed record EnemyState(
     uint ObjectId, ushort CurrentHealth, ushort MaxHealth, bool Dead,
     Vector3f Position = default, float Facing = 0f, uint Animation = 0,
-    uint OneShotSerial = 0, ushort OneShotAnimation = 0);
+    uint OneShotSerial = 0, ushort OneShotAnimation = 0, bool Plot = false);
 
 /// <summary>
 /// The host's view of every enemy. Absolute health, never damage deltas: the engine

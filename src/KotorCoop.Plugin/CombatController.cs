@@ -83,6 +83,14 @@ internal sealed class CombatController(SharedBlockView block)
             return;
         }
 
+        // A plot creature rides the census for its PRESENCE only (a cutscene actor whose
+        // scene must look the same on both screens). Un-killable is the module's rule:
+        // no pin, no health mirror, and never a death — whatever the flags say.
+        if (enemy.Plot)
+        {
+            return;
+        }
+
         if (enemy.Dead)
         {
             KillOnce(enemy.ObjectId);

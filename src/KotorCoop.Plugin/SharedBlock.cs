@@ -137,6 +137,10 @@ internal struct SharedBlock
     /// <summary>Set in an enemy slot's flags when the owning peer says it is dead.</summary>
     public const uint EnemyFlagDead = 1;
 
+    /// <summary>Un-killable by module rule (a cutscene actor): drive its presence, but the
+    /// combat mirror must not pin, heal or kill it.</summary>
+    public const uint EnemyFlagPlot = 2;
+
     // ---- enemy presence (version 20) --------------------------------------------
     //
     // The owner's position, facing and animation per enemy, so the mirroring instance
