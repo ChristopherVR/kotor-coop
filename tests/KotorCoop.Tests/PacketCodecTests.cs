@@ -79,7 +79,7 @@ public class PacketCodecTests
         Span<byte> buffer = stackalloc byte[ProtocolConstants.MaxPacketSize];
         PartySnapshotPacket original = new(999L,
         [
-            new PartyMemberState(0, new Vector3f(10f, 20f, -1f), 1.5f, 0x2712, 25),
+            new PartyMemberState(0, new Vector3f(10f, 20f, -1f), 1.5f, 0x2712, 25, 4, 0x271B),
             new PartyMemberState(3, new Vector3f(-4f, 8f, 0f), -2.1f, 0x2714, 12),
         ]);
 

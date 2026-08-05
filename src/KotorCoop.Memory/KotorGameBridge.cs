@@ -2443,7 +2443,7 @@ public sealed class KotorGameBridge : IGameBridge
         // as an enemy, pinned, and mirrored.
         HashSet<uint>? phantomIds = ReadPhantomObjectIds();
 
-        Dictionary<uint, (uint Serial, ushort Animation)>? oneShots = ReadEnemyOneShots();
+        Dictionary<uint, (uint Serial, ushort Animation)>? oneShots = ReadCreatureOneShots();
 
         foreach (CreatureRef creature in EnumerateCreatures())
         {
@@ -2507,7 +2507,7 @@ public sealed class KotorGameBridge : IGameBridge
     /// object id, or null with no plugin attached. Ids that are not enemies (companions,
     /// neutral NPCs also swing) are simply never matched by the census.
     /// </summary>
-    private Dictionary<uint, (uint Serial, ushort Animation)>? ReadEnemyOneShots()
+    private Dictionary<uint, (uint Serial, ushort Animation)>? ReadCreatureOneShots()
     {
         if (_pluginBlock == 0)
         {
@@ -2763,6 +2763,8 @@ public sealed class KotorGameBridge : IGameBridge
             byId[c.ObjectId] = c.Address;
         }
 
+        Dictionary<uint, (uint Serial, ushort Animation)>? oneShots = ReadCreatureOneShots();
+
         for (int i = 0; i < count; i++)
         {
             if (!_memory.TryReadInt32(partyTable + PartyActiveSlots + (i * 4), out int slot)
@@ -2792,16 +2794,37 @@ public sealed class KotorGameBridge : IGameBridge
             _memory.TryReadUInt32(creature + OffAnimation, out uint animation);
             int health = _memory.TryRead(creature + OffCurrentHitPoints, out short hp) ? hp : 0;
 
-            members.Add(new PartyMemberState((byte)slot, position, facing, animation, health));
+            (uint oneShotSerial, ushort oneShotAnim) =
+                oneShots is not null && oneShots.TryGetValue(objectId, out var shot)
+                    ? shot
+                    : (0u, (ushort)0);
+
+            members.Add(new PartyMemberState(
+                (byte)slot, position, facing, animation, health, oneShotSerial, oneShotAnim));
         }
 
         return members;
     }
 
+    // Party presence (block version 20): companion state handed to the plugin, which
+    // drives the body on the game thread with the seamless recipe. Roster slot + 1 @0
+    // (0 = empty, written last), x f32 @4, y @8, z @0xC, facing f32 @0x10, animation u32
+    // @0x14, health i32 @0x18, one-shot serial u32 @0x1C, one-shot anim u32 @0x20.
+    private const int BlockPartyPresenceCount = 0x1C20;
+    private const int BlockPartyPresenceSlots = 0x1C30;
+    private const int BlockPartyPresenceStride = 0x28;
+    private const int BlockPartyPresenceCapacity = 4;
+
     /// <summary>
     /// Freezes the local party AI (solo mode) and mirrors the host's companions onto the
-    /// matching local creatures by slot. With the AI frozen nothing else drives the
-    /// companion, so an external position write sticks (see docs/re trap 3).
+    /// matching local creatures by slot.
+    ///
+    /// With the plugin attached, the state goes into the shared block and the plugin's
+    /// PartyPresenceController drives the body every frame — server object AND client
+    /// twin, so the rendered companion tracks instead of trailing the engine's 512 ms
+    /// ease and stepping between agent ticks. The external write path below survives only
+    /// as the plugin-less fallback (the mock game); it never touched the twin, which is
+    /// exactly why it was superseded.
     /// </summary>
     public int TryWritePartyMembers(IReadOnlyList<PartyMemberState> members)
     {
@@ -2814,6 +2837,37 @@ public sealed class KotorGameBridge : IGameBridge
         // and the party AI script checks it to decide whether to issue follow orders.
         _memory.TryWrite<byte>(partyTable + PartySoloMode, 1);
         _partyFrozen = true;
+
+        if (_pluginBlock != 0)
+        {
+            int written = 0;
+            for (int i = 0; i < BlockPartyPresenceCapacity; i++)
+            {
+                nint slot = _pluginBlock + BlockPartyPresenceSlots + (i * BlockPartyPresenceStride);
+
+                if (i < members.Count && members[i].SlotIndex < PartyNpcSlots)
+                {
+                    PartyMemberState m = members[i];
+                    _memory.TryWrite(slot + 0x04, m.Position.X);
+                    _memory.TryWrite(slot + 0x08, m.Position.Y);
+                    _memory.TryWrite(slot + 0x0C, m.Position.Z);
+                    _memory.TryWrite(slot + 0x10, m.Facing);
+                    _memory.TryWrite(slot + 0x14, m.Animation);
+                    _memory.TryWrite(slot + 0x18, m.Health);
+                    _memory.TryWrite(slot + 0x1C, m.OneShotSerial);
+                    _memory.TryWrite(slot + 0x20, (uint)m.OneShotAnimation);
+                    _memory.TryWrite(slot + 0x00, (uint)m.SlotIndex + 1);
+                    written++;
+                }
+                else
+                {
+                    _memory.TryWrite(slot + 0x00, 0u);
+                }
+            }
+
+            _memory.TryWrite(_pluginBlock + BlockPartyPresenceCount, (uint)written);
+            return written;
+        }
 
         if (members.Count == 0)
         {

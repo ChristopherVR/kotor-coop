@@ -428,6 +428,8 @@ public static class PacketCodec
             w.WriteSingle(m.Facing);
             w.WriteUInt32(m.Animation);
             w.WriteInt32(m.Health);
+            w.WriteUInt32(m.OneShotSerial);
+            w.WriteUInt16(m.OneShotAnimation);
         }
 
         return w.Failed ? 0 : w.Position;
@@ -457,13 +459,16 @@ public static class PacketCodec
             float facing = r.ReadSingle();
             uint animation = r.ReadUInt32();
             int health = r.ReadInt32();
+            uint oneShotSerial = r.ReadUInt32();
+            ushort oneShotAnimation = r.ReadUInt16();
 
             if (r.Failed)
             {
                 return null;
             }
 
-            members.Add(new PartyMemberState(slot, position, facing, animation, health));
+            members.Add(new PartyMemberState(
+                slot, position, facing, animation, health, oneShotSerial, oneShotAnimation));
         }
 
         return new PartySnapshotPacket(serverTime, members);

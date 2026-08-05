@@ -170,6 +170,27 @@ internal struct SharedBlock
 
     public const int EnemyOneShotCapacity = 48;
 
+    // ---- party presence (version 20) --------------------------------------------
+    //
+    // The host's companions, driven on the mirroring instance by the plugin instead of
+    // the agent's raw external position writes (which never touched the client twin, so
+    // the rendered body trailed on the engine's 512 ms ease and stepped between ticks).
+    // Keyed by NPC roster slot — identical across two instances of the same save, while
+    // runtime object ids are not; the mirroring plugin resolves the slot against its OWN
+    // party table.
+
+    /// <summary>Agent -&gt; plugin. How many companion presence entries are valid.</summary>
+    public const int OffsetPartyPresenceCount = 0x1C20;
+
+    /// <summary>Agent -&gt; plugin. roster slot + 1 u32 @0 (0 = empty, written last),
+    /// position 3xf32 @4, facing f32 @0x10, animation u32 @0x14, health i32 @0x18,
+    /// one-shot serial u32 @0x1C, one-shot animation u32 @0x20. Occupies 0x1C30..0x1CD0.</summary>
+    public const int OffsetPartyPresenceSlots = 0x1C30;
+
+    public const int PartyPresenceStride = 0x28;
+
+    public const int PartyPresenceCapacity = 4;
+
     // ---- door replication (version 4) -------------------------------------------
     //
     // The agent writes the DESIRED state of doors in the local module: open state and

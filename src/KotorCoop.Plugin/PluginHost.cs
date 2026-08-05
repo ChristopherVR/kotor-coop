@@ -24,6 +24,7 @@ internal static unsafe class PluginHost
     private static FocusKeeper? _focus;
     private static CombatController? _combat;
     private static EnemyPresenceController? _enemyPresence;
+    private static PartyPresenceController? _partyPresence;
     private static DoorController? _doors;
     private static PlaceableController? _placeables;
     private static LootController? _loot;
@@ -84,6 +85,7 @@ internal static unsafe class PluginHost
             _focus = new FocusKeeper(_view);
             _combat = new CombatController(_view);
             _enemyPresence = new EnemyPresenceController(_view);
+            _partyPresence = new PartyPresenceController(_view);
             _doors = new DoorController(_view);
             _placeables = new PlaceableController(_view);
             _loot = new LootController(_view);
@@ -425,6 +427,7 @@ internal static unsafe class PluginHost
         // After the combat pass so a death applied this frame is respected (the presence
         // slot's dead flag and the kill both come from the same owner tick).
         _enemyPresence?.OnFrame();
+        _partyPresence?.OnFrame();
         _doors?.OnFrame();
         _placeables?.OnFrame();
         _loot?.OnFrame();
@@ -445,6 +448,7 @@ internal static unsafe class PluginHost
         _items?.Invalidate();
         _combat?.Invalidate();
         _enemyPresence?.Invalidate();
+        _partyPresence?.Invalidate();
         AnimationHook.InvalidateCreatureTable();
         _doors?.Invalidate();
         _placeables?.Invalidate();

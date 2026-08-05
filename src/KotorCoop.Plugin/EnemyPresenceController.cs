@@ -52,33 +52,15 @@ internal sealed unsafe class EnemyPresenceController(SharedBlockView block)
     private readonly uint[] _trackedId = new uint[SharedBlock.EnemyCapacity];
     private readonly nint[] _creature = new nint[SharedBlock.EnemyCapacity];
 
-    // Per-slot smoothing state, same shape as PhantomController.DriveDirect: measured
-    // speed from consumed displacements, a shown position that chases the target, and
-    // movement hysteresis so the gait cannot flicker.
     // One-shot replay dedupe: the serial applied last, primed on first sight of a slot so
     // a swing from before tracking began (a join, a module entry) is never replayed late.
     private readonly uint[] _appliedOneShot = new uint[SharedBlock.EnemyCapacity];
     private readonly bool[] _oneShotPrimed = new bool[SharedBlock.EnemyCapacity];
 
-    private readonly Vec3[] _lastGoal = new Vec3[SharedBlock.EnemyCapacity];
-    private readonly float[] _speed = new float[SharedBlock.EnemyCapacity];
-    private readonly double[] _speedFromTime = new double[SharedBlock.EnemyCapacity];
-    private readonly Vec3[] _shownPosition = new Vec3[SharedBlock.EnemyCapacity];
-    private readonly double[] _shownAtTime = new double[SharedBlock.EnemyCapacity];
-    private readonly bool[] _smoothing = new bool[SharedBlock.EnemyCapacity];
-    private readonly double[] _lastMovedAt = new double[SharedBlock.EnemyCapacity];
-
-    private readonly float _smoothingTauSeconds =
-        Math.Clamp(PluginConfig.ReadFloat("smooth_ms", 60f), 0f, 400f) / 1000f;
-
-    /// <summary>Movement below this between updates is jitter, not walking.</summary>
-    private const float MovementEpsilon = 0.02f;
-
-    /// <summary>How long the owner's enemy must be still before the gait drops to idle.</summary>
-    private const double StillnessSeconds = 0.35;
-
-    /// <summary>Past this the enemy did not walk, it was moved — cut instead of gliding.</summary>
-    private const float SnapGapSquared = 8f * 8f;
+    // The measure-smooth-decide half, shared with the party controller.
+    private readonly MotionSmoother _smoother = new(
+        SharedBlock.EnemyCapacity,
+        Math.Clamp(PluginConfig.ReadFloat("smooth_ms", 60f), 0f, 400f) / 1000f);
 
     private int _drivenLogged = -1;
     private bool _offLogged;
@@ -243,59 +225,8 @@ internal sealed unsafe class EnemyPresenceController(SharedBlockView block)
     /// camera separation (an enemy is allowed to stand next to the player).</summary>
     private void Drive(int slot, nint creature, EnemyPresenceView enemy, double now)
     {
-        float mdx = enemy.Position.X - _lastGoal[slot].X;
-        float mdy = enemy.Position.Y - _lastGoal[slot].Y;
-        float moved = MathF.Sqrt((mdx * mdx) + (mdy * mdy));
-
-        // Speed sampled update-to-update: the clock advances only when a displacement is
-        // consumed, because this runs per frame while the block changes per network tick,
-        // and dividing a tick's displacement by a frame's dt doubles the speed.
-        if (moved > MovementEpsilon)
-        {
-            if (_speedFromTime[slot] > 0)
-            {
-                float dt = (float)(now - _speedFromTime[slot]);
-                if (dt > 0.001f)
-                {
-                    float instant = MathF.Min(moved / dt, 12f);
-                    _speed[slot] = _speed[slot] <= 0f
-                        ? instant
-                        : (_speed[slot] * 0.7f) + (instant * 0.3f);
-                }
-            }
-
-            _speedFromTime[slot] = now;
-            _lastMovedAt[slot] = now;
-        }
-
-        Vec3 target = enemy.Position;
-        Vec3 shown = _shownPosition[slot];
-        float jdx = target.X - shown.X;
-        float jdy = target.Y - shown.Y;
-        float gapSquared = (jdx * jdx) + (jdy * jdy);
-
-        if (!_smoothing[slot] || gapSquared > SnapGapSquared)
-        {
-            _smoothing[slot] = true;
-            shown = target;
-        }
-        else
-        {
-            float dt = (float)Math.Clamp(now - _shownAtTime[slot], 0.0, 0.25);
-            float alpha = _smoothingTauSeconds <= 0f ? 1f : 1f - MathF.Exp(-dt / _smoothingTauSeconds);
-
-            shown.X += jdx * alpha;
-            shown.Y += jdy * alpha;
-            shown.Z = target.Z;
-        }
-
-        _shownPosition[slot] = shown;
-        _shownAtTime[slot] = now;
-        _lastGoal[slot] = enemy.Position;
-
-        bool moving = _lastMovedAt[slot] > 0 && (now - _lastMovedAt[slot]) < StillnessSeconds;
-
-        Odyssey.DriveEnemy(creature, shown, enemy.Facing, _speed[slot], moving, enemy.Animation);
+        (Vec3 shown, float speed, bool moving) = _smoother.Step(slot, enemy.Position, now);
+        Odyssey.DriveEnemy(creature, shown, enemy.Facing, speed, moving, enemy.Animation);
     }
 
     private void Forget(int slot)
@@ -309,13 +240,7 @@ internal sealed unsafe class EnemyPresenceController(SharedBlockView block)
         _trackedId[slot] = 0;
         _appliedOneShot[slot] = 0;
         _oneShotPrimed[slot] = false;
-        _speed[slot] = 0f;
-        _speedFromTime[slot] = 0;
-        _shownPosition[slot] = default;
-        _shownAtTime[slot] = 0;
-        _smoothing[slot] = false;
-        _lastMovedAt[slot] = 0;
-        _lastGoal[slot] = default;
+        _smoother.Reset(slot);
     }
 
     private static bool IsPlausiblePosition(Vec3 p) =>

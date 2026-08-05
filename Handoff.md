@@ -2387,3 +2387,29 @@ mirrored animation (`PlayOneShotAnimation` / `PlayFireForget`) because
 mirrored swing would be re-captured and bounce back to its owner. NEEDS-LIVE: that
 reentry path (suppress flag is cheap either way), and whether enemy swings visibly play
 on driven bodies. 266 tests; all three builds clean.
+
+### 0i.2 — companions ride the seamless path too, 2026-08-06 (later)
+
+The client's Trask/Carth were mirrored by the AGENT's raw external position writes
+(`TryWritePartyMembers`), which predate the seamless recipe: no dirty bit, never touched
+the client twin, so the rendered companion trailed the 512 ms ease and stepped once per
+network tick. Now the same block-and-drive shape as enemies:
+
+- `PartyMemberState` carries one-shots (swing serial + id) like the enemy channel; the
+  hook's capture table is shared (renamed bridge-side to `ReadCreatureOneShots`).
+- Block: party presence region 0x1C20/0x1C30, stride 0x28, 4 slots, keyed by ROSTER SLOT
+  + 1 (0 = empty; runtime ids are not cross-instance keys for companions). Bridge writes
+  it when the plugin block exists; the old external-write path survives only as the
+  plugin-less (mock) fallback. Companion HEALTH moved into the slot so the plugin is the
+  single writer for the body.
+- Plugin `PartyPresenceController`: resolves the roster slot against THIS instance's own
+  party table (APP_MANAGER -> server -> internal + 0x1B770 walk, in-process), then the
+  standard claim-each-pass + one-shot replay + `MotionSmoother` + `DriveEnemy`. Solo mode
+  stays agent-held. Kill switch `party_drive=0`.
+- `MotionSmoother` extracted: the measure-smooth-decide half shared by the enemy and
+  party controllers (PhantomController keeps its tuned copy; fold in only with a live
+  check).
+- NEEDS-LIVE: claiming a party-followed creature every pass (the phantom-era warning
+  about +0x4C0 was about CLAIMING one as a phantom; here solo mode should keep the
+  follow actions away — verify), and companion swings visibly playing. 266 tests; all
+  three builds clean.

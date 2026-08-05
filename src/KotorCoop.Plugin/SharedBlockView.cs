@@ -25,6 +25,13 @@ internal readonly record struct EnemyPresenceView(
     uint ObjectId, Vec3 Position, float Facing, uint Animation, bool Dead,
     uint OneShotSerial, uint OneShotAnimation);
 
+/// <summary>One companion's presence as the host's engine has it. <see cref="RosterSlotPlusOne"/>
+/// is the NPC roster slot + 1 (0 = empty slot) — the cross-instance key; the mirroring
+/// plugin resolves it against its own party table.</summary>
+internal readonly record struct PartyPresenceView(
+    uint RosterSlotPlusOne, Vec3 Position, float Facing, uint Animation, int Health,
+    uint OneShotSerial, uint OneShotAnimation);
+
 /// <summary>One door's desired state, as published by the agent for the local module.</summary>
 internal readonly record struct DoorView(uint ObjectId, byte OpenState, bool Unlocked);
 
@@ -224,6 +231,34 @@ internal sealed unsafe class SharedBlockView(byte* baseAddress)
             *(float*)(slot + 0x10),
             *(uint*)(slot + 0x14),
             (*(uint*)(slot + 0x18) & SharedBlock.EnemyFlagDead) != 0,
+            *(uint*)(slot + 0x1C),
+            *(uint*)(slot + 0x20));
+    }
+
+    /// <summary>Agent-written companion presence; zeroed by the plugin on a module
+    /// transition like the enemy regions, and for the same reason.</summary>
+    public uint PartyPresenceCount
+    {
+        get => *U32(SharedBlock.OffsetPartyPresenceCount);
+        set => *U32(SharedBlock.OffsetPartyPresenceCount) = value;
+    }
+
+    public PartyPresenceView GetPartyPresence(int index)
+    {
+        byte* slot = baseAddress + SharedBlock.OffsetPartyPresenceSlots
+            + (index * SharedBlock.PartyPresenceStride);
+
+        return new PartyPresenceView(
+            *(uint*)(slot + 0x00),
+            new Vec3
+            {
+                X = *(float*)(slot + 0x04),
+                Y = *(float*)(slot + 0x08),
+                Z = *(float*)(slot + 0x0C),
+            },
+            *(float*)(slot + 0x10),
+            *(uint*)(slot + 0x14),
+            *(int*)(slot + 0x18),
             *(uint*)(slot + 0x1C),
             *(uint*)(slot + 0x20));
     }

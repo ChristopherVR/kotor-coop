@@ -134,10 +134,13 @@ public sealed record EnemySnapshotPacket(long ServerTimeMs, IReadOnlyList<EnemyS
 /// One party companion as the host sees it. Keyed by <paramref name="SlotIndex"/> (the
 /// NPC roster slot, 0..8) rather than an object id, because the slot is identical across
 /// two instances of the same save while the runtime id is not. Absolute position, so a
-/// lost packet is superseded next tick.
+/// lost packet is superseded next tick. <paramref name="OneShotSerial"/> and
+/// <paramref name="OneShotAnimation"/> carry the companion's latest fire-and-forget
+/// (a swing, a parry), same scheme as the enemy channel.
 /// </summary>
 public readonly record struct PartyMemberState(
-    byte SlotIndex, Vector3f Position, float Facing, uint Animation, int Health);
+    byte SlotIndex, Vector3f Position, float Facing, uint Animation, int Health,
+    uint OneShotSerial = 0, ushort OneShotAnimation = 0);
 
 /// <summary>
 /// The host's authoritative party. In co-op the host owns the companions (its own engine
