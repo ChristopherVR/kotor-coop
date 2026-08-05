@@ -27,7 +27,8 @@ Both players, each in their own full game:
   identical positions and health across both games, rendered bodies included.)
 - **Share the world**: dropped items materialise on the other side as real, clickable
   objects and vanish when picked up; doors open and unlock for both; the story globals
-  and the quest journal merge upward, so one quest line advances for everyone.
+  and the quest journal merge upward, so one quest line advances for everyone — verified
+  live, a quest advanced on one machine lands in the other's real journal, once.
 - **Pause together**: either player's pause pauses both worlds, and only the pauser can
   release it.
 - **Go down together, and get each other back up**: a player at zero health drops their
@@ -56,10 +57,14 @@ Both players, each in their own full game:
   console prompts you to retype it. Status and co-op replies print on-screen while it's open.
 - **Talk to each other**: `say <message>` in the ~ console sends a line to the other players
   (the host relays it), so you can coordinate without seeing each other's screens.
-- **Know who's mid-conversation — and watch it**: dialogue is arbitrated by a single token —
-  one player at a time owns a story conversation, so two players can't open conflicting ones
-  and race the plot flags — and the other player spectates the owner's conversation live,
-  with the real lines and reply picks, in the game's own dialogue UI.
+- **One conversation at a time, like Baldur's Gate 3**: while any player is talking, nobody
+  else can start a dialogue — enforced inside the engine, so clicking an NPC simply does
+  nothing and tells you why. The other player spectates the owner's conversation live, with
+  the real lines and reply picks, in the game's own dialogue UI, and a late joiner catches
+  up to the right line.
+- **Scripted scenes play out the same on both screens**: cutscene actors and story NPCs
+  replicate their positions, stances and movements, while staying exempt from the combat
+  channel — the module decides who is un-killable, not the session.
 
 An unfocused or minimised instance keeps simulating (the plugin suppresses the focus
 pause), which is what makes one-machine testing practical at all.
