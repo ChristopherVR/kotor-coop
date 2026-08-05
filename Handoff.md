@@ -2521,3 +2521,12 @@ browsing player had no idea a listed game was mid-run, locked, or where. Shipped
 NEEDS-PLAY: a real two-human pass on the gate (does a blocked click FEEL right; does a
 blocked scripted conversation retry rather than wedge a quest — the gate only fires while
 a peer is actively mid-conversation, which bounds the exposure).
+
+### 0j.1 — smoke-tested live, same day
+
+Unattended two-instance run with the gate armed: `dialogue gate at 0x4CF490` on BOTH
+instances (the verify-bytes prologue check passed against the real binary), session came
+up normally, enemy drive (23/25) and party drive (1) live on the client, zero crash lines
+across several minutes of runtime with the detour sitting on the conversation path. What
+this run could NOT exercise (inert save, no second human): an actual blocked click, the
+race back-off, and the spectate-follow bypass — those are the NEEDS-PLAY list from 0j.
