@@ -18,10 +18,13 @@ Both players, each in their own full game:
 - **Travel together**: when the host crosses into another area, the client follows
   through the engine's own module-transition path (the same machinery the built-in
   `warp` cheat uses). `--no-follow` opts out.
-- **Fight the same fight**: enemy health and death are host-authoritative and mirrored
-  live; clients stream their local damage back and the host merges it in, so both
-  players' hits count. Enemies replicate as absolute health, never damage numbers,
-  because each instance applies its own difficulty modifiers.
+- **Fight the same fight — and see the same fight**: enemy health and death are
+  host-authoritative and mirrored live; clients stream their local damage back and the
+  host merges it in, so both players' hits count. And the fight *looks* the same on both
+  screens: the host streams every enemy's position, facing, stance and weapon swings,
+  and the client drives its copies to match frame by frame instead of letting two AIs
+  play two private versions of the same battle. (Verified live: 27/27 creatures at
+  identical positions and health across both games, rendered bodies included.)
 - **Share the world**: dropped items materialise on the other side as real, clickable
   objects and vanish when picked up; doors open and unlock for both; the story globals
   and the quest journal merge upward, so one quest line advances for everyone.
@@ -36,8 +39,9 @@ Both players, each in their own full game:
 - **See each other on the map**: each peer is a live pin on the M-screen map, riding the
   engine's own map-note waypoints — no interface hacking.
 - **Share one party**: the host drives the companions (Trask, Carth...) with the game's own
-  AI and each client freezes and mirrors them, so they stay one synchronised group instead
-  of two that drift. `--no-party-sync` opts out.
+  AI and each client freezes and mirrors them — through the same frame-by-frame drive as
+  enemies, swings included — so they stay one synchronised group instead of two that
+  drift. `--no-party-sync` opts out.
 - **Start the whole thing from the game's own menu**: a "Co-op" button on the main menu
   opens a real KOTOR panel — the same list widget the Load Game screen uses, with its native
   font, borders and scrollbar. One player clicks **Host**; the other sees them listed with
@@ -52,9 +56,10 @@ Both players, each in their own full game:
   console prompts you to retype it. Status and co-op replies print on-screen while it's open.
 - **Talk to each other**: `say <message>` in the ~ console sends a line to the other players
   (the host relays it), so you can coordinate without seeing each other's screens.
-- **Know who's mid-conversation**: dialogue is arbitrated by a single token — one player at a
-  time owns a story conversation, so two players can't open conflicting ones and race the
-  plot flags. Everyone sees who holds it.
+- **Know who's mid-conversation — and watch it**: dialogue is arbitrated by a single token —
+  one player at a time owns a story conversation, so two players can't open conflicting ones
+  and race the plot flags — and the other player spectates the owner's conversation live,
+  with the real lines and reply picks, in the game's own dialogue UI.
 
 An unfocused or minimised instance keeps simulating (the plugin suppresses the focus
 pause), which is what makes one-machine testing practical at all.
@@ -82,11 +87,12 @@ a mod, and only ever adds to the override folder.
 Verified live on two GOG instances: the whole session started from inside the game (Host on
 one, Connect on the other, both loading their real saved characters with no injected
 clicks), phantoms both ways with appearance and equipment, run-gait, item drop/pickup,
-enemy health/death mirroring, door unlock propagation, map pins, and going down and being
-picked up by the other player. Party reconciliation and the mod-compatibility handshake are
-unit-tested (265 tests); the handshake has been observed agreeing on two identical installs
-but its mismatch paths have not had a live pass. See `Handoff.md` and `docs/research/` for
-the precise per-feature status and the reverse-engineering behind each.
+enemy health/death mirroring, enemy and companion presence (positions, health and rendered
+bodies identical across both games), door unlock propagation, map pins, and going down and
+being picked up by the other player. The mod-compatibility handshake is unit-tested (266
+tests); it has been observed agreeing on two identical installs but its mismatch paths have
+not had a live pass. See `Handoff.md` and `docs/research/` for the precise per-feature
+status and the reverse-engineering behind each.
 
 ## Requirements
 
@@ -199,13 +205,12 @@ tools/                   RE helpers, demo scripts, the kotor1_0_3 symbol databas
   each gets the full conversation; outcomes converge through the globals/journal
   channels, but rewards can duplicate. While a player is mid-conversation the session
   freezes enemy publication for them (the engine disarms hostiles during dialogue).
-- **Party members are not reconciled yet** — each instance runs its own copies. The
-  design (an ownership split via the engine's solo-mode flag) is in
-  `docs/research/party-reconciliation.md`, pending live measurement.
+- **Enemies don't threaten the second player yet.** On the host's side the other player's
+  phantom is deliberately not a combat target (making it one safely is designed but not
+  built — `docs/research/combat-participation.md`), and on the client's side enemies are
+  a faithful presentation of the host's fight rather than local actors. Both players can
+  hurt every enemy; only the host's character gets hurt back for now.
 - **Item identity is a blueprint resref**: upgrades and charges don't travel yet.
 - **The world-time compatibility check covers the globals catalogue**; save-identity and
   per-module GIT digests (to also gate on a mod-edited module) are a planned follow-up.
-- **Unattended startup**: the in-process save load (no menu clicking) reaches the world
-  but a login step after it is still being finished (`Handoff.md`); menu-click loading
-  works but is a focus-lottery.
 - KOTOR 2 is untouched, and only GOG v1.0.3 addresses are known.
