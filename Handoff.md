@@ -8,6 +8,92 @@ no other dependencies. C# throughout.
 
 ---
 
+## 0j. PEERS ON THE MINIMAP, AND COMBAT WHEN THE PLAYERS ARE APART, 2026-08-07
+
+### The minimap shows the other players after all — in their own colours
+
+⚠ **This overturns the WON'T FIX in `docs/research/animation-and-minimap.md` §B.** The
+*findings* there stand: `DrawMap 0x0068AB10` was read end to end, it draws the area image, the
+fog and exactly ONE arrow, and the engine's three `CSWSAreaMap` party slots cannot be borrowed.
+What was wrong was the conclusion — that a peer needed its own GUI control, its own viewport
+and ~120 lines on the render path.
+
+**The arrow is already there, already the right size, and already inside an open viewport.
+Drawing it again at an offset is the whole feature.** `MinimapPeerHook` redirects the five-byte
+`call AurGUICloseViewport` at `0x0068ACB4` to a stub that draws the peers and tail-jumps to the
+real function — no prologue to relocate, and the site is only reached when the viewport really
+was opened. Full write-up: `docs/research/minimap-peers.md`.
+
+Three things worth carrying forward:
+
+- **The offset is RELATIVE to the arrow**, because `DrawMap` scrolls the image to
+  `(side/2) - pixel*scale`. So this code never needs to know where the minimap is on screen.
+- **World→pixel is borrowed, not reimplemented**: write the peer's position into party slot 2
+  via `SetPartyMemberWorldLocation 0x005790C0`, read the pixel back, restore the slot. ⚠ That
+  setter only STORES on success, so the slot must be cleared to `-1` first or an off-map peer
+  silently reuses the previous peer's pixel.
+- **Colour is a MULTIPLIER against blue art**, at control `+0x80..+0x88` (the embedded
+  `CSWGuiImageParams.color`; angle `+0x78`, alpha `+0x7C`). Values above 1.0 saturate a channel
+  instead of clamping the result, which is the only way to get red out of blue. Every palette
+  entry was captured and looked at — `(1, 0.15, 0.15)` is unreadable maroon, `(6, 0, 0)` is
+  red. Six shipped colours, one per peer slot.
+
+The local arrow is drawn once more at the end so a partner standing on you cannot hide you.
+`coop.ini minimap_peers=0` opts out.
+
+### Combat with the players apart — a review, two fixes, and a crash
+
+Full write-up: `docs/research/combat-when-apart.md`. **The short version: it works, and the
+reason is the phantom** — the distant player's body is really there in the host's game, in the
+player faction, so the host's enemies fight it and that fight is the authoritative one.
+Proximity to the HOST is irrelevant; what matters is that the phantom is where the player is.
+
+Three defects, all invisible while the players stand together:
+
+1. **⚠ THE FOLLOW FIRED OFF A PLACEHOLDER AND KILLED THE CLIENT.** `PumpTravel` rejected the
+   bridge's `areaXX` fallback for the TARGET module but not for the LOCAL one — and that
+   fallback means exactly one thing: our own transition is in progress. So mid-load it compared
+   a placeholder against the host's real module, concluded we were separated, and fired a
+   second transition into the middle of the first:
+
+   ```
+   07:58:01.186  travel: moving to module 'end_m01ab'
+   07:58:02.285  travel: moving to module 'END_M01AA'      (1.1 s later)
+   07:58:02.473  CRASH at CSWCMessage::HandleServerToPlayerCreatureUpdate_Add+0x16D
+   ```
+
+   That instruction is `mov ebp,[eax+0x48]` on the result of `CClientExoApp::GetModule()`,
+   dereferenced with **no null check**, while the previous world's creature-add messages are
+   still being serviced. Reproduced twice, fixed, and the same test now produces travels
+   **10.3 s apart with no crash**. A post-arrival settle window (`AgentSettings.ModuleSettleMs`,
+   5 s) backs it up. This is ordinary play: a client who walks through their own door arrives
+   where the host is not and is brought straight back.
+
+2. **The census was measured from the publisher only.** `ReadEnemies` caps at 32 and sheds by
+   distance, so the creatures around a distant partner sorted last and fell off — at exactly
+   the moment that partner needed them. Now the key is distance to the NEAREST player; peers
+   arrive already module-filtered.
+
+3. **The enemy snapshot carried no module.** Object ids are per module load, so a snapshot
+   taken elsewhere writes the host's healths and positions onto whatever local creatures share
+   those numbers. `EnemySnapshotPacket` now carries its module (**protocol 14**) and a client
+   drops it when it does not match. ⚠ And an empty list is now WRITTEN rather than skipped —
+   otherwise the last snapshot stays in the shared block and the plugin keeps driving the old
+   module's ids. Verified live: `client enemies 25 → 0 → 25` across a travel out and back.
+
+**Method note, and it is the same one as §0i:** the first fix I wrote for the crash (a settle
+window alone) was aimed at "the load had completed" — which I inferred from the module name
+being readable. It was not; the name was the `areaXX` fallback. Re-running the test rather than
+trusting the reasoning is what found the real cause.
+
+⚠ **Two verify.ps1 failures that are NOT regressions**, both cost time and will recur: the
+plugin logs are append-only ACROSS sessions, so `no crash on either side` reports a crash from
+a previous run; and the phantom-damage check takes 3 hp off the client each time, so after a
+few batteries the peer sits at 0 hp and `the peer really loses those hit points` fails
+`0 -> 0`. Truncate the logs and restart before believing either.
+
+---
+
 ## 0i. THE PLAYTEST BUG LIST IS CLOSED, 2026-08-06 (late)
 
 `docs/playtest-bugs.md` is gone: every item on it is resolved, and what was worth keeping is

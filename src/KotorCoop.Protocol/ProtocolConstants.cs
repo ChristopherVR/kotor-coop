@@ -24,8 +24,12 @@ public static class ProtocolConstants
     /// owner's fight instead of running a private one. Reports still carry health alone.
     /// Version 13: the snapshot includes PLOT creatures (cutscene actors) with a plot flag
     /// — presence-only, exempt from the combat half — so scripted scenes play out
-    /// identically on both screens.</summary>
-    public const byte Version = 13;
+    /// identically on both screens.
+    /// Version 14: the enemy snapshot carries the MODULE its object ids were read in, so a
+    /// peer somewhere else drops it instead of writing the owner's healths and positions
+    /// onto whatever local creatures happen to share those ids. The report direction has
+    /// always carried its module; this is the same guard the other way.</summary>
+    public const byte Version = 14;
 
     /// <summary>Journal quest tags are resrefs plus a little slack.</summary>
     public const int MaxJournalTagLength = 32;

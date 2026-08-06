@@ -107,6 +107,10 @@ internal static unsafe class PluginHost
             _journal = new JournalController(_view);
             _mapMarkers = new MapMarkerController(_view);
 
+            // The minimap draw runs on the render path and has no other route to peer
+            // positions, so it reads the block directly.
+            MinimapPeerHook.Bind(_view);
+
             // Install the frame hook from here because DirectInput8Create - our caller - is
             // verified to run on the game's main thread during startup. Installing from the
             // worker thread would patch an import from the wrong thread.
@@ -214,6 +218,21 @@ internal static unsafe class PluginHost
             else
             {
                 Log($"shot-camera guard NOT installed: {shotDiagnostic}");
+            }
+
+            // The minimap draws exactly one arrow and has no note or party loop, so a peer
+            // gets there by drawing that same arrow again, inside the viewport the engine
+            // has already opened. coop.ini minimap_peers=0 opts out.
+            if (PluginConfig.ReadBool("minimap_peers", true))
+            {
+                if (MinimapPeerHook.Install(out string minimapDiagnostic))
+                {
+                    Log($"minimap: {minimapDiagnostic}");
+                }
+                else
+                {
+                    Log($"minimap peers NOT installed: {minimapDiagnostic}");
+                }
             }
 
             // The engine reverts any pause that lacks a valid "PausedBy" record within one

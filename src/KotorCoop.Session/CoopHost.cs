@@ -118,17 +118,22 @@ public sealed class CoopHost : ICoopSession
     /// <summary>The host is the enemy authority: its fights are the ones that count.</summary>
     public bool IsEnemyAuthority => true;
 
-    public void PublishEnemies(IReadOnlyList<EnemyState> enemies)
+    public void PublishEnemies(string module, IReadOnlyList<EnemyState> enemies)
     {
         lock (_gate)
         {
+            _enemyModule = module;
             _enemies = enemies;
         }
     }
 
-    public IReadOnlyList<EnemyState> GetEnemies() => [];
+    public IReadOnlyList<EnemyState> GetEnemies(string module) => [];
 
     private IReadOnlyList<EnemyState> _enemies = [];
+
+    /// <summary>The module the published ids were read in; it travels with them so a peer
+    /// somewhere else can tell that they mean nothing to it.</summary>
+    private string _enemyModule = string.Empty;
 
     private IReadOnlyList<PartyMemberState> _party = [];
 
@@ -604,9 +609,11 @@ public sealed class CoopHost : ICoopSession
     private void BroadcastEnemies(long now, List<PeerConnection> recipients)
     {
         IReadOnlyList<EnemyState> enemies;
+        string module;
         lock (_gate)
         {
             enemies = _enemies;
+            module = _enemyModule;
         }
 
         if (enemies.Count == 0 || recipients.Count == 0)
@@ -614,7 +621,7 @@ public sealed class CoopHost : ICoopSession
             return;
         }
 
-        int length = PacketCodec.Write(_sendBuffer, new EnemySnapshotPacket(now, enemies));
+        int length = PacketCodec.Write(_sendBuffer, new EnemySnapshotPacket(now, module, enemies));
         if (length == 0)
         {
             return;

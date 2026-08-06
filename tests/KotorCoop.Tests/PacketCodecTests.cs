@@ -299,11 +299,12 @@ public class PacketCodecTests
             new(0x33, 8, 8, false, new Vector3f(12f, 34f, 0f), 0f, 0x2710, Plot: true),
         ];
 
-        int length = PacketCodec.Write(buffer, new EnemySnapshotPacket(1234, enemies));
+        int length = PacketCodec.Write(buffer, new EnemySnapshotPacket(1234, "end_m01aa", enemies));
         EnemySnapshotPacket? decoded = PacketCodec.ReadEnemySnapshot(buffer[..length]);
 
         Assert.NotNull(decoded);
         Assert.Equal(1234, decoded.ServerTimeMs);
+        Assert.Equal("end_m01aa", decoded.Module);
         Assert.Equal(enemies, decoded.Enemies);
     }
 
@@ -343,7 +344,7 @@ public class PacketCodecTests
         List<EnemyState> enemies = [.. Enumerable.Range(1, ProtocolConstants.MaxEnemies)
             .Select(i => new EnemyState((uint)i, (ushort)i, 99, i % 2 == 0))];
 
-        int length = PacketCodec.Write(buffer, new EnemySnapshotPacket(1, enemies));
+        int length = PacketCodec.Write(buffer, new EnemySnapshotPacket(1, "end_m01aa", enemies));
 
         Assert.True(length > 0, "worst-case enemy snapshot must fit inside one packet");
         Assert.Equal(ProtocolConstants.MaxEnemies, PacketCodec.ReadEnemySnapshot(buffer[..length])!.Enemies.Count);

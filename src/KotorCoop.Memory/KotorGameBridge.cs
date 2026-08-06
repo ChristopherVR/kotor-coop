@@ -2513,7 +2513,7 @@ public sealed class KotorGameBridge : IGameBridge
     /// must skip them everywhere — including a peer's damage reports.</summary>
     private readonly HashSet<uint> _plotIds = [];
 
-    public List<EnemyState> ReadEnemies()
+    public List<EnemyState> ReadEnemies(IReadOnlyList<Vector3f> otherPlayers)
     {
         List<EnemyState> enemies = [];
         _enemyAddresses.Clear();
@@ -2597,15 +2597,36 @@ public sealed class KotorGameBridge : IGameBridge
                     ? shot
                     : (0u, (ushort)0);
 
+            // ⚠ Distance to the NEAREST PLAYER, not to us.
+            //
+            // The cap sheds by this number, and a census measured from one player only can
+            // see one place at a time. Two players a room apart is the ordinary case, and
+            // it is exactly when the publisher's own surroundings are the wrong thing to
+            // measure: the creatures around the partner — the ones they are about to fight —
+            // sort last and fall off the list, so their copies stop being driven and stop
+            // being health-mirrored at the moment they start to matter. Peers are passed in
+            // already filtered to this module.
             float dx = position.X - playerPosition.X;
             float dy = position.Y - playerPosition.Y;
+            float nearestSquared = (dx * dx) + (dy * dy);
+
+            for (int p = 0; p < otherPlayers.Count; p++)
+            {
+                float px = position.X - otherPlayers[p].X;
+                float py = position.Y - otherPlayers[p].Y;
+                float squared = (px * px) + (py * py);
+                if (squared < nearestSquared)
+                {
+                    nearestSquared = squared;
+                }
+            }
 
             candidates.Add((
                 new EnemyState(
                     creature.ObjectId, (ushort)Math.Max((int)current, 0), max, current <= 0,
                     position, facing, animation, oneShotSerial, oneShotAnim, plot),
                 fighting,
-                (dx * dx) + (dy * dy)));
+                nearestSquared));
 
             _enemyAddresses[creature.ObjectId] = creature.Address;
         }

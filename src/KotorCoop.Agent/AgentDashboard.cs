@@ -244,9 +244,11 @@ public sealed class AgentDashboard(SessionManager manager, IGameBridge bridge, s
             }
         }
 
+        // Display only, so the census is read from this player's own vantage point (no peer
+        // positions) and the module gate is asked with the module we are actually in.
         IReadOnlyList<EnemyState> enemies = agent.Session.IsEnemyAuthority
-            ? agent.Bridge.ReadEnemies()
-            : agent.Session.GetEnemies();
+            ? agent.Bridge.ReadEnemies([])
+            : agent.Session.GetEnemies(agent.LastLocalState.Module);
 
         int alive = 0;
         int dead = 0;

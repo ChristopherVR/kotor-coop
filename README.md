@@ -43,8 +43,10 @@ Both players, each in their own full game:
   recovery still applies if nobody is close. Nobody gets dropped to the main menu alone
   either: a party wipe only ends the game once *every* player is down, and then it ends for
   both of you together.
-- **See each other on the map**: each peer is a live pin on the M-screen map, riding the
-  engine's own map-note waypoints — no interface hacking.
+- **See each other on the map**: every other player is a coloured arrow on your **minimap** —
+  red, green, orange, purple, cyan, yellow, one per player — pointing the way they are facing
+  and moving as they move, plus a live pin on the full M-screen map. Your own arrow stays blue
+  and is always drawn on top.
 - **Share one party**: the host drives the companions (Trask, Carth...) with the game's own
   AI and each client freezes and mirrors them — through the same frame-by-frame drive as
   enemies, swings included — so they stay one synchronised group instead of two that
@@ -100,7 +102,7 @@ one, Connect on the other, both loading their real saved characters with no inje
 clicks), phantoms both ways with appearance and equipment, run-gait, item drop/pickup,
 enemy health/death mirroring, enemy and companion presence (positions, health and rendered
 bodies identical across both games), door unlock propagation, map pins, and going down and
-being picked up by the other player. The mod-compatibility handshake is unit-tested (266
+being picked up by the other player. The mod-compatibility handshake is unit-tested (279
 tests); it has been observed agreeing on two identical installs but its mismatch paths have
 not had a live pass. See `Handoff.md` and `docs/research/` for the precise per-feature
 status and the reverse-engineering behind each.
@@ -215,9 +217,6 @@ tools/                   RE helpers, demo scripts, the kotor1_0_3 symbol databas
 - **Only the host can switch party character.** The companions are driven by the host's own
   AI and mirrored to everyone else, so a client taking one over would fight its own mirror;
   Tab and the portraits are locked there on purpose. On the host they work normally.
-- **The minimap shows only you.** The engine's minimap draws the area image and exactly one
-  arrow — there is no map-note or party loop in it to borrow. Your partner is a live pin on
-  the full M-screen map instead.
 - **One conversation at a time.** While a player is talking, nobody else can start a
   dialogue; the other player spectates rather than getting their own copy. That is the
   design (it keeps one plot line advancing), not a limitation to be lifted. While a player
@@ -229,6 +228,9 @@ tools/                   RE helpers, demo scripts, the kotor1_0_3 symbol databas
   Being downed still works normally from damage in your own game.
 - **Enemies choose targets purely by proximity.** There is no threat shaping, so which
   player an enemy picks is the engine's nearest-hostile rule and nothing else.
+- **Encounters only fire for the host.** A client cannot trigger a spawn, so an encounter
+  trigger they walk over does nothing until the host walks over it too. Client-side spawning
+  would shift the object ids the whole enemy channel is keyed on.
 - **Item identity is a blueprint resref**: upgrades and charges don't travel yet.
 - **The world-time compatibility check covers the globals catalogue**; save-identity and
   per-module GIT digests (to also gate on a mod-edited module) are a planned follow-up.

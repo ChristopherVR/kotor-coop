@@ -46,11 +46,17 @@ public interface ICoopSession : IDisposable
     /// </summary>
     bool IsEnemyAuthority { get; }
 
-    /// <summary>Host only: publish the authoritative enemy list. Ignored on a client.</summary>
-    void PublishEnemies(IReadOnlyList<EnemyState> enemies);
+    /// <summary>Host only: publish the authoritative enemy list, with the module its object
+    /// ids were read in. Ignored on a client.</summary>
+    void PublishEnemies(string module, IReadOnlyList<EnemyState> enemies);
 
-    /// <summary>Client only: the host's latest enemy list. Empty on the host.</summary>
-    IReadOnlyList<EnemyState> GetEnemies();
+    /// <summary>
+    /// Client only: the host's latest enemy list, but only if the host read it in
+    /// <paramref name="module"/> — object ids are per module load, so a snapshot taken
+    /// somewhere else names different creatures here. Empty on the host, and empty
+    /// whenever the two are apart.
+    /// </summary>
+    IReadOnlyList<EnemyState> GetEnemies(string module);
 
     /// <summary>
     /// Client only: report this instance's local view of enemy health so the host can

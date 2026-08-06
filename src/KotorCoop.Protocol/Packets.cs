@@ -134,8 +134,15 @@ public sealed record EnemyState(
 /// The host's view of every enemy. Absolute health, never damage deltas: the engine
 /// applies difficulty multipliers, temporary hit points and damage resistance per
 /// instance, so replaying "took 7 damage" on the far side does not produce 7.
+///
+/// <paramref name="Module"/> is the module the ids were read IN, and it is load-bearing:
+/// object ids are assigned per module load, so the same id names a different creature in a
+/// different module. A receiver somewhere else must drop the snapshot rather than write the
+/// host's healths and positions onto whatever local bodies happen to hold those ids. The
+/// report direction has always carried its module; this is the same guard the other way.
 /// </summary>
-public sealed record EnemySnapshotPacket(long ServerTimeMs, IReadOnlyList<EnemyState> Enemies);
+public sealed record EnemySnapshotPacket(
+    long ServerTimeMs, string Module, IReadOnlyList<EnemyState> Enemies);
 
 /// <summary>
 /// One party companion as the host sees it. Keyed by <paramref name="SlotIndex"/> (the

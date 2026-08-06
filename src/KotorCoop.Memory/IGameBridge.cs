@@ -210,8 +210,15 @@ public interface IGameBridge : IDisposable
     /// dialogue). Default false when this bridge has no overlay.</summary>
     bool PostChatLine(string line) => false;
 
-    /// <summary>Reads every enemy in the module. Used by whichever peer owns them.</summary>
-    List<EnemyState> ReadEnemies() => [];
+    /// <summary>
+    /// Reads the module's creatures for the enemy channel. Used by whichever peer owns them.
+    ///
+    /// <paramref name="otherPlayers"/> is where the OTHER players are standing. The census is
+    /// capped, and what the cap sheds is decided by distance — so without this the publisher
+    /// only ever measures from itself, and the creatures around a partner across the module
+    /// are the first thing dropped. See <see cref="KotorGameBridge.ReadEnemies"/>.
+    /// </summary>
+    List<EnemyState> ReadEnemies(IReadOnlyList<Vector3f> otherPlayers) => [];
 
     /// <summary>
     /// Turns off the local module's encounters. Called on every peer that does NOT own

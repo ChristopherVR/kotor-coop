@@ -105,11 +105,11 @@ public class PausePumpTests
         {
         }
 
-        public void PublishEnemies(IReadOnlyList<EnemyState> enemies)
+        public void PublishEnemies(string module, IReadOnlyList<EnemyState> enemies)
         {
         }
 
-        public IReadOnlyList<EnemyState> GetEnemies() => [];
+        public IReadOnlyList<EnemyState> GetEnemies(string module) => [];
 
         public void ReportEnemies(string module, IReadOnlyList<EnemyState> enemies)
         {

@@ -89,11 +89,11 @@ public class TravelPumpTests
         {
         }
 
-        public void PublishEnemies(IReadOnlyList<EnemyState> enemies)
+        public void PublishEnemies(string module, IReadOnlyList<EnemyState> enemies)
         {
         }
 
-        public IReadOnlyList<EnemyState> GetEnemies() => [];
+        public IReadOnlyList<EnemyState> GetEnemies(string module) => [];
 
         public void ReportEnemies(string module, IReadOnlyList<EnemyState> enemies)
         {
@@ -142,7 +142,7 @@ public class TravelPumpTests
     }
 
     private static (CoopAgent Agent, TravelBridge Bridge, StubSession Session) Build(
-        bool follow = true, int retryMs = 15_000)
+        bool follow = true, int retryMs = 15_000, int settleMs = 0)
     {
         TravelBridge bridge = new();
         StubSession session = new();
@@ -150,6 +150,11 @@ public class TravelPumpTests
         {
             FollowHostModule = follow,
             FollowRetryMs = retryMs,
+
+            // These tests are about the DEBOUNCE. The post-arrival settle window is a
+            // separate rule with its own test below, and leaving it on here would mean
+            // every case had to wait out a wall clock nothing else in the suite depends on.
+            ModuleSettleMs = settleMs,
         });
 
         return (agent, bridge, session);
@@ -277,6 +282,67 @@ public class TravelPumpTests
 
         Assert.Equal(2, bridge.Requests.Count);
         Assert.Equal("dan_m13aa", bridge.Requests[1].Module);
+    }
+
+    [Fact]
+    public void ArrivingSomewhereHoldsTheNextFollowUntilTheWorldHasSettled()
+    {
+        // The crash guard: leaving a module moments after arriving in it killed the client
+        // in the engine's creature-add handler, which dereferences CClientExoApp::GetModule
+        // unchecked while the previous world's object messages are still being serviced.
+        // A client that walks through its own door is brought straight back by the follow,
+        // so this pair is ordinary play rather than a contrived case.
+        (CoopAgent agent, TravelBridge bridge, StubSession session) = Build(settleMs: 60_000);
+        session.Peers.Add(HostPeer(HostModule));
+
+        agent.PumpOnce();
+        Assert.Single(bridge.Requests); // the FIRST follow is not held: we never transitioned
+
+        // We arrive somewhere of our own — a different module from both.
+        bridge.Local = new PlayerState(Vector3f.Zero, 0f, "dan_m13aa", 20, 0);
+        agent.PumpOnce();
+
+        // The host is still elsewhere, so the follow wants to fire immediately. It must not.
+        agent.PumpOnce();
+        Assert.Single(bridge.Requests);
+    }
+
+    [Fact]
+    public void NoFollowWhileOurOwnModuleNameIsTheMidTransitionFallback()
+    {
+        // "areaXX" means the module name could not be read, which happens for exactly one
+        // reason: we are mid-transition. Comparing that placeholder against the host's real
+        // module reads as separation and fires a SECOND transition into the middle of the
+        // first — which is what killed the client in the engine's creature-add handler.
+        (CoopAgent agent, TravelBridge bridge, StubSession session) = Build();
+        session.Peers.Add(HostPeer(HostModule));
+        bridge.Local = new PlayerState(Vector3f.Zero, 0f, "area1F", 20, 0);
+
+        agent.PumpOnce();
+
+        Assert.Empty(bridge.Requests);
+
+        // Once the real name resolves, the follow behaves normally.
+        bridge.Local = new PlayerState(Vector3f.Zero, 0f, ClientModule, 20, 0);
+        agent.PumpOnce();
+
+        Assert.Single(bridge.Requests);
+        Assert.Equal(HostModule, bridge.Requests[0].Module);
+    }
+
+    [Fact]
+    public void TheSettleWindowDoesNotHoldTheFirstFollowOfASession()
+    {
+        // Starting a session already in a different module from the host is not a transition,
+        // and making the player wait for one that never happened would look like the follow
+        // was broken.
+        (CoopAgent agent, TravelBridge bridge, StubSession session) = Build(settleMs: 60_000);
+        session.Peers.Add(HostPeer(HostModule));
+
+        agent.PumpOnce();
+
+        Assert.Single(bridge.Requests);
+        Assert.Equal(HostModule, bridge.Requests[0].Module);
     }
 
     [Fact]

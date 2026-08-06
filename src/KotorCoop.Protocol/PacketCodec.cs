@@ -290,6 +290,7 @@ public static class PacketCodec
         PacketWriter w = new(buffer);
         w.WriteHeader(PacketType.EnemySnapshot);
         w.WriteInt64(packet.ServerTimeMs);
+        w.WriteString(packet.Module, ProtocolConstants.MaxModuleLength);
 
         int count = Math.Min(packet.Enemies.Count, ProtocolConstants.MaxEnemies);
         w.WriteUInt8((byte)count);
@@ -321,6 +322,7 @@ public static class PacketCodec
         }
 
         long serverTime = r.ReadInt64();
+        string module = r.ReadString();
         byte count = r.ReadUInt8();
 
         if (r.Failed || count > ProtocolConstants.MaxEnemies)
@@ -352,7 +354,7 @@ public static class PacketCodec
                 oneShotSerial, oneShotAnimation, plot));
         }
 
-        return new EnemySnapshotPacket(serverTime, enemies);
+        return new EnemySnapshotPacket(serverTime, module, enemies);
     }
 
     public static int Write(Span<byte> buffer, EnemyReportPacket packet)

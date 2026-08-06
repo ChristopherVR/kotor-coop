@@ -42,6 +42,17 @@ public sealed record AgentSettings
     public int FollowRetryMs { get; init; } = 15_000;
 
     /// <summary>
+    /// How long a module must have been ours before the follow may take us out of it again.
+    ///
+    /// This is a CRASH guard, not a tuning knob: a transition issued 0.6 s after the last one
+    /// completed killed the client in
+    /// <c>CSWCMessage::HandleServerToPlayerCreatureUpdate_Add</c>, which dereferences
+    /// <c>CClientExoApp::GetModule()</c> with no null check while creature-add messages for
+    /// the world we just left are still being serviced. Zero disables it.
+    /// </summary>
+    public int ModuleSettleMs { get; init; } = 5000;
+
+    /// <summary>
     /// When true, the party companions are reconciled: the host drives them and clients
     /// freeze and mirror. Uses the engine's solo-mode flag, whose full behaviour is
     /// inferred rather than measured, so it is an escape-hatchable default.
@@ -73,6 +84,14 @@ public sealed class CoopAgent(IGameBridge bridge, ICoopSession session, AgentSet
 
     private long _lastHeavyPumpMs;
     private long _travelRetryAtMs;
+
+    /// <summary>The module we last saw ourselves in, and when we arrived — so a transition is
+    /// never issued while the world we just entered is still filling with objects. The flag
+    /// distinguishes "we changed module" from "this is the first module we ever saw", which
+    /// is where we already were and must not be made to wait.</summary>
+    private string _settledModule = string.Empty;
+    private long _moduleSettledAtMs;
+    private bool _changedModule;
 
     public IGameBridge Bridge => bridge;
 
@@ -236,6 +255,18 @@ public sealed class CoopAgent(IGameBridge bridge, ICoopSession session, AgentSet
 
         LastWriteSucceeded = bridge.TryWriteRemotePeers(visible);
 
+        // Track how long we have been in this module, for the travel settle window below.
+        // Only real names count: mid-transition the bridge reports empty or an "areaXX"
+        // fallback, and treating those as arrivals would restart the clock on noise.
+        if (local.Module.Length > 0
+            && !IsFallbackModuleName(local.Module)
+            && !string.Equals(local.Module, _settledModule, StringComparison.OrdinalIgnoreCase))
+        {
+            _changedModule = _settledModule.Length > 0;
+            _settledModule = local.Module;
+            _moduleSettledAtMs = SessionClock.NowMs;
+        }
+
         // Pause and travel are cheap flag checks and must feel immediate.
         PumpTravel(local, peers);
         PumpPause(peers);
@@ -289,7 +320,7 @@ public sealed class CoopAgent(IGameBridge bridge, ICoopSession session, AgentSet
             bridge.ModuleGitDigest(local.Module)));
 
         PumpItems(local, caps);
-        PumpEnemies(local, caps);
+        PumpEnemies(local, visible, caps);
         PumpPhantomDamage(caps);
         PumpParty(caps);
         PumpProgression(caps);
@@ -715,9 +746,48 @@ public sealed class CoopAgent(IGameBridge bridge, ICoopSession session, AgentSet
             return;
         }
 
+        // ⚠ AND NOT WHILE WE DO NOT KNOW WHERE WE ARE.
+        //
+        // "areaXX" is the bridge's fallback when the module NAME is unreadable, and the name
+        // is unreadable for exactly one reason: a transition is in progress here. The target
+        // side of this method has always rejected that value; the LOCAL side did not, so
+        // mid-load we compared a placeholder against the host's real module, concluded we
+        // were separated, and fired a second transition into the middle of the first.
+        //
+        // Measured, twice: two travels 1.1 s apart, then the client dead in
+        // CSWCMessage::HandleServerToPlayerCreatureUpdate_Add+0x16D, which dereferences
+        // CClientExoApp::GetModule() with no null check while the previous world's
+        // creature-add messages are still being serviced.
+        if (IsFallbackModuleName(local.Module))
+        {
+            return;
+        }
+
         // Never yank the player out of a conversation; the module mismatch survives
         // until the next pump anyway.
         if (bridge.IsInDialogue)
+        {
+            return;
+        }
+
+        // ⚠ LET A MODULE SETTLE BEFORE LEAVING IT AGAIN. A transition issued moments after
+        // the last one finished killed the client outright, measured:
+        //
+        //   07:48:17.766  travel: moving to module 'end_m01ab'      (this player's own move)
+        //   07:48:19.604  travel: moving to module 'END_M01AA'      (the follow, 1.8 s later)
+        //   07:48:20.266  CRASH at CSWCMessage::HandleServerToPlayerCreatureUpdate_Add+0x16D
+        //
+        // That instruction is `mov ebp,[eax+0x48]` on the result of
+        // CClientExoApp::GetModule, dereferenced with no null check — so the client was
+        // still being handed creature-add messages for a world it no longer had. The load
+        // had already COMPLETED (the module name read fine, which is how the follow fired at
+        // all), so gating on "loading" would not have caught it; what overlaps is the burst
+        // of object messages that follows a world coming up.
+        //
+        // Retail never reaches this because its transitions are player-driven and never
+        // back-to-back. Follow-the-host can be, and a client walking through its own door is
+        // exactly how: it arrives somewhere the host is not and is immediately brought back.
+        if (_changedModule && SessionClock.NowMs - _moduleSettledAtMs < settings.ModuleSettleMs)
         {
             return;
         }
@@ -920,11 +990,21 @@ public sealed class CoopAgent(IGameBridge bridge, ICoopSession session, AgentSet
     /// Health is replicated absolutely rather than as damage, because each instance applies
     /// its own difficulty multipliers and resistances to a damage number.
     /// </summary>
-    private void PumpEnemies(in PlayerState local, SessionCapabilities caps)
+    private void PumpEnemies(
+        in PlayerState local, IReadOnlyList<RemotePeer> peersHere, SessionCapabilities caps)
     {
         if (!bridge.SupportsEnemySync || (caps & SessionCapabilities.Enemies) == 0)
         {
             return;
+        }
+
+        // Where the other players are, so the census cap sheds by distance to the nearest
+        // of us rather than to whoever happens to be publishing. `peersHere` is already
+        // module-filtered, which is what makes these positions comparable at all.
+        Vector3f[] otherPlayers = new Vector3f[peersHere.Count];
+        for (int i = 0; i < peersHere.Count; i++)
+        {
+            otherPlayers[i] = peersHere[i].State.Position;
         }
 
         if (session.IsEnemyAuthority)
@@ -935,7 +1015,7 @@ public sealed class CoopAgent(IGameBridge bridge, ICoopSession session, AgentSet
             // talking, would have their own fight go quiet for the duration.
             if (!bridge.IsInDialogue)
             {
-                session.PublishEnemies(bridge.ReadEnemies());
+                session.PublishEnemies(local.Module, bridge.ReadEnemies(otherPlayers));
             }
 
             // Where a client's damage becomes real: its copies are pinned at 1 hp, so
@@ -961,18 +1041,23 @@ public sealed class CoopAgent(IGameBridge bridge, ICoopSession session, AgentSet
             Log?.Invoke($"disabled {disabled} local encounter(s); the enemy owner's spawns are authoritative");
         }
 
-        IReadOnlyList<EnemyState> enemies = session.GetEnemies();
-        if (enemies.Count > 0)
-        {
-            bridge.TryWriteEnemies(enemies);
-        }
+        // Module-gated: the owner's ids only mean anything while we are where they were
+        // read. Apart, this is empty and our own copies are left alone rather than driven
+        // onto whatever local creatures share those ids.
+        //
+        // ⚠ And an empty list is WRITTEN, not skipped. Skipping was right when empty only
+        // ever meant "the host has not sent one yet"; with the gate it also means "these ids
+        // do not belong here", and leaving the previous snapshot in the shared block would
+        // let the plugin keep driving the old module's ids onto the new module's creatures —
+        // exactly the thing the gate exists to stop. Writing a count of zero clears them.
+        bridge.TryWriteEnemies(session.GetEnemies(local.Module));
 
         // Report our own view so damage dealt here counts. Not during dialogue — the
         // disarm makes the local fight unrepresentative, and health is the only field
         // that matters anyway.
         if (!bridge.IsInDialogue)
         {
-            session.ReportEnemies(local.Module, bridge.ReadEnemies());
+            session.ReportEnemies(local.Module, bridge.ReadEnemies(otherPlayers));
         }
     }
 

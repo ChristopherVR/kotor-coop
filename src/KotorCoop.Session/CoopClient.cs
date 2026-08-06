@@ -137,20 +137,29 @@ public sealed class CoopClient : ICoopSession
     /// <summary>A client never owns enemy state; it mirrors the host's.</summary>
     public bool IsEnemyAuthority => false;
 
-    public void PublishEnemies(IReadOnlyList<EnemyState> enemies)
+    public void PublishEnemies(string module, IReadOnlyList<EnemyState> enemies)
     {
         // Only the host is authoritative, so a client's own view is deliberately dropped.
     }
 
-    public IReadOnlyList<EnemyState> GetEnemies()
+    public IReadOnlyList<EnemyState> GetEnemies(string module)
     {
         lock (_gate)
         {
-            return _enemies;
+            // Ids from another module are not stale, they are WRONG: the same numbers name
+            // different creatures here. Dropping the snapshot leaves our own copies alone
+            // until we are back in the same place.
+            return _enemyModule.Length == 0
+                || module.Length == 0
+                || string.Equals(_enemyModule, module, StringComparison.OrdinalIgnoreCase)
+                    ? _enemies
+                    : [];
         }
     }
 
     private IReadOnlyList<EnemyState> _enemies = [];
+
+    private string _enemyModule = string.Empty;
 
     private IReadOnlyList<PartyMemberState> _party = [];
 
@@ -787,6 +796,7 @@ public sealed class CoopClient : ICoopSession
                     lock (_gate)
                     {
                         _enemies = enemySnapshot.Enemies;
+                        _enemyModule = enemySnapshot.Module;
                     }
                 }
 
