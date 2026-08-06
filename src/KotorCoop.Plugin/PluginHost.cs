@@ -25,6 +25,7 @@ internal static unsafe class PluginHost
     private static CombatController? _combat;
     private static EnemyPresenceController? _enemyPresence;
     private static PartyPresenceController? _partyPresence;
+    private static IncomingDamageController? _incomingDamage;
     private static DoorController? _doors;
     private static PlaceableController? _placeables;
     private static LootController? _loot;
@@ -86,6 +87,7 @@ internal static unsafe class PluginHost
             _combat = new CombatController(_view);
             _enemyPresence = new EnemyPresenceController(_view);
             _partyPresence = new PartyPresenceController(_view);
+            _incomingDamage = new IncomingDamageController(_view);
             _doors = new DoorController(_view);
             _placeables = new PlaceableController(_view);
             _loot = new LootController(_view);
@@ -177,6 +179,18 @@ internal static unsafe class PluginHost
             // One conversation for the whole session (the BG3 rule): while a peer holds the
             // token, this instance cannot start a dialogue at all. The spectate follow is
             // the one sanctioned exception (DialogueGateHook.Bypass).
+            // Damage landing on a peer's phantom, so it can be forwarded to their real
+            // character. Read-only and filtered to phantom ids, but it sits on every
+            // damage event in the game, so it is verify-bytes like the rest.
+            if (PhantomHitHook.Install(out string hitDiagnostic))
+            {
+                Log($"combat: {hitDiagnostic}");
+            }
+            else
+            {
+                Log($"phantom-hit watch NOT installed: {hitDiagnostic}");
+            }
+
             DialogueGateHook.Enabled = PluginConfig.ReadBool("dialogue_exclusive", true);
             if (DialogueGateHook.Install(out string gateDiagnostic))
             {
@@ -254,7 +268,7 @@ internal static unsafe class PluginHost
         Unsafe.InitBlockUnaligned(_block, 0, SharedBlock.TotalSize);
 
         _block->Magic = SharedBlock.MagicValue;
-        _block->Version = 20;
+        _block->Version = 21;
 
         // A guard dword after the version. Magic plus version alone was not selective
         // enough: a scan once matched something else at a lower address and the agent
@@ -442,6 +456,10 @@ internal static unsafe class PluginHost
         // slot's dead flag and the kill both come from the same owner tick).
         _enemyPresence?.OnFrame();
         _partyPresence?.OnFrame();
+
+        // After death handling has published whether we are down, so damage that would
+        // arrive on an already-downed player is skipped rather than fighting the revive.
+        _incomingDamage?.OnFrame();
         _doors?.OnFrame();
         _placeables?.OnFrame();
         _loot?.OnFrame();
@@ -463,6 +481,8 @@ internal static unsafe class PluginHost
         _combat?.Invalidate();
         _enemyPresence?.Invalidate();
         _partyPresence?.Invalidate();
+        _incomingDamage?.Invalidate();
+        PhantomHitHook.Invalidate();
         AnimationHook.InvalidateCreatureTable();
         _doors?.Invalidate();
         _placeables?.Invalidate();

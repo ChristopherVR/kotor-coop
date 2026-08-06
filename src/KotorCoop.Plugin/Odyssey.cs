@@ -3114,6 +3114,9 @@ internal static unsafe class Odyssey
     /// <summary>repute.2da row 5 — the Neutral faction, ~50 reputation both ways.</summary>
     private const ushort FactionNeutral = 5;
 
+    /// <summary>The same, for callers choosing between it and <see cref="FactionPlayer"/>.</summary>
+    public const int FactionNeutralId = FactionNeutral;
+
     /// <summary>
     /// Marks a spawned creature as belonging to a remote player.
     ///
@@ -3149,8 +3152,81 @@ internal static unsafe class Odyssey
         nint stats = Deref(phantom + CreStats);
         if (stats != 0)
         {
-            *(ushort*)(stats + StatsFactionId) = FactionNeutral;
+            // DWORD, not ushort. The engine reads the whole dword (0x00513FF8,
+            // 0x005BFADB); the old 16-bit write only worked because the upper half
+            // happened to be zero, and a stale upper half would make the faction id read
+            // as garbage — which resolves to reputation 50 and silently un-targets
+            // everything (docs/research/combat-participation.md risk 4).
+            *(uint*)(stats + StatsFactionId) = FactionNeutral;
         }
+    }
+
+    // ---- faction, the targetability switch ---------------------------------------
+    //
+    // Hostility in KOTOR 1 is faction-vs-faction with no personal reputation list, and
+    // every targeting path re-reads it live: GetReputation -> stats+0x78 -> the faction
+    // matrix (docs/research/combat-participation.md §2). So a phantom becomes a real
+    // combat target by joining faction 0 (PLAYER) and stops being one by returning to 5
+    // (Neutral) — one dword per state change, no engine paths patched.
+
+    /// <summary>CFactionManager::GetFaction(int id) — the faction object for an id.</summary>
+    private static readonly delegate* unmanaged[Thiscall]<nint, int, nint> GetFactionFn =
+        (delegate* unmanaged[Thiscall]<nint, int, nint>)0x0052B3B0;
+
+    public const int FactionPlayer = 0;
+
+    /// <summary>
+    /// Moves a creature into a faction through the engine's own membership call.
+    ///
+    /// This is what makes a peer's phantom a genuine combat target (faction 0) and what
+    /// releases every attacker again (faction 5): retention test 6 in
+    /// CreateNewAttackActions is a live `GetReputation > 10` check evaluated at every
+    /// combat-round boundary, so the flip back is a real release lever — the one the
+    /// original aggro-sink design (Handoff 7.4) never had.
+    ///
+    /// MAIN THREAD ONLY.
+    /// </summary>
+    public static bool SetCreatureFaction(uint objectId, int factionId)
+    {
+        if (objectId is 0 or ObjectInvalid)
+        {
+            return false;
+        }
+
+        nint server = GetServer();
+        if (server == 0)
+        {
+            return false;
+        }
+
+        // The same accessor the world-up faction repair uses, rather than a second
+        // hand-walked pointer chain to the same manager.
+        nint factionManager = GetFactionManagerFn(server);
+        if (factionManager == 0)
+        {
+            return false;
+        }
+
+        nint faction = GetFactionFn(factionManager, factionId);
+        if (faction == 0)
+        {
+            return false;
+        }
+
+        FactionAddMemberFn(faction, objectId, 0);
+        return true;
+    }
+
+    /// <summary>Reads a creature's faction id (dword), or -1.</summary>
+    public static int GetCreatureFaction(nint creature)
+    {
+        if (creature == 0)
+        {
+            return -1;
+        }
+
+        nint stats = Deref(creature + CreStats);
+        return stats == 0 ? -1 : (int)*(uint*)(stats + StatsFactionId);
     }
 
     /// <summary>
@@ -3281,7 +3357,22 @@ internal static unsafe class Odyssey
     ///
     /// MAIN THREAD ONLY.
     /// </summary>
-    public static bool KillCreature(uint objectId, out int failure)
+    public static bool KillCreature(uint objectId, out int failure) =>
+        ApplyDamageEffect(objectId, 9999, out failure);
+
+    /// <summary>
+    /// Applies a plain instant damage effect to an object through the engine's own VM
+    /// routines — the same pipeline a real swing uses.
+    ///
+    /// This is how a hit that landed on a peer's phantom in THEIR game becomes real damage
+    /// to this player's actual character: running it as a genuine EffectDamage means the
+    /// receiving side applies its own resistances and difficulty scaling, floats the
+    /// number, and — at zero — enters the engine's own party temp-death, with no derived
+    /// state for us to rebuild by hand.
+    ///
+    /// MAIN THREAD ONLY.
+    /// </summary>
+    public static bool ApplyDamageEffect(uint objectId, int amount, out int failure)
     {
         failure = 0;
 
@@ -3332,7 +3423,7 @@ internal static unsafe class Odyssey
         // The handler clamps the amount to 0..10000.
         if (StackPushInteger(vm, 0) == 0
             || StackPushInteger(vm, 8) == 0
-            || StackPushInteger(vm, 9999) == 0)
+            || StackPushInteger(vm, Math.Clamp(amount, 1, 10000)) == 0)
         {
             failure = 6;
             return false;

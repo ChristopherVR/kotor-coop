@@ -66,6 +66,22 @@ public interface ICoopSession : IDisposable
     IReadOnlyList<EnemyState> GetEnemyReports(string module);
 
     /// <summary>
+    /// Tells the peer that owns <paramref name="targetPeerId"/> how much damage their
+    /// phantom has taken here in total, so their real character can take it too. Sent every
+    /// tick as a running total rather than per hit: the receiver applies the difference, so
+    /// a lost datagram costs a tick of staleness and a duplicate costs nothing.
+    /// </summary>
+    void PublishPhantomDamage(uint targetPeerId, uint cumulativeDamage, uint attackerId)
+    {
+    }
+
+    /// <summary>
+    /// The running total of damage this player owes for hits taken on their phantom in
+    /// other instances, and who last landed one. (0, 0) when nobody has hit them.
+    /// </summary>
+    (uint CumulativeDamage, uint AttackerId) GetIncomingPhantomDamage() => (0, 0);
+
+    /// <summary>
     /// Announces this instance's in-world content fingerprint (globals catalogue, save
     /// identity, current module + its GIT digest; each field 0/empty until resolved). Sent
     /// to the peer so a mismatch only knowable in-world refines the negotiated

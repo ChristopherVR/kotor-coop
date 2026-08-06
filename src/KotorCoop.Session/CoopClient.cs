@@ -302,6 +302,82 @@ public sealed class CoopClient : ICoopSession
     {
     }
 
+    // ---- phantom damage (combat participation) -----------------------------------
+
+    private readonly Dictionary<uint, (uint Damage, uint Attacker)> _phantomDamageOut = [];
+    private (uint Damage, uint Attacker) _phantomDamageIn;
+
+    /// <summary>Queued for the next tick's send; the host relays it to the addressee (or
+    /// keeps it, when the host is the one being hit).</summary>
+    public void PublishPhantomDamage(uint targetPeerId, uint cumulativeDamage, uint attackerId)
+    {
+        if (targetPeerId == 0 || targetPeerId == _localPeerId)
+        {
+            return;
+        }
+
+        lock (_gate)
+        {
+            _phantomDamageOut[targetPeerId] = (cumulativeDamage, attackerId);
+        }
+    }
+
+    public (uint CumulativeDamage, uint AttackerId) GetIncomingPhantomDamage()
+    {
+        lock (_gate)
+        {
+            return _phantomDamageIn;
+        }
+    }
+
+    private void HandlePhantomDamage(ReadOnlySpan<byte> span)
+    {
+        if (PacketCodec.ReadPhantomDamage(span) is not { } packet
+            || packet.TargetPeerId != _localPeerId)
+        {
+            return;
+        }
+
+        lock (_gate)
+        {
+            // Monotonic, so a reordered datagram cannot walk the total backwards and make
+            // the plugin re-apply the difference.
+            if (packet.CumulativeDamage > _phantomDamageIn.Damage)
+            {
+                _phantomDamageIn = (packet.CumulativeDamage, packet.AttackerId);
+            }
+        }
+    }
+
+    private void SendPhantomDamage()
+    {
+        List<KeyValuePair<uint, (uint Damage, uint Attacker)>> owed;
+        lock (_gate)
+        {
+            if (_phantomDamageOut.Count == 0 || _localPeerId == 0)
+            {
+                return;
+            }
+
+            owed = [.. _phantomDamageOut];
+        }
+
+        foreach ((uint targetPeerId, (uint damage, uint attacker)) in owed)
+        {
+            if (damage == 0)
+            {
+                continue;
+            }
+
+            int length = PacketCodec.Write(
+                _sendBuffer, new PhantomDamagePacket(_localPeerId, targetPeerId, damage, attacker));
+            if (length > 0)
+            {
+                _channel.Send(_hostEndPoint, _sendBuffer.AsSpan(0, length));
+            }
+        }
+    }
+
     /// <summary>The container-loot removals received from the host, for the agent to apply.</summary>
     public IReadOnlyList<ContainerLootRemoval> ContainerLootRemovals => _lootStore.Snapshot();
 
@@ -439,6 +515,7 @@ public sealed class CoopClient : ICoopSession
 
         SendStateUpdate(now);
         SendDialogueRequest();
+        SendPhantomDamage();
         FlushChat();
 
         if (now - _lastPingMs >= PingIntervalMs)
@@ -731,6 +808,10 @@ public sealed class CoopClient : ICoopSession
                     }
                 }
 
+                break;
+
+            case PacketType.PhantomDamage:
+                HandlePhantomDamage(span);
                 break;
 
             case PacketType.Chat:

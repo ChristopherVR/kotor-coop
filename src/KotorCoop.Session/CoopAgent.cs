@@ -290,6 +290,7 @@ public sealed class CoopAgent(IGameBridge bridge, ICoopSession session, AgentSet
 
         PumpItems(local, caps);
         PumpEnemies(local, caps);
+        PumpPhantomDamage(caps);
         PumpParty(caps);
         PumpProgression(caps);
         PumpDialogue(local, caps);
@@ -298,6 +299,45 @@ public sealed class CoopAgent(IGameBridge bridge, ICoopSession session, AgentSet
         PumpDoors(caps);
         PumpPlaceables(caps);
         PumpContainerLoot(caps);
+    }
+
+    /// <summary>
+    /// Carries hits BOTH ways for combat participation: what each peer's phantom has taken
+    /// in this game goes out to that peer, and what this player owes for hits taken on
+    /// their own phantom elsewhere goes into the plugin to be applied for real.
+    ///
+    /// This is what makes enemies dangerous to everyone rather than only to whoever owns
+    /// them. Running totals, so a dropped datagram costs a tick rather than a hit.
+    /// </summary>
+    private void PumpPhantomDamage(SessionCapabilities caps)
+    {
+        if ((caps & SessionCapabilities.Enemies) == 0)
+        {
+            return;
+        }
+
+        // Outbound: slot i of the plugin's phantom-hit table belongs to peer slot i, which
+        // is the same ordering the agent used when it wrote the peers in.
+        IReadOnlyList<RemotePeer> peers = session.GetRemotePeers();
+        for (int i = 0; i < peers.Count; i++)
+        {
+            if (!bridge.TryReadPhantomHit(i, out uint phantomId, out uint cumulative, out uint attacker)
+                || phantomId == 0
+                || cumulative == 0)
+            {
+                continue;
+            }
+
+            session.PublishPhantomDamage(peers[i].PeerId, cumulative, attacker);
+        }
+
+        // Inbound: hand the plugin the running total. Level state, written every tick —
+        // the plugin tracks what it has already applied, so this cannot double-count.
+        (uint owed, uint from) = session.GetIncomingPhantomDamage();
+        if (owed > 0)
+        {
+            bridge.TryWriteIncomingDamage(owed, from);
+        }
     }
 
     /// <summary>

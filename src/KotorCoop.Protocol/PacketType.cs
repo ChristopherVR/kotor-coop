@@ -129,4 +129,13 @@ public enum PacketType : byte
 
     /// <summary>client -> host: container-loot op received, stop retransmitting to me.</summary>
     ContainerLootAck = 30,
+
+    /// <summary>
+    /// peer -> host (-> the addressed peer): damage that landed on that peer's phantom in
+    /// the sender's game, so it can be applied to their real character. A running
+    /// CUMULATIVE total sent every tick, not an event — the receiver applies the
+    /// difference, so a lost datagram costs a tick and a duplicate costs nothing. The host
+    /// relays in the star topology, and applies it directly when it is the addressee.
+    /// </summary>
+    PhantomDamage = 31,
 }

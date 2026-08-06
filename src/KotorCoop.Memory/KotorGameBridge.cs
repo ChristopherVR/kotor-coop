@@ -138,6 +138,46 @@ public sealed class KotorGameBridge : IGameBridge
     private const int BlockEnemyPresenceSlots = 0x1410;
     private const int BlockEnemyPresenceStride = 0x28;
 
+    // Combat participation (block version 21). Plugin -> agent: what each peer's phantom
+    // has taken here, as a running total. Agent -> plugin: what the local player owes for
+    // hits taken on their phantom elsewhere.
+    private const int BlockPhantomHitSlots = 0x1CD0;
+    private const int BlockPhantomHitStride = 0x10;
+    private const int BlockIncomingDamage = 0x1D50;
+    private const int BlockIncomingDamageAttacker = 0x1D54;
+
+    /// <summary>Damage the local player's phantom has taken in each peer slot's game,
+    /// paired with the phantom object id it was recorded against.</summary>
+    public bool TryReadPhantomHit(int slot, out uint phantomId, out uint cumulative, out uint attacker)
+    {
+        phantomId = 0;
+        cumulative = 0;
+        attacker = 0;
+
+        if (_pluginBlock == 0 || slot is < 0 or >= BlockSlotCapacity)
+        {
+            return false;
+        }
+
+        nint entry = _pluginBlock + BlockPhantomHitSlots + (slot * BlockPhantomHitStride);
+        return _memory.TryReadUInt32(entry + 0x00, out phantomId)
+            && _memory.TryReadUInt32(entry + 0x04, out cumulative)
+            && _memory.TryReadUInt32(entry + 0x08, out attacker);
+    }
+
+    /// <summary>Hands the plugin the running total this player owes, for it to apply as a
+    /// real damage effect on the game's thread.</summary>
+    public bool TryWriteIncomingDamage(uint cumulative, uint attacker)
+    {
+        if (_pluginBlock == 0)
+        {
+            return false;
+        }
+
+        bool ok = _memory.TryWrite(_pluginBlock + BlockIncomingDamageAttacker, attacker);
+        return _memory.TryWrite(_pluginBlock + BlockIncomingDamage, cumulative) && ok;
+    }
+
     // Enemy one-shot capture (plugin -> agent, block version 20): fire-and-forget
     // animations per creature from the plugin's hook. id u32 @0, animation u32 @4,
     // serial u32 @8. The owner matches ids against its census when publishing.
@@ -211,11 +251,11 @@ public sealed class KotorGameBridge : IGameBridge
     private const int BlockRemoteDialoguePicks = 0x12C0;
     public const int DialoguePickLogBytes = 96;
 
-    /// <summary>16-byte signature: "KOCOOP01" + version 20 + guard 0xC0FFEE01. The version is
+    /// <summary>16-byte signature: "KOCOOP01" + version 21 + guard 0xC0FFEE01. The version is
     /// part of the pattern deliberately: an agent must not attach to a plugin whose block
     /// layout it does not know, and a stale pair fails to find each other rather than reading
     /// the wrong offsets.</summary>
-    public const string PluginSignature = "4B 4F 43 4F 4F 50 30 31 14 00 00 00 01 EE FF C0";
+    public const string PluginSignature = "4B 4F 43 4F 4F 50 30 31 15 00 00 00 01 EE FF C0";
 
     /// <summary>Agent's view of which coop item id occupies each plugin item slot.</summary>
     private readonly uint[] _itemSlotIds = new uint[BlockItemCapacity];

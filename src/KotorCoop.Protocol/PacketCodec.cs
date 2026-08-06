@@ -413,6 +413,34 @@ public static class PacketCodec
         return new EnemyReportPacket(peerId, module, enemies);
     }
 
+    public static int Write(Span<byte> buffer, PhantomDamagePacket packet)
+    {
+        PacketWriter w = new(buffer);
+        w.WriteHeader(PacketType.PhantomDamage);
+        w.WriteUInt32(packet.FromPeerId);
+        w.WriteUInt32(packet.TargetPeerId);
+        w.WriteUInt32(packet.CumulativeDamage);
+        w.WriteUInt32(packet.AttackerId);
+
+        return w.Failed ? 0 : w.Position;
+    }
+
+    public static PhantomDamagePacket? ReadPhantomDamage(ReadOnlySpan<byte> buffer)
+    {
+        PacketReader r = new(buffer);
+        if (r.ReadHeader() != PacketType.PhantomDamage)
+        {
+            return null;
+        }
+
+        uint from = r.ReadUInt32();
+        uint target = r.ReadUInt32();
+        uint cumulative = r.ReadUInt32();
+        uint attacker = r.ReadUInt32();
+
+        return r.Failed ? null : new PhantomDamagePacket(from, target, cumulative, attacker);
+    }
+
     public static int Write(Span<byte> buffer, PartySnapshotPacket packet)
     {
         PacketWriter w = new(buffer);

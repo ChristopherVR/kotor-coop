@@ -2588,3 +2588,76 @@ KOTOR instances.**
   plot-flagged creature, so a module that does is required to see a scene driven end to end.
 
 268 tests; solution, Agent publish and plugin NativeAOT all clean.
+
+---
+
+## Addendum 0l — combat participation: enemies can hurt BOTH players now, 2026-08-06
+
+Built from docs/research/combat-participation.md and **verified live between two windows**.
+This closes the last "co-op in name only" gap: a client could previously be surrounded and
+swung at on the host's screen and never lose a hit point.
+
+### What ships
+
+- **The phantom is a real target.** On spawn (and whenever the peer is alive) it joins
+  faction **0 (PLAYER)** via the engine's own `CSWSFaction::AddMember`, so every hostile
+  evaluates it exactly as it evaluates a PC. On death / leaving combat it returns to
+  Neutral **and** is pacified. That flip back is the release lever 7.4 never had:
+  `CreateNewAttackActions` re-checks `GetReputation > 10` at every combat-round boundary.
+  Edge-triggered only (AddMember walks member lists). Kill switch `phantom_targetable=0`.
+  Also fixed while in there: `MarkAsRemotePlayer`'s faction write was a **ushort** into a
+  field the engine reads as a **dword**.
+- **Hits are observed** by a verify-bytes detour on `CSWSEffectListHandler::OnApplyDamage
+  0x004DFA40` (13 bytes verified, 7 relocated) — the damage analog of the animation hook.
+  Filters on phantom id FIRST (it runs for every damage event in the game), sums bounded
+  per-type amounts, records `(cumulative, attacker)`.
+- **Carried as CUMULATIVE TOTALS** through the block (v21), the wire (`PhantomDamage`,
+  peer -> host -> addressee, monotonic) and back — never events. A lost datagram costs a
+  tick; a duplicate costs nothing. The receiver applies the DIFFERENCE.
+- **Applied** through the VM's own instant `EffectDamage` (`ApplyDamageEffect`, generalised
+  out of `KillCreature`), so resistances, difficulty scaling and floaty text all run
+  natively. Capped per application, skipped during conversations and while downed.
+- **Test hook** `blockpoke hitphantom <slot> <amount>` lands a REAL engine damage effect on
+  a phantom, because staging an armed fight on demand does not work (7.0 — the Endar
+  Spire's Sith are inert). `blockpoke combat` prints both halves of the ledger.
+
+### The bug the live run caught, and how
+
+First hit: **4 damage in, 8 out.** The block's hit table said `hits 1`, so it was not firing
+twice — it was double-counting inside one event. Rather than guess, the hook was made to
+record the raw 15 slots and the controller logged them:
+
+```
+hit breakdown: [0]=-1 [1]=-1 [2]=-1 [3]=7 ... [13]=-1 [14]=7
+```
+
+**Unpopulated slots read -1, and the amount appears TWICE** — in its type slot and again in
+the plain/universal slot 14, which the engine keeps separately (`0x004DFAEA`) as a view of
+the same damage, not an extra component. Summing all fifteen doubled everything. Now: sum
+the typed slots, use slot 14 only as the fallback when nothing else is populated. This is
+invisible to a unit test — the effect object comes from the engine.
+
+### Verified live (two instances, host 31720 / client 28500)
+
+- `combat: phantom-hit watch at 0x4DFA40` on both; 13-byte verify passed on the real binary.
+- Faction flip **read back from memory**: phantom `stats+0x78` = 0, identical to the real
+  player, min1hp still 1, on BOTH sides.
+- 7 damage on the host's copy of the client's phantom -> `combat: took 7` on the client,
+  real HP **12 -> 5**. Then 3 -> **5 -> 2**. Host ledger: `taken 10, hits 2`. Exact, no
+  double-count, no replay.
+- Zero crashes across the whole run with a detour sitting on every damage event.
+
+### Known limit, found by the same run
+
+**Forwarded damage cannot DOWN a remote player** — 20 damage floored them at 1 HP. That is
+KOTOR's own party rule (the plugin never sets min1hp on a PC; party members floor at 1 and
+are downed by a separate temp-death path), so the last hit does not convert into a downed
+state. Enemies can now wear a remote player down but not finish them. Needs its own pass:
+what the engine requires to trigger party temp-death from a damage event.
+
+### Still NEEDS-LIVE (unchanged by this run)
+
+The aggro half: no enemy has actually ATTACKED a phantom yet, because nothing in the test
+save is armed. Items 1-3 and 8 of the research checklist (cold-aggro latency, the release
+soak, two-sided fight) need a module with a live encounter — a human walking into a real
+fight settles all of them at once. 269 tests; all three builds clean.

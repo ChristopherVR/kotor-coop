@@ -71,6 +71,20 @@ public interface IGameBridge : IDisposable
     /// </summary>
     uint ModuleGitDigest(string module) => 0;
 
+    /// <summary>Damage a peer's phantom has taken in this game, as a running total. Default
+    /// "nothing recorded" for bridges without an in-process plugin (the mock harness).</summary>
+    bool TryReadPhantomHit(int slot, out uint phantomId, out uint cumulative, out uint attacker)
+    {
+        phantomId = 0;
+        cumulative = 0;
+        attacker = 0;
+        return false;
+    }
+
+    /// <summary>Hands the plugin the running total this player owes for hits taken on their
+    /// phantom elsewhere. No-op without a plugin.</summary>
+    bool TryWriteIncomingDamage(uint cumulative, uint attacker) => false;
+
     /// <summary>False when this bridge cannot see the game's world/quest state.</summary>
     bool SupportsWorldState => false;
 

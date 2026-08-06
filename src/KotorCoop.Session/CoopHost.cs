@@ -325,6 +325,84 @@ public sealed class CoopHost : ICoopSession
         return merged;
     }
 
+    // ---- phantom damage (combat participation) -----------------------------------
+    //
+    // Running totals, keyed by the peer the damage is FOR. Sent to that peer every tick;
+    // when the addressee is the host itself, kept here for the pump to read. Cumulative
+    // and monotonic, so an out-of-order or repeated datagram can never double-apply.
+
+    private readonly Dictionary<uint, (uint Damage, uint Attacker)> _phantomDamageOut = [];
+    private (uint Damage, uint Attacker) _phantomDamageIn;
+
+    public void PublishPhantomDamage(uint targetPeerId, uint cumulativeDamage, uint attackerId)
+    {
+        if (targetPeerId == 0 || targetPeerId == LocalPeerId)
+        {
+            return;
+        }
+
+        lock (_gate)
+        {
+            _phantomDamageOut[targetPeerId] = (cumulativeDamage, attackerId);
+        }
+    }
+
+    public (uint CumulativeDamage, uint AttackerId) GetIncomingPhantomDamage()
+    {
+        lock (_gate)
+        {
+            return _phantomDamageIn;
+        }
+    }
+
+    /// <summary>A client reported damage its game did to someone's phantom. If it is for
+    /// the host, keep it; otherwise it is relayed to the addressee on the next broadcast.</summary>
+    private void HandlePhantomDamage(ReadOnlySpan<byte> span)
+    {
+        if (PacketCodec.ReadPhantomDamage(span) is not { } packet)
+        {
+            return;
+        }
+
+        lock (_gate)
+        {
+            if (packet.TargetPeerId == LocalPeerId)
+            {
+                // Monotonic: a reordered datagram must never walk the total backwards.
+                if (packet.CumulativeDamage > _phantomDamageIn.Damage)
+                {
+                    _phantomDamageIn = (packet.CumulativeDamage, packet.AttackerId);
+                }
+            }
+            else if (packet.TargetPeerId != 0)
+            {
+                _phantomDamageOut[packet.TargetPeerId] = (packet.CumulativeDamage, packet.AttackerId);
+            }
+        }
+    }
+
+    private void BroadcastPhantomDamage(List<PeerConnection> recipients)
+    {
+        foreach (PeerConnection peer in recipients)
+        {
+            (uint damage, uint attacker) owed;
+            lock (_gate)
+            {
+                if (!_phantomDamageOut.TryGetValue(peer.Id, out owed) || owed.damage == 0)
+                {
+                    continue;
+                }
+            }
+
+            int length = PacketCodec.Write(
+                _sendBuffer, new PhantomDamagePacket(LocalPeerId, peer.Id, owed.damage, owed.attacker));
+            if (length > 0)
+            {
+                _channel.Send(peer.EndPoint, _sendBuffer.AsSpan(0, length));
+            }
+        }
+    }
+
     public JournalStore Journal { get; } = new();
 
     public void SetJournalEntry(string questTag, int state)
@@ -486,6 +564,7 @@ public sealed class CoopHost : ICoopSession
         BroadcastDialogue(now, recipients);
         BroadcastProgression(now, recipients);
         BroadcastContainerLoot(now, recipients);
+        BroadcastPhantomDamage(recipients);
         BroadcastWorldDigest(now, recipients);
         FlushChat(recipients);
         _buffer.PruneStale(now, _settings.PeerTimeoutMs);
@@ -750,6 +829,10 @@ public sealed class CoopHost : ICoopSession
 
             case PacketType.WorldDigest:
                 HandleWorldDigest(span);
+                break;
+
+            case PacketType.PhantomDamage:
+                HandlePhantomDamage(span);
                 break;
 
             case PacketType.DialogueRequest:

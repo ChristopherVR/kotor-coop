@@ -166,6 +166,8 @@ internal sealed unsafe class PhantomController(SharedBlockView block)
             _repathCooldown[i] = 0;
             _down[i] = false;
             _peerInCombat[i] = false;
+            _hostileToLocals[i] = false;
+            _factionKnown[i] = false;
 
             // A new world means the next position is not a continuation of the last one:
             // start the smoothing from wherever the peer actually is rather than gliding
@@ -312,6 +314,20 @@ internal sealed unsafe class PhantomController(SharedBlockView block)
             }
 
             _peerInCombat[i] = peerInCombat;
+
+            // Targetability. A phantom in faction 0 (PLAYER) is evaluated by every hostile
+            // exactly as the real player is, so the peer is genuinely part of the fight
+            // here; back in Neutral, `GetReputation > 10` releases every attacker at the
+            // next combat-round boundary. That release lever is what the original
+            // aggro-sink design lacked entirely — see docs/research/combat-participation.md.
+            ApplyTargetable(i, phantom, alive: remote.Health > 0);
+
+            // Forward what this body has taken to the peer whose character it stands for.
+            PhantomHitHook.ReadSlot(i, out uint watchedId, out uint cumulative, out uint attacker, out uint hitSerial);
+            block.SetPhantomHit(i, watchedId, cumulative, attacker, hitSerial);
+
+            ApplyTestHit(i);
+            LogHitBreakdown();
 
             // A player at zero health lies where they fell, and their phantom does the
             // same — otherwise a downed teammate looks alive and well in your game while
@@ -565,6 +581,113 @@ internal sealed unsafe class PhantomController(SharedBlockView block)
         {
             _twinNamed[slot] = true;
         }
+    }
+
+    /// <summary>Whether a peer's phantom may be attacked by this instance's enemies at all.
+    /// Off falls back to the old decoration behaviour (Neutral forever).</summary>
+    private readonly bool _targetable = PluginConfig.ReadBool("phantom_targetable", true);
+
+    /// <summary>Per slot: is the body currently in the PLAYER faction. Tri-state via the
+    /// separate _factionKnown so the first pass always writes.</summary>
+    private readonly bool[] _hostileToLocals = new bool[SharedBlock.SlotCapacity];
+    private readonly bool[] _factionKnown = new bool[SharedBlock.SlotCapacity];
+
+    /// <summary>
+    /// Puts a phantom in or out of the PLAYER faction as the peer lives and dies.
+    ///
+    /// Only on the EDGE: AddMember walks faction member lists, and a peer standing still
+    /// in a fight must not pay that every frame. On the way out it also pacifies, which
+    /// releases attackers immediately rather than at the next round boundary — belt and
+    /// braces against the one failure this design must never reproduce.
+    /// </summary>
+    private void ApplyTargetable(int slot, nint phantom, bool alive)
+    {
+        bool want = _targetable && alive;
+
+        if (_factionKnown[slot] && _hostileToLocals[slot] == want)
+        {
+            return;
+        }
+
+        uint objectId = _phantomIds[slot];
+        if (objectId == 0)
+        {
+            return;
+        }
+
+        if (!Odyssey.SetCreatureFaction(objectId, want ? Odyssey.FactionPlayer : Odyssey.FactionNeutralId))
+        {
+            return; // try again next pass rather than latching a state we did not achieve
+        }
+
+        if (!want)
+        {
+            Odyssey.PacifyPhantom(phantom);
+        }
+
+        _hostileToLocals[slot] = want;
+        _factionKnown[slot] = true;
+
+        PluginHost.Log(want
+            ? $"phantom 0x{objectId:X}: joined the player faction; local enemies can fight it"
+            : $"phantom 0x{objectId:X}: back to neutral; attackers released");
+    }
+
+    private uint _loggedAmountsSerial;
+    private int _breakdownsLogged;
+
+    /// <summary>Logs which per-type slots a hit actually populated, a few times. Damage is
+    /// accounted per damage TYPE and the same amount can appear in more than one slot, so
+    /// summing them blind over-counts — this is the measurement that settles what to sum.
+    /// Runs on the frame hook, never inside the damage hook.</summary>
+    private void LogHitBreakdown()
+    {
+        if (_breakdownsLogged >= 5 || PhantomHitHook.AmountsSerial == _loggedAmountsSerial)
+        {
+            return;
+        }
+
+        _loggedAmountsSerial = PhantomHitHook.AmountsSerial;
+        _breakdownsLogged++;
+
+        System.Text.StringBuilder line = new("hit breakdown:");
+        for (int i = 0; i < 15; i++)
+        {
+            int amount = PhantomHitHook.ReadAmount(i);
+            if (amount != 0)
+            {
+                line.Append($" [{i}]={amount}");
+            }
+        }
+
+        PluginHost.Log(line.ToString());
+    }
+
+    private uint _testHitSerial;
+
+    /// <summary>
+    /// Test hook: lands a real engine damage effect on a phantom, so the combat-forward
+    /// chain can be exercised without an armed encounter (Handoff 7.0 — staging a real
+    /// fight on demand does not work reliably). It goes through the same VM EffectDamage
+    /// the engine itself uses, so OnApplyDamage runs and the watch sees it exactly as it
+    /// would see a sword.
+    /// </summary>
+    private void ApplyTestHit(int slot)
+    {
+        uint serial = block.TestHitSerial;
+        if (serial == _testHitSerial || block.TestHitSlot != (uint)slot)
+        {
+            return;
+        }
+
+        _testHitSerial = serial;
+
+        int amount = (int)Math.Clamp(block.TestHitAmount, 1u, 1000u);
+        bool ok = Odyssey.ApplyDamageEffect(_phantomIds[slot], amount, out int failure);
+
+        PluginHost.Log(ok
+            ? $"test: applied {amount} damage to phantom 0x{_phantomIds[slot]:X}"
+            : $"test: damage on phantom 0x{_phantomIds[slot]:X} refused (failure {failure})");
     }
 
     /// <summary>appearance.2da row, u16 inside CSWSCreatureAppearanceInfo at +0xA50.</summary>
@@ -894,6 +1017,9 @@ internal sealed unsafe class PhantomController(SharedBlockView block)
 
         block.PhantomCount = (uint)_phantomCount;
         block.SetPhantomId(_phantomCount - 1, objectId);
+
+        // From here on, damage landing on this body is the peer's to take.
+        PhantomHitHook.Watch(_phantomCount - 1, objectId);
 
         PluginHost.Log(
             $"spawned phantom {_phantomCount}: id 0x{objectId:X} at 0x{creature:X} "

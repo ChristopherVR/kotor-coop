@@ -47,7 +47,7 @@ internal struct SharedBlock
     /// existing offset profiles keep working. The plugin control fields live AFTER that
     /// range, which is why the block is larger than the profile knows about.
     /// </summary>
-    public const int TotalSize = 0x1E00;
+    public const int TotalSize = 0x2000;
 
     public const int ProfileVisibleSize = 0x250;
 
@@ -194,6 +194,42 @@ internal struct SharedBlock
     public const int PartyPresenceStride = 0x28;
 
     public const int PartyPresenceCapacity = 4;
+
+    // ---- combat participation (version 21) --------------------------------------
+    //
+    // Damage that landed on a peer's phantom HERE, so it can be applied to that peer's
+    // real character in THEIR game — and the same figure arriving for the local player.
+    // Cumulative totals, never events: the receiver applies the difference between the
+    // total and what it has already taken, so a lost packet costs a tick of staleness
+    // rather than a missed hit (the enemy channel's rule).
+
+    /// <summary>Plugin -&gt; agent. Per phantom slot: phantomId u32 @0, cumulative damage
+    /// u32 @4, last attacker id u32 @8, hit serial u32 @0xC. Occupies 0x1CD0..0x1D50.</summary>
+    public const int OffsetPhantomHitSlots = 0x1CD0;
+
+    public const int PhantomHitStride = 0x10;
+
+    /// <summary>Agent -&gt; plugin. Cumulative damage the local player owes for hits taken on
+    /// their phantom elsewhere, and who last landed one.</summary>
+    public const int OffsetIncomingDamage = 0x1D50;
+
+    public const int OffsetIncomingDamageAttacker = 0x1D54;
+
+    /// <summary>Plugin -&gt; agent. Cumulative damage actually applied, so a restart or a
+    /// re-attach cannot replay the whole history onto the player.</summary>
+    public const int OffsetIncomingDamageApplied = 0x1D58;
+
+    /// <summary>
+    /// Agent -&gt; plugin, TEST HOOK. Applies a real engine damage effect to a phantom, the
+    /// same way <see cref="OffsetPickUpRequest"/> drives a real pickup: staging a genuine
+    /// fight on demand is unreliable (Handoff 7.0 — the Endar Spire's Sith are inert
+    /// scripted placements), so this exercises the true damage path — engine effect,
+    /// OnApplyDamage, the watch, the forward — without needing enemy AI to cooperate.
+    /// Slot index @0, amount @4, serial last @8.
+    /// </summary>
+    public const int OffsetTestHitSlot = 0x1D5C;
+    public const int OffsetTestHitAmount = 0x1D60;
+    public const int OffsetTestHitSerial = 0x1D64;
 
     // ---- door replication (version 4) -------------------------------------------
     //

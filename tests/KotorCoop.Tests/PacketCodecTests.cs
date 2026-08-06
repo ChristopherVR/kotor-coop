@@ -308,6 +308,17 @@ public class PacketCodecTests
     }
 
     [Fact]
+    public void PhantomDamageRoundTrips()
+    {
+        Span<byte> buffer = stackalloc byte[ProtocolConstants.MaxPacketSize];
+        PhantomDamagePacket original = new(FromPeerId: 3, TargetPeerId: 7, CumulativeDamage: 142, AttackerId: 0x14);
+
+        int length = PacketCodec.Write(buffer, original);
+        Assert.True(length > 0);
+        Assert.Equal(original, PacketCodec.ReadPhantomDamage(buffer[..length]));
+    }
+
+    [Fact]
     public void EnemyReportCarriesHealthAloneAndDropsPresence()
     {
         Span<byte> buffer = stackalloc byte[ProtocolConstants.MaxPacketSize];

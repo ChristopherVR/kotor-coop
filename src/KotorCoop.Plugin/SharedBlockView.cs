@@ -266,6 +266,39 @@ internal sealed unsafe class SharedBlockView(byte* baseAddress)
             *(uint*)(slot + 0x20));
     }
 
+    // ---- combat participation ----------------------------------------------------
+
+    /// <summary>Publishes what a peer's phantom has taken here, for the agent to forward.
+    /// The phantom id is written last, so the agent never pairs an id with another
+    /// phantom's total.</summary>
+    public void SetPhantomHit(int index, uint phantomId, uint cumulative, uint attacker, uint serial)
+    {
+        byte* slot = baseAddress + SharedBlock.OffsetPhantomHitSlots + (index * SharedBlock.PhantomHitStride);
+
+        *(uint*)(slot + 0x04) = cumulative;
+        *(uint*)(slot + 0x08) = attacker;
+        *(uint*)(slot + 0x0C) = serial;
+        *(uint*)(slot + 0x00) = phantomId;
+    }
+
+    /// <summary>Test hook: apply a real damage effect to a phantom (see the block).</summary>
+    public uint TestHitSerial => *U32(SharedBlock.OffsetTestHitSerial);
+
+    public uint TestHitSlot => *U32(SharedBlock.OffsetTestHitSlot);
+
+    public uint TestHitAmount => *U32(SharedBlock.OffsetTestHitAmount);
+
+    /// <summary>Cumulative damage this player owes for hits their phantom took elsewhere.</summary>
+    public uint IncomingDamage => *U32(SharedBlock.OffsetIncomingDamage);
+
+    public uint IncomingDamageAttacker => *U32(SharedBlock.OffsetIncomingDamageAttacker);
+
+    public uint IncomingDamageApplied
+    {
+        get => *U32(SharedBlock.OffsetIncomingDamageApplied);
+        set => *U32(SharedBlock.OffsetIncomingDamageApplied) = value;
+    }
+
     /// <summary>Publishes one captured creature one-shot for the agent to read. The id is
     /// written last so the agent never pairs an id with another creature's payload.</summary>
     public void SetEnemyOneShot(int index, uint objectId, uint animation, uint serial)

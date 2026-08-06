@@ -12,7 +12,7 @@
 param(
     [string]$ProcessName = 'swkotor',
     [int]$ProcId = 0,
-    [Parameter(Position = 0)][ValidateSet('state', 'travel', 'journal', 'pause', 'browser', 'death')]
+    [Parameter(Position = 0)][ValidateSet('state', 'travel', 'journal', 'pause', 'browser', 'death', 'hitphantom', 'combat')]
     [string]$Command = 'state',
     [Parameter(Position = 1)][string]$Arg1 = '',
     [Parameter(Position = 2)][int]$Arg2 = 0
@@ -130,6 +130,30 @@ switch ($Command) {
         "  suppress: gameOver {0}  swap {1}" -f (U32 0x102C), (U32 0x1030)
         "  revive:   serial {0}  applied {1}  status {2}  hp {3}" -f `
             (U32 0x1034), (U32 0x1038), (U32 0x103C), (U32 0x1040)
+    }
+    'hitphantom' {
+        # Lands a REAL engine damage effect on a phantom, so the combat-participation
+        # chain (OnApplyDamage -> watch -> wire -> the peer's own character) can be
+        # exercised without an armed encounter. Arg1 = slot (default 0), Arg2 = amount.
+        $slot = if ($Arg1 -match '^\d+$') { [uint32]$Arg1 } else { 0 }
+        $amount = if ($Arg2 -gt 0) { [uint32]$Arg2 } else { 5 }
+        WU32 0x1D5C $slot
+        WU32 0x1D60 $amount
+        WU32 0x1D64 ((U32 0x1D64) + 1)
+        "test hit queued: phantom slot $slot for $amount damage (serial $(U32 0x1D64))"
+    }
+    'combat' {
+        # The combat-participation state: what each phantom here has taken, and what this
+        # player owes for hits taken on their phantom elsewhere.
+        "  incoming: owed {0}  applied {1}  lastAttacker 0x{2:X}" -f (U32 0x1D50), (U32 0x1D58), (U32 0x1D54)
+        for ($i = 0; $i -lt 8; $i++) {
+            $base = 0x1CD0 + ($i * 0x10)
+            $id = U32 $base
+            if ($id -ne 0) {
+                "  phantom slot {0}: id 0x{1:X}  taken {2}  lastAttacker 0x{3:X}  hits {4}" -f `
+                    $i, $id, (U32 ($base + 4)), (U32 ($base + 8)), (U32 ($base + 0xC))
+            }
+        }
     }
     'browser' {
         # `browser` prints the panel state; `browser 1` / `browser 0` opens / closes the

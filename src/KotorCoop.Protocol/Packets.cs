@@ -163,6 +163,20 @@ public sealed record PartySnapshotPacket(long ServerTimeMs, IReadOnlyList<PartyM
 /// </summary>
 public sealed record EnemyReportPacket(uint PeerId, string Module, IReadOnlyList<EnemyState> Enemies);
 
+/// <summary>
+/// Damage that landed on a peer's phantom in the sender's game, addressed to the player
+/// that phantom stands for.
+///
+/// <paramref name="CumulativeDamage"/> is a running total, never a per-hit amount: the
+/// receiver applies the difference against what it has already taken, so a lost datagram
+/// costs a tick of staleness rather than a missed hit and a duplicate applies nothing.
+/// Same "level, not event" rule as enemy health. <paramref name="AttackerId"/> is the
+/// engine object id of whoever last landed one, which is the same number in both
+/// instances.
+/// </summary>
+public sealed record PhantomDamagePacket(
+    uint FromPeerId, uint TargetPeerId, uint CumulativeDamage, uint AttackerId);
+
 /// <summary>host -> all: the authoritative conversation token (see <see cref="DialogueState"/>).</summary>
 public sealed record DialogueSnapshotPacket(long ServerTimeMs, DialogueState State);
 
