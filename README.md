@@ -25,6 +25,12 @@ Both players, each in their own full game:
   and the client drives its copies to match frame by frame instead of letting two AIs
   play two private versions of the same battle. (Verified live: 27/27 creatures at
   identical positions and health across both games, rendered bodies included.)
+- **Enemies fight back — at both of you.** Your partner's body is a real combat target in
+  your game, not scenery: enemies pick it, swing at it, and every point of damage that
+  lands is forwarded and applied to their actual character on their own machine, through
+  the engine's own damage pipeline (their resistances, their difficulty, their floating
+  numbers). Verified live: a hit landed on one machine took the other player from 12 hit
+  points to 5.
 - **Share the world**: dropped items materialise on the other side as real, clickable
   objects and vanish when picked up; doors open and unlock for both; the story globals
   and the quest journal merge upward, so one quest line advances for everyone — verified
@@ -210,11 +216,12 @@ tools/                   RE helpers, demo scripts, the kotor1_0_3 symbol databas
   each gets the full conversation; outcomes converge through the globals/journal
   channels, but rewards can duplicate. While a player is mid-conversation the session
   freezes enemy publication for them (the engine disarms hostiles during dialogue).
-- **Enemies don't threaten the second player yet.** On the host's side the other player's
-  phantom is deliberately not a combat target (making it one safely is designed but not
-  built — `docs/research/combat-participation.md`), and on the client's side enemies are
-  a faithful presentation of the host's fight rather than local actors. Both players can
-  hurt every enemy; only the host's character gets hurt back for now.
+- **A remote player can be worn down but not finished off.** Enemies now genuinely fight
+  both players (see above), but KOTOR floors a party member at 1 hit point and downs them
+  through a separate path, so forwarded damage stops at 1 rather than dropping them.
+  Being downed still works normally from damage in your own game.
+- **Enemies choose targets purely by proximity.** There is no threat shaping, so which
+  player an enemy picks is the engine's nearest-hostile rule and nothing else.
 - **Item identity is a blueprint resref**: upgrades and charges don't travel yet.
 - **The world-time compatibility check covers the globals catalogue**; save-identity and
   per-module GIT digests (to also gate on a mod-edited module) are a planned follow-up.
