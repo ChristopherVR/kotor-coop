@@ -8,7 +8,115 @@ no other dependencies. C# throughout.
 
 ---
 
-## 0h. ⚠ THE IN-PROCESS LOAD NEVER SHOWS THE WORLD — OPEN, AND IT INVALIDATES CLAIMS IN 0f
+## 0i. THE PLAYTEST BUG LIST IS CLOSED, 2026-08-06 (late)
+
+`docs/playtest-bugs.md` is gone: every item on it is resolved, and what was worth keeping is
+here. ⚠ **This also supersedes 0h below** — the in-process load has shown the world since
+2026-08-01 (`docs/research/ingame-gui-transition.md`); read 0h as history, not as an open bug.
+
+### The dialogue-close crash — FOUND AND FIXED
+
+The last open item, and the interesting one. Closing a shared conversation could kill the
+game about two seconds later:
+
+```
+[13:19:23.729] test: closed any running conversation
+[13:19:25.675] CRASH: access violation, eip 0x6307FB   (CGuiInGame::UpdateShotCamera+0x11B)
+```
+
+**Root cause.** `Odyssey.CloseDialogue` called `CGuiInGame::CloseDialog 0x006332B0` — the
+CLIENT half only. That sets both dialogue participants at `gui+0x170/+0x174` to
+`OBJECT_INVALID` (0x006333FC) while the SERVER's `CSWSDialog` keeps running: it walks the
+tree on its own line timers and, one line later, sends the next reply list. The client's
+`HandleDialogReplies` → `ShowDialogReplies` → `UpdateShotCamera` then resolves both
+participants and dereferences the results with **no null check**:
+
+```
+0x006307D8  call CClientExoApp::GetGameObject   ; gui+0x170
+0x006307DD  mov  edx, [eax]                     ; <- no test
+0x006307F6  call CClientExoApp::GetGameObject   ; gui+0x174
+0x006307FB  mov  edx, [eax]                     ; <- the fault
+```
+
+The ~2 s delay is the dialogue line's own duration. Retail never reaches this because a
+conversation only ever ends through `CSWSDialog::Cleanup 0x005A27B0`, which is *what calls*
+`CloseDialog` (0x005A2841) — client and server go down together, so nothing is left to send.
+
+**Fix, and the general lesson.** End the conversation the way the engine does: on the SERVER.
+`CSWSObject::StopDialog 0x004CB4F0` on the dialog owner runs the end-conversation script,
+clears the participants and destructs the `CSWSDialog`, whose destructor calls `Cleanup`,
+which closes the client UI. The owner is found from the GUI's own participant ids: the one
+whose `+0x54` (dialog owner) equals its own `+0x04` (object id). A non-owner participant
+works too — it routes through `RemoveObjectFromDialog` to the owner. This is the same call
+the engine makes at a natural end (`CSWSDialog::HandleReply 0x005A04AD`) and when combat
+interrupts a conversation (`CSWSCreature::ActivityManager`).
+
+⚠ **The lesson generalises past this bug: KOTOR's client and server halves are one process
+but not one state machine. Driving only the half you can see leaves the other half running.**
+That is the same shape as the travel crash in 0g (a client holding a world the server had
+dropped) and the pause bug in 0.4 (a client mask disagreeing with the server's).
+
+`ShotCameraGuardHook` is the net under it: a verify-bytes detour on `UpdateShotCamera` that
+returns without running the body when either participant fails to resolve. All three callers
+discard the return value, so `xor eax,eax; ret 0x18` is exactly the engine's own early-out at
+0x00630F62. Its refusal count is reported from the frame hook (the detour itself must not log).
+
+**Verified live**: 22 open/close rounds across two sessions plus two full `tools\verify.ps1`
+batteries (22/22 each), the client following and closing every one, zero access violations,
+both processes alive throughout.
+
+### Animations: the last two defects, and the moving flourish
+
+- **`twin + 0x48` is a USHORT** and `+0x4A` is a separate ushort (the queued animation).
+  `KotorGameBridge.ReadPlayedAnimation` read 32 bits, so whenever anything was queued the
+  published gait was `queued<<16 | played` — not an animation id at all. Now a 16-bit read.
+  `Odyssey.GetTwinCurrentAnimation` had the same bug and is deleted.
+- **`PhantomController.MirrorAnimation` queued any non-gait id as fire-and-forget.** A
+  looping or overlay id down that path parks with no expiry and wedges the body. It now goes
+  through `Odyssey.PlayOneShotAnimation`, which asks the engine's own predicates first.
+  `Odyssey.PlayFireForget` (unguarded) is deleted.
+- **The moving flourish is captured now.** X standing still is a fire-and-forget (0x27AE) and
+  passes `InsertFireForgetAnimation` like everything else; X while MOVING takes the other arm
+  of `PlayerFlourishWeapons` and pushes an OVERLAY (0x27AD) straight into the animbase.
+  `AnimationHook` detours that arm at **0x005F4681** (`mov ebx,[esi]; push 1; push 0x27AD`,
+  nine relocatable bytes, resume 0x005F468A) and feeds the same one-shot channel.
+
+⚠ **A creature's animbase reaches its overlay setter through an ADJUSTOR THUNK.** Measured
+live: the animbase at `twin+0x68` carries vtable **0x00754AE8**, whose `+0x44` is
+`sub ecx,[ecx-4]; jmp 0x00699420` (the `CSWCAnimBaseHeadWield` override) — NOT
+`CSWCAnimBase::SetOverlayAnimation_2 0x006A03C0`. That pointer is a secondary base, so
+calling the base implementation directly hands it an unadjusted `this`. **Call the slot, not
+the address.** The first version of `PlayOverlayAnimation` required the slot to equal
+0x006A03C0 and therefore refused every real creature; it was a guard that logged why, which
+is the only reason this took one run instead of a debugging session. `+0xE0`
+(`ServerToClientAnimation 0x0069F650`) is shared by every creature-family animbase and
+overridden by doors, placeables, triggers, projectiles and visual effects — so slot identity
+there is the check that this is a creature's animbase at all.
+
+**Verified live on a phantom**, all three classes through one channel:
+
+```
+overlay  0x27AD  ->  applied 6/6   ("played one-shot 0x27AD on phantom 0x12D")
+oneshot  0x2806  ->  applied 3/3   (control)
+looping  0x2712  ->  dropped 4/4   ("in no playable class") — this is the one that wedges
+```
+
+### Where the rest of the list landed
+
+| Playtest item | Outcome |
+| --- | --- |
+| 1. World never shown after a plugin load | Fixed 2026-08-01; supersedes 0h |
+| 2. Peer position lags by seconds | Fixed by direct (seamless) drive. **Measured**: peer walked 54.4 units, mean gap **0.20**, p90 0.55, max 2.93 units |
+| 3. Initial position not synced | Fixed; phantom spawns at the peer's own position |
+| 4. Animations do not replicate | Fixed — hook not poll, plus the three fixes above |
+| 5. Enter opens chat on BOTH instances | Fixed: every key read goes through `NativeMethods.IsKeyDownHere`, which requires the foreground window to belong to this process. Code-verified, not live-verified (it needs focus juggling, the least reliable thing in this repo) |
+| 6/7. Pause not shared / stuck paused | Fixed: `SetPlayerPause` writes both halves unconditionally, `PauseController` honours a local release, `ReconcilePause` repairs a stuck banner, `PauseSanityPatch` stops the engine reverting an unbacked pause. Verified by `verify.ps1` (holds both masks, releases with the peer) |
+| 8. Minimap does not show both players | WON'T FIX — `DrawMap` has no note or party loop (0x0068AB10, whole function read). The M-screen pin works and is the supported answer |
+| 9. Nobody can switch party character | Fixed. **Measured**: host `swap 0` (Tab and portraits free), client `swap 1` — the client's lock is by design, because the host's AI owns the companions |
+
+---
+
+## 0h. ⚠ THE IN-PROCESS LOAD NEVER SHOWS THE WORLD — SUPERSEDED BY 0i (fixed 2026-08-01)
 
 **Observed by the user, confirmed by screenshot: after a plugin-driven load both instances
 are still displaying the MAIN MENU** — the host lit, the client faded to near-black
@@ -2798,12 +2906,13 @@ unrelated to the feature under test:
 
 **22/22, three consecutive runs on one session.** 270 unit tests.
 
-### ⚠ And one genuine crash the battery found — see docs/playtest-bugs.md
+### ⚠ And one genuine crash the battery found — FIXED, see §0i
 
 Closing a conversation from the frame hook crashed the host in
 `CGuiInGame::UpdateShotCamera`, with `CSWCameraOnAStick::Destructor` / `SetDialogCamera` /
 `ShowDialogReplies` on the stack. `CloseDialogue` is already guarded on an active
-conversation, so the problem is WHEN it runs, not whether. It implicates a production path
-(`DialogueSpectateController` closes the same way on three edges), it is recorded in full
-with the stack, and it is deliberately NOT fixed by guesswork — the likely correct shape is
-to close through the GUI's own Escape path, which needs an RE pass first.
+conversation, so the problem was WHEN it ran, not whether, and it implicated a production
+path (`DialogueSpectateController` closes the same way on three edges). Deliberately not
+guessed at here; the RE pass is in **§0i**, and the answer was not the Escape path but the
+SERVER side — the client close left the server's dialog running, and its next line landed on
+a conversation whose participants had just been invalidated.

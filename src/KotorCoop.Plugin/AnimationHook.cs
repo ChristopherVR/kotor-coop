@@ -18,6 +18,14 @@ namespace KotorCoop.Plugin;
 /// The hook is deliberately tiny and read-only: it records an animation id and bumps a
 /// sequence, then runs the engine's own code unchanged. It filters to the LOCAL PLAYER's
 /// client twin, so peers' phantoms (which we drive ourselves) cannot echo back.
+///
+/// One animation escapes that choke point and needs a second, smaller detour: the weapon
+/// flourish (the X key) while the player is MOVING. Standing still it is a fire-and-forget
+/// (0x27AE) and arrives here like everything else; moving, the engine takes the other arm of
+/// <c>CClientExoAppInternal::PlayerFlourishWeapons</c> and pushes an OVERLAY (0x27AD) straight
+/// into the model's animbase, touching no object field and passing no choke point. That arm
+/// is four instructions long and its id is a literal, so <see cref="OverlayFlourishSite"/>
+/// sits on it directly. Both arms feed the same one-shot channel; the apply side classifies.
 /// </summary>
 internal static unsafe class AnimationHook
 {
@@ -26,6 +34,21 @@ internal static unsafe class AnimationHook
 
     /// <summary>Where the relocated prologue resumes.</summary>
     private const nint ResumeAt = 0x0063C768;
+
+    /// <summary>The overlay arm of PlayerFlourishWeapons (0x005F4460): <c>mov ebx,[esi]</c>,
+    /// <c>push 1</c>, <c>push 0x27AD</c> — then ServerToClientAnimation and
+    /// SetOverlayAnimation_2 through the animbase's vtable.</summary>
+    private const nint OverlayFlourishSite = 0x005F4681;
+
+    private const nint OverlayFlourishResumeAt = 0x005F468A;
+
+    /// <summary>The overlay id that arm plays. A literal in the instruction stream, which is
+    /// why the site is recognisable and why the hook needs to read nothing.</summary>
+    private const ushort OverlayFlourish = 0x27AD;
+
+    /// <summary>The nine relocated bytes: <c>mov ebx,[esi]; push 1; push 0x27AD</c>.</summary>
+    private static ReadOnlySpan<byte> OverlayPrologue =>
+        [0x8B, 0x1E, 0x6A, 0x01, 0x68, 0xAD, 0x27, 0x00, 0x00];
 
     private const uint PageExecuteReadWrite = 0x40;
     private const uint MemCommitReserve = 0x3000;
@@ -168,8 +191,93 @@ internal static unsafe class AnimationHook
         NativeMethods.VirtualProtect(InsertFireForgetAnimation, (nuint)8, old, out _);
 
         _installed = true;
-        diagnostic = $"animation hook at 0x{InsertFireForgetAnimation:X} (stub 0x{stub:X})";
+
+        // The overlay arm is a separate, independent detour: if it refuses, everything else
+        // still replicates and only the moving flourish is missing.
+        string overlay = InstallOverlayFlourish();
+
+        diagnostic = $"animation hook at 0x{InsertFireForgetAnimation:X} (stub 0x{stub:X}); {overlay}";
         return true;
+    }
+
+    /// <summary>
+    /// Detours the four-instruction overlay arm inside PlayerFlourishWeapons so a flourish
+    /// performed while moving is captured too. Verify-bytes-or-refuse; a refusal costs one
+    /// cosmetic animation and nothing else.
+    /// </summary>
+    private static string InstallOverlayFlourish()
+    {
+        byte* site = (byte*)OverlayFlourishSite;
+        for (int i = 0; i < OverlayPrologue.Length; i++)
+        {
+            if (site[i] != OverlayPrologue[i])
+            {
+                return $"overlay flourish arm mismatch at +{i} ({site[i]:X2}); not captured";
+            }
+        }
+
+        nint stub = NativeMethods.VirtualAlloc(0, 64, MemCommitReserve, PageExecuteReadWrite);
+        if (stub == 0)
+        {
+            return "overlay flourish: VirtualAlloc failed";
+        }
+
+        byte* s = (byte*)stub;
+        int n = 0;
+
+        s[n++] = 0x60;                                       // pushad
+
+        nint callback = (nint)(delegate* unmanaged[Cdecl]<void>)&OnOverlayFlourish;
+        s[n++] = 0xE8;                                       // call OnOverlayFlourish
+        *(int*)(s + n) = (int)(callback - (stub + n + 4));
+        n += 4;
+
+        s[n++] = 0x61;                                       // popad
+
+        for (int i = 0; i < OverlayPrologue.Length; i++)     // the relocated arm
+        {
+            s[n++] = OverlayPrologue[i];
+        }
+
+        s[n++] = 0xE9;                                       // jmp back into the arm
+        *(int*)(s + n) = (int)(OverlayFlourishResumeAt - (stub + n + 4));
+
+        if (!NativeMethods.VirtualProtect(
+                OverlayFlourishSite, (nuint)OverlayPrologue.Length, PageExecuteReadWrite, out uint old))
+        {
+            return "overlay flourish: VirtualProtect failed";
+        }
+
+        site[0] = 0xE9;                                      // jmp stub
+        *(int*)(site + 1) = (int)(stub - (OverlayFlourishSite + 5));
+        for (int i = 5; i < OverlayPrologue.Length; i++)
+        {
+            site[i] = 0x90;
+        }
+
+        NativeMethods.VirtualProtect(OverlayFlourishSite, (nuint)OverlayPrologue.Length, old, out _);
+
+        return $"overlay flourish at 0x{OverlayFlourishSite:X} (stub 0x{stub:X})";
+    }
+
+    /// <summary>The local player flourished while moving. Rides the same one-shot channel as
+    /// every other captured animation; the receiver's classifier routes it to the overlay
+    /// call. No engine calls, no allocation.</summary>
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static void OnOverlayFlourish()
+    {
+        try
+        {
+            if (!Suppress)
+            {
+                _lastAnimation = OverlayFlourish;
+                _sequence++;
+            }
+        }
+        catch
+        {
+            // Never let a managed fault unwind into the engine's input handling.
+        }
     }
 
     /// <summary>

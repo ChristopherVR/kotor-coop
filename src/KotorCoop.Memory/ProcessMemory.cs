@@ -136,6 +136,8 @@ public sealed class ProcessMemory : IDisposable
 
     public bool TryReadUInt32(nint address, out uint value) => TryRead(address, out value);
 
+    public bool TryReadUInt16(nint address, out ushort value) => TryRead(address, out value);
+
     public bool TryReadSingle(nint address, out float value) => TryRead(address, out value);
 
     /// <summary>Reads a pointer using the target's pointer width, not the agent's.</summary>

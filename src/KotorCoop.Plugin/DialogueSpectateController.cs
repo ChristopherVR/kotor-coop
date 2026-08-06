@@ -169,6 +169,9 @@ internal sealed unsafe class DialogueSpectateController(SharedBlockView block)
 
     private long _blockedNoticeUntilMs;
 
+    /// <summary>Last <see cref="ShotCameraGuardHook.RefusedCount"/> we reported.</summary>
+    private uint _seenShotRefusals;
+
     private readonly byte[] _notice = "Another player is in a conversation"u8.ToArray();
 
     /// <summary>Opens and drives this instance's copy of a peer's conversation.</summary>
@@ -189,6 +192,15 @@ internal sealed unsafe class DialogueSpectateController(SharedBlockView block)
             _seenBlocked = DialogueGateHook.BlockedCount;
             _blockedNoticeUntilMs = Environment.TickCount64 + 2500;
             LogFew("dialogue: blocked a local conversation start; a peer holds the token");
+        }
+
+        // Evidence that the crash window is still being entered at all. The guard itself
+        // cannot log (it runs inside the engine's dialogue message handling), so its counter
+        // is reported from here, on the frame hook.
+        if (ShotCameraGuardHook.RefusedCount != _seenShotRefusals)
+        {
+            _seenShotRefusals = ShotCameraGuardHook.RefusedCount;
+            LogFew($"dialogue: shot camera refused a torn-down conversation ({_seenShotRefusals} so far)");
         }
 
         if (Environment.TickCount64 < _blockedNoticeUntilMs)

@@ -117,6 +117,11 @@ internal sealed unsafe class PhantomController(SharedBlockView block)
 
     private bool _modeLogged;
 
+    /// <summary>How many applied one-shots are logged before the channel goes quiet. Not
+    /// five: five is spent within a minute of a real fight, and it is the LATER ones — an
+    /// overlay flourish, an unusual id — that a verification pass needs to see land.</summary>
+    private const int OneShotLogLimit = 40;
+
     private int _oneShotsLogged;
 
     /// <summary>True while the phantom is lying in a death pose because its player is at
@@ -374,7 +379,7 @@ internal sealed unsafe class PhantomController(SharedBlockView block)
 
                 ushort animation = (ushort)block.GetRemoteOneShotAnim(i);
                 if (animation != 0 && Odyssey.PlayOneShotAnimation(phantom, animation)
-                    && _oneShotsLogged < 5)
+                    && _oneShotsLogged < OneShotLogLimit)
                 {
                     _oneShotsLogged++;
                     PluginHost.Log($"animation: played one-shot 0x{animation:X} on phantom 0x{_phantomIds[i]:X}");
@@ -470,6 +475,12 @@ internal sealed unsafe class PhantomController(SharedBlockView block)
     /// without cancelling the walk/run action, so it works whether the phantom is moving or
     /// still. Gait, idle and the death poses are owned elsewhere and skipped; a one-shot
     /// self-terminates back to idle, so nothing has to reset it.
+    ///
+    /// ⚠ "Not a gait" is not the same as "safe to fire and forget". This used to queue any
+    /// id that was not one of the six it knows by name, and a LOOPING or OVERLAY id sent
+    /// down the fire-and-forget path parks in the twin's current-animation field with no
+    /// expiry — the body wedges in that pose. <see cref="Odyssey.PlayOneShotAnimation"/>
+    /// asks the engine's own predicate first and refuses anything else.
     /// </summary>
     private void MirrorAnimation(int slot, nint phantom, uint anim)
     {
@@ -480,9 +491,9 @@ internal sealed unsafe class PhantomController(SharedBlockView block)
 
         _lastAnim[slot] = anim;
 
-        if (IsPlayableAnimation(anim))
+        if (IsPlayableAnimation(anim) && anim <= ushort.MaxValue)
         {
-            Odyssey.PlayFireForget(phantom, anim);
+            Odyssey.PlayOneShotAnimation(phantom, (ushort)anim);
         }
     }
 

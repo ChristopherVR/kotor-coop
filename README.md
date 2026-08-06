@@ -212,10 +212,17 @@ tools/                   RE helpers, demo scripts, the kotor1_0_3 symbol databas
 
 ## Honest limitations
 
-- **Dialogue and cutscenes are per-player.** Both players can talk to the same NPC and
-  each gets the full conversation; outcomes converge through the globals/journal
-  channels, but rewards can duplicate. While a player is mid-conversation the session
-  freezes enemy publication for them (the engine disarms hostiles during dialogue).
+- **Only the host can switch party character.** The companions are driven by the host's own
+  AI and mirrored to everyone else, so a client taking one over would fight its own mirror;
+  Tab and the portraits are locked there on purpose. On the host they work normally.
+- **The minimap shows only you.** The engine's minimap draws the area image and exactly one
+  arrow — there is no map-note or party loop in it to borrow. Your partner is a live pin on
+  the full M-screen map instead.
+- **One conversation at a time.** While a player is talking, nobody else can start a
+  dialogue; the other player spectates rather than getting their own copy. That is the
+  design (it keeps one plot line advancing), not a limitation to be lifted. While a player
+  is mid-conversation the session freezes enemy publication for them, because the engine
+  disarms hostiles during dialogue.
 - **A remote player can be worn down but not finished off.** Enemies now genuinely fight
   both players (see above), but KOTOR floors a party member at 1 hit point and downs them
   through a separate path, so forwarded damage stops at 1 rather than dropping them.

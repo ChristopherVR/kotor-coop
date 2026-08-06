@@ -731,8 +731,13 @@ public sealed class KotorGameBridge : IGameBridge
     /// </summary>
     private uint ReadPlayedAnimation(nint creature)
     {
+        // ⚠ SIXTEEN bits. The twin's current animation is a ushort (GetCurrentAnimation
+        // 0x0063C060 is `mov ax,[ecx+0x48]`) and +0x4A is a SEPARATE ushort, the queued
+        // animation that QueuedCallback swaps in. Reading 32 bits here returned
+        // queued<<16 | played whenever anything was queued — a value that is not an
+        // animation id at all, published as the peer's gait and mirrored onto the phantom.
         if (_memory.TryReadPointer(creature + OffClientTwin, out nint twin) && twin != 0
-            && _memory.TryReadUInt32(twin + OffTwinAnimation, out uint twinAnim) && twinAnim != 0)
+            && _memory.TryReadUInt16(twin + OffTwinAnimation, out ushort twinAnim) && twinAnim != 0)
         {
             return twinAnim;
         }

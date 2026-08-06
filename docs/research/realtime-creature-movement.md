@@ -8,7 +8,8 @@ modified and no game function was called for this document.
 
 Sibling docs: `docs/re/engine-movement.md` (the server walk pipeline, action queue, animation
 constants), `docs/research/animation-sync.md` (fire-and-forget replication to the twin),
-`docs/playtest-bugs.md` item 2 (what was tried in play).
+`Handoff.md` §0i (the playtest report this answered, and how it was closed — measured
+live at a mean gap of 0.20 units while the peer walked).
 
 Tag key: **VERIFIED** = read from the binary here · **INFERRED** = deduced from code I did
 read · **NEEDS-LIVE** = must be confirmed on the running game.
@@ -336,7 +337,8 @@ Two further consequences worth naming:
 
 - The 6.0-unit snap threshold in §4.1 means a `SnapTo` beyond 6 units renders instantly, while
   anything under 6 units eases in over half a second. **That is why a synthetic teleport test
-  looked fine and continuous walking did not** (`docs/playtest-bugs.md` item 2's own caveat).
+  looked fine and continuous walking did not** — the playtest report's own caveat, and the
+  reason the phantom is now PLACED rather than eased (Handoff §0i).
 - `+0x1E8` counts down and, if no update arrives, reaches `dt` and snaps. So a *stopped* peer's
   phantom lands exactly on the right spot after ~half a second — matching "a stopped peer's
   phantom stands almost exactly on the true spot".

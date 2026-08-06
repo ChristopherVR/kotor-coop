@@ -1,6 +1,29 @@
 # Animations don't replicate, and the minimap won't show a peer (research 2026-08-01)
 
-Two unrelated playtest bugs from `docs/playtest-bugs.md` — **#4 animations do not replicate**
+> **Status 2026-08-06: both bugs are closed and this document is now history plus one live
+> correction.** The animation half shipped in full — the fire-and-forget hook, the overlay
+> arm, and the classify-then-dispatch apply — and §"Apply" below is WRONG on one point that
+> only the running game could settle: see *Live correction* at the end of this header. The
+> minimap half stands as written: the mechanism cannot do it, and the M-screen pin is the
+> answer. `docs/playtest-bugs.md` is retired; `Handoff.md` §0i has the outcomes.
+>
+> ### Live correction — the overlay setter is reached through an adjustor thunk
+>
+> §"Apply" says `ab->vt[0x44](row, 1)` is `CSWCAnimBase::SetOverlayAnimation_2 0x006A03C0`.
+> On a real creature it is not. Measured on a live phantom, the animbase at `twin+0x68`
+> carries vtable **0x00754AE8**, whose `+0x44` holds
+> `sub ecx,[ecx-4]; jmp 0x00699420` — the `CSWCAnimBaseHeadWield` override behind an
+> **adjustor thunk**, because that pointer is a secondary base. Calling 0x006A03C0 directly
+> would hand it an unadjusted `this`. **Always call the slot.** `+0xE0` on the same vtable
+> *is* `ServerToClientAnimation 0x0069F650` as documented, and since doors, placeables,
+> triggers, projectiles and visual effects all override it, matching that slot is a sound
+> "this is a creature's animbase" test before calling the other one.
+>
+> Also confirmed live, on a phantom: `0x27AD` reads **overlay 1, looping 0** through the
+> engine's own predicates, `0x2806` is fire-and-forget, and `0x2712` (walk) is in neither
+> class and must be dropped rather than queued.
+
+Two unrelated playtest bugs — **#4 animations do not replicate**
 and **#8 the minimap does not show both players** — answered statically against
 `swkotor.exe` (GOG retail 1.0.3, base `0x00400000`, no ASLR, disk == memory) with
 `tools/disasm.py`, `tools/xrefs.py`, the sha256-matched symbol DB and `tools/kotorfiles.py`

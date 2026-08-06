@@ -204,6 +204,18 @@ internal static unsafe class PluginHost
                 Log($"dialogue gate NOT installed: {gateDiagnostic}");
             }
 
+            // A conversation ended from our frame hook can be followed by one last reply list
+            // the server had already queued, and the dialogue camera resolves its participants
+            // with no null check. Odyssey.CloseDialogue removes the source; this is the net.
+            if (ShotCameraGuardHook.Install(out string shotDiagnostic))
+            {
+                Log($"dialogue: {shotDiagnostic}");
+            }
+            else
+            {
+                Log($"shot-camera guard NOT installed: {shotDiagnostic}");
+            }
+
             // The engine reverts any pause that lacks a valid "PausedBy" record within one
             // tick, which in a loopback session is every pause there is — space bar, HUD
             // button and mirror alike. See PauseSanityPatch.

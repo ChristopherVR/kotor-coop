@@ -6,7 +6,7 @@ namespace KotorCoop.Plugin;
 /// fold it in only with a live check).
 ///
 /// Three jobs per tracked slot, all learned the hard way on phantoms
-/// (docs/research/realtime-creature-movement.md, docs/playtest-bugs.md item 2):
+/// (docs/research/realtime-creature-movement.md, Handoff.md §0i):
 ///
 /// - SPEED is measured from consumed displacements, update-to-update. The stream changes
 ///   per network tick while this runs per frame; dividing a tick's displacement by a

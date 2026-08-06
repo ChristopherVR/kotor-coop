@@ -1871,6 +1871,49 @@ internal static unsafe class Odyssey
     private static readonly delegate* unmanaged[Thiscall]<nint, ushort, int> AnimationFireAndForgetFn =
         (delegate* unmanaged[Thiscall]<nint, ushort, int>)0x0063C380;
 
+    /// <summary>CSWCObject::AnimationOverlay(u16) — the same classifier for the third class,
+    /// which has no object field at all and can only be applied through the animbase.</summary>
+    private static readonly delegate* unmanaged[Thiscall]<nint, ushort, int> AnimationOverlayFn =
+        (delegate* unmanaged[Thiscall]<nint, ushort, int>)0x0063C410;
+
+    /// <summary>CSWCObject::AnimationLooping(u16) — the third of the engine's predicates.</summary>
+    private static readonly delegate* unmanaged[Thiscall]<nint, ushort, int> AnimationLoopingFn =
+        (delegate* unmanaged[Thiscall]<nint, ushort, int>)0x0063C300;
+
+    private static int _animationClassLogged;
+
+    /// <summary>Reports the first few unclassified ids. All three predicates are data-driven
+    /// (they resolve the id through the model's own animbase and then look the row up in
+    /// animations.2da), so which class an id falls into is a property of the CREATURE, not a
+    /// constant — worth being able to see rather than assume.</summary>
+    private static void LogAnimationClassOnce(string message)
+    {
+        if (_animationClassLogged < 8)
+        {
+            _animationClassLogged++;
+            PluginHost.Log(message);
+        }
+    }
+
+    /// <summary>CSWCObject + this = its CSWCAnimBase (the engine's own accessor at 0x0063C070
+    /// is exactly <c>mov eax,[ecx+0x68]; ret</c>).</summary>
+    private const int TwinAnimBase = 0x68;
+
+    /// <summary>CSWCAnimBase vtable +0xE0 = ServerToClientAnimation(u16 anim, int) — maps an
+    /// animation id onto the model's own row. <c>ret 4</c>: it consumes only the id, leaving
+    /// the second pushed argument for the setter below, which is how the engine's own
+    /// flourish arm at 0x005F4681 shares one <c>push 1</c> between the two calls.</summary>
+    private const int AnimBaseServerToClientSlot = 0xE0;
+
+    /// <summary>CSWCAnimBase vtable +0x44 = SetOverlayAnimation_2(row, int). <c>ret 8</c>.
+    /// Overridden per animbase class; on a creature it is an adjustor thunk, so it is always
+    /// called through the slot. See <see cref="PlayOverlayAnimation"/>.</summary>
+    private const int AnimBaseSetOverlaySlot = 0x44;
+
+    /// <summary>The +0xE0 implementation every creature-family animbase shares, and the one
+    /// thing that tells a creature's animbase apart from a door's or a placeable's.</summary>
+    private const nint AnimBaseServerToClientFn = 0x0069F650;
+
     /// <summary>
     /// Plays a peer's one-shot animation (a weapon draw, an attack swing, a flourish, an
     /// injected stim) on a phantom, through the engine's own client-side call.
@@ -1878,6 +1921,11 @@ internal static unsafe class Odyssey
     /// A raw field write cannot do this job: the engine's own object-update handler drops
     /// repeats and explicitly skips the entire combat animation set, and overlays have no
     /// field at all. See docs/research/animation-and-minimap.md.
+    ///
+    /// Three animation classes, three different calls, and using the wrong one is not a
+    /// no-op: a looping or overlay id pushed down the fire-and-forget path parks in the
+    /// twin's current-animation field with no expiry and wedges the body. So the engine's
+    /// own predicates decide, and anything they both refuse is dropped.
     ///
     /// MAIN THREAD ONLY.
     /// </summary>
@@ -1889,11 +1937,17 @@ internal static unsafe class Odyssey
             return false;
         }
 
-        // Only dispatch what the engine itself classifies as fire-and-forget: a looping or
-        // overlay id sent down this path parks in the twin's current-animation field with no
-        // expiry and wedges the body.
         if (AnimationFireAndForgetFn(twin, animation) == 0)
         {
+            // The moving weapon flourish (0x27AD) lands here: an OVERLAY, which plays over
+            // whatever the body is already doing and exists only inside the animbase.
+            // Measured live on a phantom: 0x27AD reads overlay 1, looping 0.
+            if (AnimationOverlayFn(twin, animation) != 0 && AnimationLoopingFn(twin, animation) == 0)
+            {
+                return PlayOverlayAnimation(twin, animation);
+            }
+
+            LogAnimationClassOnce($"animation: 0x{animation:X} is in no playable class; dropped");
             return false;
         }
 
@@ -1916,6 +1970,60 @@ internal static unsafe class Odyssey
 
         return true;
     }
+
+    /// <summary>
+    /// Applies an OVERLAY animation to a twin, exactly as the engine's own moving flourish
+    /// does at 0x005F4681: resolve the animbase, map the id to a model row, set it as the
+    /// overlay.
+    ///
+    /// ⚠ BOTH CALLS GO THROUGH THE VTABLE, and that is not a style choice. Measured live on
+    /// a phantom, a creature's animbase carries vtable <c>0x00754AE8</c>, whose +0x44 is an
+    /// ADJUSTOR THUNK (<c>sub ecx,[ecx-4]; jmp 0x00699420</c>, the CSWCAnimBaseHeadWield
+    /// override) rather than <c>CSWCAnimBase::SetOverlayAnimation_2 0x006A03C0</c>. That
+    /// pointer is a secondary base, so calling the base implementation directly would hand
+    /// it an unadjusted <c>this</c>. The engine calls the slot; so do we. (The first version
+    /// of this code required the slot to equal 0x006A03C0 and refused every real creature —
+    /// which is how the thunk was found, and an argument for guards that log.)
+    ///
+    /// The guard that remains is the +0xE0 slot's identity. Every creature-family animbase
+    /// shares <c>CSWCAnimBase::ServerToClientAnimation 0x0069F650</c>; doors, placeables,
+    /// triggers, projectiles and visual effects each override it. So the slot matching is a
+    /// positive statement that this really is a creature's animbase before we call the other
+    /// slot, whatever that turns out to be.
+    /// </summary>
+    private static bool PlayOverlayAnimation(nint twin, ushort animation)
+    {
+        nint animBase = *(nint*)(twin + TwinAnimBase);
+        if (!LooksLikeHeapPointer(animBase))
+        {
+            LogAnimationClassOnce($"animation: no animbase on twin 0x{twin:X} (0x{animBase:X})");
+            return false;
+        }
+
+        nint vtable = *(nint*)animBase;
+        if (!LooksLikeCodePointer(vtable))
+        {
+            LogAnimationClassOnce($"animation: animbase 0x{animBase:X} has no vtable (0x{vtable:X})");
+            return false;
+        }
+
+        nint serverToClient = *(nint*)(vtable + AnimBaseServerToClientSlot);
+        nint setOverlay = *(nint*)(vtable + AnimBaseSetOverlaySlot);
+
+        if (serverToClient != AnimBaseServerToClientFn || !LooksLikeCodePointer(setOverlay))
+        {
+            LogAnimationClassOnce($"animation: animbase vtable 0x{vtable:X} is not a creature's"
+                + $" (+0xE0 0x{serverToClient:X}, +0x44 0x{setOverlay:X})");
+            return false;
+        }
+
+        int row = ((delegate* unmanaged[Thiscall]<nint, ushort, int>)serverToClient)(animBase, animation);
+        ((delegate* unmanaged[Thiscall]<nint, int, int, void>)setOverlay)(animBase, row, 1);
+        return true;
+    }
+
+    /// <summary>Range check for a vtable pointer: inside the image, where .rdata lives.</summary>
+    private static bool LooksLikeCodePointer(nint p) => p is > 0x400000 and < 0x8C3000;
 
     /// <summary>The CSWCCreature vtable — the guard that a twin is really a creature twin
     /// before its GetName-side name fields are written.</summary>
@@ -2217,6 +2325,24 @@ internal static unsafe class Odyssey
     private static readonly delegate* unmanaged[Thiscall]<nint, void> CloseDialogFn =
         (delegate* unmanaged[Thiscall]<nint, void>)0x006332B0;
 
+    /// <summary>
+    /// CSWSObject::StopDialog — the SERVER-side end of a conversation, and the only complete
+    /// one. On the object that OWNS the dialog it runs the end-conversation script, clears
+    /// the participants' dialog fields and destructs the CSWSDialog, whose destructor calls
+    /// <c>CSWSDialog::Cleanup</c> — which is what calls <c>CGuiInGame::CloseDialog</c>
+    /// (0x005A2841). On any other participant it forwards to the owner's
+    /// <c>RemoveObjectFromDialog</c>, which ends the whole thing once the last player leaves.
+    /// It is what the engine itself runs at a natural end (<c>CSWSDialog::HandleReply</c>
+    /// 0x005A04AD) and when combat interrupts one (<c>CSWSCreature::ActivityManager</c>).
+    /// </summary>
+    private static readonly delegate* unmanaged[Thiscall]<nint, int> StopDialogFn =
+        (delegate* unmanaged[Thiscall]<nint, int>)0x004CB4F0;
+
+    /// <summary>CSWSObject + this = the id of the object that owns the conversation this one
+    /// is in, or OBJECT_INVALID. Verified against the disassembly of StopDialog, which
+    /// compares it with the object's own id at +0x04 to decide owner from participant.</summary>
+    private const int ObjDialogOwner = 0x54;
+
     /// <summary>Copies a creature's tag into an ASCII buffer. Empty when unavailable.</summary>
     public static void ReadObjectTag(nint obj, byte* dest, int cap)
     {
@@ -2418,14 +2544,105 @@ internal static unsafe class Odyssey
         return panel != 0 && *(int*)(panel + DialogPanelReplyCount) > 0;
     }
 
-    /// <summary>Closes the local conversation UI (used when the owner ends theirs).</summary>
+    /// <summary>
+    /// Ends the local conversation (used when the owner ends theirs, when a follow times out,
+    /// and when we lose the token race).
+    ///
+    /// ⚠ This goes through the SERVER, not through <c>CGuiInGame::CloseDialog</c> directly.
+    /// Closing only the client UI leaves the server's CSWSDialog running: it keeps walking
+    /// the tree on its own timers and, one line later, sends the next reply list to a client
+    /// whose participants it has just set to OBJECT_INVALID. <c>ShowDialogReplies</c> then
+    /// calls <c>UpdateShotCamera</c>, which resolves both participants with NO null check
+    /// (0x006307DD and 0x006307FB) and faults on the second. That crash was caught live
+    /// ~2 s after a close — exactly one dialogue line's worth of delay.
+    ///
+    /// <see cref="StopDialogFn"/> tears the server dialog down first and reaches
+    /// <c>CloseDialog</c> through the engine's own <c>Cleanup</c>, so nothing is left to send.
+    ///
+    /// MAIN THREAD ONLY.
+    /// </summary>
     public static void CloseDialogue()
     {
         nint gui = GetInGameGui();
-        if (gui != 0 && *(int*)(gui + GuiConversationActive) != 0)
+        if (gui == 0 || *(int*)(gui + GuiConversationActive) == 0)
         {
-            CloseDialogFn(gui);
+            return;
         }
+
+        // The GUI names both participants; either may be the owner. Prefer the owner (one
+        // call does the whole teardown) and settle for a participant (which routes to the
+        // owner through RemoveObjectFromDialog) when the owner is not one of the two.
+        nint participant = 0;
+
+        foreach (uint raw in stackalloc uint[] { *(uint*)(gui + GuiParticipantA), *(uint*)(gui + GuiParticipantB) })
+        {
+            uint id = raw & 0x7FFFFFFF; // the fields carry flag bits above the id
+            if (id is 0 or ObjectInvalid or 0x7FFFFFFF)
+            {
+                continue;
+            }
+
+            nint obj = ResolveServerObject(id);
+            if (obj == 0)
+            {
+                continue;
+            }
+
+            uint owner = *(uint*)(obj + ObjDialogOwner);
+            if (owner == ObjectInvalid)
+            {
+                continue; // this one is not in a conversation as far as the server knows
+            }
+
+            if (owner == *(uint*)(obj + ObjIdOffset))
+            {
+                StopDialogFn(obj);
+                return;
+            }
+
+            participant = obj;
+        }
+
+        if (participant != 0)
+        {
+            StopDialogFn(participant);
+            return;
+        }
+
+        // No resolvable server side left — the conversation is a client-only shell (the
+        // half-started case the follow timeout exists for). Closing the UI is then both
+        // safe and the only thing left to do: there is no dialog to keep sending.
+        CloseDialogFn(gui);
+    }
+
+    /// <summary>CClientExoApp::GetGameObject(objectId) — the CLIENT's object lookup, the one
+    /// UpdateShotCamera itself uses. Returns 0 for an id the client does not hold.</summary>
+    private static readonly delegate* unmanaged[Thiscall]<nint, uint, nint> ClientGetGameObjectFn =
+        (delegate* unmanaged[Thiscall]<nint, uint, nint>)0x005ED580;
+
+    /// <summary>
+    /// True when both of a CGuiInGame's dialogue participants still resolve to client
+    /// objects — the precondition <c>CGuiInGame::UpdateShotCamera</c> assumes and never
+    /// checks. Asked with the RAW field values, flag bits and all, because that is exactly
+    /// what the engine passes (0x006307D8 / 0x006307F6).
+    ///
+    /// MAIN THREAD ONLY. Used by <see cref="ShotCameraGuardHook"/>.
+    /// </summary>
+    public static bool ShotCameraParticipantsResolvable(nint gui)
+    {
+        if (gui == 0)
+        {
+            return true; // nothing we can judge; let the engine run
+        }
+
+        nint client = GetClient();
+        if (client == 0)
+        {
+            return true;
+        }
+
+        return ClientGetGameObjectFn(client, *(uint*)(gui + GuiParticipantA)) != 0
+            && ClientGetGameObjectFn(client, *(uint*)(gui + GuiParticipantB)) != 0;
     }
 
     /// <summary>Resolves an object id to its live CSWSDialog*, or 0 (vtable-guarded).</summary>
@@ -4076,39 +4293,14 @@ internal static unsafe class Odyssey
     private static readonly delegate* unmanaged[Thiscall]<nint, uint, nint, void> AddFireForgetAnimationFn =
         (delegate* unmanaged[Thiscall]<nint, uint, nint, void>)0x006183D0;
 
-    /// <summary>The current played animation on a creature's client twin (twin+0x48), or 0
-    /// when the twin does not exist yet. Reflects what the model is actually doing.</summary>
-    public static uint GetTwinCurrentAnimation(nint creature)
-    {
-        nint twin = *(nint*)(creature + CreClientTwin);
-        return twin == 0 ? 0 : *(uint*)(twin + 0x48);
-    }
-
-    /// <summary>
-    /// Queues a fire-and-forget animation (weapon draw, swing, flourish) on a creature's
-    /// client twin — the exact call the engine's own server→client replication makes, so it
-    /// replays one-shots that SetAnimation would drop. No-op until the twin exists. MAIN
-    /// THREAD ONLY.
-    /// </summary>
-    public static void PlayFireForget(nint creature, uint anim)
-    {
-        nint twin = *(nint*)(creature + CreClientTwin);
-        if (twin != 0)
-        {
-            // Suppressed for the same reason as PlayOneShotAnimation: the engine reaches
-            // the capture hook from inside this call, and a mirrored animation must not be
-            // re-captured as this creature's own.
-            AnimationHook.Suppress = true;
-            try
-            {
-                AddFireForgetAnimationFn(twin, anim, 0);
-            }
-            finally
-            {
-                AnimationHook.Suppress = false;
-            }
-        }
-    }
+    // Removed on purpose, and worth not reintroducing:
+    //
+    //   GetTwinCurrentAnimation — read `*(uint*)(twin + 0x48)`. That field is a USHORT and
+    //     +0x4A is a separate ushort (the queued animation), so the read returned
+    //     queued<<16 | played. Use a 16-bit read if this is ever needed again.
+    //   PlayFireForget — queued any id on the twin with no classification. A looping or
+    //     overlay id sent down the fire-and-forget path parks with no expiry and wedges the
+    //     body. PlayOneShotAnimation is the guarded replacement and the only caller's route.
 
     /// <summary>
     /// Advances a creature toward a target using the engine's own walk step, so the move is
