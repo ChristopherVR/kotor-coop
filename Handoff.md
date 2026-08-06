@@ -2714,3 +2714,63 @@ phantom side, and `StartDialogueWith` makes the SERVER walk the player into rang
 dialogue test never needed it. Recorded so nobody assumes the hook is broken.
 
 270 tests; all three builds clean.
+
+---
+
+## Addendum 0n — a repeatable verification battery, and staging real fights, 2026-08-06
+
+The recurring complaint in every addendum above is the same: the interesting bugs only
+appear with two real games running, and there was no repeatable way to get there. Two
+things fix that.
+
+### Staging a fight without a different save
+
+`ActionAttack` is now bound (`Odyssey.AttackTarget`, routine 37 checked against
+`CSWVirtualMachineCommands::ExecuteCommandAttack 0x0052E7F0` before dispatch, OBJECT_SELF
+redirected to the attacker). `blockpoke attack <attackerId> <targetId>` orders a real
+combat round — swings, rolls, damage, and the AI carrying on afterwards.
+
+**This is why no new save was needed.** The blocker was always that the Endar Spire's Sith
+are inert scripted placements (7.0), so nothing could exercise swings or aggro. Downloading
+a save was considered and rejected: it is an untrusted binary loaded into the user's game
+and it would not be reproducible for anyone else. Commanding the attack works on ANY save,
+including the two that already exist, and it is the route 7.0 itself recommended.
+
+Also added, same shape: `blockpoke talk <tag>` (a real conversation, exactly what a click
+sends), `talk close` (ends one — required for a repeatable pass), `walk <x> <y>`,
+`hitphantom <slot> <amount>`, and the read-outs `combat` / `dialogue`.
+
+### tools\verify.ps1 — 21 checks, PASS/FAIL, idempotent
+
+Extended the existing battery from 7 checks to 21, covering hook installation, the LAN
+beacon, presence, combat participation, animation replication, dialogue exclusivity and
+quests. Pids are auto-detected; exit code is the failure count.
+
+**Verified: 21/21 passing, twice in a row against the same session.** Two of those had
+never been machine-checked before — `swing animations reach the peer` (the attack hook made
+this possible at all) and the LAN beacon end to end.
+
+Three lessons the harness itself taught, all worth keeping:
+
+- **A check that greps the whole log can pass on the PREVIOUS run's line.** One did, and
+  reported success for a conversation that never opened. Log checks now only read lines
+  written after the action (`LogHasSince` / `WaitForLog`).
+- **A verification pass must not damage what it verifies.** Three points of test damage a
+  run walked the player down to 1 hit point and then into the engine's temp-death — at
+  which point forwarded damage is *deliberately* discarded, so the combat check failed and
+  blamed the forward. The battery now revives and sets a known health first, and restores
+  it after.
+- **Judge on state, not on log lines, when the log cannot tell you the truth.**
+  `StartDialogueWith` returns true once the request is SENT; the engine's refusal happens
+  later and server-side, so "opened a conversation" in the log proves nothing. The
+  exclusivity check now asserts what the client is actually talking to.
+
+### Known gap found while doing this
+
+A CONNECTED agent stops republishing discovered servers into the block (only the menu-mode
+loop does it), so the in-world F9 browser panel reads empty mid-session. The beacon itself
+is fine — verified end to end here. Minor: the browser's job is finding a server before you
+join. Recorded, not fixed.
+
+⚠ Also observed once: a client instance vanished right after connecting, with no crash-probe
+report. Not reproducible across four subsequent launches. Recorded rather than explained.

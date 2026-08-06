@@ -244,6 +244,13 @@ internal struct SharedBlock
     public const int OffsetTestWalkSerial = 0x1D9C;
     public const int TestTalkTagLength = 32;
 
+    /// <summary>Agent -&gt; plugin, TEST HOOK. Orders <c>attacker</c> to attack <c>target</c>
+    /// through the engine's own ActionAttack, so a genuine fight can be staged (the test
+    /// save's enemies are inert scripted placements — Handoff 7.0).</summary>
+    public const int OffsetTestAttacker = 0x1DA0;
+    public const int OffsetTestAttackTarget = 0x1DA4;
+    public const int OffsetTestAttackSerial = 0x1DA8;
+
     // ---- door replication (version 4) -------------------------------------------
     //
     // The agent writes the DESIRED state of doors in the local module: open state and

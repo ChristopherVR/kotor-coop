@@ -288,6 +288,12 @@ internal sealed unsafe class SharedBlockView(byte* baseAddress)
 
     public uint TestWalkSerial => *U32(SharedBlock.OffsetTestWalkSerial);
 
+    public uint TestAttackSerial => *U32(SharedBlock.OffsetTestAttackSerial);
+
+    public uint TestAttacker => *U32(SharedBlock.OffsetTestAttacker);
+
+    public uint TestAttackTarget => *U32(SharedBlock.OffsetTestAttackTarget);
+
     public float TestWalkX => *F32(SharedBlock.OffsetTestWalkX);
 
     public float TestWalkY => *F32(SharedBlock.OffsetTestWalkY);

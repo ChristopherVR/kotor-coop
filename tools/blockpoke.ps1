@@ -12,7 +12,7 @@
 param(
     [string]$ProcessName = 'swkotor',
     [int]$ProcId = 0,
-    [Parameter(Position = 0)][ValidateSet('state', 'travel', 'journal', 'pause', 'browser', 'death', 'hitphantom', 'combat', 'talk', 'walk', 'dialogue')]
+    [Parameter(Position = 0)][ValidateSet('state', 'travel', 'journal', 'pause', 'browser', 'death', 'hitphantom', 'combat', 'talk', 'walk', 'dialogue', 'attack')]
     [string]$Command = 'state',
     [Parameter(Position = 1)][string]$Arg1 = '',
     [Parameter(Position = 2)][int]$Arg2 = 0
@@ -131,6 +131,16 @@ switch ($Command) {
         "  suppress: gameOver {0}  swap {1}" -f (U32 0x102C), (U32 0x1030)
         "  revive:   serial {0}  applied {1}  status {2}  hp {3}" -f `
             (U32 0x1034), (U32 0x1038), (U32 0x103C), (U32 0x1040)
+    }
+    'attack' {
+        # Orders a creature to attack another through the engine's own ActionAttack, so a
+        # real fight (swings, rolls, damage, AI follow-up) can be staged on a save whose
+        # enemies never aggro by themselves. Arg1 = attacker id, Arg2 = target id.
+        if ($Arg1.Length -eq 0) { Write-Error 'attack needs <attackerId> <targetId>'; exit 1 }
+        WU32 0x1DA0 ([uint32]$Arg1)
+        WU32 0x1DA4 ([uint32]$Arg2)
+        WU32 0x1DA8 ((U32 0x1DA8) + 1)
+        "attack ordered: 0x{0:X} -> 0x{1:X} (serial {2})" -f [uint32]$Arg1, [uint32]$Arg2, (U32 0x1DA8)
     }
     'talk' {
         # Opens a conversation with an NPC by tag — exactly what clicking it does, so the

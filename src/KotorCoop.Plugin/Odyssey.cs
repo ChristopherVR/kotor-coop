@@ -78,6 +78,12 @@ internal static unsafe class Odyssey
     private const int RoutineActionMoveToLocation = 21;
     private const nint ExpectedMoveToPoint = 0x0053FE00;
 
+    /// <summary>ActionAttack. The table entry is checked against the handler before use, so
+    /// a wrong index refuses instead of dispatching something else
+    /// (CSWVirtualMachineCommands::ExecuteCommandAttack).</summary>
+    private const int RoutineActionAttack = 37;
+    private const nint ExpectedAttack = 0x0052E7F0;
+
     /// <summary>
     /// The routine numbers for the item calls are not documented anywhere trustworthy, so
     /// they are resolved at runtime by scanning the 772-entry routine table for the
@@ -3241,6 +3247,81 @@ internal static unsafe class Odyssey
         if (phantom != 0)
         {
             PacifyCreatureFn(phantom);
+        }
+    }
+
+    /// <summary>
+    /// Orders one creature to attack another through the engine's own ActionAttack — a real
+    /// combat round, with swings, attack rolls, damage and the AI taking over from there.
+    ///
+    /// This exists because staging a fight on demand is otherwise unreliable: the Endar
+    /// Spire's Sith are scripted placements that do not aggro (Handoff 7.0), so every
+    /// combat-facing feature — the damage forward, swing animations, the phantom's
+    /// targetability and its release levers — had no way to be exercised. Commanding the
+    /// attack is the cheapest honest fight, and it is the route 7.0 itself recommends.
+    ///
+    /// MAIN THREAD ONLY.
+    /// </summary>
+    public static bool AttackTarget(uint attackerObjectId, uint targetObjectId, out int failure)
+    {
+        failure = 0;
+
+        nint implementer = GetImplementer(out nint vm, out nint internalVm);
+        if (implementer == 0)
+        {
+            failure = 1;
+            return false;
+        }
+
+        nint table = Deref(implementer + CommandsTableOffset);
+        if (table == 0 || *(nint*)(table + (RoutineActionAttack * 4)) != ExpectedAttack)
+        {
+            failure = 2;
+            return false;
+        }
+
+        if (*(int*)(internalVm + CallStackSizeOffset) != 0)
+        {
+            failure = 3;
+            return false;
+        }
+
+        int stackPointer = *(int*)(internalVm + StackPointerOffset);
+
+        // OBJECT_SELF is the ATTACKER: an action always applies to the caller.
+        int savedHasCaller = *(int*)(implementer + ImplHasCallerObject);
+        uint savedCallerId = *(uint*)(implementer + ImplCallerObjectId);
+
+        *(int*)(implementer + ImplHasCallerObject) = 1;
+        *(uint*)(implementer + ImplCallerObjectId) = attackerObjectId;
+
+        try
+        {
+            // ActionAttack(object oAttackee, int bPassive = FALSE), last-declared first.
+            if (StackPushInteger(vm, 0) == 0 || StackPushObject(vm, targetObjectId) == 0)
+            {
+                failure = 4;
+                return false;
+            }
+
+            var dispatch = (delegate* unmanaged[Thiscall]<nint, int, int, int>)ExpectedAttack;
+            if (dispatch(implementer, RoutineActionAttack, 2) != 0)
+            {
+                failure = 5;
+                return false;
+            }
+
+            if (*(int*)(internalVm + StackPointerOffset) != stackPointer)
+            {
+                failure = 6;
+            }
+
+            return true;
+        }
+        finally
+        {
+            *(int*)(implementer + ImplHasCallerObject) = savedHasCaller;
+            *(uint*)(implementer + ImplCallerObjectId) = savedCallerId;
         }
     }
 
