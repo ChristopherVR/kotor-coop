@@ -2774,3 +2774,36 @@ join. Recorded, not fixed.
 
 ⚠ Also observed once: a client instance vanished right after connecting, with no crash-probe
 report. Not reproducible across four subsequent launches. Recorded rather than explained.
+
+### 0n.1 — the browser stays fed mid-session; battery at 22/22
+
+**Fixed the gap 0n recorded.** `CoopCommandDispatcher` already ran a LAN listener for the
+whole session (it is what `servers` and `connect #n` read) but never published the result
+into the block — only the menu-mode loop did. So the F9 panel went empty the moment you
+joined and stayed that way, which reads as "the browser is broken" rather than "the list
+stopped refreshing". One call per 150 ms tick, and the publish signature-checks itself, so
+it writes nothing when the list has not changed. Verified live: the in-world list now reads
+`Lanik [END_M01AA] 10.5.0.2:27140` mid-session.
+
+Two harness defects fixed in the same pass, both of which had failed checks for reasons
+unrelated to the feature under test:
+
+- **The swing check attacked whatever enemy was published first**, which on a fresh session
+  was ~98 units away: the character spent the whole timeout walking and never swung. It now
+  picks the NEAREST enemy from the presence slots (which carry positions), and the check
+  reports the distance so a slow pass is legible rather than mysterious.
+- **The beacon check took the first datagram it heard.** A plugin auto-starts an agent per
+  instance and those advertise too, so it kept measuring a menu-mode host with no module.
+  It now selects the beacon whose game port is the session under test.
+
+**22/22, three consecutive runs on one session.** 270 unit tests.
+
+### ⚠ And one genuine crash the battery found — see docs/playtest-bugs.md
+
+Closing a conversation from the frame hook crashed the host in
+`CGuiInGame::UpdateShotCamera`, with `CSWCameraOnAStick::Destructor` / `SetDialogCamera` /
+`ShowDialogReplies` on the stack. `CloseDialogue` is already guarded on an active
+conversation, so the problem is WHEN it runs, not whether. It implicates a production path
+(`DialogueSpectateController` closes the same way on three edges), it is recorded in full
+with the stack, and it is deliberately NOT fixed by guesswork — the likely correct shape is
+to close through the GUI's own Escape path, which needs an RE pass first.

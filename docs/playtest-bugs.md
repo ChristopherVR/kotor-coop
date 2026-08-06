@@ -1,3 +1,41 @@
+# Open bug — closing a conversation can crash the dialogue camera (2026-08-06)
+
+**Status: OPEN, reproducible-ish, found by `tools\verify.ps1`.** Not a test-only defect:
+the same call runs in production whenever a spectator's owner ends a conversation.
+
+```
+[13:19:23.729] test: closed any running conversation
+[13:19:25.675] CRASH: access violation at 0x6307FB
+stack: 0x63AD55 0x6413A2 0x634331 0x6345B8
+```
+
+- `0x6307FB` = `CGuiInGame::UpdateShotCamera`
+- stack: `CSWCameraOnAStick::Destructor_2` -> `CSWCModule::SetDialogCamera` ->
+  `CGuiInGame::ShowDialogReplies` -> `CGuiInGame::HandleDialogReplies`
+
+So: a conversation was closed from the SwapBuffers frame hook while the GUI was still
+handling dialogue replies; the reply handler's camera was destroyed, and the next
+`UpdateShotCamera` dereferenced it. ~2 s elapsed between the close and the fault, which fits
+"the camera is torn down, then the next frame updates it".
+
+`Odyssey.CloseDialogue` is already guarded on `GuiConversationActive != 0`, so this is not an
+unguarded close — the problem is WHEN it runs, not WHETHER a conversation exists.
+
+**Why it matters beyond the harness:** `DialogueSpectateController` calls the same
+`CloseDialogue` from the same frame hook on three paths — the owner ending their
+conversation, the follow timing out, and the race back-off ("a peer won the token"). Those
+have run many times without crashing, so the window is narrow, but it is the same window.
+
+**Not fixed, and deliberately not guessed at.** The likely correct shape is to close the way
+the player's own Escape does — through the GUI's own cancel path at a safe point in its
+loop — rather than calling `CloseDialogFn` directly from the render hook. That needs an RE
+pass on the Escape handler to find the safe entry point. A cheap interim mitigation would be
+to defer the close by a frame and skip it while `ShowDialogReplies` is active, but neither
+has been measured, and this project's history is clear about what shipping an unmeasured
+guess costs.
+
+---
+
 # Playtest bug list — 2026-08-01
 
 Reported by the user from the first real two-player session (the click-loaded setup). This

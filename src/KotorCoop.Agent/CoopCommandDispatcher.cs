@@ -53,6 +53,7 @@ public sealed class CoopCommandDispatcher(
             {
                 manager.Poll();
                 DrainInputs();
+                PublishBrowserList();
                 ReflectPhase();
                 DrainChat();
             }
@@ -185,6 +186,29 @@ public sealed class CoopCommandDispatcher(
         _pendingAddress = address;
         _promptedForPassword = false;
         manager.Connect(host: false, endpoint, settingsForPassword(password ?? string.Empty));
+    }
+
+    /// <summary>
+    /// Keeps the in-game browser panel fed with what the LAN listener has heard, for as long
+    /// as the agent is alive — not only while it is sitting at the menu.
+    ///
+    /// The menu loop publishes this before you connect; nothing did afterwards, so the F9
+    /// panel went empty the moment you joined a session and stayed that way, which reads as
+    /// "the browser is broken" rather than "the list is not being refreshed". The publish
+    /// itself is cheap: it signature-checks and returns without writing when the list has
+    /// not changed, which is the common case.
+    /// </summary>
+    private void PublishBrowserList()
+    {
+        if (_kotor is null)
+        {
+            return;
+        }
+
+        _lastServerList = _browser.Servers;
+        _kotor.PublishBrowserServers(
+            [.. _lastServerList.Select(s =>
+                (s.Name, s.Address, (byte)s.PlayerCount, (byte)s.MaxPlayers, s.Locked, s.Module))]);
     }
 
     /// <summary>Posts the LAN server list to the overlay, numbered for `connect #n`.</summary>

@@ -10,7 +10,11 @@ param(
     [int]$Host1 = 0,
     [int]$Client2 = 0,
     [string]$Log1 = 'C:\GOG Games\Star Wars KOTOR (GOG)\kotorcoop-plugin.log',
-    [string]$Log2 = 'D:\Games\swkotor-gog-p2\kotorcoop-plugin.log'
+    [string]$Log2 = 'D:\Games\swkotor-gog-p2\kotorcoop-plugin.log',
+
+    # The port the session under test is hosted on, so its LAN beacon can be told apart
+    # from any other agent advertising on this machine.
+    [int]$SessionPort = 27140
 )
 
 # Pids are optional: with a demo session up, the two swkotor processes in start order are
@@ -33,6 +37,7 @@ public class VF {
   [StructLayout(LayoutKind.Sequential)] public struct MBI { public IntPtr BaseAddress, AllocationBase; public uint AllocationProtect,__a1; public UIntPtr RegionSize; public uint State,Protect,Type,__a2; }
   public static byte[] R(IntPtr h, long a, int n){ byte[] b=new byte[n]; int r; if(!ReadProcessMemory(h,new IntPtr(a),b,n,out r)||r!=n) return null; return b; }
   public static uint U32(IntPtr h, long a){ var b=R(h,a,4); return b==null?0:BitConverter.ToUInt32(b,0); }
+  public static float F32(IntPtr h, long a){ var b=R(h,a,4); return b==null?0f:BitConverter.ToSingle(b,0); }
   public static int I16(IntPtr h, long a){ var b=R(h,a,2); return b==null?0:BitConverter.ToInt16(b,0); }
   public static byte U8(IntPtr h, long a){ var b=R(h,a,1); return b==null?(byte)0:b[0]; }
   public static bool W32(IntPtr h, long a, int v){ int w; return WriteProcessMemory(h,new IntPtr(a),BitConverter.GetBytes(v),4,out w); }
@@ -210,12 +215,25 @@ try {
     $udp.Client.SetSocketOption([System.Net.Sockets.SocketOptionLevel]::Socket,
         [System.Net.Sockets.SocketOptionName]::ReuseAddress, $true)
     $udp.Client.Bind([System.Net.IPEndPoint]::new([System.Net.IPAddress]::Any, 27016))
-    $udp.Client.ReceiveTimeout = 6000
+    $udp.Client.ReceiveTimeout = 3000
     $remote = [System.Net.IPEndPoint]::new([System.Net.IPAddress]::Any, 0)
-    $bytes = $udp.Receive([ref]$remote)
+
+    # Take the beacon for the session under test, not merely the first one heard. Other
+    # agents on this machine advertise too (a plugin auto-starts one per instance), and
+    # picking whichever arrived first read a menu-mode host with no module and failed the
+    # join-in-progress check for a reason that had nothing to do with the feature.
+    $bytes = $null
+    for ($try = 0; $try -lt 8; $try++) {
+        $candidate = $udp.Receive([ref]$remote)
+        if ($candidate.Length -ge 8 -and $candidate[0] -eq 0x4B -and $candidate[1] -eq 0x44) {
+            $candPort = ([int]$candidate[3] -shl 8) -bor [int]$candidate[4]
+            if ($candPort -eq $SessionPort) { $bytes = $candidate; break }
+            if ($null -eq $bytes) { $bytes = $candidate }   # fall back to any valid beacon
+        }
+    }
     $udp.Close()
 
-    if ($bytes.Length -ge 8 -and $bytes[0] -eq 0x4B -and $bytes[1] -eq 0x44) {
+    if ($null -ne $bytes -and $bytes.Length -ge 8 -and $bytes[0] -eq 0x4B -and $bytes[1] -eq 0x44) {
         $nameLen = $bytes[7]
         # ⚠ Cast before shifting: PowerShell evaluates -shl in the operand's own width, so
         # [byte]0x6A -shl 8 is 0, not 0x6A00. Reported the game port as "4".
@@ -236,6 +254,14 @@ Check 'host advertises itself on the LAN' ($null -ne $beacon) `
     $(if ($beacon) { "'$($beacon.Name)' port $($beacon.Port) players $($beacon.Players)/$($beacon.Max)" } else { 'no beacon in 4s' })
 Check 'beacon carries join-in-progress info' ($null -ne $beacon -and $beacon.Module.Length -gt 0) `
     $(if ($beacon) { "module '$($beacon.Module)' locked=$($beacon.Locked)" } else { 'no beacon' })
+
+# The panel's own data, mid-session. This is the half that used to go stale: only the
+# menu-mode loop republished the list, so the F9 browser read empty once you had joined.
+$browserCount = [VF]::U32($h2, $b2 + 0xE08)
+$entryName = [VF]::Str($h2, $b2 + 0xE20, 32)
+$entryAddr = [VF]::Str($h2, $b2 + 0xE20 + 0x20, 24)
+Check 'the in-game browser list stays fed mid-session' ($browserCount -ge 1) `
+    "count $browserCount, first '$entryName' at '$entryAddr'"
 
 # --- 8. presence census agrees across instances ---------------------------------------
 # Only the MIRRORING side fills these in: the authority publishes to the wire and never
@@ -298,18 +324,35 @@ if ($pcAddr -and $pcBefore -gt 0) { [VF]::W16($h2, $pcAddr + 0xDC, [int16]$pcBef
 # polled, because they start and finish between frames. Ordering the host's PC to attack an
 # enemy produces real ones; the client's phantom slot must see them arrive.
 $oneShotBefore = [VF]::U32($h2, $b2 + 0x1064)        # remote one-shot serial, slot 0
-# The enemy ids are identical in both games, and only the mirroring side has them in its
-# block — so read the id there and order the HOST's player to attack that same creature.
-$enemyId = [VF]::U32($h2, $b2 + 0x490)
+
+# Pick the NEAREST enemy, not the first published one. The census is not ordered by
+# distance, and the first entry was ~98 units away: the character spent the whole timeout
+# walking and never swung, so the check failed on a fresh session while passing on one
+# where an earlier run had already banked a swing. Presence slots carry positions, and
+# enemy ids are identical in both games, so the closest one is cheap to find here.
+$px = [VF]::F32($h1, $b1 + 0x10)
+$py = [VF]::F32($h1, $b1 + 0x14)
+$enemyId = 0
+$bestDist = [double]::MaxValue
+$presenceCount = [VF]::U32($h2, $b2 + 0x1400)
+for ($i = 0; $i -lt [Math]::Min($presenceCount, 32); $i++) {
+    $slot = $b2 + 0x1410 + ($i * 0x28)
+    $id = [VF]::U32($h2, $slot)
+    if ($id -eq 0) { continue }
+    $ex = [VF]::F32($h2, $slot + 4)
+    $ey = [VF]::F32($h2, $slot + 8)
+    $d = [math]::Sqrt([math]::Pow($ex - $px, 2) + [math]::Pow($ey - $py, 2))
+    if ($d -lt $bestDist) { $bestDist = $d; $enemyId = $id }
+}
 if ($enemyId -ne 0) {
     [VF]::W32($h1, $b1 + 0x1DA0, [int]0x7FFFFFFF) | Out-Null   # attacker: the host's PC
     [VF]::W32($h1, $b1 + 0x1DA4, [int]$enemyId) | Out-Null     # target: a real enemy
     [VF]::W32($h1, $b1 + 0x1DA8, [int]([VF]::U32($h1, $b1 + 0x1DA8) + 1)) | Out-Null
     # A combat round takes a few seconds: the PC closes to melee range and swings.
-    WaitFor2 { [VF]::U32($h2, $b2 + 0x1064) -ne $oneShotBefore } 25 | Out-Null
+    WaitFor2 { [VF]::U32($h2, $b2 + 0x1064) -ne $oneShotBefore } 40 | Out-Null
     $oneShotAfter = [VF]::U32($h2, $b2 + 0x1064)
     Check 'swing animations reach the peer' ($oneShotAfter -ne $oneShotBefore) `
-        ("serial $oneShotBefore -> $oneShotAfter, attacking 0x{0:X}" -f $enemyId)
+        ("serial $oneShotBefore -> $oneShotAfter, attacking 0x{0:X} at {1:F0} units" -f $enemyId, $bestDist)
 }
 else {
     Check 'swing animations reach the peer' $false 'no enemy published to attack'
