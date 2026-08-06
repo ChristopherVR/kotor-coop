@@ -231,6 +231,19 @@ internal struct SharedBlock
     public const int OffsetTestHitAmount = 0x1D60;
     public const int OffsetTestHitSerial = 0x1D64;
 
+    /// <summary>
+    /// Agent -&gt; plugin, TEST HOOKS for driving the local player without injected input
+    /// (which is a focus lottery — traps 22/25). "Talk" runs exactly what a click on an
+    /// NPC runs, so it exercises the real conversation path including the dialogue gate;
+    /// "walk" queues the engine's own ActionMoveToLocation.
+    /// </summary>
+    public const int OffsetTestTalkTag = 0x1D70;   // 32 bytes of ascii tag
+    public const int OffsetTestTalkSerial = 0x1D90;
+    public const int OffsetTestWalkX = 0x1D94;
+    public const int OffsetTestWalkY = 0x1D98;
+    public const int OffsetTestWalkSerial = 0x1D9C;
+    public const int TestTalkTagLength = 32;
+
     // ---- door replication (version 4) -------------------------------------------
     //
     // The agent writes the DESIRED state of doors in the local module: open state and

@@ -281,6 +281,17 @@ internal sealed unsafe class SharedBlockView(byte* baseAddress)
         *(uint*)(slot + 0x00) = phantomId;
     }
 
+    /// <summary>Test hooks: drive the local player's own conversation and movement.</summary>
+    public uint TestTalkSerial => *U32(SharedBlock.OffsetTestTalkSerial);
+
+    public byte* TestTalkTag => baseAddress + SharedBlock.OffsetTestTalkTag;
+
+    public uint TestWalkSerial => *U32(SharedBlock.OffsetTestWalkSerial);
+
+    public float TestWalkX => *F32(SharedBlock.OffsetTestWalkX);
+
+    public float TestWalkY => *F32(SharedBlock.OffsetTestWalkY);
+
     /// <summary>Test hook: apply a real damage effect to a phantom (see the block).</summary>
     public uint TestHitSerial => *U32(SharedBlock.OffsetTestHitSerial);
 

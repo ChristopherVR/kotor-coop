@@ -26,6 +26,7 @@ internal static unsafe class PluginHost
     private static EnemyPresenceController? _enemyPresence;
     private static PartyPresenceController? _partyPresence;
     private static IncomingDamageController? _incomingDamage;
+    private static TestDriveController? _testDrive;
     private static DoorController? _doors;
     private static PlaceableController? _placeables;
     private static LootController? _loot;
@@ -88,6 +89,7 @@ internal static unsafe class PluginHost
             _enemyPresence = new EnemyPresenceController(_view);
             _partyPresence = new PartyPresenceController(_view);
             _incomingDamage = new IncomingDamageController(_view);
+            _testDrive = new TestDriveController(_view);
             _doors = new DoorController(_view);
             _placeables = new PlaceableController(_view);
             _loot = new LootController(_view);
@@ -471,6 +473,9 @@ internal static unsafe class PluginHost
         // Read-only: publishes the owner's current conversation line for the other player to
         // spectate. Runs in-world only (a conversation needs a live server + GUI).
         _dialogueSpectate?.OnFrame();
+
+        // Test hooks last, so a driven conversation is opened against fully-updated state.
+        _testDrive?.OnFrame();
     }
 
     private static void InvalidateAll(string reason)
@@ -482,6 +487,7 @@ internal static unsafe class PluginHost
         _enemyPresence?.Invalidate();
         _partyPresence?.Invalidate();
         _incomingDamage?.Invalidate();
+        _testDrive?.Invalidate();
         PhantomHitHook.Invalidate();
         AnimationHook.InvalidateCreatureTable();
         _doors?.Invalidate();

@@ -500,6 +500,19 @@ public sealed class CoopClient : ICoopSession
             _rejectReason = string.Empty;
             _reconnecting = true;
             _lastInboundMs = 0;
+
+            // ⚠ DROP THE CONVERSATION TOKEN. It belongs to a session we are no longer in,
+            // and it is level state the agent re-publishes every tick — so a host that
+            // CRASHES mid-conversation (rather than leaving cleanly) left this client
+            // spectating forever with its own replies disabled. Measured live: the host
+            // was killed mid-conversation and 20 s later the client still read
+            // "remote: active 1". The explicit-disconnect path was already covered; this
+            // is the same hole on the timeout path. The host re-publishes a fresh token
+            // on reconnect, so clearing costs nothing.
+            lock (_gate)
+            {
+                _dialogue = DialogueState.Idle;
+            }
         }
 
         if (!IsConnected)

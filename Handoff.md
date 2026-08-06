@@ -2661,3 +2661,56 @@ The aggro half: no enemy has actually ATTACKED a phantom yet, because nothing in
 save is armed. Items 1-3 and 8 of the research checklist (cold-aggro latency, the release
 soak, two-sided fight) need a module with a live encounter — a human walking into a real
 fight settles all of them at once. 269 tests; all three builds clean.
+
+---
+
+## Addendum 0m — driving the players, and a stale-token bug the drive exposed, 2026-08-06
+
+Added test hooks to drive the local player from the block, because "click the NPC" is
+exactly the step automation keeps failing at (KOTOR tracks its own cursor from relative
+DirectInput deltas; traps 22/25). `TestDriveController` + `blockpoke talk <tag>` /
+`walk <x> <y>` / `dialogue`. **`talk` runs `StartDialogueWith`, which is the same
+player-to-server request a mouse click produces**, so the whole conversation path —
+including the exclusivity gate — is exercised for real rather than simulated.
+
+### Verified live, two windows
+
+- **Conversation opens on demand**: `blockpoke talk end_trask` on the host ->
+  `test: opened a conversation with 'end_trask'`.
+- **The peer follows it**: the client logged `dialogue: following the peer's conversation`
+  ~2 s later, and its block read `remote: active 1 partner 'end_trask'` while the host read
+  `remote: active 0` (owner, not follower). The token propagates and the spectator opens
+  the SAME conversation against its own copy of the NPC.
+- **The BG3 rule holds**: with the host mid-conversation, the client's own
+  `talk carth` was REFUSED (`could not open a conversation`). One conversation per session,
+  confirmed end to end rather than by construction.
+- ⚠ **The spectate LINE is still empty** for base-game dialogue (`line: ''` on both sides).
+  That is the known TLK-StrRef gap from addendum 0h, now confirmed to still be open: the
+  conversation itself is shared correctly, the transcript text is not.
+
+### THE BUG: a host that CRASHES leaves the client spectating forever
+
+Killed the host process mid-conversation. Twenty seconds later the client still read
+`remote: active 1` and never logged the close — meaning its own reply control
+(`SetCanSendDialog(false)`) stayed off **permanently**. The explicit-disconnect hole was
+fixed this morning (0j); this is the same hole on the TIMEOUT path, which is the one that
+actually happens when a game crashes or a router blips.
+
+Cause: `CoopClient` detects link loss and clears `_localPeerId`, but `_dialogue` kept its
+last value, and the agent re-publishes that level state every tick — so
+`IsHeldByAnotherThan(0)` stayed true forever. Fixed: the link-loss branch now drops the
+token to `Idle`, since a token from a session you are no longer in is not authoritative
+(the host re-publishes a fresh one on reconnect). Regression test
+`AClientStopsFollowingWhenTheHostVanishesMidConversation` covers the crash case
+specifically — its sibling covers the polite Bye path.
+
+### Also found: the PC ignores script-queued move actions
+
+`walk` dispatches `ActionMoveToLocation` on the PC successfully (no failure code) and the
+player does not move — twice, to two different destinations. Phantoms obey the same call
+because `ClaimCreature` takes them out of AI control first (commandable, cleared queue,
+movement bit). Not chased further: movement replication is already proven from the
+phantom side, and `StartDialogueWith` makes the SERVER walk the player into range, so the
+dialogue test never needed it. Recorded so nobody assumes the hook is broken.
+
+270 tests; all three builds clean.

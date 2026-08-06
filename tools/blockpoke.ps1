@@ -12,7 +12,7 @@
 param(
     [string]$ProcessName = 'swkotor',
     [int]$ProcId = 0,
-    [Parameter(Position = 0)][ValidateSet('state', 'travel', 'journal', 'pause', 'browser', 'death', 'hitphantom', 'combat')]
+    [Parameter(Position = 0)][ValidateSet('state', 'travel', 'journal', 'pause', 'browser', 'death', 'hitphantom', 'combat', 'talk', 'walk', 'dialogue')]
     [string]$Command = 'state',
     [Parameter(Position = 1)][string]$Arg1 = '',
     [Parameter(Position = 2)][int]$Arg2 = 0
@@ -75,6 +75,7 @@ function U32($off) {
     if ($null -eq $b) { return [uint32]0xFFFFFFFF } else { [BitConverter]::ToUInt32($b, 0) }
 }
 function WU32($off, [uint32]$value) { [BP]::Write($h, $block + $off, [BitConverter]::GetBytes($value)) | Out-Null }
+function WF32($off, [float]$value) { [BP]::Write($h, $block + $off, [BitConverter]::GetBytes($value)) | Out-Null }
 function WAscii($off, [string]$text, [int]$cap) {
     $bytes = [byte[]]::new($cap)
     $ascii = [Text.Encoding]::ASCII.GetBytes($text)
@@ -130,6 +131,29 @@ switch ($Command) {
         "  suppress: gameOver {0}  swap {1}" -f (U32 0x102C), (U32 0x1030)
         "  revive:   serial {0}  applied {1}  status {2}  hp {3}" -f `
             (U32 0x1034), (U32 0x1038), (U32 0x103C), (U32 0x1040)
+    }
+    'talk' {
+        # Opens a conversation with an NPC by tag — exactly what clicking it does, so the
+        # exclusivity gate and the peer's spectate both run for real.
+        if ($Arg1.Length -eq 0) { Write-Error 'talk needs an NPC tag (e.g. end_trask)'; exit 1 }
+        WAscii 0x1D70 $Arg1 32
+        WU32 0x1D90 ((U32 0x1D90) + 1)
+        "talk requested: '$Arg1' (serial $(U32 0x1D90))"
+    }
+    'walk' {
+        # Walks the local player to a point with the engine's own move action.
+        $x = [float]$Arg1; $y = [float]$Arg2
+        WF32 0x1D94 $x
+        WF32 0x1D98 $y
+        WU32 0x1D9C ((U32 0x1D9C) + 1)
+        "walk requested: ({0:F2}, {1:F2}) serial {2}" -f $x, $y, (U32 0x1D9C)
+    }
+    'dialogue' {
+        "  local:  serial {0}  speaker '{1}'" -f (U32 0xCE8), (Ascii 0xC80 32)
+        "  local:  partner '{0}'  replySerial {1} index {2}" -f (Ascii 0x1200 32), (U32 0x1220), (U32 0x1224)
+        "  remote: active {0}  partner '{1}'  replySerial {2} index {3}" -f `
+            (U32 0x1228), (Ascii 0x1240 32), (U32 0x122C), (U32 0x1230)
+        "  line:   '{0}'" -f (Ascii 0x1100 96)
     }
     'hitphantom' {
         # Lands a REAL engine damage effect on a phantom, so the combat-participation

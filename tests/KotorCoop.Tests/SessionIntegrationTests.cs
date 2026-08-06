@@ -641,6 +641,54 @@ public class SessionIntegrationTests
     }
 
     [Fact]
+    public async Task AClientStopsFollowingWhenTheHostVanishesMidConversation()
+    {
+        // The mirror image of the test above: there, the conversation's OWNER left. Here
+        // the HOST dies while owning a conversation, and the client must stop reporting
+        // that a peer holds the token — the agent re-publishes that flag every tick, so a
+        // stale one leaves the spectator locked out of its own replies forever. Found
+        // live: the host was killed mid-conversation and the client still read
+        // "remote: active 1" twenty seconds later.
+        using CoopHost host = new(new SessionSettings { PlayerName = "Revan", Port = 0, TickRate = 30 });
+        using CoopClient malak = new(
+            new SessionSettings { PlayerName = "Malak", TickRate = 30, PeerTimeoutMs = 1000 },
+            new IPEndPoint(IPAddress.Loopback, host.ListenEndPoint.Port));
+
+        using CancellationTokenSource hostCts = new();
+        using CancellationTokenSource malakCts = new(Timeout + TimeSpan.FromSeconds(20));
+        Task hostTask = host.RunAsync(hostCts.Token);
+        Task malakTask = malak.RunAsync(malakCts.Token);
+
+        PlayerState state = new(Vector3f.Zero, 0f, "end_m01aa", 100, 0);
+        void Publish()
+        {
+            host.PublishLocalState(state);
+            malak.PublishLocalState(state);
+            host.PublishDialogue(true, "Trask", "");
+        }
+
+        Assert.True(await WaitForAsync(() => malak.IsConnected, Timeout, Publish));
+        Assert.True(
+            await WaitForAsync(
+                () => malak.GetDialogue().IsHeldByAnotherThan(malak.LocalPeerId), Timeout, Publish),
+            "the client never saw the host's conversation");
+
+        // The host dies without a Bye — the crash case, not the polite one.
+        await hostCts.CancelAsync();
+        await hostTask;
+
+        Assert.True(
+            await WaitForAsync(
+                () => !malak.GetDialogue().Active,
+                TimeSpan.FromSeconds(12),
+                () => malak.PublishLocalState(state)),
+            "the client kept following a conversation whose host was gone");
+
+        await malakCts.CancelAsync();
+        await malakTask;
+    }
+
+    [Fact]
     public async Task ProgressionMirrorsFromHostToClient()
     {
         using CoopHost host = new(new SessionSettings { PlayerName = "Revan", Port = 0, TickRate = 30 });
