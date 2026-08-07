@@ -440,3 +440,50 @@ node `+0x00` speaker(CExoString) / `+0x08` text(CExoLocString→StrRef) ·
 `CSWGuiDialog` (vtable `0x007559E0`) `+0x6C` reply count / `+0x1970[]` reply node ids /
 `+0x1C8A` selected slot · `CClientExoAppInternal+0x9C == 3` dialog input mode ·
 `CExoInput` global `0x007A39E4` · GUI manager `0x007A39F4`.
+
+
+---
+
+## ⚠ A JOINER CANNOT START A CONVERSATION AT ALL (found 2026-08-07, OPEN)
+
+Measured on a live two-instance session, and it invalidates two earlier claims in this
+repo's own notes — read this before trusting anything about spectating.
+
+**The symptom.** Every spectate follow ends in
+`dialogue: the peer's conversation never opened locally; backing out` after the 15 s budget.
+`Odyssey.StartDialogueWith` returns true (the request is sent), and no conversation ever
+becomes active on the client.
+
+**It is not the spectate logic.** Asking the client DIRECTLY to talk, via the
+`blockpoke talk <tag>` test hook with no follow involved, fails identically.
+
+**Eliminated by measurement, in this order:**
+
+| Suspect | Result |
+| --- | --- |
+| `DialogueGateHook` refusing the start | No `blocked a local conversation start` line ever logged |
+| A peer holding the co-op token | Closed the host's conversation, `remote: active 0`, still fails |
+| Talking to a PARTY MEMBER while solo mode is held | A non-party NPC (`end_bridgerep1`) fails too |
+| `CanSendDialog` | `CClientExoAppInternal + 0x228` reads **1** on BOTH instances |
+| Range / walking into position | Client PC 0.9 units from its own Trask |
+| A stale `gui+0xB4` conversation-active flag | Cleared it; still fails |
+
+The HOST does the identical thing, to the same NPC, successfully. The only structural
+differences left on the joiner are solo mode (`partyTable+0x190 = 1`), the control lock, and
+disabled encounters — none of which obviously reach conversation start.
+
+⚠ **Two claims elsewhere that this corrects:**
+
+1. `toolserify.ps1`'s check *"the peer follows the same conversation"* does **not** test
+   following. It asserts `RemoteDialogueActive` — that the client RECEIVED the token — and
+   nothing about whether the client opened anything. It has been passing throughout.
+2. The 22-round open/close hammer run recorded in Handoff §0i proves the CLOSE path does not
+   crash, and nothing more. Its 6-second window between open and close is shorter than the
+   15-second back-out timeout, so it could never have printed the failure. Do not cite it as
+   evidence that spectating worked.
+
+**Next step is instrumentation, not inspection**: detour `CSWSObject::StartDialog 0x004CF490`
+on the client and log whether it is reached at all, then trace the dialogue branch of
+`CSWSMessage::HandlePlayerToServerInputMessage`. If StartDialog is never reached, the message
+is being dropped before it; if it is reached and returns 0, one of its own gates is refusing
+and the disassembly will name which.
