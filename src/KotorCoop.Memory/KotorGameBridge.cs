@@ -146,11 +146,25 @@ public sealed class KotorGameBridge : IGameBridge
     // Combat participation (block version 21). Plugin -> agent: what each peer's phantom
     // has taken here, as a running total. Agent -> plugin: what the local player owes for
     // hits taken on their phantom elsewhere.
-    // Kills a peer earned (block version 22): ids, count, then the serial written LAST.
-    private const int BlockKillRequestIds = 0x1DB0;
-    private const int BlockKillRequestCapacity = 8;
-    private const int BlockKillRequestCount = 0x1DD0;
-    private const int BlockKillRequestSerial = 0x1DD4;
+    // 0x1DB0..0x1DD8 was the kill-request channel (block version 22), retired with the
+    // health min-merge it served: the owner now applies a peer's damage as real damage, so
+    // a kill falls out of the arithmetic instead of arriving as a message to be trusted.
+
+    // Damage ledger (block version 23). Peer -> agent at 0x1E60 (32 x {id, cumulative}),
+    // agent -> peer's owner at 0x2018 (same shape), counters in between. A cumulative sum
+    // of damage DEALT, which is what replaced reporting enemy HEALTH: health had to be
+    // sampled and the owner's mirror wrote its own value back between samples, so most of
+    // a lone player's fight was erased before anyone could read it.
+    private const int BlockDamageDealtSlots = 0x1E60;
+    private const int BlockDamageOwedSlots = 0x2018;
+    private const int BlockDamageLedgerStride = 0x08;
+    private const int BlockDamageLedgerCapacity = 32;
+    private const int BlockDamageDealtCount = 0x2000;
+    private const int BlockDamageDealtDropped = 0x2004;
+    private const int BlockDamageDealtGeneration = 0x2008;
+    private const int BlockDamageOwedEpoch = 0x200C;
+    private const int BlockDamageOwedCount = 0x2010;
+    private const int BlockDamageDealtEnabled = 0x2118;
 
     private const int BlockPhantomHitSlots = 0x1CD0;
     private const int BlockPhantomHitStride = 0x10;
@@ -268,7 +282,7 @@ public sealed class KotorGameBridge : IGameBridge
     /// the wrong offsets. ⚠ Bump this WITH PluginHost's `_block->Version` — they are one
     /// number in two files, and a half-bump reads as "plugin shared block not found", which
     /// looks like a broken install rather than a version skew.</summary>
-    public const string PluginSignature = "4B 4F 43 4F 4F 50 30 31 18 00 00 00 01 EE FF C0";
+    public const string PluginSignature = "4B 4F 43 4F 4F 50 30 31 19 00 00 00 01 EE FF C0";
 
     /// <summary>Agent's view of which coop item id occupies each plugin item slot.</summary>
     private readonly uint[] _itemSlotIds = new uint[BlockItemCapacity];
@@ -2663,19 +2677,9 @@ public sealed class KotorGameBridge : IGameBridge
     /// from the player, which is the same test the engine's own targeting uses, and it
     /// keeps party members, neutral NPCs and other players' phantoms out of the list.
     /// </summary>
-    /// <summary>Addresses from the latest <see cref="ReadEnemies"/>, so applying a peer's
-    /// floors does not need a second full memory scan in the same tick.</summary>
-    private readonly Dictionary<uint, nint> _enemyAddresses = [];
-
-    /// <summary>Ids the module declares plot (un-killable). The combat half of the channel
-    /// must skip them everywhere — including a peer's damage reports.</summary>
-    private readonly HashSet<uint> _plotIds = [];
-
     public List<EnemyState> ReadEnemies(IReadOnlyList<Vector3f> otherPlayers)
     {
         List<EnemyState> enemies = [];
-        _enemyAddresses.Clear();
-        _plotIds.Clear();
 
         if (_player is null)
         {
@@ -2785,8 +2789,6 @@ public sealed class KotorGameBridge : IGameBridge
                     position, facing, animation, oneShotSerial, oneShotAnim, plot),
                 fighting,
                 nearestSquared));
-
-            _enemyAddresses[creature.ObjectId] = creature.Address;
         }
 
         candidates.Sort((a, b) => a.Fighting != b.Fighting
@@ -2796,13 +2798,7 @@ public sealed class KotorGameBridge : IGameBridge
         int count = Math.Min(candidates.Count, BlockEnemyCapacity);
         for (int i = 0; i < count; i++)
         {
-            EnemyState state = candidates[i].State;
-            if (state.Plot)
-            {
-                _plotIds.Add(state.ObjectId);
-            }
-
-            enemies.Add(state);
+            enemies.Add(candidates[i].State);
         }
 
         return enemies;
@@ -2869,98 +2865,106 @@ public sealed class KotorGameBridge : IGameBridge
     }
 
     /// <summary>
-    /// Lowers this instance's enemies to a peer's reported health where the peer's is
-    /// lower — the min-merge that makes a client's damage count. A raw health write is
-    /// the engine's own idiom here (there is no dirty flag for health; the update path
-    /// diffs it every tick), and death stays this side's call: reports never go below 1
-    /// because client copies are pinned, so the killing blow is always local.
+    /// What this instance has DEALT to each enemy, straight out of the plugin's ledger.
+    ///
+    /// The replacement for reporting enemy HEALTH back to the fight's owner, and the reason
+    /// is the whole point of the channel: health is a level that has to be sampled, and the
+    /// owner's mirror writes its own value back onto our copy between samples, so a hit had
+    /// to win a race to be reported at all. Measured live — a client attacking one soldier
+    /// for ninety seconds moved it from 15 hit points to 11 and no further. A cumulative
+    /// sum of damage dealt cannot be raced, because nothing ever reads it back out of the
+    /// game.
     /// </summary>
-    public int TryApplyEnemyFloors(IReadOnlyList<EnemyState> reports)
+    public (uint Generation, List<EnemyDamageEntry> Damage) ReadDamageDealt()
     {
-        int applied = 0;
-        List<uint>? kills = null;
+        List<EnemyDamageEntry> damage = [];
 
-        foreach (EnemyState report in reports)
+        if (_pluginBlock == 0)
         {
-            if (!_enemyAddresses.TryGetValue(report.ObjectId, out nint address))
+            return (0, damage);
+        }
+
+        // Opting in is what turns the accumulation on inside the engine's damage hook. Only
+        // an instance that MIRRORS enemies needs it; asking for it here rather than having
+        // the plugin guess keeps the decision with the side that knows who owns the fight.
+        if (!_damageDealtEnabled)
+        {
+            _damageDealtEnabled = _memory.TryWrite(_pluginBlock + BlockDamageDealtEnabled, 1u);
+            return (0, damage);
+        }
+
+        _memory.TryReadUInt32(_pluginBlock + BlockDamageDealtGeneration, out uint generation);
+        _memory.TryReadUInt32(_pluginBlock + BlockDamageDealtCount, out uint count);
+
+        for (int i = 0; i < Math.Min(count, BlockDamageLedgerCapacity); i++)
+        {
+            nint slot = _pluginBlock + BlockDamageDealtSlots + (i * BlockDamageLedgerStride);
+
+            if (!_memory.TryReadUInt32(slot + 0x00, out uint objectId) || objectId == 0)
             {
                 continue;
             }
 
-            // A plot creature's health is the module's rule, not the session's — and OUR
-            // census decides plot-ness, never the report (a peer cannot un-plot a body).
-            if (_plotIds.Contains(report.ObjectId))
+            if (_memory.TryReadUInt32(slot + 0x04, out uint cumulative) && cumulative > 0)
             {
-                continue;
-            }
-
-            if (!_memory.TryRead(address + OffCurrentHitPoints, out short current))
-            {
-                continue;
-            }
-
-            // ⚠ A REPORTED DEATH IS THE LAST POINT OF DAMAGE, NOT A DELETION.
-            //
-            // The floor below never goes under 1, which is right — an enemy at zero that no
-            // death path has run for is a body the engine still thinks is alive. But it also
-            // meant a player fighting away from us could wear something down and never
-            // finish it, so a room they cleared alone stayed uncleared forever.
-            //
-            // So a peer's "it is dead" is honoured, under one condition: OUR copy must be
-            // alive and already at the floor, which only happens because that same peer
-            // fought it there. A stray or stale report can shave health; it can never delete
-            // something nobody had beaten down. The kill itself runs in the plugin, through
-            // the engine's own lethal damage, so the corpse, loot and OnDeath script are real.
-            if (report.Dead)
-            {
-                if (current is > 0 and <= 1)
-                {
-                    (kills ??= []).Add(report.ObjectId);
-                }
-
-                continue;
-            }
-
-            int floor = Math.Max(1, (int)report.CurrentHealth);
-
-            if (floor < current && _memory.TryWrite(address + OffCurrentHitPoints, floor))
-            {
-                applied++;
+                damage.Add(new EnemyDamageEntry(objectId, cumulative));
             }
         }
 
-        if (kills is not null)
-        {
-            TryRequestKills(kills);
-        }
-
-        return applied;
+        return (generation, damage);
     }
 
-    private uint _killRequestSerial;
+    /// <summary>Whether we have told the plugin to start accumulating. One write, latched:
+    /// the flag lives in the block and only a fresh block (a restarted game) clears it.</summary>
+    private bool _damageDealtEnabled;
+
+    /// <summary>Hits the plugin's ledger had no room for. Non-zero means a peer's damage is
+    /// being under-reported — the exact failure this channel exists to remove — so it is
+    /// surfaced rather than swallowed.</summary>
+    public uint ReadDamageDealtDropped()
+    {
+        if (_pluginBlock == 0)
+        {
+            return 0;
+        }
+
+        _memory.TryReadUInt32(_pluginBlock + BlockDamageDealtDropped, out uint dropped);
+        return dropped;
+    }
 
     /// <summary>
-    /// Hands the plugin a list of creatures a peer earned the kill on, for it to execute on
-    /// the game thread through the engine's own death. Ids first, count, then the serial —
-    /// the plugin only acts when the serial moves, so it never sees a half-written list.
+    /// Hands the plugin the total every peer has dealt to each of our enemies, for it to
+    /// spend as real engine damage on the game thread.
+    ///
+    /// ⚠ The count is zeroed FIRST and restored LAST, so the plugin either sees the whole
+    /// table or none of it. Elsewhere in this block an id written last is enough, because a
+    /// torn row costs a frame of a wrong position; here it would spend damage against the
+    /// wrong creature. A pass the plugin catches mid-write simply does nothing, and the
+    /// totals are cumulative levels, so the next pass makes it whole.
+    ///
+    /// The epoch is the module the ids belong to — the plugin drops its own applied totals
+    /// when it changes, so the two halves restart together rather than the plugin holding a
+    /// high applied total against an agent that has already gone back to zero.
     /// </summary>
-    public bool TryRequestKills(IReadOnlyList<uint> objectIds)
+    public bool TryPublishDamageOwed(uint epoch, IReadOnlyList<EnemyDamageEntry> owed)
     {
-        if (_pluginBlock == 0 || objectIds.Count == 0)
+        if (_pluginBlock == 0)
         {
             return false;
         }
 
-        int count = Math.Min(objectIds.Count, BlockKillRequestCapacity);
-        bool ok = true;
+        bool ok = _memory.TryWrite(_pluginBlock + BlockDamageOwedCount, 0u);
+        int count = Math.Min(owed.Count, BlockDamageLedgerCapacity);
 
         for (int i = 0; i < count; i++)
         {
-            ok &= _memory.TryWrite(_pluginBlock + BlockKillRequestIds + (i * 4), objectIds[i]);
+            nint slot = _pluginBlock + BlockDamageOwedSlots + (i * BlockDamageLedgerStride);
+            ok &= _memory.TryWrite(slot + 0x04, owed[i].CumulativeDamage);
+            ok &= _memory.TryWrite(slot + 0x00, owed[i].ObjectId);
         }
 
-        ok &= _memory.TryWrite(_pluginBlock + BlockKillRequestCount, (uint)count);
-        ok &= _memory.TryWrite(_pluginBlock + BlockKillRequestSerial, ++_killRequestSerial);
+        ok &= _memory.TryWrite(_pluginBlock + BlockDamageOwedEpoch, epoch);
+        ok &= _memory.TryWrite(_pluginBlock + BlockDamageOwedCount, (uint)count);
         return ok;
     }
 

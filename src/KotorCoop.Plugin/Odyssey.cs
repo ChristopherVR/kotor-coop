@@ -4433,6 +4433,28 @@ internal static unsafe class Odyssey
     /// </summary>
     public static bool ApplyDamageEffect(uint objectId, int amount, out int failure)
     {
+        // ⚠ Our own damage must not come back to us as a peer's contribution. The damage
+        // hook credits any hit whose creator is the local player, and every synthetic hit
+        // below is dispatched from a script context that names the player: the mirroring
+        // side finishing a mirrored enemy with KillCreature would otherwise report 9999
+        // fresh damage to the owner, and the owner applying a peer's damage would count it
+        // again as its own. Set here rather than at the call sites so none can forget.
+        //
+        // The phantom half stays visible on purpose — the test hook stages a real hit on a
+        // phantom through this call, and blinding it would blind the verification tool.
+        PhantomHitHook.SuppressDealt = true;
+        try
+        {
+            return ApplyDamageEffectCore(objectId, amount, out failure);
+        }
+        finally
+        {
+            PhantomHitHook.SuppressDealt = false;
+        }
+    }
+
+    private static bool ApplyDamageEffectCore(uint objectId, int amount, out int failure)
+    {
         failure = 0;
 
         nint implementer = GetImplementer(out nint vm, out nint internalVm);

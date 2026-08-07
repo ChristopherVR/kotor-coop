@@ -67,13 +67,12 @@ public enum PacketType : byte
     /// <summary>host -> client: the authoritative journal (possibly split over packets).</summary>
     JournalSnapshot = 21,
 
-    /// <summary>
-    /// client -> host: my local view of enemy health, sent each tick. The host merges
-    /// downward (an enemy is as hurt as ANY instance says it is), which is what makes a
-    /// client's damage real — client copies are pinned at 1 hp, so without this a
-    /// client's whole fight would be cosmetic.
-    /// </summary>
-    EnemyReport = 22,
+    // 22 was EnemyReport: a client's SAMPLED view of enemy health, min-merged by the host.
+    // Retired 2026-08-07 for EnemyDamage (32). Health could not say WHO dealt what, and
+    // sampling it lost most of a lone player's fight — the owner's mirror wrote its own
+    // value back onto the client's copy eight times a second, so a hit had to win a race
+    // against the next mirror pass to be reported at all (measured: 15 -> 11 hp and then
+    // nothing, for ninety seconds). ⚠ Do not reuse the value: an old build still sends it.
 
     /// <summary>
     /// both ways: a fingerprint of the in-world state that only becomes knowable once a
@@ -152,4 +151,18 @@ public enum PacketType : byte
     /// <c>started == 1</c>, which is exactly what firing sets.
     /// </summary>
     EncounterTrigger = 32,
+
+    /// <summary>
+    /// peer -> enemy owner: how much damage this instance has DEALT to each enemy, as a
+    /// running cumulative total per object id.
+    ///
+    /// The replacement for <c>EnemyReport</c> (22), and the difference is the whole point:
+    /// health is a level that has to be sampled and can be overwritten by the owner's next
+    /// mirror write, while damage dealt is a monotonic sum that nothing in the game can
+    /// erase — it is never read back out of the engine. The owner keeps the last total it
+    /// applied per (peer, enemy) and applies each increase as real damage to its own copy,
+    /// so the channel is order-independent, survives a lost datagram, and never
+    /// double-applies a repeated one.
+    /// </summary>
+    EnemyDamage = 33,
 }

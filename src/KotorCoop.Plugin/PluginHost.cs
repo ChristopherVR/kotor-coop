@@ -26,6 +26,8 @@ internal static unsafe class PluginHost
     private static EnemyPresenceController? _enemyPresence;
     private static PartyPresenceController? _partyPresence;
     private static IncomingDamageController? _incomingDamage;
+
+    private static PeerDamageController? _peerDamage;
     private static TestDriveController? _testDrive;
     private static DoorController? _doors;
     private static PlaceableController? _placeables;
@@ -95,6 +97,7 @@ internal static unsafe class PluginHost
             _enemyPresence = new EnemyPresenceController(_view);
             _partyPresence = new PartyPresenceController(_view);
             _incomingDamage = new IncomingDamageController(_view);
+            _peerDamage = new PeerDamageController(_view);
             _testDrive = new TestDriveController(_view);
             _doors = new DoorController(_view);
             _placeables = new PlaceableController(_view);
@@ -307,7 +310,7 @@ internal static unsafe class PluginHost
         Unsafe.InitBlockUnaligned(_block, 0, SharedBlock.TotalSize);
 
         _block->Magic = SharedBlock.MagicValue;
-        _block->Version = 24;
+        _block->Version = 25;
 
         // A guard dword after the version. Magic plus version alone was not selective
         // enough: a scan once matched something else at a lower address and the agent
@@ -504,6 +507,12 @@ internal static unsafe class PluginHost
         // standing at this frame, and so a fired encounter's spawns are already in the
         // owner's census by the next pump.
         _encounters?.OnFrame();
+
+        // After the combat pass, so the enemy the owner has just killed is already off the
+        // dealt ledger before this publishes it — and so a peer's damage lands on a copy
+        // whose health the mirror has already brought up to date this frame.
+        _peerDamage?.OnFrame();
+
         _doors?.OnFrame();
         _placeables?.OnFrame();
         _loot?.OnFrame();
@@ -529,6 +538,7 @@ internal static unsafe class PluginHost
         _enemyPresence?.Invalidate();
         _partyPresence?.Invalidate();
         _incomingDamage?.Invalidate();
+        _peerDamage?.Invalidate();
         _testDrive?.Invalidate();
         PhantomHitHook.Invalidate();
         AnimationHook.InvalidateCreatureTable();

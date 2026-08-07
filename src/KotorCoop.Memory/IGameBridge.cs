@@ -182,14 +182,6 @@ public interface IGameBridge : IDisposable
     bool SupportsEnemySync => false;
 
     /// <summary>
-    /// Asks the plugin to run the engine's own death for creatures a PEER earned the kill on.
-    /// Only the enemy owner does this: a player fighting away from the owner can bring an
-    /// enemy down but cannot deliver the last point of damage, because the health merge
-    /// floors at 1. Default false when this bridge has no plugin.
-    /// </summary>
-    bool TryRequestKills(IReadOnlyList<uint> objectIds) => false;
-
-    /// <summary>
     /// True while the local player is in a conversation. Enemy state must not be published
     /// during one: the dialogue system disarms every hostile in this instance, and a peer
     /// mirroring that would see its own fight go quiet.
@@ -338,11 +330,21 @@ public interface IGameBridge : IDisposable
     bool TryWriteProgression(uint gold, uint experience) => false;
 
     /// <summary>
-    /// Enemy-authority side only: lowers own enemies to a peer's reported health where
-    /// the peer's is lower. This is what makes a client's damage real. Returns how many
-    /// enemies were lowered.
+    /// Mirroring side: how much damage this instance has DEALT to each enemy since its
+    /// object ids were last assigned, plus the ledger generation those totals belong to.
+    /// Cumulative and monotonic within a generation; empty when no plugin is attached.
     /// </summary>
-    int TryApplyEnemyFloors(IReadOnlyList<EnemyState> reports) => 0;
+    (uint Generation, List<EnemyDamageEntry> Damage) ReadDamageDealt() => (0, []);
+
+    /// <summary>
+    /// Enemy-authority side only: hands the plugin the total every peer has dealt to each
+    /// of our enemies, keyed to <paramref name="epoch"/> (the module the ids belong to).
+    /// The plugin applies the increase as real engine damage on the game thread — which is
+    /// also how a peer's kill happens, because an enemy whose accumulated damage exceeds
+    /// its health simply dies, with the corpse, loot and OnDeath the engine runs for any
+    /// other death.
+    /// </summary>
+    bool TryPublishDamageOwed(uint epoch, IReadOnlyList<EnemyDamageEntry> owed) => false;
 
     /// <summary>False when this bridge cannot see or drive the quest journal.</summary>
     bool SupportsJournalSync => false;

@@ -92,20 +92,40 @@ public class PacketCodecTests
     }
 
     [Fact]
-    public void EnemyReportRoundTrips()
+    public void EnemyDamageRoundTrips()
     {
         Span<byte> buffer = stackalloc byte[ProtocolConstants.MaxPacketSize];
 
-        EnemyReportPacket original = new(2, "end_m01aa",
-            [new EnemyState(0x14, 3, 15, false), new EnemyState(0x17, 1, 12, false)]);
+        EnemyDamagePacket original = new(2, "end_m01aa", 4,
+            [new EnemyDamageEntry(0x14, 27), new EnemyDamageEntry(0x17, 3)]);
 
         int length = PacketCodec.Write(buffer, original);
-        EnemyReportPacket? decoded = PacketCodec.ReadEnemyReport(buffer[..length]);
+        EnemyDamagePacket? decoded = PacketCodec.ReadEnemyDamage(buffer[..length]);
 
         Assert.NotNull(decoded);
         Assert.Equal(2u, decoded.PeerId);
         Assert.Equal("end_m01aa", decoded.Module);
-        Assert.Equal(original.Enemies, decoded.Enemies);
+        Assert.Equal(4u, decoded.Generation);
+        Assert.Equal(original.Damage, decoded.Damage);
+    }
+
+    [Fact]
+    public void AFullEnemyDamageReportFitsInOneDatagram()
+    {
+        Span<byte> buffer = stackalloc byte[ProtocolConstants.MaxPacketSize];
+
+        List<EnemyDamageEntry> damage = [];
+        for (int i = 0; i < ProtocolConstants.MaxEnemyDamageEntries; i++)
+        {
+            damage.Add(new EnemyDamageEntry((uint)(0x100 + i), uint.MaxValue));
+        }
+
+        int length = PacketCodec.Write(
+            buffer, new EnemyDamagePacket(uint.MaxValue, new string('m', ProtocolConstants.MaxModuleLength),
+                uint.MaxValue, damage));
+
+        Assert.InRange(length, 1, ProtocolConstants.MaxPacketSize);
+        Assert.Equal(damage, PacketCodec.ReadEnemyDamage(buffer[..length])!.Damage);
     }
 
     [Fact]
@@ -380,20 +400,19 @@ public class PacketCodecTests
     }
 
     [Fact]
-    public void EnemyReportCarriesHealthAloneAndDropsPresence()
+    public void TheEnemyDamageDirectionCarriesNeitherHealthNorPresence()
     {
         Span<byte> buffer = stackalloc byte[ProtocolConstants.MaxPacketSize];
 
-        // A client's report exists to carry its damage back to the owner. Its presence
-        // fields are whatever its local engine happens to show and must NOT reach the
-        // wire — the owner's own positions are the authoritative ones.
-        List<EnemyState> reported = [new(0x14, 9, 15, false, new Vector3f(1f, 2f, 3f), 0.5f, 0x2712, 9, 0x271B)];
-
-        int length = PacketCodec.Write(buffer, new EnemyReportPacket(7, "end_m01aa", reported));
-        EnemyReportPacket? decoded = PacketCodec.ReadEnemyReport(buffer[..length]);
+        // A peer's direction carries damage DEALT and nothing else. No health, no presence:
+        // the owner's own engine is the authority on both, and a peer's copy of either is
+        // whatever its mirrored, min-1-hp-pinned local body happens to show.
+        int length = PacketCodec.Write(
+            buffer, new EnemyDamagePacket(7, "end_m01aa", 1, [new EnemyDamageEntry(0x14, 6)]));
+        EnemyDamagePacket? decoded = PacketCodec.ReadEnemyDamage(buffer[..length]);
 
         Assert.NotNull(decoded);
-        Assert.Equal(new EnemyState(0x14, 9, 15, false), decoded.Enemies[0]);
+        Assert.Equal(new EnemyDamageEntry(0x14, 6), decoded.Damage[0]);
     }
 
     [Fact]

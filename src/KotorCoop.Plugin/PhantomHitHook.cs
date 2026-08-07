@@ -4,8 +4,9 @@ using System.Runtime.InteropServices;
 namespace KotorCoop.Plugin;
 
 /// <summary>
-/// Watches for damage landing on a peer's phantom, so the hit can be forwarded and applied
-/// to that peer's real character in their own game.
+/// Watches the engine's single damage choke point, for two things at once: damage landing
+/// on a peer's PHANTOM (forwarded to that peer's real character), and damage the local
+/// player DEALS to anything (forwarded to whoever owns that creature's fight).
 ///
 /// The choke point is <c>CSWSEffectListHandler::OnApplyDamage 0x004DFA40</c> — the damage
 /// analog of the animation hook's dispatch site: every point of weapon, grenade and force
@@ -15,14 +16,21 @@ namespace KotorCoop.Plugin;
 /// thing that has to be right, and misses are cosmetic. See
 /// docs/research/combat-participation.md §4.
 ///
-/// Damage is accumulated as a CUMULATIVE TOTAL per phantom rather than published as
-/// events, deliberately: the far side applies the delta between what it has already taken
-/// and the total, so a lost packet costs one tick of staleness instead of a permanently
-/// missed hit. That is the same "level, not event" rule the enemy-health channel follows.
+/// Both are accumulated as CUMULATIVE TOTALS rather than published as events: the far side
+/// applies the delta between the total and what it has already applied, so a lost packet
+/// costs one tick of staleness instead of a permanently missed hit, a duplicate costs
+/// nothing, and order does not matter.
+///
+/// The damage-dealt half is what replaced reporting enemy HEALTH back to the fight's owner.
+/// Health had to be sampled, and the owner's mirror wrote its own value back over our copy
+/// between samples, so most of a lone player's fight was erased before anyone saw it
+/// (measured: 15 hp to 11 hp in ninety seconds, then nothing). A sum of damage dealt is
+/// immune to that because it is never read back out of the game — and it can say WHO dealt
+/// what, which health cannot express at all.
 ///
 /// This runs inside every damage event in the game, so it does the least possible work:
-/// compare an id against a tiny array, sum at most 15 ints, store two words. No engine
-/// calls, no allocation, and a catch that can never unwind into the engine.
+/// compare an id against two tiny arrays, read a handful of ints, add. No engine calls, no
+/// allocation, and a catch that can never unwind into the engine.
 /// </summary>
 internal static unsafe class PhantomHitHook
 {
@@ -47,6 +55,15 @@ internal static unsafe class PhantomHitHook
     /// <summary>CSWSObject + this = object id.</summary>
     private const int ObjId = 0x04;
 
+    /// <summary>The SERVER CSWSCreature vtable — the same constant CreatureFinder scans for.
+    /// Doors, placeables and mines all take damage through this hook too, and forwarding a
+    /// door's id to the owner would have it apply the damage to its own copy of the door.
+    /// Creatures only, for now.</summary>
+    private const nint ServerCreatureVtable = 0x007470C8;
+
+    /// <summary>CSWSObject + this = current hit points (int16; negative on an overkill).</summary>
+    private const int ObjCurrentHitPoints = 0x0DC;
+
     /// <summary>CGameEffect + this = creator_id, the attacker's object id.</summary>
     private const int EffectCreator = 0x18;
 
@@ -70,6 +87,37 @@ internal static unsafe class PhantomHitHook
     private static readonly uint[] _cumulative = new uint[SharedBlock.SlotCapacity];
     private static readonly uint[] _lastAttacker = new uint[SharedBlock.SlotCapacity];
     private static readonly uint[] _serial = new uint[SharedBlock.SlotCapacity];
+
+    /// <summary>Damage the local side has dealt, per target object id.</summary>
+    private static readonly DamageDealtTable _dealt = new(SharedBlock.DamageLedgerCapacity);
+
+    /// <summary>
+    /// Object ids whose damage counts as OURS: the local player and its party.
+    ///
+    /// Refreshed from the frame thread, never resolved in here. A client holds solo mode so
+    /// only the PC is actually swinging today, but a companion's hit has to count the day
+    /// that changes, and the alternative test — "anything that is not one of the mirrored
+    /// enemies" — silently credits us with enemy-on-enemy damage the moment the 32-slot
+    /// census sheds a creature.
+    /// </summary>
+    private static readonly uint[] _ourAttacker = new uint[16];
+    private static int _ourAttackerCount;
+
+    /// <summary>
+    /// ⚠ Set while the plugin is applying a damage effect OF ITS OWN, so the dealt ledger
+    /// does not count it.
+    ///
+    /// Without this the channel feeds itself: the mirroring side finishes a mirrored enemy
+    /// with <c>KillCreature</c> (a 9999-point engine damage effect) and the ledger reports
+    /// 9999 fresh damage to the owner for a creature the owner has already killed; the
+    /// owner's own application of a peer's damage is likewise seen by its own hook. Set
+    /// inside Odyssey.ApplyDamageEffect so no call site can forget it.
+    ///
+    /// The PHANTOM half is deliberately left visible: the test hook stages a real hit on a
+    /// phantom through exactly that call, and suppressing it would blind the tool that
+    /// verifies this whole path.
+    /// </summary>
+    public static bool SuppressDealt { get; set; }
 
     private static bool _installed;
 
@@ -123,14 +171,46 @@ internal static unsafe class PhantomHitHook
     public static int ReadAmount(int index) =>
         index is >= 0 and < DamageTypeSlots ? _lastAmounts[index] : 0;
 
+    // ---- damage this side has DEALT ----------------------------------------------
+
+    /// <summary>Tells the hook whose damage counts as ours. Frame thread; the array is only
+    /// ever grown-then-counted, so the hook can never read a half-written set.</summary>
+    public static void WatchAttackers(ReadOnlySpan<uint> objectIds)
+    {
+        int count = 0;
+        for (int i = 0; i < objectIds.Length && count < _ourAttacker.Length; i++)
+        {
+            if (objectIds[i] is not (0 or ObjectInvalid))
+            {
+                _ourAttacker[count++] = objectIds[i];
+            }
+        }
+
+        // Widen before narrowing: an id written above the old count is invisible until the
+        // count moves, and an id below it was already valid.
+        for (int i = count; i < _ourAttacker.Length; i++)
+        {
+            _ourAttacker[i] = 0;
+        }
+
+        _ourAttackerCount = count;
+    }
+
+    public static DamageDealtTable Dealt => _dealt;
+
     /// <summary>Drops every watch and its totals — a module change frees the bodies and the
-    /// peer's own health is re-published from scratch.</summary>
+    /// peer's own health is re-published from scratch. The dealt ledger goes with it: object
+    /// ids are assigned per module load, so a total carried across would be credited against
+    /// a completely different creature.</summary>
     public static void Invalidate()
     {
         Array.Clear(_watchedId);
         Array.Clear(_cumulative);
         Array.Clear(_lastAttacker);
         Array.Clear(_serial);
+        Array.Clear(_ourAttacker);
+        _ourAttackerCount = 0;
+        _dealt.Clear();
     }
 
     /// <summary>Verify-bytes-or-refuse, like every other patch here. MAIN THREAD, once.</summary>
@@ -231,64 +311,22 @@ internal static unsafe class PhantomHitHook
                 }
             }
 
-            if (slot < 0)
+            bool ours = slot < 0 && !SuppressDealt && IsOursToCredit(target, targetId, effect);
+
+            if (slot < 0 && !ours)
             {
                 return;
             }
 
-            int count = *(int*)(effect + EffectIntCount);
-            nint ints = *(nint*)(effect + EffectInts);
-            if (ints == 0 || count <= 0)
-            {
-                return;
-            }
-
-            // Bounded by the list's own count as well as the engine's 15 damage types: a
-            // foreign or malformed effect must not make this over-read.
-            int slots = Math.Min(count, DamageTypeSlots);
-            int total = 0;
-            int plain = 0;
-
-            for (int i = 0; i < slots; i++)
-            {
-                int amount = *(int*)(ints + (i * 4));
-                _lastAmounts[i] = amount;
-
-                // An unpopulated slot reads -1, not 0 (measured live).
-                if (amount <= 0)
-                {
-                    continue;
-                }
-
-                // ⚠ Slot 14 is the PLAIN/universal view of the same damage, not an extra
-                // component: a 7-point universal hit measures as [3]=7 AND [14]=7, so
-                // summing all fifteen reported 14 and the peer took double. Sum the typed
-                // slots and keep the plain slot only as the fallback for an effect that
-                // populates nothing else.
-                if (i == PlainSlot)
-                {
-                    plain = amount;
-                }
-                else
-                {
-                    total += amount;
-                }
-            }
-
-            for (int i = slots; i < DamageTypeSlots; i++)
-            {
-                _lastAmounts[i] = 0;
-            }
-
-            _lastAmountsSerial++;
-
-            if (total == 0)
-            {
-                total = plain;
-            }
-
+            int total = ReadTotal(effect, breakdown: slot >= 0);
             if (total <= 0)
             {
+                return;
+            }
+
+            if (slot < 0)
+            {
+                _dealt.Add(targetId, (uint)total);
                 return;
             }
 
@@ -302,5 +340,127 @@ internal static unsafe class PhantomHitHook
         {
             // Never let a managed fault unwind into the engine's damage application.
         }
+    }
+
+    /// <summary>
+    /// Whether this hit is one of OURS landing on someone else's creature — the thing the
+    /// fight's owner needs to hear about.
+    /// </summary>
+    private static bool IsOursToCredit(nint target, uint targetId, nint effect)
+    {
+        if (_ourAttackerCount == 0)
+        {
+            return false;
+        }
+
+        // Creatures only. Doors, placeables and mines come through here as well, and a
+        // door's id forwarded to the owner would have it bash its own copy of that door.
+        if (*(nint*)target != ServerCreatureVtable)
+        {
+            return false;
+        }
+
+        // ⚠ Already a corpse. The engine's own dead check is a few instructions past this
+        // hook, so splash landing on a body it has already killed still arrives here — and
+        // crediting it would report damage nobody took.
+        if (*(short*)(target + ObjCurrentHitPoints) <= 0)
+        {
+            return false;
+        }
+
+        uint attacker = *(uint*)(effect + EffectCreator);
+        if (attacker is 0 or ObjectInvalid)
+        {
+            return false;
+        }
+
+        bool fromUs = false;
+        for (int i = 0; i < _ourAttackerCount; i++)
+        {
+            uint id = _ourAttacker[i];
+
+            // Damage BETWEEN our own bodies is not a contribution to anyone's fight — and
+            // the incoming-phantom-damage channel lands on the player through this very
+            // path, so counting it would loop it straight back out again.
+            if (id == targetId)
+            {
+                return false;
+            }
+
+            fromUs |= id == attacker;
+        }
+
+        return fromUs;
+    }
+
+    /// <summary>
+    /// The damage this effect will actually take off, read out of the effect's integer list.
+    ///
+    /// ⚠ Slot 14 is not "one more damage type" — it IS the number the engine applies.
+    /// Verified in the instruction stream: <c>OnApplyDamage</c> copies slot 14 aside at
+    /// 0x004DFAEA, exits outright at 0x004DFB0A when it is zero, runs the target's
+    /// resistance/immunity/reduction virtuals over that one value, and passes the result to
+    /// <c>CSWSCreature::DoDamage</c> at 0x004DFD9B. The other fourteen slots are the
+    /// breakdown, copied into the target's per-type damage tally at 0x004DFD10 and nothing
+    /// else — which is why summing all fifteen once reported double.
+    ///
+    /// The typed sum stays as the fallback for an effect that leaves slot 14 unpopulated
+    /// (slots read -1, not 0, when unset), which preserves the behaviour that was measured
+    /// live on the phantom channel.
+    ///
+    /// ⚠ AND NOTE WHAT THIS NUMBER IS NOT: it is the amount BEFORE the target's resistances,
+    /// which is exactly why it is safe to forward. See docs/research/peer-damage-ledger.md.
+    /// </summary>
+    private static int ReadTotal(nint effect, bool breakdown)
+    {
+        int count = *(int*)(effect + EffectIntCount);
+        nint ints = *(nint*)(effect + EffectInts);
+        if (ints == 0 || count <= 0)
+        {
+            return 0;
+        }
+
+        // Bounded by the list's own count as well as the engine's 15 damage types: a
+        // foreign or malformed effect must not make this over-read.
+        int slots = Math.Min(count, DamageTypeSlots);
+        int typed = 0;
+        int plain = 0;
+
+        for (int i = 0; i < slots; i++)
+        {
+            int amount = *(int*)(ints + (i * 4));
+
+            if (breakdown)
+            {
+                _lastAmounts[i] = amount;
+            }
+
+            // An unpopulated slot reads -1, not 0 (measured live).
+            if (amount <= 0)
+            {
+                continue;
+            }
+
+            if (i == PlainSlot)
+            {
+                plain = amount;
+            }
+            else
+            {
+                typed += amount;
+            }
+        }
+
+        if (breakdown)
+        {
+            for (int i = slots; i < DamageTypeSlots; i++)
+            {
+                _lastAmounts[i] = 0;
+            }
+
+            _lastAmountsSerial++;
+        }
+
+        return plain > 0 ? plain : typed;
     }
 }

@@ -1,4 +1,3 @@
-using KotorCoop.Memory;
 using KotorCoop.Protocol;
 using KotorCoop.Session;
 using Xunit;
@@ -134,132 +133,11 @@ public class EnemyProximityTests
         Assert.DoesNotContain((uint)Cap, kept); // the farthest one, and only that one, is shed
     }
 
-    // ---- a peer's damage must not evaporate ------------------------------------------
-
-    [Fact]
-    public void ADipTheMirrorErasesIsStillReported()
-    {
-        // The measured failure, exactly: the client hits an enemy down to 5, the owner's
-        // mirror restores its copy to 11 before the next census, and under a plain sample
-        // that 5 never existed. Live, this is what pinned a soldier at 11 hp for a whole
-        // ninety-second fight.
-        LowestSeen seen = new();
-
-        Assert.Equal(11, seen.Report(0xE, 11));
-        Assert.Equal(5, seen.Report(0xE, 5));    // the hit lands
-        Assert.Equal(5, seen.Report(0xE, 11));   // the mirror puts it back; we remember
-    }
-
-    [Fact]
-    public void HealthOnlyEverGoesDownInAReport()
-    {
-        LowestSeen seen = new();
-        seen.Report(0x14, 20);
-        seen.Report(0x14, 3);
-
-        Assert.Equal(3, seen.Report(0x14, 20));
-        Assert.Equal(3, seen.Report(0x14, 19));
-        Assert.Equal(1, seen.Report(0x14, 1));
-    }
-
-    [Fact]
-    public void DeathLatchesToo()
-    {
-        // One census catching our copy dead is enough, even if the mirror revives it after —
-        // otherwise the owner's kill depends on winning the same race all over again.
-        LowestSeen seen = new();
-        Assert.False(seen.ReportDead(0xE, alive: true));
-        Assert.True(seen.ReportDead(0xE, alive: false));
-        Assert.True(seen.ReportDead(0xE, alive: true));
-    }
-
-    [Fact]
-    public void ANewModuleForgetsEverything()
-    {
-        // Ids are reassigned per module load, so a remembered low reading would be applied
-        // to a completely different creature.
-        LowestSeen seen = new("end_m01aa");
-        seen.Report(0xE, 2);
-
-        seen.EnterModule("tar_m02aa");
-        Assert.Equal(15, seen.Report(0xE, 15));
-    }
-
-    /// <summary>The latch's rule, mirroring CoopAgent.LatchLowestSeen.</summary>
-    private sealed class LowestSeen(string module = "end_m01aa")
-    {
-        private readonly Dictionary<uint, (ushort Health, bool Dead)> _seen = [];
-        private string _module = module;
-
-        public void EnterModule(string next)
-        {
-            if (!string.Equals(next, _module, StringComparison.OrdinalIgnoreCase))
-            {
-                _module = next;
-                _seen.Clear();
-            }
-        }
-
-        public ushort Report(uint id, ushort health)
-        {
-            ushort latched = _seen.TryGetValue(id, out var s) ? Math.Min(health, s.Health) : health;
-            _seen[id] = (latched, s.Dead);
-            return latched;
-        }
-
-        public bool ReportDead(uint id, bool alive)
-        {
-            _seen.TryGetValue(id, out var s);
-            bool dead = s.Dead | !alive;
-            _seen[id] = (s.Health, dead);
-            return dead;
-        }
-    }
-
-    // ---- the killing blow ------------------------------------------------------------
-
-    [Fact]
-    public void APeersKillIsHonouredOnceWeHaveAlreadyFlooredThatEnemy()
-    {
-        // The peer fought it down through the floor, so our copy sits at 1 and alive. That
-        // is the whole precondition: only then can their "it is dead" be the last point of
-        // damage rather than a deletion.
-        Assert.True(ShouldExecutePeerKill(reportedDead: true, ourHealth: 1, plot: false));
-    }
-
-    [Fact]
-    public void APeersKillIsRefusedForSomethingNobodyHasBeatenDown()
-    {
-        // A stray or stale report can shave health through the floor rule; it must never be
-        // able to delete a healthy creature.
-        Assert.False(ShouldExecutePeerKill(reportedDead: true, ourHealth: 12, plot: false));
-    }
-
-    [Fact]
-    public void AlreadyDeadIsNotKilledAgain()
-    {
-        // Our copy at or below zero means the death already ran here — most likely because
-        // WE killed it and the peer is echoing that back.
-        Assert.False(ShouldExecutePeerKill(reportedDead: true, ourHealth: 0, plot: false));
-        Assert.False(ShouldExecutePeerKill(reportedDead: true, ourHealth: -3, plot: false));
-    }
-
-    [Fact]
-    public void APlotCreatureIsNeverKilledByAPeersReport()
-    {
-        // Un-killable is the module's rule and our own census decides it, never the report.
-        Assert.False(ShouldExecutePeerKill(reportedDead: true, ourHealth: 1, plot: true));
-    }
-
-    [Fact]
-    public void ALivingReportNeverKills()
-    {
-        Assert.False(ShouldExecutePeerKill(reportedDead: false, ourHealth: 1, plot: false));
-    }
-
-    /// <summary>The owner's decision rule, mirroring KotorGameBridge.TryApplyEnemyFloors.</summary>
-    private static bool ShouldExecutePeerKill(bool reportedDead, int ourHealth, bool plot) =>
-        !plot && reportedDead && ourHealth is > 0 and <= 1;
+    // The two mechanisms that used to live here — the lowest-health latch and the
+    // "honour a peer's DEAD report once our copy is at the floor" rule — are gone. Both
+    // were ways of squeezing a peer's contribution out of a HEALTH sample; the peer now
+    // sends the damage it dealt as a cumulative sum, so there is nothing to latch and no
+    // death to trust. Their replacements are tested in PeerDamageLedgerTests.
 
     private const int Cap = 32;
 

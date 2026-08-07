@@ -357,62 +357,60 @@ public static class PacketCodec
         return new EnemySnapshotPacket(serverTime, module, enemies);
     }
 
-    public static int Write(Span<byte> buffer, EnemyReportPacket packet)
+    public static int Write(Span<byte> buffer, EnemyDamagePacket packet)
     {
         PacketWriter w = new(buffer);
-        w.WriteHeader(PacketType.EnemyReport);
+        w.WriteHeader(PacketType.EnemyDamage);
         w.WriteUInt32(packet.PeerId);
         w.WriteString(packet.Module, ProtocolConstants.MaxModuleLength);
+        w.WriteUInt32(packet.Generation);
 
-        int count = Math.Min(packet.Enemies.Count, ProtocolConstants.MaxEnemies);
+        int count = Math.Min(packet.Damage.Count, ProtocolConstants.MaxEnemyDamageEntries);
         w.WriteUInt8((byte)count);
 
         for (int i = 0; i < count; i++)
         {
-            EnemyState enemy = packet.Enemies[i];
-            w.WriteUInt32(enemy.ObjectId);
-            w.WriteUInt16(enemy.CurrentHealth);
-            w.WriteUInt16(enemy.MaxHealth);
-            w.WriteBool(enemy.Dead);
+            EnemyDamageEntry entry = packet.Damage[i];
+            w.WriteUInt32(entry.ObjectId);
+            w.WriteUInt32(entry.CumulativeDamage);
         }
 
         return w.Failed ? 0 : w.Position;
     }
 
-    public static EnemyReportPacket? ReadEnemyReport(ReadOnlySpan<byte> buffer)
+    public static EnemyDamagePacket? ReadEnemyDamage(ReadOnlySpan<byte> buffer)
     {
         PacketReader r = new(buffer);
-        if (r.ReadHeader() != PacketType.EnemyReport)
+        if (r.ReadHeader() != PacketType.EnemyDamage)
         {
             return null;
         }
 
         uint peerId = r.ReadUInt32();
         string module = r.ReadString();
+        uint generation = r.ReadUInt32();
         byte count = r.ReadUInt8();
 
-        if (r.Failed || count > ProtocolConstants.MaxEnemies)
+        if (r.Failed || count > ProtocolConstants.MaxEnemyDamageEntries)
         {
             return null;
         }
 
-        List<EnemyState> enemies = new(count);
+        List<EnemyDamageEntry> damage = new(count);
         for (int i = 0; i < count; i++)
         {
             uint objectId = r.ReadUInt32();
-            ushort current = r.ReadUInt16();
-            ushort max = r.ReadUInt16();
-            bool dead = r.ReadBool();
+            uint cumulative = r.ReadUInt32();
 
             if (r.Failed)
             {
                 return null;
             }
 
-            enemies.Add(new EnemyState(objectId, current, max, dead));
+            damage.Add(new EnemyDamageEntry(objectId, cumulative));
         }
 
-        return new EnemyReportPacket(peerId, module, enemies);
+        return new EnemyDamagePacket(peerId, module, generation, damage);
     }
 
     public static int Write(Span<byte> buffer, PhantomDamagePacket packet)

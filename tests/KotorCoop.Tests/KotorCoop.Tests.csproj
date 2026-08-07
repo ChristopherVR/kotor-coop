@@ -11,20 +11,28 @@
     <PackageReference Include="xunit.runner.visualstudio" Version="3.1.0" />
   </ItemGroup>
 
+  <!--
+    The plugin is a NativeAOT win-x86 library and cannot be referenced, but the parts of it
+    that are PURE ARITHMETIC are the parts most worth testing — the damage ledgers are where
+    an off-by-one silently costs a player their whole fight. So those files are compiled in
+    here directly rather than having their rules re-implemented in the test (which is what
+    EnemyProximityTests had to do, and a mirrored copy of a rule is a rule that can drift).
+
+    Only add dependency-free files here: anything that touches SharedBlockView, Odyssey or
+    unsafe engine pointers will not compile in a 64-bit test host.
+  -->
+  <ItemGroup>
+    <Compile Include="..\..\src\KotorCoop.Plugin\DamageDealtTable.cs" Link="Plugin\DamageDealtTable.cs" />
+    <Compile Include="..\..\src\KotorCoop.Plugin\DamageOwedLedger.cs" Link="Plugin\DamageOwedLedger.cs" />
+    <Compile Include="..\..\src\KotorCoop.Plugin\MirrorHealthRule.cs" Link="Plugin\MirrorHealthRule.cs" />
+    <Compile Include="..\..\src\KotorCoop.Plugin\DownBlock.cs" Link="Plugin\DownBlock.cs" />
+  </ItemGroup>
+
   <ItemGroup>
     <ProjectReference Include="..\..\src\KotorCoop.Protocol\KotorCoop.Protocol.csproj" />
     <ProjectReference Include="..\..\src\KotorCoop.Memory\KotorCoop.Memory.csproj" />
     <ProjectReference Include="..\..\src\KotorCoop.Session\KotorCoop.Session.csproj" />
     <ProjectReference Include="..\..\src\KotorCoop.MockGame\KotorCoop.MockGame.csproj" />
-  </ItemGroup>
-
-  <!--
-    The plugin is a win-x86 NativeAOT library and cannot be referenced, but its pure decision
-    logic still has to be tested. Files listed here are COMPILED IN, so they must stay free
-    of engine calls and unsafe code — that constraint is the reason they were split out.
-  -->
-  <ItemGroup>
-    <Compile Include="..\..\src\KotorCoop.Plugin\DownBlock.cs" Link="Plugin\DownBlock.cs" />
   </ItemGroup>
 
 </Project>

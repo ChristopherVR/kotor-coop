@@ -321,16 +321,69 @@ internal sealed unsafe class SharedBlockView(byte* baseAddress)
 
     public uint TestAttackTarget => *U32(SharedBlock.OffsetTestAttackTarget);
 
-    /// <summary>Kills a peer earned away from us, for the enemy owner to execute. Serial is
-    /// written last, so it changing means the whole list is there.</summary>
-    public uint KillRequestSerial => *U32(SharedBlock.OffsetKillRequestSerial);
+    // ---- damage ledger -----------------------------------------------------------
 
-    public uint KillRequestCount => *U32(SharedBlock.OffsetKillRequestCount);
+    /// <summary>
+    /// Publishes what this instance has DEALT to one enemy, for the agent to forward to the
+    /// enemy owner. The object id is written LAST, so the agent can never pair an id with
+    /// another creature's total — the same discipline every other slot array here uses.
+    /// </summary>
+    public void SetDamageDealt(int index, uint objectId, uint cumulative)
+    {
+        byte* slot = baseAddress + SharedBlock.OffsetDamageDealtSlots
+            + (index * SharedBlock.DamageLedgerStride);
 
-    public uint KillRequestId(int index) =>
-        index >= 0 && index < SharedBlock.KillRequestCapacity
-            ? *U32(SharedBlock.OffsetKillRequestIds + (index * 4))
-            : 0;
+        *(uint*)(slot + 0x04) = cumulative;
+        *(uint*)(slot + 0x00) = objectId;
+    }
+
+    public uint DamageDealtCount
+    {
+        get => *U32(SharedBlock.OffsetDamageDealtCount);
+        set => *U32(SharedBlock.OffsetDamageDealtCount) = value;
+    }
+
+    public uint DamageDealtDropped
+    {
+        set => *U32(SharedBlock.OffsetDamageDealtDropped) = value;
+    }
+
+    public uint DamageDealtGeneration
+    {
+        set => *U32(SharedBlock.OffsetDamageDealtGeneration) = value;
+    }
+
+    /// <summary>Agent-written: the epoch its own ids belong to. The plugin drops its applied
+    /// totals when this changes.</summary>
+    public uint DamageOwedEpoch => *U32(SharedBlock.OffsetDamageOwedEpoch);
+
+    /// <summary>Agent-written; zeroed by the plugin on a module transition like the enemy
+    /// regions, and for the same reason.</summary>
+    public uint DamageOwedCount
+    {
+        get => *U32(SharedBlock.OffsetDamageOwedCount);
+        set => *U32(SharedBlock.OffsetDamageOwedCount) = value;
+    }
+
+    public uint DamageOwedApplied
+    {
+        get => *U32(SharedBlock.OffsetDamageOwedApplied);
+        set => *U32(SharedBlock.OffsetDamageOwedApplied) = value;
+    }
+
+    /// <summary>Agent-written: non-zero on an instance whose damage has to be reported to
+    /// somebody else. Zero (the default) keeps the accumulation out of the engine's damage
+    /// hook entirely.</summary>
+    public bool DamageDealtEnabled => *U32(SharedBlock.OffsetDamageDealtEnabled) != 0;
+
+    public void GetDamageOwed(int index, out uint objectId, out uint cumulative)
+    {
+        byte* slot = baseAddress + SharedBlock.OffsetDamageOwedSlots
+            + (index * SharedBlock.DamageLedgerStride);
+
+        objectId = *(uint*)(slot + 0x00);
+        cumulative = *(uint*)(slot + 0x04);
+    }
 
     public float TestWalkX => *F32(SharedBlock.OffsetTestWalkX);
 

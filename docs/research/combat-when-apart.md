@@ -53,7 +53,7 @@ fixed. The third — a crash — was found by testing the second:
 | --- | --- | --- |
 | Enemy AI, health, death | **authoritative** — its engine runs the fight | mirrored; copies driven to the host's positions, stances and swings |
 | Local encounters | fire normally | **disabled** (`DisableLocalEncounters`) — a spawn would shift the object-id counter the whole channel keys on |
-| Damage the player deals | lands directly | reported back (`EnemyReport`, module-scoped, 2 s freshness); the host **min-merges** it into its own enemies |
+| Damage the player deals | lands directly | reported back as a cumulative SUM of damage dealt (`EnemyDamage`, module-scoped, 2 s freshness); the host spends each increase as real engine damage on its own copy — §6b |
 | Damage the player takes | normal | dealt to their PHANTOM in the host's game, forwarded, and applied through the client's own damage pipeline |
 
 So a client never runs a private fight. Its screen shows the host's fight, frame by frame.
@@ -269,10 +269,24 @@ erased by a mirror write because it is never read back out of the game. That als
 mostly redundant: an enemy whose accumulated damage exceeds its health dies through the
 owner's own death path with no "is it dead" report to trust.
 
-✅ **Fixed — see §6a.** The accumulate-damage-dealt redesign sketched above turned out not to
-be needed: making the mirror lower-only removes the race at its source, and latching the
-lowest reading closes what remains. Keep the design in mind if a future fight ever needs
-per-hit attribution (who dealt what), which health alone cannot express.
+✅ **Fixed twice.** §6a made the health channel work — mirror lower-only, latch the lowest
+reading, lift the pin at the floor, report a vanished-at-the-floor creature as dead — and
+that is what was live-verified. It was then **superseded the same day** by the
+accumulate-damage-dealt design sketched above, which is now what ships. Two reasons, and
+neither is that §6a was broken:
+
+* four mechanisms were holding one leaky channel shut, and the channel still could not say
+  WHO dealt what;
+* the lower-only rule cost owner-side HEALING outright.
+
+The peer now sends a cumulative sum of the damage it has dealt per enemy; the owner spends
+each increase as real engine damage on its own copy, so the kill falls out of the arithmetic
+with the engine's own corpse, loot and OnDeath, and the mirror goes back to propagating
+healing (as a delta, not as an overwrite). **Retired with it: the health report packet, the
+min-merge, the lowest-seen latch, the kill-request channel, and lifting the pin at the
+floor.** Full write-up, including the disassembly proving that re-running the receiver's
+resistance pipeline is not double-counting: `docs/research/peer-damage-ledger.md`.
+⚠ Unlike §6a, the replacement has NOT been live-tested.
 
 ## 6. ⚠ OPEN: a player fighting alone cannot land the killing blow
 

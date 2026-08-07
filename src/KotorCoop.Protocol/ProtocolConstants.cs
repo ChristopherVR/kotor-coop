@@ -37,8 +37,12 @@ public static class ProtocolConstants
     /// and the host's engine does the spawn. A client's own encounters are disarmed (an
     /// encounter spawn there would advance that instance's object-id counter, which every
     /// other channel keys on), so before this a joiner could walk into an ambush and nothing
-    /// happened until the host walked in too.</summary>
-    public const byte Version = 16;
+    /// happened until the host walked in too.
+    /// Version 17: the peer direction stops reporting enemy HEALTH and reports DAMAGE DEALT
+    /// instead (EnemyDamage 33 replaces EnemyReport 22). Health was a sample the owner's
+    /// mirror could overwrite before it was ever read, and it could not say who dealt what;
+    /// a cumulative sum of damage is monotonic, order-independent and un-eraseable.</summary>
+    public const byte Version = 17;
 
     /// <summary>Journal quest tags are resrefs plus a little slack.</summary>
     public const int MaxJournalTagLength = 32;
@@ -68,6 +72,15 @@ public static class ProtocolConstants
     /// bodies rather than arbitrary ones.
     /// </summary>
     public const int MaxEnemies = 32;
+
+    /// <summary>
+    /// Enemies one peer can report damage against per datagram. 8 bytes each (object id +
+    /// cumulative total), so a full 32 is 302 bytes with the header and the module string
+    /// — a quarter of a datagram. It matches the plugin's own ledger capacity, which is
+    /// the real limit: the ledger only holds enemies this instance has actually damaged
+    /// and not yet seen die.
+    /// </summary>
+    public const int MaxEnemyDamageEntries = 32;
 
     /// <summary>Party companions the host replicates. KOTOR allows two active at once; a
     /// little headroom costs nothing.</summary>

@@ -461,7 +461,7 @@ public class SessionIntegrationTests
     }
 
     [Fact]
-    public async Task ClientEnemyReportsReachTheHost()
+    public async Task ClientEnemyDamageReachesTheHost()
     {
         using CoopHost host = new(new SessionSettings { PlayerName = "Revan", Port = 0, TickRate = 30 });
         using CoopClient client = new(
@@ -473,27 +473,28 @@ public class SessionIntegrationTests
         Task clientTask = client.RunAsync(cts.Token);
 
         PlayerState state = new(Vector3f.Zero, 0f, "end_m01aa", 100, 0);
-        List<EnemyState> report = [new(0x14, 3, 15, false)];
+        List<EnemyDamageEntry> report = [new(0x14, 12)];
 
         void Publish()
         {
             host.PublishLocalState(state);
             client.PublishLocalState(state);
-            client.ReportEnemies("end_m01aa", report);
+            client.ReportEnemyDamage("end_m01aa", 3, report);
         }
 
         Assert.True(await WaitForAsync(() => client.IsConnected, Timeout, Publish));
 
-        // The host must see the client's floor for its own module...
+        // The host must see the client's damage for its own module...
         Assert.True(
             await WaitForAsync(
-                () => host.GetEnemyReports("end_m01aa").Any(e => e.ObjectId == 0x14 && e.CurrentHealth == 3),
+                () => host.GetEnemyDamage("end_m01aa")
+                    .Any(d => d.ObjectId == 0x14 && d.CumulativeDamage == 12 && d.Generation == 3),
                 Timeout,
                 Publish),
-            "the client's enemy report never reached the host");
+            "the client's damage report never reached the host");
 
         // ...and never for a different module, where the same ids name strangers.
-        Assert.DoesNotContain(host.GetEnemyReports("tar_m02aa"), e => e.ObjectId == 0x14);
+        Assert.DoesNotContain(host.GetEnemyDamage("tar_m02aa"), d => d.ObjectId == 0x14);
 
         await cts.CancelAsync();
         await Task.WhenAll(hostTask, clientTask);
