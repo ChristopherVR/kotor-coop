@@ -461,6 +461,17 @@ else {
     Check 'a client hit costs the enemy real hit points' $false 'no enemy published to attack'
 }
 
+# --- 14. engine call signatures ----------------------------------------------------------
+# Static, but it belongs in the battery rather than in a comment nobody re-runs: a __thiscall
+# callee pops its OWN arguments, so a declaration with the wrong number of them skews the
+# stack four bytes at a time and surfaces as a stack-cookie fast-fail (0xC0000409) inside some
+# unrelated function later. Two declarations were wrong when this check was written, and
+# neither had ever produced a symptom anyone could trace back to it.
+$audit = & python (Join-Path $PSScriptRoot 'callaudit.py') --bad 2>&1
+$auditOk = ($LASTEXITCODE -eq 0)
+Check 'every engine call signature matches the binary' $auditOk `
+    (@($audit | Where-Object { $_ -match '^\s+\d+ agree|do not$|agree' }) -join '; ')
+
 # Leave the world as we found it, so the next run measures the same starting conditions.
 CloseConversations $h1 $b1
 CloseConversations $h2 $b2

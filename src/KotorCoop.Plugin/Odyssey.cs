@@ -1686,10 +1686,18 @@ internal static unsafe class Odyssey
     private static readonly delegate* unmanaged[Thiscall]<nint, nint, float, float, float, int, void> WaypointAddToAreaFn =
         (delegate* unmanaged[Thiscall]<nint, nint, float, float, float, int, void>)0x005C8580;
 
-    // CSWSWaypoint::RemoveFromArea(this, area). Half of teardown; the destructor is the
-    // other half.
-    private static readonly delegate* unmanaged[Thiscall]<nint, nint, void> WaypointRemoveFromAreaFn =
-        (delegate* unmanaged[Thiscall]<nint, nint, void>)0x005C8350;
+    // CSWSWaypoint::RemoveFromArea(this). Half of teardown; the destructor is the other half.
+    //
+    // ⚠ NO ARGUMENTS. This was declared as (this, area) and called with the area, and the
+    // function does not take one: it ends in a plain `ret` (0x005C83A8) and derives the area
+    // from `this` via 0x004CB120. A __thiscall callee pops its own arguments, so every call
+    // pushed four bytes that nothing ever popped — the stack pointer walked away four bytes
+    // at a time, and a skewed stack does not fault where it is caused, it corrupts a frame
+    // and surfaces later as a stack-cookie failure (0xC0000409) in whatever returns next.
+    // Found by tools/callaudit.py, which compares every one of these declarations against
+    // the callee's own `ret` immediate.
+    private static readonly delegate* unmanaged[Thiscall]<nint, void> WaypointRemoveFromAreaFn =
+        (delegate* unmanaged[Thiscall]<nint, void>)0x005C8350;
 
     /// <summary>The server-side area of the loaded module, or 0.</summary>
     private static nint GetAreaPointer()
@@ -2054,10 +2062,11 @@ internal static unsafe class Odyssey
             return;
         }
 
-        nint area = GetAreaPointer();
-        if (area != 0)
+        // The area is still checked — it is how we know a module is loaded at all — but it is
+        // NOT passed: the function reads it off the waypoint itself.
+        if (GetAreaPointer() != 0)
         {
-            WaypointRemoveFromAreaFn(waypoint, area);
+            WaypointRemoveFromAreaFn(waypoint);
         }
 
         nint vtable = *(nint*)waypoint;
@@ -3628,13 +3637,21 @@ internal static unsafe class Odyssey
     /// shared-pause mirror uses this same bit so either player can pause both worlds.</summary>
     public const int PauseReasonPlayer = 0x01;
 
-    // CClientExoApp::SetPauseState(int nMask, int bValue). ⚠ DO NOT CALL. Its tail walks a
-    // notify list that is only valid on the engine's own call path; calling it from the
-    // plugin crashed both instances at 0x5E9BC9 (2026-08-01). SetPlayerPause assembles the
-    // client half from the individually-verified pieces instead. Kept for documentation.
+    // CClientExoApp::SetPauseState(int, int, int) — THREE arguments, not two. ⚠ DO NOT CALL.
+    //
+    // The recorded reason not to call it was that its tail walks a notify list only valid on
+    // the engine's own call path, after it crashed both instances at 0x5E9BC9 (2026-08-01).
+    // That explanation was incomplete: the declaration was also WRONG. The implementation
+    // (0x005ED650 is a thunk to 0x005F7FA0) ends in `ret 0xc` at 0x005F8285 and reads a third
+    // argument at 0x005F822A, so the two-argument call left the stack skewed by four bytes
+    // every time — reason enough on its own for a crash somewhere else entirely.
+    //
+    // Left uncalled, but now declared honestly, because a signature kept "for documentation"
+    // that documents the wrong thing is worse than none. SetPlayerPause assembles the client
+    // half from the individually-verified pieces instead.
 #pragma warning disable IDE0051, CS0414
-    private static readonly delegate* unmanaged[Thiscall]<nint, int, int, void> ClientSetPauseStateFn =
-        (delegate* unmanaged[Thiscall]<nint, int, int, void>)0x005ED650;
+    private static readonly delegate* unmanaged[Thiscall]<nint, int, int, int, void> ClientSetPauseStateFn =
+        (delegate* unmanaged[Thiscall]<nint, int, int, int, void>)0x005ED650;
 #pragma warning restore IDE0051, CS0414
 
     /// <summary>CClientExoAppInternal + this = the client's own pause-reason bitmask.</summary>
