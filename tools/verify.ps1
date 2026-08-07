@@ -451,6 +451,14 @@ for ($i = 0; $i -lt [Math]::Min($presence2, 32); $i++) {
     $slot = $b2 + 0x1410 + ($i * 0x28)
     $id = [VF]::U32($h2, $slot)
     if ($id -eq 0) { continue }
+    # ⚠ SKIP AN ENEMY THAT IS ALREADY DOWN TO 1. The check asks whether a client's hit costs
+    # the enemy hit points, and a creature sitting at 1 cannot answer it — an earlier run of
+    # this same battery leaves bodies behind, and picking one gave "hp 1 -> 1", which looks
+    # like a broken channel and is nothing of the kind. Judge on the HOST's creature, which
+    # is the authority.
+    $cand = [VF]::FindCreature($h1, $id)
+    if ($cand -eq 0 -or [VF]::I16($h1, $cand + 0xDC) -le 1) { continue }
+
     $d = [math]::Sqrt([math]::Pow([VF]::F32($h2, $slot + 4) - $cx, 2) + [math]::Pow([VF]::F32($h2, $slot + 8) - $cy, 2))
     if ($d -lt $dmgDist) { $dmgDist = $d; $dmgId = $id }
 }
