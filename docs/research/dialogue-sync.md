@@ -487,3 +487,46 @@ on the client and log whether it is reached at all, then trace the dialogue bran
 `CSWSMessage::HandlePlayerToServerInputMessage`. If StartDialog is never reached, the message
 is being dropped before it; if it is reached and returns 0, one of its own gates is refusing
 and the disassembly will name which.
+
+
+---
+
+## ⚠ CORRECTION (same day): the joiner CAN start conversations — they THRASH
+
+The section above concluded "a joiner cannot start a conversation at all". That was wrong,
+and the instrumentation that proves it is worth keeping.
+
+`DialogueGateHook` already detours `CSWSObject::StartDialog 0x004CF490`, so a counter there
+(`StartAttempts`, surfaced from the frame hook because the detour must not log) answers the
+question directly. On the joiner:
+
+```
+18:12:45.833  dialogue: following the peer's conversation
+18:12:45.837  dialogue: engine reached StartDialog (11 so far)     <- 4 ms later
+18:12:47.429  dialogue: the owner ended the conversation; closing  <- 1.6 s later
+```
+
+So the whole chain works on the joiner — input message, action queue, `RunActions`,
+`AIActionDialogObject`, `BeginConversation`, `StartDialog`. Nothing is dropped upstream.
+
+**The real defect is that conversations do not STAY open.** Watched over 35 s with the host
+holding one conversation, the published dialogue serial climbs continuously on BOTH instances
+with an empty speaker — host 6, 8, 10, 13, 15, 18, 20; client 7, 9, 12, 14, 17, 19, 22 — which
+is conversations opening and closing over and over, not one conversation running.
+
+Two suspects, neither yet proven:
+
+1. **`Odyssey.CloseDialogue` runs `CSWSObject::StopDialog`, which executes the
+   END-CONVERSATION SCRIPT.** That was the right call for correctness (it is what the engine
+   runs at a natural end) but the Endar Spire's Trask is scripted to re-initiate conversation
+   during the tutorial, so ending it can immediately start it again — a loop the spectate
+   controller then follows and closes, forever.
+2. **`FollowContentTimeoutMs = 3000`** closes a followed conversation that has OPENED but not
+   yet delivered a line. That matches the play report exactly: *"the dialogue shows for both
+   but the subtitles and dialog options don't show for a while"*. If the content legitimately
+   takes longer than three seconds, the controller is killing conversations that were working.
+
+⚠ Both of these were introduced by fixes that were themselves correct in isolation. The next
+pass should measure how long content actually takes to arrive before touching either number,
+and should test somewhere OTHER than the tutorial deck, whose Trask has scripted conversation
+behaviour that no other module shares.

@@ -57,6 +57,28 @@ internal static unsafe class DialogueGateHook
 
     public static uint BlockedCount => _blockedCount;
 
+    /// <summary>
+    /// Every time the engine reaches <c>StartDialog</c> at all, refused or not.
+    ///
+    /// ⚠ Diagnostic, and it exists to answer one question that inspection could not: a
+    /// JOINER never opens a conversation — not a followed one, not one asked for directly —
+    /// while the host does the identical thing to the same NPC and succeeds. Measurement has
+    /// already ruled out this gate (it never logged a refusal), the co-op token, party
+    /// membership, <c>CanSendDialog</c>, range and a stale <c>gui+0xB4</c>.
+    ///
+    /// This splits the remaining search in half. StartDialog is reached ONLY from
+    /// <c>ExecuteCommandBeginConversation</c>, which is the far end of
+    /// message → action queue → <c>RunActions</c> → <c>AIActionDialogObject</c> → the VM. So
+    /// if this counter moves on the joiner, the request survives the whole chain and dies in
+    /// StartDialog's own gates; if it never moves, the chain is broken upstream and the next
+    /// place to look is the dialog branch of <c>HandlePlayerToServerInputMessage</c> at
+    /// 0x00525F2E, whose first instruction discards the message when the server could not
+    /// resolve the sending player to a creature.
+    /// </summary>
+    private static uint _startAttempts;
+
+    public static uint StartAttempts => _startAttempts;
+
     private static bool _installed;
 
     /// <summary>Verify-bytes-or-refuse, like every patch in the plugin: an unrecognised
@@ -142,6 +164,8 @@ internal static unsafe class DialogueGateHook
     {
         try
         {
+            _startAttempts++;
+
             if (!Enabled || Bypass || !PeerHoldsConversation)
             {
                 return 0;

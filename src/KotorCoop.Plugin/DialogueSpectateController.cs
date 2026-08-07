@@ -172,6 +172,9 @@ internal sealed unsafe class DialogueSpectateController(SharedBlockView block)
     /// <summary>Last <see cref="ShotCameraGuardHook.RefusedCount"/> we reported.</summary>
     private uint _seenShotRefusals;
 
+    /// <summary>Last <see cref="DialogueGateHook.StartAttempts"/> we reported.</summary>
+    private uint _seenStartAttempts;
+
     private readonly byte[] _notice = "Another player is in a conversation"u8.ToArray();
 
     /// <summary>Opens and drives this instance's copy of a peer's conversation.</summary>
@@ -197,6 +200,14 @@ internal sealed unsafe class DialogueSpectateController(SharedBlockView block)
         // Evidence that the crash window is still being entered at all. The guard itself
         // cannot log (it runs inside the engine's dialogue message handling), so its counter
         // is reported from here, on the frame hook.
+        // Diagnostic for the joiner-cannot-talk defect: does the engine reach StartDialog at
+        // all here? Reported from the frame hook because the detour itself must not log.
+        if (DialogueGateHook.StartAttempts != _seenStartAttempts)
+        {
+            _seenStartAttempts = DialogueGateHook.StartAttempts;
+            LogFew($"dialogue: engine reached StartDialog ({_seenStartAttempts} so far)");
+        }
+
         if (ShotCameraGuardHook.RefusedCount != _seenShotRefusals)
         {
             _seenShotRefusals = ShotCameraGuardHook.RefusedCount;
