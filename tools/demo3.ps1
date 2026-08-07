@@ -195,15 +195,15 @@ function Start-Instance {
         if ($proc) { $proc.Refresh() }
     } while ($proc -and $proc.MainWindowHandle -eq [IntPtr]::Zero -and (Get-Date) -lt $windowDeadline)
 
-    & $movewin -ProcId $procId -X $X -Y $Y | Out-Null
     Write-Host "instance $Instance is pid $procId  ($Directory)"
 
-    Start-Sleep -Seconds 15
-
-    & $movewin -ProcId $procId -Minimize | Out-Null
-    Start-Sleep -Seconds 2
-    & $movewin -ProcId $procId -Restore | Out-Null
-    Start-Sleep -Seconds 3
+    # ⚠ DO NOT TOUCH THE WINDOW BEFORE LOADING. This used to position the window and then
+    # minimise/restore it before the load, and all four activation cycles then failed for
+    # instance 2 — on a machine where demo.ps1's instance 2 loads within a retry or two.
+    # demo.ps1 launches, waits, loads, and positions the window only afterwards; moving a
+    # window the game is still bringing up is the difference. Positioning happens at the end
+    # of this function instead, once the save is in.
+    Start-Sleep -Seconds 14
 
     # ⚠ THE PLUGIN LOAD ROUTE, not the menu one, and no input probe gating it.
     #
@@ -218,7 +218,8 @@ function Start-Instance {
     # day of evidence behind it, so the three-instance harness now takes it too. The retry
     # below is now driven by whether the load ACTUALLY SUCCEEDED, which is the honest signal.
     if ($Instance -eq 1) {
-        # Already loaded by the launch above; just park it.
+        # Already loaded by the launch above; place it, then park it.
+        & $movewin -ProcId $procId -X $X -Y $Y | Out-Null
         & $movewin -ProcId $procId -Minimize | Out-Null
         return $procId
     }
@@ -241,6 +242,7 @@ function Start-Instance {
     }
 
     if ($LASTEXITCODE -eq 0) {
+        & $movewin -ProcId $procId -X $X -Y $Y | Out-Null
         # Park it. An in-world KOTOR keeps reclaiming the foreground, and the NEXT instance's
         # menu automation cannot reach a window that keeps losing focus. A minimised instance
         # still simulates at full frame rate (measured), so nothing is lost by doing this -

@@ -64,7 +64,12 @@ $OffPhantomCount = 0x25C
 $OffPhantomIdLegacy = 0x264      # slot 0 mirror ONLY - see SharedBlock.OffsetPhantomIds
 $OffKeepAlive = 0x268
 $OffPausesCleared = 0x26C
-$OffPhantomIdTable = 0x1DE0      # the real 8-entry table
+# ⚠ 0x1F80, not 0x1DE0. The table was RELOCATED when the three-peer layout landed, and
+# 0x1DE0 is now OffsetEncounterWatch. Reading the old address made twelve checks fail against
+# a live, correct session: the "phantom id" came back 0 on the host and 1 on both clients,
+# which is precisely what the encounter watch flag holds (1 only on a peer that does not own
+# enemies). A stale offset does not read as garbage — it reads as a plausible wrong answer.
+$OffPhantomIdTable = 0x1F80      # the real 8-entry table (SharedBlock.OffsetPhantomIdTable)
 $OffPhantomHitSlots = 0x1CD0
 $PhantomHitStride = 0x10
 $SlotCapacity = 8
@@ -196,7 +201,18 @@ for ($i = 0; $i -lt 3; $i++) {
         ($null -ne ($lines | Select-String 'unhandled-exception hook installed' | Select-Object -First 1)) `
         $log
 
-    $fatal = @($lines | Select-String 'FATAL|FIRST-CHANCE')
+    # ⚠ THIS PROCESS'S SECTION OF THE LOG ONLY. The plugin appends across runs, so scanning
+    # the whole file reported a crash from hours earlier as a fault in a healthy session —
+    # the same "stale evidence" trap verify.ps1 documents for its own log checks. Each launch
+    # writes "crash probe installed", so the last one marks where this process began.
+    $probeAt = ($lines | Select-String 'crash probe installed' | Select-Object -Last 1).LineNumber
+    if ($probeAt) { $lines = $lines[($probeAt - 1)..($lines.Count - 1)] }
+
+    # ⚠ 0x406D1388 is MS_VC_EXCEPTION — the documented "name this thread" exception every
+    # MSVC-built process raises for the debugger. It is not a fault, the game raises it on its
+    # own without the plugin, and counting it failed this check on three healthy instances.
+    $fatal = @($lines | Select-String 'FATAL|FIRST-CHANCE' |
+        Where-Object { $_ -notmatch '0x406D1388' })
     Check "instance $($i + 1): no faults logged" ($fatal.Count -eq 0) `
         $(if ($fatal.Count -eq 0) { 'clean' } else { ($fatal | Select-Object -Last 2 | ForEach-Object { $_.Line }) -join ' | ' })
 }
