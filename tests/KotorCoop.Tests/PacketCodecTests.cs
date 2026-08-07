@@ -173,22 +173,48 @@ public class PacketCodecTests
         Assert.Equal(new Vector3f(1f, 2f, 3f), decoded.Entries[2].State.Position);
     }
 
+    /// <summary>
+    /// ⚠ This test used to lie. It filled the name and module to their caps and called that
+    /// the worst case, but it built every entry from a PlayerState whose three equipment
+    /// resrefs are empty strings — 3 bytes where the worst case is 51. It measured 857 bytes
+    /// against a 1200-byte limit and passed, while the real full-lobby snapshot was 1241 and
+    /// was silently dropped every single tick (and, until this change, took every other
+    /// broadcast down with it — see CoopHost.BroadcastState).
+    ///
+    /// Every field is now filled to its own cap, so the number this asserts is the number the
+    /// wire actually has to carry.
+    /// </summary>
     [Fact]
     public void FullPeerSnapshotFitsInOneDatagram()
     {
         Span<byte> buffer = stackalloc byte[ProtocolConstants.MaxPacketSize];
 
+        PlayerState worstCase = SampleState with
+        {
+            Module = new string('m', ProtocolConstants.MaxModuleLength),
+            EquippedBody = new string('b', ProtocolConstants.MaxResrefLength),
+            EquippedRightWeapon = new string('r', ProtocolConstants.MaxResrefLength),
+            EquippedLeftWeapon = new string('l', ProtocolConstants.MaxResrefLength),
+        };
+
         List<SnapshotEntry> entries = [.. Enumerable.Range(1, ProtocolConstants.MaxPeers)
             .Select(i => new SnapshotEntry(
                 (uint)i,
-                new string('n', ProtocolConstants.MaxStringLength),
-                SampleState with { Module = new string('m', ProtocolConstants.MaxStringLength) }))];
+                new string('n', ProtocolConstants.MaxNameLength),
+                worstCase))];
 
         int length = PacketCodec.Write(buffer, new WorldSnapshotPacket(1, 1, 1, 1, entries));
 
-        // A snapshot that does not fit would be silently dropped every tick.
+        // A snapshot that does not fit is dropped every tick, so nobody moves.
         Assert.True(length > 0, "worst-case snapshot must fit inside one packet");
         Assert.True(length <= ProtocolConstants.MaxPacketSize);
+
+        // And it round-trips at that size: a receive buffer that is one byte short shows up
+        // as a null decode, not as a short read.
+        WorldSnapshotPacket? decoded = PacketCodec.ReadWorldSnapshot(buffer[..length]);
+        Assert.NotNull(decoded);
+        Assert.Equal(ProtocolConstants.MaxPeers, decoded.Entries.Count);
+        Assert.Equal(worstCase.EquippedRightWeapon, decoded.Entries[^1].State.EquippedRightWeapon);
     }
 
     [Fact]

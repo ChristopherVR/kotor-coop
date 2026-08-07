@@ -28,8 +28,12 @@ public static class ProtocolConstants
     /// Version 14: the enemy snapshot carries the MODULE its object ids were read in, so a
     /// peer somewhere else drops it instead of writing the owner's healths and positions
     /// onto whatever local creatures happen to share those ids. The report direction has
-    /// always carried its module; this is the same guard the other way.</summary>
-    public const byte Version = 14;
+    /// always carried its module; this is the same guard the other way.
+    /// Version 15: peer slots are STICKY per peer id rather than positional, and a relayed
+    /// phantom-damage report carries the ORIGINATOR's peer id rather than the relaying
+    /// host's — with three or more players the positional scheme billed the wrong person
+    /// and a leaver's slot handed their body, gear and damage total to a survivor.</summary>
+    public const byte Version = 15;
 
     /// <summary>Journal quest tags are resrefs plus a little slack.</summary>
     public const int MaxJournalTagLength = 32;
@@ -79,8 +83,19 @@ public static class ProtocolConstants
     /// <summary>magic(2) + version(1) + type(1)</summary>
     public const int HeaderSize = 4;
 
-    /// <summary>Comfortably inside the smallest common path MTU, so we never fragment.</summary>
-    public const int MaxPacketSize = 1200;
+    /// <summary>
+    /// Comfortably inside the smallest common path MTU, so we never fragment. (Ethernet's
+    /// 1500 less an IPv4 header and a UDP header leaves 1472; IPv6's guaranteed minimum is
+    /// 1280 less 48 = 1232.)
+    ///
+    /// ⚠ Raised from 1200, which a FULL LOBBY did not fit in. Worst case per snapshot entry
+    /// is 152 bytes — id, a 24-char name, and a player state whose module name and three
+    /// equipment resrefs are all at their caps — so eight peers plus the header is 1241, and
+    /// the whole snapshot was dropped. The guard test claimed to prove otherwise while
+    /// quietly measuring a state with no equipment; see FullPeerSnapshotFitsInOneDatagram.
+    /// Nothing on the wire encodes this value, so it is a buffer size and nothing more.
+    /// </summary>
+    public const int MaxPacketSize = 1400;
 
     /// <summary>Default cap for the short identity fields (names, resrefs, tags), chosen so
     /// a full snapshot with every one at maximum still fits a datagram. NOT the absolute

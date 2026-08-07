@@ -8,6 +8,130 @@ no other dependencies. C# throughout.
 
 ---
 
+## 0k. ⚠ THE CRASH PROBE WAS THE CRASH — and three players now have a harness, 2026-08-07
+
+### The 0xC0000602 that killed the host, proven rather than guessed
+
+Symptom: with a third peer in the session the host vanished a couple of seconds after
+`agent reports 2 remote peer(s)`, with nothing in `kotorcoop-plugin.log` and only a Windows
+Application log entry — `swkotor.exe`, faulting module `DINPUT8.dll`, exception `0xc0000602`,
+fault offset `0x0007d2c7`.
+
+**How it was pinned down.** The DLL's PE TimeDateStamp in the WER report (`0x6a7553cc`) is a
+real build time — 13:41 local, which is commit `39fd515`'s working tree. Rebuilding the
+plugin from that revision reproduces a byte-identical-size image, and dbghelp against its own
+PDB resolves RVA `0x7d2c7` inside `RhpReversePInvokeAttachOrTrapThread2`. Disassembled, it is
+the instruction immediately after this:
+
+```
+1007D2AB  cmp  dword ptr [esi+0x30], 0     ; Thread::m_pTransitionFrame
+1007D2AF  jne  0x1007D2C7                  ; non-null -> thread is in NATIVE mode, fine
+1007D2B1  push 0x100E6728                  ; -> "\nFatal error. Invalid Program: attempted to
+1007D2B6  call 0x100818B0                  ;     call a UnmanagedCallersOnly method from
+1007D2BB  push 1                           ;     managed code.\n"
+1007D2BD  push 0
+1007D2BF  push 0
+1007D2C1  call dword ptr [0x100B5110]      ; KERNEL32!RaiseFailFastException
+1007D2C7  <- the reported fault offset, i.e. that call's return address
+```
+
+`FAIL_FAST_GENERATE_EXCEPTION_ADDRESS` (the `push 1`) makes Windows report the return address,
+which is why the offset is bit-exact.
+
+**So the fault is: a reverse P/Invoke entered on a thread that was already in cooperative
+mode.** The plugin has sixteen `[UnmanagedCallersOnly]` entry points and fifteen of them are
+reached only from engine code, which is always in native mode because the plugin only enters
+the engine through `delegate* unmanaged` calls and there is no `SuppressGCTransition`
+anywhere. The sixteenth was `CrashProbe.OnException` — a **vectored exception handler**, which
+Windows calls on the faulting thread. When the fault happens inside the plugin's own managed
+code that thread IS in cooperative mode, so the handler could not be entered at all.
+
+Three consequences, all of which match the record:
+
+- Any hardware fault in plugin managed code was an instant, silent process kill.
+- ⚠ **That includes every ordinary `NullReferenceException`.** NativeAOT implements null
+  checks as faults on the null page and converts them back in its OWN vectored handler — but
+  ours was registered later with `first=TRUE`, which puts it at the FRONT of the chain, so it
+  ran first and fail-fasted before the conversion. **Every `try`/`catch` in the plugin was
+  dead code against that fault class**, including the ones in the hooks.
+- The probe that existed to describe crashes was the reason they were undescribable. The
+  crashes it DID log were all at `swkotor.exe` addresses — engine code, native mode — which
+  is exactly the case it was written for and the reason nobody noticed.
+
+This also retires the unexplained note in 0n ("a client instance vanished right after
+connecting, with no crash-probe report").
+
+**The fix.** `CrashProbe`'s handler is now hand-emitted x86 machine code: it copies the
+exception code, address, EIP, ESP and a TEB-bounded 256-byte slice of the faulting stack into
+a fixed buffer, bumps a serial, and returns `EXCEPTION_CONTINUE_SEARCH`. No managed frame, no
+transition, nothing that can fail fast. The worker thread turns the buffer into a log line.
+The emitted bytes are re-derived and disassembled offline by
+`python tools\checkstub.py`; every branch is a forward `rel8` and the whole
+stub decodes cleanly.
+
+Alongside it: `AppDomain.CurrentDomain.UnhandledException` now logs any escaping managed
+exception with its type, message and stack (`StackTraceSupport` turned ON for this reason —
++164 KB in a DLL that loads once), and startup writes one line saying that a fail-fast leaves
+no trace here and to run `pwsh tools\crashlog.ps1`, which reads the Application log, explains
+the exception code, and can enable WER local dumps.
+
+⚠ NEEDS-LIVE: the stub, the unhandled-exception hook and the log line have never run inside
+the game. What triggered the *underlying* fault is still unproven — `Odyssey.DrawMinimapPeers`
+is the prime suspect (new, per-peer, on the render path, and the crash arrived with the second
+peer), and it has been hardened, but the honest position is that the next occurrence will now
+name itself.
+
+### The phantom-id table overlapped three other fields
+
+`OffsetPhantomIds = 0x264` was documented as "8 x uint32". It never was: `0x268` is
+`OffsetKeepAliveUnfocused`, `0x26C` is `OffsetPausesCleared`, `0x280` is
+`OffsetPickUpRequest`. With one remote player only index 0 is written, so it could not show.
+The SECOND phantom — the third player — writes its object id over the agent's keep-alive flag,
+the focus keeper then writes its pause counter into what the agent reads back as "phantom 2",
+and `ReadPhantomObjectIds` strikes creatures with those small ids out of the enemy census, the
+set drifting as the counter climbs. The real table now lives at `OffsetPhantomIdTable`
+(`0x1DE0`); `0x264` stays as the slot-0 mirror so nothing that has not been rebuilt breaks.
+
+### Slots belong to peers now, not to list positions
+
+Everything the plugin derives from a shared-block slot is keyed by slot index and nothing
+else — body, name, gear, faction, cumulative damage. The agent packed peers into slots in
+list order, so one player leaving renumbered the rest and the survivors inherited the leaver's
+body. `PeerSlotMap` makes a slot sticky per peer id (reclaimed only under pressure, and only
+from a peer that is genuinely absent); `RemoteCount` is now the occupied RANGE rather than a
+population; `PhantomController` spawns, drives and despawns per slot instead of assuming a
+contiguous prefix.
+
+And `CoopAgent` no longer attributes phantom damage by list position — it asks
+`bridge.PeerInSlot(slot)`. The list it wrote was filtered by module first, so with three
+players the wrong player was billed, sometimes one standing in another area.
+
+### Damage from two attackers is added, not maxed
+
+`_phantomDamageIn` was a single running total kept with `if (incoming > stored)`. Per-sender
+totals do not compare like that: once the host had dealt 40, a second player's reports of 5,
+10, 15 were all smaller and were discarded forever. Now keyed by source peer and summed; the
+host keys its outbound table by `(target, source)` and relays with the ORIGINATOR's id so the
+receiver can tell two attackers apart.
+
+### One agent per game, enforced
+
+⚠ Two things start an agent — the plugin's `AgentLauncher` (`coop.ini auto_start_agent`, ON by
+default) and whatever the human ran — and nothing stopped both attaching to the same
+`swkotor.exe`, both writing the same block, and both joining as separate players. That is how
+a stray third peer appeared in a two-instance session. The agent now takes
+`Local\kotorcoop-agent-<pid>` and a second one exits 3 with a message; `tools\demo3.ps1` also
+writes `auto_start_agent = 0` into each install so the harness owns its agents.
+
+### The harness
+
+`tools\demo3.ps1` brings up three instances (`--instance 3` needs nothing new — the mutex
+rename is `kcoopN` with N clamped 1..9; what it needs is a third *directory*, which
+`-CreateGame3` robocopies from instance 2's), and `tools\verify3.ps1` is a 24-check battery of
+things two players could not fail.
+
+---
+
 ## 0j. PEERS ON THE MINIMAP, AND COMBAT WHEN THE PLAYERS ARE APART, 2026-08-07
 
 ### The minimap shows the other players after all — in their own colours

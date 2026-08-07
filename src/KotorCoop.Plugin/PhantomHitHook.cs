@@ -94,6 +94,17 @@ internal static unsafe class PhantomHitHook
 
     public static void ReadSlot(int slot, out uint phantomId, out uint cumulative, out uint attacker, out uint serial)
     {
+        if (slot is < 0 or >= SharedBlock.SlotCapacity)
+        {
+            // Bounded like Watch is. An IndexOutOfRangeException raised on the frame hook
+            // does not surface as a bug report; it kills the game (see CrashProbe).
+            phantomId = 0;
+            cumulative = 0;
+            attacker = 0;
+            serial = 0;
+            return;
+        }
+
         phantomId = _watchedId[slot];
         cumulative = _cumulative[slot];
         attacker = _lastAttacker[slot];
@@ -109,7 +120,8 @@ internal static unsafe class PhantomHitHook
 
     public static uint AmountsSerial => _lastAmountsSerial;
 
-    public static int ReadAmount(int index) => _lastAmounts[index];
+    public static int ReadAmount(int index) =>
+        index is >= 0 and < DamageTypeSlots ? _lastAmounts[index] : 0;
 
     /// <summary>Drops every watch and its totals — a module change frees the bodies and the
     /// peer's own health is re-published from scratch.</summary>

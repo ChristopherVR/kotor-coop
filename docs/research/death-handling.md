@@ -4,7 +4,9 @@ What happens when a player's PC dies mid-session, and what co-op should do about
 Verified against `swkotor.exe` (GOG retail 1.0.3; disk == memory, no ASLR, base `0x400000`)
 via the sha256-matched symbol DB. Nothing was modified.
 
-Read alongside `client-control-lock.md` (the input gate this pipeline fights) and
+Read alongside `min-one-hitpoint.md` — the floor that stops this whole pipeline from ever
+starting, which KOTOR's own Endar Spire and Taris-duel scripts switch on for the PC — plus
+`client-control-lock.md` (the input gate this pipeline fights) and
 `party-reconciliation.md` (solo mode, the +0xA88 in-party flag, host-authoritative
 companions). Plugin surfaces referenced: `src/KotorCoop.Plugin/Odyssey.cs` (VM-call
 pattern, `KillCreature`, `SetMinOneHitPoint`) and `CombatController.cs` (the min1hp
@@ -228,6 +230,10 @@ exactly this: `CGameEffect` ctor 0x00503E40, `type = [0x74668C] = 4`, valid-bit 
   every HP write at 1 **and** converts an applied Death effect into "set HP 1" — full
   immunity to the pipeline. Already proven live on phantoms/enemies. Caveat from
   `Odyssey.cs`: the target never reads dead, so hostiles never disengage.
+  ⚠ **KOTOR sets this on the PC itself**: the Endar Spire command deck's OnEnter pins it
+  for the whole deck and the Taris duel ring pins it per duel, so on those maps none of the
+  machinery above can fire for anyone. That is a module rule, not a co-op fault — see
+  `min-one-hitpoint.md`.
 - `plot +0xF8` zeroes damage and blocks the Death effect — the phantom blueprint sets
   both from frame zero, which is why **a peer's phantom can never trigger any of this
   machinery on the remote instance** (VERIFIED gates; the phantom carries Min1HP+Plot).

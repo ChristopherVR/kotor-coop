@@ -105,6 +105,16 @@ internal static unsafe class AnimationHook
 
     public static void ReadCreatureSlot(int index, out uint objectId, out uint animation, out uint serial)
     {
+        if (index is < 0 or >= CreatureTableCapacity)
+        {
+            // Read from the frame hook: an out-of-range index here is a process kill, not
+            // an exception anyone gets to see (see CrashProbe).
+            objectId = 0;
+            animation = 0;
+            serial = 0;
+            return;
+        }
+
         objectId = _creatureId[index];
         animation = _creatureAnim[index];
         serial = _creatureSerial[index];

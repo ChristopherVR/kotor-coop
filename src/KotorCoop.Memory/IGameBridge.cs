@@ -85,6 +85,21 @@ public interface IGameBridge : IDisposable
     /// phantom elsewhere. No-op without a plugin.</summary>
     bool TryWriteIncomingDamage(uint cumulative, uint attacker) => false;
 
+    /// <summary>How many remote-player slots this bridge publishes into.</summary>
+    int RemoteSlotCapacity => 0;
+
+    /// <summary>
+    /// Which peer owns a published slot, 0 for empty.
+    ///
+    /// ⚠ Read this rather than assuming "slot i is the i'th peer in the list you handed
+    /// over". It is not: the list is filtered by module and masked by capability before it
+    /// is written, and slots are sticky per peer so a disconnect does not renumber the
+    /// survivors. Attributing a phantom's damage by list position instead of by this map
+    /// bills the wrong player, and with three of them that is the normal case, not the
+    /// edge case.
+    /// </summary>
+    uint PeerInSlot(int slot) => 0;
+
     /// <summary>False when this bridge cannot see the game's world/quest state.</summary>
     bool SupportsWorldState => false;
 

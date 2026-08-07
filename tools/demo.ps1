@@ -36,6 +36,34 @@ if ($Stop) {
 if (-not (Test-Path $agent)) { throw "agent not built: $agent   (run: dotnet build KotorCoop.slnx)" }
 New-Item -ItemType Directory -Force -Path $WorkDir | Out-Null
 
+# ⚠ TWO THINGS START AN AGENT. The plugin's AgentLauncher starts one per game the moment
+# dinput8.dll loads (coop.ini auto_start_agent, ON by default), and this script starts one per
+# game as well. Both attach to the same swkotor.exe, both write the same shared block, and both
+# join the session — which is how a two-instance run came to report a THIRD peer and then kill
+# the host. The agent now refuses to be the second one attached to a pid, so a stray one is
+# inert rather than a ghost player; turning auto-start off as well means the agents that do run
+# are the ones with the host/join roles this script chose, rather than coop.ini's.
+function Set-AutoStartAgent {
+    param([string]$Directory, [string]$Value)
+
+    $path = Join-Path $Directory 'coop.ini'
+    $lines = if (Test-Path $path) { @(Get-Content $path) } else { @('[coop]') }
+
+    $found = $false
+    for ($i = 0; $i -lt $lines.Count; $i++) {
+        if ($lines[$i] -match '^\s*auto_start_agent\s*=') {
+            $lines[$i] = "auto_start_agent = $Value"
+            $found = $true
+        }
+    }
+
+    if (-not $found) { $lines += "auto_start_agent = $Value" }
+    Set-Content -Path $path -Value $lines -Encoding ASCII
+}
+
+Set-AutoStartAgent -Directory $Game1 -Value '0'
+Set-AutoStartAgent -Directory $Game2 -Value '0'
+
 if (-not $SkipLaunch) {
     if (Get-Process swkotor -ErrorAction SilentlyContinue) {
         throw 'swkotor is already running; use -Stop first, or -SkipLaunch to attach to what is up'

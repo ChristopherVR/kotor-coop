@@ -222,10 +222,14 @@ tools/                   RE helpers, demo scripts, the kotor1_0_3 symbol databas
   design (it keeps one plot line advancing), not a limitation to be lifted. While a player
   is mid-conversation the session freezes enemy publication for them, because the engine
   disarms hostiles during dialogue.
-- **A remote player can be worn down but not finished off.** Enemies now genuinely fight
-  both players (see above), but KOTOR floors a party member at 1 hit point and downs them
-  through a separate path, so forwarded damage stops at 1 rather than dropping them.
-  Being downed still works normally from damage in your own game.
+- **On the Endar Spire's command deck nobody can be downed — and that is KOTOR, not us.**
+  The tutorial deck's area script pins the player character with min-one-hit-point
+  (`k_pend_area01`: `SetMinOneHP(GetFirstPC(), TRUE)`) and only releases it when you reach
+  the starboard section. While it holds, damage floors at exactly 1 hit point and no death
+  path runs — for local hits and forwarded hits alike, in co-op and in a normal
+  playthrough. Forwarded damage still lands and the health bar still tracks the beating;
+  the session logs which floor is in the way rather than pretending the damage went
+  missing. See [docs/research/min-one-hitpoint.md](docs/research/min-one-hitpoint.md).
 - **Enemies choose targets purely by proximity.** There is no threat shaping, so which
   player an enemy picks is the engine's nearest-hostile rule and nothing else.
 - **Encounters only fire for the host.** A client cannot trigger a spawn, so an encounter
