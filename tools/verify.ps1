@@ -403,6 +403,64 @@ Check 'the encounter call sites verified' `
     ((LogHas $Log2 'encounters: encounter calls verified') -and -not (LogHas $Log2 'encounters: REFUSED')) `
     'GetInActivateArea 0x590090 / SpawnIfAppropriate 0x593BE0'
 
+# --- 13. per-hit damage attribution ------------------------------------------------------
+# ⚠ CLOSE THE CONVERSATIONS FIRST. Section 11 deliberately leaves the client having tried to
+# open one, and the agent suppresses damage reports while in dialogue (the local fight is
+# disarmed and unrepresentative there). Run without this and the check fails for a reason
+# that has nothing to do with the channel under test — which it did, on its first run.
+CloseConversations $h1 $b1
+CloseConversations $h2 $b2
+for ($i = 0; $i -lt 20; $i++) {
+    if (-not [VF]::U32($h2, $b2 + 0x1228)) { break }
+    Start-Sleep -Milliseconds 500
+}
+Start-Sleep -Seconds 3
+
+# The whole point of the damage-dealt channel: a CLIENT swinging at an enemy has to cost that
+# enemy real hit points in the HOST's game, where the enemy actually lives. Nothing tested
+# this before — the channel shipped with unit tests and no live check at all — and the two
+# directions it replaced (enemy HEALTH reports) failed in exactly the way a unit test cannot
+# see: the owner's own mirror overwrote the sample before it was ever read.
+#
+# So the oracle is the host's engine, not either side's bookkeeping: find the enemy nearest
+# the CLIENT, read its hit points out of the HOST's creature, make the client attack it, and
+# read them again.
+$cx = [VF]::F32($h2, $b2 + 0x10)
+$cy = [VF]::F32($h2, $b2 + 0x14)
+$dmgId = 0
+$dmgDist = [double]::MaxValue
+$presence2 = [VF]::U32($h2, $b2 + 0x1400)
+for ($i = 0; $i -lt [Math]::Min($presence2, 32); $i++) {
+    $slot = $b2 + 0x1410 + ($i * 0x28)
+    $id = [VF]::U32($h2, $slot)
+    if ($id -eq 0) { continue }
+    $d = [math]::Sqrt([math]::Pow([VF]::F32($h2, $slot + 4) - $cx, 2) + [math]::Pow([VF]::F32($h2, $slot + 8) - $cy, 2))
+    if ($d -lt $dmgDist) { $dmgDist = $d; $dmgId = $id }
+}
+
+if ($dmgId -ne 0) {
+    $hostEnemy = [VF]::FindCreature($h1, $dmgId)
+    if ($hostEnemy -eq 0) {
+        Check 'a client hit costs the enemy real hit points' $false ("enemy 0x{0:X} not found in the host" -f $dmgId)
+    }
+    else {
+        $hpBefore = [VF]::I16($h1, $hostEnemy + 0xDC)
+        [VF]::W32($h2, $b2 + 0x1DA0, [int]0x7FFFFFFF) | Out-Null   # attacker: the CLIENT's PC
+        [VF]::W32($h2, $b2 + 0x1DA4, [int]$dmgId) | Out-Null
+        [VF]::W32($h2, $b2 + 0x1DA8, [int]([VF]::U32($h2, $b2 + 0x1DA8) + 1)) | Out-Null
+
+        # The client has to close to melee range and land a swing, then the ledger has to
+        # reach the host and be spent. Generous, and judged on the host's creature.
+        WaitFor2 { [VF]::I16($h1, $hostEnemy + 0xDC) -lt $hpBefore } 45 | Out-Null
+        $hpAfter = [VF]::I16($h1, $hostEnemy + 0xDC)
+        Check 'a client hit costs the enemy real hit points' ($hpAfter -lt $hpBefore) `
+            ("enemy 0x{0:X} at {1:F0} units: hp {2} -> {3}" -f $dmgId, $dmgDist, $hpBefore, $hpAfter)
+    }
+}
+else {
+    Check 'a client hit costs the enemy real hit points' $false 'no enemy published to attack'
+}
+
 # Leave the world as we found it, so the next run measures the same starting conditions.
 CloseConversations $h1 $b1
 CloseConversations $h2 $b2
