@@ -497,6 +497,23 @@ $auditOk = ($LASTEXITCODE -eq 0)
 Check 'every engine call signature matches the binary' $auditOk `
     (@($audit | Where-Object { $_ -match '^\s+\d+ agree|do not$|agree' }) -join '; ')
 
+# --- 15. no crash the plugin log cannot see ----------------------------------------------
+# ⚠ A FAIL-FAST LEAVES NOTHING IN THE PLUGIN LOG. A wrong __thiscall argument count skews the
+# stack and surfaces as STATUS_STACK_BUFFER_OVERRUN (0xC0000409) inside some unrelated
+# function, with no managed exception and no log line — this project logged exactly that twice
+# without an explanation before tools/callaudit.py found the cause. The Application log is the
+# only place it appears, so check it rather than trusting a quiet plugin log.
+#
+# Scoped to this run: an older crash in the log is history, not a regression (verify3 learned
+# the same lesson from its own log checks).
+$sinceRun = (Get-Date).AddMinutes(-30)
+$eventCrashes = @(
+    Get-WinEvent -FilterHashtable @{ LogName = 'Application'; Id = 1000; StartTime = $sinceRun } -ErrorAction SilentlyContinue |
+    Where-Object { $_.Message -like '*swkotor*' -or $_.Message -like '*dinput8*' })
+Check 'no swkotor crash in the event log' ($eventCrashes.Count -eq 0) `
+    $(if ($eventCrashes.Count -eq 0) { "clean since $($sinceRun.ToString('HH:mm'))" }
+      else { ($eventCrashes | Select-Object -First 2 | ForEach-Object { ($_.Message -split "`n")[0] }) -join ' | ' })
+
 # Leave the world as we found it, so the next run measures the same starting conditions.
 CloseConversations $h1 $b1
 CloseConversations $h2 $b2

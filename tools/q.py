@@ -36,14 +36,43 @@ elif cmd == 'class':
 
 elif cmd == 'func':
     like = sys.argv[2]
-    q = "SELECT class_name, function_name, address, calling_convention FROM functions WHERE function_name LIKE ?"
+    q = ("SELECT class_name, function_name, address, calling_convention, param_size_bytes "
+         "FROM functions WHERE function_name LIKE ?")
     args = (f'%{like}%',)
     if len(sys.argv) > 3:
         q += " AND class_name LIKE ?"
         args = args + (f'%{sys.argv[3]}%',)
+
+    # ⚠ SAY SO WHEN THE ROW DISAGREES WITH THE BINARY. This DB was imported from another
+    # build's symbols; 310 of its rows do not match the executable in this install, and a
+    # wrong row is worse than a missing one because it is what you trust when writing the
+    # declaration that then corrupts the stack (docs/research/engine-api.md). The callee's
+    # own `ret` immediate is the argument size, so the check is cheap and exact — do it here,
+    # at the moment someone actually looks a function up, rather than only in an audit nobody
+    # remembers to re-run.
+    verify = None
+    try:
+        import importlib.util
+        spec = importlib.util.spec_from_file_location(
+            'dbaudit', os.path.join(os.path.dirname(os.path.abspath(__file__)), 'dbaudit.py'))
+        dbaudit = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(dbaudit)
+        text = open(dbaudit.DEFAULT_EXE, 'rb').read()[dbaudit.TEXT_RAW:dbaudit.TEXT_RAW + dbaudit.TEXT_SIZE]
+        verify = (dbaudit, text)
+    except Exception:
+        pass  # no exe / no capstone: fall back to reporting the DB as-is
+
     for r in rows(q + " ORDER BY class_name, function_name", args):
         addr = f"0x{r[2]:08X}" if isinstance(r[2], int) else str(r[2])
-        print(f"  {addr}  {r[0]}::{r[1]}   [{r[3]}]")
+        warn = ''
+        if verify and isinstance(r[2], int) and r[4]:
+            dbaudit, text = verify
+            kind, imm = dbaudit.ret_immediate(text, r[2])
+            # Only multiple-of-4 sizes are comparable: the column sums raw sizeof, and 0
+            # means unpopulated. Both explained in tools/dbaudit.py.
+            if r[4] % 4 == 0 and kind == 'ret-imm' and imm != r[4]:
+                warn = f"   ** DB says {r[4]} bytes of args, the binary pops {imm} -- TRUST THE BINARY"
+        print(f"  {addr}  {r[0]}::{r[1]}   [{r[3]}]{warn}")
 
 elif cmd == 'globals':
     pat = sys.argv[2] if len(sys.argv) > 2 else ''
