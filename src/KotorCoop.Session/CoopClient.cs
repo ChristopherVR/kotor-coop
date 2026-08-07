@@ -387,6 +387,52 @@ public sealed class CoopClient : ICoopSession
         }
     }
 
+    // ---- encounter triggers -------------------------------------------------------
+
+    private string _encounterModule = string.Empty;
+    private uint[] _encounterIds = [];
+
+    /// <summary>
+    /// The set the agent last read out of the plugin. Held rather than queued: this is a
+    /// level, so the newest set is the only one worth sending and an older one is never
+    /// worth retransmitting.
+    /// </summary>
+    public void PublishEncounterTriggers(string module, IReadOnlyList<uint> encounterIds)
+    {
+        lock (_gate)
+        {
+            _encounterModule = module ?? string.Empty;
+            _encounterIds = [.. encounterIds.Take(ProtocolConstants.MaxEncounterTriggers)];
+        }
+    }
+
+    private void SendEncounterTriggers()
+    {
+        string module;
+        uint[] ids;
+
+        lock (_gate)
+        {
+            if (_encounterIds.Length == 0 || _localPeerId == 0)
+            {
+                // Nothing to say. Deliberately silent rather than sending an empty set every
+                // tick: the host ages a peer's last report out on its own, so "I left" needs
+                // no datagram and standing in open ground costs no traffic.
+                return;
+            }
+
+            module = _encounterModule;
+            ids = _encounterIds;
+        }
+
+        int length = PacketCodec.Write(
+            _sendBuffer, new EncounterTriggerPacket(_localPeerId, module, ids));
+        if (length > 0)
+        {
+            _channel.Send(_hostEndPoint, _sendBuffer.AsSpan(0, length));
+        }
+    }
+
     /// <summary>The container-loot removals received from the host, for the agent to apply.</summary>
     public IReadOnlyList<ContainerLootRemoval> ContainerLootRemovals => _lootStore.Snapshot();
 
@@ -538,6 +584,7 @@ public sealed class CoopClient : ICoopSession
         SendStateUpdate(now);
         SendDialogueRequest();
         SendPhantomDamage();
+        SendEncounterTriggers();
         FlushChat();
 
         if (now - _lastPingMs >= PingIntervalMs)

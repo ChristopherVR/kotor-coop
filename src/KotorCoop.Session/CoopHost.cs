@@ -386,6 +386,26 @@ public sealed class CoopHost : ICoopSession
         }
     }
 
+    // ---- encounter triggers -------------------------------------------------------
+    //
+    // Clients cannot fire their own encounters (the spawn would drift their object-id
+    // counter), so they report where they are standing and this instance's engine does the
+    // spawn. Fresh reports only, and only from peers in the same module — see
+    // EncounterTriggerStore for why this is a level rather than an enter event.
+
+    private readonly EncounterTriggerStore _encounterTriggers = new();
+
+    private void HandleEncounterTrigger(ReadOnlySpan<byte> span)
+    {
+        if (PacketCodec.ReadEncounterTrigger(span) is { } packet)
+        {
+            _encounterTriggers.Report(packet, SessionClock.NowMs);
+        }
+    }
+
+    public IReadOnlyList<EncounterFireRequest> GetEncounterFireRequests(string module) =>
+        _encounterTriggers.Collect(module, SessionClock.NowMs);
+
     private void BroadcastPhantomDamage(List<PeerConnection> recipients)
     {
         foreach (PeerConnection peer in recipients)
@@ -536,6 +556,7 @@ public sealed class CoopHost : ICoopSession
                     _peers.Remove(id);
                     _buffer.Remove(id);
                     ReleaseDialogueIfOwnedBy(id);
+                    _encounterTriggers.Forget(id);
                 }
             }
 
@@ -840,6 +861,10 @@ public sealed class CoopHost : ICoopSession
 
             case PacketType.PhantomDamage:
                 HandlePhantomDamage(span);
+                break;
+
+            case PacketType.EncounterTrigger:
+                HandleEncounterTrigger(span);
                 break;
 
             case PacketType.DialogueRequest:
@@ -1197,6 +1222,7 @@ public sealed class CoopHost : ICoopSession
         }
 
         _buffer.Remove(bye.PeerId);
+        _encounterTriggers.Forget(bye.PeerId);
     }
 
     public void Dispose() => _channel.Dispose();

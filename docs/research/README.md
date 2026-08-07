@@ -16,6 +16,7 @@ modified.
 | [console-overlay.md](console-overlay.md) | in-game `~` console | retail ships the whole Aurora dev console; enable via EnableCheats and READ the command buffer — no guessed callback ABI, no crash risk. `PrintStringScreenPos 0x0044CCA0` paints reply lines. |
 | [connect-flow.md](connect-flow.md) | in-game Connect UI | achievable — rebind BTN_WARP, reuse CSWGuiSaveNamePanel as an IP prompt (real editbox at panel+0x548); no password masking (keep it in coop.ini). |
 | [enemy-presence-sync.md](enemy-presence-sync.md) | one visible fight, not two private ones | owner streams enemy position/facing/stance (protocol v12); mirror drives its copies with the phantom recipe and disarms local enemy AI per pass. Combat-participation options recorded. |
+| [client-encounters.md](client-encounters.md) | a CLIENT walking into an ambush | event 0xC is just `[+0x2E0] = enterer; SpawnIfAppropriate` — reproduce it on the host with the peer's phantom. `player_only` (34 of 47 base-game encounters) is the gate. ⚠ §8: the enemy channel never materialises a creature the mirror lacks, so host spawns are invisible to a client TODAY. |
 
 Priority order for implementation (value / risk):
 1. **Name plates client-twin write** — small, closes a wrong claim, verifiable in memory.

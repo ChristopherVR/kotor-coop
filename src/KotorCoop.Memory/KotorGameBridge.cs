@@ -830,6 +830,13 @@ public sealed class KotorGameBridge : IGameBridge
             _memory.TryWrite(_pluginBlock + BlockEnemyPresenceCount, 0u);
             _memory.TryWrite(_pluginBlock + BlockPartyPresenceCount, 0u);
             _memory.TryWrite(_pluginBlock + BlockRemoteDialogueActive, 0u);
+
+            // Same staleness reason as the presence counts: with the agent gone nothing
+            // refreshes these, and a leftover request would keep offering an encounter on
+            // behalf of a peer that is no longer in the session.
+            _memory.TryWrite(_pluginBlock + BlockEncounterRequestCount, 0u);
+            _memory.TryWrite(_pluginBlock + BlockEncounterWatch, 0u);
+            _encounterWatchWritten = false;
             _memory.TryWrite(_pluginBlock + BlockCommand, (uint)0);
         }
 
@@ -1797,7 +1804,14 @@ public sealed class KotorGameBridge : IGameBridge
     /// source of object-id drift — a creature spawned by an encounter in one instance and
     /// not the other shifts the id counter for everything created afterwards, and
     /// identical ids are the key the whole combat replication rests on. The host keeps
-    /// its encounters; whatever they spawn reaches the client through the enemy channel.
+    /// its encounters, and a peer that walks into one asks the owner to fire it rather than
+    /// firing its own (see <see cref="TryRequestEncounterFire"/>).
+    ///
+    /// ⚠ This comment used to claim that whatever the owner's encounters spawn "reaches the
+    /// client through the enemy channel". It does not. Both mirror controllers begin with
+    /// <c>ResolveServerObject(id)</c> and give up on 0, so a creature that exists only in the
+    /// owner's instance is skipped — see docs/research/client-encounters.md §8, which is
+    /// where the missing materialisation path is designed.
     ///
     /// Plain dword writes, so this runs externally. Re-applied once per module.
     /// </summary>
@@ -1833,6 +1847,89 @@ public sealed class KotorGameBridge : IGameBridge
         // repeated every pump for a module that simply has none.
         _encounterModule = module;
         return disabled;
+    }
+
+    // Client-triggered encounters, mirroring SharedBlock 0x1DE0..0x1E60. The plugin owns
+    // both halves (docs/research/client-encounters.md); the bridge only carries them.
+    private const int BlockEncounterWatch = 0x1DE0;
+    private const int BlockEncounterInsideCount = 0x1DE4;
+    private const int BlockEncounterInside = 0x1DEC;
+    private const int BlockEncounterInsideCapacity = 4;
+    private const int BlockEncounterRequestCount = 0x1DFC;
+    private const int BlockEncounterRequestSerial = 0x1E00;
+    private const int BlockEncounterRequests = 0x1E04;
+    private const int BlockEncounterRequestStride = 0x08;
+    private const int BlockEncounterRequestCapacity = 8;
+
+    private uint _encounterRequestSerial;
+
+    private bool _encounterWatchWritten;
+    private bool _encounterWatchState;
+
+    public void SetEncounterWatch(bool enabled)
+    {
+        // Edge-written: this is a per-pump call and the value changes at most once a session.
+        if (_pluginBlock == 0 || (_encounterWatchWritten && _encounterWatchState == enabled))
+        {
+            return;
+        }
+
+        if (_memory.TryWrite(_pluginBlock + BlockEncounterWatch, enabled ? 1u : 0u))
+        {
+            _encounterWatchWritten = true;
+            _encounterWatchState = enabled;
+        }
+    }
+
+    public IReadOnlyList<uint> ReadEnteredEncounters()
+    {
+        if (_pluginBlock == 0
+            || !_memory.TryReadUInt32(_pluginBlock + BlockEncounterInsideCount, out uint count)
+            || count == 0)
+        {
+            return [];
+        }
+
+        count = Math.Min(count, BlockEncounterInsideCapacity);
+
+        List<uint> ids = new((int)count);
+        for (int i = 0; i < count; i++)
+        {
+            if (_memory.TryReadUInt32(_pluginBlock + BlockEncounterInside + (i * 4), out uint id)
+                && id != 0)
+            {
+                ids.Add(id);
+            }
+        }
+
+        return ids;
+    }
+
+    public bool TryRequestEncounterFire(IReadOnlyList<(uint EncounterId, uint PeerId)> requests)
+    {
+        if (_pluginBlock == 0)
+        {
+            return false;
+        }
+
+        int count = Math.Min(requests.Count, BlockEncounterRequestCapacity);
+
+        bool ok = true;
+        for (int i = 0; i < count; i++)
+        {
+            nint slot = _pluginBlock + BlockEncounterRequests + (i * BlockEncounterRequestStride);
+            ok &= _memory.TryWrite(slot + 0x00, requests[i].EncounterId);
+            ok &= _memory.TryWrite(slot + 0x04, requests[i].PeerId);
+        }
+
+        ok &= _memory.TryWrite(_pluginBlock + BlockEncounterRequestCount, (uint)count);
+
+        // Serial last and always advancing, even for an unchanged list: the plugin only
+        // acts when the serial moves, and firing is idempotent (the engine refuses an
+        // encounter that has already started), so re-offering costs nothing and covers a
+        // request that arrived while the plugin was mid-transition.
+        ok &= _memory.TryWrite(_pluginBlock + BlockEncounterRequestSerial, ++_encounterRequestSerial);
+        return ok;
     }
 
     // ---- journal ---------------------------------------------------------------

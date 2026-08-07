@@ -443,6 +443,56 @@ public static class PacketCodec
         return r.Failed ? null : new PhantomDamagePacket(from, target, cumulative, attacker);
     }
 
+    public static int Write(Span<byte> buffer, EncounterTriggerPacket packet)
+    {
+        PacketWriter w = new(buffer);
+        w.WriteHeader(PacketType.EncounterTrigger);
+        w.WriteUInt32(packet.PeerId);
+        w.WriteString(packet.Module, ProtocolConstants.MaxModuleLength);
+
+        int count = Math.Min(packet.EncounterIds.Count, ProtocolConstants.MaxEncounterTriggers);
+        w.WriteUInt8((byte)count);
+
+        for (int i = 0; i < count; i++)
+        {
+            w.WriteUInt32(packet.EncounterIds[i]);
+        }
+
+        return w.Failed ? 0 : w.Position;
+    }
+
+    public static EncounterTriggerPacket? ReadEncounterTrigger(ReadOnlySpan<byte> buffer)
+    {
+        PacketReader r = new(buffer);
+        if (r.ReadHeader() != PacketType.EncounterTrigger)
+        {
+            return null;
+        }
+
+        uint peerId = r.ReadUInt32();
+        string module = r.ReadString();
+        byte count = r.ReadUInt8();
+
+        if (r.Failed || count > ProtocolConstants.MaxEncounterTriggers)
+        {
+            return null;
+        }
+
+        List<uint> ids = new(count);
+        for (int i = 0; i < count; i++)
+        {
+            uint id = r.ReadUInt32();
+            if (r.Failed)
+            {
+                return null;
+            }
+
+            ids.Add(id);
+        }
+
+        return new EncounterTriggerPacket(peerId, module, ids);
+    }
+
     public static int Write(Span<byte> buffer, PartySnapshotPacket packet)
     {
         PacketWriter w = new(buffer);

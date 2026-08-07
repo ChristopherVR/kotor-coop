@@ -320,6 +320,40 @@ public class PacketCodecTests
     }
 
     [Fact]
+    public void EncounterTriggerRoundTrips()
+    {
+        Span<byte> buffer = stackalloc byte[ProtocolConstants.MaxPacketSize];
+        EncounterTriggerPacket original = new(PeerId: 5, "tar_m03aa", [0x11B, 0x11C]);
+
+        int length = PacketCodec.Write(buffer, original);
+        Assert.True(length > 0);
+
+        EncounterTriggerPacket? decoded = PacketCodec.ReadEncounterTrigger(buffer[..length]);
+
+        Assert.NotNull(decoded);
+        Assert.Equal(5u, decoded.PeerId);
+        Assert.Equal("tar_m03aa", decoded.Module);
+        Assert.Equal<uint[]>([0x11B, 0x11C], [.. decoded.EncounterIds]);
+    }
+
+    [Fact]
+    public void EncounterTriggerTruncatesBeyondTheCap()
+    {
+        Span<byte> buffer = stackalloc byte[ProtocolConstants.MaxPacketSize];
+
+        // Overlapping activate areas are the only way to be in several at once and the
+        // engine authors them disjoint; the cap bounds the packet rather than expressing a
+        // real limit, so exceeding it must truncate, never fail to send.
+        uint[] tooMany = [.. Enumerable.Range(1, ProtocolConstants.MaxEncounterTriggers + 3).Select(i => (uint)i)];
+
+        int length = PacketCodec.Write(buffer, new EncounterTriggerPacket(1, "korr_m34aa", tooMany));
+        EncounterTriggerPacket? decoded = PacketCodec.ReadEncounterTrigger(buffer[..length]);
+
+        Assert.NotNull(decoded);
+        Assert.Equal(ProtocolConstants.MaxEncounterTriggers, decoded.EncounterIds.Count);
+    }
+
+    [Fact]
     public void EnemyReportCarriesHealthAloneAndDropsPresence()
     {
         Span<byte> buffer = stackalloc byte[ProtocolConstants.MaxPacketSize];

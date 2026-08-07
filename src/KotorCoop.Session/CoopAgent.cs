@@ -1035,6 +1035,11 @@ public sealed class CoopAgent(IGameBridge bridge, ICoopSession session, AgentSet
 
         if (session.IsEnemyAuthority)
         {
+            // The owner's own engine fires its own encounters; only the peers that had
+            // theirs disarmed need the watch.
+            bridge.SetEncounterWatch(false);
+            PumpEncounterRequests(local);
+
             // Hold the last snapshot rather than publishing while in a conversation. The
             // dialogue system wipes every hostile's action queue in this instance on every
             // tick, so what we would send is a pacified fight — and the peer, who is not
@@ -1066,6 +1071,21 @@ public sealed class CoopAgent(IGameBridge bridge, ICoopSession session, AgentSet
         {
             Log?.Invoke($"disabled {disabled} local encounter(s); the enemy owner's spawns are authoritative");
         }
+
+        // Disarmed does not have to mean unreachable. The plugin watches which activate
+        // areas this player is standing in and the owner fires them on our behalf, so
+        // walking into an ambush works for whoever walks in — see
+        // docs/research/client-encounters.md.
+        bridge.SetEncounterWatch(true);
+        session.PublishEncounterTriggers(
+            local.Module,
+            // "areaXX" means the module name was unreadable, which means a transition is
+            // mid-flight — the same guard PumpTravel needs. Reporting then would name this
+            // area's encounter ids under a module string that matches nothing, and the ids
+            // themselves are about to be reassigned. Report an empty set instead of
+            // reporting nothing, so a set published a moment ago is superseded rather than
+            // left to age out on the host.
+            IsFallbackModuleName(local.Module) ? [] : bridge.ReadEnteredEncounters());
 
         // Module-gated: the owner's ids only mean anything while we are where they were
         // read. Apart, this is empty and our own copies are left alone rather than driven
@@ -1186,6 +1206,48 @@ public sealed class CoopAgent(IGameBridge bridge, ICoopSession session, AgentSet
 
         return false;
     }
+
+    /// <summary>
+    /// Owner side of client-triggered encounters: hand the plugin whatever encounters
+    /// clients say they are standing in, so this instance's engine can decide and spawn.
+    ///
+    /// Only ids and peer ids cross — the decision stays with the engine, which re-tests the
+    /// polygon against that peer's phantom. Written every pump rather than on a change: the
+    /// list is a level, the plugin's apply is idempotent (the engine refuses an encounter
+    /// that has already started), and a level costs nothing to repeat.
+    /// </summary>
+    private void PumpEncounterRequests(in PlayerState local)
+    {
+        // Mid-transition (see IsFallbackModuleName): our own ids are about to be reassigned,
+        // so nothing a peer names can be resolved safely. Falls through to the drain below
+        // so the request region is still cleared once.
+        IReadOnlyList<EncounterFireRequest> requests = IsFallbackModuleName(local.Module)
+            ? []
+            : session.GetEncounterFireRequests(local.Module);
+        if (requests.Count == 0 && !_encounterRequestsOutstanding)
+        {
+            return;
+        }
+
+        // One more write after the last request drains, so the region does not keep
+        // offering a peer's stale encounter once they have walked out.
+        _encounterRequestsOutstanding = requests.Count > 0;
+
+        bridge.TryRequestEncounterFire([.. requests.Select(r => (r.EncounterId, r.PeerId))]);
+
+        if (requests.Count > 0 && _encounterRequestsLogged != requests.Count)
+        {
+            _encounterRequestsLogged = requests.Count;
+            Log?.Invoke($"firing {requests.Count} encounter(s) a peer walked into");
+        }
+        else if (requests.Count == 0)
+        {
+            _encounterRequestsLogged = 0;
+        }
+    }
+
+    private bool _encounterRequestsOutstanding;
+    private int _encounterRequestsLogged;
 
     /// <summary>
     /// Reconciles the session's ground-item truth with the game: the bridge materialises

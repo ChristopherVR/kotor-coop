@@ -65,6 +65,14 @@ public static class ProtocolConstants
     public const int MaxPartyMembers = 4;
 
     /// <summary>
+    /// Encounters a client can report standing inside at once. Encounter activate areas are
+    /// authored as disjoint polygons and the whole base game has at most 7 in a module
+    /// (korr_m34aa), so overlapping four is already generous; the cap exists to bound the
+    /// packet, not because a fifth is expected.
+    /// </summary>
+    public const int MaxEncounterTriggers = 4;
+
+    /// <summary>
     /// The spectate line carried on the dialogue token.
     ///
     /// Deliberately larger than <see cref="MaxStringLength"/>: real KOTOR dialogue runs to

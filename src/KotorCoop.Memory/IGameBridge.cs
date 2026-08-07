@@ -237,6 +237,28 @@ public interface IGameBridge : IDisposable
     int DisableLocalEncounters() => 0;
 
     /// <summary>
+    /// Turns the plugin's encounter watch on or off. On only for a peer that does NOT own
+    /// enemies: the owner's engine fires its own encounters natively and has nothing to ask
+    /// anyone for, so the watch would be pure cost there.
+    /// </summary>
+    void SetEncounterWatch(bool enabled) { }
+
+    /// <summary>
+    /// Non-owner side: the object ids of the encounters the local player is standing inside
+    /// right now, as the plugin's watch reports them (the engine's own polygon test). Empty
+    /// when the plugin is absent or the player is in open ground.
+    /// </summary>
+    IReadOnlyList<uint> ReadEnteredEncounters() => [];
+
+    /// <summary>
+    /// Owner side: asks the plugin to run the engine's own "should this encounter fire"
+    /// test for each (encounter, peer) pair, standing the peer's phantom in for the player
+    /// who actually walked in. Repeats are harmless — the engine refuses an encounter that
+    /// has already started. Returns false when there is no plugin.
+    /// </summary>
+    bool TryRequestEncounterFire(IReadOnlyList<(uint EncounterId, uint PeerId)> requests) => false;
+
+    /// <summary>
     /// Applies the owning peer's enemy state to this instance: mirror their health, and
     /// stop local fighting from killing anything the owner still considers alive.
     /// </summary>

@@ -154,6 +154,19 @@ starts from the fence posts, not from scratch.
 removed) points that way. It needs its own RE pass on target selection
 (`CreateNewAttackActions 0x005B6980`) before any code.
 
+## ⚠ Correction 2026-08-07: the mirror never CREATES an enemy
+
+This doc and Handoff 0i both read as though an owner-side spawn arrives on the mirror
+through this channel. It does not, and never did. `CombatController.Apply` and
+`EnemyPresenceController.DriveOne` both open with `Odyssey.ResolveServerObject(id)` and
+return on 0: the channel drives copies that already exist in both instances (everything the
+module's GIT placed), and silently skips anything the owner alone has. Encounter spawns are
+exactly that.
+
+Found while building client-triggered encounters; the fence posts for closing it — including
+the cheap cross-instance key for the blueprint — are in
+[client-encounters.md](client-encounters.md) §8.
+
 ## Files
 
 - `src/KotorCoop.Protocol` — `EnemyState` presence fields, snapshot codec, protocol v12.

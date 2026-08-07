@@ -88,6 +88,21 @@ public interface ICoopSession : IDisposable
     (uint CumulativeDamage, uint AttackerId) GetIncomingPhantomDamage() => (0, 0);
 
     /// <summary>
+    /// Client only: "my player is standing inside these encounters." A client's own
+    /// encounters are disarmed (they would drift the object-id counter), so this is how a
+    /// client walking into an ambush gets one — the host runs the engine's eligibility test
+    /// against that client's phantom and lets its engine spawn. Sent every tick as the
+    /// current SET, not as an enter event. A host is a no-op: its engine fires its own.
+    /// </summary>
+    void PublishEncounterTriggers(string module, IReadOnlyList<uint> encounterIds) { }
+
+    /// <summary>
+    /// Host only: the encounters clients are asking for right now, in
+    /// <paramref name="module"/>, deduplicated. Empty on a client.
+    /// </summary>
+    IReadOnlyList<EncounterFireRequest> GetEncounterFireRequests(string module) => [];
+
+    /// <summary>
     /// Announces this instance's in-world content fingerprint (globals catalogue, save
     /// identity, current module + its GIT digest; each field 0/empty until resolved). Sent
     /// to the peer so a mismatch only knowable in-world refines the negotiated
