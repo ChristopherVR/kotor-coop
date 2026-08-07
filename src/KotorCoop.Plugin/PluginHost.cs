@@ -71,6 +71,11 @@ internal static unsafe class PluginHost
 
             Log($"=== KotorCoop plugin loaded into pid {NativeMethods.GetCurrentProcessId()} ===");
 
+            // FIRST, before a single hook or controller exists. A fault during startup is
+            // exactly as fatal as one during play, and the probe is what turns "the game
+            // vanished" into a line naming the exception.
+            CrashProbe.Install();
+
             // The in-game ~ console needs the engine's dev console, which is gated by
             // EnableCheats in swkotor.ini. Enabling it is the game's own sanctioned surface.
             EnsureCheatsEnabled(directory);
@@ -267,7 +272,6 @@ internal static unsafe class PluginHost
 
             _worker.Start();
             Log("worker thread started");
-            CrashProbe.Install();
 
             // Last, once everything the agent looks for exists: start the agent for this
             // instance so installing the plugin is the whole installation. Opt-out in
@@ -544,6 +548,11 @@ internal static unsafe class PluginHost
             try
             {
                 _block->Heartbeat++;
+
+                // The crash probe's handler is machine code and cannot format a log line
+                // itself (see CrashProbe: the managed version of it WAS the crash). It leaves
+                // a record behind; this is where that record becomes words.
+                CrashProbe.DrainReports();
 
                 if (_view is { } view)
                 {

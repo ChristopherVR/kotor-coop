@@ -95,7 +95,12 @@ public sealed class KotorGameBridge : IGameBridge
     private const int BlockPlayerCreature = 0x258;
     private const int BlockPhantomCount = 0x25C;
     private const int BlockLastStatus = 0x260;
+    /// <summary>⚠ Slot 0 ONLY. The dword after it is BlockKeepAliveUnfocused — see
+    /// SharedBlock.OffsetPhantomIds. The full table is BlockPhantomIdTable.</summary>
     private const int BlockPhantomIds = 0x264;
+
+    /// <summary>The real per-slot phantom object ids, moved out of 0x264's one-dword hole.</summary>
+    private const int BlockPhantomIdTable = 0x1DE0;
     private const int BlockKeepAliveUnfocused = 0x268;
     private const int BlockPausesCleared = 0x26C;
     private const int BlockPickUpRequest = 0x280;
@@ -833,6 +838,10 @@ public sealed class KotorGameBridge : IGameBridge
             _memory.TryWrite(_pluginBlock + BlockCommand, (uint)0);
         }
 
+        // A new session deals fresh peer ids, so keeping the old slot map would hold slots
+        // for players who no longer exist and push the new ones down the block.
+        _slots.Clear();
+
         ReleasePartyFreeze();
     }
 
@@ -894,19 +903,47 @@ public sealed class KotorGameBridge : IGameBridge
         // the bridge already knows which object is the player.
         ok &= _memory.TryWrite(_pluginBlock + BlockPlayerCreature, (uint)_player.Address);
 
-        int count = Math.Min(peers.Count, BlockSlotCapacity);
+        // Resolve every peer to ITS slot before writing anything, so the loop below can be a
+        // plain walk over the eight slots.
+        for (int i = 0; i < BlockSlotCapacity; i++)
+        {
+            _slotPeerIndex[i] = -1;
+        }
+
+        _presentPeerIds.Clear();
+        for (int p = 0; p < peers.Count; p++)
+        {
+            _presentPeerIds.Add(peers[p].PeerId);
+        }
+
+        for (int p = 0; p < peers.Count; p++)
+        {
+            int assigned = _slots.Assign(peers[p].PeerId, _presentPeerIds);
+            if (assigned >= 0)
+            {
+                _slotPeerIndex[assigned] = p;
+            }
+        }
+
+        // ⚠ RemoteCount is published as the occupied RANGE (highest slot + 1), not the
+        // population. Slots are sticky, so with peer 3 in slot 1 and slot 0 empty a count of
+        // "1" would hide them; the plugin reads this as "how far to look", not "how many".
+        int occupiedRange = 0;
 
         for (int i = 0; i < BlockSlotCapacity; i++)
         {
             nint slot = _pluginBlock + BlockSlots + (i * BlockSlotStride);
+            int index = _slotPeerIndex[i];
 
-            if (i >= count)
+            if (index < 0)
             {
                 ok &= _memory.TryWrite(slot + 0x00, 0u);
                 continue;
             }
 
-            RemotePeer peer = peers[i];
+            occupiedRange = i + 1;
+
+            RemotePeer peer = peers[index];
             WriteRemoteOneShot(i, peer.State);
             ok &= _memory.TryWrite(slot + 0x04, peer.PeerId);
             ok &= _memory.TryWrite(slot + 0x08, peer.State.Position.X);
@@ -939,10 +976,26 @@ public sealed class KotorGameBridge : IGameBridge
             ok &= _memory.TryWrite(slot + 0x00, 1u);
         }
 
-        ok &= _memory.TryWrite(_pluginBlock + BlockRemoteCount, (uint)count);
+        ok &= _memory.TryWrite(_pluginBlock + BlockRemoteCount, (uint)occupiedRange);
         ok &= _memory.TryWrite(_pluginBlock + BlockCommand, CommandSpawnAndDrive);
         return ok;
     }
+
+    /// <summary>Which peer owns which block slot, kept stable for the session. See
+    /// <see cref="PeerSlotMap"/> for why that matters.</summary>
+    private readonly PeerSlotMap _slots = new(BlockSlotCapacity);
+
+    /// <summary>Scratch for one publication: slot -&gt; index into the peer list, -1 = empty.</summary>
+    private readonly int[] _slotPeerIndex = new int[BlockSlotCapacity];
+
+    /// <summary>Scratch for one publication: the peer ids present, for eviction decisions.</summary>
+    private readonly List<uint> _presentPeerIds = [];
+
+    /// <inheritdoc />
+    public int RemoteSlotCapacity => BlockSlotCapacity;
+
+    /// <inheritdoc />
+    public uint PeerInSlot(int slot) => _slots.Owner(slot);
 
     // ---- ground items ----------------------------------------------------------
 
@@ -2704,7 +2757,12 @@ public sealed class KotorGameBridge : IGameBridge
         HashSet<uint>? ids = null;
         for (int i = 0; i < BlockSlotCapacity; i++)
         {
-            if (_memory.TryReadUInt32(_pluginBlock + BlockPhantomIds + (i * 4), out uint id) && id != 0)
+            // ⚠ BlockPhantomIdTable, not BlockPhantomIds. Reading eight dwords from 0x264
+            // read the keep-alive flag and the focus keeper's pause counter as if they were
+            // object ids, so ids 1, 2, 3... were quietly struck out of the enemy census as
+            // "that's a phantom" — and the counter climbs, so the set of creatures it hid
+            // drifted over a session.
+            if (_memory.TryReadUInt32(_pluginBlock + BlockPhantomIdTable + (i * 4), out uint id) && id != 0)
             {
                 (ids ??= []).Add(id);
             }

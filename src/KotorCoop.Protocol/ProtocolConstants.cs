@@ -79,8 +79,19 @@ public static class ProtocolConstants
     /// <summary>magic(2) + version(1) + type(1)</summary>
     public const int HeaderSize = 4;
 
-    /// <summary>Comfortably inside the smallest common path MTU, so we never fragment.</summary>
-    public const int MaxPacketSize = 1200;
+    /// <summary>
+    /// Comfortably inside the smallest common path MTU, so we never fragment. (Ethernet's
+    /// 1500 less an IPv4 header and a UDP header leaves 1472; IPv6's guaranteed minimum is
+    /// 1280 less 48 = 1232.)
+    ///
+    /// ⚠ Raised from 1200, which a FULL LOBBY did not fit in. Worst case per snapshot entry
+    /// is 152 bytes — id, a 24-char name, and a player state whose module name and three
+    /// equipment resrefs are all at their caps — so eight peers plus the header is 1241, and
+    /// the whole snapshot was dropped. The guard test claimed to prove otherwise while
+    /// quietly measuring a state with no equipment; see FullPeerSnapshotFitsInOneDatagram.
+    /// Nothing on the wire encodes this value, so it is a buffer size and nothing more.
+    /// </summary>
+    public const int MaxPacketSize = 1400;
 
     /// <summary>Default cap for the short identity fields (names, resrefs, tags), chosen so
     /// a full snapshot with every one at maximum still fits a datagram. NOT the absolute

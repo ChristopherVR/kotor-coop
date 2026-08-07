@@ -32,8 +32,17 @@
     <!-- Keep the DLL small and its startup cheap; it loads inside a 2003 game. -->
     <InvariantGlobalization>true</InvariantGlobalization>
     <UseSystemResourceKeys>true</UseSystemResourceKeys>
-    <StackTraceSupport>false</StackTraceSupport>
     <EventSourceSupport>false</EventSourceSupport>
+
+    <!--
+      ⚠ ON, against the size preference above, and deliberately. A managed exception that
+      escapes an [UnmanagedCallersOnly] entry point kills the game with a fail-fast and no
+      SEH exception, so CrashProbe's AppDomain.UnhandledException hook is the ONLY place the
+      fault is ever described - and without stack traces that description is a type name and
+      a message with no location. One crash class already cost a whole session to a log that
+      said nothing. The cost is a few hundred KB in a DLL that loads once.
+    -->
+    <StackTraceSupport>true</StackTraceSupport>
     <OptimizationPreference>Size</OptimizationPreference>
 
     <!-- Not part of the normal solution build; publish explicitly via build.ps1. -->

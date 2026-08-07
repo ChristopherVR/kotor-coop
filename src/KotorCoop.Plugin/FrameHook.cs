@@ -121,6 +121,9 @@ internal static unsafe partial class FrameHook
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvStdcall)])]
     private static int Detour(nint deviceContext)
     {
+        // ⚠ Everything in here is fenced or provably non-throwing, because this is a
+        // reverse-P/Invoke boundary: an escaping managed exception is not caught by the
+        // engine, it is a .NET fail-fast that kills the game with nothing in the log.
         Interlocked.Increment(ref _frames);
 
         // Reentrancy guard. The engine has a second SwapBuffers call site (the load-screen
@@ -144,6 +147,10 @@ internal static unsafe partial class FrameHook
             }
         }
 
-        return _original(deviceContext);
+        // Uninstall() can clear this from another thread between the check and the call, so
+        // it is read once. Calling through a null function pointer would fault at address 0
+        // inside the engine's frame loop, which is the least diagnosable crash there is.
+        delegate* unmanaged[Stdcall]<nint, int> original = _original;
+        return original == null ? 1 : original(deviceContext);
     }
 }

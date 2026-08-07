@@ -33,6 +33,31 @@ if ($Stop) {
 
 if (-not (Test-Path $agent)) { throw "agent not built: $agent" }
 
+# ⚠ The plugin auto-starts an agent per game (coop.ini auto_start_agent, ON by default) and so
+# does this script. Two agents on one swkotor.exe both write its shared block and both join the
+# session as separate players — the stray third peer. The agent now refuses to be the second
+# one attached to a pid; this makes sure the ones that run are the ones chosen here.
+function Set-AutoStartAgent {
+    param([string]$Directory, [string]$Value)
+
+    $path = Join-Path $Directory 'coop.ini'
+    $lines = if (Test-Path $path) { @(Get-Content $path) } else { @('[coop]') }
+
+    $found = $false
+    for ($i = 0; $i -lt $lines.Count; $i++) {
+        if ($lines[$i] -match '^\s*auto_start_agent\s*=') {
+            $lines[$i] = "auto_start_agent = $Value"
+            $found = $true
+        }
+    }
+
+    if (-not $found) { $lines += "auto_start_agent = $Value" }
+    Set-Content -Path $path -Value $lines -Encoding ASCII
+}
+
+Set-AutoStartAgent -Directory (Split-Path $Game1) -Value '0'
+Set-AutoStartAgent -Directory (Split-Path $Game2) -Value '0'
+
 function Start-Instance {
     param([string]$Path, [int]$Instance, [int]$X)
 
