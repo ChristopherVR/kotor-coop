@@ -47,7 +47,14 @@ internal struct SharedBlock
     /// existing offset profiles keep working. The plugin control fields live AFTER that
     /// range, which is why the block is larger than the profile knows about.
     /// </summary>
-    public const int TotalSize = 0x2000;
+    /// <summary>
+    /// Grown from 0x2000 for the damage ledger's owner half (0x2000..0x2118): the peer half
+    /// fills the last free 256 bytes below 0x2000 exactly, and cramming both into it would
+    /// have halved how many enemies a fight can carry damage for — which is the one failure
+    /// this channel exists to remove. Growing costs a page of the game's own heap and
+    /// nothing else; the agent finds the block by signature and reads fixed offsets.
+    /// </summary>
+    public const int TotalSize = 0x2200;
 
     public const int ProfileVisibleSize = 0x250;
 
@@ -251,25 +258,90 @@ internal struct SharedBlock
     public const int OffsetTestAttackTarget = 0x1DA4;
     public const int OffsetTestAttackSerial = 0x1DA8;
 
-    // ---- kills a PEER earned (version 22) ---------------------------------------
+    // 0x1DB0..0x1DD8 was the kill-request channel (version 22): a peer asking the enemy
+    // owner to run the engine's death for a creature the peer had beaten down to the
+    // health floor. Retired 2026-08-07 with the health min-merge it belonged to — the
+    // owner now applies a peer's damage as real damage, so a kill falls out of the
+    // arithmetic and needs no separate "it is dead" message to trust. The range is free.
+
+    // ---- damage a PEER dealt (version 23) ---------------------------------------
     //
-    // Agent -> plugin, on the ENEMY OWNER. A player fighting away from the owner could wear
-    // an enemy down to one hit point and no further: the health merge floors at 1 and a
-    // report saying "it is dead" was discarded, so with nobody else coming to finish it the
-    // room never cleared. This is how the last point of damage gets delivered — the owner
-    // runs the engine's own death for a creature a peer actually killed, so the kill is a
-    // real one (loot, XP, scripts, corpse) rather than a health poke to zero.
+    // The channel that replaced the health min-merge, in both directions. Read
+    // docs/research/peer-damage-ledger.md; the short version is that HEALTH is a level
+    // that has to be sampled and that the owner's own mirror write can erase before the
+    // sample is ever taken, while DAMAGE DEALT is a monotonic sum that nothing in the
+    // game can touch, because it is never read back out of the game.
     //
-    // Ids first, then the count, then the serial LAST, so the plugin never reads a half
-    // written list.
+    // Peer side (plugin -> agent): the damage hook accumulates, per TARGET object id, the
+    // raw damage the local player and party have dealt since the ids were last assigned.
+    // Owner side (agent -> plugin): the total every peer has dealt to each of the owner's
+    // enemies, which the plugin turns into real engine damage — its own copy of that
+    // creature then dies its own real death, corpse, loot, OnDeath and all.
+    //
+    // Both directions are CUMULATIVE TOTALS, never events. Applying the difference against
+    // what has already been applied makes the channel order-independent, immune to a
+    // duplicate, and costs one tick of staleness rather than a lost hit when a datagram
+    // goes missing. Same rule as the phantom-hit channel above.
 
-    public const int OffsetKillRequestIds = 0x1DB0;   // 8 x u32
+    /// <summary>Plugin -&gt; agent. objectId u32 @0, cumulative raw damage u32 @4.
+    /// Occupies 0x1E60..0x1F60 exactly — 32 entries, the wire cap.</summary>
+    public const int OffsetDamageDealtSlots = 0x1E60;
 
-    public const int KillRequestCapacity = 8;
+    /// <summary>Agent -&gt; plugin. Same shape, the other way: the total all peers have dealt
+    /// to each of this instance's enemies. Occupies 0x2018..0x2118.</summary>
+    public const int OffsetDamageOwedSlots = 0x2018;
 
-    public const int OffsetKillRequestCount = 0x1DD0;
+    public const int DamageLedgerStride = 0x08;
 
-    public const int OffsetKillRequestSerial = 0x1DD4;
+    /// <summary>Enemies one instance can carry damage for at a time. The ledger only holds
+    /// creatures actually damaged and not yet seen dead, so this is a live-fight bound, not
+    /// a module one; matches <c>ProtocolConstants.MaxEnemyDamageEntries</c>.</summary>
+    public const int DamageLedgerCapacity = 32;
+
+    /// <summary>Plugin -&gt; agent. How many damage-dealt entries are valid.</summary>
+    public const int OffsetDamageDealtCount = 0x2000;
+
+    /// <summary>Plugin -&gt; agent. Hits the ledger had no free slot for. Diagnostic, but a
+    /// non-zero value means a peer's damage is being silently under-reported.</summary>
+    public const int OffsetDamageDealtDropped = 0x2004;
+
+    /// <summary>
+    /// Plugin -&gt; agent. Bumped whenever the ledger restarts (a module change, a re-attach).
+    ///
+    /// ⚠ This is what lets the owner tell a RESET from a stale datagram. Without it, a peer
+    /// that leaves the module and comes back sends totals that are *smaller* than the ones
+    /// the owner last saw, the owner reads that as "nothing new", and everything the peer
+    /// does from then on is ignored forever.
+    /// </summary>
+    public const int OffsetDamageDealtGeneration = 0x2008;
+
+    /// <summary>
+    /// Agent -&gt; plugin. The owner's own ledger epoch (the FNV hash of the module the ids
+    /// were read in). The plugin clears its applied totals when this changes, so the two
+    /// halves restart together instead of the plugin holding a high applied total against
+    /// an agent that has already gone back to zero — which would swallow the first
+    /// module's worth of a peer's damage in the new one.
+    /// </summary>
+    public const int OffsetDamageOwedEpoch = 0x200C;
+
+    /// <summary>Agent -&gt; plugin. How many damage-owed entries are valid.</summary>
+    public const int OffsetDamageOwedCount = 0x2010;
+
+    /// <summary>Plugin -&gt; agent. How many damage applications have run, for the dashboard
+    /// and for telling "nothing is arriving" from "arriving and being refused".</summary>
+    public const int OffsetDamageOwedApplied = 0x2014;
+
+    /// <summary>
+    /// Agent -&gt; plugin. Non-zero on an instance that MIRRORS enemies, i.e. one whose damage
+    /// has to be reported to somebody else.
+    ///
+    /// Off by default, which matters more than it looks: the accumulation lives inside the
+    /// engine's damage hook, so on the fight's owner — where every point of damage in the
+    /// game is already authoritative and nobody will ever read the ledger — this saves a
+    /// table scan per damage event, and stops a table that is never pruned there from
+    /// filling up and reporting drops that mean nothing.
+    /// </summary>
+    public const int OffsetDamageDealtEnabled = 0x2118;
 
     // ---- door replication (version 4) -------------------------------------------
     //

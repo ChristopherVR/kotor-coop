@@ -1013,8 +1013,12 @@ public sealed class CoopAgent(IGameBridge bridge, ICoopSession session, AgentSet
     /// Moves enemy state between the game and the session in whichever direction this peer
     /// is responsible for. Exactly one peer owns enemies; it publishes what its own engine
     /// says, and everyone else applies that and is prevented from killing anything locally.
-    /// Health is replicated absolutely rather than as damage, because each instance applies
-    /// its own difficulty multipliers and resistances to a damage number.
+    ///
+    /// The two directions carry deliberately different things. DOWN from the owner comes
+    /// health, absolutely, because it is the owner's truth about a creature. UP from a peer
+    /// comes DAMAGE DEALT, cumulatively, because a peer's contribution is not a fact about
+    /// the creature at all — it is a fact about the peer, and trying to express it as health
+    /// meant sampling a number the owner's own mirror kept overwriting.
     /// </summary>
     private void PumpEnemies(
         in PlayerState local, IReadOnlyList<RemotePeer> peersHere, SessionCapabilities caps)
@@ -1044,15 +1048,18 @@ public sealed class CoopAgent(IGameBridge bridge, ICoopSession session, AgentSet
                 session.PublishEnemies(local.Module, bridge.ReadEnemies(otherPlayers));
             }
 
-            // Where a client's damage becomes real: its copies are pinned at 1 hp, so
-            // its whole fight would be cosmetic unless the host lowers its own enemies
-            // to the client's floor. Min-merge — an enemy is as hurt as ANY instance
-            // says it is.
-            int floored = bridge.TryApplyEnemyFloors(session.GetEnemyReports(local.Module));
-            if (floored > 0)
-            {
-                Log?.Invoke($"applied a peer's damage to {floored} enemy(ies)");
-            }
+            // Where a peer's damage becomes real. Its copies are pinned at 1 hp, so its
+            // whole fight would be cosmetic unless this side spends the damage it has
+            // dealt — as REAL engine damage on our own copy, which is also how the kill
+            // happens: an enemy whose accumulated damage exceeds its health dies here, with
+            // the corpse, loot, XP and OnDeath the engine runs for any other death.
+            // Published every pass, even when it is empty. The epoch travels with it, and
+            // the plugin needs to hear about a module change BEFORE the first damage in the
+            // new module rather than after — otherwise it would spend the new totals against
+            // the old module's applied figures, which name different creatures.
+            bridge.TryPublishDamageOwed(
+                _peerDamage.Epoch,
+                _peerDamage.Merge(local.Module, session.GetEnemyDamage(local.Module)));
 
             return;
         }
@@ -1078,114 +1085,32 @@ public sealed class CoopAgent(IGameBridge bridge, ICoopSession session, AgentSet
         // exactly the thing the gate exists to stop. Writing a count of zero clears them.
         bridge.TryWriteEnemies(session.GetEnemies(local.Module));
 
-        // Report our own view so damage dealt here counts. Not during dialogue — the
-        // disarm makes the local fight unrepresentative, and health is the only field
-        // that matters anyway.
+        // Report what we have DEALT, so our fight counts.
+        //
+        // ⚠ Not what we have OBSERVED. This used to send our copies' health and let the
+        // owner take min(), and it lost most of every fight: the owner writes its own value
+        // back onto our copy several times a second, so a hit had to win a race against the
+        // next mirror pass to be sampled at all. Measured — a client attacking one soldier
+        // for ninety seconds moved it from 15 hit points to 11 and then never again. A
+        // cumulative sum of damage dealt cannot be raced, because nothing ever reads it back
+        // out of the game.
+        //
+        // Not during dialogue, for the same reason the census pauses: the local fight is
+        // disarmed and unrepresentative. Nothing is lost — the totals are cumulative, so
+        // whatever accrued arrives whole on the next tick that is allowed to send.
         if (!bridge.IsInDialogue)
         {
-            session.ReportEnemies(
-                local.Module, LatchLowestSeen(local.Module, bridge.ReadEnemies(otherPlayers)));
+            (uint generation, List<EnemyDamageEntry> dealt) = bridge.ReadDamageDealt();
+            if (dealt.Count > 0)
+            {
+                session.ReportEnemyDamage(local.Module, generation, dealt);
+            }
         }
     }
 
-    /// <summary>The lowest health we have ever seen each enemy at, this module, and whether
-    /// we have seen it dead. Cleared on a module change: the ids are reassigned there.</summary>
-    private readonly Dictionary<uint, (ushort Health, bool Dead)> _lowestSeen = [];
-
-    private string _lowestSeenModule = string.Empty;
-
-    /// <summary>
-    /// Turns our report of an enemy from a SAMPLE into a HIGH-WATER MARK of the damage we
-    /// have done to it.
-    ///
-    /// ⚠ This is the difference between a peer's hits counting and a peer's hits mostly
-    /// evaporating, and it was measured rather than theorised. The owner writes its own
-    /// health onto our copy about once a second, and our census reads our copy about once a
-    /// second. A hit lands in between and then races the next mirror write: win and it gets
-    /// reported, lose and it never happened. Live, a client attacking one soldier for ninety
-    /// seconds took it from 15 to 11 and no further — its own copy briefly read 5 and the
-    /// mirror put it straight back before the census saw it.
-    ///
-    /// Remembering the lowest value we have ever seen closes that window completely, and it
-    /// changes nothing about the model: the owner already merges with min(), so "an enemy is
-    /// as hurt as ANY instance says it is" simply becomes "…as any instance has EVER said",
-    /// which is what a monotonic channel should have meant all along.
-    ///
-    /// Death latches the same way, so the one census that catches our copy dead is enough to
-    /// trigger the owner's kill even if the mirror revives our copy afterwards.
-    /// </summary>
-    private IReadOnlyList<EnemyState> LatchLowestSeen(string module, IReadOnlyList<EnemyState> census)
-    {
-        if (!string.Equals(module, _lowestSeenModule, StringComparison.OrdinalIgnoreCase))
-        {
-            _lowestSeenModule = module;
-            _lowestSeen.Clear();
-        }
-
-        if (census.Count == 0)
-        {
-            return census;
-        }
-
-        List<EnemyState> latched = new(census.Count);
-
-        foreach (EnemyState enemy in census)
-        {
-            // A plot creature's health is the module's rule and the owner ignores our report
-            // for it anyway; latching would only keep a stale number alive.
-            if (enemy.Plot)
-            {
-                latched.Add(enemy);
-                continue;
-            }
-
-            ushort health = enemy.CurrentHealth;
-            bool dead = enemy.Dead;
-
-            if (_lowestSeen.TryGetValue(enemy.ObjectId, out var seen))
-            {
-                health = Math.Min(health, seen.Health);
-                dead |= seen.Dead;
-            }
-
-            _lowestSeen[enemy.ObjectId] = (health, dead);
-            latched.Add(enemy with { CurrentHealth = health, Dead = dead });
-        }
-
-        // ⚠ A creature that DIES here leaves the census entirely — the engine takes the
-        // object away, so there is no row left to carry a "dead" flag, and the owner would
-        // simply stop hearing about it and leave its own copy standing at 1 forever. That is
-        // measured: a client alone killed a soldier outright and the owner still read 1 hp.
-        //
-        // So a vanished creature we last saw AT THE FLOOR is reported dead. The floor is what
-        // makes this safe: a creature only reaches 1 because the owner's own merge put it
-        // there, so this cannot invent a death for anything that was healthy when it left the
-        // census (dropping out of the 32-slot cap, for instance).
-        foreach (KeyValuePair<uint, (ushort Health, bool Dead)> seen in _lowestSeen)
-        {
-            if (seen.Value.Health > 1 || Contains(latched, seen.Key))
-            {
-                continue;
-            }
-
-            latched.Add(new EnemyState(seen.Key, 0, 0, Dead: true));
-        }
-
-        return latched;
-    }
-
-    private static bool Contains(List<EnemyState> enemies, uint objectId)
-    {
-        for (int i = 0; i < enemies.Count; i++)
-        {
-            if (enemies[i].ObjectId == objectId)
-            {
-                return true;
-            }
-        }
-
-        return false;
-    }
+    /// <summary>Owner side: every peer's cumulative damage, folded into one monotonic total
+    /// per enemy for our own engine to spend.</summary>
+    private readonly PeerDamageLedger _peerDamage = new();
 
     /// <summary>
     /// Reconciles the session's ground-item truth with the game: the bridge materialises

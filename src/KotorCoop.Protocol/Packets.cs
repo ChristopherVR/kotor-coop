@@ -115,8 +115,9 @@ public sealed record ItemSnapshotPacket(uint Version, IReadOnlyList<GroundItem> 
 /// private versions of the same battle. <paramref name="OneShotSerial"/> advances each
 /// time the enemy plays a fire-and-forget (a swing, a parry, a weapon draw), with the id
 /// in <paramref name="OneShotAnimation"/>, so the mirrored fight shows the strikes and
-/// not just the positions. All presence rides only the snapshot (owner → everyone); a
-/// client's <see cref="EnemyReportPacket"/> carries health alone and leaves them default.
+/// not just the positions. Presence rides only the snapshot (owner → everyone); the peer
+/// direction is <see cref="EnemyDamagePacket"/>, which carries damage dealt and nothing
+/// about health at all.
 /// </summary>
 /// <remarks>
 /// <paramref name="Plot"/> marks a creature the module declares un-killable — usually a
@@ -164,11 +165,34 @@ public readonly record struct PartyMemberState(
 public sealed record PartySnapshotPacket(long ServerTimeMs, IReadOnlyList<PartyMemberState> Members);
 
 /// <summary>
-/// A client's local view of enemy health, sent each tick, unreliable. The module rides
-/// along because enemy object ids reset across transitions — the host must never apply
-/// a report from a client standing in a different (or stale) module.
+/// How much damage the sender has dealt to one enemy since its ids were last reassigned.
+/// A running CUMULATIVE total of the RAW effect amounts, not a per-hit event and not a
+/// health reading.
 /// </summary>
-public sealed record EnemyReportPacket(uint PeerId, string Module, IReadOnlyList<EnemyState> Enemies);
+public readonly record struct EnemyDamageEntry(uint ObjectId, uint CumulativeDamage);
+
+/// <summary>
+/// A peer's contribution to the owner's fights, sent each tick, unreliable.
+///
+/// This replaces the old health report, and the reason is worth keeping: health is a LEVEL
+/// that must be sampled, and the owner's mirror writes its own value back over the peer's
+/// copy several times a second, so a peer's hit had to win a race to be seen at all. A
+/// cumulative sum of damage DEALT cannot be raced — the owner never reads it back out of
+/// the game — and, unlike health, it says who dealt what.
+///
+/// <paramref name="Module"/> rides along because object ids are assigned per module load,
+/// so the owner must not apply a total collected somewhere else. <paramref
+/// name="Generation"/> is the sender's ledger epoch: it changes whenever the sender's own
+/// totals restart (a module transition, a re-attached plugin), which is how the owner
+/// knows a smaller number is a RESET rather than a stale datagram.
+/// </summary>
+public sealed record EnemyDamagePacket(
+    uint PeerId, string Module, uint Generation, IReadOnlyList<EnemyDamageEntry> Damage);
+
+/// <summary>One peer's cumulative damage against one enemy, as the owner sees it after
+/// freshness and module filtering.</summary>
+public readonly record struct PeerEnemyDamage(
+    uint PeerId, uint Generation, uint ObjectId, uint CumulativeDamage);
 
 /// <summary>
 /// Damage that landed on a peer's phantom in the sender's game, addressed to the player

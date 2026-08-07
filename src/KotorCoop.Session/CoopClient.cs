@@ -288,23 +288,25 @@ public sealed class CoopClient : ICoopSession
         }
     }
 
-    public void ReportEnemies(string module, IReadOnlyList<EnemyState> enemies)
+    public void ReportEnemyDamage(string module, uint generation, IReadOnlyList<EnemyDamageEntry> damage)
     {
-        if (_localPeerId == 0 || enemies.Count == 0)
+        if (_localPeerId == 0 || damage.Count == 0)
         {
             return;
         }
 
-        // Unreliable and re-sent every tick, like the state update it travels beside: a
-        // lost report costs one tick of staleness on the host's floor, nothing more.
-        int length = PacketCodec.Write(_sendBuffer, new EnemyReportPacket(_localPeerId, module, enemies));
+        // Unreliable and re-sent every tick, like the state update it travels beside. Safe
+        // precisely because the totals are cumulative: a lost datagram costs one tick of
+        // staleness rather than a hit, and a duplicate applies nothing.
+        int length = PacketCodec.Write(
+            _sendBuffer, new EnemyDamagePacket(_localPeerId, module, generation, damage));
         if (length > 0)
         {
             _channel.Send(_hostEndPoint, _sendBuffer.AsSpan(0, length));
         }
     }
 
-    public IReadOnlyList<EnemyState> GetEnemyReports(string module) => [];
+    public IReadOnlyList<PeerEnemyDamage> GetEnemyDamage(string module) => [];
 
     /// <summary>The host is authoritative for loot; a client only mirrors, never publishes.</summary>
     public void PublishContainerLoot(uint containerId, uint itemId)

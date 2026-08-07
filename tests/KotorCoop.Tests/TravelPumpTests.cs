@@ -95,12 +95,6 @@ public class TravelPumpTests
 
         public IReadOnlyList<EnemyState> GetEnemies(string module) => [];
 
-        public void ReportEnemies(string module, IReadOnlyList<EnemyState> enemies)
-        {
-        }
-
-        public IReadOnlyList<EnemyState> GetEnemyReports(string module) => [];
-
         public JournalStore Journal { get; } = new();
 
         public void PublishWorldDigest(in WorldDigest digest) { }

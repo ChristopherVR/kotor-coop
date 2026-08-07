@@ -16,9 +16,9 @@ namespace KotorCoop.Plugin;
 /// flag - the server-to-client update diffs it against a snapshot every tick, so writing
 /// it is enough to move the health bar.
 ///
-/// Health is replicated ABSOLUTELY, never as damage. Each instance applies its own
-/// difficulty multiplier, temporary hit points and damage resistance, so replaying "took 7
-/// damage" on the far side does not produce 7.
+/// Health comes down from the owner; the contribution going back UP is a separate channel
+/// entirely (PeerDamageController and the damage ledger), because health could not carry it
+/// — see MirrorHealthRule for the three designs this went through and what each one cost.
 ///
 /// The local player still fights normally: damage lands, numbers float, the enemy reacts.
 /// It just cannot deliver the killing blow, because every mirrored enemy is pinned with
@@ -40,6 +40,18 @@ internal sealed class CombatController(SharedBlockView block)
     private int _logged;
 
     /// <summary>
+    /// The owner's previous health per enemy, so a RISE can be applied as the owner's own
+    /// delta rather than as an absolute overwrite (see MirrorHealthRule).
+    ///
+    /// ⚠ Keyed by object id, NOT by slot index. The census re-sorts every publish — enemies
+    /// the engine has mid-combat-round first, then by distance to the nearest player — so
+    /// slot 3 is a different creature from one pass to the next, and a slot-keyed history
+    /// would compare one enemy's health against another's.
+    /// </summary>
+    private readonly uint[] _lastOwnerId = new uint[SharedBlock.EnemyCapacity];
+    private readonly int[] _lastOwnerHealth = new int[SharedBlock.EnemyCapacity];
+
+    /// <summary>
     /// Forgets everything on a module change. The id counters reset on transition, so a
     /// remembered kill would suppress the death of a completely different creature that
     /// happens to reuse the id — and the published enemy slots in the block are equally
@@ -49,12 +61,10 @@ internal sealed class CombatController(SharedBlockView block)
     public void Invalidate()
     {
         Array.Clear(_killed);
+        Array.Clear(_lastOwnerId);
+        Array.Clear(_lastOwnerHealth);
         _killedCount = 0;
         block.EnemyCount = 0;
-
-        // Adopted, not zeroed: a kill list left over from the module we are leaving must not
-        // fire in the one we are entering, where those ids name different creatures.
-        _appliedKillSerial = block.KillRequestSerial;
     }
 
     public void OnFrame()
@@ -72,8 +82,6 @@ internal sealed class CombatController(SharedBlockView block)
             return;
         }
 
-        ExecutePeerKills();
-
         uint count = Math.Min(block.EnemyCount, (uint)SharedBlock.EnemyCapacity);
 
         for (int i = 0; i < count; i++)
@@ -81,43 +89,6 @@ internal sealed class CombatController(SharedBlockView block)
             Apply(block.GetEnemy(i));
         }
     }
-
-    /// <summary>
-    /// Runs the deaths a PEER earned. This is the owner side of the same idea as
-    /// <see cref="KillOnce"/>: a player fighting away from us can bring an enemy down, but
-    /// the health merge floors at one hit point, so without this the last blow can never
-    /// land and a room they cleared alone never actually clears.
-    ///
-    /// It goes through the engine's own lethal damage exactly as a local death does, so the
-    /// corpse, the loot and the OnDeath script all happen here — which is the whole reason
-    /// the owner executes it rather than the peer just deleting its own copy.
-    ///
-    /// The agent has already checked that our own copy is alive and at the floor, so this
-    /// only ever finishes something a peer genuinely fought down.
-    /// </summary>
-    private void ExecutePeerKills()
-    {
-        uint serial = block.KillRequestSerial;
-        if (serial == _appliedKillSerial)
-        {
-            return;
-        }
-
-        _appliedKillSerial = serial;
-
-        uint count = Math.Min(block.KillRequestCount, (uint)SharedBlock.KillRequestCapacity);
-        for (int i = 0; i < count; i++)
-        {
-            uint id = block.KillRequestId(i);
-            if (id != 0 && id != Odyssey.ObjectInvalid)
-            {
-                KillOnce(id);
-            }
-        }
-    }
-
-    /// <summary>Last kill-request serial executed, so each list runs once.</summary>
-    private uint _appliedKillSerial;
 
     private void Apply(EnemyView enemy)
     {
@@ -146,45 +117,69 @@ internal sealed class CombatController(SharedBlockView block)
             return;
         }
 
-        // Pin it while it still has health to lose. If the local player is mid-swing when
-        // the health write lands, an unpinned enemy could be killed locally between passes
-        // and then be resurrected by the next mirrored health value, which looks far worse
-        // than a stubborn enemy.
+        // Pin it, always. If the local player is mid-swing when the health write lands, an
+        // unpinned enemy could be killed locally between passes and then be resurrected by
+        // the next mirrored health value, which looks far worse than a stubborn enemy.
         //
-        // ⚠ But UNPIN at the floor, or nothing can ever die here. The pin exists so the
-        // owner delivers death — and when the players are apart, the owner is not fighting
-        // and never will. Measured: a client alone drove a soldier 15 → 1 and then swung at
-        // it forever, because Min1HP meant its copy could not die, so its census could never
-        // report a death, so the owner's kill channel had nothing to act on. An enemy the
-        // owner has already agreed is at 1 has no health left to protect; letting the player
-        // actually fighting it land the last blow makes its census report the death, and the
-        // owner then runs the real one (corpse, loot, OnDeath) within a tick.
-        Odyssey.SetMinOneHitPoint(creature, enemy.CurrentHealth > 1);
+        // ⚠ This used to be released once the owner's own value reached 1, so that a player
+        // fighting alone could land the killing blow themselves and report the death back.
+        // That crutch is gone with the mechanism it served: our damage now travels to the
+        // owner as a SUM, the owner's own engine spends it and kills its copy, and the death
+        // comes back down the ordinary channel — so there is no longer any need for a
+        // mirrored enemy to be killable here, and every reason for it not to be.
+        Odyssey.SetMinOneHitPoint(creature, true);
 
         // Never write 0: the owner has not said it is dead, and an enemy at 0 health reads
         // as dead to targeting and AI while no death path has run for it.
-        int health = Math.Max(1, (int)enemy.CurrentHealth);
-        int current = Odyssey.GetCurrentHitPoints(creature);
+        int ownerHealth = Math.Max(1, (int)enemy.CurrentHealth);
 
-        // ⚠ LOWER ONLY. NEVER RAISE.
-        //
-        // This ran eight times a second and wrote the owner's value whichever way it
-        // differed, which quietly erased this player's own contribution to every fight: a
-        // hit lands here, our copy drops, and ~125 ms later this put it straight back before
-        // the once-a-second census could report it. Measured, a client attacking one soldier
-        // for ninety seconds took it from 15 to 11 and NO FURTHER — every later hit was
-        // undone by this line while the screen showed a genuine fight.
-        //
-        // The only reason a mirrored enemy is lower here than the owner says is that we hurt
-        // it, and that is exactly what the owner's min-merge wants to hear about. So the
-        // owner may always drag it DOWN (its damage is authoritative) and never back up; our
-        // dip survives until the report round-trips, at which point the two agree anyway.
-        // Healing on the owner's side is the one thing this does not propagate, which is a
-        // fair trade for damage that does.
-        if (health < current)
+        // ⚠ SIGNED. Hit points at +0xDC are an int16 and an overkilled body parks at a
+        // negative value (−11 for a downed party member), which read unsigned is 65525 —
+        // "healthy" to any comparison here. Odyssey's accessor still returns ushort at the
+        // time of writing; the cast is correct under both, so it stays even once that is
+        // fixed.
+        int current = (short)Odyssey.GetCurrentHitPoints(creature);
+        int max = Odyssey.GetMaxHitPoints(creature);
+
+        int history = History(enemy.ObjectId);
+        bool primed = history >= 0 && _lastOwnerId[history] == enemy.ObjectId;
+
+        int target = MirrorHealthRule.Target(
+            current, max, ownerHealth, primed ? _lastOwnerHealth[history] : 0, primed);
+
+        if (history >= 0)
         {
-            Odyssey.SetCurrentHitPoints(creature, health);
+            _lastOwnerId[history] = enemy.ObjectId;
+            _lastOwnerHealth[history] = ownerHealth;
         }
+
+        if (target != current)
+        {
+            Odyssey.SetCurrentHitPoints(creature, target);
+        }
+    }
+
+    /// <summary>The history slot for an id, claiming a free one if this is the first sight
+    /// of it. -1 when the table is full, which degrades to "adopt the owner's value" — the
+    /// old absolute behaviour, and the right thing to fall back to.</summary>
+    private int History(uint objectId)
+    {
+        int free = -1;
+
+        for (int i = 0; i < _lastOwnerId.Length; i++)
+        {
+            if (_lastOwnerId[i] == objectId)
+            {
+                return i;
+            }
+
+            if (free < 0 && _lastOwnerId[i] == 0)
+            {
+                free = i;
+            }
+        }
+
+        return free;
     }
 
     private void KillOnce(uint objectId)
@@ -230,6 +225,21 @@ internal sealed class CombatController(SharedBlockView block)
         if (_killedCount < _killed.Length)
         {
             _killed[_killedCount++] = objectId;
+        }
+
+        // Its fight is over, so free both of the per-enemy tables it was holding a row in.
+        // The damage ledger is the one that matters: it is bounded, and a corpse's row would
+        // sit there for the rest of the module keeping a live enemy out.
+        PhantomHitHook.Dealt.Forget(objectId);
+
+        for (int i = 0; i < _lastOwnerId.Length; i++)
+        {
+            if (_lastOwnerId[i] == objectId)
+            {
+                _lastOwnerId[i] = 0;
+                _lastOwnerHealth[i] = 0;
+                return;
+            }
         }
     }
 }

@@ -26,6 +26,8 @@ internal static unsafe class PluginHost
     private static EnemyPresenceController? _enemyPresence;
     private static PartyPresenceController? _partyPresence;
     private static IncomingDamageController? _incomingDamage;
+
+    private static PeerDamageController? _peerDamage;
     private static TestDriveController? _testDrive;
     private static DoorController? _doors;
     private static PlaceableController? _placeables;
@@ -89,6 +91,7 @@ internal static unsafe class PluginHost
             _enemyPresence = new EnemyPresenceController(_view);
             _partyPresence = new PartyPresenceController(_view);
             _incomingDamage = new IncomingDamageController(_view);
+            _peerDamage = new PeerDamageController(_view);
             _testDrive = new TestDriveController(_view);
             _doors = new DoorController(_view);
             _placeables = new PlaceableController(_view);
@@ -493,6 +496,12 @@ internal static unsafe class PluginHost
         // After death handling has published whether we are down, so damage that would
         // arrive on an already-downed player is skipped rather than fighting the revive.
         _incomingDamage?.OnFrame();
+
+        // After the combat pass, so the enemy the owner has just killed is already off the
+        // dealt ledger before this publishes it — and so a peer's damage lands on a copy
+        // whose health the mirror has already brought up to date this frame.
+        _peerDamage?.OnFrame();
+
         _doors?.OnFrame();
         _placeables?.OnFrame();
         _loot?.OnFrame();
@@ -518,6 +527,7 @@ internal static unsafe class PluginHost
         _enemyPresence?.Invalidate();
         _partyPresence?.Invalidate();
         _incomingDamage?.Invalidate();
+        _peerDamage?.Invalidate();
         _testDrive?.Invalidate();
         PhantomHitHook.Invalidate();
         AnimationHook.InvalidateCreatureTable();

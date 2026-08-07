@@ -26,9 +26,10 @@ the other. Health agreed; nothing you could *see* did.
 - The owning peer's agent already reads every enemy each pump (`ReadEnemies`). It now also
   reads position (`+0x90`), orientation (`+0x9C`, converted to a facing angle) and the
   looping animation (`+0xD4`) — three external reads per enemy, all long-verified offsets.
-- `EnemyState` carries presence on the wire **in the snapshot only** (protocol v12). A
-  client's `EnemyReport` still carries health alone: reports exist so a client's damage
-  counts, and its local positions are never authoritative.
+- `EnemyState` carries presence on the wire **in the snapshot only** (protocol v12). The
+  peer direction carries neither presence nor health: a client's local copies are mirrored
+  and pinned, so nothing about them is authoritative. It reports the damage it has DEALT
+  instead (`EnemyDamage`, 2026-08-07 — see `docs/research/peer-damage-ledger.md`).
 - On the mirroring side the agent writes presence into a new shared-block region (block
   v20, `0x1400..0x1810`, id-written-last per slot like every other channel), and a new
   `EnemyPresenceController` drives each resolvable enemy every frame with the exact

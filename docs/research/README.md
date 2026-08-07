@@ -16,6 +16,7 @@ modified.
 | [console-overlay.md](console-overlay.md) | in-game `~` console | retail ships the whole Aurora dev console; enable via EnableCheats and READ the command buffer — no guessed callback ABI, no crash risk. `PrintStringScreenPos 0x0044CCA0` paints reply lines. |
 | [connect-flow.md](connect-flow.md) | in-game Connect UI | achievable — rebind BTN_WARP, reuse CSWGuiSaveNamePanel as an IP prompt (real editbox at panel+0x548); no password masking (keep it in coop.ini). |
 | [enemy-presence-sync.md](enemy-presence-sync.md) | one visible fight, not two private ones | owner streams enemy position/facing/stance (protocol v12); mirror drives its copies with the phantom recipe and disarms local enemy AI per pass. Combat-participation options recorded. |
+| [peer-damage-ledger.md](peer-damage-ledger.md) | carrying a peer's contribution to a fight | health was a level the owner's own mirror kept overwriting before it could be sampled — so a peer now sends a cumulative sum of damage DEALT, and the owner spends it as real engine damage. Proves from the instruction stream that re-running the receiver's resistance pipeline is not double-counting (the amounts are pre-resistance; difficulty never applies to an enemy). The kill falls out of the arithmetic. |
 
 Priority order for implementation (value / risk):
 1. **Name plates client-twin write** — small, closes a wrong claim, verifiable in memory.

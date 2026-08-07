@@ -111,12 +111,6 @@ public class PausePumpTests
 
         public IReadOnlyList<EnemyState> GetEnemies(string module) => [];
 
-        public void ReportEnemies(string module, IReadOnlyList<EnemyState> enemies)
-        {
-        }
-
-        public IReadOnlyList<EnemyState> GetEnemyReports(string module) => [];
-
         public void SetJournalEntry(string questTag, int state)
         {
         }

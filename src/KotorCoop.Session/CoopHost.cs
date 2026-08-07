@@ -294,36 +294,43 @@ public sealed class CoopHost : ICoopSession
         }
     }
 
-    /// <summary>Latest enemy report per client, so a client's damage can be merged in.</summary>
-    private sealed record EnemyReport(string Module, IReadOnlyList<EnemyState> Enemies, long ReceivedMs);
+    /// <summary>Latest damage report per client, so a client's hits become real here.</summary>
+    private sealed record EnemyDamageReport(
+        string Module, uint Generation, IReadOnlyList<EnemyDamageEntry> Damage, long ReceivedMs);
 
-    private readonly Dictionary<uint, EnemyReport> _enemyReports = [];
+    private readonly Dictionary<uint, EnemyDamageReport> _enemyDamage = [];
 
     /// <summary>Reports older than this are stale — the client left, or changed module
     /// and its ids name strangers now.</summary>
     private const int EnemyReportFreshMs = 2000;
 
-    public void ReportEnemies(string module, IReadOnlyList<EnemyState> enemies)
+    public void ReportEnemyDamage(string module, uint generation, IReadOnlyList<EnemyDamageEntry> damage)
     {
         // The host does not report to itself; its own engine is the authority.
     }
 
-    public IReadOnlyList<EnemyState> GetEnemyReports(string module)
+    public IReadOnlyList<PeerEnemyDamage> GetEnemyDamage(string module)
     {
         long now = SessionClock.NowMs;
-        List<EnemyState> merged = [];
+        List<PeerEnemyDamage> merged = [];
 
         lock (_gate)
         {
-            foreach (EnemyReport report in _enemyReports.Values)
+            foreach (KeyValuePair<uint, EnemyDamageReport> entry in _enemyDamage)
             {
+                EnemyDamageReport report = entry.Value;
+
                 if (now - report.ReceivedMs > EnemyReportFreshMs
                     || !string.Equals(report.Module, module, StringComparison.OrdinalIgnoreCase))
                 {
                     continue;
                 }
 
-                merged.AddRange(report.Enemies);
+                foreach (EnemyDamageEntry damage in report.Damage)
+                {
+                    merged.Add(new PeerEnemyDamage(
+                        entry.Key, report.Generation, damage.ObjectId, damage.CumulativeDamage));
+                }
             }
         }
 
@@ -830,8 +837,8 @@ public sealed class CoopHost : ICoopSession
                 HandleJournalSyncRequest(datagram.From, span);
                 break;
 
-            case PacketType.EnemyReport:
-                HandleEnemyReport(span, now);
+            case PacketType.EnemyDamage:
+                HandleEnemyDamage(span, now);
                 break;
 
             case PacketType.WorldDigest:
@@ -1149,9 +1156,9 @@ public sealed class CoopHost : ICoopSession
         }
     }
 
-    private void HandleEnemyReport(ReadOnlySpan<byte> span, long now)
+    private void HandleEnemyDamage(ReadOnlySpan<byte> span, long now)
     {
-        if (PacketCodec.ReadEnemyReport(span) is not { } report)
+        if (PacketCodec.ReadEnemyDamage(span) is not { } report)
         {
             _channel.NoteMalformed();
             return;
@@ -1164,7 +1171,8 @@ public sealed class CoopHost : ICoopSession
                 return;
             }
 
-            _enemyReports[report.PeerId] = new EnemyReport(report.Module, report.Enemies, now);
+            _enemyDamage[report.PeerId] =
+                new EnemyDamageReport(report.Module, report.Generation, report.Damage, now);
         }
     }
 

@@ -59,17 +59,26 @@ public interface ICoopSession : IDisposable
     IReadOnlyList<EnemyState> GetEnemies(string module);
 
     /// <summary>
-    /// Client only: report this instance's local view of enemy health so the host can
-    /// merge the damage in. Without this a client's fighting is cosmetic — its copies
-    /// are pinned at 1 hp and the next mirror would erase its damage.
+    /// Client only: report how much damage this instance has DEALT to each enemy, as a
+    /// running cumulative total. Without this a client's fighting is cosmetic — its copies
+    /// are pinned at 1 hp and only the owner's engine can actually hurt anything.
+    ///
+    /// This replaced reporting HEALTH, and the difference matters: health is a level that
+    /// has to be sampled, and the owner's mirror wrote its own value back over the client's
+    /// copy between samples, so most of a lone player's fight never crossed the wire.
+    /// <paramref name="generation"/> changes whenever the sender's totals restart, which is
+    /// how the owner tells a reset from a stale datagram.
     /// </summary>
-    void ReportEnemies(string module, IReadOnlyList<EnemyState> enemies);
+    void ReportEnemyDamage(string module, uint generation, IReadOnlyList<EnemyDamageEntry> damage)
+    {
+    }
 
     /// <summary>
-    /// Host only: every client's latest enemy report for the given module, fresh ones
-    /// only. The host applies each as a floor (min-merge) on its own enemies.
+    /// Host only: every client's latest damage report for the given module, fresh ones
+    /// only, one row per (peer, enemy). The host turns each increase into real damage on
+    /// its own copy of that creature.
     /// </summary>
-    IReadOnlyList<EnemyState> GetEnemyReports(string module);
+    IReadOnlyList<PeerEnemyDamage> GetEnemyDamage(string module) => [];
 
     /// <summary>
     /// Tells the peer that owns <paramref name="targetPeerId"/> how much damage their
