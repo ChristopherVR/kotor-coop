@@ -574,44 +574,55 @@ Tried and reverted, so nobody repeats it: resolving `+0xB4` as an id. It only "w
 object id 1 happens to exist, and asking the wrong table (the `0x007A39FC` client chain rather
 than `0x007A3A00`) made **every conversation in the game read as inactive**.
 
-### ⚠ OPEN: a client can still be wedged, but only off the gated path
+### RESOLVED: the wedge is gone, and the reason is the counted bypass grant
 
-Reproducible only through the test hook, which bypasses the gate deliberately: ask an instance
-to open a conversation with a tag that is not reachable (`carth` on the command module) and it
-is left with `gui+0xB4 = 1`, `gui+0xB0 = 0` and BOTH participants `OBJECT_INVALID`. It then
-believes forever that it is in a conversation, so it will neither start one nor follow a peer's.
+The wedge — `gui+0xB4` non-zero, `gui+0xB0` zero, both participants `OBJECT_INVALID`, and the
+instance believing forever that it is in a conversation — no longer reproduces. Two runs of
+its own recipe (host holds a conversation; the client is asked through the test hook, which
+bypasses the gate deliberately, to talk to an unreachable NPC — `carth`, then
+`sith_commander`) leave the client at `0xB4 = 0` throughout, and the full battery leaves both
+instances clean.
 
-What does NOT clear it, all measured:
+Absence is not a fix, so here is the mechanism. The wedge needed a **half-started conversation
+to persist on the client**: its own `StartDialog` reaching the engine while a peer held the
+token, producing a client-side shell with no participants that nothing could then close. Two
+of the changes above remove both halves of that:
 
-* `CGuiInGame::CloseDialog 0x006332B0` — it runs (`+0x108` is non-null, so it does not take the
-  early return at 0x006332B7) and clears `+0xB0`, but **something re-sets `+0xB4` on the very
-  next frame**. Forcing the UI shut every 10 s just produced a flicker.
-* `StopDialog` on the GUI participants — there are none to stop; both are `OBJECT_INVALID`.
-* `StopDialog` on the PLAYER's own object (`self+0x54`). Tried, and it **regressed the host**:
-  `+0x54` is not reliably reset when a conversation ends, so the fallback fired on
-  conversations that were already over and the host stopped being able to open new ones
-  (verify went 22/22 -> 21/22). Reverted; do not reintroduce without first establishing what
-  re-sets `gui+0xB4` every frame in this state.
+* `DialogueGateHook.BypassGrants` is **counted**, so the only start that passes while a peer
+  holds the token is the follow-open we asked for. The stray request that used to create the
+  shell is now refused, and the engine's own failure path runs — which is what clears the
+  pending conversation action (0x004F34A0).
+* The follow **backs out and retries** instead of poisoning its budget, so a request that does
+  not become a conversation is dropped cleanly rather than left half-alive. The log shows
+  exactly this, repeatedly, with `0xB4` never leaving 0:
 
-In real play the dialogue gate refuses that click and the engine's own failure path runs
-(clearing the pending conversation action via 0x004F34A0), so this is not currently a
-gameplay path — but the recovery is still missing.
+```
+05:04:30  dialogue: following the peer's conversation
+05:04:37  test: opened a conversation with 'carth'
+05:04:45  dialogue: the peer's conversation never opened locally; backing out
+05:04:50  dialogue: following the peer's conversation        <- retries, does not wedge
+```
 
-**The writer is now identified**, which is what the previous note asked for. `tools/fieldwrites.py`
-(new — `xrefs.py` answers "who calls this", nothing answered "who assigns this field") finds
-every disp32 store to an offset; `+0xB4` has exactly one setter reached from the GUI:
+### The writer of `gui+0xB4`, and the watch that found it
 
-| Address | Role |
-|---|---|
-| `0x0062EC60` | `CGuiInGame::SetConversationActive(int)` — `mov [esi+0xB4], eax` from its one argument. **This is what `CloseDialog` calls with 0** (0x00633423), which is why a clean teardown leaves `0xB4 = 0`. |
-| `0x004CF641` | `StartDialog` sets it to 1. NOT the repeat writer — the plugin's own `StartAttempts` counter on StartDialog does not move while wedged. |
-| `0x0060F764` | Sets it to 1 immediately after `CSWCMessage::SendPlayerToServerInput_Dialog 0x00677EA0` (0x0060F757). |
-| `0x0052D84F` | Sets it to 1 from a server-side message handler. |
+`DialogStateWatchHook` (opt-in, `coop.ini dialog_state_watch`) detours
+`CGuiInGame::SetGlobalDialogState 0x0062EC60` — the **one** writer of `+0xB4`, found with
+`tools/fieldwrites.py` — and records the RETURN ADDRESS and value of each distinct call. It
+observes only; the engine's own store always runs.
 
-**Hypothesis for the next pass, not yet proven:** `SendPlayerToServerInput_Dialog` is itself
-gated on `*(gui+0xB4)` (0x00677EB3), and `0x0060F764` sets `+0xB4` right after calling it. A
-stale 1 would therefore keep the client sending dialogue input, and the handler would set the
-flag straight back — a self-sustaining loop, which matches the observed behaviour exactly
-(forcing the flag to 0 produced a one-frame flicker and nothing else). Test it by detouring
-`0x0062EC60` and logging the return address when it is called with 1 while wedged; that is the
-same technique that settled the joiner question, and it costs one run.
+It is kept rather than deleted because the question it answers is not fully closed: the
+hypothesis that a stale flag is self-sustaining (`SendPlayerToServerInput_Dialog 0x00677EA0`
+is gated on `*(gui+0xB4)` at 0x00677EB3, and 0x0060F764 sets the flag immediately after
+calling it) was never tested against a live wedge, because there is no longer one to test it
+against. If the state ever returns, turn the watch on and the call site names itself.
+
+⚠ One reading it has already corrected: `gui+0x108` is `initialized`, not a dialog object.
+`CloseDialog`'s early return at 0x006332B7 is "the GUI is not up", not "there is no dialog".
+
+### Still imperfect: a follow can time out when the peer is far
+
+Visible in the same log — `the peer's conversation never opened locally; backing out`, three
+times in a row, when the client's PC had been left across the room by the combat checks.
+`FollowOpenTimeoutMs` is 15 s and the server walks the player the whole way first. The retry
+covers it (that is what the backoff is for) but a spectator far from the speaker can spend
+several rounds of it before catching up.

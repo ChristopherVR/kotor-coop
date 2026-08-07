@@ -218,6 +218,16 @@ internal static unsafe class PluginHost
                 Log($"dialogue gate NOT installed: {gateDiagnostic}");
             }
 
+            // Opt-in diagnostic: records who writes CGuiInGame+0xB4, which is the one thing
+            // that would settle why a wedged instance's conversation flag comes straight back.
+            DialogStateWatchHook.Enabled = PluginConfig.ReadBool("dialog_state_watch", false);
+            if (DialogStateWatchHook.Enabled)
+            {
+                Log(DialogStateWatchHook.Install(out string watchDiagnostic)
+                    ? $"dialogue: {watchDiagnostic}"
+                    : $"dialogue: dialog-state watch NOT installed: {watchDiagnostic}");
+            }
+
             // A conversation ended from our frame hook can be followed by one last reply list
             // the server had already queued, and the dialogue camera resolves its participants
             // with no null check. Odyssey.CloseDialogue removes the source; this is the net.

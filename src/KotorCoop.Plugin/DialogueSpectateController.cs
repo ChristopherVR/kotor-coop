@@ -249,6 +249,9 @@ internal sealed unsafe class DialogueSpectateController(SharedBlockView block)
     /// <summary>Last <see cref="DialogueGateHook.StartAttempts"/> we reported.</summary>
     private uint _seenStartAttempts;
 
+    /// <summary>Distinct gui+0xB4 writers already reported.</summary>
+    private int _seenDialogStateWriters;
+
     /// <summary>Shown when a click was refused and this instance IS being brought into the
     /// conversation anyway — which is the normal case, and the one the old flat refusal
     /// described as a dead end. "Another player is in a conversation" was all a player saw
@@ -295,6 +298,21 @@ internal sealed unsafe class DialogueSpectateController(SharedBlockView block)
         {
             _seenStartAttempts = DialogueGateHook.StartAttempts;
             LogFew($"dialogue: engine reached StartDialog ({_seenStartAttempts} so far)");
+        }
+
+        // Who writes CGuiInGame+0xB4, reported from here because the detour itself must not
+        // log. One line per distinct (call site, value) pair — the question is WHICH sites
+        // fire, and a per-frame loop logged per call is what buried this the first time.
+        if (DialogStateWatchHook.Enabled && DialogStateWatchHook.Known != _seenDialogStateWriters)
+        {
+            for (int i = _seenDialogStateWriters; i < DialogStateWatchHook.Known; i++)
+            {
+                LogFew($"dialogue: gui+0xB4 set to {DialogStateWatchHook.ValueAt(i)} "
+                    + $"from 0x{DialogStateWatchHook.CallerAt(i):X} "
+                    + $"({DialogStateWatchHook.CountAt(i)} so far)");
+            }
+
+            _seenDialogStateWriters = DialogStateWatchHook.Known;
         }
 
         if (ShotCameraGuardHook.RefusedCount != _seenShotRefusals)
