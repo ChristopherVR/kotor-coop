@@ -27,7 +27,26 @@ internal static unsafe class Exports
 
     private const int ErrorFail = unchecked((int)0x80004005); // E_FAIL
 
+    /// <summary>
+    /// ⚠ Called from every export, and an export IS an [UnmanagedCallersOnly] entry point:
+    /// a managed exception escaping one of these does not unwind into the game, it kills the
+    /// process outright with a .NET fail-fast (see CrashProbe). Path.Combine, LoadLibrary and
+    /// the lock can all fail on a broken install, so the whole body is fenced. A failure here
+    /// leaves the forwarding pointers null, which every export already handles.
+    /// </summary>
     private static void EnsureRealModule()
+    {
+        try
+        {
+            EnsureRealModuleCore();
+        }
+        catch (Exception ex)
+        {
+            PluginHost.Log($"FATAL: could not prepare the dinput8 forward: {ex.Message}");
+        }
+    }
+
+    private static void EnsureRealModuleCore()
     {
         lock (Gate)
         {
@@ -70,7 +89,17 @@ internal static unsafe class Exports
     {
         // This is the hook point: the game calls it once during startup.
         EnsureRealModule();
-        PluginHost.EnsureStarted();
+
+        // EnsureStarted has its own catch, but it is the one call here that runs arbitrary
+        // plugin code, so it is fenced again at the boundary rather than trusted.
+        try
+        {
+            PluginHost.EnsureStarted();
+        }
+        catch (Exception ex)
+        {
+            PluginHost.Log($"FATAL during startup (at the export boundary): {ex}");
+        }
 
         return _directInput8Create is null
             ? ErrorFail

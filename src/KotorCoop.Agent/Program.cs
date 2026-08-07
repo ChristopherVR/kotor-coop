@@ -596,6 +596,53 @@ internal static class Program
         }
 
         using ProcessMemory memory = OpenTarget(options, writable: !options.ReadOnlyAttach);
+
+        // ⚠ ONE AGENT PER GAME PROCESS, enforced rather than assumed.
+        //
+        // Two things start an agent — the plugin's AgentLauncher (coop.ini
+        // auto_start_agent, on by default) and whatever the human ran — and until now
+        // nothing stopped both from attaching to the same swkotor.exe. Both then find the
+        // same shared block and write it, both join the session as separate players, and the
+        // symptoms are indistinguishable from a protocol bug: a phantom of yourself, peer
+        // counts that do not match the number of games open, and two writers racing over
+        // OffsetPlayerCreature and the remote slots. This is how a third peer appeared in a
+        // two-instance session.
+        //
+        // Keyed on the target pid, not on the agent, so running the agent by hand against a
+        // second game is unaffected. Held for the process lifetime; abandoning it (a crash)
+        // releases it, which is the behaviour we want.
+        using Mutex attachment = new(initiallyOwned: false, $"Local\\kotorcoop-agent-{memory.ProcessId}");
+        bool attached;
+        try
+        {
+            attached = attachment.WaitOne(TimeSpan.Zero);
+        }
+        catch (AbandonedMutexException)
+        {
+            attached = true; // the previous agent died; the game is ours
+        }
+
+        if (!attached)
+        {
+            Console.Error.WriteLine(
+                $"another KotorCoop agent is already attached to pid {memory.ProcessId}; "
+                + "refusing to be a second one. Set auto_start_agent = 0 in coop.ini if you "
+                + "want to drive the agent yourself.");
+            return 3;
+        }
+
+        try
+        {
+            return await RunAttachedAsync(options, memory).ConfigureAwait(false);
+        }
+        finally
+        {
+            attachment.ReleaseMutex();
+        }
+    }
+
+    private static async Task<int> RunAttachedAsync(AgentOptions options, ProcessMemory memory)
+    {
         using IGameBridge bridge = CreateBridge(options, memory, out string diagnostic, out bool resolved);
 
         if (!resolved)

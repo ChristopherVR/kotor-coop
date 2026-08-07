@@ -138,20 +138,32 @@ internal static unsafe class DialogueReplyHook
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
     private static int OnSelectReply(int slot)
     {
-        if (AllowReplay)
+        // ⚠ The body genuinely cannot throw today, and the catch stays anyway: this is a
+        // reverse-P/Invoke boundary, so the cost of being wrong about that later is not a
+        // logged exception, it is the process. Every entry point in the plugin is fenced by
+        // rule rather than by inspection. Letting the call through (1) is the safe default —
+        // the worst case is an unrecorded pick, not a frozen conversation.
+        try
         {
-            return 1; // our own replay on the follower's panel: let through, do not record
-        }
+            if (AllowReplay)
+            {
+                return 1; // our own replay on the follower's panel: let through, do not record
+            }
 
-        if (Suppressed)
-        {
-            return 0; // a spectator's click: the owner chooses, nobody else
-        }
+            if (Suppressed)
+            {
+                return 0; // a spectator's click: the owner chooses, nobody else
+            }
 
-        if (slot >= 0)
+            if (slot >= 0)
+            {
+                LastReplySlot = slot;
+                Sequence++;
+            }
+        }
+        catch
         {
-            LastReplySlot = slot;
-            Sequence++;
+            // Never unwind into the engine's dialogue dispatch.
         }
 
         return 1;

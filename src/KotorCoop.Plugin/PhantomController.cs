@@ -165,35 +165,13 @@ internal sealed unsafe class PhantomController(SharedBlockView block)
                 Odyssey.ForgetGait(_phantoms[i]);
             }
 
-            _phantoms[i] = 0;
-            _phantomIds[i] = 0;
-            _lastGoal[i] = default;
-            _repathCooldown[i] = 0;
-            _down[i] = false;
-            _peerInCombat[i] = false;
-            _hostileToLocals[i] = false;
-            _factionKnown[i] = false;
-
             // A new world means the next position is not a continuation of the last one:
             // start the smoothing from wherever the peer actually is rather than gliding
-            // across from a stale spot.
-            _smoothing[i] = false;
-            _shownAtTime[i] = 0;
-            _speedFromTime[i] = 0;
-            _peerSpeed[i] = 0f;
-
-            _twinNamed[i] = false;
-
-            for (int j = 0; j < SharedBlock.EquipCount; j++)
-            {
-                _appliedEquip[i, j] = 0;
-            }
-
-            block.SetPhantomId(i, 0);
+            // across from a stale spot. ClearSlot resets all of that.
+            ClearSlot(i);
         }
 
-        _phantomCount = 0;
-        block.PhantomCount = 0;
+        PublishPhantomCount();
 
         // A new module may ship the blueprint the last one lacked, and a transient failure
         // clears — so give spawning a fresh start rather than staying latched off forever.
@@ -209,27 +187,98 @@ internal sealed unsafe class PhantomController(SharedBlockView block)
     /// </summary>
     public bool FlushOneBody()
     {
-        for (int i = 0; i < _phantomCount; i++)
+        // ⚠ Every slot, not the first _phantomCount of them. Slots are stable per peer
+        // now, so a live body can sit in slot 2 with slots 0 and 1 empty; the old bound left
+        // it standing and StoreCurrentModule wrote it into the save as a permanent NPC.
+        for (int i = 0; i < _phantoms.Length; i++)
         {
             if (_phantoms[i] == 0)
             {
                 continue;
             }
 
-            uint objectId = _phantomIds[i];
-            Odyssey.ForgetGait(_phantoms[i]);
-            Odyssey.DestroyObjectById(objectId, out int failure);
-            PluginHost.Log(failure == 0
-                ? $"flush: destroyed phantom 0x{objectId:X} before the module is stored"
-                : $"flush: destroy refused for phantom 0x{objectId:X} (failure {failure})");
-
-            _phantoms[i] = 0;
-            _phantomIds[i] = 0;
-            block.SetPhantomId(i, 0);
+            DestroySlot(i, "flush, before the module is stored");
             return true;
         }
 
         return false;
+    }
+
+    /// <summary>
+    /// Destroys one slot's body through the engine and forgets everything derived from it.
+    ///
+    /// The slot is CLEARED, never compacted. A slot belongs to one peer for as long as that
+    /// peer is in the block, so sliding the survivors down would hand a departing player's
+    /// name, gear, faction state and cumulative damage total to whoever ended up in their
+    /// index - which is precisely the class of bug three players makes reachable and two
+    /// never could.
+    /// </summary>
+    private void DestroySlot(int slot, string reason)
+    {
+        uint objectId = _phantomIds[slot];
+
+        if (_phantoms[slot] != 0)
+        {
+            Odyssey.ForgetGait(_phantoms[slot]);
+        }
+
+        Odyssey.DestroyObjectById(objectId, out int failure);
+        PluginHost.Log(failure == 0
+            ? $"{reason}: destroyed phantom 0x{objectId:X} (slot {slot})"
+            : $"{reason}: destroy refused for phantom 0x{objectId:X} (slot {slot}, failure {failure})");
+
+        ClearSlot(slot);
+    }
+
+    /// <summary>Forgets everything a slot derived from its body, without touching the engine.</summary>
+    private void ClearSlot(int slot)
+    {
+        _phantoms[slot] = 0;
+        _phantomIds[slot] = 0;
+        _lastGoal[slot] = default;
+        _repathCooldown[slot] = 0;
+        _down[slot] = false;
+        _peerInCombat[slot] = false;
+        _hostileToLocals[slot] = false;
+        _factionKnown[slot] = false;
+        _smoothing[slot] = false;
+        _shownAtTime[slot] = 0;
+        _speedFromTime[slot] = 0;
+        _peerSpeed[slot] = 0f;
+        _lastMovedAt[slot] = 0;
+        _lastAnim[slot] = 0;
+        _lastOneShotSerial[slot] = 0;
+        _twinNamed[slot] = false;
+
+        for (int j = 0; j < SharedBlock.EquipCount; j++)
+        {
+            _appliedEquip[slot, j] = 0;
+        }
+
+        block.SetPhantomId(slot, 0);
+
+        // Stop attributing damage to a body that no longer exists. Watch also resets the
+        // running total, so a slot reused by a later joiner starts from zero instead of
+        // inheriting the previous occupant's.
+        PhantomHitHook.Watch(slot, 0);
+    }
+
+    /// <summary>Recounts live bodies and publishes the figure. Derived, never incremented:
+    /// with stable slots the population and the highest occupied index are different
+    /// numbers, and only one of them is what the agent's readout means.</summary>
+    private void PublishPhantomCount()
+    {
+        int live = 0;
+        for (int i = 0; i < _phantoms.Length; i++)
+        {
+            if (_phantoms[i] != 0)
+            {
+                live++;
+            }
+        }
+
+        _phantomCount = live;
+        block.PhantomCount = (uint)live;
     }
 
     public void OnFrame()
@@ -241,10 +290,9 @@ internal sealed unsafe class PhantomController(SharedBlockView block)
             // Idle (a disconnect): despawn any phantoms so a player who left does not leave
             // a frozen body behind. One per frame keeps it cheap; reset the bookkeeping once
             // the last body is gone.
-            if (_phantomCount > 0 && !FlushOneBody())
+            if (_phantomCount > 0)
             {
-                _phantomCount = 0;
-                block.PhantomCount = 0;
+                FlushOneBody();
             }
 
             return;
@@ -264,46 +312,64 @@ internal sealed unsafe class PhantomController(SharedBlockView block)
             return;
         }
 
+        // ⚠ RemoteCount is the OCCUPIED RANGE, not a population count. The agent keeps a
+        // peer in the slot it joined in so nothing downstream is re-attributed when someone
+        // leaves, which means slot 1 can be live while slot 0 is empty. Everything below
+        // therefore walks all the slots and decides per slot.
         int wanted = (int)Math.Min(block.RemoteCount, (uint)SharedBlock.SlotCapacity);
 
-        // Spawning is rate-limited to at most one creature every 30 frames. A spawn is by
-        // far the most expensive thing here, and doing several in one frame is how you turn
-        // a working mod into a stutter.
+        // Spawning (and despawning) is rate-limited to at most one creature every 30 frames.
+        // A spawn is by far the most expensive thing here, and doing several in one frame is
+        // how you turn a working mod into a stutter - which is exactly what a third player
+        // joining would otherwise ask for.
         if (_spawnCooldownFrames > 0)
         {
             _spawnCooldownFrames--;
         }
-        else if (_phantomCount < wanted && !_spawnDisabled)
-        {
-            TrySpawnOne(player);
-            _spawnCooldownFrames = 30;
-        }
 
         double now = _clock.Elapsed.TotalSeconds;
-        double delta = now - _lastStep;
-        if (delta < StepIntervalSeconds)
+        bool step = (now - _lastStep) >= StepIntervalSeconds;
+        if (step)
         {
-            return;
+            _lastStep = now;
         }
 
-        _lastStep = now;
-
-        for (int i = 0; i < _phantomCount; i++)
+        for (int i = 0; i < SharedBlock.SlotCapacity; i++)
         {
-            nint phantom = _phantoms[i];
-            if (phantom == 0)
-            {
-                continue;
-            }
+            RemoteView remote = i < wanted ? block.GetRemote(i) : default;
 
-            RemoteView remote = block.GetRemote(i);
             if (!remote.Active)
             {
-                // No peer in this slot any more: leave the body standing rather than
-                // dragging it to the origin.
-                Odyssey.SetAnimation(phantom, Odyssey.AnimIdle);
+                // The peer that owned this slot is gone. Destroy the body rather than leaving
+                // it standing: with stable slots an abandoned body is inherited by the next
+                // joiner, still wearing the departed player's name and gear.
+                if (_phantoms[i] != 0 && _spawnCooldownFrames == 0)
+                {
+                    DestroySlot(i, "peer left");
+                    PublishPhantomCount();
+                    _spawnCooldownFrames = 30;
+                }
+
                 continue;
             }
+
+            if (_phantoms[i] == 0)
+            {
+                if (_spawnCooldownFrames == 0 && !_spawnDisabled)
+                {
+                    TrySpawnOne(i, player);
+                    _spawnCooldownFrames = 30;
+                }
+
+                continue;
+            }
+
+            if (!step)
+            {
+                continue;
+            }
+
+            nint phantom = _phantoms[i];
 
             ApplyAppearance(phantom, remote.Appearance);
             ApplyEquipment(i);
@@ -887,10 +953,11 @@ internal sealed unsafe class PhantomController(SharedBlockView block)
     /// Roughly a body's width — enough that the camera never enters it.</summary>
     private const float MinSeparation = 1.2f;
 
-    /// <summary>The old spawn spot: beside the local player, fanned out per phantom.</summary>
-    private Vec3 Offset(Vec3 playerPosition) => new()
+    /// <summary>The old spawn spot: beside the local player, fanned out per SLOT so two
+    /// peers that spawn moments apart never land on the same point.</summary>
+    private static Vec3 Offset(Vec3 playerPosition, int slot) => new()
     {
-        X = playerPosition.X + 2.5f + (_phantomCount * 1.5f),
+        X = playerPosition.X + 2.5f + (slot * 1.5f),
         Y = playerPosition.Y + 1.5f,
         Z = playerPosition.Z,
     };
@@ -901,7 +968,7 @@ internal sealed unsafe class PhantomController(SharedBlockView block)
         float.IsFinite(p.X) && float.IsFinite(p.Y) && float.IsFinite(p.Z)
         && (p.X != 0f || p.Y != 0f);
 
-    private void TrySpawnOne(nint player)
+    private void TrySpawnOne(int slot, nint player)
     {
         if (!_modeLogged)
         {
@@ -918,12 +985,12 @@ internal sealed unsafe class PhantomController(SharedBlockView block)
         //
         // The local player is the fallback for the case where the slot has no plausible
         // position yet (a peer that has connected but not yet published one).
-        RemoteView remote = block.GetRemote(_phantomCount);
+        RemoteView remote = block.GetRemote(slot);
         Vec3 peerPosition = remote.Position;
 
         Vec3 spawnPosition = IsPlausiblePosition(peerPosition)
             ? peerPosition
-            : Offset(Odyssey.GetPosition(player));
+            : Offset(Odyssey.GetPosition(player), slot);
 
         Vec3 facing = new() { X = 1f, Y = 0f, Z = 0f };
 
@@ -948,7 +1015,7 @@ internal sealed unsafe class PhantomController(SharedBlockView block)
             // The peer's own position refused a body (a door frame, a lift, mid-transition
             // geometry). Fall back to the old offset-from-the-player spot rather than losing
             // the phantom entirely — a phantom in the wrong place beats no phantom.
-            Vec3 fallback = Offset(Odyssey.GetPosition(player));
+            Vec3 fallback = Offset(Odyssey.GetPosition(player), slot);
             foreach (string template in Templates)
             {
                 objectId = Odyssey.SpawnCreature(template, fallback, facing, out failure);
@@ -1001,7 +1068,7 @@ internal sealed unsafe class PhantomController(SharedBlockView block)
 
         // Dress the phantom as its remote player immediately, while the client twin does
         // not exist yet, so it never renders a single frame as the commoner blueprint.
-        RemoteView owner = block.GetRemote(_phantomCount);
+        RemoteView owner = block.GetRemote(slot);
         if (owner.Active)
         {
             ApplyAppearance(creature, owner.Appearance);
@@ -1010,7 +1077,7 @@ internal sealed unsafe class PhantomController(SharedBlockView block)
         // Name it after its player, same reasoning: set before the twin exists so every
         // copy the engine makes carries it. Without a first name the selection band above
         // the phantom is blank (trap 16) and clicking a teammate shows nothing.
-        byte* name = block.GetRemoteName(_phantomCount);
+        byte* name = block.GetRemoteName(slot);
         int nameLength = 0;
         while (nameLength < SharedBlock.NameLength - 1 && name[nameLength] != 0)
         {
@@ -1022,18 +1089,16 @@ internal sealed unsafe class PhantomController(SharedBlockView block)
             Odyssey.SetCreatureFirstName(creature, name, nameLength);
         }
 
-        _phantoms[_phantomCount] = creature;
-        _phantomIds[_phantomCount] = objectId;
-        _phantomCount++;
-
-        block.PhantomCount = (uint)_phantomCount;
-        block.SetPhantomId(_phantomCount - 1, objectId);
+        _phantoms[slot] = creature;
+        _phantomIds[slot] = objectId;
+        block.SetPhantomId(slot, objectId);
+        PublishPhantomCount();
 
         // From here on, damage landing on this body is the peer's to take.
-        PhantomHitHook.Watch(_phantomCount - 1, objectId);
+        PhantomHitHook.Watch(slot, objectId);
 
         PluginHost.Log(
-            $"spawned phantom {_phantomCount}: id 0x{objectId:X} at 0x{creature:X} "
+            $"spawned phantom in slot {slot}: id 0x{objectId:X} at 0x{creature:X} "
             + $"({spawnPosition.X:F2}, {spawnPosition.Y:F2}, {spawnPosition.Z:F2})");
     }
 }

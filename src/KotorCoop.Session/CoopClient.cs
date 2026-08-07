@@ -314,7 +314,13 @@ public sealed class CoopClient : ICoopSession
     // ---- phantom damage (combat participation) -----------------------------------
 
     private readonly Dictionary<uint, (uint Damage, uint Attacker)> _phantomDamageOut = [];
-    private (uint Damage, uint Attacker) _phantomDamageIn;
+
+    /// <summary>Running totals owed to the local player, keyed by the peer that dealt them.
+    /// See <see cref="GetIncomingPhantomDamage"/>: with three players two different peers can
+    /// be hitting this player's phantom, and their totals add.</summary>
+    private readonly Dictionary<uint, (uint Damage, uint Attacker)> _phantomDamageIn = [];
+
+    private uint _lastIncomingAttacker;
 
     /// <summary>Queued for the next tick's send; the host relays it to the addressee (or
     /// keeps it, when the host is the one being hit).</summary>
@@ -331,11 +337,25 @@ public sealed class CoopClient : ICoopSession
         }
     }
 
+    /// <summary>
+    /// The total this player owes, summed across every peer that has hit their phantom.
+    ///
+    /// ⚠ Per-sender running totals ADD; they do not max. Keeping one number meant a second
+    /// attacker whose total was below the leader's was ignored outright, forever. The sum is
+    /// still monotonic, which is what the plugin's applied-so-far counter needs, so entries
+    /// are never removed - dropping one would walk the total backwards.
+    /// </summary>
     public (uint CumulativeDamage, uint AttackerId) GetIncomingPhantomDamage()
     {
         lock (_gate)
         {
-            return _phantomDamageIn;
+            ulong total = 0;
+            foreach ((uint damage, uint _) in _phantomDamageIn.Values)
+            {
+                total += damage;
+            }
+
+            return ((uint)Math.Min(total, uint.MaxValue), _lastIncomingAttacker);
         }
     }
 
@@ -349,11 +369,21 @@ public sealed class CoopClient : ICoopSession
 
         lock (_gate)
         {
-            // Monotonic, so a reordered datagram cannot walk the total backwards and make
-            // the plugin re-apply the difference.
-            if (packet.CumulativeDamage > _phantomDamageIn.Damage)
+            // Monotonic PER SENDER, so a reordered datagram cannot walk that sender's total
+            // backwards and make the plugin re-apply the difference. The host relays another
+            // client's report with the ORIGINATOR in FromPeerId, so this key really does
+            // separate the attackers rather than lumping everything under the host.
+            if (_phantomDamageIn.TryGetValue(packet.FromPeerId, out (uint Damage, uint Attacker) seen)
+                && packet.CumulativeDamage <= seen.Damage)
             {
-                _phantomDamageIn = (packet.CumulativeDamage, packet.AttackerId);
+                return;
+            }
+
+            _phantomDamageIn[packet.FromPeerId] = (packet.CumulativeDamage, packet.AttackerId);
+
+            if (packet.AttackerId != 0)
+            {
+                _lastIncomingAttacker = packet.AttackerId;
             }
         }
     }

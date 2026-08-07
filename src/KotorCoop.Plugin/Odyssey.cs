@@ -1579,7 +1579,18 @@ internal static unsafe class Odyssey
         var setExtent = (delegate* unmanaged[Thiscall]<nint, int*, void>)(*(nint*)(vtable + GuiSetExtentSlot));
         var draw = (delegate* unmanaged[Thiscall]<nint, nint, void>)(*(nint*)(vtable + GuiDrawSlot));
 
+        // The vtable itself was checked; the two slots taken out of it were not. A garbage
+        // slot here is a call to an arbitrary address from the render path.
+        if (!LooksLikeCodePointer((nint)setExtent) || !LooksLikeCodePointer((nint)draw))
+        {
+            return;
+        }
+
         float scale = *(float*)(areaMap + AreaMapScale);
+        if (!float.IsFinite(scale))
+        {
+            return;
+        }
 
         // A scratch copy, never the control's own field: SetExtent copies FROM the pointer
         // INTO this+0x04, so handing it that same address would be a self-copy — harmless
@@ -1616,6 +1627,21 @@ internal static unsafe class Odyssey
                 continue;
             }
 
+            // ⚠ Never hand the engine a position we have not looked at. This runs on the
+            // RENDER PATH against a slot an entirely separate process writes, and a slot can
+            // legitimately be read mid-write: a peer that has connected but not yet published
+            // is all zeroes, and a torn write is arbitrary bits reinterpreted as floats. The
+            // phantom spawner has always screened positions this way (IsPlausiblePosition);
+            // this path was published without the same screen, and it is the one path where
+            // the consequence lands inside the renderer.
+            if (!float.IsFinite(remote.Position.X)
+                || !float.IsFinite(remote.Position.Y)
+                || !float.IsFinite(remote.Position.Z)
+                || !float.IsFinite(remote.Facing))
+            {
+                continue;
+            }
+
             // -1 first: SetPartyMemberWorldLocation only STORES on a successful conversion,
             // so without this an off-map peer would silently reuse the previous peer's pixel.
             *scratchX = -1;
@@ -1629,8 +1655,11 @@ internal static unsafe class Odyssey
                 continue; // off the map image entirely
             }
 
-            int wantX = savedX + (int)MathF.Round((peerX - localX) * scale);
-            int wantY = savedY + (int)MathF.Round((peerY - localY) * scale);
+            // Clamped before the cast. (int) on a float larger than int.MaxValue is not a
+            // saturating conversion in IL — it is undefined, and on x86 it yields
+            // 0x80000000, which is then handed to the engine as an extent.
+            int wantX = savedX + (int)Math.Clamp(MathF.Round((peerX - localX) * scale), -8192f, 8192f);
+            int wantY = savedY + (int)Math.Clamp(MathF.Round((peerY - localY) * scale), -8192f, 8192f);
 
             // ⚠ HELD AT THE EDGE, NOT CLIPPED AWAY.
             //

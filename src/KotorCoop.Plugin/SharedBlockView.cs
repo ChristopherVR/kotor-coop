@@ -73,6 +73,20 @@ internal sealed unsafe class SharedBlockView(byte* baseAddress)
 
     public nint Address => (nint)baseAddress;
 
+    /// <summary>
+    /// Every per-slot accessor below runs it on its index first.
+    ///
+    /// ⚠ These are raw pointer arithmetic into a fixed 0x2000 allocation, so an index the
+    /// caller got wrong is not an exception, it is a write into whatever follows the block.
+    /// The counts that drive most of the loops come from the AGENT, which is a separate
+    /// process that can be restarted, replaced or (as happened) accidentally started twice
+    /// — so "the caller checked" is not a property this class may assume. Clamping rather
+    /// than throwing is deliberate: this is called from the game's frame hook, where a
+    /// managed exception is a process kill (see CrashProbe).
+    /// </summary>
+    private static int Clamp(int index, int capacity) =>
+        index < 0 ? 0 : index >= capacity ? capacity - 1 : index;
+
     private uint* U32(int offset) => (uint*)(baseAddress + offset);
 
     private int* I32(int offset) => (int*)(baseAddress + offset);
@@ -105,17 +119,27 @@ internal sealed unsafe class SharedBlockView(byte* baseAddress)
         set => *I32(SharedBlock.OffsetLastStatus) = value;
     }
 
+    /// <summary>⚠ Writes the RELOCATED table, not 0x264 — see SharedBlock.OffsetPhantomIds.
+    /// Slot 0 is mirrored to the old address so an agent built before the move still sees
+    /// the first phantom; slots 1+ never touch it, which is the whole point.</summary>
     public void SetPhantomId(int index, uint objectId)
     {
-        if (index is >= 0 and < SharedBlock.SlotCapacity)
+        if (index is < 0 or >= SharedBlock.SlotCapacity)
         {
-            *U32(SharedBlock.OffsetPhantomIds + (index * 4)) = objectId;
+            return;
+        }
+
+        *U32(SharedBlock.OffsetPhantomIdTable + (index * 4)) = objectId;
+
+        if (index == 0)
+        {
+            *U32(SharedBlock.OffsetPhantomIds) = objectId;
         }
     }
 
     public uint GetPhantomId(int index) =>
         index is >= 0 and < SharedBlock.SlotCapacity
-            ? *U32(SharedBlock.OffsetPhantomIds + (index * 4))
+            ? *U32(SharedBlock.OffsetPhantomIdTable + (index * 4))
             : 0;
 
     public void SetLocalState(Vec3 position, float facing, int health)
@@ -182,7 +206,8 @@ internal sealed unsafe class SharedBlockView(byte* baseAddress)
 
     /// <summary>Pointer to a peer's null-terminated ascii name (24 bytes).</summary>
     public byte* GetRemoteName(int index) =>
-        baseAddress + SharedBlock.SlotsOffset + (index * SharedBlock.SlotStride) + 0x20;
+        baseAddress + SharedBlock.SlotsOffset
+        + (Clamp(index, SharedBlock.SlotCapacity) * SharedBlock.SlotStride) + 0x20;
 
     // ---- ground items -----------------------------------------------------------
 
@@ -200,7 +225,8 @@ internal sealed unsafe class SharedBlockView(byte* baseAddress)
 
     public EnemyView GetEnemy(int index)
     {
-        byte* slot = baseAddress + SharedBlock.OffsetEnemySlots + (index * SharedBlock.EnemySlotStride);
+        byte* slot = baseAddress + SharedBlock.OffsetEnemySlots
+            + (Clamp(index, SharedBlock.EnemyCapacity) * SharedBlock.EnemySlotStride);
 
         return new EnemyView(
             *(uint*)(slot + 0x00),
@@ -221,7 +247,7 @@ internal sealed unsafe class SharedBlockView(byte* baseAddress)
     public EnemyPresenceView GetEnemyPresence(int index)
     {
         byte* slot = baseAddress + SharedBlock.OffsetEnemyPresenceSlots
-            + (index * SharedBlock.EnemyPresenceStride);
+            + (Clamp(index, SharedBlock.EnemyCapacity) * SharedBlock.EnemyPresenceStride);
 
         return new EnemyPresenceView(
             *(uint*)(slot + 0x00),
@@ -249,7 +275,7 @@ internal sealed unsafe class SharedBlockView(byte* baseAddress)
     public PartyPresenceView GetPartyPresence(int index)
     {
         byte* slot = baseAddress + SharedBlock.OffsetPartyPresenceSlots
-            + (index * SharedBlock.PartyPresenceStride);
+            + (Clamp(index, SharedBlock.PartyPresenceCapacity) * SharedBlock.PartyPresenceStride);
 
         return new PartyPresenceView(
             *(uint*)(slot + 0x00),
@@ -273,7 +299,8 @@ internal sealed unsafe class SharedBlockView(byte* baseAddress)
     /// phantom's total.</summary>
     public void SetPhantomHit(int index, uint phantomId, uint cumulative, uint attacker, uint serial)
     {
-        byte* slot = baseAddress + SharedBlock.OffsetPhantomHitSlots + (index * SharedBlock.PhantomHitStride);
+        byte* slot = baseAddress + SharedBlock.OffsetPhantomHitSlots
+            + (Clamp(index, SharedBlock.SlotCapacity) * SharedBlock.PhantomHitStride);
 
         *(uint*)(slot + 0x04) = cumulative;
         *(uint*)(slot + 0x08) = attacker;
@@ -346,7 +373,7 @@ internal sealed unsafe class SharedBlockView(byte* baseAddress)
     public void SetEnemyOneShot(int index, uint objectId, uint animation, uint serial)
     {
         byte* slot = baseAddress + SharedBlock.OffsetEnemyOneShotTable
-            + (index * SharedBlock.EnemyOneShotStride);
+            + (Clamp(index, SharedBlock.EnemyOneShotCapacity) * SharedBlock.EnemyOneShotStride);
 
         *(uint*)(slot + 0x04) = animation;
         *(uint*)(slot + 0x08) = serial;
@@ -358,8 +385,8 @@ internal sealed unsafe class SharedBlockView(byte* baseAddress)
     /// <summary>Pointer to a peer's null-terminated equip resref (16 bytes).</summary>
     public byte* GetEquipResref(int peerIndex, int equipIndex) =>
         baseAddress + SharedBlock.OffsetEquipSlots
-        + (peerIndex * SharedBlock.EquipSlotStride)
-        + (equipIndex * 16);
+        + (Clamp(peerIndex, SharedBlock.SlotCapacity) * SharedBlock.EquipSlotStride)
+        + (Clamp(equipIndex, SharedBlock.EquipCount) * 16);
 
     // ---- doors ------------------------------------------------------------------
 
@@ -375,7 +402,8 @@ internal sealed unsafe class SharedBlockView(byte* baseAddress)
 
     public DoorView GetDoor(int index)
     {
-        byte* slot = baseAddress + SharedBlock.OffsetDoorSlots + (index * SharedBlock.DoorSlotStride);
+        byte* slot = baseAddress + SharedBlock.OffsetDoorSlots
+            + (Clamp(index, SharedBlock.DoorCapacity) * SharedBlock.DoorSlotStride);
 
         return new DoorView(
             *(uint*)(slot + 0x00),
@@ -395,7 +423,8 @@ internal sealed unsafe class SharedBlockView(byte* baseAddress)
     /// <summary>One placeable's desired state: objectId, opened, unlocked, disarmed.</summary>
     public PlaceableView GetPlaceable(int index)
     {
-        byte* slot = baseAddress + SharedBlock.OffsetPlaceableSlots + (index * SharedBlock.PlaceableSlotStride);
+        byte* slot = baseAddress + SharedBlock.OffsetPlaceableSlots
+            + (Clamp(index, SharedBlock.PlaceableCapacity) * SharedBlock.PlaceableSlotStride);
 
         return new PlaceableView(
             *(uint*)(slot + 0x00),
@@ -416,7 +445,8 @@ internal sealed unsafe class SharedBlockView(byte* baseAddress)
     /// <summary>One container-loot removal: containerId, itemId.</summary>
     public LootView GetLoot(int index)
     {
-        byte* slot = baseAddress + SharedBlock.OffsetLootSlots + (index * SharedBlock.LootSlotStride);
+        byte* slot = baseAddress + SharedBlock.OffsetLootSlots
+            + (Clamp(index, SharedBlock.LootCapacity) * SharedBlock.LootSlotStride);
         return new LootView(*(uint*)(slot + 0x00), *(uint*)(slot + 0x04));
     }
 
@@ -607,7 +637,8 @@ internal sealed unsafe class SharedBlockView(byte* baseAddress)
 
     /// <summary>Start of a server row's fixed-size record.</summary>
     public byte* BrowserEntry(int index) =>
-        baseAddress + SharedBlock.OffsetBrowserEntries + (index * SharedBlock.BrowserEntryStride);
+        baseAddress + SharedBlock.OffsetBrowserEntries
+        + (Clamp(index, SharedBlock.BrowserCapacity) * SharedBlock.BrowserEntryStride);
 
     // ---- co-op death handling ---------------------------------------------------
 
@@ -675,12 +706,14 @@ internal sealed unsafe class SharedBlockView(byte* baseAddress)
     /// <summary>Agent-written: a remote peer's latest one-shot animation id.</summary>
     public uint GetRemoteOneShotAnim(int slot) =>
         *(uint*)(baseAddress + SharedBlock.OffsetRemoteOneShot
-            + (slot * SharedBlock.RemoteOneShotStride) + SharedBlock.RemoteOneShotAnim);
+            + (Clamp(slot, SharedBlock.SlotCapacity) * SharedBlock.RemoteOneShotStride)
+            + SharedBlock.RemoteOneShotAnim);
 
     /// <summary>Agent-written: its sequence, so the plugin fires it exactly once.</summary>
     public uint GetRemoteOneShotSerial(int slot) =>
         *(uint*)(baseAddress + SharedBlock.OffsetRemoteOneShot
-            + (slot * SharedBlock.RemoteOneShotStride) + SharedBlock.RemoteOneShotSerial);
+            + (Clamp(slot, SharedBlock.SlotCapacity) * SharedBlock.RemoteOneShotStride)
+            + SharedBlock.RemoteOneShotSerial);
 
     // ---- dialogue spectate ------------------------------------------------------
 
@@ -730,18 +763,22 @@ internal sealed unsafe class SharedBlockView(byte* baseAddress)
 
     /// <summary>Plugin-written pick-log entry base (serial u32, slot u32, lineHash u32).</summary>
     public byte* LocalDialoguePick(int index) =>
-        baseAddress + SharedBlock.OffsetLocalDialoguePicks + (index * SharedBlock.DialoguePickStride);
+        baseAddress + SharedBlock.OffsetLocalDialoguePicks
+        + (Clamp(index, SharedBlock.DialoguePickCapacity) * SharedBlock.DialoguePickStride);
 
     /// <summary>Agent-written pick-log entry base for the conversation owner's picks.</summary>
     public byte* RemoteDialoguePick(int index) =>
-        baseAddress + SharedBlock.OffsetRemoteDialoguePicks + (index * SharedBlock.DialoguePickStride);
+        baseAddress + SharedBlock.OffsetRemoteDialoguePicks
+        + (Clamp(index, SharedBlock.DialoguePickCapacity) * SharedBlock.DialoguePickStride);
 
     public ItemSlotView GetItemSlot(int index) =>
-        new(baseAddress + SharedBlock.OffsetItemSlots + (index * SharedBlock.ItemSlotStride));
+        new(baseAddress + SharedBlock.OffsetItemSlots
+            + (Clamp(index, SharedBlock.ItemSlotCapacity) * SharedBlock.ItemSlotStride));
 
     public void SetItemStatus(int index, uint itemId, uint objectId, uint state, int error)
     {
-        byte* status = baseAddress + SharedBlock.OffsetItemStatus + (index * SharedBlock.ItemStatusStride);
+        byte* status = baseAddress + SharedBlock.OffsetItemStatus
+            + (Clamp(index, SharedBlock.ItemSlotCapacity) * SharedBlock.ItemStatusStride);
         *(uint*)(status + 0x00) = itemId;
         *(uint*)(status + 0x04) = objectId;
         *(int*)(status + 0x0C) = error;

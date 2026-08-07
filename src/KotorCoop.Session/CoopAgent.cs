@@ -281,7 +281,11 @@ public sealed class CoopAgent(IGameBridge bridge, ICoopSession session, AgentSet
         // Death is arbitrated every tick too: a rescue window measured in seconds cannot
         // wait for the ~5 Hz heavy pass, and a swallowed game-over must be answered before
         // the engine tries again on the next frame.
-        PumpDeath(local, visible);
+        // ⚠ ALL peers, not `visible`. `visible` has already been filtered to the local
+        // module, so a peer one module away is absent rather than standing - and "everyone is
+        // down" then becomes true while they are alive and on their way. Two players hid this
+        // because the client follows the host's module; three do not.
+        PumpDeath(local, peers);
 
         // Client-only, every tick: keep the player's input locked to their own PC (a cheap id
         // write) so an attempted switch to a shared, host-owned companion reverts within a frame
@@ -354,19 +358,31 @@ public sealed class CoopAgent(IGameBridge bridge, ICoopSession session, AgentSet
             return;
         }
 
-        // Outbound: slot i of the plugin's phantom-hit table belongs to peer slot i, which
-        // is the same ordering the agent used when it wrote the peers in.
-        IReadOnlyList<RemotePeer> peers = session.GetRemotePeers();
-        for (int i = 0; i < peers.Count; i++)
+        // Outbound: ask the bridge WHO is in slot i.
+        //
+        // ⚠ It used to index the peer list by slot number, with a comment claiming the two
+        // orderings matched. They did not. The list written into the block is filtered by
+        // module and masked by capability first, so it is a subsequence of GetRemotePeers();
+        // slots are also sticky per peer, so a departure leaves a hole. Either alone is
+        // enough to bill the wrong player for a hit — and to bill someone standing in a
+        // different area entirely. Unreachable with two players (one remote peer means one
+        // slot); routine with three.
+        for (int slot = 0; slot < bridge.RemoteSlotCapacity; slot++)
         {
-            if (!bridge.TryReadPhantomHit(i, out uint phantomId, out uint cumulative, out uint attacker)
+            uint peerId = bridge.PeerInSlot(slot);
+            if (peerId == 0)
+            {
+                continue;
+            }
+
+            if (!bridge.TryReadPhantomHit(slot, out uint phantomId, out uint cumulative, out uint attacker)
                 || phantomId == 0
                 || cumulative == 0)
             {
                 continue;
             }
 
-            session.PublishPhantomDamage(peers[i].PeerId, cumulative, attacker);
+            session.PublishPhantomDamage(peerId, cumulative, attacker);
         }
 
         // Inbound: hand the plugin the running total. Level state, written every tick —
@@ -662,7 +678,7 @@ public sealed class CoopAgent(IGameBridge bridge, ICoopSession session, AgentSet
     /// Both suppressions live in the plugin as inert byte patches until turned on here, so a
     /// game with no session behaves exactly like stock KOTOR.
     /// </summary>
-    private void PumpDeath(in PlayerState local, IReadOnlyList<RemotePeer> visible)
+    private void PumpDeath(in PlayerState local, IReadOnlyList<RemotePeer> peers)
     {
         if (!bridge.SupportsDeathHandling)
         {
@@ -671,18 +687,18 @@ public sealed class CoopAgent(IGameBridge bridge, ICoopSession session, AgentSet
 
         // A wipe needs every player down — including this one. A peer in another module is
         // not part of this fight, but it is also not a corpse: it can still come back for
-        // us, so it counts as standing.
+        // us, so it counts as standing. That is why this takes the UNFILTERED list.
         bool everyPeerDown = true;
-        for (int i = 0; i < visible.Count; i++)
+        for (int i = 0; i < peers.Count; i++)
         {
-            if (!visible[i].State.IsDowned)
+            if (!peers[i].State.IsDowned)
             {
                 everyPeerDown = false;
                 break;
             }
         }
 
-        bool allDown = local.IsDowned && visible.Count > 0 && everyPeerDown;
+        bool allDown = local.IsDowned && peers.Count > 0 && everyPeerDown;
 
         // Hold the game-over unless the session really is wiped; always hold the control
         // swap (it fights the control lock and hands a client the host's companions).
@@ -725,9 +741,9 @@ public sealed class CoopAgent(IGameBridge bridge, ICoopSession session, AgentSet
             return; // already asked, or there is nobody left standing to do the reviving
         }
 
-        for (int i = 0; i < visible.Count; i++)
+        for (int i = 0; i < peers.Count; i++)
         {
-            RemotePeer peer = visible[i];
+            RemotePeer peer = peers[i];
             if (peer.State.IsDowned || !peer.IsInModule(local.Module))
             {
                 continue;

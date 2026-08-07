@@ -74,7 +74,19 @@ internal struct SharedBlock
     /// <summary>Plugin -&gt; agent. Last failure code from a spawn attempt, 0 = fine.</summary>
     public const int OffsetLastStatus = 0x260;
 
-    /// <summary>Plugin -&gt; agent. Object ids of the spawned phantoms, 8 x uint32.</summary>
+    /// <summary>
+    /// Plugin -&gt; agent. Object id of the phantom in slot 0 ONLY.
+    ///
+    /// ⚠ This was declared as "8 x uint32" and it never was: the very next dword, 0x268,
+    /// is <see cref="OffsetKeepAliveUnfocused"/>, 0x26C is <see cref="OffsetPausesCleared"/>
+    /// and 0x280 is <see cref="OffsetPickUpRequest"/>. With one remote player only index 0
+    /// is ever written, so the collision was invisible; the SECOND phantom — i.e. the third
+    /// player — writes its object id straight over the agent's keep-alive flag, and the
+    /// focus keeper then writes its pause counter over what the agent reads back as
+    /// "phantom 2's object id". The real table lives at <see cref="OffsetPhantomIdTable"/>;
+    /// this stays as the slot-0 mirror so an agent built against the old layout still sees
+    /// the first phantom.
+    /// </summary>
     public const int OffsetPhantomIds = 0x264;
 
     // ---- ground items (version 2) ----------------------------------------------
@@ -288,6 +300,18 @@ internal struct SharedBlock
     /// <summary>Plugin -&gt; agent. Bumped whenever the reason CHANGES, so the agent can
     /// surface it once per transition instead of once per frame.</summary>
     public const int OffsetDownBlockSerial = 0x1F64;
+
+    // ---- phantom id table (relocated, region 0x1F80..0x1FA0) ---------------------
+    //
+    // The real per-slot phantom object ids. See OffsetPhantomIds for why they could not
+    // stay at 0x264: that "array" only ever had room for one entry before the next field
+    // began. Placed in the block's unused tail so no existing offset moves — an agent that
+    // has not been rebuilt keeps reading slot 0 from 0x264, which the plugin still mirrors.
+
+    /// <summary>Plugin -&gt; agent. Object ids of the spawned phantoms, one per remote slot,
+    /// <see cref="SlotCapacity"/> x uint32. 0 = no body in that slot. Occupies
+    /// 0x1F80..0x1FA0.</summary>
+    public const int OffsetPhantomIdTable = 0x1F80;
 
     // ---- door replication (version 4) -------------------------------------------
     //
