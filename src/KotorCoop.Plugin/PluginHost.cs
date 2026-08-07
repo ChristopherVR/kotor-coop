@@ -305,7 +305,7 @@ internal static unsafe class PluginHost
         Unsafe.InitBlockUnaligned(_block, 0, SharedBlock.TotalSize);
 
         _block->Magic = SharedBlock.MagicValue;
-        _block->Version = 22;
+        _block->Version = 23;
 
         // A guard dword after the version. Magic plus version alone was not selective
         // enough: a scan once matched something else at a lower address and the agent

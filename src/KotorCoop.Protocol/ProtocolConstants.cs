@@ -28,8 +28,12 @@ public static class ProtocolConstants
     /// Version 14: the enemy snapshot carries the MODULE its object ids were read in, so a
     /// peer somewhere else drops it instead of writing the owner's healths and positions
     /// onto whatever local creatures happen to share those ids. The report direction has
-    /// always carried its module; this is the same guard the other way.</summary>
-    public const byte Version = 14;
+    /// always carried its module; this is the same guard the other way.
+    /// Version 15: peer slots are STICKY per peer id rather than positional, and a relayed
+    /// phantom-damage report carries the ORIGINATOR's peer id rather than the relaying
+    /// host's — with three or more players the positional scheme billed the wrong person
+    /// and a leaver's slot handed their body, gear and damage total to a survivor.</summary>
+    public const byte Version = 15;
 
     /// <summary>Journal quest tags are resrefs plus a little slack.</summary>
     public const int MaxJournalTagLength = 32;
