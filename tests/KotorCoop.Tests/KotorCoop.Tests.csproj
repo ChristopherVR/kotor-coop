@@ -18,4 +18,13 @@
     <ProjectReference Include="..\..\src\KotorCoop.MockGame\KotorCoop.MockGame.csproj" />
   </ItemGroup>
 
+  <!--
+    The plugin is a win-x86 NativeAOT library and cannot be referenced, but its pure decision
+    logic still has to be tested. Files listed here are COMPILED IN, so they must stay free
+    of engine calls and unsafe code — that constraint is the reason they were split out.
+  -->
+  <ItemGroup>
+    <Compile Include="..\..\src\KotorCoop.Plugin\DownBlock.cs" Link="Plugin\DownBlock.cs" />
+  </ItemGroup>
+
 </Project>

@@ -271,6 +271,24 @@ internal struct SharedBlock
 
     public const int OffsetKillRequestSerial = 0x1DD4;
 
+    // ---- why forwarded damage cannot finish a player off (region 0x1F60..0x1FA0) ---
+    //
+    // A player worn down in someone else's game should go down in their own. When they do
+    // not, the honest answer is usually not a co-op bug: KOTOR's own modules pin the PC
+    // with min-1-hp for whole scenes (the Endar Spire command deck, the Taris duel ring),
+    // and inside such a scene NOBODY can be downed — not the remote player, not the local
+    // one, not in a normal playthrough either. Rather than let that read as "forwarded
+    // damage is broken", the plugin measures the flags and names the floor.
+    // See docs/research/min-one-hitpoint.md.
+
+    /// <summary>Plugin -&gt; agent. A <c>DownBlockReason</c>: 0 none, 1 min-1-hp, 2 plot,
+    /// 3 the difficulty MinHP1 rule. A level, sampled — not an event.</summary>
+    public const int OffsetDownBlockReason = 0x1F60;
+
+    /// <summary>Plugin -&gt; agent. Bumped whenever the reason CHANGES, so the agent can
+    /// surface it once per transition instead of once per frame.</summary>
+    public const int OffsetDownBlockSerial = 0x1F64;
+
     // ---- door replication (version 4) -------------------------------------------
     //
     // The agent writes the DESIRED state of doors in the local module: open state and

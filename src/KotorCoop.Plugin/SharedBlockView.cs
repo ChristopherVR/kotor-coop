@@ -327,6 +327,20 @@ internal sealed unsafe class SharedBlockView(byte* baseAddress)
         set => *U32(SharedBlock.OffsetIncomingDamageApplied) = value;
     }
 
+    /// <summary>Which engine floor, if any, is keeping this player on their feet.</summary>
+    public uint DownBlockReason
+    {
+        get => *U32(SharedBlock.OffsetDownBlockReason);
+        set => *U32(SharedBlock.OffsetDownBlockReason) = value;
+    }
+
+    /// <summary>Bumped when <see cref="DownBlockReason"/> changes.</summary>
+    public uint DownBlockSerial
+    {
+        get => *U32(SharedBlock.OffsetDownBlockSerial);
+        set => *U32(SharedBlock.OffsetDownBlockSerial) = value;
+    }
+
     /// <summary>Publishes one captured creature one-shot for the agent to read. The id is
     /// written last so the agent never pairs an id with another creature's payload.</summary>
     public void SetEnemyOneShot(int index, uint objectId, uint animation, uint serial)

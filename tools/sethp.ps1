@@ -57,16 +57,31 @@ foreach ($c in [H]::Scan($h, 0x007470C8)) {
 
 if ($found -eq 0) { Write-Error ("no creature with id 0x{0:X} in pid {1}" -f $ObjectId, $ProcId); exit 1 }
 
-$cur = [BitConverter]::ToUInt16([H]::Read($h, $found + 0xDC, 2), 0)
+# SIGNED. The engine reads current HP as int16 and sign-extends it (movsx after the
+# vtable +0x9C getter), and OnApplyDeath parks a dead body at -11 -- read unsigned, a
+# downed creature reports 65525 and looks healthier than it has ever been.
+$cur = [BitConverter]::ToInt16([H]::Read($h, $found + 0xDC, 2), 0)
 $max = [BitConverter]::ToUInt16([H]::Read($h, $found + 0xE0, 2), 0)
+
+# The two flags that stop a body dying, so "why is this thing stuck at 1 hp" is one command
+# instead of an evening. min1hp (+0x200) floors damage at 1 and turns an applied Death
+# effect into "set hp 1"; plot (+0xF8) zeroes the damage outright. KOTOR's own modules set
+# min1hp on the PC -- the Endar Spire command deck holds it for the whole deck.
+# See docs/research/min-one-hitpoint.md.
+$min1 = [BitConverter]::ToInt32([H]::Read($h, $found + 0x200, 4), 0)
+$plot = [BitConverter]::ToInt32([H]::Read($h, $found + 0xF8, 4), 0)
+$flags = @()
+if ($min1 -ne 0) { $flags += "min1hp" }
+if ($plot -ne 0) { $flags += "plot" }
+$flagText = if ($flags.Count -gt 0) { " [" + ($flags -join ",") + "]" } else { "" }
 
 if ($Set -ge 0) {
     [H]::Write($h, $found + 0xDC, [BitConverter]::GetBytes([uint16]$Set)) | Out-Null
-    $now = [BitConverter]::ToUInt16([H]::Read($h, $found + 0xDC, 2), 0)
-    "pid {0} creature 0x{1:X} @0x{2:X}: hp {3} -> {4} (stored max {5})" -f $ProcId, $ObjectId, $found, $cur, $now, $max
+    $now = [BitConverter]::ToInt16([H]::Read($h, $found + 0xDC, 2), 0)
+    "pid {0} creature 0x{1:X} @0x{2:X}: hp {3} -> {4} (stored max {5}){6}" -f $ProcId, $ObjectId, $found, $cur, $now, $max, $flagText
 }
 else {
-    "pid {0} creature 0x{1:X} @0x{2:X}: hp {3} (stored max {4})" -f $ProcId, $ObjectId, $found, $cur, $max
+    "pid {0} creature 0x{1:X} @0x{2:X}: hp {3} (stored max {4}){5}" -f $ProcId, $ObjectId, $found, $cur, $max, $flagText
 }
 
 [H]::CloseHandle($h) | Out-Null
