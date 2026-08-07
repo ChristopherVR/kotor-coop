@@ -312,6 +312,60 @@ internal struct SharedBlock
     /// <see cref="SlotCapacity"/> x uint32. 0 = no body in that slot. Occupies
     /// 0x1F80..0x1FA0.</summary>
     public const int OffsetPhantomIdTable = 0x1F80;
+    // ---- client-triggered encounters (0x1DE0..0x1E60) ------------------------------
+    //
+    // A client's encounters are disarmed (an encounter spawn there would advance that
+    // instance's object-id counter and break the id identity every other channel keys on),
+    // so walking into an ambush used to do nothing at all until the host walked in too.
+    // Now the client REPORTS where it stands and the host's engine does the spawn — one
+    // engine ever spawns, ids stay identical. See docs/research/client-encounters.md.
+    //
+    // Both halves are levels, not events: the watch republishes the current set every pass
+    // and the request region is rewritten every pump, so a missed read costs a tick.
+
+    /// <summary>Agent -&gt; plugin. 1 only on a peer that does NOT own enemies. The owner's
+    /// engine fires its own encounters, so the watch is dead weight there.</summary>
+    public const int OffsetEncounterWatch = 0x1DE0;
+
+    /// <summary>Plugin -&gt; agent. How many entries of <see cref="OffsetEncounterInside"/>
+    /// are valid.</summary>
+    public const int OffsetEncounterInsideCount = 0x1DE4;
+
+    /// <summary>Plugin -&gt; agent. Bumped whenever the set changes, so the agent can log a
+    /// transition without diffing.</summary>
+    public const int OffsetEncounterInsideSerial = 0x1DE8;
+
+    /// <summary>Plugin -&gt; agent. Object ids of the encounters whose activate area contains
+    /// the local player. Occupies 0x1DEC..0x1DFC.</summary>
+    public const int OffsetEncounterInside = 0x1DEC;
+
+    public const int EncounterInsideCapacity = 4;
+
+    /// <summary>Agent -&gt; plugin. How many request slots are valid.</summary>
+    public const int OffsetEncounterRequestCount = 0x1DFC;
+
+    /// <summary>Agent -&gt; plugin. Bumped after the slots are written, and the only thing the
+    /// plugin re-reads: a half-written request list is never acted on.</summary>
+    public const int OffsetEncounterRequestSerial = 0x1E00;
+
+    /// <summary>Agent -&gt; plugin. encounter object id u32 @0, requesting peer id u32 @4.
+    /// Occupies 0x1E04..0x1E44.</summary>
+    public const int OffsetEncounterRequests = 0x1E04;
+
+    public const int EncounterRequestStride = 0x08;
+
+    public const int EncounterRequestCapacity = 8;
+
+    /// <summary>Plugin -&gt; agent. How many encounters this instance has actually started on
+    /// a peer's behalf, and how many requests it turned down, for the log and the battery.</summary>
+    public const int OffsetEncounterFired = 0x1E44;
+    public const int OffsetEncounterRefused = 0x1E48;
+
+    /// <summary>Plugin -&gt; agent. Why the last refusal happened
+    /// (<see cref="EncounterController"/>'s status codes). 0 = nothing refused yet.</summary>
+    public const int OffsetEncounterStatus = 0x1E4C;
+
+    // 0x1E50..0x1E60 is spare inside this region.
 
     // ---- door replication (version 4) -------------------------------------------
     //

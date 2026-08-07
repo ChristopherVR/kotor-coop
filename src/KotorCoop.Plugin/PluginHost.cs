@@ -43,6 +43,7 @@ internal static unsafe class PluginHost
     private static DeathController? _death;
     private static ChatOverlayController? _chatOverlay;
     private static DialogueSpectateController? _dialogueSpectate;
+    private static EncounterController? _encounters;
     private static Thread? _worker;
     private static volatile bool _running = true;
 
@@ -107,6 +108,7 @@ internal static unsafe class PluginHost
             _death = new DeathController(_view);
             _chatOverlay = new ChatOverlayController(_view);
             _dialogueSpectate = new DialogueSpectateController(_view);
+            _encounters = new EncounterController(_view);
             _pause = new PauseController(_view);
             _pauseKey = new PauseKeyController();
             _journal = new JournalController(_view);
@@ -305,7 +307,7 @@ internal static unsafe class PluginHost
         Unsafe.InitBlockUnaligned(_block, 0, SharedBlock.TotalSize);
 
         _block->Magic = SharedBlock.MagicValue;
-        _block->Version = 23;
+        _block->Version = 24;
 
         // A guard dword after the version. Magic plus version alone was not selective
         // enough: a scan once matched something else at a lower address and the agent
@@ -497,6 +499,11 @@ internal static unsafe class PluginHost
         // After death handling has published whether we are down, so damage that would
         // arrive on an already-downed player is skipped rather than fighting the revive.
         _incomingDamage?.OnFrame();
+
+        // After the presence passes, so the watch tests the position the player is actually
+        // standing at this frame, and so a fired encounter's spawns are already in the
+        // owner's census by the next pump.
+        _encounters?.OnFrame();
         _doors?.OnFrame();
         _placeables?.OnFrame();
         _loot?.OnFrame();
@@ -534,6 +541,7 @@ internal static unsafe class PluginHost
         _mapMarkers?.Invalidate();
         _connectMenu?.Invalidate();
         _death?.Invalidate();
+        _encounters?.Invalidate();
     }
 
     private static void WorkerLoop()

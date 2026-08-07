@@ -387,6 +387,22 @@ $clientPartner = [VF]::Str($h2, $b2 + 0x1200, 32)
 Check 'the peer cannot start a second conversation' ($clientPartner -ne 'carth') `
     "client is talking to '$clientPartner', not 'carth'"
 
+# --- 12. client-triggered encounters ------------------------------------------------
+# Plumbing only, deliberately: end_m01aa has NO encounters at all (checked offline with
+# `kotorfiles.py objectids end_m01aa` — there is no Encounter List), so a real fire cannot
+# be staged from the standard save. What IS checkable everywhere is that the two ends are
+# armed and pointing the right way: the watch runs on the mirroring side and never on the
+# authority, and the plugin verified the engine entry points instead of refusing.
+# To exercise a real fire, load a module that has encounters (tar_m03aa has four Black
+# Vulkar ambushes) and use `blockpoke encounters <encounterId> <peerId>` on the HOST.
+$watchHost = [VF]::U32($h1, $b1 + 0x1DE0)
+$watchClient = [VF]::U32($h2, $b2 + 0x1DE0)
+Check 'the encounter watch runs on the client only' (($watchClient -eq 1) -and ($watchHost -eq 0)) `
+    "host $watchHost, client $watchClient"
+Check 'the encounter call sites verified' `
+    ((LogHas $Log2 'encounters: encounter calls verified') -and -not (LogHas $Log2 'encounters: REFUSED')) `
+    'GetInActivateArea 0x590090 / SpawnIfAppropriate 0x593BE0'
+
 # Leave the world as we found it, so the next run measures the same starting conditions.
 CloseConversations $h1 $b1
 CloseConversations $h2 $b2

@@ -184,6 +184,26 @@ public sealed record EnemyReportPacket(uint PeerId, string Module, IReadOnlyList
 public sealed record PhantomDamagePacket(
     uint FromPeerId, uint TargetPeerId, uint CumulativeDamage, uint AttackerId);
 
+/// <summary>
+/// client -> host: "my player is standing inside these encounters right now."
+///
+/// <paramref name="EncounterIds"/> are engine object ids, which is a legitimate
+/// cross-instance key here for the same reason enemy ids are: <c>CSWSArea::LoadGIT</c>
+/// walks the module's GIT lists in a fixed order and hands out ids from a monotonic
+/// counter, and the Encounter List is one of those lists (Handoff 4.5;
+/// <c>tools/kotorfiles.py objectids</c> reproduces the assignment offline).
+///
+/// <paramref name="Module"/> rides along for the same reason it does on
+/// <see cref="EnemyReportPacket"/>: ids reset on a module transition, so the host must
+/// never act on a request from a peer standing somewhere else.
+///
+/// Sent every tick while the set is non-empty. The set is the message — there is no
+/// "entered" edge on the wire, because an edge that is lost is lost forever while a level
+/// re-converges on the next datagram.
+/// </summary>
+public sealed record EncounterTriggerPacket(
+    uint PeerId, string Module, IReadOnlyList<uint> EncounterIds);
+
 /// <summary>host -> all: the authoritative conversation token (see <see cref="DialogueState"/>).</summary>
 public sealed record DialogueSnapshotPacket(long ServerTimeMs, DialogueState State);
 

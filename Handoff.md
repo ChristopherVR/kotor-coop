@@ -8,6 +8,72 @@ no other dependencies. C# throughout.
 
 ---
 
+## 0l. A CLIENT CAN SET OFF AN ENCOUNTER — AND THE GAP THAT FOUND, 2026-08-07
+
+Built from a fresh RE pass, written up in full in **`docs/research/client-encounters.md`**.
+**Nothing here has been run in the game**; §7 of that doc is the test list.
+
+### The engine's answer to "a player walked in" is two instructions
+
+`CSWSEncounter::EventHandler 0x00594220`, event 0xC, does exactly this:
+`[encounter + 0x2E0] = whoEntered; SpawnIfAppropriate(whoEntered, -1.0f)`. Nothing else.
+`SpawnIfAppropriate 0x00593BE0` decides and builds a spawn list; the creatures are made
+later by `AIUpdate 0x00593FB0 -> SpawnCreatureFromSpawnList 0x00591CA0`, on the server's own
+tick. So "fire this encounter for that player" is one reproducible call, not a forced spawn.
+
+Event 0xC only ever comes from the engine's own movement functions
+(`UpdateSubareasOnMoveTo/OnJumpPosition`, twelve call sites, all of them Walk/Drive/Combat/
+Jump/AddToArea). A phantom is placed with direct `SetPosition` writes, which is in none of
+them — **that** is the mechanical reason the host cannot just notice a remote player walking
+in, and why this had to be an explicit request.
+
+### What ships
+
+Client plugin watches which activate areas contain the local player (the engine's own
+`GetInActivateArea 0x00590090`, over the area's own subarea list at `CSWSArea + 0x1A0`);
+the agent sends the SET every tick (`EncounterTrigger`, PacketType **32** — 30 and 31 were
+already taken on main); the host resolves each id, finds that peer's phantom, and calls
+`SpawnIfAppropriate` with it. One engine ever spawns, so ids stay identical and
+`DisableLocalEncounters` is untouched. Block region `0x1DE0..0x1E60`; kill switch
+`client_encounters=0`. `blockpoke encounters` reads both halves and can write a request by
+hand. Verify-bytes on both engine entry points, refusing (and logging what it saw) rather
+than calling into a binary that is not the one this was read from.
+
+### `player_only` is the whole difficulty, and the phantom nearly passes on its own
+
+Dumped every encounter `.ute` in the retail install: **47 placements, 34 with
+`PlayerOnly = 1`**, including every Taris/Korriban/Star Forge fight. A phantom has
+`is_pc = 0` and is not in the party table, so without handling this the feature would look
+alive and do nothing. It IS in faction 0 (PLAYER) since 0l, so the *reputation* gate
+(`GetAIStateReputation == 2`, hostile) already gives it the same answer as a real PC. The
+flag is therefore suspended for the duration of the one call and restored in a `finally` —
+much narrower than telling the engine a phantom is a PC.
+
+Also measured offline: **`end_m01aa` has no encounters at all.** The standard demo save
+cannot exercise any of this. `tar_m03aa` (4 × Black Vulkar ambush) is the cheapest module
+that can.
+
+### ⚠ THE GAP THIS FOUND: the mirror never materialises an enemy it does not have
+
+`enemy-presence-sync.md` and addendum 0i both say "the host keeps its encounters; whatever
+they spawn reaches the client through the enemy channel." **That is not true of the code,
+and it was already not true before this change.** `CombatController.Apply` and
+`EnemyPresenceController.DriveOne` both start with `ResolveServerObject(id)` and give up on
+0 — they drive existing local copies and never create one. A creature that exists only in
+the owner's instance is silently skipped.
+
+So a host-triggered encounter is invisible to the client today, and with this change a
+client-triggered one is invisible to the client too — while still being able to hurt them
+through the phantom (0l). That is worse than nothing, so treat `client_encounters=0` as the
+correct setting until the materialisation path exists. The design for it, with the cheap
+key (`encounterId` + `creatureListIndex` against the mirror's identical copy of the same
+encounter's `CreatureList`, one byte instead of a 16-byte resref), is in §8 of the research
+doc. This is the next real piece of work in the enemy channel.
+
+316 tests (22 new); solution, Agent and plugin NativeAOT all clean. **No protocol version
+bump applied** — an added PacketType degrades safely (an older peer ignores it), but the
+convention is to bump, so bump `ProtocolConstants.Version` when integrating.
+
 ## 0k. ⚠ THE CRASH PROBE WAS THE CRASH — and three players now have a harness, 2026-08-07
 
 ### The 0xC0000602 that killed the host, proven rather than guessed

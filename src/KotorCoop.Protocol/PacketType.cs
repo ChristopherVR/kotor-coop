@@ -138,4 +138,18 @@ public enum PacketType : byte
     /// relays in the star topology, and applies it directly when it is the addressee.
     /// </summary>
     PhantomDamage = 31,
+
+    /// <summary>
+    /// client -> host: the encounters this client's own player is standing inside RIGHT NOW.
+    /// The client's encounters are deliberately disarmed (an encounter spawn there would
+    /// drift the object-id counter the whole enemy channel keys on), so it cannot fire one
+    /// itself; the host runs the engine's own eligibility test against the client's phantom
+    /// and lets its engine do the spawn.
+    ///
+    /// A LEVEL, not an event: the current set is re-sent every tick while the player stands
+    /// in a polygon, so a lost datagram costs a tick. Repeats are free because the engine
+    /// itself is idempotent here — <c>CSWSEncounter::SpawnIfAppropriate</c> early-outs on
+    /// <c>started == 1</c>, which is exactly what firing sets.
+    /// </summary>
+    EncounterTrigger = 32,
 }

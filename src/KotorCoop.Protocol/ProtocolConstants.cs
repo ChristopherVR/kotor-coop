@@ -32,8 +32,13 @@ public static class ProtocolConstants
     /// Version 15: peer slots are STICKY per peer id rather than positional, and a relayed
     /// phantom-damage report carries the ORIGINATOR's peer id rather than the relaying
     /// host's — with three or more players the positional scheme billed the wrong person
-    /// and a leaver's slot handed their body, gear and damage total to a survivor.</summary>
-    public const byte Version = 15;
+    /// and a leaver's slot handed their body, gear and damage total to a survivor.
+    /// Version 16: EncounterTrigger — a client reports the encounters it is standing inside
+    /// and the host's engine does the spawn. A client's own encounters are disarmed (an
+    /// encounter spawn there would advance that instance's object-id counter, which every
+    /// other channel keys on), so before this a joiner could walk into an ambush and nothing
+    /// happened until the host walked in too.</summary>
+    public const byte Version = 16;
 
     /// <summary>Journal quest tags are resrefs plus a little slack.</summary>
     public const int MaxJournalTagLength = 32;
@@ -67,6 +72,14 @@ public static class ProtocolConstants
     /// <summary>Party companions the host replicates. KOTOR allows two active at once; a
     /// little headroom costs nothing.</summary>
     public const int MaxPartyMembers = 4;
+
+    /// <summary>
+    /// Encounters a client can report standing inside at once. Encounter activate areas are
+    /// authored as disjoint polygons and the whole base game has at most 7 in a module
+    /// (korr_m34aa), so overlapping four is already generous; the cap exists to bound the
+    /// packet, not because a fifth is expected.
+    /// </summary>
+    public const int MaxEncounterTriggers = 4;
 
     /// <summary>
     /// The spectate line carried on the dialogue token.

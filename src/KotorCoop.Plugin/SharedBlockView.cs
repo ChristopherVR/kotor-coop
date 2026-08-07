@@ -343,6 +343,58 @@ internal sealed unsafe class SharedBlockView(byte* baseAddress)
 
     public uint TestHitAmount => *U32(SharedBlock.OffsetTestHitAmount);
 
+    // ---- client-triggered encounters ------------------------------------------------
+
+    /// <summary>Agent -&gt; plugin: run the watch (only on a peer that does not own enemies).</summary>
+    public bool EncounterWatchEnabled => *U32(SharedBlock.OffsetEncounterWatch) != 0;
+
+    /// <summary>
+    /// Publishes the encounters the local player is standing inside. The count goes last, so
+    /// the agent never reads an id that belongs to the previous set — the same
+    /// payload-then-key ordering every other region in this block uses.
+    /// </summary>
+    public void SetEncountersInside(ReadOnlySpan<uint> ids, uint serial)
+    {
+        int count = Math.Min(ids.Length, SharedBlock.EncounterInsideCapacity);
+        for (int i = 0; i < count; i++)
+        {
+            *U32(SharedBlock.OffsetEncounterInside + (i * 4)) = ids[i];
+        }
+
+        *U32(SharedBlock.OffsetEncounterInsideSerial) = serial;
+        *U32(SharedBlock.OffsetEncounterInsideCount) = (uint)count;
+    }
+
+    public uint EncounterRequestSerial => *U32(SharedBlock.OffsetEncounterRequestSerial);
+
+    public uint EncounterRequestCount =>
+        Math.Min(*U32(SharedBlock.OffsetEncounterRequestCount), (uint)SharedBlock.EncounterRequestCapacity);
+
+    public (uint EncounterId, uint PeerId) GetEncounterRequest(int index)
+    {
+        byte* slot = baseAddress + SharedBlock.OffsetEncounterRequests
+            + (index * SharedBlock.EncounterRequestStride);
+
+        return (*(uint*)(slot + 0x00), *(uint*)(slot + 0x04));
+    }
+
+    public uint EncountersFired
+    {
+        get => *U32(SharedBlock.OffsetEncounterFired);
+        set => *U32(SharedBlock.OffsetEncounterFired) = value;
+    }
+
+    public uint EncountersRefused
+    {
+        get => *U32(SharedBlock.OffsetEncounterRefused);
+        set => *U32(SharedBlock.OffsetEncounterRefused) = value;
+    }
+
+    public uint EncounterStatus
+    {
+        set => *U32(SharedBlock.OffsetEncounterStatus) = value;
+    }
+
     /// <summary>Cumulative damage this player owes for hits their phantom took elsewhere.</summary>
     public uint IncomingDamage => *U32(SharedBlock.OffsetIncomingDamage);
 
