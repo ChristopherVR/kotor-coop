@@ -103,7 +103,22 @@ once more at the end — otherwise a partner standing where you are hides you, w
 place you always want to be able to find yourself. One extra textured quad, only when a peer
 was actually drawn.
 
-A peer outside the map is clipped by the viewport the engine already set up. That is the
-behaviour you want: a partner who is off your map is not on your map.
+## 6. ⚠ Off-map peers are HELD AT THE EDGE, not clipped away
+
+The first version let the engine's viewport clip an out-of-range peer, and the doc called that
+"the behaviour you want". It is not. The viewport is ~120 px and the map draws at roughly
+**2.8 px per world unit**, so it shows a radius of about **21 world units** — the room you are
+standing in. Every other time, your partner is simply absent, which is the one question the
+feature exists to answer. Reported from play as "the minimap doesn't show the other person at
+all", and visible in this document's own first screenshot: at 18 units the marker was already
+half off the border.
+
+So a marker that falls outside is clamped per axis to the viewport inset by the icon, which
+puts it on the border nearest the peer's bearing, and its alpha drops to `0.55` so "somewhere
+that way" cannot be misread as "right here". You lose the exact distance and keep the
+direction, which is the useful half.
+
+Verified by screenshot at both ranges: a peer 117 units away appears faded on the right border;
+brought back to 4 units it returns to full brightness at its true position.
 
 `coop.ini minimap_peers=0` opts out.

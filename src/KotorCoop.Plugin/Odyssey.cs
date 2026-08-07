@@ -1450,6 +1450,9 @@ internal static unsafe class Odyssey
     /// each draw (panel+0x5FB8 in its own terms).</summary>
     private const int ArrowRotation = 0x78;
 
+    /// <summary>Arrow control + this = CSWGuiImageParams.alpha.</summary>
+    private const int ArrowAlpha = 0x7C;
+
     /// <summary>Arrow control + this = CSWGuiImageParams.color, three floats multiplied into
     /// the icon. Above 1.0 they saturate a channel rather than clamping the result, which is
     /// what makes a red arrow possible at all out of blue art.</summary>
@@ -1591,6 +1594,7 @@ internal static unsafe class Odyssey
         int savedX = extent[0];
         int savedY = extent[1];
         float savedRotation = *(float*)(arrow + ArrowRotation);
+        float savedAlpha = *(float*)(arrow + ArrowAlpha);
         float* colour = (float*)(arrow + ArrowColour);
         float savedR = colour[0];
         float savedG = colour[1];
@@ -1625,8 +1629,26 @@ internal static unsafe class Odyssey
                 continue; // off the map image entirely
             }
 
-            extent[0] = savedX + (int)MathF.Round((peerX - localX) * scale);
-            extent[1] = savedY + (int)MathF.Round((peerY - localY) * scale);
+            int wantX = savedX + (int)MathF.Round((peerX - localX) * scale);
+            int wantY = savedY + (int)MathF.Round((peerY - localY) * scale);
+
+            // ⚠ HELD AT THE EDGE, NOT CLIPPED AWAY.
+            //
+            // The minimap viewport is about 120 px and the map draws at roughly 2.8 px per
+            // world unit, so it shows a radius of only ~21 units — the room you are standing
+            // in. Letting the engine clip a peer outside that means your partner is missing
+            // from the minimap for almost all of normal play, which is the one question the
+            // feature exists to answer. Reported from play as "it doesn't show the other
+            // person at all", and visible in the very first separated screenshot: at 18 units
+            // the marker was already half off the edge.
+            //
+            // So an off-map peer is pinned to the border in their direction. You lose the
+            // exact distance and keep the bearing, which is the useful half; the marker is
+            // also faded, so "over there somewhere" never reads as "right there".
+            bool offMap = ClampToViewport(mainInterface, extent[2], extent[3], ref wantX, ref wantY);
+
+            extent[0] = wantX;
+            extent[1] = wantY;
             *(float*)(arrow + ArrowRotation) =
                 GetMapRotateFn(areaMap, MathF.Cos(remote.Facing), MathF.Sin(remote.Facing), 0f);
 
@@ -1634,6 +1656,7 @@ internal static unsafe class Odyssey
             colour[0] = PeerArrowColours[tint];
             colour[1] = PeerArrowColours[tint + 1];
             colour[2] = PeerArrowColours[tint + 2];
+            *(float*)(arrow + ArrowAlpha) = offMap ? OffMapAlpha : savedAlpha;
 
             setExtent(arrow, extent);
             draw(arrow, drawArg);
@@ -1648,6 +1671,7 @@ internal static unsafe class Odyssey
             extent[0] = savedX;
             extent[1] = savedY;
             *(float*)(arrow + ArrowRotation) = savedRotation;
+            *(float*)(arrow + ArrowAlpha) = savedAlpha;
             colour[0] = savedR;
             colour[1] = savedG;
             colour[2] = savedB;
@@ -2284,6 +2308,47 @@ internal static unsafe class Odyssey
         int row = ((delegate* unmanaged[Thiscall]<nint, ushort, int>)serverToClient)(animBase, animation);
         ((delegate* unmanaged[Thiscall]<nint, int, int, void>)setOverlay)(animBase, row, 1);
         return true;
+    }
+
+    /// <summary>CSWGuiMainInterface + this = the minimap viewport's width and height. DrawMap
+    /// passes the first as BOTH dimensions to AurGUISetupViewport (0x0068AC77), which is what
+    /// actually clips, so the width is the honest bound on each axis.</summary>
+    private const int MainInterfaceViewportW = 0x6088;
+
+    private const int MainInterfaceViewportH = 0x608C;
+
+    /// <summary>How faded an off-map peer's marker is, so "somewhere that way" cannot be
+    /// mistaken for "right here".</summary>
+    private const float OffMapAlpha = 0.55f;
+
+    /// <summary>
+    /// Holds a marker inside the minimap's viewport, returning true when it had to move —
+    /// which is the same thing as "this peer is off the map".
+    ///
+    /// The icon's extent is in viewport space (measured live: a 32×32 icon at (44,44) inside a
+    /// 120×120 viewport, i.e. dead centre), so the bound is just the viewport inset by the
+    /// icon, and clamping each axis independently keeps the marker on the border nearest the
+    /// peer's direction.
+    /// </summary>
+    private static bool ClampToViewport(nint mainInterface, int iconW, int iconH, ref int x, ref int y)
+    {
+        int width = *(int*)(mainInterface + MainInterfaceViewportW);
+        int height = *(int*)(mainInterface + MainInterfaceViewportH);
+
+        // A viewport smaller than the icon (or an unread field) leaves the marker alone
+        // rather than pinning everything to 0,0.
+        if (width <= iconW || height <= iconH || iconW <= 0 || iconH <= 0)
+        {
+            return false;
+        }
+
+        int clampedX = Math.Clamp(x, 0, width - iconW);
+        int clampedY = Math.Clamp(y, 0, height - iconH);
+
+        bool moved = clampedX != x || clampedY != y;
+        x = clampedX;
+        y = clampedY;
+        return moved;
     }
 
     /// <summary>Range check for a vtable pointer: inside the image, where .rdata lives.</summary>
