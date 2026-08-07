@@ -189,7 +189,7 @@ internal static unsafe class PluginHost
 
             // One conversation for the whole session (the BG3 rule): while a peer holds the
             // token, this instance cannot start a dialogue at all. The spectate follow is
-            // the one sanctioned exception (DialogueGateHook.Bypass).
+            // the one sanctioned exception (DialogueGateHook.BypassGrants).
             // Damage landing on a peer's phantom, so it can be forwarded to their real
             // character. Read-only and filtered to phantom ids, but it sits on every
             // damage event in the game, so it is verify-bytes like the rest.

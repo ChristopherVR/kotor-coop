@@ -1,3 +1,5 @@
+using KotorCoop.Protocol;
+
 namespace KotorCoop.Plugin;
 
 /// <summary>
@@ -48,12 +50,36 @@ internal sealed unsafe class DialogueSpectateController(SharedBlockView block)
     /// <summary>Set once the followed conversation has actually appeared on screen.</summary>
     private bool _sawOpen;
 
+    /// <summary>When it appeared — the clock the content timeout runs on.</summary>
+    private long _sawOpenAtMs;
+
+    /// <summary>One content-latency report per follow.</summary>
+    private bool _reportedContentMs;
+
+    /// <summary>Rate limit on the yield close, which executes the conversation's end script.</summary>
+    private long _nextYieldCloseMs;
+
+    /// <summary>Yield closes issued for the conversation we are currently trying to give up.</summary>
+    private int _yieldCloseAttempts;
+
     /// <summary>How long the request has to become a conversation. Generous: the server
     /// walks the player into range first, exactly as it does for a click.</summary>
     private const long FollowOpenTimeoutMs = 15000;
 
-    /// <summary>How long an OPEN conversation may stay empty before we back out.</summary>
-    private const long FollowContentTimeoutMs = 3000;
+    /// <summary>How long an OPEN conversation may stay empty before we back out, counted
+    /// from when it opened. Generous on purpose: backing out of a conversation that was
+    /// merely slow is worse than waiting, and the log now reports the real latency so this
+    /// can be set from measurement rather than from guessing.</summary>
+    private const long FollowContentTimeoutMs = 8000;
+
+    /// <summary>Pause after a failed follow before trying that conversation again.</summary>
+    private const long ReopenCooldownMs = 4000;
+
+    /// <summary>Pause between yield-closes of our own losing conversation.</summary>
+    private const long YieldCloseRetryMs = 2000;
+
+    /// <summary>Yield closes to attempt the proper (server) way before forcing the UI shut.</summary>
+    private const int YieldCloseServerAttempts = 2;
 
     private int _logged;
 
@@ -69,12 +95,19 @@ internal sealed unsafe class DialogueSpectateController(SharedBlockView block)
 
         _following = false;
         _sawOpen = false;
+        _sawOpenAtMs = 0;
+        _reportedContentMs = false;
         _hadDialogue = false;
+        _lastLiveMs = 0;
+        _heldSpeaker[0] = 0;
+        _heldLine[0] = 0;
         _lastLineHash = 0;
         _appliedReplySerial = 0;
         _openAttempts = 0;
+        _nextYieldCloseMs = 0;
+        _yieldCloseAttempts = 0;
         _followOpenPendingUntilMs = 0;
-        DialogueGateHook.Bypass = false;
+        DialogueGateHook.BypassGrants = 0;
         DialogueGateHook.PeerHoldsConversation = false;
     }
 
@@ -83,6 +116,25 @@ internal sealed unsafe class DialogueSpectateController(SharedBlockView block)
         PublishLocal();
         FollowRemote();
     }
+
+    /// <summary>
+    /// The engine's <c>conversation active</c> flag drops for a few frames BETWEEN ENTRIES,
+    /// and every read here goes through it. The agent has always debounced that gap
+    /// (<c>CoopAgent.DialogueLingerMs</c>) so the session token does not flap; this side did
+    /// not, so on every flicker it cleared the partner tag, wiped the whole pick log and
+    /// bumped the serial twice — mid-conversation. The two halves now hold the same opinion
+    /// of when a conversation is over, which is the only way the payload the follower needs
+    /// survives an ordinary line change.
+    /// </summary>
+    private const long PublishLingerMs = 1500;
+
+    private long _lastLiveMs;
+
+    /// <summary>Last non-empty speaker/line, restored into the block across a flicker hold —
+    /// <see cref="Odyssey.TryReadActiveDialogue"/> blanks its output buffers before it reads,
+    /// so holding without this would publish an empty line for the gap.</summary>
+    private readonly byte[] _heldSpeaker = new byte[SharedBlock.LocalDialogueSpeakerLength];
+    private readonly byte[] _heldLine = new byte[SharedBlock.LocalDialogueLineLength];
 
     /// <summary>Publishes what the local player is saying and picking, for a peer to follow.</summary>
     private void PublishLocal()
@@ -94,11 +146,33 @@ internal sealed unsafe class DialogueSpectateController(SharedBlockView block)
             speaker, SharedBlock.LocalDialogueSpeakerLength,
             line, SharedBlock.LocalDialogueLineLength);
 
+        long nowMs = Environment.TickCount64;
+        if (active)
+        {
+            _lastLiveMs = nowMs;
+            if (*speaker != 0 || *line != 0)
+            {
+                Remember(speaker, _heldSpeaker);
+                Remember(line, _heldLine);
+            }
+        }
+        else if (_hadDialogue && _lastLiveMs != 0 && nowMs - _lastLiveMs < PublishLingerMs)
+        {
+            // A gap between entries, not an ending. Republish what we last saw and change
+            // nothing else — no serial bump, no cleared tag, no wiped pick log.
+            Restore(_heldSpeaker, speaker);
+            Restore(_heldLine, line);
+            return;
+        }
+
         if (!active)
         {
             if (_hadDialogue)
             {
                 _hadDialogue = false;
+                _lastLiveMs = 0;
+                _heldSpeaker[0] = 0;
+                _heldLine[0] = 0;
                 _lastLineHash = 0;
                 *speaker = 0;
                 *line = 0;
@@ -175,6 +249,14 @@ internal sealed unsafe class DialogueSpectateController(SharedBlockView block)
     /// <summary>Last <see cref="DialogueGateHook.StartAttempts"/> we reported.</summary>
     private uint _seenStartAttempts;
 
+    /// <summary>Shown when a click was refused and this instance IS being brought into the
+    /// conversation anyway — which is the normal case, and the one the old flat refusal
+    /// described as a dead end. "Another player is in a conversation" was all a player saw
+    /// when they clicked an NPC to listen in, so the feature read as broken even on the runs
+    /// where the follow then opened correctly.</summary>
+    private readonly byte[] _joiningNotice = "Joining the other player's conversation..."u8.ToArray();
+
+    /// <summary>Shown when the follow is genuinely not coming (retries exhausted).</summary>
     private readonly byte[] _notice = "Another player is in a conversation"u8.ToArray();
 
     /// <summary>Opens and drives this instance's copy of a peer's conversation.</summary>
@@ -185,8 +267,15 @@ internal sealed unsafe class DialogueSpectateController(SharedBlockView block)
         // whose open arrives from the server several frames after we request it — so the
         // bypass is LEVEL-based: up from the follow request until the follow ends.
         DialogueGateHook.PeerHoldsConversation = block.RemoteDialogueActive;
-        DialogueGateHook.Bypass =
-            _following || Environment.TickCount64 < _followOpenPendingUntilMs;
+
+        // The grant is issued at the request and consumed by the open (see BypassGrants).
+        // Expire it if the open never arrives, so a stale grant cannot let an unrelated
+        // conversation through minutes later.
+        if (_followOpenPendingUntilMs != 0 && Environment.TickCount64 >= _followOpenPendingUntilMs)
+        {
+            _followOpenPendingUntilMs = 0;
+            DialogueGateHook.BypassGrants = 0;
+        }
 
         // A refused click deserves a visible answer, not silence: keep a short notice on
         // screen after each blocked attempt.
@@ -216,7 +305,11 @@ internal sealed unsafe class DialogueSpectateController(SharedBlockView block)
 
         if (Environment.TickCount64 < _blockedNoticeUntilMs)
         {
-            fixed (byte* p = _notice)
+            bool joining = _following
+                || Environment.TickCount64 < _followOpenPendingUntilMs
+                || _openAttempts < MaxOpenAttempts;
+
+            fixed (byte* p = joining ? _joiningNotice : _notice)
             {
                 Odyssey.PostTextLine(p, 8, 4, 0.5f);
             }
@@ -229,6 +322,7 @@ internal sealed unsafe class DialogueSpectateController(SharedBlockView block)
                 LogFew("dialogue: the owner ended the conversation; closing");
                 _following = false;
                 _sawOpen = false;
+                _reportedContentMs = false;
                 _appliedReplySerial = 0;
                 _followOpenPendingUntilMs = 0;
                 DialogueReplyHook.Suppressed = false;
@@ -252,9 +346,66 @@ internal sealed unsafe class DialogueSpectateController(SharedBlockView block)
         {
             if (_hadDialogue)
             {
-                LogFew("dialogue: a peer won the conversation token; closing our own to follow");
-                Odyssey.CloseDialogue();
-                return; // follow once our own conversation has actually gone
+                // Both players standing in the same trigger get the SAME conversation from
+                // the engine, independently — and the loser's copy is exactly the copy a
+                // follow would have opened. Adopt it instead of closing and reopening: the
+                // teardown ran the end script, and the reopen took the seconds the player
+                // spent staring at an empty dialogue box with no subtitles. The owner's pick
+                // log replays from the start against line hashes, which is the same
+                // resynchronisation a cold follow performs, so an adopted conversation
+                // converges the same way.
+                if (SameTag(block.LocalDialoguePartnerTag, block.RemoteDialoguePartnerTag))
+                {
+                    LogFew("dialogue: the engine started the same conversation here; adopting it to follow");
+                    _following = true;
+                    _followingSinceMs = Environment.TickCount64;
+                    _sawOpen = true;
+                    _sawOpenAtMs = Environment.TickCount64;
+                    _reportedContentMs = false;
+                    _appliedReplySerial = 0;
+                    _pendingPickSinceMs = 0;
+                    _nextYieldCloseMs = 0;
+                    _yieldCloseAttempts = 0;
+                    return; // next frame drives it through the follow path
+                }
+                else
+                {
+                    // ⚠ ONCE, not every frame. CloseDialogue routes to
+                    // CSWSObject::StopDialog, which runs the conversation's END SCRIPT — and
+                    // an NPC whose end script re-initiates (the tutorial deck's Trask is one)
+                    // turns a per-frame close into a conversation that opens and closes
+                    // forever. The local conversation also takes a few frames to actually go,
+                    // and _hadDialogue is debounced on top of that, so the flag is still set
+                    // long after one close has landed.
+                    if (Environment.TickCount64 >= _nextYieldCloseMs)
+                    {
+                        _nextYieldCloseMs = Environment.TickCount64 + YieldCloseRetryMs;
+                        _yieldCloseAttempts++;
+
+                        if (_yieldCloseAttempts <= YieldCloseServerAttempts)
+                        {
+                            LogFew("dialogue: a peer won the conversation token; closing our own to follow");
+                            Odyssey.CloseDialogue();
+                        }
+                        else
+                        {
+                            // The server route has had its turns and this conversation is
+                            // still here, which means there is nothing server-side left to
+                            // end — a client-only shell. Shut the UI directly, or this
+                            // instance sits out the whole conversation retrying forever.
+                            LogFew($"dialogue: our conversation would not close after "
+                                + $"{YieldCloseServerAttempts} tries; forcing the UI shut");
+                            Odyssey.ForceCloseDialogueUi();
+                        }
+                    }
+
+                    return; // follow once our own conversation has actually gone
+                }
+            }
+            else
+            {
+                _nextYieldCloseMs = 0;
+                _yieldCloseAttempts = 0;
             }
 
             if (Environment.TickCount64 < _nextOpenAttemptMs || _openAttempts >= MaxOpenAttempts)
@@ -282,7 +433,7 @@ internal sealed unsafe class DialogueSpectateController(SharedBlockView block)
             // level-based bypass at the top of this method stays up for as long as the
             // follow is pending or live.
             _followOpenPendingUntilMs = Environment.TickCount64 + FollowOpenTimeoutMs;
-            DialogueGateHook.Bypass = true;
+            DialogueGateHook.BypassGrants = 1; // exactly this request, and nothing else
 
             if (!Odyssey.StartDialogueWith(tag))
             {
@@ -296,6 +447,9 @@ internal sealed unsafe class DialogueSpectateController(SharedBlockView block)
 
             _following = true;
             _followingSinceMs = Environment.TickCount64;
+            _sawOpen = false;
+            _sawOpenAtMs = 0;
+            _reportedContentMs = false;
 
             // Start from zero so the ENTIRE pick log replays: a spectator that joined after
             // the owner had already picked catches up pick by pick, each on its own line.
@@ -313,26 +467,52 @@ internal sealed unsafe class DialogueSpectateController(SharedBlockView block)
         // So a conversation that has not opened yet gets a long budget; one that HAS opened
         // but stays empty gets a short one, because that is the frozen shell worth escaping.
         bool open = Odyssey.IsConversationActive;
-        long waited = Environment.TickCount64 - _followingSinceMs;
+        long now = Environment.TickCount64;
 
-        if (open)
+        if (open && !_sawOpen)
         {
             _sawOpen = true;
+            _sawOpenAtMs = now;
+
+            // The open has landed, so any unused grant is spent: from here the spectator is
+            // gated like anyone else, which is what stops a stray click inside the
+            // conversation from knocking them out of it.
+            _followOpenPendingUntilMs = 0;
+            DialogueGateHook.BypassGrants = 0;
         }
 
-        bool giveUp = _sawOpen
-            ? open && !Odyssey.DialogueHasContent() && waited > FollowContentTimeoutMs
-            : waited > FollowOpenTimeoutMs;
+        bool hasContent = open && Odyssey.DialogueHasContent();
 
-        if (giveUp)
+        // How long content actually took, reported once per follow. This is the number the
+        // content timeout should be set from, and nothing had ever measured it.
+        if (hasContent && !_reportedContentMs)
         {
-            LogFew(_sawOpen
+            _reportedContentMs = true;
+            LogFew($"dialogue: followed conversation delivered content {now - _sawOpenAtMs} ms after opening "
+                + $"({now - _followingSinceMs} ms after the request)");
+        }
+
+        DialogueFollowVerdict verdict = DialogueFollowClock.Evaluate(
+            now, _followingSinceMs, _sawOpen ? _sawOpenAtMs : null, open, hasContent,
+            FollowOpenTimeoutMs, FollowContentTimeoutMs);
+
+        if (verdict is DialogueFollowVerdict.GiveUpNeverOpened or DialogueFollowVerdict.GiveUpNoContent)
+        {
+            LogFew(verdict == DialogueFollowVerdict.GiveUpNoContent
                 ? "dialogue: the followed conversation never delivered a line; backing out"
                 : "dialogue: the peer's conversation never opened locally; backing out");
             _following = false;
             _sawOpen = false;
+            _reportedContentMs = false;
             _followOpenPendingUntilMs = 0;
-            _openAttempts = MaxOpenAttempts; // do not thrash retrying the same failure
+
+            // ⚠ Back off, do NOT poison. This used to set _openAttempts to the cap, and the
+            // cap is only cleared when the peer's conversation ENDS — so one timeout meant
+            // the spectator ignored that conversation for as long as it ran, while the gate
+            // kept refusing the player's own clicks with "another player is in a
+            // conversation". A failure to follow is worth retrying a few times; it is not
+            // worth locking the player out of the whole conversation.
+            _nextOpenAttemptMs = Environment.TickCount64 + ReopenCooldownMs;
             DialogueReplyHook.Suppressed = false;
             Odyssey.SetCanSendDialog(true);
             Odyssey.CloseDialogue();
@@ -405,6 +585,34 @@ internal sealed unsafe class DialogueSpectateController(SharedBlockView block)
 
     private const long OpenRetryMs = 250;
 
+    /// <summary>Copies a null-terminated block buffer into managed storage, bounded.</summary>
+    private static void Remember(byte* source, byte[] destination)
+    {
+        int i = 0;
+        while (i < destination.Length - 1 && source[i] != 0)
+        {
+            destination[i] = source[i];
+            i++;
+        }
+
+        destination[i] = 0;
+    }
+
+    /// <summary>The reverse, for republishing across a between-entries gap. The bound is
+    /// <c>Length - 1</c> so the terminator has somewhere to go: stopping at Length would put
+    /// it one byte PAST the block field, into whichever field follows.</summary>
+    private static void Restore(byte[] source, byte* destination)
+    {
+        int i = 0;
+        while (i < source.Length - 1 && source[i] != 0)
+        {
+            destination[i] = source[i];
+            i++;
+        }
+
+        destination[i] = 0;
+    }
+
     /// <summary>Bounds a null-terminated tag buffer into a span, empty if unset.</summary>
     private static ReadOnlySpan<byte> TagSpan(byte* tag)
     {
@@ -417,11 +625,61 @@ internal sealed unsafe class DialogueSpectateController(SharedBlockView block)
         return new ReadOnlySpan<byte>(tag, length);
     }
 
+    /// <summary>
+    /// Whether two partner tags name the same NPC. Tags are ASCII and the engine treats them
+    /// case-insensitively, so this does too. Two EMPTY tags are never "the same": an unset
+    /// tag means nobody has published who they are talking to yet, and treating that as a
+    /// match would adopt an unrelated conversation as the peer's.
+    /// </summary>
+    private static bool SameTag(byte* a, byte* b)
+    {
+        ReadOnlySpan<byte> left = TagSpan(a);
+        ReadOnlySpan<byte> right = TagSpan(b);
+
+        if (left.IsEmpty || right.IsEmpty || left.Length != right.Length)
+        {
+            return false;
+        }
+
+        for (int i = 0; i < left.Length; i++)
+        {
+            if (Lower(left[i]) != Lower(right[i]))
+            {
+                return false;
+            }
+        }
+
+        return true;
+
+        static byte Lower(byte c) => c is >= (byte)'A' and <= (byte)'Z' ? (byte)(c + 32) : c;
+    }
+
+    /// <summary>Last line logged and when, so a repeating state does not spend the whole
+    /// budget on one message and hide the next distinct thing that happens.
+    ///
+    /// ⚠ The repeat suppression is TIME-BOUNDED, not absolute. Absolute suppression hid a
+    /// real defect: an instance retrying the same failed close every two seconds logged the
+    /// attempt once and then went quiet, which reads exactly like a state that resolved.
+    /// A loop should look like a loop in the log.</summary>
+    private string _lastLogged = string.Empty;
+
+    private long _lastLoggedAtMs;
+
+    private const long RepeatAfterMs = 10000;
+
     private void LogFew(string message)
     {
-        if (_logged < 40)
+        long now = Environment.TickCount64;
+        if (message == _lastLogged && now - _lastLoggedAtMs < RepeatAfterMs)
+        {
+            return;
+        }
+
+        if (_logged < 60)
         {
             _logged++;
+            _lastLogged = message;
+            _lastLoggedAtMs = now;
             PluginHost.Log(message);
         }
     }

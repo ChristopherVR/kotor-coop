@@ -20,7 +20,7 @@ namespace KotorCoop.Plugin;
 /// <c>ret 0xC</c> (three stack args, verified from the epilogue at 0x004CF8DF).
 ///
 /// The spectate controller's own mirrored-conversation open must pass, or a spectator
-/// could never follow: <see cref="Bypass"/> is held around that one call.
+/// could never follow: <see cref="BypassGrants"/> covers that one open, and only it.
 /// </summary>
 internal static unsafe class DialogueGateHook
 {
@@ -48,9 +48,22 @@ internal static unsafe class DialogueGateHook
     /// owner is never gated on its own conversation).</summary>
     public static volatile bool PeerHoldsConversation;
 
-    /// <summary>Held by the spectate controller around its own StartDialogueWith, which
-    /// must reach the engine while the peer's token is active — that is the point.</summary>
-    public static bool Bypass;
+    /// <summary>
+    /// Permission for exactly ONE conversation to open while a peer holds the token: the
+    /// spectate controller's own follow-open, which must reach the engine precisely because
+    /// the peer's token is active. Consumed by the first StartDialog that arrives.
+    ///
+    /// ⚠ COUNTED, not a time window. This was a boolean held up from the follow request
+    /// until the conversation appeared — a second or more, because the server walks the
+    /// player into range first — and for that whole window the gate was open to ANY
+    /// conversation start. A click on another NPC during setup therefore sailed through and
+    /// the engine, which will not run two conversations, answered by dropping the one being
+    /// followed: the spectator ended up in no conversation at all. Measured live.
+    ///
+    /// A grant is one request's worth. If a stray click consumes it first, our follow-open is
+    /// refused and retried — which is a far better failure than losing the conversation.
+    /// </summary>
+    public static volatile int BypassGrants;
 
     /// <summary>Bumped on every refused open, for the controller's on-screen feedback.</summary>
     private static uint _blockedCount;
@@ -166,8 +179,14 @@ internal static unsafe class DialogueGateHook
         {
             _startAttempts++;
 
-            if (!Enabled || Bypass || !PeerHoldsConversation)
+            if (!Enabled || !PeerHoldsConversation)
             {
+                return 0;
+            }
+
+            if (BypassGrants > 0)
+            {
+                BypassGrants--; // this is the follow-open we asked for
                 return 0;
             }
 

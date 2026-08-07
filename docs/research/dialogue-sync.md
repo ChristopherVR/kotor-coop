@@ -530,3 +530,70 @@ Two suspects, neither yet proven:
 pass should measure how long content actually takes to arrive before touching either number,
 and should test somewhere OTHER than the tutorial deck, whose Trask has scripted conversation
 behaviour that no other module shares.
+
+## RESOLVED: the thrash, and what it actually was
+
+Both suspects above were wrong about the mechanism, and the measurement the note asked for
+settled it in one run. `FollowContentTimeoutMs` was never the trigger — instrumented, a
+followed conversation delivers content **0 ms after opening, 15 ms after the request**, when
+the two players are near each other. The number was not too small; it was being measured on
+the wrong clock.
+
+Five defects, four of them mine, all fixed and live-verified:
+
+| Defect | Effect |
+|---|---|
+| `PublishLocal` had no flicker debounce | The engine's conversation-active flag drops for a few frames BETWEEN ENTRIES. The agent has always debounced it (`CoopAgent.DialogueLingerMs`); the plugin did not, so every ordinary line change cleared the partner tag, wiped the whole pick log and bumped the serial twice. **This is the serial climb** the previous note read as open/close churn. |
+| The content timeout ran from the REQUEST | `waited = now - _followingSinceMs`. The open takes seconds (the server walks the player into range first), so it spent the content budget: a conversation that opened at 2.8 s got 200 ms to deliver a line before its own watchdog tore it down. Now measured from `_sawOpenAtMs`. |
+| A single timeout poisoned the whole conversation | Give-up set `_openAttempts` to the cap, and the cap is only cleared when the peer's conversation ENDS. One failure meant the spectator ignored that conversation for as long as it ran while the gate kept refusing the player's own clicks — *"we just see 'another person started the conversation'"*. Now a backoff, not a poison. |
+| The yield close ran EVERY FRAME | `CloseDialogue` routes to `StopDialog`, which executes the end-conversation script. Per-frame, against an NPC scripted to re-initiate, that is a genuine open/close loop. Now rate-limited. |
+| The gate bypass was a TIME WINDOW | Held up from the follow request until the conversation appeared — a second or more — during which ANY conversation start passed. A click on another NPC during setup sailed through, and the engine, which will not run two conversations, dropped the one being followed. Now a counted grant: one request's worth (`DialogueGateHook.BypassGrants`). |
+
+Plus one improvement rather than a fix: when both players stand in the same trigger the
+engine starts the SAME conversation on both independently, and the loser's copy is exactly the
+copy a follow would have opened. It is now **adopted** instead of being closed and reopened —
+measured at ~880 ms with content immediately, against a teardown-and-reopen that ran the end
+script and left the player watching an empty box.
+
+Verified live (both on the Endar Spire, which is the WORST case for this — Trask's end script
+re-initiates where no other module's does):
+
+* one conversation held 40 s, serials flat (host +0, client +1) against host +14 / client +16
+  before;
+* simultaneous start on both instances: adopted in ~880 ms, serials flat at 5 for 25 s;
+* the full battery, 22/22.
+
+### `CGuiInGame + 0xB4` is a flag, not an object id
+
+`GetIsConversationActive 0x0053EF70` reads `+0xB4` and passes it to an object lookup
+(0x0053EF83), which reads like an id. **It is not.** Sampled across a whole conversation it
+only ever holds 0 or 1, and the engine's own teardown clears it — a host that ended a
+conversation properly reads `0xB0=0, 0xB4=0` on the next sample.
+
+Tried and reverted, so nobody repeats it: resolving `+0xB4` as an id. It only "works" because
+object id 1 happens to exist, and asking the wrong table (the `0x007A39FC` client chain rather
+than `0x007A3A00`) made **every conversation in the game read as inactive**.
+
+### ⚠ OPEN: a client can still be wedged, but only off the gated path
+
+Reproducible only through the test hook, which bypasses the gate deliberately: ask an instance
+to open a conversation with a tag that is not reachable (`carth` on the command module) and it
+is left with `gui+0xB4 = 1`, `gui+0xB0 = 0` and BOTH participants `OBJECT_INVALID`. It then
+believes forever that it is in a conversation, so it will neither start one nor follow a peer's.
+
+What does NOT clear it, all measured:
+
+* `CGuiInGame::CloseDialog 0x006332B0` — it runs (`+0x108` is non-null, so it does not take the
+  early return at 0x006332B7) and clears `+0xB0`, but **something re-sets `+0xB4` on the very
+  next frame**. Forcing the UI shut every 10 s just produced a flicker.
+* `StopDialog` on the GUI participants — there are none to stop; both are `OBJECT_INVALID`.
+* `StopDialog` on the PLAYER's own object (`self+0x54`). Tried, and it **regressed the host**:
+  `+0x54` is not reliably reset when a conversation ends, so the fallback fired on
+  conversations that were already over and the host stopped being able to open new ones
+  (verify went 22/22 -> 21/22). Reverted; do not reintroduce without first establishing what
+  re-sets `gui+0xB4` every frame in this state.
+
+In real play the dialogue gate refuses that click and the engine's own failure path runs
+(clearing the pending conversation action via 0x004F34A0), so this is not currently a
+gameplay path — but the recovery is still missing, and the next pass should find the writer of
+`gui+0xB4` rather than guess at the teardown again.

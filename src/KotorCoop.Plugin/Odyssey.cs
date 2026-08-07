@@ -2517,9 +2517,31 @@ internal static unsafe class Odyssey
         get
         {
             nint gui = GetInGameGui();
-            return gui != 0 && *(int*)(gui + GuiConversationActive) != 0;
+            return gui != 0 && ConversationLive(gui);
         }
     }
+
+    /// <summary>
+    /// Whether the client GUI has a conversation on screen.
+    ///
+    /// MEASURED, because <c>GetIsConversationActive 0x0053EF70</c> reads this field and then
+    /// passes it to an object lookup (0x0053EF83), which reads like an object id. It is not:
+    /// sampled live across a whole conversation it only ever holds 0 or 1, and the engine's
+    /// own teardown clears it — a host that ended a conversation properly read
+    /// <c>0xB0=0, 0xB4=0</c> on the next sample.
+    ///
+    /// ⚠ Do not "improve" this into a lookup of <c>+0xB4</c> as an id. That was tried: it
+    /// resolves only because object id 1 happens to exist, and asking the wrong table
+    /// (the 0x007A39FC client chain rather than 0x007A3A00) made every conversation in the
+    /// game read as inactive. A flag test is what the field supports.
+    ///
+    /// A NON-ZERO VALUE HERE IS NOT PROOF OF A HEALTHY CONVERSATION. A client whose server
+    /// half still holds an unfinished conversation re-sets this every frame, with the GUI's
+    /// participants both reading OBJECT_INVALID — see <see cref="CloseDialogue"/>, which is
+    /// where that case has to be ended.
+    /// </summary>
+    private static bool ConversationLive(nint gui) =>
+        *(int*)(gui + GuiConversationActive) != 0;
 
     /// <summary>
     /// Reads the speaker and line of the conversation the local player is currently in, into
@@ -2601,7 +2623,7 @@ internal static unsafe class Odyssey
             _ringNewest = changed;
         }
 
-        if (*(int*)(gui + GuiConversationActive) == 0)
+        if (!ConversationLive(gui))
         {
             return false; // no conversation on screen
         }
@@ -2728,7 +2750,7 @@ internal static unsafe class Odyssey
         }
 
         nint gui = GetInGameGui();
-        if (gui == 0 || *(int*)(gui + GuiConversationActive) == 0)
+        if (gui == 0 || !ConversationLive(gui))
         {
             return;
         }
@@ -2770,7 +2792,7 @@ internal static unsafe class Odyssey
     public static bool StartDialogueWith(ReadOnlySpan<byte> tag)
     {
         nint gui = GetInGameGui();
-        if (gui == 0 || *(int*)(gui + GuiConversationActive) != 0)
+        if (gui == 0 || ConversationLive(gui))
         {
             return false; // no HUD, or we are already talking
         }
@@ -2884,7 +2906,7 @@ internal static unsafe class Odyssey
     public static bool DialogueHasContent()
     {
         nint gui = GetInGameGui();
-        if (gui == 0 || *(int*)(gui + GuiConversationActive) == 0)
+        if (gui == 0 || !ConversationLive(gui))
         {
             return false;
         }
@@ -2919,10 +2941,32 @@ internal static unsafe class Odyssey
     ///
     /// MAIN THREAD ONLY.
     /// </summary>
+    /// <summary>
+    /// Shuts the dialogue UI directly, without going through the server at all.
+    ///
+    /// ⚠ LAST RESORT, and only for a conversation <see cref="CloseDialogue"/> has already
+    /// failed to end — a conversation whose participants resolve, so CloseDialogue calls
+    /// StopDialog and returns, but whose UI is still up afterwards. It adds nothing on the
+    /// path where no participant resolves, because CloseDialogue already falls back to this
+    /// same call there.
+    ///
+    /// It is NOT a cure for a wedged client: where the server half still holds an unfinished
+    /// conversation, this clears the flag and the next frame sets it straight back. That case
+    /// belongs to <see cref="CloseDialogue"/>, which stops the dialog on the player itself.
+    /// </summary>
+    public static void ForceCloseDialogueUi()
+    {
+        nint gui = GetInGameGui();
+        if (gui != 0 && ConversationLive(gui))
+        {
+            CloseDialogFn(gui);
+        }
+    }
+
     public static void CloseDialogue()
     {
         nint gui = GetInGameGui();
-        if (gui == 0 || *(int*)(gui + GuiConversationActive) == 0)
+        if (gui == 0 || !ConversationLive(gui))
         {
             return;
         }
@@ -2966,6 +3010,15 @@ internal static unsafe class Odyssey
             StopDialogFn(participant);
             return;
         }
+
+        // ⚠ TRIED AND REVERTED: stopping the dialog on the PLAYER here as a last resort
+        // (self+0x54 naming a dialog owner). The theory was that a conversation the server
+        // started but the client never finished opening leaves the GUI naming 0x7F000000
+        // twice while the player's own object still holds the dialog. It did NOT clear the
+        // wedge — the flag came straight back on the next frame — and +0x54 is not reliably
+        // reset to OBJECT_INVALID when a conversation ends, so the fallback fires on
+        // conversations that are already over. Do not reintroduce it without first
+        // establishing what re-sets gui+0xB4 every frame in that state.
 
         // No resolvable server side left — the conversation is a client-only shell (the
         // half-started case the follow timeout exists for). Closing the UI is then both

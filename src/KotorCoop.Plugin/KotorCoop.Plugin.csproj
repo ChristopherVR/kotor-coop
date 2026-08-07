@@ -50,4 +50,14 @@
     <IsPackable>false</IsPackable>
   </PropertyGroup>
 
+  <!--
+    Shared by SOURCE, not by reference. The plugin has no assembly dependencies on purpose —
+    it is a NativeAOT x86 DLL loaded into a 2003 game — but this rule must be identical on
+    both sides of the wire, and it is the kind of arithmetic that is worth a unit test. Test
+    coverage lives with KotorCoop.Protocol; the code compiles into both.
+  -->
+  <ItemGroup>
+    <Compile Include="..\KotorCoop.Protocol\DialogueFollowClock.cs" Link="Shared\DialogueFollowClock.cs" />
+  </ItemGroup>
+
 </Project>
