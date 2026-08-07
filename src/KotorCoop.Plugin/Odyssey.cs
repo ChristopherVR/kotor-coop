@@ -968,6 +968,24 @@ internal static unsafe class Odyssey
     /// </summary>
     private const uint AutoPauseOptionMask = 0x0001F800;
 
+    /// <summary>
+    /// Tutorial windows, the same dword, bit 1.
+    ///
+    /// ⚠ These are a single-player convenience that stalls a co-op fight. Measured: a player
+    /// who walked into a room of hostiles ALONE — their partner elsewhere in the module — got
+    /// "The game pauses when you sight an enemy", and that box sat on screen for six minutes
+    /// while enemies beat on them. Their character sheathed its weapon, every queued action
+    /// was ignored, and the fight simply stopped. The auto-pause options beside it are already
+    /// cleared for exactly this reason; the tutorial box is the same problem one layer up,
+    /// and it is worse because it needs a click that a player being hit is not free to give.
+    ///
+    /// Two independent confirmations of the bit: <c>SetTutorialWindowsEnabled 0x005472F0</c>
+    /// toggles it, and <c>CGuiInGame::TutorialReasonWillShowWindow 0x0062F420</c> opens with
+    /// <c>test byte ptr [eax+0x14], 2</c> and returns "no window" when it is clear — so
+    /// clearing it suppresses every tutorial reason, not just this one.
+    /// </summary>
+    private const uint TutorialWindowMask = 0x00000002;
+
     private const int ClientOptionsFlags = 0x14;
 
     /// <summary>
@@ -977,7 +995,11 @@ internal static unsafe class Odyssey
     ///
     /// This clears the same option bits the in-game options screen writes, rather than
     /// fighting the pause bitmask every frame — all six off is a configuration the game
-    /// ships as valid, and manual, tutorial and GUI pauses keep working.
+    /// ships as valid, and manual and GUI pauses keep working.
+    ///
+    /// <see cref="TutorialWindowMask"/> goes with them: a tutorial box needs a CLICK to
+    /// dismiss, which a player mid-fight cannot give, and it stalls their whole combat until
+    /// they do.
     /// </summary>
     public static bool SuppressAutoPause()
     {
@@ -993,13 +1015,15 @@ internal static unsafe class Odyssey
             return false;
         }
 
+        const uint unwanted = AutoPauseOptionMask | TutorialWindowMask;
+
         uint* flags = (uint*)(options + ClientOptionsFlags);
-        if ((*flags & AutoPauseOptionMask) == 0)
+        if ((*flags & unwanted) == 0)
         {
             return false;
         }
 
-        *flags &= ~AutoPauseOptionMask;
+        *flags &= ~unwanted;
         return true;
     }
 

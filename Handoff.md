@@ -41,6 +41,39 @@ Three things worth carrying forward:
 The local arrow is drawn once more at the end so a partner standing on you cannot hide you.
 `coop.ini minimap_peers=0` opts out.
 
+### ⚠ MEASURED 2026-08-07: the engine DOES start a lone player's fight
+
+The whole "apart" review rested on an untested assumption — that the host's engine runs its
+enemies against a distant partner's phantom. `verify.ps1` never tested it: it stages fights
+with `ActionAttack`, which bypasses perception. It does now, and the answer is yes.
+
+Client alone beside two Sith Soldiers at `(30.5, 139)`, host's PC at `(20, 22)` — **120 units
+away**. Both soldiers walked to the phantom and fought it: 25 hits, 50 damage, positions
+identical on both instances to two decimals, forwarded damage reaching the client's real
+character (`owed 46 applied 46`). There is no distance culling to defeat —
+`CSWSArea::IncrementPlayersInArea` raises AI priority for the AREA, not by proximity to a
+player, and a phantom is an ordinary creature to everything below that.
+
+**But the lone fight stalled anyway, on a tutorial box.** "The game pauses when you sight an
+enemy" sat on screen for SIX MINUTES while two soldiers beat on the character; it sheathed its
+weapon and every queued action was ignored. The auto-pause option bits were already cleared so
+the world clock ran, but a modal panel owns the action queue and needs a click a player being
+hit cannot give. `CClientOptions + 0x14` bit `0x02` gates every tutorial window — confirmed
+twice, by `SetTutorialWindowsEnabled 0x005472F0` toggling exactly that bit and by
+`CGuiInGame::TutorialReasonWillShowWindow 0x0062F420` opening with `test byte [eax+0x14], 2`.
+Cleared alongside the auto-pause options. Verified by screenshot: same room, no box, weapon
+drawn, mid-swing.
+
+⚠ **And one thing found but NOT fixed: a player fighting alone cannot land the killing blow.**
+`TryApplyEnemyFloors` floors at `max(1, reported)` and discards reports marked Dead, so a
+client wears an enemy to 1 hp and nothing dies — with the host elsewhere, the room never
+clears. Both rules were deliberate (death must run the engine's own path; one peer's bad read
+must not delete things). The fix needs the host to run `Odyssey.KillCreature` — which already
+exists and is what a client runs for the host's kills — behind a new host-side agent→plugin
+channel, gated on the host having already floored that creature to 1. It changes who may kill,
+which is the centre of the authority model, so it is written up in
+`docs/research/combat-when-apart.md` §6 rather than rushed.
+
 ### Combat with the players apart — a review, two fixes, and a crash
 
 Full write-up: `docs/research/combat-when-apart.md`. **The short version: it works, and the

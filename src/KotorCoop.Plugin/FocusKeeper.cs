@@ -51,7 +51,9 @@ internal sealed class FocusKeeper(SharedBlockView block)
         // bits are already clear.
         if (Odyssey.SuppressAutoPause())
         {
-            PluginHost.Log("auto-pause options cleared (they desynchronise two instances)");
+            PluginHost.Log(
+                "auto-pause and tutorial windows cleared (they desynchronise two instances,"
+                + " and a tutorial box stalls a fight until someone clicks it)");
         }
 
         if (Odyssey.ClearPauseReason(Odyssey.PauseReasonUnfocused))

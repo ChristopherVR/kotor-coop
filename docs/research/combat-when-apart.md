@@ -58,6 +58,54 @@ fixed. The third — a crash — was found by testing the second:
 
 So a client never runs a private fight. Its screen shows the host's fight, frame by frame.
 
+## 1b. MEASURED: the engine really does start the fight (2026-08-07)
+
+This was the assumption everything else rested on, and until now it had never been tested —
+`tools\verify.ps1` stages fights with `ActionAttack`, which bypasses perception entirely.
+
+The test: put the client ALONE beside two Sith Soldiers at `(30.5, 139)` with the host's PC
+at `(20, 22)` — **~120 units away, most of the length of the Endar Spire** — and watch the
+one signal that says the host's engine ran the fight, namely damage landing on the client's
+phantom, which is the client's only body inside the authoritative simulation.
+
+```
+baseline: phantom has taken 0 across 0 hit(s)
+  taken 4    hits 2   lastAttacker 0xE
+  taken 10   hits 5   lastAttacker 0x10
+  taken 18   hits 9   lastAttacker 0x10
+  taken 22   hits 11  lastAttacker 0x10
+```
+
+Both soldiers **walked to the phantom** — from `(29.74, 144.46)` and `(31.86, 141.99)` to
+`(30.25, 140.78)` and `(31.24, 140.64)`, either side of it — and fought it, with both games
+agreeing on their positions to two decimals. The forwarded damage reached the client's real
+character (`incoming: owed 46 applied 46`), which floored at 1 hit point exactly as designed.
+
+So there is no distance culling to work around: the area's AI priority is raised by
+`CSWSArea::IncrementPlayersInArea` — **presence in the AREA, not proximity to a player** — and
+a phantom is an ordinary creature to everything downstream of that.
+
+## 1c. ⚠ What DID stall the lone fight: a tutorial box
+
+The same test exposed a blocker that has nothing to do with authority or distance. The client
+sighted an enemy for the first time and got:
+
+> The game pauses when you sight an enemy, and the selection reticle will show up in red...
+
+That box **sat on screen for six minutes** while two soldiers beat on the character. It
+sheathed its weapon, every queued action was ignored, and the fight stopped — the auto-pause
+option bits are already cleared by the plugin, so the world clock kept running, but the modal
+panel owns the action queue and it needs a CLICK that a player being hit is not free to give.
+
+Fixed with the bits beside it: `CClientOptions + 0x14` bit `0x02` gates every tutorial window.
+Two independent confirmations — `SetTutorialWindowsEnabled 0x005472F0` toggles exactly that
+bit, and `CGuiInGame::TutorialReasonWillShowWindow 0x0062F420` opens with
+`test byte ptr [eax+0x14], 2` and returns "no window" when it is clear, so clearing it
+suppresses every tutorial reason rather than this one message. Cleared alongside the six
+auto-pause options in `Odyssey.SuppressAutoPause`.
+
+Verified by screenshot: same room, same two soldiers, no box, weapon drawn, mid-swing.
+
 ## 2. Why a distant client's fight is not empty
 
 The client walks ahead into a room the host has not reached. In the HOST's game:
@@ -138,6 +186,44 @@ follow brings it back        client enemies 25   presence 25     <- and reopened
   player is spectating (and so is not fighting either), which is what makes the hold safe —
   but it does mean a conversation and a fight cannot happen at the same time in one session,
   by design.
+## 6. ⚠ OPEN: a player fighting alone cannot land the killing blow
+
+Found by the same test, not yet fixed, and it needs a decision rather than a patch.
+
+`KotorGameBridge.TryApplyEnemyFloors` is how a client's damage becomes real:
+
+```csharp
+if (report.Dead || !_enemyAddresses.TryGetValue(report.ObjectId, out nint address)) continue;
+...
+int floor = Math.Max(1, (int)report.CurrentHealth);
+```
+
+Two rules, and together they mean **a client can wear an enemy down to 1 hit point and never
+finish it**: the floor never goes below 1, and a report that says the enemy is DEAD is
+discarded outright. If the host is elsewhere, nothing else is going to hit that enemy — so the
+room never clears and the fight has no end. Measured incidentally in the same session: soldier
+`0xE` sat at exactly 1 hp on both instances.
+
+Both rules were deliberate and both are defensible on their own. Death has to run through the
+engine's own path or there is no loot, no XP, no scripts and no corpse — and a raw poke to 0
+produces a body at zero hit points that the engine does not consider dead, which is the same
+zombie class of bug as the pause and dialogue ones. Discarding `Dead` stops one peer's bad
+read from deleting things.
+
+**The shape of the fix** — the engine call already exists and is already used for the other
+direction. `Odyssey.KillCreature` is `ApplyDamageEffect(id, 9999)`, a real `EffectDamage`
+through the VM, which is exactly what `CombatController` runs when a client executes a death
+the host decided ("killed 0x14 on the owner's authority"). So the host needs to run that same
+call when a client reports a kill. What it needs that does not exist yet is an agent→plugin
+channel on the HOST side, since `TryWriteEnemies` is client-only today.
+
+Worth gating it tightly: honour a client's `Dead` only for a creature the host has ALREADY
+floored to 1 — which the floor rule guarantees it will have — so a bad read can shave health
+but can never delete anything the reporter had not genuinely fought down.
+
+⚠ This changes who may kill, which is the centre of the combat authority model, so it is
+written down rather than rushed.
+
 * **Encounters only fire for the host.** A client cannot trigger a spawn; it sees the host's.
   With the players apart this means an encounter trigger the client walks over does nothing
   until the host walks over it too. NOT FIXED, and not cheaply fixable: client-side spawning
