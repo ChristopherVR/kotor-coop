@@ -39,6 +39,10 @@ internal sealed class IncomingDamageController(SharedBlockView block)
     private readonly bool _enabled = PluginConfig.ReadBool("phantom_targetable", true);
 
     private int _countdown;
+
+    /// <summary>Whether we are currently holding damage back for a conversation, so the
+    /// hold is announced once rather than every pass.</summary>
+    private bool _heldForDialogue;
     private int _logged;
 
     private DownBlockReason _reason = DownBlockReason.None;
@@ -99,9 +103,30 @@ internal sealed class IncomingDamageController(SharedBlockView block)
         // Not while a conversation owns the screen: the dialogue system is mid-scene and
         // the enemy channel freezes for the same reason. The debt is not lost — it is
         // still owed on the next pass.
+        //
+        // ⚠ AND IT SAYS SO, because a silent hold here is indistinguishable from the
+        // channel being broken. Measured: after a module transition the client's
+        // conversation-active flag (gui+0xB4) was still set with no conversation on screen,
+        // and this returned every pass forever — forwarded damage read `owed 20 applied 0`
+        // and the player was quietly immune. Twenty minutes went into a bug that one log
+        // line would have named. The stale flag itself is a separate defect; this only
+        // makes the hold visible.
         if (Odyssey.IsConversationActive)
         {
+            if (!_heldForDialogue)
+            {
+                _heldForDialogue = true;
+                PluginHost.Log(
+                    $"combat: holding {owed - applied} forwarded damage — a conversation is on screen");
+            }
+
             return;
+        }
+
+        if (_heldForDialogue)
+        {
+            _heldForDialogue = false;
+            PluginHost.Log("combat: conversation over; applying the forwarded damage held for it");
         }
 
         uint playerId = Odyssey.GetPlayerObjectId();

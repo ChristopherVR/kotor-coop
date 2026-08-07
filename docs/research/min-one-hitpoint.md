@@ -264,3 +264,50 @@ on entering the Starboard Section.
 0x00545F90  ExecuteCommandSetMinOneHP            (nwscript routine 716)
 0x0063E7F0  Global::return_zero                  (kills the dead "knocked out" branch at 0x004E015D)
 ```
+
+
+---
+
+## LIVE VERIFICATION (2026-08-07, integrator)
+
+Every link in the chain was confirmed on two running instances, in this order:
+
+1. **The script really is what sets it.** Independent NCS disassembly of
+   `end_m01aa/k_pend_area01.ncs` at 0x11AC — the offset this document predicted:
+
+   ```
+   04 03 00 00 00 01   CONSTI 1              (TRUE)
+   05 00 02 24 00      ACTION 548  GetFirstPC
+   05 00 02 cc 02      ACTION 716  SetMinOneHP
+   ```
+
+   and `end_m01ab/k_pend_1b_area.ncs` at 0x10A1 is byte-identical with `CONSTI 0`.
+   Routine indices derived from `nwscript.nss`: GetFirstPC 548, SetMinOneHP 716.
+   `m01aa.are` declares `OnEnter = 'k_pend_area01'`.
+
+2. **The live PC carries the pin on the command deck.**
+   `sethp.ps1 -ObjectId 0x7FFFFFFF` → `hp 12 (stored max 0) [min1hp]`.
+   That closes the one inference this document shipped with.
+
+3. **It clears on travel.** After the host travelled to `end_m01ab` and the client
+   followed, the same read gives `hp 12 (stored max 0)` — no flags.
+
+4. **And forwarded damage then downs the player.** 20 damage landed on the client's
+   phantom in the host's game produced, on the client:
+   `combat: took 20 damage from a hit on our phantom (attacker 0x14)` immediately
+   followed by `death: the local player is down`.
+
+So the README limitation this replaced was wrong twice over: the floor is KOTOR's rule for
+that one deck, and everywhere else a remote player goes down normally.
+
+⚠ **A separate defect found during step 4, not yet fixed.** The first attempt read
+`owed 20 applied 0` and nothing happened, silently, for minutes. Cause: after the module
+transition the client's conversation-active flag (`gui+0xB4`) was still set with no
+conversation on screen, and `IncomingDamageController` holds damage back while a conversation
+owns the screen. `blockpoke talk close` cleared it and the damage applied instantly.
+
+A stale `gui+0xB4` after a transition makes a player quietly immune to forwarded damage. This
+is the same shape as the stuck pause `Odyssey.ReconcilePause` repairs — an edge-triggered
+engine state left set across a transition — and probably wants the same treatment: a
+level-triggered reconcile that closes a conversation the client believes in but cannot show.
+The hold is now at least logged, so it can never be invisible again.
