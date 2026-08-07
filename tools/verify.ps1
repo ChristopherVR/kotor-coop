@@ -105,6 +105,15 @@ function WaitForLog($path, $pattern, [int]$since, [int]$seconds) {
 
 # Put the game back to a known state before measuring anything: a conversation left open by
 # an earlier run defers damage and blocks attack orders, which fails unrelated checks.
+# The counterpart to CloseConversations: a creature left in combat by an earlier check cannot
+# start a conversation, and the dialogue checks run after the fight the animation check stages.
+# (attacker set, target zero) is the plugin's "break off" order.
+function BreakOffCombat($h, $b) {
+    [VF]::W32($h, $b + 0x1DA0, [int]0x7FFFFFFF) | Out-Null   # this instance's own PC
+    [VF]::W32($h, $b + 0x1DA4, 0) | Out-Null                 # no target = stop
+    [VF]::W32($h, $b + 0x1DA8, [int]([VF]::U32($h, $b + 0x1DA8) + 1)) | Out-Null
+}
+
 function CloseConversations($h, $b) {
     $closeTag = [byte[]]::new(32)
     [Array]::Copy([Text.Encoding]::ASCII.GetBytes('close'), $closeTag, 5)
@@ -357,6 +366,14 @@ if ($enemyId -ne 0) {
 else {
     Check 'swing animations reach the peer' $false 'no enemy published to attack'
 }
+
+# ⚠ Put the fight down before talking. Section 10 orders the host's PC to attack and leaves it
+# in combat; a creature in combat cannot open a conversation, so "the peer follows the same
+# conversation" failed on any session that had already fought — which read as a spectate
+# regression more than once and was never a dialogue defect at all.
+BreakOffCombat $h1 $b1
+BreakOffCombat $h2 $b2
+Start-Sleep -Seconds 4
 
 # --- 11. dialogue exclusivity -------------------------------------------------------------
 # One conversation per session, enforced in the engine: the host opens one, the client

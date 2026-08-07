@@ -54,8 +54,23 @@ internal sealed unsafe class TestDriveController(SharedBlockView block)
 
         uint attacker = block.TestAttacker;
         uint target = block.TestAttackTarget;
-        if (attacker == 0 || target == 0)
+        if (attacker == 0)
         {
+            return;
+        }
+
+        // An attacker with NO TARGET means "stop fighting" — the counterpart to the order
+        // above, and the thing the battery needs to put the world back. A creature still in
+        // combat cannot start a conversation, so the fight staged by the animation check was
+        // failing the dialogue check that ran after it, intermittently and for a reason that
+        // had nothing to do with dialogue. (attacker set, target zero) was previously an
+        // ignored no-op, so nothing else means anything by it.
+        if (target == 0)
+        {
+            bool cleared = Odyssey.ClearQueuedCombatActions(attacker);
+            PluginHost.Log(cleared
+                ? $"test: 0x{attacker:X} ordered to break off combat"
+                : $"test: could not break off combat for 0x{attacker:X}");
             return;
         }
 

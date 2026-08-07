@@ -4190,6 +4190,35 @@ internal static unsafe class Odyssey
     ///
     /// MAIN THREAD ONLY.
     /// </summary>
+    /// <summary>
+    /// CServerExoApp::ClearAllQueuedCombatActions(objectId) — drops a creature's queued
+    /// combat actions, which is what actually ends a fight it was ordered into.
+    ///
+    /// Signature checked against the binary rather than taken from the symbol DB alone:
+    /// one stack argument read at 0x004AEFA0 and `ret 4` at 0x004AEFBC, matching the DB's
+    /// param size of 4. (See docs/research/engine-api.md for why that check is not optional.)
+    ///
+    /// Exists for the TEST BATTERY, which stages a real fight and then needs the world back:
+    /// a creature left in combat cannot start a conversation, so the fight staged by one
+    /// check was failing the dialogue check that ran after it.
+    ///
+    /// MAIN THREAD ONLY.
+    /// </summary>
+    public static bool ClearQueuedCombatActions(uint objectId)
+    {
+        nint server = GetServer();
+        if (server == 0 || objectId == 0)
+        {
+            return false;
+        }
+
+        ClearQueuedCombatActionsFn(server, objectId);
+        return true;
+    }
+
+    private static readonly delegate* unmanaged[Thiscall]<nint, uint, void> ClearQueuedCombatActionsFn =
+        (delegate* unmanaged[Thiscall]<nint, uint, void>)0x004AEFA0;
+
     public static bool AttackTarget(uint attackerObjectId, uint targetObjectId, out int failure)
     {
         failure = 0;

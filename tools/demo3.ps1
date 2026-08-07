@@ -170,7 +170,12 @@ function Start-Instance {
     $exe = Join-Path $Directory 'swkotor.exe'
     $before = @(Get-Process swkotor -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Id)
 
-    if ($Instance -eq 1) { & $agent launch --windowed --game-path $exe | Out-Null }
+    # ⚠ INSTANCE 1 LOADS ITS SAVE AS PART OF THE LAUNCH. demo.ps1 has always done it that way
+    # for the first instance and it is the only combination with a day of evidence behind it;
+    # splitting the load into a separate step (as this script did) failed every relaunch.
+    # Instances 2 and 3 keep the separate load — for THEM, folding it in is what fails, which
+    # is the opposite asymmetry and is recorded as such in demo.ps1.
+    if ($Instance -eq 1) { & $agent launch --windowed --load-save $Save --game-path $exe | Out-Null }
     else                 { & $agent launch --instance $Instance --game-path $exe | Out-Null }
 
     $deadline = (Get-Date).AddSeconds(60)
@@ -200,15 +205,41 @@ function Start-Instance {
     & $movewin -ProcId $procId -Restore | Out-Null
     Start-Sleep -Seconds 3
 
-    & $inputalive -ProcId $procId | Out-Null
-    if ($LASTEXITCODE -ne 0) {
-        Write-Warning "instance $Instance has dead menu input; relaunching it"
-        Stop-Process -Id $procId -Force -Confirm:$false
-        Start-Sleep -Seconds 3
-        return $null
+    # ⚠ THE PLUGIN LOAD ROUTE, not the menu one, and no input probe gating it.
+    #
+    # This used to demand `--load-via-menu` behind an inputalive check, and on a machine where
+    # the two-instance harness loads first time every time it burned all five relaunches of
+    # instance 1 reporting "dead menu input". The probe hovers a hardcoded menu pixel, and
+    # three windows being shuffled for position do not present the same menu the two-window
+    # layout does — so it was measuring its own assumptions, not the game.
+    #
+    # demo.ps1 has always used `agent load --load-save`, which tries the in-process plugin
+    # route (no clicking at all) and falls back to the menu by itself. That is the path with a
+    # day of evidence behind it, so the three-instance harness now takes it too. The retry
+    # below is now driven by whether the load ACTUALLY SUCCEEDED, which is the honest signal.
+    if ($Instance -eq 1) {
+        # Already loaded by the launch above; just park it.
+        & $movewin -ProcId $procId -Minimize | Out-Null
+        return $procId
     }
 
-    & $agent load --pid $procId --load-save $Save --load-via-menu | Out-Null
+    & $agent load --pid $procId --load-save $Save | Out-Null
+
+    # ⚠ ACTIVATION-CYCLE BEFORE RELAUNCHING. Menu input injection fails intermittently
+    # (Handoff traps 22 and 25) and a minimise/restore cycle is the one thing known to revive
+    # it — demo.ps1 has done this for its second instance all along and reaches a session
+    # nearly every time. This script skipped straight to killing and relaunching the process,
+    # which is both slower and, measured here, does not work: instance 2 burned relaunch after
+    # relaunch while the cheap fix was never tried.
+    for ($cycle = 1; $cycle -le 4 -and $LASTEXITCODE -ne 0; $cycle++) {
+        Write-Warning "instance $Instance auto-load failed; activation-cycling the window (retry $cycle/4)"
+        & $movewin -ProcId $procId -Minimize | Out-Null
+        Start-Sleep -Seconds 2
+        & $movewin -ProcId $procId -Restore | Out-Null
+        Start-Sleep -Seconds 3
+        & $agent load --pid $procId --load-save $Save | Out-Null
+    }
+
     if ($LASTEXITCODE -eq 0) {
         # Park it. An in-world KOTOR keeps reclaiming the foreground, and the NEXT instance's
         # menu automation cannot reach a window that keeps losing focus. A minimised instance
@@ -218,7 +249,7 @@ function Start-Instance {
         return $procId
     }
 
-    Write-Warning "instance $Instance reported live input but did not load; relaunching"
+    Write-Warning "instance $Instance did not load; relaunching"
     Stop-Process -Id $procId -Force -Confirm:$false
     Start-Sleep -Seconds 3
     return $null
