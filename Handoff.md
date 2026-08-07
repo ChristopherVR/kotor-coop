@@ -74,6 +74,41 @@ channel, gated on the host having already floored that creature to 1. It changes
 which is the centre of the authority model, so it is written up in
 `docs/research/combat-when-apart.md` §6 rather than rushed.
 
+### 2026-08-07 (latest): A LONE PLAYER CAN NOW WIN A FIGHT — verified live
+
+```
+client alone vs a Sith Soldier, host's PC 120 units away
+start     host hp 15   client hp 15
+round 1   host hp  6   client hp  2
+round 2   host hp  1   client hp  1
+round 4   host hp gone client hp gone     <- and: "combat: killed 0xE on the owner's authority"
+```
+
+The same test previously stalled at **11 hp for a whole ninety-second fight** with the screen
+showing a genuine, swinging, combat-mode battle. Four things were in the way, each hiding the
+next — full write-up in `docs/research/combat-when-apart.md` §6a:
+
+1. **The mirror RAISED the peer's copy back up.** `CombatController` wrote the owner's health
+   whichever way it differed, eight times a second, undoing every local hit ~125 ms before the
+   once-a-second census could see it. Now **lower-only**: the owner may drag a mirrored enemy
+   down (its damage is authoritative) and never back up, because the only reason our copy is
+   lower is that we hurt it — which is exactly what the min-merge wants to hear. Owner-side
+   healing no longer propagates; a fair trade for damage that does.
+2. **The report was a sample, not a high-water mark.** `CoopAgent.LatchLowestSeen` remembers
+   the lowest health and any death seen this module, so a dip cannot be missed.
+3. **Min1HP meant a peer's copy could never die, so it could never REPORT a death** — and the
+   pin exists so the owner delivers the killing blow, which it never will when the players are
+   apart. Released once the owner's own value reaches 1.
+4. **A dead creature leaves the census entirely**, so no row is left to carry the flag. A
+   creature that vanishes having last been seen AT THE FLOOR is reported dead — safe because
+   only the owner's own merge can put something at 1.
+
+⚠ The §6b "report damage dealt, not health observed" redesign is NOT needed and was not built:
+making the mirror lower-only removes the race at its source. Keep it in mind only if
+per-hit attribution (who dealt what) is ever required, which health alone cannot express.
+
+22/22 on `toolserify.ps1` afterwards, 292 unit tests.
+
 ### 2026-08-07 (later): pause scoped to the vicinity, and the kill channel
 
 Two changes toward "the default engine rules still apply, per player":

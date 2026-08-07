@@ -134,6 +134,88 @@ public class EnemyProximityTests
         Assert.DoesNotContain((uint)Cap, kept); // the farthest one, and only that one, is shed
     }
 
+    // ---- a peer's damage must not evaporate ------------------------------------------
+
+    [Fact]
+    public void ADipTheMirrorErasesIsStillReported()
+    {
+        // The measured failure, exactly: the client hits an enemy down to 5, the owner's
+        // mirror restores its copy to 11 before the next census, and under a plain sample
+        // that 5 never existed. Live, this is what pinned a soldier at 11 hp for a whole
+        // ninety-second fight.
+        LowestSeen seen = new();
+
+        Assert.Equal(11, seen.Report(0xE, 11));
+        Assert.Equal(5, seen.Report(0xE, 5));    // the hit lands
+        Assert.Equal(5, seen.Report(0xE, 11));   // the mirror puts it back; we remember
+    }
+
+    [Fact]
+    public void HealthOnlyEverGoesDownInAReport()
+    {
+        LowestSeen seen = new();
+        seen.Report(0x14, 20);
+        seen.Report(0x14, 3);
+
+        Assert.Equal(3, seen.Report(0x14, 20));
+        Assert.Equal(3, seen.Report(0x14, 19));
+        Assert.Equal(1, seen.Report(0x14, 1));
+    }
+
+    [Fact]
+    public void DeathLatchesToo()
+    {
+        // One census catching our copy dead is enough, even if the mirror revives it after —
+        // otherwise the owner's kill depends on winning the same race all over again.
+        LowestSeen seen = new();
+        Assert.False(seen.ReportDead(0xE, alive: true));
+        Assert.True(seen.ReportDead(0xE, alive: false));
+        Assert.True(seen.ReportDead(0xE, alive: true));
+    }
+
+    [Fact]
+    public void ANewModuleForgetsEverything()
+    {
+        // Ids are reassigned per module load, so a remembered low reading would be applied
+        // to a completely different creature.
+        LowestSeen seen = new("end_m01aa");
+        seen.Report(0xE, 2);
+
+        seen.EnterModule("tar_m02aa");
+        Assert.Equal(15, seen.Report(0xE, 15));
+    }
+
+    /// <summary>The latch's rule, mirroring CoopAgent.LatchLowestSeen.</summary>
+    private sealed class LowestSeen(string module = "end_m01aa")
+    {
+        private readonly Dictionary<uint, (ushort Health, bool Dead)> _seen = [];
+        private string _module = module;
+
+        public void EnterModule(string next)
+        {
+            if (!string.Equals(next, _module, StringComparison.OrdinalIgnoreCase))
+            {
+                _module = next;
+                _seen.Clear();
+            }
+        }
+
+        public ushort Report(uint id, ushort health)
+        {
+            ushort latched = _seen.TryGetValue(id, out var s) ? Math.Min(health, s.Health) : health;
+            _seen[id] = (latched, s.Dead);
+            return latched;
+        }
+
+        public bool ReportDead(uint id, bool alive)
+        {
+            _seen.TryGetValue(id, out var s);
+            bool dead = s.Dead | !alive;
+            _seen[id] = (s.Health, dead);
+            return dead;
+        }
+    }
+
     // ---- the killing blow ------------------------------------------------------------
 
     [Fact]

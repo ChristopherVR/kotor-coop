@@ -186,7 +186,50 @@ follow brings it back        client enemies 25   presence 25     <- and reopened
   player is spectating (and so is not fighting either), which is what makes the hold safe —
   but it does mean a conversation and a fight cannot happen at the same time in one session,
   by design.
-## 6b. ⚠ THE REAL BLOCKER: a peer's damage is SAMPLED, so most of it is erased
+## 6a. FIXED, END TO END: a lone player can now win a fight (2026-08-07)
+
+Client alone against a Sith Soldier, host's PC 120 units away, attacking every 8 seconds:
+
+```
+start     host hp 15   client hp 15
+round 1   host hp  6   client hp  2
+round 2   host hp  1   client hp  1
+round 4   host hp gone client hp gone
+```
+
+and on the owner:
+
+```
+combat: killed 0xE on the owner's authority
+```
+
+Before this the same test stalled at **11 hp for a whole ninety-second fight**. Three things
+were in the way, and each one hid the next:
+
+1. **The mirror raised the peer's copy back up.** `CombatController` wrote the owner's health
+   whichever way it differed, eight times a second, so a hit landed here and was undone
+   ~125 ms later — long before the once-a-second census could report it. It is now
+   **lower-only**: the owner may always drag a mirrored enemy down (its damage is
+   authoritative) and never back up, because the only reason our copy is lower is that we hurt
+   it, which is exactly what the owner's min-merge wants to hear. Healing on the owner's side
+   is the one thing that no longer propagates; that is a fair trade for damage that does.
+2. **The report was a sample, not a high-water mark.** `LatchLowestSeen` in the agent now
+   remembers the lowest health (and any death) seen this module, so a dip cannot be missed
+   even if it is overwritten between censuses. The owner already merged with `min()`; this
+   just makes "as hurt as ANY instance says" mean "…as any instance has EVER said".
+3. **Min1HP meant the peer's copy could never die, so it could never report a death.** The pin
+   exists so the owner delivers the killing blow — but when the players are apart the owner is
+   not fighting and never will. It is now released once the owner's own value reaches 1: an
+   enemy the owner agrees is at the floor has no health left to protect, so whoever is
+   actually fighting it lands the last blow, and the owner runs the real death.
+4. **A creature that dies leaves the census entirely**, so there is no row left to carry the
+   flag and the owner would simply stop hearing about it. A vanished creature last seen AT THE
+   FLOOR is now reported dead — safe precisely because only the owner's own merge can put
+   something at 1.
+
+22/22 on `toolserify.ps1` afterwards, 292 unit tests.
+
+## 6b. ⚠ THE ORIGINAL DIAGNOSIS: a peer's damage was SAMPLED, so most of it was erased
 
 Measured 2026-08-07, client alone against soldier `0xE` with the host 120 units away, the
 client ordered to attack once every 8 seconds for 90 seconds:
@@ -226,9 +269,10 @@ erased by a mirror write because it is never read back out of the game. That als
 mostly redundant: an enemy whose accumulated damage exceeds its health dies through the
 owner's own death path with no "is it dead" report to trust.
 
-⚠ Until that lands, a player fighting away from the enemy owner contributes only the damage
-that happens to survive the race. **The kill channel in §6 is built and unit-tested but cannot
-be live-proven while this stands**, because the enemy never reaches the floor it triggers on.
+✅ **Fixed — see §6a.** The accumulate-damage-dealt redesign sketched above turned out not to
+be needed: making the mirror lower-only removes the race at its source, and latching the
+lowest reading closes what remains. Keep the design in mind if a future fight ever needs
+per-hit attribution (who dealt what), which health alone cannot express.
 
 ## 6. ⚠ OPEN: a player fighting alone cannot land the killing blow
 

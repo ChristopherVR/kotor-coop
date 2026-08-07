@@ -146,16 +146,42 @@ internal sealed class CombatController(SharedBlockView block)
             return;
         }
 
-        // Pin it first. If the local player is mid-swing when the health write lands, an
-        // unpinned enemy could be killed locally between passes and then be resurrected by
-        // the next mirrored health value, which looks far worse than a stubborn enemy.
-        Odyssey.SetMinOneHitPoint(creature, true);
+        // Pin it while it still has health to lose. If the local player is mid-swing when
+        // the health write lands, an unpinned enemy could be killed locally between passes
+        // and then be resurrected by the next mirrored health value, which looks far worse
+        // than a stubborn enemy.
+        //
+        // ⚠ But UNPIN at the floor, or nothing can ever die here. The pin exists so the
+        // owner delivers death — and when the players are apart, the owner is not fighting
+        // and never will. Measured: a client alone drove a soldier 15 → 1 and then swung at
+        // it forever, because Min1HP meant its copy could not die, so its census could never
+        // report a death, so the owner's kill channel had nothing to act on. An enemy the
+        // owner has already agreed is at 1 has no health left to protect; letting the player
+        // actually fighting it land the last blow makes its census report the death, and the
+        // owner then runs the real one (corpse, loot, OnDeath) within a tick.
+        Odyssey.SetMinOneHitPoint(creature, enemy.CurrentHealth > 1);
 
         // Never write 0: the owner has not said it is dead, and an enemy at 0 health reads
         // as dead to targeting and AI while no death path has run for it.
         int health = Math.Max(1, (int)enemy.CurrentHealth);
+        int current = Odyssey.GetCurrentHitPoints(creature);
 
-        if (Odyssey.GetCurrentHitPoints(creature) != health)
+        // ⚠ LOWER ONLY. NEVER RAISE.
+        //
+        // This ran eight times a second and wrote the owner's value whichever way it
+        // differed, which quietly erased this player's own contribution to every fight: a
+        // hit lands here, our copy drops, and ~125 ms later this put it straight back before
+        // the once-a-second census could report it. Measured, a client attacking one soldier
+        // for ninety seconds took it from 15 to 11 and NO FURTHER — every later hit was
+        // undone by this line while the screen showed a genuine fight.
+        //
+        // The only reason a mirrored enemy is lower here than the owner says is that we hurt
+        // it, and that is exactly what the owner's min-merge wants to hear about. So the
+        // owner may always drag it DOWN (its damage is authoritative) and never back up; our
+        // dip survives until the report round-trips, at which point the two agree anyway.
+        // Healing on the owner's side is the one thing this does not propagate, which is a
+        // fair trade for damage that does.
+        if (health < current)
         {
             Odyssey.SetCurrentHitPoints(creature, health);
         }

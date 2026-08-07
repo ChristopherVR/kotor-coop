@@ -1083,8 +1083,108 @@ public sealed class CoopAgent(IGameBridge bridge, ICoopSession session, AgentSet
         // that matters anyway.
         if (!bridge.IsInDialogue)
         {
-            session.ReportEnemies(local.Module, bridge.ReadEnemies(otherPlayers));
+            session.ReportEnemies(
+                local.Module, LatchLowestSeen(local.Module, bridge.ReadEnemies(otherPlayers)));
         }
+    }
+
+    /// <summary>The lowest health we have ever seen each enemy at, this module, and whether
+    /// we have seen it dead. Cleared on a module change: the ids are reassigned there.</summary>
+    private readonly Dictionary<uint, (ushort Health, bool Dead)> _lowestSeen = [];
+
+    private string _lowestSeenModule = string.Empty;
+
+    /// <summary>
+    /// Turns our report of an enemy from a SAMPLE into a HIGH-WATER MARK of the damage we
+    /// have done to it.
+    ///
+    /// ⚠ This is the difference between a peer's hits counting and a peer's hits mostly
+    /// evaporating, and it was measured rather than theorised. The owner writes its own
+    /// health onto our copy about once a second, and our census reads our copy about once a
+    /// second. A hit lands in between and then races the next mirror write: win and it gets
+    /// reported, lose and it never happened. Live, a client attacking one soldier for ninety
+    /// seconds took it from 15 to 11 and no further — its own copy briefly read 5 and the
+    /// mirror put it straight back before the census saw it.
+    ///
+    /// Remembering the lowest value we have ever seen closes that window completely, and it
+    /// changes nothing about the model: the owner already merges with min(), so "an enemy is
+    /// as hurt as ANY instance says it is" simply becomes "…as any instance has EVER said",
+    /// which is what a monotonic channel should have meant all along.
+    ///
+    /// Death latches the same way, so the one census that catches our copy dead is enough to
+    /// trigger the owner's kill even if the mirror revives our copy afterwards.
+    /// </summary>
+    private IReadOnlyList<EnemyState> LatchLowestSeen(string module, IReadOnlyList<EnemyState> census)
+    {
+        if (!string.Equals(module, _lowestSeenModule, StringComparison.OrdinalIgnoreCase))
+        {
+            _lowestSeenModule = module;
+            _lowestSeen.Clear();
+        }
+
+        if (census.Count == 0)
+        {
+            return census;
+        }
+
+        List<EnemyState> latched = new(census.Count);
+
+        foreach (EnemyState enemy in census)
+        {
+            // A plot creature's health is the module's rule and the owner ignores our report
+            // for it anyway; latching would only keep a stale number alive.
+            if (enemy.Plot)
+            {
+                latched.Add(enemy);
+                continue;
+            }
+
+            ushort health = enemy.CurrentHealth;
+            bool dead = enemy.Dead;
+
+            if (_lowestSeen.TryGetValue(enemy.ObjectId, out var seen))
+            {
+                health = Math.Min(health, seen.Health);
+                dead |= seen.Dead;
+            }
+
+            _lowestSeen[enemy.ObjectId] = (health, dead);
+            latched.Add(enemy with { CurrentHealth = health, Dead = dead });
+        }
+
+        // ⚠ A creature that DIES here leaves the census entirely — the engine takes the
+        // object away, so there is no row left to carry a "dead" flag, and the owner would
+        // simply stop hearing about it and leave its own copy standing at 1 forever. That is
+        // measured: a client alone killed a soldier outright and the owner still read 1 hp.
+        //
+        // So a vanished creature we last saw AT THE FLOOR is reported dead. The floor is what
+        // makes this safe: a creature only reaches 1 because the owner's own merge put it
+        // there, so this cannot invent a death for anything that was healthy when it left the
+        // census (dropping out of the 32-slot cap, for instance).
+        foreach (KeyValuePair<uint, (ushort Health, bool Dead)> seen in _lowestSeen)
+        {
+            if (seen.Value.Health > 1 || Contains(latched, seen.Key))
+            {
+                continue;
+            }
+
+            latched.Add(new EnemyState(seen.Key, 0, 0, Dead: true));
+        }
+
+        return latched;
+    }
+
+    private static bool Contains(List<EnemyState> enemies, uint objectId)
+    {
+        for (int i = 0; i < enemies.Count; i++)
+        {
+            if (enemies[i].ObjectId == objectId)
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /// <summary>
