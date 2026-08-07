@@ -595,5 +595,23 @@ What does NOT clear it, all measured:
 
 In real play the dialogue gate refuses that click and the engine's own failure path runs
 (clearing the pending conversation action via 0x004F34A0), so this is not currently a
-gameplay path — but the recovery is still missing, and the next pass should find the writer of
-`gui+0xB4` rather than guess at the teardown again.
+gameplay path — but the recovery is still missing.
+
+**The writer is now identified**, which is what the previous note asked for. `tools/fieldwrites.py`
+(new — `xrefs.py` answers "who calls this", nothing answered "who assigns this field") finds
+every disp32 store to an offset; `+0xB4` has exactly one setter reached from the GUI:
+
+| Address | Role |
+|---|---|
+| `0x0062EC60` | `CGuiInGame::SetConversationActive(int)` — `mov [esi+0xB4], eax` from its one argument. **This is what `CloseDialog` calls with 0** (0x00633423), which is why a clean teardown leaves `0xB4 = 0`. |
+| `0x004CF641` | `StartDialog` sets it to 1. NOT the repeat writer — the plugin's own `StartAttempts` counter on StartDialog does not move while wedged. |
+| `0x0060F764` | Sets it to 1 immediately after `CSWCMessage::SendPlayerToServerInput_Dialog 0x00677EA0` (0x0060F757). |
+| `0x0052D84F` | Sets it to 1 from a server-side message handler. |
+
+**Hypothesis for the next pass, not yet proven:** `SendPlayerToServerInput_Dialog` is itself
+gated on `*(gui+0xB4)` (0x00677EB3), and `0x0060F764` sets `+0xB4` right after calling it. A
+stale 1 would therefore keep the client sending dialogue input, and the handler would set the
+flag straight back — a self-sustaining loop, which matches the observed behaviour exactly
+(forcing the flag to 0 produced a one-frame flicker and nothing else). Test it by detouring
+`0x0062EC60` and logging the return address when it is called with 1 while wedged; that is the
+same technique that settled the joiner question, and it costs one run.
