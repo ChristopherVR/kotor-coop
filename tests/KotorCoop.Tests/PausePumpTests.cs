@@ -132,8 +132,73 @@ public class PausePumpTests
         }
     }
 
-    private static RemotePeer Peer(uint id, uint flags) =>
-        new(id, $"peer{id}", new PlayerState(Vector3f.Zero, 0f, "end_m01aa", 20, 0, Flags: flags));
+    private static RemotePeer Peer(uint id, uint flags) => Peer(id, flags, Vector3f.Zero);
+
+    private static RemotePeer Peer(uint id, uint flags, Vector3f at) =>
+        new(id, $"peer{id}", new PlayerState(at, 0f, "end_m01aa", 20, 0, Flags: flags));
+
+    [Fact]
+    public void APeerPausingAcrossTheModuleDoesNotFreezeUs()
+    {
+        // A pause is for the situation you are both in. Someone stopping to read their
+        // inventory two rooms away is not your situation, and taking your game away for it
+        // is the opposite of seamless.
+        PauseBridge bridge = new();
+        PauseSession session = new();
+        CoopAgent agent = new(bridge, session, new AgentSettings { PauseShareRangeUnits = 30f });
+
+        session.Peers.Add(Peer(1, PlayerState.FlagPaused, new Vector3f(200f, 0f, 0f)));
+        agent.PumpOnce();
+
+        Assert.Empty(bridge.Requests);
+    }
+
+    [Fact]
+    public void APeerPausingBesideUsStillPausesUs()
+    {
+        PauseBridge bridge = new();
+        PauseSession session = new();
+        CoopAgent agent = new(bridge, session, new AgentSettings { PauseShareRangeUnits = 30f });
+
+        session.Peers.Add(Peer(1, PlayerState.FlagPaused, new Vector3f(4f, 3f, 0f)));
+        agent.PumpOnce();
+
+        Assert.Equal([true], bridge.Requests);
+    }
+
+    [Fact]
+    public void ARangeOfZeroSharesEveryPauseHoweverFarAway()
+    {
+        // The escape hatch back to the old all-or-nothing behaviour.
+        PauseBridge bridge = new();
+        PauseSession session = new();
+        CoopAgent agent = new(bridge, session, new AgentSettings { PauseShareRangeUnits = 0f });
+
+        session.Peers.Add(Peer(1, PlayerState.FlagPaused, new Vector3f(9000f, 0f, 0f)));
+        agent.PumpOnce();
+
+        Assert.Equal([true], bridge.Requests);
+    }
+
+    [Fact]
+    public void WalkingAwayFromAPausedPeerReleasesUs()
+    {
+        // Distance is re-judged every tick, so leaving the shared situation leaves the pause
+        // behind too rather than carrying it with you.
+        PauseBridge bridge = new();
+        PauseSession session = new();
+        CoopAgent agent = new(bridge, session, new AgentSettings { PauseShareRangeUnits = 30f });
+
+        session.Peers.Add(Peer(1, PlayerState.FlagPaused, new Vector3f(2f, 0f, 0f)));
+        agent.PumpOnce();
+        Assert.Equal([true], bridge.Requests);
+
+        session.Peers.Clear();
+        session.Peers.Add(Peer(1, PlayerState.FlagPaused, new Vector3f(500f, 0f, 0f)));
+        agent.PumpOnce();
+
+        Assert.Equal([true, false], bridge.Requests);
+    }
 
     [Fact]
     public void APausedPeerPausesThisInstanceOnce()

@@ -60,6 +60,13 @@ public sealed record AgentSettings
     public bool SyncParty { get; init; } = true;
 
     /// <summary>
+    /// How near a peer must be for their pause to pause you too, in world units. A pause is
+    /// for a situation you are both in; a partner across the module stopping to read their
+    /// inventory should not freeze your fight. 0 shares every pause, whatever the distance.
+    /// </summary>
+    public float PauseShareRangeUnits { get; init; } = 30f;
+
+    /// <summary>
     /// When true, party gold and PC experience are shared: the host publishes its absolute
     /// values and clients overwrite their own, so both parties level and spend together.
     /// Opinionated (it changes a client's own totals), so it is escape-hatchable.
@@ -269,7 +276,7 @@ public sealed class CoopAgent(IGameBridge bridge, ICoopSession session, AgentSet
 
         // Pause and travel are cheap flag checks and must feel immediate.
         PumpTravel(local, peers);
-        PumpPause(peers);
+        PumpPause(local, visible);
 
         // Death is arbitrated every tick too: a rescue window measured in seconds cannot
         // wait for the ~5 Hz heavy pass, and a swallowed game-over must be answered before
@@ -594,17 +601,36 @@ public sealed class CoopAgent(IGameBridge bridge, ICoopSession session, AgentSet
     /// only one who can release it — a local space-bar press against a mirrored pause is
     /// re-asserted by the plugin.
     /// </summary>
-    private void PumpPause(IReadOnlyList<RemotePeer> peers)
+    private void PumpPause(in PlayerState local, IReadOnlyList<RemotePeer> peersHere)
     {
         if (!settings.SyncPause || !bridge.SupportsPauseSync)
         {
             return;
         }
 
+        // ⚠ ONLY PEERS IN THE VICINITY. A pause is for the situation you are BOTH in — the
+        // fight you are both standing in, the decision you are both making. Freezing a
+        // partner on the other side of the module because you stopped to think is not shared
+        // pause, it is one player taking the other's game away, and it is the opposite of
+        // seamless. Beyond this range the two of you are not interacting, so there is nothing
+        // to keep in step and each world runs on its own.
+        //
+        // Either of you can still release it: PauseController honours a local unpause and
+        // does not re-assert (see "released locally"), so whoever is ready to move on can.
+        float rangeSquared = settings.PauseShareRangeUnits * settings.PauseShareRangeUnits;
+
         bool anyPeerPaused = false;
-        for (int i = 0; i < peers.Count; i++)
+        for (int i = 0; i < peersHere.Count; i++)
         {
-            if (peers[i].State.IsPaused)
+            if (!peersHere[i].State.IsPaused)
+            {
+                continue;
+            }
+
+            // Range of 0 shares every pause regardless of distance (coop.ini escape hatch
+            // for anyone who wants the old all-or-nothing behaviour back).
+            if (settings.PauseShareRangeUnits <= 0f
+                || peersHere[i].State.Position.DistanceSquaredTo(local.Position) <= rangeSquared)
             {
                 anyPeerPaused = true;
                 break;

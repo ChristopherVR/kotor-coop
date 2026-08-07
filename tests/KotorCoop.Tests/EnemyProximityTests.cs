@@ -134,6 +134,51 @@ public class EnemyProximityTests
         Assert.DoesNotContain((uint)Cap, kept); // the farthest one, and only that one, is shed
     }
 
+    // ---- the killing blow ------------------------------------------------------------
+
+    [Fact]
+    public void APeersKillIsHonouredOnceWeHaveAlreadyFlooredThatEnemy()
+    {
+        // The peer fought it down through the floor, so our copy sits at 1 and alive. That
+        // is the whole precondition: only then can their "it is dead" be the last point of
+        // damage rather than a deletion.
+        Assert.True(ShouldExecutePeerKill(reportedDead: true, ourHealth: 1, plot: false));
+    }
+
+    [Fact]
+    public void APeersKillIsRefusedForSomethingNobodyHasBeatenDown()
+    {
+        // A stray or stale report can shave health through the floor rule; it must never be
+        // able to delete a healthy creature.
+        Assert.False(ShouldExecutePeerKill(reportedDead: true, ourHealth: 12, plot: false));
+    }
+
+    [Fact]
+    public void AlreadyDeadIsNotKilledAgain()
+    {
+        // Our copy at or below zero means the death already ran here — most likely because
+        // WE killed it and the peer is echoing that back.
+        Assert.False(ShouldExecutePeerKill(reportedDead: true, ourHealth: 0, plot: false));
+        Assert.False(ShouldExecutePeerKill(reportedDead: true, ourHealth: -3, plot: false));
+    }
+
+    [Fact]
+    public void APlotCreatureIsNeverKilledByAPeersReport()
+    {
+        // Un-killable is the module's rule and our own census decides it, never the report.
+        Assert.False(ShouldExecutePeerKill(reportedDead: true, ourHealth: 1, plot: true));
+    }
+
+    [Fact]
+    public void ALivingReportNeverKills()
+    {
+        Assert.False(ShouldExecutePeerKill(reportedDead: false, ourHealth: 1, plot: false));
+    }
+
+    /// <summary>The owner's decision rule, mirroring KotorGameBridge.TryApplyEnemyFloors.</summary>
+    private static bool ShouldExecutePeerKill(bool reportedDead, int ourHealth, bool plot) =>
+        !plot && reportedDead && ourHealth is > 0 and <= 1;
+
     private const int Cap = 32;
 
     /// <summary>The census's own keep-or-shed rule: order by distance to the nearest player,

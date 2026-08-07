@@ -21,6 +21,15 @@ public readonly record struct Vector3f(float X, float Y, float Z)
         return MathF.Sqrt((dx * dx) + (dy * dy) + (dz * dz));
     }
 
+    /// <summary>Squared distance, for range tests that never need the actual distance.</summary>
+    public float DistanceSquaredTo(Vector3f other)
+    {
+        float dx = X - other.X;
+        float dy = Y - other.Y;
+        float dz = Z - other.Z;
+        return (dx * dx) + (dy * dy) + (dz * dz);
+    }
+
     public bool IsFinite => float.IsFinite(X) && float.IsFinite(Y) && float.IsFinite(Z);
 
     public override string ToString() => $"({X:F2}, {Y:F2}, {Z:F2})";

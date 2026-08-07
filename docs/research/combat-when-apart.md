@@ -186,6 +186,50 @@ follow brings it back        client enemies 25   presence 25     <- and reopened
   player is spectating (and so is not fighting either), which is what makes the hold safe —
   but it does mean a conversation and a fight cannot happen at the same time in one session,
   by design.
+## 6b. ⚠ THE REAL BLOCKER: a peer's damage is SAMPLED, so most of it is erased
+
+Measured 2026-08-07, client alone against soldier `0xE` with the host 120 units away, the
+client ordered to attack once every 8 seconds for 90 seconds:
+
+```
+start     host hp 15   client hp 15
+round 1   host hp 11   client hp 11     <- one merge landed
+round 2   host hp 11   client hp  5     <- the client hit it again...
+round 3   host hp 11   client hp 11     <- ...and the mirror put it straight back
+rounds 4-9  host hp 11   client hp 11   <- stuck, for the rest of the fight
+```
+
+**The enemy went from 15 to 11 and then stopped, permanently.** Not at the floor of 1 — at 11.
+So §6's kill floor is the last inch of a road the damage mostly never travels.
+
+The cause is that both halves of the merge work on ABSOLUTE HEALTH, sampled about once a
+second each:
+
+* the owner writes its value onto the peer's copy (`TryWriteEnemies` → `CombatController`);
+* the peer's census reads whatever its copy currently says (`ReadEnemies`);
+* the owner takes the minimum (`TryApplyEnemyFloors`).
+
+A hit lands on the peer's copy and then races the next mirror write. Win the race and the
+damage is reported and merged; lose it and the copy is restored to the owner's value and that
+hit never existed. Round 2 above is exactly that: `5` was real, and it was gone before the
+census saw it. The absolute-health design is right for REPLICATING the owner's truth — a
+damage number replayed on the far side gets the wrong resistances — but it is wrong for
+CARRYING a peer's contribution back, because it makes the contribution a sample instead of a
+sum.
+
+**The fix is to make the peer report damage it DEALT, not health it OBSERVED.** The plugin
+already has the machinery: `PhantomHitHook` accumulates a running total of damage landing on a
+phantom, and the same shape works here — watch damage the local player applies to an enemy,
+keep a cumulative total per object id, and send that. The owner then subtracts each peer's
+total from its own value, which is order-independent, survives a lost packet, and cannot be
+erased by a mirror write because it is never read back out of the game. That also makes §6
+mostly redundant: an enemy whose accumulated damage exceeds its health dies through the
+owner's own death path with no "is it dead" report to trust.
+
+⚠ Until that lands, a player fighting away from the enemy owner contributes only the damage
+that happens to survive the race. **The kill channel in §6 is built and unit-tested but cannot
+be live-proven while this stands**, because the enemy never reaches the floor it triggers on.
+
 ## 6. ⚠ OPEN: a player fighting alone cannot land the killing blow
 
 Found by the same test, not yet fixed, and it needs a decision rather than a patch.

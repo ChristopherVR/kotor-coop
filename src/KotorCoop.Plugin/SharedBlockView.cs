@@ -294,6 +294,17 @@ internal sealed unsafe class SharedBlockView(byte* baseAddress)
 
     public uint TestAttackTarget => *U32(SharedBlock.OffsetTestAttackTarget);
 
+    /// <summary>Kills a peer earned away from us, for the enemy owner to execute. Serial is
+    /// written last, so it changing means the whole list is there.</summary>
+    public uint KillRequestSerial => *U32(SharedBlock.OffsetKillRequestSerial);
+
+    public uint KillRequestCount => *U32(SharedBlock.OffsetKillRequestCount);
+
+    public uint KillRequestId(int index) =>
+        index >= 0 && index < SharedBlock.KillRequestCapacity
+            ? *U32(SharedBlock.OffsetKillRequestIds + (index * 4))
+            : 0;
+
     public float TestWalkX => *F32(SharedBlock.OffsetTestWalkX);
 
     public float TestWalkY => *F32(SharedBlock.OffsetTestWalkY);

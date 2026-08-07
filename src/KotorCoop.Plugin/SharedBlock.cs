@@ -251,6 +251,26 @@ internal struct SharedBlock
     public const int OffsetTestAttackTarget = 0x1DA4;
     public const int OffsetTestAttackSerial = 0x1DA8;
 
+    // ---- kills a PEER earned (version 22) ---------------------------------------
+    //
+    // Agent -> plugin, on the ENEMY OWNER. A player fighting away from the owner could wear
+    // an enemy down to one hit point and no further: the health merge floors at 1 and a
+    // report saying "it is dead" was discarded, so with nobody else coming to finish it the
+    // room never cleared. This is how the last point of damage gets delivered — the owner
+    // runs the engine's own death for a creature a peer actually killed, so the kill is a
+    // real one (loot, XP, scripts, corpse) rather than a health poke to zero.
+    //
+    // Ids first, then the count, then the serial LAST, so the plugin never reads a half
+    // written list.
+
+    public const int OffsetKillRequestIds = 0x1DB0;   // 8 x u32
+
+    public const int KillRequestCapacity = 8;
+
+    public const int OffsetKillRequestCount = 0x1DD0;
+
+    public const int OffsetKillRequestSerial = 0x1DD4;
+
     // ---- door replication (version 4) -------------------------------------------
     //
     // The agent writes the DESIRED state of doors in the local module: open state and

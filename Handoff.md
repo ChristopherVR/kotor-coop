@@ -74,6 +74,44 @@ channel, gated on the host having already floored that creature to 1. It changes
 which is the centre of the authority model, so it is written up in
 `docs/research/combat-when-apart.md` §6 rather than rushed.
 
+### 2026-08-07 (later): pause scoped to the vicinity, and the kill channel
+
+Two changes toward "the default engine rules still apply, per player":
+
+- **A pause no longer freezes a partner across the module.** `PumpPause` now only mirrors a
+  peer's pause when they are within `AgentSettings.PauseShareRangeUnits` (default 30, and 0
+  restores the old share-everything behaviour). A pause is for the situation you are BOTH in;
+  beyond that range you are not interacting and there is nothing to keep in step. Either of
+  you can still release it — `PauseController` already honours a local unpause and does not
+  re-assert.
+- **The owner can now execute a kill a PEER earned** (block version 22, kill-request channel
+  at `0x1DB0`). `CombatController.ExecutePeerKills` runs `Odyssey.KillCreature` — the engine's
+  own lethal damage, so corpse, loot and OnDeath are real — gated on our own copy being ALIVE
+  and already at the floor of 1, which only happens because that peer fought it there.
+
+⚠ **BUT the kill channel cannot be live-proven yet, and the reason is a bigger bug.** Measured:
+a client alone against soldier `0xE`, host 120 units away, attacking for 90 s — the enemy went
+**15 → 11 and then stopped for the rest of the fight**, never reaching the floor at all. The
+client's copy briefly read 5 and the mirror put it straight back to 11.
+
+**A peer's damage is SAMPLED, not accumulated.** Both halves of the merge work on absolute
+health about once a second: the owner writes its value onto the peer's copy, the peer's census
+reads whatever its copy says, the owner takes the minimum. Every hit races the next mirror
+write, and the ones that lose never existed. Absolute health is right for replicating the
+owner's truth; it is wrong for carrying a peer's contribution back.
+
+The fix is to report damage DEALT rather than health OBSERVED — `PhantomHitHook` already does
+exactly this shape for damage landing on a phantom. Written up in
+`docs/research/combat-when-apart.md` §6b. Until it lands, a player fighting away from the
+enemy owner contributes only the damage that survives the race.
+
+⚠ Also seen, unrelated to the above and worth knowing: **a third peer crashed the host** with
+a .NET fail-fast (`0xc0000602` in DINPUT8, which bypasses the crash probe — check the Windows
+Application log, not just the plugin log). It happened seconds after `agent reports 1 remote
+peer(s)` became `2`. `demo.ps1` starts an agent AND the plugin auto-starts one, so a stale
+agent can join as a third player; the whole project is only ever tested with two. Kill every
+`KotorCoop.Agent` before a run.
+
 ### Combat with the players apart — a review, two fixes, and a crash
 
 Full write-up: `docs/research/combat-when-apart.md`. **The short version: it works, and the

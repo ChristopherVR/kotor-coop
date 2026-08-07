@@ -51,6 +51,10 @@ internal sealed class CombatController(SharedBlockView block)
         Array.Clear(_killed);
         _killedCount = 0;
         block.EnemyCount = 0;
+
+        // Adopted, not zeroed: a kill list left over from the module we are leaving must not
+        // fire in the one we are entering, where those ids name different creatures.
+        _appliedKillSerial = block.KillRequestSerial;
     }
 
     public void OnFrame()
@@ -68,6 +72,8 @@ internal sealed class CombatController(SharedBlockView block)
             return;
         }
 
+        ExecutePeerKills();
+
         uint count = Math.Min(block.EnemyCount, (uint)SharedBlock.EnemyCapacity);
 
         for (int i = 0; i < count; i++)
@@ -75,6 +81,43 @@ internal sealed class CombatController(SharedBlockView block)
             Apply(block.GetEnemy(i));
         }
     }
+
+    /// <summary>
+    /// Runs the deaths a PEER earned. This is the owner side of the same idea as
+    /// <see cref="KillOnce"/>: a player fighting away from us can bring an enemy down, but
+    /// the health merge floors at one hit point, so without this the last blow can never
+    /// land and a room they cleared alone never actually clears.
+    ///
+    /// It goes through the engine's own lethal damage exactly as a local death does, so the
+    /// corpse, the loot and the OnDeath script all happen here — which is the whole reason
+    /// the owner executes it rather than the peer just deleting its own copy.
+    ///
+    /// The agent has already checked that our own copy is alive and at the floor, so this
+    /// only ever finishes something a peer genuinely fought down.
+    /// </summary>
+    private void ExecutePeerKills()
+    {
+        uint serial = block.KillRequestSerial;
+        if (serial == _appliedKillSerial)
+        {
+            return;
+        }
+
+        _appliedKillSerial = serial;
+
+        uint count = Math.Min(block.KillRequestCount, (uint)SharedBlock.KillRequestCapacity);
+        for (int i = 0; i < count; i++)
+        {
+            uint id = block.KillRequestId(i);
+            if (id != 0 && id != Odyssey.ObjectInvalid)
+            {
+                KillOnce(id);
+            }
+        }
+    }
+
+    /// <summary>Last kill-request serial executed, so each list runs once.</summary>
+    private uint _appliedKillSerial;
 
     private void Apply(EnemyView enemy)
     {

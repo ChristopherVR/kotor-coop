@@ -167,6 +167,14 @@ public interface IGameBridge : IDisposable
     bool SupportsEnemySync => false;
 
     /// <summary>
+    /// Asks the plugin to run the engine's own death for creatures a PEER earned the kill on.
+    /// Only the enemy owner does this: a player fighting away from the owner can bring an
+    /// enemy down but cannot deliver the last point of damage, because the health merge
+    /// floors at 1. Default false when this bridge has no plugin.
+    /// </summary>
+    bool TryRequestKills(IReadOnlyList<uint> objectIds) => false;
+
+    /// <summary>
     /// True while the local player is in a conversation. Enemy state must not be published
     /// during one: the dialogue system disarms every hostile in this instance, and a peer
     /// mirroring that would see its own fight go quiet.
