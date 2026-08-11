@@ -354,6 +354,7 @@ public sealed class CoopAgent(IGameBridge bridge, ICoopSession session, AgentSet
             // take ~2 s to reach the follower's screen. At this cadence it is a few hundred
             // milliseconds, which is the difference between "following" and "lagging".
             PumpDialogue(local, caps);
+            PumpInteractionLocks(local);
             PumpBarks(local);
         }
 
@@ -556,6 +557,12 @@ public sealed class CoopAgent(IGameBridge bridge, ICoopSession session, AgentSet
     private long _dialogueLastActiveMs;
     private string _dialogueHeldPartnerTag = string.Empty;
 
+    /// <summary>The last node the local conversation was really on, held across the engine's
+    /// between-entries flicker so a line change does not read as "position unknown".</summary>
+    private int _dialogueHeldNode = DialogueState.NoNode;
+
+    private uint _dialogueHeldNodeSerial;
+
     /// <summary>How long a conversation may read inactive before it is reported over.
     /// Longer than any between-entries gap, shorter than feels laggy on a real close.</summary>
     private const long DialogueLingerMs = 1500;
@@ -570,6 +577,43 @@ public sealed class CoopAgent(IGameBridge bridge, ICoopSession session, AgentSet
     /// The line is empty until the plugin resolves it (base-game TLK-only lines still read as
     /// empty — see docs/research/dialogue-sync.md); the ownership token is useful on its own.
     /// </summary>
+    /// <summary>
+    /// Claims whatever the local player is interacting with, and hands back every lock anyone
+    /// holds so the plugin can hold the objects IT owns still.
+    ///
+    /// Both directions run every tick, deliberately. The claim is a lease that expires unless
+    /// refreshed, and the lock list is a level that is replaced wholesale — neither has an
+    /// edge that could be dropped, which is what makes a client dying mid-conversation
+    /// harmless rather than a permanently frozen NPC.
+    /// </summary>
+    private void PumpInteractionLocks(in PlayerState local)
+    {
+        bridge.TryReadLocalInteraction(out string tag, out uint kind, out bool active);
+
+        // Sent even when the tag is empty: that is how the session learns which module the
+        // locks are scoped to, and a lock names a tag, which only means anything in one.
+        session.PublishInteractionClaim(
+            local.Module, tag ?? string.Empty, (InteractionKind)kind, active);
+
+        // ⚠ OUR OWN LOCK IS FILTERED OUT HERE, so the plugin can hold everything it is given
+        // without needing to know its own peer id.
+        //
+        // It would be actively wrong to send it: the object WE are interacting with is already
+        // frozen locally by the engine's own dialogue system, and re-clearing its action queue
+        // every pass would be fighting the conversation rather than helping it.
+        IReadOnlyList<InteractionLock> all = session.GetInteractionLocks();
+        List<InteractionLock> theirs = [];
+        foreach (InteractionLock held in all)
+        {
+            if (held.PeerId != session.LocalPeerId)
+            {
+                theirs.Add(held);
+            }
+        }
+
+        bridge.WriteInteractionLocks(theirs);
+    }
+
     private void PumpDialogue(in PlayerState local, SessionCapabilities caps)
     {
         if ((caps & SessionCapabilities.Dialogue) == 0)
@@ -580,7 +624,8 @@ public sealed class CoopAgent(IGameBridge bridge, ICoopSession session, AgentSet
         // What the local player is hearing and doing, straight from the plugin's read.
         bridge.TryReadLocalDialogue(out string speaker, out string line);
         bridge.TryReadLocalDialogueFollow(
-            out string partnerTag, out uint replySerial, out int replyIndex, out byte[] pickLog);
+            out string partnerTag, out uint replySerial, out int replyIndex, out byte[] pickLog,
+            out int nodeIndex, out uint nodeSerial);
 
         // Who owns a conversation right now, from the last broadcast. Read FIRST because it
         // gates the local claim below.
@@ -608,6 +653,20 @@ public sealed class CoopAgent(IGameBridge bridge, ICoopSession session, AgentSet
             {
                 _dialogueHeldPartnerTag = partnerTag;
             }
+
+            // ⚠ The NODE is held across the flicker for the same reason as the tag, and it
+            // matters more. The engine drops its "conversation active" flag for a few frames
+            // BETWEEN ENTRIES, and during that gap the plugin reads no conversation and
+            // publishes -1. Letting that reach the wire would tell the follower "I no longer
+            // know where I am" on every single line change — precisely at the moment the
+            // owner has just moved to a new node and the follower most needs to be sent
+            // there. Hold the last real node instead; the serial only advances when the node
+            // genuinely changed, so holding cannot re-drive anything.
+            if (nodeIndex >= 0)
+            {
+                _dialogueHeldNode = nodeIndex;
+                _dialogueHeldNodeSerial = nodeSerial;
+            }
         }
 
         bool active = rawInDialogue
@@ -615,11 +674,15 @@ public sealed class CoopAgent(IGameBridge bridge, ICoopSession session, AgentSet
         if (!active)
         {
             _dialogueHeldPartnerTag = string.Empty;
+            _dialogueHeldNode = DialogueState.NoNode;
+            _dialogueHeldNodeSerial = 0;
         }
 
         session.PublishDialogue(
             active, speaker, line,
-            active ? _dialogueHeldPartnerTag : string.Empty, replySerial, replyIndex, pickLog);
+            active ? _dialogueHeldPartnerTag : string.Empty, replySerial, replyIndex, pickLog,
+            active ? _dialogueHeldNode : DialogueState.NoNode,
+            active ? _dialogueHeldNodeSerial : 0);
 
         // The other direction: when a peer owns a conversation, hand the plugin who they are
         // talking to and which reply they last picked, so this instance runs the SAME
@@ -631,7 +694,9 @@ public sealed class CoopAgent(IGameBridge bridge, ICoopSession session, AgentSet
             followingPeer ? token.PartnerTag : string.Empty,
             followingPeer ? token.ReplySerial : 0,
             followingPeer ? token.ReplyIndex : 0,
-            followingPeer ? token.PickLog : null);
+            followingPeer ? token.PickLog : null,
+            followingPeer ? token.NodeIndex : DialogueState.NoNode,
+            followingPeer ? token.NodeSerial : 0);
 
         _lastSpectateSerial = token.Serial;
     }

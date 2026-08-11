@@ -23,9 +23,54 @@ internal sealed unsafe class BarkController(SharedBlockView block)
 
     private int _countdown;
 
-    /// <summary>Serials already replayed, so a bark plays once however long it sits in the
-    /// block. Indexed by slot, matching the ring the agent writes.</summary>
-    private readonly uint[] _appliedSerial = new uint[SharedBlock.BarkCapacity];
+    /// <summary>
+    /// Barks already replayed, as (speaker, serial) pairs — NOT indexed by slot.
+    ///
+    /// ⚠ SLOT IS THE WRONG KEY, and keying on it made one bark play seven times. The agent
+    /// writes each delivery into the NEXT slot of the remote ring
+    /// (<c>KotorGameBridge.TryWriteBark</c> advances <c>_barkWriteSlot</c> on every call), so
+    /// a bark delivered more than once occupies a different slot each time and every one of
+    /// them looks new to that slot's own high-water mark. Measured: seven "replayed a peer's
+    /// line from 0x37" for a single bark, in pairs about 160 ms apart.
+    ///
+    /// This was invisible for as long as the channel was broken — every replay failed on a
+    /// speaker that did not resolve, so the duplicates were seven identical failures instead
+    /// of seven beeps.
+    ///
+    /// Dedup belongs on the RECEIVER anyway: barks travel unreliably by design, and sending
+    /// one more than once is a legitimate way to make a cheap, lossy channel likely to
+    /// arrive. What must not happen twice is the NPC opening its mouth.
+    /// </summary>
+    private readonly uint[] _appliedSpeaker = new uint[AppliedMemory];
+    private readonly uint[] _appliedSerial = new uint[AppliedMemory];
+    private int _appliedWrite;
+
+    /// <summary>How many recent barks are remembered for dedup. Comfortably more than the
+    /// ring the agent writes into, so a bark cannot be forgotten while its slot still holds
+    /// it and be replayed a second time.</summary>
+    private const int AppliedMemory = 32;
+
+    /// <summary>Whether this exact bark has already been spoken here. Linear over a short
+    /// array, on a pass that runs a few times a second — the simple thing is the right one.</summary>
+    private bool AlreadyPlayed(uint speaker, uint serial)
+    {
+        for (int i = 0; i < AppliedMemory; i++)
+        {
+            if (_appliedSerial[i] == serial && _appliedSpeaker[i] == speaker)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private void Remember(uint speaker, uint serial)
+    {
+        _appliedSpeaker[_appliedWrite] = speaker;
+        _appliedSerial[_appliedWrite] = serial;
+        _appliedWrite = (_appliedWrite + 1) % AppliedMemory;
+    }
 
     /// <summary>True once the slots have been primed, so barks published before this
     /// instance was listening are not all replayed at once on the first pass.</summary>
@@ -59,10 +104,16 @@ internal sealed unsafe class BarkController(SharedBlockView block)
 
         for (int i = 0; i < SharedBlock.BarkCapacity; i++)
         {
-            _appliedSerial[i] = 0;
             block.SetLocalBark(i, 0, 0, [], [], 0);
         }
 
+        for (int i = 0; i < AppliedMemory; i++)
+        {
+            _appliedSpeaker[i] = 0;
+            _appliedSerial[i] = 0;
+        }
+
+        _appliedWrite = 0;
         _primed = false;
     }
 
@@ -104,22 +155,16 @@ internal sealed unsafe class BarkController(SharedBlockView block)
         {
             BarkView bark = block.GetRemoteBark(i, text, out int lineLength, resRef);
 
-            if (bark.Serial == 0 || bark.Serial == _appliedSerial[i])
+            if (bark.Serial == 0 || AlreadyPlayed(bark.Speaker, bark.Serial))
             {
                 continue;
             }
+
+            Remember(bark.Speaker, bark.Serial);
 
             // First sight of a slot only records where it had got to. Without this, joining
             // a session mid-module would replay every bark the peer had ever thrown.
-            if (!_primed)
-            {
-                _appliedSerial[i] = bark.Serial;
-                continue;
-            }
-
-            _appliedSerial[i] = bark.Serial;
-
-            if (bark.Speaker == 0)
+            if (!_primed || bark.Speaker == 0)
             {
                 continue;
             }
@@ -142,10 +187,12 @@ internal sealed unsafe class BarkController(SharedBlockView block)
             if (_logged < 20)
             {
                 _logged++;
+                // The serial and slot are in the line because "how many times did this play"
+                // is a question the log has already had to answer once, and could not.
                 PluginHost.Log(played
-                    ? $"bark: replayed a peer's line from 0x{bark.Speaker:X}"
+                    ? $"bark: replayed a peer's line from 0x{bark.Speaker:X} (serial {bark.Serial}, slot {i})"
                     : $"bark: could not replay a peer's line from 0x{bark.Speaker:X} "
-                        + "(that creature does not exist here)");
+                        + $"(serial {bark.Serial}, slot {i}) — that creature does not exist here");
             }
         }
 

@@ -330,6 +330,11 @@ internal sealed unsafe class SharedBlockView(byte* baseAddress)
 
     public uint TestAttackTarget => *U32(SharedBlock.OffsetTestAttackTarget);
 
+    /// <summary>Test hook: make a named creature bark, through the engine's own call.</summary>
+    public uint TestBarkSerial => *U32(SharedBlock.OffsetTestBarkSerial);
+
+    public byte* TestBarkTag => baseAddress + SharedBlock.OffsetTestBarkTag;
+
     // ---- damage ledger -----------------------------------------------------------
 
     /// <summary>
@@ -958,6 +963,54 @@ internal sealed unsafe class SharedBlockView(byte* baseAddress)
     public byte* RemoteDialoguePick(int index) =>
         baseAddress + SharedBlock.OffsetRemoteDialoguePicks
         + (Clamp(index, SharedBlock.DialoguePickCapacity) * SharedBlock.DialoguePickStride);
+
+    // ---- dialogue node sync -----------------------------------------------------
+
+    /// <summary>Plugin-written; the entry index the local conversation shows, or -1.</summary>
+    public int LocalDialogueNode
+    {
+        get => *(int*)U32(SharedBlock.OffsetLocalDialogueNode);
+        set => *(int*)U32(SharedBlock.OffsetLocalDialogueNode) = value;
+    }
+
+    /// <summary>Plugin-written; bumped after the node, so the pair is never read torn.</summary>
+    public uint LocalDialogueNodeSerial
+    {
+        get => *U32(SharedBlock.OffsetLocalDialogueNodeSerial);
+        set => *U32(SharedBlock.OffsetLocalDialogueNodeSerial) = value;
+    }
+
+    /// <summary>Agent-written; the entry index the conversation's owner shows, or -1.</summary>
+    public int RemoteDialogueNode => *(int*)U32(SharedBlock.OffsetRemoteDialogueNode);
+
+    /// <summary>Agent-written; bumped when the owner moves to a different node.</summary>
+    public uint RemoteDialogueNodeSerial => *U32(SharedBlock.OffsetRemoteDialogueNodeSerial);
+
+    // ---- per-object interaction locks -------------------------------------------
+
+    /// <summary>Plugin-written; the tag of the object the local player is interacting with.</summary>
+    public byte* LocalInteractionTag => baseAddress + SharedBlock.OffsetLocalInteractionTag;
+
+    public uint LocalInteractionKind
+    {
+        get => *U32(SharedBlock.OffsetLocalInteractionKind);
+        set => *U32(SharedBlock.OffsetLocalInteractionKind) = value;
+    }
+
+    public bool LocalInteractionActive
+    {
+        get => *U32(SharedBlock.OffsetLocalInteractionActive) != 0;
+        set => *U32(SharedBlock.OffsetLocalInteractionActive) = value ? 1u : 0u;
+    }
+
+    /// <summary>Agent-written; how many lock slots are valid, clamped to the capacity.</summary>
+    public uint InteractionLockCount =>
+        Math.Min(*U32(SharedBlock.OffsetInteractionLockCount), (uint)SharedBlock.InteractionLockCapacity);
+
+    /// <summary>Agent-written lock entry base: peerId u32 @0, kind u32 @4, tag[32] @8.</summary>
+    public byte* InteractionLock(int index) =>
+        baseAddress + SharedBlock.OffsetInteractionLocks
+        + (Clamp(index, SharedBlock.InteractionLockCapacity) * SharedBlock.InteractionLockStride);
 
     public ItemSlotView GetItemSlot(int index) =>
         new(baseAddress + SharedBlock.OffsetItemSlots

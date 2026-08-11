@@ -45,6 +45,13 @@ internal sealed unsafe class PartyPresenceController(SharedBlockView block)
     private readonly uint[] _appliedOneShot = new uint[SharedBlock.PartyPresenceCapacity];
     private readonly bool[] _oneShotPrimed = new bool[SharedBlock.PartyPresenceCapacity];
 
+    /// <summary>Per slot: is the body currently held Neutral. Tri-state via
+    /// <see cref="_factionKnown"/> so the first pass always writes.</summary>
+    private readonly bool[] _heldNeutral = new bool[SharedBlock.PartyPresenceCapacity];
+    private readonly bool[] _factionKnown = new bool[SharedBlock.PartyPresenceCapacity];
+
+    private int _repairsLogged;
+
     // mirror_smooth_ms, not the phantom's smooth_ms: companions arrive on the agent's
     // combat pump (~150 ms apart), not the 30 Hz tick — see EnemyPresenceController.
     private readonly MotionSmoother _smoother = new(
@@ -134,10 +141,55 @@ internal sealed unsafe class PartyPresenceController(SharedBlockView block)
         // action) must never contest the writes, so re-claim every pass.
         Odyssey.ClaimCreature(creature);
 
-        // Health travels in the same slot so there is exactly one writer for the body.
-        if (member.Health > 0 && Odyssey.GetCurrentHitPoints(creature) != member.Health)
+        // ⚠ A MIRRORED COMPANION MUST NOT BE A BATTLEFIELD ON A MIRRORING INSTANCE.
+        //
+        // They are faction PLAYER, driven from here, cannot fight back (solo mode freezes the
+        // party AI and the queue is cleared every pass) and are not min-1-hp pinned. Turn
+        // local_combat on and they become the nearest player-faction bodies to every mirrored
+        // enemy: an immortal aggro sink that soaks the whole fight while the local PC is never
+        // touched — and their damage goes nowhere, because there is no client->host channel
+        // for companion health, so the host never sees any of it.
+        //
+        // Held Neutral they stop being targets; pinned min-1-hp they stop being killable here.
+        // Applied in BOTH directions, so switching local_combat off — or this instance ceasing
+        // to mirror — puts them back in the player faction on the next pass.
+        ApplyCompanionFaction(
+            slot, creature, objectId,
+            neutral: EnemyPresenceController.LocalCombat && block.DamageDealtEnabled);
+
+        // ⚠ THE HOST OWNS COMPANION HEALTH — INCLUDING WHEN IT IS ZERO.
+        //
+        // The old `Health > 0` guard is why a client could end up with a companion lying down
+        // under a FULL health bar, permanently: a burst between two ~150 ms passes drops the
+        // body into the engine's temp-death, and the next pass wrote the host's positive
+        // figure straight onto a GetDeadTemp body. The bar reads 34/34, the companion never
+        // stands up, and if it happens to all of them this instance reaches a party wipe the
+        // host never saw — which the agent then arbitrates across the whole session.
+        //
+        // So write what the host says, whatever it says, then repair the state that implies.
+        if (Odyssey.GetCurrentHitPoints(creature) != member.Health)
         {
             Odyssey.SetCurrentHitPoints(creature, member.Health);
+        }
+
+        // The repair, through the engine's own Resurrection effect rather than a hit-point
+        // poke: that is the only path that clears the death animation and restores the AI
+        // flags. Hit points are already correct from the write above, and deliberately not set
+        // in the same call — a heal landing while the body still reads dead is dropped by the
+        // engine's own rule.
+        if (member.Health > 0 && Odyssey.IsDowned(creature))
+        {
+            Odyssey.SetRaiseable(creature);
+
+            bool revived = Odyssey.ReviveCreature(objectId, out int failure);
+            if (_repairsLogged < 10)
+            {
+                _repairsLogged++;
+                PluginHost.Log(revived
+                    ? $"party drive: stood companion 0x{objectId:X} back up — it was down here "
+                        + $"while the host has it on {member.Health} hp"
+                    : $"party drive: could not revive companion 0x{objectId:X} (failure {failure})");
+            }
         }
 
         if (!_oneShotPrimed[slot])
@@ -219,6 +271,47 @@ internal sealed unsafe class PartyPresenceController(SharedBlockView block)
         _trackedId[slot] = 0;
         _appliedOneShot[slot] = 0;
         _oneShotPrimed[slot] = false;
+        _factionKnown[slot] = false;
         _smoother.Reset(slot);
+    }
+
+    /// <summary>
+    /// Puts a mirrored companion in or out of the PLAYER faction, on the EDGE only.
+    ///
+    /// The faction call walks member lists, so a party standing still in a fight must not pay
+    /// that every frame. On the way to Neutral it also pins min-1-hp and releases anything
+    /// already locked onto the body — the pin ALONE re-creates the aggro lock, because a body
+    /// that cannot die is never released by the engine's own retention test. That is exactly
+    /// the mistake the original aggro-sink phantom design made.
+    ///
+    /// ⚠ SAVE HAZARD, UNRESOLVED. Faction membership and min-1-hp are both persisted. A client
+    /// that saves while local_combat is on could bake a Neutral, unkillable companion into
+    /// that save. Restoring on the way out covers a live toggle but not a crash mid-session.
+    /// </summary>
+    private void ApplyCompanionFaction(int slot, nint creature, uint objectId, bool neutral)
+    {
+        if (_factionKnown[slot] && _heldNeutral[slot] == neutral)
+        {
+            return;
+        }
+
+        if (!Odyssey.SetCreatureFaction(objectId, neutral ? Odyssey.FactionNeutralId : Odyssey.FactionPlayer))
+        {
+            return; // try again next pass rather than latching a state we did not achieve
+        }
+
+        Odyssey.SetMinOneHitPoint(creature, neutral);
+
+        if (neutral)
+        {
+            Odyssey.ReleaseAttackersOn(creature);
+        }
+
+        _heldNeutral[slot] = neutral;
+        _factionKnown[slot] = true;
+
+        PluginHost.Log(neutral
+            ? $"party drive: companion 0x{objectId:X} held neutral and pinned — the host owns its health"
+            : $"party drive: companion 0x{objectId:X} back in the player faction");
     }
 }

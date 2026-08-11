@@ -110,7 +110,68 @@ internal sealed unsafe class EnemyPresenceController(SharedBlockView block)
     /// phantom over there. IncomingDamageController reads this same flag and stands down when
     /// it is set, so the two always move together.
     /// </summary>
-    public static readonly bool LocalCombat = PluginConfig.ReadBool("local_combat", false);
+    public static readonly bool LocalCombat = PluginConfig.ReadBool("local_combat", true);
+
+    /// <summary>
+    /// How close a driven enemy's local body must be to this player before its owner's report
+    /// may be absorbed, in world units (coop.ini <c>local_combat_range</c>).
+    ///
+    /// ⚠ This closes the hole the identity test alone leaves open. A mirrored enemy is placed
+    /// where the OWNER's engine has it, which is next to the OWNER's player — so when the two
+    /// players are apart the local copy can never reach this player, never lands a hit, and a
+    /// blanket absorb would make this player invulnerable for the whole fight. The measured
+    /// "apart" case is ~120 units (docs/research/combat-when-apart.md §1b), so 20 separates
+    /// the two cases with a wide margin instead of trying to model weapon reach.
+    /// </summary>
+    private static readonly float EngagementRangeSquared =
+        Squared(Math.Clamp(PluginConfig.ReadFloat("local_combat_range", 20f), 1f, 200f));
+
+    private static float Squared(float value) => value * value;
+
+    /// <summary>Owner-side ids driven on the most recent pass whose local body stood close
+    /// enough to this player for its own AI to be fighting them, and when that was recorded.
+    /// Frame thread only, both writes and reads.</summary>
+    private static readonly uint[] EngagedOwnerId = new uint[SharedBlock.EnemyCapacity];
+    private static int _engagedCount;
+    private static long _engagedAtTicks;
+
+    /// <summary>Past this the record is not evidence of anything — no drive pass has run at
+    /// all (a module change, the conversation hold, an ended session), so nothing local is
+    /// fighting and every forwarded point is this player's to take.</summary>
+    private static readonly long EngagedFreshTicks = TimeSpan.FromSeconds(1).Ticks;
+
+    /// <summary>
+    /// Whether <paramref name="ownerObjectId"/> — an attacker id in the OWNER's id space, the
+    /// space the enemy census and the phantom-damage channel both use — is an enemy this
+    /// instance is genuinely driving AND is standing close enough to this player to be dealing
+    /// them damage here.
+    ///
+    /// ⚠ THIS IS THE ENTIRE LICENCE FOR ABSORBING FORWARDED DAMAGE, and every class of damage
+    /// the old blanket absorb swallowed silently fails one of the two tests: an enemy shed by
+    /// the census cap or by distance was never driven; a creature the resolver skipped was
+    /// never driven; a phantom-id collision returns before the drive; a mine, a trap or a
+    /// scripted EffectDamage names an attacker that is not in the census at all; the
+    /// conversation hold stops the pass so the record goes stale; and a fight 120 units away
+    /// has no local body near this player. All of them now APPLY.
+    /// </summary>
+    public static bool IsLocallyEngaged(uint ownerObjectId)
+    {
+        if (ownerObjectId is 0 or Odyssey.ObjectInvalid
+            || DateTime.UtcNow.Ticks - _engagedAtTicks > EngagedFreshTicks)
+        {
+            return false;
+        }
+
+        for (int i = 0; i < _engagedCount; i++)
+        {
+            if (EngagedOwnerId[i] == ownerObjectId)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
 
     /// <summary>
     /// Forgets everything on a module change: ids reset across transitions, every cached
@@ -126,6 +187,11 @@ internal sealed unsafe class EnemyPresenceController(SharedBlockView block)
 
         block.EnemyPresenceCount = 0;
         _drivenLogged = -1;
+
+        // Ids are per module load: a stale engagement record would license absorbing damage
+        // billed to a completely different creature.
+        _engagedCount = 0;
+        _engagedAtTicks = 0;
     }
 
     public void OnFrame()
@@ -171,6 +237,10 @@ internal sealed unsafe class EnemyPresenceController(SharedBlockView block)
         nint player = (nint)block.PlayerCreature;
         int driven = 0;
 
+        // Rebuilt from scratch every pass, so a body that stops being driven — or walks out
+        // of range — stops licensing an absorb on the very next pass rather than decaying.
+        _engagedCount = 0;
+
         for (int i = 0; i < count; i++)
         {
             EnemyPresenceView enemy = block.GetEnemyPresence(i);
@@ -186,6 +256,14 @@ internal sealed unsafe class EnemyPresenceController(SharedBlockView block)
         }
 
         MaterialisedEnemies.Sweep(now);
+
+        // ⚠ STAMPED ONLY HERE, at the bottom of a pass that actually ran. Every early return
+        // above -- no session, drive disabled, a local conversation, an empty census -- leaves
+        // the stamp where it was, so IsLocallyEngaged goes false within a second and
+        // IncomingDamageController APPLIES instead of absorbing. That is deliberate: the
+        // conversation hold in particular used to be absorbed, when the pre-local_combat code
+        // held that debt on purpose.
+        _engagedAtTicks = DateTime.UtcNow.Ticks;
 
         // One line when the census changes, not per frame.
         if (driven != _drivenLogged)
@@ -271,7 +349,22 @@ internal sealed unsafe class EnemyPresenceController(SharedBlockView block)
         // With local combat on, the queue is LEFT ALONE — the same wipe that stops the
         // enemy walking away also deletes its swings, which is why a mirroring instance is
         // never in combat. See Odyssey.ClaimCreature(nint, bool).
-        Odyssey.ClaimCreature(creature, clearActions: !LocalCombat);
+        // With local combat on the wipe is TARGETED rather than absent. "Leave the queue
+        // alone" was the first attempt and it is worse than the bug it replaced: this
+        // controller overwrites the body position from the owner every pass, so a queued move
+        // never reduces its own distance, never completes, and wedges the queue head
+        // permanently -- the attacks behind it never run and this instance still never enters
+        // combat, only now the body also fights our placement. Odyssey reads the head node's
+        // action type (node+0x00, dispatched by RunActions 0x0057F4A0) and wipes only when it
+        // is a move-class action.
+        if (LocalCombat)
+        {
+            Odyssey.ClaimCreatureForFight(creature);
+        }
+        else
+        {
+            Odyssey.ClaimCreature(creature, clearActions: true);
+        }
 
         // Re-assert every pass, not once at spawn: a materialised body is marked as a
         // mirrored enemy when it is created and lives for the rest of the module, so a
@@ -298,7 +391,42 @@ internal sealed unsafe class EnemyPresenceController(SharedBlockView block)
         }
 
         Drive(slot, creature, enemy, now);
+
+        if (LocalCombat)
+        {
+            // The other half of the position fight: our own SetPosition suppresses the dirty
+            // bit, the local AI does not. See Odyssey.ClearPositionDirty.
+            Odyssey.ClearPositionDirty(creature);
+
+            RecordEngagement(enemy.ObjectId, creature, player);
+        }
+
         return true;
+    }
+
+    /// <summary>
+    /// Records a driven enemy as "close enough to be fighting this player HERE" -- the fact
+    /// that licenses IncomingDamageController to absorb the owner report for it.
+    ///
+    /// Planar distance: the Z of a driven body is the owner's, and a ramp between two players
+    /// standing in the same fight is a metre of height, not a different floor.
+    /// </summary>
+    private static void RecordEngagement(uint ownerObjectId, nint creature, nint player)
+    {
+        if (player == 0 || _engagedCount >= EngagedOwnerId.Length)
+        {
+            return;
+        }
+
+        Vec3 body = Odyssey.GetPosition(creature);
+        Vec3 them = Odyssey.GetPosition(player);
+        float dx = body.X - them.X;
+        float dy = body.Y - them.Y;
+
+        if ((dx * dx) + (dy * dy) <= EngagementRangeSquared)
+        {
+            EngagedOwnerId[_engagedCount++] = ownerObjectId;
+        }
     }
 
     /// <summary>Resolves and caches the slot's creature, revalidating the cached pointer

@@ -174,14 +174,17 @@ public sealed class CoopHost : ICoopSession
 
     public void PublishDialogue(
         bool active, string speakerName, string line,
-        string partnerTag = "", uint replySerial = 0, int replyIndex = 0, byte[]? pickLog = null)
+        string partnerTag = "", uint replySerial = 0, int replyIndex = 0, byte[]? pickLog = null,
+        int nodeIndex = DialogueState.NoNode, uint nodeSerial = 0)
     {
         lock (_gate)
         {
             // The host's own claim goes through the same arbiter as a client's, so ownership
             // and the serial are decided in exactly one place.
             _dialogue = DialogueArbiter.Apply(
-                _dialogue, HostPeerId, active, speakerName, line, partnerTag, replySerial, replyIndex, pickLog);
+                _dialogue, HostPeerId, active, speakerName, line, partnerTag, replySerial, replyIndex, pickLog,
+                nodeIndex, nodeSerial,
+                _interactionLocks.HolderOf(_interactionModule, partnerTag ?? string.Empty, SessionClock.NowMs));
         }
     }
 
@@ -495,6 +498,103 @@ public sealed class CoopHost : ICoopSession
     private readonly Queue<BarkPacket> _barkInbox = new();
     private readonly Queue<(BarkPacket Packet, uint ExceptPeer)> _barkOutbox = new();
 
+    // ---- per-object interaction locks -------------------------------------------------
+    //
+    // "Hold this one still, I am using it." The host arbitrates and broadcasts; every peer
+    // applies the result to the objects IT owns. See InteractionLockStore for why this is a
+    // lease rather than a claim/release handshake.
+
+    private readonly InteractionLockStore _interactionLocks = new();
+
+    /// <summary>The host's own claim goes through the same store as a client's, so ownership
+    /// is decided in exactly one place — the same discipline as the dialogue token.
+    ///
+    /// Called every tick whether or not anything is claimed, so the module the broadcast is
+    /// scoped to is always current: a lock names a TAG, and tags only mean anything inside
+    /// the module that loaded them.</summary>
+    public void PublishInteractionClaim(string module, string tag, InteractionKind kind, bool active)
+    {
+        _interactionModule = module ?? string.Empty;
+
+        if (string.IsNullOrEmpty(tag))
+        {
+            return;
+        }
+
+        _interactionLocks.Claim(
+            new InteractionClaimPacket(HostPeerId, _interactionModule, tag, kind, active),
+            SessionClock.NowMs);
+    }
+
+    private string _interactionModule = string.Empty;
+
+    public IReadOnlyList<InteractionLock> GetInteractionLocks()
+    {
+        lock (_gate)
+        {
+            return _interactionLocksLatest;
+        }
+    }
+
+    /// <summary>What was last broadcast, so the host's own plugin sees exactly what the
+    /// clients see rather than a separately-computed opinion.</summary>
+    private IReadOnlyList<InteractionLock> _interactionLocksLatest = [];
+
+    private void HandleInteractionClaim(ReadOnlySpan<byte> span)
+    {
+        if (PacketCodec.ReadInteractionClaim(span) is not { } claim)
+        {
+            _channel.NoteMalformed();
+            return;
+        }
+
+        // Only a known peer may claim, and only for its own peer id — the same rule the
+        // dialogue token uses, and for the same reason.
+        lock (_gate)
+        {
+            if (!_peers.ContainsKey(claim.PeerId))
+            {
+                return;
+            }
+        }
+
+        _interactionLocks.Claim(claim, SessionClock.NowMs);
+    }
+
+    /// <summary>
+    /// Broadcasts the live locks for a module. Sent as a LEVEL every tick, not as edges: a
+    /// lost datagram then costs one tick of a stale hold rather than an NPC held forever, and
+    /// a peer that joins mid-conversation learns the state without anyone re-announcing it.
+    /// </summary>
+    private void BroadcastInteractionLocks(List<PeerConnection> recipients)
+    {
+        IReadOnlyList<InteractionLock> locks =
+            _interactionLocks.Collect(_interactionModule, SessionClock.NowMs);
+
+        lock (_gate)
+        {
+            _interactionLocksLatest = locks;
+        }
+
+        if (recipients.Count == 0)
+        {
+            return;
+        }
+
+        int length = PacketCodec.Write(
+            _sendBuffer,
+            new InteractionLockPacket(SessionClock.NowMs, _interactionModule, locks));
+        if (length <= 0)
+        {
+            return;
+        }
+
+        foreach (PeerConnection peer in recipients)
+        {
+            _channel.Send(peer.EndPoint, _sendBuffer.AsSpan(0, length));
+        }
+    }
+
     public void PublishBark(string module, uint speaker, byte[] text, byte[] soundResRef, uint flags, uint serial)
     {
         BarkPacket packet = new(LocalPeerId, module, speaker, text, soundResRef, flags, serial);
@@ -748,6 +848,7 @@ public sealed class CoopHost : ICoopSession
                     ReleaseDialogueIfOwnedBy(id);
                     ForgetPhantomDamageFor(id);
                     _encounterTriggers.Forget(id);
+                    _interactionLocks.Forget(id);
                 }
             }
 
@@ -800,6 +901,7 @@ public sealed class CoopHost : ICoopSession
         BroadcastContainerLoot(now, recipients);
         BroadcastPhantomDamage(recipients);
         BroadcastBarks(recipients);
+        BroadcastInteractionLocks(recipients);
         BroadcastWorldDigest(now, recipients);
         FlushChat(recipients);
         _buffer.PruneStale(now, _settings.PeerTimeoutMs);
@@ -1086,6 +1188,10 @@ public sealed class CoopHost : ICoopSession
 
             case PacketType.Bark:
                 HandleBark(span);
+                break;
+
+            case PacketType.InteractionClaim:
+                HandleInteractionClaim(span);
                 break;
 
             case PacketType.Ping:
@@ -1382,7 +1488,10 @@ public sealed class CoopHost : ICoopSession
             {
                 _dialogue = DialogueArbiter.Apply(
                     _dialogue, request.PeerId, request.Active, request.SpeakerName, request.Line,
-                    request.PartnerTag, request.ReplySerial, request.ReplyIndex, request.PickLog);
+                    request.PartnerTag, request.ReplySerial, request.ReplyIndex, request.PickLog,
+                    request.NodeIndex, request.NodeSerial,
+                    _interactionLocks.HolderOf(
+                        _interactionModule, request.PartnerTag ?? string.Empty, SessionClock.NowMs));
             }
         }
     }
@@ -1435,6 +1544,11 @@ public sealed class CoopHost : ICoopSession
             ReleaseDialogueIfOwnedBy(bye.PeerId);
             ForgetPhantomDamageFor(bye.PeerId);
         }
+
+        // Outside the lock: the store has its own. A departing peer must not keep an NPC
+        // held — the lease would expire it anyway, but a player should not have to wait out
+        // a timeout to talk to someone the last player left mid-sentence.
+        _interactionLocks.Forget(bye.PeerId);
 
         _buffer.Remove(bye.PeerId);
         _encounterTriggers.Forget(bye.PeerId);

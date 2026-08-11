@@ -95,6 +95,12 @@ function WaitFor2([scriptblock]$condition, [int]$seconds) {
     }
     return $false
 }
+function NewLogLines($path, [int]$since) {
+    if (-not (Test-Path $path)) { return @() }
+    $lines = @(Get-Content $path)
+    if ($lines.Count -le $since) { return @() }
+    return $lines[$since..($lines.Count - 1)]
+}
 function WaitForLog($path, $pattern, [int]$since, [int]$seconds) {
     for ($i = 0; $i -lt ($seconds * 2); $i++) {
         if (LogHasSince $path $pattern $since) { return $true }
@@ -403,6 +409,47 @@ Start-Sleep -Seconds 6
 $clientPartner = [VF]::Str($h2, $b2 + 0x1200, 32)
 Check 'the peer cannot start a second conversation' ($clientPartner -ne 'carth') `
     "client is talking to '$clientPartner', not 'carth'"
+
+# --- 11a. the interaction lock reaches the object's OWNER ---------------------------------
+# Section 11 leaves the HOST owning a conversation with end_trask and the CLIENT following it.
+# The client's own claim loses that race (the host got there first), so the lock the CLIENT
+# should be seeing is the host's — one object held by a peer.
+#
+# This is the channel that fixes "Trask keeps walking around on the other screen": ownership
+# is one-directional, so without a lock the owner's AI is never told anything is happening.
+$clientLocks = [VF]::U32($h2, $b2 + 0x1358)
+Check 'an interaction lock reaches the other instance' ($clientLocks -ge 1) `
+    "client sees $clientLocks object(s) held by a peer"
+
+# --- 11b. NPC barks reach the other player ------------------------------------------------
+# The one-line bubble an NPC throws up without ever entering the dialogue system — the utility
+# droid's beep. It reaches NO other channel, so every check above can pass while one player
+# hears a droid and the other gets silence, which is exactly how this shipped broken twice.
+#
+# ⚠ Close the conversation first: BarkController skips replay while a conversation owns the
+# screen, and section 11 deliberately leaves one open. Without this the check fails for a
+# reason that has nothing to do with barks — the same trap section 11 itself carries.
+CloseConversations $h1 $b1
+CloseConversations $h2 $b2
+Start-Sleep -Seconds 2
+
+$barkMark = LogLines $Log2
+$weld = [byte[]]::new(32)
+[Array]::Copy([Text.Encoding]::ASCII.GetBytes('end_weld'), $weld, 8)
+for ($i = 0; $i -lt 32; $i += 4) { [VF]::W32($h1, $b1 + 0x1DB0 + $i, [BitConverter]::ToInt32($weld, $i)) | Out-Null }
+[VF]::W32($h1, $b1 + 0x1DD0, [int]([VF]::U32($h1, $b1 + 0x1DD0) + 1)) | Out-Null
+
+# The oracle is the CLIENT saying it spoke the line. The host capturing something was never
+# in doubt — it captured `this` instead of the speaker's object id and asked the far side for
+# a creature numbered 0x011680D0.
+Check 'an NPC bark reaches the other player' (WaitForLog $Log2 "bark: replayed a peer's line" $barkMark 12) ''
+
+# And exactly ONCE. The remote ring is written to a fresh slot on every delivery, so a
+# per-slot high-water mark let a single bark play seven times — invisible for as long as
+# every replay was failing anyway.
+Start-Sleep -Seconds 3
+$barkPlays = @(NewLogLines $Log2 $barkMark | Where-Object { $_ -match "bark: replayed a peer's line" }).Count
+Check 'that bark is spoken once, not once per delivery' ($barkPlays -eq 1) "replayed $barkPlays time(s)"
 
 # --- 12. client-triggered encounters ------------------------------------------------
 # Plumbing only, deliberately: end_m01aa has NO encounters at all (checked offline with

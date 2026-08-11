@@ -151,10 +151,26 @@ public interface ICoopSession : IDisposable
     /// </summary>
     void PublishDialogue(
         bool active, string speakerName, string line,
-        string partnerTag = "", uint replySerial = 0, int replyIndex = 0, byte[]? pickLog = null);
+        string partnerTag = "", uint replySerial = 0, int replyIndex = 0, byte[]? pickLog = null,
+        int nodeIndex = DialogueState.NoNode, uint nodeSerial = 0);
 
     /// <summary>The authoritative conversation token — who, if anyone, is mid-dialogue.</summary>
     DialogueState GetDialogue();
+
+    /// <summary>
+    /// Claims (or stops claiming) a single world object — "hold this one still, I am using
+    /// it". An empty <paramref name="tag"/> claims nothing and only keeps the session's idea
+    /// of the current module fresh, so this is safe and expected to call every tick.
+    ///
+    /// A LEASE: the claim is re-sent while it is held and expires on its own if the claimant
+    /// goes away. There is no release message to lose, which is the point — see
+    /// <c>InteractionLockStore</c>.
+    /// </summary>
+    void PublishInteractionClaim(string module, string tag, InteractionKind kind, bool active) { }
+
+    /// <summary>Every object currently held, by anyone, in the local module. Each peer applies
+    /// this to the objects IT owns.</summary>
+    IReadOnlyList<InteractionLock> GetInteractionLocks() => [];
 
     /// <summary>Host only: publish the party's gold and the PC's experience. Ignored on a client.</summary>
     void PublishProgression(uint gold, uint experience);

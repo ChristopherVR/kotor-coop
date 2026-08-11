@@ -19,11 +19,21 @@ namespace KotorCoop.Protocol;
 /// spectator can open the identical conversation against its own copy of that creature.
 /// A tag rather than an object id: ids are per-load and a spectator that joined through a
 /// different path could resolve a different body.</item>
-/// <item><see cref="ReplySerial"/> / <see cref="ReplyIndex"/> — every reply the owner picks,
-/// as the slot index they clicked. Replaying the same slot on the spectator walks its copy
-/// of the .dlg down the identical branch, which is what keeps the two conversations on the
-/// same line. Only the owner may pick; the spectator's ability to commit a reply is turned
-/// off while it follows.</item>
+/// <item><see cref="NodeIndex"/> / <see cref="NodeSerial"/> — WHERE THE OWNER IS: the index
+/// of the dialogue entry on screen. This is what the follower is driven by. An entry index
+/// is a plain array position in the .dlg both instances loaded, so it means the same thing
+/// on both; it is also the engine's own notion of a conversation's position, which it checks
+/// (<c>CSWSDialog::HandleReply</c> refuses a reply whose claimed entry index does not match
+/// the live one). -1 means "unknown" and is never driven.</item>
+/// <item><see cref="ReplySerial"/> / <see cref="ReplyIndex"/> / <see cref="PickLog"/> — what
+/// the owner PRESSED. ⚠ DIAGNOSTIC ONLY. This used to be what the spectator replayed, and
+/// replaying it cannot converge: a reply slot is not a property of the conversation but of
+/// one instance's evaluation of it. The starting entry, the set of replies offered, and a
+/// reply's outgoing link are each chosen by scripts that run separately on each machine, so
+/// "slot 1" is not reliably the same branch on the two screens — and a follower gated on a
+/// line it can only reach by applying the very pick it is gating simply stops forever. Only
+/// the owner may pick; the spectator's ability to commit a reply is turned off while it
+/// follows.</item>
 /// </list>
 ///
 /// <see cref="SpeakerName"/> and <see cref="Line"/> remain as a diagnostic read of the
@@ -38,10 +48,17 @@ public readonly record struct DialogueState(
     string PartnerTag = "",
     uint ReplySerial = 0,
     int ReplyIndex = 0,
-    byte[]? PickLog = null)
+    byte[]? PickLog = null,
+    int NodeIndex = -1, // = NoNode; a record's own const is not in scope for its parameter list
+    uint NodeSerial = 0)
 {
     /// <summary>The pick log's fixed wire size: 8 entries x (serial, slot, lineHash).</summary>
     public const int PickLogBytes = 96;
+
+    /// <summary>"The owner's position is not known." Never driven — a follower that cannot be
+    /// told where to go waits where it is, which is recoverable, rather than being sent to
+    /// node 0, which is the top of the conversation.</summary>
+    public const int NoNode = -1;
 
     public static DialogueState Idle { get; } = new(false, 0, 0, string.Empty, string.Empty);
 

@@ -420,6 +420,68 @@ public class PacketCodecTests
     }
 
     [Fact]
+    public void InteractionClaimRoundTrips()
+    {
+        Span<byte> buffer = stackalloc byte[ProtocolConstants.MaxPacketSize];
+        InteractionClaimPacket original =
+            new(PeerId: 5, "end_m01aa", "end_trask", InteractionKind.Conversation, Active: true);
+
+        int length = PacketCodec.Write(buffer, original);
+        Assert.True(length > 0);
+        Assert.Equal(original, PacketCodec.ReadInteractionClaim(buffer[..length]));
+    }
+
+    [Fact]
+    public void InteractionClaimRejectsAnUnknownKind()
+    {
+        // A lock whose release rules this build does not know is worse than no lock: it is
+        // the OWNER that would hold the body and never learn when to let go.
+        Span<byte> buffer = stackalloc byte[ProtocolConstants.MaxPacketSize];
+        int length = PacketCodec.Write(
+            buffer,
+            new InteractionClaimPacket(5, "end_m01aa", "end_trask", InteractionKind.Conversation, true));
+
+        buffer[length - 2] = 0x7F; // the kind byte, second from the end
+
+        Assert.Null(PacketCodec.ReadInteractionClaim(buffer[..length]));
+    }
+
+    [Fact]
+    public void InteractionLockRoundTrips()
+    {
+        Span<byte> buffer = stackalloc byte[ProtocolConstants.MaxPacketSize];
+        InteractionLockPacket original = new(
+            ServerTimeMs: 1234,
+            "end_m01aa",
+            [new InteractionLock(2, "end_trask", InteractionKind.Conversation)]);
+
+        int length = PacketCodec.Write(buffer, original);
+        InteractionLockPacket? decoded = PacketCodec.ReadInteractionLock(buffer[..length]);
+
+        Assert.NotNull(decoded);
+        Assert.Equal(original.ServerTimeMs, decoded.ServerTimeMs);
+        Assert.Equal(original.Module, decoded.Module);
+        Assert.Equal(original.Locks, decoded.Locks);
+    }
+
+    [Fact]
+    public void InteractionLockTruncatesBeyondTheCap()
+    {
+        Span<byte> buffer = stackalloc byte[ProtocolConstants.MaxPacketSize];
+        InteractionLock[] tooMany =
+        [
+            .. Enumerable.Range(1, ProtocolConstants.MaxInteractionLocks + 3)
+                .Select(i => new InteractionLock((uint)i, $"npc_{i}", InteractionKind.Conversation)),
+        ];
+
+        int length = PacketCodec.Write(buffer, new InteractionLockPacket(0, "end_m01aa", tooMany));
+        InteractionLockPacket? decoded = PacketCodec.ReadInteractionLock(buffer[..length]);
+
+        Assert.NotNull(decoded);
+        Assert.Equal(ProtocolConstants.MaxInteractionLocks, decoded.Locks.Count);
+    }
+
+    [Fact]
     public void EncounterTriggerRoundTrips()
     {
         Span<byte> buffer = stackalloc byte[ProtocolConstants.MaxPacketSize];

@@ -47,8 +47,19 @@ public static class ProtocolConstants
     /// encounter or script spawn) — before this such an enemy was invisible on the mirror
     /// while still able to hurt its player through the phantom.
     /// Version 19: Bark (34) — the one-line NPC bubbles that never touch the dialogue system
-    /// and so reached no other channel at all.</summary>
-    public const byte Version = 19;
+    /// and so reached no other channel at all.
+    /// Version 20: InteractionClaim (35) / InteractionLock (36) — a per-object lock the
+    /// object's OWNER honours. Ownership was one-directional (shared-state-audit §4): a
+    /// client could open a conversation with a host-owned NPC and the host's AI, never told,
+    /// kept walking him around. Shaped as a LEASE so a client that dies mid-conversation
+    /// cannot strand the NPC.
+    /// Version 21: DialogueState carries the owner's NODE — the index of the dialogue entry
+    /// on screen — and the follower is driven onto that entry instead of replaying the reply
+    /// SLOT the owner pressed. Slot replay can never converge: which entry a conversation
+    /// starts on, which replies are offered, and where a reply leads are all decided by
+    /// scripts that run separately on each instance, so a slot does not name the same branch
+    /// on two machines. The pick fields stay on the wire as a diagnostic.</summary>
+    public const byte Version = 21;
 
     /// <summary>Journal quest tags are resrefs plus a little slack.</summary>
     public const int MaxJournalTagLength = 32;
@@ -99,6 +110,14 @@ public static class ProtocolConstants
     /// packet, not because a fifth is expected.
     /// </summary>
     public const int MaxEncounterTriggers = 4;
+
+    /// <summary>
+    /// Objects locked at once across the whole session. One conversation at a time is already
+    /// the session rule, so this is headroom for the non-dialogue interactions the same
+    /// primitive will carry (a container being looted, a workbench in use) rather than a
+    /// number anyone is expected to reach.
+    /// </summary>
+    public const int MaxInteractionLocks = 4;
 
     /// <summary>
     /// The spectate line carried on the dialogue token.

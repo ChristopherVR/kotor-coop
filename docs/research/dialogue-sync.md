@@ -626,3 +626,110 @@ times in a row, when the client's PC had been left across the room by the combat
 `FollowOpenTimeoutMs` is 15 s and the server walks the player the whole way first. The retry
 covers it (that is what the backoff is for) but a spectator far from the speaker can spend
 several rounds of it before catching up.
+
+---
+
+## Node sync: replaying the owner's POSITION, not their pick (2026-08-11, live-verified)
+
+Slot replay is gone. Everything below was measured against two live instances, not inferred.
+
+### Why reply-slot replay could never converge
+
+A reply slot is not a property of the conversation. It is a property of **one instance's
+evaluation** of the conversation, and three separate decisions inside a dialogue are taken
+independently on each machine by scripts reading that machine's own world state:
+
+* **Where it starts.** `CSWSDialog::GetStartEntry 0x005A3640` takes the first starting entry
+  whose `Active` script passes. `end_trask01.dlg` has 19 starting entries, 18 conditional.
+* **Which replies are offered.** The panel's slots are *compacted* over the links that passed
+  locally (the real link index lives at `panel+0x1970[slot]`), so one differently-filtered
+  link shifts every later slot.
+* **Where a reply goes.** Its outgoing link is first-that-passes as well.
+
+**Measured**, and this is the finding that settles it: with both instances on the same save in
+the same module, the host's conversation started on entry **29** and the client's on entry
+**19** — *before any pick was made at all*. No amount of correcting the pick log could have
+fixed that, because no pick was involved.
+
+### The current entry index is `CSWSDialog+0x70`, not `+0x60`
+
+`+0x60` was a candidate picked out of a "+0x60..+0x74 band" without a proof, and it is the
+wrong dword. `+0x70` is settled twice over, both times by the engine using it as an index:
+
+* `CSWSDialog::SendDialogEntry` loads it at 0x005A4045 and indexes the entry array —
+  `imul eax, eax, 0xB0` against `[esi+0x08]`, and 0xB0 is exactly `sizeof(CSWSDialogEntry)`
+  with `+0x08` exactly the `entries` pointer;
+* `CSWSDialog::HandleReply` compares the caller's claimed entry index against it at
+  0x005A0403 and refuses the reply when they differ — the engine's **own desync check**, on
+  this field.
+
+Live: a host mid-conversation read `node 29/74`, stable across a 30 s sample.
+
+### The owner object is the one that names itself
+
+`CSWSObject::UpdateDialog 0x004CD583` refuses to run unless `[obj+0x54] == [obj+0x04]` — the
+dialog-owner id equals the object's own id. That equality **is** the definition of the object
+a conversation hangs off; everything else is a participant.
+
+### ⚠ Drive through `CSWSDialog::SendDialogEntry 0x005A4010`, NOT the CSWSObject wrapper
+
+This is the difference between a follower that moves and one that does not, and it cost two
+live runs to find.
+
+`CSWSObject::SendDialogEntry 0x004CD460` consults `CSWSObject::IsDialogDelay 0x004CD2D0`
+first and, when that says wait, **queues** the entry (`+0x4C`, flag `+0x48`) and returns
+**success** having sent nothing. Measured on a live follower:
+
+```
+dialogue: the engine has deferred 1200 attempts to move from 19 to 29; still trying —
+  owner 0x127 node 19/74 pending 1:29 sendGate 0 isDialogDelay 1 delay 0:37591 last 0:17591
+```
+
+`pending 1:29` — the request was sitting in the queue. The queue is only ever flushed by
+`UpdateDialog`, i.e. by the local pacing a follower is not supposed to be running.
+
+That gate is not wrong, it is simply **not ours**: it exists to pace an *owner's* conversation
+against its own audio. A follower's pacing authority is the other player. So the inner
+producer is called directly — `__thiscall(dialog)(CSWSObject* speaker, int, int entryIndex,
+int* status)`, `ret 0x10` (epilogues 0x005A414A / 0x005A41B3 / 0x005A41F7 / 0x005A4259). It
+bounds-checks the entry index itself at 0x005A41FD, and it is the same function the deferral
+would eventually have called.
+
+It is also the single call site of `CGuiInGame::HandleDialogSound` (the voice-over) and of the
+lipsync arming that follows — so driving the node brings the line, its audio and its mouth
+together. "Subtitles stop, lips not synced, audio not synced" is **one** defect, not three.
+
+⚠ **A successful call is not an arrival.** Banking the serial on a reported success stranded
+the follower for the rest of the conversation. The node itself is the acknowledgement: nothing
+is recorded until a re-read shows the engine actually moved.
+
+### What was measured, end to end
+
+`tools/dlgprobe.ps1` now samples both instances' node columns, makes the client click to join,
+and makes the host answer:
+
+```
+  t   host#  client#  remoteActive  hostNode  clientNode  wantNode
+  4       1        0             1        29          -1        29
+  -> client clicks 'end_trask' (join)
+  5       1        2             1        29          29        29
+  -> host answers (key '2')
+ 11       2        3             1        19          19        19
+
+dialogue: followed the owner 19 -> 29     (join: the client's own start node was wrong)
+dialogue: followed the owner 29 -> 19     (the host picked a reply; the client tracked it)
+NODES: on the same entry for 15 of 15 paired samples.
+```
+
+### Two state-machine defects fixed alongside
+
+* **`Suppressed` was asserted below the `!open` early return**, so the entire join window —
+  up to `FollowOpenTimeoutMs`, 15 s — ran unsuppressed and *both players could answer*. It is
+  asserted as soon as the follow is live now. This was never a hole in the reply hook.
+* **The gate was held shut on an EMPTY peer partner tag.** `SameTag` refuses an empty tag by
+  design, so while the peer's tag was unresolved every local start was refused — including the
+  join the player was trying to make (measured in play as a click at :23 doing nothing and the
+  identical click at :26 working). The tag is empty for a real window at the start of every
+  conversation, because `gui+0x170/0x174` stay `OBJECT_INVALID` until the server resolves
+  them. The gate now only closes once the peer's identity is known; a competitor that slips
+  through is still yielded by the adopt path.

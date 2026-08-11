@@ -302,7 +302,9 @@ public sealed record DialogueRequestPacket(
     string PartnerTag = "",
     uint ReplySerial = 0,
     int ReplyIndex = 0,
-    byte[]? PickLog = null);
+    byte[]? PickLog = null,
+    int NodeIndex = DialogueState.NoNode,
+    uint NodeSerial = 0);
 
 /// <summary>
 /// A peer's in-world content fingerprint, sent both ways once a save is loaded and
@@ -329,3 +331,41 @@ public sealed record JournalSyncRequestPacket(uint PeerId, uint KnownVersion);
 /// these in one burst, each carrying the same version.
 /// </summary>
 public sealed record JournalSnapshotPacket(uint Version, IReadOnlyList<KeyValuePair<string, int>> Entries);
+
+/// <summary>What a lock is for. Only conversations exist today; the field is on the wire
+/// because the release rules differ per kind, and adding one later must not renumber.</summary>
+public enum InteractionKind : byte
+{
+    None = 0,
+    Conversation = 1,
+}
+
+/// <summary>
+/// peer -&gt; host: "I am interacting with <paramref name="Tag"/> right now."
+///
+/// A TAG, not an object id, for the reason the dialogue channel already uses one: the tag is
+/// what the dialogue gate compares and what <c>CreatureFinder.FindByTag</c> resolves, and it
+/// survives being read on an instance that never loaded the same body.
+///
+/// <paramref name="Module"/> rides along for the usual reason — tags and ids are only
+/// meaningful where they were read, so the owner must never act on a claim from a peer
+/// standing somewhere else.
+///
+/// Sent every tick while the claim is live. <paramref name="Active"/> false is a release; it
+/// is an optimisation, not the safety net (see <see cref="PacketType.InteractionClaim"/>).
+/// </summary>
+public sealed record InteractionClaimPacket(
+    uint PeerId, string Module, string Tag, InteractionKind Kind, bool Active);
+
+/// <summary>One granted lock, as the host's arbiter sees it.</summary>
+public readonly record struct InteractionLock(uint PeerId, string Tag, InteractionKind Kind);
+
+/// <summary>
+/// host -&gt; all: every lock currently granted, broadcast each tick.
+///
+/// The SET is the message. A lock that stops being broadcast is released — there is no
+/// "released" entry to lose, which is what makes a client crashing mid-conversation cost a
+/// lease rather than an NPC.
+/// </summary>
+public sealed record InteractionLockPacket(
+    long ServerTimeMs, string Module, IReadOnlyList<InteractionLock> Locks);

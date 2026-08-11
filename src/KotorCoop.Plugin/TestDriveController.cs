@@ -20,6 +20,7 @@ internal sealed unsafe class TestDriveController(SharedBlockView block)
     private uint _talkSerial;
     private uint _walkSerial;
     private uint _attackSerial;
+    private uint _barkSerial;
 
     public void Invalidate()
     {
@@ -27,6 +28,7 @@ internal sealed unsafe class TestDriveController(SharedBlockView block)
         _talkSerial = block.TestTalkSerial;
         _walkSerial = block.TestWalkSerial;
         _attackSerial = block.TestAttackSerial;
+        _barkSerial = block.TestBarkSerial;
     }
 
     public void OnFrame()
@@ -34,6 +36,68 @@ internal sealed unsafe class TestDriveController(SharedBlockView block)
         HandleTalk();
         HandleWalk();
         HandleAttack();
+        HandleBark();
+    }
+
+    /// <summary>
+    /// Makes a named creature bark a known line through the engine's own BarkString, WITHOUT
+    /// the replay guard — so the capture hook sees it exactly as it sees one the game
+    /// produced, and the whole channel (capture, block, wire, replay) runs end to end on
+    /// demand.
+    ///
+    /// Nothing else could reach this path. Barks come from scripts and AI actions the
+    /// starting area only fires on triggers automation cannot reach, and clicking a droid
+    /// opens a conversation rather than barking. So the channel was only ever exercised by a
+    /// human playing the game, and it shipped broken twice — most recently with the capture
+    /// stub reading the wrong stack slots, which put a heap pointer where the speaker's
+    /// object id belonged and made every replay fail with "that creature does not exist
+    /// here" on the far side.
+    /// </summary>
+    private void HandleBark()
+    {
+        uint serial = block.TestBarkSerial;
+        if (serial == _barkSerial)
+        {
+            return;
+        }
+
+        _barkSerial = serial;
+
+        byte* tag = block.TestBarkTag;
+        int length = 0;
+        while (length < SharedBlock.TestBarkTagLength && tag[length] != 0)
+        {
+            length++;
+        }
+
+        if (length == 0)
+        {
+            return;
+        }
+
+        nint creature = CreatureFinder.FindByTag(new ReadOnlySpan<byte>(tag, length));
+        if (creature == 0)
+        {
+            PluginHost.Log($"test: no creature tagged "
+                + $"'{System.Text.Encoding.ASCII.GetString(tag, length)}' to bark");
+            return;
+        }
+
+        uint objectId = *(uint*)(creature + 0x04); // CSWSObject + 4 = the object's id
+        if (objectId is 0 or Odyssey.ObjectInvalid)
+        {
+            return;
+        }
+
+        // A line distinctive enough that finding it on the far side proves it travelled,
+        // rather than merely that something arrived.
+        ReadOnlySpan<byte> line = "coop test bark"u8;
+
+        bool spoke = Odyssey.PlayBark(objectId, line, default, 1, suppressCapture: false);
+
+        PluginHost.Log(spoke
+            ? $"test: 0x{objectId:X} barked a test line"
+            : $"test: could not bark from 0x{objectId:X}");
     }
 
     /// <summary>

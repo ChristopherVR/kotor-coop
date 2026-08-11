@@ -1,4 +1,4 @@
-using System.Runtime.InteropServices;
+﻿using System.Runtime.InteropServices;
 using KotorCoop.Protocol;
 
 namespace KotorCoop.Memory;
@@ -462,13 +462,32 @@ public sealed class KotorGameBridge : IGameBridge
     private const int BlockRemoteDialoguePicks = 0x12C0;
     public const int DialoguePickLogBytes = 96;
 
-    /// <summary>16-byte signature: "KOCOOP01" + version 23 + guard 0xC0FFEE01. The version is
+    // Dialogue node sync, mirroring SharedBlock version 32 (region 0x1320..0x1330). The
+    // conversation's POSITION — the index of the entry on screen — rather than the reply slot
+    // the owner pressed, which is per-instance and cannot converge. -1 means "unknown", and
+    // is passed through as-is so the far side declines to drive rather than guessing at 0.
+    // Per-object interaction locks, mirroring SharedBlock version 33 (0x1330..0x13E0).
+    private const int BlockLocalInteractionTag = 0x1330;
+    private const int BlockInteractionTagLength = 32;
+    private const int BlockLocalInteractionKind = 0x1350;
+    private const int BlockLocalInteractionActive = 0x1354;
+    private const int BlockInteractionLockCount = 0x1358;
+    private const int BlockInteractionLocks = 0x1360;
+    private const int BlockInteractionLockStride = 0x28;
+    private const int BlockInteractionLockCapacity = 4;
+
+    private const int BlockLocalDialogueNode = 0x1320;
+    private const int BlockLocalDialogueNodeSerial = 0x1324;
+    private const int BlockRemoteDialogueNode = 0x1328;
+    private const int BlockRemoteDialogueNodeSerial = 0x132C;
+
+    /// <summary>16-byte signature: "KOCOOP01" + version 33 + guard 0xC0FFEE01. The version is
     /// part of the pattern deliberately: an agent must not attach to a plugin whose block
     /// layout it does not know, and a stale pair fails to find each other rather than reading
     /// the wrong offsets. ⚠ Bump this WITH PluginHost's `_block->Version` — they are one
     /// number in two files, and a half-bump reads as "plugin shared block not found", which
     /// looks like a broken install rather than a version skew.</summary>
-    public const string PluginSignature = "4B 4F 43 4F 4F 50 30 31 1F 00 00 00 01 EE FF C0";
+    public const string PluginSignature = "4B 4F 43 4F 4F 50 30 31 21 00 00 00 01 EE FF C0";
 
     /// <summary>Agent's view of which coop item id occupies each plugin item slot.</summary>
     private readonly uint[] _itemSlotIds = new uint[BlockItemCapacity];
@@ -2861,12 +2880,15 @@ public sealed class KotorGameBridge : IGameBridge
     /// pick LOG — recent picks each stamped with the line they were made on, opaque here.
     /// </summary>
     public bool TryReadLocalDialogueFollow(
-        out string partnerTag, out uint replySerial, out int replyIndex, out byte[] pickLog)
+        out string partnerTag, out uint replySerial, out int replyIndex, out byte[] pickLog,
+        out int nodeIndex, out uint nodeSerial)
     {
         partnerTag = string.Empty;
         replySerial = 0;
         replyIndex = 0;
         pickLog = [];
+        nodeIndex = -1;
+        nodeSerial = 0;
 
         if (_pluginBlock == 0)
         {
@@ -2877,6 +2899,14 @@ public sealed class KotorGameBridge : IGameBridge
             _pluginBlock + BlockLocalDialoguePartnerTag, BlockDialoguePartnerTagLength, out partnerTag);
         ok &= _memory.TryReadUInt32(_pluginBlock + BlockLocalDialogueReplySerial, out replySerial);
         ok &= _memory.TryReadInt32(_pluginBlock + BlockLocalDialogueReplyIndex, out replyIndex);
+
+        // ⚠ The serial FIRST, then the node — the mirror image of the plugin's write order,
+        // which is what makes the pair safe to read without a lock. The plugin writes node
+        // then serial; reading serial then node means a value torn between the two reads is
+        // seen as an OLD serial with a NEW node, which the follower simply does not act on,
+        // rather than a new serial pointing at a node that has not landed yet.
+        ok &= _memory.TryReadUInt32(_pluginBlock + BlockLocalDialogueNodeSerial, out nodeSerial);
+        ok &= _memory.TryReadInt32(_pluginBlock + BlockLocalDialogueNode, out nodeIndex);
 
         byte[] log = new byte[DialoguePickLogBytes];
         if (_memory.TryRead(_pluginBlock + BlockLocalDialoguePicks, log))
@@ -2889,11 +2919,67 @@ public sealed class KotorGameBridge : IGameBridge
     }
 
     /// <summary>
+    /// Reads the object the local player is interacting with, so the session can claim it on
+    /// their behalf. An empty tag means "nothing claimed" and is the ordinary case.
+    /// </summary>
+    public bool TryReadLocalInteraction(out string tag, out uint kind, out bool active)
+    {
+        tag = string.Empty;
+        kind = 0;
+        active = false;
+
+        if (_pluginBlock == 0)
+        {
+            return false;
+        }
+
+        bool ok = _memory.TryReadAsciiString(
+            _pluginBlock + BlockLocalInteractionTag, BlockInteractionTagLength, out tag);
+        ok &= _memory.TryReadUInt32(_pluginBlock + BlockLocalInteractionKind, out kind);
+        ok &= _memory.TryReadUInt32(_pluginBlock + BlockLocalInteractionActive, out uint live);
+
+        tag ??= string.Empty;
+        active = live != 0;
+        return ok;
+    }
+
+    /// <summary>
+    /// Hands the plugin every object currently held, by anyone. The COUNT is written LAST:
+    /// the plugin acts on it, and it must never see a count that includes an entry whose tag
+    /// has not landed yet — the same ordering rule as the dialogue active flag below.
+    /// </summary>
+    public bool WriteInteractionLocks(IReadOnlyList<InteractionLock> locks)
+    {
+        if (_pluginBlock == 0)
+        {
+            return false;
+        }
+
+        int count = Math.Min(locks?.Count ?? 0, BlockInteractionLockCapacity);
+        bool ok = true;
+
+        for (int i = 0; i < count; i++)
+        {
+            InteractionLock entry = locks![i];
+            nint slot = _pluginBlock + BlockInteractionLocks + (i * BlockInteractionLockStride);
+
+            ok &= _memory.TryWrite(slot, entry.PeerId);
+            ok &= _memory.TryWrite(slot + 4, (uint)entry.Kind);
+            ok &= _memory.TryWriteAsciiString(slot + 8, entry.Tag ?? string.Empty, BlockInteractionTagLength);
+        }
+
+        ok &= _memory.TryWrite(_pluginBlock + BlockInteractionLockCount, (uint)count);
+        return ok;
+    }
+
+    /// <summary>
     /// Tells the plugin which conversation a peer owns, so it can open the same one locally
     /// and follow the owner's picks. The active flag is written LAST: the plugin acts on it,
     /// and it must never see "follow a conversation" before it knows whose.
     /// </summary>
-    public bool WriteRemoteDialogue(bool active, string partnerTag, uint replySerial, int replyIndex, byte[]? pickLog)
+    public bool WriteRemoteDialogue(
+        bool active, string partnerTag, uint replySerial, int replyIndex, byte[]? pickLog,
+        int nodeIndex, uint nodeSerial)
     {
         if (_pluginBlock == 0)
         {
@@ -2910,6 +2996,13 @@ public sealed class KotorGameBridge : IGameBridge
 
         ok &= _memory.TryWrite(_pluginBlock + BlockRemoteDialogueReplyIndex, (uint)replyIndex);
         ok &= _memory.TryWrite(_pluginBlock + BlockRemoteDialogueReplySerial, replySerial);
+
+        // Node before its serial, so the plugin never sees a bumped serial pointing at a node
+        // that has not arrived — the same ordering rule as the active flag below, and for the
+        // same reason: the serial is what the far side acts on.
+        ok &= _memory.TryWrite(_pluginBlock + BlockRemoteDialogueNode, (uint)nodeIndex);
+        ok &= _memory.TryWrite(_pluginBlock + BlockRemoteDialogueNodeSerial, nodeSerial);
+
         ok &= _memory.TryWrite(_pluginBlock + BlockRemoteDialogueActive, active ? 1u : 0u);
         return ok;
     }

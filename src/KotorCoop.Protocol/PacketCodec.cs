@@ -551,6 +551,99 @@ public static class PacketCodec
         return new EncounterTriggerPacket(peerId, module, ids);
     }
 
+    public static int Write(Span<byte> buffer, InteractionClaimPacket packet)
+    {
+        PacketWriter w = new(buffer);
+        w.WriteHeader(PacketType.InteractionClaim);
+        w.WriteUInt32(packet.PeerId);
+        w.WriteString(packet.Module, ProtocolConstants.MaxModuleLength);
+        w.WriteString(packet.Tag, ProtocolConstants.MaxTagLength);
+        w.WriteUInt8((byte)packet.Kind);
+        w.WriteUInt8(packet.Active ? (byte)1 : (byte)0);
+        return w.Failed ? 0 : w.Position;
+    }
+
+    public static InteractionClaimPacket? ReadInteractionClaim(ReadOnlySpan<byte> buffer)
+    {
+        PacketReader r = new(buffer);
+        if (r.ReadHeader() != PacketType.InteractionClaim)
+        {
+            return null;
+        }
+
+        uint peerId = r.ReadUInt32();
+        string module = r.ReadString();
+        string tag = r.ReadString();
+        byte kind = r.ReadUInt8();
+        byte active = r.ReadUInt8();
+
+        // ⚠ An unknown kind is DROPPED rather than coerced. A lock whose release rules this
+        // build does not know is worse than no lock at all, because it is the OWNER that
+        // would hold the body and never learn when to stop.
+        if (r.Failed || kind > (byte)InteractionKind.Conversation)
+        {
+            return null;
+        }
+
+        return new InteractionClaimPacket(peerId, module, tag, (InteractionKind)kind, active != 0);
+    }
+
+    public static int Write(Span<byte> buffer, InteractionLockPacket packet)
+    {
+        PacketWriter w = new(buffer);
+        w.WriteHeader(PacketType.InteractionLock);
+        w.WriteInt64(packet.ServerTimeMs);
+        w.WriteString(packet.Module, ProtocolConstants.MaxModuleLength);
+
+        int count = Math.Min(packet.Locks.Count, ProtocolConstants.MaxInteractionLocks);
+        w.WriteUInt8((byte)count);
+
+        for (int i = 0; i < count; i++)
+        {
+            InteractionLock entry = packet.Locks[i];
+            w.WriteUInt32(entry.PeerId);
+            w.WriteString(entry.Tag, ProtocolConstants.MaxTagLength);
+            w.WriteUInt8((byte)entry.Kind);
+        }
+
+        return w.Failed ? 0 : w.Position;
+    }
+
+    public static InteractionLockPacket? ReadInteractionLock(ReadOnlySpan<byte> buffer)
+    {
+        PacketReader r = new(buffer);
+        if (r.ReadHeader() != PacketType.InteractionLock)
+        {
+            return null;
+        }
+
+        long serverTimeMs = r.ReadInt64();
+        string module = r.ReadString();
+        byte count = r.ReadUInt8();
+
+        if (r.Failed || count > ProtocolConstants.MaxInteractionLocks)
+        {
+            return null;
+        }
+
+        List<InteractionLock> locks = new(count);
+        for (int i = 0; i < count; i++)
+        {
+            uint peerId = r.ReadUInt32();
+            string tag = r.ReadString();
+            byte kind = r.ReadUInt8();
+
+            if (r.Failed || kind > (byte)InteractionKind.Conversation)
+            {
+                return null;
+            }
+
+            locks.Add(new InteractionLock(peerId, tag, (InteractionKind)kind));
+        }
+
+        return r.Failed ? null : new InteractionLockPacket(serverTimeMs, module, locks);
+    }
+
     public static int Write(Span<byte> buffer, PartySnapshotPacket packet)
     {
         PacketWriter w = new(buffer);
@@ -614,6 +707,10 @@ public static class PacketCodec
         return new PartySnapshotPacket(serverTime, members);
     }
 
+    /// <summary>The largest dialogue entry index the wire will carry. Far above any real
+    /// .dlg — its job is to reject a corrupt sender, not to bound the game.</summary>
+    private const int MaxDialogueNodeIndex = 4095;
+
     /// <summary>The dialogue pick log: a single presence byte, then exactly
     /// <see cref="DialogueState.PickLogBytes"/> raw bytes. Opaque to the wire — only the
     /// two plugins interpret the entries.</summary>
@@ -656,6 +753,8 @@ public static class PacketCodec
         w.WriteUInt32(s.ReplySerial);
         w.WriteInt32(s.ReplyIndex);
         WritePickLog(ref w, s.PickLog);
+        w.WriteInt32(s.NodeIndex);
+        w.WriteUInt32(s.NodeSerial);
 
         return w.Failed ? 0 : w.Position;
     }
@@ -678,12 +777,25 @@ public static class PacketCodec
         uint replySerial = r.ReadUInt32();
         int replyIndex = r.ReadInt32();
         byte[]? pickLog = ReadPickLog(ref r);
+        int nodeIndex = r.ReadInt32();
+        uint nodeSerial = r.ReadUInt32();
+
+        // Anything other than a real entry index or the explicit "unknown" is treated as
+        // unknown. A negative index that is not -1, or one past any conceivable .dlg, can only
+        // come from a corrupt or mismatched sender — and the cost of trusting it is a follower
+        // driven to a node that is not the owner's.
+        if (nodeIndex < DialogueState.NoNode || nodeIndex > MaxDialogueNodeIndex)
+        {
+            nodeIndex = DialogueState.NoNode;
+        }
 
         return r.Failed
             ? null
             : new DialogueSnapshotPacket(
                 serverTime,
-                new DialogueState(active, owner, serial, speaker, line, partnerTag, replySerial, replyIndex, pickLog));
+                new DialogueState(
+                    active, owner, serial, speaker, line, partnerTag, replySerial, replyIndex,
+                    pickLog, nodeIndex, nodeSerial));
     }
 
     public static int Write(Span<byte> buffer, ProgressionSnapshotPacket packet)
@@ -750,6 +862,8 @@ public static class PacketCodec
         w.WriteUInt32(packet.ReplySerial);
         w.WriteInt32(packet.ReplyIndex);
         WritePickLog(ref w, packet.PickLog);
+        w.WriteInt32(packet.NodeIndex);
+        w.WriteUInt32(packet.NodeSerial);
 
         return w.Failed ? 0 : w.Position;
     }
@@ -770,10 +884,21 @@ public static class PacketCodec
         uint replySerial = r.ReadUInt32();
         int replyIndex = r.ReadInt32();
         byte[]? pickLog = ReadPickLog(ref r);
+        int nodeIndex = r.ReadInt32();
+        uint nodeSerial = r.ReadUInt32();
+
+        // Same clamp as the snapshot: an index that is neither real nor the explicit
+        // "unknown" is treated as unknown, so a corrupt claim cannot drive a follower.
+        if (nodeIndex < DialogueState.NoNode || nodeIndex > MaxDialogueNodeIndex)
+        {
+            nodeIndex = DialogueState.NoNode;
+        }
 
         return r.Failed
             ? null
-            : new DialogueRequestPacket(peerId, active, speaker, line, partnerTag, replySerial, replyIndex, pickLog);
+            : new DialogueRequestPacket(
+                peerId, active, speaker, line, partnerTag, replySerial, replyIndex, pickLog,
+                nodeIndex, nodeSerial);
     }
 
     public static int Write(Span<byte> buffer, WorldDigestPacket packet)

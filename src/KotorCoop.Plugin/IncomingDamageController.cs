@@ -31,6 +31,9 @@ internal sealed class IncomingDamageController(SharedBlockView block)
     /// gain from testing it hundreds of times a second.</summary>
     private const int IntervalFrames = 10;
 
+    /// <summary>The same, under local_combat — see the window note at the call site.</summary>
+    private const int LocalCombatIntervalFrames = 3;
+
     /// <summary>A single application is capped so that a desync, a restart with a stale
     /// total, or a garbage read can never one-shot a player. Anything larger arrives as
     /// several applications over successive passes, which is also more readable in play.</summary>
@@ -52,6 +55,19 @@ internal sealed class IncomingDamageController(SharedBlockView block)
     private DateTime _lastAbsorbLog = DateTime.MinValue;
 
     private static readonly TimeSpan AbsorbLogInterval = TimeSpan.FromSeconds(10);
+
+    /// <summary>
+    /// How much absorbed damage counts as a claim worth checking. Big enough that one
+    /// glancing blow in a corridor does not trip it, small enough that a real fight does
+    /// within a few seconds. A player at full health in the Endar Spire has ~12 hit points,
+    /// so this is several rounds of nothing happening.
+    /// </summary>
+    private const uint AbsorbProofThreshold = 40;
+
+    private uint _absorbedSinceProof;
+    private short _lastHealthSeen = short.MaxValue;
+    private bool _localDamageSeen;
+    private bool _watchdogTripped;
 
     private DownBlockReason _reason = DownBlockReason.None;
     private uint _reasonSerial;
@@ -90,55 +106,22 @@ internal sealed class IncomingDamageController(SharedBlockView block)
             return;
         }
 
-        _countdown = IntervalFrames;
+        bool localCombat = EnemyPresenceController.LocalCombat && block.DamageDealtEnabled;
+
+        // ⚠ THE WINDOW IS THE ATTRIBUTION ERROR. The wire carries ONE cumulative total for
+        // this player summed across every attacker, plus the id of the LAST attacker only, so
+        // each pass can only bill its whole delta to one id. A short window is the only lever
+        // that narrows that without a protocol change: three frames is ~50 ms at 60 fps,
+        // comfortably inside the ~150 ms combat pump, so a delta rarely mixes an attributable
+        // attacker with a mine.
+        _countdown = localCombat ? LocalCombatIntervalFrames : IntervalFrames;
 
         uint owed = block.IncomingDamage;
         uint applied = block.IncomingDamageApplied;
 
-        // ⚠ DAMAGE AUTHORITY, AND IT MOVES WITH EnemyPresenceController.LocalCombat.
-        //
-        // With local combat on, this instance's own mirrored enemies swing at this player
-        // here, and the owner ALSO forwards what its copies did to this player's phantom over
-        // there — the same swings, counted twice. So exactly one instance may apply damage to
-        // a given player, and the rule is: whoever owns the player owns the damage to them.
-        //
-        // The owed total is absorbed rather than ignored: leaving it unacknowledged would
-        // build a backlog that lands all at once the moment local combat is switched off.
-        // ⚠ ROLE GATE. `local_combat` is read from this install's own coop.ini, and the two
-        // instances are two installs — nothing puts it on the wire. Standing the incoming
-        // channel down on an instance that mirrors no enemies gains nothing and simply
-        // deletes that player's damage. DamageDealtEnabled is set only by an instance that
-        // is actually mirroring, which is the same test PortraitController uses for "am I
-        // the client here".
-        if (EnemyPresenceController.LocalCombat && block.DamageDealtEnabled)
-        {
-            if (owed != applied)
-            {
-                _absorbed += owed - applied;
-                block.IncomingDamageApplied = owed;
-
-                // ⚠ ON A HEARTBEAT, NOT A COUNTER. If the local enemies do not in fact engage
-                // — a materialised body with its attack bit cleared, an enemy that locked
-                // onto a peer's phantom instead of this player, an enemy shed by the census
-                // cap — then this branch is total invulnerability, and a log that stops after
-                // five lines makes it look like nothing is happening at all. This file's own
-                // history is the argument: "twenty minutes went into a bug that one log line
-                // would have named."
-                if (DateTime.UtcNow - _lastAbsorbLog >= AbsorbLogInterval)
-                {
-                    _lastAbsorbLog = DateTime.UtcNow;
-                    PluginHost.Log(
-                        $"combat: absorbed {_absorbed} forwarded damage in total without applying it "
-                        + "(local_combat is on — our own enemies are supposed to be dealing this "
-                        + "player's damage here; if the health bar never moves, they are not)");
-                }
-            }
-
-            return;
-        }
-
-        // A fresh session (or a peer that restarted its count) publishes a total lower
-        // than ours: adopt it rather than treating the difference as damage.
+        // A fresh session (or a peer that restarted its count) publishes a total lower than
+        // ours: adopt it rather than treating the difference as damage. ⚠ Above the absorb, so
+        // a restart can never be booked as absorbed damage that never existed.
         if (owed < applied)
         {
             block.IncomingDamageApplied = owed;
@@ -149,6 +132,104 @@ internal sealed class IncomingDamageController(SharedBlockView block)
         {
             return;
         }
+
+        // ⚠ DAMAGE AUTHORITY, AND IT MOVES WITH EnemyPresenceController.LocalCombat.
+        //
+        // With local combat on, this instance's own mirrored enemies swing at this player
+        // here, and the owner ALSO forwards what its copies did to this player's phantom over
+        // there — the same swings, counted twice. So exactly one instance may apply damage to
+        // a given player.
+        //
+        // ⚠ BUT THE ABSORB MUST BE ATTRIBUTABLE, NOT BLANKET. The first version stood down for
+        // the whole channel, and several damage classes produce a forwarded total with NO
+        // local analogue at all: enemies shed by the 32-slot census cap or by distance,
+        // creatures the resolver skipped, phantom-id collisions, mines and traps and scripted
+        // EffectDamage, a fight across the module where no driven body is anywhere near this
+        // player, and the conversation hold. Every one of those was silently deleted.
+        //
+        // The channel already carries the attacker, in the OWNER's id space, which is the same
+        // space the enemy census uses. EnemyPresenceController answers the only question that
+        // matters: is that attacker a body I am driving, right now, close enough to this
+        // player to be hitting them here. Yes -> absorb; anything else -> fall through and
+        // APPLY.
+        //
+        // ⚠ ROLE GATE. `local_combat` is read from this install's own coop.ini and never
+        // crosses the wire. DamageDealtEnabled is set only by an instance that is actually
+        // mirroring — the same test PortraitController uses for "am I the client here".
+        // ⚠ THE INVULNERABILITY WATCHDOG, AND IT IS WHY THIS FEATURE CAN BE ON AT ALL.
+        //
+        // Everything above assumes the premise nobody has ever observed: that a mirrored enemy
+        // whose POSITION IS OVERWRITTEN FROM THE OWNER EVERY PASS can still complete a combat
+        // round against the local PC. If it cannot, every test above still passes — the body
+        // is driven, it is in range, it is the last attacker — and this player takes no damage
+        // from anyone, for the whole session, with only a log line to say so.
+        //
+        // So the absorb is required to SHOW ITS WORK. Absorbing is a claim that our own copies
+        // are dealing this damage locally; if that were true, the player's hit points would be
+        // falling. They are sampled here, and if a real amount has been absorbed across a
+        // window without the health moving DOWN even once, the claim is false and the channel
+        // reverts to applying. Self-correcting, loud, and it fails towards a player who can be
+        // hurt rather than one who cannot.
+        nint watched = Odyssey.GetPlayerCreaturePointer();
+        short healthNow = watched == 0 ? _lastHealthSeen : Odyssey.GetCurrentHitPoints(watched);
+        if (healthNow < _lastHealthSeen)
+        {
+            _localDamageSeen = true;   // something hurt us locally; the claim is good
+        }
+
+        _lastHealthSeen = healthNow;
+
+        if (_absorbedSinceProof >= AbsorbProofThreshold && !_localDamageSeen)
+        {
+            if (!_watchdogTripped)
+            {
+                _watchdogTripped = true;
+                PluginHost.Log(
+                    $"combat: ⚠ local_combat WATCHDOG TRIPPED — absorbed {_absorbedSinceProof} damage "
+                    + "on the claim that our own mirrored enemies were dealing it here, and this "
+                    + "player's hit points never fell once. They are not. Applying forwarded damage "
+                    + "again so this player is not invulnerable; combat state on this instance will "
+                    + "stay wrong until the local copies can actually land a hit.");
+            }
+        }
+        else if (_localDamageSeen)
+        {
+            // Proof arrived: reset the window and re-arm rather than latching either way.
+            _absorbedSinceProof = 0;
+            _localDamageSeen = false;
+            _watchdogTripped = false;
+        }
+
+        if (localCombat && !_watchdogTripped
+            && EnemyPresenceController.IsLocallyEngaged(block.IncomingDamageAttacker))
+        {
+            _absorbedSinceProof += owed - applied;
+            _absorbed += owed - applied;
+            block.IncomingDamageApplied = owed;
+
+            // ⚠ ON A HEARTBEAT, NOT A COUNTER, and it names the two things that decide whether
+            // this is working. If the local enemies do not in fact engage, this branch is
+            // total invulnerability — and "absorbing while the engine says we are not in
+            // combat" is exactly that smell. The engine's in-combat field is DERIVED from
+            // being fought rather than settable (a written flag is reverted in 0-2 ms, see
+            // CombatStateController), so it is honest evidence rather than our own belief
+            // echoed back.
+            if (DateTime.UtcNow - _lastAbsorbLog >= AbsorbLogInterval)
+            {
+                _lastAbsorbLog = DateTime.UtcNow;
+                PluginHost.Log(
+                    $"combat: absorbed {_absorbed} forwarded damage in total, attributed to mirrored "
+                    + $"enemies we are driving (last attacker 0x{block.IncomingDamageAttacker:X}); "
+                    + $"this engine says in-combat={Odyssey.IsPlayerInCombat} — if that is false "
+                    + "while this line keeps printing, our copies are NOT dealing the damage and "
+                    + "this player is invulnerable");
+            }
+
+            return;
+        }
+
+        // (The restart-adoption and no-change tests now run ABOVE the absorb, so a restart
+        // cannot be booked as absorbed damage that never happened.)
 
         // Not while a conversation owns the screen: the dialogue system is mid-scene and
         // the enemy channel freezes for the same reason. The debt is not lost — it is

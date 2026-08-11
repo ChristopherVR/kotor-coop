@@ -173,4 +173,28 @@ public enum PacketType : byte
     /// clicked the utility droid and heard it beep while everybody else got silence.
     /// </summary>
     Bark = 34,
+
+    /// <summary>
+    /// peer -&gt; host: "I am holding this object right now — do not let anyone else interact
+    /// with it, and if you own it, hold it still."
+    ///
+    /// A LEASE, NOT A HANDSHAKE, and that is the whole reliability design: an unheld lock
+    /// strands an NPC, so there is no release message whose loss could do that. The claimant
+    /// re-sends every tick and the host ages the claim out. A client that crashes
+    /// mid-conversation simply stops refreshing. An explicit release makes the common case
+    /// instant; it is not what makes it correct.
+    /// </summary>
+    InteractionClaim = 35,
+
+    /// <summary>
+    /// host -&gt; all: the authoritative set of live interaction locks, broadcast each tick.
+    ///
+    /// Two halves consume it. Every instance feeds the tags to the dialogue gate, so a
+    /// conversation cannot be started against a claimed NPC — including by the OWNER, whose
+    /// scripts and AI reach the same StartDialog choke point. The instance that OWNS the
+    /// object additionally holds the body still, which is the gap
+    /// docs/research/shared-state-audit.md §4 names: "the host's Trask carries on walking
+    /// because the host's AI was never told otherwise".
+    /// </summary>
+    InteractionLock = 36,
 }

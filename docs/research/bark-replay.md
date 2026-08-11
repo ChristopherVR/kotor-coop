@@ -106,3 +106,77 @@ each was re-checked against the disassembly:
   `MaxDialogueLineLength = 220`.
 - Whether any shipped bark line has bytes above 0x7F (decides raw bytes vs string) — checkable
   against `dialog.tlk` offline.
+
+---
+
+## Why it still did not work: the capture stub read the wrong stack slots (2026-08-11)
+
+Reported from play as the utility droid's "beep beep boop" appearing only for the player who
+clicked it. The bark **was** captured and **did** cross the wire; it failed at replay, and the
+far side said so in a line that names its own cause:
+
+```
+bark: could not replay a peer's line from 0x11680D0 (that creature does not exist here)
+```
+
+`0x011680D0` is not an object id — real ids in this module are `0x37`, `0x127`, `0x12D`. It is
+a heap pointer, and specifically it is `this`, the `CClientExoAppInternal`.
+
+### The bug: each `push` moves `esp`
+
+`BarkHook`'s stub is entered by `jmp`, so after `pushad` the four stack arguments sit at
+`[esp+0x24]`, `[esp+0x28]`, `[esp+0x2C]`, `[esp+0x30]`. The stub pushed them for a cdecl
+callback in right-to-left order using the "obvious" descending sequence:
+
+```
+0x30, 0x2C, 0x28, 0x24     ← WRONG
+```
+
+Every push lowers `esp` by four, so the reads walk **down the argument list while esp walks
+down with them**. The two cancel exactly, and the correct sequence is `0x30` four times. What
+the descending version actually read, in order: `arg4`, `arg2`, **the return address**, and
+**ecx**.
+
+So the callback received `this` as the speaker's object id (hence the lookup for creature
+`0x011680D0`), the return address as the text `CExoString*` (whose length field failed the
+sanity guard, producing an empty line), and the real text string as the `CResRef*`.
+
+Nothing crashed, which is why it looked like it was working. `PhantomHitHook` has the same
+shape and gets it right — its two pushes are both `+0x28`, with the shift called out in a
+comment.
+
+### The second bug, which the first was hiding
+
+Once replay worked, one bark played **seven times**:
+
+```
+bark: replayed a peer's line from 0x37   ×7, in pairs ~160 ms apart
+```
+
+`BarkController` deduped by **slot**, but `KotorGameBridge.TryWriteBark` advances
+`_barkWriteSlot` on every call, so a bark delivered more than once occupies a different slot
+each time and every one looks new to that slot's own high-water mark. This had always been
+true; it was invisible while every replay failed, because the duplicates were seven identical
+failures instead of seven beeps.
+
+Dedup belongs on the receiver regardless: barks travel unreliably by design, and sending one
+more than once is a legitimate way to make a cheap lossy channel likely to arrive. What must
+not happen twice is the NPC opening its mouth. The controller now remembers recent
+`(speaker, serial)` pairs.
+
+### How it is tested now, since it cannot be provoked
+
+Barks come from scripts and AI actions the starting area fires on triggers automation cannot
+reach, and clicking a droid opens a conversation rather than barking — so the channel could
+only ever be exercised by a human playing the game, which is how it shipped broken twice.
+
+`SharedBlock.OffsetTestBarkTag` / `OffsetTestBarkSerial` (0x1DB0 / 0x1DD0, reusing the retired
+kill-request range) make a named creature bark a known line through the engine's own
+`BarkString` **without** the replay guard, so the capture hook sees it exactly as it sees a
+game-produced bark. `tools/barkprobe.ps1` fires it and reads both logs; `verify.ps1` carries
+the two checks permanently — that a bark reaches the other player, and that it is spoken once.
+
+```
+[20:31:16.081] test: 0x37 barked a test line                              (host)
+[20:31:16.225] bark: replayed a peer's line from 0x37 (serial 1, slot 0)  (client, 144 ms)
+```

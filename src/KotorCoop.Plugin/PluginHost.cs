@@ -1,4 +1,4 @@
-using System.Runtime.CompilerServices;
+﻿using System.Runtime.CompilerServices;
 using System.Text;
 
 namespace KotorCoop.Plugin;
@@ -43,6 +43,7 @@ internal static unsafe class PluginHost
     private static MapMarkerController? _mapMarkers;
     private static PortraitController? _portraits;
     private static BarkController? _barks;
+    private static InteractionLockController? _interactionLocks;
     private static MenuLoadController? _menuLoad;
     private static ConnectMenuController? _connectMenu;
     private static ChatInputController? _chatInput;
@@ -126,6 +127,7 @@ internal static unsafe class PluginHost
             _mapMarkers = new MapMarkerController(_view);
             _portraits = new PortraitController(_view);
             _barks = new BarkController(_view);
+            _interactionLocks = new InteractionLockController(_view);
 
             // The minimap draw runs on the render path and has no other route to peer
             // positions, so it reads the block directly.
@@ -357,12 +359,20 @@ internal static unsafe class PluginHost
         Unsafe.InitBlockUnaligned(_block, 0, SharedBlock.TotalSize);
 
         _block->Magic = SharedBlock.MagicValue;
-        _block->Version = 31;
+        _block->Version = 33;
 
         // A guard dword after the version. Magic plus version alone was not selective
         // enough: a scan once matched something else at a lower address and the agent
         // silently anchored on it. 16 bytes makes a coincidental match implausible.
         *(uint*)((byte*)_block + 0x0C) = SharedBlock.GuardValue;
+
+        // ⚠ The dialogue nodes start at -1, not at the zero the block was just filled with.
+        // Zero is a VALID entry index — the first line of a conversation — so a block that has
+        // never held one would otherwise be indistinguishable from one sitting at the top of a
+        // dialogue. Caught by the node probe on the first live run: an instance that had never
+        // talked to anybody reported node 0 with an empty partner tag.
+        *(int*)((byte*)_block + SharedBlock.OffsetLocalDialogueNode) = -1;
+        *(int*)((byte*)_block + SharedBlock.OffsetRemoteDialogueNode) = -1;
 
         WriteModuleName("kotor");
 
@@ -580,6 +590,7 @@ internal static unsafe class PluginHost
         _mapMarkers?.OnFrame();
         _portraits?.OnFrame();
         _barks?.OnFrame();
+        _interactionLocks?.OnFrame();
 
         // Read-only: publishes the owner's current conversation line for the other player to
         // spectate. Runs in-world only (a conversation needs a live server + GUI).
@@ -615,6 +626,7 @@ internal static unsafe class PluginHost
         _death?.Invalidate();
         _encounters?.Invalidate();
         _barks?.Invalidate();
+        _interactionLocks?.Invalidate();
     }
 
     private static void WorkerLoop()

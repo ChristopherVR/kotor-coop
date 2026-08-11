@@ -378,6 +378,171 @@ internal static unsafe class Odyssey
         *(int*)(creature + CreRunFlag) = 0;
     }
 
+    // ---- the action queue, read as a queue rather than wiped blind ------------------
+    //
+    // Established from the binary, because BOTH extremes are wrong and both have shipped:
+    //
+    //   CSWSObject + 0x0FC  -> CExoLinkedList<CSWSObjectActionNode>*
+    //   [list]              -> the head position (+0x04 next, +0x08 data). ClearAllActions
+    //                          0x004CCD80 walks exactly this at 0x004CCDBE, and
+    //                          CExoLinkedList::GetAt 0x005E9B60 is `mov eax,[eax+8]; ret 4`.
+    //   [pos + 0x08]        -> CSWSObjectActionNode* (0x74 bytes: CSWSObject::AddAction
+    //                          0x004CEA20 opens with `push 0x74`).
+    //   [node + 0x00]       -> the ACTION TYPE. RunActions 0x0057F4A0 dispatches on it:
+    //                          `mov eax,[edi]` / `cmp eax,0x40` / `ja default` /
+    //                          `jmp dword ptr [eax*4 + 0x5801E4]`.
+    //
+    // The HEAD is the action the engine is currently running: ClearAllActions compares each
+    // element against [[obj+0xFC]]+8 to build the `bIsCurrent` argument for vtable +0x74.
+
+    /// <summary>CSWSObject + this = the action-queue list pointer.</summary>
+    private const int ObjActionList = 0x0FC;
+
+    /// <summary>CExoLinkedList position + this = the element pointer.</summary>
+    private const int ActionListNodeData = 0x08;
+
+    /// <summary>
+    /// The action type at the head of a creature's queue, or -1 for "empty, or nothing I
+    /// recognise". Three reads and no engine call, so it is safe from the frame hook and
+    /// cheap enough to run per mirrored enemy per pass.
+    ///
+    /// The range test is not decoration: RunActions itself refuses anything above 0x40, so a
+    /// value outside it is a stale pointer read as a node, not an action.
+    /// </summary>
+    public static int GetHeadActionType(nint creature)
+    {
+        if (creature == 0)
+        {
+            return -1;
+        }
+
+        nint list = *(nint*)(creature + ObjActionList);
+        if (list == 0)
+        {
+            return -1;
+        }
+
+        nint head = *(nint*)list;
+        if (head == 0)
+        {
+            return -1;
+        }
+
+        nint node = *(nint*)(head + ActionListNodeData);
+        if (node == 0)
+        {
+            return -1;
+        }
+
+        int type = *(int*)node;
+        return type is >= 0 and <= 0x40 ? type : -1;
+    }
+
+    /// <summary>
+    /// Every id in the RunActions jump table (0x5801E4) whose handler MOVES the body, read off
+    /// the table entry by entry rather than guessed:
+    ///
+    ///   0x00 MoveToPoint  0x01 CheckMoveToObject  0x02 CheckMoveAwayFromObject
+    ///   0x03 CheckInterAreaPathfinding  0x04 JumpToPoint  0x09 CheckMoveToPoint
+    ///   0x10 CheckMoveToObjectRadius  0x11 CheckMoveToPointRadius
+    ///   0x2B CheckMoveAwayFromLocation  0x2C RandomWalk  0x2F JumpToObject  0x32 Drive
+    ///   0x36 ForceFollowObject  0x39 CheckForceFollowObject  0x3C PartyFollowLeader
+    ///   0x3F CheckMoveToFollowRadius
+    ///
+    /// Everything else is left alone. The fight lives at 0x0B PhysicalAttacks (0x005BBBF0),
+    /// 0x3E Combat (0x005B6210), 0x0E CastSpell, 0x31 CounterSpell, 0x0F WaitForEndOfRound.
+    /// </summary>
+    private static bool IsMoveAction(int type) =>
+        type is 0x00 or 0x01 or 0x02 or 0x03 or 0x04 or 0x09 or 0x10 or 0x11
+             or 0x2B or 0x2C or 0x2F or 0x32 or 0x36 or 0x39 or 0x3C or 0x3F;
+
+    /// <summary>
+    /// Stops a creature WALKING, and nothing else — the hold a peer's interaction lock buys.
+    /// Returns true when something was actually cleared.
+    ///
+    /// ⚠ Only when the head action is a MOVE. A blanket ClearAllActions every pass is what
+    /// made a mirrored enemy unable to ever land a swing (see
+    /// <see cref="ClaimCreatureForFight"/>) — the queue does not distinguish a walk from the
+    /// whole fight, so the test has to. Here the object being held is usually an NPC someone
+    /// is talking to, and the only thing that must stop is the owner's AI strolling it out of
+    /// the conversation.
+    ///
+    /// MAIN THREAD ONLY.
+    /// </summary>
+    public static bool HoldCreatureStill(nint creature)
+    {
+        if (creature == 0 || !IsMoveAction(GetHeadActionType(creature)))
+        {
+            return false;
+        }
+
+        ClearAllActionsFn(creature, 1);
+        return true;
+    }
+
+    /// <summary>
+    /// The claim a mirrored enemy gets under local_combat: keep the fight, drop the walk.
+    ///
+    /// ⚠ NEITHER EXTREME IS CORRECT. The unconditional wipe deletes the swings, which is why a
+    /// mirroring instance is never in combat. But leaving the queue alone is WORSE than the
+    /// bug it replaced, because a queued move can then never COMPLETE: this instance
+    /// overwrites the body's position from the owner's stream every pass, and MotionSmoother
+    /// never reads the engine's position back, so AIActionMoveToPoint re-measures the same
+    /// distance forever, stays at the queue head, and the attack actions behind it never run.
+    /// The transient condition the wipe existed for becomes permanent.
+    ///
+    /// So the wipe is conditioned on what is actually AT the head — the node the engine is
+    /// running. A move-class head is the wedge and goes; anything else is the fight and stays.
+    ///
+    /// ⚠ LOAD-BEARING: when it fires it clears the WHOLE queue, because that is the engine's
+    /// own ClearAllActions — the one path that runs each node's virtual ClearAction (vtable
+    /// +0x74) before unlinking. Removing a single node by hand needs CSWSCreature::ClearAction
+    /// (0x004FAB00) plus CExoLinkedList::RemoveAt (0x005E9C10) driven from managed code, which
+    /// is not worth an unverified first outing. The cost is that attacks queued BEHIND a move
+    /// go with it; the AI re-queues at the next combat-round boundary, tens of milliseconds.
+    /// The wedge is forever.
+    /// </summary>
+    public static void ClaimCreatureForFight(nint creature) =>
+        ClaimCreature(creature, clearActions: IsMoveAction(GetHeadActionType(creature)));
+
+    /// <summary>
+    /// CSWSObject::ClearDirtyFlag(int nFlag) — the flags are a bit array based at this+0x1FC:
+    /// <c>[this + 0x1FC + (nFlag&gt;&gt;5)*4] &amp;= ~(1 &lt;&lt; (nFlag &amp; 31))</c>.
+    /// </summary>
+    private static readonly delegate* unmanaged[Thiscall]<nint, int, void> ClearDirtyFlagFn =
+        (delegate* unmanaged[Thiscall]<nint, int, void>)0x004CC250;
+
+    /// <summary>
+    /// Flag 1 = position. VERIFIED: SetPosition (0x004CD1A0) raises it with
+    /// <c>or dword ptr [esi+0x1FC], 2</c> at 0x004CD1C8 and skips that instruction exactly
+    /// when its fourth argument (bSuppressDirty) is non-zero — the argument DriveBody passes 1
+    /// for.
+    /// </summary>
+    private const int DirtyFlagPosition = 1;
+
+    /// <summary>
+    /// Undoes a position dirty bit somebody else raised this frame.
+    ///
+    /// ⚠ The other half of DriveBody's suppress-dirty argument, and it exists only because of
+    /// local_combat. DriveBody suppresses the bit on OUR write for a measured reason: raised,
+    /// the AI master's sync pass runs the twin's position handler, which re-derives the
+    /// playback rate through ComputeSpeedFactor and gets 0.0 for a creature with no waypoint
+    /// list — legs frozen mid-pose, body sliding, the "flying" look. With the queue intact the
+    /// local AI calls SetPosition itself and does NOT suppress, so the artifact returns
+    /// through the back door.
+    ///
+    /// ⚠ NEEDS-LIVE: a belt, not a proof. Whether the SwapBuffers hook beats the AI master's
+    /// sync pass within a frame is unmeasured. The targeted wipe is the real mitigation. If
+    /// mirrored enemies show frozen legs under local_combat, the ordering is wrong.
+    /// </summary>
+    public static void ClearPositionDirty(nint creature)
+    {
+        if (creature != 0)
+        {
+            ClearDirtyFlagFn(creature, DirtyFlagPosition);
+        }
+    }
+
     /// <summary>
     /// Queues ActionMoveToLocation (NWScript routine 21) on a creature, so the engine's own
     /// AI walks it there: pathfinding, walkmesh, ground snap and the walk animation all come
@@ -2776,13 +2941,22 @@ internal static unsafe class Odyssey
     private const int DialogEntryStride = 0xB0;
 
     /// <summary>
-    /// CSWSDialog + this = current on-screen entry index. NEEDS-LIVE: the RE pins the
-    /// current node state to the +0x60..+0x74 band but not the exact "index of the visible
-    /// line" dword, so this is a candidate. A wrong value only mis-selects a node — which is
-    /// bounds-checked against the entry count, so it can never fault — making it safe to
-    /// ship unverified and calibrate with one live probe.
+    /// CSWSDialog + this = the index of the entry currently on screen.
+    ///
+    /// ⚠ NOT +0x60. That was a candidate picked out of the "+0x60..+0x74 band" without a
+    /// proof, and it is the wrong dword. The right one is settled twice over, both times by
+    /// the engine using it as an index rather than by inference:
+    ///
+    ///   * <c>CSWSDialog::SendDialogEntry</c> loads it at 0x005A4045 and indexes the entry
+    ///     array with it — <c>imul eax, eax, 0xB0</c> against <c>[esi+0x08]</c>, and 0xB0 is
+    ///     exactly <c>sizeof(CSWSDialogEntry)</c> in the symbol database, with +0x08 exactly
+    ///     the <c>entries</c> pointer;
+    ///   * <c>CSWSDialog::HandleReply</c> compares the caller's claimed entry index against
+    ///     it at 0x005A0403 and refuses the reply when they differ. That is the engine's OWN
+    ///     desync check, on this field, which makes it the field two instances have to agree
+    ///     on by the engine's own definition of agreement.
     /// </summary>
-    private const int DialogCurrentEntryIndexCandidate = 0x60;
+    private const int DialogCurrentEntryIndex = 0x70;
 
     // CSWSDialogNode (at the start of each entry): speaker CExoString @0, text CExoLocString @8.
     private const int NodeSpeaker = 0x00;
@@ -3085,6 +3259,37 @@ internal static unsafe class Odyssey
         ReadExoStringInto(obj + ObjTag, dest, cap);
     }
 
+    /// <summary>
+    /// Whether an object carries <paramref name="tag"/>, case-insensitively — the engine
+    /// treats tags that way and so does the dialogue gate.
+    ///
+    /// Used to re-verify a cached pointer before acting on it: an object id and a raw pointer
+    /// can both survive into memory that has been reused, and the tag is the thing the caller
+    /// actually meant.
+    /// </summary>
+    public static bool HasTag(nint obj, ReadOnlySpan<byte> tag)
+    {
+        if (obj == 0 || tag.IsEmpty || tag.Length >= 64)
+        {
+            return false;
+        }
+
+        byte* actual = stackalloc byte[64];
+        ReadObjectTag(obj, actual, 64);
+
+        for (int i = 0; i < tag.Length; i++)
+        {
+            if (actual[i] == 0 || Lower(actual[i]) != Lower(tag[i]))
+            {
+                return false;
+            }
+        }
+
+        return actual[tag.Length] == 0;
+
+        static byte Lower(byte c) => c is >= (byte)'A' and <= (byte)'Z' ? (byte)(c + 32) : c;
+    }
+
     /// <summary>The tag of whoever the local player is currently in conversation with, or
     /// empty. Reads the client GUI's participant ids, skipping the player itself.</summary>
     public static void ReadDialoguePartnerTag(byte* dest, int cap)
@@ -3313,6 +3518,279 @@ internal static unsafe class Odyssey
     /// 0x006A7390 itself dispatches through (<c>call [eax+0x6C]</c>).</summary>
     private const int PanelSelectReplySlot = 0x6C;
 
+    // ---- dialogue node sync ------------------------------------------------------
+    //
+    // ⚠ REPLAYING THE OWNER'S REPLY SLOT CANNOT CONVERGE, AND NO AMOUNT OF GATING FIXES IT.
+    //
+    // A reply slot is not a property of the conversation; it is a property of ONE INSTANCE'S
+    // EVALUATION of the conversation. Three separate decisions inside a dialogue are taken
+    // independently on each machine, by scripts reading that machine's own world state:
+    //
+    //   * WHERE IT STARTS. CSWSDialog::GetStartEntry 0x005A3640 takes the first starting
+    //     entry whose Active script passes. end_trask01.dlg alone has 19 starting entries, 18
+    //     of them conditional — so two players at different tutorial progress begin on
+    //     different nodes with no pick involved at all.
+    //   * WHICH REPLIES ARE OFFERED. The panel's slots are COMPACTED over the links that
+    //     passed locally (the real link index lives at panel+0x1970[slot]). One
+    //     differently-filtered link shifts every later slot, so "slot 1" is simply not the
+    //     same branch on the two screens.
+    //   * WHERE A REPLY GOES. Its outgoing link is first-that-passes as well.
+    //
+    // So the owner publishes WHERE IT IS rather than WHAT IT PRESSED: the index of the entry
+    // on screen. That is a plain array index into the .dlg's entry list — identical on both
+    // instances because both load the same file — and it is the quantity the engine itself
+    // treats as the conversation's position (HandleReply refuses a reply whose claimed index
+    // does not match it). Node sync also dissolves the start-node divergence for free: the
+    // follower is driven to wherever the owner actually began.
+    //
+    // It replaces the pick log outright. The two must never run together: a pick gate waiting
+    // on a line hash and a node gate driving the node would each undo the other's work, which
+    // is the stranding this is here to end.
+
+    /// <summary>
+    /// CSWSDialog::SendDialogEntry(CSWSObject* speaker, int, int entryIndex, int* status) —
+    /// __thiscall on the DIALOG, <c>ret 0x10</c> (four epilogues, 0x005A414A / 0x005A41B3 /
+    /// 0x005A41F7 / 0x005A4259; and the engine's call site at 0x004CD4B5 does not clean the
+    /// four arguments up itself).
+    ///
+    /// This is the engine's actual producer of a dialogue line: the single call site of
+    /// CGuiInGame::HandleDialogSound (the voice-over) and of the lipsync arming that follows
+    /// it, as well as of the subtitle. Driving a node through it therefore brings the line,
+    /// its audio and its mouth together, which is the whole reason node sync is the right
+    /// shape — "subtitles stop, lips not synced, audio not synced" is one defect, not three.
+    ///
+    /// ⚠ CALLED DIRECTLY, NOT THROUGH CSWSObject::SendDialogEntry 0x004CD460 — deliberately,
+    /// and this is the difference between a follower that moves and one that does not.
+    ///
+    /// The outer wrapper consults CSWSObject::IsDialogDelay first and, when that says "wait",
+    /// QUEUES the entry (+0x4C, flag +0x48) and returns SUCCESS without sending anything.
+    /// Measured on a live follower: `pending 1:29 sendGate 0 isDialogDelay 1` — the request
+    /// for node 29 sat queued, the call kept reporting success, and the node never moved,
+    /// through twelve hundred retries.
+    ///
+    /// That gate is not wrong; it is simply not ours. It exists to pace an OWNER's
+    /// conversation against its own audio, so the next line does not tread on the current
+    /// one. A follower's pacing authority is the other player: it should show the line the
+    /// owner is on, when the owner is on it. Deferring to a local audio clock as well means
+    /// deferring to the wrong clock, and the queue it deferred into is only ever flushed by
+    /// UpdateDialog — which is to say, by the pacing this instance is not supposed to be
+    /// running.
+    ///
+    /// The producer bounds-checks the entry index itself (0x005A41FD, against the entry count
+    /// at +0x04) and is the same function the deferral would eventually have called, so going
+    /// straight to it is the narrower path rather than the riskier one.
+    /// </summary>
+    private static readonly delegate* unmanaged[Thiscall]<nint, nint, int, int, int*, int> SendDialogEntryFn =
+        (delegate* unmanaged[Thiscall]<nint, nint, int, int, int*, int>)0x005A4010;
+
+    /// <summary>The status the producer writes back when it declined to send after all. The
+    /// engine's own caller tests for exactly this and re-queues (0x004CD4BA).</summary>
+    private const int DialogEntryDeferred = 0xA;
+
+    /// <summary>CSWSObject + this = a dialog scratch field the engine clears immediately
+    /// before every call to the producer (0x004CD4AB). Replicated rather than reasoned about:
+    /// it is part of the call's contract at the only site that reaches it.</summary>
+    private const int ObjDlgSendScratch = 0x1F4;
+
+    /// <summary>
+    /// The object that OWNS the live conversation, and its CSWSDialog. (0, 0) when there is
+    /// no conversation on screen or the owner cannot be identified.
+    ///
+    /// "Owner" is the engine's own test, not ours: <c>CSWSObject::UpdateDialog</c> 0x004CD583
+    /// refuses to run unless <c>[obj+0x54] == [obj+0x04]</c> — the dialog-owner id equals the
+    /// object's own id — so that equality IS the definition of the object a conversation
+    /// hangs off. Everything else is a mere participant, and driving an entry on one would
+    /// write +0x1F4 on an object the engine never treats this way.
+    ///
+    /// The walk starts at the GUI's two participant ids, masking the flag bits exactly as
+    /// <see cref="ReadDialoguePartnerTag"/> does, then hops once to the owner each names.
+    /// Every pointer is guarded and the dialog is vtable-verified.
+    /// </summary>
+    public static bool TryGetActiveDialogue(out nint owner, out nint dialog)
+    {
+        owner = 0;
+        dialog = 0;
+
+        nint gui = GetInGameGui();
+        if (gui == 0 || !ConversationLive(gui))
+        {
+            return false;
+        }
+
+        foreach (uint raw in stackalloc uint[]
+                 { *(uint*)(gui + GuiParticipantA), *(uint*)(gui + GuiParticipantB) })
+        {
+            uint id = raw & 0x7FFFFFFF;
+            if (id is 0 or ObjectInvalid or 0x7FFFFFFF)
+            {
+                continue;
+            }
+
+            nint participant = ResolveServerObject(id);
+            if (participant == 0)
+            {
+                continue;
+            }
+
+            if (IsDialogueOwner(participant, out dialog))
+            {
+                owner = participant;
+                return true;
+            }
+
+            // A participant names its owner at +0x54. Follow it exactly ONCE — a chain would
+            // mean the field is not what the engine says it is, and looping on a bad read is
+            // how a frame hook becomes a hang.
+            uint ownerId = *(uint*)(participant + ObjDialogOwner);
+            if (ownerId is 0 or ObjectInvalid || ownerId == id)
+            {
+                continue;
+            }
+
+            nint candidate = ResolveServerObject(ownerId);
+            if (candidate != 0 && IsDialogueOwner(candidate, out dialog))
+            {
+                owner = candidate;
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>Whether an object is the owner of a live conversation: it names itself as the
+    /// dialog owner AND carries a pointer with the CSWSDialog vtable.</summary>
+    private static bool IsDialogueOwner(nint obj, out nint dialog)
+    {
+        dialog = 0;
+
+        if (*(uint*)(obj + ObjDialogOwner) != *(uint*)(obj + ObjIdOffset))
+        {
+            return false;
+        }
+
+        nint candidate = Deref(obj + ObjActiveDialog);
+        if (!LooksLikeHeapPointer(candidate) || *(nint*)candidate != DialogVtable)
+        {
+            return false;
+        }
+
+        dialog = candidate;
+        return true;
+    }
+
+    /// <summary>Sanity bound on a .dlg's entry count. Generous — the largest base-game file is
+    /// nowhere near it — and its job is only to reject a pointer that is not a dialog.</summary>
+    private const int MaxDialogueEntries = 4096;
+
+    /// <summary>
+    /// CSWSObject::IsDialogDelay — __thiscall, no stack arguments, plain <c>ret</c> (verified
+    /// at 0x004CD41E). Returns 1 when the engine will DEFER an entry instead of sending it.
+    /// It is the gate <see cref="DriveDialogueToNode"/> loses to, so being able to ask it
+    /// directly is the difference between diagnosing a stuck follower and guessing at it.
+    /// </summary>
+    private static readonly delegate* unmanaged[Thiscall]<nint, int> IsDialogDelayFn =
+        (delegate* unmanaged[Thiscall]<nint, int>)0x004CD2D0;
+
+    // The dialog bookkeeping on a CSWSObject, from the symbol database (+0x38..+0x44 are
+    // named; +0x48..+0x50 are the unnamed neighbours SendDialogEntry uses for its deferral).
+    private const int ObjDlgDelayDay = 0x38;
+    private const int ObjDlgDelayMs = 0x3C;
+    private const int ObjDlgLastDay = 0x40;
+    private const int ObjDlgLastMs = 0x44;
+    private const int ObjDlgPendingFlag = 0x48;
+    private const int ObjDlgPendingEntry = 0x4C;
+    private const int ObjDlgSendGate = 0x50;
+
+    /// <summary>
+    /// Why a node drive is or is not landing, as one line for the log. Read-only apart from
+    /// the IsDialogDelay call, which is a pure predicate.
+    ///
+    /// This exists because "SendDialogEntry returned success" and "the line arrived" are
+    /// different facts, and the first was mistaken for the second once already.
+    /// </summary>
+    public static string DescribeDialogueDrive()
+    {
+        if (!TryGetActiveDialogue(out nint owner, out nint dialog))
+        {
+            return "no conversation here";
+        }
+
+        return $"owner 0x{*(uint*)(owner + ObjIdOffset):X}"
+            + $" node {*(int*)(dialog + DialogCurrentEntryIndex)}/{*(int*)(dialog + DialogEntriesCount)}"
+            + $" pending {*(int*)(owner + ObjDlgPendingFlag)}:{*(int*)(owner + ObjDlgPendingEntry)}"
+            + $" sendGate {*(int*)(owner + ObjDlgSendGate)}"
+            + $" isDialogDelay {IsDialogDelayFn(owner)}"
+            + $" delay {*(uint*)(owner + ObjDlgDelayDay)}:{*(uint*)(owner + ObjDlgDelayMs)}"
+            + $" last {*(uint*)(owner + ObjDlgLastDay)}:{*(uint*)(owner + ObjDlgLastMs)}";
+    }
+
+    /// <summary>
+    /// The index of the dialogue entry on screen, or -1 when there is no conversation here or
+    /// the index does not sit inside this instance's entry array.
+    ///
+    /// Bounds-checked against the dialog's OWN entry count, so a misread is published as
+    /// "unknown" rather than as a node the peer would then be driven to. -1 is a first-class
+    /// value on the wire for exactly that reason.
+    /// </summary>
+    public static int GetDialogueNodeIndex()
+    {
+        if (!TryGetActiveDialogue(out _, out nint dialog))
+        {
+            return -1;
+        }
+
+        int count = *(int*)(dialog + DialogEntriesCount);
+        int index = *(int*)(dialog + DialogCurrentEntryIndex);
+        return count is > 0 and <= MaxDialogueEntries && index >= 0 && index < count ? index : -1;
+    }
+
+    /// <summary>
+    /// Drives the local conversation onto <paramref name="entryIndex"/> — the follower's half
+    /// of node sync. False when there is no conversation here, when the index is not inside
+    /// this instance's copy of the .dlg, or when we are already on that node.
+    ///
+    /// ⚠ ALREADY-THERE IS A REFUSAL, NOT A NO-OP WORTH DOING ANYWAY. Re-sending the current
+    /// entry restarts the line and its voice-over, so a controller that drove every frame
+    /// would hold the conversation on one node forever, stuttering its audio from the top —
+    /// the same shape as the old blind pick replay, in a new place.
+    ///
+    /// ⚠ Bounds-checked against the LOCAL entry count. Both instances load the same file so
+    /// the counts agree; the check is what turns a mismatched install (a mod on one side
+    /// only) into a conversation that stops following, rather than the engine indexing a
+    /// 0xB0-stride array past its end.
+    ///
+    /// MAIN THREAD ONLY.
+    /// </summary>
+    public static bool DriveDialogueToNode(int entryIndex)
+    {
+        if (entryIndex < 0 || !TryGetActiveDialogue(out nint owner, out nint dialog))
+        {
+            return false;
+        }
+
+        int count = *(int*)(dialog + DialogEntriesCount);
+        if (count is <= 0 or > MaxDialogueEntries || entryIndex >= count)
+        {
+            return false;
+        }
+
+        if (*(int*)(dialog + DialogCurrentEntryIndex) == entryIndex)
+        {
+            return false;
+        }
+
+        *(int*)(owner + ObjDlgSendScratch) = 0;
+
+        int status = 0;
+        SendDialogEntryFn(dialog, owner, -1, entryIndex, &status);
+
+        // The status, not the return value, is what the engine's own caller tests. Callers
+        // here verify by RE-READING the node anyway — a producer that reports success is
+        // still not proof a line arrived, which is the lesson that produced this comment.
+        return status != DialogEntryDeferred;
+    }
+
     /// <summary>
     /// CClientExoAppInternal::BarkString(objectId, a2, a3, a4) — <c>ret 0x10</c>. The real
     /// implementation, and the point every bark converges on.
@@ -3361,10 +3839,16 @@ internal static unsafe class Odyssey
     /// Bracketed with <see cref="BarkHook.Replaying"/> so the capture hook ignores the bark
     /// we are playing back; without it a bark would bounce between instances forever.
     ///
+    /// <paramref name="suppressCapture"/> is false ONLY for the test hook, which needs a bark
+    /// this instance produces to be captured exactly as a game-produced one is — that round
+    /// trip is the only way the capture stub's stack arithmetic can be checked without a
+    /// human playing the game, and it shipped wrong twice for want of it.
+    ///
     /// MAIN THREAD ONLY.
     /// </summary>
     public static bool PlayBark(
-        uint speakerObjectId, ReadOnlySpan<byte> text, ReadOnlySpan<byte> resRef, uint flags)
+        uint speakerObjectId, ReadOnlySpan<byte> text, ReadOnlySpan<byte> resRef, uint flags,
+        bool suppressCapture = true)
     {
         if (speakerObjectId is 0 or ObjectInvalid)
         {
@@ -3412,7 +3896,7 @@ internal static unsafe class Odyssey
         byte* line = stackalloc byte[8];
         *(ulong*)line = 0;
 
-        BarkHook.Replaying = true;
+        BarkHook.Replaying = suppressCapture;
         try
         {
             CExoStringCtorFn(line, chars);
@@ -4637,6 +5121,14 @@ internal static unsafe class Odyssey
             PacifyCreatureFn(phantom);
         }
     }
+
+    /// <summary>
+    /// The same CSWSCreature::PacifyCreature (0x004FD960), named for the general case: release
+    /// every local creature currently locked onto this body. Mirrored COMPANIONS need it for
+    /// the same reason phantoms do — under local_combat they are pinned min-1-hp, so they
+    /// never read dead and nothing lets go of them on its own.
+    /// </summary>
+    public static void ReleaseAttackersOn(nint creature) => PacifyPhantom(creature);
 
     /// <summary>
     /// Orders one creature to attack another through the engine's own ActionAttack — a real

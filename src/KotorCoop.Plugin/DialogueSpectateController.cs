@@ -8,17 +8,24 @@ namespace KotorCoop.Plugin;
 /// touch the replies. The player who started it owns it until they close it.
 ///
 /// It is the real conversation on both screens, not a transcript. The spectator opens the
-/// identical dialogue against its own copy of the NPC (resolved by TAG — object ids are
-/// per module load and would not match) and replays every reply slot the owner picks. Both
-/// instances run the same .dlg from the same install, so the same slot walks the same
-/// branch and the two conversations stay on the same node.
+/// identical dialogue against its own copy of the NPC (resolved by TAG — object ids are per
+/// module load and would not match) and is then driven to whichever NODE the owner is on:
+/// the index of the dialogue entry showing, sent through the engine's own entry producer, so
+/// the line, its voice-over and its lipsync all arrive together.
+///
+/// ⚠ It does NOT replay the reply slot the owner pressed. That is what it used to do, and it
+/// could not work: a slot is a property of one instance's evaluation of the conversation, not
+/// of the conversation. Which entry it starts on, which replies are offered and where a reply
+/// leads are each chosen by scripts that run separately on each machine. An entry index is a
+/// plain array position in a file both instances loaded, and it is the engine's own notion of
+/// where a conversation is — see the node-sync note in <see cref="Odyssey"/> for the argument
+/// and the addresses.
 ///
 /// Two rules keep ownership honest:
 ///   * the spectator's ability to commit a reply is turned OFF for as long as it follows
 ///     (CanSendDialog), so only the owner's choices ever advance the tree;
-///   * replies the spectator's own panel dispatches while replaying are not published back
-///     (<see cref="DialogueReplyHook.Suppressed"/>), or the owner would receive its own pick
-///     as a new one and advance twice.
+///   * a follower publishes neither picks nor its own node, or the two instances would drive
+///     each other in a circle.
 ///
 /// Runs on the game's frame hook. Every engine read is guarded and every engine call is
 /// bounds-checked; a conversation that cannot be resolved is skipped, never guessed at.
@@ -32,8 +39,15 @@ internal sealed unsafe class DialogueSpectateController(SharedBlockView block)
     /// running its own. Cleared the moment the owner's conversation ends.</summary>
     private bool _following;
 
-    /// <summary>The owner's reply serial we last replayed, so each pick is replayed once.</summary>
-    private uint _appliedReplySerial;
+    /// <summary>The owner's node serial we have already been driven to, so one node change
+    /// is acted on once. Zero means "drive me wherever the owner is", which is exactly what a
+    /// fresh follow wants — a joiner lands on the owner's CURRENT line rather than replaying
+    /// its way there.</summary>
+    private uint _appliedNodeSerial;
+
+    /// <summary>"No node." Mirrors <c>DialogueState.NoNode</c> on the wire; the plugin does
+    /// not reference the protocol assembly.</summary>
+    private const int NoNode = -1;
 
     /// <summary>While now is before this, a follow-open we requested is still in flight and
     /// the dialogue gate must let StartDialog through for it.</summary>
@@ -108,7 +122,13 @@ internal sealed unsafe class DialogueSpectateController(SharedBlockView block)
         _heldSpeaker[0] = 0;
         _heldLine[0] = 0;
         _lastLineHash = 0;
-        _appliedReplySerial = 0;
+        _appliedNodeSerial = 0;
+
+        // A node index names an entry in ONE .dlg. Carrying one across a module change points
+        // it at a different file's entry list, so it goes with everything else here.
+        block.LocalDialogueNode = NoNode;
+        block.LocalDialogueNodeSerial++;
+
         _nextYieldCloseMs = 0;
         _yieldCloseAttempts = 0;
         _localUnidentifiedSinceMs = 0;
@@ -186,6 +206,11 @@ internal sealed unsafe class DialogueSpectateController(SharedBlockView block)
                 *block.LocalDialoguePartnerTag = 0;
                 block.LocalDialogueSerial++;
 
+                // The node is per conversation, like the pick log: a stale index surviving
+                // into the next one names an entry in a different .dlg entirely.
+                block.LocalDialogueNode = NoNode;
+                block.LocalDialogueNodeSerial++;
+
                 // The pick log is per conversation: stale picks surviving into the next one
                 // would replay against lines they were never made on.
                 for (int i = 0; i < SharedBlock.DialoguePickCapacity; i++)
@@ -203,11 +228,41 @@ internal sealed unsafe class DialogueSpectateController(SharedBlockView block)
         Odyssey.ReadDialoguePartnerTag(
             block.LocalDialoguePartnerTag, SharedBlock.LocalDialoguePartnerTagLength);
 
+        // ⚠ WHERE WE ARE — the thing a follower is actually driven by.
+        //
+        // The index of the entry on screen, which is a plain array position in the .dlg both
+        // instances loaded and therefore means the same thing on both.
+        //
+        // Written EVEN WHILE FOLLOWING, unlike the pick log below. The feedback loop this
+        // looks like it would create is already cut a layer up: the agent publishes nothing
+        // from an instance that is following a peer's token (CoopAgent.PumpDialogue's
+        // `rawInDialogue = local.IsInDialogue && !followingPeer`), so a follower's node never
+        // reaches the wire whatever this writes. Guarding here as well cost the one thing
+        // that makes the whole mechanism observable: with it in place the field froze at
+        // whatever the follower published just before it adopted, so a probe watching the two
+        // nodes converge saw a stale number and could not tell a working drive from a broken
+        // one. Measured — it read 19 for thirty seconds after being driven to 29.
+        //
+        // A read of -1 is never published over a good node while the conversation is still
+        // live. The engine's active flag drops for a few frames between entries and the node
+        // reads unknown for that gap; writing it through would tell the follower "I have lost
+        // my place" on every line change, which is the exact moment it most needs a node. The
+        // clear happens once, at the end of the conversation, in the !active branch above.
+        int node = Odyssey.GetDialogueNodeIndex();
+        if (node >= 0 && node != block.LocalDialogueNode)
+        {
+            block.LocalDialogueNode = node;
+            block.LocalDialogueNodeSerial++; // serial last: the far side reads it first
+        }
+
         // Replies WE picked, appended to the pick LOG with the hash of the line they were
-        // picked on. A pick is only meaningful on its line: replaying a slot number while
-        // the spectator's screen shows a different node walks them down the wrong branch,
-        // and a spectator that joined late needs the earlier picks too — one latest value
-        // cannot carry either. (Not recorded while following: those are replays, not ours.)
+        // picked on.
+        //
+        // ⚠ DIAGNOSTIC ONLY NOW — nothing is driven from this. It says what the owner
+        // pressed, which is worth having in a log when a conversation goes wrong. It is NOT
+        // what the follower replays, and reinstating that would undo the node drive: see the
+        // node-sync note in Odyssey for why a reply slot cannot mean the same thing on two
+        // machines. (Not recorded while following: those are replays, not ours.)
         if (!_following && DialogueReplyHook.Sequence != block.LocalDialogueReplySerial)
         {
             uint lineHash = Hash(line, 2166136261u);
@@ -278,12 +333,27 @@ internal sealed unsafe class DialogueSpectateController(SharedBlockView block)
         // here (the BG3 rule). The one exception is our own follow of that conversation,
         // whose open arrives from the server several frames after we request it — so the
         // bypass is LEVEL-based: up from the follow request until the follow ends.
-        DialogueGateHook.PeerHoldsConversation = block.RemoteDialogueActive;
+        //
+        // ⚠ THE GATE ONLY CLOSES ONCE WE KNOW WHO THE PEER IS TALKING TO.
+        //
+        // The gate's whole job is to tell a JOIN (a click on the peer's own partner, which
+        // must pass) from a competing conversation (which must not). With an EMPTY partner tag
+        // it can do neither: SameTag refuses an empty tag by design, so every start was
+        // refused — including the join the player was trying to make. And the tag is empty for
+        // a real window at the start of every conversation, because the participant ids at
+        // gui+0x170/0x174 stay OBJECT_INVALID until the server has resolved them. Measured in
+        // play as a click at :23 doing nothing and the identical click at :26 working.
+        //
+        // So while the peer's identity is unknown, do not gate at all. The cost of letting a
+        // competing start through for those few hundred milliseconds is bounded and already
+        // handled: the adopt/yield path below closes our own conversation the moment the tags
+        // resolve and disagree. The cost of refusing everything is a player who cannot join.
+        bool peerPartnerKnown = block.RemoteDialogueActive && *block.RemoteDialoguePartnerTag != 0;
 
-        // Which NPC the peer is talking to, so the gate can tell a JOIN (a click on that
-        // same character) from a competing conversation and refuse only the latter. A
-        // pointer into the shared block, which outlives every frame.
-        DialogueGateHook.PeerPartnerTag = block.RemoteDialogueActive
+        DialogueGateHook.PeerHoldsConversation = peerPartnerKnown;
+
+        // A pointer into the shared block, which outlives every frame.
+        DialogueGateHook.PeerPartnerTag = peerPartnerKnown
             ? (nint)block.RemoteDialoguePartnerTag
             : 0;
 
@@ -366,7 +436,7 @@ internal sealed unsafe class DialogueSpectateController(SharedBlockView block)
                 _following = false;
                 _sawOpen = false;
                 _reportedContentMs = false;
-                _appliedReplySerial = 0;
+                _appliedNodeSerial = 0;
                 _followOpenPendingUntilMs = 0;
                 Odyssey.CloseDialogue();
             }
@@ -446,13 +516,16 @@ internal sealed unsafe class DialogueSpectateController(SharedBlockView block)
                     _sawOpenAtMs = Environment.TickCount64;
                     _reportedContentMs = false;
 
-                    // ⚠ Start from where the owner IS, not from the beginning of their log.
-                    // Replaying the whole history means firing every pick they have already
-                    // made, back to back, which walks this copy of the conversation through
-                    // several nodes in a second — seen as the conversation "skipping". The
-                    // follower joined partway through; partway through is where it starts.
-                    _appliedReplySerial = NewestRemotePickSerial();
-                    _pendingPickSinceMs = 0;
+                    // ⚠ Start from where the owner IS — which is now simply what a zero here
+                    // MEANS, rather than something that had to be computed.
+                    //
+                    // Under pick replay this had to skip the owner's history by hand, or the
+                    // follower fired every pick already made, back to back, and walked through
+                    // several nodes in a second (the conversation "skipping"). Position has no
+                    // history to skip: an unapplied serial drives us straight to the single
+                    // node the owner is on, so a mid-conversation joiner lands on the line
+                    // being spoken and nowhere else.
+                    _appliedNodeSerial = 0;
                     _nextYieldCloseMs = 0;
                     _yieldCloseAttempts = 0;
                     return; // next frame drives it through the follow path
@@ -540,6 +613,22 @@ internal sealed unsafe class DialogueSpectateController(SharedBlockView block)
             return;
         }
 
+        // ⚠ SUPPRESSED THE MOMENT WE ARE FOLLOWING — not once the conversation is on screen.
+        //
+        // This assertion used to sit AFTER the `if (!open) return;` below, which meant the
+        // whole join window ran unsuppressed: the follower's conversation takes up to
+        // FollowOpenTimeoutMs to arrive (the server walks the player into range first), and
+        // for every one of those seconds the joiner could answer. Both players could pick, on
+        // two copies of the same conversation, and the owner's copy was the only one anyone
+        // else could see — so the second player's answers went into a branch nobody was
+        // watching. That is the "both players can still click the options" report, and it was
+        // never a hole in the reply hook; it was this line being one early-return too low.
+        //
+        // It stays a LEVEL, re-decided from false at the top of every frame (see the note
+        // there). Asserting it here rather than at the bottom widens the window it covers
+        // without making it a latch.
+        DialogueReplyHook.Suppressed = true;
+
         // ⚠ "Requested" and "on screen" are different states, with different patience.
         //
         // The request goes to the server, which resolves the participants, walks the player
@@ -616,9 +705,8 @@ internal sealed unsafe class DialogueSpectateController(SharedBlockView block)
             return; // still on its way; nothing to drive yet
         }
 
-        // While following: never allowed to CHOOSE. Re-asserted every frame because whether
-        // the engine restores this flag on its own was never established.
-        DialogueReplyHook.Suppressed = true;
+        // (Suppressed is asserted above, before the open check, so the join window is covered
+        // too — it used to be asserted here and that was the hole.)
 
         // ⚠ SetCanSendDialog(false) used to be asserted here too, as a second "cannot commit
         // a reply" lever. It is not that lever, and it was the reason a followed conversation
@@ -633,77 +721,102 @@ internal sealed unsafe class DialogueSpectateController(SharedBlockView block)
         // when something else nudged them. The reply block above is the real and sufficient
         // one — it refuses CSWGuiDialog::SelectReply itself.
 
-        // Replay the owner's picks IN ORDER, each one ONLY once our own screen shows the
-        // line it was picked on. Entries auto-advance on both sides and a reply prompt
-        // WAITS, so the follower naturally arrives at each pick's line and stops there;
-        // the line hash is what keeps a pick from firing on the wrong node.
+        // ⚠ DRIVEN TO THE OWNER'S NODE. THE PICK REPLAY THAT USED TO BE HERE IS GONE, AND
+        // MUST NOT COME BACK ALONGSIDE THIS — the two gates would each undo the other's work.
         //
-        // ⚠ A pick is NEVER applied blind any more. There used to be an 8-second grace after
-        // which an unmatched pick went in regardless — harmless while the panel offset was
-        // wrong and SelectDialogueReply always failed, and actively destructive once it was
-        // fixed: the follower answered on a timer, on whatever node it happened to be on,
-        // which is "the dialogue options being selected" and half of "skipping a convo".
-        // A pick that never finds its line is now simply not made; the player is looking at
-        // the same conversation and can see it, which beats guessing on their behalf.
-        byte* next = null;
-        for (int i = 0; i < SharedBlock.DialoguePickCapacity; i++)
+        // What was here: wait until our own line hashes to the line the owner's pick was made
+        // on, then dispatch that reply slot. It deadlocked completely, and the deadlock was
+        // measured off a frozen session rather than reasoned about. DialogueReplyHook is a
+        // PREFIX hook, so when it records a pick the engine's own SelectReply body has not run
+        // yet; by the time the frame hook samples the history ring, that body has appended
+        // BOTH the player's reply and the next NPC entry. So every pick was stamped with the
+        // hash of the line it PRODUCED, and the follower sat waiting for a line it could only
+        // reach by applying the very pick it was gating on. From the live ring: prompt
+        // 0x74851E0A, pick stamped 0xC1EFCE18, two records apart. No pick made after a
+        // follower joined had ever been applied, in either direction.
+        //
+        // Fixing the stamp would not have been enough, which is why this is a replacement and
+        // not a repair: a reply slot is a per-instance quantity (Odyssey's node-sync note has
+        // the three reasons and their addresses), so a correctly-stamped slot still walks the
+        // two screens down different branches. Publishing POSITION instead sidesteps all of
+        // it, and dissolves the start-node divergence for free.
+        int wantedNode = block.RemoteDialogueNode;
+        uint wantedSerial = block.RemoteDialogueNodeSerial;
+
+        if (wantedNode < 0 || wantedSerial == _appliedNodeSerial)
         {
-            byte* entry = block.RemoteDialoguePick(i);
-            uint serial = *(uint*)entry;
-            if (serial != 0 && serial > _appliedReplySerial)
-            {
-                next = entry; // the log is ordered; the first unapplied entry is the oldest
-                break;
-            }
+            return; // the owner has not said where it is, or we have already been sent there
         }
 
-        if (next == null)
+        // Wait for our own conversation to have produced a line before driving it. Driving a
+        // shell that has not delivered anything races the open, and the open is the thing that
+        // decides which panel the conversation is even running on.
+        if (!hasContent)
         {
-            _pendingPickSinceMs = 0;
             return;
         }
 
-        if (_pendingPickSinceMs == 0)
+        int before = Odyssey.GetDialogueNodeIndex();
+
+        // Already there — the common case, because entries auto-advance identically on both
+        // instances through any stretch of a conversation without a choice in it. Bank it, or
+        // every such node would be re-examined on every frame for as long as the owner sat
+        // on it.
+        if (before == wantedNode)
         {
-            _pendingPickSinceMs = Environment.TickCount64;
+            _appliedNodeSerial = wantedSerial;
+            _driveAttempts = 0;
+            return;
         }
 
-        uint pickSerial = *(uint*)next;
-        int slot = (int)*(uint*)(next + 4);
-        uint pickLineHash = *(uint*)(next + 8);
-
-        uint myLineHash = Hash(block.LocalDialogueLine, 2166136261u);
-        if (myLineHash != pickLineHash)
+        // ⚠ A SUCCESSFUL CALL IS NOT AN ARRIVAL, AND BANKING THE SERIAL ON ONE STRANDS THE
+        // FOLLOWER FOR THE REST OF THE CONVERSATION.
+        //
+        // CSWSObject::SendDialogEntry returns 1 from its DEFER path as well as its send path:
+        // when the dialog-delay gate is shut it stores the entry at +0x4C, raises +0x48 and
+        // reports success. And that gate is shut exactly when a follower first tries to use
+        // it — CSWSObject::IsDialogDelay asks GetCanSendDialog, which refuses for about a
+        // second after the stamp at +0x22C, and a conversation opening is one of the things
+        // that stamps it. Measured: the client joined, drove 19 -> 29 three milliseconds
+        // after its conversation delivered content, was told "success", and sat on 19 for the
+        // next seventeen seconds with the serial already banked so it never tried again.
+        //
+        // So the node itself is the acknowledgement. Nothing is banked until the engine has
+        // actually moved, and until then this simply runs again next frame — which is the
+        // same level-triggered shape as everything else in this controller, and it turns the
+        // engine's transient gate into a few frames of latency instead of a dead follow.
+        if (!Odyssey.DriveDialogueToNode(wantedNode))
         {
-            return; // not on that line here yet, and guessing is worse than waiting
+            return; // could not even be asked for yet; try again next frame
         }
 
-        if (Odyssey.SelectDialogueReply(slot))
+        int landed = Odyssey.GetDialogueNodeIndex();
+        if (landed == wantedNode)
         {
-            _appliedReplySerial = pickSerial;
-            _pendingPickSinceMs = 0;
-            LogFew($"dialogue: followed the owner's reply {slot}");
+            _appliedNodeSerial = wantedSerial;
+            LogFew($"dialogue: followed the owner {before} -> {wantedNode}"
+                + (_driveAttempts > 0 ? $" (after {_driveAttempts} deferred attempts)" : string.Empty));
+            _driveAttempts = 0;
+            return;
+        }
+
+        // Deferred. Say so once it has gone on long enough to be a fault rather than the
+        // ordinary one-second gate, and keep retrying either way — a follower that gives up
+        // is a follower watching a conversation it is not in.
+        if (++_driveAttempts == DriveAttemptsBeforeComplaining)
+        {
+            PluginHost.Log($"dialogue: the engine has deferred {DriveAttemptsBeforeComplaining} attempts to "
+                + $"move from {landed} to {wantedNode}; still trying — {Odyssey.DescribeDialogueDrive()}");
         }
     }
 
-    private long _pendingPickSinceMs;
+    /// <summary>Deferred drives of the CURRENT node request, reset once one lands.</summary>
+    private int _driveAttempts;
 
-    /// <summary>The highest pick serial the owner has published, i.e. where their
-    /// conversation has already got to.</summary>
-    private uint NewestRemotePickSerial()
-    {
-        uint newest = 0;
-        for (int i = 0; i < SharedBlock.DialoguePickCapacity; i++)
-        {
-            uint serial = *(uint*)block.RemoteDialoguePick(i);
-            if (serial > newest)
-            {
-                newest = serial;
-            }
-        }
-
-        return newest;
-    }
+    /// <summary>Frames of deferral before the log says so. The engine's own gate clears in
+    /// about a second, and the frame hook runs at roughly 300 Hz, so this is several times
+    /// the ordinary wait — it fires for a gate that is stuck, not for one that is working.</summary>
+    private const int DriveAttemptsBeforeComplaining = 1200;
 
 
 

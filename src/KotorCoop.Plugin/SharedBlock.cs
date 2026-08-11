@@ -279,7 +279,25 @@ internal struct SharedBlock
     // owner to run the engine's death for a creature the peer had beaten down to the
     // health floor. Retired 2026-08-07 with the health min-merge it belonged to — the
     // owner now applies a peer's damage as real damage, so a kill falls out of the
-    // arithmetic and needs no separate "it is dead" message to trust. The range is free.
+    // arithmetic and needs no separate "it is dead" message to trust. Reused below.
+
+    /// <summary>
+    /// Agent -&gt; plugin, TEST HOOK. Makes a named creature bark a known line, through the
+    /// engine's own BarkString and WITHOUT the replay guard, so the capture hook sees it
+    /// exactly as it sees a bark the game produced.
+    ///
+    /// Same reasoning as the attack hook next door: provoking a real one is unreliable.
+    /// Barks come from scripts and AI actions, the starting area's droids bark on triggers
+    /// that automation cannot reach, and clicking one opens a conversation instead. Without
+    /// this the bark channel could only be tested by a human playing the game — which is how
+    /// it shipped broken twice, most recently with the capture stub reading the wrong stack
+    /// slots and nothing to notice.
+    ///
+    /// Tag @0 (32 bytes of ascii), serial last @0x20.
+    /// </summary>
+    public const int OffsetTestBarkTag = 0x1DB0;
+    public const int OffsetTestBarkSerial = 0x1DD0;
+    public const int TestBarkTagLength = 32;
 
     // ---- damage a PEER dealt (version 23) ---------------------------------------
     //
@@ -841,6 +859,78 @@ internal struct SharedBlock
 
     /// <summary>Agent -&gt; plugin. The conversation owner's recent picks. 0x12C0..0x1320.</summary>
     public const int OffsetRemoteDialoguePicks = 0x12C0;
+
+    // ---- dialogue node sync (version 32, region 0x1320..0x1330) -------------------
+    //
+    // ⚠ THIS REPLACES THE PICK LOG ABOVE AS THE THING THE FOLLOWER IS DRIVEN BY. The pick log
+    // is still published, and is now DIAGNOSTIC ONLY — it says what the owner pressed, which
+    // is worth having in a log, and nothing reads it to decide anything.
+    //
+    // Replaying the owner's reply SLOT cannot converge, because a slot is not a property of
+    // the conversation but of one instance's evaluation of it: the starting entry, the set of
+    // replies offered and a reply's outgoing link are each chosen by scripts that run
+    // separately on each machine (Odyssey's node-sync section carries the full argument and
+    // the addresses). So the owner publishes its POSITION instead — the index of the entry on
+    // screen, a plain array index into the .dlg both instances loaded — and the follower is
+    // driven onto that entry through the engine's own producer. The engine agrees this is the
+    // quantity that matters: CSWSDialog::HandleReply refuses a reply whose claimed entry
+    // index does not match the live one.
+    //
+    // -1 means "no conversation, or the index could not be trusted", and is never driven.
+
+    /// <summary>Plugin -&gt; agent. The entry index the local conversation is showing, or -1.</summary>
+    public const int OffsetLocalDialogueNode = 0x1320;
+
+    /// <summary>Plugin -&gt; agent. Bumped when the local node changes; written last, so a
+    /// half-written pair reads as the previous node rather than as a torn one.</summary>
+    public const int OffsetLocalDialogueNodeSerial = 0x1324;
+
+    /// <summary>Agent -&gt; plugin. The entry index the conversation's OWNER is showing, or -1.</summary>
+    public const int OffsetRemoteDialogueNode = 0x1328;
+
+    /// <summary>Agent -&gt; plugin. Bumped when the owner's node changes.</summary>
+    public const int OffsetRemoteDialogueNodeSerial = 0x132C;
+
+    // ---- per-object interaction locks (version 33, region 0x1330..0x13E0) -------------
+    //
+    // "Hold this one still, I am using it." Ownership in this mod is one-directional
+    // (docs/research/shared-state-audit.md §4): the host owns companions, enemies, doors and
+    // containers, so a client that walks up to Trask and talks to him is talking to a puppet
+    // while the HOST's AI — never told — keeps walking the real one around. That is the
+    // reported "Trask is still moving around on the host's and other players' screens".
+    //
+    // The lock is claimed the moment a player starts interacting, which is EARLIER than the
+    // conversation token can be granted, and that is what makes it fair: the host's own
+    // dialogue claim runs the arbiter in-process at zero latency while a client's costs a
+    // round trip, so without this the host wins every contested NPC by construction.
+    //
+    // A LEASE, re-sent while held. There is no release message to lose, so a client that dies
+    // mid-conversation cannot strand an NPC for the rest of the session.
+
+    /// <summary>Plugin -&gt; agent. Tag of the object the local player is interacting with, or
+    /// empty. A TAG, not an object id — ids are per module load.</summary>
+    public const int OffsetLocalInteractionTag = 0x1330;
+
+    public const int LocalInteractionTagLength = 32; // occupies 0x1330..0x1350
+
+    /// <summary>Plugin -&gt; agent. What kind of interaction (see InteractionKind).</summary>
+    public const int OffsetLocalInteractionKind = 0x1350;
+
+    /// <summary>Plugin -&gt; agent. Nonzero while the claim is live. A LEVEL, not an edge.</summary>
+    public const int OffsetLocalInteractionActive = 0x1354;
+
+    /// <summary>Agent -&gt; plugin. How many lock slots below are valid.</summary>
+    public const int OffsetInteractionLockCount = 0x1358;
+
+    /// <summary>Agent -&gt; plugin. Entries: peerId u32 @0, kind u32 @4, tag[32] @8. Occupies
+    /// 0x1360..0x13E0 (4 x 0x28 — the protocol's MaxInteractionLocks).</summary>
+    public const int OffsetInteractionLocks = 0x1360;
+
+    public const int InteractionLockStride = 0x28;
+
+    public const int InteractionLockCapacity = 4;
+
+    public const int InteractionLockTagLength = 32;
 
     // ---- container-loot removal (region 0xD00..0xE00) -----------------------------
     //

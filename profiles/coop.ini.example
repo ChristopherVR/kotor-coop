@@ -66,7 +66,7 @@ combat_state_sync=0
 # Let this instance's mirrored enemies fight for themselves, so its own combat state
 # rises during a peer's fight. Moves damage authority too: with this on, the owner's
 # forwarded phantom damage is absorbed instead of applied, or every hit lands twice.
-local_combat=0
+local_combat=1
 
 # Activate the render window at launch. Without this an instance draws nothing until it
 # is clicked into - with two windows that means clicking both, every launch.
@@ -76,8 +76,33 @@ activate_render_on_start=1
 # engine's four BarkString arguments are pointers, and the contents now travel instead).
 bark_replay=1
 
+# Hold an object still while another player is interacting with it. Ownership is
+# one-directional - the host owns companions and NPCs - so without this a client talking to
+# Trask sees a body driven from the host's stream while the host's own AI keeps walking the
+# real one around, which is the "Trask is still moving on the host's screen" report. The
+# claim also settles a contested NPC fairly: it goes up the moment a player starts
+# interacting, which is earlier than a conversation exists, so it records who got there
+# first rather than who reached the arbiter first (always the host, in-process).
+interaction_locks=1
+
+# Be pulled into a conversation another player starts, instead of clicking the same NPC to
+# join. OFF, and read both reasons before turning it on.
+#   * It is the behaviour that was removed once already: players were yanked out of whatever
+#     they were doing from anywhere in the module. Joining is a click because walking away
+#     while your partner talks to a shopkeeper is a legitimate thing to want.
+#   * UNRESOLVED: a conversation that recruits or dismisses a companion calls
+#     AddPartyMember / RemovePartyMember, and those have NO channel in this mod. Being driven
+#     into a recruitment conversation ends it with a party roster the other instance does not
+#     share - and the roster is what the companion channel keys on.
+# Ordinary conversation is fine. Recruitment is not.
+force_dialogue_party=0
+
 # Let the mod own the HUD pause button. The engine's own toggle reads server mask bit 0x02,
 # which is also the focus-loss reason FocusKeeper must keep clearing - so it can pause but
 # never unpause. OFF until the hook is confirmed by hand: it swallows the click, so if the
 # toggle does not fire the button does nothing at all.
 pause_button_hook=1
+
+# How close a driven mirrored enemy's body must be to this player (world units) before
+# its owner's damage report may be absorbed. Only read when local_combat=1.
+local_combat_range=20

@@ -153,14 +153,32 @@ internal static unsafe class BarkHook
         int n = 0;
 
         // Entered by JMP, so esp still points at the caller's return address and the four
-        // stack arguments sit at [esp+4..0x10]. pushad shifts those by 0x20.
+        // stack arguments sit at [esp+4..0x10]. pushad shifts those by 0x20, putting arg1 at
+        // [esp+0x24], arg2 at [esp+0x28], arg3 at [esp+0x2C] and arg4 at [esp+0x30].
         s[n++] = 0x60;                                       // pushad
 
-        // push arg4, arg3, arg2, arg1 (cdecl callback takes them left to right)
-        foreach (int offset in (ReadOnlySpan<int>)[0x30, 0x2C, 0x28, 0x24])
+        // ⚠ EVERY OFFSET IS 0x30 — NOT 0x30, 0x2C, 0x28, 0x24. EACH PUSH MOVES ESP.
+        //
+        // The arguments go on right to left for the cdecl callback, so the reads walk DOWN
+        // the argument list while esp walks down with them, four bytes per push. The two
+        // cancel exactly: the same literal 0x30 addresses arg4, then arg3, then arg2, then
+        // arg1. Writing the "obvious" descending sequence instead reads, in order: arg4,
+        // arg2, THE RETURN ADDRESS, and ECX.
+        //
+        // That is what shipped, and it is why barks never appeared on the other screen. The
+        // callback's first parameter — the speaker's object id — was receiving `this`, the
+        // CClientExoAppInternal pointer, so the far side was asked to find a creature whose
+        // id was 0x011680D0 and logged "that creature does not exist here" for every line.
+        // The text pointer was the return address, whose CExoString read failed the length
+        // guard and produced an empty line, and the resref was read out of the real text
+        // string. Nothing crashed, which is why it looked like it was working.
+        //
+        // PhantomHitHook has the same shape and gets it right (its two pushes are both
+        // +0x28, with the shift called out in a comment); this is the one that missed it.
+        for (int arg = 0; arg < 4; arg++)                     // arg4, arg3, arg2, arg1
         {
-            s[n++] = 0xFF; s[n++] = 0xB4; s[n++] = 0x24;     // push dword [esp+offset]
-            *(int*)(s + n) = offset;
+            s[n++] = 0xFF; s[n++] = 0xB4; s[n++] = 0x24;     // push dword [esp+0x30]
+            *(int*)(s + n) = 0x30;
             n += 4;
         }
 

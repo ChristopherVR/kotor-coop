@@ -278,3 +278,80 @@ so the button's unpause path finds nothing to remove and no-ops. `PauseKeyContro
 NEXT: find the HUD pause button's handler and either hook it (the click is the intent, and
 we already own the pause) or give the mouse the same fallback the key has. Do NOT "fix" this
 by re-asserting in the reconciler — that is the loop that made the banner unclearable before.
+
+---
+
+## §4 answered: the per-object interaction lock (2026-08-11, live-verified)
+
+§4 recorded that ownership is one-directional and that nothing tells an object's owner when
+somebody else is using it. That channel now exists.
+
+**The reported symptom:** a client walks up to Trask and starts talking. The client sees a body
+it drives from the host's position stream; the host's own AI, never told anything happened,
+carries on walking the real Trask around. Both screens show a conversation with a companion
+who is strolling out of it.
+
+### Shape: a lease, claimed early
+
+* **A lease, not a handshake.** The claim is re-sent every tick while it is held and expires
+  on its own. There is no release message, so losing one cannot strand an NPC for the rest of
+  the session — which is the failure that actually matters, because the case to design for is
+  a client dying mid-conversation. Same discipline as the encounter-trigger channel.
+* **Claimed the moment a player starts interacting**, which is earlier than a conversation
+  exists. That is what makes a contested NPC fair, and it fixes a bias nothing had noticed:
+  "first speaker wins" is only fair if both claims race on equal terms, and they never did —
+  the host's dialogue claim reaches the arbiter **in-process at zero latency** while a
+  client's crosses the network. Two players clicking the same NPC at the same instant
+  resolved to the host every time, however early the client clicked. `DialogueArbiter` now
+  takes a `lockHolder` and refuses a claim on an NPC someone else holds **even when the token
+  is free**.
+* **A claim with no partner tag is never refused.** The tag is empty for a real window at the
+  start of every conversation (`gui+0x170/0x174` stay `OBJECT_INVALID` until the server
+  resolves the participants), and refusing on an empty tag would refuse every conversation in
+  the game for its first few hundred milliseconds.
+
+### The hold itself
+
+`Odyssey.HoldCreatureStill` clears the action queue **only when the head action is a move**.
+A blanket `ClearAllActions` every pass is what stopped a mirrored enemy ever landing a swing —
+the queue does not distinguish a walk from the whole fight, so the test has to.
+
+The agent filters the local peer's own claim out before handing the list down, so the plugin
+holds everything it is given without needing to know its own peer id. Sending it would be
+actively wrong: the object *this* player is talking to is already frozen by the engine's own
+dialogue system.
+
+### Measured
+
+Client starts the conversation, host owns the NPC:
+
+```
+  t   host#  client#  hostNode  clientNode  hLock  cLock   hostPartner  clientPartner
+  0       0        1        -1          29      1      0                end_trask
+  -> host clicks 'end_trask' (join)
+  5       1        1        29          29      1      0   end_trask    end_trask
+NODES: on the same entry for 9 of 9 paired samples.
+```
+
+`hLock 1` from t=0 — the host is holding Trask still at the client's request, before the host
+is in the conversation at all.
+
+`verify.ps1` carries it permanently: *an interaction lock reaches the other instance*.
+
+### `force_dialogue_party`, and why it is OFF
+
+With the lock in place, being *pulled into* a peer's conversation rather than clicking to join
+is a few lines — it sends the same request a click sends and takes the same adopt path.
+Verified live: with nobody clicking, the host joined **531 ms** after the client started and
+landed on the same node (14/14 paired samples).
+
+It ships **off**, for two reasons:
+
+1. It is the behaviour that was already removed once. Players were yanked out of whatever they
+   were doing from anywhere in the module; joining became a click because walking away while
+   your partner talks to a shopkeeper is a legitimate thing to want.
+2. **Unresolved:** a conversation that recruits or dismisses a companion calls
+   `AddPartyMember` / `RemovePartyMember`, and those have **no channel in this mod**. A player
+   driven into a recruitment conversation ends it holding a party roster the other instance
+   does not share — and the roster is what the companion channel keys on. Ordinary
+   conversation is fine; recruitment is not.

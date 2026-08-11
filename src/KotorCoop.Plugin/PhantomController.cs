@@ -679,7 +679,36 @@ internal sealed unsafe class PhantomController(SharedBlockView block)
     /// </summary>
     private void ApplyTargetable(int slot, nint phantom, bool alive)
     {
-        bool want = _targetable && alive;
+        // ⚠ THE AUTHORITY SPLIT ONLY HOLDS IF EACH INSTANCE'S ENEMIES FIGHT ITS OWN PLAYER,
+        // AND NOTHING IN THE ENGINE ENFORCES THAT.
+        //
+        // Under local_combat this instance's mirrored enemies swing for themselves and the
+        // owner's forwarded total for this player is absorbed instead of applied. That trade
+        // is only sound while the local copies are hitting the LOCAL PC. Target selection is
+        // hostility + line of sight + distance; a peer's phantom is faction PLAYER while that
+        // peer lives; and the mirrored enemies are driven to the OWNER's coordinates — which
+        // puts them standing next to the owner's phantom, the nearest player-faction body they
+        // can see. So the client's copy of a Sith soldier locks onto the HOST's phantom while
+        // the host's copy hits the client's phantom, both sides absorb, and nobody loses a hit
+        // point.
+        //
+        // The lock is sticky, which turns one bad acquisition into a whole battle: the engine
+        // releases a target only on dead / unresolvable / a reputation flip, and a phantom is
+        // min-1-hp so it never reads dead and stays in faction 0.
+        //
+        // So on a MIRRORING instance with local_combat on, peer phantoms are held Neutral.
+        // Nothing is lost: this instance's damage to a phantom was never authoritative (the
+        // owner's copy of that fight is the real one), and the body is still drawn, named,
+        // equipped, posed and animated. What changes is that the only player-faction bodies a
+        // local enemy can pick become the local PC and the mirrored companions.
+        //
+        // ⚠ GATED ON DamageDealtEnabled, NOT ON local_combat ALONE. On the OWNING instance the
+        // peer's phantom MUST stay in the player faction: it is that peer's only body inside
+        // the authoritative simulation, and hits on it are how they participate at all. Getting
+        // this gate wrong makes a distant player un-fightable everywhere.
+        bool holdNeutral = EnemyPresenceController.LocalCombat && block.DamageDealtEnabled;
+
+        bool want = _targetable && alive && !holdNeutral;
 
         if (_factionKnown[slot] && _hostileToLocals[slot] == want)
         {
