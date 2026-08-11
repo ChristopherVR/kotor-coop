@@ -45,6 +45,14 @@ internal sealed class IncomingDamageController(SharedBlockView block)
     private bool _heldForDialogue;
     private int _logged;
 
+    /// <summary>Running total absorbed under local_combat, and when it was last announced.
+    /// A silent absorb is indistinguishable from a broken channel, so it is never silent.</summary>
+    private uint _absorbed;
+
+    private DateTime _lastAbsorbLog = DateTime.MinValue;
+
+    private static readonly TimeSpan AbsorbLogInterval = TimeSpan.FromSeconds(10);
+
     private DownBlockReason _reason = DownBlockReason.None;
     private uint _reasonSerial;
 
@@ -86,6 +94,48 @@ internal sealed class IncomingDamageController(SharedBlockView block)
 
         uint owed = block.IncomingDamage;
         uint applied = block.IncomingDamageApplied;
+
+        // ⚠ DAMAGE AUTHORITY, AND IT MOVES WITH EnemyPresenceController.LocalCombat.
+        //
+        // With local combat on, this instance's own mirrored enemies swing at this player
+        // here, and the owner ALSO forwards what its copies did to this player's phantom over
+        // there — the same swings, counted twice. So exactly one instance may apply damage to
+        // a given player, and the rule is: whoever owns the player owns the damage to them.
+        //
+        // The owed total is absorbed rather than ignored: leaving it unacknowledged would
+        // build a backlog that lands all at once the moment local combat is switched off.
+        // ⚠ ROLE GATE. `local_combat` is read from this install's own coop.ini, and the two
+        // instances are two installs — nothing puts it on the wire. Standing the incoming
+        // channel down on an instance that mirrors no enemies gains nothing and simply
+        // deletes that player's damage. DamageDealtEnabled is set only by an instance that
+        // is actually mirroring, which is the same test PortraitController uses for "am I
+        // the client here".
+        if (EnemyPresenceController.LocalCombat && block.DamageDealtEnabled)
+        {
+            if (owed != applied)
+            {
+                _absorbed += owed - applied;
+                block.IncomingDamageApplied = owed;
+
+                // ⚠ ON A HEARTBEAT, NOT A COUNTER. If the local enemies do not in fact engage
+                // — a materialised body with its attack bit cleared, an enemy that locked
+                // onto a peer's phantom instead of this player, an enemy shed by the census
+                // cap — then this branch is total invulnerability, and a log that stops after
+                // five lines makes it look like nothing is happening at all. This file's own
+                // history is the argument: "twenty minutes went into a bug that one log line
+                // would have named."
+                if (DateTime.UtcNow - _lastAbsorbLog >= AbsorbLogInterval)
+                {
+                    _lastAbsorbLog = DateTime.UtcNow;
+                    PluginHost.Log(
+                        $"combat: absorbed {_absorbed} forwarded damage in total without applying it "
+                        + "(local_combat is on — our own enemies are supposed to be dealing this "
+                        + "player's damage here; if the health bar never moves, they are not)");
+                }
+            }
+
+            return;
+        }
 
         // A fresh session (or a peer that restarted its count) publishes a total lower
         // than ours: adopt it rather than treating the difference as damage.

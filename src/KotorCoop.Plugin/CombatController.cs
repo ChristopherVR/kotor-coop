@@ -111,7 +111,17 @@ internal sealed class CombatController(SharedBlockView block)
             return;
         }
 
-        nint creature = Odyssey.ResolveServerObject(enemy.ObjectId);
+        // Translate through the materialisation map: an enemy that exists only in the
+        // owner's instance has a locally-spawned stand-in under a different id. An
+        // UNMAPPED owner id colliding with one of those stand-ins' local ids must not be
+        // touched at all — resolving it would pin and mirror the wrong body.
+        uint mapped = MaterialisedEnemies.ToLocal(enemy.ObjectId);
+        if (mapped == 0 && MaterialisedEnemies.ToOwner(enemy.ObjectId) != 0)
+        {
+            return;
+        }
+
+        nint creature = Odyssey.ResolveServerObject(mapped != 0 ? mapped : enemy.ObjectId);
         if (creature == 0)
         {
             return;
@@ -192,7 +202,18 @@ internal sealed class CombatController(SharedBlockView block)
             }
         }
 
-        nint creature = Odyssey.ResolveServerObject(objectId);
+        // Same translation as Apply: the death of a materialised enemy is executed on its
+        // local stand-in, and a collision with an unrelated stand-in's id is left alone.
+        uint mapped = MaterialisedEnemies.ToLocal(objectId);
+        if (mapped == 0 && MaterialisedEnemies.ToOwner(objectId) != 0)
+        {
+            Remember(objectId);
+            return;
+        }
+
+        uint effectiveId = mapped != 0 ? mapped : objectId;
+
+        nint creature = Odyssey.ResolveServerObject(effectiveId);
         if (creature == 0)
         {
             // Already gone from this instance; remember it so we stop looking.
@@ -203,7 +224,7 @@ internal sealed class CombatController(SharedBlockView block)
         // The pin has to come off or the death effect just floors health at 1.
         Odyssey.SetMinOneHitPoint(creature, false);
 
-        if (Odyssey.KillCreature(objectId, out int failure))
+        if (Odyssey.KillCreature(effectiveId, out int failure))
         {
             Remember(objectId);
 

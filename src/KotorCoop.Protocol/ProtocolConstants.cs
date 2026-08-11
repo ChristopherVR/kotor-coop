@@ -41,8 +41,14 @@ public static class ProtocolConstants
     /// Version 17: the peer direction stops reporting enemy HEALTH and reports DAMAGE DEALT
     /// instead (EnemyDamage 33 replaces EnemyReport 22). Health was a sample the owner's
     /// mirror could overwrite before it was ever read, and it could not say who dealt what;
-    /// a cumulative sum of damage is monotonic, order-independent and un-eraseable.</summary>
-    public const byte Version = 17;
+    /// a cumulative sum of damage is monotonic, order-independent and un-eraseable.
+    /// Version 18: EnemyState carries the appearance.2da row and repute.2da faction id, so
+    /// a mirror can MATERIALISE an enemy that exists only in the owner's instance (an
+    /// encounter or script spawn) — before this such an enemy was invisible on the mirror
+    /// while still able to hurt its player through the phantom.
+    /// Version 19: Bark (34) — the one-line NPC bubbles that never touch the dialogue system
+    /// and so reached no other channel at all.</summary>
+    public const byte Version = 19;
 
     /// <summary>Journal quest tags are resrefs plus a little slack.</summary>
     public const int MaxJournalTagLength = 32;
@@ -64,12 +70,12 @@ public static class ProtocolConstants
     public const int MaxGroundItems = 16;
 
     /// <summary>
-    /// Creatures the owner replicates per snapshot. 36 bytes each (id, health, death,
-    /// position, facing, animation, one-shot serial + id, plot), so a full 32 is 1165
-    /// bytes with the header — inside one datagram with almost no slack; the fit is
-    /// asserted by a test. A module can hold more creatures than this: the census takes
-    /// hostiles first, then the nearest bystanders, so the cap sheds the least visible
-    /// bodies rather than arbitrary ones.
+    /// Creatures the owner replicates per snapshot. 40 bytes each (id, health, death,
+    /// position, facing, animation, one-shot serial + id, plot, appearance, faction), so
+    /// a full 32 is 1293 bytes with the header — inside one datagram with modest slack;
+    /// the fit is asserted by a test. A module can hold more creatures than this: the
+    /// census takes hostiles first, then the nearest bystanders, so the cap sheds the
+    /// least visible bodies rather than arbitrary ones.
     /// </summary>
     public const int MaxEnemies = 32;
 

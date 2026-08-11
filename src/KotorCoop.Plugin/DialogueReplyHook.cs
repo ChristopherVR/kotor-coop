@@ -18,14 +18,33 @@ namespace KotorCoop.Plugin;
 /// </summary>
 internal static unsafe class DialogueReplyHook
 {
-    private const nint SelectReply = 0x006A7110;
+    /// <summary>
+    /// <c>CSWGuiDialog::SelectReply</c> — the commit for the ordinary dialogue panel, and
+    /// (through the same address in their vtables) for the two computer panels.
+    ///
+    /// The five bytes the jump overwrites: <c>mov eax,[ecx+0x6C]</c> then the first two of
+    /// <c>mov edx,[esp+4]</c>. Both are position-independent — no rel32, no rip-relative —
+    /// so relocating them into the stub is safe.
+    /// </summary>
+    private static readonly byte[] BasePrologue = [0x8B, 0x41, 0x6C, 0x8B, 0x54];
 
-    /// <summary>The five bytes the jump overwrites: <c>mov eax,[ecx+0x6C]</c> then the first
-    /// two of <c>mov edx,[esp+4]</c>. Both are position-independent — no rel32, no rip
-    /// relative — so relocating them into the stub is safe.</summary>
-    private static readonly byte[] Prologue = [0x8B, 0x41, 0x6C, 0x8B, 0x54];
-
-    private static readonly nint ResumeAt = SelectReply + 5;
+    /// <summary>
+    /// <c>CSWGuiDialogCinematic::SelectReply</c> — a DIFFERENT function, and the reason both
+    /// players could still answer.
+    ///
+    /// ⚠ Hooking only 0x006A7110 covers three of the four dialogue panel classes.
+    /// KOTOR's story conversations are the fourth: `CSWGuiDialogCinematic`'s vtable slot
+    /// +0x6C is 0x006A7E20, and every commit reaches the panel through
+    /// `HandleSelectReply 0x006A7390`'s `call [eax+0x6C]` — `xrefs 0x006A7110` finds zero
+    /// direct call sites. So in a letterbox conversation the follower's clicks went straight
+    /// past the block and the owner's picks were never captured, which is exactly the
+    /// "dialogue is still broken allowing each to click the options" report.
+    ///
+    /// Its first instruction is the six-byte SEH load <c>mov eax, fs:[0]</c>, so six bytes
+    /// are relocated rather than five. Position-independent, and the refusal path returns
+    /// before the SEH frame is ever built. Same <c>ret 4</c> as the base.
+    /// </summary>
+    private static readonly byte[] CinematicPrologue = [0x64, 0xA1, 0x00, 0x00, 0x00, 0x00];
 
     private const uint MemCommitReserve = 0x1000 | 0x2000;
     private const uint PageExecuteReadWrite = 0x40;
@@ -59,15 +78,38 @@ internal static unsafe class DialogueReplyHook
             return true;
         }
 
-        byte* site = (byte*)SelectReply;
-        for (int i = 0; i < Prologue.Length; i++)
+        // Both commits are hooked, or the block has a hole the size of every story
+        // conversation. The base is required; the cinematic one is reported separately so a
+        // future build that moves it is visible rather than silently unguarded.
+        if (!InstallOne(0x006A7110, BasePrologue, out string baseDiagnostic))
         {
-            if (site[i] != Prologue[i])
+            diagnostic = baseDiagnostic;
+            return false;
+        }
+
+        bool cinematic = InstallOne(0x006A7E20, CinematicPrologue, out string cinematicDiagnostic);
+
+        _installed = true;
+        diagnostic = cinematic
+            ? $"{baseDiagnostic}; cinematic {cinematicDiagnostic}"
+            : $"{baseDiagnostic}; ⚠ CINEMATIC NOT HOOKED ({cinematicDiagnostic}) — "
+                + "replies in story conversations are unguarded";
+        return true;
+    }
+
+    private static bool InstallOne(nint target, byte[] prologue, out string diagnostic)
+    {
+        byte* site = (byte*)target;
+        for (int i = 0; i < prologue.Length; i++)
+        {
+            if (site[i] != prologue[i])
             {
-                diagnostic = $"prologue mismatch at +{i} ({site[i]:X2}); not hooking dialogue replies";
+                diagnostic = $"prologue mismatch at +{i} ({site[i]:X2}); not hooking 0x{target:X}";
                 return false;
             }
         }
+
+        nint resumeAt = target + prologue.Length;
 
         nint stub = NativeMethods.VirtualAlloc(0, 64, MemCommitReserve, PageExecuteReadWrite);
         if (stub == 0)
@@ -99,33 +141,37 @@ internal static unsafe class DialogueReplyHook
 
         s[n++] = 0x83; s[n++] = 0xC4; s[n++] = 0x04;         // add esp, 4  (cdecl cleanup)
         s[n++] = 0x85; s[n++] = 0xC0;                        // test eax, eax
-        s[n++] = 0x74; s[n++] = (byte)(Prologue.Length + 6); // jz blocked (skip resume path)
+        s[n++] = 0x74; s[n++] = (byte)(prologue.Length + 6); // jz blocked (skip resume path)
         s[n++] = 0x61;                                       // popad
 
-        for (int i = 0; i < Prologue.Length; i++)             // the relocated prologue
+        for (int i = 0; i < prologue.Length; i++)             // the relocated prologue
         {
-            s[n++] = Prologue[i];
+            s[n++] = prologue[i];
         }
 
-        s[n++] = 0xE9;                                       // jmp SelectReply+5
-        *(int*)(s + n) = (int)(ResumeAt - (stub + n + 4));
+        s[n++] = 0xE9;                                       // jmp target + prologue
+        *(int*)(s + n) = (int)(resumeAt - (stub + n + 4));
         n += 4;
 
         s[n++] = 0x61;                                       // blocked: popad
         s[n++] = 0xC2; s[n++] = 0x04; s[n++] = 0x00;         // ret 4
 
-        if (!NativeMethods.VirtualProtect(SelectReply, 5, PageExecuteReadWrite, out uint old))
+        if (!NativeMethods.VirtualProtect(target, (nuint)prologue.Length, PageExecuteReadWrite, out uint old))
         {
             diagnostic = "VirtualProtect failed";
             return false;
         }
 
         site[0] = 0xE9;                                      // jmp stub
-        *(int*)(site + 1) = (int)(stub - (SelectReply + 5));
-        NativeMethods.VirtualProtect(SelectReply, 5, old, out _);
+        *(int*)(site + 1) = (int)(stub - (target + 5));
+        for (int i = 5; i < prologue.Length; i++)
+        {
+            site[i] = 0x90;                                  // pad the remainder of the
+        }                                                    //  relocated instruction
 
-        _installed = true;
-        diagnostic = $"dialogue reply hook at 0x{SelectReply:X} (stub 0x{stub:X})";
+        NativeMethods.VirtualProtect(target, (nuint)prologue.Length, old, out _);
+
+        diagnostic = $"0x{target:X} (stub 0x{stub:X})";
         return true;
     }
 

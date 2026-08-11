@@ -486,6 +486,101 @@ public sealed class CoopHost : ICoopSession
     public IReadOnlyList<EncounterFireRequest> GetEncounterFireRequests(string module) =>
         _encounterTriggers.Collect(module, SessionClock.NowMs);
 
+    // ---- NPC barks ----------------------------------------------------------------
+    //
+    // Any instance can produce one and everybody else should hear it, so the host both
+    // consumes barks (its own player should see a client's droid beep) and relays them to
+    // the other clients. Unreliable by design: a lost bark costs a line.
+
+    private readonly Queue<BarkPacket> _barkInbox = new();
+    private readonly Queue<(BarkPacket Packet, uint ExceptPeer)> _barkOutbox = new();
+
+    public void PublishBark(string module, uint speaker, byte[] text, byte[] soundResRef, uint flags, uint serial)
+    {
+        BarkPacket packet = new(LocalPeerId, module, speaker, text, soundResRef, flags, serial);
+        lock (_gate)
+        {
+            _barkOutbox.Enqueue((packet, LocalPeerId));
+        }
+    }
+
+    public IReadOnlyList<BarkPacket> DrainBarks(string module)
+    {
+        lock (_gate)
+        {
+            if (_barkInbox.Count == 0)
+            {
+                return [];
+            }
+
+            List<BarkPacket> ready = [];
+            while (_barkInbox.Count > 0)
+            {
+                BarkPacket bark = _barkInbox.Dequeue();
+
+                // Ids are per module load, so a bark from somewhere else names nothing here.
+                if (string.Equals(bark.Module, module, StringComparison.OrdinalIgnoreCase))
+                {
+                    ready.Add(bark);
+                }
+            }
+
+            return ready;
+        }
+    }
+
+    private void HandleBark(ReadOnlySpan<byte> span)
+    {
+        if (PacketCodec.ReadBark(span) is not { } bark)
+        {
+            _channel.NoteMalformed();
+            return;
+        }
+
+        lock (_gate)
+        {
+            if (!_peers.ContainsKey(bark.PeerId))
+            {
+                return; // only a known peer, and it cannot speak for another
+            }
+
+            _barkInbox.Enqueue(bark);
+            _barkOutbox.Enqueue((bark, bark.PeerId)); // everyone but the sender
+        }
+    }
+
+    private void BroadcastBarks(List<PeerConnection> recipients)
+    {
+        List<(BarkPacket Packet, uint ExceptPeer)> pending;
+        lock (_gate)
+        {
+            if (_barkOutbox.Count == 0)
+            {
+                return;
+            }
+
+            pending = [.. _barkOutbox];
+            _barkOutbox.Clear();
+        }
+
+        foreach ((BarkPacket packet, uint except) in pending)
+        {
+            int length = PacketCodec.Write(_sendBuffer, packet);
+            if (length <= 0)
+            {
+                continue;
+            }
+
+            foreach (PeerConnection peer in recipients)
+            {
+                if (peer.Id != except)
+                {
+                    _channel.Send(peer.EndPoint, _sendBuffer.AsSpan(0, length));
+                }
+            }
+        }
+    }
+
     private void BroadcastPhantomDamage(List<PeerConnection> recipients)
     {
         List<KeyValuePair<(uint Target, uint Source), (uint Damage, uint Attacker)>> owed;
@@ -704,6 +799,7 @@ public sealed class CoopHost : ICoopSession
         BroadcastProgression(now, recipients);
         BroadcastContainerLoot(now, recipients);
         BroadcastPhantomDamage(recipients);
+        BroadcastBarks(recipients);
         BroadcastWorldDigest(now, recipients);
         FlushChat(recipients);
         _buffer.PruneStale(now, _settings.PeerTimeoutMs);
@@ -986,6 +1082,10 @@ public sealed class CoopHost : ICoopSession
 
             case PacketType.Chat:
                 HandleChat(span);
+                break;
+
+            case PacketType.Bark:
+                HandleBark(span);
                 break;
 
             case PacketType.Ping:

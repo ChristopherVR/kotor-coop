@@ -343,6 +343,10 @@ public class PacketCodecTests
             // A cutscene actor: presence rides, and the plot flag must survive the wire so
             // the mirroring side's combat half knows to leave it alone.
             new(0x33, 8, 8, false, new Vector3f(12f, 34f, 0f), 0f, 0x2710, Plot: true),
+            // An encounter spawn the mirror will have to MATERIALISE: the appearance row
+            // and faction are the whole recipe, so they must survive the wire exactly.
+            new(0x2001, 22, 22, false, new Vector3f(5f, 6f, 0f), 0.5f, 0x2712,
+                Appearance: 187, Faction: 1),
         ];
 
         int length = PacketCodec.Write(buffer, new EnemySnapshotPacket(1234, "end_m01aa", enemies));
@@ -363,6 +367,56 @@ public class PacketCodecTests
         int length = PacketCodec.Write(buffer, original);
         Assert.True(length > 0);
         Assert.Equal(original, PacketCodec.ReadPhantomDamage(buffer[..length]));
+    }
+
+    [Fact]
+    public void BarkRoundTrips()
+    {
+        // The bark's CONTENTS travel, not the engine's pointers to them — so the codec has to
+        // preserve the exact bytes, including a resref that is a fixed char[16] rather than a
+        // string, and text in the game's own 8-bit encoding rather than UTF-8.
+        Span<byte> buffer = stackalloc byte[ProtocolConstants.MaxPacketSize];
+        byte[] text = System.Text.Encoding.Latin1.GetBytes("Beep beep boopé");
+        byte[] resRef = new byte[BarkPacket.ResRefBytes];
+        System.Text.Encoding.ASCII.GetBytes("n_droid_bark01").CopyTo(resRef, 0);
+
+        BarkPacket original = new(
+            PeerId: 3, "end_m01aa", Speaker: 0x25, Text: text, SoundResRef: resRef,
+            Flags: 1, Serial: 7);
+
+        int length = PacketCodec.Write(buffer, original);
+        Assert.True(length > 0);
+
+        BarkPacket? decoded = PacketCodec.ReadBark(buffer[..length]);
+        Assert.NotNull(decoded);
+        Assert.Equal(original.Speaker, decoded.Speaker);
+        Assert.Equal(original.Flags, decoded.Flags);
+        Assert.Equal(original.Serial, decoded.Serial);
+        Assert.Equal(text, decoded.Text);
+        Assert.Equal(resRef, decoded.SoundResRef);
+    }
+
+    [Fact]
+    public void BarkTextIsNotMangledByUtf8Expansion()
+    {
+        // ⚠ The regression this guards: WriteString is UTF-8 with a single length byte, so a
+        // full-length line of 8-bit engine text would expand past the prefix and be truncated
+        // mid-sentence. The bark codec writes raw bytes for exactly this reason.
+        Span<byte> buffer = stackalloc byte[ProtocolConstants.MaxPacketSize];
+        byte[] text = new byte[BarkPacket.MaxTextBytes];
+        Array.Fill(text, (byte)0xE9); // 'é' in the engine's encoding: two bytes in UTF-8
+
+        BarkPacket original = new(
+            PeerId: 1, "end_m01aa", Speaker: 9, Text: text,
+            SoundResRef: new byte[BarkPacket.ResRefBytes], Flags: 0, Serial: 1);
+
+        int length = PacketCodec.Write(buffer, original);
+        Assert.True(length > 0);
+
+        BarkPacket? decoded = PacketCodec.ReadBark(buffer[..length]);
+        Assert.NotNull(decoded);
+        Assert.Equal(BarkPacket.MaxTextBytes, decoded.Text.Length);
+        Assert.Equal(text, decoded.Text);
     }
 
     [Fact]

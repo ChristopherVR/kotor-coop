@@ -29,12 +29,49 @@ $agent = Join-Path $repo 'src\KotorCoop.Agent\bin\Debug\net10.0-windows\KotorCoo
 if ($Stop) {
     Get-Process KotorCoop.Agent -ErrorAction SilentlyContinue | Stop-Process -Force
     Get-Process swkotor -ErrorAction SilentlyContinue | Stop-Process -Force
-    'stopped agents and game instances'
+
+    # The agent windows are launched with -NoExit, so killing the agent leaves an empty
+    # console sitting there. Left alone they pile up one pair per run until the desktop is
+    # full of dead terminals, and the next run's windows are indistinguishable from the
+    # last one's. Close them here: the run records its console pids, and the title match is
+    # the fallback for windows left over from a run whose record is gone.
+    $record = Join-Path $WorkDir 'consoles.txt'
+    $closed = 0
+
+    if (Test-Path $record) {
+        foreach ($line in Get-Content $record) {
+            $consolePid = 0
+            if ([int]::TryParse($line.Trim(), [ref]$consolePid) -and $consolePid -gt 0) {
+                $console = Get-Process -Id $consolePid -ErrorAction SilentlyContinue
+                # Check the name: pids are recycled, and killing a stranger would be worse
+                # than leaving a window open.
+                if ($console -and $console.ProcessName -eq 'pwsh') {
+                    $console | Stop-Process -Force
+                    $closed++
+                }
+            }
+        }
+
+        Remove-Item $record -Force -ErrorAction SilentlyContinue
+    }
+
+    foreach ($console in Get-Process pwsh -ErrorAction SilentlyContinue) {
+        if ($console.Id -ne $PID -and $console.MainWindowTitle -like 'coop agent *') {
+            $console | Stop-Process -Force
+            $closed++
+        }
+    }
+
+    "stopped agents and game instances; closed $closed agent console(s)"
     return
 }
 
 if (-not (Test-Path $agent)) { throw "agent not built: $agent   (run: dotnet build KotorCoop.slnx)" }
 New-Item -ItemType Directory -Force -Path $WorkDir | Out-Null
+
+# Start the console record clean: a leftover list from an earlier run names pids that have
+# since been recycled onto unrelated processes.
+Remove-Item (Join-Path $WorkDir 'consoles.txt') -Force -ErrorAction SilentlyContinue
 
 # ⚠ TWO THINGS START AN AGENT. The plugin's AgentLauncher starts one per game the moment
 # dinput8.dll loads (coop.ini auto_start_agent, ON by default), and this script starts one per
@@ -149,17 +186,48 @@ $drop1 = Join-Path $WorkDir 'drop1.txt'
 $drop2 = Join-Path $WorkDir 'drop2.txt'
 Remove-Item $drop1, $drop2 -ErrorAction SilentlyContinue
 
-Start-Process -FilePath $agent -ArgumentList `
-    'run', '--pid', $pid1, '--kotor', '--host', '--port', $Port, '--name', $Name1, '--drop-file', $drop1 `
-    -RedirectStandardOutput (Join-Path $WorkDir 'agent1.log') `
-    -RedirectStandardError  (Join-Path $WorkDir 'agent1.err')
+# ⚠ Each agent gets its own VISIBLE console, and writes its own log file.
+#
+# They used to be started with -RedirectStandardOutput straight to a log, which is why the
+# two agent windows sat there blank: redirecting the stream is what stops it reaching a
+# console. Reported from use as "we also want to see logs in those running consoles".
+#
+# The window is NOT piped, deliberately. The readout redraws in place, which needs a real
+# console — put a pipe in the way and every redraw appends instead of overwriting, which is
+# the log "spamming" that piping through Tee-Object produced. The file comes from the
+# agent's own --log instead: one compact timestamped line per change, in the same place
+# every tool and handoff note already expects it.
+function Start-AgentConsole {
+    param([string]$Title, [string[]]$AgentArgs, [string]$LogPath)
+
+    # ⚠ NOT piped. The agent redraws its readout IN PLACE, which needs a real console: put a
+    # pipe (Tee-Object) in the way and Console.IsOutputRedirected goes true, every redraw
+    # appends instead of overwriting, and the window fills with thousands of copies of the
+    # same screen. That was tried and reported straight back as the log "spamming".
+    #
+    # So the window gets the live colour readout, and a SECOND agent writes nothing — the
+    # log file is produced by the agent itself, which emits one compact timestamped line per
+    # change when its output is redirected. Here that redirection is the tee'd copy started
+    # separately below, so both forms exist without either spoiling the other.
+    $quoted = ($AgentArgs | ForEach-Object { "'" + ($_ -replace "'", "''") + "'" }) -join ' '
+    $command = "`$Host.UI.RawUI.WindowTitle = '$Title'; & '$agent' $quoted"
+
+    # -NoExit so a crashed or exited agent leaves its last words on screen instead of the
+    # window vanishing with the evidence in it. The pid is recorded so -Stop can close the
+    # window too — otherwise every run leaves another pair of dead terminals behind.
+    $console = Start-Process -FilePath 'pwsh' -ArgumentList '-NoExit', '-Command', $command -PassThru
+    Add-Content -Path (Join-Path $WorkDir 'consoles.txt') -Value $console.Id
+}
+
+Start-AgentConsole -Title "coop agent 1 - $Name1 (host)" -LogPath (Join-Path $WorkDir 'agent1.log') `
+    -AgentArgs @('run', '--pid', $pid1, '--kotor', '--host', '--port', $Port, '--name', $Name1, '--drop-file', $drop1,
+                 '--log', (Join-Path $WorkDir 'agent1.log'))
 
 Start-Sleep -Seconds 4
 
-Start-Process -FilePath $agent -ArgumentList `
-    'run', '--pid', $pid2, '--kotor', '--join', "127.0.0.1:$Port", '--name', $Name2, '--drop-file', $drop2 `
-    -RedirectStandardOutput (Join-Path $WorkDir 'agent2.log') `
-    -RedirectStandardError  (Join-Path $WorkDir 'agent2.err')
+Start-AgentConsole -Title "coop agent 2 - $Name2 (join)" -LogPath (Join-Path $WorkDir 'agent2.log') `
+    -AgentArgs @('run', '--pid', $pid2, '--kotor', '--join', "127.0.0.1:$Port", '--name', $Name2, '--drop-file', $drop2,
+                 '--log', (Join-Path $WorkDir 'agent2.log'))
 
 Start-Sleep -Seconds 8
 

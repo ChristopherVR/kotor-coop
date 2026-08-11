@@ -38,6 +38,47 @@ internal static unsafe partial class CreatureFinder
     [LibraryImport("kernel32.dll")]
     private static partial nuint VirtualQuery(nint address, out MemoryBasicInformation buffer, nuint length);
 
+    [LibraryImport("kernel32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static partial bool ReadProcessMemory(
+        nint process, nint address, byte* buffer, nuint size, out nuint read);
+
+    [LibraryImport("kernel32.dll")]
+    private static partial nint GetCurrentProcess();
+
+    /// <summary>
+    /// Copies memory out of THIS process without ever faulting: an unreadable address makes
+    /// the call return false where a direct dereference would raise an access violation.
+    ///
+    /// ⚠ This is not belt-and-braces, it is the fix for a real crash. VirtualQuery says a
+    /// region was committed and readable a moment ago; the game's own loader and audio
+    /// threads free and re-protect regions continuously, and during a module load — the
+    /// busiest allocation window there is — one of them went away underneath the scan. The
+    /// AV landed in managed code, where NativeAOT cannot throw and calls FailFast, so the
+    /// whole game died with "Attempted to read or write protected memory". Copying first
+    /// turns that into a skipped region.
+    /// </summary>
+    private static bool TryReadSelf(nint address, byte* destination, int length)
+    {
+        if (address <= 0 || length <= 0)
+        {
+            return false;
+        }
+
+        return ReadProcessMemory(GetCurrentProcess(), address, destination, (nuint)length, out nuint read)
+            && read == (nuint)length;
+    }
+
+    /// <summary>How much of a region is copied at a time. Big enough that the syscall cost
+    /// disappears against the memcpy, small enough to stay off the large-object heap.</summary>
+    private const int ChunkBytes = 256 * 1024;
+
+    /// <summary>A candidate needs its vtable and the object id that follows it.</summary>
+    private const int CandidateBytes = 8;
+
+    /// <summary>Reused across calls: this only ever runs on the game thread.</summary>
+    private static readonly byte[] Chunk = new byte[ChunkBytes];
+
     /// <summary>
     /// Finds the creature whose object id matches. Returns 0 if not found.
     ///
@@ -109,29 +150,56 @@ internal static unsafe partial class CreatureFinder
 
     private static nint ScanRegion(nint start, long size, uint objectId, ReadOnlySpan<byte> tag)
     {
-        // Creature pointers are 4-byte aligned, and so is the vtable slot at offset 0.
-        for (long offset = 0; offset + 4 <= size; offset += 4)
+        fixed (byte* buffer = Chunk)
         {
-            nint candidate = start + (nint)offset;
+            long position = 0;
 
-            if (*(nint*)candidate != CreatureVtable)
+            while (position + CandidateBytes <= size)
             {
-                continue;
-            }
+                int want = (int)Math.Min(ChunkBytes, size - position);
 
-            if (tag.IsEmpty)
-            {
-                if (*(uint*)(candidate + ObjectIdOffset) == objectId)
+                if (!TryReadSelf(start + (nint)position, buffer, want))
                 {
-                    return candidate;
+                    // The region moved or went away between the query and now. Skipping it
+                    // can at worst miss a creature, and the caller already treats "not
+                    // found" as a normal answer; faulting would end the process.
+                    return 0;
                 }
 
-                continue;
-            }
+                // Creature pointers are 4-byte aligned, and so is the vtable slot at 0.
+                for (int offset = 0; offset + CandidateBytes <= want; offset += 4)
+                {
+                    if (*(nint*)(buffer + offset) != CreatureVtable)
+                    {
+                        continue;
+                    }
 
-            if (TagMatches(candidate, tag))
-            {
-                return candidate;
+                    nint candidate = start + (nint)position + offset;
+
+                    if (tag.IsEmpty)
+                    {
+                        if (*(uint*)(buffer + offset + ObjectIdOffset) == objectId)
+                        {
+                            return candidate;
+                        }
+
+                        continue;
+                    }
+
+                    if (TagMatches(candidate, tag))
+                    {
+                        return candidate;
+                    }
+                }
+
+                if (want < ChunkBytes)
+                {
+                    break;
+                }
+
+                // Overlap by one candidate so a match straddling the chunk boundary — whose
+                // object id lives in the next chunk — is still seen whole.
+                position += want - (CandidateBytes - 4);
             }
         }
 
@@ -140,25 +208,49 @@ internal static unsafe partial class CreatureFinder
 
     /// <summary>Case-insensitive tag compare. Odyssey tags are authored in mixed case and
     /// compared case-insensitively everywhere else in the engine.</summary>
+    /// <summary>Longest tag worth comparing; Odyssey tags are resref-sized.</summary>
+    private const int MaxTagBytes = 64;
+
     private static bool TagMatches(nint creature, ReadOnlySpan<byte> tag)
     {
-        nint chars = *(nint*)(creature + TagOffset);
-        int length = *(int*)(creature + TagOffset + 4);
+        // ⚠ The pointer is validated BEFORE it is followed. The previous version read
+        // *(chars + length - 1) to strip the CExoString trailing null and only sanity-checked
+        // `chars` on the line AFTER — so a stale or garbage string header was dereferenced
+        // first, which is the same class of fault the region copy above exists to stop.
+        byte* header = stackalloc byte[8];
+        if (!TryReadSelf(creature + TagOffset, header, 8))
+        {
+            return false;
+        }
+
+        nint chars = (nint)(*(uint*)header);
+        int length = *(int*)(header + 4);
+
+        if (chars is <= 0x10000 or >= 0x7FFF_0000 || length is <= 0 or > MaxTagBytes)
+        {
+            return false;
+        }
+
+        byte* text = stackalloc byte[MaxTagBytes];
+        if (!TryReadSelf(chars, text, length))
+        {
+            return false;
+        }
 
         // The stored length can include the terminating null (the CExoString trap).
-        if (length > 0 && *(byte*)(chars + length - 1) == 0)
+        if (text[length - 1] == 0)
         {
             length--;
         }
 
-        if (chars is <= 0x10000 or >= 0x7FFF_0000 || length != tag.Length)
+        if (length != tag.Length)
         {
             return false;
         }
 
         for (int i = 0; i < length; i++)
         {
-            if (Lower(*(byte*)(chars + i)) != Lower(tag[i]))
+            if (Lower(text[i]) != Lower(tag[i]))
             {
                 return false;
             }

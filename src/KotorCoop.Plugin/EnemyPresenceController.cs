@@ -29,10 +29,32 @@ namespace KotorCoop.Plugin;
 internal sealed unsafe class EnemyPresenceController(SharedBlockView block)
 {
     /// <summary>CSWSObject + this = object type; a creature is 5 (verified, the AI
-    /// master's own gate at 0x004B0C20 tests it).</summary>
+    /// master's own gate at 0x004B0C20 tests it).
+    ///
+    /// ⚠ RESOLVED, 2026-08-11 — AND IT WAS THE WRONG FIELD WIDTH ALL ALONG.
+    ///
+    /// This used to compare the whole DWORD, and on a live census enemy 0x14 read 5 while
+    /// 0x25 — standing in the right place, at full health, driven fine by every other
+    /// channel — read 0x40005. The old note called that "flag bits above the type" and left
+    /// the test strict, on the theory that widening it to the vtable check was right but not
+    /// understood (a live run of that widening also broke the peer-damage battery).
+    ///
+    /// The type is a WORD, not a dword: docs/re/object-model.md has it as `+0x008 | object
+    /// type | word`, and the engine's own gate at 0x004B0C5A reads it as a BYTE
+    /// (`mov al, [esi+8]` / `cmp al, [0x746633]`). The dword compare was dragging in
+    /// adjacent per-creature state — 0x40005 is type 5 with 0x0004 living at +0x0A. So the
+    /// fix is a NARROWING to the documented width, not the widening that was tried and
+    /// reverted, which is a much safer change and does not weaken the test at all.
+    ///
+    /// This mattered for more than the census. The skipped creatures made
+    /// MaterialisedEnemies' resolver return 0 for a creature that was present, so it fell
+    /// through to a full-process CreatureFinder sweep to prove absence — measured live at
+    /// five sweeps 200 ms apart, and it never stopped, because the false-alarm log caps at
+    /// five lines while the loop runs on. See docs/research/mirror-sweep-storm.md.
+    /// </summary>
     private const int ObjType = 0x08;
 
-    private const int ObjTypeCreature = 5;
+    private const ushort ObjTypeCreature = 5;
 
     /// <summary>CSWSObject + this = object id, for cheap per-frame revalidation.</summary>
     private const int ObjId = 0x04;
@@ -58,12 +80,37 @@ internal sealed unsafe class EnemyPresenceController(SharedBlockView block)
     private readonly bool[] _oneShotPrimed = new bool[SharedBlock.EnemyCapacity];
 
     // The measure-smooth-decide half, shared with the party controller.
+    //
+    // Its own knob, not the phantom's smooth_ms: phantoms arrive at the 30 Hz tick, where
+    // 60 ms reads as continuous, but mirrored creatures arrive on the agent's combat pump
+    // (~150 ms apart). A 60 ms tau consumes most of each hop before the next lands — fast,
+    // stop, fast, a visible pulse at the stream rate. A tau near the arrival interval
+    // spreads each hop across the whole gap, at the cost of trailing truth by a step.
     private readonly MotionSmoother _smoother = new(
         SharedBlock.EnemyCapacity,
-        Math.Clamp(PluginConfig.ReadFloat("smooth_ms", 60f), 0f, 400f) / 1000f);
+        Math.Clamp(PluginConfig.ReadFloat("mirror_smooth_ms", 150f), 0f, 600f) / 1000f);
 
     private int _drivenLogged = -1;
     private bool _offLogged;
+
+    /// <summary>
+    /// Whether this instance lets its mirrored enemies fight for themselves.
+    ///
+    /// OFF preserves the behaviour every other channel was built against: the enemy is a
+    /// body in the right place that never acts, and everything that happens to this player
+    /// arrives as forwarded damage from the owner.
+    ///
+    /// ON hands the local copies back to their own AI so they can complete combat rounds
+    /// here — which is the only way this engine's combat state can rise, since the engine
+    /// derives it from being fought rather than from a flag anyone can set (measured: a
+    /// written flag is reverted in 0-2 ms, see CombatStateController).
+    ///
+    /// ⚠ TURNING THIS ON WITHOUT MOVING DAMAGE AUTHORITY DOUBLE-COUNTS EVERY HIT: the local
+    /// enemy swings here AND the owner forwards the same swing that landed on this player's
+    /// phantom over there. IncomingDamageController reads this same flag and stands down when
+    /// it is set, so the two always move together.
+    /// </summary>
+    public static readonly bool LocalCombat = PluginConfig.ReadBool("local_combat", false);
 
     /// <summary>
     /// Forgets everything on a module change: ids reset across transitions, every cached
@@ -83,8 +130,13 @@ internal sealed unsafe class EnemyPresenceController(SharedBlockView block)
 
     public void OnFrame()
     {
+        double now = _clock.Elapsed.TotalSeconds;
+
         if (block.Command != SharedBlock.CommandSpawnAndDrive)
         {
+            // Still sweep: a session that ended leaves materialised bodies with nobody
+            // refreshing them, and they must not stand around (or reach a save) forever.
+            MaterialisedEnemies.Sweep(now);
             return;
         }
 
@@ -101,7 +153,9 @@ internal sealed unsafe class EnemyPresenceController(SharedBlockView block)
 
         // A local conversation owns the stage: the dialogue system positions and disarms
         // creatures itself, and the owner's agent holds its publication during its own
-        // dialogues for the same reason.
+        // dialogues for the same reason. No sweep either — a spawn or destroy is a VM
+        // dispatch, refused while a script runs, and the census hold must not read as
+        // staleness.
         if (Odyssey.IsConversationActive)
         {
             return;
@@ -110,20 +164,28 @@ internal sealed unsafe class EnemyPresenceController(SharedBlockView block)
         uint count = Math.Min(block.EnemyPresenceCount, (uint)SharedBlock.EnemyCapacity);
         if (count == 0)
         {
+            MaterialisedEnemies.Sweep(now);
             return;
         }
 
-        double now = _clock.Elapsed.TotalSeconds;
         nint player = (nint)block.PlayerCreature;
         int driven = 0;
 
         for (int i = 0; i < count; i++)
         {
-            if (DriveOne(i, block.GetEnemyPresence(i), now, player))
+            EnemyPresenceView enemy = block.GetEnemyPresence(i);
+
+            // Every listed id — dead or alive — keeps its materialised body's lease
+            // fresh; a corpse the owner still publishes must keep lying there.
+            MaterialisedEnemies.Seen(enemy.ObjectId, now);
+
+            if (DriveOne(i, enemy, now, player))
             {
                 driven++;
             }
         }
+
+        MaterialisedEnemies.Sweep(now);
 
         // One line when the census changes, not per frame.
         if (driven != _drivenLogged)
@@ -159,8 +221,39 @@ internal sealed unsafe class EnemyPresenceController(SharedBlockView block)
             }
         }
 
-        nint creature = Resolve(slot, enemy.ObjectId);
-        if (creature == 0 || creature == player)
+        // Translate through the materialisation map. An owner id with no local mapping
+        // usually resolves directly (GIT identity); when it does not, the enemy exists
+        // only in the owner's instance and a stand-in body is built for it.
+        uint mapped = MaterialisedEnemies.ToLocal(enemy.ObjectId);
+
+        // ⚠ An unmapped owner id that numerically equals the LOCAL id of a body we
+        // spawned for a DIFFERENT owner enemy must never be resolved as if it were
+        // GIT-identical — that would drive our stand-in to two masters. It is exactly
+        // the phantom-id collision above, one table over.
+        if (mapped == 0 && MaterialisedEnemies.ToOwner(enemy.ObjectId) != 0)
+        {
+            MaterialisedEnemies.TryMaterialise(enemy, now);
+            return false;
+        }
+
+        nint creature = Resolve(slot, mapped != 0 ? mapped : enemy.ObjectId);
+        if (creature == 0)
+        {
+            if (mapped == 0)
+            {
+                MaterialisedEnemies.TryMaterialise(enemy, now);
+            }
+            else
+            {
+                // The mapped body vanished under us (the engine freed it); forget the
+                // mapping so a later pass can rebuild it.
+                MaterialisedEnemies.ForgetOwner(enemy.ObjectId);
+            }
+
+            return false;
+        }
+
+        if (creature == player)
         {
             return false;
         }
@@ -174,7 +267,19 @@ internal sealed unsafe class EnemyPresenceController(SharedBlockView block)
         // Re-claim every pass, not once: the local AI re-queues combat and movement
         // actions between frames, and an armed MoveToPoint at the queue head is the
         // contended writer that made direct placement look broken for a month.
-        Odyssey.ClaimCreature(creature);
+        //
+        // With local combat on, the queue is LEFT ALONE — the same wipe that stops the
+        // enemy walking away also deletes its swings, which is why a mirroring instance is
+        // never in combat. See Odyssey.ClaimCreature(nint, bool).
+        Odyssey.ClaimCreature(creature, clearActions: !LocalCombat);
+
+        // Re-assert every pass, not once at spawn: a materialised body is marked as a
+        // mirrored enemy when it is created and lives for the rest of the module, so a
+        // spawn-time decision about whether it may swing cannot be trusted to still hold.
+        if (LocalCombat)
+        {
+            Odyssey.PermitAttacking(creature);
+        }
 
         // Replay any NEW fire-and-forget the owner's copy played — the swings and parries
         // that turn a mirrored fight from bodies-in-the-right-places into a fight.
@@ -203,7 +308,7 @@ internal sealed unsafe class EnemyPresenceController(SharedBlockView block)
         nint cached = _creature[slot];
         if (cached != 0 && _trackedId[slot] == objectId
             && *(uint*)(cached + ObjId) == objectId
-            && *(int*)(cached + ObjType) == ObjTypeCreature)
+            && *(ushort*)(cached + ObjType) == ObjTypeCreature)
         {
             return cached;
         }
@@ -211,7 +316,7 @@ internal sealed unsafe class EnemyPresenceController(SharedBlockView block)
         Forget(slot);
 
         nint creature = Odyssey.ResolveServerObject(objectId);
-        if (creature == 0 || *(int*)(creature + ObjType) != ObjTypeCreature)
+        if (creature == 0 || *(ushort*)(creature + ObjType) != ObjTypeCreature)
         {
             return 0;
         }

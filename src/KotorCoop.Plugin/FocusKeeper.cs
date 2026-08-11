@@ -31,6 +31,12 @@ internal sealed class FocusKeeper(SharedBlockView block)
     private int _countdown;
     private uint _cleared;
 
+    /// <summary>Activate the render window on launch so the instance is not black until it
+    /// is clicked. Off restores the stock behaviour for anyone who wants it.</summary>
+    private readonly bool _activateRender = PluginConfig.ReadBool("activate_render_on_start", true);
+
+    private int _activationsLogged;
+
     public void OnFrame()
     {
         if (_countdown > 0)
@@ -40,6 +46,20 @@ internal sealed class FocusKeeper(SharedBlockView block)
         }
 
         _countdown = CheckIntervalFrames;
+
+        // Before the KeepAliveUnfocused opt-in, because this is not about staying alive
+        // while unfocused — it is about ever drawing at all. A launched instance comes up
+        // with its render window unactivated and stays black until the player clicks into
+        // it, which with two windows means clicking both every single launch. Measured: the
+        // flag is a latch, so this fires once and then costs a compare per pass.
+        if (_activateRender && Odyssey.EnsureRenderWindowActive() && _activationsLogged < 5)
+        {
+            // The load chain deactivates and this re-activates several times before the
+            // world settles, which is working as intended but is not worth five lines a
+            // launch, let alone a line every time it ever happens.
+            _activationsLogged++;
+            PluginHost.Log("render window activated (it comes up black until something does)");
+        }
 
         if (!block.KeepAliveUnfocused)
         {

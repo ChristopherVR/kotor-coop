@@ -45,3 +45,39 @@ chat_overlay_lines = 5
 
 ; Milliseconds a line stays before it fades. 0 = never fade.
 chat_overlay_fade_ms = 9000
+
+; --- mirroring a world you do not own ---------------------------------------------
+
+; Build a local stand-in for an enemy that exists only in the enemy owner's instance
+; (an encounter or script spawn there). Without it such an enemy is invisible here while
+; still able to hurt you through your phantom. 0 disables materialisation.
+enemy_materialise = 1
+
+; On a client, hide the HUD's three party portrait widgets. The companions belong to the
+; host (Tab and portrait clicks are locked anyway), so the portraits are dead UI showing
+; state this instance does not own. 0 keeps them visible.
+hide_party_portraits = 1
+
+# Replicate a peer's combat state into this engine. OFF: the engine re-derives the
+# in-combat field continuously and reverts a written one within 0-2 ms (measured), so
+# this cannot hold yet. See CombatStateController for the real fix.
+combat_state_sync=0
+
+# Let this instance's mirrored enemies fight for themselves, so its own combat state
+# rises during a peer's fight. Moves damage authority too: with this on, the owner's
+# forwarded phantom damage is absorbed instead of applied, or every hit lands twice.
+local_combat=0
+
+# Activate the render window at launch. Without this an instance draws nothing until it
+# is clicked into - with two windows that means clicking both, every launch.
+activate_render_on_start=1
+
+# Replay a peer's NPC barks here. On: the crash that forced this off is fixed (two of the
+# engine's four BarkString arguments are pointers, and the contents now travel instead).
+bark_replay=1
+
+# Let the mod own the HUD pause button. The engine's own toggle reads server mask bit 0x02,
+# which is also the focus-loss reason FocusKeeper must keep clearing - so it can pause but
+# never unpause. OFF until the hook is confirmed by hand: it swallows the click, so if the
+# toggle does not fire the button does nothing at all.
+pause_button_hook=1

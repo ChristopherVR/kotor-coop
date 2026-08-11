@@ -26,6 +26,8 @@
     <Compile Include="..\..\src\KotorCoop.Plugin\DamageOwedLedger.cs" Link="Plugin\DamageOwedLedger.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\MirrorHealthRule.cs" Link="Plugin\MirrorHealthRule.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\DownBlock.cs" Link="Plugin\DownBlock.cs" />
+    <Compile Include="..\..\src\KotorCoop.Plugin\Vec3.cs" Link="Plugin\Vec3.cs" />
+    <Compile Include="..\..\src\KotorCoop.Plugin\MotionSmoother.cs" Link="Plugin\MotionSmoother.cs" />
   </ItemGroup>
 
   <ItemGroup>

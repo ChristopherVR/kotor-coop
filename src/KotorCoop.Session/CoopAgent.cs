@@ -23,6 +23,18 @@ public sealed record AgentSettings
     public int HeavyPumpIntervalMs { get; init; } = 1000;
 
     /// <summary>
+    /// How often the combat channels run: enemy presence, phantom damage both ways, and the
+    /// party mirror. These used to ride the heavy pass, which meant a mirrored enemy moved
+    /// on one-second-old truth — it covered a full second of running in one hop, and the
+    /// plugin's smoother turned that hop into a visible glide across the room. Forwarded
+    /// damage waited the same second. None of these reads is a world scan on the scale the
+    /// heavy gate exists for: the enemy census is one pass over the creature table, the
+    /// rest are shared-block reads, so a few times a second is affordable where the
+    /// hundreds-of-milliseconds world-state passes are not.
+    /// </summary>
+    public int CombatPumpIntervalMs { get; init; } = 150;
+
+    /// <summary>
     /// When true, remote players in a different module are not written into the game.
     /// KOTOR has exactly one module loaded at a time, so a peer on Taris has no
     /// meaningful position in your copy of the Endar Spire.
@@ -90,6 +102,7 @@ public sealed class CoopAgent(IGameBridge bridge, ICoopSession session, AgentSet
     private string _lastTravelRequest = string.Empty;
 
     private long _lastHeavyPumpMs;
+    private long _lastCombatPumpMs;
     private long _travelRetryAtMs;
 
     /// <summary>The module we last saw ourselves in, and when we arrived — so a transition is
@@ -110,6 +123,15 @@ public sealed class CoopAgent(IGameBridge bridge, ICoopSession session, AgentSet
     public bool LastReadSucceeded { get; private set; }
 
     public bool LastWriteSucceeded { get; private set; }
+
+    /// <summary>How long a pump tick takes, averaged over the last 100, and the worst of
+    /// them — against the budget one tick has. Surfaced for the readout rather than printed,
+    /// because the readout owns the console.</summary>
+    public double PumpAverageMs { get; private set; }
+
+    public double PumpPeakMs { get; private set; }
+
+    public double PumpBudgetMs { get; private set; }
 
     public long ReadFailureCount { get; private set; }
 
@@ -189,8 +211,15 @@ public sealed class CoopAgent(IGameBridge bridge, ICoopSession session, AgentSet
                 if (ms > maxMs) maxMs = ms;
                 if (ticks >= 100)
                 {
-                    Console.WriteLine(
-                        $"[pump] avg {sumMs / ticks:F1}ms  peak {maxMs:F1}ms  over {ticks} ticks (budget {budgetMs:F0}ms)");
+                    // ⚠ PUBLISHED, never printed. This used to Console.WriteLine straight
+                    // onto a screen the dashboard redraws in place, so the line appeared at
+                    // the cursor and was painted over a fraction of a second later — seen as
+                    // the terminal "flickering, showing a [pump] log then disappearing".
+                    // Anything worth saying while the readout owns the console has to go
+                    // through the readout.
+                    PumpAverageMs = sumMs / ticks;
+                    PumpPeakMs = maxMs;
+                    PumpBudgetMs = budgetMs;
                     ticks = 0; sumMs = 0; maxMs = 0;
                 }
             }
@@ -278,6 +307,11 @@ public sealed class CoopAgent(IGameBridge bridge, ICoopSession session, AgentSet
         PumpTravel(local, peers);
         PumpPause(local, visible);
 
+        // Deliberately NOT inside PumpPause: that returns early when pause sharing is
+        // switched off, and combat state is not an optional courtesy — it decides which
+        // ruleset each engine is running.
+        PumpSharedCombat(visible);
+
         // Death is arbitrated every tick too: a rescue window measured in seconds cannot
         // wait for the ~5 Hz heavy pass, and a swallowed game-over must be answered before
         // the engine tries again on the next frame.
@@ -295,6 +329,32 @@ public sealed class CoopAgent(IGameBridge bridge, ICoopSession session, AgentSet
             && (caps & SessionCapabilities.Party) != 0)
         {
             bridge.LockControlToPlayer();
+        }
+
+        // --- combat path: a few times a second -------------------------------------------
+        //
+        // Enemy presence, damage in both directions, and the party mirror. Fast enough that
+        // a mirrored enemy's movement reads as movement (at the heavy pass's 1 Hz it read as
+        // a lurch covering a second of running per hop, smoothed into a glide), and that a
+        // hit taken through a phantom lands in the same beat of the fight it happened in —
+        // but still gated, because the enemy census is a creature-table scan and does not
+        // belong on the 30 Hz position path.
+        long combatNowMs = Environment.TickCount64;
+        if (combatNowMs - _lastCombatPumpMs >= settings.CombatPumpIntervalMs)
+        {
+            _lastCombatPumpMs = combatNowMs;
+            PumpEnemies(local, visible, caps);
+            PumpPhantomDamage(caps);
+            PumpParty(caps);
+
+            // Dialogue rides here too. It is the same kind of traffic — small block reads,
+            // no world scan — and it was the reason a followed conversation felt second-hand:
+            // the owner's partner tag, line and pick log crossed agent→wire at 1 Hz and
+            // wire→block at 1 Hz on the far side, so a line the owner had already heard could
+            // take ~2 s to reach the follower's screen. At this cadence it is a few hundred
+            // milliseconds, which is the difference between "following" and "lagging".
+            PumpDialogue(local, caps);
+            PumpBarks(local);
         }
 
         // --- heavy world-state path ------------------------------------------------------
@@ -331,16 +391,48 @@ public sealed class CoopAgent(IGameBridge bridge, ICoopSession session, AgentSet
             bridge.ModuleGitDigest(local.Module)));
 
         PumpItems(local, caps);
-        PumpEnemies(local, visible, caps);
-        PumpPhantomDamage(caps);
-        PumpParty(caps);
         PumpProgression(caps);
-        PumpDialogue(local, caps);
         PumpWorldState(caps);
         PumpJournal(caps);
         PumpDoors(caps);
         PumpPlaceables(caps);
         PumpContainerLoot(caps);
+    }
+
+    /// <summary>The bark serial this agent has already published, per plugin ring slot, so a
+    /// line is sent once however long it sits in the block.</summary>
+    private readonly Dictionary<uint, uint> _publishedBarks = [];
+
+    /// <summary>
+    /// Carries NPC barks both ways. A bark never enters the dialogue system, so before this
+    /// one player heard the utility droid beep and everybody else got silence.
+    ///
+    /// Keyed on the SPEAKER's object id rather than a ring index: the plugin's ring slot for
+    /// a given line is an implementation detail, while "the last serial seen from this
+    /// creature" is the thing that decides whether a line is new.
+    /// </summary>
+    private void PumpBarks(in PlayerState local)
+    {
+        if (!bridge.CanWriteRemotes || IsFallbackModuleName(local.Module) || local.Module.Length == 0)
+        {
+            return; // mid-transition: the ids a bark names are about to be reassigned
+        }
+
+        foreach (BarkRecord bark in bridge.ReadBarks())
+        {
+            if (_publishedBarks.TryGetValue(bark.Speaker, out uint published) && published == bark.Serial)
+            {
+                continue;
+            }
+
+            _publishedBarks[bark.Speaker] = bark.Serial;
+            session.PublishBark(local.Module, bark.Speaker, bark.Text, bark.SoundResRef, bark.Flags, bark.Serial);
+        }
+
+        foreach (BarkPacket bark in session.DrainBarks(local.Module))
+        {
+            bridge.TryWriteBark(bark.Speaker, bark.Text, bark.SoundResRef, bark.Flags, bark.Serial);
+        }
     }
 
     /// <summary>
@@ -657,6 +749,85 @@ public sealed class CoopAgent(IGameBridge bridge, ICoopSession session, AgentSet
         {
             _remotePauseHeld = anyPeerPaused;
             Log?.Invoke(anyPeerPaused ? "a peer paused; pausing with them" : "peer pause released");
+        }
+
+        // EITHER player may end a shared pause. A peer that released one it did not start
+        // says so with FlagPauseReleased, because a release cannot be inferred from the
+        // absence of FlagPaused — a mirroring player never had that flag set.
+        uint peerReleases = 0;
+        for (int i = 0; i < peersHere.Count; i++)
+        {
+            if (peersHere[i].State.HasReleasedPause)
+            {
+                peerReleases++;
+            }
+        }
+
+        if (peerReleases > 0 && !_peerPauseReleaseSeen)
+        {
+            _peerPauseReleaseSeen = true;
+            _remotePauseReleaseSerial++;
+
+            if (bridge.TrySignalRemotePauseRelease(_remotePauseReleaseSerial))
+            {
+                Log?.Invoke("a peer ended the shared pause; releasing ours too");
+            }
+        }
+        else if (peerReleases == 0)
+        {
+            // Re-arm only once the flag has cleared, so one release ends one pause however
+            // many ticks the peer keeps announcing it.
+            _peerPauseReleaseSeen = false;
+        }
+    }
+
+    /// <summary>Serial handed to the plugin; a change is the release.</summary>
+    private uint _remotePauseReleaseSerial;
+
+    /// <summary>Whether a peer's release flag is currently being announced, so the level on
+    /// the wire is consumed as a single edge.</summary>
+    private bool _peerPauseReleaseSeen;
+
+    /// <summary>Last value written to the plugin, so the block is only touched on an edge.</summary>
+    private bool _sessionCombatHeld;
+
+    /// <summary>
+    /// Publishes "a remote peer in your module is fighting" so the plugin can put this
+    /// engine into combat too.
+    ///
+    /// Deliberately NOT range-gated the way the shared pause is. Combat state is not a
+    /// courtesy to whoever is standing next to you: it changes round timing, what the HUD
+    /// shows, whether abilities queue as combat actions and whether auto-pause fires. Two
+    /// players in the same module during the same fight must run the same ruleset, whether
+    /// they are ten units apart or across the room.
+    ///
+    /// The local player is excluded by construction — <paramref name="peersHere"/> is remote
+    /// peers only — because the plugin treats this as a claim it imposes and later releases,
+    /// and a host fighting alone would otherwise force itself out of its own fight.
+    /// </summary>
+    private void PumpSharedCombat(IReadOnlyList<RemotePeer> peersHere)
+    {
+        if (!bridge.SupportsCombatSync)
+        {
+            return;
+        }
+
+        bool anyPeerFighting = false;
+        for (int i = 0; i < peersHere.Count; i++)
+        {
+            if (peersHere[i].State.IsInCombat)
+            {
+                anyPeerFighting = true;
+                break;
+            }
+        }
+
+        if (anyPeerFighting != _sessionCombatHeld && bridge.TrySetSessionInCombat(anyPeerFighting))
+        {
+            _sessionCombatHeld = anyPeerFighting;
+            Log?.Invoke(anyPeerFighting
+                ? "a peer here is fighting; entering combat with them"
+                : "the peers here have left combat");
         }
     }
 

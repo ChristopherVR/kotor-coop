@@ -48,6 +48,25 @@ public readonly record struct PlayerState(
     /// </summary>
     public const uint FlagDowned = 8;
 
+    /// <summary>
+    /// This player has just RELEASED a shared pause they did not start.
+    ///
+    /// Needed because a release is not observable as the absence of <see cref="FlagPaused"/>:
+    /// a mirroring player never had that flag set in the first place (mirrored pauses are
+    /// excluded at the source), so "peer is not paused" is indistinguishable from "peer has
+    /// unpaused us both". Without this bit only the ORIGINATOR could end a shared pause, and
+    /// the other player pressing pause unfroze their own game while their partner stayed
+    /// frozen — reported from play, and reproduced: instance 1 held its pause after instance
+    /// 2 released.
+    ///
+    /// An EDGE published as a level for a short window, like the one-shot animations: a
+    /// release that is lost is lost forever, while a couple of ticks of repetition converges.
+    /// </summary>
+    public const uint FlagPauseReleased = 16;
+
+    /// <summary>True while this player is asking to end a shared pause they did not start.</summary>
+    public bool HasReleasedPause => (Flags & FlagPauseReleased) != 0;
+
     public static PlayerState Empty { get; } = new(Vector3f.Zero, 0f, string.Empty, 0, 0);
 
     /// <summary>Rejects NaN/infinite reads, which is what a bad offset profile produces.</summary>

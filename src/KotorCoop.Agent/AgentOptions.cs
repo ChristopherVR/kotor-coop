@@ -87,6 +87,10 @@ public sealed record AgentOptions
     /// </summary>
     public string? DropFile { get; init; }
 
+    /// <summary>Where to append the compact status log. The console keeps its live readout;
+    /// this file gets one timestamped line per change, which is the form worth keeping.</summary>
+    public string? LogFile { get; init; }
+
     /// <summary>
     /// Hide peers whose module differs from ours. Correct between two copies of the same
     /// game, but wrong when bridging different games (or a mock harness), because the two
@@ -191,6 +195,7 @@ public sealed record AgentOptions
         bool syncProgression = true;
         bool menuConnect = false;
         string? dropFile = null;
+        string? logFile = null;
 
         for (int i = 1; i < args.Length; i++)
         {
@@ -302,6 +307,10 @@ public sealed record AgentOptions
                     dropFile = Next();
                     break;
 
+                case "--log":
+                    logFile = Next();
+                    break;
+
                 case "--phantoms":
                     phantoms = int.TryParse(Next(), out int parsedPhantoms)
                         ? Math.Clamp(parsedPhantoms, 0, 8)
@@ -348,6 +357,7 @@ public sealed record AgentOptions
             SyncProgression = syncProgression,
             MenuConnect = menuConnect,
             DropFile = dropFile,
+            LogFile = logFile,
         };
     }
 

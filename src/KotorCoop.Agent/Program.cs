@@ -791,7 +791,7 @@ internal static class Program
         }
 
         Task dispatchTask = dispatcher.RunAsync(cts.Token);
-        AgentDashboard dashboard = new(manager, bridge, options.DropFile);
+        AgentDashboard dashboard = new(manager, bridge, options.DropFile, options.LogFile);
         await dashboard.RunAsync(cts.Token).ConfigureAwait(false);
         await dispatchTask.ConfigureAwait(false);
 

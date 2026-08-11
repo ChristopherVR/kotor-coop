@@ -2,16 +2,6 @@ using System.Runtime.InteropServices;
 
 namespace KotorCoop.Plugin;
 
-[StructLayout(LayoutKind.Sequential)]
-internal struct Vec3
-{
-    public float X;
-    public float Y;
-    public float Z;
-
-    public float Length => MathF.Sqrt((X * X) + (Y * Y) + (Z * Z));
-}
-
 /// <summary>CScriptLocation, 0x18 bytes: position then a NORMALISED direction vector.</summary>
 [StructLayout(LayoutKind.Sequential, Size = 0x18)]
 internal struct ScriptLocation
@@ -353,14 +343,35 @@ internal static unsafe class Odyssey
     /// Order matters: ClearAllActions no-ops unless the commandable flag is 1, so the
     /// queue must be emptied BEFORE the creature is made non-commandable.
     /// </summary>
-    public static void ClaimCreature(nint creature)
+    public static void ClaimCreature(nint creature) => ClaimCreature(creature, clearActions: true);
+
+    /// <summary>
+    /// As <see cref="ClaimCreature(nint)"/>, but <paramref name="clearActions"/> false leaves
+    /// the creature's action queue alone.
+    ///
+    /// ⚠ THE WIPE IS WHY A CLIENT IS NEVER IN COMBAT. EnemyPresenceController re-claims every
+    /// mirrored enemy every pass, and ClearAllActions does not distinguish a queued
+    /// MoveToPoint (which fights our placement, and is the reason the wipe exists) from a
+    /// queued attack (which is the entire fight). So the client's enemies have their swings
+    /// deleted several times a second, never land one, and the client's combat state — which
+    /// the engine derives from actually being fought — stays false through the whole battle.
+    ///
+    /// Leaving the queue alone hands the enemy back to its own AI on this instance. Its
+    /// position is still driven from the owner every pass, so it stays where the owner says;
+    /// what it gains is the ability to finish a combat round.
+    /// </summary>
+    public static void ClaimCreature(nint creature, bool clearActions)
     {
         // Deliberately LEAVES the creature commandable. An earlier version set the
         // commandable flag to 0 to stop the AI interfering, which was self-defeating: the
         // action queue is executed by the AI master, so a non-commandable creature ignores
         // the move actions we queue and never walks anywhere.
         *(int*)(creature + ObjCommandable) = 1;
-        ClearAllActionsFn(creature, 1);
+
+        if (clearActions)
+        {
+            ClearAllActionsFn(creature, 1);
+        }
 
         // Movement must be permitted or the walk animation is skipped entirely.
         *(int*)(creature + CreMovePermitted) |= 2;
@@ -2673,7 +2684,7 @@ internal static unsafe class Odyssey
     }
 
     /// <summary>Range check for a vtable pointer: inside the image, where .rdata lives.</summary>
-    private static bool LooksLikeCodePointer(nint p) => p is > 0x400000 and < 0x8C3000;
+    internal static bool LooksLikeCodePointer(nint p) => p is > 0x400000 and < 0x8C3000;
 
     /// <summary>The CSWCCreature vtable — the guard that a twin is really a creature twin
     /// before its GetName-side name fields are written.</summary>
@@ -2802,6 +2813,33 @@ internal static unsafe class Odyssey
     /// <summary>True while the player is in a loaded module (not a menu/load screen), so a chat
     /// key should open the chat prompt rather than do nothing at the main menu.</summary>
     public static bool IsInGame => GetInGameGui() != 0;
+
+    /// <summary>CGuiInGame + this = CSWGuiMainInterface* — the HUD panel: minimap, party
+    /// portraits, action bar (docs/research/ingame-gui-transition.md §"main_interface").</summary>
+    private const int GuiMainInterface = 0x90;
+
+    /// <summary>CSWGuiMainInterface's vtable (symbol database). Checking it EXACTLY is what
+    /// lets the widget offsets inside the object be trusted: a pointer with this vtable is
+    /// this class, laid out the way the database says.</summary>
+    private const nint MainInterfaceVtable = 0x00753F50;
+
+    /// <summary>The live HUD object, vtable-verified, or 0 (no module loaded, HUD torn
+    /// down for a transition, or a pointer that is not what the layout says it is).</summary>
+    public static nint GetMainInterface()
+    {
+        nint gui = GetInGameGui();
+        if (gui == 0)
+        {
+            return 0;
+        }
+
+        nint mainInterface = Deref(gui + GuiMainInterface);
+        return mainInterface != 0
+            && LooksLikeHeapPointer(mainInterface)
+            && *(nint*)mainInterface == MainInterfaceVtable
+            ? mainInterface
+            : 0;
+    }
 
     /// <summary>True while a conversation is on screen, so the chat key defers to dialogue.</summary>
     public static bool IsConversationActive
@@ -2960,15 +2998,33 @@ internal static unsafe class Odyssey
     //   follow CSWGuiDialog::SelectReply (0x006A7110, thiscall(int)) — the click-reply-N
     //          entry. Replaying the owner's slot walks our copy of the same .dlg down the
     //          same branch.
-    //   mute   CClientExoApp::SetCanSendDialog (0x005EDC80) — the spectator may not commit
-    //          a reply of its own. Written every frame while following, because whether the
-    //          engine re-sets it was never established.
+    //   mute   DialogueReplyHook refuses CSWGuiDialog::SelectReply on the follower. That is
+    //          the whole reply block.
+    //          ⚠ NOT CClientExoApp::SetCanSendDialog (0x005EDC80), which reads like the
+    //          right lever and is not one: its only consumer is IsDialogDelay 0x004CD2D0,
+    //          so clearing it stalls the follower's own conversation ADVANCE — killing the
+    //          voice-over and the lipsync with it. See DialogueSpectateController.
 
     /// <summary>CSWSObject + this = the object's tag (CExoString).</summary>
     private const int ObjTag = 0x18;
 
-    /// <summary>CGuiInGame + this = the live CSWGuiDialog panel.</summary>
-    private const int GuiDialogPanel = 0x78;
+    /// <summary>
+    /// CGuiInGame + this = the live CSWGuiDialog panel.
+    ///
+    /// ⚠ This was 0x78, which is the PARTY SELECTION panel, and the mistake was silent and
+    /// expensive. Verified in the binary: <c>CGuiInGame::ShowDialogEntry 0x0062B730</c> and
+    /// <c>ShowDialogReplies 0x006340E0</c> both load the panel from <c>[esi+0x3C]</c>
+    /// (0x0062B758, 0x0062B795, 0x0062B7B6, 0x0063411B), while <c>ShowPartySelection
+    /// 0x0062DD20</c> is the one that loads <c>[esi+0x78]</c> (0x0062DDC6). The symbol
+    /// database agrees — it names +0x78 party_selection and leaves a gap at +0x3C.
+    ///
+    /// What the wrong offset cost: <see cref="SelectDialogueReply"/> read its reply count out
+    /// of the party-selection panel, failed the 1..64 range test and returned false forever,
+    /// so a FOLLOWER NEVER REPLAYED THE OWNER'S PICK. The follow then starved, hit the
+    /// content timeout, dropped its reply suppression — and both players could answer the
+    /// same conversation, independently. That is the reported bug.
+    /// </summary>
+    private const int GuiDialogPanel = 0x3C;
 
     /// <summary>CSWGuiDialog + this = how many reply slots are on screen.</summary>
     private const int DialogPanelReplyCount = 0x6C;
@@ -2987,9 +3043,6 @@ internal static unsafe class Odyssey
     /// </summary>
     private static readonly delegate* unmanaged[Thiscall]<nint, uint, void> SendDialogInputFn =
         (delegate* unmanaged[Thiscall]<nint, uint, void>)0x00677EA0;
-
-    private static readonly delegate* unmanaged[Thiscall]<nint, int, void> SelectReplyFn =
-        (delegate* unmanaged[Thiscall]<nint, int, void>)0x006A7110;
 
     private static readonly delegate* unmanaged[Thiscall]<nint, int, void> SetCanSendDialogFn =
         (delegate* unmanaged[Thiscall]<nint, int, void>)0x005EDC80;
@@ -3129,9 +3182,39 @@ internal static unsafe class Odyssey
     /// <summary>CSWSObject + this = the object's id.</summary>
     private const int ObjIdOffset = 0x04;
 
-    /// <summary>The live conversation panel, or 0. Vtable-checked loosely: the dialog panel
-    /// is subclassed (cinematic/computer variants), so only the reply-count field's
-    /// plausibility is trusted, and every use of it is bounds-checked anyway.</summary>
+    /// <summary>
+    /// CGuiInGame holds FOUR dialogue panels, one per class, at their own members (symbol
+    /// database): the ordinary one at +0x3C, then cinematic, computer and computer-camera.
+    /// A conversation drives exactly one of them.
+    /// </summary>
+    private static ReadOnlySpan<int> GuiDialogPanels => [0x3C, 0x40, 0x44, 0x48];
+
+    /// <summary>The four dialogue panel vtables, so a candidate pointer is identified rather
+    /// than assumed. Order matches nothing — membership is the test. (uint, not nint: a span
+    /// of a platform-sized type cannot be a compile-time blob.)</summary>
+    private static ReadOnlySpan<uint> DialogPanelVtables =>
+    [
+        0x007559E0, // CSWGuiDialog
+        0x00755800, // CSWGuiDialogCinematic
+        0x00755888, // CSWGuiDialogComputer
+        0x00755958, // CSWGuiDialogComputerCamera
+    ];
+
+    /// <summary>
+    /// The live conversation panel, or 0.
+    ///
+    /// ⚠ This used to read ONE member and assume it. That is wrong twice over: the member it
+    /// read was +0x78, the party-selection panel (see <see cref="GuiDialogPanel"/>), and even
+    /// the right member only covers ordinary conversations — KOTOR's story dialogue runs on
+    /// the CINEMATIC panel, a different object at a different offset. A follower therefore
+    /// read its reply count out of a panel that was not in the conversation and never
+    /// replayed the owner's pick.
+    ///
+    /// The panel is now IDENTIFIED: each candidate must carry one of the four dialogue panel
+    /// vtables, and the one actually showing replies wins. A panel with a plausible reply
+    /// count is the conversation in progress; failing that, the first identified panel is
+    /// returned so callers that only test for existence still work.
+    /// </summary>
     private static nint GetDialoguePanel()
     {
         nint gui = GetInGameGui();
@@ -3140,8 +3223,42 @@ internal static unsafe class Odyssey
             return 0;
         }
 
-        nint panel = Deref(gui + GuiDialogPanel);
-        return LooksLikeHeapPointer(panel) ? panel : 0;
+        nint identified = 0;
+
+        foreach (int offset in GuiDialogPanels)
+        {
+            nint panel = Deref(gui + offset);
+            if (!LooksLikeHeapPointer(panel))
+            {
+                continue;
+            }
+
+            nint vtable = *(nint*)panel;
+            bool known = false;
+            foreach (uint candidate in DialogPanelVtables)
+            {
+                if (vtable == (nint)candidate)
+                {
+                    known = true;
+                    break;
+                }
+            }
+
+            if (!known)
+            {
+                continue;
+            }
+
+            identified = identified == 0 ? panel : identified;
+
+            int count = *(int*)(panel + DialogPanelReplyCount);
+            if (count is > 0 and <= 64)
+            {
+                return panel; // this one is showing a reply list: it is the live conversation
+            }
+        }
+
+        return identified;
     }
 
     /// <summary>
@@ -3166,11 +3283,23 @@ internal static unsafe class Odyssey
             return false;
         }
 
+        // ⚠ THROUGH THE PANEL'S OWN VTABLE SLOT, never the hard-coded address. The four
+        // dialogue panel classes do not share one SelectReply: the cinematic panel's slot is
+        // 0x006A7E20, not 0x006A7110, and calling the base implementation with a cinematic
+        // `this` is exactly the class of mistake the engine's own dispatch exists to avoid.
+        // The engine itself commits through `call [eax+0x6C]` in HandleSelectReply.
+        nint vtable = *(nint*)panel;
+        var selectReply = (delegate* unmanaged[Thiscall]<nint, int, void>)(*(nint*)(vtable + PanelSelectReplySlot));
+        if (!LooksLikeCodePointer((nint)selectReply))
+        {
+            return false;
+        }
+
         // Bracketed so the one pick we dispatch passes the follower's own-click block.
         DialogueReplyHook.AllowReplay = true;
         try
         {
-            SelectReplyFn(panel, slot);
+            selectReply(panel, slot);
         }
         finally
         {
@@ -3180,7 +3309,149 @@ internal static unsafe class Odyssey
         return true;
     }
 
-    /// <summary>Allows or forbids this client committing a dialogue reply.</summary>
+    /// <summary>CSWGuiDialog vtable + this = SelectReply(int) — the slot HandleSelectReply
+    /// 0x006A7390 itself dispatches through (<c>call [eax+0x6C]</c>).</summary>
+    private const int PanelSelectReplySlot = 0x6C;
+
+    /// <summary>
+    /// CClientExoAppInternal::BarkString(objectId, a2, a3, a4) — <c>ret 0x10</c>. The real
+    /// implementation, and the point every bark converges on.
+    ///
+    /// ⚠ Called DIRECTLY, with the client internal as `this` — not through the
+    /// <c>CServerExoApp::BarkString 0x005EDBB0</c> thunk. The thunk is
+    /// <c>mov ecx,[ecx+4]; jmp here</c>, i.e. it expects a `this` whose +0x04 is a
+    /// CClientExoAppInternal. Handing it the SERVER app (whose +0x04 is a server internal)
+    /// makes this function run against an object of the wrong class, and the first
+    /// vtable dispatch inside it goes somewhere arbitrary. That is not theoretical: the
+    /// first version did exactly that, and the instance it was replayed on died with no
+    /// crash-probe line and no event-log entry — the replay never even reached its own log
+    /// statement. The internal is the same pointer <see cref="GetInGameGui"/> already walks
+    /// to (<c>[client + 0x04]</c>).
+    /// </summary>
+    /// <summary>
+    /// CClientExoAppInternal::BarkString(uint clientObjectId, CExoString* text,
+    /// CResRef* sound, int ignoreRange) — <c>ret 0x10</c>, verified at 0x005F2CCD.
+    ///
+    /// ⚠ ARGUMENTS 2 AND 3 ARE POINTERS. Forwarding them across processes is what killed the
+    /// engine twice; both are dereferenced on BOTH branches of 0x005F2CA8, so the
+    /// speaker-not-found path is no safer. They are rebuilt locally instead — see
+    /// <see cref="PlayBark"/> and docs/research/bark-replay.md.
+    /// </summary>
+    private static readonly delegate* unmanaged[Thiscall]<nint, uint, byte*, byte*, int, void> BarkStringFn =
+        (delegate* unmanaged[Thiscall]<nint, uint, byte*, byte*, int, void>)0x005F2C90;
+
+    /// <summary>CClientExoAppInternal, or 0. Exists from startup, menu included.</summary>
+    private static nint GetClientInternal()
+    {
+        nint client = GetClient();
+        if (client == 0)
+        {
+            return 0;
+        }
+
+        nint internalApp = Deref(client + AppClientOffset);
+        return LooksLikeHeapPointer(internalApp) ? internalApp : 0;
+    }
+
+    /// <summary>
+    /// Replays a bark a peer's instance produced, on this instance's copy of the same
+    /// creature. The arguments are the captured ones, forwarded verbatim — see
+    /// <see cref="BarkHook"/> for why they are not interpreted.
+    ///
+    /// Bracketed with <see cref="BarkHook.Replaying"/> so the capture hook ignores the bark
+    /// we are playing back; without it a bark would bounce between instances forever.
+    ///
+    /// MAIN THREAD ONLY.
+    /// </summary>
+    public static bool PlayBark(
+        uint speakerObjectId, ReadOnlySpan<byte> text, ReadOnlySpan<byte> resRef, uint flags)
+    {
+        if (speakerObjectId is 0 or ObjectInvalid)
+        {
+            return false;
+        }
+
+        nint clientInternal = GetClientInternal();
+        if (clientInternal == 0)
+        {
+            return false;
+        }
+
+        // The speaker has to exist here, or the engine resolves nothing and the bubble is
+        // attached to a creature this instance does not have.
+        if (ResolveServerObject(speakerObjectId) == 0)
+        {
+            return false;
+        }
+
+        // The engine's argument is the CLIENT id. ServerToClientObjectId (0x005F2AC0) is
+        // literally `id == OBJECT_INVALID ? id : id | 0x80000000` — the top bit selects the
+        // client half of the 0x2000-slot object array.
+        uint clientObjectId = speakerObjectId | 0x80000000;
+
+        // arg3: a CResRef is a fixed char[16], zero-filled — NOT a C string. An empty one is
+        // an ordinary case (a line with no voice-over), so there is nothing to fall back to.
+        byte* sound = stackalloc byte[BarkHook.ResRefBytes];
+        for (int i = 0; i < BarkHook.ResRefBytes; i++)
+        {
+            sound[i] = i < resRef.Length ? resRef[i] : (byte)0;
+        }
+
+        // arg2: build a REAL CExoString with the engine's own constructor and free it after
+        // the call — exactly what ExecuteCommandBarkString does at 0x00548A4A. SetBark
+        // copy-constructs from it (0x006A9986), so the callee never takes ownership.
+        int length = Math.Min(text.Length, BarkHook.TextMax);
+        byte* chars = stackalloc byte[BarkHook.TextMax + 1];
+        for (int i = 0; i < length; i++)
+        {
+            chars[i] = text[i];
+        }
+
+        chars[length] = 0;
+
+        byte* line = stackalloc byte[8];
+        *(ulong*)line = 0;
+
+        BarkHook.Replaying = true;
+        try
+        {
+            CExoStringCtorFn(line, chars);
+            try
+            {
+                BarkStringFn(clientInternal, clientObjectId, line, sound, (int)flags);
+            }
+            finally
+            {
+                CExoStringDtorFn(line);
+            }
+        }
+        finally
+        {
+            BarkHook.Replaying = false;
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// Allows or forbids this client committing a dialogue reply.
+    ///
+    /// ⚠ DO NOT CALL — NOT EVEN WITH `true`. Kept, unused, because the address and the trap
+    /// are worth not re-discovering.
+    ///
+    /// CClientExoAppInternal::SetCanSendDialog (0x005F3030, ret 4) writes the flag at +0x228
+    /// AND STAMPS +0x22C WITH THE CURRENT WORLD TIME (0x005F305F). GetCanSendDialog
+    /// (0x005F3070, ret 0xC) refuses while `now - [+0x22C] <= 1000` (0x005F316C), and a
+    /// successful check back-dates the stamp to now-2000 so the gate stays open by itself.
+    /// So there is no such thing as "setting it back to true": every call is a fresh
+    /// ~1 second during which CSWSObject::SendDialogEntry (0x004CD460) DEFERS entries rather
+    /// than sending them — no CSWSDialog::SendDialogEntry, therefore no
+    /// CGuiInGame::HandleDialogSound (0x0062E1D0), therefore no voice-over and no lipsync.
+    ///
+    /// The engine re-stamps it only during area load (MainLoop 0x006031DB). Nothing in this
+    /// mod sets it false, so there is nothing to restore.
+    /// </summary>
+#pragma warning disable IDE0051
     public static void SetCanSendDialog(bool allowed)
     {
         nint client = GetClient();
@@ -3189,6 +3460,7 @@ internal static unsafe class Odyssey
             SetCanSendDialogFn(client, allowed ? 1 : 0);
         }
     }
+#pragma warning restore IDE0051
 
     /// <summary>
     /// True when the live conversation has actually been populated — a resolved participant
@@ -3633,6 +3905,51 @@ internal static unsafe class Odyssey
         return true;
     }
 
+    // ---- render window activation -------------------------------------------------
+    //
+    // A launched instance comes up with its render window NEVER ACTIVATED, and draws
+    // nothing until the player clicks into it — the reported "one of the two windows is
+    // black until I focus it". Measured on the live pair: both instances sat at 0 straight
+    // after launch, focusing one took it to 1, and focusing the OTHER left the first at 1.
+    // So it is a latch, not a focus mirror: activating once per launch is enough, and
+    // nothing turns it off again in normal play.
+
+    /// <summary>Global: nonzero once the render window has been activated.</summary>
+    private const nint RenderWindowActiveFlag = 0x007A3A38;
+
+    /// <summary>
+    /// Global::ActivateRenderWindow() — __stdcall, NO arguments (0x00401E83 is a plain
+    /// `ret`). Sets the flag above, and, when the server exists and is not already running,
+    /// clears the unfocused pause reason through SetPauseState(2, 0) — the same reason
+    /// FocusKeeper clears. It early-outs when the flag is already set, so calling it
+    /// repeatedly is free.
+    /// </summary>
+    private static readonly delegate* unmanaged[Stdcall]<void> ActivateRenderWindowFn =
+        (delegate* unmanaged[Stdcall]<void>)0x00401E00;
+
+    /// <summary>True once this instance's render window has been activated.</summary>
+    public static bool IsRenderWindowActive => *(int*)RenderWindowActiveFlag != 0;
+
+    /// <summary>
+    /// Activates the render window if it has not been. Returns true when this call did it,
+    /// so a caller can log the once-per-launch edge.
+    ///
+    /// MAIN THREAD ONLY.
+    /// </summary>
+    public static bool EnsureRenderWindowActive()
+    {
+        // The function dereferences the app manager; before it exists there is nothing to
+        // activate and the call would fault.
+        if (Deref(AppManagerPtr) == 0 || IsRenderWindowActive)
+        {
+            return false;
+        }
+
+        ActivateRenderWindowFn();
+
+        return IsRenderWindowActive;
+    }
+
     /// <summary>The player's own pause toggle. See EngineGlobals on the agent side; the
     /// shared-pause mirror uses this same bit so either player can pause both worlds.</summary>
     public const int PauseReasonPlayer = 0x01;
@@ -3799,8 +4116,10 @@ internal static unsafe class Odyssey
     ///
     /// MAIN THREAD ONLY.
     /// </summary>
-    public static bool ReconcilePause()
+    public static bool ReconcilePause(out string detail)
     {
+        detail = "";
+
         nint client = GetClient();
         nint server = GetServer();
         nint gui = GetInGameGui();
@@ -3823,14 +4142,55 @@ internal static unsafe class Odyssey
         bool guiBelieves = *(int*)(gui + GuiBelievesPaused) != 0;
         bool repaired = false;
 
+        // ⚠ THE BANNER IS THE ENGINE'S OWN INTENT, AND IT WINS.
+        //
+        // Measured 2026-08-11, and it is the whole reason the pause button looked dead:
+        // the engine's own pause paths (the space handler, the HUD button) move the GUI
+        // belief and the world timers but DO NOT SET A MASK BIT. This reconciler used to
+        // read that as "stranded holders" and tear the banner down within ~60 ms —
+        //
+        //     .600  reconciler UNPAUSED (banner) — no mask held a bit (server 0x00, client 0x00)
+        //     .744  space fallback -> paused
+        //
+        // — so pressing space only ever worked because PauseKeyController re-paused it 200 ms
+        // later, and clicking the HUD button, which has no such fallback, did nothing at all.
+        // We had reinvented the very bug PauseSanityPatch exists to delete, on our own side.
+        //
+        // So when the masks and the banner disagree, ADOPT the banner instead of cancelling
+        // it: write the mask the engine forgot. That turns an engine pause into a real,
+        // mask-backed pause — which is also what makes it publishable, so a HUD-button pause
+        // now reaches the other player like any other.
+        //
+        // Adoption is deliberately restricted to the case where NO reason bit is held (or
+        // only the player's own). A script pause raises its own bit and shows the same
+        // banner, and adding the player bit on top of it would leave the game stuck paused
+        // after the script cleared its own.
+        if (union == 0 && guiBelieves)
+        {
+            SetPlayerPause(true);
+            detail = "ADOPTED an engine pause (banner up, no mask) — now mask-backed and shareable";
+            return true;
+        }
+
+        if (union == PauseReasonPlayer && !guiBelieves)
+        {
+            // The mirror image: an engine path cleared the banner but left our mask set.
+            // Adopting the unpause is what lets a mouse click release a pause at all — there
+            // is no key fallback on that route to notice.
+            SetPlayerPause(false);
+            detail = "ADOPTED an engine unpause (banner down, mask still held)";
+            return true;
+        }
+
         if (union == 0)
         {
-            // Nothing holds a pause, so nothing may stay paused. Resume the two timers the
-            // login chain manages (matching what it pauses) and clear the GUI belief.
+            // No banner and no mask, but a timer is still stopped: a genuine stray, from the
+            // login chain or a swallowed edge. Resume it.
             nint clientTimer = ClientGetWorldTimerFn(client);
             if (clientTimer != 0 && *(int*)(clientTimer + WorldTimerPausedFlag) != 0)
             {
                 UnpauseWorldTimerFn(clientTimer);
+                detail += "client timer, ";
                 repaired = true;
             }
 
@@ -3838,19 +4198,23 @@ internal static unsafe class Odyssey
             if (serverTimer != 0 && *(int*)(serverTimer + WorldTimerPausedFlag) != 0)
             {
                 UnpauseWorldTimerFn(serverTimer);
+                detail += "server timer, ";
                 repaired = true;
             }
 
-            if (guiBelieves)
+            if (repaired)
             {
-                SetPauseVisualsFn(gui, 0, 0);
-                repaired = true;
+                detail = $"resumed a stray stopped timer ({detail.TrimEnd(',', ' ')}), "
+                    + "no banner and no mask held";
             }
         }
         else if ((union & PauseReasonPlayer) != 0 && !guiBelieves)
         {
-            // A real player pause with no banner: the show edge was missed.
+            // A player pause held ALONGSIDE some other reason, with no banner: the show edge
+            // was missed. Restoring the banner is right here — the pause is genuinely held by
+            // something we must not clear.
             SetPauseVisualsFn(gui, 1, PauseReasonManual);
+            detail = $"restored the banner for a held pause (mask 0x{union:X2})";
             repaired = true;
         }
 
@@ -4094,6 +4458,102 @@ internal static unsafe class Odyssey
             *(uint*)(stats + StatsFactionId) = FactionNeutral;
         }
     }
+
+    /// <summary>
+    /// Marks a body materialised as a stand-in for an enemy that exists only in the owning
+    /// peer's instance (see MaterialisedEnemies). Identical discipline to
+    /// <see cref="MarkAsRemotePlayer"/> — no plot (plot zeroes incoming damage and the
+    /// local player must be able to fight it), min-1-hp (only the owner may kill it), no
+    /// selecting the corpse (its loot exists only in the owner's world), no swinging on
+    /// its own (its swings are replayed from the owner's copy) — EXCEPT the faction, which
+    /// the caller applies from the owner's published value rather than forcing Neutral: a
+    /// materialised Sith trooper must read hostile or the fight it brought is invisible.
+    /// </summary>
+    // ---- combat state ------------------------------------------------------------
+
+    /// <summary>
+    /// CSWSCreature::SetCombatState(int inCombat, byte notify) — the engine's own writer of
+    /// the in-combat dword at +0x4E0.
+    ///
+    /// TWO stack arguments, established from the body rather than the symbol row (which
+    /// claims a nonsensical 5 bytes): after the SEH prologue and three pushes, 0x004F2648
+    /// reads the requested state from `[esp+0x3C]` and 0x004F2655 reads a byte flag from
+    /// `[esp+0x40]` — the incoming arg1 and arg2. It compares the request against the
+    /// current field, returns early when they already agree, and 0x004F2687 is the only
+    /// write to +0x4E0 in the function.
+    ///
+    /// It is a SETTER, not a re-derivation: it takes the state it is told. That is what
+    /// makes replicating combat possible at all.
+    /// </summary>
+    private static readonly delegate* unmanaged[Thiscall]<nint, int, byte, void> SetCombatStateFn =
+        (delegate* unmanaged[Thiscall]<nint, int, byte, void>)0x004F2610;
+
+    /// <summary>CSWSCreature + this = the in-combat dword.</summary>
+    private const int CreInCombat = 0x4E0;
+
+    /// <summary>True when the local PC's engine has it in combat.</summary>
+    public static bool IsPlayerInCombat
+    {
+        get
+        {
+            nint player = GetPlayerCreaturePointer();
+            return player != 0 && *(int*)(player + CreInCombat) != 0;
+        }
+    }
+
+    /// <summary>
+    /// Drives the local PC's combat state through the engine's own setter. Returns true
+    /// when this call changed something, so a caller can log the edge rather than every
+    /// re-assertion.
+    ///
+    /// MAIN THREAD ONLY.
+    /// </summary>
+    public static bool SetPlayerCombatState(bool inCombat)
+    {
+        nint player = GetPlayerCreaturePointer();
+        if (player == 0)
+        {
+            return false;
+        }
+
+        if ((*(int*)(player + CreInCombat) != 0) == inCombat)
+        {
+            return false;
+        }
+
+        // notify = 1: the same value the engine's own callers pass, so the party broadcast
+        // and the HUD follow the change instead of the field moving under them.
+        SetCombatStateFn(player, inCombat ? 1 : 0, 1);
+
+        return (*(int*)(player + CreInCombat) != 0) == inCombat;
+    }
+
+    public static void MarkAsMirroredEnemy(nint creature)
+    {
+        *(int*)(creature + ObjPlot) = 0;
+        *(int*)(creature + ObjMinOneHitPoint) = 1;
+        *(int*)(creature + ObjDeadSelectable) = 0;
+
+        // ⚠ THE ATTACK BIT IS PERMANENT ONCE CLEARED. ClaimCreature ORs bit 0x02 back on
+        // every pass but never 0x04, so a body marked here can never swing again for as long
+        // as it lives. That is right when this instance only wants a stand-in — and fatal
+        // under local_combat, where these materialised bodies are precisely the enemies
+        // (host encounter spawns, scripted waves) expected to do the fighting: they would
+        // hold a target, queue attacks, deal nothing, and IncomingDamageController would
+        // absorb the owner's report for them. The player would be invulnerable, silently.
+        if (!EnemyPresenceController.LocalCombat)
+        {
+            *(int*)(creature + CreMovePermitted) &= ~CreAttackPermittedBit;
+        }
+    }
+
+    /// <summary>
+    /// Restores a mirrored enemy's ability to attack. Re-asserted every drive pass under
+    /// local_combat, because a body can be marked once at spawn and live for the rest of the
+    /// module — a spawn-time decision cannot be trusted to still hold.
+    /// </summary>
+    public static void PermitAttacking(nint creature) =>
+        *(int*)(creature + CreMovePermitted) |= CreAttackPermittedBit;
 
     // ---- faction, the targetability switch ---------------------------------------
     //

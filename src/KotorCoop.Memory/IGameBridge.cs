@@ -168,6 +168,25 @@ public interface IGameBridge : IDisposable
     /// </summary>
     bool TrySetRemotePause(bool desired) => false;
 
+    /// <summary>False when this bridge cannot replicate combat state into the game.</summary>
+    bool SupportsCombatSync => false;
+
+    /// <summary>
+    /// Declares that a REMOTE peer standing in this player's module is fighting, so the
+    /// plugin can put this engine into combat too. A client's own enemies are mirrors with
+    /// the attack bit cleared, so its engine never works this out for itself — and combat
+    /// state gates round timing, the HUD, auto-pause and how abilities queue.
+    /// </summary>
+    bool TrySetSessionInCombat(bool fighting) => false;
+
+    /// <summary>The plugin's count of local releases of a MIRRORED pause. A change is the
+    /// release; the absolute value means nothing.</summary>
+    uint LocalPauseReleaseSerial => 0;
+
+    /// <summary>Tells the plugin a peer ended the shared pause, so this instance drops the
+    /// pause it started. Either player may end a shared pause.</summary>
+    bool TrySignalRemotePauseRelease(uint serial) => false;
+
     /// <summary>False when this bridge cannot warp the local player between modules.</summary>
     bool SupportsTravel => false;
 
@@ -234,6 +253,13 @@ public interface IGameBridge : IDisposable
     /// are the first thing dropped. See <see cref="KotorGameBridge.ReadEnemies"/>.
     /// </summary>
     List<EnemyState> ReadEnemies(IReadOnlyList<Vector3f> otherPlayers) => [];
+
+    /// <summary>Barks the plugin captured since the last look. See <see cref="BarkRecord"/>.</summary>
+    List<BarkRecord> ReadBarks() => [];
+
+    /// <summary>Hands a peer's bark to the plugin to replay on its copy of the speaker.</summary>
+    bool TryWriteBark(
+        uint speaker, ReadOnlySpan<byte> text, ReadOnlySpan<byte> soundResRef, uint flags, uint serial) => false;
 
     /// <summary>
     /// Turns off the local module's encounters. Called on every peer that does NOT own

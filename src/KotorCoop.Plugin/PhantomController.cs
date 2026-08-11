@@ -888,6 +888,9 @@ internal sealed unsafe class PhantomController(SharedBlockView block)
         float jdy = target.Y - shown.Y;
         float gapSquared = (jdx * jdx) + (jdy * jdy);
 
+        // How fast the body is actually shown covering ground this step, for the gait below.
+        float chaseSpeed = 0f;
+
         if (!_smoothing[slot] || gapSquared > SnapGapSquared)
         {
             _smoothing[slot] = true;
@@ -900,9 +903,36 @@ internal sealed unsafe class PhantomController(SharedBlockView block)
             float dt = (float)Math.Clamp(now - _shownAtTime[slot], 0.0, 0.25);
             float alpha = _smoothingTauSeconds <= 0f ? 1f : 1f - MathF.Exp(-dt / _smoothingTauSeconds);
 
-            shown.X += jdx * alpha;
-            shown.Y += jdy * alpha;
+            float stepX = jdx * alpha;
+            float stepY = jdy * alpha;
+
+            // Bound the chase to a speed a body could plausibly have. The exponential term
+            // alone closes a gap at gap/tau — after any stall (a burst of packet loss, a
+            // heavy pass hogging the pump thread, an interpolation-buffer dry spell) that is
+            // tens of units per second under the snap threshold, and the phantom streaks
+            // across the screen with its legs at a normal cycle: the "flying" look. Capped,
+            // the same recovery is a sprint; a deficit the cap cannot close grows until it
+            // crosses SnapGapSquared and cuts, which is what a real teleport deserves.
+            // 12 u/s is the plausibility ceiling the speed estimator already uses, so
+            // ordinary tracking (force speed included) is never capped, only recovery.
+            float stepLength = MathF.Sqrt((stepX * stepX) + (stepY * stepY));
+            float maxStep = MaxChaseUnitsPerSecond * dt;
+            if (stepLength > maxStep && stepLength > 0f)
+            {
+                float scale = maxStep / stepLength;
+                stepX *= scale;
+                stepY *= scale;
+                stepLength = maxStep;
+            }
+
+            shown.X += stepX;
+            shown.Y += stepY;
             shown.Z = target.Z;
+
+            if (dt > 0.001f)
+            {
+                chaseSpeed = stepLength / dt;
+            }
         }
 
         _shownPosition[slot] = shown;
@@ -921,7 +951,16 @@ internal sealed unsafe class PhantomController(SharedBlockView block)
 
         bool moving = _lastMovedAt[slot] > 0 && (now - _lastMovedAt[slot]) < StillnessSeconds;
 
-        Odyssey.DrivePhantom(phantom, shown, remote.Facing, _peerSpeed[slot], moving);
+        // The gait follows the speed the body is SHOWN moving at, not only the peer's
+        // measured speed. In steady tracking the two agree (the chase settles at exactly
+        // the stream's speed), but during a capped catch-up the body genuinely covers
+        // ground faster than the peer does — feeding the peer's number there kept the legs
+        // at a walk while the floor streamed past, which reads as sliding. Max, not
+        // replacement: the chase speed decays as the gap closes, and the peer's smoothed
+        // estimate is the steadier signal while simply following.
+        float gaitSpeed = MathF.Max(_peerSpeed[slot], chaseSpeed);
+
+        Odyssey.DrivePhantom(phantom, shown, remote.Facing, gaitSpeed, moving);
         _lastGoal[slot] = remote.Position;
     }
 
@@ -944,6 +983,11 @@ internal sealed unsafe class PhantomController(SharedBlockView block)
 
     /// <summary>Past this the peer did not walk, they moved — cut instead of gliding.</summary>
     private const float SnapGapSquared = 8f * 8f;
+
+    /// <summary>The fastest the shown position may chase the received one, in units per
+    /// second. Bounds the recovery glide after a stall; see the comment in DriveDirect.
+    /// Mirrors <see cref="MotionSmoother"/>'s cap — keep the two in agreement.</summary>
+    private const float MaxChaseUnitsPerSecond = 12f;
 
     private readonly Vec3[] _shownPosition = new Vec3[SharedBlock.SlotCapacity];
     private readonly double[] _shownAtTime = new double[SharedBlock.SlotCapacity];

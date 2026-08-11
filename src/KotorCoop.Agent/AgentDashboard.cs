@@ -10,7 +10,8 @@ namespace KotorCoop.Agent;
 /// follows connect/disconnect/reconnect: between sessions there is no agent and the readout
 /// says so instead of rendering stale peers.
 /// </summary>
-public sealed class AgentDashboard(SessionManager manager, IGameBridge bridge, string? dropFile = null)
+public sealed class AgentDashboard(
+    SessionManager manager, IGameBridge bridge, string? dropFile = null, string? logFile = null)
 {
     /// <summary>
     /// What the D key drops, cycling. KOTOR 1 has no native drop-item UI, so the demo
@@ -25,6 +26,16 @@ public sealed class AgentDashboard(SessionManager manager, IGameBridge bridge, s
 
     private int _dropIndex;
     private string _lastDropNote = string.Empty;
+
+    /// <summary>The last compact status line written in log mode, so an unchanged session
+    /// says nothing at all rather than repeating itself five times a second.</summary>
+    private string _lastLogLine = string.Empty;
+
+    /// <summary>When that line was last written, so a quiet session still leaves a heartbeat
+    /// rather than looking like a dead process.</summary>
+    private DateTime _lastLogAt = DateTime.MinValue;
+
+    private static readonly TimeSpan LogHeartbeat = TimeSpan.FromSeconds(30);
 
     public async Task RunAsync(CancellationToken cancellationToken)
     {
@@ -53,12 +64,26 @@ public sealed class AgentDashboard(SessionManager manager, IGameBridge bridge, s
 
                 CheckDropFile();
 
+                // ⚠ TWO DIFFERENT OUTPUTS, because a screen and a log file want opposite
+                // things. On a console the readout is redrawn in place five times a second,
+                // which is right there and unreadable anywhere else: redirected, every
+                // redraw APPENDS another full copy, so a few minutes of running produced
+                // thousands of screens of near-identical text — reported from use as the
+                // log "spamming". Redirected output now gets one compact line, and only
+                // when something actually changed.
                 if (canPosition)
                 {
-                    Console.SetCursorPosition(0, 0);
+                    Render();
+                    FlushFrame();
                 }
 
-                Render();
+                // The log is written whenever one was asked for, and also when there is no
+                // console to draw on — so a windowed run still leaves a record and a
+                // redirected one is not silent.
+                if (logFile is not null || !canPosition)
+                {
+                    WriteLogLine();
+                }
             }
         }
         catch (OperationCanceledException)
@@ -193,12 +218,84 @@ public sealed class AgentDashboard(SessionManager manager, IGameBridge bridge, s
         _lastDropNote = $"dropped {resref} as item 0x{itemId:X}";
     }
 
+    /// <summary>
+    /// One compact, timestamped line for a log file or a pipe — written only when the
+    /// session's shape changes, plus a heartbeat so a healthy quiet session still shows it
+    /// is alive.
+    ///
+    /// The fields are the ones worth grepping for after the fact: who is connected, how the
+    /// link is behaving, whether memory access is still working, where the player is and how
+    /// many bodies each channel is driving. Everything cosmetic stays on the screen version.
+    /// </summary>
+    private void WriteLogLine()
+    {
+        CoopAgent? agent = manager.Agent;
+
+        string line;
+        if (agent is null)
+        {
+            line = "no session (not connected)";
+        }
+        else
+        {
+            SessionStats stats = agent.Session.GetStats();
+            PlayerState local = agent.LastLocalState;
+
+            string memory = agent.LastReadSucceeded
+                ? agent.Bridge.CanWriteRemotes && !agent.LastWriteSucceeded ? "WRITE-FAILING" : "ok"
+                : $"READ-FAILING({agent.ReadFailureCount})";
+
+            line = string.Create(System.Globalization.CultureInfo.InvariantCulture,
+                $"{stats.Status}  peers {stats.PeerCount}  rtt {stats.RoundTripMs:F0}ms  "
+                + $"malformed {stats.PacketsDropped}  memory {memory}  "
+                + $"module {(local.Module.Length > 0 ? local.Module : "-")}  "
+                + $"hp {DescribeHealth(local.Health, local.MaxHealth)}  peers-here {agent.LastPeers.Count}  "
+                + $"state {DescribeState(local)}  "
+                + $"combat [{DescribeSharedCombat(local, agent.LastPeers)}]");
+        }
+
+        DateTime now = DateTime.Now;
+        if (line == _lastLogLine && now - _lastLogAt < LogHeartbeat)
+        {
+            return;
+        }
+
+        _lastLogLine = line;
+        _lastLogAt = now;
+        string entry = $"[{now:HH:mm:ss}] {line}";
+
+        if (logFile is not null)
+        {
+            try
+            {
+                File.AppendAllText(logFile, entry + Environment.NewLine);
+            }
+            catch (IOException)
+            {
+                // A log that cannot be written must never take the session down with it.
+            }
+            catch (UnauthorizedAccessException)
+            {
+            }
+        }
+
+        if (Console.IsOutputRedirected)
+        {
+            Console.Out.WriteLine(entry);
+            Console.Out.Flush();
+        }
+    }
+
     private void Render()
     {
         CoopAgent? agent = manager.Agent;
 
-        WriteLine($"KotorCoop agent  {bridge.Description}");
-        WriteLine(string.Empty);
+        // ⚠ Every line names WHAT it is and WHAT the number means. The old readout was a
+        // grid of bare abbreviations — "tx/rx", "flags v0", "phantoms=4", "hp 12/0" — and
+        // was reported straight back as "the format is still very confusing what everything
+        // means". A readout nobody can read is not a diagnostic.
+        WriteLine("=== KOTOR CO-OP AGENT ============================================");
+        WriteLine($" attached   {bridge.Description}");
 
         if (agent is null)
         {
@@ -210,10 +307,17 @@ public sealed class AgentDashboard(SessionManager manager, IGameBridge bridge, s
         PlayerState local = agent.LastLocalState;
         IReadOnlyList<RemotePeer> peers = agent.LastPeers;
 
-        WriteLine($"session  {stats.Status}");
-        WriteLine($"         peers {stats.PeerCount}  rtt {stats.RoundTripMs:F1}ms  tx {stats.PacketsSent}  rx {stats.PacketsReceived}  malformed {stats.PacketsDropped}");
-        WriteLine($"         flags v{stats.FlagVersion} ({agent.Session.Flags.Count} known)  pending ops {stats.PendingFlagOps}");
+        string role = agent.Session.IsEnemyAuthority
+            ? "HOST - this game owns the enemies, doors and companions"
+            : "CLIENT - this game mirrors the host's world";
+
         WriteLine(string.Empty);
+        WriteLine(" NETWORK");
+        WriteLine($" role       {role}");
+        WriteLine($" link       {stats.Status}");
+        WriteLine($" players    {stats.PeerCount} other connected      round trip {stats.RoundTripMs:F0} ms");
+        WriteLine($" traffic    {stats.PacketsSent} sent / {stats.PacketsReceived} received      "
+            + (stats.PacketsDropped > 0 ? $"{stats.PacketsDropped} MALFORMED" : "none malformed"));
 
 
         WriteContentSection(agent);
@@ -223,24 +327,47 @@ public sealed class AgentDashboard(SessionManager manager, IGameBridge bridge, s
             ? agent.LastWriteSucceeded ? "ok" : "FAILING"
             : "not supported by this profile (read-only)";
 
-        WriteLine($"memory   read {readStatus}");
-        WriteLine($"         write {writeStatus}");
         WriteLine(string.Empty);
-        WriteLine($"local    module {(local.Module.Length > 0 ? local.Module : "(unknown)"),-16} pos {local.Position}  facing {local.Facing:F2}  hp {local.Health}/{local.MaxHealth}");
+        WriteLine(" GAME MEMORY");
+        WriteLine($" reading    {readStatus}          writing    {writeStatus}");
+        WriteLine($" pump cost  {agent.PumpAverageMs:F1} ms average, {agent.PumpPeakMs:F1} ms peak   (budget {agent.PumpBudgetMs:F0} ms)");
         WriteLine(string.Empty);
-        WriteLine($"remote peers ({peers.Count})");
+        WriteLine(" THIS PLAYER");
+        WriteLine($" area       {(local.Module.Length > 0 ? local.Module : "(unknown)")}"
+            + $"      at {local.Position}  facing {local.Facing:F2}");
+        WriteLine($" health     {DescribeHealth(local.Health, local.MaxHealth)}");
+        WriteLine($" state      {DescribeState(local)}");
+        WriteLine(string.Empty);
+        WriteLine($" OTHER PLAYERS ({peers.Count})");
 
-        for (int i = 0; i < 6; i++)
+        for (int i = 0; i < Math.Max(peers.Count, 1); i++)
         {
             if (i < peers.Count)
             {
                 RemotePeer peer = peers[i];
-                string sameModule = peer.IsInModule(local.Module) ? " " : "*";
-                WriteLine($"  {sameModule}{peer.PeerId,3} {peer.Name,-14} {peer.State.Module,-16} {peer.State.Position}  hp {peer.State.Health}/{peer.State.MaxHealth}");
+                bool here = peer.IsInModule(local.Module);
+                string where = here ? "here with you" : $"in {peer.State.Module}";
+
+                // ⚠ A MIRRORING PEER NEVER SETS FlagPaused, so reading its state alone shows
+                // "exploring" while its game is visibly frozen — reported from play. The flag
+                // deliberately carries only a player's OWN pause (a mirrored one is excluded
+                // at the source, or two instances latch each other paused forever), so the
+                // shared half has to be supplied here: if THIS player holds a pause, every
+                // peer standing in this module is frozen by it, whatever their flags say.
+                string state = DescribeState(peer.State);
+                if (here && local.IsPaused && !peer.State.IsPaused)
+                {
+                    state = state.StartsWith("exploring", StringComparison.Ordinal)
+                        ? "PAUSED (mirroring yours)"
+                        : $"{state}, PAUSED (mirroring yours)";
+                }
+
+                WriteLine($"   {peer.Name,-12} {where,-18} {DescribeHealth(peer.State.Health, peer.State.MaxHealth),-20}"
+                    + state);
             }
             else
             {
-                WriteLine(string.Empty);
+                WriteLine("   (nobody else connected yet)");
             }
         }
 
@@ -265,36 +392,34 @@ public sealed class AgentDashboard(SessionManager manager, IGameBridge bridge, s
         }
 
         WriteLine(string.Empty);
-        WriteLine(
-            $"enemies  {enemies.Count} known ({alive} alive, {dead} dead)   "
-            + (agent.Session.IsEnemyAuthority ? "THIS instance is authoritative" : "mirroring the host"));
+        WriteLine(" SHARED WORLD");
+        WriteLine($" combat     {DescribeSharedCombat(local, peers)}");
+        WriteLine($" enemies    {enemies.Count} tracked - {alive} alive, {dead} dead"
+            + (agent.Session.IsEnemyAuthority ? "   (published by this game)" : "   (received from the host)"));
 
         DialogueState convo = agent.Session.GetDialogue();
         string convoWho = convo.OwnerPeerId == agent.Session.LocalPeerId
             ? "you are"
             : $"peer {convo.OwnerPeerId} is";
-        WriteLine($"dialogue {(convo.Active ? $"{convoWho} in a conversation" + (convo.SpeakerName.Length > 0 ? $" ({convo.SpeakerName})" : string.Empty) : "none")}");
+        WriteLine($" talking    {(convo.Active ? $"{convoWho} talking" + (convo.SpeakerName.Length > 0 ? $" to {convo.SpeakerName}" : string.Empty) : "nobody is talking")}");
 
+        // Ground items are a demo affordance, not session health: one summary line, and the
+        // resrefs only when there is something to say. The readout has to fit a default
+        // console without resizing — reported as "we have to resize it to see everything".
         List<GroundItem> items = agent.Session.Items.Snapshot();
-        WriteLine(string.Empty);
-        WriteLine($"ground items ({items.Count})  {_lastDropNote}");
+        string itemNames = items.Count == 0
+            ? "none"
+            : string.Join(", ", items.Take(3).Select(item => item.Resref)) + (items.Count > 3 ? ", ..." : string.Empty);
 
-        for (int i = 0; i < 3; i++)
+        WriteLine($" items      {items.Count} on the ground: {itemNames}");
+
+        if (_lastDropNote.Length > 0)
         {
-            if (i < items.Count)
-            {
-                GroundItem item = items[i];
-                WriteLine($"   0x{item.ItemId:X8} {item.Resref,-16} {item.Module,-16} {item.Position}");
-            }
-            else
-            {
-                WriteLine(string.Empty);
-            }
+            WriteLine($" last drop  {_lastDropNote}");
         }
 
         WriteLine(string.Empty);
-        WriteLine("* = in a different module, so not written into the game.");
-        WriteLine("[D] drop an item at your feet   [P] pick the first one up.   Ctrl+C to stop.");
+        WriteLine(" [D] drop an item    [P] pick one up    Ctrl+C to stop");
     }
 
     /// <summary>Steady-state readout while no session is live (between connects).</summary>
@@ -322,7 +447,7 @@ public sealed class AgentDashboard(SessionManager manager, IGameBridge bridge, s
     /// tell the difference. Says nothing while everything is on and nothing was warned
     /// about, so the normal case costs no space.
     /// </summary>
-    private static void WriteContentSection(CoopAgent agent)
+    private void WriteContentSection(CoopAgent agent)
     {
         CompatibilityVerdict? verdict = agent.Session.Compatibility;
         if (verdict is null)
@@ -351,10 +476,165 @@ public sealed class AgentDashboard(SessionManager manager, IGameBridge bridge, s
         WriteLine(string.Empty);
     }
 
-    private static void WriteLine(string text)
+    /// <summary>The frame being built. Lines are collected and flushed together so the
+    /// readout can be clamped to the window.</summary>
+    private readonly List<string> _frame = [];
+
+    private void WriteLine(string text)
     {
-        // Pad so shorter frames do not leave fragments of longer ones behind.
-        int width = Console.IsOutputRedirected ? text.Length : Math.Max(Console.WindowWidth - 1, text.Length);
-        Console.WriteLine(text.PadRight(width));
+        if (Console.IsOutputRedirected)
+        {
+            Console.WriteLine(text);
+            return;
+        }
+
+        _frame.Add(text);
+    }
+
+    /// <summary>
+    /// Paints the collected frame, clamped to the window so it CANNOT scroll.
+    ///
+    /// ⚠ Scrolling is what makes an in-place readout flicker. Writing one more line than the
+    /// window holds scrolls everything up by one, so the next redraw starting at (0,0) lands
+    /// against shifted content and the screen alternates between two mis-aligned versions of
+    /// itself — reported as "flickering between different views every second". Never write
+    /// the last row, and always pad to the full width so a shorter frame cannot leave pieces
+    /// of a longer one behind.
+    /// </summary>
+    private void FlushFrame()
+    {
+        int height = Math.Max(Console.WindowHeight - 1, 1);
+        int width = Math.Max(Console.WindowWidth - 1, 1);
+
+        Console.SetCursorPosition(0, 0);
+
+        ConsoleColor previous = Console.ForegroundColor;
+        for (int i = 0; i < height; i++)
+        {
+            string line = i < _frame.Count ? _frame[i] : string.Empty;
+            if (line.Length > width)
+            {
+                line = line[..width];
+            }
+
+            // Colour by MEANING, not by parsing: a line naming a failure is red, one naming
+            // a healthy state green, headings white, the rest dim — so a glance answers
+            // "is this session alright" without reading any of it.
+            Console.ForegroundColor = ColourFor(line);
+            Console.Write(line.PadRight(width));
+            Console.Write('\n');
+        }
+
+        Console.ForegroundColor = previous;
+        _frame.Clear();
+    }
+
+    /// <summary>
+    /// The player's situation in words: fighting, paused, talking, down. These are the
+    /// states that change what every other channel is allowed to do — the enemy census
+    /// pauses during a conversation, damage is held, movement stops when paused — so a
+    /// readout that omits them cannot explain what it is showing.
+    /// </summary>
+    private static string DescribeState(PlayerState state)
+    {
+        List<string> parts = [];
+
+        if ((state.Flags & PlayerState.FlagDowned) != 0)
+        {
+            parts.Add("DOWNED");
+        }
+
+        if ((state.Flags & PlayerState.FlagInCombat) != 0)
+        {
+            parts.Add("IN COMBAT");
+        }
+
+        if ((state.Flags & PlayerState.FlagPaused) != 0)
+        {
+            parts.Add("PAUSED");
+        }
+
+        if ((state.Flags & PlayerState.FlagInDialogue) != 0)
+        {
+            parts.Add("in a conversation");
+        }
+
+        return parts.Count == 0 ? "exploring (not in combat, not paused)" : string.Join(", ", parts);
+    }
+
+    /// <summary>
+    /// The fight as the SESSION sees it, rather than as one engine sees it.
+    ///
+    /// Every peer already publishes its own in-combat flag, but nothing ever combined them,
+    /// so two players standing in the same room during the same fight produced "IN COMBAT"
+    /// on one readout and "exploring" on the other with no explanation. That is not a
+    /// reporting bug, and saying so is the point of this line: on a client the enemies are
+    /// MIRRORS — driven puppets, not creatures its own AI is fighting — so the client's
+    /// engine genuinely never enters combat, and it never will until the owner-side
+    /// engagement is replicated rather than just the bodies.
+    ///
+    /// Until then the honest thing is to name the fight, name who their engine has actually
+    /// engaged, and mark the rest as mirroring so nobody reads it as a dropped packet.
+    /// </summary>
+    private static string DescribeSharedCombat(PlayerState local, IReadOnlyList<RemotePeer> peers)
+    {
+        List<string> engaged = [];
+        List<string> mirroring = [];
+
+        (local.IsInCombat ? engaged : mirroring).Add("you");
+
+        foreach (RemotePeer peer in peers)
+        {
+            // Somebody fighting in another module is their own business, not this fight.
+            if (!peer.IsInModule(local.Module))
+            {
+                continue;
+            }
+
+            (peer.State.IsInCombat ? engaged : mirroring).Add(peer.Name);
+        }
+
+        if (engaged.Count == 0)
+        {
+            return "nobody here is fighting";
+        }
+
+        string where = local.Module.Length > 0 ? local.Module : "this area";
+        string line = $"FIGHT in {where} - engaged: {string.Join(", ", engaged)}";
+
+        // One name here is the reported symptom, so spell out what it means rather than
+        // leaving a bare absence.
+        return mirroring.Count == 0
+            ? line
+            : $"{line}; mirroring only: {string.Join(", ", mirroring)} (their engine is not in combat)";
+    }
+
+    /// <summary>Health in a form that says what it means. A max of 0 means the profile has
+    /// not resolved the field, which "12/0" reads as a bug in the game rather than a gap in
+    /// what this agent can see.</summary>
+    private static string DescribeHealth(int current, int max) =>
+        max > 0 ? $"{current}/{max}" : $"{current} (maximum unknown)";
+
+    private static ConsoleColor ColourFor(string text)
+    {
+        if (text.Contains("FAIL", StringComparison.OrdinalIgnoreCase)
+            || text.Contains("not supported", StringComparison.Ordinal)
+            || text.Contains("disconnect", StringComparison.OrdinalIgnoreCase))
+        {
+            return ConsoleColor.Red;
+        }
+
+        if (text.Contains(" ok", StringComparison.Ordinal)
+            || text.Contains("authoritative", StringComparison.Ordinal)
+            || text.Contains("mirroring", StringComparison.Ordinal))
+        {
+            return ConsoleColor.Green;
+        }
+
+        // A heading is a line that starts in column 0 with a word; continuation lines are
+        // indented, and those stay dim so the shape of the readout is visible at a glance.
+        return text.Length > 0 && !char.IsWhiteSpace(text[0])
+            ? ConsoleColor.White
+            : ConsoleColor.DarkGray;
     }
 }

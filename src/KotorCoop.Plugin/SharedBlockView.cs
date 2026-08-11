@@ -25,7 +25,7 @@ internal readonly record struct EnemyView(
 /// drive can replay exactly the new ones.</summary>
 internal readonly record struct EnemyPresenceView(
     uint ObjectId, Vec3 Position, float Facing, uint Animation, bool Dead,
-    uint OneShotSerial, uint OneShotAnimation);
+    uint OneShotSerial, uint OneShotAnimation, bool Plot, ushort Appearance, ushort Faction);
 
 /// <summary>One companion's presence as the host's engine has it. <see cref="RosterSlotPlusOne"/>
 /// is the NPC roster slot + 1 (0 = empty slot) — the cross-instance key; the mirroring
@@ -33,6 +33,12 @@ internal readonly record struct EnemyPresenceView(
 internal readonly record struct PartyPresenceView(
     uint RosterSlotPlusOne, Vec3 Position, float Facing, uint Animation, int Health,
     uint OneShotSerial, uint OneShotAnimation);
+
+/// <summary>One NPC bark: who said it and the three engine arguments that shaped it,
+/// carried verbatim. <see cref="Serial"/> makes a repeat of the same line visible.</summary>
+/// <summary>The scalar half of a bark slot; text and resref are copied into caller buffers
+/// by <see cref="SharedBlockView.GetRemoteBark"/>.</summary>
+internal readonly record struct BarkView(uint Speaker, uint Flags, uint Serial);
 
 /// <summary>One door's desired state, as published by the agent for the local module.</summary>
 internal readonly record struct DoorView(uint ObjectId, byte OpenState, bool Unlocked);
@@ -261,7 +267,10 @@ internal sealed unsafe class SharedBlockView(byte* baseAddress)
             *(uint*)(slot + 0x14),
             (*(uint*)(slot + 0x18) & SharedBlock.EnemyFlagDead) != 0,
             *(uint*)(slot + 0x1C),
-            *(uint*)(slot + 0x20));
+            *(uint*)(slot + 0x20),
+            (*(uint*)(slot + 0x18) & SharedBlock.EnemyFlagPlot) != 0,
+            *(ushort*)(slot + 0x24),
+            *(ushort*)(slot + 0x26));
     }
 
     /// <summary>Agent-written companion presence; zeroed by the plugin on a module
@@ -328,6 +337,63 @@ internal sealed unsafe class SharedBlockView(byte* baseAddress)
     /// enemy owner. The object id is written LAST, so the agent can never pair an id with
     /// another creature's total — the same discipline every other slot array here uses.
     /// </summary>
+    /// <summary>One captured or replayable NPC bark. <see cref="Serial"/> 0 means the slot
+    /// has never been written; the arguments are the engine's own, carried verbatim.</summary>
+    public void SetLocalBark(
+        int index, uint speaker, uint flags, ReadOnlySpan<byte> text, ReadOnlySpan<byte> resRef, uint serial)
+    {
+        byte* slot = baseAddress + SharedBlock.OffsetLocalBarkSlots
+            + (Clamp(index, SharedBlock.BarkCapacity) * SharedBlock.BarkStride);
+
+        int textLength = Math.Min(text.Length, SharedBlock.BarkTextMax);
+
+        *(uint*)(slot + SharedBlock.BarkSpeakerOffset) = speaker;
+        *(uint*)(slot + SharedBlock.BarkFlagsOffset) = flags;
+        *(uint*)(slot + SharedBlock.BarkTextLengthOffset) = (uint)textLength;
+
+        for (int i = 0; i < SharedBlock.BarkResRefBytes; i++)
+        {
+            slot[SharedBlock.BarkResRefOffset + i] = i < resRef.Length ? resRef[i] : (byte)0;
+        }
+
+        for (int i = 0; i < textLength; i++)
+        {
+            slot[SharedBlock.BarkTextOffset + i] = text[i];
+        }
+
+        // Serial last: the agent acts on a slot only once this says it is complete.
+        *(uint*)(slot + SharedBlock.BarkSerialOffset) = serial;
+    }
+
+    /// <summary>
+    /// Agent-written: a bark from a peer for this instance to replay. The text and resref are
+    /// copied out into the caller's buffers rather than exposed as pointers into the block —
+    /// pointers are exactly what made this channel crash the engine.
+    /// </summary>
+    public BarkView GetRemoteBark(int index, Span<byte> text, out int textLength, Span<byte> resRef)
+    {
+        byte* slot = baseAddress + SharedBlock.OffsetRemoteBarkSlots
+            + (Clamp(index, SharedBlock.BarkCapacity) * SharedBlock.BarkStride);
+
+        int stored = (int)*(uint*)(slot + SharedBlock.BarkTextLengthOffset);
+        textLength = Math.Clamp(stored, 0, Math.Min(text.Length, SharedBlock.BarkTextMax));
+
+        for (int i = 0; i < textLength; i++)
+        {
+            text[i] = slot[SharedBlock.BarkTextOffset + i];
+        }
+
+        for (int i = 0; i < SharedBlock.BarkResRefBytes && i < resRef.Length; i++)
+        {
+            resRef[i] = slot[SharedBlock.BarkResRefOffset + i];
+        }
+
+        return new BarkView(
+            *(uint*)(slot + SharedBlock.BarkSpeakerOffset),
+            *(uint*)(slot + SharedBlock.BarkFlagsOffset),
+            *(uint*)(slot + SharedBlock.BarkSerialOffset));
+    }
+
     public void SetDamageDealt(int index, uint objectId, uint cumulative)
     {
         byte* slot = baseAddress + SharedBlock.OffsetDamageDealtSlots
@@ -598,6 +664,23 @@ internal sealed unsafe class SharedBlockView(byte* baseAddress)
 
     /// <summary>Pointer to the null-terminated module name for the menu load (16 bytes).</summary>
     public byte* MenuLoadModule => baseAddress + SharedBlock.OffsetMenuLoadModule;
+
+    /// <summary>Agent-written: a REMOTE peer standing in this module has its engine in
+    /// combat. See <see cref="SharedBlock.OffsetSessionInCombat"/> for why the client cannot
+    /// determine this locally, and why the local player is excluded.</summary>
+    public bool SessionInCombat => *U32(SharedBlock.OffsetSessionInCombat) != 0;
+
+    /// <summary>Plugin-written: bumped when this player releases a pause mirrored from a
+    /// peer, so the agent can announce that the shared pause is over.</summary>
+    public uint LocalPauseReleaseSerial
+    {
+        get => *U32(SharedBlock.OffsetLocalPauseReleaseSerial);
+        set => *U32(SharedBlock.OffsetLocalPauseReleaseSerial) = value;
+    }
+
+    /// <summary>Agent-written: bumped when a PEER released the shared pause, so this instance
+    /// drops the pause it started.</summary>
+    public uint RemotePauseReleaseSerial => *U32(SharedBlock.OffsetRemotePauseReleaseSerial);
 
     // ---- shared pause -----------------------------------------------------------
 

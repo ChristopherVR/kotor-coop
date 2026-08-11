@@ -17,6 +17,9 @@ internal static unsafe class PluginHost
     private static readonly object Gate = new();
     private static bool _started;
     private static string _logPath = "kotorcoop-plugin.log";
+
+    /// <summary>Per-subsystem logs are this + channel + ".log" (see <see cref="Log"/>).</summary>
+    private static string _channelPathPrefix = "kotorcoop-";
     private static SharedBlock* _block;
     private static SharedBlockView? _view;
     private static PhantomController? _controller;
@@ -34,9 +37,12 @@ internal static unsafe class PluginHost
     private static LootController? _loot;
     private static TravelController? _travel;
     private static PauseController? _pause;
+    private static CombatStateController? _combatState;
     private static PauseKeyController? _pauseKey;
     private static JournalController? _journal;
     private static MapMarkerController? _mapMarkers;
+    private static PortraitController? _portraits;
+    private static BarkController? _barks;
     private static MenuLoadController? _menuLoad;
     private static ConnectMenuController? _connectMenu;
     private static ChatInputController? _chatInput;
@@ -67,6 +73,7 @@ internal static unsafe class PluginHost
         {
             string directory = NativeMethods.GetModuleDirectory("dinput8.dll");
             _logPath = Path.Combine(directory, "kotorcoop-plugin.log");
+            _channelPathPrefix = Path.Combine(directory, "kotorcoop-");
 
             // Before any controller is constructed: several read their settings from coop.ini
             // in their field initialisers.
@@ -113,9 +120,12 @@ internal static unsafe class PluginHost
             _dialogueSpectate = new DialogueSpectateController(_view);
             _encounters = new EncounterController(_view);
             _pause = new PauseController(_view);
+            _combatState = new CombatStateController(_view);
             _pauseKey = new PauseKeyController();
             _journal = new JournalController(_view);
             _mapMarkers = new MapMarkerController(_view);
+            _portraits = new PortraitController(_view);
+            _barks = new BarkController(_view);
 
             // The minimap draw runs on the render path and has no other route to peer
             // positions, so it reads the block directly.
@@ -179,6 +189,20 @@ internal static unsafe class PluginHost
             else
             {
                 Log($"animation hook NOT installed: {animationDiagnostic}");
+            }
+
+            // An NPC's one-line bark never enters the dialogue system, so nothing else in the
+            // mod can see it. Opt-out because it patches a hot engine entry.
+            if (PluginConfig.ReadBool("bark_sync", true))
+            {
+                if (BarkHook.Install(out string barkDiagnostic))
+                {
+                    Log($"barks: {barkDiagnostic}");
+                }
+                else
+                {
+                    Log($"bark hook NOT installed: {barkDiagnostic}");
+                }
             }
 
             // Which dialogue reply the player picks is dispatched and gone between frames,
@@ -267,6 +291,19 @@ internal static unsafe class PluginHost
                 Log($"pause sanity patch NOT installed: {pausePatchDiagnostic}");
             }
 
+            // The HUD pause button toggles on server mask bit 0x02, which is ALSO the
+            // focus-loss reason FocusKeeper clears every 30 frames — so the button's "am I
+            // paused?" read is always false and it can pause but never unpause. Measured:
+            // PausesCleared went 0 -> 1 -> 2, one per click. See PauseButtonHook.
+            if (PauseButtonHook.Install(out string pauseButtonDiagnostic))
+            {
+                Log($"pause: {pauseButtonDiagnostic}");
+            }
+            else
+            {
+                Log($"pause button NOT hooked: {pauseButtonDiagnostic}");
+            }
+
             // Co-op death handling: suppress the control auto-swap and the game-over screen.
             // Both patches stay inert until the agent turns them on, so a plugin with no
             // session behaves exactly like stock KOTOR.
@@ -320,7 +357,7 @@ internal static unsafe class PluginHost
         Unsafe.InitBlockUnaligned(_block, 0, SharedBlock.TotalSize);
 
         _block->Magic = SharedBlock.MagicValue;
-        _block->Version = 25;
+        _block->Version = 31;
 
         // A guard dword after the version. Magic plus version alone was not selective
         // enough: a scan once matched something else at a lower address and the agent
@@ -439,6 +476,11 @@ internal static unsafe class PluginHost
                 return;
             }
 
+            if (MaterialisedEnemies.FlushOneBody())
+            {
+                return;
+            }
+
             _mapMarkers?.FlushOneBody();
             return;
         }
@@ -464,6 +506,11 @@ internal static unsafe class PluginHost
             }
 
             if (_items is { } items && items.FlushOneBody())
+            {
+                return;
+            }
+
+            if (MaterialisedEnemies.FlushOneBody())
             {
                 return;
             }
@@ -527,9 +574,12 @@ internal static unsafe class PluginHost
         _placeables?.OnFrame();
         _loot?.OnFrame();
         _pause?.OnFrame();
+        _combatState?.OnFrame();
         _pauseKey?.OnFrame();
         _journal?.OnFrame();
         _mapMarkers?.OnFrame();
+        _portraits?.OnFrame();
+        _barks?.OnFrame();
 
         // Read-only: publishes the owner's current conversation line for the other player to
         // spectate. Runs in-world only (a conversation needs a live server + GUI).
@@ -546,6 +596,7 @@ internal static unsafe class PluginHost
         _items?.Invalidate();
         _combat?.Invalidate();
         _enemyPresence?.Invalidate();
+        MaterialisedEnemies.Invalidate();
         _partyPresence?.Invalidate();
         _incomingDamage?.Invalidate();
         _peerDamage?.Invalidate();
@@ -557,11 +608,13 @@ internal static unsafe class PluginHost
         _loot?.Invalidate();
         _travel?.Invalidate();
         _pause?.Invalidate();
+        _combatState?.Invalidate();
         _journal?.Invalidate();
         _mapMarkers?.Invalidate();
         _connectMenu?.Invalidate();
         _death?.Invalidate();
         _encounters?.Invalidate();
+        _barks?.Invalidate();
     }
 
     private static void WorkerLoop()
@@ -710,15 +763,67 @@ internal static unsafe class PluginHost
         }
     }
 
+    /// <summary>
+    /// The subsystems that get their own log file.
+    ///
+    /// One 15 MB file with every subsystem interleaved is unreadable when you are chasing
+    /// one of them, which is the whole complaint. Rather than retro-fit a channel argument
+    /// onto ~200 call sites, this uses the prefix convention the messages ALREADY follow
+    /// ("dialogue: ...", "pause: ...", "combat: ..."), so a line files itself.
+    ///
+    /// The list is explicit on purpose: a free-form prefix would spawn a new file for every
+    /// typo and every message that merely happens to contain a colon.
+    /// </summary>
+    private static readonly string[] LogChannels =
+    [
+        "dialogue", "pause", "combat", "bark", "phantom", "item", "loot", "door",
+        "journal", "minimap", "death", "transition", "epoch", "party", "enemy",
+        "chat", "travel", "portrait", "encounter", "hook", "agent", "session",
+    ];
+
+    /// <summary>Prefixes that name the same subsystem as one of the channels above.</summary>
+    private static string CanonicalChannel(string prefix) => prefix switch
+    {
+        "death handling" => "death",
+        "phantoms" => "phantom",
+        "barks" => "bark",
+        "items" => "item",
+        "doors" => "door",
+        "frame hook" or "menu frame hook" or "console interp" => "hook",
+        _ => prefix,
+    };
+
+    /// <summary>
+    /// Files a line by its own prefix. Returns "general" for anything unprefixed — startup
+    /// banners, fatals, and the handful of messages that never adopted the convention.
+    /// </summary>
+    private static string ChannelFor(string message)
+    {
+        int colon = message.IndexOf(':');
+
+        // A timestamp or an address would otherwise look like a prefix; a real one is a
+        // short lowercase word or two, and never contains a digit.
+        if (colon <= 0 || colon > 20)
+        {
+            return "general";
+        }
+
+        string prefix = CanonicalChannel(message[..colon].ToLowerInvariant());
+
+        return Array.IndexOf(LogChannels, prefix) >= 0 ? prefix : "general";
+    }
+
     public static void Log(string message)
     {
         try
         {
-            DateTime now = DateTime.Now;
-            File.AppendAllText(
-                _logPath,
-                $"[{now:HH:mm:ss.fff}] {message}{Environment.NewLine}",
-                Encoding.ASCII);
+            string line = $"[{DateTime.Now:HH:mm:ss.fff}] {message}{Environment.NewLine}";
+
+            // The combined file stays the timeline: it is what you read when the question is
+            // "what happened around 14:48", and what verify.ps1 and every existing note
+            // grep. The split files are for reading ONE subsystem end to end.
+            File.AppendAllText(_logPath, line, Encoding.ASCII);
+            File.AppendAllText(_channelPathPrefix + ChannelFor(message) + ".log", line, Encoding.ASCII);
         }
         catch
         {

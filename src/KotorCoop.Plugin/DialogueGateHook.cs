@@ -125,11 +125,18 @@ internal static unsafe class DialogueGateHook
         int n = 0;
 
         s[n++] = 0x60;                                       // pushad
+        s[n++] = 0x51;                                       // push ecx — the CSWSObject the
+                                                             //  conversation is starting on,
+                                                             //  so the gate can tell WHICH
+                                                             //  NPC was clicked
 
-        nint callback = (nint)(delegate* unmanaged[Cdecl]<int>)&OnStartDialog;
+        nint callback = (nint)(delegate* unmanaged[Cdecl]<nint, int>)&OnStartDialog;
         s[n++] = 0xE8;                                       // call OnStartDialog
         *(int*)(s + n) = (int)(callback - (stub + n + 4));
         n += 4;
+
+        s[n++] = 0x83; s[n++] = 0xC4; s[n++] = 0x04;         // add esp, 4 — cdecl, we clean up
+                                                             //  (before the test: it writes flags)
 
         s[n++] = 0x85; s[n++] = 0xC0;                        // test eax, eax  (before popad —
                                                              //  popad overwrites eax)
@@ -170,10 +177,26 @@ internal static unsafe class DialogueGateHook
         return true;
     }
 
+    /// <summary>
+    /// The tag of the NPC the peer is talking to, as a pointer into the shared block, or
+    /// null. Set by the spectate controller every frame.
+    ///
+    /// This is what makes JOINING possible: a conversation the peer owns is not refused when
+    /// the player deliberately clicks THAT NPC — it is exactly the conversation they are
+    /// asking to see — while a click on anyone else is still refused, so the session keeps
+    /// one conversation at a time.
+    /// </summary>
+    public static volatile nint PeerPartnerTag;
+
+    /// <summary>CSWSObject + this = the object's tag (CExoString: char* @0, length @4).</summary>
+    private const int ObjTag = 0x18;
+
+    private const int MaxTagBytes = 64;
+
     /// <summary>Runs at every conversation start, before the engine's own body. Returns
     /// non-zero to refuse. No engine calls, no allocation — a click on an NPC lands here.</summary>
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
-    private static int OnStartDialog()
+    private static int OnStartDialog(nint target)
     {
         try
         {
@@ -186,7 +209,16 @@ internal static unsafe class DialogueGateHook
 
             if (BypassGrants > 0)
             {
-                BypassGrants--; // this is the follow-open we asked for
+                BypassGrants--; // an open this instance asked for itself
+                return 0;
+            }
+
+            // The player clicked the very NPC the peer is talking to: that is a request to
+            // JOIN, not a competing conversation. Let it through — the spectate controller
+            // sees the tags match and adopts it as a follow.
+            if (TargetIsPeersPartner(target))
+            {
+                _joinsAllowed++;
                 return 0;
             }
 
@@ -199,4 +231,52 @@ internal static unsafe class DialogueGateHook
             return 0;
         }
     }
+
+    private static int _joinsAllowed;
+
+    public static int JoinsAllowed => _joinsAllowed;
+
+    /// <summary>
+    /// Whether the object a conversation is starting on carries the same tag as the peer's
+    /// partner. Raw reads with hard bounds — this runs on the engine's thread from a click,
+    /// where a fault would be the game closing rather than an exception.
+    /// </summary>
+    private static bool TargetIsPeersPartner(nint target)
+    {
+        nint expected = PeerPartnerTag;
+        if (target is <= 0x10000 or >= 0x7FFF_0000 || expected == 0)
+        {
+            return false;
+        }
+
+        nint chars = *(nint*)(target + ObjTag);
+        int length = *(int*)(target + ObjTag + 4);
+
+        if (chars is <= 0x10000 or >= 0x7FFF_0000 || length is <= 0 or > MaxTagBytes)
+        {
+            return false;
+        }
+
+        // The stored length can include the terminating null (the CExoString trap).
+        byte* actual = (byte*)chars;
+        if (actual[length - 1] == 0)
+        {
+            length--;
+        }
+
+        byte* want = (byte*)expected;
+        for (int i = 0; i < length; i++)
+        {
+            byte w = want[i];
+            if (w == 0 || Lower(actual[i]) != Lower(w))
+            {
+                return false;
+            }
+        }
+
+        // Both must end together: "carth" must not match "carthx".
+        return want[length] == 0;
+    }
+
+    private static byte Lower(byte c) => c is >= (byte)'A' and <= (byte)'Z' ? (byte)(c + 32) : c;
 }

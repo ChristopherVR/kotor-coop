@@ -35,12 +35,6 @@ internal sealed unsafe class DialogueSpectateController(SharedBlockView block)
     /// <summary>The owner's reply serial we last replayed, so each pick is replayed once.</summary>
     private uint _appliedReplySerial;
 
-    /// <summary>Retry budget for opening the conversation: the NPC's twin may not exist for
-    /// a frame or two, and a full creature sweep is too expensive to repeat forever.</summary>
-    private int _openAttempts;
-
-    private long _nextOpenAttemptMs;
-
     /// <summary>While now is before this, a follow-open we requested is still in flight and
     /// the dialogue gate must let StartDialog through for it.</summary>
     private long _followOpenPendingUntilMs;
@@ -66,6 +60,14 @@ internal sealed unsafe class DialogueSpectateController(SharedBlockView block)
     /// walks the player into range first, exactly as it does for a click.</summary>
     private const long FollowOpenTimeoutMs = 15000;
 
+    /// <summary>When the local conversation first read ACTIVE without naming a partner.</summary>
+    private long _localUnidentifiedSinceMs;
+
+    /// <summary>How long a local conversation may stay unidentified before it counts as a
+    /// competitor. Same budget as a follow-open, for the same reason: the server walks the
+    /// player the whole way into range before the conversation exists.</summary>
+    private const long LocalOpenGraceMs = FollowOpenTimeoutMs;
+
     /// <summary>How long an OPEN conversation may stay empty before we back out, counted
     /// from when it opened. Generous on purpose: backing out of a conversation that was
     /// merely slow is worse than waiting, and the log now reports the real latency so this
@@ -74,6 +76,11 @@ internal sealed unsafe class DialogueSpectateController(SharedBlockView block)
 
     /// <summary>Pause after a failed follow before trying that conversation again.</summary>
     private const long ReopenCooldownMs = 4000;
+
+    /// <summary>Pause between attempts to end an empty conversation shell.</summary>
+    private const long UnstickRetryMs = 3000;
+
+    private long _nextUnstickMs;
 
     /// <summary>Pause between yield-closes of our own losing conversation.</summary>
     private const long YieldCloseRetryMs = 2000;
@@ -90,7 +97,6 @@ internal sealed unsafe class DialogueSpectateController(SharedBlockView block)
         if (_following)
         {
             DialogueReplyHook.Suppressed = false;
-            Odyssey.SetCanSendDialog(true);
         }
 
         _following = false;
@@ -103,9 +109,9 @@ internal sealed unsafe class DialogueSpectateController(SharedBlockView block)
         _heldLine[0] = 0;
         _lastLineHash = 0;
         _appliedReplySerial = 0;
-        _openAttempts = 0;
         _nextYieldCloseMs = 0;
         _yieldCloseAttempts = 0;
+        _localUnidentifiedSinceMs = 0;
         _followOpenPendingUntilMs = 0;
         DialogueGateHook.BypassGrants = 0;
         DialogueGateHook.PeerHoldsConversation = false;
@@ -171,6 +177,7 @@ internal sealed unsafe class DialogueSpectateController(SharedBlockView block)
             {
                 _hadDialogue = false;
                 _lastLiveMs = 0;
+                _localUnidentifiedSinceMs = 0;
                 _heldSpeaker[0] = 0;
                 _heldLine[0] = 0;
                 _lastLineHash = 0;
@@ -252,15 +259,17 @@ internal sealed unsafe class DialogueSpectateController(SharedBlockView block)
     /// <summary>Distinct gui+0xB4 writers already reported.</summary>
     private int _seenDialogStateWriters;
 
-    /// <summary>Shown when a click was refused and this instance IS being brought into the
-    /// conversation anyway — which is the normal case, and the one the old flat refusal
-    /// described as a dead end. "Another player is in a conversation" was all a player saw
-    /// when they clicked an NPC to listen in, so the feature read as broken even on the runs
-    /// where the follow then opened correctly.</summary>
-    private readonly byte[] _joiningNotice = "Joining the other player's conversation..."u8.ToArray();
-
-    /// <summary>Shown when the follow is genuinely not coming (retries exhausted).</summary>
-    private readonly byte[] _notice = "Another player is in a conversation"u8.ToArray();
+    /// <summary>
+    /// Shown when a click on someone ELSE was refused because a peer owns the conversation.
+    /// It names the way in rather than only the refusal: the player is not stuck, they are
+    /// one click away from the same conversation.
+    ///
+    /// ⚠ There is no "Joining..." notice any more. There used to be, because this instance
+    /// opened the peer's conversation by itself — which is exactly the forced join that was
+    /// reported from play, and the message was the only sign of it. Joining is a click now,
+    /// so the only thing worth saying is which NPC to click.
+    /// </summary>
+    private readonly byte[] _notice = "Another player is in a conversation - click the same character to join"u8.ToArray();
 
     /// <summary>Opens and drives this instance's copy of a peer's conversation.</summary>
     private void FollowRemote()
@@ -270,6 +279,26 @@ internal sealed unsafe class DialogueSpectateController(SharedBlockView block)
         // whose open arrives from the server several frames after we request it — so the
         // bypass is LEVEL-based: up from the follow request until the follow ends.
         DialogueGateHook.PeerHoldsConversation = block.RemoteDialogueActive;
+
+        // Which NPC the peer is talking to, so the gate can tell a JOIN (a click on that
+        // same character) from a competing conversation and refuse only the latter. A
+        // pointer into the shared block, which outlives every frame.
+        DialogueGateHook.PeerPartnerTag = block.RemoteDialogueActive
+            ? (nint)block.RemoteDialoguePartnerTag
+            : 0;
+
+        // ⚠ A LEVEL, RE-DECIDED EVERY FRAME — never a latch.
+        //
+        // It is cleared here and set true at exactly one place below, the point where a
+        // follow is genuinely live and on screen. It used to be set true while following and
+        // cleared on three named exits, and the exits did not cover the ways a follow really
+        // ends: our own conversation closing locally, or the peer staying in one while ours
+        // never reopened, both return early WITHOUT passing a clear. A stuck flag is not a
+        // cosmetic bug — DialogueReplyHook swallows CSWGuiDialog::SelectReply outright, so
+        // the player can never answer ANY conversation again, including their own, and the
+        // dialogue just sits there. Reported from play as the client's dialogue not showing
+        // its questions and then taking seconds to do anything.
+        DialogueReplyHook.Suppressed = false;
 
         // The grant is issued at the request and consumed by the open (see BypassGrants).
         // Expire it if the open never arrives, so a stale grant cannot let an unrelated
@@ -323,11 +352,7 @@ internal sealed unsafe class DialogueSpectateController(SharedBlockView block)
 
         if (Environment.TickCount64 < _blockedNoticeUntilMs)
         {
-            bool joining = _following
-                || Environment.TickCount64 < _followOpenPendingUntilMs
-                || _openAttempts < MaxOpenAttempts;
-
-            fixed (byte* p = joining ? _joiningNotice : _notice)
+            fixed (byte* p = _notice)
             {
                 Odyssey.PostTextLine(p, 8, 4, 0.5f);
             }
@@ -343,15 +368,9 @@ internal sealed unsafe class DialogueSpectateController(SharedBlockView block)
                 _reportedContentMs = false;
                 _appliedReplySerial = 0;
                 _followOpenPendingUntilMs = 0;
-                DialogueReplyHook.Suppressed = false;
-                Odyssey.SetCanSendDialog(true);
                 Odyssey.CloseDialogue();
             }
 
-            // The retry budget is PER CONVERSATION. Resetting it only after a successful
-            // follow left it spent forever once one open failed — measured live as the
-            // spectator silently ignoring every later conversation in the module.
-            _openAttempts = 0;
             return;
         }
 
@@ -372,15 +391,67 @@ internal sealed unsafe class DialogueSpectateController(SharedBlockView block)
                 // log replays from the start against line hashes, which is the same
                 // resynchronisation a cold follow performs, so an adopted conversation
                 // converges the same way.
+                // ⚠ AN UNIDENTIFIED LOCAL CONVERSATION IS NOT A COMPETITOR — IT IS USUALLY
+                // THIS PLAYER'S OWN CLICK-TO-JOIN, STILL IN FLIGHT. This is why click-to-join
+                // never worked, through three passes that went looking for an engine guard
+                // refusing it. Nothing refuses it. We annulled it ourselves, one frame after
+                // the click.
+                //
+                // gui+0xB4 goes up the INSTANT the player clicks, seconds before any
+                // conversation exists:
+                //   * CSWCCreature::ActionInitiateDialog (0x0060F620) calls
+                //     SetGlobalDialogState(1) at 0x0060F76D, straight after
+                //     SendPlayerToServerInput_Dialog — on the click itself;
+                //   * CSWSObject::AIActionDialogObject (0x0057A470) sets it again at
+                //     0x0057A70E, which is BEFORE its range test (0x0057A7AC / 0x0057A923),
+                //     and re-queues itself to the front for every tick the server spends
+                //     walking the player into range.
+                //
+                // For that whole window gui+0x170/0x174 are still OBJECT_INVALID, so
+                // ReadDialoguePartnerTag publishes an EMPTY tag; SameTag refuses an empty tag
+                // by design; and the yield-close below therefore ran on the FIRST FRAME after
+                // the click, with _nextYieldCloseMs starting at 0. CloseDialogue found no
+                // resolvable participant and went straight to CGuiInGame::CloseDialog, which
+                // clears the flag again at 0x00633423. DialogueGateHook never ran at all —
+                // which is exactly why gui+0xB4 kept measuring 0 on the joiner and why gate
+                // hunting found nothing refusing anything.
+                //
+                // So wait for the conversation to say who it is. The moment the tag resolves,
+                // the tests below run unchanged and a genuine competing conversation is still
+                // yielded at the first instant it is identifiable.
+                if (*block.LocalDialoguePartnerTag == 0)
+                {
+                    if (_localUnidentifiedSinceMs == 0)
+                    {
+                        _localUnidentifiedSinceMs = Environment.TickCount64;
+                    }
+
+                    if (Environment.TickCount64 - _localUnidentifiedSinceMs < LocalOpenGraceMs)
+                    {
+                        return; // still arriving — do not tear down our own request
+                    }
+                }
+                else
+                {
+                    _localUnidentifiedSinceMs = 0;
+                }
+
                 if (SameTag(block.LocalDialoguePartnerTag, block.RemoteDialoguePartnerTag))
                 {
+                    _localUnidentifiedSinceMs = 0;
                     LogFew("dialogue: the engine started the same conversation here; adopting it to follow");
                     _following = true;
                     _followingSinceMs = Environment.TickCount64;
                     _sawOpen = true;
                     _sawOpenAtMs = Environment.TickCount64;
                     _reportedContentMs = false;
-                    _appliedReplySerial = 0;
+
+                    // ⚠ Start from where the owner IS, not from the beginning of their log.
+                    // Replaying the whole history means firing every pick they have already
+                    // made, back to back, which walks this copy of the conversation through
+                    // several nodes in a second — seen as the conversation "skipping". The
+                    // follower joined partway through; partway through is where it starts.
+                    _appliedReplySerial = NewestRemotePickSerial();
                     _pendingPickSinceMs = 0;
                     _nextYieldCloseMs = 0;
                     _yieldCloseAttempts = 0;
@@ -424,56 +495,49 @@ internal sealed unsafe class DialogueSpectateController(SharedBlockView block)
             {
                 _nextYieldCloseMs = 0;
                 _yieldCloseAttempts = 0;
+                _localUnidentifiedSinceMs = 0;
             }
 
-            if (Environment.TickCount64 < _nextOpenAttemptMs || _openAttempts >= MaxOpenAttempts)
+            // ⚠ UNSTICK A STALE CONVERSATION SHELL, or the player can never join anything.
+            //
+            // Verified in the binary: CSWCMessage::SendPlayerToServerInput_Dialog 0x00677EA0
+            // reads [gui+0xB4] at 0x00677EB3 and, if it is set, JUMPS STRAIGHT TO ITS EXIT.
+            // That call is the tail of the ordinary click path too, so while that flag is up
+            // this instance cannot start a conversation with anybody — the request is dropped
+            // before the engine ever reaches StartDialog, which is why the dialogue gate's
+            // attempt counter never moved and the join looked refused when nothing had
+            // refused it.
+            //
+            // A client can be left holding a shell like that: its server half still has an
+            // unfinished conversation and re-sets the flag every frame, with the GUI's
+            // participants both reading OBJECT_INVALID (see Odyssey.CloseDialogue). Ending it
+            // is what makes the next click work. Rate-limited, because closing runs the
+            // conversation's end script.
+            if (Odyssey.IsConversationActive && !Odyssey.DialogueHasContent()
+                && Environment.TickCount64 >= _nextUnstickMs)
             {
+                _nextUnstickMs = Environment.TickCount64 + UnstickRetryMs;
+                LogFew("dialogue: an empty conversation shell is blocking new ones here; ending it "
+                    + "so a click can join the peer's");
+                Odyssey.CloseDialogue();
                 return;
             }
 
-            // ⚠ An empty tag is not an attempt. The token can go active a second or more
-            // before the owner's client resolves WHO they are talking to (the server walks
-            // them into range first), and counting those ticks against the budget burned all
-            // ten attempts before the tag ever arrived — measured live as the spectator
-            // never opening a conversation that then sat fully published in its block.
-            ReadOnlySpan<byte> tag = TagSpan(block.RemoteDialoguePartnerTag);
-            if (tag.IsEmpty)
-            {
-                return; // the owner has not published who yet
-            }
-
-            _openAttempts++;
-            _nextOpenAttemptMs = Environment.TickCount64 + OpenRetryMs;
-
-            // Open the bypass BEFORE requesting: the request queues a server action and the
-            // engine only reaches StartDialog frames later (it walks the player into range
-            // first), so a scoped bypass around this call would miss its own open. The
-            // level-based bypass at the top of this method stays up for as long as the
-            // follow is pending or live.
-            _followOpenPendingUntilMs = Environment.TickCount64 + FollowOpenTimeoutMs;
-            DialogueGateHook.BypassGrants = 1; // exactly this request, and nothing else
-
-            if (!Odyssey.StartDialogueWith(tag))
-            {
-                if (_openAttempts >= MaxOpenAttempts)
-                {
-                    LogFew("dialogue: could not open the peer's conversation locally; not following");
-                }
-
-                return;
-            }
-
-            _following = true;
-            _followingSinceMs = Environment.TickCount64;
-            _sawOpen = false;
-            _sawOpenAtMs = 0;
-            _reportedContentMs = false;
-
-            // Start from zero so the ENTIRE pick log replays: a spectator that joined after
-            // the owner had already picked catches up pick by pick, each on its own line.
-            _appliedReplySerial = 0;
-            _pendingPickSinceMs = 0;
-            LogFew("dialogue: following the peer's conversation");
+            // ⚠ NOTHING IS OPENED HERE, DELIBERATELY.
+            //
+            // This used to request the peer's conversation itself, so a player standing
+            // anywhere in the module was yanked into a dialogue they had not asked for —
+            // reported from play, and the wrong shape for a co-op game besides: walking away
+            // while your partner talks to a shopkeeper is a legitimate thing to want.
+            //
+            // Joining is now the player's own click. The gate hook lets a start through when
+            // the clicked NPC is the one the peer is talking to, the engine opens the same
+            // conversation locally, and the `_hadDialogue` branch above adopts it as a follow
+            // — the same adopt path that already handled two players clicking at once, which
+            // is why this is a deletion rather than a new mechanism. Anyone the player clicks
+            // who is NOT the peer's partner is still refused, so the session keeps exactly
+            // one conversation.
+            return;
         }
 
         // ⚠ "Requested" and "on screen" are different states, with different patience.
@@ -524,15 +588,25 @@ internal sealed unsafe class DialogueSpectateController(SharedBlockView block)
             _reportedContentMs = false;
             _followOpenPendingUntilMs = 0;
 
-            // ⚠ Back off, do NOT poison. This used to set _openAttempts to the cap, and the
-            // cap is only cleared when the peer's conversation ENDS — so one timeout meant
-            // the spectator ignored that conversation for as long as it ran, while the gate
-            // kept refusing the player's own clicks with "another player is in a
-            // conversation". A failure to follow is worth retrying a few times; it is not
-            // worth locking the player out of the whole conversation.
-            _nextOpenAttemptMs = Environment.TickCount64 + ReopenCooldownMs;
-            DialogueReplyHook.Suppressed = false;
-            Odyssey.SetCanSendDialog(true);
+            // ⚠ NO SetCanSendDialog HERE, IN EITHER DIRECTION — this used to say `true`, and
+            // that is not a restore, it is a fresh one-second gag on the voice-over.
+            //
+            // CClientExoAppInternal::SetCanSendDialog (0x005F3030, ret 4) writes the flag at
+            // +0x228 AND STAMPS +0x22C WITH THE CURRENT WORLD TIME (0x005F305F).
+            // GetCanSendDialog (0x005F3070, ret 0xC) then refuses while
+            // `now - [+0x22C] <= 1000` (0x005F316C jbe -> 0x005F32C8 `xor eax,eax; ret 0xC`),
+            // and on success back-dates the stamp to now-2000 so the gate holds itself open.
+            // The engine only ever re-stamps it during AREA LOAD (MainLoop 0x006031DB, inside
+            // the area_not_ready_to_display branch at 0x00602EFC).
+            //
+            // While that gate is shut, CSWSObject::IsDialogDelay (0x004CD2D0) returns 1 and
+            // CSWSObject::SendDialogEntry (0x004CD460) DEFERS the entry instead of calling
+            // CSWSDialog::SendDialogEntry — which is the only producer of
+            // CGuiInGame::HandleDialogSound (0x0062E1D0), the voice-over, and of the lipsync
+            // arming that follows it. Nothing sets the flag false any more, so there was
+            // nothing to restore and every call was pure cost. One of them fired on the
+            // "owner ended the conversation" edge, exactly as the follower was about to be
+            // pulled into the next one.
             Odyssey.CloseDialogue();
             return;
         }
@@ -542,17 +616,35 @@ internal sealed unsafe class DialogueSpectateController(SharedBlockView block)
             return; // still on its way; nothing to drive yet
         }
 
-        // While following: never allowed to choose, re-asserted every frame because whether
+        // While following: never allowed to CHOOSE. Re-asserted every frame because whether
         // the engine restores this flag on its own was never established.
         DialogueReplyHook.Suppressed = true;
-        Odyssey.SetCanSendDialog(false);
 
-        // Replay the owner's picks IN ORDER, each one once our own screen shows the line it
-        // was picked on. Entries auto-advance on both sides and a reply prompt WAITS, so the
-        // follower naturally arrives at each pick's line and stops there; matching on the
-        // line hash is what keeps a pick from firing on the wrong node. A pick whose line
-        // never appears (a VO skipped locally, a hash rarity) is applied anyway after a
-        // grace period — best effort beats stranding the conversation.
+        // ⚠ SetCanSendDialog(false) used to be asserted here too, as a second "cannot commit
+        // a reply" lever. It is not that lever, and it was the reason a followed conversation
+        // was silent and dead-faced. Traced in the binary: GetCanSendDialog 0x005EDC90 has
+        // exactly ONE caller, CSWSObject::IsDialogDelay 0x004CD2D0, which returns "delayed"
+        // when the flag is clear; CSWSObject::UpdateDialog 0x004CD580 then SKIPS the branch
+        // that reaches SendDialogEntry. And SendDialogEntry 0x005A4010 is what passes the
+        // node's sound resref (CSWSDialogBase+0x34) to CGuiInGame::HandleDialogSound
+        // 0x0062E1D0 — the voice-over — while UpdateDialogLipSync 0x0062FA30 drives the mouth
+        // ONLY while that stream is playing. So holding the flag down froze the follower's
+        // own conversation advance: no VO, therefore no lipsync, and lines that only moved
+        // when something else nudged them. The reply block above is the real and sufficient
+        // one — it refuses CSWGuiDialog::SelectReply itself.
+
+        // Replay the owner's picks IN ORDER, each one ONLY once our own screen shows the
+        // line it was picked on. Entries auto-advance on both sides and a reply prompt
+        // WAITS, so the follower naturally arrives at each pick's line and stops there;
+        // the line hash is what keeps a pick from firing on the wrong node.
+        //
+        // ⚠ A pick is NEVER applied blind any more. There used to be an 8-second grace after
+        // which an unmatched pick went in regardless — harmless while the panel offset was
+        // wrong and SelectDialogueReply always failed, and actively destructive once it was
+        // fixed: the follower answered on a timer, on whatever node it happened to be on,
+        // which is "the dialogue options being selected" and half of "skipping a convo".
+        // A pick that never finds its line is now simply not made; the player is looking at
+        // the same conversation and can see it, which beats guessing on their behalf.
         byte* next = null;
         for (int i = 0; i < SharedBlock.DialoguePickCapacity; i++)
         {
@@ -581,27 +673,39 @@ internal sealed unsafe class DialogueSpectateController(SharedBlockView block)
         uint pickLineHash = *(uint*)(next + 8);
 
         uint myLineHash = Hash(block.LocalDialogueLine, 2166136261u);
-        bool onThatLine = myLineHash == pickLineHash;
-        bool overdue = Environment.TickCount64 - _pendingPickSinceMs > PickGraceMs;
+        if (myLineHash != pickLineHash)
+        {
+            return; // not on that line here yet, and guessing is worse than waiting
+        }
 
-        if ((onThatLine || overdue) && Odyssey.SelectDialogueReply(slot))
+        if (Odyssey.SelectDialogueReply(slot))
         {
             _appliedReplySerial = pickSerial;
             _pendingPickSinceMs = 0;
-            LogFew($"dialogue: followed the owner's reply {slot}{(onThatLine ? "" : " (line unmatched, applied late)")}");
+            LogFew($"dialogue: followed the owner's reply {slot}");
         }
     }
 
-    /// <summary>How long a pick may wait for its line before it is applied regardless.</summary>
-    private const long PickGraceMs = 8000;
-
     private long _pendingPickSinceMs;
 
-    /// <summary>Attempts to open the peer's conversation before giving up. The NPC's client
-    /// twin can lag its creature by a frame or two, and each attempt is a full sweep.</summary>
-    private const int MaxOpenAttempts = 10;
+    /// <summary>The highest pick serial the owner has published, i.e. where their
+    /// conversation has already got to.</summary>
+    private uint NewestRemotePickSerial()
+    {
+        uint newest = 0;
+        for (int i = 0; i < SharedBlock.DialoguePickCapacity; i++)
+        {
+            uint serial = *(uint*)block.RemoteDialoguePick(i);
+            if (serial > newest)
+            {
+                newest = serial;
+            }
+        }
 
-    private const long OpenRetryMs = 250;
+        return newest;
+    }
+
+
 
     /// <summary>Copies a null-terminated block buffer into managed storage, bounded.</summary>
     private static void Remember(byte* source, byte[] destination)

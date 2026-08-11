@@ -54,7 +54,9 @@ internal struct SharedBlock
     /// this channel exists to remove. Growing costs a page of the game's own heap and
     /// nothing else; the agent finds the block by signature and reads fixed offsets.
     /// </summary>
-    public const int TotalSize = 0x2200;
+    /// <summary>Grown from 0x2300 for the widened bark rings (version 31): a bark has to
+    /// carry its TEXT and sound resref, not two pointers into the producing process.</summary>
+    public const int TotalSize = 0x3300;
 
     public const int ProfileVisibleSize = 0x250;
 
@@ -172,8 +174,11 @@ internal struct SharedBlock
     public const int OffsetEnemyPresenceCount = 0x1400;
 
     /// <summary>Agent -&gt; plugin. id u32 @0, position 3xf32 @4, facing f32 @0x10,
-    /// animation u32 @0x14, flags u32 @0x18 (bit 0 dead), one-shot serial u32 @0x1C,
-    /// one-shot animation u32 @0x20. Occupies 0x1410..0x1910.</summary>
+    /// animation u32 @0x14, flags u32 @0x18 (bit 0 dead, bit 1 plot), one-shot serial
+    /// u32 @0x1C, one-shot animation u32 @0x20, appearance.2da row u16 @0x24 and
+    /// repute.2da faction u16 @0x26 (version 26 — for materialising an enemy this
+    /// instance has no copy of; 0 appearance = unknown, do not materialise).
+    /// Occupies 0x1410..0x1910.</summary>
     public const int OffsetEnemyPresenceSlots = 0x1410;
 
     public const int EnemyPresenceStride = 0x28;
@@ -355,6 +360,58 @@ internal struct SharedBlock
     /// </summary>
     public const int OffsetDamageDealtEnabled = 0x2118;
 
+    // ---- NPC barks (version 27) --------------------------------------------------
+    //
+    // The one-liners an NPC throws into a bubble without ever opening the dialogue system
+    // (the utility droid's beep). They reach no other channel, so one player got a line and
+    // everybody else got silence. Captured by BarkHook, replayed by BarkController.
+    //
+    // Both directions are a small ring of (speaker, three verbatim engine arguments), with
+    // the SERIAL WRITTEN LAST per entry so a half-written slot is never acted on — the same
+    // discipline the enemy and damage regions use.
+
+    /// <summary>
+    /// Plugin -&gt; agent. One captured bark per slot:
+    ///   +0x00 speaker (SERVER object id, u32)
+    ///   +0x04 flags   (u32, the engine's ignore-range argument)
+    ///   +0x08 textLen (u32)
+    ///   +0x10 resref  (16 raw bytes — a CResRef is char[16], not a string)
+    ///   +0x20 text    (up to <see cref="BarkTextMax"/> bytes, engine encoding, no NUL)
+    ///   +0xFC serial  (u32) — LAST DWORD OF THE SLOT, so "serial written last" still holds
+    /// Occupies 0x2300..0x2B00 (8 x 0x100).
+    ///
+    /// ⚠ The old 0x14 slot carried four opaque dwords, two of which were POINTERS into the
+    /// producing process. That is what killed the engine on replay; the contents have to
+    /// travel, and they do not fit in 0x14. See docs/research/bark-replay.md.
+    /// The old rings at 0x2120..0x2260 are left dead rather than reused, so a stale agent
+    /// reading the previous layout finds zeros instead of half a record.
+    /// </summary>
+    public const int OffsetLocalBarkSlots = 0x2300;
+
+    /// <summary>Agent -&gt; plugin. Same shape: barks a peer produced, for this instance to
+    /// replay. Occupies 0x2B00..0x3300.</summary>
+    public const int OffsetRemoteBarkSlots = 0x2B00;
+
+    public const int BarkStride = 0x100;
+
+    /// <summary>Bytes of bark text carried per slot. Matches <c>BarkHook.TextMax</c>.</summary>
+    public const int BarkTextMax = 200;
+
+    /// <summary>A CResRef is a fixed char[16].</summary>
+    public const int BarkResRefBytes = 16;
+
+    // Field offsets within a bark slot.
+    public const int BarkSpeakerOffset = 0x00;
+    public const int BarkFlagsOffset = 0x04;
+    public const int BarkTextLengthOffset = 0x08;
+    public const int BarkResRefOffset = 0x10;
+    public const int BarkTextOffset = 0x20;
+    public const int BarkSerialOffset = 0xFC;
+
+    /// <summary>Barks carried per direction. They are occasional and the pump drains them
+    /// several times a second; matches <c>BarkHook.Capacity</c>.</summary>
+    public const int BarkCapacity = 8;
+
     // ---- why forwarded damage cannot finish a player off (region 0x1F60..0x1FA0) ---
     //
     // A player worn down in someone else's game should go down in their own. When they do
@@ -437,7 +494,44 @@ internal struct SharedBlock
     /// (<see cref="EncounterController"/>'s status codes). 0 = nothing refused yet.</summary>
     public const int OffsetEncounterStatus = 0x1E4C;
 
-    // 0x1E50..0x1E60 is spare inside this region.
+    /// <summary>
+    /// Agent -&gt; plugin (version 29). Nonzero while a REMOTE peer standing in this player's
+    /// module has its engine genuinely in combat.
+    ///
+    /// ⚠ Remote peers only, never this player's own state. The plugin uses this as a claim
+    /// to impose combat locally and then release it again, so if it included the local
+    /// player the release would cut short a fight this engine is genuinely running: the
+    /// host, fighting alone, would publish its own combat, hold itself in it, and then force
+    /// itself out the moment the flag dropped.
+    ///
+    /// This exists because a client's engine cannot work it out for itself and never will:
+    /// <see cref="Odyssey.MarkAsMirroredEnemy"/> clears the attack-permitted bit on every
+    /// mirrored enemy, on purpose, so the client's copies never swing and its combat state
+    /// never rises. Measured live: host creature +0x4E0 = 1, client = 0, same room, same
+    /// second. Combat state gates round timing, the HUD, combat music and auto-pause, so
+    /// leaving it false on the client is not a cosmetic gap.
+    /// </summary>
+    public const int OffsetSessionInCombat = 0x1E50;
+
+    /// <summary>
+    /// Plugin -&gt; agent (version 30). Bumped each time this player releases a pause that was
+    /// MIRRORED from a peer, so the agent can tell everyone the shared pause is over.
+    ///
+    /// A serial rather than a flag: the release is an edge, and a flag would either be missed
+    /// between polls or need a clear-after-read handshake across two processes.
+    /// </summary>
+    public const int OffsetLocalPauseReleaseSerial = 0x1E54;
+
+    /// <summary>
+    /// Agent -&gt; plugin (version 30). Bumped when a PEER releases the shared pause, so this
+    /// instance drops its own pause even though it is the one that started it.
+    ///
+    /// This is what makes either player able to end a shared pause. Without it only the
+    /// originator could, and the other player's pause key unfroze their game alone.
+    /// </summary>
+    public const int OffsetRemotePauseReleaseSerial = 0x1E58;
+
+    // 0x1E5C..0x1E60 is spare inside this region.
 
     // ---- door replication (version 4) -------------------------------------------
     //

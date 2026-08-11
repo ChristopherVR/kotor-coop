@@ -51,7 +51,81 @@ public sealed class KotorGameBridge : IGameBridge
     /// </summary>
     private const int OffCurrentHitPoints = 0xDC;
 
+    /// <summary>
+    /// The STORED max hit points, u16 — and it is <b>zero on every player character</b>,
+    /// which is why the readout said "12 (maximum unknown)" for days.
+    ///
+    /// <c>CSWSObject::GetMaxHitPoints</c> (0x004D01A0) is a one-line <c>mov ax,[ecx+0xE0]</c>,
+    /// so this field is right for doors, placeables and ordinary creatures. But
+    /// <c>CSWSCreature::GetMaxHitPoints</c> (0x004ED310) overrides it and branches on
+    /// <c>stats+0x6C</c> (<c>is_pc</c>): for a PC the engine never stores a total at all, it
+    /// re-adds one up from the per-level records every time it is asked. Reading the field
+    /// on a PC therefore reads a slot the engine simply never writes.
+    /// See <see cref="TryReadMaxHitPoints"/>, which reproduces the branch.
+    /// </summary>
     private const int OffMaxHitPoints = 0xE0;
+
+    // CSWSCreatureStats — the pieces CSWSCreature::GetMaxHitPoints sums for a PC.
+    // (StatsIsPc, the flag that selects the accumulate path, is declared with the other
+    // stats offsets below.)
+    private const int StatsLevelListData = 0x28;    // CExoArrayList<CSWLevelStats*>: T* data
+    private const int StatsLevelListCount = 0x2C;   // ...then the count, then the capacity
+    private const int StatsConModifier = 0xEE;      // byte, added once PER LEVEL (0x004ED372)
+    private const int LevelStatsHitPoints = 0x2B;   // byte, the hit points rolled at that level
+
+    /// <summary>A sanity bound on the level list, so a torn read cannot make this walk far.</summary>
+    private const int MaxCharacterLevels = 40;
+
+    /// <summary>
+    /// Max hit points, following the same branch the engine follows.
+    ///
+    /// For a PC: sum <c>(level.hitPoints + conModifier)</c> over the character's levels,
+    /// which is the loop at 0x004ED360..0x004ED3CA. Verified live against both instances —
+    /// a level-1 PC with a rolled 10 and a +2 constitution modifier came out at 12, matching
+    /// a full-health reading exactly.
+    ///
+    /// For anything else: the stored field, which is what the engine returns.
+    ///
+    /// Returns 0 when nothing can be read, which every caller already treats as "unknown".
+    /// </summary>
+    private int TryReadMaxHitPoints(nint creature)
+    {
+        bool isPc = _memory.TryRead(creature + OffCreatureStats, out uint stats)
+            && stats != 0
+            && _memory.TryReadInt32((nint)stats + StatsIsPc, out int pcFlag)
+            && pcFlag == 1;
+
+        if (!isPc)
+        {
+            return _memory.TryRead(creature + OffMaxHitPoints, out ushort stored) ? stored : 0;
+        }
+
+        if (!_memory.TryRead((nint)stats + StatsLevelListData, out uint levels)
+            || !_memory.TryReadInt32((nint)stats + StatsLevelListCount, out int levelCount)
+            || levels == 0
+            || levelCount <= 0
+            || levelCount > MaxCharacterLevels)
+        {
+            return 0;
+        }
+
+        int conModifier = _memory.TryRead((nint)stats + StatsConModifier, out byte con) ? con : 0;
+        int total = 0;
+
+        for (int i = 0; i < levelCount; i++)
+        {
+            if (!_memory.TryRead((nint)levels + (i * 4), out uint level)
+                || level == 0
+                || !_memory.TryRead((nint)level + LevelStatsHitPoints, out byte rolled))
+            {
+                return 0;
+            }
+
+            total += rolled + conModifier;
+        }
+
+        return total;
+    }
 
     /// <summary>Damage floors at 1 instead of killing. Used to make a peer's enemies non-lethal.</summary>
     private const int OffMinOneHitPoint = 0x200;
@@ -166,6 +240,24 @@ public sealed class KotorGameBridge : IGameBridge
     private const int BlockDamageOwedCount = 0x2010;
     private const int BlockDamageDealtEnabled = 0x2118;
 
+    // NPC barks (block v27): a small ring each way, speaker + three verbatim engine
+    // arguments + a serial written last per entry.
+    // Bark rings (block version 31). ⚠ Mirror of SharedBlock — a slot now carries the bark's
+    // TEXT and sound resref, because the engine's own arguments include two pointers that are
+    // meaningless in another process (docs/research/bark-replay.md).
+    private const int BlockLocalBarkSlots = 0x2300;
+    private const int BlockRemoteBarkSlots = 0x2B00;
+    private const int BlockBarkStride = 0x100;
+    private const int BlockBarkCapacity = 8;
+    private const int BlockBarkTextMax = 200;
+    private const int BlockBarkResRefBytes = 16;
+    private const int BlockBarkSpeaker = 0x00;
+    private const int BlockBarkFlags = 0x04;
+    private const int BlockBarkTextLength = 0x08;
+    private const int BlockBarkResRef = 0x10;
+    private const int BlockBarkText = 0x20;
+    private const int BlockBarkSerial = 0xFC;
+
     private const int BlockPhantomHitSlots = 0x1CD0;
     private const int BlockPhantomHitStride = 0x10;
     private const int BlockIncomingDamage = 0x1D50;
@@ -192,6 +284,91 @@ public sealed class KotorGameBridge : IGameBridge
 
     /// <summary>Hands the plugin the running total this player owes, for it to apply as a
     /// real damage effect on the game's thread.</summary>
+    /// <summary>
+    /// Reads the barks the plugin captured. Returns every slot; the caller decides what is
+    /// new by serial, which is written last per entry so a half-written slot reads as its
+    /// previous (already-published) self rather than as a mixture.
+    /// </summary>
+    public List<BarkRecord> ReadBarks()
+    {
+        List<BarkRecord> barks = [];
+        if (_pluginBlock == 0)
+        {
+            return barks;
+        }
+
+        for (int i = 0; i < BlockBarkCapacity; i++)
+        {
+            nint slot = _pluginBlock + BlockLocalBarkSlots + (i * BlockBarkStride);
+
+            if (!_memory.TryReadUInt32(slot + BlockBarkSerial, out uint serial) || serial == 0)
+            {
+                continue;
+            }
+
+            _memory.TryReadUInt32(slot + BlockBarkSpeaker, out uint speaker);
+            _memory.TryReadUInt32(slot + BlockBarkFlags, out uint flags);
+            _memory.TryReadUInt32(slot + BlockBarkTextLength, out uint textLength);
+
+            if (speaker == 0)
+            {
+                continue;
+            }
+
+            int length = (int)Math.Min(textLength, BlockBarkTextMax);
+            byte[] text = new byte[length];
+            if (length > 0 && !_memory.TryRead(slot + BlockBarkText, text.AsSpan()))
+            {
+                continue;
+            }
+
+            byte[] resRef = new byte[BlockBarkResRefBytes];
+            if (!_memory.TryRead(slot + BlockBarkResRef, resRef.AsSpan()))
+            {
+                continue;
+            }
+
+            barks.Add(new BarkRecord(speaker, text, resRef, flags, serial));
+        }
+
+        return barks;
+    }
+
+    /// <summary>Hands a peer's bark to the plugin to replay. Round-robins the ring so a burst
+    /// of barks does not overwrite one before the plugin's pass has seen it.</summary>
+    public bool TryWriteBark(
+        uint speaker, ReadOnlySpan<byte> text, ReadOnlySpan<byte> soundResRef, uint flags, uint serial)
+    {
+        if (_pluginBlock == 0)
+        {
+            return false;
+        }
+
+        nint slot = _pluginBlock + BlockRemoteBarkSlots + (_barkWriteSlot * BlockBarkStride);
+        _barkWriteSlot = (_barkWriteSlot + 1) % BlockBarkCapacity;
+
+        int length = Math.Min(text.Length, BlockBarkTextMax);
+
+        byte[] resRef = new byte[BlockBarkResRefBytes];
+        soundResRef[..Math.Min(soundResRef.Length, BlockBarkResRefBytes)].CopyTo(resRef);
+
+        bool ok = _memory.TryWrite(slot + BlockBarkSpeaker, speaker);
+        ok &= _memory.TryWrite(slot + BlockBarkFlags, flags);
+        ok &= _memory.TryWrite(slot + BlockBarkTextLength, (uint)length);
+        ok &= _memory.TryWrite(slot + BlockBarkResRef, (ReadOnlySpan<byte>)resRef);
+
+        if (length > 0)
+        {
+            ok &= _memory.TryWrite(slot + BlockBarkText, text[..length]);
+        }
+
+        // Serial last, so the plugin never replays a half-written entry.
+        ok &= _memory.TryWrite(slot + BlockBarkSerial, serial);
+        return ok;
+    }
+
+    private int _barkWriteSlot;
+
     public bool TryWriteIncomingDamage(uint cumulative, uint attacker)
     {
         if (_pluginBlock == 0)
@@ -219,6 +396,15 @@ public sealed class KotorGameBridge : IGameBridge
     // Shared pause + journal apply, mirroring SharedBlock version 7.
     private const int BlockRemotePauseDesired = 0x96C;
     private const int BlockRemotePauseApplied = 0x970;
+
+    /// <summary>Agent -&gt; plugin: a remote peer in this module is in combat (version 29).</summary>
+    private const int BlockSessionInCombat = 0x1E50;
+
+    /// <summary>Plugin -&gt; agent: bumped when this player released a mirrored pause (v30).</summary>
+    private const int BlockLocalPauseReleaseSerial = 0x1E54;
+
+    /// <summary>Agent -&gt; plugin: bumped when a peer released the shared pause (v30).</summary>
+    private const int BlockRemotePauseReleaseSerial = 0x1E58;
     private const int BlockJournalSerial = 0x974;
     private const int BlockJournalTag = 0x978;
     private const int BlockJournalState = 0x998;
@@ -282,7 +468,7 @@ public sealed class KotorGameBridge : IGameBridge
     /// the wrong offsets. ⚠ Bump this WITH PluginHost's `_block->Version` — they are one
     /// number in two files, and a half-bump reads as "plugin shared block not found", which
     /// looks like a broken install rather than a version skew.</summary>
-    public const string PluginSignature = "4B 4F 43 4F 4F 50 30 31 19 00 00 00 01 EE FF C0";
+    public const string PluginSignature = "4B 4F 43 4F 4F 50 30 31 1F 00 00 00 01 EE FF C0";
 
     /// <summary>Agent's view of which coop item id occupies each plugin item slot.</summary>
     private readonly uint[] _itemSlotIds = new uint[BlockItemCapacity];
@@ -672,7 +858,7 @@ public sealed class KotorGameBridge : IGameBridge
         // threshold is -10), and an unsigned read would turn -3 into 65533 — reading as
         // "alive and thriving" to every peer at the exact moment it matters most.
         int health = _memory.TryRead(creature + OffCurrentHitPoints, out short currentHp) ? currentHp : 0;
-        int maxHealth = _memory.TryRead(creature + OffMaxHitPoints, out ushort maxHp) ? maxHp : 0;
+        int maxHealth = TryReadMaxHitPoints(creature);
         uint animation = ReadPlayedAnimation(creature);
 
         // The appearance.2da row travels with the avatar so the peer's phantom can wear
@@ -739,6 +925,13 @@ public sealed class KotorGameBridge : IGameBridge
     /// <summary>Latches "this player paused the game themselves" across the window where
     /// a peer's mirrored pause shares the same engine bit.</summary>
     private bool _ownPauseLatched;
+
+    /// <summary>How long a pause release is announced on the wire. Long enough that a lost
+    /// datagram cannot swallow it, short enough that it cannot end a LATER pause.</summary>
+    private static readonly TimeSpan PauseReleaseAnnounceWindow = TimeSpan.FromMilliseconds(750);
+
+    private uint _lastPauseReleaseSerial;
+    private DateTime _pauseReleaseAnnouncedUntil = DateTime.MinValue;
 
     /// <summary>
     /// The presence bits that travel with the avatar: talking, paused, fighting.
@@ -810,6 +1003,25 @@ public sealed class KotorGameBridge : IGameBridge
         if (IsLocalPlayerDowned)
         {
             flags |= PlayerState.FlagDowned;
+        }
+
+        // A release of a MIRRORED pause, announced for a short window so a lost datagram
+        // does not lose it. The plugin counts them; the transition to a new count starts the
+        // window. See PlayerState.FlagPauseReleased.
+        uint releaseSerial = LocalPauseReleaseSerial;
+        if (releaseSerial != _lastPauseReleaseSerial)
+        {
+            _lastPauseReleaseSerial = releaseSerial;
+
+            // Zero is "never released", not a release: a fresh plugin publishes it.
+            _pauseReleaseAnnouncedUntil = releaseSerial == 0
+                ? DateTime.MinValue
+                : DateTime.UtcNow + PauseReleaseAnnounceWindow;
+        }
+
+        if (DateTime.UtcNow < _pauseReleaseAnnouncedUntil)
+        {
+            flags |= PlayerState.FlagPauseReleased;
         }
 
         return flags;
@@ -2137,6 +2349,36 @@ public sealed class KotorGameBridge : IGameBridge
         _pluginBlock != 0
         && _memory.TryWrite(_pluginBlock + BlockRemotePauseDesired, desired ? 1u : 0u);
 
+    // ---- shared combat state ----------------------------------------------------
+
+    /// <summary>Combat replication needs the plugin: only an in-process
+    /// CSWSCreature::SetCombatState call moves the state the engine actually reads.</summary>
+    public bool SupportsCombatSync => _pluginBlock != 0;
+
+    /// <summary>
+    /// Tells the plugin whether a REMOTE peer standing in this player's module is fighting.
+    /// Never includes the local player — see <c>SharedBlock.OffsetSessionInCombat</c>.
+    /// </summary>
+    public bool TrySetSessionInCombat(bool fighting) =>
+        _pluginBlock != 0
+        && _memory.TryWrite(_pluginBlock + BlockSessionInCombat, fighting ? 1u : 0u);
+
+    /// <summary>
+    /// The plugin's count of times this player has released a pause mirrored from a peer.
+    /// A CHANGE in this value is the release; the value itself means nothing.
+    /// </summary>
+    public uint LocalPauseReleaseSerial =>
+        _pluginBlock != 0
+        && _memory.TryReadUInt32(_pluginBlock + BlockLocalPauseReleaseSerial, out uint serial)
+            ? serial
+            : 0;
+
+    /// <summary>Tells the plugin a peer has ended the shared pause, so this instance drops
+    /// the pause it started.</summary>
+    public bool TrySignalRemotePauseRelease(uint serial) =>
+        _pluginBlock != 0
+        && _memory.TryWrite(_pluginBlock + BlockRemotePauseReleaseSerial, serial);
+
     // ---- in-game Connect flow --------------------------------------------------
 
     private uint _lastConnectSerial;
@@ -2739,7 +2981,7 @@ public sealed class KotorGameBridge : IGameBridge
             // read would report it as 65531 hp and alive — the death would never
             // replicate.
             _memory.TryRead(creature.Address + OffCurrentHitPoints, out short current);
-            _memory.TryRead(creature.Address + OffMaxHitPoints, out ushort max);
+            ushort max = (ushort)Math.Clamp(TryReadMaxHitPoints(creature.Address), 0, ushort.MaxValue);
 
             // Presence: where this engine has the body and what it is playing, so the
             // mirroring side can drive its copy there. Best-effort — a failed read leaves
@@ -2753,6 +2995,21 @@ public sealed class KotorGameBridge : IGameBridge
             }
 
             _memory.TryReadUInt32(creature.Address + OffAnimation, out uint animation);
+
+            // What the creature looks like and whose side it is on — enough for a mirror
+            // that has no copy at all to build a stand-in (no blueprint name survives on a
+            // live creature; see Packets.EnemyState). Best-effort: zero appearance simply
+            // means the mirror will not materialise this one.
+            _memory.TryRead(creature.Address + OffAppearanceType, out ushort appearance);
+
+            ushort faction = 0;
+            if (_memory.TryReadUInt32(creature.Address + OffCreatureStats, out uint statsPtr)
+                && statsPtr != 0
+                && _memory.TryReadUInt32((nint)statsPtr + StatsFaction, out uint factionId)
+                && factionId <= ushort.MaxValue)
+            {
+                faction = (ushort)factionId;
+            }
 
             (uint oneShotSerial, ushort oneShotAnim) =
                 oneShots is not null && oneShots.TryGetValue(creature.ObjectId, out var shot)
@@ -2786,7 +3043,8 @@ public sealed class KotorGameBridge : IGameBridge
             candidates.Add((
                 new EnemyState(
                     creature.ObjectId, (ushort)Math.Max((int)current, 0), max, current <= 0,
-                    position, facing, animation, oneShotSerial, oneShotAnim, plot),
+                    position, facing, animation, oneShotSerial, oneShotAnim, plot,
+                    appearance, faction),
                 fighting,
                 nearestSquared));
         }
@@ -3009,6 +3267,8 @@ public sealed class KotorGameBridge : IGameBridge
             ok &= _memory.TryWrite(presence + 0x18, flags);
             ok &= _memory.TryWrite(presence + 0x1C, enemy.OneShotSerial);
             ok &= _memory.TryWrite(presence + 0x20, (uint)enemy.OneShotAnimation);
+            ok &= _memory.TryWrite(presence + 0x24, enemy.Appearance);
+            ok &= _memory.TryWrite(presence + 0x26, enemy.Faction);
             ok &= _memory.TryWrite(presence + 0x00, enemy.ObjectId);
         }
 

@@ -326,7 +326,11 @@ internal static unsafe class PhantomHitHook
 
             if (slot < 0)
             {
-                _dealt.Add(targetId, (uint)total);
+                // The ledger travels to the enemy OWNER, so it must be keyed in the
+                // owner's id space: a hit on a materialised stand-in is recorded under
+                // the owner id the body stands in for, not its local spawn id.
+                uint ownerId = MaterialisedEnemies.ToOwner(targetId);
+                _dealt.Add(ownerId != 0 ? ownerId : targetId, (uint)total);
                 return;
             }
 

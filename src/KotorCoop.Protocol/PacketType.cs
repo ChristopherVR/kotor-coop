@@ -165,4 +165,12 @@ public enum PacketType : byte
     /// double-applies a repeated one.
     /// </summary>
     EnemyDamage = 33,
+
+    /// <summary>
+    /// A one-line NPC bark (any -> all, relayed by the host).
+    ///
+    /// Barks never enter the dialogue system, so no other channel carries them: one player
+    /// clicked the utility droid and heard it beep while everybody else got silence.
+    /// </summary>
+    Bark = 34,
 }

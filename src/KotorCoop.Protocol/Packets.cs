@@ -126,10 +126,21 @@ public sealed record ItemSnapshotPacket(uint Version, IReadOnlyList<GroundItem> 
 /// alone: no min-1-hp pin, no health mirror, no death, and a client's damage report for it
 /// is ignored. Its health is the module's business, not the session's.
 /// </remarks>
+/// <remarks>
+/// <paramref name="Appearance"/> (the appearance.2da row) and <paramref name="Faction"/>
+/// (the repute.2da row) exist for MATERIALISATION: an enemy the owner's engine spawned
+/// (an encounter, a script) has no copy on the mirror at all — `ResolveServerObject`
+/// returns nothing — and no blueprint name survives on a live creature to send. What does
+/// survive is what the creature looks like and whose side it is on, which is enough for
+/// the mirror to build a stand-in from the co-op blueprint the same way phantoms are
+/// built, and everything else (position, health, swings, death) already rides the
+/// channel. Zero appearance means "unknown — do not materialise".
+/// </remarks>
 public sealed record EnemyState(
     uint ObjectId, ushort CurrentHealth, ushort MaxHealth, bool Dead,
     Vector3f Position = default, float Facing = 0f, uint Animation = 0,
-    uint OneShotSerial = 0, ushort OneShotAnimation = 0, bool Plot = false);
+    uint OneShotSerial = 0, ushort OneShotAnimation = 0, bool Plot = false,
+    ushort Appearance = 0, ushort Faction = 0);
 
 /// <summary>
 /// The host's view of every enemy. Absolute health, never damage deltas: the engine
@@ -227,6 +238,36 @@ public sealed record PhantomDamagePacket(
 /// </summary>
 public sealed record EncounterTriggerPacket(
     uint PeerId, string Module, IReadOnlyList<uint> EncounterIds);
+
+/// <summary>
+/// One NPC bark: the line an NPC throws into a bubble without opening a conversation.
+///
+/// <paramref name="Speaker"/> is the engine SERVER object id, which names the same creature
+/// in every instance for anything the module loaded (Handoff 4.5).
+///
+/// ⚠ <paramref name="Text"/> and <paramref name="SoundResRef"/> are the RESOLVED CONTENTS of
+/// the engine's arguments, not the arguments. <c>BarkString</c> takes a <c>CExoString*</c>
+/// and a <c>CResRef*</c>, and an earlier version of this packet carried those POINTERS
+/// verbatim on the principle that a value passed through untouched needs no interpretation.
+/// In the receiving process they are wild addresses, and the engine dereferences both — that
+/// is what killed two instances. See docs/research/bark-replay.md.
+///
+/// <paramref name="Module"/> rides along for the usual reason: object ids reset on a
+/// transition, so a bark must never be replayed by someone standing somewhere else.
+/// <paramref name="Serial"/> makes a repeat of the same line visible as a new one.
+/// </summary>
+public sealed record BarkPacket(
+    uint PeerId, string Module, uint Speaker, byte[] Text, byte[] SoundResRef,
+    uint Flags, uint Serial)
+{
+    /// <summary>Bytes of bark text carried. Nothing in the binary bounds a bark's length;
+    /// this is anchored to the dialogue channel's own line limit.</summary>
+    public const int MaxTextBytes = 200;
+
+    /// <summary>A <c>CResRef</c> is a fixed <c>char[16]</c> — not a NUL-terminated string,
+    /// and an empty one is an ordinary case (a line with no voice-over).</summary>
+    public const int ResRefBytes = 16;
+}
 
 /// <summary>host -> all: the authoritative conversation token (see <see cref="DialogueState"/>).</summary>
 public sealed record DialogueSnapshotPacket(long ServerTimeMs, DialogueState State);

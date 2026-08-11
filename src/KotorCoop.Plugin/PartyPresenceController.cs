@@ -45,9 +45,11 @@ internal sealed unsafe class PartyPresenceController(SharedBlockView block)
     private readonly uint[] _appliedOneShot = new uint[SharedBlock.PartyPresenceCapacity];
     private readonly bool[] _oneShotPrimed = new bool[SharedBlock.PartyPresenceCapacity];
 
+    // mirror_smooth_ms, not the phantom's smooth_ms: companions arrive on the agent's
+    // combat pump (~150 ms apart), not the 30 Hz tick — see EnemyPresenceController.
     private readonly MotionSmoother _smoother = new(
         SharedBlock.PartyPresenceCapacity,
-        Math.Clamp(PluginConfig.ReadFloat("smooth_ms", 60f), 0f, 400f) / 1000f);
+        Math.Clamp(PluginConfig.ReadFloat("mirror_smooth_ms", 150f), 0f, 600f) / 1000f);
 
     private int _drivenLogged = -1;
 

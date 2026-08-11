@@ -104,8 +104,8 @@ enemy health/death mirroring, enemy and companion presence (positions, health an
 bodies identical across both games), door unlock propagation, map pins, and going down and
 being picked up by the other player. The mod-compatibility handshake is unit-tested (279
 tests); it has been observed agreeing on two identical installs but its mismatch paths have
-not had a live pass. See `Handoff.md` and `docs/research/` for the precise per-feature
-status and the reverse-engineering behind each.
+not had a live pass. See `docs/research/` for the precise per-feature status and the
+reverse-engineering behind each.
 
 ## Requirements
 
@@ -191,10 +191,11 @@ dotnet run --project src/KotorCoop.MockGame -- --join 127.0.0.1 --name Malak
   damage merged in host-side); a phantom belongs to its player and cannot be killed
   locally, only knocked about.
 
-`Handoff.md` is the deep documentation: verified engine addresses and structures,
+`docs/research/` is the deep documentation: verified engine addresses and structures,
 traps (each of which cost real time), per-feature status, and the research trail.
-`docs/re/` holds the underlying reverse-engineering notes; `tools/` the helper scripts
-and the symbol-database queries everything was derived from.
+Start with `docs/research/shared-state-audit.md` for what actually replicates today and
+what only looks like it does. `tools/` holds the helper scripts and the symbol-database
+queries everything was derived from.
 
 ## Layout
 

@@ -24,6 +24,10 @@ internal sealed class PauseController(SharedBlockView block)
     /// <summary>The local player unpaused while a peer's pause was mirrored; honour it.</summary>
     private bool _releasedLocally;
 
+    /// <summary>The peer release serial already acted on, so one release ends one pause.</summary>
+    private uint _appliedReleaseSerial;
+
+
     private int _logged;
 
     /// <summary>
@@ -36,6 +40,11 @@ internal sealed class PauseController(SharedBlockView block)
         _applied = false;
         _releasedLocally = false;
         block.RemotePauseApplied = 0;
+
+        // Adopt whatever the agent's counter is at rather than resetting to zero: it keeps
+        // counting across a module change, and a reset would make the next read look like a
+        // release and unpause the new world.
+        _appliedReleaseSerial = block.RemotePauseReleaseSerial;
     }
 
     public void OnFrame()
@@ -52,14 +61,39 @@ internal sealed class PauseController(SharedBlockView block)
         // one missed edge otherwise leaves a permanent PAUSED banner and a dead pause key.
         // Runs whether or not a session is active — the stuck state comes from the login
         // chain and from mirror races, and both exist before a peer connects.
-        if (Odyssey.HasPlayer && Odyssey.ReconcilePause())
+        if (Odyssey.HasPlayer && Odyssey.ReconcilePause(out string what))
         {
-            LogFew("pause: repaired stuck pause state (timers/banner vs masks)");
+            LogFew($"pause: reconciler {what}");
         }
 
         if (block.Command != SharedBlock.CommandSpawnAndDrive)
         {
             return;
+        }
+
+        // A peer has ended the shared pause. This runs BEFORE the desired/applied logic and
+        // regardless of who started it: the originator's pause is its own engine pause, held
+        // by nothing this controller tracks, so honouring the release means clearing it here.
+        // ⚠ NO "prime on first change" HERE. An earlier version skipped the first change on
+        // the theory that it might be a serial inherited from before we were listening — but
+        // the block is zeroed when the plugin allocates it and the agent's counter starts at
+        // zero too, so the first change IS the first real release, and priming swallowed it.
+        // Measured: the peer announced the release and this side never acted on it.
+        // Staleness is handled by adopting the current value on Invalidate instead.
+        uint release = block.RemotePauseReleaseSerial;
+        if (release != _appliedReleaseSerial)
+        {
+            _appliedReleaseSerial = release;
+
+            if (Odyssey.IsPlayerPaused)
+            {
+                Odyssey.SetPlayerPause(false);
+                _applied = false;
+                _releasedLocally = false;
+                block.RemotePauseApplied = 0;
+                LogFew("pause: a peer released the shared pause; releasing ours");
+                return;
+            }
         }
 
         bool desired = block.RemotePauseDesired;
@@ -103,7 +137,14 @@ internal sealed class PauseController(SharedBlockView block)
             {
                 _releasedLocally = true;
                 block.RemotePauseApplied = 0;
-                LogFew("pause: released locally; not re-asserting the peer's pause");
+
+                // ...and TELL THE SESSION, so the player who started the pause comes out of
+                // it too. Honouring the release only locally is what made "unpausing does
+                // not unpause both" — reproduced: the originator held its pause after the
+                // other player released. Either player may end a shared pause; that is the
+                // whole point of it being shared.
+                block.LocalPauseReleaseSerial++;
+                LogFew("pause: released locally; telling the peer to release theirs too");
                 return;
             }
 
@@ -129,7 +170,10 @@ internal sealed class PauseController(SharedBlockView block)
 
     private void LogFew(string message)
     {
-        if (_logged < 20)
+        // Raised from 20 while the dead-pause-button hunt is open (Handoff 0u): the
+        // reconciler can spend that budget in three seconds, and the lines that matter are
+        // the ones around a button press, which happens long after the cap would have hit.
+        if (_logged < 200)
         {
             _logged++;
             PluginHost.Log(message);
