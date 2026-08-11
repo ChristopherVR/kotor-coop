@@ -57,11 +57,49 @@ internal static unsafe class DialogueReplyHook
     public static uint Sequence { get; private set; }
 
     /// <summary>
-    /// Set while this instance is FOLLOWING someone else's conversation. While set, the
-    /// player's own reply clicks are BLOCKED outright — the spectator listens, the owner
-    /// chooses — and nothing is recorded for broadcast.
+    /// While this is in the future, the player's own reply clicks are BLOCKED outright — the
+    /// spectator listens, the owner chooses — and nothing is recorded for broadcast.
+    ///
+    /// ⚠ A LEASE, NOT A FLAG, AND THAT IS THE WHOLE POINT.
+    ///
+    /// This used to be a plain <c>bool Suppressed</c> re-decided from false at the top of the
+    /// spectate controller's frame pass. That is correct only while the frame pass RUNS, and
+    /// it does not always run: <c>PluginHost</c>'s frame function returns early above the
+    /// spectate controller during an area-transition flush, during a session travel warp, and
+    /// for the whole window in which there is no world epoch at all (a loading screen). Across
+    /// any of those the flag simply held its last value — and a stuck <c>true</c> is not a
+    /// cosmetic bug, because the detour below swallows <c>CSWGuiDialog::SelectReply</c>
+    /// outright: the player can never answer ANY conversation again, including their own, and
+    /// the dialogue just sits there. Reported from play.
+    ///
+    /// A lease cannot latch. The controller renews it every frame it holds a peer's
+    /// conversation, and if the controller stops running for any reason the gag expires on its
+    /// own. The failure it trades into — a spectator who could commit one reply after a frame
+    /// stall longer than <see cref="SuppressLeaseMs"/> — is bounded, recoverable and vastly
+    /// cheaper than a player who can never talk again.
+    ///
+    /// ⚠ int, not long, and compared with a wrap-safe unchecked subtraction: a 32-bit store is
+    /// naturally atomic on x86, so the detour can never read a torn deadline. (Both sides run
+    /// on the game's main thread today — the frame hook is on SwapBuffers and a reply click is
+    /// on the input dispatch — but the hook must be correct without depending on that.)
     /// </summary>
-    public static bool Suppressed { get; set; }
+    private static volatile int _suppressUntilTick = Environment.TickCount;
+
+    /// <summary>How long one renewal buys. Several frames' worth at any playable frame rate,
+    /// and short enough that a controller which has genuinely stopped hands the player their
+    /// dialogue back within a couple of seconds.</summary>
+    public const int SuppressLeaseMs = 2000;
+
+    /// <summary>Renew the gag for <see cref="SuppressLeaseMs"/>. Called every frame that a
+    /// peer holds the session's conversation.</summary>
+    public static void SuppressReplies() => _suppressUntilTick = Environment.TickCount + SuppressLeaseMs;
+
+    /// <summary>Hand the replies back, now. Called every frame that no peer holds one, so the
+    /// deadline is a live level in both directions rather than something that ages out.</summary>
+    public static void AllowReplies() => _suppressUntilTick = Environment.TickCount;
+
+    /// <summary>Whether a reply click is currently refused.</summary>
+    public static bool Suppressed => unchecked(_suppressUntilTick - Environment.TickCount) > 0;
 
     /// <summary>
     /// Set for the duration of our own replay call, so the one pick we dispatch on the
@@ -179,7 +217,8 @@ internal static unsafe class DialogueReplyHook
     /// Runs inside the engine's call, before its own body. Decides whether the call may
     /// proceed (nonzero) and records the pick when it is the local player's own. No engine
     /// calls, no allocation, nothing that could throw — this is the game's thread
-    /// mid-dispatch.
+    /// mid-dispatch. (<see cref="Suppressed"/> reads <c>Environment.TickCount</c>, which is a
+    /// bare <c>GetTickCount</c>: no allocation, no managed state, cannot throw.)
     /// </summary>
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
     private static int OnSelectReply(int slot)

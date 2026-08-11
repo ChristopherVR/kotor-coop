@@ -262,6 +262,26 @@ public interface IGameBridge : IDisposable
     /// it owns still. Default false.</summary>
     bool WriteInteractionLocks(IReadOnlyList<InteractionLock> locks) => false;
 
+    /// <summary>
+    /// This instance's companion roster, straight off its own party table: which of the nine
+    /// NPC slots are recruited, and which are in the active party. Default is "cannot read
+    /// one", which is NOT the same as an empty roster and must never be published as one.
+    /// </summary>
+    bool TryReadLocalPartyRoster(out PartyRoster roster)
+    {
+        roster = PartyRoster.Empty;
+        return false;
+    }
+
+    /// <summary>
+    /// Hands the game the HOST's roster to reconcile against, or clears it.
+    ///
+    /// <paramref name="valid"/> false means "no authority is speaking here" — the host itself,
+    /// a client with no level yet, a disabled channel — and the game must then leave its own
+    /// roster completely alone. Default false.
+    /// </summary>
+    bool WriteHostPartyRoster(bool valid, PartyRoster roster) => false;
+
     /// <summary>Posts one line to the always-on chat overlay (used to surface a peer's
     /// dialogue). Default false when this bridge has no overlay.</summary>
     bool PostChatLine(string line) => false;

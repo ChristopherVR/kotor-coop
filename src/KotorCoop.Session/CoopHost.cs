@@ -147,6 +147,29 @@ public sealed class CoopHost : ICoopSession
 
     public IReadOnlyList<PartyMemberState> GetPartyMembers() => [];
 
+    /// <summary>The host's own companion roster, as its party table last read. Broadcast every
+    /// tick as a LEVEL; <see cref="_hasPartyRoster"/> gates the very first tick, before which
+    /// there is nothing to say and an all-zero mask would read as "dismiss everyone".</summary>
+    private PartyRoster _partyRoster = PartyRoster.Empty;
+
+    private bool _hasPartyRoster;
+
+    public void PublishPartyRoster(PartyRoster roster)
+    {
+        lock (_gate)
+        {
+            _partyRoster = roster;
+            _hasPartyRoster = true;
+        }
+    }
+
+    /// <summary>The host IS the roster; it never mirrors anyone's.</summary>
+    public bool TryGetPartyRoster(out PartyRoster roster)
+    {
+        roster = PartyRoster.Empty;
+        return false;
+    }
+
     private uint _gold;
     private uint _experience;
     private bool _hasProgression;
@@ -896,6 +919,7 @@ public sealed class CoopHost : ICoopSession
 
         BroadcastEnemies(now, recipients);
         BroadcastParty(now, recipients);
+        BroadcastPartyRoster(now, recipients);
         BroadcastDialogue(now, recipients);
         BroadcastProgression(now, recipients);
         BroadcastContainerLoot(now, recipients);
@@ -984,6 +1008,48 @@ public sealed class CoopHost : ICoopSession
         }
 
         int length = PacketCodec.Write(_sendBuffer, new PartySnapshotPacket(now, party));
+        if (length == 0)
+        {
+            return;
+        }
+
+        foreach (PeerConnection peer in recipients)
+        {
+            _channel.Send(peer.EndPoint, _sendBuffer.AsSpan(0, length));
+        }
+    }
+
+    /// <summary>
+    /// Sends the authoritative companion roster. Twenty bytes, every tick, unconditionally
+    /// once the host has read its party table at least once.
+    ///
+    /// ⚠ IT IS SENT EVEN WHEN NOTHING HAS CHANGED, and unlike the party/enemy snapshots it is
+    /// NOT skipped when the payload is empty. Both matter. "Nobody is recruited yet" is a real
+    /// roster and the first module of the game is exactly that; skipping it would leave a
+    /// joiner with no level at all, and a client with no level applies nothing — so a
+    /// divergence created before the first recruitment would never be corrected. And a change
+    /// sent once is an edge, which is the shape this channel exists to avoid: a roster
+    /// divergence is permanent, so the correction has to keep arriving.
+    /// </summary>
+    private void BroadcastPartyRoster(long now, List<PeerConnection> recipients)
+    {
+        PartyRoster roster;
+        lock (_gate)
+        {
+            if (!_hasPartyRoster)
+            {
+                return;
+            }
+
+            roster = _partyRoster;
+        }
+
+        if (recipients.Count == 0)
+        {
+            return;
+        }
+
+        int length = PacketCodec.Write(_sendBuffer, new PartyRosterPacket(now, roster));
         if (length == 0)
         {
             return;

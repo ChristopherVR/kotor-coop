@@ -369,3 +369,62 @@ public readonly record struct InteractionLock(uint PeerId, string Tag, Interacti
 /// </summary>
 public sealed record InteractionLockPacket(
     long ServerTimeMs, string Module, IReadOnlyList<InteractionLock> Locks);
+
+/// <summary>
+/// One instance's whole companion roster, as two nine-bit masks over the engine's NPC slots.
+///
+/// ⚠ THE SLOT INDEX IS THE COMPANION'S IDENTITY, and nothing else on the wire names one.
+/// KOTOR's roster is a fixed nine-entry table (NPC_BASTILA .. NPC_ZAALBAR) and both instances
+/// loaded the same save, so slot N means the same character on both. That is also the key
+/// PartyPresenceController already resolves companions by — see its "companions are keyed by
+/// NPC roster slot (identical across two instances of the same save)" — so this channel and
+/// the companion mirror agree on identity by construction rather than by convention.
+///
+/// <paramref name="AvailableMask"/> = recruited: the story has handed this companion over,
+/// whether or not they are in the active party right now. Read from party table +0x30
+/// (<c>int[9]</c>, nonzero = available; <c>CSWPartyTable::AddNPC</c> at 0x00564350 writes the
+/// literal 1). Every roster operation in the engine refuses a slot that is not available.
+///
+/// <paramref name="PartyMask"/> = in the ACTIVE party: the at-most-two companions walking
+/// behind the player. Read from party table +0x00 (count, max 2) and +0x04
+/// (<c>int[2]</c> of NPC slot indices — slot indices, NOT object ids).
+/// </summary>
+public readonly record struct PartyRoster(ushort AvailableMask, ushort PartyMask)
+{
+    /// <summary>Nothing recruited, nobody in the party. What a peer's roster reads as before
+    /// the first level has arrived, and what must never be applied as if it were real.</summary>
+    public static readonly PartyRoster Empty = new(0, 0);
+
+    /// <summary>Only the nine slots the engine has (<see cref="ProtocolConstants.PartyRosterSlots"/>).
+    /// Anything above them is a malformed sender, and is dropped rather than acted on.</summary>
+    public const ushort SlotMask = (1 << ProtocolConstants.PartyRosterSlots) - 1;
+
+    public bool IsAvailable(int slot) => (AvailableMask & (1 << slot)) != 0;
+
+    public bool IsInParty(int slot) => (PartyMask & (1 << slot)) != 0;
+
+    /// <summary>
+    /// Slots this roster has in the party that <paramref name="local"/> does not — the adds a
+    /// peer owes. Availability is deliberately NOT considered here: whether the local engine
+    /// can honour an add is the local engine's business, and it refuses on its own.
+    /// </summary>
+    public ushort AddsAgainst(PartyRoster local) =>
+        (ushort)(PartyMask & ~local.PartyMask & SlotMask);
+
+    /// <summary>Slots <paramref name="local"/> has in the party that this roster does not —
+    /// the removes a peer owes. This is the direction that fixes a dismissal, and the one that
+    /// must run FIRST: the party holds at most two companions, so an add can be refused purely
+    /// because a stale member is still occupying the seat.</summary>
+    public ushort RemovesAgainst(PartyRoster local) =>
+        (ushort)(local.PartyMask & ~PartyMask & SlotMask);
+}
+
+/// <summary>
+/// host -&gt; all: the authoritative companion roster, broadcast each tick.
+///
+/// No module rides along, and that is deliberate rather than an omission: the party table is
+/// SAVE state, not module state (it lives in PARTYTABLE.res and survives every transition), so
+/// unlike an object id or a tag it means the same thing to a peer standing anywhere. The
+/// enemy and lock channels carry a module because ids and tags do not.
+/// </summary>
+public sealed record PartyRosterPacket(long ServerTimeMs, PartyRoster Roster);

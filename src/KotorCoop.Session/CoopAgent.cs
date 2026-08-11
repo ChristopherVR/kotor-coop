@@ -346,6 +346,7 @@ public sealed class CoopAgent(IGameBridge bridge, ICoopSession session, AgentSet
             PumpEnemies(local, visible, caps);
             PumpPhantomDamage(caps);
             PumpParty(caps);
+            PumpPartyRoster(caps);
 
             // Dialogue rides here too. It is the same kind of traffic — small block reads,
             // no world scan — and it was the reason a followed conversation felt second-hand:
@@ -513,6 +514,56 @@ public sealed class CoopAgent(IGameBridge bridge, ICoopSession session, AgentSet
         // is re-asserted inside TryWritePartyMembers every pass. (The input control-lock that
         // stops the client controlling those companions runs every tick in the fast path.)
         bridge.TryWritePartyMembers(session.GetPartyMembers());
+    }
+
+    /// <summary>
+    /// Keeps the companion ROSTER — who is recruited and who is walking with the player — the
+    /// same on both instances. <see cref="PumpParty"/> carries where the companions are; this
+    /// carries which companions exist, and it is the one that was missing.
+    ///
+    /// The failure it fixes: a conversation that recruits or dismisses a companion calls the
+    /// engine's AddPartyMember / RemovePartyMember, and those ran on whichever instance was
+    /// executing the dialogue's scripts. The other instance's party table never heard, and the
+    /// roster is the KEY the companion mirror resolves by — PartyPresenceController looks up
+    /// "the host's NPC slot 2" in its OWN party table — so after a divergence the mirror is
+    /// either driving nothing or driving the wrong body.
+    ///
+    /// Host-authoritative, matching every other companion channel. The host publishes a level;
+    /// a client hands that level to its plugin, which reconciles through the engine's own
+    /// roster calls on the frame hook. Runs on the combat pump rather than the 30 Hz tick: a
+    /// roster changes a few times per playthrough, and each reconciliation is a VM dispatch.
+    /// </summary>
+    private void PumpPartyRoster(SessionCapabilities caps)
+    {
+        if (!settings.SyncParty || !bridge.SupportsPartySync || (caps & SessionCapabilities.Party) == 0)
+        {
+            // ⚠ CLEAR ON THE WAY OUT, do not just stop writing. A level the plugin is still
+            // holding from before the channel was disabled would keep being reconciled against
+            // forever — the exact "a stale authority outlives the thing that authorised it"
+            // failure the lease channels are shaped to avoid.
+            bridge.WriteHostPartyRoster(false, PartyRoster.Empty);
+            return;
+        }
+
+        if (session.IsEnemyAuthority)
+        {
+            // The host: publish its own table, and never reconcile against anyone. Writing the
+            // cleared word here is what makes "am I being told a roster" the plugin's whole
+            // test — it does not need to know which end of the session it is on.
+            if (bridge.TryReadLocalPartyRoster(out PartyRoster local))
+            {
+                session.PublishPartyRoster(local);
+            }
+
+            bridge.WriteHostPartyRoster(false, PartyRoster.Empty);
+            return;
+        }
+
+        // A client. TryGetPartyRoster is false until the first level has arrived, and that
+        // distinction is load-bearing: an empty roster and an unheard-of one are the same two
+        // masks, and applying the second would dismiss the player's whole party.
+        bridge.WriteHostPartyRoster(
+            session.TryGetPartyRoster(out PartyRoster host), host);
     }
 
     /// <summary>

@@ -1378,4 +1378,55 @@ public static class PacketCodec
         Vector3f position = r.ReadVector3();
         return r.Failed ? null : new GroundItem(itemId, resref, module, position);
     }
+
+    public static int Write(Span<byte> buffer, PartyRosterPacket packet)
+    {
+        PacketWriter w = new(buffer);
+        w.WriteHeader(PacketType.PartyRoster);
+        w.WriteInt64(packet.ServerTimeMs);
+        w.WriteUInt16(packet.Roster.AvailableMask);
+        w.WriteUInt16(packet.Roster.PartyMask);
+        return w.Failed ? 0 : w.Position;
+    }
+
+    public static PartyRosterPacket? ReadPartyRoster(ReadOnlySpan<byte> buffer)
+    {
+        PacketReader r = new(buffer);
+        if (r.ReadHeader() != PacketType.PartyRoster)
+        {
+            return null;
+        }
+
+        long serverTimeMs = r.ReadInt64();
+        ushort available = r.ReadUInt16();
+        ushort party = r.ReadUInt16();
+
+        if (r.Failed)
+        {
+            return null;
+        }
+
+        // ⚠ BITS ABOVE THE NINTH TAKE THE WHOLE PACKET DOWN, they are not masked off.
+        //
+        // A slot index is fed straight to the engine's own AddPartyMember/RemovePartyMember,
+        // which validate it (0x00565648: `cmp edi,9 / jge refuse`) — but the reason to refuse
+        // HERE is that a tenth bit means the sender is not the build it claims to be, and the
+        // nine bits we would keep are then no more trustworthy than the one we threw away.
+        // Quietly masking would apply a roster we have evidence against.
+        if ((available & ~PartyRoster.SlotMask) != 0 || (party & ~PartyRoster.SlotMask) != 0)
+        {
+            return null;
+        }
+
+        // A companion cannot be in the party without having been recruited; the engine will not
+        // produce this and will not accept it (AddMember tests +0x30 at 0x00565651 before it
+        // touches anything). Dropping it stops a corrupt level from making a client spend every
+        // pass attempting an add its own engine refuses.
+        if ((party & ~available) != 0)
+        {
+            return null;
+        }
+
+        return new PartyRosterPacket(serverTimeMs, new PartyRoster(available, party));
+    }
 }

@@ -85,16 +85,34 @@ bark_replay=1
 # first rather than who reached the arbiter first (always the host, in-process).
 interaction_locks=1
 
+# Keep the companion roster the same on both instances: who is recruited, and which two are
+# walking with the player. The host publishes its nine NPC slots as a LEVEL every tick and a
+# client reconciles through the engine's own AddPartyMember / RemovePartyMember - never by
+# poking the party table, which would leave the portraits, follow state and party list
+# describing a party the game no longer has.
+#
+# This is what AddPartyMember / RemovePartyMember previously had no channel for at all. The
+# roster is the key the companion mirror resolves by (the host's "NPC slot 2" is looked up in
+# the client's own table), so a divergence made the mirror drive the wrong body, or none, and
+# it never healed on its own.
+#
+# It does NOT replicate recruitment itself - making a companion AVAILABLE needs the blueprint
+# the conversation's script named, which the roster does not record afterwards. Availability
+# arrives the way it already does, from the same conversation running on both instances; this
+# fixes the party seat, which is what a partial or aborted conversation gets wrong.
+party_roster_sync=1
+
 # Be pulled into a conversation another player starts, instead of clicking the same NPC to
 # join. OFF, and read both reasons before turning it on.
 #   * It is the behaviour that was removed once already: players were yanked out of whatever
 #     they were doing from anywhere in the module. Joining is a click because walking away
 #     while your partner talks to a shopkeeper is a legitimate thing to want.
-#   * UNRESOLVED: a conversation that recruits or dismisses a companion calls
-#     AddPartyMember / RemovePartyMember, and those have NO channel in this mod. Being driven
-#     into a recruitment conversation ends it with a party roster the other instance does not
-#     share - and the roster is what the companion channel keys on.
-# Ordinary conversation is fine. Recruitment is not.
+#   * A conversation that recruits or dismisses a companion calls AddPartyMember /
+#     RemovePartyMember. Those now HAVE a channel (party_roster_sync above), which reconciles
+#     the party seat afterwards - but recruitment itself still does not replicate, so a player
+#     driven into a recruitment conversation whose scripts do not run to the end here can be
+#     left without the companion the other instance has. Better than before; not yet settled.
+# Ordinary conversation is fine. Recruitment is still the case to test.
 force_dialogue_party=0
 
 # Let the mod own the HUD pause button. The engine's own toggle reads server mask bit 0x02,

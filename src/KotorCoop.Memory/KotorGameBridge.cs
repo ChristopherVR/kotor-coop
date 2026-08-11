@@ -481,13 +481,30 @@ public sealed class KotorGameBridge : IGameBridge
     private const int BlockRemoteDialogueNode = 0x1328;
     private const int BlockRemoteDialogueNodeSerial = 0x132C;
 
-    /// <summary>16-byte signature: "KOCOOP01" + version 33 + guard 0xC0FFEE01. The version is
+    // Companion roster reconciliation, mirroring SharedBlock version 34 (0x3300..0x3320).
+    //
+    // Two PACKED dwords, one per direction, and the packing is the concurrency design: the
+    // masks are read by one process while the other writes them, and a single aligned dword
+    // store on x86 cannot be torn. Splitting "available" and "in party" into two fields would
+    // have needed a serial and a re-read to prove the pair belonged together (the discipline
+    // the dialogue node pair uses); packing them removes the question instead of answering it.
+    private const int BlockLocalPartyRoster = 0x3300;
+    private const int BlockHostPartyRoster = 0x3304;
+
+    /// <summary>Bits 0..8 = recruited, bits 16..24 = in the active party, bit 31 = "this word
+    /// was actually written by somebody who knows" (see <see cref="WriteHostPartyRoster"/>).</summary>
+    private const int BlockPartyRosterAvailableShift = 0;
+    private const int BlockPartyRosterPartyShift = 16;
+    private const uint BlockPartyRosterSlotMask = 0x1FF;
+    private const uint BlockPartyRosterValid = 0x8000_0000;
+
+    /// <summary>16-byte signature: "KOCOOP01" + version 34 + guard 0xC0FFEE01. The version is
     /// part of the pattern deliberately: an agent must not attach to a plugin whose block
     /// layout it does not know, and a stale pair fails to find each other rather than reading
     /// the wrong offsets. ⚠ Bump this WITH PluginHost's `_block->Version` — they are one
     /// number in two files, and a half-bump reads as "plugin shared block not found", which
     /// looks like a broken install rather than a version skew.</summary>
-    public const string PluginSignature = "4B 4F 43 4F 4F 50 30 31 21 00 00 00 01 EE FF C0";
+    public const string PluginSignature = "4B 4F 43 4F 4F 50 30 31 22 00 00 00 01 EE FF C0";
 
     /// <summary>Agent's view of which coop item id occupies each plugin item slot.</summary>
     private readonly uint[] _itemSlotIds = new uint[BlockItemCapacity];
@@ -2970,6 +2987,58 @@ public sealed class KotorGameBridge : IGameBridge
 
         ok &= _memory.TryWrite(_pluginBlock + BlockInteractionLockCount, (uint)count);
         return ok;
+    }
+
+    /// <summary>
+    /// Reads this instance's companion roster out of the block, where the plugin republishes it
+    /// from its own party table every frame.
+    ///
+    /// ⚠ THE VALID BIT IS NOT DECORATION. A game sitting at the main menu has no party table
+    /// at all, and the plugin leaves the word at zero there — which is bit-identical to "the
+    /// party table says nobody is recruited". A host that published the second while it was
+    /// really the first would broadcast an empty roster to a client that HAS companions, and
+    /// the client would faithfully dismiss all of them. So an unset bit 31 is reported as "no
+    /// reading", never as an empty roster.
+    /// </summary>
+    public bool TryReadLocalPartyRoster(out PartyRoster roster)
+    {
+        roster = PartyRoster.Empty;
+
+        if (_pluginBlock == 0
+            || !_memory.TryReadUInt32(_pluginBlock + BlockLocalPartyRoster, out uint packed)
+            || (packed & BlockPartyRosterValid) == 0)
+        {
+            return false;
+        }
+
+        roster = new PartyRoster(
+            (ushort)((packed >> BlockPartyRosterAvailableShift) & BlockPartyRosterSlotMask),
+            (ushort)((packed >> BlockPartyRosterPartyShift) & BlockPartyRosterSlotMask));
+        return true;
+    }
+
+    /// <summary>
+    /// Hands the plugin the host's roster to reconcile its own against, or clears it.
+    ///
+    /// One dword, written whole — there is no ordering rule to get wrong here because there is
+    /// only one store. Clearing (<paramref name="valid"/> false) writes a plain 0, so the
+    /// plugin's "is anybody telling me what the roster should be" test is the same test in both
+    /// directions and a disconnected agent stops the reconciliation by doing nothing special.
+    /// </summary>
+    public bool WriteHostPartyRoster(bool valid, PartyRoster roster)
+    {
+        if (_pluginBlock == 0)
+        {
+            return false;
+        }
+
+        uint packed = valid
+            ? BlockPartyRosterValid
+                | ((roster.AvailableMask & BlockPartyRosterSlotMask) << BlockPartyRosterAvailableShift)
+                | ((roster.PartyMask & BlockPartyRosterSlotMask) << BlockPartyRosterPartyShift)
+            : 0u;
+
+        return _memory.TryWrite(_pluginBlock + BlockHostPartyRoster, packed);
     }
 
     /// <summary>

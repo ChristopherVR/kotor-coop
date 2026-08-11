@@ -58,8 +58,13 @@ public static class ProtocolConstants
     /// SLOT the owner pressed. Slot replay can never converge: which entry a conversation
     /// starts on, which replies are offered, and where a reply leads are all decided by
     /// scripts that run separately on each instance, so a slot does not name the same branch
-    /// on two machines. The pick fields stay on the wire as a diagnostic.</summary>
-    public const byte Version = 21;
+    /// on two machines. The pick fields stay on the wire as a diagnostic.
+    /// Version 22: PartyRoster (37) — the host's nine companion slots as two masks
+    /// (available, in-party), broadcast as a LEVEL. AddPartyMember / RemovePartyMember had no
+    /// channel at all, so a conversation that recruited or dismissed a companion left the two
+    /// instances holding different rosters — and the roster is the key the whole companion
+    /// channel resolves companions by.</summary>
+    public const byte Version = 22;
 
     /// <summary>Journal quest tags are resrefs plus a little slack.</summary>
     public const int MaxJournalTagLength = 32;
@@ -102,6 +107,17 @@ public static class ProtocolConstants
     /// <summary>Party companions the host replicates. KOTOR allows two active at once; a
     /// little headroom costs nothing.</summary>
     public const int MaxPartyMembers = 4;
+
+    /// <summary>
+    /// NPC roster slots. NINE, and this one is not a chosen cap — it is the engine's own
+    /// bound, asserted in the binary rather than inferred: <c>CSWPartyTable::AddMember</c>
+    /// (0x00565620) refuses <c>nNPC &lt; 0 || nNPC &gt;= 9</c> at 0x00565648, and the
+    /// availability array at party table +0x30 is <c>int[9]</c>.
+    ///
+    /// The slot index IS the NPC identity in KOTOR (NPC_BASTILA, NPC_CARTH, ...), which is
+    /// why the wire carries a bitmask and no separate id: there is nothing else to name.
+    /// </summary>
+    public const int PartyRosterSlots = 9;
 
     /// <summary>
     /// Encounters a client can report standing inside at once. Encounter activate areas are

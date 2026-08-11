@@ -58,6 +58,8 @@
   -->
   <ItemGroup>
     <Compile Include="..\KotorCoop.Protocol\DialogueFollowClock.cs" Link="Shared\DialogueFollowClock.cs" />
+    <Compile Include="..\KotorCoop.Protocol\DialogueFollowMachine.cs" Link="Shared\DialogueFollowMachine.cs" />
+    <Compile Include="..\KotorCoop.Protocol\DialogueNodeFollower.cs" Link="Shared\DialogueNodeFollower.cs" />
   </ItemGroup>
 
 </Project>

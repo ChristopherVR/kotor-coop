@@ -1,4 +1,4 @@
-namespace KotorCoop.Plugin;
+﻿namespace KotorCoop.Plugin;
 
 /// <summary>
 /// Both halves of the per-object interaction lock.
@@ -84,6 +84,7 @@ internal sealed unsafe class InteractionLockController(SharedBlockView block)
         {
             _creature[i] = 0;
             _cachedTag[i][0] = 0;
+            _nextRetryMs[i] = 0;
         }
 
         *block.LocalInteractionTag = 0;
@@ -162,6 +163,7 @@ internal sealed unsafe class InteractionLockController(SharedBlockView block)
             {
                 _creature[i] = 0;
                 _cachedTag[i][0] = 0;
+                _nextRetryMs[i] = 0;
                 continue;
             }
 
@@ -172,6 +174,7 @@ internal sealed unsafe class InteractionLockController(SharedBlockView block)
             {
                 _creature[i] = 0;
                 _cachedTag[i][0] = 0;
+                _nextRetryMs[i] = 0;
                 continue;
             }
 
@@ -266,8 +269,9 @@ internal sealed unsafe class InteractionLockController(SharedBlockView block)
         }
 
         ReadOnlySpan<byte> wanted = new(tag, length);
+        bool sameTag = SameCachedTag(slot, wanted);
 
-        if (_creature[slot] != 0 && SameCachedTag(slot, wanted))
+        if (sameTag && _creature[slot] != 0)
         {
             nint cached = _creature[slot];
             if (*(int*)(cached + 0x08) == 5 && Odyssey.HasTag(cached, wanted))
@@ -276,8 +280,30 @@ internal sealed unsafe class InteractionLockController(SharedBlockView block)
             }
         }
 
+        // ⚠ A FAILED LOOKUP MUST BE REMEMBERED, OR IT REPEATS FOREVER AT THE PASS RATE.
+        //
+        // CreatureFinder.FindByTag SWEEPS: it walks the whole user address space through
+        // VirtualQuery, copying every committed private region out in 256 KB chunks and
+        // testing every 4-byte-aligned dword. A sweep that SUCCEEDS returns at the first
+        // match; a sweep that FAILS does all of it, every time. Failure is therefore the
+        // expensive case by construction, which is the opposite of the intuition.
+        //
+        // And failure is the NORMAL case here: a lock names an object the peer is using, and
+        // the instance holding the lock is routinely one that has no local body for it. The
+        // first version stored the 0 and the cache test rejected it on the next pass, so it
+        // swept again — about thirty full address-space sweeps a second, on the frame thread.
+        //
+        // So the tag is recorded whether or not the body was found, and a miss is retried on
+        // a timer rather than immediately. Same remedy MaterialisedEnemies already needed for
+        // the same finder (its ProvenPresent list, after a measured sweep storm).
+        if (sameTag && _creature[slot] == 0 && Environment.TickCount64 < _nextRetryMs[slot])
+        {
+            return 0;
+        }
+
         nint found = CreatureFinder.FindByTag(wanted);
         _creature[slot] = found;
+        _nextRetryMs[slot] = found != 0 ? 0 : Environment.TickCount64 + MissRetryMs;
 
         for (int i = 0; i < length; i++)
         {
@@ -287,6 +313,13 @@ internal sealed unsafe class InteractionLockController(SharedBlockView block)
         _cachedTag[slot][length] = 0;
         return found;
     }
+
+    /// <summary>How long a failed tag lookup is trusted before sweeping again. Long enough
+    /// that a miss costs nothing, short enough that a body which has since streamed in is
+    /// picked up well within a conversation.</summary>
+    private const long MissRetryMs = 2000;
+
+    private readonly long[] _nextRetryMs = new long[SharedBlock.InteractionLockCapacity];
 
     private bool SameCachedTag(int slot, ReadOnlySpan<byte> wanted)
     {

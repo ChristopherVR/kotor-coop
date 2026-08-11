@@ -56,7 +56,11 @@ internal struct SharedBlock
     /// </summary>
     /// <summary>Grown from 0x2300 for the widened bark rings (version 31): a bark has to
     /// carry its TEXT and sound resref, not two pointers into the producing process.</summary>
-    public const int TotalSize = 0x3300;
+    /// <summary>Grown from 0x3300 for the companion roster (version 34). The 0x2120..0x2260
+    /// hole left by the old bark rings is deliberately NOT reused — it is documented as dead
+    /// so a stale reader finds zeros there rather than half a record, and quietly repurposing
+    /// it would turn that promise into a trap for the next person who reads the comment.</summary>
+    public const int TotalSize = 0x3400;
 
     public const int ProfileVisibleSize = 0x250;
 
@@ -931,6 +935,57 @@ internal struct SharedBlock
     public const int InteractionLockCapacity = 4;
 
     public const int InteractionLockTagLength = 32;
+
+    // ---- companion roster reconciliation (version 34, region 0x3300..0x3320) ----------
+    //
+    // The channel AddPartyMember / RemovePartyMember never had. A conversation that recruits or
+    // dismisses a companion runs its scripts on ONE instance, so the other instance's party
+    // table never hears — and the party table is what the whole companion channel keys on
+    // (PartyPresenceController resolves the host's "NPC slot 2" against its OWN table). After a
+    // divergence the mirror drives the wrong body, or none.
+    //
+    // ⚠ PACKED INTO ONE DWORD PER DIRECTION ON PURPOSE. These words are read by one process
+    // while the other writes them. Two separate fields for "recruited" and "in the party" could
+    // be sampled half-updated, which would need a serial and a re-read to detect (the
+    // discipline the dialogue node pair uses). A single aligned dword store cannot tear on x86,
+    // so the question does not arise. Nine slots is the engine's own bound — CSWPartyTable::
+    // AddMember at 0x00565648 refuses nNPC >= 9 — so both masks fit in one word twice over.
+    //
+    // ⚠ BIT 31 IS NOT "SOMETHING IS RECRUITED", IT IS "SOMEBODY WROTE THIS". A game at the main
+    // menu has no party table and leaves the word at zero, which is bit-identical to a real
+    // roster with nothing recruited. Without the bit, a host would publish "nobody is in your
+    // party" during a loading screen and its client would obediently dismiss everyone.
+
+    /// <summary>Plugin -&gt; agent. This instance's roster, republished every frame from its own
+    /// party table. Bits 0..8 recruited, bits 16..24 in the active party, bit 31 valid.</summary>
+    public const int OffsetLocalPartyRoster = 0x3300;
+
+    /// <summary>Agent -&gt; plugin. The HOST's roster, same packing. Zero (not merely
+    /// all-masks-clear, but bit 31 clear) means "nobody is telling this instance what its
+    /// roster should be" — the host itself, a client before the first level arrives, a
+    /// disconnected agent, a disabled channel — and nothing is reconciled.</summary>
+    public const int OffsetHostPartyRoster = 0x3304;
+
+    /// <summary>Plugin -&gt; agent. Roster adds this instance has performed. Diagnostic, and
+    /// the one that says the channel WORKED rather than merely arrived.</summary>
+    public const int OffsetPartyRosterAdds = 0x3308;
+
+    /// <summary>Plugin -&gt; agent. Roster removes this instance has performed.</summary>
+    public const int OffsetPartyRosterRemoves = 0x330C;
+
+    /// <summary>Plugin -&gt; agent. The last refusal this instance hit, so a reconciliation that
+    /// keeps being refused is visible without a log dive. 0 = nothing refused.</summary>
+    public const int OffsetPartyRosterStatus = 0x3310;
+
+    public const int PartyRosterAvailableShift = 0;
+    public const int PartyRosterPartyShift = 16;
+    public const uint PartyRosterSlotMask = 0x1FF;
+    public const uint PartyRosterValid = 0x8000_0000;
+
+    /// <summary>Roster slots. The engine's bound, not a chosen cap: CSWPartyTable::AddMember
+    /// (0x00565620) refuses nNPC &lt; 0 or &gt;= 9, and availability at party table +0x30 is
+    /// int[9].</summary>
+    public const int PartyRosterSlots = 9;
 
     // ---- container-loot removal (region 0xD00..0xE00) -----------------------------
     //

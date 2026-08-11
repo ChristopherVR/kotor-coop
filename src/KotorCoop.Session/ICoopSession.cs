@@ -144,6 +144,28 @@ public interface ICoopSession : IDisposable
     IReadOnlyList<PartyMemberState> GetPartyMembers();
 
     /// <summary>
+    /// Host only: publish the authoritative companion ROSTER — which of the nine NPC slots are
+    /// recruited and which are in the active party. Ignored on a client.
+    ///
+    /// Separate from <see cref="PublishParty"/>, which carries where the companions ARE. This
+    /// carries who they are, which is the thing that channel keys on: a companion recruited or
+    /// dismissed inside a conversation changes only this, and until it crossed the wire the
+    /// other instance kept resolving slot N to whatever it happened to have there.
+    /// </summary>
+    void PublishPartyRoster(PartyRoster roster) { }
+
+    /// <summary>
+    /// Client only: the host's latest roster. False until the first level has arrived — a
+    /// client must never apply an all-zero roster it has merely not been told yet, which would
+    /// dismiss its whole party.
+    /// </summary>
+    bool TryGetPartyRoster(out PartyRoster roster)
+    {
+        roster = PartyRoster.Empty;
+        return false;
+    }
+
+    /// <summary>
     /// Announces this instance's local conversation status. <paramref name="active"/> true
     /// means the local player has entered a conversation; the session runs it through the
     /// host's arbiter. Speaker/line are the spectate payload (empty until the plugin can read

@@ -43,10 +43,39 @@ internal static unsafe class DialogueGateHook
     /// <summary>Master switch, from coop.ini <c>dialogue_exclusive</c> (default on).</summary>
     public static bool Enabled;
 
-    /// <summary>Set per frame from the block: a REMOTE peer currently owns the conversation
-    /// token (the agent writes the flag only for peers other than this instance, so an
-    /// owner is never gated on its own conversation).</summary>
-    public static volatile bool PeerHoldsConversation;
+    /// <summary>
+    /// Renewed per frame from the block: a REMOTE peer currently owns the conversation token
+    /// (the agent writes the flag only for peers other than this instance, so an owner is
+    /// never gated on its own conversation).
+    ///
+    /// ⚠ A LEASE, NOT A FLAG — the same argument as
+    /// <see cref="DialogueReplyHook.SuppressReplies"/>, and for the same reason. The spectate
+    /// controller does not run on every frame: <c>PluginHost</c> returns early above it during
+    /// an area-transition flush, during a travel warp, and for the whole of a loading screen.
+    /// A plain boolean held its last value across all of those, and a stale <c>true</c> here
+    /// refuses every conversation the player tries to start, silently, with the refusal path
+    /// looking exactly like an NPC who has nothing to say.
+    ///
+    /// The gate fails OPEN when the lease runs out, which is the same direction the rest of
+    /// this hook already fails in (an unrecognised prologue means no gate; a managed fault
+    /// means the start proceeds). A competing conversation that slips through in that window
+    /// is bounded and already handled — the spectate controller's yield path closes it the
+    /// moment the tags resolve and disagree.
+    /// </summary>
+    private static volatile int _peerHoldsUntilTick = Environment.TickCount;
+
+    /// <summary>How long one renewal buys. Matches the reply hook's lease so the two levels
+    /// this instance asserts on the engine expire together.</summary>
+    public const int PeerHoldLeaseMs = DialogueReplyHook.SuppressLeaseMs;
+
+    /// <summary>Renew the gate. Called every frame a peer's conversation is known.</summary>
+    public static void HoldForPeer() => _peerHoldsUntilTick = Environment.TickCount + PeerHoldLeaseMs;
+
+    /// <summary>Open the gate now, so the level is live in both directions.</summary>
+    public static void ReleaseForPeer() => _peerHoldsUntilTick = Environment.TickCount;
+
+    public static bool PeerHoldsConversation =>
+        unchecked(_peerHoldsUntilTick - Environment.TickCount) > 0;
 
     /// <summary>
     /// Permission for exactly ONE conversation to open while a peer holds the token: the
@@ -62,6 +91,16 @@ internal static unsafe class DialogueGateHook
     ///
     /// A grant is one request's worth. If a stray click consumes it first, our follow-open is
     /// refused and retried — which is a far better failure than losing the conversation.
+    ///
+    /// ⚠ NOTHING GRANTS ONE TODAY, and that is not an oversight — it is the measure of how
+    /// completely the self-open was removed. The spectate controller opens no conversation of
+    /// its own any more (joining is the player's own click, which the tag test below lets
+    /// through on its own merits), so the counter sits at zero for the whole session. The
+    /// mechanism is kept rather than deleted because it is the only correct way to let a
+    /// specific, self-initiated open past the gate, and the next thing that needs one — a
+    /// scripted cutscene join, say — should use it instead of inventing a second door.
+    /// It was previously cleared from three places in the controller, all of which were
+    /// clearing a counter no code path could raise; those are gone.
     /// </summary>
     public static volatile int BypassGrants;
 

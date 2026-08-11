@@ -14,7 +14,12 @@ param(
 
     # The port the session under test is hosted on, so its LAN beacon can be told apart
     # from any other agent advertising on this machine.
-    [int]$SessionPort = 27140
+    [int]$SessionPort = 27140,
+
+    # The CLIENT agent's drop file (demo.ps1 starts it with --drop-file). This is the only
+    # lever that makes a real, session-owned ground item exist: see section 15 for why the
+    # shared block cannot be used to stage one.
+    [string]$ClientDropFile = "$env:TEMP\kotorcoop-demo\drop2.txt"
 )
 
 # Pids are optional: with a demo session up, the two swkotor processes in start order are
@@ -533,7 +538,356 @@ else {
     Check 'a client hit costs the enemy real hit points' $false 'no enemy published to attack'
 }
 
-# --- 14. engine call signatures ----------------------------------------------------------
+# --- 14. shared progression (party gold and PC experience) -------------------------------
+# Host-authoritative, and — unlike almost everything else in this battery — carried entirely
+# OUTSIDE the shared block: the agent reads the host's wallet and experience straight out of
+# the host's engine and writes them into the client's (CoopAgent.PumpProgression ->
+# KotorGameBridge.TryReadProgression / TryWriteProgression). There is no plugin half at all.
+#
+# So the only honest oracle is the CLIENT'S OWN ENGINE FIELDS: change the number in the
+# host's game and wait for the client's game to be holding it too. Nothing here reads either
+# agent's bookkeeping, and neither side's "I published it" would prove anything — publishing
+# is not arriving.
+#
+# Pointer chains, both from docs/research/progression-sync.md and both VERIFIED there:
+#   appMgr 0x7A39FC -> serverApp +8 -> internal +4 -> partyTable +0x1B770, gold at +0xFC
+#   PC (object id 0x7FFFFFFF)      -> stats +0xA74                      -> experience +0x68
+# The first three hops are the same ones PauseMask already walks in section 4.
+function PartyTable($h) {
+    $am = [VF]::U32($h, 0x7A39FC)
+    if ($am -eq 0) { return 0 }
+    $srv = [VF]::U32($h, $am + 8)
+    if ($srv -eq 0) { return 0 }
+    $srvInt = [VF]::U32($h, $srv + 4)
+    if ($srvInt -eq 0) { return 0 }
+    return $srvInt + 0x1B770
+}
+
+$partyTable1 = PartyTable $h1
+$partyTable2 = PartyTable $h2
+$pcHost = [VF]::FindCreature($h1, 0x7FFFFFFF)
+$pcPeer = [VF]::FindCreature($h2, 0x7FFFFFFF)
+$statsHost = if ($pcHost) { [VF]::U32($h1, $pcHost + 0xA74) } else { 0 }
+$statsPeer = if ($pcPeer) { [VF]::U32($h2, $pcPeer + 0xA74) } else { 0 }
+
+if ($partyTable1 -and $partyTable2 -and $statsHost -and $statsPeer) {
+    $goldBefore = [VF]::U32($h1, $partyTable1 + 0xFC)
+    $xpBefore = [VF]::U32($h1, $statsHost + 0x68)
+
+    # Move both by a small offset from what the host already has, rather than to a fixed
+    # marker number. Two reasons: the session can be restored exactly afterwards, and the
+    # target can never coincide with the value the client is already sitting on — the mirror
+    # means the client starts EQUAL to the host, so "it now reads the new number" is only
+    # meaningful if the new number is one nothing was holding a moment ago.
+    #
+    # ⚠ Experience moves DOWN where it can. Pushing it up risks crossing a level threshold,
+    # which lights the level-up prompt on both screens — real state left behind for the next
+    # run to trip over, and section 11's conversations do not enjoy a modal GUI either.
+    $goldTarget = $goldBefore + 137
+    $xpTarget = if ($xpBefore -ge 8) { $xpBefore - 5 } else { $xpBefore + 5 }
+
+    [VF]::W32($h1, $partyTable1 + 0xFC, [int]$goldTarget) | Out-Null
+    [VF]::W32($h1, $statsHost + 0x68, [int]$xpTarget) | Out-Null
+
+    # One heavy pump a second on each side plus a wire hop; 25 s is many times over, and
+    # both fields travel in the same snapshot so one wait covers them.
+    WaitFor2 {
+        ([VF]::U32($h2, $partyTable2 + 0xFC) -eq $goldTarget) -and
+        ([VF]::U32($h2, $statsPeer + 0x68) -eq $xpTarget)
+    } 25 | Out-Null
+
+    $goldSeen = [VF]::U32($h2, $partyTable2 + 0xFC)
+    $xpSeen = [VF]::U32($h2, $statsPeer + 0x68)
+
+    Check 'party gold reaches the other instance' ($goldSeen -eq $goldTarget) `
+        "host $goldBefore -> $goldTarget, client's engine reads $goldSeen"
+    Check 'PC experience reaches the other instance' ($xpSeen -eq $xpTarget) `
+        "host $xpBefore -> $xpTarget, client's engine reads $xpSeen"
+
+    # Put the host's numbers back and let the mirror carry the restore across, so the next
+    # run starts from the same wallet and the same sheet this one did. (Waiting on gold is
+    # enough: the two fields are written by the same call on the client.)
+    [VF]::W32($h1, $partyTable1 + 0xFC, [int]$goldBefore) | Out-Null
+    [VF]::W32($h1, $statsHost + 0x68, [int]$xpBefore) | Out-Null
+    WaitFor2 { [VF]::U32($h2, $partyTable2 + 0xFC) -eq $goldBefore } 20 | Out-Null
+}
+else {
+    # Emit BOTH checks even when the pointers do not resolve. A check that is skipped
+    # silently is counted as neither pass nor fail and simply disappears from the summary,
+    # which reads exactly like it passed.
+    $progressionWhy = "partyTable host 0x{0:X} client 0x{1:X}, stats host 0x{2:X} client 0x{3:X}" -f `
+        $partyTable1, $partyTable2, $statsHost, $statsPeer
+    Check 'party gold reaches the other instance' $false $progressionWhy
+    Check 'PC experience reaches the other instance' $false $progressionWhy
+}
+
+# --- 15. shared ground items (an item taken here vanishes there) -------------------------
+# ⚠ Put the fight and any conversation down first. The pickup below is a real ENGINE ACTION
+# queued on the local player, and a character in combat or mid-conversation will not walk
+# over and take anything — the same trap sections 11, 11b and 13 each carry.
+BreakOffCombat $h1 $b1
+BreakOffCombat $h2 $b2
+CloseConversations $h1 $b1
+CloseConversations $h2 $b2
+Start-Sleep -Seconds 4
+
+# ⚠ THE DROP CANNOT BE STAGED FROM THE SHARED BLOCK, and it is worth saying why, because it
+# is the obvious thing to try. The item region at 0x290 is the AGENT's desired-state area:
+# an item written there by hand never enters the SESSION's item store, so it can never reach
+# the peer, and a check built on it would only be watching one plugin talk to itself — a
+# check that passes for the wrong reason.
+#
+# The one lever that produces a genuinely shared item is the agent's own drop file
+# (demo.ps1 gives each agent --drop-file), which runs exactly the code the dashboard's D key
+# runs: Session.DropItem -> the reliable item op -> both agents' desired sets -> both
+# plugins spawn a body.
+#
+# Dropped from the CLIENT, deliberately. The item lands 1.6 units in front of the DROPPING
+# player, so the client has one step to walk when it is asked to pick it back up. Drop from
+# the host instead and the item lands wherever the host's PC finished section 10's fight,
+# which can be tens of units from the client — the same distance mistake that made the
+# animation check fail on a fresh session.
+$dropResref = 'g_i_medeqpmnt01'   # a medpac: stackable, so a run that succeeds adds no new
+                                  # inventory line to the client's character
+
+# Item status is the PLUGIN's report, one 0x10-byte entry per slot: itemId, the engine
+# object it created, state (1 alive, 2 vanished), error. Judging on THIS and not on the
+# desired slots at 0x290 is the whole point — the desired region only says the agent asked
+# for an item, while a non-zero objectId here means the peer's engine really created a body,
+# and the plugin's aliveness probe re-asks the engine every 20 frames, so a slot that STAYS
+# alive is a body the engine still says is lying on the floor.
+function ItemSlotOf($h, $b, $itemId) {
+    for ($k = 0; $k -lt 8; $k++) {
+        if ([VF]::U32($h, $b + 0x410 + ($k * 0x10)) -eq $itemId) { return $k }
+    }
+    return -1
+}
+function ItemState($h, $b, $slot) { [VF]::U32($h, $b + 0x410 + ($slot * 0x10) + 8) }
+function ItemBody($h, $b, $slot) { [VF]::U32($h, $b + 0x410 + ($slot * 0x10) + 4) }
+
+# Remember which items the HOST already has bodies for. A previous run whose pickup did not
+# complete leaves an item lying there, and mistaking it for this run's drop would report a
+# pass from stale evidence — the same lesson the log helpers at the top of this file learned.
+$knownItems = @{}
+for ($i = 0; $i -lt 8; $i++) {
+    $id = [VF]::U32($h1, $b1 + 0x410 + ($i * 0x10))
+    if ($id -ne 0) { $knownItems["$id"] = $true }
+}
+
+$dropRequested = $false
+try {
+    Set-Content -Path $ClientDropFile -Value $dropResref -Encoding ASCII -ErrorAction Stop
+    $dropRequested = $true
+}
+catch {
+    $dropRequested = $false
+}
+
+# The agent DELETES the file as it takes the request, so the file going away is proof the
+# request was seen at all. Without this a session started without --drop-file (or with a
+# different work directory) would fail the checks below exactly as if the item channel were
+# broken, which is a lie about which thing is wrong.
+$dropTaken = $dropRequested -and (WaitFor2 { -not (Test-Path $ClientDropFile) } 15)
+
+$script:newItemId = 0
+if ($dropTaken) {
+    WaitFor2 {
+        for ($k = 0; $k -lt 8; $k++) {
+            $entry = $b1 + 0x410 + ($k * 0x10)
+            $id = [VF]::U32($h1, $entry)
+            if ($id -eq 0 -or $knownItems.ContainsKey("$id")) { continue }
+            if (([VF]::U32($h1, $entry + 8) -eq 1) -and ([VF]::U32($h1, $entry + 4) -ne 0)) {
+                $script:newItemId = $id
+                return $true
+            }
+        }
+        return $false
+    } 30 | Out-Null
+}
+
+$hostSlot = if ($newItemId) { ItemSlotOf $h1 $b1 $newItemId } else { -1 }
+$hostBody = if ($hostSlot -ge 0) { ItemBody $h1 $b1 $hostSlot } else { 0 }
+
+# The DROPPING instance's own body can lag the peer's — the plugin spaces its engine
+# mutations 15 frames apart and the two plugins are not in step — so wait for the client's
+# slot rather than deciding on one read. Deciding on one read is how the pickup below would
+# end up aimed at slot 0, which holds somebody else's item.
+$script:clientSlot = -1
+if ($newItemId) {
+    WaitFor2 {
+        $script:clientSlot = ItemSlotOf $h2 $b2 $newItemId
+        ($script:clientSlot -ge 0) -and ((ItemState $h2 $b2 $script:clientSlot) -eq 1)
+    } 20 | Out-Null
+}
+
+Check 'a dropped item is created in the peer''s game' (($newItemId -ne 0) -and ($hostBody -ne 0)) `
+    $(if ($newItemId -ne 0) { "item 0x{0:X} is object 0x{1:X} in the host, slot {2}" -f $newItemId, $hostBody, $hostSlot }
+      elseif (-not $dropRequested) { "could not write the drop request to $ClientDropFile" }
+      elseif (-not $dropTaken) { "the client agent never took the drop request from $ClientDropFile (was this session started by demo.ps1?)" }
+      else { "the request was taken but no new item body appeared in the host within 30s" })
+
+if (($newItemId -ne 0) -and ($clientSlot -ge 0)) {
+    $issuedBefore = [VF]::U32($h2, $b2 + 0x284)
+
+    # The pickup TEST HOOK: the 1-based slot index of an item the local player should walk
+    # over and take, through the engine's own ActionPickUpItem. It exists because clicking a
+    # small object on the floor is not something automation can do reliably, and it is the
+    # identical write KotorGameBridge.TryRequestPickUp makes — so nothing exercised here is a
+    # path a player never runs.
+    [VF]::W32($h2, $b2 + 0x280, [int]($clientSlot + 1)) | Out-Null
+
+    # First the client's own plugin has to see the item leave ITS floor. That is the engine's
+    # answer to "who possesses this object", asked by the aliveness probe — NOT the return
+    # value of the pickup call, which only ever meant the action was queued.
+    $tookIt = WaitFor2 { (ItemState $h2 $b2 $clientSlot) -eq 2 } 45
+    $issuedAfter = [VF]::U32($h2, $b2 + 0x284)
+
+    # And then the peer's copy has to go. This is the whole reason the channel exists: an
+    # item taken in one game must not still be lying there in the other, or two players pick
+    # up the same medpac. The host's plugin destroys its body once the session stops wanting
+    # the item, so the slot either clears or stops reading Alive.
+    $goneOnPeer = WaitFor2 {
+        $s = ItemSlotOf $h1 $b1 $newItemId
+        ($s -lt 0) -or ((ItemState $h1 $b1 $s) -ne 1)
+    } 30
+
+    # The issued counter is part of the verdict, not decoration. An item can leave the floor
+    # for reasons that are nothing to do with this check (it spawned somewhere unreachable and
+    # the probe reported it gone), and the host's copy would then be withdrawn too — a pass
+    # for entirely the wrong reason. The plugin only bumps this once the engine has ACCEPTED
+    # the pick-up action, so requiring it ties the vanish to the action we asked for.
+    $finalSlot = ItemSlotOf $h1 $b1 $newItemId
+    Check 'an item picked up here vanishes on the peer' `
+        (($issuedAfter -ne $issuedBefore) -and $tookIt -and $goneOnPeer) `
+        ("pickups issued {0} -> {1}, client slot {2} state {3}, host slot {4}" -f `
+            $issuedBefore, $issuedAfter, $clientSlot, (ItemState $h2 $b2 $clientSlot),
+            $(if ($finalSlot -lt 0) { 'cleared' } else { "still state $(ItemState $h1 $b1 $finalSlot)" }))
+
+    # ⚠ Nothing can withdraw a shared item from outside the session, so a pickup that did not
+    # complete leaves this item on both floors for the next run. That is why the check above
+    # snapshots the host's existing items first: a leftover is ignored rather than mistaken
+    # for the new drop. It does cost one of the eight item slots per failed run.
+}
+else {
+    Check 'an item picked up here vanishes on the peer' $false `
+        $(if ($newItemId -eq 0) { 'no item was dropped to pick up' } else { "item 0x{0:X} has no slot in the client" -f $newItemId })
+}
+
+# --- 16. death handling ------------------------------------------------------------------
+# Three separate things, and they are checked separately because they fail separately.
+#
+# 1. The two byte patches exist. Both are verify-bytes-or-refuse detours (the control
+#    auto-swap funnel, and the single CALL that raises game-over), so if the installed binary
+#    ever stops matching, the plugin declines and says so — this is where that shows, exactly
+#    as for the hooks in section 6.
+# 2. They are ARMED the right way round. Both patches are inert until the agent sets their
+#    flags, and the swap suppression is a CLIENT-side lock ONLY: applying it to the host too
+#    left nobody able to switch character at all, which was reported from play. That is a
+#    directional fact about live state, so it is checked as one.
+# 3. The downed -> revive round trip actually runs.
+Check 'death guards installed on both sides' `
+    ((LogHas $Log1 'death handling: control-swap guard at') -and (LogHas $Log2 'death handling: control-swap guard at')) `
+    'ChangeCharacter 0x5F6B60 + the game-over call site 0x4B6E99'
+
+$suppressOverHost = [VF]::U32($h1, $b1 + 0x102C)
+$suppressOverPeer = [VF]::U32($h2, $b2 + 0x102C)
+$suppressSwapHost = [VF]::U32($h1, $b1 + 0x1030)
+$suppressSwapPeer = [VF]::U32($h2, $b2 + 0x1030)
+Check 'death suppressions armed the right way round' `
+    (($suppressOverHost -ne 0) -and ($suppressOverPeer -ne 0) -and ($suppressSwapHost -eq 0) -and ($suppressSwapPeer -ne 0)) `
+    "game-over host $suppressOverHost client $suppressOverPeer, swap host $suppressSwapHost client $suppressSwapPeer"
+
+if ($pcPeer -eq 0) { $pcPeer = [VF]::FindCreature($h2, 0x7FFFFFFF) }
+
+if ($pcPeer -eq 0) {
+    Check 'a downed player is reported to the agent' $false 'client PC not found'
+    Check 'the co-op revive stands the player back up' $false 'client PC not found'
+}
+else {
+    $maxPeer = [VF]::I16($h2, $pcPeer + 0xE0)
+
+    # ⚠ STAND THE PLAYER UP FIRST if an earlier section left him down. The oracle below is a
+    # RISING edge, and a player who is already down produces no edge at all — so the check
+    # would fail while reporting nothing about the channel. Section 9 learned the same thing
+    # from the other side (forwarded damage is discarded for a downed player) and revives
+    # before it measures; this is that lesson applied to the section that owns the state.
+    if ([VF]::I16($h2, $pcPeer + 0xDC) -le 0) {
+        [VF]::W32($h2, $b2 + 0x1040, [int]$(if ($maxPeer -ge 20) { 20 } else { [Math]::Max($maxPeer, 1) })) | Out-Null
+        [VF]::W32($h2, $b2 + 0x1034, [int]([VF]::U32($h2, $b2 + 0x1034) + 1)) | Out-Null
+        WaitFor2 { [VF]::I16($h2, $pcPeer + 0xDC) -gt 0 } 15 | Out-Null
+        Start-Sleep -Seconds 2
+    }
+
+    $hpSaved = [VF]::I16($h2, $pcPeer + 0xDC)
+    $tempSaved = [VF]::U32($h2, $pcPeer + 0xE4)
+    $downedSerialBefore = [VF]::U32($h2, $b2 + 0x1024)
+    $reviveAppliedBefore = [VF]::U32($h2, $b2 + 0x1038)
+    $gameOverBefore = [VF]::U32($h2, $b2 + 0x1028)
+    $downBlock = [VF]::U32($h2, $b2 + 0x1F60)
+
+    # ⚠ THE HIT POINTS ARE ZEROED FROM OUTSIDE THE ENGINE, ON PURPOSE, and that is the only
+    # way this can be staged on the test save. The Endar Spire command deck pins the PC at
+    # min-1-hp for the whole deck (docs/research/min-one-hitpoint.md — it is a module rule,
+    # not a co-op fault), so every route THROUGH the engine is clamped at 1 and NOBODY can be
+    # downed there: not by a damage effect, not by the forwarded-damage channel section 9
+    # uses, not in a normal playthrough either. A cross-process write is not clamped, and the
+    # plugin's downed test is the engine's own CSWSCreature::GetDeadTemp — "current plus
+    # temporary hit points <= 0" — which is exactly what this produces. The block's
+    # DownBlockReason at 0x1F60 is reported below so a reader can see the floor for himself.
+    #
+    # What this does NOT stage is the engine's death choreography: OnApplyDeath, the control
+    # auto-swap and the game-over all hang off the damage handler, not off the hit-point
+    # field. Those are what the two checks above cover, and there is no way to fire them here
+    # without a module that lets a PC be damaged to zero.
+    [VF]::W32($h2, $pcPeer + 0xE4, 0) | Out-Null
+    [VF]::W16($h2, $pcPeer + 0xDC, [int16]0) | Out-Null
+
+    # The oracle is the EDGE counter, not the level at 0x1020. The agent revives a downed
+    # player the moment a standing peer is within a few units, and the engine's own
+    # TempDeathUpdate stands people up after five clear seconds, so the level can easily be
+    # back to 0 before the next poll — a serial cannot be missed that way.
+    $sawDown = WaitFor2 { [VF]::U32($h2, $b2 + 0x1024) -ne $downedSerialBefore } 15
+    Check 'a downed player is reported to the agent' $sawDown `
+        ("downed serial {0} -> {1}, game-over attempts {2} -> {3}, down-block reason {4}" -f `
+            $downedSerialBefore, [VF]::U32($h2, $b2 + 0x1024), $gameOverBefore,
+            [VF]::U32($h2, $b2 + 0x1028), $downBlock)
+
+    # Drive the revive ourselves rather than waiting on the agent's proximity rule, which
+    # depends on where the two players happen to be standing after section 13. Same channel
+    # either way — and if the agent's own rescue fires first, that is the same path arriving
+    # by the other door, so it cannot make this pass falsely.
+    $reviveHp = if ($hpSaved -gt 0) { $hpSaved } elseif ($maxPeer -ge 20) { 20 } else { [Math]::Max($maxPeer, 1) }
+    [VF]::W32($h2, $b2 + 0x1040, [int]$reviveHp) | Out-Null
+    [VF]::W32($h2, $b2 + 0x1034, [int]([VF]::U32($h2, $b2 + 0x1034) + 1)) | Out-Null
+
+    # ⚠ Judged on the ENGINE's hit points AND on the plugin's applied/status pair together.
+    # Hit points alone would also be satisfied by the engine's five-second auto-revive, which
+    # is not the channel under test; the applied serial moving with a zero status is what says
+    # the co-op revive ran, and a failed revive still echoes the serial (with a non-zero
+    # status), so the status has to be read too.
+    WaitFor2 {
+        ([VF]::U32($h2, $b2 + 0x1038) -ne $reviveAppliedBefore) -and ([VF]::I16($h2, $pcPeer + 0xDC) -gt 0)
+    } 25 | Out-Null
+
+    $reviveApplied = [VF]::U32($h2, $b2 + 0x1038)
+    $reviveStatus = [VF]::U32($h2, $b2 + 0x103C)
+    $hpAfterRevive = [VF]::I16($h2, $pcPeer + 0xDC)
+    $downedNow = [VF]::U32($h2, $b2 + 0x1020)
+    Check 'the co-op revive stands the player back up' `
+        (($reviveApplied -ne $reviveAppliedBefore) -and ($reviveStatus -eq 0) -and ($hpAfterRevive -gt 0) -and ($downedNow -eq 0)) `
+        ("applied {0} -> {1}, status {2}, hp {3}, downed {4}" -f `
+            $reviveAppliedBefore, $reviveApplied, $reviveStatus, $hpAfterRevive, $downedNow)
+
+    # Leave the player as we found him. The wait first is load-bearing: the plugin tops the
+    # hit points up a TICK AFTER the Resurrection (a same-frame write lands while the target
+    # still reads dead and the engine drops it), and the agent's own rescue may have queued a
+    # second top-up of its own — restoring before those land would simply be overwritten.
+    Start-Sleep -Seconds 3
+    [VF]::W32($h2, $pcPeer + 0xE4, [int]$tempSaved) | Out-Null
+    if ($hpSaved -gt 0) { [VF]::W16($h2, $pcPeer + 0xDC, [int16]$hpSaved) | Out-Null }
+}
+
+# --- 17. engine call signatures ----------------------------------------------------------
 # Static, but it belongs in the battery rather than in a comment nobody re-runs: a __thiscall
 # callee pops its OWN arguments, so a declaration with the wrong number of them skews the
 # stack four bytes at a time and surfaces as a stack-cookie fast-fail (0xC0000409) inside some
@@ -544,7 +898,7 @@ $auditOk = ($LASTEXITCODE -eq 0)
 Check 'every engine call signature matches the binary' $auditOk `
     (@($audit | Where-Object { $_ -match '^\s+\d+ agree|do not$|agree' }) -join '; ')
 
-# --- 15. no crash the plugin log cannot see ----------------------------------------------
+# --- 18. no crash the plugin log cannot see ----------------------------------------------
 # ⚠ A FAIL-FAST LEAVES NOTHING IN THE PLUGIN LOG. A wrong __thiscall argument count skews the
 # stack and surfaces as STATUS_STACK_BUFFER_OVERRUN (0xC0000409) inside some unrelated
 # function, with no managed exception and no log line — this project logged exactly that twice

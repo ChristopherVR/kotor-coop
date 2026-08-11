@@ -44,6 +44,7 @@ internal static unsafe class PluginHost
     private static PortraitController? _portraits;
     private static BarkController? _barks;
     private static InteractionLockController? _interactionLocks;
+    private static PartyRosterController? _partyRoster;
     private static MenuLoadController? _menuLoad;
     private static ConnectMenuController? _connectMenu;
     private static ChatInputController? _chatInput;
@@ -128,6 +129,7 @@ internal static unsafe class PluginHost
             _portraits = new PortraitController(_view);
             _barks = new BarkController(_view);
             _interactionLocks = new InteractionLockController(_view);
+            _partyRoster = new PartyRosterController(_view);
 
             // The minimap draw runs on the render path and has no other route to peer
             // positions, so it reads the block directly.
@@ -359,7 +361,11 @@ internal static unsafe class PluginHost
         Unsafe.InitBlockUnaligned(_block, 0, SharedBlock.TotalSize);
 
         _block->Magic = SharedBlock.MagicValue;
-        _block->Version = 33;
+        // ⚠ ONE NUMBER IN TWO FILES. KotorGameBridge.PluginSignature embeds this byte in the
+        // pattern the agent scans for, so bumping only one end reads as "plugin shared block
+        // not found" — which looks like a broken install rather than a version skew.
+        // 34 = the companion roster region at 0x3300 (SharedBlock, version 34).
+        _block->Version = 34;
 
         // A guard dword after the version. Magic plus version alone was not selective
         // enough: a scan once matched something else at a lower address and the agent
@@ -566,6 +572,11 @@ internal static unsafe class PluginHost
         _enemyPresence?.OnFrame();
         _partyPresence?.OnFrame();
 
+        // After the companion mirror, not before: reconciling the roster can spawn a companion
+        // body, and it should be driven by the mirror on the NEXT frame with the block already
+        // read rather than half-way through this one.
+        _partyRoster?.OnFrame();
+
         // After death handling has published whether we are down, so damage that would
         // arrive on an already-downed player is skipped rather than fighting the revive.
         _incomingDamage?.OnFrame();
@@ -627,6 +638,7 @@ internal static unsafe class PluginHost
         _encounters?.Invalidate();
         _barks?.Invalidate();
         _interactionLocks?.Invalidate();
+        _partyRoster?.Invalidate();
     }
 
     private static void WorkerLoop()

@@ -197,4 +197,22 @@ public enum PacketType : byte
     /// because the host's AI was never told otherwise".
     /// </summary>
     InteractionLock = 36,
+
+    /// <summary>
+    /// host -&gt; all: the authoritative NPC ROSTER — which of the nine companion slots are
+    /// available (recruited) and which are in the active party — broadcast each tick.
+    ///
+    /// The gap it closes: <c>AddPartyMember</c> / <c>RemovePartyMember</c> had no channel at
+    /// all. A conversation that recruits or dismisses a companion runs its scripts on ONE
+    /// instance, and the roster is what the whole companion channel keys on
+    /// (PartyPresenceController resolves companions by NPC slot), so the two instances ended
+    /// a recruitment holding different parties and the mirror silently stopped naming the
+    /// same creature.
+    ///
+    /// A LEVEL, not an edge, for the reason every channel here that matters is: an edge that
+    /// is dropped strands the divergence forever, and a roster divergence is exactly the kind
+    /// that never heals on its own. Two nine-bit masks are small enough that re-sending the
+    /// complete truth every tick costs nothing.
+    /// </summary>
+    PartyRoster = 37,
 }

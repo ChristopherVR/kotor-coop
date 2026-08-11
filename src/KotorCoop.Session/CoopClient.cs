@@ -176,6 +176,39 @@ public sealed class CoopClient : ICoopSession
         }
     }
 
+    /// <summary>The host's roster, as last received, and whether one ever has been.</summary>
+    private PartyRoster _partyRoster = PartyRoster.Empty;
+
+    private bool _hasPartyRoster;
+
+    public void PublishPartyRoster(PartyRoster roster)
+    {
+        // Only the host is authoritative for the roster; a client's own view is dropped, the
+        // same way its party snapshot is.
+    }
+
+    /// <summary>
+    /// ⚠ THE BOOL IS THE SAFETY, NOT A CONVENIENCE. An unheard-from roster and a genuinely
+    /// empty one are the same two zero masks, and applying the second by mistake dismisses
+    /// every companion the player has. So "no level yet" is reported as false and the plugin
+    /// is handed nothing at all — a client with no level applies nothing, which is exactly
+    /// what a client that has not been told anything should do.
+    ///
+    /// It is deliberately NOT aged out. A roster is save state, not a position sample: a
+    /// stale one is still the last thing the host said about a table that only changes when
+    /// somebody recruits or dismisses. Losing the connection is handled by the connection
+    /// (the agent stops writing the block); losing a few datagrams is not a reason to stop
+    /// reconciling.
+    /// </summary>
+    public bool TryGetPartyRoster(out PartyRoster roster)
+    {
+        lock (_gate)
+        {
+            roster = _partyRoster;
+            return _hasPartyRoster;
+        }
+    }
+
     /// <summary>The host's authoritative conversation token, as last received.</summary>
     private DialogueState _dialogue = DialogueState.Idle;
 
@@ -1043,6 +1076,20 @@ public sealed class CoopClient : ICoopSession
                     lock (_gate)
                     {
                         _party = party.Members;
+                    }
+                }
+
+                break;
+
+            case PacketType.PartyRoster:
+                if (PacketCodec.ReadPartyRoster(span) is { } rosterSnapshot)
+                {
+                    lock (_gate)
+                    {
+                        // A LEVEL, replaced wholesale — the host sends the complete roster
+                        // every tick, so there is no "companion left the party" edge to miss.
+                        _partyRoster = rosterSnapshot.Roster;
+                        _hasPartyRoster = true;
                     }
                 }
 

@@ -1012,6 +1012,53 @@ internal sealed unsafe class SharedBlockView(byte* baseAddress)
         baseAddress + SharedBlock.OffsetInteractionLocks
         + (Clamp(index, SharedBlock.InteractionLockCapacity) * SharedBlock.InteractionLockStride);
 
+    // ---- companion roster reconciliation ----------------------------------------
+    //
+    // One packed dword per direction; see SharedBlock's region comment for why the two masks
+    // share a word rather than sitting in fields of their own.
+
+    /// <summary>
+    /// Plugin-written; this instance's roster. Setting it stamps the valid bit, because the
+    /// only way to write this at all is to have read the party table — a caller that could not
+    /// read one calls <see cref="ClearLocalPartyRoster"/> instead, and the two are deliberately
+    /// different operations so "no reading" can never be spelled the same as "empty roster".
+    /// </summary>
+    public void SetLocalPartyRoster(uint availableMask, uint partyMask) =>
+        *U32(SharedBlock.OffsetLocalPartyRoster) =
+            SharedBlock.PartyRosterValid
+            | ((availableMask & SharedBlock.PartyRosterSlotMask) << SharedBlock.PartyRosterAvailableShift)
+            | ((partyMask & SharedBlock.PartyRosterSlotMask) << SharedBlock.PartyRosterPartyShift);
+
+    public void ClearLocalPartyRoster() => *U32(SharedBlock.OffsetLocalPartyRoster) = 0;
+
+    /// <summary>Agent-written; the host's roster. False when nobody is telling this instance
+    /// what its roster should be, in which case the masks are meaningless and untouched.</summary>
+    public bool TryGetHostPartyRoster(out uint availableMask, out uint partyMask)
+    {
+        uint packed = *U32(SharedBlock.OffsetHostPartyRoster);
+        availableMask = (packed >> SharedBlock.PartyRosterAvailableShift) & SharedBlock.PartyRosterSlotMask;
+        partyMask = (packed >> SharedBlock.PartyRosterPartyShift) & SharedBlock.PartyRosterSlotMask;
+        return (packed & SharedBlock.PartyRosterValid) != 0;
+    }
+
+    public uint PartyRosterAdds
+    {
+        get => *U32(SharedBlock.OffsetPartyRosterAdds);
+        set => *U32(SharedBlock.OffsetPartyRosterAdds) = value;
+    }
+
+    public uint PartyRosterRemoves
+    {
+        get => *U32(SharedBlock.OffsetPartyRosterRemoves);
+        set => *U32(SharedBlock.OffsetPartyRosterRemoves) = value;
+    }
+
+    public uint PartyRosterStatus
+    {
+        get => *U32(SharedBlock.OffsetPartyRosterStatus);
+        set => *U32(SharedBlock.OffsetPartyRosterStatus) = value;
+    }
+
     public ItemSlotView GetItemSlot(int index) =>
         new(baseAddress + SharedBlock.OffsetItemSlots
             + (Clamp(index, SharedBlock.ItemSlotCapacity) * SharedBlock.ItemSlotStride));
