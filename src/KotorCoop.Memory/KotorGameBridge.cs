@@ -3142,7 +3142,24 @@ public sealed class KotorGameBridge : IGameBridge
             // Signed: an overkilled enemy sits at negative hit points, and an unsigned
             // read would report it as 65531 hp and alive — the death would never
             // replicate.
-            _memory.TryRead(creature.Address + OffCurrentHitPoints, out short current);
+            //
+            // ⚠ AND THE READ'S RESULT IS HONOURED, because `current <= 0` becomes Dead below.
+            // Discarding the bool meant a FAILED read produced current = 0 and published a
+            // perfectly healthy creature as a corpse. Measured: the client killed eight or
+            // nine creatures within ~100 ms of the host opening a conversation, four times out
+            // of four, and five to eight seconds later the same ids came back alive and were
+            // spawned again as duplicate stand-ins. Cross-process reads fail transiently — the
+            // agent's own readout has a READ-FAILING counter that reached a thousand — so this
+            // is not a theoretical branch.
+            //
+            // Skipping the creature is the right failure: presence is a LEVEL re-sent every
+            // tick, so a body omitted from one snapshot is simply described by the next, while
+            // a body wrongly marked dead is acted on immediately and irreversibly.
+            if (!_memory.TryRead(creature.Address + OffCurrentHitPoints, out short current))
+            {
+                continue;
+            }
+
             ushort max = (ushort)Math.Clamp(TryReadMaxHitPoints(creature.Address), 0, ushort.MaxValue);
 
             // Presence: where this engine has the body and what it is playing, so the

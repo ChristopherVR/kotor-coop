@@ -210,6 +210,61 @@ public class SessionIntegrationTests
     }
 
     [Fact]
+    public async Task ThePartyRosterReachesTheClientAsALevel()
+    {
+        using CoopHost host = new(new SessionSettings { PlayerName = "Revan", Port = 0, TickRate = 30 });
+        using CoopClient client = new(
+            new SessionSettings { PlayerName = "Malak", TickRate = 30 },
+            new IPEndPoint(IPAddress.Loopback, host.ListenEndPoint.Port));
+
+        using CancellationTokenSource cts = new(Timeout + TimeSpan.FromSeconds(20));
+        Task hostTask = host.RunAsync(cts.Token);
+        Task clientTask = client.RunAsync(cts.Token);
+
+        PlayerState state = new(Vector3f.Zero, 0f, "end_m01aa", 100, 0);
+        void Publish()
+        {
+            host.PublishLocalState(state);
+            client.PublishLocalState(state);
+        }
+
+        Assert.True(await WaitForAsync(() => client.IsConnected, Timeout, Publish));
+
+        // ⚠ BEFORE ANYTHING IS PUBLISHED THE CLIENT MUST REPORT "NO LEVEL", not an empty
+        // roster. The two are the same masks, and applying the second would dismiss the
+        // player's whole party the moment they joined.
+        Assert.False(client.TryGetPartyRoster(out _), "a client with no level claimed to have one");
+
+        // Trask is recruited and walking (slot 8 in the base game's roster numbering — the
+        // value is arbitrary here; what matters is that both masks survive intact).
+        host.PublishPartyRoster(new PartyRoster(AvailableMask: 0b1_0000_0000, PartyMask: 0b1_0000_0000));
+        Assert.True(
+            await WaitForAsync(
+                () => client.TryGetPartyRoster(out PartyRoster r) && r.IsInParty(8),
+                Timeout,
+                Publish),
+            "the host's roster never reached the client");
+
+        // He is dismissed. This is the direction an EDGE channel would lose: nothing announces
+        // a removal, the next level simply stops containing him.
+        host.PublishPartyRoster(new PartyRoster(AvailableMask: 0b1_0000_0000, PartyMask: 0));
+        Assert.True(
+            await WaitForAsync(
+                () => client.TryGetPartyRoster(out PartyRoster r) && !r.IsInParty(8) && r.IsAvailable(8),
+                Timeout,
+                Publish),
+            "the dismissal never reached the client");
+
+        // The host is authoritative and never mirrors anyone's roster, in either direction.
+        Assert.False(host.TryGetPartyRoster(out _));
+        client.PublishPartyRoster(new PartyRoster(0b1_1111_1111, 0b11));
+        Assert.False(host.TryGetPartyRoster(out _));
+
+        await cts.CancelAsync();
+        await Task.WhenAll(hostTask, clientTask);
+    }
+
+    [Fact]
     public async Task AGlobalsCatalogueMismatchDropsWorldStateBothWays()
     {
         // Two players on different saves (or different global-variable mods) must not fuse

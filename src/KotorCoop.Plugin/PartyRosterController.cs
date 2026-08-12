@@ -243,9 +243,16 @@ internal sealed unsafe class PartyRosterController(SharedBlockView block)
             }
 
             // Deliberately falls through to the add in the SAME pass. A spawned companion that
-            // is not in the party is an ordinary loose creature — the pre-store flush does not
-            // know about it and SaveCreatures does not skip it — so the window between the two
-            // calls is kept to zero rather than a half second.
+            // is not yet in the party is an ordinary loose creature — the pre-store flush does
+            // not know about it and SaveCreatures does not skip it (only the in-party flag at
+            // +0xA88 buys that exemption) — so the window between the two calls is kept to zero
+            // rather than a half second.
+            //
+            // ⚠ If the add still fails, the body is NOT destroyed and NOT re-spawned. SpawnNPC
+            // has already written the new id into party table +0x0C, so the next pass resolves
+            // it and goes straight to the add. That bounds the damage at one orphaned body per
+            // slot for one pass; destroying it instead would leave the table pointing at a
+            // creature that no longer exists, which is the worse of the two.
             PluginHost.Log($"party roster: spawned NPC slot {addSlot} as 0x{objectId:X} to add them here");
         }
 

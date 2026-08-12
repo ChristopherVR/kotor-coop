@@ -73,3 +73,94 @@ special-casing.
 Size: MEDIUM. New PartyController (~PhantomController + CombatController), new per-tick
 PartySnapshot keyed by slot, shared-block v8, agent party-table census. Only genuinely new
 engine call: AddAction(0x3D). All other primitives already in Odyssey.cs.
+
+---
+
+# Roster sync (implemented 2026-08-11)
+
+The half of party reconciliation that was still missing: `AddPartyMember` /
+`RemovePartyMember` had **no channel at all**. A conversation that recruits or dismisses a
+companion runs its scripts on ONE instance — the other is following a dialogue token, not
+executing dialogue — so only one party table hears. And the party table is the key the whole
+companion channel resolves by (`PartyPresenceController` looks the host's "NPC slot 2" up in
+its OWN table), so a divergence makes the mirror drive the wrong body, or none, silently and
+for the rest of the session. This is the blocker recorded against `force_dialogue_party`.
+
+## Engine facts established (each with the instruction that proves it)
+
+All against swkotor.exe v1.0.3, image base 0x400000, no ASLR.
+
+**`int AddPartyMember(int nNPC, object oCreature)`** — `CSWVirtualMachineCommands::Execute
+CommandAddPartyMember` @ **0x0052DE70**, `__thiscall`, **`ret 8`** → `(this, nCommandId,
+nParams)`, the same shape as the `CreateObject` dispatch the plugin already uses.
+- pops an INTEGER (`CVirtualMachine::StackPopInteger` 0x005D1000) at 0x0052DE7E, then an
+  OBJECT (`StackPopObject` 0x005D10C0) at 0x0052DE9D. A VM pop yields arguments in
+  DECLARATION order, so the pushes go in reverse: object first, slot index last.
+- hands both to `CSWPartyTable::AddMember(nNPC, oCreature)` at 0x0052DEC4.
+- pushes an `int` result back (`StackPushInteger` 0x005D1010) at 0x0052DF21 — **on the
+  refusal path too** (0x0052DF1A pushes the zero). The early-out at 0x0052DE87 returns
+  0xFFFFF82F and pushes NOTHING, so the return may only be popped when the handler's own
+  status is 0.
+
+**`int RemovePartyMember(int nNPC)`** — @ **0x00541C00**, `__thiscall`, **`ret 8`**.
+- one integer pop at 0x00541C0C; `CSWPartyTable::GetNPCObject(nNPC, 0, 1)` at 0x00541C3F,
+  `RemoveMember(nNPC)` at 0x00541C4D; result pushed at 0x00541CA0. Same status rule.
+
+**`object SpawnAvailableNPC(int nNPC, location lLoc)`** — @ **0x00543ED0**, `__thiscall`,
+**`ret 8`**.
+- integer pop at 0x00543EDE, then engine structure type 2 (location) via
+  `StackPopEngineStructure` 0x005D10A0 at 0x00543EF4; `CSWPartyTable::SpawnNPC` at
+  0x00543F2A; object pushed back at 0x00543F36.
+
+**`CSWPartyTable::AddMember`** @ 0x00565620 (`__thiscall`, 8 bytes of args) — its refusals ARE
+the channel's preconditions, in the order it tests them:
+- `+0xF0 != -1` → refuse (0x00565625). A script driving one party member freezes the roster.
+- `+0x00 == 2` → refuse (0x00565633). **Two companions is the ceiling**, which is why removes
+  must run before adds: a straight swap otherwise fails on every pass forever.
+- `nNPC < 0` (0x00565640) or `>= 9` (0x00565648) → refuse. **Nine slots is the engine's
+  bound**, not a chosen cap.
+- `+0x30 + 4*nNPC == 0` → refuse (0x00565651). Not recruited.
+- the object id must resolve through `CServerExoApp::GetGameObject` (0x00565666) → **the add
+  needs a LIVE body**.
+- then writes `[+0x04 + 4*count] = nNPC` (0x005656B5) and `[+0x0C + 4*nNPC] = oCreature`
+  (0x005656B9), confirming this document's corrected layout above against the DB's.
+
+`CSWPartyTable::RemoveMember` @ 0x00565560 tests the same `+0xF0` (0x00565565), a count > 0,
+the 0..8 range and availability.
+
+**Availability is a bare flag**: `CSWPartyTable::AddNPC` writes the literal 1 at 0x00564350
+(`mov dword ptr [ebx + ebp*4 + 0x30], 1`). Nothing in the roster records the BLUEPRINT the
+recruiting script named — which is the reason recruitment itself cannot be replicated from
+the roster (see the boundary below).
+
+**The canonical spawn-then-add pair** is the game's own: `CSWGuiPartySelection::AcceptParty`
+(0x006BE560) calls `SpawnNPC` at 0x006BE90C and `AddMember` at 0x006BEA25.
+
+## What was built
+
+- Wire: `PacketType.PartyRoster = 37`, protocol version 22. Two nine-bit masks (available,
+  in-party) plus a timestamp — 16 bytes. **A LEVEL**, broadcast every tick by the host,
+  including when it is empty (the Endar Spire before Trask joins is a real all-zero roster,
+  and a client with no level reconciles nothing).
+- Shared block **version 34**, region 0x3300..0x3320, `TotalSize` 0x3300 → 0x3400. One PACKED
+  dword per direction: bits 0..8 available, 16..24 in-party, **bit 31 = "somebody wrote
+  this"**. Packing removes the tearing question rather than answering it with a serial; bit 31
+  separates "no party table to read" (main menu, transition) from "nothing recruited", which
+  are otherwise the same two zero masks — and publishing the second while it was really the
+  first would tell a client to dismiss everyone.
+- Plugin: `PartyRosterController`, publishing every frame and reconciling every 30 frames;
+  **one operation per pass**, removes before adds, spawning through `SpawnAvailableNPC` only
+  when the slot has no body.
+
+## The boundary, deliberately not crossed
+
+**This does not replicate RECRUITMENT.** Making a companion available needs
+`AddAvailableNPCByTemplate`/`ByObject` and therefore the blueprint the script named, which
++0x30 does not record (it is a 1). Availability is expected to arrive the way it already does
+— the same conversation running on both instances. What a partial or aborted conversation
+actually gets wrong is the PARTY SEAT, and that is what this fixes. A slot the peer has in its
+party and this instance never recruited is logged once, by slot, and skipped.
+
+Still open: `force_dialogue_party` remains off. The roster now reconciles after a recruitment
+conversation, but a player driven into one whose scripts do not run to the end here can still
+end up without the companion — that is the availability gap above, not a roster one.

@@ -5954,10 +5954,27 @@ internal static unsafe class Odyssey
             }
         }
 
-        _gaitLogTimer++;
-        if (_gaitLogTimer >= 240 && moving)
+        // ⚠ WALL CLOCK, NOT A FRAME COUNT — and this is a performance fix, not tidiness.
+        //
+        // This was `_gaitLogTimer++` against a threshold of 240, on a SINGLE static counter
+        // incremented once per DriveCreature call. That is once per DRIVEN BODY per frame, not
+        // once per frame, so a client mirroring 32 enemies plus companions crossed the
+        // threshold about 33x faster than the number suggests.
+        //
+        // Measured: ~18,000 gait lines on a client against 21 on the host over the same window
+        // (a 2.1 MB log against 98 KB), averaging 22.8 lines/second and peaking at 74. And
+        // PluginHost.Log writes each line TWICE — combined log plus channel log — each a full
+        // open/write/close, so the client was doing ~46 synchronous file operations a second
+        // on the game's frame thread, peaking near 148. On the path whose own contract says
+        // allocation-free.
+        //
+        // A wall-clock gate makes it one line per interval no matter how many bodies are
+        // driven, which is what "every so often, tell me what the gait looks like" always
+        // meant.
+        long nowMs = Environment.TickCount64;
+        if (moving && nowMs - _gaitLoggedAtMs >= GaitLogIntervalMs)
         {
-            _gaitLogTimer = 0;
+            _gaitLoggedAtMs = nowMs;
             nint t = *(nint*)(creature + CreClientTwin);
             nint mine = GetLocalPlayerTwin();
             PluginHost.Log(
@@ -5970,7 +5987,11 @@ internal static unsafe class Odyssey
         }
     }
 
-    private static int _gaitLogTimer;
+    /// <summary>When the gait diagnostic last spoke, and how often it may. Seconds, because
+    /// this is a "what does the gait look like" sample, not a trace.</summary>
+    private static long _gaitLoggedAtMs;
+
+    private const long GaitLogIntervalMs = 5000;
 
     /// <summary>Last gait asserted per driven creature, so the twin call fires on change
     /// only. Fixed slots rather than a dictionary: at most 8 phantoms plus 32 mirrored

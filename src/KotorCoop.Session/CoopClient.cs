@@ -24,6 +24,7 @@ public sealed class CoopClient : ICoopSession
     private readonly ReliableItemSender _itemSender = new();
     private readonly ReliableJournalSender _journalSender = new();
     private readonly ContainerLootStore _lootStore = new();
+    private readonly ReliableLootSender _lootSender = new();
     private readonly Lock _gate = new();
     private readonly uint _nonce;
 
@@ -410,9 +411,26 @@ public sealed class CoopClient : ICoopSession
 
     public IReadOnlyList<PeerEnemyDamage> GetEnemyDamage(string module) => [];
 
-    /// <summary>The host is authoritative for loot; a client only mirrors, never publishes.</summary>
+    /// <summary>
+    /// This player emptied a container here. A container is a private copy in each process, so
+    /// unless the host is told, its copy still holds the item and whoever opens it there takes
+    /// the same loot a second time — the dupe this whole channel exists to prevent.
+    ///
+    /// Reliable, like the host's own removals: a removal is a one-shot fact, not a level the
+    /// next tick re-sends. Enqueue-only; the tick loop owns the send buffer.
+    ///
+    /// Gated on the store, which is what stops the host's removals bouncing back: applying one
+    /// empties a container here, this instance's scanner then reports the same item as looted,
+    /// and the store recognises it and swallows the announcement.
+    /// </summary>
     public void PublishContainerLoot(uint containerId, uint itemId)
     {
+        if (!_lootStore.Add(new ContainerLootRemoval(containerId, itemId)))
+        {
+            return;
+        }
+
+        _lootSender.Enqueue(_localPeerId, containerId, itemId, SessionClock.NowMs);
     }
 
     // ---- phantom damage (combat participation) -----------------------------------
@@ -742,6 +760,12 @@ public sealed class CoopClient : ICoopSession
         foreach (JournalOpPacket op in _journalSender.CollectDue(now))
         {
             SendJournalOp(op);
+        }
+
+        // One recipient — the host — which relays onward to the other clients.
+        foreach (ContainerLootPacket op in _lootSender.CollectDue(LootRecipients, now))
+        {
+            SendContainerLoot(op);
         }
 
         // Report our in-world digest so the host can judge the world-time match (globals,

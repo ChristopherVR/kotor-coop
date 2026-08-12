@@ -611,6 +611,67 @@ public class PacketCodecTests
     }
 
     [Fact]
+    public void PartyRosterRoundTrips()
+    {
+        Span<byte> buffer = stackalloc byte[ProtocolConstants.MaxPacketSize];
+
+        // Bastila (0), Carth (1) and Mission (5) recruited; Carth and Mission walking.
+        PartyRosterPacket original = new(4321, new PartyRoster(0b0_0010_0011, 0b0_0010_0010));
+
+        int length = PacketCodec.Write(buffer, original);
+        PartyRosterPacket? decoded = PacketCodec.ReadPartyRoster(buffer[..length]);
+
+        Assert.NotNull(decoded);
+        Assert.Equal(original.ServerTimeMs, decoded.ServerTimeMs);
+        Assert.Equal(original.Roster, decoded.Roster);
+        Assert.True(decoded.Roster.IsInParty(1));
+        Assert.False(decoded.Roster.IsInParty(0));
+        Assert.True(decoded.Roster.IsAvailable(0));
+    }
+
+    [Fact]
+    public void EmptyPartyRosterRoundTrips()
+    {
+        // The Endar Spire before Trask joins is a real, legitimate all-zero roster, and it has
+        // to survive the wire as one — a codec that treated "nothing recruited" as "nothing to
+        // say" would leave a joiner with no level at all, and a client with no level never
+        // reconciles.
+        Span<byte> buffer = stackalloc byte[ProtocolConstants.MaxPacketSize];
+
+        int length = PacketCodec.Write(buffer, new PartyRosterPacket(1, PartyRoster.Empty));
+        PartyRosterPacket? decoded = PacketCodec.ReadPartyRoster(buffer[..length]);
+
+        Assert.NotNull(decoded);
+        Assert.Equal(PartyRoster.Empty, decoded.Roster);
+    }
+
+    [Fact]
+    public void PartyRosterRejectsSlotsTheEngineDoesNotHave()
+    {
+        // Nine slots is the engine's own bound (CSWPartyTable::AddMember refuses nNPC >= 9), so
+        // a tenth bit means the sender is not the build it claims to be — and the nine bits we
+        // would keep are then no more trustworthy than the one thrown away.
+        Span<byte> buffer = stackalloc byte[ProtocolConstants.MaxPacketSize];
+        int length = PacketCodec.Write(
+            buffer, new PartyRosterPacket(1, new PartyRoster(0xFFFF, 0)));
+
+        Assert.Null(PacketCodec.ReadPartyRoster(buffer[..length]));
+    }
+
+    [Fact]
+    public void PartyRosterRejectsAPartyMemberWhoWasNeverRecruited()
+    {
+        // The engine cannot produce this and will not accept it: AddMember tests availability
+        // before it touches anything. Dropping it stops a corrupt level from making a client
+        // spend every pass attempting an add its own engine refuses.
+        Span<byte> buffer = stackalloc byte[ProtocolConstants.MaxPacketSize];
+        int length = PacketCodec.Write(
+            buffer, new PartyRosterPacket(1, new PartyRoster(AvailableMask: 0b1, PartyMask: 0b10)));
+
+        Assert.Null(PacketCodec.ReadPartyRoster(buffer[..length]));
+    }
+
+    [Fact]
     public void NonAsciiNamesSurvive()
     {
         Span<byte> buffer = stackalloc byte[ProtocolConstants.MaxPacketSize];

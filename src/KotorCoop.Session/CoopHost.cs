@@ -106,14 +106,30 @@ public sealed class CoopHost : ICoopSession
     public void RemoveItem(uint itemId) => Items.Remove(itemId);
 
     private readonly ReliableLootSender _lootSender = new();
+    private readonly ContainerLootStore _lootStore = new();
 
     /// <summary>
-    /// The host looted an item from a shared container; broadcast the removal reliably so it
-    /// vanishes from every client's copy too. Enqueue-only — the tick loop, which owns the
+    /// Someone looted an item out of a shared container here; broadcast the removal reliably so
+    /// it vanishes from every client's copy too. Enqueue-only — the tick loop, which owns the
     /// send buffer, does the actual broadcasting and retransmits.
+    ///
+    /// Gated on the store, which is what keeps a client's removal from bouncing: applying it
+    /// here empties the container in the host's game, the host's own scanner then reports the
+    /// same item as looted, and the store recognises it and stops it going back out.
     /// </summary>
-    public void PublishContainerLoot(uint containerId, uint itemId) =>
+    public void PublishContainerLoot(uint containerId, uint itemId)
+    {
+        if (!_lootStore.Add(new ContainerLootRemoval(containerId, itemId)))
+        {
+            return;
+        }
+
         _lootSender.Enqueue(HostPeerId, containerId, itemId, SessionClock.NowMs);
+    }
+
+    /// <summary>Every removal known here, host-discovered and client-reported alike, for the
+    /// agent to re-declare to the game.</summary>
+    public IReadOnlyList<ContainerLootRemoval> ContainerLootRemovals => _lootStore.Snapshot();
 
     /// <summary>The host is the enemy authority: its fights are the ones that count.</summary>
     public bool IsEnemyAuthority => true;
@@ -1212,6 +1228,10 @@ public sealed class CoopHost : ICoopSession
                 HandleItemSyncRequest(datagram.From, span);
                 break;
 
+            case PacketType.ContainerLoot:
+                HandleContainerLoot(datagram.From, span);
+                break;
+
             case PacketType.ContainerLootAck:
                 if (PacketCodec.ReadContainerLootAck(span) is { } lootAck)
                 {
@@ -1447,6 +1467,38 @@ public sealed class CoopHost : ICoopSession
 
         // Ack unconditionally: a duplicate op means the previous ack was lost.
         int length = PacketCodec.Write(_replyBuffer, new ItemAckPacket(op.OpSequence));
+        if (length > 0)
+        {
+            _channel.Send(from, _replyBuffer.AsSpan(0, length));
+        }
+    }
+
+    /// <summary>
+    /// A client emptied a container in its own copy of the world. Record it (so the item goes
+    /// from the host's copy too) and relay it onward, because the client only ever talks to the
+    /// host — a third player learns about it no other way.
+    ///
+    /// The relay goes out under the host's own peer id and a fresh sequence rather than the
+    /// client's. Loot ops are retired per-recipient by sequence, and two peers number their ops
+    /// from 1 independently, so forwarding a client's sequence would collide with the host's.
+    /// Recipients de-duplicate on the (container, item) pair regardless of who announced it, so
+    /// nothing is lost by re-attributing the relay — including at the client that sent it,
+    /// which recognises its own removal coming back and drops it.
+    /// </summary>
+    private void HandleContainerLoot(IPEndPoint from, ReadOnlySpan<byte> span)
+    {
+        if (PacketCodec.ReadContainerLoot(span) is not { } op)
+        {
+            _channel.NoteMalformed();
+            return;
+        }
+
+        // PublishContainerLoot is the same door the host's own scanner comes through: it adds to
+        // the store and enqueues the broadcast only when the pair is new.
+        PublishContainerLoot(op.ContainerId, op.ItemId);
+
+        // Ack unconditionally: a duplicate op means the previous ack was lost.
+        int length = PacketCodec.Write(_replyBuffer, new ContainerLootAckPacket(HostPeerId, op.OpSequence));
         if (length > 0)
         {
             _channel.Send(from, _replyBuffer.AsSpan(0, length));

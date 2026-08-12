@@ -733,3 +733,75 @@ NODES: on the same entry for 15 of 15 paired samples.
   conversation, because `gui+0x170/0x174` stay `OBJECT_INVALID` until the server resolves
   them. The gate now only closes once the peer's identity is known; a competitor that slips
   through is still yielded by the adopt path.
+
+---
+
+## The spectate controller is an explicit state machine now (2026-08-11)
+
+A follow-up audit of `DialogueSpectateController` found thirteen state defects. Two were
+fixed in place (the section above). **Seven of the remaining eleven were the same shape** — a
+flag whose CLEAR sat below an early return that a later pass had added above it — so the
+structure changed rather than the instances. Patching them one at a time only waits for the
+next early return.
+
+### The defect list, as re-derived
+
+| # | Where | Defect |
+|---|---|---|
+| 1 | `PluginHost.InvalidateAll` | ⚠ **`_dialogueSpectate.Invalidate()` IS NEVER CALLED.** Some thirty controllers are reset on a module change and this is not one of them, so the whole "a node index names an entry in ONE .dlg" teardown was dead code. **Still open — PluginHost is owned elsewhere.** Mitigated: the controller now watches `Odyssey.TryGetWorldEpoch` itself and self-invalidates. |
+| 2 | `PluginHost` frame fn | The frame function `return`s above `_dialogueSpectate?.OnFrame()` three ways — the area-transition flush, a travel warp, and the whole of a no-world-epoch window (a loading screen). `DialogueReplyHook.Suppressed` and `DialogueGateHook.PeerHoldsConversation` were per-frame LEVELS with no writer during those, so they held their last value. A latched `Suppressed` is the "cannot answer any conversation, ever" report. **Fixed** by making both LEASES. |
+| 3 | `Invalidate` | Set `_hadDialogue = false`, which is the guard on the branch that clears the block's speaker, line and partner tag — so a module change left a stale partner tag published for the rest of the session, and that tag is what the far side's join gate compares against. **Fixed**: the block is cleared directly. |
+| 4 | give-up path | Reset `_following/_sawOpen/_reportedContentMs` but not `_appliedNodeSerial` or `_driveAttempts`. A follow that began while the owner's serial was still the banked one believed it had already been driven there and stood still. **Fixed**: node state is reset on every frame the machine is not following. |
+| 5 | give-up path | No cooldown. Give-up closes the conversation, and the adopt path finds the very same conversation still on screen with the very same matching tag on the NEXT frame and takes it straight back — an open/close cycle whose period is the content timeout and whose every lap runs the END SCRIPT. `ReopenCooldownMs = 4000` existed but nothing used it. **Fixed**: `BackingOff`. |
+| 6 | `_localUnidentifiedSinceMs` | `0` used as "not started", which is a value `Environment.TickCount64` genuinely takes — and a sentinel the clock can produce re-stamps itself every frame, so the grace never expires. **Fixed**: nullable. |
+| 7 | yield path | The tag comparison refuses an EMPTY tag by design, so a peer whose participants had not resolved read as "not our partner" and every local conversation looked like a competitor — including the copy of the peer's own conversation the engine hands both players in the same trigger, which is exactly the copy the adopt path exists to keep. This is the mirror image of defect 2 in the section above. **Fixed**: nothing is yielded until the peer has named its partner. |
+| 8 | adopt path | Banked `_sawOpen = true` unconditionally, but `_hadDialogue` is debounced across the between-entries flicker — so an adopt could start the 8 s content clock on a conversation that was not on screen. **Fixed**: the adopt banks an open only if the engine flag is up; otherwise the long open budget applies until it is. |
+| 9 | `BypassGrants` / `_followOpenPendingUntilMs` | Dead. Nothing has raised a grant since the self-open was removed, yet three code paths cleared the counter and a whole expiry branch ran against a deadline nothing ever set. **Fixed**: the controller no longer touches either; the hook keeps the mechanism, documented as ungranted. |
+| 10 | `ReopenCooldownMs` | Declared, never read. Now the stand-off in defect 5. |
+| 11 | `LogFew` | `_logged < 60` was a LIFETIME cap: a session that had seen sixty dialogue events went permanently silent, including for the next genuinely new state. Same failure the file's own comment argues against for repeat suppression, one level up. **Fixed**: the budget refills on a 120 s window. |
+| 12 | suppression scope | `Suppressed` covered only `_following`. `Yielding` (a conversation we have decided to close, whose plot flags race the owner's) and `BackingOff` (a matching conversation still on screen) were both answerable. **Fixed**: suppression is now `state != Idle`, i.e. "a peer holds the token". |
+| 13 | (unchanged, noted) | A follow whose own conversation closes locally while the peer keeps the token stays `Following` until the peer releases it. This is deliberate — `DialogueFollowClock` cannot tell that from the between-entries flicker without a number nobody has measured — and it is bounded by the owner's conversation. Left alone. |
+
+### The states
+
+```
+Idle        no peer holds the token. Nothing suppressed, nothing gated.
+Standby     a peer holds it; we are not committed. Suppressed. Unsticks a stale shell.
+            Also where an unidentified local conversation waits out its grace period,
+            and where a competing one waits for the peer to name itself.
+Yielding    a peer holds it and we hold a DIFFERENT one. Rate-limited close, then force.
+Adopting    one frame: our conversation IS the peer's. Starts both clocks.
+Opening     following, not yet on screen. The 15 s budget.
+Following   following, on screen. Drives the owner's node. The 8 s content budget.
+BackingOff  a follow gave up. Stand off ReopenCooldownMs before adopting again.
+```
+
+Transitions: `!PeerActive` → `Idle` from anywhere (closing once, if we were following).
+`Standby` → `Adopting` when the local partner is the peer's, → `Yielding` when it is a
+different, named NPC and the peer has named theirs. `Adopting` → `Opening`/`Following`.
+`Following` → `BackingOff` on either deadline. `BackingOff` → `Standby` when the stand-off
+expires. `Yielding` → `Standby` when our conversation has gone.
+
+### What moved into testable form
+
+`src/KotorCoop.Protocol/DialogueFollowMachine.cs` (states, inputs, actions, the transition
+table) and `src/KotorCoop.Protocol/DialogueNodeFollower.cs` (which of the owner's positions
+we have been driven to, and the deferral count). Both are compiled into the plugin BY SOURCE
+via `KotorCoop.Plugin.csproj`, the same route `DialogueFollowClock` already took — the plugin
+is a NativeAOT win-x86 library and nothing may reference it, so anything that must be covered
+has to live in `KotorCoop.Protocol`. 41 new tests in
+`tests/KotorCoop.Tests/DialogueFollowMachineTests.cs` and `DialogueNodeFollowerTests.cs`.
+
+What is left in `DialogueSpectateController` is engine reads, engine writes and shared-block
+plumbing. If a line in it decides something, it is in the wrong file.
+
+### The two levels are leases, not flags
+
+`DialogueReplyHook.SuppressReplies()` / `AllowReplies()` and `DialogueGateHook.HoldForPeer()` /
+`ReleaseForPeer()` stamp a deadline (2000 ms) that the controller renews every frame. Both are
+`volatile int` ticks compared with a wrap-safe unchecked subtraction, so the detours — which
+run on the engine's own thread mid-dispatch — can never read a torn deadline. Both fail OPEN,
+which is the direction the rest of both hooks already fails in.
+
+This is what defect 2 costs if it is not done: the flag is only correct while the frame pass
+runs, and the frame pass does not always run.

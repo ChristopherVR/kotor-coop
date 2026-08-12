@@ -639,6 +639,18 @@ internal static unsafe class PluginHost
         _barks?.Invalidate();
         _interactionLocks?.Invalidate();
         _partyRoster?.Invalidate();
+
+        // ⚠ THIS LINE WAS MISSING, so the spectate controller's ENTIRE teardown had never run
+        // in the history of the mod — every other controller here was reset on a module change
+        // and that one was not. A conversation's partner TAG then resolved to a different body
+        // in the new module, and a published node index named an entry in a completely
+        // different .dlg.
+        //
+        // The controller no longer depends on this: it watches the same world epoch PluginHost
+        // gates its frame on and invalidates itself. Both are kept deliberately. The
+        // self-invalidation is what makes it correct when this list is wrong again, and this
+        // line is what makes the list mean what it says.
+        _dialogueSpectate?.Invalidate();
     }
 
     private static void WorkerLoop()
