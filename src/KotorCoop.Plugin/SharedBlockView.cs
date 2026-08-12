@@ -670,6 +670,18 @@ internal sealed unsafe class SharedBlockView(byte* baseAddress)
     /// <summary>Pointer to the null-terminated module name for the menu load (16 bytes).</summary>
     public byte* MenuLoadModule => baseAddress + SharedBlock.OffsetMenuLoadModule;
 
+    /// <summary>Agent-written: the next menu load adopts somebody else's world, so the
+    /// character must come from Temp\pifo.ifo rather than the staged world's own
+    /// module.ifo. See <see cref="SharedBlock.OffsetAdoptWorldLogin"/>.</summary>
+    public bool AdoptWorldLogin => *U32(SharedBlock.OffsetAdoptWorldLogin) != 0;
+
+    /// <summary>Plugin-written: which login flavour the last load actually took.</summary>
+    public uint AdoptWorldApplied
+    {
+        get => *U32(SharedBlock.OffsetAdoptWorldApplied);
+        set => *U32(SharedBlock.OffsetAdoptWorldApplied) = value;
+    }
+
     /// <summary>Agent-written: a REMOTE peer standing in this module has its engine in
     /// combat. See <see cref="SharedBlock.OffsetSessionInCombat"/> for why the client cannot
     /// determine this locally, and why the local player is excluded.</summary>

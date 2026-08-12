@@ -169,6 +169,66 @@ public sealed class ErfArchive : GameArchive
                 BinaryPrimitives.ReadUInt32LittleEndian(value.Slice(4, 4))));
         }
     }
+
+    /// <summary>
+    /// Finds one member of an ERF held IN MEMORY rather than on disk. A save's module state
+    /// is a nested container — <c>SAVEGAME.sav</c> holds <c>&lt;module&gt;.sav</c>, which
+    /// holds <c>module.ifo</c> and the GIT — and the nested one is a byte range of its
+    /// parent, never a file of its own, so the path-based reader above cannot open it.
+    ///
+    /// <paramref name="resref"/> null matches the first member of the type. Bounds-checked
+    /// throughout: a truncated or hostile save reads as "absent" rather than throwing.
+    /// </summary>
+    public static bool TryFindMember(byte[] erf, int resourceType, string? resref, out byte[] data)
+    {
+        ArgumentNullException.ThrowIfNull(erf);
+        data = [];
+
+        if (erf.Length < 160)
+        {
+            return false;
+        }
+
+        uint count = BinaryPrimitives.ReadUInt32LittleEndian(erf.AsSpan(0x10, 4));
+        uint keysOffset = BinaryPrimitives.ReadUInt32LittleEndian(erf.AsSpan(0x18, 4));
+        uint valuesOffset = BinaryPrimitives.ReadUInt32LittleEndian(erf.AsSpan(0x1C, 4));
+
+        // The cap is a runaway guard on a corrupt count, not a format limit; no real save
+        // member list comes near it.
+        for (uint i = 0; i < count && i < 4096; i++)
+        {
+            long key = keysOffset + (24L * i);
+            long value = valuesOffset + (8L * i);
+            if (key + 24 > erf.Length || value + 8 > erf.Length)
+            {
+                return false;
+            }
+
+            int type = erf[key + 20] | (erf[key + 21] << 8);
+            if (type != resourceType)
+            {
+                continue;
+            }
+
+            string name = GameFileText.CString(erf.AsSpan((int)key, 16));
+            if (resref is not null && !string.Equals(name, resref, StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            uint offset = BinaryPrimitives.ReadUInt32LittleEndian(erf.AsSpan((int)value, 4));
+            uint size = BinaryPrimitives.ReadUInt32LittleEndian(erf.AsSpan((int)value + 4, 4));
+            if ((long)offset + size > erf.Length)
+            {
+                return false;
+            }
+
+            data = erf.AsSpan((int)offset, (int)size).ToArray();
+            return true;
+        }
+
+        return false;
+    }
 }
 
 /// <summary>Shared "read a byte range out of a file" used by every container reader.</summary>

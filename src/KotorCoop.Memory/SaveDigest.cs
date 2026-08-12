@@ -394,59 +394,11 @@ public static class SaveDigest
         return archives;
     }
 
-    /// <summary>
-    /// Finds one member of an in-memory ERF (the nested module .sav is a slice of
-    /// SAVEGAME.sav, never a file of its own). Layout per <see cref="ErfArchive"/>:
-    /// entry count at 0x10, key list (24-byte entries) at 0x18, resource list (8-byte
-    /// entries) at 0x1C. Bounds-checked throughout so a truncated save reads as "absent".
-    /// </summary>
-    private static bool TryFindErfMember(byte[] erf, int resourceType, string? resref, out byte[] data)
-    {
-        data = [];
-
-        if (erf.Length < 160)
-        {
-            return false;
-        }
-
-        uint count = ReadU32(erf, 0x10);
-        uint keysOffset = ReadU32(erf, 0x18);
-        uint valuesOffset = ReadU32(erf, 0x1C);
-
-        for (uint i = 0; i < count && i < 4096; i++)
-        {
-            long key = keysOffset + (24L * i);
-            long value = valuesOffset + (8L * i);
-            if (key + 24 > erf.Length || value + 8 > erf.Length)
-            {
-                return false;
-            }
-
-            int type = erf[key + 20] | (erf[key + 21] << 8);
-            if (type != resourceType)
-            {
-                continue;
-            }
-
-            string name = GameFileText.CString(erf.AsSpan((int)key, 16));
-            if (resref is not null && !string.Equals(name, resref, StringComparison.OrdinalIgnoreCase))
-            {
-                continue;
-            }
-
-            uint offset = ReadU32(erf, (int)value);
-            uint size = ReadU32(erf, (int)value + 4);
-            if ((long)offset + size > erf.Length)
-            {
-                return false;
-            }
-
-            data = erf.AsSpan((int)offset, (int)size).ToArray();
-            return true;
-        }
-
-        return false;
-    }
+    /// <summary>Finds one member of an in-memory ERF (the nested module .sav is a slice of
+    /// SAVEGAME.sav, never a file of its own). The walk itself lives on
+    /// <see cref="ErfArchive"/>, next to the on-disk reader whose format it shares.</summary>
+    private static bool TryFindErfMember(byte[] erf, int resourceType, string? resref, out byte[] data) =>
+        ErfArchive.TryFindMember(erf, resourceType, resref, out data);
 
     private static bool TryReadOuterMember(ErfArchive outer, int resourceType, out byte[] data)
     {
@@ -454,9 +406,6 @@ public static class SaveDigest
         ArchiveResource? resource = outer.Resources.FirstOrDefault(r => r.ResourceType == resourceType);
         return resource is not null && outer.TryRead(resource.Resref, resource.Extension, out data);
     }
-
-    private static uint ReadU32(byte[] buffer, int offset) =>
-        (uint)(buffer[offset] | (buffer[offset + 1] << 8) | (buffer[offset + 2] << 16) | (buffer[offset + 3] << 24));
 
     // ---- FNV-1a helpers, the house hash ---------------------------------------
 

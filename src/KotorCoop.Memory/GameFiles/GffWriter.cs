@@ -281,6 +281,18 @@ public sealed class GffWriter
                 WriteU32(fieldData, (uint)value);
                 break;
 
+            // Bare float runs, no length prefix — the type fixes the count (3 and 4).
+            case GffFieldType.Vector:
+            case GffFieldType.Orientation:
+            {
+                foreach (float component in (float[])value)
+                {
+                    WriteU32(fieldData, BitConverter.SingleToUInt32Bits(component));
+                }
+
+                break;
+            }
+
             default:
                 throw new NotSupportedException($"GFF writer: field type {type} is not supported");
         }
@@ -383,6 +395,19 @@ public sealed class GffWriterStruct
 
     /// <summary>A bare StrRef field (type 18, KOTOR's addition to the format).</summary>
     public GffWriterStruct SetStrRef(string label, uint value) => Set(label, GffFieldType.StrRef, value);
+
+    /// <summary>
+    /// A VECTOR field: three floats in the field-data block. Present in real save data —
+    /// a creature's <c>FollowInfo</c> carries <c>FollowLocation</c>, <c>LastLeaderPos</c>
+    /// and <c>LastFollowerPos</c> — so a writer that cannot emit one cannot reproduce a
+    /// player entry.
+    /// </summary>
+    public GffWriterStruct SetVector(string label, float x, float y, float z) =>
+        Set(label, GffFieldType.Vector, new[] { x, y, z });
+
+    /// <summary>An ORIENTATION field: four floats (a quaternion) in the field-data block.</summary>
+    public GffWriterStruct SetOrientation(string label, float x, float y, float z, float w) =>
+        Set(label, GffFieldType.Orientation, new[] { x, y, z, w });
 
     /// <summary>Sets a Struct field and returns the new child for population.</summary>
     public GffWriterStruct AddStruct(string label, uint structId)

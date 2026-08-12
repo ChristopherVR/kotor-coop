@@ -313,6 +313,20 @@ internal sealed unsafe class MenuLoadController(SharedBlockView block)
             // already returned by now, so one clear is enough — the guard on it being
             // non-zero just avoids a redundant call.
             // See docs/research/character-login-chain.md.
+            // ⚠ UNLESS THE WORLD IS NOT OURS. When the staged save came from the host
+            // (world adoption), its module.ifo holds the HOST's character, and rerouting to
+            // LoadPrimaryPlayer would bring this player up in the host's body. Leaving the
+            // flag SET is then correct rather than a bug: it is the flavour that reads
+            // Temp\pifo.ifo, which the agent has already filled with this player's own
+            // character. The engine's own autosave path works exactly this way — the
+            // only reason the reroute exists is that a MANUAL save carries no pifo.
+            if (!_loginRerouted && block.AdoptWorldLogin)
+            {
+                _loginRerouted = true;
+                block.AdoptWorldApplied = SharedBlock.AdoptLoginCarriedCharacter;
+                PluginHost.Log("menu: adopting a world — login left on TEMP:pifo (the carried character)");
+            }
+
             if (!_loginRerouted)
             {
                 nint appManagerNow = *(nint*)AppManagerPtr;
@@ -323,6 +337,7 @@ internal sealed unsafe class MenuLoadController(SharedBlockView block)
                 {
                     SetDoingStartNewModule(serverNow, 0);
                     _loginRerouted = true;
+                    block.AdoptWorldApplied = SharedBlock.AdoptLoginSavedCharacter;
                     PluginHost.Log("menu: routed the login to the saved character (LoadPrimaryPlayer)");
                 }
             }

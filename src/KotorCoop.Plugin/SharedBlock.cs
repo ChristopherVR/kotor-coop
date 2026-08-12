@@ -987,6 +987,41 @@ internal struct SharedBlock
     /// int[9].</summary>
     public const int PartyRosterSlots = 9;
 
+    // ---- adopted-world login (version 35, region 0x3320..0x3330) ------------------
+    //
+    // Which flavour of the engine's character login the next menu load takes. The chain
+    // forks on DoingStartNewModule (serverInternal+0x1007C), and MenuLoadController clears
+    // it every frame of the load window so RunModule takes LoadPrimaryPlayer and reads the
+    // PC out of the loaded module's own module.ifo.
+    //
+    // That is right when the world and the character came from the SAME save, which until
+    // now they always did. A joiner adopting the host's world is the case that breaks it:
+    // the staged world is the host's, so its module.ifo holds the HOST's character, and
+    // LoadPrimaryPlayer would bring the joiner up in the host's body. Leaving the flag SET
+    // routes the login through LoadCharacterFromIFO(-1) instead, which reads Temp\pifo.ifo —
+    // the joiner's own character, written there by PlayerIfo before the load fires.
+    //
+    // ⚠ Only ever set this when a pifo has actually been staged. Retail's own reason for
+    // never taking this path with a manual save is that a missing pifo fails SILENTLY: the
+    // 0xF login branch ignores LoadCharacterFromIFO's return value, login is confirmed
+    // anyway, and InitiateModuleForPlayer manufactures a blank 1/1-hit-point creature at the
+    // module start point. See docs/research/character-login-chain.md.
+
+    /// <summary>Agent -&gt; plugin. Nonzero = the next menu load is adopting somebody else's
+    /// world, so leave DoingStartNewModule alone and let the login read Temp\pifo.ifo.
+    /// Read once per load and not latched, so an ordinary load after an adopted one behaves
+    /// normally without anything having to clear it.</summary>
+    public const int OffsetAdoptWorldLogin = 0x3320;
+
+    /// <summary>Plugin -&gt; agent. Which flavour the last load actually took: 0 nothing yet,
+    /// 1 the saved character (LoadPrimaryPlayer), 2 the carried character (TEMP:pifo). The
+    /// one field that says whose body the player came up in, which is otherwise only visible
+    /// by looking at the character.</summary>
+    public const int OffsetAdoptWorldApplied = 0x3324;
+
+    public const uint AdoptLoginSavedCharacter = 1;
+    public const uint AdoptLoginCarriedCharacter = 2;
+
     // ---- container-loot removal (region 0xD00..0xE00) -----------------------------
     //
     // Chests and corpses are shared, so an item the host loots out of a container must vanish

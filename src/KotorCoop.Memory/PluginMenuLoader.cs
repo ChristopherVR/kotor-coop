@@ -17,12 +17,25 @@ namespace KotorCoop.Memory;
 /// </summary>
 public static class PluginMenuLoader
 {
+    /// <summary>
+    /// The save slot the plugin's load path fires against.
+    ///
+    /// ⚠ Id 1, not 0: <c>LoadPCAutoSave</c> formats its target as
+    /// <c>Format("%06d - %s", 1, "AUTOSAVE")</c>, and staging "000000 - AUTOSAVE" produced a
+    /// load that reached SetLoadingModule(1) and then silently bailed with no module target.
+    /// </summary>
+    public const string AutosaveSlot = "000001 - AUTOSAVE";
+
     private const int BlockMenuLoadSerial = 0x9A4;
     private const int BlockMenuLoadApplied = 0x9A8;
     private const int BlockMenuLoadStatus = 0x9AC;
     private const int BlockMenuLoadModule = 0x9B0;
     private const int BlockMenuLoadModuleLength = 16;
     private const int BlockHeartbeat = 0x4C;
+
+    // SharedBlock.OffsetAdoptWorldLogin / OffsetAdoptWorldApplied (block version 35).
+    private const int BlockAdoptWorldLogin = 0x3320;
+    private const int BlockAdoptWorldApplied = 0x3324;
 
     /// <summary>
     /// Reads which module a save is standing in, from SAVEGAME.sav's ERF key list: the
@@ -109,10 +122,7 @@ public static class PluginMenuLoader
 
         DirectoryInfo source = saves[slotIndex];
 
-        // LoadPCAutoSave formats its target as Format("%06d - %s", 1, "AUTOSAVE") —
-        // id 1, not 0. Staging "000000 - AUTOSAVE" produced a load that got as far as
-        // SetLoadingModule(1) and then silently bailed with no module target set.
-        string autosave = Path.Combine(savesDirectory, "000001 - AUTOSAVE");
+        string autosave = Path.Combine(savesDirectory, AutosaveSlot);
 
         try
         {
@@ -141,7 +151,13 @@ public static class PluginMenuLoader
     /// Finds the plugin's shared block (works at the main menu; no player needed) and
     /// bumps the menu-load serial. Returns the block address for status polling.
     /// </summary>
-    public static bool TryRequestLoad(ProcessMemory memory, out nint block, out string diagnostic)
+    /// <param name="adoptedWorld">True when the staged save came from the host rather than
+    /// this install (world adoption), so the character must be read from Temp\pifo.ifo
+    /// instead of the staged world's own module.ifo — which holds the HOST's character. See
+    /// the adopted-world login region in <c>SharedBlock</c> and
+    /// docs/research/character-login-chain.md.</param>
+    public static bool TryRequestLoad(
+        ProcessMemory memory, out nint block, out string diagnostic, bool adoptedWorld = false)
     {
         block = 0;
 
@@ -192,7 +208,7 @@ public static class PluginMenuLoader
             using var process = System.Diagnostics.Process.GetProcessById(memory.ProcessId);
             savesDirectory = Path.Combine(
                 Path.GetDirectoryName(process.MainModule?.FileName) ?? string.Empty,
-                "saves", "000001 - AUTOSAVE");
+                "saves", AutosaveSlot);
         }
         catch (Exception)
         {
@@ -210,6 +226,15 @@ public static class PluginMenuLoader
             return false;
         }
 
+        // Which character the load brings up, written BEFORE the serial for the same reason
+        // the module name is: the plugin acts on the serial, so everything it will read must
+        // already be there.
+        if (!memory.TryWrite(block + BlockAdoptWorldLogin, adoptedWorld ? 1u : 0u))
+        {
+            diagnostic = "could not write the login flavour";
+            return false;
+        }
+
         // Continue from whatever serial the block holds — the plugin outlives agents.
         if (!memory.TryReadUInt32(block + BlockMenuLoadSerial, out uint serial)
             || !memory.TryWrite(block + BlockMenuLoadSerial, serial + 1))
@@ -218,9 +243,21 @@ public static class PluginMenuLoader
             return false;
         }
 
-        diagnostic = $"load request {serial + 1} sent to the plugin (module {moduleName})";
+        diagnostic = $"load request {serial + 1} sent to the plugin (module {moduleName}"
+            + (adoptedWorld ? ", carried character)" : ")");
         return true;
     }
+
+    /// <summary>
+    /// Which character the last load actually brought up: 1 the world's own saved character,
+    /// 2 the character carried in through Temp\pifo.ifo, 0 nothing loaded yet.
+    ///
+    /// Worth checking rather than assuming. A missing pifo does not fail the load — the
+    /// engine's 0xF login branch ignores LoadCharacterFromIFO's return value — it produces a
+    /// blank level-1 stranger, and this is the field that says so before the player notices.
+    /// </summary>
+    public static bool TryReadLoginFlavour(ProcessMemory memory, nint block, out uint flavour) =>
+        memory.TryReadUInt32(block + BlockAdoptWorldApplied, out flavour);
 
     /// <summary>Reads back the plugin's ack and failure code for the last request.</summary>
     public static bool TryReadStatus(ProcessMemory memory, nint block, out uint applied, out int status)
