@@ -51,6 +51,7 @@ internal static unsafe class MaterialisedEnemies
     private static readonly uint[] LocalIds = new uint[SharedBlock.EnemyCapacity];
     private static readonly nint[] Bodies = new nint[SharedBlock.EnemyCapacity];
     private static readonly double[] LastSeen = new double[SharedBlock.EnemyCapacity];
+    private static readonly double[] SpawnedAt = new double[SharedBlock.EnemyCapacity];
 
     private static int _spawnCooldown;
     private static int _spawnFailures;
@@ -65,6 +66,33 @@ internal static unsafe class MaterialisedEnemies
     private static readonly uint[] ProvenPresent = new uint[SharedBlock.EnemyCapacity];
 
     private static int _provenCount;
+
+    /// <summary>
+    /// How long after its spawn a body is protected from being condemned as unresolvable.
+    ///
+    /// Measured live (21:44 session, owner 0x3B): a stand-in's fresh id can fail the cheap
+    /// resolver on its very first frame — cause not yet pinned down — and the old response
+    /// was destroy-and-respawn at the spawn cooldown's cadence: five bodies burned in two
+    /// seconds, five ticks of object-id counter drift, before one happened to stick. A
+    /// body that is genuinely gone still gets destroyed, one second later; a body the
+    /// resolver was merely late on survives its infancy.
+    /// </summary>
+    private const double BirthGraceSeconds = 1.0;
+
+    /// <summary>True while an owner id's stand-in is too young to be condemned for failing
+    /// to resolve (see <see cref="BirthGraceSeconds"/>).</summary>
+    public static bool InBirthGrace(uint ownerId, double now)
+    {
+        for (int i = 0; i < OwnerIds.Length; i++)
+        {
+            if (OwnerIds[i] == ownerId)
+            {
+                return now - SpawnedAt[i] < BirthGraceSeconds;
+            }
+        }
+
+        return false;
+    }
 
     /// <summary>The local id standing in for an owner id, or 0 when the owner's id is
     /// expected to resolve directly (the ordinary GIT-identity case).</summary>
@@ -253,6 +281,7 @@ internal static unsafe class MaterialisedEnemies
         LocalIds[slot] = localId;
         Bodies[slot] = creature;
         LastSeen[slot] = now;
+        SpawnedAt[slot] = now;
 
         if (_logged < 20)
         {
@@ -371,6 +400,7 @@ internal static unsafe class MaterialisedEnemies
         LocalIds[slot] = 0;
         Bodies[slot] = 0;
         LastSeen[slot] = 0;
+        SpawnedAt[slot] = 0;
     }
 
     /// <summary>CSWSCreature + this = the appearance.2da row, u16 — the same field the

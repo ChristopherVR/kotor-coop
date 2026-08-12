@@ -321,10 +321,19 @@ internal sealed unsafe class EnemyPresenceController(SharedBlockView block)
             {
                 MaterialisedEnemies.TryMaterialise(enemy, now);
             }
-            else
+            else if (!MaterialisedEnemies.InBirthGrace(enemy.ObjectId, now))
             {
-                // The mapped body vanished under us (the engine freed it); forget the
-                // mapping so a later pass can rebuild it.
+                // The mapped body has been unresolvable past its birth grace: treat it as
+                // genuinely gone. A FRESH body is left alone instead — measured live, a
+                // stand-in's first resolve can fail transiently, and condemning it on that
+                // one frame burned a body (and an object id) per spawn cooldown until one
+                // stuck. Log what the resolver saw, because "could not be resolved" alone
+                // told us nothing about why.
+                nint raw = Odyssey.ResolveServerObject(mapped);
+                PluginHost.Log(
+                    $"enemy drive: giving up on stand-in 0x{mapped:X} for owner "
+                    + $"0x{enemy.ObjectId:X} (resolver returned 0x{raw:X}"
+                    + (raw != 0 ? $", vtable 0x{*(nint*)raw:X}, id 0x{*(uint*)(raw + ObjId):X})" : ")"));
                 MaterialisedEnemies.ForgetOwner(enemy.ObjectId);
             }
 

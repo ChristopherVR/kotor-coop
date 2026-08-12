@@ -25,6 +25,9 @@ public sealed class CoopClient : ICoopSession
     private readonly ReliableJournalSender _journalSender = new();
     private readonly ContainerLootStore _lootStore = new();
     private readonly ReliableLootSender _lootSender = new();
+
+    /// <summary>A client's only loot recipient is the host, which relays to everyone else.</summary>
+    private static readonly uint[] LootRecipients = [CoopHost.HostPeerId];
     private readonly Lock _gate = new();
     private readonly uint _nonce;
 
@@ -762,10 +765,15 @@ public sealed class CoopClient : ICoopSession
             SendJournalOp(op);
         }
 
-        // One recipient — the host — which relays onward to the other clients.
+        // One recipient — the host — which relays onward to the other clients and acks
+        // with its own peer id (CoopHost.HandleContainerLoot acks unconditionally).
         foreach (ContainerLootPacket op in _lootSender.CollectDue(LootRecipients, now))
         {
-            SendContainerLoot(op);
+            int lootLength = PacketCodec.Write(_sendBuffer, op);
+            if (lootLength > 0)
+            {
+                _channel.Send(_hostEndPoint, _sendBuffer.AsSpan(0, lootLength));
+            }
         }
 
         // Report our in-world digest so the host can judge the world-time match (globals,
@@ -1194,6 +1202,16 @@ public sealed class CoopClient : ICoopSession
 
             case PacketType.ContainerLoot:
                 HandleContainerLoot(span);
+                break;
+
+            case PacketType.ContainerLootAck:
+                // The host confirming one of OUR loot ops; without this the reliable
+                // sender retransmits the op until it retires at max attempts.
+                if (PacketCodec.ReadContainerLootAck(span) is { } lootAck)
+                {
+                    _lootSender.Acknowledge(lootAck.PeerId, lootAck.OpSequence);
+                }
+
                 break;
 
             case PacketType.Pong:
