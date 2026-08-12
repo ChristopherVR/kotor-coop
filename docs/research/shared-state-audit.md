@@ -173,8 +173,33 @@ the host publishes gold and XP; the client **writes the host's totals over its o
 tick. A client's own kill grants XP locally and then has it stamped back down within a
 tick. Both instances read 300 in the audit only because neither had gained any since load.
 
-Needs to become a merge, not an overwrite — most likely "publish deltas and take the max",
-the shape the journal channel already uses.
+### FIXED (2026-08-13), and the obvious fix was wrong
+
+"Publish deltas and take the max" is right for one of these two values and would have been a
+disaster for the other.
+
+**Experience cannot be a delta.** Both engines already grant kill XP independently: a
+client's mirrored enemy is killed through `Odyssey.KillCreature`, which applies a real lethal
+damage effect precisely so the death runs the engine's own path — and that path reaches
+`CSWSEffectListHandler::OnApplyDeath` (0x4E0AC0), whose call at 0x4E0CB7 is the **only**
+caller of `CSWSCreature::ApplyDeathExperience` (0x4FB1E0). So the mirror grants the same XP
+the owner does, for the same kill. Forwarding a delta would have doubled every kill in the
+game. XP is therefore absolute and merges by **max**, in both directions — which carries the
+thing that actually diverges (script-granted XP: `GivePlotXP` from a conversation only one
+instance is having, stealth awards) and leaves the rest alone.
+
+**Gold cannot be a max.** It is the one shared value that goes DOWN, and a max would
+resurrect anything anyone spent. It travels as a cumulative earned/spent **ledger** — the
+shape `EnemyDamagePacket` already proved — which the host applies against its own party
+table; the host's balance IS the purse. A client's purchase now comes out of the party's
+money exactly once, in any datagram order, however many times the report arrives, with a
+generation field so a re-attached agent's re-reported totals are adopted rather than spent
+a second time.
+
+`ProgressionReportPacket` (type 38, protocol 23) is the peer direction the channel never had.
+Covered by `ProgressionPumpTests`. ⚠ Not yet live-verified: gold changes are inferred from
+the level, so the agent must not count its own writes as the party earning money — there is a
+test for that, but it has not been watched against a real shop.
 
 ## 4. The root of most of the list: ownership is one-directional
 

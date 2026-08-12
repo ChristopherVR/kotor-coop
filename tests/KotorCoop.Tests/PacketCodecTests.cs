@@ -110,6 +110,32 @@ public class PacketCodecTests
     }
 
     [Fact]
+    public void ProgressionReportRoundTrips()
+    {
+        Span<byte> buffer = stackalloc byte[ProtocolConstants.MaxPacketSize];
+
+        ProgressionReportPacket original = new(
+            PeerId: 2, Generation: 0xDEADBEEF, GoldEarned: 400, GoldSpent: 250, Experience: 1500);
+
+        int length = PacketCodec.Write(buffer, original);
+        ProgressionReportPacket? decoded = PacketCodec.ReadProgressionReport(buffer[..length]);
+
+        Assert.NotNull(decoded);
+        Assert.Equal(original, decoded);
+    }
+
+    [Fact]
+    public void ATruncatedProgressionReportIsRejected()
+    {
+        // A half-read ledger would be applied as a real contribution: garbage that survives
+        // decoding here becomes gold appearing in or vanishing from the party's purse.
+        Span<byte> buffer = stackalloc byte[ProtocolConstants.MaxPacketSize];
+        int length = PacketCodec.Write(buffer, new ProgressionReportPacket(2, 1, 400, 250, 1500));
+
+        Assert.Null(PacketCodec.ReadProgressionReport(buffer[..(length - 1)]));
+    }
+
+    [Fact]
     public void AFullEnemyDamageReportFitsInOneDatagram()
     {
         Span<byte> buffer = stackalloc byte[ProtocolConstants.MaxPacketSize];

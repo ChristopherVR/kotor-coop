@@ -566,11 +566,43 @@ public sealed class CoopAgent(IGameBridge bridge, ICoopSession session, AgentSet
             session.TryGetPartyRoster(out PartyRoster host), host);
     }
 
+    /// <summary>The local gold reading the last pass, so a change made BY THE GAME can be told
+    /// from one this agent wrote. -1 until the first observation, which only baselines.</summary>
+    private long _lastObservedGold = -1;
+
+    /// <summary>This instance's contribution to the shared purse: everything its own engine
+    /// has put in and taken out since the ledger started.</summary>
+    private uint _goldEarned;
+    private uint _goldSpent;
+
+    /// <summary>Bumped whenever the totals above restart, so the host can tell a RESET from a
+    /// stale datagram. Seeded from the clock because an agent re-attaching mid-session must
+    /// not reuse the epoch its predecessor's totals were counted in.</summary>
+    private readonly uint _progressionGeneration = unchecked((uint)Environment.TickCount64);
+
+    /// <summary>What each peer's ledger had already been spent against this purse, so an
+    /// increase is applied once. Keyed by peer, valued by (generation, earned, spent).</summary>
+    private readonly Dictionary<uint, (uint Generation, uint Earned, uint Spent)> _appliedProgression = [];
+
     /// <summary>
-    /// Shares progression: the host publishes its party gold and PC experience; a client
-    /// overwrites its own with the host's absolute values each tick, so the two parties level
-    /// and spend together. Absolute (not additive) because every kill grants XP/gold locally
-    /// on both instances — adding a client's own on top would double-count.
+    /// Shares progression. The host's party table IS the purse; clients report what their own
+    /// engine put in and took out, the host spends each increase against its table, and the
+    /// resulting balance is broadcast absolutely for everyone to mirror.
+    ///
+    /// ⚠ GOLD AND EXPERIENCE DO NOT TRAVEL THE SAME WAY, and the asymmetry is the whole
+    /// design. Gold is the one shared value that goes DOWN, so it cannot be merged as a level
+    /// — max would resurrect anything anyone spent, and last-writer-wins is what stopped a
+    /// client buying anything at all (their purchase was restored by the host's next
+    /// snapshot). It travels as a cumulative ledger instead, the shape the damage channel
+    /// already proved.
+    ///
+    /// Experience is the opposite. It cannot be a ledger, because both engines ALREADY grant
+    /// kill XP independently: a client's mirrored enemy dies through the engine's real damage
+    /// pipeline (<c>KillCreature</c> applies a lethal effect), so <c>OnApplyDeath</c> and
+    /// <c>ApplyDeathExperience</c> run on the mirror exactly as on the owner. Forwarding a
+    /// delta would count every kill in the game twice. It is absolute and merges by max, which
+    /// carries the thing that genuinely diverges — script-granted XP, from a conversation or a
+    /// stealth award only one instance ran — and leaves the rest alone.
     /// </summary>
     private void PumpProgression(SessionCapabilities caps)
     {
@@ -581,21 +613,120 @@ public sealed class CoopAgent(IGameBridge bridge, ICoopSession session, AgentSet
             return;
         }
 
-        if (session.IsEnemyAuthority)
+        if (!bridge.TryReadProgression(out uint gold, out uint experience))
         {
-            // The host is authoritative for progression too: publish, never mirror.
-            if (bridge.TryReadProgression(out uint gold, out uint experience))
-            {
-                session.PublishProgression(gold, experience);
-            }
-
             return;
         }
 
-        // A client: mirror the host's totals, once any have arrived.
+        ObserveLocalGold(gold);
+
+        if (session.IsEnemyAuthority)
+        {
+            PumpProgressionHost(gold, experience);
+            return;
+        }
+
+        // A client: report our own contribution, then mirror whatever the host makes of it.
+        session.ReportProgression(_progressionGeneration, _goldEarned, _goldSpent, experience);
+
         if (session.TryGetProgression(out uint hostGold, out uint hostExperience))
         {
-            bridge.TryWriteProgression(hostGold, hostExperience);
+            // Never below our own XP: a max on both ends means neither instance can pull the
+            // other backwards while a report is in flight.
+            if (bridge.TryWriteProgression(hostGold, Math.Max(hostExperience, experience)))
+            {
+                _lastObservedGold = hostGold;
+            }
+        }
+    }
+
+    /// <summary>
+    /// The host: spend every client's outstanding contribution against the party table, then
+    /// publish the result.
+    /// </summary>
+    private void PumpProgressionHost(uint gold, uint experience)
+    {
+        long purse = gold;
+        uint mergedExperience = experience;
+
+        foreach (PeerProgression report in session.GetProgressionReports())
+        {
+            mergedExperience = Math.Max(mergedExperience, report.Experience);
+
+            if (!_appliedProgression.TryGetValue(report.PeerId, out (uint Generation, uint Earned, uint Spent) applied)
+                || applied.Generation != report.Generation)
+            {
+                // First sight of this peer's ledger, or the ledger restarted. Adopt the
+                // totals WITHOUT spending them: a re-attached agent re-reports everything it
+                // ever counted, and applying that as new activity would hand the party a
+                // second copy of a session's earnings.
+                _appliedProgression[report.PeerId] = (report.Generation, report.GoldEarned, report.GoldSpent);
+                continue;
+            }
+
+            // Only increases. A total that went backwards inside one generation is a
+            // reordered datagram, and the next one supersedes it.
+            long earned = report.GoldEarned > applied.Earned ? report.GoldEarned - applied.Earned : 0;
+            long spent = report.GoldSpent > applied.Spent ? report.GoldSpent - applied.Spent : 0;
+
+            if (earned == 0 && spent == 0)
+            {
+                continue;
+            }
+
+            purse += earned - spent;
+
+            _appliedProgression[report.PeerId] = (
+                report.Generation,
+                Math.Max(applied.Earned, report.GoldEarned),
+                Math.Max(applied.Spent, report.GoldSpent));
+
+            Log?.Invoke(
+                $"purse: peer {report.PeerId} contributed +{earned} -{spent}, party gold {gold} -> {purse}");
+        }
+
+        // The party cannot owe money: the engine's gold is unsigned, and a negative write
+        // would wrap to something enormous.
+        purse = Math.Clamp(purse, 0, uint.MaxValue);
+
+        if ((purse != gold || mergedExperience != experience)
+            && bridge.TryWriteProgression((uint)purse, mergedExperience))
+        {
+            // Our own write is not the game earning or spending; re-baseline so the next
+            // observation measures only what the engine did.
+            _lastObservedGold = purse;
+        }
+
+        session.PublishProgression((uint)purse, mergedExperience);
+    }
+
+    /// <summary>
+    /// Turns the local gold READING into ledger entries. The engine has no "gold changed"
+    /// event, so a change is inferred from the level — which means our own writes have to be
+    /// excluded, or applying the purse would read as the party earning it all over again.
+    /// Every write above re-baselines for exactly that reason.
+    /// </summary>
+    private void ObserveLocalGold(uint gold)
+    {
+        if (_lastObservedGold < 0)
+        {
+            // First sight: baseline only. Everything the party already had belongs to the
+            // save, not to anyone's contribution — counting it as "earned" would have the
+            // host add a whole playthrough's takings to its own purse.
+            _lastObservedGold = gold;
+            return;
+        }
+
+        long delta = gold - _lastObservedGold;
+        _lastObservedGold = gold;
+
+        if (delta > 0)
+        {
+            _goldEarned += (uint)delta;
+        }
+        else if (delta < 0)
+        {
+            _goldSpent += (uint)-delta;
         }
     }
 

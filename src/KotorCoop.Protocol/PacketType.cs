@@ -215,4 +215,25 @@ public enum PacketType : byte
     /// complete truth every tick costs nothing.
     /// </summary>
     PartyRoster = 37,
+
+    /// <summary>
+    /// client -&gt; host: this peer's contribution to the shared purse and its own experience
+    /// total.
+    ///
+    /// The gold half is a LEDGER, in the shape <see cref="EnemyDamage"/> proved: cumulative
+    /// earned and cumulative spent, never a balance. A balance cannot be merged — two
+    /// instances holding 400 and 1200 have no arithmetic that says which is right — while
+    /// "this peer has taken 250 out of the purse since it joined" is a fact nothing can race,
+    /// survives a lost datagram, and never double-applies a repeated one. The host spends
+    /// each increase against its own party table, and its resulting balance IS the purse.
+    ///
+    /// The experience half is an ABSOLUTE, and merges upward by max. It cannot be a ledger,
+    /// because both engines already grant kill XP independently: a client's mirrored enemy
+    /// dies through the real damage pipeline (<c>KillCreature</c> → <c>OnApplyDeath</c> →
+    /// <c>ApplyDeathExperience</c> 0x4FB1E0, whose only caller is 0x4E0CB7), so forwarding
+    /// XP as a delta would count every kill in the game twice. What genuinely diverges is
+    /// script-granted XP — <c>GivePlotXP</c> from a conversation only one instance is having,
+    /// stealth XP — and a max carries that up without touching the rest.
+    /// </summary>
+    ProgressionReport = 38,
 }

@@ -198,6 +198,26 @@ public interface ICoopSession : IDisposable
     void PublishProgression(uint gold, uint experience);
 
     /// <summary>
+    /// Client only: this peer's contribution to the shared purse and its own experience total.
+    ///
+    /// Gold is a cumulative earned/spent LEDGER, never a balance — a balance cannot be merged
+    /// (two instances holding 400 and 1200 have no arithmetic that says which is right) while
+    /// "this peer has taken 250 out of the purse since it joined" can be applied exactly once
+    /// by the host, in any order, however many times it arrives.
+    ///
+    /// Experience is ABSOLUTE and merges upward by max. It cannot be a delta: both engines
+    /// already grant kill XP independently (a mirrored enemy dies through the real damage
+    /// pipeline, so <c>ApplyDeathExperience</c> runs on the mirror too), so forwarding a delta
+    /// would count every kill twice. What diverges is script-granted XP, and a max carries
+    /// that without disturbing the rest.
+    /// </summary>
+    void ReportProgression(uint generation, uint goldEarned, uint goldSpent, uint experience) { }
+
+    /// <summary>Host only: every client's latest progression contribution, fresh ones only.
+    /// Empty on a client.</summary>
+    IReadOnlyList<PeerProgression> GetProgressionReports() => [];
+
+    /// <summary>
     /// Client only: the host's latest gold and experience. Returns false until a snapshot has
     /// arrived, so a client never mirrors zero over its own values before the first one.
     /// </summary>

@@ -63,8 +63,16 @@ public static class ProtocolConstants
     /// (available, in-party), broadcast as a LEVEL. AddPartyMember / RemovePartyMember had no
     /// channel at all, so a conversation that recruited or dismissed a companion left the two
     /// instances holding different rosters — and the roster is the key the whole companion
-    /// channel resolves companions by.</summary>
-    public const byte Version = 22;
+    /// channel resolves companions by.
+    /// Version 23: ProgressionReport (38) — the peer direction of the progression channel,
+    /// which had none. The host published absolute gold and XP and every client OVERWROTE its
+    /// own with them, so a client's plot XP was erased within a tick and a client could not
+    /// spend gold at all (the host's value restored it). Gold now travels as a cumulative
+    /// earned/spent LEDGER the host spends against its own party table — the balance cannot be
+    /// merged, but "this peer has taken 250 out of the purse" can — while XP travels as an
+    /// absolute merged by max, because both engines already grant kill XP independently and a
+    /// delta would count every kill twice.</summary>
+    public const byte Version = 23;
 
     /// <summary>Journal quest tags are resrefs plus a little slack.</summary>
     public const int MaxJournalTagLength = 32;

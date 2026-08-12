@@ -280,6 +280,27 @@ public sealed record DialogueSnapshotPacket(long ServerTimeMs, DialogueState Sta
 /// </summary>
 public sealed record ProgressionSnapshotPacket(long ServerTimeMs, uint Gold, uint Experience);
 
+/// <summary>
+/// client -> host: this peer's contribution to the shared purse, and its own experience.
+///
+/// <paramref name="GoldEarned"/> and <paramref name="GoldSpent"/> are running CUMULATIVE
+/// totals since this peer's ledger last restarted, never a balance — the same discipline as
+/// <see cref="EnemyDamagePacket"/>, and for the same reason: the host applies each increase
+/// once, so the channel is order-independent, survives a lost datagram and cannot
+/// double-apply a repeat. <paramref name="Generation"/> changes whenever the sender's totals
+/// restart (a re-attached agent), which is how the host tells a RESET from a stale datagram.
+///
+/// <paramref name="Experience"/> is absolute and merges upward by max — see
+/// <see cref="PacketType.ProgressionReport"/> for why XP cannot be a delta.
+/// </summary>
+public sealed record ProgressionReportPacket(
+    uint PeerId, uint Generation, uint GoldEarned, uint GoldSpent, uint Experience);
+
+/// <summary>One peer's progression contribution, as the host sees it after freshness
+/// filtering.</summary>
+public readonly record struct PeerProgression(
+    uint PeerId, uint Generation, uint GoldEarned, uint GoldSpent, uint Experience);
+
 /// <summary>One received chat line, for a small on-screen/console log.</summary>
 public sealed record ChatMessage(uint PeerId, string Name, string Text);
 

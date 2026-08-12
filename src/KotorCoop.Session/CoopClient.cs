@@ -414,6 +414,29 @@ public sealed class CoopClient : ICoopSession
 
     public IReadOnlyList<PeerEnemyDamage> GetEnemyDamage(string module) => [];
 
+    public void ReportProgression(uint generation, uint goldEarned, uint goldSpent, uint experience)
+    {
+        if (_localPeerId == 0)
+        {
+            return;
+        }
+
+        // Sent every tick even when nothing changed, and unreliable, for the same reason the
+        // damage ledger is: the totals are cumulative, so a lost datagram costs a tick of
+        // staleness rather than a purchase, and a repeat applies nothing.
+        int length = PacketCodec.Write(
+            _sendBuffer,
+            new ProgressionReportPacket(_localPeerId, generation, goldEarned, goldSpent, experience));
+
+        if (length > 0)
+        {
+            _channel.Send(_hostEndPoint, _sendBuffer.AsSpan(0, length));
+        }
+    }
+
+    /// <summary>The host merges reports; a client only sends its own.</summary>
+    public IReadOnlyList<PeerProgression> GetProgressionReports() => [];
+
     /// <summary>
     /// This player emptied a container here. A container is a private copy in each process, so
     /// unless the host is told, its copy still holds the item and whoever opens it there takes
