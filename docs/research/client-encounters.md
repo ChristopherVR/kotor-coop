@@ -16,11 +16,22 @@ here · **NEEDS-LIVE** = must be confirmed on the running game.
 ## 1. The gap
 
 Every peer that does not own enemies has its encounters switched off —
-`KotorGameBridge.DisableLocalEncounters` writes `active = 0`, `started = 1` over every
-`CSWSEncounter` in the module. The reason is sound and is not being revisited: an encounter
+`KotorGameBridge.DisableLocalEncounters` writes `started = 1` over every `CSWSEncounter` in
+the module. The reason is sound and is not being revisited: an encounter
 spawn creates creatures, creature creation advances that instance's object-id counter, and
 identical object ids across instances are the key the enemy, item, door, placeable and loot
 channels all rest on (Handoff 4.5).
+
+⚠ It used to write `active = 0` as well, and that **poisoned the player's own save**.
+`CSWSEncounter::SaveEncounter` (0x591350) serialises `active` (+0x238) into the GIT and does
+not serialise `started` (+0x278) — verified by disassembly: the function references +0x238
+and +0x23C from that pair and nothing else. So a client who saved while joined wrote
+"inactive" into their save for every encounter in the module, permanently, and those
+encounters never fired again in single-player either. One field is enough anyway:
+`SpawnIfAppropriate` (0x593BE0) early-outs on `active == 0` **or** `started == 1`, and sets
+`started = 1` itself at 0x593C39 when it spawns — so writing `started` is exactly claiming
+the encounter has already fired. It is now re-asserted every 15 s within a module rather than
+once, because the binary was not exhaustively swept for a path that clears it.
 
 The cost was that the disarm is total. A client could walk into the middle of a Black Vulkar
 ambush and nothing at all happened, on either screen, until the host happened to walk into

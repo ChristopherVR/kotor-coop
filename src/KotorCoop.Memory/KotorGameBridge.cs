@@ -2105,22 +2105,54 @@ public sealed class KotorGameBridge : IGameBridge
     /// <summary>CSWSEncounter vtable.</summary>
     public const uint EncounterVtable = 0x00749D98;
 
-    /// <summary>CSWSEncounter + this = active dword (symbol database: active).</summary>
+    /// <summary>
+    /// CSWSEncounter + this = active dword (symbol database: active).
+    ///
+    /// ⚠ NEVER WRITE THIS. It is kept named so the next person recognises it rather than
+    /// rediscovering it: <c>SaveEncounter</c> (0x591350) serialises this field into the
+    /// GIT, so a write here follows the player into their save and disarms the encounter
+    /// permanently, in single-player too. Disarm through <see cref="EncounterStarted"/>,
+    /// which is runtime-only. See <see cref="DisableLocalEncounters"/>.
+    /// </summary>
     private const int EncounterActive = 0x238;
 
     /// <summary>CSWSEncounter + this = started dword (symbol database: started).</summary>
     private const int EncounterStarted = 0x278;
 
     private string _encounterModule = string.Empty;
+    private long _encounterDisarmedAtMs;
 
     /// <summary>
-    /// Turns off every encounter in the local module: active = 0, started = 1. Called on
-    /// the instance that does NOT own enemies. Encounter spawns are the one engine-side
-    /// source of object-id drift — a creature spawned by an encounter in one instance and
-    /// not the other shifts the id counter for everything created afterwards, and
-    /// identical ids are the key the whole combat replication rests on. The host keeps
-    /// its encounters, and a peer that walks into one asks the owner to fire it rather than
-    /// firing its own (see <see cref="TryRequestEncounterFire"/>).
+    /// How often the disarm is re-asserted within one module. It is a LEVEL now, not a
+    /// one-shot: <c>started</c> is the engine's own "this one has fired" latch and the
+    /// binary was not exhaustively swept for a path that clears it (a respawn timer is the
+    /// plausible one), so re-writing it a few times a minute costs a cached scan and removes
+    /// the question. Cheap because the scan is cached and the writes are plain dwords.
+    /// </summary>
+    private const int EncounterDisarmRefreshMs = 15_000;
+
+    /// <summary>
+    /// Turns off every encounter in the local module. Called on the instance that does NOT
+    /// own enemies. Encounter spawns are the one engine-side source of object-id drift — a
+    /// creature spawned by an encounter in one instance and not the other shifts the id
+    /// counter for everything created afterwards, and identical ids are the key the whole
+    /// combat replication rests on. The host keeps its encounters, and a peer that walks into
+    /// one asks the owner to fire it rather than firing its own (see
+    /// <see cref="TryRequestEncounterFire"/>).
+    ///
+    /// ⚠ ONLY <c>started</c> IS WRITTEN, AND THAT IS DELIBERATE — it used to write
+    /// <c>active = 0</c> as well, which POISONED THE PLAYER'S SAVE.
+    /// <c>CSWSEncounter::SaveEncounter</c> (0x591350) serialises <c>active</c> (+0x238) into
+    /// the GIT and does NOT serialise <c>started</c> (+0x278) — verified by disassembly, the
+    /// function references +0x238 and +0x23C and nothing else from that pair. So a client
+    /// who saved while joined wrote "inactive" into their own save for every encounter in
+    /// the module, permanently, and those encounters never fired again in single-player
+    /// either. <c>started</c> is runtime-only and dies with the module.
+    ///
+    /// One is enough: <c>CSWSEncounter::SpawnIfAppropriate</c> (0x593BE0) early-outs on
+    /// <c>active == 0</c> OR <c>started == 1</c>, and sets <c>started = 1</c> itself
+    /// (0x593C39) when it does spawn — so writing it is exactly claiming the encounter has
+    /// already fired.
     ///
     /// ⚠ This comment used to claim that whatever the owner's encounters spawn "reaches the
     /// client through the enemy channel". It does not. Both mirror controllers begin with
@@ -2128,15 +2160,24 @@ public sealed class KotorGameBridge : IGameBridge
     /// owner's instance is skipped — see docs/research/client-encounters.md §8, which is
     /// where the missing materialisation path is designed.
     ///
-    /// Plain dword writes, so this runs externally. Re-applied once per module.
+    /// Plain dword writes, so this runs externally.
     /// </summary>
     public int DisableLocalEncounters()
     {
-        if (!EngineGlobals.TryReadModuleName(_memory, out string module)
-            || string.Equals(module, _encounterModule, StringComparison.OrdinalIgnoreCase))
+        if (!EngineGlobals.TryReadModuleName(_memory, out string module))
         {
             return 0;
         }
+
+        long nowMs = Environment.TickCount64;
+
+        if (string.Equals(module, _encounterModule, StringComparison.OrdinalIgnoreCase)
+            && nowMs - _encounterDisarmedAtMs < EncounterDisarmRefreshMs)
+        {
+            return 0;
+        }
+
+        _encounterDisarmedAtMs = nowMs;
 
         int disabled = 0;
 
@@ -2149,10 +2190,7 @@ public sealed class KotorGameBridge : IGameBridge
                 continue;
             }
 
-            bool ok = _memory.TryWrite(address + EncounterActive, 0);
-            ok &= _memory.TryWrite(address + EncounterStarted, 1);
-
-            if (ok)
+            if (_memory.TryWrite(address + EncounterStarted, 1))
             {
                 disabled++;
             }
@@ -2160,8 +2198,12 @@ public sealed class KotorGameBridge : IGameBridge
 
         // Remember the module even if there were no encounters, so the scan is not
         // repeated every pump for a module that simply has none.
+        bool sameModule = string.Equals(module, _encounterModule, StringComparison.OrdinalIgnoreCase);
         _encounterModule = module;
-        return disabled;
+
+        // A refresh pass re-asserts the same encounters it already disarmed; reporting them
+        // again would have the agent log "disabled N encounter(s)" every 15 seconds forever.
+        return sameModule ? 0 : disabled;
     }
 
     // Client-triggered encounters, mirroring SharedBlock 0x1DE0..0x1E60. The plugin owns
