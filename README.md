@@ -102,7 +102,12 @@ one, Connect on the other, both loading their real saved characters with no inje
 clicks), phantoms both ways with appearance and equipment, run-gait, item drop/pickup,
 enemy health/death mirroring, enemy and companion presence (positions, health and rendered
 bodies identical across both games), door unlock propagation, map pins, and going down and
-being picked up by the other player. The mod-compatibility handshake is unit-tested (279
+being picked up by the other player. And no longer only on the Endar Spire: the same pair
+has been warped live through Taris' Lower City (where the client set off the Black Vulkar
+ambushes — see above) and Tatooine's Sand People territory, where the census ran at its
+full 32-creature cap with the client mirroring 32 of 32 through a real multi-enemy battle
+that wore both players down through their own damage pipelines
+(`docs/research/transition-window-races.md` is the trail of what those transitions found). The mod-compatibility handshake is unit-tested (279
 tests); it has been observed agreeing on two identical installs but its mismatch paths have
 not had a live pass. See `docs/research/` for the precise per-feature status and the
 reverse-engineering behind each.
@@ -233,9 +238,14 @@ tools/                   RE helpers, demo scripts, the kotor1_0_3 symbol databas
   missing. See [docs/research/min-one-hitpoint.md](docs/research/min-one-hitpoint.md).
 - **Enemies choose targets purely by proximity.** There is no threat shaping, so which
   player an enemy picks is the engine's nearest-hostile rule and nothing else.
-- **Encounters only fire for the host.** A client cannot trigger a spawn, so an encounter
-  trigger they walk over does nothing until the host walks over it too. Client-side spawning
-  would shift the object ids the whole enemy channel is keyed on.
+- ~~**Encounters only fire for the host.**~~ No longer: a client walking into an ambush
+  reports the polygon it is standing in, the host's engine fires the encounter for that
+  player's phantom (the `PlayerOnly` gate is suspended for the one call — the remote
+  player *is* a player), and the spawned enemies materialise on the client as driven
+  stand-ins. Verified live on the Taris Lower City Vulkar ambushes: the client walked in,
+  three encounters fired host-side, all nine spawned Vulkars appeared on the client, and
+  damage flowed both ways — the spawns hurt the client through its phantom, and the
+  client's own hits were spent by the host on the real bodies.
 - **Item identity is a blueprint resref**: upgrades and charges don't travel yet.
 - **The world-time compatibility check covers the globals catalogue**; save-identity and
   per-module GIT digests (to also gate on a mod-edited module) are a planned follow-up.

@@ -115,6 +115,28 @@ per half-second per enemy (0xB7..0xC4+ in ten seconds, measured). Identity is no
 creature VTABLE here too. Verified: the next run materialised nine Vulkars with zero
 give-ups and zero destroys.
 
+## Where it ended: Taris and Tatooine, live
+
+With all five fixed, the same session then chained a second cross-planet warp
+(tar_m03aa → tat_m20aa, the Sand People territory) and ran a real battle there:
+
+* Object ids, positions and health identical across both instances for the module's
+  placed creatures (chief `0x9` at 120 hp, the same coordinates to the centimetre).
+* The census ran at exactly its 32-slot cap and the client mirrored **32 of 32** —
+  the first live exercise of the cap in a crowded module.
+* A staged Sand People fight engaged BOTH bodies: the host's engine fought for real
+  (worn from 12 to 1 hp) while three different warriors landed hits on the client's
+  phantom, each forwarded and applied through the client's own pipeline
+  (`took 2/3/5 damage from a hit on our phantom`, named attackers).
+* One companion mirrored throughout.
+
+⚠ One warp artifact to know about: `SetMinOneHP` from the Endar Spire command deck
+travels WITH the character — the area script only releases it in the starboard section,
+so a character warped out early keeps the pin on every planet, and nobody can be downed
+until it is released. That is the engine honouring its save data, not a co-op defect,
+but a test save built by warping off the command deck will silently block every
+death-path test.
+
 ## The general rule these four instantiate
 
 A module transition destroys every object and reassigns every id, but nothing pauses the
