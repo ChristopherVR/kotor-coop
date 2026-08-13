@@ -194,3 +194,28 @@ rebound OK, Escape behaviour, and what the stock LBL_TITLE reads.
 anywhere in a tick unwound the loop and the ~ console, the menu button and the browser all
 went quiet for the rest of the session — with nothing on screen to say why, because the thing
 that reports problems is what died. The tick body is now individually guarded.
+
+## Live verification of the native panel (2026-08-13, second pass)
+
+The full product flow was run cold — plain `Start-Process swkotor.exe`, no scripts, hidden
+auto-started agents on both sides:
+
+| step | result |
+| --- | --- |
+| Cold launch, no `menu_button` key | Co-op button present (default-on verified) |
+| Co-op click → browser → Connect on the locked row | **native SaveNamePanel opens** over the menu, editbox focused, caret live |
+| Type `hoth`, click OK | **no save attempt** (the WriteGame rebind held), answer routed as `password hoth`, host admitted the client (`peers 1`), world auto-loaded |
+| Console in-world | `where` and `who` reply; Up recalls history; `wa`+Tab completes to `warp` with the usage hint line drawn below the input |
+
+Known gaps, deliberate or observed:
+- The panel title still reads "Enter name for saved game:" (stock LBL_TITLE strref; its
+  params offset is unresearched and was not guessed).
+- The panel is swept by a focus loss (alt-tab while it is up dismisses it cleanly —
+  "password prompt: dismissed", no crash). The player re-presses Connect; the ask does not
+  auto-re-fire after an unanswered dismissal.
+- The auto-started agent hosts on the CLI default port (27015); coop.ini `port=` is not
+  folded into the hosting path. Harmless on LAN (the beacon carries the real port) but a
+  direct-IP joiner typing the ini port would miss.
+- ⚠ Injected-input trap for test scripts: an arrow key sent WITHOUT
+  KEYEVENTF_EXTENDEDKEY is NUMPAD-8 and types '8' into the console; tools/sendkey.ps1 now
+  sends 0xE0-prefixed scans for the arrow cluster.

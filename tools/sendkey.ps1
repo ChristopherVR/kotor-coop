@@ -41,8 +41,12 @@ public class Keys {
         INPUT[] i = new INPUT[1];
         i[0].type = 1;
         i[0].u.ki.wVk = 0;
-        i[0].u.ki.wScan = scan;
-        i[0].u.ki.dwFlags = (uint)(0x0008 | (up ? 0x0002 : 0));
+        // High-byte 0xE0 marks an extended key (the arrow cluster, as opposed to the
+        // numpad): without KEYEVENTF_EXTENDEDKEY an injected 0x48 is NUMPAD-8, which
+        // types '8' instead of registering VK_UP.
+        bool ext = (scan & 0xFF00) == 0xE000;
+        i[0].u.ki.wScan = (ushort)(scan & 0xFF);
+        i[0].u.ki.dwFlags = (uint)(0x0008 | (ext ? 0x0001 : 0) | (up ? 0x0002 : 0));
         SendInput(1, i, Marshal.SizeOf(typeof(INPUT)));
     }
     public static void Focus(IntPtr hwnd) {
@@ -64,7 +68,9 @@ $scanCodes = @{
     'j' = 0x24; 'k' = 0x25; 'l' = 0x26
     'z' = 0x2C; 'x' = 0x2D; 'c' = 0x2E; 'v' = 0x2F; 'b' = 0x30; 'n' = 0x31; 'm' = 0x32
     'tab' = 0x0F; 'enter' = 0x1C; 'space' = 0x39
-    'up' = 0x48; 'down' = 0x50; 'left' = 0x4B; 'right' = 0x4D
+    # Extended (0xE0-prefixed) arrow-cluster keys; the plain 0x48/0x50 are the NUMPAD.
+    'up' = 0xE048; 'down' = 0xE050; 'left' = 0xE04B; 'right' = 0xE04D
+    'grave' = 0x29; 'backspace' = 0x0E
 }
 
 $proc = if ($ProcId -ne 0) { Get-Process -Id $ProcId -ErrorAction SilentlyContinue }
