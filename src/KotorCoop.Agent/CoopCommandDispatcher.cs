@@ -18,7 +18,9 @@ public sealed class CoopCommandDispatcher(
     SessionManager manager,
     IGameBridge bridge,
     int defaultPort,
-    Func<string, SessionSettings> settingsForPassword)
+    Func<string, SessionSettings> settingsForPassword,
+    Func<CoopConfig?>? loadConfig = null,
+    Action? menuAutoLoad = null)
 {
     private readonly KotorGameBridge? _kotor = bridge as KotorGameBridge;
 
@@ -50,6 +52,17 @@ public sealed class CoopCommandDispatcher(
 
     private SessionPhase _lastPhase = SessionPhase.Idle;
     private bool _promptedForPassword;
+
+    /// <summary>
+    /// Armed by a connect/host that originated inside the game (Co-op button, browser
+    /// panel, ~ console) — i.e. one made while the player could plausibly still be at the
+    /// main menu. When such a session reaches its load condition the save auto-loads once,
+    /// so "pick a server, arrive in the world" is one action.
+    /// </summary>
+    private bool _menuAutoLoadArmed;
+
+    /// <summary>Mirror of SharedBlock.ConnectStatusConnecting for the agent side.</summary>
+    private const uint ConnectStatusConnecting = 1;
 
     /// <summary>Polls the block for console/menu commands and reflects status until cancelled.</summary>
     public async Task RunAsync(CancellationToken cancellationToken)
@@ -99,31 +112,126 @@ public sealed class CoopCommandDispatcher(
         // The ~ console. A whole command line typed in-game.
         if (_kotor.TryTakeConsoleCommand(out string line))
         {
-            Dispatch(ConsoleCommand.Parse(line));
+            DispatchFromGame(ConsoleCommand.Parse(line));
         }
 
-        // The main-menu Connect button. It carries an optional typed host; empty means "use
-        // the configured host", which we model as a bare reconnect/connect with no address.
+        // The main-menu Connect button. It carries an optional typed host; empty means
+        // "use the configured host" — a reconnect when a session existed, coop.ini's say
+        // otherwise.
         if (_kotor.TryTakeConnectRequest(out string typedHost))
         {
-            Dispatch(typedHost.Length > 0
-                ? new CoopCommand(CoopCommandKind.Connect, Address: typedHost)
-                : new CoopCommand(CoopCommandKind.Reconnect));
+            _kotor.SetConnectStatus(ConnectStatusConnecting);
+            OnConnectRequest(typedHost);
         }
 
-        // A row confirmed in the in-game browser panel. The menu loop consumes these until the
-        // first session starts and nothing did afterwards, so a SECOND pick — which is the
-        // ordinary case, because a refused join leaves the player back at the menu looking at
-        // the same panel — did nothing at all, beside a list this class was already keeping
-        // up to date.
-        if (_kotor.TryTakeBrowserConnect(out int picked))
-        {
-            JoinListed(picked);
-        }
-
+        // The in-game server browser: the HOST button, or a listed row confirmed. The row
+        // is dialed as `connect #n` so it takes exactly the same path a typed pick would.
         if (_kotor.TryTakeBrowserHost())
         {
-            Dispatch(new CoopCommand(CoopCommandKind.Host));
+            DispatchFromGame(new CoopCommand(CoopCommandKind.Host));
+        }
+
+        if (_kotor.TryTakeBrowserConnect(out int picked))
+        {
+            if (picked >= 0 && picked < _lastServerList.Count)
+            {
+                DispatchFromGame(new CoopCommand(CoopCommandKind.Connect, Address: $"#{picked + 1}"));
+            }
+            else
+            {
+                Reply("that server is no longer listed");
+            }
+        }
+    }
+
+    /// <summary>
+    /// Handles a Co-op button press; <paramref name="typedHost"/> is the host typed
+    /// in-game, empty for a bare press. Public so the no-plugin <c>--menu</c> startup (and
+    /// tests) can drive the same path the button does.
+    /// </summary>
+    public void OnConnectRequest(string typedHost)
+    {
+        if (typedHost.Length > 0)
+        {
+            DispatchFromGame(new CoopCommand(CoopCommandKind.Connect, Address: typedHost));
+        }
+        else if (manager.CanReconnect)
+        {
+            DispatchFromGame(new CoopCommand(CoopCommandKind.Reconnect));
+        }
+        else
+        {
+            DispatchConfiguredConnect();
+        }
+    }
+
+    /// <summary>
+    /// A bare connect with no session to reconnect to: coop.ini decides. mode=host hosts,
+    /// host=&lt;address&gt; joins it, and with neither the player is pointed at the server
+    /// browser instead of getting "nothing to reconnect to".
+    /// </summary>
+    private void DispatchConfiguredConnect()
+    {
+        CoopConfig? config = loadConfig?.Invoke();
+
+        if (config is { Host: true })
+        {
+            DispatchFromGame(new CoopCommand(
+                CoopCommandKind.Host,
+                Password: config.Password.Length > 0 ? config.Password : null));
+            return;
+        }
+
+        if (config is { HasHostAddress: true })
+        {
+            DispatchFromGame(new CoopCommand(
+                CoopCommandKind.Connect,
+                Address: $"{config.HostAddress}:{config.Port}",
+                Password: config.Password.Length > 0 ? config.Password : null));
+            return;
+        }
+
+        Reply("no co-op server configured - pick one in the server browser, or set host=<ip> in coop.ini");
+    }
+
+    /// <summary>
+    /// Dispatches a command that originated inside the game rather than from the command
+    /// line. A connect or host chosen this way arms the one-shot menu auto-load; a host
+    /// has nothing to wait for, so its load fires immediately, while a joiner's fires when
+    /// the session reaches Connected (see <see cref="ReflectPhase"/>).
+    /// </summary>
+    private void DispatchFromGame(CoopCommand command)
+    {
+        if (command.Kind is CoopCommandKind.Connect or CoopCommandKind.Host)
+        {
+            _menuAutoLoadArmed = true;
+        }
+
+        Dispatch(command);
+
+        if (command.Kind == CoopCommandKind.Host)
+        {
+            FireMenuAutoLoadIfArmed();
+        }
+    }
+
+    /// <summary>
+    /// Fires the menu auto-load at most once per menu-initiated connect, and only when the
+    /// game is verifiably still at the main menu (no readable player state) — never
+    /// mid-world, never again on a reconnect.
+    /// </summary>
+    private void FireMenuAutoLoadIfArmed()
+    {
+        if (!_menuAutoLoadArmed)
+        {
+            return;
+        }
+
+        _menuAutoLoadArmed = false;
+
+        if (menuAutoLoad is not null && !bridge.TryReadLocalState(out _))
+        {
+            menuAutoLoad();
         }
     }
 
@@ -456,6 +564,7 @@ public sealed class CoopCommandDispatcher(
         {
             case SessionPhase.Connected:
                 Reply($"connected - {manager.Detail}");
+                FireMenuAutoLoadIfArmed();
                 break;
 
             case SessionPhase.Failed:
@@ -472,6 +581,9 @@ public sealed class CoopCommandDispatcher(
                     Reply($"failed - {manager.Detail}");
                 }
 
+                // A refused join (wrong password, incompatible save...) must never load a
+                // save out from under the menu.
+                _menuAutoLoadArmed = false;
                 break;
 
             case SessionPhase.Disconnected:

@@ -1,5 +1,4 @@
 using System.Diagnostics;
-using System.Net;
 using KotorCoop.Memory;
 using KotorCoop.Memory.GameFiles;
 using KotorCoop.Protocol;
@@ -516,255 +515,22 @@ internal static class Program
     }
 
     /// <summary>
-    /// Enables the in-game Co-op button and waits for the player to press it, then resolves
-    /// the connection from coop.ini (the button may also carry a typed host IP, which wins).
-    /// Returns go=false if cancelled before a connect was chosen.
+    /// Reads coop.ini beside the attached game's own executable, or null when it is absent
+    /// or unreadable — the command line and the built-in defaults stand in that case.
     /// </summary>
-    private static async Task<(bool Go, CoopMode Mode, IPEndPoint? Host, string Name, string Password)>
-        WaitForMenuConnectAsync(IGameBridge bridge, int processId, AgentOptions options, CancellationToken token)
+    private static CoopConfig? TryLoadCoopConfig(int processId)
     {
-        CoopMode mode = options.Mode;
-        IPEndPoint? host = options.HostEndPoint;
-        string name = options.Name;
-        string password = options.Password;
-
-        CoopConfig? config = null;
         try
         {
             using Process game = Process.GetProcessById(processId);
             string? gameDir = Path.GetDirectoryName(game.MainModule?.FileName);
-            if (gameDir is not null)
-            {
-                config = CoopConfig.TryLoad(CoopConfig.PathFor(gameDir));
-            }
+            return gameDir is null ? null : CoopConfig.TryLoad(CoopConfig.PathFor(gameDir));
         }
         catch
         {
-            // No coop.ini: the command-line options stand in for it.
-        }
-
-        // coop.ini's password applies to the BROWSER path too, not only to the paths that end
-        // in ApplyConfig. It did not, so a player who had set one still got asked for it: the
-        // browser-connect branch below read this variable, which held only the command line's.
-        // Folding it in here means a configured password is tried first and the prompt is what
-        // happens when there isn't one, or it is wrong — which is the whole contract.
-        if (password.Length == 0 && config is { Password.Length: > 0 })
-        {
-            password = config.Password;
-        }
-
-        // Only the KOTOR bridge exposes the plugin block the button lives in. The enable
-        // write defaults to TRUE now: the plugin shows the button on its own (coop.ini
-        // menu_button, default on), and this block flag is a force-on override — so the
-        // default here has to agree, or an agent attach would read as "turn it off".
-        if (bridge is not KotorGameBridge kotor || !kotor.EnableConnectMenu(config?.MenuButton ?? true))
-        {
-            Console.WriteLine("in-game Co-op button unavailable (no plugin); waiting for a connect signal is skipped.");
-            // Without the plugin there is nothing to wait on — connect immediately from
-            // whatever config we have.
-            return ApplyConfig(true);
-        }
-
-        Console.WriteLine(config?.MenuButton == false
-            ? "waiting for a connect request (the menu button is hidden by coop.ini menu_button=0; the ~ console works)..."
-            : "press the Co-op button in the game's main menu to connect (or use the ~ console: servers / connect <ip|#n> / host)...");
-
-        // Listen for LAN beacons while we wait, so `servers` can list hosts at the menu.
-        using ServerDiscovery browser = new();
-        browser.StartListening();
-        IReadOnlyList<ServerInfo> lastServers = [];
-
-        // Set when a locked row was picked with no password to hand: the pick is held here
-        // while the player types one, and the `password` verb below completes the join.
-        ServerInfo? awaitingPassword = null;
-
-        while (!token.IsCancellationRequested)
-        {
-            // Keep the in-game browser panel fed with what the LAN listener has found, so the
-            // list is live while the player is looking at it.
-            lastServers = browser.Servers;
-            kotor.PublishBrowserServers(
-                [.. lastServers.Select(s =>
-                    (s.Name, s.Address, (byte)s.PlayerCount, (byte)s.MaxPlayers, s.Locked, s.Module, s.Faces))],
-                passwordHeld: password.Length > 0);
-
-            // The player chose to host from the panel rather than join a listed server.
-            if (kotor.TryTakeBrowserHost())
-            {
-                MenuReply(kotor, "hosting; the other player will see you in their list");
-                return (true, CoopMode.Host, null, name, password);
-            }
-
-            // The player picked a row in the panel and pressed Enter.
-            if (kotor.TryTakeBrowserConnect(out int picked))
-            {
-                if (picked >= 0 && picked < lastServers.Count)
-                {
-                    ServerInfo chosen = lastServers[picked];
-
-                    // The beacon says locked and nothing has supplied a password: ask now. The
-                    // alternative — dial anyway — can only end in E_PASSWORD, and what the
-                    // player saw when it did was the world loading into a session they were
-                    // never admitted to, with the rejection printed in a window behind the game.
-                    if (chosen.Locked && password.Length == 0)
-                    {
-                        awaitingPassword = chosen;
-                        MenuReply(kotor, $"{chosen.Name} is password protected - type the password and press Enter");
-                        kotor.RequestPasswordPrompt();
-                        continue;
-                    }
-
-                    MenuReply(kotor, $"connecting to {chosen.Name} ({chosen.Address})");
-                    return (true, CoopMode.Join, chosen.EndPoint, name, password);
-                }
-
-                MenuReply(kotor, "that server is no longer listed");
-            }
-
-            if (kotor.TryTakeConnectRequest(out string typedHost))
-            {
-                kotor.SetConnectStatus(SharedBlockConnectStatusConnecting);
-                (bool go, CoopMode m, IPEndPoint? h, string n, string p) = ApplyConfig(true);
-
-                // A host IP typed in-game overrides coop.ini's.
-                if (typedHost.Length > 0 && IPEndPoint.TryParse(
-                        typedHost.Contains(':') ? typedHost : $"{typedHost}:{options.Port}", out IPEndPoint? typed))
-                {
-                    m = CoopMode.Join;
-                    h = typed;
-                }
-
-                return (go, m, h, n, p);
-            }
-
-            // The ~ console also works while waiting at the menu — this is exactly where a
-            // server browser is most useful, and the FuncInterp hook routes console commands at
-            // the menu. Without this, `servers` / `connect <ip>` / `host` did nothing until a
-            // session already existed, because CoopCommandDispatcher only starts afterwards.
-            if (kotor.TryTakeConsoleCommand(out string consoleLine))
-            {
-                CoopCommand command = ConsoleCommand.Parse(consoleLine);
-                switch (command.Kind)
-                {
-                    case CoopCommandKind.Servers:
-                        IReadOnlyList<ServerInfo> found = browser.Servers;
-                        lastServers = found;
-                        if (found.Count == 0)
-                        {
-                            MenuReply(kotor, "no co-op servers found on the LAN (host one, or connect by IP)");
-                            break;
-                        }
-
-                        MenuReply(kotor, $"servers on the LAN ({found.Count}) - connect #n to join:");
-                        for (int i = 0; i < found.Count; i++)
-                        {
-                            MenuReply(kotor, $"  {i + 1}) {found[i].Name}  {found[i].Address}  ({found[i].PlayerCount}/{found[i].MaxPlayers})");
-                        }
-
-                        break;
-
-                    case CoopCommandKind.Host:
-                        MenuReply(kotor, "hosting...");
-                        return (true, CoopMode.Host, null, name,
-                            command.Password is { Length: > 0 } hp ? hp : password);
-
-                    case CoopCommandKind.Connect:
-                        // `connect #n` picks from the last listing; otherwise a typed address.
-                        if (command.Address is { Length: > 1 } pick && pick[0] == '#'
-                            && int.TryParse(pick[1..], out int index))
-                        {
-                            if (index < 1 || index > lastServers.Count)
-                            {
-                                MenuReply(kotor, $"no server #{index} - run `servers` first");
-                                break;
-                            }
-
-                            ServerInfo chosen = lastServers[index - 1];
-                            MenuReply(kotor, $"connecting to {chosen.Name} ({chosen.Address})");
-                            return (true, CoopMode.Join, chosen.EndPoint, name,
-                                command.Password is { Length: > 0 } cp1 ? cp1 : password);
-                        }
-
-                        if (command.TryResolveEndpoint(options.Port, out IPEndPoint typedEndpoint))
-                        {
-                            MenuReply(kotor, $"connecting to {typedEndpoint}");
-                            return (true, CoopMode.Join, typedEndpoint, name,
-                                command.Password is { Length: > 0 } cp2 ? cp2 : password);
-                        }
-
-                        MenuReply(kotor, $"could not resolve host '{command.Address}'");
-                        break;
-
-                    // The answer to the prompt above. It carries only the secret: the player
-                    // picked a row in a panel and never saw an address, so demanding one back
-                    // would be the same as not having prompted.
-                    case CoopCommandKind.Password:
-                        if (awaitingPassword is not { } locked)
-                        {
-                            MenuReply(kotor, "nothing is waiting for a password - pick a server first");
-                            break;
-                        }
-
-                        MenuReply(kotor, $"connecting to {locked.Name} ({locked.Address})");
-                        return (true, CoopMode.Join, locked.EndPoint, name,
-                            command.Password ?? string.Empty);
-
-                    case CoopCommandKind.Status:
-                        MenuReply(kotor, "at the main menu - not connected");
-                        break;
-
-                    case CoopCommandKind.Help:
-                        MenuReply(kotor, ConsoleCommand.HelpText);
-                        break;
-
-                    case CoopCommandKind.Invalid:
-                        MenuReply(kotor, command.Error);
-                        break;
-                }
-            }
-
-            try
-            {
-                await Task.Delay(200, token).ConfigureAwait(false);
-            }
-            catch (OperationCanceledException)
-            {
-                break;
-            }
-        }
-
-        return (false, CoopMode.None, null, name, password);
-
-        (bool, CoopMode, IPEndPoint?, string, string) ApplyConfig(bool go)
-        {
-            if (config is null)
-            {
-                return (go, mode, host, name, password);
-            }
-
-            return (
-                go,
-                config.Host ? CoopMode.Host : CoopMode.Join,
-                config.Host ? null : config.ResolveEndPoint(),
-                config.Name ?? name,
-                config.Password.Length > 0 ? config.Password : password);
+            return null;
         }
     }
-
-    /// <summary>
-    /// Echoes a menu-time console reply to stdout, the in-game console reply line and the chat
-    /// overlay — the same three places <see cref="CoopCommandDispatcher"/> uses once a session
-    /// exists, so the console behaves identically before and after connecting.
-    /// </summary>
-    private static void MenuReply(KotorGameBridge kotor, string text)
-    {
-        Console.WriteLine($"[coop] {text}");
-        kotor.PostConsoleReply(text);
-        kotor.PostChatLine(text);
-    }
-
-    /// <summary>Mirror of SharedBlock.ConnectStatusConnecting for the agent side.</summary>
-    private const uint SharedBlockConnectStatusConnecting = 1;
 
     /// <summary>
     /// Pushes the always-on chat-overlay settings from coop.ini into the plugin block. Uses
@@ -922,82 +688,48 @@ internal static class Program
             cts.Cancel();
         };
 
-        // The in-game Connect flow: enable the menu button and wait for the player to press
-        // it, taking the host/join details from coop.ini. Falls through to the command-line
-        // options when coop.ini is absent.
-        CoopMode mode = options.Mode;
-        IPEndPoint? hostEndPoint = options.HostEndPoint;
-        string playerName = options.Name;
-        string password = options.Password;
-
-        if (options.MenuConnect)
-        {
-            (bool go, mode, hostEndPoint, playerName, password) =
-                await WaitForMenuConnectAsync(bridge, memory.ProcessId, options, cts.Token).ConfigureAwait(false);
-
-            if (!go)
-            {
-                return 0; // cancelled before connecting
-            }
-        }
-
-        if (mode == CoopMode.None)
-        {
-            Console.Error.WriteLine("no connection was chosen.");
-            return 1;
-        }
-
-        if (mode == CoopMode.Join && hostEndPoint is null)
-        {
-            Console.Error.WriteLine("join requested but no host address is set (coop.ini host=...).");
-            return 1;
-        }
+        // Everything a session needs is constructed up front, whether or not a connection
+        // has been chosen yet: from the moment the agent attaches, the dispatcher is THE
+        // single command path. CLI --host/--join is just an initial dispatch through it,
+        // and every in-game surface (~ console, Co-op button, browser panel) feeds the
+        // same per-tick loop — so say/servers/connect/host all work at the main menu.
+        CoopConfig? config = TryLoadCoopConfig(memory.ProcessId);
 
         // Fingerprint this install so a mod mismatch with the peer is caught at join time.
         // Best-effort: a digest that could not be computed compares as "unchecked" and
         // never blocks a session.
         ContentDigest digest = ComputeInstallDigest(memory.ProcessId);
 
-        // The player name is fixed for the process; the in-game console can vary only the
-        // password (per connect), so the settings factory closes over the resolved name.
-        string effectiveName = playerName;
+        // The player name: coop.ini's wins for menu-driven connects, the command line's for
+        // scripted ones. A password typed with an in-game command (connect <ip> <password>,
+        // host <password>) beats everything; then --password; then coop.ini's — in EVERY
+        // mode, not just menu mode: the file documents one setting, and honouring it in only
+        // one of the two ways a session starts is the kind of difference nobody debugs —
+        // they conclude the password does not work. (Scripted runs that want a specific
+        // password pass --password, which still wins.)
+        string effectiveName = options.MenuConnect && config?.Name is { Length: > 0 } iniName
+            ? iniName
+            : options.Name;
+        string fallbackPassword = options.Password.Length > 0
+            ? options.Password
+            : config?.Password ?? string.Empty;
+
+        if (options.Password.Length == 0 && config is { Password.Length: > 0 })
+        {
+            Console.WriteLine("password: set from coop.ini");
+        }
 
         // coop.ini can override the two settings that decide how far behind a peer looks —
         // the send rate and the interpolation buffer — plus pause mirroring, so they can be
         // tuned by whoever is actually watching the screen rather than only at build time.
-        CoopConfig? tuning = null;
-        try
-        {
-            using Process game = Process.GetProcessById(memory.ProcessId);
-            string? gameDir = Path.GetDirectoryName(game.MainModule?.FileName);
-            if (gameDir is not null)
-            {
-                tuning = CoopConfig.TryLoad(CoopConfig.PathFor(gameDir));
-            }
-        }
-        catch
-        {
-            // No coop.ini: the command line and the built-in defaults stand.
-        }
-
-        int tickRate = tuning is { TickRate: > 0 } ? tuning.TickRate : options.TickRate;
-        int interpolationMs = tuning is { InterpolationDelayMs: >= 0 }
-            ? tuning.InterpolationDelayMs
+        int tickRate = config is { TickRate: > 0 } ? config.TickRate : options.TickRate;
+        int interpolationMs = config is { InterpolationDelayMs: >= 0 }
+            ? config.InterpolationDelayMs
             : ProtocolConstants.DefaultInterpolationDelayMs;
 
         if (tickRate != options.TickRate || interpolationMs != ProtocolConstants.DefaultInterpolationDelayMs)
         {
             Console.WriteLine($"tuning: {tickRate} Hz, {interpolationMs} ms interpolation (from coop.ini)");
-        }
-
-        // coop.ini's password applies to a directly-started session too, not only to the
-        // in-game menu path that already consulted it. The file documents one setting, and
-        // honouring it in only one of the two ways a session starts is the kind of difference
-        // nobody debugs — they conclude the password does not work.
-        if (password.Length == 0 && tuning is { Password.Length: > 0 })
-        {
-            password = tuning.Password;
-            Console.WriteLine("password: set from coop.ini");
         }
 
         AgentSettings agentSettings = new()
@@ -1007,7 +739,7 @@ internal static class Program
             FollowHostModule = options.FollowHostModule,
             SyncParty = options.SyncParty,
             SyncProgression = options.SyncProgression,
-            SyncPause = tuning?.PauseSync ?? true,
+            SyncPause = config?.PauseSync ?? true,
         };
 
         // Surface why a cached player pointer stopped validating. Re-resolving costs a full
@@ -1022,51 +754,76 @@ internal static class Program
         SessionSettings SettingsFor(string sessionPassword) => new()
         {
             PlayerName = effectiveName,
-            ServerName = tuning?.ServerName ?? string.Empty,
+            ServerName = config?.ServerName ?? string.Empty,
             Port = options.Port,
             TickRate = tickRate,
             InterpolationDelayMs = interpolationMs,
             Digest = digest,
             AllowDifferentSave = options.AllowDifferentSave,
-            Password = sessionPassword,
+            Password = sessionPassword.Length > 0 ? sessionPassword : fallbackPassword,
         };
 
-        CoopCommandDispatcher dispatcher = new(manager, bridge, options.Port, SettingsFor);
+        // The dispatcher owns every command surface and the one LAN listener. It re-reads
+        // coop.ini per bare button press (so an edit at the menu is honoured without a
+        // restart), and a session started from the menu auto-loads the player's save the
+        // moment it is up — hosting immediately, joining once the handshake lands, and
+        // only if the game is verifiably still at the main menu (never mid-world, never
+        // again on a reconnect, never after a refused join).
+        CoopCommandDispatcher dispatcher = new(
+            manager,
+            bridge,
+            options.Port,
+            SettingsFor,
+            loadConfig: () => TryLoadCoopConfig(memory.ProcessId),
+            menuAutoLoad: () => _ = Task.Run(() => LoadIntoTheWorld(memory), cts.Token));
 
         // Push the coop.ini chat-overlay settings to the plugin (best-effort; defaults when
         // there is no coop.ini). Independent of connection mode — the overlay is useful the
         // moment a session is up.
         ApplyChatOverlayConfig(bridge, memory.ProcessId);
 
-        // The initial connection goes through the DISPATCHER, not manager.Connect — every later
-        // connect, disconnect and reconnect already did, and the dispatcher is the one place
-        // that records what a join is (its endpoint, its password) so a password prompt can
-        // retry it. Connecting around it left the first attempt — the one the in-game browser
-        // makes — invisible to that bookkeeping, which is why a locked server rejected the
-        // player and nothing ever asked them for a password.
-        dispatcher.Dispatch(mode == CoopMode.Host
-            ? new CoopCommand(CoopCommandKind.Host, Password: password)
-            : new CoopCommand(CoopCommandKind.Connect, Address: hostEndPoint!.ToString(), Password: password));
-
-        // Start the command pump before the loader waits on it: the wait below reads the phase,
-        // and it is the dispatcher's Poll that advances it.
-        Task dispatchTask = dispatcher.RunAsync(cts.Token);
-
-        // A session started from the game's own menu — hosting or joining — should land the
-        // player in the world without another human step, but ONLY once there is a session to
-        // land in. The browser guarantees its panel is closed before the choice is handed over,
-        // so the menu is a plain, freshly rebuilt main menu by the time this runs.
-        if (options.MenuConnect && !resolved)
+        // One-time startup for the in-game surfaces. Only the KOTOR bridge exposes the
+        // plugin block the Co-op button lives in; the enable write also snapshots the
+        // request serial so a stale press never fires on the first poll.
+        if (bridge is KotorGameBridge kotor && kotor.EnableConnectMenu(config?.MenuButton ?? true))
         {
-            _ = Task.Run(
-                () => MenuAutoLoad.RunAsync(
-                    manager,
-                    mode == CoopMode.Host,
-                    () => LoadIntoTheWorld(memory),
-                    cts.Token,
-                    Console.WriteLine),
-                cts.Token);
+            if (options.MenuConnect)
+            {
+                // The button is default-ON (plugin-side too); menu_button = 0 is the opt-out.
+                Console.WriteLine(config?.MenuButton == false
+                    ? "waiting for a connect request (menu_button=0 hides the button; the ~ console still works)..."
+                    : "press the Co-op button in the game's main menu to connect (or use the ~ console: servers / connect <ip|#n> / host)...");
+            }
         }
+        else if (options.MenuConnect)
+        {
+            // No plugin block: nothing in-game can ever signal a connect, so --menu would
+            // wait forever. Behave as a bare button press instead — coop.ini decides,
+            // exactly as it always has for this case.
+            Console.WriteLine("in-game Co-op button unavailable (no plugin); connecting from coop.ini.");
+            dispatcher.OnConnectRequest(string.Empty);
+        }
+
+        // demo.ps1 / session.ps1 compatibility: --host and --join start their session
+        // immediately, through exactly the path an in-game command would take. --menu makes
+        // no initial dispatch — the dispatcher just runs and the player acts in-game.
+        if (options.Mode == CoopMode.Host)
+        {
+            dispatcher.Dispatch(new CoopCommand(CoopCommandKind.Host));
+        }
+        else if (options.Mode == CoopMode.Join)
+        {
+            if (options.HostEndPoint is null)
+            {
+                Console.Error.WriteLine("join requested but no host address is set.");
+                return 1;
+            }
+
+            dispatcher.Dispatch(new CoopCommand(
+                CoopCommandKind.Connect, Address: options.HostEndPoint.ToString()));
+        }
+
+        Task dispatchTask = dispatcher.RunAsync(cts.Token);
         AgentDashboard dashboard = new(manager, bridge, options.DropFile, options.LogFile);
         await dashboard.RunAsync(cts.Token).ConfigureAwait(false);
         await dispatchTask.ConfigureAwait(false);

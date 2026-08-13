@@ -27,6 +27,14 @@ public sealed record CoopConfig
 
     public string HostAddress { get; init; } = "127.0.0.1";
 
+    /// <summary>
+    /// Whether the file actually named a host, as opposed to <see cref="HostAddress"/>
+    /// holding its 127.0.0.1 default. A bare Co-op button press with no session to
+    /// reconnect to needs this to tell "join the configured server" apart from "nothing
+    /// is configured — point the player at the server browser".
+    /// </summary>
+    public bool HasHostAddress { get; init; }
+
     public int Port { get; init; } = ProtocolConstants.DefaultPort;
 
     public string Password { get; init; } = string.Empty;
@@ -161,6 +169,7 @@ public sealed record CoopConfig
         {
             Host = host,
             HostAddress = kv.GetValueOrDefault("host", "127.0.0.1"),
+            HasHostAddress = kv.TryGetValue("host", out string? hostValue) && hostValue.Length > 0,
             Port = int.TryParse(kv.GetValueOrDefault("port"), out int port) ? port : ProtocolConstants.DefaultPort,
             Password = kv.GetValueOrDefault("password", string.Empty),
             Name = kv.GetValueOrDefault("name"),
