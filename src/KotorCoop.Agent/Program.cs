@@ -688,6 +688,30 @@ internal static class Program
             cts.Cancel();
         };
 
+        // ⚠ THE AGENT DIES WITH ITS GAME. Without this, closing the game leaves a hidden
+        // zombie agent still connected to the session: the host keeps a live "peer" whose
+        // player no longer exists — its phantom standing frozen in the world, "left the
+        // game" never announced, and the slot held until the process is hunted down by
+        // hand. Proven live: the joiner's game was killed and the host still reported
+        // peers 1 three minutes later, because the auto-started agent was the peer. The
+        // cancel tears the session down through the normal path, so the Bye goes out and
+        // the host announces the leave within a tick.
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                using Process game = Process.GetProcessById(memory.ProcessId);
+                await game.WaitForExitAsync(cts.Token).ConfigureAwait(false);
+                Console.WriteLine("the game exited; the agent shuts down with it.");
+                cts.Cancel();
+            }
+            catch
+            {
+                // Already-gone or unwatchable target (mock profile): nothing to watch —
+                // the agent then lives until Ctrl+C, exactly as before.
+            }
+        });
+
         // Everything a session needs is constructed up front, whether or not a connection
         // has been chosen yet: from the moment the agent attaches, the dispatcher is THE
         // single command path. CLI --host/--join is just an initial dispatch through it,

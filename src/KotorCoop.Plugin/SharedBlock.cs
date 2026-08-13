@@ -1087,6 +1087,17 @@ internal struct SharedBlock
     /// so both halves of starting a session live in the same in-game screen.</summary>
     public const int OffsetBrowserHostSerial = 0xE18;
 
+    /// <summary>
+    /// Agent -&gt; plugin. How many peers the SESSION has admitted right now — written every
+    /// dispatcher tick, independent of whether the local player has resolved. This is the
+    /// seamless-arrival gate's signal: <c>RemoteCount</c> (0x48) cannot serve, because it is
+    /// only written once the agent's player resolve succeeds — a full-memory-scan operation
+    /// rate-limited to 1 Hz — which measured ~1.7 s AFTER the world was ready, exactly the
+    /// window in which the player watched the co-op "pop in". Zero when no session exists.
+    /// (0xE1C was never read or written before this field; no version bump needed.)
+    /// </summary>
+    public const int OffsetSessionPeers = 0xE1C;
+
     /// <summary>Agent -&gt; plugin. Server entries: name[32], address[24], players u8, max u8.</summary>
     public const int OffsetBrowserEntries = 0xE20;
 

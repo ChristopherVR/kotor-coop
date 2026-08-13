@@ -64,6 +64,10 @@ public sealed class CoopCommandDispatcher(
     /// <summary>Mirror of SharedBlock.ConnectStatusConnecting for the agent side.</summary>
     private const uint ConnectStatusConnecting = 1;
 
+    /// <summary>Roster changes become lines on BOTH screens: "Malak joined the game" /
+    /// "Malak left the game" (see <see cref="PeerAnnouncer"/> for why this exists).</summary>
+    private readonly PeerAnnouncer _peerAnnouncer = new();
+
     /// <summary>Polls the block for console/menu commands and reflects status until cancelled.</summary>
     public async Task RunAsync(CancellationToken cancellationToken)
     {
@@ -89,6 +93,7 @@ public sealed class CoopCommandDispatcher(
                     DrainInputs();
                     PublishBrowserList();
                     ReflectPhase();
+                    AnnouncePeerChanges();
                     DrainChat();
                 }
                 catch (Exception ex) when (ex is not OperationCanceledException)
@@ -352,6 +357,27 @@ public sealed class CoopCommandDispatcher(
 
                 break;
         }
+    }
+
+    /// <summary>Diffs the admitted roster each tick and posts joins/leaves through the same
+    /// trio every reply uses (stdout, console line, chat overlay) — which is what puts the
+    /// line on the HOST's screen when a player is admitted.</summary>
+    private void AnnouncePeerChanges()
+    {
+        if (manager.Current is not { } session)
+        {
+            _peerAnnouncer.Reset();
+            _kotor?.PublishSessionPeerCount(0);
+            return;
+        }
+
+        IReadOnlyList<RemotePeer> peers = session.GetRemotePeers();
+        _peerAnnouncer.Observe(peers, Reply);
+
+        // The seamless-arrival gate's signal: written here, every tick, because THIS loop
+        // never depends on the player resolve — the pump's RemoteCount does, and its 1 Hz
+        // resolve is precisely why the load screen used to drop before the first sync.
+        _kotor?.PublishSessionPeerCount(peers.Count);
     }
 
     /// <summary>Posts the session roster: the local player first, then each remote peer with

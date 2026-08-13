@@ -559,7 +559,18 @@ public sealed class KotorGameBridge : IGameBridge
     public List<CreatureRef> EnumerateCreatures()
     {
         long nowMs = Environment.TickCount64;
-        if (_creatureCache is not null && nowMs - _creatureCacheAtMs < CreatureCacheMs)
+
+        // ⚠ An EMPTY result ages out fast. "No creatures" means "no world yet" — a state
+        // that flips exactly once, at load — and caching it for the full 15 s is what made
+        // the join arrival randomly awful: the agent attaches at the menu, scans, caches
+        // the emptiness, and then every resolve attempt while the save loads returns that
+        // stale nothing until the cache happens to expire. Measured live: the same flow
+        // resolved 1.7 s after world-ready on one run and 15.7 s on the next, purely on
+        // cache-expiry luck — and the seamless-arrival hold timed out watching it. A short
+        // TTL keeps the melt-down protection (still at most ~1 scan/s while worldless,
+        // the same rate the resolve limiter allows) without ever hiding a fresh world.
+        int ttlMs = _creatureCache is { Count: 0 } ? EmptyCreatureCacheMs : CreatureCacheMs;
+        if (_creatureCache is not null && nowMs - _creatureCacheAtMs < ttlMs)
         {
             return _creatureCache;
         }
@@ -574,6 +585,9 @@ public sealed class KotorGameBridge : IGameBridge
     /// dominating the pump, short enough that a creature spawned mid-fight is picked up
     /// quickly.</summary>
     private const int CreatureCacheMs = 15_000;
+
+    /// <summary>How long an EMPTY creature scan is reused — see the warning above.</summary>
+    private const int EmptyCreatureCacheMs = 750;
 
     private List<CreatureRef>? _creatureCache;
     private long _creatureCacheAtMs;
@@ -2970,6 +2984,16 @@ public sealed class KotorGameBridge : IGameBridge
         _lastBrowserHostSerial = serial;
         return true;
     }
+
+    /// <summary>Agent -&gt; plugin: peers the session has admitted right now, written every
+    /// dispatcher tick regardless of player resolve — the seamless-arrival gate's signal.</summary>
+    private const int BlockSessionPeers = 0xE1C;
+
+    /// <summary>Publishes the session's admitted peer count (0 = no session/nobody), so the
+    /// plugin can hold the load screen for the first sync without waiting on the 1 Hz
+    /// player-resolve that RemoteCount depends on.</summary>
+    public bool PublishSessionPeerCount(int count) =>
+        _pluginBlock != 0 && _memory.TryWrite(_pluginBlock + BlockSessionPeers, (uint)Math.Max(0, count));
 
     /// <summary>
     /// Asks the game to prompt the player for a password: the plugin force-opens the developer

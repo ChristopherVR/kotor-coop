@@ -847,6 +847,10 @@ internal sealed unsafe class SharedBlockView(byte* baseAddress)
     /// <summary>The player chose to HOST rather than join a listed server.</summary>
     public void RequestBrowserHost() => (*U32(SharedBlock.OffsetBrowserHostSerial))++;
 
+    /// <summary>Peers the session has admitted, written by the agent every tick regardless
+    /// of player resolve — the seamless-arrival gate's signal (see SharedBlock).</summary>
+    public uint SessionPeers => *U32(SharedBlock.OffsetSessionPeers);
+
     /// <summary>Start of a server row's fixed-size record.</summary>
     public byte* BrowserEntry(int index) =>
         baseAddress + SharedBlock.OffsetBrowserEntries

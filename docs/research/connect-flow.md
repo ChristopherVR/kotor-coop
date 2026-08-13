@@ -311,3 +311,44 @@ prompt, the title caption, the journal idempotence fix, and the dispatcher unifi
 | Type password → OK | connected as peer 2, world loaded, no menu flash |
 | Journal popup | **zero "Journal Entry Added" boxes on either side**, host and joiner |
 | Peers | 1/1 both sides, END_M01AA, each sees the other's character |
+
+## Seamless arrival + join/leave announcements (2026-08-13, live-verified)
+
+Two user reports: the client loads in and THEN co-op "connects" around them, and the host
+gets no on-screen word when a player joins.
+
+**The pop-in's root cause was an innocent-looking cache.** `EnumerateCreatures` cached its
+scan for 15 s regardless of content. The agent attaches at the menu, scans, finds ZERO
+creatures (no world yet), caches the emptiness — and then every resolve attempt during the
+save load returns that stale nothing until the cache happens to expire. Measured live: the
+identical flow resolved 1.7 s after world-ready on one run and 15.7 s on the next, purely on
+expiry luck. Empty results now age out in 750 ms (`EmptyCreatureCacheMs`); "no creatures"
+means "no world yet", a state that flips exactly once.
+
+**The seamless gate** (MenuLoadController.TryPresentWorld): a ready world is held behind the
+load screen while the session has admitted peers and no phantom exists yet — released the
+frame the phantom spawns, released early when the agent has resolved and filtered everyone
+out (peer in another module), released at a 4 s deadline regardless. The signal is a new
+agent-written field `OffsetSessionPeers` (0xE1C, written every dispatcher tick) — NOT
+RemoteCount, which depends on the 1 Hz player resolve and arrives too late by definition.
+With the cache fix the gate rarely needs to hold at all: final run's timeline —
+`18:58:43.259 waiting for the client world` → `18:58:45.462 spawned phantom` (under the
+load screen) → `18:58:45.880 presentation handed over`. The player arrives with their
+partner already standing there.
+
+Two supporting facts established: the SwapBuffers hook DOES fire under the load screen (the
+world pipeline runs there; only movies gate it), and a stall-detecting fallback in
+PluginHost.MenuFrame drives the pipeline at ~10 Hz anyway if that ever stops being true.
+
+**Join/leave announcements** (`PeerAnnouncer` + dispatcher tick): the admitted roster is
+diffed every tick and changes post through the standard reply trio — "Malak joined the
+game" (host log + overlay, live) and "Malak left the game" (screenshot, on-screen, with the
+phantom despawning alongside). Keyed by peer id, not name; `password` prompt refusals never
+announce (they are never admitted).
+
+**Agents die with their game now.** Killing the joiner's game left its hidden auto-started
+agent connected — the host kept a live "peer" whose player no longer existed, frozen phantom
+and all, exactly as the process-model review predicted. The agent now watches its game pid
+and cancels itself on exit, so the Bye goes out and the host announces the leave within a
+tick. (The live "left" proof above was produced by stopping the zombie by hand; the watch
+ships with this change.)

@@ -59,6 +59,12 @@ internal static unsafe class PluginHost
     private static Thread? _worker;
     private static volatile bool _running = true;
 
+    /// <summary>The swap-hook frame count last seen from MenuFrame, and how many MainLoop
+    /// ticks it has sat unchanged — the "is the swap hook dormant?" probe the seamless
+    /// hold's fallback heartbeat uses.</summary>
+    private static long _heldFrameSample;
+    private static int _heldStallTicks;
+
     public static nint BlockAddress => (nint)_block;
 
     public static void EnsureStarted()
@@ -430,6 +436,27 @@ internal static unsafe class PluginHost
         // having just pressed Connect in the browser, where the swap hook does not fire. It is
         // a no-op unless the agent has bumped the request serial.
         _passwordPrompt?.OnFrame();
+
+        // Insurance for the seamless-arrival hold: the world pipeline (phantom spawn, the
+        // very thing the hold waits for) lives on the SwapBuffers hook, and if the load
+        // screen renders the way the menu movie does, that hook is dormant — the phantom
+        // could never spawn and every hold would run to its deadline. So while the hold is
+        // active and the swap counter is visibly stalled, drive the pipeline from here at
+        // ~10 Hz (30 MainLoop ticks ≈ 100 ms). Its own epoch gate keeps it safe: the hold
+        // only starts after the module and player creature exist.
+        if (_menuLoad is { HoldingPresentation: true })
+        {
+            if (FrameHook.FrameCount == _heldFrameSample && ++_heldStallTicks >= 30)
+            {
+                _heldStallTicks = 0;
+                OnFrame();
+            }
+            else if (FrameHook.FrameCount != _heldFrameSample)
+            {
+                _heldFrameSample = FrameHook.FrameCount;
+                _heldStallTicks = 0;
+            }
+        }
 
         // Console history/completion follows the ~ console itself, which opens at the menu
         // AND in-world — so it lives on this hook, not the (menu-dormant) SwapBuffers one.

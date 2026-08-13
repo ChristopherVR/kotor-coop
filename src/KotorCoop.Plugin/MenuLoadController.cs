@@ -202,6 +202,24 @@ internal sealed unsafe class MenuLoadController(SharedBlockView block)
     /// <summary>Presentation handed over for this load; steps that pop panels run once.</summary>
     private bool _presented;
 
+    /// <summary>True while a ready world is being held behind the load screen waiting for
+    /// the first co-op sync. PluginHost uses this to drive the world pipeline from MainLoop
+    /// if the swap hook turns out to be dormant under the load screen — without that, the
+    /// phantom the hold waits for could never spawn and every hold would hit its deadline.</summary>
+    public bool HoldingPresentation { get; private set; }
+
+    /// <summary>When the co-op presentation hold started (world ready, first sync not yet
+    /// visible); 0 while no hold is running. See <see cref="TryPresentWorld"/>.</summary>
+    private long _syncHoldStartedMs;
+
+    private bool _syncHoldLogged;
+
+    /// <summary>How long the load screen may keep covering a READY world while waiting for
+    /// the first co-op sync. The phantom usually lands within a second of the world existing
+    /// (the agent resolves and pumps under the load screen); this is the ceiling for an
+    /// agent that is slow, dead, or whose peer walked into another module mid-load.</summary>
+    private const long SyncHoldMaxMs = 4000;
+
     private long _nextPresentLogMs;
 
     /// <summary>
@@ -397,6 +415,9 @@ internal sealed unsafe class MenuLoadController(SharedBlockView block)
             _pumping = true;
             _loginRerouted = false;
             _presented = false;
+            _syncHoldStartedMs = 0;
+            _syncHoldLogged = false;
+            HoldingPresentation = false;
             return;
         }
 
@@ -605,6 +626,48 @@ internal sealed unsafe class MenuLoadController(SharedBlockView block)
             return false;
         }
 
+        // ⚠ THE SEAMLESS GATE. The world is ready — but if the session has admitted another
+        // player and their body has not been spawned yet, presenting now means the player
+        // walks into an "empty" world and watches co-op pop in around them. Hold the load
+        // screen instead, so the agent's resolve, the peer slots, and the phantom spawn all
+        // land while the screen is still covered.
+        //
+        // The signal is SessionPeers (written every dispatcher tick), NOT RemoteCount:
+        // RemoteCount is only written after the agent's player resolve — a full memory scan
+        // rate-limited to 1 Hz — which measured ~1.7 s AFTER world-ready, exactly the pop-in
+        // this gate removes. Released the frame the phantom exists; released early when the
+        // agent HAS resolved (it wrote the player id) and still filtered everyone out (the
+        // peer is really in another module — nobody to wait for); released at the deadline
+        // regardless (a slow or dead agent must never hold a ready world hostage).
+        if (block.SessionPeers > 0 && block.PhantomCount == 0
+            && !(block.PlayerCreature != 0 && block.RemoteCount == 0 && _syncHoldStartedMs != 0))
+        {
+            long now = Environment.TickCount64;
+            if (_syncHoldStartedMs == 0)
+            {
+                _syncHoldStartedMs = now;
+            }
+
+            if (now - _syncHoldStartedMs < SyncHoldMaxMs)
+            {
+                if (!_syncHoldLogged)
+                {
+                    _syncHoldLogged = true;
+                    HoldingPresentation = true;
+                    PluginHost.Log("menu: world ready; holding presentation for the first co-op sync");
+                }
+
+                return false;
+            }
+
+            PluginHost.Log("menu: co-op sync hold timed out; presenting anyway");
+        }
+        else if (_syncHoldLogged)
+        {
+            PluginHost.Log($"menu: co-op sync landed under the load screen ({Environment.TickCount64 - _syncHoldStartedMs} ms)");
+        }
+
+        HoldingPresentation = false;
         _presented = true;
         nint gui = GetInGameGui(client);
 
