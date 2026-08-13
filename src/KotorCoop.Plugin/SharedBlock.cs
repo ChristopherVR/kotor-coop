@@ -1102,6 +1102,16 @@ internal struct SharedBlock
     /// the prompt that follows Connect is never a surprise.</summary>
     public const int BrowserEntryLocked = 0x3A;
 
+    /// <summary>Agent -&gt; plugin: non-zero when the agent ALREADY HOLDS a password for the
+    /// next join (coop.ini, --password, or a previously answered prompt). The plugin cannot
+    /// see the agent's configuration, so without this a "prompt on locked" would ask players
+    /// who configured a password; Connect prompts only when
+    /// <see cref="BrowserEntryLocked"/> is set AND this is clear. Same value on every row —
+    /// the password is per-agent, not per-server. Occupies previously unused padding between
+    /// <see cref="BrowserEntryLocked"/> and the stride end (verified: nothing ever read or
+    /// wrote 0x3B), so no PluginSignature bump.</summary>
+    public const int BrowserEntryPasswordHeld = 0x3B;
+
     /// <summary>Rows the panel can show; occupies 0xE20..0x1020, inside the region.</summary>
     public const int BrowserCapacity = 8;
 

@@ -296,7 +296,10 @@ public sealed class CoopCommandDispatcher(
             return;
         }
 
-        Dial(address, endpoint, password ?? string.Empty, locked: false);
+        // A typed password wins; otherwise whatever is already held (coop.ini's, or one
+        // offered ahead of the join by the in-browser prompt) rides along — the same rule
+        // JoinListed applies.
+        Dial(address, endpoint, password ?? _password, locked: false);
     }
 
     /// <summary>
@@ -341,20 +344,27 @@ public sealed class CoopCommandDispatcher(
     }
 
     /// <summary>
-    /// Answers a prompt: retry the waiting join with the typed password. The address comes from
-    /// the attempt that asked, so the player supplies only the secret.
+    /// Answers a prompt: retry the waiting join with the typed password — or, when no join is
+    /// waiting, HOLD the password for the one about to start. The unsolicited case is normal
+    /// now, not an error: the in-browser prompt publishes <c>password &lt;pw&gt;</c> BEFORE
+    /// the browser confirms the row, precisely so this agent already holds the secret when
+    /// the connect request lands a moment later.
     /// </summary>
     private void AnswerPasswordPrompt(string password)
     {
-        if (_pendingEndpoint is not { } endpoint)
-        {
-            Reply("nothing is waiting for a password - pick a server first");
-            return;
-        }
-
         if (password.Length == 0)
         {
             Reply("that password was empty - type: password <the server's password>");
+            return;
+        }
+
+        if (_pendingEndpoint is not { } endpoint)
+        {
+            // An offer: nothing to retry, so nothing is dialled — Dial picks this up via
+            // _password when the join starts (the browser-confirm arrives in this same tick,
+            // drained after the console line).
+            _password = password;
+            Reply("password saved for the next join");
             return;
         }
 
@@ -406,7 +416,8 @@ public sealed class CoopCommandDispatcher(
         _lastServerList = _browser.Servers;
         _kotor.PublishBrowserServers(
             [.. _lastServerList.Select(s =>
-                (s.Name, s.Address, (byte)s.PlayerCount, (byte)s.MaxPlayers, s.Locked, s.Module, s.Faces))]);
+                (s.Name, s.Address, (byte)s.PlayerCount, (byte)s.MaxPlayers, s.Locked, s.Module, s.Faces))],
+            passwordHeld: _password.Length > 0);
     }
 
     /// <summary>Posts the LAN server list to the overlay, numbered for `connect #n`.</summary>

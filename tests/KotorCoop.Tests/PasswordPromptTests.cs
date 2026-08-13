@@ -109,8 +109,10 @@ public class PasswordPromptTests
     [Fact]
     public void AnAnswerWithNothingWaitingConnectsToNothing()
     {
-        // `password x` typed out of the blue must not dial whatever was last in mind — there is
-        // no attempt to retry, so the only correct thing to do is say so.
+        // `password x` with no attempt waiting must not dial whatever was last in mind. It is
+        // no longer an error though: the in-browser prompt sends the password BEFORE the row
+        // confirmation, so an unsolicited answer is an OFFER — held for the join about to
+        // start, dialling nothing by itself.
         using StubBridge bridge = new();
         using SessionManager manager = new(bridge, new AgentSettings { PollRate = 30 });
         CoopCommandDispatcher dispatcher = new(
@@ -120,6 +122,81 @@ public class PasswordPromptTests
 
         Assert.Equal(SessionPhase.Idle, manager.Phase);
         Assert.Null(manager.Current);
+    }
+
+    [Fact]
+    public async Task AnUnsolicitedAnswerIsSavedAndUsedByTheNextJoin()
+    {
+        // The in-browser prompt's exact ordering, agent-side: the `password <pw>` console line
+        // lands FIRST (nothing waiting — an offer), the join starts a moment later carrying no
+        // password of its own. The offered one must get it in, with no prompt round-trip.
+        using CoopHost host = new(new SessionSettings
+        {
+            PlayerName = "Revan", Port = 0, TickRate = 30, Password = "hoth",
+        });
+
+        using CancellationTokenSource cts = new(TimeSpan.FromSeconds(40));
+        Task hostTask = host.RunAsync(cts.Token);
+        int port = host.ListenEndPoint.Port;
+
+        using StubBridge bridge = new();
+        using SessionManager manager = new(bridge, new AgentSettings { PollRate = 30 });
+
+        CoopCommandDispatcher dispatcher = new(manager, bridge, port,
+            password => new SessionSettings { PlayerName = "Malak", TickRate = 30, Password = password });
+
+        // The offer: nothing is waiting, so nothing is dialled.
+        dispatcher.Dispatch(ConsoleCommand.Parse("password hoth"));
+        Assert.Equal(SessionPhase.Idle, manager.Phase);
+        Assert.Null(manager.Current);
+
+        // The join that follows names no password; the offered one rides along.
+        dispatcher.Dispatch(new CoopCommand(CoopCommandKind.Connect, Address: $"127.0.0.1:{port}"));
+
+        Assert.True(await WaitForPhase(manager, SessionPhase.Connected, host),
+            "the join did not reuse the password offered ahead of it");
+
+        manager.Disconnect();
+        await cts.CancelAsync();
+        await hostTask;
+    }
+
+    [Fact]
+    public async Task AWrongOfferStillGetsARetryPrompt()
+    {
+        // An offered password that turns out wrong must degrade into the existing retry flow:
+        // the join fails with E_PASSWORD, the retry answer dials the SAME server again.
+        using CoopHost host = new(new SessionSettings
+        {
+            PlayerName = "Revan", Port = 0, TickRate = 30, Password = "hoth",
+        });
+
+        using CancellationTokenSource cts = new(TimeSpan.FromSeconds(40));
+        Task hostTask = host.RunAsync(cts.Token);
+        int port = host.ListenEndPoint.Port;
+
+        using StubBridge bridge = new();
+        using SessionManager manager = new(bridge, new AgentSettings { PollRate = 30 });
+
+        CoopCommandDispatcher dispatcher = new(manager, bridge, port,
+            password => new SessionSettings { PlayerName = "Malak", TickRate = 30, Password = password });
+
+        dispatcher.Dispatch(ConsoleCommand.Parse("password wrong"));
+        dispatcher.Dispatch(new CoopCommand(CoopCommandKind.Connect, Address: $"127.0.0.1:{port}"));
+
+        Assert.True(await WaitForPhase(manager, SessionPhase.Failed, host),
+            "the host admitted a client with the wrong offered password");
+        Assert.Contains("password", manager.Detail, StringComparison.OrdinalIgnoreCase);
+
+        // Now a join IS waiting: the same verb is a retry, not an offer.
+        dispatcher.Dispatch(ConsoleCommand.Parse("password hoth"));
+
+        Assert.True(await WaitForPhase(manager, SessionPhase.Connected, host),
+            "answering the retry prompt did not redial the join that asked");
+
+        manager.Disconnect();
+        await cts.CancelAsync();
+        await hostTask;
     }
 
     [Fact]

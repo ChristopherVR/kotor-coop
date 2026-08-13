@@ -219,3 +219,60 @@ Known gaps, deliberate or observed:
 - ⚠ Injected-input trap for test scripts: an arrow key sent WITHOUT
   KEYEVENTF_EXTENDEDKEY is NUMPAD-8 and types '8' into the console; tools/sendkey.ps1 now
   sends 0xE0-prefixed scans for the arrow cluster.
+
+## Prompt in place (implemented 2026-08-13, NEEDS-LIVE)
+
+What was wrong with the verified flow above, as the player experiences it: Connect on a
+locked row **closed the browser**, dumped them at the main menu, and only then floated the
+password modal over the bare menu — a visual round-trip through a screen they never asked
+for, because the ask travelled plugin → agent → plugin (close, connect serial, `Dial` sees
+locked-with-nothing, bumps 0xE14, prompt controller reopens a panel over the rebuilt menu).
+
+Now the ask happens BEFORE the browser closes, pushed over the browser itself — the retail
+pattern exactly (the stock save screen pushes CSWGuiSaveNamePanel over ITSELF; show sequence
+from 0x006CB8BC above). Our browser IS a CSWGuiSaveLoad, so this is the engine's own flow.
+
+- The modal machinery moved into **`PasswordEntryModal`** (one class owning
+  build/rebind/show/read/dismiss — everything in "Native panel upgrade" above, unchanged at
+  the engine level), with two callers:
+  1. **`NativeBrowserController`** — Connect on a locked row with no agent-held password
+     records the pick and sets a flag; the NEXT plugin frame floats the modal over the
+     browser using the browser's own gui manager (the main-menu object is freed while the
+     browser is up and must not be resolved). Construction stays on the frame hook, never
+     inside the engine's event dispatch. OK → the freed-panel poll publishes
+     `password <typed>` through the console channel FIRST, then the normal
+     close-and-connect handoff (selection, then the connect serial after the browser
+     sweep) — so the agent holds the secret before the join starts. Cancel/empty-OK/alt-tab
+     → the modal alone is swept; the player stays in the browser, row still selected.
+  2. **`PasswordPromptController`** — the 0xE14 serial path, kept intact as the
+     WRONG-PASSWORD RETRY: it fires after the browser is long closed, so its modal floats
+     over the main menu (correct there). Same latch, same console fallback, same
+     adopt-serial-at-construction.
+- **`BrowserEntry+0x3B` = PasswordHeld** (agent → plugin, previously unused padding inside
+  the 0x40 stride — verified nothing ever read or wrote it, so no signature bump). The
+  agent stamps every row with "I already hold a password for the next join" (coop.ini,
+  --password, or an answered prompt); the plugin prompts only on locked-and-NOT-held, so a
+  configured player is never asked. The flag folds into the publish signature so gaining or
+  losing a password rewrites the rows.
+- **Agent: an unsolicited `password <pw>` is an offer, not an error.** With the new
+  ordering the line arrives before any join is pending;
+  `CoopCommandDispatcher.AnswerPasswordPrompt` stores it in `_password` and replies
+  "password saved for the next join"; both `JoinListed` and a direct `connect` fold it in.
+  The retry behaviour when an endpoint IS pending is unchanged (unit tested both ways in
+  PasswordPromptTests).
+- Every fallback keeps the OLD live-verified flow: a latched or failed modal open turns the
+  click into the close-then-connect handoff, where the agent's serial prompt (or its
+  console fallback) still asks — nothing can strand the player's click.
+
+NEEDS-LIVE checklist (GOG host `--password hoth` + instance-2 joiner):
+
+| # | step | expected |
+| --- | --- | --- |
+| 1 | Co-op → browser → Connect (or Enter) on the locked row, joiner holds no password | modal opens IN PLACE: the browser stays visible beneath it (title "CO-OP SERVERS", rows, details pane), NO main-menu flash |
+| 2 | press Cancel | modal closes, browser still up, same row highlighted; nothing dialled (agent logs nothing) |
+| 3 | Connect again, OK on an EMPTY box | same as Cancel — browser stays, nothing dialled |
+| 4 | Connect again, type `hoth`, OK | browser closes once, `password saved for the next join` then `connecting to ...` in the agent, `peers 1`, world loads — menu appears only during the normal close-to-load handoff |
+| 5 | joiner restarts with `--password hoth` (or coop.ini password), Connect on the locked row | NO prompt at all: dials straight away (held flag) |
+| 6 | joiner configured with a WRONG password, Connect | dials, `E_PASSWORD`, auto-load held, retry modal opens over the MAIN MENU (acceptable — the browser is long closed), answering `hoth` connects |
+| 7 | while the in-place modal is up: click browser rows/buttons beneath | dead (modal owns input); Escape/alt-tab behaviour = dismissed → case 2 |
+| 8 | unlocked row, Connect | unchanged old flow, no prompt |

@@ -585,7 +585,8 @@ internal static class Program
             lastServers = browser.Servers;
             kotor.PublishBrowserServers(
                 [.. lastServers.Select(s =>
-                    (s.Name, s.Address, (byte)s.PlayerCount, (byte)s.MaxPlayers, s.Locked, s.Module, s.Faces))]);
+                    (s.Name, s.Address, (byte)s.PlayerCount, (byte)s.MaxPlayers, s.Locked, s.Module, s.Faces))],
+                passwordHeld: password.Length > 0);
 
             // The player chose to host from the panel rather than join a listed server.
             if (kotor.TryTakeBrowserHost())

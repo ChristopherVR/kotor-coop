@@ -2755,6 +2755,12 @@ public sealed class KotorGameBridge : IGameBridge
     /// <summary>Entry +0x3A: non-zero when the host requires a password (a lock marker in the row).</summary>
     private const int BlockBrowserEntryLocked = 0x3A;
 
+    /// <summary>Non-zero when this agent already holds a password for the next join
+    /// (coop.ini, --password, or an answered prompt): the plugin prompts on a locked row
+    /// only when this is clear, so configured players are never asked. Same value on every
+    /// row; previously unused padding, so no signature bump.</summary>
+    private const int BlockBrowserEntryPasswordHeld = 0x3B;
+
     // SharedBlock's browser details array (block version 36).
     private const int BlockBrowserDetails = 0x3400;
     private const int BlockBrowserDetailStride = 0x70;
@@ -2829,15 +2835,22 @@ public sealed class KotorGameBridge : IGameBridge
     /// Publishes the discovered servers for the in-game panel to draw. Writes the rows first and
     /// the count last, so the plugin can never read a count that outruns the rows. A cheap
     /// signature check keeps this from rewriting the same list every tick.
+    /// <paramref name="passwordHeld"/> is this agent's "I already hold a password for the next
+    /// join" flag (coop.ini, --password, or an answered prompt), stamped on every row: the
+    /// plugin's in-browser prompt fires only on locked-and-not-held, so a player who
+    /// configured a password is never asked for it.
     /// </summary>
     public bool PublishBrowserServers(
-        IReadOnlyList<(string Name, string Address, byte Players, byte MaxPlayers, bool Locked, string Module)> servers) =>
+        IReadOnlyList<(string Name, string Address, byte Players, byte MaxPlayers, bool Locked, string Module)> servers,
+        bool passwordHeld = false) =>
         PublishBrowserServers(
-            [.. servers.Select(s => (s.Name, s.Address, s.Players, s.MaxPlayers, s.Locked, s.Module, (IReadOnlyList<string>)[]))]);
+            [.. servers.Select(s => (s.Name, s.Address, s.Players, s.MaxPlayers, s.Locked, s.Module, (IReadOnlyList<string>)[]))],
+            passwordHeld);
 
     public bool PublishBrowserServers(
         IReadOnlyList<(string Name, string Address, byte Players, byte MaxPlayers, bool Locked,
-            string Module, IReadOnlyList<string> Portraits)> servers)
+            string Module, IReadOnlyList<string> Portraits)> servers,
+        bool passwordHeld = false)
     {
         if (_pluginBlock == 0)
         {
@@ -2846,7 +2859,9 @@ public sealed class KotorGameBridge : IGameBridge
 
         int count = Math.Min(servers.Count, BlockBrowserCapacity);
 
-        string signature = string.Join('|', servers.Take(count)
+        // The held flag folds into the signature so gaining or losing a password rewrites
+        // the rows even when the server list itself has not changed.
+        string signature = $"held={(passwordHeld ? 1 : 0)}|" + string.Join('|', servers.Take(count)
             .Select(s => $"{s.Name}@{s.Address}:{s.Players}/{s.MaxPlayers}:{(s.Locked ? 1 : 0)}:{s.Module}"
                 + $":{string.Join(',', s.Portraits)}"));
         if (signature == _lastBrowserSignature)
@@ -2872,6 +2887,7 @@ public sealed class KotorGameBridge : IGameBridge
             _memory.TryWrite(entry + BlockBrowserEntryPlayers, players);
             _memory.TryWrite(entry + BlockBrowserEntryMaxPlayers, max);
             _memory.TryWrite(entry + BlockBrowserEntryLocked, locked ? (byte)1 : (byte)0);
+            _memory.TryWrite(entry + BlockBrowserEntryPasswordHeld, passwordHeld ? (byte)1 : (byte)0);
 
             // Resolved HERE, not in the plugin: reading a module's display name means opening
             // module files, which is the agent's job — the plugin draws what it is handed.

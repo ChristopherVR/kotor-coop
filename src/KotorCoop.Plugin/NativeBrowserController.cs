@@ -25,6 +25,10 @@ namespace KotorCoop.Plugin;
 ///   2. The listbox OWNS its rows (AddControls flag): refreshing the list is just another
 ///      AddControls (it frees the old rows itself), and panel teardown frees everything. No
 ///      pointer we hand the engine may come from the managed heap; rows are engine-allocated.
+///
+/// Connect on a locked row (with no agent-held password — <see cref="SharedBlock.BrowserEntryPasswordHeld"/>)
+/// floats the <see cref="PasswordEntryModal"/> OVER this panel before anything closes, so the
+/// player is never round-tripped through the main menu to be asked; see OnFrameWhileOpen.
 /// </summary>
 internal sealed unsafe class NativeBrowserController
 {
@@ -148,6 +152,16 @@ internal sealed unsafe class NativeBrowserController
     private bool _f9WasDown;
     private int _logged;
 
+    /// <summary>The password modal this controller floats OVER its own panel when Connect is
+    /// pressed on a locked row with no agent-held password — the retail pattern exactly: the
+    /// stock save screen pushes this very popup over itself. Asking here, before anything
+    /// closes, is what keeps the player out of the menu round-trip.</summary>
+    private readonly PasswordEntryModal _passwordModal = new();
+
+    /// <summary>Set by <see cref="OnConnectClicked"/>; the open runs on the next plugin frame
+    /// so panel construction never happens inside the engine's event dispatch.</summary>
+    private bool _promptOpenPending;
+
     public NativeBrowserController(SharedBlockView block) => _block = block;
 
     /// <summary>True while our panel is registered: the main menu pointer is DANGLING and the
@@ -172,6 +186,8 @@ internal sealed unsafe class NativeBrowserController
             _closing = false;
             _connectPending = false;
             _openRequested = false;
+            _promptOpenPending = false;
+            _passwordModal.Forget();
             return;
         }
 
@@ -213,6 +229,12 @@ internal sealed unsafe class NativeBrowserController
             _panel = 0;
             _closing = false;
             _block.BrowserOpen = 0;
+            _promptOpenPending = false;
+
+            // If the browser died with the password modal still floating over it (an
+            // engine-side close we did not initiate), the modal must not outlive its
+            // surface: hand it to the same sweep and forget it.
+            _passwordModal.AbandonToSweep();
 
             if (_connectPending)
             {
@@ -234,6 +256,70 @@ internal sealed unsafe class NativeBrowserController
             else
             {
                 Log("native browser: closed");
+            }
+
+            return;
+        }
+
+        // The password modal floating over this panel, when there is one. While it is up the
+        // browser beneath must not close, refresh or take keys — the modal owns the screen.
+        switch (_passwordModal.Poll())
+        {
+            case PasswordEntryModal.Outcome.StillOpen:
+                return;
+
+            case PasswordEntryModal.Outcome.Answered:
+                // ORDERING: the password goes to the agent FIRST, the connect serial only
+                // after the browser sweep (the normal _connectPending handoff below) — so
+                // the agent already holds the password when the join starts. Publishing
+                // here is safe: the modal is freed (Poll saw the sweep take it), and the
+                // console channel is plain block memory, no GUI teardown to race.
+                _passwordModal.PublishAnswer(_block);
+                _connectPending = true;
+                Close();
+                Log($"native browser: password answered for row {_pendingSelection}; connecting");
+                return;
+
+            case PasswordEntryModal.Outcome.Dismissed:
+                if (!PasswordEntryModal.Available)
+                {
+                    // The modal broke mid-ask: fall back to the fully verified old flow —
+                    // close and hand the connect over; the agent sees the locked row with
+                    // no password and re-asks via the latched console fallback.
+                    _connectPending = true;
+                    Close();
+                    Log("native browser: password modal latched off; using the close-then-ask flow");
+                }
+                else
+                {
+                    // Cancel (or empty OK, or alt-tab): the player stays in the browser,
+                    // the row still selected. Nothing was sent anywhere.
+                    Log("native browser: password prompt cancelled; staying in the browser");
+                }
+
+                return;
+        }
+
+        // A locked-row Connect recorded by the click handler: float the prompt over the
+        // browser now, on the plugin frame, using the gui manager OUR panel was registered
+        // with (the main menu object is freed while the browser is up and must not be
+        // resolved). Retail parallel: CSWGuiSaveLoad pushes CSWGuiSaveNamePanel over itself.
+        if (_promptOpenPending)
+        {
+            _promptOpenPending = false;
+
+            if (_passwordModal.TryOpen(_guiManager))
+            {
+                Log($"native browser: password prompt over the browser (row {_pendingSelection})");
+            }
+            else
+            {
+                // Could not float the modal (latched, or a transient refusal): the player's
+                // click must not die in a browser that silently does nothing. The old
+                // close-then-prompt flow is fully live-verified — take it.
+                _connectPending = true;
+                Close();
+                Log("native browser: password modal unavailable; using the close-then-ask flow");
             }
 
             return;
@@ -657,6 +743,23 @@ internal sealed unsafe class NativeBrowserController
             }
 
             self._pendingSelection = selected;
+
+            // A locked row with no agent-held password: ask HERE, over the browser, before
+            // anything closes — no round trip through the main menu. The open itself is
+            // deferred to the next plugin frame (OnFrameWhileOpen) so panel construction
+            // never runs inside the engine's event dispatch; the handler only records.
+            // BrowserEntryPasswordHeld is the agent's "I already hold one for you" flag —
+            // a player who configured a password in coop.ini/CLI must not be asked again.
+            byte* entry = self._block.BrowserEntry(selected);
+            if (entry[SharedBlock.BrowserEntryLocked] != 0
+                && entry[SharedBlock.BrowserEntryPasswordHeld] == 0
+                && PasswordEntryModal.Available
+                && !self._passwordModal.IsOpen)
+            {
+                self._promptOpenPending = true;
+                return; // the browser stays up; the modal floats over it
+            }
+
             self._connectPending = true;
             self.Close();
         }
