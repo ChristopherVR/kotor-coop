@@ -709,9 +709,11 @@ internal struct SharedBlock
     public const uint ConnectStatusConnected = 2;
     public const uint ConnectStatusFailed = 3;
 
-    /// <summary>Agent -&gt; plugin. Nonzero opts into the main-menu Co-op button. Off by
-    /// default (the block is zero-initialised), so the GUI rebind — engine-call code that
-    /// wants live verification — never runs unless coop.ini enables it.</summary>
+    /// <summary>Agent -&gt; plugin. Nonzero FORCES the main-menu Co-op button on. No longer a
+    /// prerequisite: the plugin shows the button by itself (coop.ini <c>menu_button</c>, read
+    /// plugin-side, default on), so the button exists with no agent attached at all. This
+    /// field survives as a diagnostics override — an agent write of 1 un-hides a button that
+    /// coop.ini turned off; a write of 0 (or a zeroed block) simply defers to coop.ini.</summary>
     public const int OffsetConnectEnable = 0x9F0;
 
     // ---- in-game console (version 9) ----------------------------------------------

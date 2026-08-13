@@ -1666,8 +1666,8 @@ internal static unsafe class Odyssey
     // ---- main-menu Co-op button --------------------------------------------------
     //
     // The dormant BTN_WARP on the main menu is rebound to start co-op. See
-    // docs/research/connect-flow.md. This is guarded engine-call code and only runs when
-    // the agent opts in (coop.ini menu_button=1), because it wants live verification.
+    // docs/research/connect-flow.md. Guarded engine-call code, on by default now that it is
+    // live-verified; coop.ini menu_button=0 opts out (read plugin-side, no agent needed).
 
     /// <summary>CClientExoAppInternal + this = CSWGuiMainMenu*, null outside the menu.</summary>
     private const int ClientInternalMainMenuOffset = 0x280;

@@ -18,7 +18,7 @@ namespace KotorCoop.Session;
 ///   port = 27140
 ///   password = swordfish
 ///   name = Malak
-///   menu_button = 1    ; enable the in-game Co-op menu button
+///   menu_button = 1    ; the in-game Co-op menu button (default on; 0 hides it)
 /// </code>
 /// </summary>
 public sealed record CoopConfig
@@ -42,9 +42,11 @@ public sealed record CoopConfig
     /// </summary>
     public string? ServerName { get; init; }
 
-    /// <summary>Whether the plugin should rebind the main-menu button to start co-op. Off
-    /// by default — the GUI rebind is engine-call code that wants live verification.</summary>
-    public bool MenuButton { get; init; }
+    /// <summary>Whether the main-menu Co-op button shows. ON by default — the button is part
+    /// of the install, and the plugin shows it on its own (it reads this same key from
+    /// coop.ini in-process); the agent's write of this value into the shared block is a
+    /// force-on override, kept for diagnostics. <c>menu_button = 0</c> hides it.</summary>
+    public bool MenuButton { get; init; } = true;
 
     /// <summary>
     /// How often state is sent, in Hz. Every millisecond here is visible latency on the
@@ -163,7 +165,7 @@ public sealed record CoopConfig
             Password = kv.GetValueOrDefault("password", string.Empty),
             Name = kv.GetValueOrDefault("name"),
             ServerName = kv.GetValueOrDefault("server_name"),
-            MenuButton = IsTruthy(kv.GetValueOrDefault("menu_button")),
+            MenuButton = !kv.ContainsKey("menu_button") || IsTruthy(kv.GetValueOrDefault("menu_button")),
             TickRate = int.TryParse(kv.GetValueOrDefault("tick_rate"), out int tick)
                 ? Math.Clamp(tick, 5, 120)
                 : 0,

@@ -153,6 +153,41 @@ screenshots show — but keystrokes sent during the movies go to the movie, not 
 ⚠ Still no masking: the typed password is cleartext on screen, as the format constant above
 dictates.
 
+## Native panel upgrade (implemented 2026-08-13, NEEDS-LIVE)
+
+The console prompt above is now the FALLBACK; the primary surface is the researched
+`CSWGuiSaveNamePanel`, built by `PasswordPromptController`:
+
+- **Show**: `operator_new(0x690)` → `Ctor 0x006CAE70(guiManager)` (the arg follows the
+  pattern every panel ctor takes; vtable `0x007576D0` verified after, mismatch latches) →
+  rebind BTN_OK (`+0x68`) and BTN_CANCEL (`+0x22C`) to plugin stubs via AddEvent 0x27+0x2D
+  **before showing** (the stock OK's WriteGame trap above) → `SetText 0x00416490` on
+  `panel+0x4D0` with an EMPTY string → `AddPanel 0x0040BC70(gm, panel, 1, 1)` (flags2 bit0
+  = PushModalPanel). The MENU IS NOT MARKED `0x400`: marking it is an explicit act of
+  OnLoadSaveGame (`0x67B22C`), not a side effect of AddPanel, and the stock flow floats
+  this very popup over a live panel — so the menu stays valid and the other menu
+  controllers keep running.
+- **`panel+0x4D0` is the EDIT CONTENT, not a caption**: it is EDITBOX(`+0x3F0`) +
+  edit_text(`+0xE0`), whose string is `+0x78` = the typed `+0x548` — the doc's own
+  arithmetic. Stamping prompt text there would come straight back as the "password" on a
+  bare OK, so the box is cleared instead and the title stays savename.gui's stock
+  LBL_TITLE strref (its params offset is unresearched; do not invent it).
+- **OK**: read the CExoString at `+0x548` (cut at the FIRST NULL — the length field
+  includes the terminator), compose `password <text>` (`PasswordAnswer.Compose`, unit
+  tested) and publish it through the existing console channel
+  (`SharedBlockView.PublishConsoleCommand`) — but only AFTER the sweep confirms the panel
+  freed (`PanelExists 0x0040BD70`), the browser's own teardown-race discipline. Zero new
+  block fields; the agent's `password` verb path is unchanged.
+- **Dismiss**: mark `panel+0x44 = (f & ~0x300) | 0x400` and let the manager sweep pop the
+  modal stack, unregister and free it (RemovePanel pops the modal top; freeing from inside
+  the click dispatch would be a use-after-free). Empty OK = cancel. A re-bumped serial
+  reopens a fresh panel (construct-per-open, the retail pattern).
+- Guard refusals latch the native path off (`_broken`) and every ask falls back to
+  `OpenConsoleWith("password ")`; in-world asks use the console directly (no menu exists).
+
+NEEDS-LIVE: the ctor argument, the modal-over-menu show, Enter-in-editbox routing to the
+rebound OK, Escape behaviour, and what the stock LBL_TITLE reads.
+
 ## Trap: a dead command tick takes the whole console with it
 
 `CoopCommandDispatcher.RunAsync` caught only `OperationCanceledException`, so one throw

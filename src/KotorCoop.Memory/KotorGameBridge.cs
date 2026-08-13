@@ -2512,8 +2512,9 @@ public sealed class KotorGameBridge : IGameBridge
 
     private uint _lastConnectSerial;
 
-    /// <summary>Opts the plugin into the main-menu Co-op button and remembers the current
-    /// request serial so the first poll does not fire spuriously.</summary>
+    /// <summary>Writes the main-menu Co-op button override (the plugin shows the button by
+    /// itself now — a 1 here FORCES it on over a coop.ini opt-out, a 0 defers to coop.ini)
+    /// and remembers the current request serial so the first poll does not fire spuriously.</summary>
     public bool EnableConnectMenu(bool enabled)
     {
         if (_pluginBlock == 0)

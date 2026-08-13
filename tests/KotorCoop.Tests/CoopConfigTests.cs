@@ -90,7 +90,10 @@ public class CoopConfigTests
             Assert.NotNull(c);
             Assert.Equal(KotorCoop.Protocol.ProtocolConstants.DefaultPort, c.Port);
             Assert.Equal(string.Empty, c.Password);
-            Assert.False(c.MenuButton);
+
+            // The Co-op button is part of the install: an absent key means ON, and only an
+            // explicit menu_button = 0 hides it (covered below).
+            Assert.True(c.MenuButton);
 
             // Chat overlay defaults on when the file says nothing about it.
             Assert.True(c.ChatOverlay);
@@ -100,6 +103,34 @@ public class CoopConfigTests
         {
             File.Delete(path);
         }
+    }
+
+    [Fact]
+    public void MenuButtonHidesOnlyWhenExplicitlyTurnedOff()
+    {
+        string path = WriteTemp("""
+            mode = join
+            menu_button = 0
+            """);
+
+        try
+        {
+            CoopConfig? c = CoopConfig.TryLoad(path);
+            Assert.NotNull(c);
+            Assert.False(c.MenuButton);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void MenuButtonDefaultsOnWithNoConfigAtAll()
+    {
+        // No coop.ini is the fresh-install case: TryLoad returns null and the agent's
+        // `config?.MenuButton ?? true` must land on the same answer as the record default.
+        Assert.True(new CoopConfig().MenuButton);
     }
 
     [Fact]
