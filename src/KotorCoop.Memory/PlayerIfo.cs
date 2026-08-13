@@ -40,6 +40,17 @@ public static class PlayerIfo
     private const string NeutralisedPifoName = "kcoopoldpifo";
 
     /// <summary>
+    /// The stash the plugin restores from, written beside the pifo.
+    ///
+    /// ⚠ NOT called "pifo", and that is the entire point. <c>LoadPCAutoSave</c> copies
+    /// <c>&lt;export&gt;\pifo</c> over <c>TEMP:pifo</c> BY NAME and truncates the destination
+    /// to zero when the staged save has no pifo to copy — which is every adopted world. A
+    /// copy under a different name survives that, and the plugin puts it back on the game's
+    /// own thread in the gap between the loader and the login.
+    /// </summary>
+    public const string CarriedCharacterFile = "kcoop_carried.ifo";
+
+    /// <summary>
     /// Reads the primary player character out of a save directory's <c>SAVEGAME.sav</c>.
     ///
     /// The PC lives in <c>&lt;module&gt;.sav → module.ifo → Mod_PlayerList</c>, written by
@@ -146,10 +157,17 @@ public static class PlayerIfo
             string temp = Path.Combine(gameDirectory, "Temp");
             Directory.CreateDirectory(temp);
 
-            string path = Path.Combine(temp, $"{PifoResRef}.ifo");
-            File.WriteAllBytes(path, BuildPifo(player));
+            byte[] pifo = BuildPifo(player);
 
-            diagnostic = $"wrote {path}";
+            // BOTH files. The pifo is what the engine reads; the stash is what survives
+            // LoadPCAutoSave truncating the pifo, and is what the plugin copies back over it
+            // once the loader has finished with it. Writing only the pifo is what produced a
+            // blank level-1 character in the first live adoption.
+            string path = Path.Combine(temp, $"{PifoResRef}.ifo");
+            File.WriteAllBytes(path, pifo);
+            File.WriteAllBytes(Path.Combine(temp, CarriedCharacterFile), pifo);
+
+            diagnostic = $"wrote {path} and the carried-character stash ({pifo.Length} bytes)";
             return true;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException)

@@ -167,26 +167,70 @@ VERIFIED (19 tests, plus a check against the two real saves on this machine):
 * **the gate**: two saves that fingerprint differently, and `ApplyWorldMismatch` refusing
   them, become one fingerprint and a full `SessionCapabilities.All` admission after adoption.
 
-NEEDS-LIVE — none of this has been run against the game:
+## 7. Live pass (2026-08-13) — VERIFIED, and the bug it found
 
-1. **Does the adopted world come up at all**, and with the joiner's character rather than a
-   blank level-1 stranger? `block+0x3324` reports the flavour taken; the character's own
-   `FirstName` and hit points settle the rest.
-2. **Does `LoadPCAutoSave` disturb `Temp\`?** It creates the directory (`CreateDirectory2` at
-   0x6CA542) and no delete call was found near it, but this was not chased to the bottom.
-   `WorldAdoption.TryReassertCharacter` exists to be called again immediately before the load
-   fires; if the answer is "no", it is redundant rather than wrong.
-3. **Where does the joiner physically arrive?** The TEMP path leaves `[player+0x40] == 0`, so
-   `InitiateModuleForPlayer` places them at the module start point rather than a saved
-   position. That is believed to be the *right* behaviour for someone arriving in another
-   person's world, but it has not been seen.
-4. **The party.** The adopted world's `PARTYTABLE.res` and `AVAILNPC0.utc` are the host's, so
+Run against two real GOG installs: `agent serve-world` on install 1, `agent adopt` on
+install 2 sitting at the main menu. Both installs' saves were byte-identical, so a marker
+file was added to the served save to prove the world genuinely crossed the wire.
+
+Measured, on the successful run:
+
+| | |
+|---|---|
+| transferred | 654,025 bytes, 5 files (screenshot correctly excluded) |
+| staged identity | `0x155107BD`, equal to the host's |
+| marker file | arrived in the joiner's autosave slot |
+| joiner's own save | byte-identical afterwards (untouched) |
+| the character that came up | **hp 12, xp 150, `is_pc` 1, faction 0** — the saved character |
+| position | (15.42, 20.12) — the module entry point |
+| crash log | clean |
+
+### ⚠ THE BUG: `LoadPCAutoSave` TRUNCATES THE CARRIED PIFO (item 2, answered the hard way)
+
+The first live adoption came up as a **blank 1-hit-point, 0-experience character standing at
+the module start point** — the exact failure §1 describes, with the faction-repair canary
+firing to match. `Temp\pifo.ifo` was 0 bytes, timestamped inside the load.
+
+The cause: `LoadPCAutoSave` copies `<export>\pifo` over `TEMP:pifo`
+(`CExoResMan::FileCopy`, 0x6CA634) and **makes that call even when the staged save contains
+no pifo** — which every manual save and every adopted world is. A copy with no source
+truncates the destination to zero. So the file the agent wrote before the load was empty by
+the time the login read it.
+
+An agent-side re-write loop does NOT fix this, and the attempt is recorded because it looks
+like it should: the truncation and the login's read fall inside the same load, and a 100 ms
+poll from another process cannot fit between them. Measured — the loop fired twice, the file
+was restored to its full 11,918 bytes, and the character was *still* blank.
+
+The fix is in the plugin, at the only place where the gap is addressable: `FirePhase2` copies
+a stash (`Temp\kcoop_carried.ifo`, a name the loader's FileCopy does not target) back over
+`Temp\pifo.ifo` on the game's own thread, immediately after `LoadPCAutoSave` returns and
+before the login that reads it. With that in place the canary went silent and the character
+came up whole.
+
+### Item 3, answered: the joiner arrives at the module entry point
+
+`(15.42, 20.12)`, not the saved `(21.01, 21.15)` — because the TEMP path leaves
+`[player+0x40] == 0` and `InitiateModuleForPlayer` places them at `ModEntryArea`. This is
+correct for someone arriving in another person's world, and it is now observed rather than
+assumed. ⚠ Anything judging adoption health on POSITION will call every healthy adoption a
+failure; judge on hit points and experience.
+
+## 8. Still open
+
+1. **The party.** The adopted world's `PARTYTABLE.res` and `AVAILNPC0.utc` are the host's, so
    the joiner should come up with the host's companions. Untested, and it interacts with
    `PartyRosterController`, which is the channel that keys on exactly this.
-5. **A host mid-module.** Everything here assumes the host's save is a save. Serving a world
+2. **A host mid-module.** Everything here assumes the host's save is a save. Serving a world
    while the host is standing in it means serving a *stale* one — the host would need to save
    first, or the joiner adopts the last save and then converges through the ordinary channels.
    This is the largest open design question, not just an untested path.
+3. **Adoption has not been run INTO a live session.** The pass above adopts and loads; it does
+   not then connect the two agents and play. The digests agree by construction, so the
+   compatibility gate should now admit — but "should" is what §7 was about.
+4. **The flavour field reports the branch, not the outcome.** `block+0x3324` says the login
+   took the TEMP:pifo path; it said so on the run that produced a blank character too. The
+   honest oracle is the PC's own hit points and experience.
 
 ## Key addresses
 

@@ -15,6 +15,12 @@ public enum AgentCommand
     Info,
     Profiles,
     InstallDataMods,
+
+    /// <summary>Serve this install's world (a save directory) to joiners over TCP.</summary>
+    ServeWorld,
+
+    /// <summary>Adopt a host's world and load it carrying this install's own character.</summary>
+    Adopt,
 }
 
 public enum CoopMode
@@ -161,6 +167,8 @@ public sealed record AgentOptions
             "info" => AgentCommand.Info,
             "profiles" => AgentCommand.Profiles,
             "install-datamods" => AgentCommand.InstallDataMods,
+            "serve-world" => AgentCommand.ServeWorld,
+            "adopt" => AgentCommand.Adopt,
             _ => AgentCommand.Help,
         };
 

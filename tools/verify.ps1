@@ -580,11 +580,17 @@ if ($partyTable1 -and $partyTable2 -and $statsHost -and $statsPeer) {
     # means the client starts EQUAL to the host, so "it now reads the new number" is only
     # meaningful if the new number is one nothing was holding a moment ago.
     #
-    # ⚠ Experience moves DOWN where it can. Pushing it up risks crossing a level threshold,
-    # which lights the level-up prompt on both screens — real state left behind for the next
-    # run to trip over, and section 11's conversations do not enjoy a modal GUI either.
+    # ⚠ GOLD AND EXPERIENCE NO LONGER TRAVEL THE SAME WAY, and this section used to assume
+    # they did. Gold is a purse the host owns; experience MERGES UPWARD BY MAX in both
+    # directions, because both engines already grant kill XP independently (a mirrored enemy
+    # dies through the real damage pipeline, so ApplyDeathExperience runs on the mirror too)
+    # and an absolute overwrite was erasing a client's plot XP within a tick.
+    #
+    # So the old check — push the host's XP DOWN and wait for the client to follow — now
+    # asserts exactly the bug that was fixed. It moves UP, and the downward case becomes its
+    # own check: the client must REFUSE to be pulled backwards.
     $goldTarget = $goldBefore + 137
-    $xpTarget = if ($xpBefore -ge 8) { $xpBefore - 5 } else { $xpBefore + 5 }
+    $xpTarget = $xpBefore + 5   # small: crossing a level threshold lights a modal prompt
 
     [VF]::W32($h1, $partyTable1 + 0xFC, [int]$goldTarget) | Out-Null
     [VF]::W32($h1, $statsHost + 0x68, [int]$xpTarget) | Out-Null
@@ -601,14 +607,31 @@ if ($partyTable1 -and $partyTable2 -and $statsHost -and $statsPeer) {
 
     Check 'party gold reaches the other instance' ($goldSeen -eq $goldTarget) `
         "host $goldBefore -> $goldTarget, client's engine reads $goldSeen"
-    Check 'PC experience reaches the other instance' ($xpSeen -eq $xpTarget) `
+    Check 'PC experience rises on the other instance' ($xpSeen -eq $xpTarget) `
         "host $xpBefore -> $xpTarget, client's engine reads $xpSeen"
 
-    # Put the host's numbers back and let the mirror carry the restore across, so the next
-    # run starts from the same wallet and the same sheet this one did. (Waiting on gold is
-    # enough: the two fields are written by the same call on the client.)
+    # The guard, and the whole reason the channel changed: a client that has earned XP the
+    # host has not — plot XP from a conversation only it is having — must not have it stamped
+    # back down. Drop the host well below and give it longer than a merge would need.
+    [VF]::W32($h1, $statsHost + 0x68, [int]($xpBefore - 20)) | Out-Null
+    Start-Sleep -Seconds 6
+    $xpAfterDrop = [VF]::U32($h2, $statsPeer + 0x68)
+    $xpHostHealed = [VF]::U32($h1, $statsHost + 0x68)
+
+    Check "a client's experience cannot be pulled backwards" ($xpAfterDrop -eq $xpTarget) `
+        "host dropped to $($xpBefore - 20), client's engine still reads $xpAfterDrop"
+
+    # ...and the merge runs the other way too: the client keeps reporting its absolute, so
+    # the host climbs back to it rather than the pair settling at the lower number.
+    Check 'the host adopts the higher experience back' ($xpHostHealed -eq $xpTarget) `
+        "host wrote $($xpBefore - 20), reads back $xpHostHealed"
+
+    # Put the numbers back. ⚠ BOTH SIDES, BY HAND: a max-merged value cannot be restored
+    # downward through the channel — writing only the host would have the client's higher
+    # figure pull it straight back up, which is the behaviour two checks above just proved.
     [VF]::W32($h1, $partyTable1 + 0xFC, [int]$goldBefore) | Out-Null
     [VF]::W32($h1, $statsHost + 0x68, [int]$xpBefore) | Out-Null
+    [VF]::W32($h2, $statsPeer + 0x68, [int]$xpBefore) | Out-Null
     WaitFor2 { [VF]::U32($h2, $partyTable2 + 0xFC) -eq $goldBefore } 20 | Out-Null
 }
 else {
@@ -618,7 +641,9 @@ else {
     $progressionWhy = "partyTable host 0x{0:X} client 0x{1:X}, stats host 0x{2:X} client 0x{3:X}" -f `
         $partyTable1, $partyTable2, $statsHost, $statsPeer
     Check 'party gold reaches the other instance' $false $progressionWhy
-    Check 'PC experience reaches the other instance' $false $progressionWhy
+    Check 'PC experience rises on the other instance' $false $progressionWhy
+    Check "a client's experience cannot be pulled backwards" $false $progressionWhy
+    Check 'the host adopts the higher experience back' $false $progressionWhy
 }
 
 # --- 15. shared ground items (an item taken here vanishes there) -------------------------

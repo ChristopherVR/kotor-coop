@@ -324,7 +324,9 @@ internal sealed unsafe class MenuLoadController(SharedBlockView block)
             {
                 _loginRerouted = true;
                 block.AdoptWorldApplied = SharedBlock.AdoptLoginCarriedCharacter;
-                PluginHost.Log("menu: adopting a world — login left on TEMP:pifo (the carried character)");
+                // ASCII only: the plugin log is written as bytes, and an em-dash arrives as
+                // '?' in the file.
+                PluginHost.Log("menu: adopting a world - login left on TEMP:pifo (the carried character)");
             }
 
             if (!_loginRerouted)
@@ -685,8 +687,68 @@ internal sealed unsafe class MenuLoadController(SharedBlockView block)
         PluginHost.Log("menu: calling LoadPCAutoSave");
         LoadPCAutoSave(panel, _entryNative);
 
+        RestoreCarriedCharacter();
+
         LogLoadState("immediately after LoadPCAutoSave");
     }
+
+    /// <summary>
+    /// Puts the carried character back into <c>Temp\pifo.ifo</c>, in the one gap where it
+    /// cannot be raced.
+    ///
+    /// ⚠ MEASURED, AND WHY THE AGENT CANNOT DO THIS. <c>LoadPCAutoSave</c> exports the staged
+    /// save and then copies <c>&lt;export&gt;\pifo</c> over <c>TEMP:pifo</c>
+    /// (<c>CExoResMan::FileCopy</c> at 0x6CA634). It makes that call even when the staged save
+    /// contains no pifo — every manual save, and every world we adopt — and a copy with no
+    /// source TRUNCATES THE DESTINATION TO ZERO BYTES. So the file the agent wrote before the
+    /// load is empty by the time the login reads it, <c>LoadCharacterFromIFO</c> finds nothing
+    /// usable, its caller ignores the failure, and <c>InitiateModuleForPlayer</c> manufactures
+    /// a blank 1/1-hit-point creature at the module start point.
+    ///
+    /// Live, before this existed: the adopted world came up with a PC reading hp 1, xp 0, at
+    /// exactly the module start point (15.42, 20.12) instead of the saved (21.01, 21.15). An
+    /// agent-side re-write loop lost the race — truncation and the login's read fall inside
+    /// the same load, and a poll from another process cannot fit between them. Here there is
+    /// no race at all: this runs on the game's own thread, after the copy has happened and
+    /// before the login that reads the result.
+    /// </summary>
+    private void RestoreCarriedCharacter()
+    {
+        if (!block.AdoptWorldLogin)
+        {
+            return;
+        }
+
+        try
+        {
+            string directory = NativeMethods.GetModuleDirectory("dinput8.dll");
+            string carried = Path.Combine(directory, "Temp", CarriedCharacterFile);
+            string pifo = Path.Combine(directory, "Temp", "pifo.ifo");
+
+            if (!File.Exists(carried))
+            {
+                PluginHost.Log($"menu: adopting a world but {CarriedCharacterFile} is missing; "
+                    + "the login will produce a blank character");
+                return;
+            }
+
+            File.Copy(carried, pifo, overwrite: true);
+            PluginHost.Log(
+                $"menu: restored the carried character over TEMP:pifo ({new FileInfo(pifo).Length} bytes)");
+        }
+        catch (Exception ex)
+        {
+            // Never fatal: a failed restore costs the wrong character, not the process.
+            PluginHost.Log($"menu: could not restore the carried character: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// Where the agent stashes the joining player's character, next to the pifo the loader
+    /// clobbers. A separate name on purpose — the loader's FileCopy targets "pifo" by name,
+    /// so anything we want to survive it must not be called that.
+    /// </summary>
+    internal const string CarriedCharacterFile = "kcoop_carried.ifo";
 
     private long _nextDiagnosticMs;
 

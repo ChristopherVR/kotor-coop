@@ -25,6 +25,8 @@ internal static class Program
                 AgentCommand.Scan => Scan(options),
                 AgentCommand.Track => Track(options),
                 AgentCommand.AutoTrack => AutoTrack(options),
+                AgentCommand.ServeWorld => await ServeWorldAsync(options).ConfigureAwait(false),
+                AgentCommand.Adopt => await AdoptAsync(options).ConfigureAwait(false),
                 AgentCommand.Run => await RunAsync(options).ConfigureAwait(false),
                 _ => Help(),
             };
@@ -160,6 +162,209 @@ internal static class Program
 
         Console.WriteLine(diagnostic);
         return loaded ? 0 : 1;
+    }
+
+    /// <summary>
+    /// Serves this install's world to joiners: the save directory itself, over TCP on the
+    /// session's port number, until cancelled.
+    ///
+    /// Standalone rather than folded into `run` on purpose, for now. Which world a host
+    /// should serve while it is STANDING IN ONE is an open question — the save on disk is by
+    /// definition older than the world being played — and a separate verb keeps that decision
+    /// out of the session's path until it is answered. See docs/research/world-adoption.md §6.
+    /// </summary>
+    private static async Task<int> ServeWorldAsync(AgentOptions options)
+    {
+        if (!TryResolveGameDirectory(options.GamePath, out string gameDirectory))
+        {
+            Console.Error.WriteLine($"game directory not found: {options.GamePath} (use --game-path <dir or exe>)");
+            return 1;
+        }
+
+        int slot = options.LoadSave > 0 ? options.LoadSave - 1 : 0;
+        if (!PluginMenuLoader.TryResolveSaveDirectory(gameDirectory, slot, out string saveDirectory, out string which))
+        {
+            Console.Error.WriteLine(which);
+            return 1;
+        }
+
+        IReadOnlyList<WorldFile> world = WorldTransfer.ReadSaveDirectory(saveDirectory);
+        long bytes = 0;
+        foreach (WorldFile file in world)
+        {
+            bytes += file.Data.Length;
+        }
+
+        Console.WriteLine($"serving '{which}' ({world.Count} file(s), {bytes:N0} bytes) on :{options.Port}");
+        Console.WriteLine("press Ctrl+C to stop.");
+
+        using CancellationTokenSource cts = new();
+        Console.CancelKeyPress += (_, e) =>
+        {
+            e.Cancel = true;
+            cts.Cancel();
+        };
+
+        await WorldTransfer
+            .ServeAsync(world, options.Port, SessionPassword.Hash(options.Password), Console.WriteLine, cts.Token)
+            .ConfigureAwait(false);
+
+        return 0;
+    }
+
+    /// <summary>
+    /// Adopts a host's world into this install and loads it carrying this install's own
+    /// character — the joining half of world adoption.
+    ///
+    /// Run against a game sitting at the MAIN MENU: the load is fired through the plugin, the
+    /// same route `load` uses, but with the character login left on TEMP:pifo so the world's
+    /// own (the host's) character is not the one that comes up.
+    /// </summary>
+    private static async Task<int> AdoptAsync(AgentOptions options)
+    {
+        if (options.HostEndPoint is null)
+        {
+            Console.Error.WriteLine("Specify the host with --join <ip[:port]>.");
+            return 1;
+        }
+
+        using ProcessMemory memory = OpenTarget(options, writable: true);
+        using Process game = Process.GetProcessById(memory.ProcessId);
+
+        string? gameDirectory;
+        try
+        {
+            gameDirectory = Path.GetDirectoryName(game.MainModule?.FileName);
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"cannot resolve the game directory: {ex.Message}");
+            return 1;
+        }
+
+        if (gameDirectory is null)
+        {
+            Console.Error.WriteLine("cannot resolve the game directory");
+            return 1;
+        }
+
+        // Which of OUR saves the character comes from. The world is the host's; this save
+        // contributes nothing else.
+        int slot = options.LoadSave > 0 ? options.LoadSave - 1 : 0;
+        if (!PluginMenuLoader.TryResolveSaveDirectory(gameDirectory, slot, out string ownSave, out string which))
+        {
+            Console.Error.WriteLine(which);
+            return 1;
+        }
+
+        Console.WriteLine($"carrying the character from '{which}'");
+
+        AdoptedWorld? adopted = await WorldAdoption.TryAdoptAsync(
+            gameDirectory,
+            ownSave,
+            options.HostEndPoint,
+            SessionPassword.Hash(options.Password),
+            expectedSaveIdentity: 0,
+            Console.WriteLine,
+            CancellationToken.None).ConfigureAwait(false);
+
+        if (adopted is null)
+        {
+            return 1;
+        }
+
+        // ⚠ adoptedWorld: true is the whole point. It leaves DoingStartNewModule SET so the
+        // login reads Temp\pifo.ifo; clearing it (what every other load does) would read the
+        // staged world's own module.ifo, which holds the HOST's character.
+        if (!PluginMenuLoader.TryRequestLoad(memory, out nint block, out string request, adoptedWorld: true))
+        {
+            Console.Error.WriteLine(request);
+            return 1;
+        }
+
+        Console.WriteLine(request);
+
+        GameLifecycle lifecycle = new(memory);
+        DateTime deadline = DateTime.UtcNow + TimeSpan.FromSeconds(120);
+        string pifoPath = Path.Combine(gameDirectory, "Temp", "pifo.ifo");
+        int reasserted = 0;
+
+        while (DateTime.UtcNow < deadline)
+        {
+            // ⚠ MEASURED, AND THE WHOLE REASON THIS LOOP IS NOT JUST A WAIT.
+            // LoadPCAutoSave copies <export>\pifo over TEMP:pifo (CExoResMan::FileCopy at
+            // 0x6CA634) and runs that copy even when the staged save contains no pifo — which
+            // TRUNCATES ours to zero bytes. Live: the file was written at 11:56:4x, was 0
+            // bytes by the time LoadPCAutoSave returned, LoadCharacterFromIFO found nothing
+            // usable, and the engine manufactured a blank creature (the faction-repair canary
+            // fired). The login reads the file ~0.6 s later, so re-writing it here lands
+            // inside the window; a non-empty file is left alone so we never race the read.
+            try
+            {
+                FileInfo pifo = new(pifoPath);
+                if (!pifo.Exists || pifo.Length == 0)
+                {
+                    if (WorldAdoption.TryReassertCharacter(gameDirectory, ownSave, out string reassert))
+                    {
+                        reasserted++;
+                        Console.WriteLine($"re-wrote the carried character after the loader cleared it ({reassert})");
+                    }
+                }
+            }
+            catch (IOException)
+            {
+                // The engine has the file open; the next pass picks it up.
+            }
+
+            if (lifecycle.GetPhase() == GamePhase.InWorld)
+            {
+                // Which character actually came up. A missing pifo does NOT fail the load —
+                // the engine's 0xF login branch ignores LoadCharacterFromIFO's return value —
+                // it produces a blank level-1 stranger, so this is the field that says so.
+                PluginMenuLoader.TryReadLoginFlavour(memory, block, out uint flavour);
+
+                Console.WriteLine(flavour switch
+                {
+                    // ⚠ The flavour says which BRANCH the login took, not that the character
+                    // loaded — a missing pifo produces a blank level-1 stranger and reports
+                    // the same 2. The re-assert count is the honest companion signal, and the
+                    // oracle is the PC itself.
+                    2 => $"in world: '{adopted.Value.Module}', carrying our own character (TEMP:pifo)"
+                        + (reasserted > 0 ? $"; pifo re-written {reasserted}x during the load" : string.Empty),
+                    1 => $"⚠ in world: '{adopted.Value.Module}', but the login took the SAVED character "
+                        + "(the host's) — the adopted-world flag did not reach the plugin",
+                    _ => $"⚠ in world: '{adopted.Value.Module}', but the plugin reported no login flavour",
+                });
+
+                return flavour == 2 ? 0 : 1;
+            }
+
+            if (PluginMenuLoader.TryReadStatus(memory, block, out _, out int status) && status != 0)
+            {
+                Console.Error.WriteLine($"the plugin refused the load (failure {status})");
+                return 1;
+            }
+
+            game.Refresh();
+            if (game.HasExited)
+            {
+                Console.Error.WriteLine("the game exited while loading");
+                return 1;
+            }
+
+            // Fast enough to land inside the ~0.6 s between the loader clearing the pifo and
+            // the login reading it.
+            Thread.Sleep(100);
+        }
+
+        Console.Error.WriteLine("the plugin accepted the load but no world appeared within 120s");
+        return 1;
+    }
+
+    private static bool TryResolveGameDirectory(string path, out string gameDirectory)
+    {
+        gameDirectory = Directory.Exists(path) ? path : Path.GetDirectoryName(path) ?? string.Empty;
+        return gameDirectory.Length > 0 && Directory.Exists(gameDirectory);
     }
 
     /// <summary>

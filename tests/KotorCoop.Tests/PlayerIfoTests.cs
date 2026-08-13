@@ -233,6 +233,28 @@ public sealed class PlayerIfoTests : IDisposable
     }
 
     [Fact]
+    public void StagingAlsoWritesTheStashThatSurvivesTheLoader()
+    {
+        // ⚠ MEASURED LIVE. LoadPCAutoSave copies <export>\pifo over TEMP:pifo and makes that
+        // call even when the staged save has no pifo — which truncates ours to zero bytes.
+        // The first live adoption came up as a blank 1-hit-point character at the module
+        // start point because of it. The stash is a byte-identical copy under a name the
+        // loader's FileCopy does not target, which the plugin restores over the pifo once the
+        // loader is done with it.
+        string game = TempDirectory();
+        string save = BuildSaveDirectory("end_m01aa", ("Yasuko Kaar", true));
+
+        Assert.True(PlayerIfo.TryStagePlayer(game, save, out _));
+
+        string pifo = Path.Combine(game, "Temp", "pifo.ifo");
+        string stash = Path.Combine(game, "Temp", PlayerIfo.CarriedCharacterFile);
+
+        Assert.True(File.Exists(stash));
+        Assert.Equal(File.ReadAllBytes(pifo), File.ReadAllBytes(stash));
+        Assert.NotEqual("pifo.ifo", PlayerIfo.CarriedCharacterFile);
+    }
+
+    [Fact]
     public void StagingIsIdempotent()
     {
         // It is called both before and after LoadPCAutoSave, because whether that function

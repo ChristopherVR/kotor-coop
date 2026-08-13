@@ -91,11 +91,18 @@ public static class PluginMenuLoader
     }
 
     /// <summary>
-    /// Copies the save directory holding slot <paramref name="slotIndex"/> (0-based, in
-    /// the same most-recent-first order the in-game list shows) over the autosave slot.
+    /// The save directory holding slot <paramref name="slotIndex"/> (0-based, in the same
+    /// most-recent-first order the in-game list shows).
+    ///
+    /// The autosave is excluded from the ordering rather than counted: the GUI pins it on
+    /// top, so counting it would shift every real slot by one — the off-by-one that made
+    /// "-Save 2" silently load through a different path than "-Save 1".
     /// </summary>
-    public static bool TryStageSaveAsAutosave(string gameDirectory, int slotIndex, out string diagnostic)
+    public static bool TryResolveSaveDirectory(
+        string gameDirectory, int slotIndex, out string saveDirectory, out string diagnostic)
     {
+        saveDirectory = string.Empty;
+
         string savesDirectory = Path.Combine(gameDirectory, "saves");
         if (!Directory.Exists(savesDirectory))
         {
@@ -103,9 +110,6 @@ public static class PluginMenuLoader
             return false;
         }
 
-        // The GUI lists saves newest-first, with the autosave pinned on top when it
-        // exists. Slot indices here refer to real saves, so the autosave is excluded
-        // from the ordering rather than counted.
         List<DirectoryInfo> saves =
         [
             .. new DirectoryInfo(savesDirectory)
@@ -120,8 +124,24 @@ public static class PluginMenuLoader
             return false;
         }
 
-        DirectoryInfo source = saves[slotIndex];
+        saveDirectory = saves[slotIndex].FullName;
+        diagnostic = saves[slotIndex].Name;
+        return true;
+    }
 
+    /// <summary>
+    /// Copies the save directory holding slot <paramref name="slotIndex"/> (0-based, in
+    /// the same most-recent-first order the in-game list shows) over the autosave slot.
+    /// </summary>
+    public static bool TryStageSaveAsAutosave(string gameDirectory, int slotIndex, out string diagnostic)
+    {
+        if (!TryResolveSaveDirectory(gameDirectory, slotIndex, out string sourcePath, out diagnostic))
+        {
+            return false;
+        }
+
+        DirectoryInfo source = new(sourcePath);
+        string savesDirectory = Path.Combine(gameDirectory, "saves");
         string autosave = Path.Combine(savesDirectory, AutosaveSlot);
 
         try
