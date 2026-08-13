@@ -568,7 +568,7 @@ internal static class Program
             lastServers = browser.Servers;
             kotor.PublishBrowserServers(
                 [.. lastServers.Select(s =>
-                    (s.Name, s.Address, (byte)s.PlayerCount, (byte)s.MaxPlayers, s.Locked, s.Module))]);
+                    (s.Name, s.Address, (byte)s.PlayerCount, (byte)s.MaxPlayers, s.Locked, s.Module, s.Faces))]);
 
             // The player chose to host from the panel rather than join a listed server.
             if (kotor.TryTakeBrowserHost())
@@ -944,6 +944,16 @@ internal static class Program
             Console.WriteLine($"tuning: {tickRate} Hz, {interpolationMs} ms interpolation (from coop.ini)");
         }
 
+        // coop.ini's password applies to a directly-started session too, not only to the
+        // in-game menu path that already consulted it. The file documents one setting, and
+        // honouring it in only one of the two ways a session starts is the kind of difference
+        // nobody debugs — they conclude the password does not work.
+        if (password.Length == 0 && tuning is { Password.Length: > 0 })
+        {
+            password = tuning.Password;
+            Console.WriteLine("password: set from coop.ini");
+        }
+
         AgentSettings agentSettings = new()
         {
             PollRate = tickRate,
@@ -966,6 +976,7 @@ internal static class Program
         SessionSettings SettingsFor(string sessionPassword) => new()
         {
             PlayerName = effectiveName,
+            ServerName = tuning?.ServerName ?? string.Empty,
             Port = options.Port,
             TickRate = tickRate,
             InterpolationDelayMs = interpolationMs,

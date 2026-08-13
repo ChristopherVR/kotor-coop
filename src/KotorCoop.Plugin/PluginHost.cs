@@ -364,8 +364,8 @@ internal static unsafe class PluginHost
         // ⚠ ONE NUMBER IN TWO FILES. KotorGameBridge.PluginSignature embeds this byte in the
         // pattern the agent scans for, so bumping only one end reads as "plugin shared block
         // not found" — which looks like a broken install rather than a version skew.
-        // 35 = the adopted-world login region at 0x3320 (SharedBlock, version 35).
-        _block->Version = 35;
+        // 36 = the browser details array at 0x3400 (SharedBlock, version 36).
+        _block->Version = 36;
 
         // A guard dword after the version. Magic plus version alone was not selective
         // enough: a scan once matched something else at a lower address and the agent

@@ -110,12 +110,15 @@ public sealed class SessionManager(IGameBridge bridge, AgentSettings agentSettin
             {
                 _discovery = new ServerDiscovery();
                 _discovery.StartAdvertising(
-                    settings.PlayerName,
+                    settings.AdvertisedName,
                     settings.Port,
                     (byte)KotorCoop.Protocol.ProtocolConstants.MaxPeers,
                     () => (_session?.GetStats().PeerCount ?? 0) + 1,
                     locked: settings.Password.Length > 0,
-                    module: () => bridge.TryReadLocalState(out var state) ? state.Module : string.Empty);
+                    module: () => bridge.TryReadLocalState(out var state) ? state.Module : string.Empty,
+                    // Read live, like the count and the module: a browsing player sees the
+                    // party as it is now, not as it was when the session started.
+                    portraits: bridge.ReadPartyPortraits);
             }
 
             _phase = SessionPhase.Connecting;

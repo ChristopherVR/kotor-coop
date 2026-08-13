@@ -271,6 +271,18 @@ public sealed record SessionSettings
 {
     public string PlayerName { get; init; } = "player";
 
+    /// <summary>
+    /// What this host calls itself in other players' server browsers (coop.ini
+    /// <c>server_name</c>). Empty falls back to <see cref="PlayerName"/> — the browser must
+    /// always have something to show, and the character's name is what it showed before this
+    /// existed.
+    /// </summary>
+    public string ServerName { get; init; } = string.Empty;
+
+    /// <summary>The name this host advertises: its server name when set, else the player's.</summary>
+    public string AdvertisedName =>
+        ServerName.Length > 0 ? ServerName : PlayerName;
+
     public int Port { get; init; } = ProtocolConstants.DefaultPort;
 
     public int TickRate { get; init; } = ProtocolConstants.DefaultTickRate;

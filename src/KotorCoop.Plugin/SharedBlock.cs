@@ -60,7 +60,9 @@ internal struct SharedBlock
     /// hole left by the old bark rings is deliberately NOT reused — it is documented as dead
     /// so a stale reader finds zeros there rather than half a record, and quietly repurposing
     /// it would turn that promise into a trap for the next person who reads the comment.</summary>
-    public const int TotalSize = 0x3400;
+    /// <summary>Grown from 0x3400 for the browser details array (version 36): the server rows
+    /// at 0xE20 cannot widen, because the death region begins exactly where they end.</summary>
+    public const int TotalSize = 0x3700;
 
     public const int ProfileVisibleSize = 0x250;
 
@@ -1088,6 +1090,42 @@ internal struct SharedBlock
 
     /// <summary>Rows the panel can show; occupies 0xE20..0x1020, inside the region.</summary>
     public const int BrowserCapacity = 8;
+
+    // ---- browser details (version 36, region 0x3400..0x3600) ---------------------
+    //
+    // What the panel's DETAILS pane draws for the highlighted row: the world the host is
+    // standing in, and the party's faces.
+    //
+    // A parallel array rather than a wider row, because the row above is boxed in — it runs
+    // 0xE20..0x1020 and the death region starts exactly there, so the stride cannot grow
+    // without moving every field a working reader already knows. Same shape the enemy
+    // one-shot table uses beside the presence slots, and indexed the same way: details[i]
+    // belongs to entry[i].
+    //
+    // ⚠ Portraits are RESREFS, not portraits.2da row ids. CSWSObject keeps the resref at
+    // +0x20 (the id at +0x30 is a different thing), the panel's image label takes a resref,
+    // so nothing between the host's creature and the drawn face has to consult a table —
+    // and two installs with differently-modded portraits.2da cannot disagree about which
+    // face a number means.
+
+    public const int OffsetBrowserDetails = 0x3400;
+
+    public const int BrowserDetailStride = 0x60;
+
+    /// <summary>The world the host is standing in, ALREADY READABLE ("Taris - Lower City").
+    /// The agent resolves the resref through the area file and dialog.tlk before writing, so
+    /// the plugin draws what it is given. 40 bytes because the resolved names are sentences,
+    /// not resrefs — the longest base-game area name measured is 28 characters.</summary>
+    public const int BrowserDetailModule = 0x00;
+
+    public const int BrowserDetailModuleLength = 40;
+
+    /// <summary>Three portrait resrefs: the PC first, then the active companions.</summary>
+    public const int BrowserDetailPortraits = 0x28;
+
+    public const int BrowserDetailPortraitLength = 16;
+
+    public const int BrowserDetailPortraitCount = 3;
 
     // ---- co-op death handling (version 14, region 0x1020..0x1080) -----------------
     //

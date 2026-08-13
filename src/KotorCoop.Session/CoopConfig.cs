@@ -33,6 +33,15 @@ public sealed record CoopConfig
 
     public string? Name { get; init; }
 
+    /// <summary>
+    /// What this host calls itself in other players' server browsers. Distinct from
+    /// <see cref="Name"/>, which is the CHARACTER's name on the wire and in the selection
+    /// band: a server wants a name for the session ("Chris's Tuesday game"), not for the
+    /// person. Unset falls back to <see cref="Name"/>, which is what every existing install
+    /// already advertises.
+    /// </summary>
+    public string? ServerName { get; init; }
+
     /// <summary>Whether the plugin should rebind the main-menu button to start co-op. Off
     /// by default — the GUI rebind is engine-call code that wants live verification.</summary>
     public bool MenuButton { get; init; }
@@ -153,6 +162,7 @@ public sealed record CoopConfig
             Port = int.TryParse(kv.GetValueOrDefault("port"), out int port) ? port : ProtocolConstants.DefaultPort,
             Password = kv.GetValueOrDefault("password", string.Empty),
             Name = kv.GetValueOrDefault("name"),
+            ServerName = kv.GetValueOrDefault("server_name"),
             MenuButton = IsTruthy(kv.GetValueOrDefault("menu_button")),
             TickRate = int.TryParse(kv.GetValueOrDefault("tick_rate"), out int tick)
                 ? Math.Clamp(tick, 5, 120)

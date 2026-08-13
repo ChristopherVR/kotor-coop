@@ -498,13 +498,13 @@ public sealed class KotorGameBridge : IGameBridge
     private const uint BlockPartyRosterSlotMask = 0x1FF;
     private const uint BlockPartyRosterValid = 0x8000_0000;
 
-    /// <summary>16-byte signature: "KOCOOP01" + version 35 + guard 0xC0FFEE01. The version is
+    /// <summary>16-byte signature: "KOCOOP01" + version 36 + guard 0xC0FFEE01. The version is
     /// part of the pattern deliberately: an agent must not attach to a plugin whose block
     /// layout it does not know, and a stale pair fails to find each other rather than reading
     /// the wrong offsets. ⚠ Bump this WITH PluginHost's `_block->Version` — they are one
     /// number in two files, and a half-bump reads as "plugin shared block not found", which
     /// looks like a broken install rather than a version skew.</summary>
-    public const string PluginSignature = "4B 4F 43 4F 4F 50 30 31 23 00 00 00 01 EE FF C0";
+    public const string PluginSignature = "4B 4F 43 4F 4F 50 30 31 24 00 00 00 01 EE FF C0";
 
     /// <summary>Agent's view of which coop item id occupies each plugin item slot.</summary>
     private readonly uint[] _itemSlotIds = new uint[BlockItemCapacity];
@@ -2751,6 +2751,62 @@ public sealed class KotorGameBridge : IGameBridge
     /// <summary>Entry +0x3A: non-zero when the host requires a password (a lock marker in the row).</summary>
     private const int BlockBrowserEntryLocked = 0x3A;
 
+    // SharedBlock's browser details array (block version 36).
+    private const int BlockBrowserDetails = 0x3400;
+    private const int BlockBrowserDetailStride = 0x60;
+    private const int BlockBrowserDetailModule = 0x00;
+    private const int BlockBrowserDetailModuleLength = 40;
+    private const int BlockBrowserDetailPortraits = 0x28;
+    private const int BlockBrowserDetailPortraitLength = 16;
+    private const int BlockBrowserDetailPortraitCount = 3;
+
+    /// <summary>Module resref -> what to show a browsing player, cached because the answer
+    /// costs an archive open and never changes for a given resref.</summary>
+    private readonly Dictionary<string, string> _moduleNames = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// A readable name for a module resref, resolved from THIS install's own module files.
+    ///
+    /// Deliberately local rather than sent by the host: both installs have the base game, the
+    /// answer is identical on both, and a resref is 16 bytes on the wire where a display name
+    /// is not. Falls back to the resref itself, which is what the browser showed before and is
+    /// never wrong — only terse.
+    /// </summary>
+    private string DescribeModule(string module)
+    {
+        if (module.Length == 0)
+        {
+            return string.Empty;
+        }
+
+        if (_moduleNames.TryGetValue(module, out string? cached))
+        {
+            return cached;
+        }
+
+        string name = module;
+
+        try
+        {
+            using var process = System.Diagnostics.Process.GetProcessById(_memory.ProcessId);
+            string? gameDirectory = Path.GetDirectoryName(process.MainModule?.FileName);
+
+            if (gameDirectory is not null
+                && GameFiles.ModuleNames.TryRead(gameDirectory, module, out string readable)
+                && readable.Length > 0)
+            {
+                name = readable;
+            }
+        }
+        catch (Exception)
+        {
+            // A browser label is not worth failing anything for; keep the resref.
+        }
+
+        _moduleNames[module] = name;
+        return name;
+    }
+
     private uint _browserListSerial;
     private uint _lastBrowserConnectSerial;
     private uint _lastBrowserHostSerial;
@@ -2768,7 +2824,13 @@ public sealed class KotorGameBridge : IGameBridge
     /// signature check keeps this from rewriting the same list every tick.
     /// </summary>
     public bool PublishBrowserServers(
-        IReadOnlyList<(string Name, string Address, byte Players, byte MaxPlayers, bool Locked, string Module)> servers)
+        IReadOnlyList<(string Name, string Address, byte Players, byte MaxPlayers, bool Locked, string Module)> servers) =>
+        PublishBrowserServers(
+            [.. servers.Select(s => (s.Name, s.Address, s.Players, s.MaxPlayers, s.Locked, s.Module, (IReadOnlyList<string>)[]))]);
+
+    public bool PublishBrowserServers(
+        IReadOnlyList<(string Name, string Address, byte Players, byte MaxPlayers, bool Locked,
+            string Module, IReadOnlyList<string> Portraits)> servers)
     {
         if (_pluginBlock == 0)
         {
@@ -2778,7 +2840,8 @@ public sealed class KotorGameBridge : IGameBridge
         int count = Math.Min(servers.Count, BlockBrowserCapacity);
 
         string signature = string.Join('|', servers.Take(count)
-            .Select(s => $"{s.Name}@{s.Address}:{s.Players}/{s.MaxPlayers}:{(s.Locked ? 1 : 0)}:{s.Module}"));
+            .Select(s => $"{s.Name}@{s.Address}:{s.Players}/{s.MaxPlayers}:{(s.Locked ? 1 : 0)}:{s.Module}"
+                + $":{string.Join(',', s.Portraits)}"));
         if (signature == _lastBrowserSignature)
         {
             return true;
@@ -2789,17 +2852,32 @@ public sealed class KotorGameBridge : IGameBridge
         for (int i = 0; i < count; i++)
         {
             nint entry = _pluginBlock + BlockBrowserEntries + (i * BlockBrowserEntryStride);
-            (string name, string address, byte players, byte max, bool locked, string module) = servers[i];
+            nint detail = _pluginBlock + BlockBrowserDetails + (i * BlockBrowserDetailStride);
+            (string name, string address, byte players, byte max, bool locked, string module,
+                IReadOnlyList<string> portraits) = servers[i];
 
-            // The row has no space for the module string, so it rides in the name column as
-            // "Name [module]" — which is also exactly what a browsing player wants to read.
-            string caption = module.Length > 0 ? $"{name} [{module}]" : name;
-
-            _memory.TryWriteAsciiString(entry + BlockBrowserEntryName, caption, BlockBrowserEntryNameLength);
+            // ⚠ The module no longer rides inside the name. It used to be folded in as
+            // "Name [module]" because the row was the only place to put it; the row is now
+            // the host's chosen name alone, and the world has its own field for the details
+            // pane — which is what a player actually reads before joining.
+            _memory.TryWriteAsciiString(entry + BlockBrowserEntryName, name, BlockBrowserEntryNameLength);
             _memory.TryWriteAsciiString(entry + BlockBrowserEntryAddress, address, BlockBrowserEntryAddressLength);
             _memory.TryWrite(entry + BlockBrowserEntryPlayers, players);
             _memory.TryWrite(entry + BlockBrowserEntryMaxPlayers, max);
             _memory.TryWrite(entry + BlockBrowserEntryLocked, locked ? (byte)1 : (byte)0);
+
+            // Resolved HERE, not in the plugin: reading a module's display name means opening
+            // module files, which is the agent's job — the plugin draws what it is handed.
+            _memory.TryWriteAsciiString(
+                detail + BlockBrowserDetailModule, DescribeModule(module), BlockBrowserDetailModuleLength);
+
+            for (int p = 0; p < BlockBrowserDetailPortraitCount; p++)
+            {
+                _memory.TryWriteAsciiString(
+                    detail + BlockBrowserDetailPortraits + (p * BlockBrowserDetailPortraitLength),
+                    p < portraits.Count ? portraits[p] : string.Empty,
+                    BlockBrowserDetailPortraitLength);
+            }
         }
 
         _memory.TryWrite(_pluginBlock + BlockBrowserCount, (uint)count);
@@ -3660,6 +3738,138 @@ public sealed class KotorGameBridge : IGameBridge
     /// Reads the active companions and where the host's engine has them. Skips the PC (never
     /// a companion) implicitly, because only the active NPC slots are read.
     /// </summary>
+    /// <summary>
+    /// CSWSObject + this = portrait_id, the portraits.2da row (symbol database: ushort).
+    ///
+    /// ⚠ NOT +0x20. That field is typed CResRef and looked like the portrait itself, which
+    /// would have kept this out of portraits.2da entirely — but measured on a live PC it is
+    /// SIXTEEN ZERO BYTES while +0x30 reads 21. The engine keeps the id and resolves the
+    /// texture through the table; the resref field is dead for a creature in the world.
+    ///
+    /// ⚠ NOT YET CONFIRMED TO BE THE ID THE GUI USES. This is the SERVER object's copy, and
+    /// this codebase has one standing trap about exactly that: the process runs a client and
+    /// a server half, and the half that draws is not always the half that stores. The HUD
+    /// portrait is drawn from <c>CSWCCreatureStats + 0x11C</c> (the client's stats), and if
+    /// the two disagree, that is the one to read. The browser currently fills its portrait
+    /// boxes but the texture does not resolve — see docs/research/server-browser.md.
+    /// </summary>
+    private const int OffPortraitId = 0x30;
+
+    /// <summary>
+    /// The portrait resrefs of this instance's party — the PC first, then each companion in
+    /// the active party, for the in-game server browser's details pane.
+    ///
+    /// Best-effort throughout: a portrait that cannot be read is skipped rather than failing
+    /// the list, because this is decoration on a lobby screen and a missing face must not
+    /// stop a server being advertised.
+    /// </summary>
+    public IReadOnlyList<string> ReadPartyPortraits()
+    {
+        List<string> portraits = [];
+
+        if (_player is not null)
+        {
+            AddPortrait(portraits, _player.Address);
+        }
+
+        if (!TryGetPartyTable(out nint partyTable)
+            || !_memory.TryReadInt32(partyTable + PartyCount, out int count)
+            || count is <= 0 or > PartyMaxCompanions)
+        {
+            return portraits;
+        }
+
+        Dictionary<uint, nint> byId = [];
+        foreach (CreatureRef c in EnumerateCreatures())
+        {
+            byId[c.ObjectId] = c.Address;
+        }
+
+        for (int i = 0; i < count; i++)
+        {
+            if (!_memory.TryReadInt32(partyTable + PartyActiveSlots + (i * 4), out int slot)
+                || slot is < 0 or >= PartyNpcSlots
+                || !_memory.TryReadUInt32(partyTable + PartyObjectIds + (slot * 4), out uint objectId)
+                || objectId == 0x7F000000
+                || !byId.TryGetValue(objectId, out nint creature))
+            {
+                continue;
+            }
+
+            AddPortrait(portraits, creature);
+        }
+
+        return portraits;
+    }
+
+    /// <summary>Appends one creature's portrait texture, resolved id -> portraits.2da.</summary>
+    private void AddPortrait(List<string> portraits, nint creature)
+    {
+        if (!_memory.TryRead(creature + OffPortraitId, out ushort id) || id == 0)
+        {
+            return;
+        }
+
+        string resref = PortraitResRef(id);
+        if (resref.Length > 0)
+        {
+            portraits.Add(resref);
+        }
+    }
+
+    /// <summary>portraits.2da, read once. Null when it cannot be read at all.</summary>
+    private GameFiles.TwoDa? _portraitTable;
+    private bool _portraitTableResolved;
+
+    /// <summary>Resolved rows, since a party of three asks for the same handful forever.</summary>
+    private readonly Dictionary<ushort, string> _portraitResRefs = [];
+
+    /// <summary>
+    /// The texture for a portraits.2da row — the <c>baseresref</c> column, which is what the
+    /// GUI's image labels take.
+    /// </summary>
+    private string PortraitResRef(ushort id)
+    {
+        if (_portraitResRefs.TryGetValue(id, out string? cached))
+        {
+            return cached;
+        }
+
+        string resref = string.Empty;
+
+        try
+        {
+            if (!_portraitTableResolved)
+            {
+                _portraitTableResolved = true;
+
+                using var process = System.Diagnostics.Process.GetProcessById(_memory.ProcessId);
+                string? gameDirectory = Path.GetDirectoryName(process.MainModule?.FileName);
+
+                if (gameDirectory is not null)
+                {
+                    using GameFiles.GameFiles files = new(gameDirectory);
+                    if (files.TryReadResource("portraits", "2da", out byte[] data))
+                    {
+                        _portraitTable = GameFiles.TwoDa.Parse(data);
+                    }
+                }
+            }
+
+            if (_portraitTable is not null && id < _portraitTable.RowCount)
+            {
+                resref = _portraitTable.Get(id, "baseresref");
+            }
+        }
+        catch (Exception)
+        {
+            // A missing face is cosmetic; never let it disturb the session.
+        }
+
+        _portraitResRefs[id] = resref;
+        return resref;
+    }
+
     public List<PartyMemberState> ReadPartyMembers()
     {
         List<PartyMemberState> members = [];

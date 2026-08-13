@@ -349,6 +349,13 @@ public interface IGameBridge : IDisposable
     List<PartyMemberState> ReadPartyMembers() => [];
 
     /// <summary>
+    /// The portrait resrefs of this instance's party, PC first — what a host advertises so a
+    /// browsing player can see who they would be joining. Empty when unknown, which the
+    /// browser draws as no faces rather than as an error.
+    /// </summary>
+    IReadOnlyList<string> ReadPartyPortraits() => [];
+
+    /// <summary>
     /// Client side: freezes the local party AI (solo mode) so companions do not follow or
     /// act on their own, then mirrors the host's companions onto the matching local
     /// creatures by slot. Returns how many were placed. The local PC — even if it is a

@@ -233,3 +233,75 @@ Row text: `CSWGuiButton.text +0x154`, `CSWGuiText.text_params +0x18`, caption `C
 `PopModalPanel 0x0040BE00` · `RemovePanel 0x0040C830` · `CSWGuiPanel::GetControl 0x0040BA00`.
 `AddEvent 0x0041AB20` (see connect-flow) · manual IP editbox `CSWGuiSaveNamePanel` typed string
 `panel+0x548` · console print `PrintStringScreenPos 0x0044CCA0`.
+
+---
+
+## The listing itself (2026-08-13, live)
+
+What the panel shows, after a pass driven by looking at it rather than at the block.
+
+### Two rendering rules this GUI enforces, both learned by breaking them
+
+1. **There is no newline.** An embedded `\n` in a caption draws as `?` — the row read
+   `Chris's Co-op Game?10.5.0.2:27140`. Layout comes from the renderer's own word wrap and
+   from keeping text short, never from control characters.
+2. **Overflowing text shows its TAIL, not its head.** When a caption needs more lines than
+   its box has, what survives is the bottom. That single fact explains both defects this pass
+   fixed:
+   - the row's original `"1. Name [module]  address  (players/max)"` padded the name to 18 and
+     the address to 23 — ~50 characters in a box about twenty wide — so the browser displayed
+     an IP and a player count with **the host's name pushed off the top**;
+   - the whole world string in the narrow PLANET label displayed as `Module`, the last word of
+     "Endar Spire - Command **Module**", and the extra wrapped line ran into the AREA label
+     beneath it.
+
+### The layout now
+
+```
+row (list, two lines)        details pane
+---------------------        ------------
+Chris's Co-op Game           ENDAR SPIRE        <- planet label
+10.5.0.2:27140 (1/8)         COMMAND MODULE     <- area label
+                             Password required  <- shot caption, only when locked
+                             [face][face][face] <- the host party's portraits
+```
+
+⚠ The world is SPLIT ON `" - "` deliberately: the game's own area names are written
+"Planet - Area" ("Taris - Lower City", "Unknown World - Temple Main Floor") and the panel's
+two labels are the save screen's planet and area. Each half fits on one line; the whole
+string does not.
+
+### Where the names come from
+
+`Mod_Name` in `module.ifo` is **not** it — measured on four base-game modules, every one of
+them returns its own resref. The player-facing name is on the AREA, as a `Name` StrRef into
+`dialog.tlk`: 10221 -> "Endar Spire - Command Module", 35894 -> "Taris - Lower City". Read
+locally by the browsing agent (`GameFiles.ModuleNames`), because both installs have the same
+files and a resref is 16 bytes on the wire where a sentence is not. Verified against the
+install: 6/6 real modules resolve, longest 33 characters, an unknown resref falls back to
+itself.
+
+The host's display name is `coop.ini server_name`, distinct from `name` (the character's).
+
+### ⚠ OPEN: the portraits fill WHITE
+
+The data path is complete and verified — the host reads `portrait_id` off each party
+creature, resolves it through `portraits.2da` (`baseresref`; row 21 -> `po_pmha4`), the
+beacon carries up to three resrefs (v3 tail), the block's details array holds them, and the
+panel's image labels take them. Live, two of the three boxes fill for a party of two. They
+fill **white**, which is what an image label draws when its fill texture does not resolve.
+
+Two candidates, neither eliminated:
+
+1. **The wrong half's id.** `+0x30` is the SERVER object's `portrait_id`. This process runs a
+   client and a server half, and the half that draws is not always the half that stores — the
+   HUD portrait comes from `CSWCCreatureStats + 0x11C`. If those disagree, the client's is the
+   one the GUI means. (The measured value, 21 -> `po_pmha4`, is a MALE portrait for a female
+   PC, which is itself a hint that this id is not the one being drawn.)
+2. **The texture is not reachable by that name.** `po_pmha4` resolves through neither
+   `chitin.key`/BIF nor override — KOTOR keeps GUI textures in `swpc_tex_gui.erf`, which the
+   file readers here do not index, so the name could not be confirmed offline either.
+
+`SetFillImage` itself is not the problem: its second argument is only a force-if-unchanged
+flag (0x414C00 compares against `[this+0x40]` and early-outs when equal and the flag is 0),
+and the labels visibly change state when written.

@@ -670,6 +670,12 @@ internal sealed unsafe class SharedBlockView(byte* baseAddress)
     /// <summary>Pointer to the null-terminated module name for the menu load (16 bytes).</summary>
     public byte* MenuLoadModule => baseAddress + SharedBlock.OffsetMenuLoadModule;
 
+    /// <summary>The details record for browser row <paramref name="index"/> — the world the
+    /// host stands in and its party's portrait resrefs. Parallel to
+    /// <see cref="BrowserEntry"/>, indexed identically.</summary>
+    public byte* BrowserDetail(int index) =>
+        baseAddress + SharedBlock.OffsetBrowserDetails + (index * SharedBlock.BrowserDetailStride);
+
     /// <summary>Agent-written: the next menu load adopts somebody else's world, so the
     /// character must come from Temp\pifo.ifo rather than the staged world's own
     /// module.ifo. See <see cref="SharedBlock.OffsetAdoptWorldLogin"/>.</summary>

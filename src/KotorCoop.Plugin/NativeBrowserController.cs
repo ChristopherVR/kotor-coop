@@ -420,16 +420,6 @@ internal sealed unsafe class NativeBrowserController
         triple[2] = built;
         AddControls(panel + PanelListBox, (nint)triple, 1, 0, 0);
 
-        // The stock population showed the last real save's details; blank the pane the way
-        // ShowGame's own clear path does.
-        SetCaption(panel + PanelPlanetParams, "");
-        SetCaption(panel + PanelAreaParams, "");
-        SetCaption(panel + PanelShotCaptionParams, "");
-        foreach (int offset in PanelImageParams)
-        {
-            WithExoString("", s => SetFillImage(panel + offset, s, 0));
-        }
-
         // Keep the previous highlight across a refresh; otherwise start on the first row, so
         // Enter connects to the top server without a click (the row-select event this fires
         // is unbound on our rows — verified safe).
@@ -438,6 +428,85 @@ internal sealed unsafe class NativeBrowserController
         {
             SetSelectedControl(panel + PanelListBox, select, 1);
         }
+
+        ShowDetails(panel, built > 0 ? select : -1);
+    }
+
+    /// <summary>
+    /// Fills the details pane for the highlighted row: the world the host is standing in, and
+    /// the party's faces.
+    ///
+    /// The stock population left the last real save's details there, so this used to blank
+    /// the pane and stop. It is the natural home for everything the row cannot hold — the row
+    /// is a narrow button whose caption wraps, and crowding it is what pushed the host's name
+    /// off screen when the module was folded into it.
+    ///
+    /// <paramref name="index"/> below zero blanks everything, which is what an empty list
+    /// wants.
+    /// </summary>
+    private void ShowDetails(nint panel, int index)
+    {
+        string world = string.Empty;
+        bool locked = false;
+        string[] faces = new string[SharedBlock.BrowserDetailPortraitCount];
+
+        if (index >= 0 && index < MaxRows)
+        {
+            locked = _block.BrowserEntry(index)[SharedBlock.BrowserEntryLocked] != 0;
+            byte* detail = _block.BrowserDetail(index);
+            world = ReadAscii(detail + SharedBlock.BrowserDetailModule, SharedBlock.BrowserDetailModuleLength);
+
+            for (int i = 0; i < faces.Length; i++)
+            {
+                faces[i] = ReadAscii(
+                    detail + SharedBlock.BrowserDetailPortraits + (i * SharedBlock.BrowserDetailPortraitLength),
+                    SharedBlock.BrowserDetailPortraitLength);
+            }
+        }
+
+        // ⚠ SPLIT ON " - ", because these are the save panel's PLANET and AREA labels and the
+        // game's own area names are written in exactly that shape: "Endar Spire - Command
+        // Module", "Taris - Lower City". Putting the whole string in one label showed
+        // "Module" — the labels are narrow, and this renderer bottom-aligns text it has to
+        // wrap, so an overflowing caption displays its TAIL. Two short halves fit; one long
+        // one silently shows the wrong end of itself.
+        string planet = world;
+        string area = string.Empty;
+        int split = world.IndexOf(" - ", StringComparison.Ordinal);
+        if (split > 0)
+        {
+            planet = world[..split];
+            area = world[(split + 3)..];
+        }
+
+        SetCaption(panel + PanelPlanetParams, planet);
+        SetCaption(panel + PanelAreaParams, area);
+
+        // The lock lives here rather than as a third row line: the row box holds two, and a
+        // third would push the host's name off the top — the very bug this pass exists to fix.
+        SetCaption(panel + PanelShotCaptionParams, locked ? "Password required" : "");
+
+        // Image 0 is the save screenshot's slot and stays empty — there is no screenshot of
+        // somebody else's session. 1..3 are the party portraits.
+        WithExoString("", s => SetFillImage(panel + PanelImageParams[0], s, 0));
+
+        for (int i = 0; i < faces.Length && i + 1 < PanelImageParams.Length; i++)
+        {
+            string face = faces[i];
+            WithExoString(face, s => SetFillImage(panel + PanelImageParams[i + 1], s, 0));
+        }
+    }
+
+    /// <summary>Reads a NUL-padded ASCII cell out of the block.</summary>
+    private static string ReadAscii(byte* start, int maxLength)
+    {
+        int length = 0;
+        while (length < maxLength && start[length] != 0)
+        {
+            length++;
+        }
+
+        return length == 0 ? string.Empty : System.Text.Encoding.ASCII.GetString(start, length);
     }
 
     /// <summary>Engine-allocates a row entry, clones layout/font from the proto, sets the
@@ -469,30 +538,45 @@ internal sealed unsafe class NativeBrowserController
         return entry;
     }
 
-    /// <summary>"1. Name [module]  address  (players/max) *" from the shared-block record —
-    /// the module rides inside the name column (the agent folds it in) and the trailing
-    /// asterisk marks a password-locked host, so the prompt after Connect is no surprise.</summary>
+    /// <summary>
+    /// The row's caption. The renderer word-wraps it into the row box, which holds two lines:
+    ///
+    ///     Chris's Co-op Game
+    ///     10.5.0.2:27140 (1/8)
+    ///
+    /// ⚠ TWO RULES, BOTH LEARNED THE EXPENSIVE WAY.
+    ///
+    /// 1. NO NEWLINES. There is no glyph for 0x0A here — an embedded '\n' draws as '?', which
+    ///    is what "Game?10.5.0.2:27140" was. Layout comes from the wrap and from keeping the
+    ///    text short, never from control characters.
+    /// 2. NOTHING MAY OVERFLOW. When the caption needs more lines than the box has, the
+    ///    renderer shows the BOTTOM of it. That is the whole history of this row: the original
+    ///    "1. Name [module]  address  (players/max)" padded the name to 18 and the address to
+    ///    23, a ~50-character string in a box about twenty wide, so what a player saw was the
+    ///    tail — an IP and a count — with the host's name pushed off the top.
+    ///
+    /// So the row carries the two things a player picks by, sized to fit: who is hosting, and
+    /// the address with the count beside it. Everything else — the world, the party, the
+    /// password — is in the details pane, which has room and is one line of code away rather
+    /// than a third line that would push the name off again.
+    /// </summary>
     private string FormatEntry(byte[] scratch, int index)
     {
         byte* entry = _block.BrowserEntry(index);
         int n = 0;
 
-        scratch[n++] = (byte)('1' + index);
-        scratch[n++] = (byte)'.';
+        n = AppendField(scratch, n, entry + SharedBlock.BrowserEntryName, SharedBlock.BrowserEntryNameLength, 0);
+
+        // A plain space: the wrap breaks here when the name fills the first line, which is
+        // exactly the two-line layout wanted, and reads as one line when it does not.
         scratch[n++] = (byte)' ';
-        n = AppendField(scratch, n, entry + SharedBlock.BrowserEntryName, SharedBlock.BrowserEntryNameLength, 18);
-        n = AppendField(scratch, n, entry + SharedBlock.BrowserEntryAddress, SharedBlock.BrowserEntryAddressLength, 23);
+        n = AppendField(scratch, n, entry + SharedBlock.BrowserEntryAddress, SharedBlock.BrowserEntryAddressLength, 0);
+        scratch[n++] = (byte)' ';
         scratch[n++] = (byte)'(';
         n = AppendCount(scratch, n, entry[SharedBlock.BrowserEntryPlayers]);
         scratch[n++] = (byte)'/';
         n = AppendCount(scratch, n, entry[SharedBlock.BrowserEntryMaxPlayers]);
         scratch[n++] = (byte)')';
-
-        if (entry[SharedBlock.BrowserEntryLocked] != 0)
-        {
-            scratch[n++] = (byte)' ';
-            scratch[n++] = (byte)'*';
-        }
 
         return System.Text.Encoding.ASCII.GetString(scratch, 0, n);
     }

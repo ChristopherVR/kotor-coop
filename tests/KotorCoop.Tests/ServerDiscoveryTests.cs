@@ -34,6 +34,85 @@ public class ServerDiscoveryTests
     }
 
     [Fact]
+    public void PartyPortraitsRideTheBeacon()
+    {
+        // The faces a browsing player sees before joining. Compared by CONTENT: the record's
+        // generated equality compares the list by reference, so a round trip can never be
+        // asserted with Assert.Equal on the whole beacon once a list is on it.
+        ServerBeacon beacon = new(
+            3, 27140, 3, 8, "Chris's Game", Locked: true, Module: "tar_m03aa",
+            Portraits: ["po_pcarth", "po_pbastilla", "po_pmission"]);
+
+        Span<byte> buffer = stackalloc byte[ServerBeacon.MaxBytes];
+        int length = beacon.Write(buffer);
+        Assert.True(length > 0);
+
+        ServerBeacon? read = ServerBeacon.Read(buffer[..length]);
+
+        Assert.NotNull(read);
+        Assert.Equal("Chris's Game", read.Value.Name);
+        Assert.Equal("tar_m03aa", read.Value.Module);
+        Assert.True(read.Value.Locked);
+        Assert.Equal<string[]>(["po_pcarth", "po_pbastilla", "po_pmission"], [.. read.Value.Faces]);
+    }
+
+    [Fact]
+    public void AVersionTwoBeaconReadsWithNoPortraits()
+    {
+        // A v2 host stops after the module. Its listing must appear with no faces rather
+        // than being rejected, exactly as v1 does for the locked flag.
+        ServerBeacon v2 = new(2, 27140, 1, 8, "Old Host", Locked: false, Module: "end_m01aa");
+        Span<byte> buffer = stackalloc byte[ServerBeacon.MaxBytes];
+        int full = v2.Write(buffer);
+
+        // Cut the v3 tail off: everything the v2 writer would not have produced.
+        int nameBytes = System.Text.Encoding.UTF8.GetByteCount("Old Host");
+        int v2Length = 8 + nameBytes + 2 + System.Text.Encoding.UTF8.GetByteCount("end_m01aa");
+        Assert.True(v2Length < full);
+
+        ServerBeacon? read = ServerBeacon.Read(buffer[..v2Length]);
+
+        Assert.NotNull(read);
+        Assert.Equal("end_m01aa", read.Value.Module);
+        Assert.Empty(read.Value.Faces);
+    }
+
+    [Fact]
+    public void APortraitCountTheDatagramCannotBackIsIgnored()
+    {
+        // The count is a remote byte that sizes a loop; a sender claiming three portraits it
+        // did not send must cost the faces, not an exception.
+        ServerBeacon beacon = new(3, 27140, 1, 8, "Host", Module: "end_m01aa", Portraits: ["po_pcarth"]);
+        Span<byte> buffer = stackalloc byte[ServerBeacon.MaxBytes];
+        int length = beacon.Write(buffer);
+
+        // The count byte sits immediately before the single 16-byte resref.
+        buffer[length - ServerBeacon.ResRefLength - 1] = 3;
+
+        ServerBeacon? read = ServerBeacon.Read(buffer[..length]);
+
+        Assert.NotNull(read);
+        Assert.Empty(read.Value.Faces);
+    }
+
+    [Fact]
+    public void TheListCarriesAHostsPortraitsThrough()
+    {
+        // The gap this closes: the beacon carried the faces and the list dropped them on the
+        // floor, so the browser drew three empty boxes with the data sitting one field away.
+        ServerList list = new();
+        list.Observe(
+            new IPEndPoint(IPAddress.Parse("10.5.0.2"), 27140),
+            new ServerBeacon(3, 27140, 2, 8, "Chris's Game", Module: "end_m01aa",
+                Portraits: ["po_pmha4", "po_ptrask"]),
+            nowMs: 1000);
+
+        ServerInfo server = Assert.Single(list.Snapshot(1000));
+
+        Assert.Equal<string[]>(["po_pmha4", "po_ptrask"], [.. server.Faces]);
+    }
+
+    [Fact]
     public void AVersionOneBeaconWithoutTheTailReadsAsUnlockedUnknownModule()
     {
         // A v1 sender stops after the name. The v2 reader must accept the datagram and

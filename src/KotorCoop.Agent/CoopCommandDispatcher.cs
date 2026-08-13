@@ -208,7 +208,7 @@ public sealed class CoopCommandDispatcher(
         _lastServerList = _browser.Servers;
         _kotor.PublishBrowserServers(
             [.. _lastServerList.Select(s =>
-                (s.Name, s.Address, (byte)s.PlayerCount, (byte)s.MaxPlayers, s.Locked, s.Module))]);
+                (s.Name, s.Address, (byte)s.PlayerCount, (byte)s.MaxPlayers, s.Locked, s.Module, s.Faces))]);
     }
 
     /// <summary>Posts the LAN server list to the overlay, numbered for `connect #n`.</summary>
