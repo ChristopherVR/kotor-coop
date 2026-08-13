@@ -53,6 +53,7 @@ internal static unsafe class PluginHost
     private static NativeBrowserController? _nativeBrowser;
     private static DeathController? _death;
     private static ChatOverlayController? _chatOverlay;
+    private static ConsoleAssistController? _consoleAssist;
     private static DialogueSpectateController? _dialogueSpectate;
     private static EncounterController? _encounters;
     private static Thread? _worker;
@@ -121,6 +122,7 @@ internal static unsafe class PluginHost
             _nativeBrowser = new NativeBrowserController(_view);
             _death = new DeathController(_view);
             _chatOverlay = new ChatOverlayController(_view);
+            _consoleAssist = new ConsoleAssistController();
             _dialogueSpectate = new DialogueSpectateController(_view);
             _encounters = new EncounterController(_view);
             _pause = new PauseController(_view);
@@ -428,6 +430,10 @@ internal static unsafe class PluginHost
         // having just pressed Connect in the browser, where the swap hook does not fire. It is
         // a no-op unless the agent has bumped the request serial.
         _passwordPrompt?.OnFrame();
+
+        // Console history/completion follows the ~ console itself, which opens at the menu
+        // AND in-world — so it lives on this hook, not the (menu-dormant) SwapBuffers one.
+        _consoleAssist?.OnFrame();
     }
 
     private static void OnFrame()

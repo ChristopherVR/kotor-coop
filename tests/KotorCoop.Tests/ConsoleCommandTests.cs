@@ -172,4 +172,49 @@ public class ConsoleCommandTests
         CoopCommand c = ConsoleCommand.Parse("host");
         Assert.False(c.TryResolveEndpoint(7777, out _));
     }
+
+    [Fact]
+    public void WarpCarriesTheModuleLowercased()
+    {
+        CoopCommand c = ConsoleCommand.Parse("warp DANM13");
+        Assert.Equal(CoopCommandKind.Warp, c.Kind);
+        Assert.Equal("danm13", c.Address);
+        Assert.Null(c.Password);
+    }
+
+    [Fact]
+    public void WarpAcceptsAnOptionalWaypointTag()
+    {
+        CoopCommand c = ConsoleCommand.Parse("warp danm13 wp_entry_01");
+        Assert.Equal(CoopCommandKind.Warp, c.Kind);
+        Assert.Equal("danm13", c.Address);
+        Assert.Equal("wp_entry_01", c.Password);
+    }
+
+    [Fact]
+    public void WarpWithoutAModuleIsInvalid()
+    {
+        CoopCommand c = ConsoleCommand.Parse("warp");
+        Assert.Equal(CoopCommandKind.Invalid, c.Kind);
+        Assert.Contains("module", c.Error);
+    }
+
+    [Theory]
+    [InlineData("warp bad-name")]              // '-' is not resref-safe
+    [InlineData("warp danm13x_reallytoolong")] // > 16 chars
+    [InlineData("warp dan m13; drop")]         // shell-ish junk in the waypoint slot
+    public void WarpRejectsMalformedResrefs(string line)
+    {
+        Assert.Equal(CoopCommandKind.Invalid, ConsoleCommand.Parse(line).Kind);
+    }
+
+    [Theory]
+    [InlineData("who", CoopCommandKind.Who)]
+    [InlineData("peers", CoopCommandKind.Who)]
+    [InlineData("where", CoopCommandKind.Where)]
+    [InlineData("coop who", CoopCommandKind.Who)]
+    public void RosterAndPositionVerbsMapToKinds(string line, CoopCommandKind expected)
+    {
+        Assert.Equal(expected, ConsoleCommand.Parse(line).Kind);
+    }
 }
