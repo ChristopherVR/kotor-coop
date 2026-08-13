@@ -840,8 +840,8 @@ internal sealed unsafe class SharedBlockView(byte* baseAddress)
     /// <summary>Confirms the current selection; the agent connects. Selection is written first.</summary>
     public void RequestBrowserConnect() => (*U32(SharedBlock.OffsetBrowserConnectSerial))++;
 
-    /// <summary>Asks the agent to prompt for a password for the current selection.</summary>
-    public void RequestBrowserPassword() => (*U32(SharedBlock.OffsetBrowserPasswordSerial))++;
+    /// <summary>Bumped by the agent when the player must be asked for a server's password.</summary>
+    public uint BrowserPasswordSerial => *U32(SharedBlock.OffsetBrowserPasswordSerial);
 
     /// <summary>The player chose to HOST rather than join a listed server.</summary>
     public void RequestBrowserHost() => (*U32(SharedBlock.OffsetBrowserHostSerial))++;

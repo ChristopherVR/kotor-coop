@@ -1067,7 +1067,18 @@ internal struct SharedBlock
     /// redraw without diffing every entry.</summary>
     public const int OffsetBrowserListSerial = 0xE10;
 
-    /// <summary>Plugin -&gt; agent. Bumped to ask for a password prompt for the selection.</summary>
+    /// <summary>
+    /// Agent -&gt; plugin. Bumped to ask the GAME to prompt for a password: the plugin opens the
+    /// developer console pre-filled with <c>password&#160;</c> and the player types the rest.
+    ///
+    /// ⚠ This ran the other way when it was written (plugin -&gt; agent, "ask for a prompt"), and
+    /// that direction cannot work — the agent is a console window behind the game and has no way
+    /// to take a keystroke from a player looking at the main menu. It also never had a single
+    /// caller on either side, so the browser's Connect on a locked server dialled with whatever
+    /// coop.ini held, was rejected, and the player was never asked for anything. Only the AGENT
+    /// knows a password is needed (the host is the one that rejects), and only the PLUGIN can
+    /// ask for it, so the request travels agent -&gt; plugin.
+    /// </summary>
     public const int OffsetBrowserPasswordSerial = 0xE14;
 
     /// <summary>Plugin -&gt; agent. Bumped when the player chooses HOST in the browser panel,

@@ -2396,11 +2396,24 @@ internal static unsafe class Odyssey
     /// grave keypress isn't double-toggled. MAIN THREAD ONLY (same thread the engine runs this on).
     /// See docs/research/console-open-safe.md.
     /// </summary>
-    public static void OpenChatInput()
+    public static void OpenChatInput() => OpenConsoleWith("say ");
+
+    /// <summary>
+    /// The general form of <see cref="OpenChatInput"/>: force-opens the developer console with
+    /// <paramref name="prefill"/> already typed and the caret after it, so the player only has
+    /// to supply the argument. <c>"say "</c> makes it a chat box; <c>"password "</c> makes it a
+    /// password prompt for a locked server.
+    ///
+    /// Returns false when the console was already open — a real grave keypress must never be
+    /// double-toggled, and the caller has to know its prompt did not take (so it can retry on a
+    /// later frame rather than silently waiting for an answer nobody was asked for).
+    /// MAIN THREAD ONLY.
+    /// </summary>
+    public static bool OpenConsoleWith(string prefill)
     {
         if (*(int*)ConsoleOpenFlagPtr != 0)
         {
-            return; // already open — do not re-toggle
+            return false; // already open — do not re-toggle
         }
 
         // Latch first, matching the engine order.
@@ -2427,16 +2440,20 @@ internal static unsafe class Odyssey
             }
         }
 
-        // Seed "say " and place the caret after it, so whatever the player types becomes the
-        // chat message and Enter routes it as `say <message>`.
+        // Seed the verb and place the caret after it, so whatever the player types becomes its
+        // argument and Enter routes the finished line through the FuncInterp detour.
         byte* buffer = (byte*)ConsoleBufferPtr;
-        buffer[0] = (byte)'s';
-        buffer[1] = (byte)'a';
-        buffer[2] = (byte)'y';
-        buffer[3] = (byte)' ';
-        buffer[4] = 0;
-        *(int*)ConsoleCaretPtr = 4;
+        int written = Math.Min(prefill.Length, ConsoleBufferCapacity - 1);
+        for (int i = 0; i < written; i++)
+        {
+            char c = prefill[i];
+            buffer[i] = (byte)(c is < (char)0x20 or > (char)0x7E ? ' ' : c);
+        }
+
+        buffer[written] = 0;
+        *(int*)ConsoleCaretPtr = written;
         *(int*)ConsoleOpenFlagPtr = 1;
+        return true;
     }
 
     // ---- death pose --------------------------------------------------------------

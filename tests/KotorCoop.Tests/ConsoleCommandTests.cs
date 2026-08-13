@@ -99,6 +99,35 @@ public class ConsoleCommandTests
     }
 
     [Fact]
+    public void PasswordCarriesOnlyTheSecret()
+    {
+        // The answer to a prompt. It deliberately has NO address: the player picked a row in
+        // the browser panel and never saw an IP, so the join being retried is the one that
+        // asked, not one they have to re-identify.
+        CoopCommand c = ConsoleCommand.Parse("password hoth");
+        Assert.Equal(CoopCommandKind.Password, c.Kind);
+        Assert.Equal("hoth", c.Password);
+        Assert.Null(c.Address);
+
+        Assert.Equal(CoopCommandKind.Password, ConsoleCommand.Parse("pw hoth").Kind);
+    }
+
+    [Fact]
+    public void APassphraseKeepsItsSpaces()
+    {
+        // Keeping only the first word would be indistinguishable from a wrong password.
+        Assert.Equal("two words", ConsoleCommand.Parse("password two words").Password);
+    }
+
+    [Fact]
+    public void PasswordWithNothingToSayIsInvalid()
+    {
+        CoopCommand c = ConsoleCommand.Parse("password");
+        Assert.Equal(CoopCommandKind.Invalid, c.Kind);
+        Assert.Contains("password", c.Error);
+    }
+
+    [Fact]
     public void SayCapturesTheWholeMessage()
     {
         CoopCommand c = ConsoleCommand.Parse("say on my way to the bridge");

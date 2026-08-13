@@ -35,6 +35,13 @@
     <ProjectReference Include="..\..\src\KotorCoop.Memory\KotorCoop.Memory.csproj" />
     <ProjectReference Include="..\..\src\KotorCoop.Session\KotorCoop.Session.csproj" />
     <ProjectReference Include="..\..\src\KotorCoop.MockGame\KotorCoop.MockGame.csproj" />
+
+    <!--
+      The agent is an Exe, but CoopCommandDispatcher is where the console/browser commands
+      actually decide things — which server is dialled, when a player is asked for a password,
+      what a retry reuses. That is worth testing directly rather than through a live game.
+    -->
+    <ProjectReference Include="..\..\src\KotorCoop.Agent\KotorCoop.Agent.csproj" />
   </ItemGroup>
 
 </Project>

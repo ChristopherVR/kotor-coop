@@ -543,6 +543,16 @@ internal static class Program
             // No coop.ini: the command-line options stand in for it.
         }
 
+        // coop.ini's password applies to the BROWSER path too, not only to the paths that end
+        // in ApplyConfig. It did not, so a player who had set one still got asked for it: the
+        // browser-connect branch below read this variable, which held only the command line's.
+        // Folding it in here means a configured password is tried first and the prompt is what
+        // happens when there isn't one, or it is wrong — which is the whole contract.
+        if (password.Length == 0 && config is { Password.Length: > 0 })
+        {
+            password = config.Password;
+        }
+
         // Only the KOTOR bridge exposes the plugin block the button lives in.
         if (bridge is not KotorGameBridge kotor || !kotor.EnableConnectMenu(config?.MenuButton ?? false))
         {
@@ -560,6 +570,10 @@ internal static class Program
         using ServerDiscovery browser = new();
         browser.StartListening();
         IReadOnlyList<ServerInfo> lastServers = [];
+
+        // Set when a locked row was picked with no password to hand: the pick is held here
+        // while the player types one, and the `password` verb below completes the join.
+        ServerInfo? awaitingPassword = null;
 
         while (!token.IsCancellationRequested)
         {
@@ -583,6 +597,19 @@ internal static class Program
                 if (picked >= 0 && picked < lastServers.Count)
                 {
                     ServerInfo chosen = lastServers[picked];
+
+                    // The beacon says locked and nothing has supplied a password: ask now. The
+                    // alternative — dial anyway — can only end in E_PASSWORD, and what the
+                    // player saw when it did was the world loading into a session they were
+                    // never admitted to, with the rejection printed in a window behind the game.
+                    if (chosen.Locked && password.Length == 0)
+                    {
+                        awaitingPassword = chosen;
+                        MenuReply(kotor, $"{chosen.Name} is password protected - type the password and press Enter");
+                        kotor.RequestPasswordPrompt();
+                        continue;
+                    }
+
                     MenuReply(kotor, $"connecting to {chosen.Name} ({chosen.Address})");
                     return (true, CoopMode.Join, chosen.EndPoint, name, password);
                 }
@@ -663,6 +690,20 @@ internal static class Program
 
                         MenuReply(kotor, $"could not resolve host '{command.Address}'");
                         break;
+
+                    // The answer to the prompt above. It carries only the secret: the player
+                    // picked a row in a panel and never saw an address, so demanding one back
+                    // would be the same as not having prompted.
+                    case CoopCommandKind.Password:
+                        if (awaitingPassword is not { } locked)
+                        {
+                            MenuReply(kotor, "nothing is waiting for a password - pick a server first");
+                            break;
+                        }
+
+                        MenuReply(kotor, $"connecting to {locked.Name} ({locked.Address})");
+                        return (true, CoopMode.Join, locked.EndPoint, name,
+                            command.Password ?? string.Empty);
 
                     case CoopCommandKind.Status:
                         MenuReply(kotor, "at the main menu - not connected");
@@ -768,7 +809,7 @@ internal static class Program
     /// Best-effort: on any refusal the player just loads a save by hand, exactly as before
     /// this existed, and the session is already connected either way.
     /// </summary>
-    private static void AutoLoadAfterMenuConnect(ProcessMemory memory)
+    private static void LoadIntoTheWorld(ProcessMemory memory)
     {
         try
         {
@@ -788,6 +829,7 @@ internal static class Program
             Console.WriteLine($"auto-load skipped: {ex.Message}");
         }
     }
+
 
     private static async Task<int> RunAsync(AgentOptions options)
     {
@@ -992,21 +1034,35 @@ internal static class Program
         // moment a session is up.
         ApplyChatOverlayConfig(bridge, memory.ProcessId);
 
-        // The initial connection goes through the manager directly; every later connect,
-        // disconnect and reconnect arrives through the dispatcher (the ~ console or the menu
-        // button) and swaps the session under the running dashboard.
-        manager.Connect(mode == CoopMode.Host, mode == CoopMode.Host ? null : hostEndPoint, SettingsFor(password));
+        // The initial connection goes through the DISPATCHER, not manager.Connect — every later
+        // connect, disconnect and reconnect already did, and the dispatcher is the one place
+        // that records what a join is (its endpoint, its password) so a password prompt can
+        // retry it. Connecting around it left the first attempt — the one the in-game browser
+        // makes — invisible to that bookkeeping, which is why a locked server rejected the
+        // player and nothing ever asked them for a password.
+        dispatcher.Dispatch(mode == CoopMode.Host
+            ? new CoopCommand(CoopCommandKind.Host, Password: password)
+            : new CoopCommand(CoopCommandKind.Connect, Address: hostEndPoint!.ToString(), Password: password));
+
+        // Start the command pump before the loader waits on it: the wait below reads the phase,
+        // and it is the dispatcher's Poll that advances it.
+        Task dispatchTask = dispatcher.RunAsync(cts.Token);
 
         // A session started from the game's own menu — hosting or joining — should land the
-        // player in the world without another human step. The browser guarantees its panel
-        // is closed before the choice is handed over, so the menu is a plain, freshly
-        // rebuilt main menu by the time this runs.
+        // player in the world without another human step, but ONLY once there is a session to
+        // land in. The browser guarantees its panel is closed before the choice is handed over,
+        // so the menu is a plain, freshly rebuilt main menu by the time this runs.
         if (options.MenuConnect && !resolved)
         {
-            _ = Task.Run(() => AutoLoadAfterMenuConnect(memory), cts.Token);
+            _ = Task.Run(
+                () => MenuAutoLoad.RunAsync(
+                    manager,
+                    mode == CoopMode.Host,
+                    () => LoadIntoTheWorld(memory),
+                    cts.Token,
+                    Console.WriteLine),
+                cts.Token);
         }
-
-        Task dispatchTask = dispatcher.RunAsync(cts.Token);
         AgentDashboard dashboard = new(manager, bridge, options.DropFile, options.LogFile);
         await dashboard.RunAsync(cts.Token).ConfigureAwait(false);
         await dispatchTask.ConfigureAwait(false);

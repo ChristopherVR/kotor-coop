@@ -2748,6 +2748,9 @@ public sealed class KotorGameBridge : IGameBridge
 
     private const int BlockBrowserHostSerial = 0xE18;
 
+    /// <summary>Agent -&gt; plugin: bumped to make the GAME ask the player for a password.</summary>
+    private const int BlockBrowserPasswordSerial = 0xE14;
+
     /// <summary>Entry +0x3A: non-zero when the host requires a password (a lock marker in the row).</summary>
     private const int BlockBrowserEntryLocked = 0x3A;
 
@@ -2812,6 +2815,7 @@ public sealed class KotorGameBridge : IGameBridge
     private uint _browserListSerial;
     private uint _lastBrowserConnectSerial;
     private uint _lastBrowserHostSerial;
+    private uint _passwordPromptSerial;
     private string _lastBrowserSignature = string.Empty;
 
     /// <summary>True while the in-game browser panel is on screen.</summary>
@@ -2936,6 +2940,32 @@ public sealed class KotorGameBridge : IGameBridge
 
         _lastBrowserHostSerial = serial;
         return true;
+    }
+
+    /// <summary>
+    /// Asks the game to prompt the player for a password: the plugin force-opens the developer
+    /// console with <c>password&#160;</c> pre-typed, and the answer comes back as an ordinary
+    /// console command.
+    ///
+    /// The agent cannot take the keystroke itself — it is a console window behind a fullscreen
+    /// game, and the player is looking at the main menu — so the ask has to be handed to the
+    /// side that owns the screen. Seeds the serial from whatever is already in the block, so a
+    /// reattached agent does not re-ask on its first request.
+    /// </summary>
+    public bool RequestPasswordPrompt()
+    {
+        if (_pluginBlock == 0)
+        {
+            return false;
+        }
+
+        if (_passwordPromptSerial == 0
+            && _memory.TryReadUInt32(_pluginBlock + BlockBrowserPasswordSerial, out uint current))
+        {
+            _passwordPromptSerial = current;
+        }
+
+        return _memory.TryWrite(_pluginBlock + BlockBrowserPasswordSerial, ++_passwordPromptSerial);
     }
 
     /// <summary>Posts a status line for the in-game console to display.</summary>

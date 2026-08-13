@@ -33,6 +33,7 @@ internal static unsafe class FuncInterpHook
     [
         "connect", "join", "host", "disconnect", "dc", "leave", "reconnect", "rc",
         "say", "chat", "msg", "clear", "cls", "servers", "browse", "list", "status", "help", "coop",
+        "password", "pw",
     ];
 
     private static SharedBlockView? _block;

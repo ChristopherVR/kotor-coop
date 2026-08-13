@@ -33,6 +33,21 @@ public sealed class CoopCommandDispatcher(
     /// <summary>The address of the last join attempt, so a password prompt can echo it back.</summary>
     private string? _pendingAddress;
 
+    /// <summary>
+    /// The endpoint of the last join attempt, so answering a password prompt can retry it
+    /// without the player retyping an address. This is what makes <c>password &lt;pw&gt;</c> a
+    /// complete answer: a player who picked a row in the browser never saw an IP, and asking
+    /// them to produce one is the same as not prompting at all.
+    /// </summary>
+    private IPEndPoint? _pendingEndpoint;
+
+    /// <summary>
+    /// The password the current attempt is using. Tracked so a locked server can be recognised
+    /// as unanswerable BEFORE dialling it — "the row says locked and we hold nothing" is worth a
+    /// prompt straight away rather than a round trip that can only end in E_PASSWORD.
+    /// </summary>
+    private string _password = string.Empty;
+
     private SessionPhase _lastPhase = SessionPhase.Idle;
     private bool _promptedForPassword;
 
@@ -51,11 +66,22 @@ public sealed class CoopCommandDispatcher(
 
             while (await timer.WaitForNextTickAsync(cancellationToken).ConfigureAwait(false))
             {
-                manager.Poll();
-                DrainInputs();
-                PublishBrowserList();
-                ReflectPhase();
-                DrainChat();
+                // One bad tick must not end the command surface. Without this, a single throw
+                // anywhere below unwinds the loop and the ~ console, the menu button and the
+                // browser all go quiet for the rest of the session — with nothing on screen to
+                // say why, because the thing that reports problems is what died.
+                try
+                {
+                    manager.Poll();
+                    DrainInputs();
+                    PublishBrowserList();
+                    ReflectPhase();
+                    DrainChat();
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException)
+                {
+                    Console.WriteLine($"[coop] command tick failed: {ex.Message}");
+                }
             }
         }
         catch (OperationCanceledException)
@@ -83,6 +109,21 @@ public sealed class CoopCommandDispatcher(
             Dispatch(typedHost.Length > 0
                 ? new CoopCommand(CoopCommandKind.Connect, Address: typedHost)
                 : new CoopCommand(CoopCommandKind.Reconnect));
+        }
+
+        // A row confirmed in the in-game browser panel. The menu loop consumes these until the
+        // first session starts and nothing did afterwards, so a SECOND pick — which is the
+        // ordinary case, because a refused join leaves the player back at the menu looking at
+        // the same panel — did nothing at all, beside a list this class was already keeping
+        // up to date.
+        if (_kotor.TryTakeBrowserConnect(out int picked))
+        {
+            JoinListed(picked);
+        }
+
+        if (_kotor.TryTakeBrowserHost())
+        {
+            Dispatch(new CoopCommand(CoopCommandKind.Host));
         }
     }
 
@@ -112,8 +153,14 @@ public sealed class CoopCommandDispatcher(
 
             case CoopCommandKind.Host:
                 _pendingAddress = null;
+                _pendingEndpoint = null;
                 _promptedForPassword = false;
-                manager.Connect(host: true, endpoint: null, settingsForPassword(command.Password ?? string.Empty));
+                _password = command.Password ?? string.Empty;
+                manager.Connect(host: true, endpoint: null, settingsForPassword(_password));
+                break;
+
+            case CoopCommandKind.Password:
+                AnswerPasswordPrompt(command.Password ?? string.Empty);
                 break;
 
             case CoopCommandKind.Disconnect:
@@ -168,11 +215,7 @@ public sealed class CoopCommandDispatcher(
                 return;
             }
 
-            ServerInfo chosen = _lastServerList[index - 1];
-            _pendingAddress = chosen.Address;
-            _promptedForPassword = false;
-            Reply($"connecting to {chosen.Name} ({chosen.Address})");
-            manager.Connect(host: false, chosen.EndPoint, settingsForPassword(password ?? string.Empty));
+            JoinListed(index - 1, password);
             return;
         }
 
@@ -183,9 +226,94 @@ public sealed class CoopCommandDispatcher(
             return;
         }
 
-        _pendingAddress = address;
+        Dial(address, endpoint, password ?? string.Empty, locked: false);
+    }
+
+    /// <summary>
+    /// Joins the <paramref name="index"/>-th server of the last published listing — the path
+    /// behind both <c>connect #n</c> and a row confirmed in the in-game browser panel. A typed
+    /// <paramref name="password"/> wins; otherwise whatever the session is already carrying
+    /// (coop.ini's, or one the player has answered a prompt with) is reused.
+    /// </summary>
+    private void JoinListed(int index, string? password = null)
+    {
+        if (index < 0 || index >= _lastServerList.Count)
+        {
+            Reply("that server is no longer listed");
+            return;
+        }
+
+        ServerInfo chosen = _lastServerList[index];
+        Reply($"connecting to {chosen.Name} ({chosen.Address})");
+        Dial(chosen.Address, chosen.EndPoint, password ?? _password, chosen.Locked);
+    }
+
+    /// <summary>
+    /// The one place a join is actually started. Records what a password prompt needs to retry
+    /// it, and refuses to dial a server the beacon says is locked when nothing has supplied a
+    /// password — prompting instead, because that attempt can only end in E_PASSWORD and a
+    /// failed handshake is a slower, more confusing way to ask the same question.
+    /// </summary>
+    private void Dial(string? address, IPEndPoint endpoint, string password, bool locked)
+    {
+        _pendingAddress = address ?? endpoint.ToString();
+        _pendingEndpoint = endpoint;
+        _password = password;
         _promptedForPassword = false;
-        manager.Connect(host: false, endpoint, settingsForPassword(password ?? string.Empty));
+
+        if (locked && password.Length == 0)
+        {
+            PromptForPassword("this server is password protected");
+            return;
+        }
+
+        manager.Connect(host: false, endpoint, settingsForPassword(password));
+    }
+
+    /// <summary>
+    /// Answers a prompt: retry the waiting join with the typed password. The address comes from
+    /// the attempt that asked, so the player supplies only the secret.
+    /// </summary>
+    private void AnswerPasswordPrompt(string password)
+    {
+        if (_pendingEndpoint is not { } endpoint)
+        {
+            Reply("nothing is waiting for a password - pick a server first");
+            return;
+        }
+
+        if (password.Length == 0)
+        {
+            Reply("that password was empty - type: password <the server's password>");
+            return;
+        }
+
+        _password = password;
+        _promptedForPassword = false; // a wrong one must be able to ask again
+        Reply($"retrying {_pendingAddress}...");
+        manager.Connect(host: false, endpoint, settingsForPassword(password));
+    }
+
+    /// <summary>
+    /// Asks the player for a password. The ask is handed to the PLUGIN, which force-opens the
+    /// developer console pre-filled with <c>password&#160;</c> — the agent's own console is
+    /// behind a fullscreen game and cannot take the keystroke. The written hint goes out too,
+    /// for the headless case and because the overlay keeps it on screen after the console
+    /// closes on Enter.
+    /// </summary>
+    private void PromptForPassword(string why)
+    {
+        _promptedForPassword = true;
+        Reply($"{why} - type the password and press Enter (or: password <pw>)");
+
+        // The ask has to reach the GAME. If it cannot, the player is left looking at a menu
+        // with no prompt on it while we wait for an answer nobody was asked for — so say so
+        // instead of failing silently, and name the manual way in.
+        if (_kotor is null || !_kotor.RequestPasswordPrompt())
+        {
+            Console.WriteLine(
+                "[coop] could not open the in-game prompt; press ~ in the game and type: password <pw>");
+        }
     }
 
     /// <summary>
@@ -250,11 +378,13 @@ public sealed class CoopCommandDispatcher(
                 break;
 
             case SessionPhase.Failed:
-                if (!_promptedForPassword && _pendingAddress is { } address
+                // The host answered E_PASSWORD: the one set in coop.ini was wrong, or there was
+                // none. Ask, rather than leaving the player at a menu with a rejection they can
+                // only see in the agent's window.
+                if (!_promptedForPassword && _pendingEndpoint is not null
                     && manager.Detail.Contains("password", StringComparison.OrdinalIgnoreCase))
                 {
-                    _promptedForPassword = true;
-                    Reply($"password required. type: connect {address} <password>");
+                    PromptForPassword(_password.Length > 0 ? "that password was wrong" : "this server needs a password");
                 }
                 else
                 {

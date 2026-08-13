@@ -48,6 +48,7 @@ internal static unsafe class PluginHost
     private static MenuLoadController? _menuLoad;
     private static ConnectMenuController? _connectMenu;
     private static ChatInputController? _chatInput;
+    private static PasswordPromptController? _passwordPrompt;
     private static ServerBrowserController? _browser;
     private static NativeBrowserController? _nativeBrowser;
     private static DeathController? _death;
@@ -115,6 +116,7 @@ internal static unsafe class PluginHost
             _menuLoad = new MenuLoadController(_view);
             _connectMenu = new ConnectMenuController(_view);
             _chatInput = new ChatInputController();
+            _passwordPrompt = new PasswordPromptController(_view);
             _browser = new ServerBrowserController(_view);
             _nativeBrowser = new NativeBrowserController(_view);
             _death = new DeathController(_view);
@@ -420,6 +422,12 @@ internal static unsafe class PluginHost
         // stays 0 at a settled menu), so a load request serviced from OnFrame sat forever.
         // MainLoop fires at the menu and in-world alike, on the same game thread.
         _menuLoad?.OnFrame();
+
+        // A locked server's password prompt. Here rather than on the swap hook for the same
+        // reason the menu-load replay is: the ask lands while the player is at the main menu,
+        // having just pressed Connect in the browser, where the swap hook does not fire. It is
+        // a no-op unless the agent has bumped the request serial.
+        _passwordPrompt?.OnFrame();
     }
 
     private static void OnFrame()

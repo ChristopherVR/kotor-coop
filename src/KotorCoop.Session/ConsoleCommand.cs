@@ -35,6 +35,14 @@ public enum CoopCommandKind
     /// <summary>List the available commands.</summary>
     Help,
 
+    /// <summary>
+    /// Answer a password prompt: retry the join that is waiting on one, with the text in
+    /// <see cref="CoopCommand.Password"/>. Carries no address — the address is whichever join
+    /// asked, which is the whole point of the verb (the player picked a row in the browser and
+    /// should not have to retype an IP they never saw).
+    /// </summary>
+    Password,
+
     /// <summary>The line was understood as a command but is malformed; see <see cref="CoopCommand.Error"/>.</summary>
     Invalid,
 
@@ -153,6 +161,14 @@ public static class ConsoleCommand
                     CoopCommandKind.Host,
                     Password: rest.Length > 0 ? string.Join(' ', rest) : null);
 
+            // The whole rest of the line is the password, spaces and all: a passphrase is a
+            // perfectly ordinary thing to set, and silently keeping only its first word would
+            // look exactly like a wrong password.
+            case "password" or "pw":
+                return rest.Length == 0
+                    ? new CoopCommand(CoopCommandKind.Invalid, Error: "password needs the password, e.g. password hoth")
+                    : new CoopCommand(CoopCommandKind.Password, Password: string.Join(' ', rest));
+
             case "disconnect" or "dc" or "leave":
                 return new CoopCommand(CoopCommandKind.Disconnect);
 
@@ -183,5 +199,5 @@ public static class ConsoleCommand
 
     /// <summary>One-line help listing the commands, for the overlay and dashboard.</summary>
     public const string HelpText =
-        "commands: servers | connect <ip|#n> [password] | host | disconnect | reconnect | say <msg> | clear | status | help";
+        "commands: servers | connect <ip|#n> [password] | password <pw> | host | disconnect | reconnect | say <msg> | clear | status | help";
 }
