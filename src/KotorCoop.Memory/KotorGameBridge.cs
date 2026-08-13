@@ -2132,6 +2132,29 @@ public sealed class KotorGameBridge : IGameBridge
     private const int EncounterDisarmRefreshMs = 15_000;
 
     /// <summary>
+    /// True for "area1"/"area1F"-style names: what the module reads as while a transition is
+    /// in flight. Not a module on disk — an object id wearing a module's clothes — and every
+    /// pointer the scan holds while one is showing belongs to a world being freed.
+    /// </summary>
+    private static bool IsTransitionalModuleName(string module)
+    {
+        if (module.Length <= 4 || !module.StartsWith("area", StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        for (int i = 4; i < module.Length; i++)
+        {
+            if (!Uri.IsHexDigit(module[i]))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    /// <summary>
     /// Turns off every encounter in the local module. Called on the instance that does NOT
     /// own enemies. Encounter spawns are the one engine-side source of object-id drift — a
     /// creature spawned by an encounter in one instance and not the other shifts the id
@@ -2164,17 +2187,36 @@ public sealed class KotorGameBridge : IGameBridge
     /// </summary>
     public int DisableLocalEncounters()
     {
-        if (!EngineGlobals.TryReadModuleName(_memory, out string module))
+        if (!EngineGlobals.TryReadModuleName(_memory, out string module) || module.Length == 0)
+        {
+            return 0;
+        }
+
+        // ⚠ NEVER WHILE A TRANSITION IS IN FLIGHT. An "areaNN" name is what the engine reads
+        // as while the module is being torn down and rebuilt, and every encounter the scan
+        // knows about belongs to the world being freed. Measured: a client crashed one frame
+        // into a follow-travel with eip in the HEAP — a corrupted call target, which is what
+        // writing into recycled memory produces.
+        if (IsTransitionalModuleName(module))
         {
             return 0;
         }
 
         long nowMs = Environment.TickCount64;
+        bool sameModule = string.Equals(module, _encounterModule, StringComparison.OrdinalIgnoreCase);
 
-        if (string.Equals(module, _encounterModule, StringComparison.OrdinalIgnoreCase)
-            && nowMs - _encounterDisarmedAtMs < EncounterDisarmRefreshMs)
+        if (sameModule && nowMs - _encounterDisarmedAtMs < EncounterDisarmRefreshMs)
         {
             return 0;
+        }
+
+        // ⚠ AND NEVER FROM A LIST THAT PREDATES THE WORLD. The scan cache lives for 30 s,
+        // which is longer than a module lasts in a bad case and longer than the refresh
+        // interval below — so a new module would otherwise be "disarmed" by writing into the
+        // previous one's freed objects.
+        if (!sameModule)
+        {
+            _scanCache.Remove(EncounterVtable);
         }
 
         _encounterDisarmedAtMs = nowMs;
@@ -2183,6 +2225,16 @@ public sealed class KotorGameBridge : IGameBridge
 
         foreach (nint address in CachedScan(EncounterVtable, 128, ObjectScanCacheMs))
         {
+            // ⚠ RE-VALIDATE THE VTABLE, not just the id. These addresses can be up to 30 s
+            // old, and an object freed in between may have been recycled into something else
+            // whose bytes at +0x04 happen to look like a plausible object id. The vtable is
+            // what makes this an encounter, so it is what has to still be there before we
+            // write into the thing.
+            if (!_memory.TryReadUInt32(address, out uint vtable) || vtable != EncounterVtable)
+            {
+                continue;
+            }
+
             // Sanity: a real encounter has its object id where CSWSObject keeps it.
             if (!_memory.TryReadUInt32(address + OffObjectId, out uint objectId)
                 || objectId is 0 or >= 0x7F000000)
@@ -2198,7 +2250,6 @@ public sealed class KotorGameBridge : IGameBridge
 
         // Remember the module even if there were no encounters, so the scan is not
         // repeated every pump for a module that simply has none.
-        bool sameModule = string.Equals(module, _encounterModule, StringComparison.OrdinalIgnoreCase);
         _encounterModule = module;
 
         // A refresh pass re-asserts the same encounters it already disarmed; reporting them
