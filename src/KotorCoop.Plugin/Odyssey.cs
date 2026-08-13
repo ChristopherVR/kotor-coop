@@ -2519,11 +2519,24 @@ internal static unsafe class Odyssey
     /// bOverrideHigher stays 0, so the engine's refusal to lower a quest state holds and
     /// the cross-instance merge stays monotonic even against a replayed packet.
     ///
+    /// ⚠ SetState is NEVER called when the journal already has the tag at or past the
+    /// state (<paramref name="alreadyCurrent"/> comes back true instead). This is not an
+    /// optimisation: SetState sends the server→player journal message — the "Journal
+    /// Entry Added" feedback box — even when nothing changed. In the 1.0.3 disassembly
+    /// the AddQuest send at 0x5C616D is reached without ever consulting the change flags
+    /// the function accumulates, and the JournalUpdated send at 0x5C62BC is gated only on
+    /// bOverrideHigher == 0. There is no bNoFeedback parameter (args are tag, state,
+    /// bOverrideHigher), so the only way to apply idempotently is to not call it. A
+    /// genuine advance still goes through and still shows the popup, which is correct
+    /// feedback — the quest really moved.
+    ///
     /// MAIN THREAD ONLY.
     /// </summary>
-    public static bool SetJournalState(byte* tagAscii, int tagLength, int state, out int failure)
+    public static bool SetJournalState(
+        byte* tagAscii, int tagLength, int state, out int failure, out bool alreadyCurrent)
     {
         failure = 0;
+        alreadyCurrent = false;
 
         if (tagLength <= 0)
         {
@@ -2581,14 +2594,43 @@ internal static unsafe class Odyssey
         }
 
         // Every entry the engine will walk must have a readable tag, or the walk faults
-        // before it ever reaches our string. Cheap: journals hold tens of entries.
+        // before it ever reaches our string. Cheap: journals hold tens of entries. The
+        // same walk answers "does the journal already have this tag at or past the
+        // state?" — the idempotence check that keeps a redundant apply from reaching
+        // SetState at all (see the method remarks for why that must never happen).
+        ReadOnlySpan<byte> requestTag = new(tagAscii, tagLength);
+
         for (int i = 0; i < size; i++)
         {
-            nint entryTag = *(nint*)(data + (i * JournalEntryStride) + JournalEntryTag);
+            nint entry = data + (i * JournalEntryStride);
+            nint entryTag = *(nint*)(entry + JournalEntryTag);
             if (entryTag != 0 && !NativeMethods.IsReadable(entryTag))
             {
                 failure = 5;
                 return false;
+            }
+
+            if (entryTag == 0)
+            {
+                continue;
+            }
+
+            // CExoString { char* @0, len @4 }; the length INCLUDES the null (the length
+            // trap), and EqualsNoCase cuts at the first null, so a sane length bound is
+            // all this needs. A garbage length is clamped: tags are resrefs, <= 32 chars.
+            uint entryTagLength = *(uint*)(entry + JournalEntryTag + 4);
+            int bounded = (int)Math.Min(entryTagLength, 64);
+
+            if (bounded <= 0
+                || !JournalTags.EqualsNoCase(new ReadOnlySpan<byte>((void*)entryTag, bounded), requestTag))
+            {
+                continue;
+            }
+
+            if (*(int*)(entry + JournalEntryState) >= state)
+            {
+                alreadyCurrent = true;
+                return true;
             }
         }
 
@@ -2603,6 +2645,12 @@ internal static unsafe class Odyssey
 
     /// <summary>SJournalEntry + this = the tag CExoString (lea ecx,[eax+edx+0x18]).</summary>
     private const int JournalEntryTag = 0x18;
+
+    /// <summary>SJournalEntry + this = the quest state. VERIFIED twice over: SetState
+    /// itself compares and stores its state argument at [entry+0x20] (the cmp/mov pair at
+    /// 0x5C5E23–0x5C5E30), and the agent's read path walked the same layout live —
+    /// 'end_attack' state 20. Read-only here.</summary>
+    private const int JournalEntryState = 0x20;
 
     // ---- creature naming ---------------------------------------------------------
 

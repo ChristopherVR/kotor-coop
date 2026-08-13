@@ -803,6 +803,16 @@ public sealed class CoopAgent(IGameBridge bridge, ICoopSession session, AgentSet
             return;
         }
 
+        // ⚠ ORDER MATTERS: reading the local journal comes FIRST, so the bridge's shadow
+        // is primed from the game before any store entry is offered for applying. On a
+        // fresh join the store fills from the host's snapshot while this game is still
+        // loading; offering those entries against an unprimed shadow replayed the whole
+        // journal through the engine, and the engine's SetState shows the "Journal Entry
+        // Added" box even for a no-op — the popup every player saw on load-in. The bridge
+        // refuses applies until it has read the journal once, and skips any entry the
+        // game already has; a GENUINE advance from a peer still applies and still shows
+        // the popup, deliberately — the quest really moved, and the engine offers no way
+        // to apply it silently (SetState has no feedback flag).
         foreach (KeyValuePair<string, int> change in bridge.CollectChangedJournal())
         {
             session.SetJournalEntry(change.Key, change.Value);

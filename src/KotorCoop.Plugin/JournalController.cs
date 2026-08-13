@@ -41,7 +41,8 @@ internal sealed unsafe class JournalController(SharedBlockView block)
             length++;
         }
 
-        bool ok = Odyssey.SetJournalState(tag, length, block.JournalState, out int failure);
+        bool ok = Odyssey.SetJournalState(
+            tag, length, block.JournalState, out int failure, out bool alreadyCurrent);
         block.JournalStatus = ok ? 0 : failure;
         block.JournalApplied = serial;
 
@@ -49,9 +50,12 @@ internal sealed unsafe class JournalController(SharedBlockView block)
         {
             _logged++;
             string name = Encoding.ASCII.GetString(tag, length);
-            PluginHost.Log(ok
-                ? $"journal: '{name}' -> state {block.JournalState} on the session's authority"
-                : $"journal: '{name}' refused (failure {failure})");
+            PluginHost.Log(
+                alreadyCurrent
+                    ? $"journal: '{name}' already at or past state {block.JournalState}; skipped (no feedback popup)"
+                    : ok
+                        ? $"journal: '{name}' -> state {block.JournalState} on the session's authority"
+                        : $"journal: '{name}' refused (failure {failure})");
         }
     }
 }

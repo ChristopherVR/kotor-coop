@@ -28,6 +28,7 @@
     <Compile Include="..\..\src\KotorCoop.Plugin\DownBlock.cs" Link="Plugin\DownBlock.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\Vec3.cs" Link="Plugin\Vec3.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\MotionSmoother.cs" Link="Plugin\MotionSmoother.cs" />
+    <Compile Include="..\..\src\KotorCoop.Plugin\JournalTags.cs" Link="Plugin\JournalTags.cs" />
   </ItemGroup>
 
   <ItemGroup>
