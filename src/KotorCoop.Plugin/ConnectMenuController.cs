@@ -5,20 +5,37 @@ namespace KotorCoop.Plugin;
 
 /// <summary>
 /// Adds a "Co-op" action to the main menu: the dormant BTN_WARP control is rebound so a
-/// click bumps the connect serial in the shared block, and the agent — attached and
-/// waiting — starts the session from coop.ini. See docs/research/connect-flow.md.
+/// click opens the server browser, and the agent — attached and waiting — starts the
+/// session from the player's pick. See docs/research/connect-flow.md.
 ///
-/// Deliberately opt-in (coop.ini menu_button=1 → the agent sets the enable flag). The
-/// rebind is engine-call code that has not been verified live, and it is guarded to
-/// fail safe: a control pointer that does not look right is skipped rather than called.
+/// ON BY DEFAULT: the button is simply THERE whenever the plugin is loaded — agent or no
+/// agent — because the plugin IS the co-op install and a menu entry that only appears when
+/// an external process has both started and been configured reads as a broken install.
+/// (It began life opt-in while the GUI rebind awaited live verification; that verification
+/// has long since happened — the button, the relabel and the browser it opens are all
+/// live-proven.) Opting out is plugin-side: <c>coop.ini menu_button = 0</c>, read here
+/// directly, so no agent needs to exist for the setting to hold in either direction.
 ///
-/// The interactive IP-entry panel (typing the host in-game via the reused save-name
-/// popup) is designed in the research but not built here; this ships the button and the
-/// coop.ini-driven connect, which is the lower-risk half.
+/// The agent's enable flag in the shared block (<see cref="SharedBlockView.ConnectMenuEnabled"/>)
+/// is now an OVERRIDE, not a prerequisite: a nonzero forces the button on even when
+/// coop.ini hides it — kept as a diagnostics lever, and so an older agent's enable-write
+/// still means what it meant. With no agent at all the field just stays 0 and the coop.ini
+/// default (on) decides.
+///
+/// A press with no agent attached is safe by construction: the click only opens the
+/// browser panel, whose list reads all-zero block fields as "no servers" and shows the
+/// scanning placeholder; Connect on the placeholder is ignored, and Host merely bumps a
+/// serial nobody reads. AgentLauncher auto-starts an agent anyway (coop.ini
+/// auto_start_agent, default on), so the empty state is transient.
 /// </summary>
 internal sealed unsafe class ConnectMenuController
 {
     private readonly SharedBlockView _block;
+
+    /// <summary>coop.ini's say, read ONCE at construction (PluginHost points PluginConfig at
+    /// the game directory before any controller exists). Per-frame would be a file read on
+    /// the game's main loop. Default TRUE: the button exists unless explicitly hidden.</summary>
+    private readonly bool _configEnabled = PluginConfig.ReadBool("menu_button", true);
 
     public ConnectMenuController(SharedBlockView block) => _block = block;
 
@@ -36,9 +53,10 @@ internal sealed unsafe class ConnectMenuController
     {
         _instance = this;
 
-        // Opt-in only, and only while the menu exists (a server means we are in a world, where
-        // the main menu — and BTN_WARP — is gone).
-        if (!_block.ConnectMenuEnabled || Odyssey.HasServer)
+        // Default ON; coop.ini menu_button=0 hides it unless the agent's block flag forces it
+        // back (diagnostics override — see the class comment). And only while the menu exists:
+        // a server means we are in a world, where the main menu — and BTN_WARP — is gone.
+        if ((!_configEnabled && !_block.ConnectMenuEnabled) || Odyssey.HasServer)
         {
             _bound = false;
             return;

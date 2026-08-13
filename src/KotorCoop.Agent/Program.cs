@@ -553,8 +553,11 @@ internal static class Program
             password = config.Password;
         }
 
-        // Only the KOTOR bridge exposes the plugin block the button lives in.
-        if (bridge is not KotorGameBridge kotor || !kotor.EnableConnectMenu(config?.MenuButton ?? false))
+        // Only the KOTOR bridge exposes the plugin block the button lives in. The enable
+        // write defaults to TRUE now: the plugin shows the button on its own (coop.ini
+        // menu_button, default on), and this block flag is a force-on override — so the
+        // default here has to agree, or an agent attach would read as "turn it off".
+        if (bridge is not KotorGameBridge kotor || !kotor.EnableConnectMenu(config?.MenuButton ?? true))
         {
             Console.WriteLine("in-game Co-op button unavailable (no plugin); waiting for a connect signal is skipped.");
             // Without the plugin there is nothing to wait on — connect immediately from
@@ -562,9 +565,9 @@ internal static class Program
             return ApplyConfig(true);
         }
 
-        Console.WriteLine(config?.MenuButton == true
-            ? "press the Co-op button in the game's main menu to connect (or use the ~ console: servers / connect <ip|#n> / host)..."
-            : "waiting for a connect request (coop.ini menu_button=1 adds the menu button; the ~ console also works)...");
+        Console.WriteLine(config?.MenuButton == false
+            ? "waiting for a connect request (the menu button is hidden by coop.ini menu_button=0; the ~ console works)..."
+            : "press the Co-op button in the game's main menu to connect (or use the ~ console: servers / connect <ip|#n> / host)...");
 
         // Listen for LAN beacons while we wait, so `servers` can list hosts at the menu.
         using ServerDiscovery browser = new();

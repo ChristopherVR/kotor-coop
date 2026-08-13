@@ -756,7 +756,8 @@ internal sealed unsafe class SharedBlockView(byte* baseAddress)
         set => *U32(SharedBlock.OffsetConnectStatus) = value;
     }
 
-    /// <summary>Agent-written: nonzero enables the in-game Co-op menu button.</summary>
+    /// <summary>Agent-written: nonzero FORCES the in-game Co-op menu button on. The button
+    /// defaults on plugin-side (coop.ini menu_button); this is the diagnostics override.</summary>
     public bool ConnectMenuEnabled => *U32(SharedBlock.OffsetConnectEnable) != 0;
 
     // ---- in-game console --------------------------------------------------------
