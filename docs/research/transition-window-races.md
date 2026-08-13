@@ -135,7 +135,32 @@ travels WITH the character — the area script only releases it in the starboard
 so a character warped out early keeps the pin on every planet, and nobody can be downed
 until it is released. That is the engine honouring its save data, not a co-op defect,
 but a test save built by warping off the command deck will silently block every
-death-path test.
+death-path test. The rig clears it by writing 0 over `player + 0x200` (int, located via
+the block's engine-player pointer) on both instances.
+
+### The first real downing outside the Endar Spire (2026-08-14)
+
+With the pins cleared, the next battle produced the death path organically: the client
+aggroed Sand People on its way across `tat_m20aa`, fought back through the damage ledger
+(23 points spent on warrior `0x29` by the owner), took **24 forwarded hits** through its
+phantom, and went down for real — **hp −15/12**, genuine negative hit points through the
+engine's own death threshold, `state DOWNED` on the wire. On the owner the death edge ran
+the full anti-aggro-sink release from the decoy design, in a real fight for the first
+time: `phantom 0xBC: back to neutral; attackers released` then `down (player at 0 hp)`.
+
+The rescue half: the peer-rescue code path stood the player back up (`revive applied;
+the player stands up; topped up to 10 hp`) — and the Sand People mob immediately beat
+them back down, which is the engine being honest, not a sync defect: reviving inside an
+active fight needs the attackers dead or peeled first, same as any co-op game. And with
+both PLAYERS down at once, no game-over fired on either side — correct, because the
+host's companion was still standing and KOTOR wipes on the whole party, not the players;
+the down-block guard never had to intervene.
+
+Also measured on the way: the client's kill of a neutral jawa crossed the ledger, died on
+the owner's authority and mirrored back — and granted 0 XP on both sides, because a
+zero-challenge neutral grants nothing in single-player either. Kill XP for real hostiles
+is the engine's own grant (`ApplyDeathExperience`) and the XP max-merge is baseline-
+verified; there is nothing co-op-specific left to prove there.
 
 ## The general rule these four instantiate
 
