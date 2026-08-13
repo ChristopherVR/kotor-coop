@@ -112,8 +112,17 @@ internal sealed unsafe class EnemyPresenceController(SharedBlockView block)
     /// enemy swings here AND the owner forwards the same swing that landed on this player's
     /// phantom over there. IncomingDamageController reads this same flag and stands down when
     /// it is set, so the two always move together.
+    ///
+    /// ⚠ OFF BY DEFAULT, and this default has now been paid for twice. The shared-state
+    /// audit's adversarial review left four structural items open ("do not default this
+    /// on"), a bare `dev` commit flipped it to on anyway, and the predicted failure then
+    /// happened live on tat_m20aa (2026-08-14): 15 points of forwarded damage were
+    /// absorbed as "attributed to mirrored enemies we are driving" while this engine's
+    /// own in-combat flag read FALSE — the local copy never dealt the replacement damage,
+    /// and the player was simply invulnerable for that hit. Opt in via coop.ini once the
+    /// audit's items 4-7 are closed.
     /// </summary>
-    public static readonly bool LocalCombat = PluginConfig.ReadBool("local_combat", true);
+    public static readonly bool LocalCombat = PluginConfig.ReadBool("local_combat", false);
 
     /// <summary>
     /// How close a driven enemy's local body must be to this player before its owner's report

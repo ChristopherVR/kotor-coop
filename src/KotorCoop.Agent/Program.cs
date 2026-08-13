@@ -849,6 +849,15 @@ internal static class Program
 
         Task dispatchTask = dispatcher.RunAsync(cts.Token);
         AgentDashboard dashboard = new(manager, bridge, options.DropFile, options.LogFile);
+
+        // ⚠ The agent's event voice. SessionManager.Log and CoopAgent.Log existed for the
+        // life of the project with NOTHING assigned to them — every "X revived you",
+        // "disabled N local encounters" and pump-failure line was discarded, which made a
+        // misfiring rescue on tat_m20aa undiagnosable from the logs. The manager forwards
+        // its agents' lines; the dashboard writes them under the status line and into
+        // --log.
+        manager.Log = dashboard.Note;
+
         await dashboard.RunAsync(cts.Token).ConfigureAwait(false);
         await dispatchTask.ConfigureAwait(false);
 

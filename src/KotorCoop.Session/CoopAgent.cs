@@ -1177,11 +1177,18 @@ public sealed class CoopAgent(IGameBridge bridge, ICoopSession session, AgentSet
                 continue;
             }
 
-            if (peer.State.Position.DistanceTo(local.Position) <= ReviveRangeUnits)
+            float distance = peer.State.Position.DistanceTo(local.Position);
+            if (distance <= ReviveRangeUnits)
             {
                 _reviveRequested = true;
                 bridge.RequestRevive(ReviveHitPoints);
-                Log?.Invoke($"{peer.Name} revived you");
+
+                // The distance and both positions are part of the record: a rescue fired
+                // at 76 units on tat_m20aa and was undiagnosable without them.
+                Log?.Invoke(
+                    $"{peer.Name} revived you ({distance:F1} units: "
+                    + $"they {peer.State.Position.X:F1},{peer.State.Position.Y:F1} "
+                    + $"you {local.Position.X:F1},{local.Position.Y:F1})");
                 return;
             }
         }

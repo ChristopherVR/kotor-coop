@@ -1533,6 +1533,77 @@ internal static unsafe class Odyssey
     /// <summary>True once the server object exists (it does not at the main menu).</summary>
     public static bool HasServer => GetServer() != 0;
 
+    // ---- spectate camera: the engine's own follow handoff -------------------------
+    //
+    // CSWCModule::SetCameraFollow(clientObjectId, 1) is how the engine itself moves the
+    // third-person camera between creatures: ChangeCharacter (0x5F6C27), the
+    // ControlObject network handler (0x64CBB8/0x64CC76) and area attach (0x5F5D8B) all
+    // funnel through it. It resolves the id via CClientExoApp::GetCreatureByGameObjectID,
+    // reuses the existing CAurBehaviorCameraFollow when one is installed, queues into the
+    // module's pending fields (+0x314/+0x318) when the module is still loading, and
+    // early-outs while the client is in combat MODE (weapons-drawn UI state) — so a
+    // caller must treat it as a LEVEL and re-assert, not fire it once and trust it.
+
+    /// <summary>CClientExoApp::GetModule — the CSWCModule the camera belongs to; null
+    /// until a client world is up.</summary>
+    private static readonly delegate* unmanaged[Thiscall]<nint, nint> GetClientModuleFn =
+        (delegate* unmanaged[Thiscall]<nint, nint>)0x005ED530;
+
+    /// <summary>CClientExoApp::GetPlayerCreature — the client-side controlled creature.</summary>
+    private static readonly delegate* unmanaged[Thiscall]<nint, nint> GetClientPlayerCreatureFn =
+        (delegate* unmanaged[Thiscall]<nint, nint>)0x005ED540;
+
+    /// <summary>CSWCModule::SetCameraFollow — thiscall (uint clientObjectId, int bImmediate).</summary>
+    private static readonly delegate* unmanaged[Thiscall]<nint, uint, int, void> SetCameraFollowFn =
+        (delegate* unmanaged[Thiscall]<nint, uint, int, void>)0x0063F9D0;
+
+    /// <summary>
+    /// Points the camera at a SERVER object (the id space every co-op channel uses); the
+    /// client id is the documented `id | 0x80000000` conversion (see PlayBark's notes on
+    /// ServerToClientObjectId, 0x005F2AC0). MAIN THREAD ONLY. Returns false when no
+    /// client world is up — and silently does nothing while the client is in combat mode,
+    /// which is why callers re-assert.
+    /// </summary>
+    public static bool SetCameraFollowServerObject(uint serverObjectId)
+    {
+        nint client = GetClient();
+        if (client == 0)
+        {
+            return false;
+        }
+
+        nint module = GetClientModuleFn(client);
+        if (module == 0)
+        {
+            return false;
+        }
+
+        SetCameraFollowFn(module, serverObjectId | 0x80000000, 1);
+        return true;
+    }
+
+    /// <summary>Hands the camera back to the creature the player controls, through the
+    /// same engine call. MAIN THREAD ONLY.</summary>
+    public static bool RestoreCameraToControlledCreature()
+    {
+        nint client = GetClient();
+        if (client == 0)
+        {
+            return false;
+        }
+
+        nint module = GetClientModuleFn(client);
+        nint controlled = GetClientPlayerCreatureFn(client);
+        if (module == 0 || controlled == 0)
+        {
+            return false;
+        }
+
+        // A client creature's +0x04 already holds its CLIENT-space id.
+        SetCameraFollowFn(module, *(uint*)(controlled + 0x04), 1);
+        return true;
+    }
+
     // ---- module identity and transitions ----------------------------------------
 
     /// <summary>CServerExoAppInternal + this = CServerInfo* (symbol database: server_info).</summary>

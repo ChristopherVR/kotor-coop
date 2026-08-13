@@ -52,6 +52,7 @@ internal static unsafe class PluginHost
     private static ServerBrowserController? _browser;
     private static NativeBrowserController? _nativeBrowser;
     private static DeathController? _death;
+    private static SpectateController? _spectate;
     private static ChatOverlayController? _chatOverlay;
     private static ConsoleAssistController? _consoleAssist;
     private static DialogueSpectateController? _dialogueSpectate;
@@ -127,6 +128,7 @@ internal static unsafe class PluginHost
             _browser = new ServerBrowserController(_view);
             _nativeBrowser = new NativeBrowserController(_view);
             _death = new DeathController(_view);
+            _spectate = new SpectateController(_view);
             _chatOverlay = new ChatOverlayController(_view);
             _consoleAssist = new ConsoleAssistController();
             _dialogueSpectate = new DialogueSpectateController(_view);
@@ -616,6 +618,10 @@ internal static unsafe class PluginHost
         // pending revive applied) before the phantom/combat passes read the same creature.
         _death?.OnFrame();
 
+        // Right after death, on the state it just published: a downed player's camera
+        // follows a living peer instead of their own corpse.
+        _spectate?.OnFrame();
+
         _controller?.OnFrame();
         _items?.OnFrame();
         _combat?.OnFrame();
@@ -694,6 +700,7 @@ internal static unsafe class PluginHost
         _mapMarkers?.Invalidate();
         _connectMenu?.Invalidate();
         _death?.Invalidate();
+        _spectate?.Invalidate();
         _encounters?.Invalidate();
         _barks?.Invalidate();
         _interactionLocks?.Invalidate();

@@ -112,6 +112,10 @@ public sealed class SessionManager(IGameBridge bridge, AgentSettings agentSettin
             ICoopSession session = host ? new CoopHost(settings) : new CoopClient(settings, endpoint!);
             CoopAgent agent = new(bridge, session, agentSettings);
 
+            // Through a lambda so a sink assigned to this manager AFTER the session started
+            // still hears the agent — the dashboard wires itself up later in startup.
+            agent.Log = line => Log?.Invoke(line);
+
             CancellationTokenSource cts = new();
             _session = session;
             _agent = agent;

@@ -42,7 +42,12 @@ Both players, each in their own full game:
   it downs them — so a partner who walks over picks you straight back up, and the game's own
   recovery still applies if nobody is close. Nobody gets dropped to the main menu alone
   either: a party wipe only ends the game once *every* player is down, and then it ends for
-  both of you together.
+  both of you together. And while you wait for the rescue you are not staring at your own
+  corpse: **a downed player's camera follows their partner** — through the engine's own
+  camera handoff, the same one the party system uses — snapping back the moment you are
+  revived, or to the honest corpse view if the last player standing goes down too. (On the
+  host, KOTOR's own behaviour is kept instead: control swaps to a living companion and you
+  keep playing.) `spectate_on_down=0` opts out.
 - **See each other on the map**: every other player is a coloured arrow on your **minimap** —
   red, green, orange, purple, cyan, yellow, one per player — pointing the way they are facing
   and moving as they move, plus a live pin on the full M-screen map. Your own arrow stays blue

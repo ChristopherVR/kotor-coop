@@ -227,6 +227,38 @@ public sealed class AgentDashboard(
     /// link is behaving, whether memory access is still working, where the player is and how
     /// many bodies each channel is driving. Everything cosmetic stays on the screen version.
     /// </summary>
+    /// <summary>
+    /// An EVENT line from the session layer (a revive, a channel decision, a pump
+    /// failure), written straight to the log file and to a redirected console. Distinct
+    /// from the periodic status line: events are never deduplicated — each one happened.
+    /// Thread-safe by way of File.AppendAllText; callers are the pump thread.
+    /// </summary>
+    public void Note(string line)
+    {
+        string entry = $"[{DateTime.Now:HH:mm:ss}] * {line}";
+
+        if (logFile is not null)
+        {
+            try
+            {
+                File.AppendAllText(logFile, entry + Environment.NewLine);
+            }
+            catch (IOException)
+            {
+                // A log that cannot be written must never take the session down with it.
+            }
+            catch (UnauthorizedAccessException)
+            {
+            }
+        }
+
+        if (Console.IsOutputRedirected)
+        {
+            Console.Out.WriteLine(entry);
+            Console.Out.Flush();
+        }
+    }
+
     private void WriteLogLine()
     {
         CoopAgent? agent = manager.Agent;
