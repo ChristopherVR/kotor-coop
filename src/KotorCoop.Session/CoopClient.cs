@@ -966,6 +966,19 @@ public sealed class CoopClient : ICoopSession
         }
     }
 
+    /// <summary>The single recipient of a client's loot ops — the host, which relays
+    /// onward to the other clients and acks with its own peer id.</summary>
+    private static readonly uint[] LootRecipients = [CoopHost.HostPeerId];
+
+    private void SendContainerLoot(ContainerLootPacket op)
+    {
+        int length = PacketCodec.Write(_sendBuffer, op);
+        if (length > 0)
+        {
+            _channel.Send(_hostEndPoint, _sendBuffer.AsSpan(0, length));
+        }
+    }
+
     private void SendBye()
     {
         if (_localPeerId == 0)
@@ -1194,6 +1207,14 @@ public sealed class CoopClient : ICoopSession
 
             case PacketType.ContainerLoot:
                 HandleContainerLoot(span);
+                break;
+
+            case PacketType.ContainerLootAck:
+                if (PacketCodec.ReadContainerLootAck(span) is { } lootAck)
+                {
+                    _lootSender.Acknowledge(lootAck.PeerId, lootAck.OpSequence);
+                }
+
                 break;
 
             case PacketType.Pong:
