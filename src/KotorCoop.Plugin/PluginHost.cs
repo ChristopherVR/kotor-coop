@@ -375,7 +375,7 @@ internal static unsafe class PluginHost
         // pattern the agent scans for, so bumping only one end reads as "plugin shared block
         // not found" — which looks like a broken install rather than a version skew.
         // 37 = the load-screen texture in the browser details array (SharedBlock, version 37).
-        _block->Version = 37;
+        _block->Version = 38;
 
         // A guard dword after the version. Magic plus version alone was not selective
         // enough: a scan once matched something else at a lower address and the agent
@@ -494,7 +494,19 @@ internal static unsafe class PluginHost
                 InvalidateAll("world unloading");
             }
 
+            // The agent must not adopt a pointer into a world that no longer exists.
+            _view?.PublishEnginePlayer(0, 0);
             return;
+        }
+
+        // Every frame, so the agent can adopt the engine's own player instead of trusting
+        // a scan that can latch a freed copy (SharedBlock.OffsetEnginePlayerPointer).
+        if (_view is { } playerView)
+        {
+            nint enginePlayer = Odyssey.GetPlayerCreaturePointer();
+            playerView.PublishEnginePlayer(
+                enginePlayer,
+                enginePlayer != 0 ? *(uint*)(enginePlayer + 0x04) : 0);
         }
 
         if (epoch != _epoch)
@@ -655,6 +667,12 @@ internal static unsafe class PluginHost
     private static void InvalidateAll(string reason)
     {
         Log($"epoch: {reason}; clearing phantom, item, combat and door state");
+
+        // First, before any controller can act on them again: the agent-written world inputs
+        // are stale (the agent's reads fail through a transition, so it cannot clear them
+        // itself), and a controller acting on them spawns bodies for the wrong world.
+        _view?.ClearAgentWorldInputs();
+
         _controller?.Invalidate();
         _items?.Invalidate();
         _combat?.Invalidate();

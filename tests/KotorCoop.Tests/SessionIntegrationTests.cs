@@ -82,6 +82,51 @@ public class SessionIntegrationTests
         await Task.WhenAll(hostTask, clientTask);
     }
 
+    /// <summary>
+    /// The module string is what the peer filter, the enemy-snapshot gate and travel-follow
+    /// all compare, so a peer's TRUE module must survive the wire even when the two players
+    /// are in different modules. Written while chasing a live session where a host in
+    /// tar_m03aa kept a phantom for a client still on end_m01aa — which is only possible if
+    /// one side saw the other's module as its own or as empty.
+    /// </summary>
+    [Fact]
+    public async Task ModuleSurvivesTheWireWhenPlayersAreApart()
+    {
+        using CoopHost host = new(new SessionSettings { PlayerName = "Revan", Port = 0, TickRate = 30 });
+        using CoopClient client = new(
+            new SessionSettings { PlayerName = "Malak", TickRate = 30 },
+            new IPEndPoint(IPAddress.Loopback, host.ListenEndPoint.Port));
+
+        using CancellationTokenSource cts = new(Timeout + TimeSpan.FromSeconds(10));
+        Task hostTask = host.RunAsync(cts.Token);
+        Task clientTask = client.RunAsync(cts.Token);
+
+        PlayerState hostState = new(new Vector3f(300f, 200f, 8f), 1f, "tar_m03aa", 100, 0);
+        PlayerState clientState = new(new Vector3f(20f, 22f, -1f), 2f, "end_m01aa", 90, 0);
+
+        void Publish()
+        {
+            host.PublishLocalState(hostState);
+            client.PublishLocalState(clientState);
+        }
+
+        bool bothSeen = await WaitForAsync(
+            () => client.GetRemotePeers().Any(p => p.PeerId == CoopHost.HostPeerId)
+                && host.GetRemotePeers().Any(p => p.PeerId == 2),
+            Timeout,
+            Publish);
+        Assert.True(bothSeen, "the two ends never saw each other");
+
+        RemotePeer hostAsSeenByClient = client.GetRemotePeers().First(p => p.PeerId == CoopHost.HostPeerId);
+        Assert.Equal("tar_m03aa", hostAsSeenByClient.State.Module);
+
+        RemotePeer clientAsSeenByHost = host.GetRemotePeers().First(p => p.PeerId == 2);
+        Assert.Equal("end_m01aa", clientAsSeenByHost.State.Module);
+
+        await cts.CancelAsync();
+        await Task.WhenAll(hostTask, clientTask);
+    }
+
     [Fact]
     public async Task MovementPropagates()
     {

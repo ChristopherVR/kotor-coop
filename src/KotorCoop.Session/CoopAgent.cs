@@ -1472,6 +1472,23 @@ public sealed class CoopAgent(IGameBridge bridge, ICoopSession session, AgentSet
             return;
         }
 
+        // ⚠ The module label must be read in the same breath as the world data it labels.
+        // `local.Module` is RETAINED across a failed read, and the census and damage
+        // channels read or write the LIVE world — so around a module transition the two
+        // can belong to different worlds. Measured on the tar_m03aa warp: for a few
+        // seconds after arrival the owner published a fresh Taris census labelled
+        // END_M01AA, which sailed through the module gate of a client genuinely standing
+        // on the Endar Spire and drove Taris ids onto its creatures. A skewed or
+        // unreadable label skips the world-labelled operations below — they are levels,
+        // so the next clean tick republishes them. (The encounter-set publish is NOT
+        // gated on this: it must keep superseding with an empty set on a fallback name.)
+        string censusModule = bridge.TryReadCurrentModule(out string liveModule)
+            ? liveModule
+            : local.Module;
+        bool moduleClean = censusModule.Length > 0
+            && !IsFallbackModuleName(censusModule)
+            && string.Equals(censusModule, local.Module, StringComparison.OrdinalIgnoreCase);
+
         // Where the other players are, so the census cap sheds by distance to the nearest
         // of us rather than to whoever happens to be publishing. `peersHere` is already
         // module-filtered, which is what makes these positions comparable at all.
@@ -1488,13 +1505,20 @@ public sealed class CoopAgent(IGameBridge bridge, ICoopSession session, AgentSet
             bridge.SetEncounterWatch(false);
             PumpEncounterRequests(local);
 
+            // Census and damage carry the module label; a dirty label skips them (see the
+            // same-breath note above).
+            if (!moduleClean)
+            {
+                return;
+            }
+
             // Hold the last snapshot rather than publishing while in a conversation. The
             // dialogue system wipes every hostile's action queue in this instance on every
             // tick, so what we would send is a pacified fight — and the peer, who is not
             // talking, would have their own fight go quiet for the duration.
             if (!bridge.IsInDialogue)
             {
-                session.PublishEnemies(local.Module, bridge.ReadEnemies(otherPlayers));
+                session.PublishEnemies(censusModule, bridge.ReadEnemies(otherPlayers));
             }
 
             // Where a peer's damage becomes real. Its copies are pinned at 1 hp, so its
@@ -1508,7 +1532,7 @@ public sealed class CoopAgent(IGameBridge bridge, ICoopSession session, AgentSet
             // the old module's applied figures, which name different creatures.
             bridge.TryPublishDamageOwed(
                 _peerDamage.Epoch,
-                _peerDamage.Merge(local.Module, session.GetEnemyDamage(local.Module)));
+                _peerDamage.Merge(censusModule, session.GetEnemyDamage(censusModule)));
 
             return;
         }
@@ -1537,6 +1561,13 @@ public sealed class CoopAgent(IGameBridge bridge, ICoopSession session, AgentSet
             // reporting nothing, so a set published a moment ago is superseded rather than
             // left to age out on the host.
             IsFallbackModuleName(local.Module) ? [] : bridge.ReadEnteredEncounters());
+
+        // The enemy apply and the damage report are world-labelled; a dirty label skips
+        // them (see the same-breath note above).
+        if (!moduleClean)
+        {
+            return;
+        }
 
         // Module-gated: the owner's ids only mean anything while we are where they were
         // read. Apart, this is empty and our own copies are left alone rather than driven

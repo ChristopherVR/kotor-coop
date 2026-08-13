@@ -185,6 +185,41 @@ internal sealed unsafe class SharedBlockView(byte* baseAddress)
         set => *U32(SharedBlock.OffsetPickUpIssued) = value;
     }
 
+    /// <summary>Publishes the engine's own player creature for the agent to adopt instead
+    /// of trusting its scan (see SharedBlock.OffsetEnginePlayerPointer). Pointer first,
+    /// id second — the id is the tear-detector, so it must be the later write.</summary>
+    public void PublishEnginePlayer(nint creature, uint objectId)
+    {
+        *U32(SharedBlock.OffsetEnginePlayerPointer) = (uint)creature;
+        *U32(SharedBlock.OffsetEnginePlayerId) = objectId;
+    }
+
+    /// <summary>
+    /// Zeroes the agent-written world-keyed inputs: remote peers, enemy presence, party
+    /// presence and the published player-creature pointer.
+    ///
+    /// ⚠ Called on every epoch invalidation, because the agent CANNOT do this itself in the
+    /// window that matters: through a module transition its process reads fail, so the block
+    /// keeps whatever the old world last wrote. Measured on the tar_m03aa warp: the plugin
+    /// arrived in the new module, read a three-second-stale remote slot, and spawned a
+    /// phantom for a peer still on the Endar Spire — burning an object id and feeding the
+    /// census a body it would later publish as a dead enemy. The agent re-writes all of
+    /// these within a tick of its reads recovering; until then, empty is the truth.
+    /// </summary>
+    public void ClearAgentWorldInputs()
+    {
+        *U32(0x48) = 0;
+        for (int i = 0; i < SharedBlock.SlotCapacity; i++)
+        {
+            byte* slot = baseAddress + SharedBlock.SlotsOffset + (i * SharedBlock.SlotStride);
+            *(uint*)(slot + 0x00) = 0;
+        }
+
+        EnemyPresenceCount = 0;
+        PartyPresenceCount = 0;
+        *U32(SharedBlock.OffsetPlayerCreature) = 0;
+    }
+
     public RemoteView GetRemote(int index)
     {
         if (index is < 0 or >= SharedBlock.SlotCapacity)

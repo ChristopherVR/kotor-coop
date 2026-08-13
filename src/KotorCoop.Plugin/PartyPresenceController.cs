@@ -92,7 +92,9 @@ internal sealed unsafe class PartyPresenceController(SharedBlockView block)
         }
 
         double now = _clock.Elapsed.TotalSeconds;
-        nint player = (nint)block.PlayerCreature;
+        // Fresh engine resolve — the block's copy is agent-written and stale through a
+        // module transition (see the EncounterController travel-follow crash).
+        nint player = Odyssey.GetPlayerCreaturePointer();
         int driven = 0;
 
         for (int i = 0; i < count; i++)

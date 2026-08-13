@@ -148,7 +148,19 @@ internal sealed unsafe class EncounterController(SharedBlockView block)
             return;
         }
 
-        nint player = (nint)block.PlayerCreature;
+        // ⚠ block.PlayerCreature is a POINTER THE AGENT WROTE, and through a module
+        // transition it is a stale one: the agent's reads fail mid-load, so the block keeps
+        // the old world's creature while a new epoch is already up. Dereferencing it here
+        // killed the client one second into every cross-module travel-follow (eip inside
+        // HandleWatch, measured twice on tar_m03aa). It is a liveness signal only; the
+        // pointer that gets dereferenced is resolved fresh from the engine, which returns
+        // null while there is no player to stand anywhere.
+        if (block.PlayerCreature == 0)
+        {
+            return;
+        }
+
+        nint player = Odyssey.GetPlayerCreaturePointer();
         if (player == 0)
         {
             return;

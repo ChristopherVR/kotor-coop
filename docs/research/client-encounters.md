@@ -237,7 +237,45 @@ Guards, all in `EncounterController`:
 | Everything dropped on a module change, request serial re-latched | ids reset on transition (Handoff 4.8) |
 | `client_encounters=0` in coop.ini | kill switch |
 
-## 7. NEEDS-LIVE — nothing below has been run
+## 7. NEEDS-LIVE — first live pass 2026-08-13 (tar_m03aa)
+
+Measured on the live pair after warping it to tar_m03aa (see
+`docs/research/transition-window-races.md` for the four transition bugs that run found and
+fixed first):
+
+- **The watch sees the polygons (item 2): CONFIRMED.** The client walked from (322, 221)
+  toward the ambush at (380.7, 153.3) and its log reported each activate area crossed en
+  route — `encounters: standing in 1 activate area(s), first 0x51` … `0x50` — with clean
+  enter/leave edges, through the engine's own `GetInActivateArea`.
+- **The requests reach the host and the host calls the engine (item 3, first half):
+  CONFIRMED.** The host attempted `FireEncounter` on the requesting peer's phantom within
+  the same second.
+- **The engine declined those first attempts — and the decline was CORRECT.** The client
+  agent's player scan had latched a freed copy of the PC (transition-window race #4), so
+  the phantom stood frozen at the spawn point while the real player walked the polygons:
+  `SpawnIfAppropriate` re-tested eligibility against a body that genuinely was not there.
+  The fire path refusing a phantom outside the polygon is the design working.
+- **The fire works (items 3 and 4): CONFIRMED.** Retried with the engine-player adoption
+  (block v38): the phantom ran with its player, and the host's engine started three
+  ambushes as the client crossed their polygons —
+  `encounters: started 0x52 / 0x51 / 0x50 for peer 2 (phantom 0xA9)` — real Vulkars
+  spawned by the host's own `SpawnCreatureFromSpawnList`. All three are `PlayerOnly = 1`
+  encounters, so the `player_only` suspension demonstrably let the phantom through
+  (without it every one of these is `EngineDeclined`).
+- **The client sees the spawns (item 5): CONFIRMED.** The materialisation channel built
+  stand-ins for all nine spawned Vulkars (appearance rows 264/265/269, faction 1) with
+  zero give-ups after the object-type→vtable fix, and the session view read
+  `FIGHT in tar_m03aa — engaged: Lanik; mirroring only: you` on the client — the fight
+  exists once, on the owner, and the client watches it.
+- **No fault at or after the fire (item 6):** three fires and nine spawns produced no
+  first-chance exceptions on either side.
+- The re-fire storm (item 7) did not appear: refusals are logged capped and `NotArmed`
+  stays silent.
+
+Still open from the original list: encounter object-id equality measured directly (the
+watch and the fire agreeing on 0x50..0x52 across both instances is strong but indirect),
+and the `player_only` suspension proven by the explicit negative test (comment it out,
+expect `EngineDeclined` — the positive direction is now proven by the fires above).
 
 `end_m01aa` has no encounters, so **the standard demo save cannot exercise this at all.**
 Use a module that has them: `tar_m03aa` (4 × `ptar_vulkaraptenc`) is the earliest convenient

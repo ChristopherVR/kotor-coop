@@ -52,9 +52,12 @@ internal sealed unsafe class EnemyPresenceController(SharedBlockView block)
     /// five sweeps 200 ms apart, and it never stopped, because the false-alarm log caps at
     /// five lines while the loop runs on. See docs/research/mirror-sweep-storm.md.
     /// </summary>
-    private const int ObjType = 0x08;
-
-    private const ushort ObjTypeCreature = 5;
+    /// <summary>CSWSCreature's vtable — the reliable identity test. The object-type word
+    /// at +0x08 carries FLAG BITS on live creatures (0x40005 measured), so an equality
+    /// test against 5 rejects real bodies; the first live encounter spawn on tar_m03aa
+    /// had its stand-in rejected by exactly that, destroyed, and respawned every
+    /// half-second — one burned object id per loop.</summary>
+    private const nint CreatureVtable = 0x007470C8;
 
     /// <summary>CSWSObject + this = object id, for cheap per-frame revalidation.</summary>
     private const int ObjId = 0x04;
@@ -234,7 +237,10 @@ internal sealed unsafe class EnemyPresenceController(SharedBlockView block)
             return;
         }
 
-        nint player = (nint)block.PlayerCreature;
+        // Resolved fresh, never taken from the block: the agent-written pointer survives a
+        // module transition stale, and RecordEngagement dereferences this (same fault class
+        // as the EncounterController travel-follow crash).
+        nint player = Odyssey.GetPlayerCreaturePointer();
         int driven = 0;
 
         // Rebuilt from scratch every pass, so a body that stops being driven — or walks out
@@ -445,7 +451,7 @@ internal sealed unsafe class EnemyPresenceController(SharedBlockView block)
         nint cached = _creature[slot];
         if (cached != 0 && _trackedId[slot] == objectId
             && *(uint*)(cached + ObjId) == objectId
-            && *(ushort*)(cached + ObjType) == ObjTypeCreature)
+            && *(nint*)cached == CreatureVtable)
         {
             return cached;
         }
@@ -453,7 +459,7 @@ internal sealed unsafe class EnemyPresenceController(SharedBlockView block)
         Forget(slot);
 
         nint creature = Odyssey.ResolveServerObject(objectId);
-        if (creature == 0 || *(ushort*)(creature + ObjType) != ObjTypeCreature)
+        if (creature == 0 || *(nint*)creature != CreatureVtable)
         {
             return 0;
         }

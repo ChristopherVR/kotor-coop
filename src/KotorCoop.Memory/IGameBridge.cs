@@ -21,6 +21,21 @@ public interface IGameBridge : IDisposable
 
     bool TryReadLocalState(out PlayerState state);
 
+    /// <summary>
+    /// The module the world is in RIGHT NOW, read directly from the engine — not retained
+    /// from an earlier successful read the way <see cref="TryReadLocalState"/>'s caller
+    /// retains a whole state across a failed one. Callers that label world-scoped data
+    /// (the enemy census) must label it with this, read in the same breath as the data:
+    /// a retained label and a live payload can belong to different worlds around a module
+    /// transition. False when the bridge has no module reading; callers then fall back to
+    /// the retained state's module, which is the pre-existing behaviour.
+    /// </summary>
+    bool TryReadCurrentModule(out string module)
+    {
+        module = string.Empty;
+        return false;
+    }
+
     bool TryWriteRemotePeers(IReadOnlyList<RemotePeer> peers);
 
     /// <summary>

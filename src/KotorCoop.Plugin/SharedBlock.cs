@@ -385,6 +385,32 @@ internal struct SharedBlock
     /// </summary>
     public const int OffsetDamageDealtEnabled = 0x2118;
 
+    // ---- engine-resolved player (version 38, region 0x2260..0x2268) ---------------
+    //
+    // Placed in the free space after the DEAD bark rings (0x2120..0x2260), never inside
+    // them: a stale agent still writes barks at the old offsets, and these fields must
+    // not be where those writes land.
+
+    /// <summary>
+    /// Plugin -&gt; agent. The engine's own <c>CServerExoApp::GetPlayerCreature()</c>,
+    /// republished every frame (0 while no world is up).
+    ///
+    /// The agent finds the player by scanning for creature vtables, and that scan can
+    /// latch a FREED COPY of the player object: the copy keeps its vtable, its stats
+    /// pointer and its is_pc flag, so every cheap validation passes — while its position
+    /// and health stay frozen at whatever the copy died with. Measured on tar_m03aa: the
+    /// agent published the PC standing at its spawn point for minutes while the real
+    /// character walked across the map, so the phantom never moved and every encounter
+    /// the real player stood in was declined against a body somewhere else. The engine's
+    /// answer costs one call and cannot name a freed object.
+    /// </summary>
+    public const int OffsetEnginePlayerPointer = 0x2260;
+
+    /// <summary>Plugin -&gt; agent. The object id at <c>player + 0x04</c>, written AFTER the
+    /// pointer so a torn read pairs an old id with an old pointer, never a new pointer
+    /// with garbage.</summary>
+    public const int OffsetEnginePlayerId = 0x2264;
+
     // ---- NPC barks (version 27) --------------------------------------------------
     //
     // The one-liners an NPC throws into a bubble without ever opening the dialogue system

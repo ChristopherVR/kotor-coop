@@ -217,6 +217,11 @@ public sealed class KotorGameBridge : IGameBridge
     private const int BlockEnemyPresenceSlots = 0x1410;
     private const int BlockEnemyPresenceStride = 0x28;
 
+    // Engine-resolved player (block version 38). Plugin -> agent: the engine's own
+    // GetPlayerCreature(), republished every frame; 0 while no world is up.
+    private const int BlockEnginePlayerPointer = 0x2260;
+    private const int BlockEnginePlayerId = 0x2264;
+
     // Combat participation (block version 21). Plugin -> agent: what each peer's phantom
     // has taken here, as a running total. Agent -> plugin: what the local player owes for
     // hits taken on their phantom elsewhere.
@@ -498,13 +503,13 @@ public sealed class KotorGameBridge : IGameBridge
     private const uint BlockPartyRosterSlotMask = 0x1FF;
     private const uint BlockPartyRosterValid = 0x8000_0000;
 
-    /// <summary>16-byte signature: "KOCOOP01" + version 37 + guard 0xC0FFEE01. The version is
+    /// <summary>16-byte signature: "KOCOOP01" + version 38 + guard 0xC0FFEE01. The version is
     /// part of the pattern deliberately: an agent must not attach to a plugin whose block
     /// layout it does not know, and a stale pair fails to find each other rather than reading
     /// the wrong offsets. ⚠ Bump this WITH PluginHost's `_block->Version` — they are one
     /// number in two files, and a half-bump reads as "plugin shared block not found", which
     /// looks like a broken install rather than a version skew.</summary>
-    public const string PluginSignature = "4B 4F 43 4F 4F 50 30 31 25 00 00 00 01 EE FF C0";
+    public const string PluginSignature = "4B 4F 43 4F 4F 50 30 31 26 00 00 00 01 EE FF C0";
 
     /// <summary>Agent's view of which coop item id occupies each plugin item slot.</summary>
     private readonly uint[] _itemSlotIds = new uint[BlockItemCapacity];
@@ -845,6 +850,12 @@ public sealed class KotorGameBridge : IGameBridge
 
     // ---- IGameBridge ----------------------------------------------------------
 
+    /// <summary>Live engine read, never retained — see the interface remarks. The "areaXX"
+    /// fallback is deliberately NOT applied here: a caller labelling a census wants "the
+    /// name is unreadable" reported as failure, not disguised as a placeholder name.</summary>
+    public bool TryReadCurrentModule(out string module) =>
+        EngineGlobals.TryReadModuleName(_memory, out module) && module.Length > 0;
+
     public bool TryReadLocalState(out PlayerState state)
     {
         state = PlayerState.Empty;
@@ -856,6 +867,28 @@ public sealed class KotorGameBridge : IGameBridge
         // 21544/21544 — plausible-looking garbage, which is the worst kind, because the
         // phantom positions derived from it look like a network fault rather than a stale
         // pointer. Two small reads per tick buy immunity to that.
+        // Prefer the engine's own answer to the scan. The scan can latch a FREED COPY of
+        // the player — the copy keeps its vtable, stats pointer and is_pc flag, so every
+        // cheap validation passes while its position and health stay frozen at whatever
+        // the copy died with. Measured on tar_m03aa: this agent published the PC standing
+        // at its spawn point for minutes while the real character crossed the map, so the
+        // phantom never moved and every ambush the real player stood in was declined
+        // against a body somewhere else. The plugin republishes the engine's
+        // GetPlayerCreature() every frame (0 while no world is up); adopt it whenever it
+        // names a different creature than the one the scan chose.
+        if (_pluginBlock != 0
+            && _memory.TryReadUInt32(_pluginBlock + BlockEnginePlayerPointer, out uint enginePlayer)
+            && enginePlayer != 0
+            && (_player is null || _player.Address != (nint)enginePlayer)
+            && _memory.TryReadUInt32(_pluginBlock + BlockEnginePlayerId, out uint engineId)
+            && StillLooksLikeThePlayer((nint)enginePlayer))
+        {
+            ResolveDiagnostic?.Invoke(
+                $"player: adopted the engine's own creature 0x{enginePlayer:X} (id 0x{engineId:X})"
+                + (_player is null ? string.Empty : $" over the scan's 0x{_player.Address:X}"));
+            _player = new CreatureRef((nint)enginePlayer, engineId, string.Empty, true, false);
+        }
+
         if (_player is not null && !StillLooksLikeThePlayer(_player.Address))
         {
             if (_playerLostLogged < 3)
@@ -3379,6 +3412,18 @@ public sealed class KotorGameBridge : IGameBridge
             }
 
             if (phantomIds is not null && phantomIds.Contains(creature.ObjectId))
+            {
+                continue;
+            }
+
+            // Belt over the id table: the plugin clears a phantom's slot before the body has
+            // finished dying, and one census pass in that window published the freed body as
+            // a dead enemy (measured on the tar_m03aa warp — the peer dutifully executed the
+            // kill on a stand-in it materialised for the ghost). The tag names every body the
+            // co-op blueprint spawned — phantoms and materialised stand-ins alike, none of
+            // which is ever this instance's enemy to publish — and it survives to the last
+            // readable moment.
+            if (creature.Tag == GameFiles.PhantomBlueprint.Tag)
             {
                 continue;
             }

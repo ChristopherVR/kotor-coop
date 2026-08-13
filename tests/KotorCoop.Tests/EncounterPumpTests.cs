@@ -19,6 +19,10 @@ public class EncounterPumpTests
     {
         public string LocalModule { get; set; } = Module;
 
+        /// <summary>The LIVE module read (IGameBridge.TryReadCurrentModule). Null mirrors
+        /// <see cref="LocalModule"/> — the steady state, where retained and live agree.</summary>
+        public string? CurrentModule { get; set; }
+
         public List<uint> Inside { get; } = [];
 
         public List<(uint EncounterId, uint PeerId)> Fired { get; } = [];
@@ -39,6 +43,12 @@ public class EncounterPumpTests
         {
             state = new PlayerState(Vector3f.Zero, 0f, LocalModule, 20, 0);
             return true;
+        }
+
+        public bool TryReadCurrentModule(out string module)
+        {
+            module = CurrentModule ?? LocalModule;
+            return module.Length > 0;
         }
 
         public bool TryWriteRemotePeers(IReadOnlyList<RemotePeer> peers) => true;
@@ -114,7 +124,10 @@ public class EncounterPumpTests
 
         public void RemoveItem(uint itemId) { }
 
-        public void PublishEnemies(string module, IReadOnlyList<EnemyState> enemies) { }
+        public List<string> PublishedEnemyModules { get; } = [];
+
+        public void PublishEnemies(string module, IReadOnlyList<EnemyState> enemies) =>
+            PublishedEnemyModules.Add(module);
 
         public IReadOnlyList<EnemyState> GetEnemies(string module) => [];
 
@@ -241,6 +254,35 @@ public class EncounterPumpTests
 
         // One entry from the first pump, one clearing write, and nothing after that.
         Assert.Equal([(0x11Bu, 5u)], bridge.Fired);
+    }
+
+    [Fact]
+    public void ASkewedCensusLabelSuppressesTheOwnersEnemyPublish()
+    {
+        // `local.Module` is retained across a failed read while the census reads the live
+        // world, so around a module transition the label and the payload can belong to
+        // different worlds. Measured live: the owner arrived in tar_m03aa and for a few
+        // seconds published a fresh Taris census labelled END_M01AA — which passed the
+        // module gate of a client genuinely standing on the Endar Spire and drove Taris
+        // ids onto its creatures. A label that disagrees with the live module read must
+        // suppress the publish.
+        (CoopAgent agent, EncounterBridge bridge, StubSession session) = Build(authority: true);
+        bridge.CurrentModule = "end_m01aa";
+
+        agent.PumpOnce();
+
+        Assert.Empty(session.PublishedEnemyModules);
+    }
+
+    [Fact]
+    public void ACleanCensusLabelPublishesTheOwnersEnemies()
+    {
+        // The control for the test above: retained and live agree, the census goes out.
+        (CoopAgent agent, _, StubSession session) = Build(authority: true);
+
+        agent.PumpOnce();
+
+        Assert.Contains(Module, session.PublishedEnemyModules);
     }
 
     [Fact]
