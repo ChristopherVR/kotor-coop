@@ -79,6 +79,14 @@ internal sealed unsafe class PasswordEntryModal
     private static readonly delegate* unmanaged[Thiscall]<nint, nint, void> EditTextSetText =
         (delegate* unmanaged[Thiscall]<nint, nint, void>)0x00416490;
 
+    // CSWGuiTextParams::SetText(CExoString*) — the LABEL caption setter (copies the string,
+    // sets str_ref = -1 so the literal wins, re-wraps immediately). The browser panel's
+    // SetCaption uses the same call. ⚠ NOT interchangeable with 0x00416490 above: that one is
+    // the EDITBOX text setter — using it on the label region is the wrong class at the wrong
+    // offset, and using THIS one on +0x4D0 would be equally wrong the other way round.
+    private static readonly delegate* unmanaged[Thiscall]<nint, nint, void> TitleSetText =
+        (delegate* unmanaged[Thiscall]<nint, nint, void>)0x00415E00;
+
     // CSWGuiManager::AddPanel(panel, flags2, bPlayOpenSound). flags2 = 1 sets bit0, which is
     // what triggers PushModalPanel — the researched modal show for this panel.
     private static readonly delegate* unmanaged[Thiscall]<nint, nint, int, int, void> AddPanel =
@@ -103,6 +111,20 @@ internal sealed unsafe class PasswordEntryModal
     private const int PanelBtnCancel = 0x22C;  // embedded CSWGuiButton
     private const int PanelEditText = 0x4D0;   // EDITBOX(+0x3F0) + edit_text(+0xE0)
     private const int PanelTypedString = 0x548; // edit_text + 0x78: CExoString {char*, len}
+
+    // LBL_TITLE — the fourth embedded control, researched from the ctor's own disassembly
+    // (0x006CAEDE: `lea ecx, [esi+0x550]` → CSWGuiLabel::Constructor 0x0041ACD0; registered
+    // against the literal "LBL_TITLE" at 0x006CAFA4..0x006CAFC7). Its CSWGuiText lives at
+    // label+0xD0 and the text params at text+0x18 → panel+0x638, the same label+0xE8 shape
+    // the save/load panel's title uses (native-browser-panel.md, live-proven at +0x15C
+    // there). The stock "Enter name for saved game:" is a strref baked into savename.gui,
+    // resolved ONCE in the ctor's Load pass; an exhaustive xref scan found nothing that
+    // re-stamps it, so one SetText after construction sticks.
+    private const int PanelTitleLabel = 0x550;
+    private const nint LabelVtable = 0x0073E5B8;
+    private const int PanelTitleText = 0x620;    // label + 0xD0: the CSWGuiText
+    private const int PanelTitleParams = 0x638;  // text + 0x18: the CSWGuiTextParams
+    private const int TitleParamsTextObject = 0x688; // params + 0x50: back-pointer to the text
 
     // ---- state ---------------------------------------------------------------------
 
@@ -222,11 +244,27 @@ internal sealed unsafe class PasswordEntryModal
         // arithmetic connect-flow.md spells out), NOT a caption label: stamping prompt text
         // here would hand it straight back as the "password" on a bare OK. So the box is
         // cleared of whatever the ctor seeded, guaranteeing +0x548 holds only the player's
-        // keystrokes. The panel's title stays savename.gui's stock LBL_TITLE text — its
-        // params offset is not researched, and inventing one is how engine writes go wrong.
-        // The player context is already set: they just picked a row whose details pane says
-        // "Password required".
+        // keystrokes. The title is captioned separately below, at the researched LBL_TITLE
+        // params — never here.
         WithExoString(string.Empty, s => EditTextSetText(panel + PanelEditText, s));
+
+        // Caption the title so the prompt says what it is asking, instead of savename.gui's
+        // stock "Enter name for saved game:". Guarded by the two invariants the research
+        // names — the label's vtable at +0x550 and the params' back-pointer to the label's
+        // own CSWGuiText — and on a mismatch the caption is simply SKIPPED, not latched: a
+        // shifted label layout (a GUI mod?) makes the title cosmetic-wrong, while the modal
+        // itself still works, and killing a working prompt over a caption would be the wrong
+        // trade. A write through a wrong params offset is what the guards exist to prevent.
+        if (*(nint*)(panel + PanelTitleLabel) == LabelVtable
+            && *(nint*)(panel + TitleParamsTextObject) == panel + PanelTitleText)
+        {
+            WithExoString("Enter the server password", s => TitleSetText(panel + PanelTitleParams, s));
+        }
+        else if (_logged < 32)
+        {
+            _logged++;
+            PluginHost.Log("password modal: title label not where researched; keeping the stock caption");
+        }
 
         // Show as a MODAL over whatever is live beneath (flags2 bit0 → PushModalPanel).
         // Nothing below is marked for the sweep — see the class comment. Focus lands on the

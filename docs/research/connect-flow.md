@@ -276,3 +276,23 @@ NEEDS-LIVE checklist (GOG host `--password hoth` + instance-2 joiner):
 | 6 | joiner configured with a WRONG password, Connect | dials, `E_PASSWORD`, auto-load held, retry modal opens over the MAIN MENU (acceptable — the browser is long closed), answering `hoth` connects |
 | 7 | while the in-place modal is up: click browser rows/buttons beneath | dead (modal owns input); Escape/alt-tab behaviour = dismissed → case 2 |
 | 8 | unlocked row, Connect | unchanged old flow, no prompt |
+
+## LBL_TITLE researched (2026-08-13): the title is now captioned
+
+The fourth embedded control of CSWGuiSaveNamePanel is LBL_TITLE at **panel+0x550**
+(ctor 0x006CAEDE: `lea ecx, [esi+0x550]` → CSWGuiLabel::Constructor 0x0041ACD0; registered
+against the "LBL_TITLE" literal at 0x006CAFA4..0x006CAFC7; 0x550 + sizeof(CSWGuiLabel)=0x140
+= the 0x690 panel size). Its CSWGuiText is at label+0xD0 (panel+0x620) and the
+CSWGuiTextParams at text+0x18 → **panel+0x638** — the same label+0xE8 shape as the save/load
+title already shipping at +0x15C. Caption with **CSWGuiTextParams::SetText 0x00415E00**
+(copies the string, sets str_ref = -1, re-wraps); 0x00416490 is CSWGuiEditText::SetText —
+the editbox setter behind the +0x4D0 trap, never the label.
+
+The stock "Enter name for saved game:" is a strref baked into savename.gui, resolved ONCE in
+the ctor's Load pass (SetStrRef 0x415E50 from CSWGuiText::Load 0x00416050); exhaustive xref
+scans of 0x415E00/0x415E50 found nothing that re-stamps it, and the per-frame draw path
+(0x00416240) renders the cached string without touching str_ref — one SetText after the ctor
+sticks. PasswordEntryModal writes "Enter the server password" guarded by two invariants
+(label vtable 0x0073E5B8 at +0x550; params+0x50 back-pointer == panel+0x620), and on a
+mismatch SKIPS the caption rather than latching the modal: a shifted label is a cosmetic
+problem, a wrong-offset write is not.
