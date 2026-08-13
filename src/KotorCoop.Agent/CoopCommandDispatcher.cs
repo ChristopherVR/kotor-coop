@@ -153,6 +153,76 @@ public sealed class CoopCommandDispatcher(
             case CoopCommandKind.Help:
                 Reply(ConsoleCommand.HelpText);
                 break;
+
+            case CoopCommandKind.Warp:
+                // Rides the existing agent->plugin travel channel (the same one peer-follow
+                // travel uses): the plugin flushes everything it spawned, then the engine's
+                // own move-to-module path runs — party collection, store-out, load screen.
+                // The parser already validated the resref, so a false here means no plugin.
+                if (_kotor is null || !_kotor.SupportsTravel)
+                {
+                    Reply("warp needs the in-game plugin (no shared block found)");
+                }
+                else if (_kotor.TryRequestTravel(command.Address!, command.Password ?? string.Empty))
+                {
+                    Reply($"warping to {command.Address}...");
+                }
+                else
+                {
+                    Reply($"could not request warp to {command.Address}");
+                }
+
+                break;
+
+            case CoopCommandKind.Who:
+                if (manager.Current is not { } who)
+                {
+                    Reply("not connected - no players to list");
+                    break;
+                }
+
+                ListPlayers(who);
+                break;
+
+            case CoopCommandKind.Where:
+                if (bridge.TryReadLocalState(out PlayerState local) && local.Module.Length > 0)
+                {
+                    Reply($"module {local.Module}  at {local.Position.X:F1} {local.Position.Y:F1} {local.Position.Z:F1}"
+                        + $"  hp {local.Health}/{local.MaxHealth}");
+                }
+                else
+                {
+                    Reply("no player loaded (not in a module yet)");
+                }
+
+                break;
+        }
+    }
+
+    /// <summary>Posts the session roster: the local player first, then each remote peer with
+    /// the module they were last seen in. Everything read here already exists per tick —
+    /// <see cref="ICoopSession.GetRemotePeers"/> and the session stats.</summary>
+    private void ListPlayers(ICoopSession session)
+    {
+        IReadOnlyList<RemotePeer> peers = session.GetRemotePeers();
+        SessionStats stats = session.GetStats();
+
+        string rtt = stats.RoundTripMs > 0 ? $" - rtt {stats.RoundTripMs:F0}ms" : string.Empty;
+        Reply($"players ({peers.Count + 1}){rtt}:");
+
+        string localModule = bridge.TryReadLocalState(out PlayerState state) && state.Module.Length > 0
+            ? state.Module
+            : "?";
+        Reply($"  {session.LocalName} (you)  {localModule}");
+
+        foreach (RemotePeer peer in peers)
+        {
+            string module = peer.State.Module.Length > 0 ? peer.State.Module : "?";
+            string flags = peer.State.IsDowned ? "  [down]"
+                : peer.State.IsInDialogue ? "  [talking]"
+                : peer.State.IsInCombat ? "  [fighting]"
+                : string.Empty;
+            Reply($"  {peer.Name}  {module}{flags}");
         }
     }
 

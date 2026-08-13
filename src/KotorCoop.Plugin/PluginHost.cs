@@ -52,6 +52,7 @@ internal static unsafe class PluginHost
     private static NativeBrowserController? _nativeBrowser;
     private static DeathController? _death;
     private static ChatOverlayController? _chatOverlay;
+    private static ConsoleAssistController? _consoleAssist;
     private static DialogueSpectateController? _dialogueSpectate;
     private static EncounterController? _encounters;
     private static Thread? _worker;
@@ -119,6 +120,7 @@ internal static unsafe class PluginHost
             _nativeBrowser = new NativeBrowserController(_view);
             _death = new DeathController(_view);
             _chatOverlay = new ChatOverlayController(_view);
+            _consoleAssist = new ConsoleAssistController();
             _dialogueSpectate = new DialogueSpectateController(_view);
             _encounters = new EncounterController(_view);
             _pause = new PauseController(_view);
@@ -420,6 +422,10 @@ internal static unsafe class PluginHost
         // stays 0 at a settled menu), so a load request serviced from OnFrame sat forever.
         // MainLoop fires at the menu and in-world alike, on the same game thread.
         _menuLoad?.OnFrame();
+
+        // Console history/completion follows the ~ console itself, which opens at the menu
+        // AND in-world — so it lives on this hook, not the (menu-dormant) SwapBuffers one.
+        _consoleAssist?.OnFrame();
     }
 
     private static void OnFrame()

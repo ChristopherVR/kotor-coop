@@ -103,6 +103,9 @@ internal static partial class NativeMethods
     public const int VkDown = 0x28;
     public const int VkF9 = 0x78;
 
+    /// <summary>Tab, edge-detected while the ~ console is open, cycles verb completion.</summary>
+    public const int VkTab = 0x09;
+
     /// <summary>
     /// Physical key state, independent of the message queue. The high bit is set while the
     /// key is down. Reads no engine state and cannot affect the game.

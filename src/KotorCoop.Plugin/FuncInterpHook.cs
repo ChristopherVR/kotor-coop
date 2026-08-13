@@ -28,12 +28,23 @@ internal static unsafe class FuncInterpHook
     private const uint PageExecuteReadWrite = 0x40;
     private const uint MemCommitReserve = 0x3000;
 
-    /// <summary>Verbs the co-op layer owns; kept in sync with <c>ConsoleCommand.Parse</c>.</summary>
+    /// <summary>Verbs the co-op layer owns; kept in sync with <c>ConsoleCommand.Parse</c>
+    /// (and, for completion, <c>ConsoleVerbCatalog</c>).</summary>
     private static readonly string[] Verbs =
     [
         "connect", "join", "host", "disconnect", "dc", "leave", "reconnect", "rc",
         "say", "chat", "msg", "clear", "cls", "servers", "browse", "list", "status", "help", "coop",
+        "stat", "commands", "?", "warp", "who", "peers", "where",
     ];
+
+    /// <summary>
+    /// Every submitted console line, for Up/Down recall (see ConsoleAssistController).
+    /// Recorded here because this detour is the one place EVERY submission passes through —
+    /// engine cheats included, and recalling <c>giveitem</c> is as useful as <c>connect</c>.
+    /// Touched only on the game's main thread: the detour runs on it, and so does the
+    /// MainLoop hook that navigates.
+    /// </summary>
+    internal static readonly ConsoleHistoryRing History = new(32);
 
     private static SharedBlockView? _block;
     private static delegate* unmanaged[Cdecl]<byte*, nint> _original;
@@ -102,11 +113,16 @@ internal static unsafe class FuncInterpHook
     {
         try
         {
-            if (commandLine != null && _block is { } block && IsCoopCommand(commandLine, out int length))
+            if (commandLine != null)
             {
-                block.PublishConsoleCommand(commandLine, length);
-                *(byte*)ResultBuffer = 0; // empty result: nothing echoed, no "not found"
-                return ResultBuffer;
+                RecordHistory(commandLine);
+
+                if (_block is { } block && IsCoopCommand(commandLine, out int length))
+                {
+                    block.PublishConsoleCommand(commandLine, length);
+                    *(byte*)ResultBuffer = 0; // empty result: nothing echoed, no "not found"
+                    return ResultBuffer;
+                }
             }
         }
         catch
@@ -115,6 +131,34 @@ internal static unsafe class FuncInterpHook
         }
 
         return _original(commandLine);
+    }
+
+    /// <summary>
+    /// Copies the submitted line into the history ring (one small string per submission —
+    /// the only allocation this detour makes, and only on the rare human-typed event, never
+    /// per frame). The ring itself decides what to keep: empties, consecutive duplicates
+    /// and <c>password</c>/<c>pw</c> lines are dropped there.
+    /// </summary>
+    private static void RecordHistory(byte* commandLine)
+    {
+        int n = 0;
+        while (n < 512 && commandLine[n] != 0)
+        {
+            n++;
+        }
+
+        if (n == 0)
+        {
+            return;
+        }
+
+        Span<char> chars = n <= 256 ? stackalloc char[256] : new char[n];
+        for (int i = 0; i < n; i++)
+        {
+            chars[i] = (char)commandLine[i];
+        }
+
+        History.Record(new string(chars[..n]));
     }
 
     /// <summary>True when the line's first token is one of our verbs; sets its length.</summary>

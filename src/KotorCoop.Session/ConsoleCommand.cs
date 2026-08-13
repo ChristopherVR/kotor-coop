@@ -40,6 +40,17 @@ public enum CoopCommandKind
 
     /// <summary>Not one of ours (some other console command); leave it alone.</summary>
     Unknown,
+
+    /// <summary>Move this instance to another module through the plugin's travel channel;
+    /// the module resref is in <see cref="CoopCommand.Address"/> and an optional waypoint
+    /// tag rides in <see cref="CoopCommand.Password"/>.</summary>
+    Warp,
+
+    /// <summary>List the connected players and which module each is in.</summary>
+    Who,
+
+    /// <summary>Print the local player's module and position.</summary>
+    Where,
 }
 
 /// <summary>
@@ -176,12 +187,62 @@ public static class ConsoleCommand
             case "help" or "?" or "commands":
                 return new CoopCommand(CoopCommandKind.Help);
 
+            case "warp":
+                // Validated here rather than in the dispatcher so a typo is caught with a
+                // message instead of a silent no-op travel request. A module resref is at
+                // most 16 chars of [a-z0-9_]; a waypoint TAG is looser but rides the same
+                // 32-byte block field, so it gets the same charset with the block's cap.
+                if (rest.Length == 0)
+                {
+                    return new CoopCommand(CoopCommandKind.Invalid, Error: "warp needs a module, e.g. warp danm13");
+                }
+
+                if (!IsResRef(rest[0], maxLength: 16))
+                {
+                    return new CoopCommand(CoopCommandKind.Invalid, Error: $"'{rest[0]}' is not a module name (letters, digits, _; max 16)");
+                }
+
+                if (rest.Length > 1 && !IsResRef(rest[1], maxLength: 31))
+                {
+                    return new CoopCommand(CoopCommandKind.Invalid, Error: $"'{rest[1]}' is not a waypoint tag (letters, digits, _; max 31)");
+                }
+
+                return new CoopCommand(
+                    CoopCommandKind.Warp,
+                    Address: rest[0].ToLowerInvariant(),
+                    Password: rest.Length > 1 ? rest[1] : null);
+
+            case "who" or "peers":
+                return new CoopCommand(CoopCommandKind.Who);
+
+            case "where":
+                return new CoopCommand(CoopCommandKind.Where);
+
             default:
                 return new CoopCommand(CoopCommandKind.Unknown);
         }
     }
 
+    /// <summary>True for a resref-shaped token: 1..maxLength chars of ASCII letter/digit/underscore.</summary>
+    private static bool IsResRef(string value, int maxLength)
+    {
+        if (value.Length < 1 || value.Length > maxLength)
+        {
+            return false;
+        }
+
+        foreach (char c in value)
+        {
+            if (!char.IsAsciiLetterOrDigit(c) && c != '_')
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
     /// <summary>One-line help listing the commands, for the overlay and dashboard.</summary>
     public const string HelpText =
-        "commands: servers | connect <ip|#n> [password] | host | disconnect | reconnect | say <msg> | clear | status | help";
+        "commands: servers | connect <ip|#n> [password] | host | disconnect | reconnect | say <msg> | clear | status | warp <module> | who | where | help";
 }

@@ -28,6 +28,9 @@
     <Compile Include="..\..\src\KotorCoop.Plugin\DownBlock.cs" Link="Plugin\DownBlock.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\Vec3.cs" Link="Plugin\Vec3.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\MotionSmoother.cs" Link="Plugin\MotionSmoother.cs" />
+    <Compile Include="..\..\src\KotorCoop.Plugin\ConsoleHistoryRing.cs" Link="Plugin\ConsoleHistoryRing.cs" />
+    <Compile Include="..\..\src\KotorCoop.Plugin\ConsoleCompletionEngine.cs" Link="Plugin\ConsoleCompletionEngine.cs" />
+    <Compile Include="..\..\src\KotorCoop.Plugin\ConsoleVerbCatalog.cs" Link="Plugin\ConsoleVerbCatalog.cs" />
   </ItemGroup>
 
   <ItemGroup>

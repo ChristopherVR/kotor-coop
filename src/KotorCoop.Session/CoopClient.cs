@@ -25,6 +25,14 @@ public sealed class CoopClient : ICoopSession
     private readonly ReliableJournalSender _journalSender = new();
     private readonly ContainerLootStore _lootStore = new();
     private readonly ReliableLootSender _lootSender = new();
+
+    /// <summary>
+    /// The loot sender's one recipient: the host, which applies the removal, re-attributes
+    /// it under its own id, and relays it to the other clients (see the host's
+    /// HandleContainerLoot). The shared sender retires an op once every listed recipient has
+    /// acked, so a client's list is just this.
+    /// </summary>
+    private static readonly uint[] LootRecipients = [CoopHost.HostPeerId];
     private readonly Lock _gate = new();
     private readonly uint _nonce;
 
@@ -966,6 +974,15 @@ public sealed class CoopClient : ICoopSession
         }
     }
 
+    private void SendContainerLoot(ContainerLootPacket op)
+    {
+        int length = PacketCodec.Write(_sendBuffer, op);
+        if (length > 0)
+        {
+            _channel.Send(_hostEndPoint, _sendBuffer.AsSpan(0, length));
+        }
+    }
+
     private void SendBye()
     {
         if (_localPeerId == 0)
@@ -1059,6 +1076,16 @@ public sealed class CoopClient : ICoopSession
                 if (PacketCodec.ReadJournalAck(span) is { } journalAck)
                 {
                     _journalSender.Acknowledge(journalAck.OpSequence);
+                }
+
+                break;
+
+            case PacketType.ContainerLootAck:
+                if (PacketCodec.ReadContainerLootAck(span) is { } lootAck)
+                {
+                    // The ack names its sender (the host) so the shared per-recipient
+                    // sender can mark exactly that recipient done.
+                    _lootSender.Acknowledge(lootAck.PeerId, lootAck.OpSequence);
                 }
 
                 break;

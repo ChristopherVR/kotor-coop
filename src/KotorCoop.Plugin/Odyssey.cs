@@ -2266,7 +2266,7 @@ internal static unsafe class Odyssey
     private const nint ConsoleCaretPtr = 0x007A3A44;
 
     /// <summary>Capacity of the engine's console command buffer (null-terminated, cap 500).</summary>
-    private const int ConsoleBufferCapacity = 0x1F4;
+    public const int ConsoleBufferCapacity = 0x1F4;
 
     // Global::AurPostString(str, x, line, life) — cdecl, caller-cleaned; ENQUEUES a string
     // node (new[0x434]) onto the render list and returns it. It never touches the texture font
@@ -2304,6 +2304,51 @@ internal static unsafe class Odyssey
         }
 
         return i;
+    }
+
+    /// <summary>
+    /// Reads the console command line as a managed string (ASCII, cut at the first null —
+    /// this is a raw char buffer, not a CExoString, so there is no length-includes-null trap
+    /// here; the null itself is the only terminator). Allocates, so call it on key edges and
+    /// buffer changes rather than every frame. MAIN THREAD ONLY.
+    /// </summary>
+    public static string ReadConsoleLine()
+    {
+        byte* p = (byte*)ConsoleBufferPtr;
+        int n = ConsoleBufferLength();
+        if (n == 0)
+        {
+            return string.Empty;
+        }
+
+        Span<char> chars = n <= 256 ? stackalloc char[256] : new char[n];
+        for (int i = 0; i < n; i++)
+        {
+            chars[i] = (char)p[i];
+        }
+
+        return new string(chars[..n]);
+    }
+
+    /// <summary>
+    /// Replaces the console command line and parks the caret at its end — the same two
+    /// stores <see cref="OpenChatInput"/> seeds, which is all the engine needs: it owns the
+    /// buffer and keeps editing from the caret as the player types. Non-ASCII characters
+    /// become '?' (the engine's WM_CHAR path only ever produces ASCII here anyway).
+    /// MAIN THREAD ONLY.
+    /// </summary>
+    public static void SetConsoleLine(string text)
+    {
+        byte* buffer = (byte*)ConsoleBufferPtr;
+        int count = Math.Min(text.Length, ConsoleBufferCapacity - 1);
+        for (int i = 0; i < count; i++)
+        {
+            char c = text[i];
+            buffer[i] = c is >= (char)0x20 and <= (char)0x7E ? (byte)c : (byte)'?';
+        }
+
+        buffer[count] = 0;
+        *(int*)ConsoleCaretPtr = count;
     }
 
     // The queued render's text color: the string node captures its RGBA at enqueue time from
