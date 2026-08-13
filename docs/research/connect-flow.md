@@ -296,3 +296,18 @@ sticks. PasswordEntryModal writes "Enter the server password" guarded by two inv
 (label vtable 0x0073E5B8 at +0x550; params+0x50 back-pointer == panel+0x620), and on a
 mismatch SKIPS the caption rather than latching the modal: a shifted label is a cosmetic
 problem, a wrong-offset write is not.
+
+## Live verification, third pass (2026-08-13): all three user reports fixed
+
+Cold product flow again (no scripts, hidden auto-agents), after merging the in-place
+prompt, the title caption, the journal idempotence fix, and the dispatcher unification:
+
+| check | result |
+| --- | --- |
+| Host via `host` typed in the ~ console AT THE MENU | hosted + auto-loaded (the unified dispatcher's menu-time verbs, live) |
+| Connect on the locked row | modal floats OVER the browser — row, details and portraits visible beneath; no menu round-trip |
+| Modal title | **"Enter the server password"** (panel+0x638 write held; guards passed) |
+| Cancel | back in the browser, row still selected, nothing dialled |
+| Type password → OK | connected as peer 2, world loaded, no menu flash |
+| Journal popup | **zero "Journal Entry Added" boxes on either side**, host and joiner |
+| Peers | 1/1 both sides, END_M01AA, each sees the other's character |
