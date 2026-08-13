@@ -26,9 +26,38 @@ $ErrorActionPreference = 'Stop'
 $repo = Split-Path $PSScriptRoot -Parent
 $agent = Join-Path $repo 'src\KotorCoop.Agent\bin\Debug\net10.0-windows\KotorCoop.Agent.exe'
 
+# Defined ABOVE the -Stop block because -Stop restores the flag on the way out. (A
+# PowerShell function does not exist until its definition line has executed.)
+function Set-AutoStartAgent {
+    param([string]$Directory, [string]$Value)
+
+    $path = Join-Path $Directory 'coop.ini'
+    $lines = if (Test-Path $path) { @(Get-Content $path) } else { @('[coop]') }
+
+    $found = $false
+    for ($i = 0; $i -lt $lines.Count; $i++) {
+        if ($lines[$i] -match '^\s*auto_start_agent\s*=') {
+            $lines[$i] = "auto_start_agent = $Value"
+            $found = $true
+        }
+    }
+
+    if (-not $found) { $lines += "auto_start_agent = $Value" }
+    Set-Content -Path $path -Value $lines -Encoding ASCII
+}
+
 if ($Stop) {
     Get-Process KotorCoop.Agent -ErrorAction SilentlyContinue | Stop-Process -Force
     Get-Process swkotor -ErrorAction SilentlyContinue | Stop-Process -Force
+
+    # Undo the rig's auto_start_agent=0 (written below so the rig's own visible agents are
+    # the only ones attached). Leaving it off is what made a rig-touched install lose the
+    # invisible-agent behaviour for REAL play afterwards: the player launches the game, no
+    # agent starts, the Co-op flow silently does nothing, and nothing on screen says why.
+    # The rig is a test harness; it must not permanently reconfigure the product.
+    Set-AutoStartAgent -Directory $Game1 -Value '1'
+    Set-AutoStartAgent -Directory $Game2 -Value '1'
+    "restored auto_start_agent = 1 in both installs (the rig turns it off while running)"
 
     # The agent windows are launched with -NoExit, so killing the agent leaves an empty
     # console sitting there. Left alone they pile up one pair per run until the desktop is
@@ -80,24 +109,7 @@ Remove-Item (Join-Path $WorkDir 'consoles.txt') -Force -ErrorAction SilentlyCont
 # the host. The agent now refuses to be the second one attached to a pid, so a stray one is
 # inert rather than a ghost player; turning auto-start off as well means the agents that do run
 # are the ones with the host/join roles this script chose, rather than coop.ini's.
-function Set-AutoStartAgent {
-    param([string]$Directory, [string]$Value)
-
-    $path = Join-Path $Directory 'coop.ini'
-    $lines = if (Test-Path $path) { @(Get-Content $path) } else { @('[coop]') }
-
-    $found = $false
-    for ($i = 0; $i -lt $lines.Count; $i++) {
-        if ($lines[$i] -match '^\s*auto_start_agent\s*=') {
-            $lines[$i] = "auto_start_agent = $Value"
-            $found = $true
-        }
-    }
-
-    if (-not $found) { $lines += "auto_start_agent = $Value" }
-    Set-Content -Path $path -Value $lines -Encoding ASCII
-}
-
+# (-Stop restores the flag to 1: the rig must not permanently reconfigure the product.)
 Set-AutoStartAgent -Directory $Game1 -Value '0'
 Set-AutoStartAgent -Directory $Game2 -Value '0'
 

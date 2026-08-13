@@ -24,19 +24,11 @@ $agent = Join-Path $root 'src\KotorCoop.Agent\bin\Debug\net10.0-windows\KotorCoo
 $movewin = Join-Path $PSScriptRoot 'movewin.ps1'
 $inputalive = Join-Path $PSScriptRoot 'inputalive.ps1'
 
-if ($Stop) {
-    Get-Process KotorCoop.Agent -ErrorAction SilentlyContinue | Stop-Process -Force -Confirm:$false
-    Get-Process swkotor -ErrorAction SilentlyContinue | Stop-Process -Force -Confirm:$false
-    'session stopped'
-    return
-}
-
-if (-not (Test-Path $agent)) { throw "agent not built: $agent" }
-
 # ⚠ The plugin auto-starts an agent per game (coop.ini auto_start_agent, ON by default) and so
 # does this script. Two agents on one swkotor.exe both write its shared block and both join the
 # session as separate players — the stray third peer. The agent now refuses to be the second
 # one attached to a pid; this makes sure the ones that run are the ones chosen here.
+# Defined above the -Stop block, which restores the flag on the way out.
 function Set-AutoStartAgent {
     param([string]$Directory, [string]$Value)
 
@@ -54,6 +46,21 @@ function Set-AutoStartAgent {
     if (-not $found) { $lines += "auto_start_agent = $Value" }
     Set-Content -Path $path -Value $lines -Encoding ASCII
 }
+
+if ($Stop) {
+    Get-Process KotorCoop.Agent -ErrorAction SilentlyContinue | Stop-Process -Force -Confirm:$false
+    Get-Process swkotor -ErrorAction SilentlyContinue | Stop-Process -Force -Confirm:$false
+
+    # The rig turned the invisible auto-start agent off while it ran its own visible ones;
+    # leaving it off would strip a rig-touched install of the whole "launch the game and
+    # play" behaviour for real use. The rig must not permanently reconfigure the product.
+    Set-AutoStartAgent -Directory (Split-Path $Game1) -Value '1'
+    Set-AutoStartAgent -Directory (Split-Path $Game2) -Value '1'
+    'session stopped (auto_start_agent restored to 1)'
+    return
+}
+
+if (-not (Test-Path $agent)) { throw "agent not built: $agent" }
 
 Set-AutoStartAgent -Directory (Split-Path $Game1) -Value '0'
 Set-AutoStartAgent -Directory (Split-Path $Game2) -Value '0'

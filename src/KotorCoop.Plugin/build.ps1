@@ -42,6 +42,13 @@ if ($Uninstall) {
     $log = Join-Path $GameDir 'kotorcoop-plugin.log'
     if (Test-Path $log) { Remove-Item $log -Force; "removed $log" }
 
+    # The agent -Install deploys. Every file is KotorCoop.*, so this can never touch a
+    # game file or a user's mod.
+    foreach ($ours in Get-ChildItem $GameDir -File -Filter 'KotorCoop.*' -ErrorAction SilentlyContinue) {
+        Remove-Item $ours.FullName -Force
+        "removed agent file $($ours.FullName)"
+    }
+
     # Remove only the override assets we installed — every one is a k_coop_ resref, so
     # this can never delete a user's mod file.
     $overrideTarget = Join-Path $GameDir 'Override'
@@ -107,6 +114,45 @@ if ($Install) {
             "installed override -> $(Join-Path $overrideTarget $asset.Name)"
         }
     }
+
+    # Deploy the AGENT beside the game too. The plugin's AgentLauncher auto-starts
+    # KotorCoop.Agent.exe from the game directory (or kotorcoop\/coop\ under it) — that is
+    # what makes "launch the game and play" the whole experience. Until now the agent was
+    # hand-copied once and silently went stale on every rebuild, which is the worst kind of
+    # version skew: the plugin and agent meet over a signature-checked shared block, so a
+    # stale agent either refuses the block or, worse, drives it with last week's semantics.
+    # Installing the plugin without the agent it launches is half an install.
+    $agentProject = Join-Path (Split-Path $projectDir -Parent) 'KotorCoop.Agent'
+    Push-Location $agentProject
+    try {
+        dotnet build -v q --nologo
+        if ($LASTEXITCODE -ne 0) { throw "agent build failed with exit code $LASTEXITCODE" }
+    }
+    finally {
+        Pop-Location
+    }
+
+    $agentBin = Join-Path $agentProject 'bin\Debug\net10.0-windows'
+    if (-not (Test-Path (Join-Path $agentBin 'KotorCoop.Agent.exe'))) {
+        throw "agent build succeeded but KotorCoop.Agent.exe not found in $agentBin"
+    }
+
+    # Game root, not a subfolder: AgentLauncher searches the game dir FIRST, so a loose
+    # copy there (which every existing install has) would shadow anything we put deeper.
+    $agentInstalled = 0
+    foreach ($file in Get-ChildItem $agentBin -File) {
+        try {
+            Copy-Item $file.FullName (Join-Path $GameDir $file.Name) -Force
+            $agentInstalled++
+        }
+        catch [System.IO.IOException] {
+            # A running agent holds its own image; the plugin and overrides above still
+            # installed. Say so rather than half-failing silently.
+            throw "agent file locked ($($file.Name)) - stop KotorCoop.Agent.exe and re-run -Install"
+        }
+    }
+
+    "installed agent -> $GameDir ($agentInstalled files)"
 
     ''
     'The game loads DirectInput from its own directory before the system one, so this'
