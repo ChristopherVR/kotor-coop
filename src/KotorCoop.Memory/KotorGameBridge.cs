@@ -498,13 +498,13 @@ public sealed class KotorGameBridge : IGameBridge
     private const uint BlockPartyRosterSlotMask = 0x1FF;
     private const uint BlockPartyRosterValid = 0x8000_0000;
 
-    /// <summary>16-byte signature: "KOCOOP01" + version 36 + guard 0xC0FFEE01. The version is
+    /// <summary>16-byte signature: "KOCOOP01" + version 37 + guard 0xC0FFEE01. The version is
     /// part of the pattern deliberately: an agent must not attach to a plugin whose block
     /// layout it does not know, and a stale pair fails to find each other rather than reading
     /// the wrong offsets. ⚠ Bump this WITH PluginHost's `_block->Version` — they are one
     /// number in two files, and a half-bump reads as "plugin shared block not found", which
     /// looks like a broken install rather than a version skew.</summary>
-    public const string PluginSignature = "4B 4F 43 4F 4F 50 30 31 24 00 00 00 01 EE FF C0";
+    public const string PluginSignature = "4B 4F 43 4F 4F 50 30 31 25 00 00 00 01 EE FF C0";
 
     /// <summary>Agent's view of which coop item id occupies each plugin item slot.</summary>
     private readonly uint[] _itemSlotIds = new uint[BlockItemCapacity];
@@ -2753,12 +2753,14 @@ public sealed class KotorGameBridge : IGameBridge
 
     // SharedBlock's browser details array (block version 36).
     private const int BlockBrowserDetails = 0x3400;
-    private const int BlockBrowserDetailStride = 0x60;
+    private const int BlockBrowserDetailStride = 0x70;
     private const int BlockBrowserDetailModule = 0x00;
     private const int BlockBrowserDetailModuleLength = 40;
     private const int BlockBrowserDetailPortraits = 0x28;
     private const int BlockBrowserDetailPortraitLength = 16;
     private const int BlockBrowserDetailPortraitCount = 3;
+    private const int BlockBrowserDetailLoadScreen = 0x58;
+    private const int BlockBrowserDetailLoadScreenLength = 16;
 
     /// <summary>Module resref -> what to show a browsing player, cached because the answer
     /// costs an archive open and never changes for a given resref.</summary>
@@ -2870,6 +2872,14 @@ public sealed class KotorGameBridge : IGameBridge
             // module files, which is the agent's job — the plugin draws what it is handed.
             _memory.TryWriteAsciiString(
                 detail + BlockBrowserDetailModule, DescribeModule(module), BlockBrowserDetailModuleLength);
+
+            // "where the host is", as the game's own loading art. Composed rather than looked
+            // up: the engine builds these names the same way ("load_%s"), and the area's own
+            // LoadScreenID reads 0 on every base-game module.
+            _memory.TryWriteAsciiString(
+                detail + BlockBrowserDetailLoadScreen,
+                module.Length > 0 ? "load_" + module.ToLowerInvariant() : string.Empty,
+                BlockBrowserDetailLoadScreenLength);
 
             for (int p = 0; p < BlockBrowserDetailPortraitCount; p++)
             {

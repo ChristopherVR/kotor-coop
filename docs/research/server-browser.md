@@ -283,7 +283,7 @@ itself.
 
 The host's display name is `coop.ini server_name`, distinct from `name` (the character's).
 
-### ⚠ OPEN: the portraits fill WHITE
+### The portraits, and why they were white — SOLVED
 
 The data path is complete and verified — the host reads `portrait_id` off each party
 creature, resolves it through `portraits.2da` (`baseresref`; row 21 -> `po_pmha4`), the
@@ -291,17 +291,33 @@ beacon carries up to three resrefs (v3 tail), the block's details array holds th
 panel's image labels take them. Live, two of the three boxes fill for a party of two. They
 fill **white**, which is what an image label draws when its fill texture does not resolve.
 
-Two candidates, neither eliminated:
+**`CSWGuiBorderParams::SetFillImage` takes a `CResRef*`, not a `CExoString*`.** Its comparison
+callee at 0x406DC0 is `repe cmpsd` with `ecx = 4` — sixteen raw bytes compared in place — and
+the engine's own caller copies a 16-byte record out of the save entry and passes THAT
+(`ShowGame`, 0x6C8B39 -> 0x6C8B43). Handing it a CExoString makes the engine read a POINTER
+and a LENGTH as the texture's name, which resolves to nothing and draws a blank white fill.
 
-1. **The wrong half's id.** `+0x30` is the SERVER object's `portrait_id`. This process runs a
-   client and a server half, and the half that draws is not always the half that stores — the
-   HUD portrait comes from `CSWCCreatureStats + 0x11C`. If those disagree, the client's is the
-   one the GUI means. (The measured value, 21 -> `po_pmha4`, is a MALE portrait for a female
-   PC, which is itself a hint that this id is not the one being drawn.)
-2. **The texture is not reachable by that name.** `po_pmha4` resolves through neither
-   `chitin.key`/BIF nor override — KOTOR keeps GUI textures in `swpc_tex_gui.erf`, which the
-   file readers here do not index, so the name could not be confirmed offline either.
+Everything else was already right: `portrait_id` at `CSWSObject+0x30` reads 15, the save's own
+`PortraitId` field agrees, portraits.2da row 15 is `po_pfhb3` (female, forpc, appearance 113
+against the PC's 114), and `po_pfhb3` is present in the texture pack. The id was never the
+problem — an early misreading of a hex dump made it look like 21 (`po_pmha4`, a male portrait)
+and sent this off after the client/server split for a while.
 
-`SetFillImage` itself is not the problem: its second argument is only a force-if-unchanged
-flag (0x414C00 compares against `[this+0x40]` and early-outs when equal and the flag is 0),
-and the labels visibly change state when written.
+⚠ The blanking calls that predated this had the same defect and hid it perfectly: garbage
+blanks an image just as well as an empty name does. A wrong argument type is invisible for
+as long as you only ever use it to clear something.
+
+### The middle image: the module's load screen
+
+The big pane — where the save panel draws a save's screenshot — draws
+`load_<module>`, the game's own loading art for wherever the host is standing. The format
+string `"load_%s"` is at file offset 0x345580 and the 97 textures live in
+`TexturePacks\swpc_tex_gui.erf` (`load_end_m01aa`, `load_tar_m03aa`, ...). Composed by the
+agent, so a convention change is one function rather than a plugin rebuild.
+
+⚠ The area's own `LoadScreenID` is NOT the source: it reads 0 on every base-game module
+measured, so it is dead in KOTOR 1.
+
+The engine's portrait walk is `esi + 0x5E4` with stride `0x140` for three faces
+(0x6C8B31..0x6C8B52), which is exactly the `PanelImageParams` this controller already had —
+`[0x224, 0x5E4, 0x724, 0x864]`, screenshot then three portraits.

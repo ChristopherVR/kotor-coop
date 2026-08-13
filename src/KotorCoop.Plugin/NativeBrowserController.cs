@@ -72,8 +72,14 @@ internal sealed unsafe class NativeBrowserController
     private static readonly delegate* unmanaged[Thiscall]<nint, nint, void> SetText =
         (delegate* unmanaged[Thiscall]<nint, nint, void>)0x00415E00;
 
-    // CSWGuiBorderParams::SetFillImage(CExoString*, 0) — blanks the details-pane images the
-    // stock population left behind (the exact calls ShowGame's clear path makes).
+    // CSWGuiBorderParams::SetFillImage(CResRef*, bForce) — the details-pane images.
+    //
+    // ⚠ A CResRef, NOT a CExoString, however much the name suggests otherwise. Its comparison
+    // callee (0x406DC0) is `repe cmpsd` with ecx = 4 — sixteen raw bytes compared in place —
+    // and the engine's own caller copies a 16-byte record out of the save entry (ShowGame,
+    // 0x6C8B39..0x6C8B43). Handing it a CExoString makes the engine read a POINTER and a
+    // LENGTH as the texture name; that is what drew the portraits as blank white fills.
+    // bForce = 0 early-outs when the name is unchanged, which is what we want.
     private static readonly delegate* unmanaged[Thiscall]<nint, nint, int, void> SetFillImage =
         (delegate* unmanaged[Thiscall]<nint, nint, int, void>)0x00414C00;
 
@@ -447,6 +453,7 @@ internal sealed unsafe class NativeBrowserController
     private void ShowDetails(nint panel, int index)
     {
         string world = string.Empty;
+        string loadScreen = string.Empty;
         bool locked = false;
         string[] faces = new string[SharedBlock.BrowserDetailPortraitCount];
 
@@ -455,6 +462,8 @@ internal sealed unsafe class NativeBrowserController
             locked = _block.BrowserEntry(index)[SharedBlock.BrowserEntryLocked] != 0;
             byte* detail = _block.BrowserDetail(index);
             world = ReadAscii(detail + SharedBlock.BrowserDetailModule, SharedBlock.BrowserDetailModuleLength);
+            loadScreen = ReadAscii(
+                detail + SharedBlock.BrowserDetailLoadScreen, SharedBlock.BrowserDetailLoadScreenLength);
 
             for (int i = 0; i < faces.Length; i++)
             {
@@ -486,14 +495,14 @@ internal sealed unsafe class NativeBrowserController
         // third would push the host's name off the top — the very bug this pass exists to fix.
         SetCaption(panel + PanelShotCaptionParams, locked ? "Password required" : "");
 
-        // Image 0 is the save screenshot's slot and stays empty — there is no screenshot of
-        // somebody else's session. 1..3 are the party portraits.
-        WithExoString("", s => SetFillImage(panel + PanelImageParams[0], s, 0));
+        // Image 0 is the save screenshot's slot; 1..3 are the party portraits, at 0x5E4 with
+        // stride 0x140 — the exact walk ShowGame makes at 0x6C8B31..0x6C8B52.
+        WithResRef(loadScreen, r => SetFillImage(panel + PanelImageParams[0], r, 0));
 
         for (int i = 0; i < faces.Length && i + 1 < PanelImageParams.Length; i++)
         {
             string face = faces[i];
-            WithExoString(face, s => SetFillImage(panel + PanelImageParams[i + 1], s, 0));
+            WithResRef(face, r => SetFillImage(panel + PanelImageParams[i + 1], r, 0));
         }
     }
 
@@ -688,6 +697,34 @@ internal sealed unsafe class NativeBrowserController
 
     /// <summary>Builds an engine CExoString on the stack, runs <paramref name="use"/>, frees
     /// it. SetText/SetFillImage copy the string, so the temporary may die right after.</summary>
+    /// <summary>
+    /// Runs <paramref name="use"/> with a pointer to a 16-byte <c>CResRef</c> — raw
+    /// NUL-padded characters, no pointer and no length.
+    ///
+    /// ⚠ THIS IS NOT A CExoString, AND THE DIFFERENCE IS WHY THE PORTRAITS WERE WHITE.
+    /// <c>CSWGuiBorderParams::SetFillImage</c> takes a CResRef: its comparison callee
+    /// (0x406DC0) is <c>repe cmpsd</c> with <c>ecx = 4</c> — sixteen bytes compared in place —
+    /// and the engine's own caller (<c>ShowGame</c>, 0x6C8B43) hands it a 16-byte record
+    /// copied out of the save entry. Passing a CExoString instead makes the engine read a
+    /// POINTER and a LENGTH as the texture's name, which resolves to nothing and draws a
+    /// blank white fill. The blanking calls that came before had the same defect and hid it
+    /// perfectly, because garbage blanks just as well as an empty name does.
+    /// </summary>
+    private static void WithResRef(string ascii, Action<nint> use)
+    {
+        byte* storage = stackalloc byte[16];
+        new Span<byte>(storage, 16).Clear();
+
+        int count = Math.Min(ascii.Length, 16);
+        for (int i = 0; i < count; i++)
+        {
+            char c = ascii[i];
+            storage[i] = (byte)(c < 0x20 || c > 0x7E ? (byte)0 : (byte)c);
+        }
+
+        use((nint)storage);
+    }
+
     private static void WithExoString(string ascii, Action<nint> use)
     {
         byte* storage = stackalloc byte[16];

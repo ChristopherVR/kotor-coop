@@ -61,8 +61,9 @@ internal struct SharedBlock
     /// so a stale reader finds zeros there rather than half a record, and quietly repurposing
     /// it would turn that promise into a trap for the next person who reads the comment.</summary>
     /// <summary>Grown from 0x3400 for the browser details array (version 36): the server rows
-    /// at 0xE20 cannot widen, because the death region begins exactly where they end.</summary>
-    public const int TotalSize = 0x3700;
+    /// at 0xE20 cannot widen, because the death region begins exactly where they end. Grown
+    /// again for the load-screen texture in that array (version 37).</summary>
+    public const int TotalSize = 0x3800;
 
     public const int ProfileVisibleSize = 0x250;
 
@@ -1110,7 +1111,7 @@ internal struct SharedBlock
 
     public const int OffsetBrowserDetails = 0x3400;
 
-    public const int BrowserDetailStride = 0x60;
+    public const int BrowserDetailStride = 0x70;
 
     /// <summary>The world the host is standing in, ALREADY READABLE ("Taris - Lower City").
     /// The agent resolves the resref through the area file and dialog.tlk before writing, so
@@ -1126,6 +1127,20 @@ internal struct SharedBlock
     public const int BrowserDetailPortraitLength = 16;
 
     public const int BrowserDetailPortraitCount = 3;
+
+    /// <summary>
+    /// The module's loading-screen texture, which the details pane draws where the save panel
+    /// draws a save's screenshot — "where the host is", in the game's own art.
+    ///
+    /// The engine names these <c>load_&lt;module&gt;</c> (the format string "load_%s" lives at
+    /// file offset 0x345580) and ships them in TexturePacks\swpc_tex_gui.erf: load_end_m01aa,
+    /// load_tar_m03aa, 97 of them. The AGENT composes the name, so a future install whose
+    /// convention differs is one function to change rather than a plugin rebuild. The area's
+    /// own LoadScreenID is NOT the source — it reads 0 on every base-game module measured.
+    /// </summary>
+    public const int BrowserDetailLoadScreen = 0x58;
+
+    public const int BrowserDetailLoadScreenLength = 16;
 
     // ---- co-op death handling (version 14, region 0x1020..0x1080) -----------------
     //
