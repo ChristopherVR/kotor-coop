@@ -2355,8 +2355,10 @@ public sealed class KotorGameBridge : IGameBridge
     private const int JournalEntryState = 0x20;
 
     /// <summary>What this game's journal held when last scanned (or what we last applied),
-    /// so only genuine advances are announced and nothing echoes.</summary>
-    private readonly Dictionary<string, int> _journalShadow = new(StringComparer.OrdinalIgnoreCase);
+    /// so only genuine advances are announced, nothing echoes — and, critically, nothing
+    /// is applied before the live journal has been read once (see JournalShadow: judging
+    /// against an unprimed shadow was the "Journal Entry Added" popup on every join).</summary>
+    private readonly JournalShadow _journalShadow = new();
 
     /// <summary>Reading is external; applying goes through the plugin (SetState must run
     /// on the game's thread, and it is also what refreshes the journal GUI).</summary>
@@ -2364,20 +2366,15 @@ public sealed class KotorGameBridge : IGameBridge
 
     public List<KeyValuePair<string, int>> CollectChangedJournal()
     {
-        List<KeyValuePair<string, int>> changes = [];
-
-        foreach ((string tag, int state) in ReadJournalEntries())
+        // A failed read (loading screen, chain not yet resolvable) must return empty
+        // WITHOUT priming the shadow — an empty read result and "could not read" are
+        // different facts, and conflating them is what replayed the whole store on join.
+        if (!TryReadJournalEntries(out List<KeyValuePair<string, int>> live))
         {
-            if (_journalShadow.TryGetValue(tag, out int known) && known >= state)
-            {
-                continue;
-            }
-
-            _journalShadow[tag] = state;
-            changes.Add(new KeyValuePair<string, int>(tag, state));
+            return [];
         }
 
-        return changes;
+        return _journalShadow.Observe(live);
     }
 
     /// <summary>
@@ -2394,7 +2391,11 @@ public sealed class KotorGameBridge : IGameBridge
             return false;
         }
 
-        if (_journalShadow.TryGetValue(questTag, out int known) && known >= state)
+        // Covers both halves of idempotence: never before the live journal has been read
+        // (the join race), and never for a state the game already has (redundant apply —
+        // the engine's SetState fires the "Journal Entry Added" GUI feedback even when
+        // nothing changes, so a redundant apply is a guaranteed spurious popup).
+        if (!_journalShadow.ShouldApply(questTag, state))
         {
             return false;
         }
@@ -2415,19 +2416,27 @@ public sealed class KotorGameBridge : IGameBridge
 
         if (ok)
         {
-            // Optimistic: the engine's own SetState refuses to lower a state, so even a
-            // failed apply cannot make this shadow wrong in a way that loses progress.
-            _journalShadow[questTag] = state;
+            // Optimistic: quest states only rise, so even a failed apply cannot make the
+            // shadow wrong in a way that loses progress.
+            _journalShadow.MarkApplied(questTag, state);
         }
 
         return ok;
     }
 
-    private IEnumerable<(string Tag, int State)> ReadJournalEntries()
+    /// <summary>
+    /// Reads the live journal. Returns FALSE when the chain is not readable (loading
+    /// screen, menu, mid-transition) — which is a different fact from "readable and
+    /// empty" (true with an empty list, e.g. a new game), and the shadow priming above
+    /// depends on the distinction.
+    /// </summary>
+    private bool TryReadJournalEntries(out List<KeyValuePair<string, int>> entries)
     {
+        entries = [];
+
         if (!EngineGlobals.TryGetServerInternal(_memory, out nint serverInternal))
         {
-            yield break;
+            return false;
         }
 
         // ⚠ +0x11C HOLDS a pointer to the CSWSJournal; it is not the journal. Reading it as
@@ -2438,14 +2447,15 @@ public sealed class KotorGameBridge : IGameBridge
         if (!_memory.TryReadPointer(serverInternal + PartyTableOffset + PartyTableJournal, out nint journal)
             || journal == 0)
         {
-            yield break;
+            return false;
         }
 
-        if (!_memory.TryReadPointer(journal, out nint data) || data == 0
+        if (!_memory.TryReadPointer(journal, out nint data)
             || !_memory.TryReadInt32(journal + 4, out int count)
-            || count is <= 0 or > 512)
+            || count is < 0 or > 512
+            || (count > 0 && data == 0))
         {
-            yield break;
+            return false;
         }
 
         for (int i = 0; i < count; i++)
@@ -2463,8 +2473,10 @@ public sealed class KotorGameBridge : IGameBridge
                 continue;
             }
 
-            yield return (tag, state);
+            entries.Add(new KeyValuePair<string, int>(tag, state));
         }
+
+        return true;
     }
 
     // ---- shared pause ----------------------------------------------------------
