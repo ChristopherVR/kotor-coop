@@ -46,9 +46,21 @@ controlled creature's own id from `CClientExoApp::GetPlayerCreature` (`0x5ED540`
   is then alive, the player is still playing, and spectate must not steal that camera.
   On a client the swap is suppressed (companions are host-driven mirrors), the
   controlled body IS the corpse, and spectate fills exactly that hole.
-- Target = first peer slot with `Active && Health > 0` whose phantom resolves.
-- Holds through conversations (the dialogue camera owns the view), retargets when the
-  watched peer dies, and restores through the same engine call on revive.
+- **The roster, in cycle order**: every living peer's phantom (peer-slot order), then
+  every living mirrored companion (party-presence slots, bounded by the published COUNT
+  — the epoch clear zeroes the count and leaves the slot bytes). The companions matter:
+  a downed host is *playing* its companion, so the companion mirror is what a spectator
+  wants to watch. Rebuilt from live state every pass; nothing cached.
+- **Tab cycles** (`SpectateCycle.Pick`, pure and unit-tested): edge-triggered,
+  foreground-gated (`IsKeyDownHere` — two instances on one machine must not both react),
+  sampled EVERY frame and latched so an edge between camera passes is not lost. A
+  vanished target snaps to the first survivor rather than advancing blind. Tab is free
+  while down: its stock meaning (switch party member) is control-locked on clients and a
+  no-op on a spectating host.
+- **Dialogue owns the camera completely**: while a conversation shows locally, every
+  pass returns before touching anything — no assert, no cycle, and no RESTORE either,
+  so a revive landing mid-conversation gives the camera back only after the dialogue
+  tears down (the engine's own `ReAttachCamera` discipline, mirrored).
 - Kill switch: `spectate_on_down=0`.
 
 ## Live-verified, all three transitions (tat_m20aa)
@@ -65,6 +77,31 @@ controlled creature's own id from `CClientExoApp::GetPlayerCreature` (`0x5ED540`
 
 The host side stayed silent through its own downs — the engine swapped it onto Trask and
 the controlled-creature gate held, which is the designed asymmetry.
+
+The cycling pass (same module, later session), all live:
+
+```
+06:22:15.276  spectate: watching 0xBC — Tab cycles (2 to watch)   (host phantom + Trask mirror)
+06:25:04.195  spectate: watching 0xB6 — Tab cycles (2 to watch)   (Tab → the Trask mirror)
+06:25:22.417  spectate: watching 0xBC — Tab cycles (2 to watch)   (Tab → wrap back)
+06:26:14.866  spectate: watching 0xB6 — Tab cycles (1 to watch)   (the watched host went down
+                                                                   — dropped off the roster,
+                                                                   auto-snap to the survivor,
+                                                                   WHILE a conversation was
+                                                                   open on the host's side)
+06:26:49.039  spectate: back up — the camera is yours again        (revive restore)
+```
+
+The dialogue-engagement check rode along: the host opened a real conversation
+(`test: opened a conversation with 'tat20_bantha'`) while the client spectated, the Sand
+People downed the host mid-talk, and the client's roster churned through it — no camera
+fight, no first-chance, spectate lines healthy throughout.
+
+One Tab press was swallowed early in the pass: an injected keypress only counts while the
+GAME window really holds the foreground (`IsKeyDownHere`), and the first
+foreground-then-send attempt raced. Human play cannot hit this — a player pressing Tab is
+already focused — but rig scripts should let `sendkey.ps1` do its own foregrounding and
+not fight it.
 
 ## Rig lessons paid for on the way (they cost most of the session)
 
