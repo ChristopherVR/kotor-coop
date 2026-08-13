@@ -35,6 +35,7 @@
     <ProjectReference Include="..\..\src\KotorCoop.Memory\KotorCoop.Memory.csproj" />
     <ProjectReference Include="..\..\src\KotorCoop.Session\KotorCoop.Session.csproj" />
     <ProjectReference Include="..\..\src\KotorCoop.MockGame\KotorCoop.MockGame.csproj" />
+    <ProjectReference Include="..\..\src\KotorCoop.Agent\KotorCoop.Agent.csproj" />
   </ItemGroup>
 
 </Project>

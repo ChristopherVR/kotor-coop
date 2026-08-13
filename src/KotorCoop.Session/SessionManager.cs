@@ -68,6 +68,22 @@ public sealed class SessionManager(IGameBridge bridge, AgentSettings agentSettin
 
     public SessionPhase Phase => _phase;
 
+    /// <summary>
+    /// Whether <see cref="Reconnect"/> has parameters to reuse — i.e. any
+    /// <see cref="Connect"/> has ever happened in this process. A bare Co-op button press
+    /// means "reconnect" when this is true and "consult coop.ini" when it is not.
+    /// </summary>
+    public bool CanReconnect
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _lastSettings is not null;
+            }
+        }
+    }
+
     public string Detail => _detail;
 
     /// <summary>Optional sink for status changes; surfaced by the console and dashboard.</summary>
