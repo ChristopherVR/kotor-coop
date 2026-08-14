@@ -519,6 +519,20 @@ internal sealed unsafe class CheatController(SharedBlockView block)
             return;
         }
 
+        // ⚠ The guard above cannot catch a wrong resref, so this one has to. CreateItemOnFloor
+        // 0x00547F60 does not test LoadFromTemplate's result (0x0054806B), so a blueprint that
+        // is not in this install still returns a perfectly good object id — and the old answer
+        // "did not spawn (failure N; wrong resref?)" could therefore never be the one a typo
+        // produced. What a typo produces is a nameless, empty body reported as a success.
+        if (Odyssey.TryReadItemIdentityFields(itemId, out Odyssey.ItemIdentityFields spawned)
+            && spawned.LooksUnloaded)
+        {
+            Answer(
+                SharedBlock.CheatStatusEngineRefused,
+                $"'{resref}' is not a blueprint here - 0x{itemId:X} spawned EMPTY");
+            return;
+        }
+
         Answer(SharedBlock.CheatStatusApplied, $"dropped '{resref}' as 0x{itemId:X}");
     }
 

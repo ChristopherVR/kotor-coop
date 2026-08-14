@@ -477,7 +477,24 @@ public sealed class CoopCommandDispatcher(
     /// </summary>
     private void DropItem(string request)
     {
-        Reply(ItemDropRequest.Drop(manager, bridge, request).Note);
+        ItemDropRequest.Outcome outcome = ItemDropRequest.Drop(manager, bridge, request);
+
+        // ⚠ THE OFFLINE CASE STILL HAS TO WORK. Routing this verb through the session was the
+        // fix for a drop that reached no peer — but a single-player game has no session, and
+        // "not connected" would take away the only way to put an item on the floor before
+        // anyone joins. That matters here specifically: staging a target for `setitem` is
+        // something you want to do BEFORE the pair is up. So a sessionless drop falls back to
+        // the staging cheat, which spawns it locally, and the answer says which of the two
+        // happened rather than letting the caller assume.
+        if (outcome.NoSession && !request.StartsWith('#')
+            && !request.StartsWith("0x", StringComparison.OrdinalIgnoreCase))
+        {
+            Reply("not connected - spawning it locally only, where no peer will see it");
+            SendCheat(new CheatRequest(CheatKinds.DropItem, Text: request));
+            return;
+        }
+
+        Reply(outcome.Note);
     }
 
     /// <summary>
@@ -521,8 +538,16 @@ public sealed class CoopCommandDispatcher(
                     ? "yours"
                     : $"held by 0x{item.Possessor:X}";
 
+            // A body with no name at all is almost always one CreateItemOnFloor built from a
+            // blueprint that is not in this install — it does not check the template load, so
+            // a typo produces a real but empty item. Say so here: it is the difference between
+            // "pick this one" and "this one is the wreckage of a mistyped drop".
+            string name = item.Resref.Length > 0
+                ? item.Resref
+                : "<NO NAME - probably a bad blueprint>";
+
             Reply(
-                $"  0x{item.ObjectId:X}  {(item.Resref.Length > 0 ? item.Resref : "<no tag>")}  "
+                $"  0x{item.ObjectId:X}  {name}  "
                 + $"{where}  stack {item.Identity.StackSize}  "
                 + $"charges {item.Identity.Charges}/{item.Identity.MaxCharges}  "
                 + $"upgrades 0x{item.Identity.Upgrades:X}"
@@ -580,13 +605,24 @@ public sealed class CoopCommandDispatcher(
 
         _kotor.TryGetItemResref(objectId, out string resref, force: true);
 
+        // ⚠ Kept inside 96 characters on purpose — that is the in-game reply field, and it
+        // truncates silently. The log gets the same line, so what matters is that the fields
+        // an identity check compares survive the cut.
         Reply(
-            $"item 0x{objectId:X} {(resref.Length > 0 ? resref : "<no tag>")}: "
-            + $"stack {identity.StackSize}, charges {identity.Charges}/{identity.MaxCharges}, "
-            + $"upgrades 0x{identity.Upgrades:X}, "
+            $"item 0x{objectId:X} {(resref.Length > 0 ? resref : "<NO NAME>")}: "
+            + $"stack {identity.StackSize}, chg {identity.Charges}/{identity.MaxCharges}, "
+            + $"upg 0x{identity.Upgrades:X}, "
             + $"{(identity.Identified ? "identified" : "UNidentified")}"
             + (identity.Stolen ? ", stolen" : string.Empty)
             + (identity.NonEquippable ? ", non-equippable" : string.Empty));
+
+        if (resref.Length == 0)
+        {
+            Reply(
+                $"item 0x{objectId:X} has no tag and no spawn record - CreateItemOnFloor "
+                + "builds a real but EMPTY body for a blueprint that is not installed, so "
+                + "this is most likely the wreckage of a mistyped resref");
+        }
     }
 
     /// <summary>
@@ -1432,13 +1468,53 @@ public sealed class CoopCommandDispatcher(
     }
 
     /// <summary>
+    /// The agent's log sink, wired to <c>AgentDashboard.Note</c> at startup — the same hook
+    /// <c>SessionManager.Log</c> uses, and for the same reason.
+    ///
+    /// ⚠ WITHOUT THIS EVERY REPLY IS INVISIBLE TO AN UNATTENDED RUN. `demo.ps1` gives each
+    /// agent a VISIBLE console (deliberately — the readout redraws in place, and a pipe turns
+    /// every redraw into another appended copy) and a SEPARATE `--log` file written by the
+    /// dashboard. A reply printed with Console.WriteLine therefore lands in a window nobody
+    /// is watching and never reaches the file every check actually reads. Measured on the rig
+    /// on 2026-08-15: `items` answered "showed 12 of 58 - full list in the agent log" and the
+    /// agent log held seven status lines and nothing else. Same class of bug as
+    /// `_lastDropNote` rendering only to the dashboard.
+    ///
+    /// Null in tests and in any host that has no dashboard; the console fallback below covers
+    /// that case.
+    /// </summary>
+    public Action<string>? Log { get; set; }
+
+    /// <summary>
     /// All co-op feedback — command replies and chat alike — goes to the always-on overlay as
     /// well as the console reply line, because the console closes on Enter (so a reply that
     /// arrives a tick later would never be seen there) and the overlay persists regardless.
+    ///
+    /// ⚠ The in-game reply line is a 96-byte field and truncates without complaint, so a
+    /// reply is a SUMMARY and the substance belongs in the log. Multi-line answers (`items`,
+    /// `who`, `servers`) rely on that: only the last line survives in the block, and all of
+    /// them survive in the log.
     /// </summary>
     private void Reply(string text)
     {
-        Console.WriteLine($"[coop] {text}");
+        // The log sink already writes to a redirected stdout, timestamped. Writing here too
+        // would double every line in a piped run; writing nowhere would lose them in a
+        // windowed one. So: the window when there is a window, the sink otherwise — and the
+        // sink always, because the file is the record.
+        if (Log is not { } log)
+        {
+            Console.WriteLine($"[coop] {text}");
+        }
+        else
+        {
+            if (!Console.IsOutputRedirected)
+            {
+                Console.WriteLine($"[coop] {text}");
+            }
+
+            log(text);
+        }
+
         _kotor?.PostConsoleReply(text);
         _kotor?.PostChatLine(text);
     }

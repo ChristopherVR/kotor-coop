@@ -1123,7 +1123,38 @@ internal static unsafe class Odyssey
         /// lying on the floor. Not part of identity, but it is the one fact that tells a
         /// listing whose pack an item is in.</summary>
         public uint Possessor;
+
+        /// <summary>
+        /// False when the item's Tag is empty — which, for a body we just asked the engine to
+        /// create from a named blueprint, means the blueprint DOES NOT EXIST. See
+        /// <see cref="LooksUnloaded"/>.
+        /// </summary>
+        public bool HasTag;
+
+        /// <summary>
+        /// This body was never filled in from a template.
+        ///
+        /// ⚠ `CreateItemOnFloor` 0x00547F60 calls `LoadFromTemplate` 0x005608B0 at
+        /// 0x0054806B and **never tests its result** — it goes straight on to add the item to
+        /// the area and returns the object id at 0x005480AF. So a resref that names no
+        /// blueprint yields a live, addressable, perfectly valid `CSWSItem` carrying nothing
+        /// but its constructor's defaults, and every "did it spawn?" guard reports success.
+        ///
+        /// The tell is the pair below, both from `CSWSItem::Constructor` 0x005530A0: it
+        /// leaves the Tag empty (it never writes +0x28) and sets Charges to exactly 50
+        /// (0x00553189). All 557 item blueprints in the base game declare a Tag, so an empty
+        /// one is not something a real load produces.
+        ///
+        /// Measured live 2026-08-15: a drop of `g_w_blstrpstl01` — a typo, the real ones are
+        /// `g_w_blstrpstl001`..`010` — produced object 0x131 with no tag, 50 charges, an
+        /// uninitialised MaxCharges of 1768092, stack 1 and no upgrades. Exactly this.
+        /// </summary>
+        public bool LooksUnloaded => !HasTag;
     }
+
+    /// <summary>CSWSItem + this = the object's Tag, a CExoString (char* then length). From
+    /// `SaveItem` 0x0055CCEE, which writes <c>[esi+0x28]</c> under the GFF label "Tag".</summary>
+    private const int ItemTag = 0x28;
 
     /// <summary>
     /// Reads one live item's identity fields through the engine's own object lookup.
@@ -1160,7 +1191,22 @@ internal static unsafe class Odyssey
         Upgrades = *(uint*)(item + ItemUpgrades),
         BitFlags = *(uint*)(item + ItemBitFlags),
         Possessor = *(uint*)(item + ItemPossessor),
+        HasTag = HasNonEmptyTag(item),
     };
+
+    /// <summary>
+    /// True when the item carries a Tag. A CExoString is a char* followed by its length, and
+    /// the length routinely INCLUDES the terminating null (three bugs in this project so
+    /// far), so a one-byte "length" over an empty buffer still means empty — hence the first
+    /// byte is checked too rather than the length alone.
+    /// </summary>
+    private static bool HasNonEmptyTag(nint item)
+    {
+        nint text = *(nint*)(item + ItemTag);
+        uint length = *(uint*)(item + ItemTag + 4);
+
+        return text != 0 && length != 0 && *(byte*)text != 0;
+    }
 
     /// <summary>
     /// Deletes item <paramref name="itemId"/> from placeable <paramref name="placeable"/>'s

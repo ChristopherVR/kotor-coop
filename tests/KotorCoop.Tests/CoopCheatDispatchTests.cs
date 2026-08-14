@@ -123,13 +123,42 @@ public class CoopCheatDispatchTests
     /// session's own drop is the thing that shares it, so that is the path the verb takes,
     /// and this test exists to stop the cheat route creeping back.
     /// </summary>
+    /// <summary>
+    /// ⚠ …EXCEPT WITH NO SESSION, where the cheat is the only thing that can put an item on
+    /// the floor at all.
+    ///
+    /// Routing the verb through the session is what fixed a drop that reached no peer, but a
+    /// single-player game has no session, and refusing there would take away the way an
+    /// operator stages a target BEFORE the pair is up — which is exactly when they want to.
+    /// So the fallback is deliberate, and the reply says which of the two paths ran rather
+    /// than letting the caller assume it replicated.
+    /// </summary>
     [Fact]
-    public void DropItemGoesThroughTheSessionRatherThanTheCheatChannel()
+    public void DropItemFallsBackToTheCheatOnlyWhenThereIsNoSession()
     {
         (CoopCommandDispatcher dispatcher, CheatBridge bridge, SessionManager manager) = NewDispatcher();
         using (manager)
         {
             Type(dispatcher, "dropitem g_w_blstrpstl001");
+
+            CheatRequest request = Assert.Single(bridge.Requests);
+            Assert.Equal(CheatKinds.DropItem, request.Kind);
+            Assert.Equal("g_w_blstrpstl001", request.Text);
+        }
+    }
+
+    /// <summary>
+    /// The by-id form has no such fallback, and must not invent one. `CreateItemOnFloor`
+    /// takes a blueprint NAME — there is nothing it could do with an object id — so a
+    /// sessionless `dropitem 0x131` has to refuse rather than spawn something arbitrary.
+    /// </summary>
+    [Fact]
+    public void ADropByObjectIdNeverFallsBackToASpawn()
+    {
+        (CoopCommandDispatcher dispatcher, CheatBridge bridge, SessionManager manager) = NewDispatcher();
+        using (manager)
+        {
+            Type(dispatcher, "dropitem 0x131");
 
             Assert.Empty(bridge.Requests);
         }

@@ -16,12 +16,20 @@ public sealed class AgentDashboard(
     /// <summary>
     /// What the D key drops, cycling. KOTOR 1 has no native drop-item UI, so the demo
     /// conjures well-known blueprints at the player's feet instead.
+    ///
+    /// ⚠ EVERY ONE OF THESE MUST EXIST IN THE INSTALL, and the check is not the one you would
+    /// expect: `CreateItemOnFloor` 0x00547F60 never tests whether the template loaded
+    /// (docs/research/item-identity.md §10), so a resref with a typo spawns a real but EMPTY
+    /// item and reports success. All three below were confirmed present in the GOG build's
+    /// chitin.key with tools/kotorfiles.py. The neighbouring `g_w_blstrpstl01` — one zero
+    /// short — is NOT a blueprint, and a live session spent an afternoon poking the nameless
+    /// body it produced.
     /// </summary>
     private static readonly string[] DropCycle =
     [
-        "g_w_lghtsbr01",   // blue lightsaber
-        "g_w_blstrpstl001", // blaster pistol
-        "g_i_medeqpmnt01", // medpac
+        "g_w_lghtsbr01",    // blue lightsaber
+        "g_w_blstrpstl001", // blaster pistol  (NOT ...pstl01 — that one does not exist)
+        "g_i_medeqpmnt01",  // medpac
     ];
 
     private int _dropIndex;

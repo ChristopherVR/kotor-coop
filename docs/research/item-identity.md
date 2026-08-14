@@ -414,16 +414,90 @@ that will usually resolve, so the mistake would be silent.
 
 ---
 
-## 10. NEEDS-LIVE
+## 10. `CreateItemOnFloor` does not check that the blueprint exists (2026-08-15)
 
-**Still nothing in this document has been measured in a running game.** What changed is that
-it now *can* be, without a human at the controls. In order of what would invalidate the most:
+The first rig run of §9's harness proved the writer and then hit three walls. All three turned
+out to be one engine fact.
 
-1. **The apply lands.** `setitem` on the sender, `dropitem 0x<id>`, then read the receiver.
-   Three witnesses have to agree: the sender's `setitem` answer, the receiver's plugin log
-   line `item slot N: identity applied to 0xID — asked for (...), item now reads (...)`, and
-   the receiver's own `item 0x<newId>`. `identity SKIPPED for 0xID — <reason>` means the
-   resolve refused and now names why.
+**VERIFIED.** `CreateItemOnFloor` `0x00547F60` calls `CSWSItem::LoadFromTemplate` `0x005608B0`
+at `0x0054806B` and **never tests its result**. The next instruction reloads an unrelated
+stack slot; the item is added to the area at `0x005480A8` and its object id returned at
+`0x005480AF` regardless. A resref naming no blueprint therefore produces a live, addressable,
+perfectly valid `CSWSItem` — carrying nothing but its constructor's defaults.
+
+From `CSWSItem::Constructor` `0x005530A0`, which is the whole profile of such a body:
+
+| Field | Value | Site |
+| --- | --- | --- |
+| Tag `+0x28` | **empty** — never written | (absent) |
+| Charges `+0x258` | **50** | `0x00553189` `mov dword [esi+0x258], 0x32` |
+| MaxCharges `+0x25C` | **uninitialised heap** | no writer — see below |
+| StackSize `+0x28C` | 1 | `0x005531CD` |
+| Upgrades `+0x294` | 0 | `0x005531BA` |
+| BaseItem `+0x0C` | 30 | `CSWItem::Constructor` `0x005B466B` — a real row, so useless as a tell |
+
+`tools/fieldwrites.py 0x25C` lists 23 writers image-wide and exactly two inside `CSWSItem`:
+`LoadDataFromGff` `0x0056004E` and `CopyItem` `0x0055DB0F`. **The constructor is not among
+them.** So MaxCharges on a template-less item is whatever the allocator handed over.
+
+That is precisely what the rig saw. A drop of `g_w_blstrpstl01` — a typo; the real blueprints
+are `g_w_blstrpstl001`..`010` and `020` — produced object `0x131` reading `<no tag>`,
+`charges 50/1768092`, stack 1, upgrades 0. Every field matches the table above.
+
+### 10.1 What each blocker actually was
+
+- **"A spawned ground item has no tag, so it cannot be re-sent."** True, and only for this
+  reason: the wire carries a blueprint name, the only name a live `CSWSItem` keeps is its Tag
+  (§8.2), and a body built from no template has none. A body built from a REAL template does
+  have one. Fixed properly either way: `KotorGameBridge.TryGetSpawnedItemResref` recovers the
+  resref from the item slot the agent itself wrote it into, which is better evidence than the
+  tag proxy ever was.
+- **`charges 50/1768092`.** Not a wrong offset. `+0x258` and `+0x25C` are confirmed by their
+  own GFF labels — `SaveItem` `0x0055CCEE`+ writes `byte [esi+0x258]` under `"Charges"`
+  (`0x748F88`) and `byte [esi+0x25C]` under `"MaxCharges"` (`0x748F7C`). The value is
+  uninitialised memory, exactly as the constructor predicts.
+- **`items` printed nothing.** Unrelated to all of the above, and a plain plumbing bug: the
+  dispatcher's replies went only to `Console.WriteLine`, which in a `demo.ps1` run is a
+  visible window with no reader and no file behind it. `CoopCommandDispatcher.Log` is now
+  wired to `AgentDashboard.Note`, the same hook `SessionManager.Log` uses.
+
+### 10.2 What changed because of it
+
+- **A garbage MaxCharges is no longer clamped to 255.** Clamping turned memory nobody wrote
+  into a plausible maximum and shipped it to a peer. Since both fields persist as GFF *bytes*,
+  anything above 255 is provably not a value the engine meant, so it is treated as unread —
+  and repaired with **the engine's own default**: at `0x00560016` the loader passes the
+  Charges it has just read as the default for MaxCharges. Every base-game item takes that
+  path, because **none of the 557 `.uti` blueprints declares a MaxCharges field at all.**
+  (Surveyed with `tools/kotorfiles.py`: 557 item blueprints, 0 with an empty Tag, 26 carrying
+  real Charges — the droid shields and utility devices, all `Charges 10`.)
+- **Both spawn paths now say when a template did not load.** `ItemController` logs
+  `spawned 0xID but it has NO TAG and 50 charges — the blueprint almost certainly does not
+  exist`, and the `dropitem` cheat answers `'<resref>' is not a blueprint here - 0xID spawned
+  EMPTY`. The old guard (`did not spawn (failure N; wrong resref?)`) could never fire for a
+  typo, because the engine does not fail. An empty Tag is a safe tell: zero of the 557
+  base-game blueprints have one.
+
+---
+
+## 11. NEEDS-LIVE
+
+**The writer is PROVEN LIVE (2026-08-15)**, with two independent witnesses:
+`setitem 0x131 stack=20 charges=3 max=50 upgrades=0x5` answered
+`0x131: stk 20 chg 3/50 upg 5 bits 18`, the plugin's own read-back logged
+`stack 1->20, charges 50/1768092->3/50, upgrades 0x0->0x5`, and the agent's external
+`item 0x131` — a different process, a different reader — agreed. So `ApplyItemIdentity`
+writes all five fields into a live `CSWSItem` and they read back. That was item 1's first
+half and the thing nothing had ever observed.
+
+**The wire half is still unmeasured.** In order of what would invalidate the most:
+
+1. **The apply lands ON A PEER.** `setitem` on the sender, `dropitem 0x<id>`, then read the
+   receiver. Three witnesses have to agree: the sender's `setitem` answer, the receiver's
+   plugin log line `item slot N: identity applied to 0xID — asked for (...), item now reads
+   (...)`, and the receiver's own `item 0x<newId>`. `identity SKIPPED for 0xID — <reason>`
+   means the resolve refused and now names why. ⚠ Pick a target with a REAL blueprint name —
+   §10 is what happens otherwise.
 2. **The read is reading an item.** `items` on a loaded save should list items whose stack
    sizes and charges match the inventory screen. The specific risk is the sweep handing back
    an address whose `+0x14` is an id but which is not the `CSWSItem` base; the vtable+id
@@ -442,3 +516,10 @@ it now *can* be, without a human at the controls. In order of what would invalid
    change must report "plugin shared block not found" rather than attaching and writing the
    wrong offsets. That is the intended behaviour of the bump (40 → 41 for the four `setitem`
    fields at `0x33B0..0x33C0`), and it is worth seeing once.
+7. **A body the plugin spawned can be re-sent.** `dropitem 0x<theReceiversCopy>` on the
+   receiving instance. This is the loop closing on itself and it is the case §10.1 fixed:
+   the resref comes from the item slot rather than from the item, so it works even for a
+   body whose Tag the engine never filled in.
+8. **A bad blueprint is caught.** `dropitem g_w_notathing` should answer
+   `'g_w_notathing' is not a blueprint here - 0xID spawned EMPTY` rather than reporting a
+   successful drop. Cheap to run, and it is the check that would have saved the first pass.

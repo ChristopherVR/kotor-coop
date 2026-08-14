@@ -898,6 +898,14 @@ internal static class Program
         // --log.
         manager.Log = dashboard.Note;
 
+        // ⚠ And so does every CONSOLE REPLY, for exactly the same reason. The dispatcher's
+        // answers — `items` rows, a drop's refusal, a cheat's verdict — went only to
+        // Console.WriteLine, which in a demo.ps1 run is a visible window with no reader and
+        // no file behind it. That made every multi-line answer unusable to an unattended
+        // check: the in-game reply field is 96 bytes and holds one line, so the log was the
+        // only place the rest could have gone, and nothing was sending it there.
+        dispatcher.Log = dashboard.Note;
+
         await dashboard.RunAsync(cts.Token).ConfigureAwait(false);
         await dispatchTask.ConfigureAwait(false);
 
