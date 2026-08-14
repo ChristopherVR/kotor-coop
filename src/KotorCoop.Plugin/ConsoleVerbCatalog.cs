@@ -63,6 +63,11 @@ internal static class ConsoleVerbCatalog
         ("dropitem", "dropitem <resref>"),
         ("cheats", "cheats"),
 
+        // The staging instrument, spelled in full and with no alias. Completion offering it
+        // is fine — discoverability is this list's job — but nothing about it is short, and
+        // the usage says what it costs.
+        ("moviewarp", "moviewarp <module> <movie...> | queue <movie...> | clear | show  (the plugin stops for the movie)"),
+
         // Completable, but NEVER recorded: ConsoleHistoryRing drops password/pw lines, so
         // completion may offer the verb while recall can never replay the secret.
         ("password", "password <pw>"),

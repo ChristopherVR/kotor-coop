@@ -205,6 +205,62 @@ public class CoopCheatDispatchTests
         }
     }
 
+    /// <summary>
+    /// The staging instrument reaches the plugin as a cheat with its mode and its movie
+    /// names — and, in the warp form, as ONE request rather than two. The travel half is
+    /// deliberately withheld until the plugin has answered: the plugin's frame takes the
+    /// travel branch and returns before it reaches the cheat channel, so filing both together
+    /// would warp with no movie and leave the cinematic armed for the next transition.
+    /// </summary>
+    [Fact]
+    public void StagingACinematicFilesTheMoviesAndWaitsBeforeTravelling()
+    {
+        (CoopCommandDispatcher dispatcher, CheatBridge bridge, SessionManager manager) = NewDispatcher();
+        using (manager)
+        {
+            Type(dispatcher, "moviewarp tar_m02af 01c 01f");
+
+            CheatRequest request = Assert.Single(bridge.Requests);
+            Assert.Equal(CheatKinds.StageMovie, request.Kind);
+            Assert.Equal(StageMovieModes.WarpWithMovies, request.Amount);
+            Assert.Equal("01c,01f", request.Text);
+        }
+    }
+
+    [Theory]
+    [InlineData("moviewarp queue 01c", StageMovieModes.QueueOnly, "01c")]
+    [InlineData("moviewarp clear", StageMovieModes.Clear, "")]
+    [InlineData("moviewarp show", StageMovieModes.Show, "")]
+    public void TheOtherStagingModesAreOneRequestEach(string line, int mode, string text)
+    {
+        (CoopCommandDispatcher dispatcher, CheatBridge bridge, SessionManager manager) = NewDispatcher();
+        using (manager)
+        {
+            Type(dispatcher, line);
+
+            CheatRequest request = Assert.Single(bridge.Requests);
+            Assert.Equal(CheatKinds.StageMovie, request.Kind);
+            Assert.Equal(mode, request.Amount);
+            Assert.Equal(text, request.Text);
+        }
+    }
+
+    /// <summary>A staging line the parser refuses must not become an engine call — the same
+    /// demand every other cheat is held to, and more so for this one.</summary>
+    [Theory]
+    [InlineData("moviewarp")]
+    [InlineData("moviewarp tar_m02af")]
+    [InlineData("moviewarp tar_m02af 01c 01c")]
+    public void ARefusedStagingLineNeverReachesThePlugin(string line)
+    {
+        (CoopCommandDispatcher dispatcher, CheatBridge bridge, SessionManager manager) = NewDispatcher();
+        using (manager)
+        {
+            Type(dispatcher, line);
+            Assert.Empty(bridge.Requests);
+        }
+    }
+
     [Fact]
     public void WithoutAPluginNothingIsFiled()
     {

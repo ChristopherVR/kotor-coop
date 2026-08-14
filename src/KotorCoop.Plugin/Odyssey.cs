@@ -4850,6 +4850,119 @@ internal static unsafe class Odyssey
         return written;
     }
 
+    // ---- cinematics: WRITING the transition queue (the staging instrument) -----
+    //
+    // Everything above this line is read-only. The two calls below are the exception, and
+    // they exist for one purpose: to let a live test stage a movie-carrying module
+    // transition with nobody at the controls. See docs/research/cinematics.md §7.
+    //
+    // Read the consequence before calling either of them. A queued transition movie is
+    // played by CServerExoAppInternal::StartNewModule 0x004BA920 (via PlayLoadModuleMovies
+    // 0x005EDB20), which parks the MAIN THREAD inside WaitForMovie 0x005F6F20 for the length
+    // of the film. Neither frame hook fires in that window, so nothing this plugin does
+    // happens during it — including the pre-store flush that keeps plugin-spawned bodies out
+    // of the saved module. These are therefore guarded by MovieStaging, not called directly.
+
+    /// <summary>
+    /// CClientExoApp::AddMoveToModuleMovie 0x005EDB50 — <c>__thiscall</c>, ONE argument
+    /// (<c>CExoString*</c>), returning the engine's own verdict.
+    ///
+    /// Argument size checked against the callee's own <c>ret</c> per docs/research/engine-api.md:
+    /// 0x005EDB50 is the usual <c>mov ecx,[ecx+4]; jmp</c> adjustor thunk onto 0x006027A0,
+    /// which is <c>mov edx,[esp+4]; lea eax,[ecx+0x2D8]; push eax; push edx;
+    /// call 0x005FBBF0; <b>ret 4</b></c> — one 4-byte argument, and EAX falls straight out of
+    /// the callee, which is why this is declared as returning <c>int</c> rather than void.
+    ///
+    /// That callee is `CClientExoAppInternal::AddMovieToExoArrayList 0x005FBBF0`, and its
+    /// return value is worth having: it refuses an empty name (`CExoString::operator!=` against
+    /// "" at 0x005FBC25, returning 0 at 0x005FBF39) and, for a name containing no <c>:</c>,
+    /// builds <c>MOVIES:%s</c> (0x0073D7D8) and tries to open the file — returning 0 and adding
+    /// NOTHING when it cannot. So a name this build has no <c>.bik</c> for is refused by the
+    /// engine itself, and it tells us so. (That upgrades cinematics.md's INFERRED note about
+    /// this guard to VERIFIED, and explains why the retail game gets away with referencing
+    /// movies it does not ship.) The add itself is
+    /// `CExoArrayList&lt;CExoString&gt;::AddUnique 0x005F7C10`, which copies the string — so
+    /// the temporary below can be destroyed immediately.
+    /// </summary>
+    private static readonly delegate* unmanaged[Thiscall]<nint, byte*, int> AddMoveToModuleMovieFn =
+        (delegate* unmanaged[Thiscall]<nint, byte*, int>)0x005EDB50;
+
+    /// <summary>
+    /// CClientExoApp::RemoveMoveToModuleMovies 0x005EE380 — <c>__thiscall</c>, NO arguments
+    /// (the whole function is <c>mov eax,[ecx+4]; mov [eax+0x2DC],0; ret</c> — a bare
+    /// <c>ret</c>, so the argument size is 0). It zeroes the array list's SIZE field, which is
+    /// exactly what the engine itself does on the way out of WaitForMovie.
+    /// </summary>
+    private static readonly delegate* unmanaged[Thiscall]<nint, void> RemoveMoveToModuleMoviesFn =
+        (delegate* unmanaged[Thiscall]<nint, void>)0x005EE380;
+
+    /// <summary>True once the client application object exists. Cheaper and earlier than
+    /// <see cref="HasServer"/>: the client is what owns the movie player and the transition
+    /// movie queue.</summary>
+    public static bool HasClient => GetClient() != 0;
+
+    /// <summary>
+    /// Appends one movie name to the engine's move-to-module queue, and returns whether the
+    /// ENGINE accepted it — not whether we asked. A refusal means the name is empty or this
+    /// install has no such file, and reporting our own optimism instead would produce a
+    /// transition with no cinematic and a log claiming otherwise.
+    ///
+    /// The <c>CExoString</c> is built by the engine's own <c>CStrConstructor 0x005E5A90</c>
+    /// and freed by <c>Destructor_2 0x005E5C20</c>, deliberately rather than being assembled
+    /// by hand: a hand-built one has to get the length convention right, and a CExoString's
+    /// length INCLUDES the terminating null — the trap that has produced three separate bugs
+    /// in this codebase already.
+    ///
+    /// MAIN THREAD ONLY.
+    /// </summary>
+    public static bool QueueTransitionMovie(byte* ascii, int length)
+    {
+        nint client = GetClient();
+        if (client == 0 || ascii == null || length <= 0 || length > 16)
+        {
+            return false;
+        }
+
+        byte* name = stackalloc byte[24];
+        for (int i = 0; i < length; i++)
+        {
+            name[i] = ascii[i];
+        }
+
+        name[length] = 0;
+
+        byte* text = stackalloc byte[8];
+        for (int i = 0; i < 8; i++)
+        {
+            text[i] = 0;
+        }
+
+        CExoStringCtorFn(text, name);
+        int accepted = AddMoveToModuleMovieFn(client, text);
+        CExoStringDtorFn(text);
+
+        return accepted != 0;
+    }
+
+    /// <summary>
+    /// Empties the transition movie queue. The way out of a staging run that is not going to
+    /// happen — an armed queue left behind would attach a cinematic to whatever transition
+    /// came next, hours later, with nothing in the log to connect the two.
+    ///
+    /// MAIN THREAD ONLY.
+    /// </summary>
+    public static bool ClearQueuedTransitionMovies()
+    {
+        nint client = GetClient();
+        if (client == 0)
+        {
+            return false;
+        }
+
+        RemoveMoveToModuleMoviesFn(client);
+        return true;
+    }
+
     /// <summary>The player's own pause toggle. See EngineGlobals on the agent side; the
     /// shared-pause mirror uses this same bit so either player can pause both worlds.</summary>
     public const int PauseReasonPlayer = 0x01;

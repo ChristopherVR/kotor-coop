@@ -373,3 +373,22 @@ still cannot exercise the apply: the ground body genuinely IS object `0x131`
 ground-spawned item body. The refusal is now VISIBLE, which is the part that was broken; the
 read path needs its own look, ideally against an inventory item with real charges/upgrades
 rather than a freshly spawned stock one.
+
+### Ready to run, never run — a transition WITH a movie
+
+The pre-store-flush hypothesis is still open, and it now has an instrument instead of needing
+a human to play the escape-pod conversation. `moviewarp` stages a cinematic onto a module
+transition through the engine's own `move_to_module_movies` queue; the full procedure, the
+PASS/FAIL lines and the baked-phantom check are `docs/research/cinematics.md` §7.
+
+Two runs, and **only the second one tests the hypothesis** (§7.4 — the first is
+plugin-initiated, so the flush has already finished before the movie starts):
+
+```powershell
+pwsh tools\blockpoke.ps1 -ProcId <host pid> console 'moviewarp tar_m03aa 01c'   # run A: the lever
+pwsh tools\blockpoke.ps1 -ProcId <host pid> console 'moviewarp queue 01c'       # run B: then a DOOR
+pwsh tools\blockpoke.ps1 -ProcId <host pid> console 'moviewarp clear'           # always, afterwards
+```
+
+`01c` is 6.4 MB and present in both installs (61 identical `.bik` each, checked), so a stall
+under ~6 s means no movie played — a bare module load already measured 5.1-5.3 s here.

@@ -36,6 +36,10 @@ public static class CheatKinds
     public const uint Slay = 4;
     public const uint Teleport = 5;
     public const uint DropItem = 6;
+
+    /// <summary>Stage a cinematic onto a module transition. <c>Amount</c> is the mode
+    /// (<c>StageMovieModes</c>) and <c>Text</c> the comma-separated movie names.</summary>
+    public const uint StageMovie = 7;
 }
 
 /// <summary>The plugin's verdicts, mirroring <c>SharedBlock.CheatStatus*</c>.</summary>

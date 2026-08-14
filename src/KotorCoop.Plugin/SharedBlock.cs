@@ -1156,6 +1156,19 @@ internal struct SharedBlock
     /// <summary>Put a blueprint on the floor at the local player's feet.</summary>
     public const uint CheatKindDropItem = 6;
 
+    /// <summary>
+    /// Stage a cinematic onto a module transition — the one verb here that is a TEST
+    /// INSTRUMENT rather than a convenience, because the thing it arranges (a movie playing
+    /// across a transition) is the window in which this plugin is not running at all.
+    /// <see cref="OffsetCheatAmount"/> carries the mode (<c>MovieStaging.Mode*</c>) and
+    /// <see cref="OffsetCheatText"/> the comma-separated movie names.
+    ///
+    /// A NEW KIND NEEDS NO VERSION BUMP: the fields it uses all exist, and a plugin older
+    /// than this answers <c>unknown cheat kind 7</c> — which is the correct degradation, out
+    /// loud, rather than a silent no-op.
+    /// </summary>
+    public const uint CheatKindStageMovie = 7;
+
     /// <summary>The request was carried out here.</summary>
     public const int CheatStatusApplied = 1;
 

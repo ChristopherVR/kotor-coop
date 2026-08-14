@@ -35,6 +35,7 @@
     <Compile Include="..\..\src\KotorCoop.Plugin\JournalTags.cs" Link="Plugin\JournalTags.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\SpectateCycle.cs" Link="Plugin\SpectateCycle.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\CheatAuthority.cs" Link="Plugin\CheatAuthority.cs" />
+    <Compile Include="..\..\src\KotorCoop.Plugin\MovieStaging.cs" Link="Plugin\MovieStaging.cs" />
   </ItemGroup>
 
   <ItemGroup>
