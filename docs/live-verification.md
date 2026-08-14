@@ -208,3 +208,76 @@ Logs land in `%TEMP%\kotorcoop-demo\agent1.log` / `agent2.log` and
 
 When done: `pwsh tools\demo.ps1 -Stop`. Report anything that didn't fire and I'll fix the
 offset/coord; everything here degrades safe, so a miss is a tuning note, not a crash.
+
+## Integration live pass (2026-08-15) — six merged workstreams on the rig
+
+Run against `integration/honest-limitations` with the plugin freshly installed into BOTH
+game dirs and the agent rebuilt (block 40). Both instances loaded save 1 into `END_M01AA`
+unattended; nothing below needed a human at the controls.
+
+**Enabling change:** `tools/blockpoke.ps1 console '<line>'` was added, writing the same
+console channel (`SharedBlock` 0x9F4/0x9F8, reply 0xA58/0xA5C) the in-game `~` console
+writes. Injected keystrokes never reach this game, so before this every console-routed
+feature — `netsim`, the staging cheats, `status` — was verifiable by a human and nobody
+else. It waits on a reply-serial CHANGE, not on non-empty text, because the reply field
+holds the previous answer until the next lands.
+
+### Confirmed live
+
+- **Block version 40 is what the running plugin publishes**, and the agent finds it. The
+  merge-time reconciliation (item identity took 39, cheats moved to 40, signature `28`) is
+  correct on a real process.
+- **Cinematic instrumentation is live and reads the engine correctly.** The control line
+  `cinematic: a movie is playing with no world up (the main menu's own loop)` appeared
+  exactly once on each instance. It also caught two **5.3 s and 5.1 s main-thread stalls
+  while in a world** during save load, with no transition movie queued — five seconds in
+  which no frame callback ran at all.
+- **The pre-store flush is NOT swallowed on a movie-less transition.** Host, before the
+  module was stored: `destroyed phantom 0x136 (slot 0)` and `destroyed item body 0x131`,
+  then `epoch: world unloading`. Client flushed its item body and three materialised
+  enemies the same way. ⚠ **This does not close the hypothesis** — this transition had
+  `0 transition movie(s)`. The risk case is a transition WITH a movie (the escape-pod /
+  stunt-module chain), which still needs the real trigger.
+- **Reconnect: full blackout.** `netsim blackout 10` on the client → host dropped the peer,
+  client rejoined **as peer 2, the same id**, one phantom (`0x132`) re-equipped with clothes
+  and weapon, never two bodies. Peer-id preservation across an outage is the load-bearing
+  fix; a regression here double-banks the returning player's damage.
+- **Reconnect: the half-open link.** `netsim blackout 15 out` reproduced the exact ghost
+  signature — host expired the peer at 07:39:17 while the client still believed it was
+  connected, then the client noticed at 07:39:22 and rejoined as peer 2. Before the fix that
+  state was permanent, because the host kept ponging the ghost's pings. **This is the case
+  no process-kill test can produce.**
+- **0 malformed packets** across two blackouts and ~650 injected drops; `netsim off` returned
+  `netsim off (clean link)` both times.
+- **Cheat channel end to end**, and the guards say what they SAW rather than claiming
+  success: `god 1` on the Endar Spire command deck answered `god was already ON` (the
+  `k_pend_area01` min-1-hp pin), and `topup 5` answered `the engine refused it: the player
+  reports 0 maximum hit points` — a transient transition-window read, refused rather than
+  written as garbage.
+- **Travel together survived** `END_M01AA` → `tar_m03aa` with both agents and both games up,
+  no access violation. The only first-chance exception is `0x406D1388` (the thread-naming
+  marker) in a system DLL, not ours.
+
+### Failed live — `slay` from a client is silently dropped
+
+The client answers `slaying the nearest enemy 0x4 (14.4m away)` and the plugin logs
+`cheat: 0x4 is the host's; sent the kill to them (status 2)` — the authority decision is
+RIGHT, the client correctly refuses to kill an enemy it does not own. But the kill never
+arrives: the host plugin log has no entry at all after the arrival lines, there is no agent
+`*` event for it on either side, and the target is still at exactly 14.4 m after two
+attempts. The routing reports a success it has not earned, which is worse than refusing.
+
+Reproduce: `blockpoke -ProcId <client> console 'slay'` twice, then read the host log.
+Suspects, in order: the client plugin writes the request but the agent never forwards it;
+or it is forwarded and the host drops it because the ledger was reset for the new epoch
+(`combat: peer-damage ledger reset for epoch A3A42907` fired on arrival).
+
+### Not verified this pass — item identity apply
+
+`drop <resref>` replicates the item to both sides and correctly logs NO identity (a blueprint
+drop has no live item to read identity from, and unknown stays unknown rather than being
+faked as stock — the intended fail-safe). Exercising the apply path needs the by-object-id
+form, and `#<hex>` through the drop FILE produced nothing. The blocker is a harness gap:
+`AgentDashboard._lastDropNote` renders only in the dashboard UI, never to the log file, so an
+unattended run cannot tell "refused, and here is why" from "nothing happened". Fix that first,
+then re-run with an item carrying real charges/upgrades.

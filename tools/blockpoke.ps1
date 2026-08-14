@@ -12,10 +12,17 @@
 #   pwsh tools\blockpoke.ps1 -ProcId 1234 cheat god 1
 #   pwsh tools\blockpoke.ps1 -ProcId 1234 cheat slay 42   # decimal object id
 #   pwsh tools\blockpoke.ps1 -ProcId 1234 cheat           # read the answer + detail
+#   pwsh tools\blockpoke.ps1 -ProcId 1234 console 'netsim blackout 10'
+#   pwsh tools\blockpoke.ps1 -ProcId 1234 console         # read the latest agent reply
+#
+# The `console` verb writes the same agent<-plugin channel the in-game ~ console writes,
+# which is the ONLY way to drive a co-op verb unattended: injected keystrokes never reach
+# this game (docs/live-verification.md), so without this every console-routed feature —
+# netsim, the staging cheats, status — was live-testable by a human and nobody else.
 param(
     [string]$ProcessName = 'swkotor',
     [int]$ProcId = 0,
-    [Parameter(Position = 0)][ValidateSet('state', 'travel', 'journal', 'pause', 'browser', 'death', 'hitphantom', 'combat', 'talk', 'walk', 'dialogue', 'attack', 'encounters', 'cheat')]
+    [Parameter(Position = 0)][ValidateSet('state', 'travel', 'journal', 'pause', 'browser', 'death', 'hitphantom', 'combat', 'talk', 'walk', 'dialogue', 'attack', 'encounters', 'cheat', 'console')]
     [string]$Command = 'state',
     [Parameter(Position = 1)][string]$Arg1 = '',
     [Parameter(Position = 2)][int]$Arg2 = 0
@@ -134,6 +141,31 @@ switch ($Command) {
         "  suppress: gameOver {0}  swap {1}" -f (U32 0x102C), (U32 0x1030)
         "  revive:   serial {0}  applied {1}  status {2}  hp {3}" -f `
             (U32 0x1034), (U32 0x1038), (U32 0x103C), (U32 0x1040)
+    }
+    'console' {
+        # Bump the serial LAST: the agent polls it and reads the text behind it, so a
+        # half-written command must never be visible under a serial that says "ready".
+        if ($Arg1.Length -gt 0) {
+            $before = U32 0xA58
+            WAscii 0x9F8 $Arg1 96
+            WU32 0x9F4 ((U32 0x9F4) + 1)
+
+            # Wait for a REPLY SERIAL CHANGE rather than for non-empty text: the reply field
+            # holds the previous answer until the next one lands, so reading text alone
+            # cheerfully reports the last command's result as if it were this one's.
+            $deadline = (Get-Date).AddSeconds(6)
+            while ((Get-Date) -lt $deadline -and (U32 0xA58) -eq $before) { Start-Sleep -Milliseconds 100 }
+
+            if ((U32 0xA58) -eq $before) {
+                "  console: sent '{0}' (serial {1}) - NO REPLY within 6s" -f $Arg1, (U32 0x9F4)
+            } else {
+                "  console: sent '{0}' (serial {1})" -f $Arg1, (U32 0x9F4)
+            }
+        }
+
+        "  console: cmd serial {0}  reply serial {1}" -f (U32 0x9F4), (U32 0xA58)
+        "  last command: '{0}'" -f (Ascii 0x9F8 96)
+        "  reply:        '{0}'" -f (Ascii 0xA5C 96)
     }
     'cheat' {
         # The staging cheats, without needing the console or a keyboard — which is the whole
