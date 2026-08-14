@@ -41,6 +41,21 @@ public sealed class CoopClient : ICoopSession
 
     private PlayerState _localState = PlayerState.Empty;
     private uint _localPeerId;
+
+    /// <summary>
+    /// The id this client was last admitted under. Unlike <see cref="_localPeerId"/> it is
+    /// NOT cleared when the link drops, and that is the point: everything the player does
+    /// during an outage — a door opened, a quest advanced, an item picked up — still has to be
+    /// queued under an identity so it can be delivered when the link returns. Gated on
+    /// "have we ever been admitted", because the ops are keyed by (origin, sequence) and an
+    /// origin of zero would collide with the next peer to make one up.
+    ///
+    /// Safe now that a returning peer reclaims its own id (CoopHost's retired table); before
+    /// that, the host would have dealt a new id and these ops would arrive under the old one.
+    /// The host does not key world state on the origin — it is a dedup key — so even then
+    /// nothing would have been misapplied, but the identity is now genuinely stable.
+    /// </summary>
+    private uint _sessionPeerId;
     private uint _sequence;
     private long _lastHelloMs;
     private long _lastPingMs;
@@ -52,6 +67,35 @@ public sealed class CoopClient : ICoopSession
     private double _roundTripMs;
     private string _rejectReason = string.Empty;
     private bool _reconnecting;
+
+    /// <summary>
+    /// Set on every Welcome, cleared once the three world stores have been re-requested.
+    ///
+    /// ⚠ THE VERSION TRIPWIRE ALONE CANNOT BE TRUSTED ACROSS AN OUTAGE. Each store's version
+    /// is a count of local changes, not a fingerprint of its contents, so two sets that
+    /// diverged by the same NUMBER of changes compare equal and no resync is ever requested —
+    /// permanent silent divergence. Ordinarily the client's own ops bump the host and break
+    /// the tie, but an outage is exactly the window in which both ends change independently,
+    /// and a client change the host already holds at that value bumps nothing. So a
+    /// reconnection asks for all three snapshots unconditionally instead of waiting to be
+    /// told it needs them.
+    /// </summary>
+    private bool _resyncOnConnect;
+
+    /// <summary>
+    /// When the host's world snapshot stopped listing this client, or 0 while it still does.
+    ///
+    /// ⚠ THE ONE-WAY OUTAGE. Silence is the only disconnect signal this client had, and a
+    /// half-open link produces none: if only the UPSTREAM direction fails (a NAT rebinding, a
+    /// firewall that drops one way, an ISP fault), the host stops hearing us and expires the
+    /// slot after five seconds while its broadcasts keep arriving here perfectly. The link
+    /// then recovers, and this client goes on sending state updates for a peer id the host no
+    /// longer knows — every one of which the host drops on the floor. It receives the world,
+    /// renders everyone, and is invisible to all of them, permanently, with nothing in its own
+    /// state that says anything is wrong. The host's snapshot is a complete roster, so "I am
+    /// not in it" is the missing signal, and it is already on the wire.
+    /// </summary>
+    private long _absentFromSnapshotSinceMs;
     private CompatibilityVerdict? _installVerdict;
     private CompatibilityVerdict? _compatibility;
     private WorldDigest _localWorld = WorldDigest.Empty;
@@ -108,6 +152,11 @@ public sealed class CoopClient : ICoopSession
 
     public uint LocalPeerId => _localPeerId;
 
+    /// <summary>This client's transport fault injector. Arming it partitions this one player
+    /// and leaves the rest of the session running, which is the ordinary "one player's
+    /// router blipped" case.</summary>
+    public NetworkSim Network => _channel.Sim;
+
     public bool IsConnected => _localPeerId != 0;
 
     public string LocalName => _settings.PlayerName;
@@ -119,7 +168,7 @@ public sealed class CoopClient : ICoopSession
     public uint DropItem(
         string resref, string module, Vector3f position, ItemIdentity identity = default)
     {
-        if (_localPeerId == 0)
+        if (_sessionPeerId == 0)
         {
             return 0;
         }
@@ -127,7 +176,7 @@ public sealed class CoopClient : ICoopSession
         uint itemId;
         lock (_gate)
         {
-            itemId = (_localPeerId << 16) | (_nextItemSequence++ & 0xFFFF);
+            itemId = (_sessionPeerId << 16) | (_nextItemSequence++ & 0xFFFF);
         }
 
         GroundItem item = new(itemId, resref, module, position, identity);
@@ -139,7 +188,13 @@ public sealed class CoopClient : ICoopSession
             return 0;
         }
 
-        SendItemOp(_itemSender.Enqueue(_localPeerId, ItemOpKind.Drop, item, SessionClock.NowMs));
+        ItemOpPacket op = _itemSender.Enqueue(_sessionPeerId, ItemOpKind.Drop, item, SessionClock.NowMs);
+
+        if (IsConnected)
+        {
+            SendItemOp(op);
+        }
+
         return itemId;
     }
 
@@ -461,7 +516,9 @@ public sealed class CoopClient : ICoopSession
             return;
         }
 
-        _lootSender.Enqueue(_localPeerId, containerId, itemId, SessionClock.NowMs);
+        // Queued under the last admitted identity so a chest emptied during an outage still
+        // reaches the host afterwards — see SetFlag.
+        _lootSender.Enqueue(_sessionPeerId, containerId, itemId, SessionClock.NowMs);
     }
 
     // ---- phantom damage (combat participation) -----------------------------------
@@ -630,23 +687,34 @@ public sealed class CoopClient : ICoopSession
             return;
         }
 
-        if (_localPeerId == 0)
+        // Queued while disconnected too — see SetFlag.
+        if (_sessionPeerId == 0)
         {
             return;
         }
 
-        SendJournalOp(_journalSender.Enqueue(_localPeerId, questTag, state, SessionClock.NowMs));
+        JournalOpPacket op = _journalSender.Enqueue(_sessionPeerId, questTag, state, SessionClock.NowMs);
+
+        if (IsConnected)
+        {
+            SendJournalOp(op);
+        }
     }
 
     public void RemoveItem(uint itemId)
     {
-        if (!Items.Remove(itemId) || _localPeerId == 0)
+        if (!Items.Remove(itemId) || _sessionPeerId == 0)
         {
             return;
         }
 
         GroundItem tombstone = new(itemId, string.Empty, string.Empty, Vector3f.Zero);
-        SendItemOp(_itemSender.Enqueue(_localPeerId, ItemOpKind.Remove, tombstone, SessionClock.NowMs));
+        ItemOpPacket op = _itemSender.Enqueue(_sessionPeerId, ItemOpKind.Remove, tombstone, SessionClock.NowMs);
+
+        if (IsConnected)
+        {
+            SendItemOp(op);
+        }
     }
 
     public void PublishLocalState(in PlayerState state)
@@ -665,13 +733,21 @@ public sealed class CoopClient : ICoopSession
         // trip; the host's authoritative version will confirm or correct it.
         Flags.Set(flagId, value);
 
-        if (_localPeerId == 0)
+        // ⚠ QUEUED EVEN WHILE THE LINK IS DOWN. The gate used to be _localPeerId, which is
+        // zeroed the moment the host goes quiet — so every world change the player made
+        // during an outage was applied locally and never queued at all, and the reliable
+        // channel that exists to survive exactly this had nothing in it to deliver.
+        if (_sessionPeerId == 0)
         {
             return;
         }
 
-        FlagOpPacket op = _flagSender.Enqueue(_localPeerId, flagId, value, SessionClock.NowMs);
-        SendFlagOp(op);
+        FlagOpPacket op = _flagSender.Enqueue(_sessionPeerId, flagId, value, SessionClock.NowMs);
+
+        if (IsConnected)
+        {
+            SendFlagOp(op);
+        }
     }
 
     public SessionStats GetStats()
@@ -734,23 +810,7 @@ public sealed class CoopClient : ICoopSession
         // "the host restarted" or "the router blipped" recoverable in-game.
         if (IsConnected && _lastInboundMs != 0 && now - _lastInboundMs > _settings.PeerTimeoutMs)
         {
-            _localPeerId = 0;
-            _rejectReason = string.Empty;
-            _reconnecting = true;
-            _lastInboundMs = 0;
-
-            // ⚠ DROP THE CONVERSATION TOKEN. It belongs to a session we are no longer in,
-            // and it is level state the agent re-publishes every tick — so a host that
-            // CRASHES mid-conversation (rather than leaving cleanly) left this client
-            // spectating forever with its own replies disabled. Measured live: the host
-            // was killed mid-conversation and 20 s later the client still read
-            // "remote: active 1". The explicit-disconnect path was already covered; this
-            // is the same hole on the timeout path. The host re-publishes a fresh token
-            // on reconnect, so clearing costs nothing.
-            lock (_gate)
-            {
-                _dialogue = DialogueState.Idle;
-            }
+            ForgetSession();
         }
 
         if (!IsConnected)
@@ -761,6 +821,12 @@ public sealed class CoopClient : ICoopSession
                 SendHello();
             }
 
+            // ⚠ Prune while DOWN as well as while up. This used to sit at the bottom of the
+            // tick, past this early return, so a client whose host vanished kept every peer
+            // it had ever seen frozen at their last position for as long as the outage lasted
+            // — and the agent goes on writing those into the game, so the other player stood
+            // there like a statue rather than disappearing.
+            _buffer.PruneStale(now, _settings.PeerTimeoutMs);
             return;
         }
 
@@ -818,6 +884,43 @@ public sealed class CoopClient : ICoopSession
         }
 
         _buffer.PruneStale(now, _settings.PeerTimeoutMs);
+    }
+
+    /// <summary>
+    /// Drops back to the handshake, keeping everything that is not about this connection.
+    ///
+    /// Reached two ways: the host went silent (the ordinary drop), or the host's roster stops
+    /// listing us while its traffic keeps arriving (the half-open link). Both mean "we are no
+    /// longer a member of this session", and the cure for both is to say Hello again with the
+    /// SAME nonce, which is what makes the host hand back the same peer id and everything
+    /// keyed on it — cumulative damage, the progression ledger, the phantom slot — continue
+    /// rather than start again.
+    ///
+    /// What is deliberately NOT reset: the reliable senders (their ops are world truth still
+    /// owed to the host), the stores (a client's world does not un-happen because a router
+    /// blinked), and the roster/progression levels (stale, but the last thing the host said,
+    /// and applying nothing is worse than applying slightly old truth).
+    /// </summary>
+    private void ForgetSession()
+    {
+        _localPeerId = 0;
+        _rejectReason = string.Empty;
+        _reconnecting = true;
+        _lastInboundMs = 0;
+        _absentFromSnapshotSinceMs = 0;
+
+        // ⚠ DROP THE CONVERSATION TOKEN. It belongs to a session we are no longer in,
+        // and it is level state the agent re-publishes every tick — so a host that
+        // CRASHES mid-conversation (rather than leaving cleanly) left this client
+        // spectating forever with its own replies disabled. Measured live: the host
+        // was killed mid-conversation and 20 s later the client still read
+        // "remote: active 1". The explicit-disconnect path was already covered; this
+        // is the same hole on the timeout path. The host re-publishes a fresh token
+        // on reconnect, so clearing costs nothing.
+        lock (_gate)
+        {
+            _dialogue = DialogueState.Idle;
+        }
     }
 
     private void SendHello()
@@ -1056,9 +1159,21 @@ public sealed class CoopClient : ICoopSession
 
         ReadOnlySpan<byte> span = datagram.Span;
         long now = SessionClock.NowMs;
-        _lastInboundMs = now;
+        PacketType type = PacketCodec.PeekType(span);
 
-        switch (PacketCodec.PeekType(span))
+        // ⚠ NOT EVERY PACKET PROVES WE ARE STILL IN THE SESSION. The liveness clock is the
+        // only thing that notices a dropped link, and a Pong or an op ack is sent by the host
+        // to anyone who asks — member or not. So a client the host has expired (a one-way
+        // outage: our upstream failed, its broadcasts kept arriving) could keep its own clock
+        // fresh with its own pings, and never work out that it had become a ghost. Only
+        // traffic the host sends to MEMBERS counts: the snapshots, the levels, the handshake.
+        if (type is not (PacketType.Pong or PacketType.FlagAck or PacketType.ItemAck
+            or PacketType.JournalAck or PacketType.ContainerLootAck))
+        {
+            _lastInboundMs = now;
+        }
+
+        switch (type)
         {
             case PacketType.Welcome:
                 HandleWelcome(span);
@@ -1087,7 +1202,11 @@ public sealed class CoopClient : ICoopSession
             case PacketType.FlagSnapshot:
                 if (PacketCodec.ReadFlagSnapshot(span) is { } flagSnapshot)
                 {
-                    Flags.ReplaceAll(flagSnapshot.Flags, flagSnapshot.Version);
+                    // Merge, never replace: world flags are monotonic, and a snapshot must
+                    // not lower (or delete) one a local advance has just raised. The journal
+                    // has always done it this way; flags used to overwrite, which is how a
+                    // change made during an outage disappeared on reconnect.
+                    Flags.MergeSnapshot(flagSnapshot.Flags, flagSnapshot.Version);
                 }
 
                 break;
@@ -1281,7 +1400,25 @@ public sealed class CoopClient : ICoopSession
         if (_localPeerId == 0)
         {
             _localPeerId = welcome.AssignedPeerId;
+            _sessionPeerId = welcome.AssignedPeerId;
             _reconnecting = false;
+
+            // The link is back. Everything still unacked backed off while it was down; make
+            // it all due now so the world catches up in one tick instead of over the next few
+            // seconds. Nothing is re-created here — the ops kept their sequence numbers, and
+            // the host dedups on (origin, sequence), so a re-send the host already applied is
+            // recognised and merely re-acked.
+            _flagSender.ResetBackoff();
+            _itemSender.ResetBackoff();
+            _journalSender.ResetBackoff();
+            _lootSender.ResetBackoff();
+
+            // ...and ask for the full world back, rather than trusting three version counters
+            // that an outage can leave equal-but-different. See _resyncOnConnect.
+            _resyncOnConnect = true;
+            _lastFlagRequestMs = 0;
+            _lastItemRequestMs = 0;
+            _lastJournalRequestMs = 0;
 
             // Judge compatibility from our side too, from the host's digest in the Welcome.
             // The host already refused an incompatible client; this gives the client the
@@ -1325,19 +1462,69 @@ public sealed class CoopClient : ICoopSession
             return;
         }
 
+        HashSet<uint> present = [];
+        bool listed = false;
+
         foreach (SnapshotEntry entry in snapshot.Entries)
         {
             if (entry.PeerId == _localPeerId)
             {
+                listed = true;
                 continue;
             }
 
+            present.Add(entry.PeerId);
             _buffer.Push(entry.PeerId, entry.Name, entry.State, now);
+        }
+
+        // Half-open link: the host has forgotten us but we can still hear it. See
+        // _absentFromSnapshotSinceMs. Given a grace period rather than acted on immediately,
+        // because a snapshot can also arrive in the window between our Welcome and the host's
+        // next tick.
+        if (listed)
+        {
+            _absentFromSnapshotSinceMs = 0;
+        }
+        else if (_localPeerId != 0)
+        {
+            if (_absentFromSnapshotSinceMs == 0)
+            {
+                _absentFromSnapshotSinceMs = now;
+            }
+            else if (now - _absentFromSnapshotSinceMs > _settings.PeerTimeoutMs)
+            {
+                ForgetSession();
+                return;
+            }
+        }
+
+        // The snapshot is the complete roster, so anyone missing from it has left — drop them
+        // now rather than holding a phantom for another peer timeout. That window is what put
+        // two copies of the same player on screen when one of them reconnected during it.
+        _buffer.RetainOnly(present);
+
+        // A reconnection asks for everything once, regardless of what the versions say. The
+        // request is only disarmed once all three senders are quiet, because a forced resync
+        // while our own ops are still in flight is exactly the overwrite the pending gates
+        // below exist to prevent — so it waits its turn rather than being spent unused.
+        bool forced = _resyncOnConnect;
+        if (forced
+            && _flagSender.PendingCount == 0
+            && _itemSender.PendingCount == 0
+            && _journalSender.PendingCount == 0)
+        {
+            _resyncOnConnect = false;
         }
 
         // The version tripwire: 4 bytes per tick tells us whether our world flags still
         // match the host's, and the full set only crosses the wire when they do not.
-        if (snapshot.FlagVersion != Flags.Version && now - _lastFlagRequestMs >= FlagResyncIntervalMs)
+        //
+        // Gated on our own ops being acked, exactly like items and journal below and for the
+        // same reason: until they land, the two sides are SUPPOSED to differ, and asking for
+        // a snapshot in that window used to be how a client's own change got overwritten.
+        if ((forced || snapshot.FlagVersion != Flags.Version)
+            && _flagSender.PendingCount == 0
+            && now - _lastFlagRequestMs >= FlagResyncIntervalMs)
         {
             _lastFlagRequestMs = now;
             int length = PacketCodec.Write(_replyBuffer, new FlagSyncRequestPacket(_localPeerId, Flags.Version));
@@ -1350,7 +1537,7 @@ public sealed class CoopClient : ICoopSession
         // Same tripwire for ground items, but only once our own ops have all been acked:
         // resyncing while a drop is still in flight would erase it locally, respawn it on
         // the next snapshot, and flicker the item in and out of the world.
-        if (snapshot.ItemVersion != Items.Version
+        if ((forced || snapshot.ItemVersion != Items.Version)
             && _itemSender.PendingCount == 0
             && now - _lastItemRequestMs >= ItemResyncIntervalMs)
         {
@@ -1365,7 +1552,7 @@ public sealed class CoopClient : ICoopSession
         // Journal tripwire, gated on our own ops being acked for the same reason as
         // items: the merge itself is monotonic, but the version numbers only settle once
         // in-flight ops have landed.
-        if (snapshot.JournalVersion != Journal.Version
+        if ((forced || snapshot.JournalVersion != Journal.Version)
             && _journalSender.PendingCount == 0
             && now - _lastJournalRequestMs >= JournalResyncIntervalMs)
         {

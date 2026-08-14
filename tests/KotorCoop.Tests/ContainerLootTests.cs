@@ -89,14 +89,40 @@ public class ContainerLootTests
         Assert.Equal(0, sender.PendingCount);
     }
 
+    /// <summary>
+    /// ⚠ THE OPPOSITE OF WHAT THIS TEST USED TO ASSERT. It proved that an op with no
+    /// recipients is "dropped rather than queued forever" — which is the same thing as
+    /// throwing away every chest the host emptied while a client's link was down, because
+    /// the host removes a silent peer from its table after five seconds and the recipient
+    /// list then goes empty. The client came back, was never told, and could take the same
+    /// loot a second time. World truth now waits for somebody to tell.
+    /// </summary>
     [Fact]
-    public void AnOpWithNoRecipientsIsDroppedRatherThanQueuedForever()
+    public void AnOpWithNoRecipientsWaitsForOneInsteadOfBeingDropped()
     {
         ReliableLootSender sender = new();
         sender.Enqueue(CoopHost.HostPeerId, 0x53, 0xC9, 0);
 
+        // Nobody connected: nothing goes out, but nothing is lost either.
         Assert.Empty(sender.CollectDue([], 0));
-        Assert.Equal(0, sender.PendingCount);
+        Assert.Empty(sender.CollectDue([], 10_000));
+        Assert.Equal(1, sender.PendingCount);
+
+        // The client comes back and is told at once.
+        Assert.Single(sender.CollectDue([2u], 10_000));
+    }
+
+    [Fact]
+    public void TheSenderIsBoundedRatherThanUnlimited()
+    {
+        ReliableLootSender sender = new(maxPending: 3);
+
+        for (uint item = 0; item < 20; item++)
+        {
+            sender.Enqueue(CoopHost.HostPeerId, 0x53, item, 0);
+        }
+
+        Assert.Equal(3, sender.PendingCount);
     }
 
     [Fact]

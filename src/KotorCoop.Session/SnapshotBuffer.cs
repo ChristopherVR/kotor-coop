@@ -15,6 +15,15 @@ public sealed class SnapshotBuffer(int interpolationDelayMs = ProtocolConstants.
 {
     private const int MaxSamplesPerPeer = 32;
 
+    /// <summary>
+    /// A gap longer than this is a disconnection, not a dropped packet, and the two samples
+    /// either side of it must not be interpolated between: the peer did not walk from where
+    /// they were to where they are now, and lerping across the gap slides their avatar the
+    /// whole way in one interpolation window. Comfortably longer than any burst of loss at
+    /// 30 Hz, comfortably shorter than the peer timeout.
+    /// </summary>
+    private const int ContinuityGapMs = 1000;
+
     private sealed class PeerTrack
     {
         public string Name = string.Empty;
@@ -59,6 +68,14 @@ public sealed class SnapshotBuffer(int interpolationDelayMs = ProtocolConstants.
             if (track.Samples.Count > 0 && receivedAtMs < track.Samples[^1].TimeMs)
             {
                 return;
+            }
+
+            // The first sample after a link came back is a fresh start, not the far end of a
+            // walk: throw the pre-gap history away so the peer appears where they are instead
+            // of sliding there from wherever they were standing when the link died.
+            if (track.Samples.Count > 0 && receivedAtMs - track.Samples[^1].TimeMs > ContinuityGapMs)
+            {
+                track.Samples.Clear();
             }
 
             track.Samples.Add((receivedAtMs, state));
@@ -143,6 +160,42 @@ public sealed class SnapshotBuffer(int interpolationDelayMs = ProtocolConstants.
         lock (_gate)
         {
             _peers.Remove(peerId);
+        }
+    }
+
+    /// <summary>
+    /// Drops every tracked peer that is not in <paramref name="present"/>.
+    ///
+    /// The host's world snapshot is a complete LEVEL — everyone it knows about, every tick —
+    /// so a peer missing from it has gone, and there is no need to age it out. That matters on
+    /// reconnection: when the host drops a peer, its own buffer is cleaned immediately, but a
+    /// third player's was still being refreshed by the relay right up to the moment the host
+    /// gave up, so it kept the departed avatar for another full peer timeout on top. If the
+    /// player rejoined in that window there were briefly two of them on screen.
+    /// </summary>
+    public void RetainOnly(IReadOnlyCollection<uint> present)
+    {
+        lock (_gate)
+        {
+            List<uint>? gone = null;
+
+            foreach (uint peerId in _peers.Keys)
+            {
+                if (!present.Contains(peerId))
+                {
+                    (gone ??= []).Add(peerId);
+                }
+            }
+
+            if (gone is null)
+            {
+                return;
+            }
+
+            foreach (uint peerId in gone)
+            {
+                _peers.Remove(peerId);
+            }
         }
     }
 

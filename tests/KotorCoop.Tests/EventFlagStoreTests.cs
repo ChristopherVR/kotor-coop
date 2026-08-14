@@ -153,21 +153,63 @@ public class ReliableFlagSenderTests
         Assert.Single(sender.CollectDue(nowMs: 300));
     }
 
+    /// <summary>
+    /// ⚠ THE OPPOSITE OF WHAT THIS TEST USED TO ASSERT, deliberately. It used to prove that
+    /// retransmits stop after a fixed attempt count "rather than leaking into a dead link";
+    /// what that actually did was throw away a world change nothing would ever re-announce
+    /// (the bridge only reports globals that CHANGED), so a door opened during a blackout
+    /// longer than fifteen seconds stayed shut for the other player permanently. The op is
+    /// now kept and the cost is bounded by backing off instead.
+    /// </summary>
     [Fact]
-    public void RetransmitsStopAfterMaxAttempts()
+    public void AnUnackedOpSurvivesALongBlackoutAndBacksOff()
     {
-        ReliableFlagSender sender = new(retransmitIntervalMs: 10, maxAttempts: 3);
+        ReliableFlagSender sender = new(retransmitIntervalMs: 10, maxIntervalMs: 100);
         sender.Enqueue(2, 1001, 1, nowMs: 0);
 
-        long now = 0;
-        for (int i = 0; i < 10; i++)
+        int attempts = 0;
+        for (long now = 0; now <= 60_000; now += 10)
         {
-            now += 50;
+            attempts += sender.CollectDue(now).Count;
+        }
+
+        Assert.Equal(1, sender.PendingCount);
+
+        // A minute of silence at a flat 10 ms would have been ~6000 datagrams; the cap makes
+        // it ~600, and the op is still there to deliver when the link returns.
+        Assert.InRange(attempts, 1, 700);
+    }
+
+    [Fact]
+    public void ReconnectingMakesEveryPendingOpDueAtOnce()
+    {
+        ReliableFlagSender sender = new(retransmitIntervalMs: 250, maxIntervalMs: 4000);
+        sender.Enqueue(2, 1001, 1, nowMs: 0);
+        sender.Enqueue(2, 1002, 1, nowMs: 0);
+
+        // Burn enough attempts that both ops are deep into the backoff.
+        for (long now = 0; now <= 30_000; now += 250)
+        {
             sender.CollectDue(now);
         }
 
-        // Retransmitting forever into a dead link would leak memory and bandwidth.
-        Assert.Equal(0, sender.PendingCount);
+        Assert.Empty(sender.CollectDue(30_100));
+
+        sender.ResetBackoff();
+        Assert.Equal(2, sender.CollectDue(30_100).Count);
+    }
+
+    [Fact]
+    public void ThePendingQueueIsBounded()
+    {
+        ReliableFlagSender sender = new(maxPending: 4);
+
+        for (uint flag = 0; flag < 50; flag++)
+        {
+            sender.Enqueue(2, flag, 1, nowMs: 0);
+        }
+
+        Assert.Equal(4, sender.PendingCount);
     }
 
     [Fact]

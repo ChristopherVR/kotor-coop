@@ -51,6 +51,13 @@ public sealed class UdpChannel : IDisposable
 
     public IPEndPoint LocalEndPoint { get; }
 
+    /// <summary>
+    /// The fault injector for this channel. Off by default; every channel in the session
+    /// passes through here, so arming it partitions the whole peer rather than one feature.
+    /// See <see cref="NetworkSim"/> for why the seam is here and not per-channel.
+    /// </summary>
+    public NetworkSim Sim { get; } = new();
+
     public long PacketsSent => Interlocked.Read(ref _packetsSent);
 
     public long PacketsReceived => Interlocked.Read(ref _packetsReceived);
@@ -70,6 +77,25 @@ public sealed class UdpChannel : IDisposable
             return;
         }
 
+        // One volatile bool on the clean path; nothing below runs unless a fault is armed.
+        if (Sim.Armed)
+        {
+            long now = SessionClock.NowMs;
+            if (Sim.DropOutbound(now))
+            {
+                return;
+            }
+
+            int delay = Sim.DelayMs();
+            if (delay > 0)
+            {
+                // The span is borrowed from a tick-loop buffer that is about to be reused,
+                // so a delayed send has to own its bytes.
+                _ = SendLaterAsync(destination, data.ToArray(), delay);
+                return;
+            }
+        }
+
         try
         {
             int sent = _socket.SendTo(data, SocketFlags.None, destination);
@@ -79,6 +105,27 @@ public sealed class UdpChannel : IDisposable
         catch (SocketException)
         {
             // A transient send failure is not worth tearing the session down for.
+        }
+        catch (ObjectDisposedException)
+        {
+        }
+    }
+
+    /// <summary>
+    /// Holds a datagram back to simulate latency. Fire-and-forget: a simulated link losing
+    /// a delayed packet at shutdown is exactly what a real one does.
+    /// </summary>
+    private async Task SendLaterAsync(IPEndPoint destination, byte[] data, int delayMs)
+    {
+        try
+        {
+            await Task.Delay(delayMs).ConfigureAwait(false);
+            int sent = _socket.SendTo(data, SocketFlags.None, destination);
+            Interlocked.Increment(ref _packetsSent);
+            Interlocked.Add(ref _bytesSent, sent);
+        }
+        catch (SocketException)
+        {
         }
         catch (ObjectDisposedException)
         {
@@ -102,6 +149,23 @@ public sealed class UdpChannel : IDisposable
                     await _socket.ReceiveFromAsync(buffer, SocketFlags.None, from, cancellationToken)
                         .ConfigureAwait(false);
 
+                if (Sim.Armed)
+                {
+                    long now = SessionClock.NowMs;
+                    if (Sim.DropInbound(now))
+                    {
+                        // Received by the socket, never seen by the session — a packet the
+                        // link ate on the way in.
+                        continue;
+                    }
+
+                    int delay = Sim.DelayMs();
+                    if (delay > 0)
+                    {
+                        await Task.Delay(delay, cancellationToken).ConfigureAwait(false);
+                    }
+                }
+
                 Interlocked.Increment(ref _packetsReceived);
                 Interlocked.Add(ref _bytesReceived, result.ReceivedBytes);
 
@@ -111,6 +175,14 @@ public sealed class UdpChannel : IDisposable
             {
                 // See SIO_UDP_CONNRESET above: a peer vanished. Keep listening.
                 continue;
+            }
+            catch (SocketException ex) when (ex.SocketErrorCode == SocketError.OperationAborted)
+            {
+                // The socket was disposed with this receive in flight. That is a shutdown,
+                // not a fault — and it is the ordinary shape of one whenever teardown races
+                // the cancellation token rather than following it, which anything that
+                // partitions a link and then stops the session does constantly.
+                return null;
             }
             catch (OperationCanceledException)
             {

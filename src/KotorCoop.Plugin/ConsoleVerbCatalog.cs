@@ -42,6 +42,7 @@ internal static class ConsoleVerbCatalog
         ("who", "who"),
         ("peers", "peers"),
         ("where", "where"),
+        ("netsim", "netsim <off|status|loss <pct>|latency <ms> [jitter]|blackout <secs> [in|out|both]>"),
 
         // Completable, but NEVER recorded: ConsoleHistoryRing drops password/pw lines, so
         // completion may offer the verb while recall can never replay the secret.

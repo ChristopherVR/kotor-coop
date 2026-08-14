@@ -132,7 +132,44 @@ public sealed class EventFlagStore
         }
     }
 
-    /// <summary>Replaces the whole set from an authoritative host snapshot.</summary>
+    /// <summary>
+    /// Applies an authoritative host snapshot the way <see cref="Merge"/> applies a single
+    /// value: upwards only, never removing.
+    ///
+    /// ⚠ THIS REPLACED <see cref="ReplaceAll"/> ON THE RESYNC PATH, and the difference is a
+    /// data-loss bug. A resync fires when the versions disagree, which is exactly the state a
+    /// client is in when it holds a change the host has not applied yet — so wiping the set and
+    /// adopting the host's put the client's own world BACKWARDS. Nothing recovered it: the
+    /// bridge reports only globals that CHANGED, so a flag erased from the store was never
+    /// re-observed and never re-announced. The snapshot is also capped at what fits one
+    /// datagram (~277 flags), which under ReplaceAll meant a large set silently deleted
+    /// everything past the cap.
+    ///
+    /// Upward merge makes all three harmless: the host's flag set only ever grows, so nothing
+    /// it omits is a deletion, and nothing it sends can lower a local advance.
+    /// </summary>
+    public void MergeSnapshot(IReadOnlyList<KeyValuePair<uint, sbyte>> flags, uint version)
+    {
+        lock (_gate)
+        {
+            foreach (KeyValuePair<uint, sbyte> flag in flags)
+            {
+                if (!_flags.TryGetValue(flag.Key, out sbyte existing) || existing < flag.Value)
+                {
+                    _flags[flag.Key] = flag.Value;
+                }
+            }
+
+            // Adopt the host's version so the tripwire stops firing. Anything this client
+            // still holds that the host does not is, by construction, an op the reliable
+            // sender is still carrying — and it is never abandoned, so it lands, the host's
+            // version moves, and the next snapshot disagrees again until the two really agree.
+            Version = version;
+        }
+    }
+
+    /// <summary>Replaces the whole set from an authoritative host snapshot. Destructive —
+    /// see <see cref="MergeSnapshot"/> for why the resync path must not use this.</summary>
     public void ReplaceAll(IReadOnlyList<KeyValuePair<uint, sbyte>> flags, uint version)
     {
         lock (_gate)

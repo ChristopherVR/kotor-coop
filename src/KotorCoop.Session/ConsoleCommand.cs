@@ -59,6 +59,14 @@ public enum CoopCommandKind
 
     /// <summary>Print the local player's module and position.</summary>
     Where,
+
+    /// <summary>
+    /// Inject a transport fault on the live session so a disconnect can be reproduced with
+    /// nobody touching a cable. The sub-verb is in <see cref="CoopCommand.Address"/> and its
+    /// argument (percentage, milliseconds, seconds, direction) in
+    /// <see cref="CoopCommand.Password"/>.
+    /// </summary>
+    NetSim,
 }
 
 /// <summary>
@@ -228,6 +236,14 @@ public static class ConsoleCommand
                     Address: rest[0].ToLowerInvariant(),
                     Password: rest.Length > 1 ? rest[1] : null);
 
+            // netsim off | status | loss <pct> | latency <ms> [jitter] | blackout <secs> [in|out|both]
+            //
+            // Validated here rather than in the dispatcher for the same reason `warp` is: a
+            // typo in a fault-injection command must not silently arm nothing (or, worse,
+            // something else) on a live session.
+            case "netsim" or "net":
+                return ParseNetSim(rest);
+
             case "who" or "peers":
                 return new CoopCommand(CoopCommandKind.Who);
 
@@ -236,6 +252,77 @@ public static class ConsoleCommand
 
             default:
                 return new CoopCommand(CoopCommandKind.Unknown);
+        }
+    }
+
+    /// <summary>
+    /// Parses the <c>netsim</c> sub-grammar. Every branch either produces a fully-specified
+    /// command or an <see cref="CoopCommandKind.Invalid"/> naming the correct shape — there is
+    /// no "close enough" reading of a line that deliberately breaks the network.
+    /// </summary>
+    private static CoopCommand ParseNetSim(string[] rest)
+    {
+        const string usage =
+            "netsim off | status | loss <pct> | latency <ms> [jitter] | blackout <seconds> [in|out|both]";
+
+        if (rest.Length == 0)
+        {
+            return new CoopCommand(CoopCommandKind.NetSim, Address: "status");
+        }
+
+        string sub = rest[0].ToLowerInvariant();
+        string[] args = rest[1..];
+
+        switch (sub)
+        {
+            case "off" or "none" or "clear":
+                return new CoopCommand(CoopCommandKind.NetSim, Address: "off");
+
+            case "status" or "stat":
+                return new CoopCommand(CoopCommandKind.NetSim, Address: "status");
+
+            case "loss" or "drop":
+                if (args.Length == 0 || !double.TryParse(args[0], out double percent)
+                    || percent < 0 || percent > 100)
+                {
+                    return new CoopCommand(
+                        CoopCommandKind.Invalid, Error: "netsim loss needs a percentage 0-100, e.g. netsim loss 30");
+                }
+
+                return new CoopCommand(CoopCommandKind.NetSim, Address: "loss", Password: string.Join(' ', args));
+
+            case "latency" or "lag" or "delay":
+                if (args.Length == 0 || !int.TryParse(args[0], out int latency) || latency < 0)
+                {
+                    return new CoopCommand(
+                        CoopCommandKind.Invalid, Error: "netsim latency needs milliseconds, e.g. netsim latency 120 40");
+                }
+
+                if (args.Length > 1 && (!int.TryParse(args[1], out int jitter) || jitter < 0))
+                {
+                    return new CoopCommand(
+                        CoopCommandKind.Invalid, Error: "netsim latency jitter must be milliseconds, e.g. netsim latency 120 40");
+                }
+
+                return new CoopCommand(CoopCommandKind.NetSim, Address: "latency", Password: string.Join(' ', args));
+
+            case "blackout" or "cut" or "drop-all":
+                if (args.Length == 0 || !double.TryParse(args[0], out double seconds) || seconds <= 0)
+                {
+                    return new CoopCommand(
+                        CoopCommandKind.Invalid, Error: "netsim blackout needs seconds, e.g. netsim blackout 10");
+                }
+
+                if (args.Length > 1 && args[1].ToLowerInvariant() is not ("in" or "out" or "both"))
+                {
+                    return new CoopCommand(
+                        CoopCommandKind.Invalid, Error: "netsim blackout direction must be in, out or both");
+                }
+
+                return new CoopCommand(CoopCommandKind.NetSim, Address: "blackout", Password: string.Join(' ', args));
+
+            default:
+                return new CoopCommand(CoopCommandKind.Invalid, Error: usage);
         }
     }
 
@@ -260,5 +347,5 @@ public static class ConsoleCommand
 
     /// <summary>One-line help listing the commands, for the overlay and dashboard.</summary>
     public const string HelpText =
-        "commands: servers | connect <ip|#n> [password] | password <pw> | host | disconnect | reconnect | say <msg> | clear | status | warp <module> | who | where | help";
+        "commands: servers | connect <ip|#n> [password] | password <pw> | host | disconnect | reconnect | say <msg> | clear | status | warp <module> | who | where | netsim <off|status|loss|latency|blackout> | help";
 }

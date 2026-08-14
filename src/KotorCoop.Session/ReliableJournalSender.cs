@@ -5,9 +5,11 @@ namespace KotorCoop.Session;
 /// <summary>
 /// Retransmit-until-ack for journal ops, exactly like <see cref="ReliableFlagSender"/>.
 /// A quest advance is world truth: a lost position update is superseded 50 ms later, a
-/// lost "the quest moved on" is a player permanently behind.
+/// lost "the quest moved on" is a player permanently behind — which is precisely why an op
+/// here is retried with a growing backoff rather than abandoned after a fixed count.
 /// </summary>
-public sealed class ReliableJournalSender(int retransmitIntervalMs = 250, int maxAttempts = 60)
+public sealed class ReliableJournalSender(
+    int retransmitIntervalMs = 250, int maxIntervalMs = 4000, int maxPending = 4096)
 {
     private sealed class Pending
     {
@@ -38,12 +40,15 @@ public sealed class ReliableJournalSender(int retransmitIntervalMs = 250, int ma
             uint sequence = _nextSequence++;
             JournalOpPacket packet = new(originPeerId, sequence, questTag, state);
 
-            _pending[sequence] = new Pending
+            if (_pending.Count < maxPending)
             {
-                Packet = packet,
-                LastSentMs = nowMs,
-                Attempts = 1,
-            };
+                _pending[sequence] = new Pending
+                {
+                    Packet = packet,
+                    LastSentMs = nowMs,
+                    Attempts = 1,
+                };
+            }
 
             return packet;
         }
@@ -64,20 +69,11 @@ public sealed class ReliableJournalSender(int retransmitIntervalMs = 250, int ma
 
         lock (_gate)
         {
-            List<uint>? exhausted = null;
-
-            foreach ((uint sequence, Pending pending) in _pending)
+            foreach (Pending pending in _pending.Values)
             {
-                if (nowMs - pending.LastSentMs < retransmitIntervalMs)
+                if (nowMs - pending.LastSentMs < RetransmitBackoff.IntervalMs(
+                        pending.Attempts, retransmitIntervalMs, maxIntervalMs))
                 {
-                    continue;
-                }
-
-                if (pending.Attempts >= maxAttempts)
-                {
-                    // Give up rather than retransmit forever into a dead link; the
-                    // version-mismatch resync repairs the state if the link returns.
-                    (exhausted ??= []).Add(sequence);
                     continue;
                 }
 
@@ -85,17 +81,22 @@ public sealed class ReliableJournalSender(int retransmitIntervalMs = 250, int ma
                 pending.LastSentMs = nowMs;
                 due.Add(pending.Packet);
             }
-
-            if (exhausted is not null)
-            {
-                foreach (uint sequence in exhausted)
-                {
-                    _pending.Remove(sequence);
-                }
-            }
         }
 
         return due;
+    }
+
+    /// <summary>Makes every pending op due immediately; called when a dropped link returns.</summary>
+    public void ResetBackoff()
+    {
+        lock (_gate)
+        {
+            foreach (Pending pending in _pending.Values)
+            {
+                pending.Attempts = 0;
+                pending.LastSentMs = 0;
+            }
+        }
     }
 
     public void Clear()
