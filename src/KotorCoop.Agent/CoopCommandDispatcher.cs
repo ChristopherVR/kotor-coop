@@ -54,6 +54,30 @@ public sealed class CoopCommandDispatcher(
     private bool _promptedForPassword;
 
     /// <summary>
+    /// The serial of a staging cheat still waiting on the plugin, or 0 for none.
+    ///
+    /// Held rather than fired-and-forgotten because a cheat's WHOLE VALUE is its answer: an
+    /// unattended verification run types `slay` and needs to know whether the kill happened
+    /// here, went to the host, or was refused because the thing it aimed at turned out to be
+    /// a phantom. Reporting "sent" and moving on would make the channel untestable.
+    /// </summary>
+    private uint _pendingCheatSerial;
+
+    /// <summary>
+    /// When that cheat was filed, so an answer that never comes is reported as such.
+    ///
+    /// It really can never come: the cheat executor runs on the SwapBuffers frame hook, which
+    /// is dormant behind the main-menu movie, so a cheat typed at the menu sits unread until
+    /// a world loads. Waiting silently forever is the one behaviour a staging channel must
+    /// not have — and it would also wedge the next cheat, because only one is in flight.
+    /// </summary>
+    private DateTime _pendingCheatFiled;
+
+    /// <summary>How long to wait for the game thread. Generous: the plugin answers on its
+    /// next frame, so anything past a couple of seconds means no frames are running.</summary>
+    private static readonly TimeSpan CheatAnswerTimeout = TimeSpan.FromSeconds(3);
+
+    /// <summary>
     /// Armed by a connect/host that originated inside the game (Co-op button, browser
     /// panel, ~ console) — i.e. one made while the player could plausibly still be at the
     /// main menu. When such a session reaches its load condition the save auto-loads once,
@@ -101,6 +125,7 @@ public sealed class CoopCommandDispatcher(
                     AnnouncePeerChanges();
                     AnnounceCompatibilityChanges();
                     DrainChat();
+                    ReflectCheatAnswer();
                 }
                 catch (Exception ex) when (ex is not OperationCanceledException)
                 {
@@ -366,6 +391,44 @@ public sealed class CoopCommandDispatcher(
                 }
 
                 break;
+
+            // ---- staging cheats ---------------------------------------------
+
+            case CoopCommandKind.God:
+                SendCheat(new CheatRequest(CheatKinds.God, Amount: command.Amount));
+                break;
+
+            case CoopCommandKind.TopUp:
+                SendCheat(new CheatRequest(CheatKinds.TopUp, Amount: command.Amount));
+                break;
+
+            case CoopCommandKind.StandUp:
+                SendCheat(new CheatRequest(CheatKinds.StandUp, Amount: command.Amount));
+                break;
+
+            case CoopCommandKind.Slay:
+                Slay(command.Address);
+                break;
+
+            case CoopCommandKind.Teleport:
+                SendCheat(new CheatRequest(CheatKinds.Teleport, X: command.X, Y: command.Y, Z: command.Z));
+                break;
+
+            case CoopCommandKind.GoTo:
+                GoTo(command.Address ?? string.Empty);
+                break;
+
+            case CoopCommandKind.DropItem:
+                SendCheat(new CheatRequest(CheatKinds.DropItem, Text: command.Address ?? string.Empty));
+                break;
+
+            case CoopCommandKind.Cheats:
+                foreach (string line in ConsoleCommand.CheatsText)
+                {
+                    Reply(line);
+                }
+
+                break;
         }
     }
 
@@ -417,6 +480,217 @@ public sealed class CoopCommandDispatcher(
         }
 
         Reply(sim.Describe());
+    }
+
+    /// <summary>
+    /// Files a staging cheat with the plugin and remembers its serial so the answer can be
+    /// reported. Refuses out loud when there is no plugin: "nothing happened" is the one
+    /// outcome a staging command must never produce silently.
+    /// </summary>
+    private void SendCheat(CheatRequest request)
+    {
+        if (!bridge.SupportsCheats)
+        {
+            Reply("staging cheats need the in-game plugin (no shared block found)");
+            return;
+        }
+
+        if (bridge.TryRequestCheat(request, out uint serial))
+        {
+            _pendingCheatSerial = serial;
+            _pendingCheatFiled = DateTime.UtcNow;
+        }
+        else
+        {
+            Reply("could not reach the plugin to run that");
+        }
+    }
+
+    /// <summary>
+    /// Prints the plugin's answer to the cheat we are waiting on, once. The detail sentence
+    /// is what the plugin actually SAW — a refusal names the rule and the object id — so it
+    /// is printed verbatim rather than being restated from the status code.
+    /// </summary>
+    private void ReflectCheatAnswer()
+    {
+        if (_pendingCheatSerial == 0)
+        {
+            return;
+        }
+
+        if (!bridge.TryReadCheatAnswer(out uint applied, out int status, out string detail)
+            || applied != _pendingCheatSerial)
+        {
+            if (DateTime.UtcNow - _pendingCheatFiled > CheatAnswerTimeout)
+            {
+                _pendingCheatSerial = 0;
+                Reply("the game never answered that - is a world loaded? (cheats run on the game's frame)");
+            }
+
+            return;
+        }
+
+        _pendingCheatSerial = 0;
+
+        string prefix = status switch
+        {
+            CheatStatus.Applied => string.Empty,
+            CheatStatus.Forwarded => string.Empty,
+            CheatStatus.NoWorld => "not in a world: ",
+            CheatStatus.NoTarget => "no target: ",
+            CheatStatus.Refused => "refused: ",
+            CheatStatus.EngineRefused => "the engine refused it: ",
+            _ => $"status {status}: ",
+        };
+
+        Reply(detail.Length > 0 ? prefix + detail : $"the plugin answered with status {status} and no detail");
+    }
+
+    /// <summary>
+    /// Resolves what <c>slay</c> should aim at and hands it over. A bare <c>slay</c> means
+    /// "the nearest hostile", which only the agent can answer — it is the side that runs the
+    /// enemy census — so the nearest id is picked here and the plugin is given a number
+    /// rather than a policy.
+    ///
+    /// The authority decision itself is deliberately NOT made here: whether this instance
+    /// kills the creature or forwards the kill to its owner depends on state only the plugin
+    /// can see (the phantom table, the party roster, the mirror's own pin), and splitting
+    /// that rule across two processes is how it would drift.
+    /// </summary>
+    private void Slay(string? token)
+    {
+        if (string.IsNullOrEmpty(token))
+        {
+            if (!TryFindNearestEnemy(out uint nearest, out float distance))
+            {
+                Reply("no living enemy in range - name one: slay <tag|id>");
+                return;
+            }
+
+            Reply($"slaying the nearest enemy 0x{nearest:X} ({distance:F1}m away)");
+            SendCheat(new CheatRequest(CheatKinds.Slay, Target: nearest));
+            return;
+        }
+
+        if (ConsoleCommand.TryParseObjectId(token, out uint objectId))
+        {
+            SendCheat(new CheatRequest(CheatKinds.Slay, Target: objectId));
+            return;
+        }
+
+        // A tag. Refuse one that names a PLAYER before it reaches the engine: the plugin
+        // rejects a phantom by id anyway, but a peer's name is what a person actually types
+        // and the reason is clearer said here.
+        if (manager.Current is { } session)
+        {
+            foreach (RemotePeer peer in session.GetRemotePeers())
+            {
+                if (peer.Name.Equals(token, StringComparison.OrdinalIgnoreCase))
+                {
+                    Reply($"{peer.Name} is a player - their character is theirs, not yours to kill");
+                    return;
+                }
+            }
+        }
+
+        SendCheat(new CheatRequest(CheatKinds.Slay, Text: token));
+    }
+
+    /// <summary>The nearest living enemy to the local player, from the census this agent
+    /// already runs every tick for the enemy channel.</summary>
+    private bool TryFindNearestEnemy(out uint objectId, out float distance)
+    {
+        objectId = 0;
+        distance = 0f;
+
+        if (!bridge.TryReadLocalState(out PlayerState local))
+        {
+            return false;
+        }
+
+        float best = float.MaxValue;
+        foreach (EnemyState enemy in bridge.ReadEnemies([]))
+        {
+            if (enemy.Dead || enemy.Plot || enemy.CurrentHealth == 0)
+            {
+                continue;
+            }
+
+            float dx = enemy.Position.X - local.Position.X;
+            float dy = enemy.Position.Y - local.Position.Y;
+            float dz = enemy.Position.Z - local.Position.Z;
+            float d = MathF.Sqrt((dx * dx) + (dy * dy) + (dz * dz));
+
+            if (d < best)
+            {
+                best = d;
+                objectId = enemy.ObjectId;
+            }
+        }
+
+        distance = best;
+        return objectId != 0;
+    }
+
+    /// <summary>
+    /// Moves the local player to a peer's last known position.
+    ///
+    /// The module check is the whole point: peer positions are area coordinates, so the same
+    /// numbers name a completely different place in a different module, and a cross-module
+    /// <c>goto</c> would drop the player through the floor of the world they are in. Use
+    /// <c>warp</c> to follow somebody to another module and <c>goto</c> once you are there.
+    /// </summary>
+    private void GoTo(string name)
+    {
+        if (manager.Current is not { } session)
+        {
+            Reply("not connected - nobody to go to");
+            return;
+        }
+
+        IReadOnlyList<RemotePeer> peers = session.GetRemotePeers();
+        RemotePeer? found = null;
+
+        // "#n" picks the n-th of the `who` listing, for a name nobody wants to type.
+        if (name.StartsWith('#') && int.TryParse(name[1..], out int index)
+            && index >= 1 && index <= peers.Count)
+        {
+            found = peers[index - 1];
+        }
+        else
+        {
+            foreach (RemotePeer peer in peers)
+            {
+                if (peer.Name.Equals(name, StringComparison.OrdinalIgnoreCase))
+                {
+                    found = peer;
+                    break;
+                }
+            }
+        }
+
+        if (found is not { } target)
+        {
+            Reply($"no player called '{name}' - run `who` to see who is here");
+            return;
+        }
+
+        string localModule = bridge.TryReadLocalState(out PlayerState local) && local.Module.Length > 0
+            ? local.Module
+            : string.Empty;
+
+        if (localModule.Length > 0 && target.State.Module.Length > 0
+            && !localModule.Equals(target.State.Module, StringComparison.OrdinalIgnoreCase))
+        {
+            Reply($"{target.Name} is in {target.State.Module} and you are in {localModule} - warp there first");
+            return;
+        }
+
+        SendCheat(new CheatRequest(
+            CheatKinds.Teleport,
+            X: target.State.Position.X,
+            Y: target.State.Position.Y,
+            Z: target.State.Position.Z));
     }
 
     /// <summary>Diffs the admitted roster each tick and posts joins/leaves through the same

@@ -44,6 +44,25 @@ internal static class ConsoleVerbCatalog
         ("where", "where"),
         ("netsim", "netsim <off|status|loss <pct>|latency <ms> [jitter]|blackout <secs> [in|out|both]>"),
 
+        // ---- staging cheats ------------------------------------------------------
+        //
+        // Every one of these is a name the retail console does NOT already use (its list is
+        // heal, addexp, addlevel, giveitem, givecredits, revealmap, invulnerability, warp,
+        // whereami, infiniteuses, bright, turbo, the set* stat verbs and the give* supply
+        // verbs — read out of the binary, see docs/research/console-cheats.md). Shadowing a
+        // retail verb would take a working cheat away from the player to replace it with a
+        // co-op one they did not ask for; `warp` is the single deliberate exception and it
+        // predates this list.
+        ("god", "god [on|off]"),
+        ("topup", "topup [hitpoints]"),
+        ("standup", "standup [hitpoints]"),
+        ("getup", "getup [hitpoints]"),
+        ("slay", "slay [tag|id]  (blank = nearest hostile)"),
+        ("tp", "tp <x> <y> [z]"),
+        ("goto", "goto <player|#n>"),
+        ("dropitem", "dropitem <resref>"),
+        ("cheats", "cheats"),
+
         // Completable, but NEVER recorded: ConsoleHistoryRing drops password/pw lines, so
         // completion may offer the verb while recall can never replay the secret.
         ("password", "password <pw>"),

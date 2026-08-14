@@ -10,11 +10,31 @@ namespace KotorCoop.Plugin;
 /// Only the FIRST token completes. Once an argument (or even a trailing space) follows the
 /// verb, Tab does nothing — the engine's caret could be anywhere in the line, and rewriting
 /// an argument the player is mid-way through typing is worse than doing nothing. The hint
-/// line switches from candidate list to the verb's usage at the same boundary.
+/// line switches from candidate list to the verb's usage at the same boundary, and from
+/// there it tracks WHICH ARGUMENT is being typed, because "connect &lt;ip&gt; [password]" stops
+/// being useful the moment you are three tokens in and cannot remember whether the password
+/// came before or after the port.
+///
+/// Completion covers the ENGINE's verbs as well as ours (see <see cref="SetEngineVerbs"/>).
+/// The mod borrows KOTOR's developer console rather than replacing it, so a candidate list
+/// that knew only about co-op verbs would quietly imply the ~60 the game registers itself do
+/// not exist.
 /// </summary>
 internal sealed class ConsoleCompletionEngine
 {
     private readonly (string Verb, string Usage)[] _entries;
+
+    /// <summary>
+    /// Verbs the ENGINE registered, read live from its command table. Kept separate from
+    /// <see cref="_entries"/> rather than merged, for two reasons: co-op verbs must sort
+    /// FIRST in a candidate list (Tab should reach ours before a stat cheat when both
+    /// match), and only ours have a usage string to show.
+    /// </summary>
+    private string[] _engineVerbs = [];
+
+    /// <summary>Longest hint the queued-text renderer draws without running off the screen
+    /// edge; it has no layout, so this is the only wrapping there is.</summary>
+    private const int MaxHintLength = 72;
 
     /// <summary>The candidates being cycled, or null when no cycle is in progress.</summary>
     private string[]? _cycleCandidates;
@@ -33,6 +53,55 @@ internal sealed class ConsoleCompletionEngine
     public ConsoleCompletionEngine((string Verb, string Usage)[] entries)
     {
         _entries = entries;
+    }
+
+    /// <summary>
+    /// Supplies the engine's own console verbs. Anything already in the co-op catalog is
+    /// dropped so a verb we intercept is not offered twice, and the rest are sorted so the
+    /// cycle order is stable — the table is sorted by name already, but a mod's late
+    /// registration would not be.
+    /// </summary>
+    public void SetEngineVerbs(IReadOnlyList<string> verbs)
+    {
+        List<string> kept = new(verbs.Count);
+        foreach (string verb in verbs)
+        {
+            if (verb.Length == 0 || Contains(kept, verb) || IsCatalogVerb(verb))
+            {
+                continue;
+            }
+
+            kept.Add(verb);
+        }
+
+        kept.Sort(StringComparer.Ordinal);
+        _engineVerbs = [.. kept];
+    }
+
+    private bool IsCatalogVerb(string verb)
+    {
+        foreach ((string candidate, _) in _entries)
+        {
+            if (string.Equals(candidate, verb, StringComparison.Ordinal))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool Contains(List<string> list, string value)
+    {
+        foreach (string item in list)
+        {
+            if (string.Equals(item, value, StringComparison.Ordinal))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /// <summary>
@@ -103,8 +172,16 @@ internal sealed class ConsoleCompletionEngine
 
         if (rest.Length > 0)
         {
-            // Mid-arguments: only an exact verb has anything useful to say.
-            return usage ?? string.Empty;
+            // Mid-arguments. A co-op verb shows its usage with the argument being typed
+            // called out; an ENGINE verb has no usage we could invent, so it says only that
+            // the console owns it — which is still the useful fact (the line will not be
+            // intercepted, so a typo will be reported by the engine, not by us).
+            if (usage is { } known)
+            {
+                return WithArgumentMarker(known, rest);
+            }
+
+            return IsEngineVerb(key) ? $"{key}  (game console command)" : string.Empty;
         }
 
         string[] candidates = Candidates(key);
@@ -124,9 +201,68 @@ internal sealed class ConsoleCompletionEngine
                     return verbUsage;
                 }
             }
+
+            // The sole candidate is one of the engine's.
+            return $"{candidates[0]}  (game console command)";
         }
 
         return JoinCapped(candidates);
+    }
+
+    private bool IsEngineVerb(string verb)
+    {
+        foreach (string candidate in _engineVerbs)
+        {
+            if (string.Equals(candidate, verb, StringComparison.Ordinal))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// The usage line with the argument currently being typed called out — the "what should
+    /// the NEXT token be" half of the assist.
+    ///
+    /// The specs come from the usage string itself rather than a second table, so a verb can
+    /// never grow an argument in one place and not the other. A trailing parenthetical note
+    /// ("(blank = nearest hostile)") is prose, not an argument, and stops the scan.
+    /// </summary>
+    private static string WithArgumentMarker(string usage, string rest)
+    {
+        string[] parts = usage.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+
+        int specCount = 0;
+        for (int i = 1; i < parts.Length; i++)
+        {
+            if (parts[i][0] == '(')
+            {
+                break;
+            }
+
+            specCount++;
+        }
+
+        if (specCount == 0)
+        {
+            return usage;
+        }
+
+        // How many arguments are BEHIND the caret. A trailing space means the token just
+        // finished, so the next one is being started; without it the last token is still
+        // being typed and IS the current argument.
+        string[] typed = rest.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
+        bool started = rest.Length > 0 && char.IsWhiteSpace(rest[^1]);
+        int index = started ? typed.Length : Math.Max(0, typed.Length - 1);
+
+        string marker = index < specCount ? parts[1 + index] : "(all given)";
+        string line = $"{usage}  <- {marker}";
+
+        // The renderer has no layout: an overlong line just draws off the screen edge, so a
+        // hint that no longer fits loses the marker rather than the usage.
+        return line.Length <= MaxHintLength ? line : usage;
     }
 
     /// <summary>Forgets the cycle, e.g. when the console closes or history rewrites the line.</summary>
@@ -137,10 +273,24 @@ internal sealed class ConsoleCompletionEngine
         _lastProduced = null;
     }
 
+    /// <summary>
+    /// Everything the prefix could become: the co-op catalog in its declared order first,
+    /// then the engine's own verbs. Ours lead deliberately — Tab from "s" should reach
+    /// <c>say</c>, <c>slay</c> and <c>status</c> before it walks the eight <c>set*</c> stat
+    /// cheats.
+    /// </summary>
     private string[] Candidates(string prefix)
     {
         int count = 0;
         foreach ((string verb, _) in _entries)
+        {
+            if (verb.StartsWith(prefix, StringComparison.Ordinal))
+            {
+                count++;
+            }
+        }
+
+        foreach (string verb in _engineVerbs)
         {
             if (verb.StartsWith(prefix, StringComparison.Ordinal))
             {
@@ -158,6 +308,14 @@ internal sealed class ConsoleCompletionEngine
             }
         }
 
+        foreach (string verb in _engineVerbs)
+        {
+            if (verb.StartsWith(prefix, StringComparison.Ordinal))
+            {
+                result[i++] = verb;
+            }
+        }
+
         return result;
     }
 
@@ -167,7 +325,7 @@ internal sealed class ConsoleCompletionEngine
     /// </summary>
     private static string JoinCapped(string[] candidates)
     {
-        const int maxLength = 72;
+        const int maxLength = MaxHintLength;
         System.Text.StringBuilder sb = new(maxLength + 8);
         foreach (string candidate in candidates)
         {

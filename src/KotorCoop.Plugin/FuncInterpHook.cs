@@ -41,6 +41,11 @@ internal static unsafe class FuncInterpHook
         // something the engine's own console owns, and `coop net ...` already routes through
         // the "coop" prefix for anyone who wants the short form.
         "netsim",
+
+        // Staging cheats. None of these shadows a retail console verb — checked against the
+        // engine's own registered names (docs/research/console-cheats.md) — so intercepting
+        // them takes nothing away from the player.
+        "god", "topup", "standup", "getup", "slay", "tp", "goto", "dropitem", "cheats",
     ];
 
     /// <summary>

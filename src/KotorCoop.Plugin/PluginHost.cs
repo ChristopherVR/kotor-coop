@@ -32,6 +32,7 @@ internal static unsafe class PluginHost
 
     private static PeerDamageController? _peerDamage;
     private static TestDriveController? _testDrive;
+    private static CheatController? _cheats;
     private static DoorController? _doors;
     private static PlaceableController? _placeables;
     private static LootController? _loot;
@@ -117,6 +118,7 @@ internal static unsafe class PluginHost
             _incomingDamage = new IncomingDamageController(_view);
             _peerDamage = new PeerDamageController(_view);
             _testDrive = new TestDriveController(_view);
+            _cheats = new CheatController(_view);
             _doors = new DoorController(_view);
             _placeables = new PlaceableController(_view);
             _loot = new LootController(_view);
@@ -130,7 +132,10 @@ internal static unsafe class PluginHost
             _death = new DeathController(_view);
             _spectate = new SpectateController(_view);
             _chatOverlay = new ChatOverlayController(_view);
-            _consoleAssist = new ConsoleAssistController();
+            // Beside the log, in the game directory the plugin was loaded from: the recall
+            // history is per-install, which is what a player means by "my commands".
+            _consoleAssist = new ConsoleAssistController(
+                Path.Combine(directory, "kotorcoop-console-history.txt"));
             _dialogueSpectate = new DialogueSpectateController(_view);
             _encounters = new EncounterController(_view);
             _pause = new PauseController(_view);
@@ -378,7 +383,7 @@ internal static unsafe class PluginHost
         // not found" — which looks like a broken install rather than a version skew.
         // 37 = the load-screen texture in the browser details array (SharedBlock, version 37).
         // 39 = per-instance item identity in the item slot's tail (SharedBlock, version 39).
-        _block->Version = 39;
+        _block->Version = 40;
 
         // A guard dword after the version. Magic plus version alone was not selective
         // enough: a scan once matched something else at a lower address and the agent
@@ -676,6 +681,11 @@ internal static unsafe class PluginHost
 
         // Test hooks last, so a driven conversation is opened against fully-updated state.
         _testDrive?.OnFrame();
+
+        // And the staging cheats after them, for the same reason: a slay measures the
+        // phantom table, the party roster and the mirror's pin, all of which this frame's
+        // passes have just brought up to date.
+        _cheats?.OnFrame();
     }
 
     private static void InvalidateAll(string reason)
@@ -697,6 +707,7 @@ internal static unsafe class PluginHost
         _incomingDamage?.Invalidate();
         _peerDamage?.Invalidate();
         _testDrive?.Invalidate();
+        _cheats?.Invalidate();
         PhantomHitHook.Invalidate();
         AnimationHook.InvalidateCreatureTable();
         _doors?.Invalidate();
