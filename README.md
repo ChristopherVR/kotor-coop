@@ -71,6 +71,28 @@ Both players, each in their own full game:
   `connect <ip> [password]`, `disconnect` or `reconnect` at any time — the session is torn
   down and rebuilt live, no restart. If the host wants a password you didn't give, the
   console prompts you to retype it. Status and co-op replies print on-screen while it's open.
+  The console helps you type: **Tab completes** and repeated Tab cycles the candidates,
+  **Up/Down recall** what you typed before (and it survives a restart), **Escape** dismisses,
+  and a hint line under the input shows the candidates or the verb's usage with the argument
+  you are on marked. Completion covers **the game's own console verbs too** — `giveitem`,
+  `revealmap`, the `set*` stat cheats — because it reads the engine's live command table, so
+  it picks up a mod's verbs as well.
+- **Stage a test without grinding to it.** Alongside KOTOR's own cheats (which all touch only
+  your game, so they were already co-op-safe and are left alone) there are a few verbs whose
+  answer depends on *who typed them*:
+
+  | Verb | Does | Co-op rule |
+  | --- | --- | --- |
+  | `god [on\|off]` | your damage floors at 1 hp | yours alone — your health is what your peers mirror |
+  | `topup [n]` | your hit points to n, or full | yours alone |
+  | `standup [n]` | stand yourself up out of the downed state | yours alone; retail `heal` doesn't do this |
+  | `slay [tag\|id]` | kill an enemy (blank = nearest) | the enemies' owner kills it for real; a client sends the kill through the damage ledger so the host's engine produces the death for both. Refuses a player, a phantom, a companion or a plot creature — out loud |
+  | `tp <x> <y> [z]` | move yourself in this area | yours alone; your position already replicates |
+  | `goto <player>` | move yourself to a peer | same module only |
+  | `dropitem <resref>` | drop a blueprint at your feet | becomes shared world state through the existing item channel — the other player can see and take it |
+  | `cheats` | lists these and the retail ones | — |
+
+  `docs/research/console-cheats.md` has the full reference and what each one pokes.
 - **Talk to each other**: `say <message>` in the ~ console sends a line to the other players
   (the host relays it), so you can coordinate without seeing each other's screens.
 - **One conversation at a time, like Baldur's Gate 3**: while any player is talking, nobody

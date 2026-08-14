@@ -128,6 +128,27 @@ Logs land in `%TEMP%\kotorcoop-demo\agent1.log` / `agent2.log` and
 - Screen: the other player sees `Lanik: hello` (or `Malak:`). Confirms buffer-capture timing.
 - Also try `status`, `disconnect`, `reconnect` — agent log echoes each.
 
+## Console assist & staging cheats (NEEDS-LIVE — full table in docs/research/console-cheats.md § 4)
+- Press `~`, then plugin log: `console: completion has N engine console verbs` (expect ~35).
+- Type `giv` + Tab repeatedly: it should cycle `givecredits → giveitem → givemed → ...`,
+  i.e. the ENGINE's own verbs, not just ours.
+- Type `connect 1.2.3.4 ` (trailing space): the hint row reads
+  `connect <ip|#n> [password]  <- [password]`. Escape hides it; typing brings it back.
+- Type `status`, close the console, quit, relaunch, `~`, Up → `status` comes back
+  (`kotorcoop-console-history.txt` beside the plugin log; it must contain no `password` line).
+- `god on` → "god ON"; take a hit and confirm health floors at 1 on BOTH screens.
+- `topup`, then get downed and `standup` → the body stands within a second.
+- **The important one:** stand near an enemy and type `slay` on the HOST (expect
+  `killed 0x..`, corpse + loot, client logs `combat: killed 0x.. on the owner's authority`),
+  then on the CLIENT (expect `0x.. is the host's; sent the kill to them` and the enemy dying
+  on both screens through the ordinary mirror).
+- Refusals must SAY SO, never no-op: `slay <peer's name>`, and `slay Trask` (a companion).
+- `goto <the other player>` in the same module; then `dropitem g_w_blstrpstl001` and confirm
+  the item appears for the other player and vanishes for both when either picks it up.
+- No keyboard? `pwsh tools\blockpoke.ps1 -ProcId <pid> cheat god 1` (also `topup`, `standup`,
+  `slay <decimal id>`) fires the same channel, and the bare `cheat` prints the status AND the
+  plugin's detail sentence. Only the console-UI checks above need a human at the keys.
+
 ## Chat overlay (NEEDS-LIVE: anchor coordinates, font alpha)
 - After a `say`, the message appears bottom-left, semi-transparent, and fades after ~9 s.
 - If it's off-screen → adjust `chat_overlay_anchor` / calibrate the coords in ChatOverlayController.

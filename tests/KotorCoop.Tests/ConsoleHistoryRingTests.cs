@@ -163,4 +163,87 @@ public class ConsoleHistoryRingTests
         ring.Record("  status  ");
         Assert.Equal("status", ring.Older());
     }
+
+    // ---- persistence across runs ------------------------------------------------
+
+    /// <summary>Oldest first, which is the order Restore replays and therefore the order the
+    /// file has to be written in.</summary>
+    [Fact]
+    public void SnapshotIsOldestFirst()
+    {
+        ConsoleHistoryRing ring = new(4);
+        ring.Record("one");
+        ring.Record("two");
+        ring.Record("three");
+
+        Assert.Equal(["one", "two", "three"], ring.Snapshot());
+    }
+
+    [Fact]
+    public void SnapshotOfAWrappedRingHoldsOnlyTheSurvivors()
+    {
+        ConsoleHistoryRing ring = new(2);
+        ring.Record("one");
+        ring.Record("two");
+        ring.Record("three");
+
+        Assert.Equal(["two", "three"], ring.Snapshot());
+    }
+
+    /// <summary>A saved history read back is the same history, and Up walks it the same way.</summary>
+    [Fact]
+    public void RestoreRoundTripsASnapshot()
+    {
+        ConsoleHistoryRing saved = new(8);
+        saved.Record("warp danm13");
+        saved.Record("status");
+
+        ConsoleHistoryRing loaded = new(8);
+        loaded.Restore(saved.Snapshot());
+
+        Assert.Equal(saved.Snapshot(), loaded.Snapshot());
+        Assert.Equal("status", loaded.Older());
+        Assert.Equal("warp danm13", loaded.Older());
+    }
+
+    /// <summary>
+    /// Restore goes through Record, so a hand-edited or corrupted file cannot smuggle in a
+    /// blank, a duplicate — or a password, which never reached the file in the first place
+    /// but must be refused on the way back in regardless.
+    /// </summary>
+    [Fact]
+    public void RestoreAppliesTheSameRulesAsTyping()
+    {
+        ConsoleHistoryRing ring = new(8);
+        ring.Restore(["status", "", "   ", "status", "password hunter2", "pw hunter2", "who"]);
+
+        Assert.Equal(["status", "who"], ring.Snapshot());
+    }
+
+    [Fact]
+    public void RestoreLeavesTheCursorLive()
+    {
+        ConsoleHistoryRing ring = new(8);
+        ring.Restore(["status", "who"]);
+
+        // Down before any Up means "not navigating", not "step past the newest".
+        Assert.Null(ring.Newer());
+        Assert.Equal("who", ring.Older());
+    }
+
+    /// <summary>
+    /// The probe the persistence check uses. Count saturates at the capacity and would stop
+    /// changing once the ring is full, which would silently stop the file being written.
+    /// </summary>
+    [Fact]
+    public void RecordedKeepsCountingPastTheCapacity()
+    {
+        ConsoleHistoryRing ring = new(2);
+        ring.Record("one");
+        ring.Record("two");
+        ring.Record("three");
+
+        Assert.Equal(2, ring.Count);
+        Assert.Equal(3, ring.Recorded);
+    }
 }

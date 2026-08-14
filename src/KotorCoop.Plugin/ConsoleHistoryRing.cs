@@ -37,6 +37,14 @@ internal sealed class ConsoleHistoryRing
     public int Count => Math.Min(_count, _entries.Length);
 
     /// <summary>
+    /// Lines ever stored, monotonic and NOT saturating — the "has anything changed?" probe.
+    /// <see cref="Count"/> cannot answer that once the ring is full: it sits at the capacity
+    /// forever while the contents keep rolling, so a persistence check keyed on it would stop
+    /// saving after the thirty-second command of the mod's life.
+    /// </summary>
+    public int Recorded => _count;
+
+    /// <summary>
     /// Records one submitted line. Empty/whitespace lines and secrets are dropped; a line
     /// identical to the previous entry is not stored twice in a row (retyping `status` five
     /// times should cost one Up, not five). Any submit — stored or not — returns the
@@ -107,6 +115,42 @@ internal sealed class ConsoleHistoryRing
 
     /// <summary>Back to live. Called when the console closes, so the next open starts fresh.</summary>
     public void ResetCursor() => _age = -1;
+
+    /// <summary>
+    /// Every line held, oldest first — the order <see cref="Restore"/> wants back.
+    ///
+    /// This is what makes history survive a RESTART rather than just a console close: the
+    /// plugin writes the snapshot beside its log when the console closes and reads it back
+    /// at load, so the `warp` line you spent five minutes getting right is still one Up away
+    /// tomorrow. Secrets never appear here because <see cref="Record"/> never stored them.
+    /// </summary>
+    public IReadOnlyList<string> Snapshot()
+    {
+        int stored = Count;
+        string[] lines = new string[stored];
+        for (int i = 0; i < stored; i++)
+        {
+            // EntryAt is indexed by AGE (0 = newest), and the snapshot is oldest-first.
+            lines[i] = EntryAt(stored - 1 - i);
+        }
+
+        return lines;
+    }
+
+    /// <summary>
+    /// Replays a snapshot, oldest first, through the ordinary <see cref="Record"/> path — so
+    /// a hand-edited or corrupted file cannot smuggle in a blank, a duplicate or a secret
+    /// that the live path would have refused.
+    /// </summary>
+    public void Restore(IEnumerable<string> lines)
+    {
+        foreach (string line in lines)
+        {
+            Record(line);
+        }
+
+        _age = -1;
+    }
 
     private string EntryAt(int age) => _entries[(_count - 1 - age) % _entries.Length];
 

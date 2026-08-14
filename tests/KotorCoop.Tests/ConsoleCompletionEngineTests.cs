@@ -125,10 +125,71 @@ public class ConsoleCompletionEngineTests
     }
 
     [Fact]
-    public void VerbWithArgumentsHintsItsUsage()
+    public void VerbWithArgumentsHintsWhichArgumentIsBeingTyped()
     {
-        Assert.Equal("connect <ip|#n> [password]", NewEngine().Hint("connect 10.0.0.5"));
-        Assert.Equal("connect <ip|#n> [password]", NewEngine().Hint("connect "));
+        // A trailing space means the previous token finished, so the marker moves on; while
+        // a token is still being typed it stays on that token.
+        Assert.Equal("connect <ip|#n> [password]  <- <ip|#n>", NewEngine().Hint("connect "));
+        Assert.Equal("connect <ip|#n> [password]  <- <ip|#n>", NewEngine().Hint("connect 10.0.0.5"));
+        Assert.Equal("connect <ip|#n> [password]  <- [password]", NewEngine().Hint("connect 10.0.0.5 "));
+        Assert.Equal("connect <ip|#n> [password]  <- [password]", NewEngine().Hint("connect 10.0.0.5 hoth"));
+    }
+
+    [Fact]
+    public void EveryArgumentGivenSaysSo()
+    {
+        Assert.Equal("connect <ip|#n> [password]  <- (all given)", NewEngine().Hint("connect 10.0.0.5 hoth "));
+    }
+
+    [Fact]
+    public void AVerbWithNoArgumentsJustShowsItsUsage()
+    {
+        Assert.Equal("clear", NewEngine().Hint("clear "));
+    }
+
+    [Fact]
+    public void AParentheticalNoteIsNotAnArgument()
+    {
+        // The catalog carries prose after the arguments for a couple of verbs; it must not
+        // be offered as the next thing to type.
+        ConsoleCompletionEngine engine = new([("slay", "slay [tag|id]  (blank = nearest hostile)")]);
+        Assert.Equal("slay [tag|id]  (blank = nearest hostile)  <- [tag|id]", engine.Hint("slay "));
+        Assert.Equal("slay [tag|id]  (blank = nearest hostile)  <- (all given)", engine.Hint("slay foo "));
+    }
+
+    // ---- the engine's own verbs -------------------------------------------------
+
+    [Fact]
+    public void EngineVerbsCompleteAndCoopVerbsComeFirst()
+    {
+        ConsoleCompletionEngine engine = NewEngine();
+        engine.SetEngineVerbs(["giveitem", "givecredits", "clear"]);
+
+        // Ours lead: "c" reaches connect/clear/cls before anything the engine registered.
+        Assert.Equal("connect", engine.Complete("c"));
+
+        // And an engine-only verb is reachable, which it was not before.
+        Assert.Equal("givecredits", engine.Complete("give"));
+        Assert.Equal("giveitem", engine.Complete("givecredits"));
+    }
+
+    [Fact]
+    public void AnEngineVerbAlreadyInTheCatalogIsNotOfferedTwice()
+    {
+        ConsoleCompletionEngine engine = NewEngine();
+        engine.SetEngineVerbs(["clear", "clear"]);
+
+        Assert.Equal("connect  clear  cls", engine.Hint("c"));
+    }
+
+    [Fact]
+    public void AnEngineVerbHintsThatTheGameOwnsIt()
+    {
+        ConsoleCompletionEngine engine = NewEngine();
+        engine.SetEngineVerbs(["revealmap"]);
+
+        Assert.Equal("revealmap  (game console command)", engine.Hint("revealmap"));
+        Assert.Equal("revealmap  (game console command)", engine.Hint("revealmap now"));
     }
 
     [Fact]
@@ -191,5 +252,49 @@ public class ConsoleCompletionEngineTests
         {
             Assert.StartsWith(verb, usage);
         }
+    }
+
+    /// <summary>
+    /// The verbs KOTOR itself registers in the developer console, read out of the retail
+    /// binary's string table (the block at file offset 0x34F058..0x34F210 in the GOG 1.0.3
+    /// swkotor.exe; see docs/research/console-cheats.md).
+    /// </summary>
+    private static readonly string[] RetailConsoleVerbs =
+    [
+        "heal", "setcomputeruse", "setdemolitions", "setstealth", "setawareness",
+        "setpersuade", "setrepair", "setsecurity", "settreatinjury", "setstrength",
+        "setdexterity", "setconstitution", "setintelligence", "setwisdom", "setcharisma",
+        "addexp", "turbo", "invulnerability", "restartminigame", "bright", "addlightside",
+        "adddarkside", "revealmap", "givecredits", "giveitem", "givemed", "giverepair",
+        "givecomspikes", "givesecspikes", "givesitharmour", "warp", "infiniteuses",
+        "whereami", "addlevel", "dancedancemalak",
+    ];
+
+    /// <summary>
+    /// A co-op verb must not SHADOW a retail one. The console interceptor swallows any line
+    /// whose first token is ours, so naming a co-op verb `heal` would take the game's own
+    /// working cheat away from the player and replace it with something they did not ask
+    /// for — and they would have no way to tell, because the engine never sees the line.
+    ///
+    /// <c>warp</c> is the one deliberate exception and predates the staging cheats: co-op
+    /// travel has to go through the session, not the raw cheat.
+    /// </summary>
+    [Fact]
+    public void NoCoopVerbShadowsARetailConsoleVerb()
+    {
+        HashSet<string> retail = [.. RetailConsoleVerbs];
+        List<string> shadowed = [];
+
+        foreach ((string verb, _) in ConsoleVerbCatalog.Entries)
+        {
+            if (retail.Contains(verb) && verb != "warp")
+            {
+                shadowed.Add(verb);
+            }
+        }
+
+        Assert.True(
+            shadowed.Count == 0,
+            $"these co-op verbs would swallow a retail console cheat: {string.Join(", ", shadowed)}");
     }
 }

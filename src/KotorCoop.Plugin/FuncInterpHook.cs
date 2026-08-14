@@ -36,6 +36,11 @@ internal static unsafe class FuncInterpHook
         "say", "chat", "msg", "clear", "cls", "servers", "browse", "list", "status", "help", "coop",
         "password", "pw",
         "stat", "commands", "?", "warp", "who", "peers", "where",
+
+        // Staging cheats. None of these shadows a retail console verb — checked against the
+        // engine's own registered names (docs/research/console-cheats.md) — so intercepting
+        // them takes nothing away from the player.
+        "god", "topup", "standup", "getup", "slay", "tp", "goto", "dropitem", "cheats",
     ];
 
     /// <summary>

@@ -58,7 +58,7 @@ internal static unsafe partial class CreatureFinder
     /// whole game died with "Attempted to read or write protected memory". Copying first
     /// turns that into a skipped region.
     /// </summary>
-    private static bool TryReadSelf(nint address, byte* destination, int length)
+    internal static bool TryReadSelf(nint address, byte* destination, int length)
     {
         if (address <= 0 || length <= 0)
         {

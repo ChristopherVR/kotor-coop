@@ -59,6 +59,45 @@ public enum CoopCommandKind
 
     /// <summary>Print the local player's module and position.</summary>
     Where,
+
+    // ---- staging cheats ---------------------------------------------------------
+    //
+    // Only the verbs whose ANSWER DEPENDS ON WHO TYPED THEM, plus the two that stage a
+    // co-op scenario nothing else reaches. KOTOR's own console already ships giveitem,
+    // givecredits, addexp, addlevel, revealmap and heal, all of which touch only the
+    // typist's single-player state and are therefore already correct in co-op; duplicating
+    // them here would add a second spelling and no correctness. See
+    // docs/research/console-cheats.md.
+
+    /// <summary>Toggle or report the local player's damage floor.
+    /// <see cref="CoopCommand.Amount"/>: 1 on, 0 off, -1 report.</summary>
+    God,
+
+    /// <summary>Set the local player's hit points; <see cref="CoopCommand.Amount"/> 0 = to
+    /// maximum.</summary>
+    TopUp,
+
+    /// <summary>Stand the local player up out of the co-op downed state.</summary>
+    StandUp,
+
+    /// <summary>Kill a creature through whichever authority path this instance owns. The
+    /// target token (tag or id) is in <see cref="CoopCommand.Address"/>; empty means
+    /// "the nearest hostile", resolved by the agent from its own enemy census.</summary>
+    Slay,
+
+    /// <summary>Move the local player to <see cref="CoopCommand.X"/>/<see cref="CoopCommand.Y"/>
+    /// /<see cref="CoopCommand.Z"/> inside the current area.</summary>
+    Teleport,
+
+    /// <summary>Move the local player to a peer, named in <see cref="CoopCommand.Address"/>.</summary>
+    GoTo,
+
+    /// <summary>Put a blueprint on the floor at the local player's feet, where the item
+    /// channel will replicate it to everyone.</summary>
+    DropItem,
+
+    /// <summary>List the staging cheats and the retail console cheats worth knowing.</summary>
+    Cheats,
 }
 
 /// <summary>
@@ -70,7 +109,11 @@ public readonly record struct CoopCommand(
     CoopCommandKind Kind,
     string? Address = null,
     string? Password = null,
-    string Error = "")
+    string Error = "",
+    int Amount = 0,
+    float X = 0f,
+    float Y = 0f,
+    float Z = 0f)
 {
     /// <summary>
     /// Resolves <see cref="Address"/> to an endpoint, applying <paramref name="defaultPort"/>
@@ -234,6 +277,132 @@ public static class ConsoleCommand
             case "where":
                 return new CoopCommand(CoopCommandKind.Where);
 
+            // ---- staging cheats -------------------------------------------------
+
+            // A cheat that only ever applies to your own character REFUSES A TARGET rather
+            // than ignoring one. "god malak" is a reasonable thing for a player to try, and
+            // silently arming their own invulnerability instead would be a lie about what
+            // just happened — so the argument is validated and the message names the rule.
+            case "god":
+                if (rest.Length == 0)
+                {
+                    return new CoopCommand(CoopCommandKind.God, Amount: -1);
+                }
+
+                return rest[0].ToLowerInvariant() switch
+                {
+                    "on" or "1" or "true" or "yes" => new CoopCommand(CoopCommandKind.God, Amount: 1),
+                    "off" or "0" or "false" or "no" => new CoopCommand(CoopCommandKind.God, Amount: 0),
+                    _ => new CoopCommand(
+                        CoopCommandKind.Invalid,
+                        Error: "god applies to your own character only - use: god [on|off]"),
+                };
+
+            case "topup":
+                if (rest.Length == 0)
+                {
+                    return new CoopCommand(CoopCommandKind.TopUp);
+                }
+
+                if (!int.TryParse(rest[0], out int hitPoints) || hitPoints <= 0)
+                {
+                    return new CoopCommand(
+                        CoopCommandKind.Invalid,
+                        Error: $"'{rest[0]}' is not a hit-point count - use: topup [n], or topup for full");
+                }
+
+                return new CoopCommand(CoopCommandKind.TopUp, Amount: hitPoints);
+
+            case "standup" or "getup":
+                if (rest.Length == 0)
+                {
+                    return new CoopCommand(CoopCommandKind.StandUp);
+                }
+
+                if (!int.TryParse(rest[0], out int reviveHitPoints) || reviveHitPoints <= 0)
+                {
+                    return new CoopCommand(
+                        CoopCommandKind.Invalid,
+                        Error: $"'{rest[0]}' is not a hit-point count - use: standup [n]");
+                }
+
+                return new CoopCommand(CoopCommandKind.StandUp, Amount: reviveHitPoints);
+
+            case "slay":
+                if (rest.Length == 0)
+                {
+                    // No target: the agent picks the nearest hostile from its own census.
+                    return new CoopCommand(CoopCommandKind.Slay);
+                }
+
+                // Aiming this at a person is the mistake worth catching in the parser: the
+                // plugin refuses it too (a phantom and a companion are both recognised
+                // there), but a player who types "slay me" deserves the reason immediately
+                // rather than a round trip.
+                if (IsSelfWord(rest[0]))
+                {
+                    return new CoopCommand(
+                        CoopCommandKind.Invalid,
+                        Error: "slay is for enemies - your own character is not a target");
+                }
+
+                if (!IsTargetToken(rest[0]))
+                {
+                    return new CoopCommand(
+                        CoopCommandKind.Invalid,
+                        Error: $"'{rest[0]}' is not a creature tag or object id");
+                }
+
+                return new CoopCommand(CoopCommandKind.Slay, Address: rest[0]);
+
+            case "tp":
+                if (rest.Length < 2)
+                {
+                    return new CoopCommand(
+                        CoopCommandKind.Invalid,
+                        Error: "tp needs coordinates, e.g. tp 12.5 -30.0 (z optional)");
+                }
+
+                if (!TryParseCoordinate(rest[0], out float x) || !TryParseCoordinate(rest[1], out float y))
+                {
+                    return new CoopCommand(
+                        CoopCommandKind.Invalid,
+                        Error: $"'{rest[0]} {rest[1]}' is not a coordinate pair");
+                }
+
+                float z = 0f;
+                if (rest.Length > 2 && !TryParseCoordinate(rest[2], out z))
+                {
+                    return new CoopCommand(CoopCommandKind.Invalid, Error: $"'{rest[2]}' is not a height");
+                }
+
+                return new CoopCommand(CoopCommandKind.Teleport, X: x, Y: y, Z: z);
+
+            case "goto":
+                return rest.Length == 0
+                    ? new CoopCommand(CoopCommandKind.Invalid, Error: "goto needs a player, e.g. goto Malak (or `who` to list)")
+                    : new CoopCommand(CoopCommandKind.GoTo, Address: string.Join(' ', rest));
+
+            case "dropitem":
+                if (rest.Length == 0)
+                {
+                    return new CoopCommand(
+                        CoopCommandKind.Invalid,
+                        Error: "dropitem needs a blueprint, e.g. dropitem g_w_blstrpstl001");
+                }
+
+                if (!IsResRef(rest[0], maxLength: 16))
+                {
+                    return new CoopCommand(
+                        CoopCommandKind.Invalid,
+                        Error: $"'{rest[0]}' is not a blueprint resref (letters, digits, _; max 16)");
+                }
+
+                return new CoopCommand(CoopCommandKind.DropItem, Address: rest[0].ToLowerInvariant());
+
+            case "cheats":
+                return new CoopCommand(CoopCommandKind.Cheats);
+
             default:
                 return new CoopCommand(CoopCommandKind.Unknown);
         }
@@ -258,7 +427,78 @@ public static class ConsoleCommand
         return true;
     }
 
+    /// <summary>Words a player uses to mean themselves. Recognised so a self-aimed
+    /// <c>slay</c> gets the rule explained instead of "that is not a tag".</summary>
+    private static bool IsSelfWord(string value) =>
+        value.Equals("me", StringComparison.OrdinalIgnoreCase)
+        || value.Equals("self", StringComparison.OrdinalIgnoreCase)
+        || value.Equals("myself", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// True for a token that could name a creature: a resref-shaped tag, or an object id
+    /// written as <c>0x2A</c>, <c>#42</c> or <c>42</c>. Ids are accepted as text and resolved
+    /// later — the parser's job is to reject a line that cannot possibly name anything.
+    /// </summary>
+    private static bool IsTargetToken(string value) => TryParseObjectId(value, out _) || IsResRef(value, maxLength: 31);
+
+    /// <summary>
+    /// Parses an object id in the three spellings a person types. Public because the agent
+    /// resolves the same token against the world and must agree with the parser about what
+    /// counts as an id.
+    /// </summary>
+    public static bool TryParseObjectId(string value, out uint objectId)
+    {
+        objectId = 0;
+        if (value.Length == 0)
+        {
+            return false;
+        }
+
+        ReadOnlySpan<char> span = value.AsSpan();
+        if (span[0] == '#')
+        {
+            span = span[1..];
+        }
+
+        if (span.StartsWith("0x", StringComparison.OrdinalIgnoreCase))
+        {
+            return uint.TryParse(
+                span[2..], System.Globalization.NumberStyles.HexNumber,
+                System.Globalization.CultureInfo.InvariantCulture, out objectId);
+        }
+
+        return uint.TryParse(span, out objectId);
+    }
+
+    /// <summary>Invariant-culture float parse: a console line is typed with a dot whatever
+    /// the machine's locale says, and a comma-decimal locale would otherwise read "12.5" as
+    /// 125.</summary>
+    private static bool TryParseCoordinate(string value, out float result) =>
+        float.TryParse(
+            value, System.Globalization.NumberStyles.Float,
+            System.Globalization.CultureInfo.InvariantCulture, out result);
+
     /// <summary>One-line help listing the commands, for the overlay and dashboard.</summary>
     public const string HelpText =
-        "commands: servers | connect <ip|#n> [password] | password <pw> | host | disconnect | reconnect | say <msg> | clear | status | warp <module> | who | where | help";
+        "commands: servers | connect <ip|#n> [password] | password <pw> | host | disconnect | reconnect | say <msg> | clear | status | warp <module> | who | where | cheats | help";
+
+    /// <summary>
+    /// The staging-cheat listing. Two halves on purpose: what co-op adds, and what the
+    /// retail console already does correctly in co-op — because the second half is the part
+    /// a player cannot discover on their own and the part we deliberately did not rewrite.
+    /// </summary>
+    public static readonly string[] CheatsText =
+    [
+        "co-op staging cheats (authority-aware):",
+        "  god [on|off]        your damage floors at 1 hp; yours only",
+        "  topup [n]           your hit points to n, or to full",
+        "  standup [n]         stand yourself up out of the downed state",
+        "  slay [tag|id]       kill an enemy; a client routes it to the host",
+        "  tp <x> <y> [z]      move yourself inside this area",
+        "  goto <player>       move yourself to a peer (same module)",
+        "  dropitem <resref>   drop a blueprint; the item channel shares it",
+        "retail console cheats, already co-op-safe (they touch only your game):",
+        "  giveitem <resref> | givecredits <n> | addexp <n> | addlevel | heal",
+        "  revealmap | infiniteuses | invulnerability | whereami | bright | turbo",
+    ];
 }

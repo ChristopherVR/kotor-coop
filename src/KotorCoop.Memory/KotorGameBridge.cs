@@ -398,6 +398,21 @@ public sealed class KotorGameBridge : IGameBridge
     private const int BlockTravelWaypoint = 0x944;
     private const int BlockTravelNameLength = 32;
 
+    // Staging cheats, mirroring SharedBlock version 39 (region 0x3328..0x33B0).
+    private const int BlockCheatSerial = 0x3328;
+    private const int BlockCheatKind = 0x332C;
+    private const int BlockCheatTarget = 0x3330;
+    private const int BlockCheatAmount = 0x3334;
+    private const int BlockCheatX = 0x3338;
+    private const int BlockCheatY = 0x333C;
+    private const int BlockCheatZ = 0x3340;
+    private const int BlockCheatText = 0x3344;
+    private const int BlockCheatTextLength = 32;
+    private const int BlockCheatApplied = 0x3364;
+    private const int BlockCheatStatus = 0x3368;
+    private const int BlockCheatDetail = 0x336C;
+    private const int BlockCheatDetailLength = 64;
+
     // Shared pause + journal apply, mirroring SharedBlock version 7.
     private const int BlockRemotePauseDesired = 0x96C;
     private const int BlockRemotePauseApplied = 0x970;
@@ -3137,6 +3152,64 @@ public sealed class KotorGameBridge : IGameBridge
         ok &= _memory.TryReadUInt32(_pluginBlock + BlockTravelSerial, out uint serial);
         ok &= _memory.TryWrite(_pluginBlock + BlockTravelSerial, serial + 1);
         return ok;
+    }
+
+    // ---- staging cheats --------------------------------------------------------
+
+    /// <summary>Every staging cheat ends in an engine call, so all of them need the plugin.</summary>
+    public bool SupportsCheats => _pluginBlock != 0;
+
+    /// <inheritdoc />
+    public bool TryRequestCheat(CheatRequest request, out uint serial)
+    {
+        serial = 0;
+        if (_pluginBlock == 0)
+        {
+            return false;
+        }
+
+        bool ok = _memory.TryWrite(_pluginBlock + BlockCheatKind, request.Kind);
+        ok &= _memory.TryWrite(_pluginBlock + BlockCheatTarget, request.Target);
+        ok &= _memory.TryWrite(_pluginBlock + BlockCheatAmount, request.Amount);
+        ok &= _memory.TryWrite(_pluginBlock + BlockCheatX, request.X);
+        ok &= _memory.TryWrite(_pluginBlock + BlockCheatY, request.Y);
+        ok &= _memory.TryWrite(_pluginBlock + BlockCheatZ, request.Z);
+        ok &= _memory.TryWriteAsciiString(_pluginBlock + BlockCheatText, request.Text ?? string.Empty, BlockCheatTextLength);
+
+        // Blank the previous answer BEFORE arming the serial, so a caller that polls fast
+        // cannot read the last request's detail and believe it belongs to this one.
+        ok &= _memory.TryWrite(_pluginBlock + BlockCheatStatus, 0);
+        ok &= _memory.TryWriteAsciiString(_pluginBlock + BlockCheatDetail, string.Empty, BlockCheatDetailLength);
+
+        // Serial last, and continued from whatever the block already holds: the plugin
+        // outlives the agent, so restarting the count from zero would replay whichever
+        // request a previous agent left behind. Same rule as travel.
+        ok &= _memory.TryReadUInt32(_pluginBlock + BlockCheatSerial, out uint previous);
+        serial = previous + 1;
+        ok &= _memory.TryWrite(_pluginBlock + BlockCheatSerial, serial);
+        return ok;
+    }
+
+    /// <inheritdoc />
+    public bool TryReadCheatAnswer(out uint applied, out int status, out string detail)
+    {
+        applied = 0;
+        status = 0;
+        detail = string.Empty;
+
+        if (_pluginBlock == 0)
+        {
+            return false;
+        }
+
+        if (!_memory.TryReadUInt32(_pluginBlock + BlockCheatApplied, out applied)
+            || !_memory.TryReadInt32(_pluginBlock + BlockCheatStatus, out status))
+        {
+            return false;
+        }
+
+        _memory.TryReadAsciiString(_pluginBlock + BlockCheatDetail, BlockCheatDetailLength, out detail);
+        return true;
     }
 
     // ---- enemies ---------------------------------------------------------------

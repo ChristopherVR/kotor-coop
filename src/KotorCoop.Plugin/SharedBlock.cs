@@ -1053,6 +1053,98 @@ internal struct SharedBlock
     public const uint AdoptLoginSavedCharacter = 1;
     public const uint AdoptLoginCarriedCharacter = 2;
 
+    // ---- co-op cheats (version 39, region 0x3328..0x33B0) ------------------------
+    //
+    // The staging surface: one serial-edged request the agent writes and the plugin runs on
+    // the game thread, because every one of these ends in an engine call and engine calls
+    // only ever happen there.
+    //
+    // It carries a DETAIL string back, which is not decoration. A cheat that cannot be
+    // applied has to say WHAT IT SAW — "that id is a phantom", "no creature 0x2A here",
+    // "the module pins you at one hit point" — or a guard that fails safe is
+    // indistinguishable from a guard that silently does nothing, and the whole point of
+    // staging commands is that a live session can trust the answer without a human watching
+    // the screen. The plugin logs the same sentence.
+    //
+    // Deliberately ONE request in flight. These are typed by a human a few times a minute;
+    // a ring would add ordering questions to a channel whose whole value is that its answer
+    // arrives before the next line is typed.
+
+    /// <summary>Agent -&gt; plugin. Bumped LAST, after every other field of the request, so
+    /// the plugin can never observe a half-written cheat.</summary>
+    public const int OffsetCheatSerial = 0x3328;
+
+    /// <summary>Agent -&gt; plugin. One of the <c>Cheat*</c> kind constants below.</summary>
+    public const int OffsetCheatKind = 0x332C;
+
+    /// <summary>Agent -&gt; plugin. Engine object id the cheat aims at; 0 = "the local player"
+    /// for the self cheats, or "resolve <see cref="OffsetCheatText"/> as a tag" for slay.</summary>
+    public const int OffsetCheatTarget = 0x3330;
+
+    /// <summary>Agent -&gt; plugin. The numeric argument: hit points for a top-up, stack size
+    /// for an item, 1/0 for a toggle.</summary>
+    public const int OffsetCheatAmount = 0x3334;
+
+    /// <summary>Agent -&gt; plugin. Destination for a teleport (world coordinates).</summary>
+    public const int OffsetCheatX = 0x3338;
+    public const int OffsetCheatY = 0x333C;
+    public const int OffsetCheatZ = 0x3340;
+
+    /// <summary>Agent -&gt; plugin. A tag or a blueprint resref, null-terminated ASCII.</summary>
+    public const int OffsetCheatText = 0x3344;
+
+    public const int CheatTextLength = 32;
+
+    /// <summary>Plugin -&gt; agent. The serial the plugin has finished; equal to
+    /// <see cref="OffsetCheatSerial"/> means the answer below is for the current request.</summary>
+    public const int OffsetCheatApplied = 0x3364;
+
+    /// <summary>Plugin -&gt; agent. One of the <c>CheatStatus*</c> constants.</summary>
+    public const int OffsetCheatStatus = 0x3368;
+
+    /// <summary>Plugin -&gt; agent. What actually happened, in words, null-terminated ASCII.
+    /// Occupies 0x336C..0x33AC, inside the region.</summary>
+    public const int OffsetCheatDetail = 0x336C;
+
+    public const int CheatDetailLength = 64;
+
+    /// <summary>Toggle the local player's min-1-hit-point pin. Amount 1 on, 0 off, -1 report.</summary>
+    public const uint CheatKindGod = 1;
+
+    /// <summary>Set the local player's hit points (amount &lt;= 0 means "to maximum").</summary>
+    public const uint CheatKindTopUp = 2;
+
+    /// <summary>Stand the local player back up out of the downed state.</summary>
+    public const uint CheatKindStandUp = 3;
+
+    /// <summary>Kill a creature, through whichever authority path this instance owns.</summary>
+    public const uint CheatKindSlay = 4;
+
+    /// <summary>Snap the local player to (x, y, z) inside the current area.</summary>
+    public const uint CheatKindTeleport = 5;
+
+    /// <summary>Put a blueprint on the floor at the local player's feet.</summary>
+    public const uint CheatKindDropItem = 6;
+
+    /// <summary>The request was carried out here.</summary>
+    public const int CheatStatusApplied = 1;
+
+    /// <summary>The request was handed to the owning peer rather than applied locally —
+    /// the honest answer for a client slaying an enemy it does not own.</summary>
+    public const int CheatStatusForwarded = 2;
+
+    /// <summary>No world (main menu), or no local player creature yet.</summary>
+    public const int CheatStatusNoWorld = -1;
+
+    /// <summary>The target named by the request does not exist in this instance.</summary>
+    public const int CheatStatusNoTarget = -2;
+
+    /// <summary>The co-op authority rules refuse it; the detail says which rule.</summary>
+    public const int CheatStatusRefused = -3;
+
+    /// <summary>The engine refused the call; the detail carries its failure code.</summary>
+    public const int CheatStatusEngineRefused = -4;
+
     // ---- container-loot removal (region 0xD00..0xE00) -----------------------------
     //
     // Chests and corpses are shared, so an item the host loots out of a container must vanish

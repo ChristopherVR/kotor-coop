@@ -9,10 +9,13 @@
 #   pwsh tools\blockpoke.ps1 -ProcId 1234 travel end_m01aa
 #   pwsh tools\blockpoke.ps1 -ProcId 1234 journal k_swg_bastila 20
 #   pwsh tools\blockpoke.ps1 -ProcId 1234 pause 1
+#   pwsh tools\blockpoke.ps1 -ProcId 1234 cheat god 1
+#   pwsh tools\blockpoke.ps1 -ProcId 1234 cheat slay 42   # decimal object id
+#   pwsh tools\blockpoke.ps1 -ProcId 1234 cheat           # read the answer + detail
 param(
     [string]$ProcessName = 'swkotor',
     [int]$ProcId = 0,
-    [Parameter(Position = 0)][ValidateSet('state', 'travel', 'journal', 'pause', 'browser', 'death', 'hitphantom', 'combat', 'talk', 'walk', 'dialogue', 'attack', 'encounters')]
+    [Parameter(Position = 0)][ValidateSet('state', 'travel', 'journal', 'pause', 'browser', 'death', 'hitphantom', 'combat', 'talk', 'walk', 'dialogue', 'attack', 'encounters', 'cheat')]
     [string]$Command = 'state',
     [Parameter(Position = 1)][string]$Arg1 = '',
     [Parameter(Position = 2)][int]$Arg2 = 0
@@ -131,6 +134,42 @@ switch ($Command) {
         "  suppress: gameOver {0}  swap {1}" -f (U32 0x102C), (U32 0x1030)
         "  revive:   serial {0}  applied {1}  status {2}  hp {3}" -f `
             (U32 0x1034), (U32 0x1038), (U32 0x103C), (U32 0x1040)
+    }
+    'cheat' {
+        # The staging cheats, without needing the console or a keyboard — which is the whole
+        # point, since injected input does not reach this game (see docs/live-verification.md).
+        # Bare `cheat` prints the channel; the plugin's DETAIL string is the answer worth
+        # reading, because a refusal names the rule and the object id it saw.
+        #   cheat god 1 | cheat god 0 | cheat topup [hp] | cheat standup [hp] | cheat slay <id>
+        $kinds = @{ 'god' = 1; 'topup' = 2; 'standup' = 3; 'slay' = 4 }
+        if ($Arg1.Length -gt 0) {
+            if (-not $kinds.ContainsKey($Arg1)) {
+                Write-Error "cheat kinds: $($kinds.Keys -join ', ')  (tp/dropitem need the console)"
+                exit 1
+            }
+
+            $kind = $kinds[$Arg1]
+            $target = 0
+            $amount = $Arg2
+            if ($Arg1 -eq 'slay') { $target = $Arg2; $amount = 0 }
+
+            WU32 0x332C ([uint32]$kind)
+            WU32 0x3330 ([uint32]$target)
+            WU32 0x3334 ([uint32]$amount)
+            WAscii 0x3344 '' 32
+            WU32 0x3368 0
+            WAscii 0x336C '' 64
+            WU32 0x3328 ((U32 0x3328) + 1)
+            "cheat '$Arg1' queued (serial $(U32 0x3328)); re-run the bare 'cheat' to read the answer"
+        }
+
+        # Status is a SIGNED int in the block and every refusal is negative, so it has to be
+        # sign-extended back out of the unsigned read or -3 prints as 4294967293.
+        $status = U32 0x3368
+        if ($status -gt 0x7FFFFFFF) { $status = [int64]$status - 4294967296 }
+
+        "  cheat: serial {0}  applied {1}  status {2}" -f (U32 0x3328), (U32 0x3364), $status
+        "  detail: '{0}'" -f (Ascii 0x336C 64)
     }
     'attack' {
         # Orders a creature to attack another through the engine's own ActionAttack, so a

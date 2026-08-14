@@ -3,6 +3,53 @@ using KotorCoop.Protocol;
 namespace KotorCoop.Memory;
 
 /// <summary>
+/// One staging cheat, as the agent hands it to the plugin.
+///
+/// A flat record rather than a verb-per-method because the plugin side is a single
+/// serial-edged slot in the shared block: adding a cheat is a new <paramref name="Kind"/>
+/// constant on both sides, not a new channel. <paramref name="Text"/> carries whichever
+/// string the kind needs (a creature tag, a blueprint resref) and is capped by the block's
+/// own 32-byte field.
+/// </summary>
+public readonly record struct CheatRequest(
+    uint Kind,
+    uint Target = 0,
+    int Amount = 0,
+    float X = 0f,
+    float Y = 0f,
+    float Z = 0f,
+    string Text = "");
+
+/// <summary>
+/// The cheat kinds, mirroring the plugin's <c>SharedBlock.CheatKind*</c> constants.
+///
+/// ⚠ KEEP IN SYNC with SharedBlock. The two halves of this mod cannot share a type — the
+/// plugin is NativeAOT win-x86 and the agent is x64 — so every block constant is written
+/// twice on purpose, exactly like the travel, journal and browser offsets above it. A wrong
+/// number here means the plugin runs a different verb from the one that was typed.
+/// </summary>
+public static class CheatKinds
+{
+    public const uint God = 1;
+    public const uint TopUp = 2;
+    public const uint StandUp = 3;
+    public const uint Slay = 4;
+    public const uint Teleport = 5;
+    public const uint DropItem = 6;
+}
+
+/// <summary>The plugin's verdicts, mirroring <c>SharedBlock.CheatStatus*</c>.</summary>
+public static class CheatStatus
+{
+    public const int Applied = 1;
+    public const int Forwarded = 2;
+    public const int NoWorld = -1;
+    public const int NoTarget = -2;
+    public const int Refused = -3;
+    public const int EngineRefused = -4;
+}
+
+/// <summary>
 /// The seam between the co-op stack and a specific game. Everything above this interface
 /// is game-agnostic; everything game-specific is an offset profile behind it.
 /// </summary>
@@ -435,6 +482,35 @@ public interface IGameBridge : IDisposable
     /// other death.
     /// </summary>
     bool TryPublishDamageOwed(uint epoch, IReadOnlyList<EnemyDamageEntry> owed) => false;
+
+    /// <summary>False when this bridge has no plugin to run staging cheats through.</summary>
+    bool SupportsCheats => false;
+
+    /// <summary>
+    /// Publishes one staging cheat for the plugin to run on the game thread, returning the
+    /// serial it was filed under so the answer can be matched to it.
+    ///
+    /// Fire-and-forget by design: every one of these ends in an engine call, engine calls
+    /// only happen on the game's own thread, and the agent is not on it. The answer comes
+    /// back through <see cref="TryReadCheatAnswer"/> a frame or two later.
+    /// </summary>
+    bool TryRequestCheat(CheatRequest request, out uint serial)
+    {
+        serial = 0;
+        return false;
+    }
+
+    /// <summary>
+    /// Reads the plugin's answer to the last cheat: which serial it finished, the status,
+    /// and the sentence describing what it actually saw. False when there is no plugin.
+    /// </summary>
+    bool TryReadCheatAnswer(out uint applied, out int status, out string detail)
+    {
+        applied = 0;
+        status = 0;
+        detail = string.Empty;
+        return false;
+    }
 
     /// <summary>False when this bridge cannot see or drive the quest journal.</summary>
     bool SupportsJournalSync => false;
