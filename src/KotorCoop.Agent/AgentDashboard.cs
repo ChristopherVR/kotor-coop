@@ -25,7 +25,29 @@ public sealed class AgentDashboard(
     ];
 
     private int _dropIndex;
-    private string _lastDropNote = string.Empty;
+    private string _lastDropNoteValue = string.Empty;
+
+    /// <summary>
+    /// The outcome of the last drop or pick-up. A property rather than a field because every
+    /// assignment must ALSO reach the log file: this note is where a drop says why it refused
+    /// ("not a readable item here", "ground full"), and it used to render only on the
+    /// dashboard's own screen. An unattended run — which is how this project tests — could
+    /// therefore not tell a refusal from nothing having happened at all, which is exactly
+    /// what blocked verifying the item-identity apply path live on 2026-08-15.
+    /// </summary>
+    private string _lastDropNote
+    {
+        get => _lastDropNoteValue;
+        set
+        {
+            _lastDropNoteValue = value;
+
+            if (value.Length > 0)
+            {
+                Note(value);
+            }
+        }
+    }
 
     /// <summary>The last compact status line written in log mode, so an unchanged session
     /// says nothing at all rather than repeating itself five times a second.</summary>

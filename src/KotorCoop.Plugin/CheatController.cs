@@ -299,7 +299,20 @@ internal sealed unsafe class CheatController(SharedBlockView block)
 
                 if (PhantomHitHook.Dealt.Add(ledgerId, CheatAuthority.ForwardedKillDamage))
                 {
-                    Answer(SharedBlock.CheatStatusForwarded, explanation);
+                    // Name the id space, and do not claim the kill landed. All this call can
+                    // know is that the debt was BANKED here; whether the owner can resolve
+                    // that id is the owner's business and it never answers back. Found live
+                    // on 2026-08-15: the old wording ("sent the kill to them") read as done,
+                    // and the enemy was still standing after two attempts because the host
+                    // could not resolve the id at all.
+                    string keyed = ownerId != 0
+                        ? $"owner id 0x{ownerId:X}"
+                        : $"our own id 0x{targetId:X} (no owner mapping - only lands if the "
+                          + "owner uses the same id)";
+
+                    Answer(
+                        SharedBlock.CheatStatusForwarded,
+                        $"queued a killing blow for the owner, keyed by {keyed}");
                 }
                 else
                 {

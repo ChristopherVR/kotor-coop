@@ -584,6 +584,10 @@ public static class ConsoleCommand
         "  tp <x> <y> [z]      move yourself inside this area",
         "  goto <player>       move yourself to a peer (same module)",
         "  dropitem <resref>   drop a blueprint; the item channel shares it",
+        // Listed here because it is the same family — a verb that exists to stage a test —
+        // and discoverability is the point of this listing. It is owned by the network
+        // fault-injection work, which registers its own catalog entry and parser case; this
+        // is only the line that tells a player it is there.
         "test harness:",
         "  netsim <off|status|loss <pct>|latency <ms> <jitter>|blackout <s> [in|out|both]>",
         "retail console cheats, already co-op-safe (they touch only your game):",

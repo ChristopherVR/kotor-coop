@@ -60,6 +60,10 @@ internal sealed unsafe class PeerDamageController(SharedBlockView block)
     private int _countdown;
     private int _logged;
 
+    /// <summary>Separate budget from <see cref="_logged"/>: an unresolvable id is the quiet
+    /// failure, so it must not be crowded out of the log by successful applies.</summary>
+    private int _unresolvedLogged;
+
     /// <summary>
     /// A module change reassigns every object id, so both halves start again — and they must
     /// start again TOGETHER, which is what the agent's epoch is for. This clears the local
@@ -232,8 +236,25 @@ internal sealed unsafe class PeerDamageController(SharedBlockView block)
             // Resolve first: an id we cannot find is a creature that is not here (shed on a
             // transition, or already destroyed after its death). Leaving the debt unapplied
             // is right — it lands when the creature does, and never on a stranger.
+            //
+            // ⚠ But SAY SO. This skip used to be silent, and silence made a whole failure
+            // class invisible: a peer forwards damage keyed by an id this instance has never
+            // heard of, the debt sits unapplied forever, and both ends look healthy. Found
+            // live on 2026-08-15 — a client's `slay` reported "sent the kill to them" and the
+            // host log had not one word about it. Bounded by its own counter so a genuine
+            // transition (where every id is briefly unresolvable) costs a few lines, not a
+            // flood.
             if (Odyssey.ResolveServerObject(objectId) == 0)
             {
+                if (_unresolvedLogged < 10)
+                {
+                    _unresolvedLogged++;
+                    PluginHost.Log(
+                        $"combat: a peer owes {amount} damage to 0x{objectId:X}, which does not "
+                        + "resolve here - holding the debt (normal mid-transition; permanent if "
+                        + "the peer keyed it in its OWN id space)");
+                }
+
                 continue;
             }
 

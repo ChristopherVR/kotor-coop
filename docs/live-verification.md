@@ -281,3 +281,62 @@ form, and `#<hex>` through the drop FILE produced nothing. The blocker is a harn
 `AgentDashboard._lastDropNote` renders only in the dashboard UI, never to the log file, so an
 unattended run cannot tell "refused, and here is why" from "nothing happened". Fix that first,
 then re-run with an item carrying real charges/upgrades.
+
+## Follow-up pass (2026-08-15, later) — fixes verified, and one defect localised deeper
+
+### Fixed and confirmed live
+
+- **`slay` on the HOST works end to end.** `slaying the nearest enemy 0x1A (27.1m away)` →
+  `cheat: killed 0x1A (status 1)`. The authority path itself is sound.
+- **The host no longer swallows unresolvable peer damage.** `PeerDamageController` had a bare
+  `continue` for an id it could not resolve — no log, no counter — which is what made this
+  entire failure class invisible. It now says
+  `combat: a peer owes N damage to 0xID, which does not resolve here`, on its own bounded
+  budget so successful applies cannot crowd it out. This single line turned an unfalsifiable
+  "nothing happened" into a located defect within one run.
+- **`slay` no longer claims delivery it has not earned.** A forwarded kill now answers
+  `queued a killing blow for the owner, keyed by <id space>` instead of "sent the kill to
+  them" — all the caller can actually know is that the debt was banked locally.
+- **Drop outcomes reach the log.** `AgentDashboard._lastDropNote` is now a property that also
+  calls `Note`, so `* drop: object 0x131 is not a readable item here` appears in the agent log
+  instead of only on a dashboard nobody is watching. This was the blocker on unattended
+  item-identity verification.
+- **The nearest-hostile sweep reads the right census.** On a mirroring instance it now sweeps
+  the OWNER's published set rather than the local engine's creature list, and the reply names
+  the source: `[from owner census, 32 in 'END_M01AA']`.
+
+### OPEN — the host publishes an enemy id it cannot itself resolve
+
+The client's `slay` still does not kill, and the cause is now located precisely and is NOT in
+the cheat:
+
+1. The client sweeps the owner's census — proven by the reply tag `[from owner census, 32 in
+   'END_M01AA']`.
+2. That census contains `0x35`, so the HOST published it.
+3. The host cannot resolve `0x35`: `combat: a peer owes 200 damage to 0x35, which does not
+   resolve here`.
+4. `tools/creatures.ps1` on the host finds **no `0x35` at all** among its 38 creatures
+   (0x36/0x37/0x38 exist). The client has 45 creatures and `0x35` is an `end_weld` at
+   (33.58, 22.72) that exists only there.
+
+So an id in the host's own enemy census names nothing the host can resolve. Any damage a peer
+forwards against it is held for ever. Mirroring still works because the client MATERIALISES
+what it cannot find (`materialise: owner 0x1A -> local 0x135`), which masks the divergence for
+every channel except the debt.
+
+Next diagnostic (not run): dump the host's published census beside `creatures.ps1` output and
+find which ids in it have no resolvable creature — the suspicion is the census is read in a
+different id space (KOTOR's client/server halves — the host dump shows the same id at two
+addresses) or holds entries for creatures already destroyed. Until that is settled, a client's
+forwarded damage against a naturally-present enemy is only reliable where the ids happen to
+agree, which the ID counts (38 vs 45) say is not guaranteed.
+
+### Still unverified — item identity apply
+
+`drop <resref>` replicates and correctly records no identity. The by-object-id harness path
+still cannot exercise the apply: the ground body genuinely IS object `0x131`
+(`item slot 0: spawned item 0x10001 as object 0x131`) and `drop #131` answers
+`object 0x131 is not a readable item here` — so `TryReadItemIdentity` cannot read a
+ground-spawned item body. The refusal is now VISIBLE, which is the part that was broken; the
+read path needs its own look, ideally against an inventory item with real charges/upgrades
+rather than a freshly spawned stock one.

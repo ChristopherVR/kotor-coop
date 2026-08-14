@@ -370,6 +370,14 @@ Observed at integration time, not during the pass that wrote this doc:
 and passed in the next (1 m 33 s) and in isolation (9 s). Every channel converged except
 container loot — `clientLoot=0` with flags and journal both settled.
 
+**The correlation is now measured, across five full-suite runs: it fails on the SLOW ones and
+passes on the fast ones** — failures at 2 m 12 s and 2 m 16 s, passes at 1 m 33 s, 1 m 47 s
+and 1 m 49 s, and it passes in 9 s alone. Suite wall-clock is the predictor, which is exactly
+what the starvation explanation below requires: the 25 s budget is wall-clock but the attempts
+inside it are ticks, and a loaded machine buys fewer of them. Treat a failure here as a signal
+about machine load, not about the transport — but do NOT silence it by widening the budget,
+because the underlying asymmetry it points at is real.
+
 That asymmetry is not luck, it is the shape of the channel. Loot backs off 250 ms doubling to
 a 4 s cap, which fits roughly nine or ten attempts into the test's 25 s budget; at 30 % loss in
 both directions a send-plus-ack survives with p ≈ 0.49, so being unacked after nine attempts is

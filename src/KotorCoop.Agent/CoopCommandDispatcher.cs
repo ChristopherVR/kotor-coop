@@ -563,11 +563,20 @@ public sealed class CoopCommandDispatcher(
         {
             if (!TryFindNearestEnemy(out uint nearest, out float distance))
             {
-                Reply("no living enemy in range - name one: slay <tag|id>");
+                // Names the census, because "none in range" and "the owner has not published
+                // any here" look identical from the console and mean different things.
+                Reply(
+                    manager.Current is { IsEnemyAuthority: false }
+                        ? "no living enemy in the owner's census here - name one: slay <tag|id>"
+                        : "no living enemy in range - name one: slay <tag|id>");
                 return;
             }
 
-            Reply($"slaying the nearest enemy 0x{nearest:X} ({distance:F1}m away)");
+            // Names the census it came from: an id is only meaningful in one id space, and
+            // when a forwarded kill goes missing the FIRST question is which list chose it.
+            Reply(
+                $"slaying the nearest enemy 0x{nearest:X} ({distance:F1}m away) "
+                + $"[from {_lastCensusSource}]");
             SendCheat(new CheatRequest(CheatKinds.Slay, Target: nearest));
             return;
         }
@@ -596,8 +605,24 @@ public sealed class CoopCommandDispatcher(
         SendCheat(new CheatRequest(CheatKinds.Slay, Text: token));
     }
 
-    /// <summary>The nearest living enemy to the local player, from the census this agent
-    /// already runs every tick for the enemy channel.</summary>
+    /// <summary>
+    /// The nearest living enemy to the local player.
+    ///
+    /// ⚠ Which census answers this depends on who owns the fight, and getting it wrong is
+    /// silent. On a MIRRORING instance the local engine's creature list is in OUR id space,
+    /// and those ids mean nothing to the owner — the kill is forwarded as a debt keyed by
+    /// object id, so an id the owner cannot resolve is a debt it holds for ever. Measured
+    /// live on 2026-08-15: the client's list held 45 creatures to the host's 38, the sweep
+    /// picked an `end_weld` that exists only here, and the host logged nothing at all
+    /// because it had never heard of that id.
+    ///
+    /// So a mirroring instance sweeps the OWNER's published set instead: those ids are the
+    /// only ones a forwarded kill can be keyed by, and the positions travel with them.
+    /// </summary>
+    /// <summary>Which list the last nearest-enemy sweep read, for the reply line. An id
+    /// is only meaningful in one id space, so the source belongs next to the id.</summary>
+    private string _lastCensusSource = "none";
+
     private bool TryFindNearestEnemy(out uint objectId, out float distance)
     {
         objectId = 0;
@@ -608,8 +633,21 @@ public sealed class CoopCommandDispatcher(
             return false;
         }
 
+        IReadOnlyList<EnemyState> census;
+
+        if (manager.Current is { IsEnemyAuthority: false } mirror)
+        {
+            census = mirror.GetEnemies(local.Module);
+            _lastCensusSource = $"owner census, {census.Count} in '{local.Module}'";
+        }
+        else
+        {
+            census = bridge.ReadEnemies([]);
+            _lastCensusSource = $"local engine, {census.Count}";
+        }
+
         float best = float.MaxValue;
-        foreach (EnemyState enemy in bridge.ReadEnemies([]))
+        foreach (EnemyState enemy in census)
         {
             if (enemy.Dead || enemy.Plot || enemy.CurrentHealth == 0)
             {
