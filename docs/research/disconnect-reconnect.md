@@ -363,6 +363,30 @@ snapshot that tick. Clients then receive no roster — but they still receive th
 roster and lock levels every tick, so the membership check in §2.8 does not false-positive.
 The pre-existing overflow problem itself is untouched by this pass.
 
+### 4.8 Loot is retransmit-only, so heavy loss has nothing to rescue a straggler
+
+Observed at integration time, not during the pass that wrote this doc:
+`HeavyPacketLossStillConverges` failed once in a full merged suite run (2 m 12 s wall clock)
+and passed in the next (1 m 33 s) and in isolation (9 s). Every channel converged except
+container loot — `clientLoot=0` with flags and journal both settled.
+
+That asymmetry is not luck, it is the shape of the channel. Loot backs off 250 ms doubling to
+a 4 s cap, which fits roughly nine or ten attempts into the test's 25 s budget; at 30 % loss in
+both directions a send-plus-ack survives with p ≈ 0.49, so being unacked after nine attempts is
+a ~0.3 % event — until the suite runs under enough parallel load to starve the 30 Hz tick,
+which cuts the number of attempts that fit in the window and lifts that probability sharply.
+**Flags and journal have a version tripwire and a divergence-repair path that catches a
+straggler; loot has neither (§4.1 notes it is the one channel with no tripwire), so it is
+retransmit-only and a run of bad luck has nothing behind it.**
+
+This is a genuine, if modest, weakness rather than purely a test artifact: on a real link that
+is bad for a sustained period, a loot removal is the op most likely to arrive late. It is not
+*lost* — the sender keeps it until acked, and the (re)connect resync now covers the
+outage-shaped case — so the world does not diverge permanently. Deliberately not "fixed" by
+widening the test budget, which would only hide the property. The real fix is to give loot the
+same content-fingerprint tripwire §4.1 proposes for the others, at which point a straggler is
+repaired rather than merely retried.
+
 ## 5. Tests
 
 `tests/KotorCoop.Tests/DisconnectRecoveryTests.cs` — real host, real client, real sockets, and

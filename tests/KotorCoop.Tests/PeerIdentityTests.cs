@@ -111,7 +111,8 @@ public class PeerIdentityTests : IDisposable
         // told nobody it was going, when the replacement dials in.
         //
         // ⚠ The reclaim window is the peer SLOT's lifetime, not forever — the host matches a
-        // returning Hello against its live peers. AFarewellIsStillAFarewell is the other half.
+        // returning Hello against its live peers, then against the retired-by-nonce table.
+        // ByeIdentityTests is the other half: what a departure does and does not reset.
         uint identity = PeerIdentity.Mint();
 
         using CoopHost host = new(new SessionSettings { PlayerName = "Revan", Port = 0, TickRate = 30 });
@@ -150,56 +151,15 @@ public class PeerIdentityTests : IDisposable
         await hostTask;
     }
 
-    [Fact]
-    public async Task AFarewellIsStillAFarewell()
-    {
-        // A stable identity must not resurrect a player who LEFT. A clean Bye retires the peer
-        // slot, and coming back afterwards is a fresh join — which is what the session telling
-        // everyone "so-and-so left" already means.
-        uint identity = PeerIdentity.Mint();
-
-        using CoopHost host = new(new SessionSettings { PlayerName = "Revan", Port = 0, TickRate = 30 });
-        using CancellationTokenSource cts = new(TimeSpan.FromSeconds(30));
-        Task hostTask = host.RunAsync(cts.Token);
-
-        IPEndPoint endpoint = new(IPAddress.Loopback, host.ListenEndPoint.Port);
-        PlayerState state = new(Vector3f.Zero, 0f, "end_m01aa", 100, 0);
-
-        uint firstId;
-        using (CoopClient first = new(Settings(identity), endpoint))
-        {
-            using CancellationTokenSource firstCts = new();
-            Task firstTask = first.RunAsync(firstCts.Token);
-
-            Assert.True(
-                await WaitAsync(() => first.IsConnected, () => Publish(host, state, first)),
-                "the first client never joined");
-            firstId = first.LocalPeerId;
-
-            await firstCts.CancelAsync();
-            await firstTask; // sends Bye on the way out
-        }
-
-        Assert.True(
-            await WaitAsync(() => host.GetStats().PeerCount == 0, () => host.PublishLocalState(state)),
-            "the host never retired the departed peer");
-
-        using CoopClient second = new(Settings(identity), endpoint);
-        using CancellationTokenSource secondCts = new();
-        Task secondTask = second.RunAsync(secondCts.Token);
-
-        Assert.True(
-            await WaitAsync(() => second.IsConnected, () => Publish(host, state, second)),
-            "the returning client never joined");
-
-        Assert.NotEqual(0u, firstId);
-        Assert.NotEqual(firstId, second.LocalPeerId);
-
-        await secondCts.CancelAsync();
-        await secondTask;
-        await cts.CancelAsync();
-        await hostTask;
-    }
+    // NOTE: AFarewellIsStillAFarewell used to live here. It asserted that a clean Bye
+    // followed by a rejoin must yield a NEW peer id. That invariant was wrong, and the
+    // evidence is in docs/research/disconnect-reconnect.md: the counters keyed on a peer id
+    // (the plugin's DamageDealtTable, the host's _phantomDamageIn, the CoopAgent ledger) are
+    // module-scoped, not connection-scoped — nothing clears them on a departure — so handing
+    // a returning player a fresh id makes their whole historic contribution bank a second
+    // time. An identity must live as long as the counters keyed on it. The intent behind the
+    // old test is preserved in ByeIdentityTests, which enforces it via the nonce (a departure
+    // that really does reset state mints a new one) rather than via the Bye, which does not.
 
     private static SessionSettings Settings(uint identity) =>
         new() { PlayerName = "Malak", TickRate = 30, PeerIdentity = identity };
