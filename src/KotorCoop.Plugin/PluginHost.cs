@@ -377,7 +377,8 @@ internal static unsafe class PluginHost
         // pattern the agent scans for, so bumping only one end reads as "plugin shared block
         // not found" — which looks like a broken install rather than a version skew.
         // 37 = the load-screen texture in the browser details array (SharedBlock, version 37).
-        _block->Version = 38;
+        // 39 = per-instance item identity in the item slot's tail (SharedBlock, version 39).
+        _block->Version = 39;
 
         // A guard dword after the version. Magic plus version alone was not selective
         // enough: a scan once matched something else at a lower address and the agent

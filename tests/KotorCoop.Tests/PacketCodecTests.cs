@@ -317,6 +317,58 @@ public class PacketCodecTests
         Assert.Equal(new ItemSyncRequestPacket(2, 5), PacketCodec.ReadItemSyncRequest(buffer[..requestLength]));
     }
 
+    /// <summary>
+    /// The whole point of protocol 24: what makes an item THIS item has to survive the wire.
+    /// A stack of twenty half-spent charges with three upgrades bolted in must decode as
+    /// exactly that, and an identity nobody read must decode as UNKNOWN rather than as a
+    /// plausible-looking stock item.
+    /// </summary>
+    [Fact]
+    public void ItemIdentityRoundTripsAndUnknownStaysUnknown()
+    {
+        Span<byte> buffer = stackalloc byte[ProtocolConstants.MaxPacketSize];
+
+        ItemIdentity identity = new(
+            StackSize: 20,
+            Charges: 7,
+            MaxCharges: 50,
+            Upgrades: 0b1011,
+            Flags: ItemIdentity.FlagKnown | ItemIdentity.FlagIdentified | ItemIdentity.FlagStolen);
+
+        GroundItem item = new(
+            0x20001, "g_w_lghtsbr01", "end_m01aa", new Vector3f(1f, 2f, 3f), identity);
+
+        int length = PacketCodec.Write(buffer, new ItemOpPacket(2, 7, ItemOpKind.Drop, item));
+        ItemOpPacket? decoded = PacketCodec.ReadItemOp(buffer[..length]);
+
+        Assert.NotNull(decoded);
+        Assert.Equal(identity, decoded.Item.Identity);
+        Assert.True(decoded.Item.Identity.IsKnown);
+        Assert.True(decoded.Item.Identity.Identified);
+        Assert.True(decoded.Item.Identity.Stolen);
+        Assert.False(decoded.Item.Identity.NonEquippable);
+
+        GroundItem stock = new(0x20002, "g_i_medeqpmnt01", "end_m01aa", Vector3f.Zero);
+        int stockLength = PacketCodec.Write(buffer, new ItemOpPacket(2, 8, ItemOpKind.Drop, stock));
+        ItemOpPacket? stockDecoded = PacketCodec.ReadItemOp(buffer[..stockLength]);
+
+        Assert.NotNull(stockDecoded);
+        Assert.False(stockDecoded.Item.Identity.IsKnown);
+        Assert.Equal(ItemIdentity.Unknown, stockDecoded.Item.Identity);
+    }
+
+    [Fact]
+    public void ItemAckAndSyncRequestRoundTrip()
+    {
+        Span<byte> buffer = stackalloc byte[ProtocolConstants.MaxPacketSize];
+
+        int ackLength = PacketCodec.Write(buffer, new ItemAckPacket(7));
+        Assert.Equal(7u, PacketCodec.ReadItemAck(buffer[..ackLength])!.OpSequence);
+
+        int requestLength = PacketCodec.Write(buffer, new ItemSyncRequestPacket(2, 5));
+        Assert.Equal(new ItemSyncRequestPacket(2, 5), PacketCodec.ReadItemSyncRequest(buffer[..requestLength]));
+    }
+
     [Fact]
     public void ContainerLootPacketsRoundTrip()
     {
@@ -336,12 +388,15 @@ public class PacketCodecTests
     {
         Span<byte> buffer = stackalloc byte[ProtocolConstants.MaxPacketSize];
 
+        // Every string at its cap AND every identity carried, which is the true worst case
+        // now that an item is more than a blueprint name.
         List<GroundItem> items = [.. Enumerable.Range(1, ProtocolConstants.MaxGroundItems)
             .Select(i => new GroundItem(
                 (uint)i,
                 new string('r', ProtocolConstants.MaxResrefLength),
                 new string('m', ProtocolConstants.MaxModuleLength),
-                new Vector3f(1f, 2f, 3f)))];
+                new Vector3f(1f, 2f, 3f),
+                new ItemIdentity(ushort.MaxValue, 0xFF, 0xFF, uint.MaxValue, 0x0F)))];
 
         int length = PacketCodec.Write(buffer, new ItemSnapshotPacket(3, items));
 

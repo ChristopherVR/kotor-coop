@@ -197,6 +197,37 @@ public sealed class AgentDashboard(
 
         string resref = requestedResref ?? DropCycle[_dropIndex % DropCycle.Length];
 
+        // "#1f" names a LIVE item in this instance by engine object id rather than a
+        // blueprint, and that is the only form that can exercise item identity: a conjured
+        // blueprint has no instance to read a stack size or an upgrade mask off. It does not
+        // remove the item from wherever it is — this is the same harness as the rest of the
+        // drop key, and duplicating an item locally is a cheaper price than needing the game
+        // to have a drop UI it does not have.
+        ItemIdentity identity = ItemIdentity.Unknown;
+        if (resref.StartsWith('#'))
+        {
+            if (bridge is not KotorGameBridge live)
+            {
+                _lastDropNote = "drop #id needs --kotor";
+                return;
+            }
+
+            if (!uint.TryParse(resref[1..], System.Globalization.NumberStyles.HexNumber, null, out uint objectId))
+            {
+                _lastDropNote = $"drop: {resref} is not a hex object id";
+                return;
+            }
+
+            string liveResref = live.ItemResref(objectId);
+            if (liveResref.Length == 0 || !live.TryReadItemIdentity(objectId, out identity))
+            {
+                _lastDropNote = $"drop: object 0x{objectId:X} is not a readable item here";
+                return;
+            }
+
+            resref = liveResref;
+        }
+
         // In front of the player, along their facing, rather than at a fixed world offset:
         // the camera sits behind the character, so a world-axis offset drops the item
         // off-screen as often as not. Facing is the angle of the orientation vector, so
@@ -207,7 +238,7 @@ public sealed class AgentDashboard(
             local.Position.Y + (MathF.Sin(local.Facing) * DropDistance),
             local.Position.Z);
 
-        uint itemId = agent.Session.DropItem(resref, local.Module, at);
+        uint itemId = agent.Session.DropItem(resref, local.Module, at, identity);
         if (itemId == 0)
         {
             _lastDropNote = $"drop refused: {resref} (not connected, or ground full)";
@@ -215,7 +246,10 @@ public sealed class AgentDashboard(
         }
 
         _dropIndex++;
-        _lastDropNote = $"dropped {resref} as item 0x{itemId:X}";
+        _lastDropNote = identity.IsKnown
+            ? $"dropped {resref} as item 0x{itemId:X} (stack {identity.StackSize}, "
+              + $"charges {identity.Charges}/{identity.MaxCharges}, upgrades 0x{identity.Upgrades:X})"
+            : $"dropped {resref} as item 0x{itemId:X}";
     }
 
     /// <summary>

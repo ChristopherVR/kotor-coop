@@ -254,7 +254,19 @@ tools/                   RE helpers, demo scripts, the kotor1_0_3 symbol databas
   three encounters fired host-side, all nine spawned Vulkars appeared on the client, and
   damage flowed both ways — the spawns hurt the client through its phantom, and the
   client's own hits were spent by the host on the real bodies.
-- **Item identity is a blueprint resref**: upgrades and charges don't travel yet.
+- ~~**Item identity is a blueprint resref**~~ — no longer, on the wire: an item that crosses
+  between players now carries **what makes it that item** — its stack size, its charges, its
+  installed upgrades, and whether it is identified (plus the stolen and non-equippable bits) —
+  and the receiving instance writes them onto the body it just created, the same five fields
+  the engine's own upgrade workbench copies when it rebuilds an upgraded weapon from its
+  template. An identity nobody could read stays explicitly *unknown* rather than being faked
+  as stock, and merges upward: a stock re-announcement can never strip an upgraded weapon.
+  See [docs/research/item-identity.md](docs/research/item-identity.md).
+  **Still open:** nothing yet *detects* a player putting an item on the ground — KOTOR 1 has
+  no drop UI, so the ground channel is still driven by the harness (the dashboard's `drop`
+  key, which can now name a live item by object id to send its real state). And the apply
+  path has not had a live pass: every offset is read out of the retail binary's own save/load
+  routines, but a guarded no-op is what a wrong one produces, not a crash.
 - **The world-time compatibility check covers the globals catalogue**; save-identity and
   per-module GIT digests (to also gate on a mod-edited module) are a planned follow-up.
 - KOTOR 2 is untouched, and only GOG v1.0.3 addresses are known.

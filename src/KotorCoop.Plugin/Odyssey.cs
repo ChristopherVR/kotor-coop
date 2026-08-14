@@ -1121,6 +1121,104 @@ internal static unsafe class Odyssey
         return true;
     }
 
+    // ---- item identity ---------------------------------------------------------------
+    //
+    // Everything that is true of ONE item rather than of its blueprint. CreateItemOnFloor
+    // takes a template name and nothing else, so an item spawned for a peer arrives stock:
+    // one of it, full charges, unidentified, no upgrades. These four fields are what the
+    // engine itself carries across a rebuild-from-template.
+    //
+    // Provenance (docs/research/item-identity.md), all read out of this binary:
+    //   CSWSItem::SaveItem       0x0055CCD0 — writes StackSize from the word at +0x28C,
+    //                                        Charges/MaxCharges from +0x258/+0x25C,
+    //                                        Upgrades from the dword at +0x294, and the
+    //                                        Identified/Stolen/NonEquippable GFF fields
+    //                                        from bits 0/5/6 of +0x288.
+    //   CSWSItem::LoadDataFromGff 0x0055FCD0 — the matching reader, same offsets.
+    //   CSWSItem::SetIdentified  0x00554170 — eight instructions that toggle bit 0 of +0x288
+    //                                        and nothing else, which is why the bit poke
+    //                                        below needs no engine call.
+    //   CSWSItem::HasUpgrade     0x004EADA0 — `[this+0x294] & (1 << n)`, so +0x294 is a
+    //                                        MASK of installed upgrade slots.
+    //   CSWGuiUpgrade            0x006C5620 — the workbench itself: LoadFromTemplate, then
+    //                                        SetIdentified(1), then a raw copy of the old
+    //                                        item's +0x294 and Stolen bit onto the new body,
+    //                                        with no rebuild call afterwards. This IS the
+    //                                        sequence below, performed by the engine.
+    //
+    // Nothing derived caches any of it: ComputeArmorClass (0x00553CC0) reads the BASE ITEM
+    // row and GetCost (0x00554000) recomputes from the base item every call, so there is no
+    // stale sibling to refresh after the poke — unlike an appearance change, which there is.
+
+    /// <summary>CSWSItem + this = charges (int, byte-ranged).</summary>
+    private const int ItemCharges = 0x258;
+
+    /// <summary>CSWSItem + this = max charges (int, byte-ranged).</summary>
+    private const int ItemMaxCharges = 0x25C;
+
+    /// <summary>CSWSItem + this = the flag bitfield. Bit 0 identified, 5 stolen, 6 non-equippable.</summary>
+    private const int ItemBitFlags = 0x288;
+
+    /// <summary>CSWSItem + this = stack size. A dword whose high half the engine keeps zero.</summary>
+    private const int ItemStackSize = 0x28C;
+
+    /// <summary>CSWSItem + this = the installed-upgrade bitmask.</summary>
+    private const int ItemUpgrades = 0x294;
+
+    private const uint ItemBitIdentified = 1u << 0;
+    private const uint ItemBitStolen = 1u << 5;
+    private const uint ItemBitNonEquippable = 1u << 6;
+
+    /// <summary>
+    /// Writes one item's per-instance state onto a freshly created body, so a peer's
+    /// half-spent stack of twenty arrives as twenty and their upgraded lightsaber arrives
+    /// upgraded.
+    ///
+    /// Field writes only — no engine call, so there is no argument size to get wrong and no
+    /// stack to skew. An id that does not resolve to a live CSWSItem (wrong module, item
+    /// already destroyed, the pointer reused) fails the vtable check inside
+    /// <see cref="ResolveItemBase"/> and this returns false having touched nothing: the item
+    /// stays exactly as the engine made it, which is the old behaviour rather than a crash.
+    ///
+    /// Only ever reached with an identity the agent actually READ, so the values are written
+    /// as they came rather than second-guessed — a stock item reads as stock and writing its
+    /// own numbers back changes nothing. The single exception is a stack size of 0, which the
+    /// engine never produces and which would make the item unpickable; the decoder already
+    /// clamps it, and this refuses it again because it is the one field that ends up inside
+    /// somebody else's world.
+    ///
+    /// MAIN THREAD ONLY.
+    /// </summary>
+    public static bool ApplyItemIdentity(
+        uint itemId, uint upgrades, uint stackSize, uint charges, uint maxCharges, uint flags)
+    {
+        nint item = ResolveItemBase(itemId);
+        if (item == 0)
+        {
+            return false;
+        }
+
+        *(uint*)(item + ItemUpgrades) = upgrades;
+
+        if (stackSize > 0)
+        {
+            *(uint*)(item + ItemStackSize) = Math.Min(stackSize, ushort.MaxValue);
+        }
+
+        *(uint*)(item + ItemMaxCharges) = maxCharges;
+        *(uint*)(item + ItemCharges) = charges;
+
+        uint bits = *(uint*)(item + ItemBitFlags);
+        bits = Set(bits, ItemBitIdentified, (flags & SharedBlock.ItemIdentityIdentified) != 0);
+        bits = Set(bits, ItemBitStolen, (flags & SharedBlock.ItemIdentityStolen) != 0);
+        bits = Set(bits, ItemBitNonEquippable, (flags & SharedBlock.ItemIdentityNonEquippable) != 0);
+        *(uint*)(item + ItemBitFlags) = bits;
+
+        return true;
+
+        static uint Set(uint bits, uint bit, bool on) => on ? bits | bit : bits & ~bit;
+    }
+
     public static byte GetDoorOpenState(nint door) => *(byte*)(door + DoorOpenState);
 
     public static byte GetDoorPendingOpenState(nint door) => *(byte*)(door + DoorPendingOpenState);

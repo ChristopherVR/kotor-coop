@@ -71,8 +71,14 @@ public static class ProtocolConstants
     /// earned/spent LEDGER the host spends against its own party table — the balance cannot be
     /// merged, but "this peer has taken 250 out of the purse" can — while XP travels as an
     /// absolute merged by max, because both engines already grant kill XP independently and a
-    /// delta would count every kill twice.</summary>
-    public const byte Version = 23;
+    /// delta would count every kill twice.
+    /// Version 24: a ground item carries its IDENTITY (stack size, charges, max charges,
+    /// installed-upgrade mask, and the identified/stolen/non-equippable bits) and not just
+    /// its blueprint resref. Before this the receiving instance re-created a pristine stock
+    /// item, so a half-spent stack of twenty arrived as one fresh one and an upgraded
+    /// lightsaber arrived with its upgrades stripped. A zeroed identity still means
+    /// "unknown", which is what the harness sends and what the receiver leaves alone.</summary>
+    public const byte Version = 24;
 
     /// <summary>Journal quest tags are resrefs plus a little slack.</summary>
     public const int MaxJournalTagLength = 32;
@@ -89,7 +95,10 @@ public static class ProtocolConstants
 
     /// <summary>
     /// Ground items a session tracks at once. 16 is the most that still fits in a single
-    /// item snapshot datagram with every string at maximum length (16 x 66 bytes + header).
+    /// item snapshot datagram with every string at maximum length: 66 bytes of id, resref,
+    /// module and position plus 9 of item identity is 75 each, so a full 16 is 1210 bytes
+    /// with the header — inside <see cref="MaxPacketSize"/>, and asserted by a test rather
+    /// than by this arithmetic.
     /// </summary>
     public const int MaxGroundItems = 16;
 

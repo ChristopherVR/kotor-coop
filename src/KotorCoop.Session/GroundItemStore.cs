@@ -40,12 +40,34 @@ public sealed class GroundItemStore
         }
     }
 
-    /// <summary>Adds a dropped item. Returns true only when the set actually changed.</summary>
+    /// <summary>
+    /// Adds a dropped item. Returns true only when the set actually changed.
+    ///
+    /// An id already on the ground is normally left alone — that is what makes a
+    /// retransmitted drop harmless. The one exception is the item's IDENTITY, which merges
+    /// upward like every other shared fact here: a re-announcement that KNOWS the stack
+    /// size, charges and upgrades replaces one that did not, and never the other way round.
+    /// Identity can only ever be learned, so an instance that heard the blueprint first (a
+    /// snapshot, a harness drop) is repaired by the real thing arriving later, while a
+    /// stock re-announcement can never strip an upgraded weapon back down.
+    /// </summary>
     public bool Drop(GroundItem item)
     {
         lock (_gate)
         {
-            if (_items.ContainsKey(item.ItemId) || _items.Count >= ProtocolConstants.MaxGroundItems)
+            if (_items.TryGetValue(item.ItemId, out GroundItem? existing))
+            {
+                if (!item.Identity.IsKnown || existing.Identity.IsKnown)
+                {
+                    return false;
+                }
+
+                _items[item.ItemId] = existing with { Identity = item.Identity };
+                Version++;
+                return true;
+            }
+
+            if (_items.Count >= ProtocolConstants.MaxGroundItems)
             {
                 return false;
             }
@@ -96,15 +118,29 @@ public sealed class GroundItemStore
         return op.Kind == ItemOpKind.Drop ? Drop(op.Item) : Remove(op.Item.ItemId);
     }
 
-    /// <summary>Replaces the whole set from an authoritative host snapshot.</summary>
+    /// <summary>
+    /// Replaces the whole set from an authoritative host snapshot.
+    ///
+    /// The host decides WHICH items are on the ground and where. It does not get to forget
+    /// an identity: an entry whose identity is unknown carries no claim about the item, so a
+    /// locally known one for the same id survives the replacement. Without this rule a
+    /// client that received the drop op (identity and all) and then the host's snapshot
+    /// would have the upgrades taken straight back off the item.
+    /// </summary>
     public void ReplaceAll(IReadOnlyList<GroundItem> items, uint version)
     {
         lock (_gate)
         {
+            Dictionary<uint, GroundItem> previous = new(_items);
             _items.Clear();
+
             foreach (GroundItem item in items)
             {
-                _items[item.ItemId] = item;
+                _items[item.ItemId] = !item.Identity.IsKnown
+                    && previous.TryGetValue(item.ItemId, out GroundItem? known)
+                    && known.Identity.IsKnown
+                        ? item with { Identity = known.Identity }
+                        : item;
             }
 
             Version = version;

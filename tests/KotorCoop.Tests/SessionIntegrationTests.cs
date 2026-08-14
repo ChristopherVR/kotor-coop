@@ -936,4 +936,68 @@ public class SessionIntegrationTests
         await cts.CancelAsync();
         await Task.WhenAll(hostTask, clientTask);
     }
+
+    /// <summary>
+    /// An upgraded, half-spent stack dropped by a CLIENT has to reach the host as that item
+    /// and not as a blueprint name — over real sockets, through the reliable item op, and
+    /// then back down in the host's authoritative snapshot without the return trip flattening
+    /// it. That round trip is the whole reason the store refuses to forget an identity: the
+    /// op carries it and the snapshot that follows does not have to.
+    /// </summary>
+    [Fact]
+    public async Task ADroppedItemCarriesItsIdentityToTheHostAndBack()
+    {
+        using CoopHost host = new(new SessionSettings { PlayerName = "Revan", Port = 0, TickRate = 30 });
+        using CoopClient client = new(
+            new SessionSettings { PlayerName = "Malak", TickRate = 30 },
+            new IPEndPoint(IPAddress.Loopback, host.ListenEndPoint.Port));
+
+        using CancellationTokenSource cts = new(Timeout + TimeSpan.FromSeconds(10));
+        Task hostTask = host.RunAsync(cts.Token);
+        Task clientTask = client.RunAsync(cts.Token);
+
+        PlayerState state = new(new Vector3f(10f, 20f, 0f), 0f, "end_m01aa", 100, 0);
+        void Publish()
+        {
+            host.PublishLocalState(state);
+            client.PublishLocalState(state);
+        }
+
+        Assert.True(await WaitForAsync(() => client.IsConnected, Timeout, Publish));
+
+        ItemIdentity identity = new(
+            StackSize: 20,
+            Charges: 7,
+            MaxCharges: 50,
+            Upgrades: 0b101,
+            Flags: ItemIdentity.FlagKnown | ItemIdentity.FlagIdentified);
+
+        uint itemId = client.DropItem(
+            "g_w_lghtsbr01", "end_m01aa", new Vector3f(11f, 21f, 0f), identity);
+        Assert.NotEqual(0u, itemId);
+
+        Assert.True(
+            await WaitForAsync(() => host.Items.TryGet(itemId, out _), Timeout, Publish),
+            "the host never received the drop");
+
+        host.Items.TryGet(itemId, out GroundItem? atHost);
+        Assert.Equal(identity, atHost!.Identity);
+
+        // The host now re-publishes the ground each time a client resyncs. Its snapshot is
+        // authoritative about WHICH items exist; it must not walk the identity back off the
+        // client's own copy either.
+        Assert.True(
+            await WaitForAsync(
+                () => client.Items.TryGet(itemId, out GroundItem? echoed)
+                    && echoed is not null && echoed.Identity.IsKnown,
+                Timeout,
+                Publish),
+            "the client's own copy lost its identity");
+
+        client.Items.TryGet(itemId, out GroundItem? atClient);
+        Assert.Equal(identity, atClient!.Identity);
+
+        await cts.CancelAsync();
+        await Task.WhenAll(hostTask, clientTask);
+    }
 }

@@ -122,7 +122,8 @@ public sealed class ProgressionPumpTests
 
         public void SetFlag(uint flagId, sbyte value) { }
 
-        public uint DropItem(string resref, string module, Vector3f position) => 0;
+        public uint DropItem(
+            string resref, string module, Vector3f position, ItemIdentity identity = default) => 0;
 
         public void RemoveItem(uint itemId) { }
 
