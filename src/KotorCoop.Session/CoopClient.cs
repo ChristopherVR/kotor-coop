@@ -89,11 +89,7 @@ public sealed class CoopClient : ICoopSession
 
         WorldDigestComparison mismatch = WorldDigest.Compare(_localWorld, _hostWorld);
 
-        _compatibility = ContentCompatibility.ApplyWorldMismatch(
-            install,
-            mismatch.GlobalsCatalogueMismatch,
-            mismatch.SaveIdentityMismatch,
-            mismatch.ModuleGitMismatch);
+        _compatibility = ContentCompatibility.ApplyWorldMismatch(install, mismatch);
     }
 
     public CoopClient(SessionSettings settings, IPEndPoint hostEndPoint)
@@ -1287,7 +1283,7 @@ public sealed class CoopClient : ICoopSession
             // The host already refused an incompatible client; this gives the client the
             // same capability set (so both ends gate the same channels) and the same
             // warnings to show. Computed identically, so the two agree without negotiating.
-            ContentCompatibility.AllowDifferentSave = _settings.AllowDifferentSave;
+            ContentCompatibility.RequireIdenticalSave = _settings.RequireIdenticalSave;
             _installVerdict = ContentCompatibility.Compare(_settings.Digest, welcome.Digest);
             _compatibility = _installVerdict;
             RefineCompatibility();

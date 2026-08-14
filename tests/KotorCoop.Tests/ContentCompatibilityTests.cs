@@ -90,30 +90,46 @@ public class ContentCompatibilityTests
     }
 
     [Fact]
-    public void SaveMismatchRefusesByDefaultAndDegradesWhenAllowed()
+    public void SaveMismatchDegradesByDefaultAndRefusesOnlyWhenDemanded()
     {
+        // The policy world adoption changed. A different save used to end the join; it now
+        // costs exactly the channels that rest on shared object ids, because adoption is a
+        // recovery the player can actually reach — and evicting someone already standing in
+        // the world is not.
         CompatibilityVerdict install = ContentCompatibility.Compare(Digest(), Digest());
 
-        ContentCompatibility.AllowDifferentSave = false;
-        CompatibilityVerdict refused = ContentCompatibility.ApplyWorldMismatch(
+        ContentCompatibility.RequireIdenticalSave = false;
+        CompatibilityVerdict degraded = ContentCompatibility.ApplyWorldMismatch(
             install, globalsCatalogueMismatch: false, saveIdentityMismatch: true, moduleGitMismatch: false);
-        Assert.Equal(RefusalReason.SaveGame, refused.Refusal);
+
+        Assert.True(degraded.Admitted);
+        Assert.Equal(SessionCapabilities.None, degraded.Allowed & SessionCapabilities.Enemies);
+        Assert.Equal(SessionCapabilities.None, degraded.Allowed & SessionCapabilities.Doors);
+        Assert.Equal(SessionCapabilities.None, degraded.Allowed & SessionCapabilities.GroundItems);
+        Assert.Equal(SessionCapabilities.None, degraded.Allowed & SessionCapabilities.Party);
+        Assert.NotEqual(SessionCapabilities.None, degraded.Allowed & SessionCapabilities.Phantoms);
+        Assert.NotEqual(SessionCapabilities.None, degraded.Allowed & SessionCapabilities.Journal);
+
+        // Machine-readable, not just a sentence: the note names the cause AND the cost.
+        CompatibilityNote note = Assert.Single(degraded.Notes, n => n.Code == CompatibilityCode.Save);
+        Assert.Equal("W_SAVE", note.Tag);
+        Assert.Equal(ContentCompatibility.ObjectIdKeyed, note.Dropped);
+        Assert.True(note.IsDegradation);
+        Assert.Contains("rejoin", note.Text, StringComparison.OrdinalIgnoreCase);
 
         try
         {
-            ContentCompatibility.AllowDifferentSave = true;
-            CompatibilityVerdict degraded = ContentCompatibility.ApplyWorldMismatch(
+            ContentCompatibility.RequireIdenticalSave = true;
+            CompatibilityVerdict refused = ContentCompatibility.ApplyWorldMismatch(
                 install, globalsCatalogueMismatch: false, saveIdentityMismatch: true, moduleGitMismatch: false);
 
-            Assert.True(degraded.Admitted);
-            Assert.Equal(SessionCapabilities.None, degraded.Allowed & SessionCapabilities.Enemies);
-            Assert.Equal(SessionCapabilities.None, degraded.Allowed & SessionCapabilities.Doors);
-            Assert.Equal(SessionCapabilities.None, degraded.Allowed & SessionCapabilities.GroundItems);
-            Assert.NotEqual(SessionCapabilities.None, degraded.Allowed & SessionCapabilities.Phantoms);
+            Assert.Equal(RefusalReason.SaveGame, refused.Refusal);
+            Assert.Equal(SessionCapabilities.None, refused.Allowed);
+            Assert.StartsWith("E_SAVE", refused.Summary, StringComparison.Ordinal);
         }
         finally
         {
-            ContentCompatibility.AllowDifferentSave = false;
+            ContentCompatibility.RequireIdenticalSave = false;
         }
     }
 
@@ -140,6 +156,87 @@ public class ContentCompatibilityTests
         Assert.True(v.Admitted);
         Assert.Equal(SessionCapabilities.None, v.Allowed & SessionCapabilities.Enemies);
         Assert.NotEqual(SessionCapabilities.None, v.Allowed & SessionCapabilities.WorldState);
+    }
+
+    [Fact]
+    public void AModuleGitDegradationNamesTheModuleItAppliesTo()
+    {
+        // "enemies are off here" is only actionable if the player is told where "here" is —
+        // and the module travels with the comparison precisely so this line can say it.
+        CompatibilityVerdict install = ContentCompatibility.Compare(Digest(), Digest());
+        WorldDigestComparison mismatch = WorldDigest.Compare(
+            new WorldDigest(0xAAAA, 0xBBBB, "tar_m03aa", 0x1111),
+            new WorldDigest(0xAAAA, 0xBBBB, "TAR_M03AA", 0x2222));
+
+        Assert.True(mismatch.ModuleGitMismatch);
+        Assert.Equal("tar_m03aa", mismatch.Module);
+
+        CompatibilityVerdict v = ContentCompatibility.ApplyWorldMismatch(install, mismatch);
+        CompatibilityNote note = Assert.Single(v.Notes, n => n.Code == CompatibilityCode.ModuleGit);
+
+        Assert.Equal("W_GIT", note.Tag);
+        Assert.Equal(ContentCompatibility.ObjectIdKeyed, note.Dropped);
+        Assert.Contains("tar_m03aa", note.Text, StringComparison.Ordinal);
+        Assert.Equal(ContentCompatibility.ObjectIdKeyed, v.Dropped);
+    }
+
+    [Fact]
+    public void AnUnresolvedWorldFieldOnlyEverWarnsAndCostsNoChannel()
+    {
+        // The house rule at the world level: a peer whose game files could not be read
+        // reports 0, and 0 must never take a channel off anyone. A filesystem quirk on one
+        // machine is not evidence that the two worlds disagree.
+        CompatibilityVerdict install = ContentCompatibility.Compare(Digest(), Digest());
+
+        WorldDigestComparison mismatch = WorldDigest.Compare(
+            new WorldDigest(0xAAAA, 0, "tar_m03aa", 0),        // could not fingerprint save or GIT
+            new WorldDigest(0xAAAA, 0xBBBB, "tar_m03aa", 0x2222));
+
+        Assert.False(mismatch.Any);
+
+        CompatibilityVerdict v = ContentCompatibility.ApplyWorldMismatch(install, mismatch);
+
+        Assert.True(v.Admitted);
+        Assert.Equal(SessionCapabilities.All, v.Allowed);
+        Assert.DoesNotContain(v.Notes, n => n.IsDegradation);
+    }
+
+    [Fact]
+    public void EveryDegradationSaysWhichChannelsItCost()
+    {
+        // The machine-readable half of the contract: whatever a verdict switched off, the
+        // union of its notes accounts for it. Nothing goes dark unexplained.
+        CompatibilityVerdict install = ContentCompatibility.Compare(
+            Digest(), Digest(appearance: 2)); // appearance mismatch: one install-time degradation
+
+        CompatibilityVerdict v = ContentCompatibility.ApplyWorldMismatch(
+            install, globalsCatalogueMismatch: true, saveIdentityMismatch: true,
+            moduleGitMismatch: false, module: "end_m01aa");
+
+        SessionCapabilities accountedFor = SessionCapabilities.None;
+        foreach (CompatibilityNote note in v.Notes)
+        {
+            accountedFor |= note.Dropped;
+        }
+
+        Assert.Equal(v.Dropped, accountedFor);
+        Assert.Contains("W_SAVE", v.Tags, StringComparison.Ordinal);
+        Assert.Contains("W_GLOBALS", v.Tags, StringComparison.Ordinal);
+        Assert.Contains("W_APPEARANCE", v.Tags, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ARefusedInstallIsNeverSoftenedByTheWorldComparison()
+    {
+        // A refusal is final: no later world fact may talk it back into a session.
+        CompatibilityVerdict refused = ContentCompatibility.Compare(Digest(), Digest(exe: 2));
+        Assert.Equal(RefusalReason.Executable, refused.Refusal);
+
+        CompatibilityVerdict v = ContentCompatibility.ApplyWorldMismatch(
+            refused, globalsCatalogueMismatch: false, saveIdentityMismatch: false, moduleGitMismatch: false);
+
+        Assert.Equal(RefusalReason.Executable, v.Refusal);
+        Assert.Equal(SessionCapabilities.None, v.Allowed);
     }
 
     [Fact]

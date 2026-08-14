@@ -194,7 +194,15 @@ internal static class Program
             bytes += file.Data.Length;
         }
 
+        // The identity of what we are serving, so a joiner can prove that what it staged is
+        // what we sent. 0 (unreadable save) is a valid answer: the joiner is told the check
+        // did not run rather than being blocked by our filesystem's problem.
+        uint identity = SaveDigest.TryComputeSaveIdentity(saveDirectory, out uint computed) ? computed : 0;
+
         Console.WriteLine($"serving '{which}' ({world.Count} file(s), {bytes:N0} bytes) on :{options.Port}");
+        Console.WriteLine(identity != 0
+            ? $"world identity 0x{identity:X8}"
+            : "world identity unknown (the save could not be fingerprinted; joiners cannot self-check)");
         Console.WriteLine("press Ctrl+C to stop.");
 
         using CancellationTokenSource cts = new();
@@ -205,7 +213,8 @@ internal static class Program
         };
 
         await WorldTransfer
-            .ServeAsync(world, options.Port, SessionPassword.Hash(options.Password), Console.WriteLine, cts.Token)
+            .ServeAsync(
+                world, options.Port, SessionPassword.Hash(options.Password), identity, Console.WriteLine, cts.Token)
             .ConfigureAwait(false);
 
         return 0;
@@ -783,7 +792,7 @@ internal static class Program
             TickRate = tickRate,
             InterpolationDelayMs = interpolationMs,
             Digest = digest,
-            AllowDifferentSave = options.AllowDifferentSave,
+            RequireIdenticalSave = options.RequireIdenticalSave,
             Password = sessionPassword.Length > 0 ? sessionPassword : fallbackPassword,
         };
 

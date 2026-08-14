@@ -118,11 +118,11 @@ public sealed record AgentOptions
     public bool LoadViaMenuClicks { get; init; }
 
     /// <summary>
-    /// Admit a peer whose save differs, degrading to the mod-independent channels rather
-    /// than refusing. For deliberately split play where enemies, doors and items are not
-    /// expected to line up.
+    /// Refuse a peer whose save differs instead of admitting it with the object-id-keyed
+    /// channels off. The pre-world-adoption rule, kept for anyone who would rather not play
+    /// at all than play without shared enemies, doors and items.
     /// </summary>
-    public bool AllowDifferentSave { get; init; }
+    public bool RequireIdenticalSave { get; init; }
 
     /// <summary>Session password. A host with one admits only clients that match; a client
     /// presents it when joining. Empty is an open session.</summary>
@@ -197,7 +197,7 @@ public sealed record AgentOptions
         bool filterByModule = true;
         bool followHostModule = true;
         bool loadViaMenuClicks = false;
-        bool allowDifferentSave = false;
+        bool requireIdenticalSave = false;
         string password = string.Empty;
         bool syncParty = true;
         bool syncProgression = true;
@@ -291,8 +291,14 @@ public sealed record AgentOptions
                     loadViaMenuClicks = true;
                     break;
 
+                case "--require-identical-save":
+                    requireIdenticalSave = true;
+                    break;
+
+                // Kept accepted because it is in scripts and in the docs: it now describes
+                // the default, so it is a no-op rather than an error.
                 case "--allow-different-save":
-                    allowDifferentSave = true;
+                    requireIdenticalSave = false;
                     break;
 
                 case "--password":
@@ -359,7 +365,7 @@ public sealed record AgentOptions
             FilterByModule = filterByModule,
             FollowHostModule = followHostModule,
             LoadViaMenuClicks = loadViaMenuClicks,
-            AllowDifferentSave = allowDifferentSave,
+            RequireIdenticalSave = requireIdenticalSave,
             Password = password,
             SyncParty = syncParty,
             SyncProgression = syncProgression,
@@ -481,10 +487,12 @@ public sealed record AgentOptions
                                (mode, host, port, password, name, menu_button). Lets the
                                player start co-op from the menu instead of the session
                                beginning the moment the agent launches.
-          --allow-different-save  join a peer on a different save. Enemies, doors and
-                               items are not shared (their object ids would not line up),
-                               but phantoms, appearance, equipment and journal still work.
-                               Without this, a save mismatch is refused.
+          --require-identical-save  refuse a peer whose save differs. By default such a
+                               peer is admitted with enemies, doors, items and party
+                               switched off (their object ids would not line up) while
+                               phantoms, appearance, equipment and journal keep working —
+                               and told so on screen. `agent adopt` removes the mismatch
+                               altogether by taking the host's world.
           --drop-file <path>   watch this path for a drop request. Write a blueprint
                                resref into it (or create it empty for the default cycle)
                                and the item is dropped at your feet and shared with every

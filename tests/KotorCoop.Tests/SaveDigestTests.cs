@@ -176,7 +176,7 @@ public sealed class SaveDigestTests : IDisposable
     // ---- the session-lived cache ------------------------------------------------
 
     [Fact]
-    public void TheCacheServesTheStagedAutosaveAndLatchesUnknowns()
+    public void TheCacheServesTheStagedAutosaveWithoutBlockingItsCaller()
     {
         // A game directory whose staged co-op autosave exists: the cache must find and
         // digest it without being told which save the session loaded.
@@ -188,16 +188,76 @@ public sealed class SaveDigestTests : IDisposable
             BuildSavegameErf("end_m01aa", 295, [(2u, "n_duros")], 2057));
 
         SaveDigestCache cache = new(gameDir);
+
+        // ⚠ The contract that protects the transition: the FIRST ask never does the disk
+        // work on the caller's thread. It answers 0 = unknown (which can only ever warn)
+        // and computes in the background.
+        Assert.Equal(0u, cache.SaveIdentity);
+        Assert.Equal(0u, cache.ModuleGit("end_m01aa"));
+
+        Assert.True(cache.WaitForPending(TimeSpan.FromSeconds(10)));
+
         Assert.NotEqual(0u, cache.SaveIdentity);
         Assert.NotEqual(0u, cache.ModuleGit("end_m01aa"));
+        Assert.True(cache.WaitForPending(TimeSpan.FromSeconds(10)));
         Assert.Equal(cache.ModuleGit("end_m01aa"), cache.ModuleGit("END_M01AA")); // module names are case-insensitive
 
-        // No saves at all: everything unknown, nothing thrown, and the answer is latched
-        // rather than re-hitting the disk every heavy pump.
+        // No saves at all: everything unknown, nothing thrown.
         SaveDigestCache empty = new(Path.Combine(Path.GetTempPath(), "kotorcoop-nowhere"));
+        Assert.Equal(0u, empty.SaveIdentity);
+        Assert.True(empty.WaitForPending(TimeSpan.FromSeconds(10)));
         Assert.Equal(0u, empty.SaveIdentity);
         Assert.Equal(0u, empty.ModuleGit("end_m01aa"));
         Assert.Equal(0u, empty.ModuleGit(""));
+    }
+
+    [Fact]
+    public void AdoptingAWorldReplacesTheCachedIdentityInsteadOfLatchingTheOldOne()
+    {
+        // ⚠ THE BUG THIS PINS. World adoption stages the host's world over the autosave
+        // slot, which can happen AFTER an agent has already fingerprinted whatever was
+        // there. A cache that latched forever would keep announcing the identity of the
+        // save the joiner had before — and the session would tell them their save does not
+        // match the host's at the exact moment it literally IS the host's.
+        string gameDir = BuildGameDirectory("end_m01aa", PristineGit([("n_duros", 0)]));
+        string staged = Path.Combine(gameDir, "saves", "000001 - AUTOSAVE");
+        Directory.CreateDirectory(staged);
+        string savegame = Path.Combine(staged, "SAVEGAME.sav");
+        File.WriteAllBytes(savegame, BuildSavegameErf("end_m01aa", 295, [(2u, "n_duros")], 2057));
+
+        SaveDigestCache cache = new(gameDir);
+        _ = cache.SaveIdentity;
+        Assert.True(cache.WaitForPending(TimeSpan.FromSeconds(10)));
+        uint before = cache.SaveIdentity;
+        Assert.NotEqual(0u, before);
+
+        // The adoption: a different world lands in the same slot.
+        File.WriteAllBytes(savegame, BuildSavegameErf("tar_m02aa", 833, [(2u, "n_sith")], 2057));
+        File.SetLastWriteTimeUtc(savegame, DateTime.UtcNow.AddSeconds(5));
+
+        // The re-stat is rate-limited, so nudge the clock the only way the API allows:
+        // wait out the interval. Two seconds is the whole cost of noticing an adoption.
+        Assert.True(WaitFor(() => cache.SaveIdentity != before && cache.SaveIdentity != 0,
+            TimeSpan.FromSeconds(15)));
+
+        Assert.True(SaveDigest.TryComputeSaveIdentity(staged, out uint expected));
+        Assert.Equal(expected, cache.SaveIdentity);
+    }
+
+    private static bool WaitFor(Func<bool> condition, TimeSpan timeout)
+    {
+        DateTime deadline = DateTime.UtcNow + timeout;
+        while (DateTime.UtcNow < deadline)
+        {
+            if (condition())
+            {
+                return true;
+            }
+
+            Thread.Sleep(100);
+        }
+
+        return condition();
     }
 
     // ---- real install (skipped when absent) ------------------------------------

@@ -60,16 +60,20 @@ public readonly record struct WorldDigest(
         bool git = sameModule && local.ModuleGit != 0 && remote.ModuleGit != 0
             && local.ModuleGit != remote.ModuleGit;
 
-        return new WorldDigestComparison(globals, save, git);
+        return new WorldDigestComparison(globals, save, git, sameModule ? localModule : string.Empty);
     }
 }
 
 /// <summary>The outcome of <see cref="WorldDigest.Compare"/>: which in-world facts the two
 /// peers disagree on. Feeds <see cref="ContentCompatibility.ApplyWorldMismatch"/> verbatim.</summary>
+/// <param name="Module">The module both peers were standing in when this was judged, empty
+/// while they are apart. Carried purely so a GIT degradation can NAME the module on screen —
+/// "enemies are off here" is only actionable if the player knows where "here" is.</param>
 public readonly record struct WorldDigestComparison(
     bool GlobalsCatalogueMismatch,
     bool SaveIdentityMismatch,
-    bool ModuleGitMismatch)
+    bool ModuleGitMismatch,
+    string Module = "")
 {
     public bool Any => GlobalsCatalogueMismatch || SaveIdentityMismatch || ModuleGitMismatch;
 }

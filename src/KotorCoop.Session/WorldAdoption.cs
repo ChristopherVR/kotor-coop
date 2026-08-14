@@ -72,10 +72,10 @@ public static class WorldAdoption
         log?.Invoke($"world adoption: {diagnostic}");
 
         // 2. The host's world.
-        IReadOnlyList<WorldFile> world;
+        FetchedWorld fetched;
         try
         {
-            world = await WorldTransfer.FetchAsync(host, passwordHash, cancellationToken).ConfigureAwait(false);
+            fetched = await WorldTransfer.FetchAsync(host, passwordHash, cancellationToken).ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is InvalidDataException or IOException
             or System.Net.Sockets.SocketException)
@@ -83,6 +83,14 @@ public static class WorldAdoption
             log?.Invoke($"world adoption: could not fetch the host's world — {ex.Message}");
             return null;
         }
+
+        IReadOnlyList<WorldFile> world = fetched.Files;
+
+        // The host states the identity of what it served (transfer v2). A caller that already
+        // knows it from elsewhere wins — it is the more trustworthy of the two, having come
+        // from the session rather than from the machine we are about to copy files from — but
+        // otherwise this is what turns the staging into a self-check instead of a hope.
+        uint expected = expectedSaveIdentity != 0 ? expectedSaveIdentity : fetched.SaveIdentity;
 
         long bytes = 0;
         foreach (WorldFile file in world)
@@ -118,12 +126,19 @@ public static class WorldAdoption
             return null;
         }
 
-        if (expectedSaveIdentity != 0 && identity != expectedSaveIdentity)
+        if (expected != 0 && identity != expected)
         {
             log?.Invoke(
                 $"world adoption: the staged world fingerprints 0x{identity:X8}, "
-                + $"the host reported 0x{expectedSaveIdentity:X8} — refusing to play a world we did not receive");
+                + $"the host reported 0x{expected:X8} — refusing to play a world we did not receive");
             return null;
+        }
+
+        if (expected == 0)
+        {
+            // Not fatal — an unknown never blocks, here as everywhere — but worth saying,
+            // because it means the one check that could have caught a bad transfer did not run.
+            log?.Invoke("world adoption: the host did not state its save identity; staging unverified");
         }
 
         PluginMenuLoader.TryReadSaveModuleName(slot, out string module);

@@ -56,8 +56,8 @@ public sealed class WorldTransferTests : IDisposable
 
         int port = await ServeAsync(world, SessionPassword.None);
 
-        IReadOnlyList<WorldFile> received = await WorldTransfer.FetchAsync(
-            Local(port), SessionPassword.None, _cts.Token);
+        IReadOnlyList<WorldFile> received = (await WorldTransfer.FetchAsync(
+            Local(port), SessionPassword.None, _cts.Token)).Files;
 
         Assert.Equal(world.Count, received.Count);
         for (int i = 0; i < world.Count; i++)
@@ -75,8 +75,8 @@ public sealed class WorldTransferTests : IDisposable
         IReadOnlyList<WorldFile> world = [new("SAVEGAME.sav", Bytes(584_228, seed: 3))];
 
         int port = await ServeAsync(world, SessionPassword.None);
-        IReadOnlyList<WorldFile> received = await WorldTransfer.FetchAsync(
-            Local(port), SessionPassword.None, _cts.Token);
+        IReadOnlyList<WorldFile> received = (await WorldTransfer.FetchAsync(
+            Local(port), SessionPassword.None, _cts.Token)).Files;
 
         Assert.Single(received);
         Assert.Equal(world[0].Data, received[0].Data);
@@ -95,10 +95,37 @@ public sealed class WorldTransferTests : IDisposable
             await rude.GetStream().WriteAsync(new byte[] { 0x4B }, _cts.Token);
         }
 
-        IReadOnlyList<WorldFile> received = await WorldTransfer.FetchAsync(
-            Local(port), SessionPassword.None, _cts.Token);
+        IReadOnlyList<WorldFile> received = (await WorldTransfer.FetchAsync(
+            Local(port), SessionPassword.None, _cts.Token)).Files;
 
         Assert.Single(received);
+    }
+
+    [Fact]
+    public async Task TheHostStatesTheIdentityOfTheWorldItServes()
+    {
+        // Transfer v2. Without this the joiner's self-check ("is what I staged what I was
+        // sent?") cannot run at all, because nothing ever told it what to expect.
+        int port = await ServeAsync(
+            [new("SAVEGAME.sav", Bytes(64, seed: 31))], SessionPassword.None, saveIdentity: 0x155107BD);
+
+        FetchedWorld fetched = await WorldTransfer.FetchAsync(Local(port), SessionPassword.None, _cts.Token);
+
+        Assert.Equal(0x155107BDu, fetched.SaveIdentity);
+        Assert.Single(fetched.Files);
+    }
+
+    [Fact]
+    public async Task AHostThatCouldNotFingerprintItsWorldSaysSoWithZero()
+    {
+        // The house rule on the transfer too: unknown is a legal answer that skips the
+        // check, never one that blocks the transfer.
+        int port = await ServeAsync([new("SAVEGAME.sav", Bytes(64, seed: 32))], SessionPassword.None);
+
+        FetchedWorld fetched = await WorldTransfer.FetchAsync(Local(port), SessionPassword.None, _cts.Token);
+
+        Assert.Equal(0u, fetched.SaveIdentity);
+        Assert.Single(fetched.Files);
     }
 
     // ---- refusals --------------------------------------------------------------
@@ -248,8 +275,8 @@ public sealed class WorldTransferTests : IDisposable
         File.WriteAllBytes(Path.Combine(source, "savenfo.res"), Bytes(673, seed: 24));
 
         int port = await ServeAsync(WorldTransfer.ReadSaveDirectory(source), SessionPassword.None);
-        IReadOnlyList<WorldFile> received = await WorldTransfer.FetchAsync(
-            Local(port), SessionPassword.None, _cts.Token);
+        IReadOnlyList<WorldFile> received = (await WorldTransfer.FetchAsync(
+            Local(port), SessionPassword.None, _cts.Token)).Files;
 
         string destination = TempDirectory();
         WorldTransfer.WriteSaveDirectory(destination, received);
@@ -267,10 +294,11 @@ public sealed class WorldTransferTests : IDisposable
     private static IPEndPoint Local(int port) => new(IPAddress.Loopback, port);
 
     /// <summary>Starts a server on a free port and returns it, once it is accepting.</summary>
-    private async Task<int> ServeAsync(IReadOnlyList<WorldFile> world, uint passwordHash)
+    private async Task<int> ServeAsync(
+        IReadOnlyList<WorldFile> world, uint passwordHash, uint saveIdentity = 0)
     {
         int port = FreePort();
-        _ = WorldTransfer.ServeAsync(world, port, passwordHash, log: null, _cts.Token);
+        _ = WorldTransfer.ServeAsync(world, port, passwordHash, saveIdentity, log: null, _cts.Token);
         await WaitUntilListeningAsync(port);
         return port;
     }
@@ -305,17 +333,20 @@ public sealed class WorldTransferTests : IDisposable
                     read += n;
                 }
 
+                // Transfer v2 framing: an 8-byte reply header (magic, version, status, then
+                // the host's save identity), a 2-byte file count, then one 6-byte file prefix.
                 byte[] nameBytes = Encoding.Latin1.GetBytes(name);
-                byte[] reply = new byte[4 + 2 + 6 + nameBytes.Length];
+                byte[] reply = new byte[8 + 2 + 6 + nameBytes.Length];
                 reply[0] = 0x4B;                                    // magic low  ('K')
                 reply[1] = 0x57;                                    // magic high ('W')
-                reply[2] = 1;                                       // version
+                reply[2] = 2;                                       // version
                 reply[3] = 0;                                       // status ok
-                reply[4] = 1;                                       // file count = 1
-                reply[6] = (byte)nameBytes.Length;
-                reply[7] = (byte)(nameBytes.Length >> 8);
-                BinaryPrimitives.WriteUInt32LittleEndian(reply.AsSpan(8, 4), declaredSize);
-                nameBytes.CopyTo(reply, 12);
+                BinaryPrimitives.WriteUInt32LittleEndian(reply.AsSpan(4, 4), 0u); // identity: unknown
+                reply[8] = 1;                                       // file count = 1
+                reply[10] = (byte)nameBytes.Length;
+                reply[11] = (byte)(nameBytes.Length >> 8);
+                BinaryPrimitives.WriteUInt32LittleEndian(reply.AsSpan(12, 4), declaredSize);
+                nameBytes.CopyTo(reply, 16);
 
                 await stream.WriteAsync(reply, _cts.Token);
                 await stream.WriteAsync(payload, _cts.Token);
