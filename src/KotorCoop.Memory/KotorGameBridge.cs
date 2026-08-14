@@ -4991,9 +4991,60 @@ public sealed class KotorGameBridge : IGameBridge
 
         EnsureItemKnown(itemObjectId, force);
 
-        bool found = _itemTags.TryGetValue(itemObjectId, out string? tag);
-        resref = found ? tag! : string.Empty;
-        return found;
+        if (_itemTags.TryGetValue(itemObjectId, out string? tag))
+        {
+            resref = tag;
+            return true;
+        }
+
+        // Last resort, and the only one that works for a body WE asked the plugin to make.
+        return TryGetSpawnedItemResref(itemObjectId, out resref);
+    }
+
+    /// <summary>
+    /// The resref the plugin was told to spawn for the body now living at
+    /// <paramref name="objectId"/>, recovered from the item slot we wrote it into.
+    ///
+    /// ⚠ THIS IS WHAT MAKES A REPLICATED ITEM RE-SENDABLE. The wire carries a blueprint name,
+    /// the only name a live <c>CSWSItem</c> retains is its Tag, and a body the engine created
+    /// from a template it could not find has no Tag at all — so the one item an unattended run
+    /// can reliably manufacture was the one item that could not travel (measured on the rig,
+    /// 2026-08-15: `dropitem 0x131` refused with "its tag is unreadable").
+    ///
+    /// There is no need to guess. The agent WROTE the resref into <c>slot + 0x14</c> and the
+    /// plugin wrote the object id it produced into <c>status + 0x04</c>, so the mapping from
+    /// body back to blueprint is a fact we already hold — better evidence than the tag proxy,
+    /// which is only ever an approximation of the resref (docs/research/item-identity.md §8.2).
+    /// </summary>
+    private bool TryGetSpawnedItemResref(uint objectId, out string resref)
+    {
+        resref = string.Empty;
+
+        if (_pluginBlock == 0 || objectId is 0 or ObjectInvalid)
+        {
+            return false;
+        }
+
+        for (int i = 0; i < BlockItemCapacity; i++)
+        {
+            nint status = _pluginBlock + BlockItemStatus + (i * BlockItemStatusStride);
+
+            if (!_memory.TryReadUInt32(status + 0x08, out uint state) || state != ItemStateAlive
+                || !_memory.TryReadUInt32(status + 0x04, out uint body) || body != objectId)
+            {
+                continue;
+            }
+
+            nint slot = _pluginBlock + BlockItemSlots + (i * BlockItemSlotStride);
+            if (_memory.TryReadAsciiString(slot + 0x14, BlockItemResrefLength, out resref)
+                && resref.Length > 0)
+            {
+                return true;
+            }
+        }
+
+        resref = string.Empty;
+        return false;
     }
 
     /// <summary>
@@ -5065,8 +5116,12 @@ public sealed class KotorGameBridge : IGameBridge
                 ? holder
                 : ObjectInvalid;
 
-            listings.Add(new ItemListing(
-                objectId, ItemResref(objectId), possessor, identity));
+            // The spawn-record fallback too, so a body the plugin made for us shows the
+            // blueprint it was made from rather than "<no tag>" — that name is the one thing
+            // a re-drop needs, and the listing is where the operator picks a target.
+            TryGetItemResref(objectId, out string resref);
+
+            listings.Add(new ItemListing(objectId, resref, possessor, identity));
         }
 
         // The interesting ones first — an item with a stack, charges or an upgrade mask is

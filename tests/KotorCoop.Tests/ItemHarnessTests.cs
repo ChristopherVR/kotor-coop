@@ -93,6 +93,45 @@ public class ItemHarnessTests
     }
 
     /// <summary>
+    /// ⚠ EVERY CONSOLE REPLY MUST REACH THE LOG SINK.
+    ///
+    /// The dispatcher's answers used to go only to Console.WriteLine, and in a `demo.ps1` run
+    /// that is a visible window with no reader and no file behind it — the `--log` file is
+    /// written by the dashboard, which never saw these lines. Measured on the rig 2026-08-15:
+    /// `items` answered "showed 12 of 58 - full list in the agent log" and the agent log held
+    /// seven status lines and nothing else, so the harness could not pick a target.
+    ///
+    /// This pins the wiring rather than the wording: whatever a verb replies, the sink gets
+    /// it. The in-game reply field is 96 bytes and holds one line, so for any multi-line
+    /// answer the sink is the ONLY complete record.
+    /// </summary>
+    [Fact]
+    public void EveryReplyReachesTheLogSink()
+    {
+        NoGameBridge bridge = new();
+        using SessionManager manager = new(bridge, new AgentSettings { PollRate = 30 });
+
+        List<string> logged = [];
+        CoopCommandDispatcher dispatcher = new(
+            manager, bridge, 27140,
+            password => new SessionSettings { PlayerName = "Tester", Port = 0, TickRate = 30 })
+        {
+            Log = logged.Add,
+        };
+
+        dispatcher.Dispatch(ConsoleCommand.Parse("status"));
+        dispatcher.Dispatch(ConsoleCommand.Parse("who"));
+        dispatcher.Dispatch(ConsoleCommand.Parse("cheats"));
+
+        // `cheats` alone answers with a whole table, which is the shape that matters: a
+        // multi-line reply has nowhere to go but here, because the in-game field holds one.
+        Assert.True(logged.Count >= 2 + ConsoleCommand.CheatsText.Length,
+            $"only {logged.Count} lines reached the sink");
+        Assert.Contains(logged, line => line.Contains("not connected", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(ConsoleCommand.CheatsText[0], logged);
+    }
+
+    /// <summary>
     /// ⚠ ONE NUMBER IN TWO FILES, and a half-bump presents as "instance 1 failed to launch"
     /// — the agent simply never finds the block, which reads as a broken install rather than
     /// a version skew. The version is embedded in the byte pattern the agent scans for, so

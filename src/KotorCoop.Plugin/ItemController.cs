@@ -238,6 +238,22 @@ internal sealed unsafe class ItemController(SharedBlockView block)
             return;
         }
 
+        // ⚠ A NON-ZERO OBJECT ID DOES NOT MEAN THE BLUEPRINT EXISTS. CreateItemOnFloor
+        // 0x00547F60 calls LoadFromTemplate at 0x0054806B and never tests its result, so a
+        // resref naming no blueprint still produces a live item — one carrying nothing but
+        // its constructor's defaults. The check above can therefore never fire for a typo,
+        // which is exactly how a drop of `g_w_blstrpstl01` (no such resref; the real ones end
+        // 001..010) spent a whole rig session looking like a successful spawn.
+        if (Odyssey.TryReadItemIdentityFields(objectId, out Odyssey.ItemIdentityFields spawned)
+            && spawned.LooksUnloaded)
+        {
+            PluginHost.Log(
+                $"item slot {slot}: spawned 0x{objectId:X} but it has NO TAG and "
+                + $"{spawned.Charges} charges — the blueprint almost certainly does not exist "
+                + "in this install (CreateItemOnFloor does not check the template load). "
+                + "The body is real but empty; expect a nameless item on the floor.");
+        }
+
         // The engine made a stock copy of the blueprint; the peer sent us THEIR copy.
         // Reconcile the difference before anything can look at the item — but only when the
         // agent actually read the far side's state, because an unknown identity must leave

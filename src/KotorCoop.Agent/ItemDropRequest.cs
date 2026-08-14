@@ -24,7 +24,11 @@ public static class ItemDropRequest
 
     /// <summary>What a drop did. <paramref name="ItemId"/> is 0 for every refusal, so a
     /// caller never has to read the sentence to find out whether anything happened.</summary>
-    public readonly record struct Outcome(uint ItemId, string Note)
+    /// <param name="NoSession">There was nothing to announce the drop TO. Separated from the
+    /// other refusals because it is the one a caller can still do something about — a
+    /// single-player game can still spawn the item locally, which is how a target is staged
+    /// before anyone connects.</param>
+    public readonly record struct Outcome(uint ItemId, string Note, bool NoSession = false)
     {
         public bool Dropped => ItemId != 0;
     }
@@ -47,7 +51,7 @@ public static class ItemDropRequest
     {
         if (manager.Agent is not { } agent)
         {
-            return Refused("drop: not connected");
+            return new Outcome(0, "drop: not connected", NoSession: true);
         }
 
         PlayerState local = agent.LastLocalState;

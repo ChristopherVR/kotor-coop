@@ -373,6 +373,35 @@ pwsh tools\blockpoke.ps1 -ProcId <host>   console 'census 0x35'
 
 # 4. Only once 1-2 agree: the end-to-end result.
 pwsh tools\blockpoke.ps1 -ProcId <client> console 'slay'
+# 1. ASK THE HOST what it is publishing and what its own engine says about each id.
+pwsh tools\blockpoke.ps1 -ProcId <host> console 'census'
+#    line 1  "census: gate: ..." - one of:
+#      "array 0x... confirmed K of N ... (no ghosts)"   -> the check runs and the scan is clean
+#      "array 0x... confirmed K of N, dropped D (0x..)" -> the check runs and is removing ghosts
+#      "NOT CHECKING - no server object array"          -> the pointer chain is wrong; that is
+#                                                          the bug, and nothing was ever gated
+#    line 2  "census: my own census holds N id(s) ...; N resolve in MY engine, 0 do not"
+#            As the OWNER, any non-zero "do not" is the defect, and each is then named.
+
+# 2. ASK BOTH SIDES ABOUT THE DISPUTED ID. This is the line that ends the argument.
+pwsh tools\blockpoke.ps1 -ProcId <host>   console 'census 0x35'
+pwsh tools\blockpoke.ps1 -ProcId <client> console 'census 0x35'
+#    "census: 0x35  object array: ...  |  raw scan: ...  |  census: ..."
+#      array NOT HELD + raw scan present -> a ghost the gate should have caught (gate bug)
+#      array NOT HELD + raw scan absent  -> the id never came from this instance at all;
+#                                           the search moves to the wire, not to memory
+#      array held                        -> the agent and the plugin disagree; go to check 3
+
+# 3. THE PLUGIN'S OWN VERDICT on the same id, through the engine, on the game thread.
+pwsh tools\blockpoke.ps1 -ProcId <host> console 'slay #35'
+#    "no object 0x35 in this module" = the plugin cannot resolve it either (agree)
+#    a kill, or any other refusal   = the plugin CAN resolve it (disagree with check 2)
+
+# 4. The end-to-end result, once 1-3 agree.
+pwsh tools\blockpoke.ps1 -ProcId <client> console 'slay'
+#    client: "queued a killing blow for the owner, keyed by owner id 0xNN"
+#    host plugin log: "combat: applied 100000 of a peer's damage to 0xNN"
+#                     and NOT "which does not resolve here"
 ```
 
 ⚠ `#NN` and bare numbers are now **hex** in every console verb (`slay #35` killed `0x23`
@@ -417,54 +446,85 @@ a cache lookup that cannot populate itself, `TryReadItemIdentity` was the only t
 could rebuild the cache, and the two were joined by `||` with the cache lookup first. Full
 write-up in `docs/research/item-identity.md` §8.
 
-## Item identity, end to end — the unattended run (block 41, NOT YET RUN)
+## Item identity, end to end — the unattended run (block 41)
+
+**The WRITER is PROVEN LIVE (2026-08-15).** `setitem 0x131 stack=20 charges=3 max=50
+upgrades=0x5` answered `0x131: stk 20 chg 3/50 upg 5 bits 18`, the plugin log read back
+`stack 1->20, charges 50/1768092->3/50, upgrades 0x0->0x5`, and an external
+`item 0x131` agreed: `stack 20, charges 3/50, upgrades 0x5`. So `Odyssey.ApplyItemIdentity`
+genuinely writes all five fields into a live `CSWSItem` and they read back — the thing that
+had never once been observed in this feature's life. **The wire half is still NOT RUN.**
 
 Everything below goes through `pwsh tools/blockpoke.ps1 -ProcId <pid> console '<line>'`, which
-is the only channel that reaches a co-op verb without a keyboard. Replies come back on the
-same channel; the multi-line ones (`items`) land in the agent's window and in `agent1.log` /
-`agent2.log` as `[coop] …` lines.
+is the only channel that reaches a co-op verb without a keyboard. **The reply field is 96
+bytes and holds ONE line**, so every reply is a summary and the substance is in
+`%TEMP%\kotorcoop-demo\agent1.log` / `agent2.log` — the dispatcher writes there now, which it
+did not on the first attempt (that is why `items` looked empty).
 
 **Ids are hex: `0x131` or `#131`. A bare `131` is refused on purpose** — it is also a legal
 resref, and reading it as decimal would name object `0x83` silently.
+
+⚠ **Type the resref carefully, and check `items` afterwards.** `CreateItemOnFloor` 0x00547F60
+calls `LoadFromTemplate` and **never tests the result** (0x0054806B), so a blueprint that is
+not installed still yields a live object id — an empty body with no tag, 50 charges and an
+uninitialised MaxCharges. That is what `g_w_blstrpstl01` produced on the first attempt; the
+real resrefs end `001`..`010`. Both spawn paths now say so out loud, and `items` prints
+`<NO NAME - probably a bad blueprint>` for such a body.
+
+Verified to exist in the GOG install: `g_w_blstrpstl001`, `g_w_lghtsbr01`, `g_i_medeqpmnt01`,
+`g_w_fraggren01`, `g_i_progspike01`, `g_i_drdshld001` (the last is one of only 26 blueprints
+that ship with real charges — `Charges 10`).
 
 ```powershell
 # The two game pids and the two game directories, the same way every other section gets them.
 $pid1, $pid2 = (Get-Process swkotor | Sort-Object StartTime).Id
 $Game1 = 'C:\GOG Games\Star Wars KOTOR (GOG)'   # demo.ps1's defaults
 $Game2 = 'D:\Games\swkotor-gog-p2'
+$log1  = "$env:TEMP\kotorcoop-demo\agent1.log"
+$log2  = "$env:TEMP\kotorcoop-demo\agent2.log"
 
-# 0. Both halves must be the NEW build. build.ps1 -Install, then confirm the version moved:
+# 0. Both halves must be the NEW build. build.ps1 -Install, then confirm the version:
 pwsh tools\blockpoke.ps1 -ProcId $pid1 state      # expect "version 41"
 
 # 1. On the HOST: find an item worth sending. Most interesting first; the sweep reports
 #    itself on the first line, so a short list cannot be mistaken for a truncated one.
-pwsh tools\blockpoke.ps1 -ProcId $pid1 console 'items'
-#    -> [coop] items: 214 item bodies, 214 with a readable tag
-#    -> [coop]   0x9F  g_i_frggren01  yours  stack 1  charges 0/0  upgrades 0x0
+#    THE ROWS ARE IN THE AGENT LOG, not in the reply — the reply is the closing summary.
+pwsh tools\blockpoke.ps1 -ProcId $pid1 console 'items 40'
+Select-String -Path $log1 -Pattern 'items:|^\s+0x' | Select-Object -Last 45
+#    -> items: 59 item bodies, 58 with a readable tag
+#    ->   0xB4  g_w_fraggren01  yours  stack 1  charges 0/0  upgrades 0x0
+#    Pick one that is "yours" and has a real name. If nothing is, `giveitem` at the in-game
+#    console (a retail verb, typed by hand) will put one in the pack.
 
 # 2. Make it genuinely non-stock. This writes through Odyssey.ApplyItemIdentity — the SAME
 #    function an arriving item goes through — and answers with the fields read BACK.
-pwsh tools\blockpoke.ps1 -ProcId $pid1 console 'setitem 0x9f stack=20 charges=3 max=50 upgrades=0x5'
-#    -> reply: 0x9F: stk 20 chg 3/50 upg 5 bits 9
-#    -> host plugin log: setitem 0x9F: stack 1->20, charges 0/0->3/50, upgrades 0x0->0x5, ...
-#    ⚠ If the reply says "stk 1" the write did not land: that is finding (1) failing, and it
-#      fails BEFORE the network is involved, which is the cheapest possible place to learn it.
+pwsh tools\blockpoke.ps1 -ProcId $pid1 console 'setitem 0xb4 stack=20 charges=3 max=50 upgrades=0x5'
+#    -> reply: 0xB4: stk 20 chg 3/50 upg 5 bits 18        <- PROVEN on 2026-08-15
+#    -> host plugin log: setitem 0xB4: stack 1->20, charges 0/0->3/50, upgrades 0x0->0x5, ...
 
 # 3. Replicate it. Both instances spawn a body from the item slot, so BOTH plugin logs
 #    should show the apply — the host is not a special case here.
-pwsh tools\blockpoke.ps1 -ProcId $pid1 console 'dropitem 0x9f'
-#    -> reply: dropped g_i_frggren01 as item 0x10001 (stack 20, charges 3/50, upgrades 0x5, flags 0x3)
+pwsh tools\blockpoke.ps1 -ProcId $pid1 console 'dropitem 0xb4'
+#    -> dropped g_w_fraggren01 as item 0x10001 (stack 20, charges 3/50, upgrades 0x5, flags 0x3)
+#    ⚠ If this refuses with "its tag is unreadable", the item is an empty body from a bad
+#      blueprint (see the warning above) — pick a different one from step 1.
 
 # 4. Read both plugin logs for the marker. The success line reports what the item NOW HOLDS,
 #    not what was asked for; the two halves of it must agree.
-Select-String -Path "$Game1\kotorcoop-plugin.log","$Game2\kotorcoop-plugin.log" -Pattern 'identity (applied|SKIPPED)' | Select-Object -Last 4
+Select-String -Path "$Game1\kotorcoop-plugin.log","$Game2\kotorcoop-plugin.log" -Pattern 'identity (applied|SKIPPED)|NO TAG' | Select-Object -Last 6
 #    -> item slot 0: identity applied to 0x132 — asked for (stack 20, charges 3/50,
-#       upgrades 0x5, flags 0x3), item now reads (stack 20, charges 3/50, upgrades 0x5, bits 0x9)
+#       upgrades 0x5, flags 0x3), item now reads (stack 20, charges 3/50, upgrades 0x5, bits 0x18)
 #    -> "identity SKIPPED for 0xID — <reason>" now names what the resolve saw.
 
 # 5. Read the receiver back from OUTSIDE its plugin, using the object id step 4 named.
 pwsh tools\blockpoke.ps1 -ProcId $pid2 console 'item 0x132'
-#    -> item 0x132 g_i_frggren01: stack 20, charges 3/50, upgrades 0x5, identified
+Select-String -Path $log2 -Pattern 'item 0x' | Select-Object -Last 2
+#    -> item 0x132 g_w_fraggren01: stack 20, chg 3/50, upg 0x5, identified
+
+# 6. Re-send the receiver's own copy back. This is the loop closing on itself, and it is the
+#    case that could not work before: a body the plugin spawned has no Tag, so the resref now
+#    comes from the item slot we wrote it into rather than from the item.
+pwsh tools\blockpoke.ps1 -ProcId $pid2 console 'dropitem 0x132'
 ```
 
 Three independent witnesses have to agree at step 5: the sender's `setitem` read-back, the

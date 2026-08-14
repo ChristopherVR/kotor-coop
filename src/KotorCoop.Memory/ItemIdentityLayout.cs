@@ -93,14 +93,36 @@ public static class ItemIdentityLayout
             flags |= ItemIdentity.FlagNonEquippable;
         }
 
-        // Clamped rather than trusted. The engine keeps charges inside a byte (both are
-        // saved as GFF bytes) and the stack inside a word, but this window can also be a
-        // stale read of freed memory, and a garbage stack size is the one field that would
-        // be written back into a real item on the far side.
+        // ⚠ A CHARGE COUNT THAT DOES NOT FIT IN A BYTE IS NOT A CHARGE COUNT.
+        //
+        // Both fields are persisted as GFF bytes (SaveItem 0x0055CE27 and 0x0055CE3D each
+        // read a single byte), so the engine can never have MEANT a value above 255 — such a
+        // value is uninitialised memory, and clamping it to 255 would turn garbage into a
+        // plausible number and write that onto a peer's item.
+        //
+        // It is not hypothetical. `CSWSItem::Constructor` 0x005530A0 writes Charges = 50
+        // (0x00553189, `mov dword [esi+0x258], 0x32`) and NEVER touches MaxCharges — the only
+        // writers of +0x25C inside CSWSItem are LoadDataFromGff (0x0056004E) and CopyItem
+        // (0x0055DB0F). So any item whose template load did not run carries an uninitialised
+        // MaxCharges. Measured live on 2026-08-15: `charges 50/1768092` on a body
+        // CreateItemOnFloor produced for a resref that does not exist.
+        //
+        // The repair is the ENGINE'S OWN default, not one we invented: at 0x00560016 the
+        // loader passes the Charges value it has just read as the default for MaxCharges, so
+        // "MaxCharges I cannot read" means "MaxCharges equals Charges". That is also what
+        // every base-game blueprint gets — none of the 557 .uti files declares a MaxCharges
+        // field at all, so all 557 take that default.
+        byte safeCharges = charges <= byte.MaxValue ? (byte)charges : (byte)0;
+        byte safeMaxCharges = maxCharges <= byte.MaxValue ? (byte)maxCharges : safeCharges;
+
+        // The stack is a word to the engine (SaveItem reads `word [esi+0x28C]`), and a stack
+        // of zero is not something it produces — but this window can also be a stale read of
+        // freed memory, and the stack size is the one field that ends up written into a real
+        // item on the far side.
         return new ItemIdentity(
             (ushort)Math.Clamp(stack, 1, ushort.MaxValue),
-            (byte)Math.Min(charges, byte.MaxValue),
-            (byte)Math.Min(maxCharges, byte.MaxValue),
+            safeCharges,
+            safeMaxCharges,
             upgrades,
             flags);
     }
