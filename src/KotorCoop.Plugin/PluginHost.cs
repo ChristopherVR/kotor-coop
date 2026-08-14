@@ -421,6 +421,13 @@ internal static unsafe class PluginHost
     /// </summary>
     private static void MenuFrame()
     {
+        // First of all, and on THIS hook rather than OnFrame: a pre-rendered movie blocks the
+        // main thread inside WaitForMovie, so the SwapBuffers callback cannot fire during one
+        // and the only evidence a cinematic played is the gap it leaves between two of these
+        // callbacks. Measuring it here brackets exactly the client tick, the server tick and
+        // the present. See docs/research/cinematics.md.
+        CinematicWatch.OnFrame();
+
         // The native browser first: its IsOpen gate tells the others the main-menu object
         // is currently freed (a shown child panel reclaims the menu until close rebuilds it).
         _nativeBrowser?.OnFrame();
@@ -679,6 +686,7 @@ internal static unsafe class PluginHost
         // itself), and a controller acting on them spawns bodies for the wrong world.
         _view?.ClearAgentWorldInputs();
 
+        CinematicWatch.Invalidate();
         _controller?.Invalidate();
         _items?.Invalidate();
         _combat?.Invalidate();
@@ -756,12 +764,20 @@ internal static unsafe class PluginHost
                     // Report a stalled frame hook once rather than every tick. If the hook
                     // is installed but never fires, everything else silently does nothing,
                     // and that is worth saying out loud.
+                    //
+                    // This is the ONE thing still moving during a cinematic: a movie blocks
+                    // the main thread inside WaitForMovie, so the swap never happens and this
+                    // warning is the expected — not anomalous — reading for its whole
+                    // duration. The line says so, because a reader who does not know that
+                    // will spend the length of a movie chasing a hook that is fine.
+                    // See docs/research/cinematics.md and CinematicWatch.
                     long frames = FrameHook.FrameCount;
                     if (FrameHook.IsInstalled && frames == lastFrames)
                     {
                         if (++quietTicks == 120)
                         {
-                            Log("WARNING: frame hook installed but has not fired for ~2s");
+                            Log("WARNING: frame hook installed but has not fired for ~2s "
+                                + "(normal while a movie or a module load holds the main thread)");
                         }
                     }
                     else
@@ -881,6 +897,7 @@ internal static unsafe class PluginHost
         "dialogue", "pause", "combat", "bark", "phantom", "item", "loot", "door",
         "journal", "minimap", "death", "transition", "epoch", "party", "enemy",
         "chat", "travel", "portrait", "encounter", "hook", "agent", "session",
+        "cinematic",
     ];
 
     /// <summary>Prefixes that name the same subsystem as one of the channels above.</summary>

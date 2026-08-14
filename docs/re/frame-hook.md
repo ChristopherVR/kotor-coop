@@ -560,6 +560,13 @@ already avoids it.
 - **No callback during movie playback.** The swap at `0x004048C1` is guarded by
   `CClientExoApp::IsMoviePlaying`. The simulation is not advancing then either, so this is
   acceptable; if it ever is not, switch to the call-site detour in section 6.5.
+  **⚠ The call-site detour is not the escape hatch this implies — see
+  `docs/research/cinematics.md`.** `CClientExoAppInternal::MainLoop` spins inside
+  `WaitForMovie 0x005F6F20` until the movie ends, so the detour at `0x004046BD` fires *before*
+  that block and then does not fire again either. Neither hook runs during a movie, and in a
+  co-op session the simulation not advancing is only true of THIS process: the external agent
+  and the other player keep going. What matters is not a co-op tick that has nothing to do, it
+  is the pre-store flush and the epoch gate, which are delayed by the whole length of the movie.
 - **`_realSwapBuffers` must be set before the slot is written.** It is, above. Reversing
   those two lines would produce a null-pointer call on the very next frame.
 - **Verify, do not trust, the constants.** `SwapBuffersSlot` is validated against

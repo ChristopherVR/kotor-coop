@@ -67,6 +67,13 @@ inferred from: the gate being `IsMoviePlaying`; the observed dormancy; and engin
 (`[[[[[0x7A39FC]+4]+4]+0x12C]]+0x30`) or logging `IsMoviePlaying()`'s return. **This "why" does not
 affect the recommended hook** — `MainLoop` fires whatever the reason for the skip.
 
+**The probe now ships.** `CinematicWatch` (on this very hook) calls `IsMoviePlaying` every frame
+and logs `cinematic: a movie is playing with no world up (the main menu's own loop)` the first
+time it reads true with no server. One run of `tools/demo.ps1` settles this claim; it is step 2
+of the test plan in `docs/research/cinematics.md`, where it doubles as the control that proves
+the watch is reading the engine at all. The same document explains why the *in-world* case is
+the opposite: there a movie blocks `MainLoop` itself, so neither hook sees it.
+
 ## The frame loop (VERIFIED)
 
 `WinMain 0x004041F0` is a `PeekMessageA` pump:

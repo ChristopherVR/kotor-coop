@@ -4621,6 +4621,137 @@ internal static unsafe class Odyssey
         return IsRenderWindowActive;
     }
 
+    // ---- cinematics: the Bink movie player ------------------------------------
+    //
+    // See docs/research/cinematics.md. Everything here is READ-ONLY on purpose: the whole
+    // point of these accessors is to let the plugin SAY what the engine did during the
+    // seconds it was not being called at all, not to steer the movie player.
+    //
+    // The load-bearing fact behind them: while a pre-rendered movie plays,
+    // CClientExoAppInternal::WaitForMovie (0x005F6F20) spins the MAIN THREAD in a loop at
+    // 0x005F7063-0x005F70B5 that runs nothing but Global::messagepump, so
+    // CServerExoApp::MainLoop is never reached, GDI SwapBuffers is never called, and NEITHER
+    // of the plugin's frame hooks fires. A movie is therefore observable only from its edges.
+
+    /// <summary>
+    /// CClientExoApp::IsMoviePlaying 0x005EDB40 — <c>__thiscall</c>, NO arguments.
+    ///
+    /// Argument size checked against the callee's own <c>ret</c> per docs/research/engine-api.md:
+    /// the whole chain is 0x005EDB40 → 0x005F2BD0 → 0x0070C1F0 → 0x00404DD0, and 0x00404DD0 is
+    /// literally <c>mov eax,[ecx+0x30]; ret</c> — a bare <c>ret</c>, so the argument size is 0.
+    /// Every hop is a pointer load with a null guard at 0x005F2BD8, which is why this is safe
+    /// to call on any frame, world or menu.
+    /// </summary>
+    private static readonly delegate* unmanaged[Thiscall]<nint, int> IsMoviePlayingFn =
+        (delegate* unmanaged[Thiscall]<nint, int>)0x005EDB40;
+
+    /// <summary>
+    /// <c>CClientExoAppInternal::move_to_module_movies</c> — the <c>CExoArrayList&lt;CExoString&gt;</c>
+    /// of movies a module transition is going to play, named in the DB's own offsets table.
+    ///
+    /// NWScript <c>StartNewModule(module, waypoint, movie1..movie6)</c>
+    /// (CSWVirtualMachineCommands::ExecuteCommandStartNewModule 0x00544390) pushes its six
+    /// movie arguments into this list through AddMoveToModuleMovie 0x005EDB50, and
+    /// CServerExoAppInternal::StartNewModule 0x004BA920 drains it with PlayLoadModuleMovies
+    /// 0x005EDB20 while the new module loads. So a non-empty list is the ONE pre-warning the
+    /// engine gives that a cinematic is about to take the main thread away.
+    /// </summary>
+    private const int ClientMoveToModuleMovies = 0x2D8;
+
+    /// <summary>CExoArrayList layout, from the DB: <c>+0x00</c> data, <c>+0x04</c> size,
+    /// <c>+0x08</c> capacity.</summary>
+    private const int ArrayListData = 0x00;
+    private const int ArrayListSize = 0x04;
+
+    /// <summary>CExoString layout, from the DB: <c>+0x00 char*</c>, <c>+0x04</c> length —
+    /// and that length INCLUDES the terminating null (see the CExoString length trap), which
+    /// is why the reader below cuts at the first null rather than trusting it.</summary>
+    private const int ExoStringSize = 0x08;
+
+    /// <summary>
+    /// True while the engine's Bink player has a movie up.
+    ///
+    /// ⚠ In a loaded module this practically never reads true from a frame callback, and that
+    /// is the finding rather than a defect: an in-world movie blocks the main thread inside
+    /// WaitForMovie, so no callback runs while it is true. It DOES read true at the main menu,
+    /// whose looping movie is played asynchronously and is the reason the SwapBuffers frame
+    /// hook is menu-dormant (docs/research/menu-frame-hook.md).
+    ///
+    /// MAIN THREAD ONLY.
+    /// </summary>
+    public static bool IsMoviePlaying()
+    {
+        nint client = GetClient();
+        return client != 0 && IsMoviePlayingFn(client) != 0;
+    }
+
+    /// <summary>
+    /// How many movies the pending module transition has queued. Zero in the ordinary case.
+    /// A pure read of two pointers deep; no engine call, so it is cheap enough for every frame.
+    /// </summary>
+    public static int QueuedTransitionMovieCount()
+    {
+        nint internalClient = GetClientInternal();
+        if (internalClient == 0)
+        {
+            return 0;
+        }
+
+        int size = *(int*)(internalClient + ClientMoveToModuleMovies + ArrayListSize);
+
+        // A list this long is not a list, it is a torn or wrong read. Six is the engine's own
+        // ceiling (StartNewModule takes exactly six movie arguments); allow a little slack and
+        // refuse anything past it rather than walk off into memory below.
+        return size is > 0 and <= 16 ? size : 0;
+    }
+
+    /// <summary>
+    /// Copies the name of queued transition movie <paramref name="index"/> into
+    /// <paramref name="destination"/> as ASCII, and returns how many bytes were written.
+    ///
+    /// Cuts at the first null deliberately: a CExoString's length field counts the terminator,
+    /// and trusting it has produced three separate off-by-one bugs in this codebase already.
+    /// </summary>
+    public static int ReadQueuedTransitionMovie(int index, byte* destination, int capacity)
+    {
+        if (destination == null || capacity <= 0 || index < 0 || index >= QueuedTransitionMovieCount())
+        {
+            return 0;
+        }
+
+        nint internalClient = GetClientInternal();
+        if (internalClient == 0)
+        {
+            return 0;
+        }
+
+        nint data = Deref(internalClient + ClientMoveToModuleMovies + ArrayListData);
+        if (data == 0)
+        {
+            return 0;
+        }
+
+        nint text = Deref(data + (index * ExoStringSize));
+        if (text == 0)
+        {
+            return 0;
+        }
+
+        int written = 0;
+        while (written < capacity)
+        {
+            byte c = *(byte*)(text + written);
+            if (c == 0)
+            {
+                break;
+            }
+
+            destination[written++] = c;
+        }
+
+        return written;
+    }
+
     /// <summary>The player's own pause toggle. See EngineGlobals on the agent side; the
     /// shared-pause mirror uses this same bit so either player can pause both worlds.</summary>
     public const int PauseReasonPlayer = 0x01;
