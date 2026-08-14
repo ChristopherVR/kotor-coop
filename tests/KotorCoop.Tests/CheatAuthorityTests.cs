@@ -152,4 +152,64 @@ public class CheatAuthorityTests
         Assert.Equal(0u, ledger.Dropped);
         Assert.Equal(CheatAuthority.ForwardedKillDamage, ledger.TotalAt(0));
     }
+
+    // ---- id spaces: the same number means different creatures on the two instances ----
+
+    /// <summary>
+    /// The case that made a client's <c>slay</c> do nothing at all: the console hands down an
+    /// id read from the OWNER's census, the mirror holds a materialised stand-in for it, and
+    /// resolving the owner's number here finds nothing. The body to resolve is the stand-in;
+    /// the debt is still keyed by the owner's number, because that is the only one the owner
+    /// can spend it against.
+    /// </summary>
+    [Fact]
+    public void AnOwnerIdWithAStandInResolvesLocallyAndStillPaysTheOwner()
+    {
+        (uint local, uint owner) = CheatAuthority.MirrorIds(
+            requested: 0x1A, mappedLocal: 0x135, mappedOwner: 0);
+
+        Assert.Equal(0x135u, local);
+        Assert.Equal(0x1Au, owner);
+    }
+
+    /// <summary>The other direction: somebody typed one of OUR stand-in ids, which means
+    /// nothing to the owner, so the debt is translated back into their space.</summary>
+    [Fact]
+    public void AStandInIdIsForwardedUnderTheOwnersNumber()
+    {
+        (uint local, uint owner) = CheatAuthority.MirrorIds(
+            requested: 0x135, mappedLocal: 0, mappedOwner: 0x1A);
+
+        Assert.Equal(0x135u, local);
+        Assert.Equal(0x1Au, owner);
+    }
+
+    /// <summary>With no mapping either way the ordinary GIT-identity assumption stands — the
+    /// same placed creature carries the same id in both engines, which is what the whole
+    /// enemy channel keys on.</summary>
+    [Fact]
+    public void AnUnmappedIdIsAssumedIdenticalOnBothSides()
+    {
+        (uint local, uint owner) = CheatAuthority.MirrorIds(
+            requested: 0x35, mappedLocal: 0, mappedOwner: 0);
+
+        Assert.Equal(0x35u, local);
+        Assert.Equal(0x35u, owner);
+    }
+
+    /// <summary>
+    /// A number that is BOTH an owner id we hold a body for and one of our own stand-in ids
+    /// is read as the owner's. That precedence is not arbitrary: every id the bare
+    /// <c>slay</c> sweep produces on a mirroring instance comes out of the owner's census, so
+    /// the owner reading is the one that is nearly always meant.
+    /// </summary>
+    [Fact]
+    public void TheOwnerReadingWinsWhenANumberIsAmbiguous()
+    {
+        (uint local, uint owner) = CheatAuthority.MirrorIds(
+            requested: 0x40, mappedLocal: 0x200, mappedOwner: 0x99);
+
+        Assert.Equal(0x200u, local);
+        Assert.Equal(0x40u, owner);
+    }
 }

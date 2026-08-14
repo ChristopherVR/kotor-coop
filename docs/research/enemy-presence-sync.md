@@ -168,11 +168,129 @@ Found while building client-triggered encounters; the fence posts for closing it
 the cheap cross-instance key for the blueprint — are in
 [client-encounters.md](client-encounters.md) §8.
 
+## ⚠ Root cause 2026-08-15: the census published GHOSTS — ids their own publisher could not resolve
+
+The defect this closes was found from the other end, in the peer-damage ledger: a client's
+`slay` banked 200 points of damage against enemy `0x35`, forwarded it to the host, and the
+host answered `combat: a peer owes 200 damage to 0x35, which does not resolve here` — for an
+id the host had **published in its own enemy census**. `tools/creatures.ps1` on the host then
+found no `0x35` at all among its 38 creatures. See `docs/live-verification.md`
+(2026-08-15) for the full measurement chain and
+[peer-damage-ledger.md](peer-damage-ledger.md) for what such a debt costs.
+
+### What was actually wrong
+
+**A vtable scan cannot tell a live object from a destroyed one.** Everything the agent knows
+about creatures comes from `KotorGameBridge.ScanCreatures`, which sweeps private committed
+memory for the 4-byte `CSWSCreature` vtable value `0x007470C8` and reads the object id out of
+the following word. `operator delete` does not clear either of them, so a freed creature block
+keeps reading as a creature — with a plausible tag, position and hit-point count — until
+something else claims the memory. The census then publishes an id that belongs to nothing.
+
+The host dump carries the proof independent of any theory about how the ghosts arise: it
+shows **the same object id at two different addresses** (`0x38` at `0x1505B674` and at
+`0x1923A620`). The engine's array maps one id to exactly one object, so at least one of those
+two was never in it.
+
+**Nothing downstream could catch it**, which is why it survived so long:
+
+- ids in the census are only ever *consumed* by the peer, which cannot know what the
+  publisher can resolve;
+- the mirror MATERIALISES anything it cannot find (`materialise: owner 0x1A -> local 0x135`),
+  so presence, health and death all look healthy on a ghost id;
+- the one channel that must resolve the id on the publisher's side — a peer's forwarded
+  damage — skipped it silently until the 2026-08-15 log line was added.
+
+A second, quieter consequence of the same scan: a duplicated id makes the census publish
+whichever of the two addresses the scan reached last, so a *live* creature's presence and
+health could be read out of a dead body's memory.
+
+### The fix — ask the engine, on the publishing side
+
+`CGameObjectArray::GetGameObject` (0x004D8230) is a short open-hash lookup with no state of
+its own, so the agent reproduces it rather than calling it — an external process cannot call
+into the game anyway
+(`EngineGlobals.TryLookupObject`, VERIFIED by transcription from `tools/disasm.py`):
+
+```
+array  = [[0x007A39FC] + 0x08]   CServerExoApp
+         + 0x04                  CServerExoAppInternal
+         + 0x1005C               CGameObjectArray*        (CServerExoApp::GetObjectArray 0x004AED70)
+tree   = [array + 0x00]          GameObjectArrayEntry**   (symbol DB: object_tree)
+bucket = ((id >> 31) & 1) << 12 | (id & 0xFFF)            8192 buckets; the high bit is a
+                                                          SPLIT, not a mask — the engine
+                                                          allocates objects and characters
+                                                          from two id spaces
+for (e = tree[bucket]; e; e = [e + 0x08])                 GameObjectArrayEntry, size 0xC
+    if ([e + 0x00] == (id & 0x7FFFFFFF)) return [e + 0x04]
+```
+
+`KotorGameBridge.EnumerateCreatures` now confirms every scanned creature through it before
+anyone sees the list: kept only when **the id resolves to that creature's own address**. The
+address test is the part that matters for duplicates — "the id resolves" is true of both
+copies and only one of them is the object the engine will hand a peer's damage to.
+
+This is the right authority precisely because it is the SAME lookup the debt is spent through
+(`Odyssey.ResolveServerObject` → `CServerExoApp::GetGameObject`). "Confirmed here" therefore
+means exactly "an id a peer can key work by", which is the property the census silently
+lacked.
+
+Costs and rates: the scan still runs at most every 15 s (it is expensive and creature
+addresses are module-stable), but the confirmation re-runs every 250 ms — because "where are
+the creature-shaped objects" is stable while "which of them does the engine still own"
+changes the moment anything dies. Two small reads per creature, so a confirmation pass is a
+few hundred microseconds.
+
+### Failing safe, in both directions
+
+| Situation | Behaviour |
+| --- | --- |
+| No server (main menu, mid-transition) | nothing to ask — the scan passes through untouched |
+| The gate confirms NONE of many candidates | **distrust the gate, not the world**: publish everything and log it once. A wrong offset would otherwise empty the session of enemies, phantom bodies and the player |
+| A transient read failure on one creature | dropped for one 250 ms window, back on the next; the census is a level, and the materialisation lease is 5 s |
+| Ghosts found | dropped, and `[census] N of M creature-shaped objects are not in the engine's object array` says so — never silent |
+
+### The other half: an id is only meaningful in one id space
+
+The same run exposed a second id-space fault in the cheat path. On a mirroring instance the
+bare `slay` sweep reads the OWNER's census (that is the only space a forwarded debt can be
+keyed by), but `CheatController.TryResolveTarget` then resolved that number against the LOCAL
+engine — so wherever the mirror had materialised a stand-in (`owner 0x1A -> local 0x135`) the
+kill was refused as "no creature here answers to that", and where the number happened to name
+a different local creature the phantom/companion/plot rules were judged against the wrong
+body. `CheatAuthority.MirrorIds` now sorts the spaces out before anything is resolved:
+`ToLocal` first (an arriving id is nearly always the owner's), then `ToOwner` (somebody typed
+one of our stand-in ids), then GIT identity. The body is resolved in local space; the debt is
+still keyed in the owner's.
+
+### Tests
+
+`tests/KotorCoop.Tests/LiveObjectGateTests.cs` — the bucket arithmetic (including that the
+high bit selects the other half of the table rather than being masked away), chain walking,
+a circular chain terminating, a ghost dropped beside a live object, a duplicate id keeping
+only the address the array names, and the distrust-yourself fail-safe.
+`CheatAuthorityTests` covers the four `MirrorIds` cases.
+
+### NEEDS-LIVE
+
+- The `+0x1005C` array pointer and the bucket walk were transcribed from the instruction
+  stream, not observed. The fail-safe makes a wrong one harmless (it confirms nothing, so
+  everything is published and the log says so) — but the confirming evidence is the log line
+  `[census] N of M ...` appearing with N small and non-zero, plus a client `slay` that kills.
+- Whether ghost ids are dominated by a previous module generation (the duplicate-id pattern
+  suggests it) or by ordinary mid-module destruction. The fix does not care; the answer would
+  tell us whether the 15 s scan TTL is also worth shortening.
+
 ## Files
 
+- `src/KotorCoop.Memory/EngineGlobals.cs` — the server object array walk
+  (`TryGetServerObjectArray`, `TryResolveServerObject`, `TryLookupObject`).
+- `src/KotorCoop.Memory/LiveObjectGate.cs` — the keep/drop policy and its self-distrust.
 - `src/KotorCoop.Protocol` — `EnemyState` presence fields, snapshot codec, protocol v12.
 - `src/KotorCoop.Memory/KotorGameBridge.cs` — presence reads in `ReadEnemies`, presence
-  region writes in `TryWriteEnemies`, block signature v20.
+  region writes in `TryWriteEnemies`, block signature v20, and the liveness confirmation in
+  `EnumerateCreatures`/`Confirm`.
+- `src/KotorCoop.Plugin/CheatAuthority.cs` — `MirrorIds`, the owner/local id-space rule.
 - `src/KotorCoop.Plugin/SharedBlock.cs` — region `0x1400..0x1810`, `TotalSize 0x1A00`.
 - `src/KotorCoop.Plugin/EnemyPresenceController.cs` — the driver.
 - `src/KotorCoop.Plugin/Odyssey.cs` — `DriveEnemy` / shared `DriveBody`, gait table

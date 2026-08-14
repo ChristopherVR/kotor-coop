@@ -340,3 +340,26 @@ Nothing below has been measured. The build compiles and 321 unit tests pass; tha
 10. **A bump is needed at integration:** `ProtocolConstants.Version` 14 → 15,
     `PluginHost._block->Version`, and `KotorGameBridge.PluginSignature`. Deliberately not
     done here.
+
+## 7. ⚠ 2026-08-15: the debt was sound; the KEY was not
+
+The first live exercise of a forwarded kill (a client's `slay`) delivered nothing, and the
+ledger was not at fault. Two id-space faults were, and both are written up in
+[enemy-presence-sync.md](enemy-presence-sync.md) ("the census published GHOSTS"):
+
+1. **The owner published ids it could not itself resolve.** The census is built from a vtable
+   scan of committed memory, which cannot distinguish a live creature from the intact bytes of
+   a destroyed one, so an id keyed against a ghost is owed for ever. The agent now confirms
+   every scanned creature through the engine's own `CGameObjectArray` — the same lookup the
+   debt is spent through — before publishing.
+2. **The cheat resolved an owner id against the local engine.** Fixed with
+   `CheatAuthority.MirrorIds`.
+
+The change that made both findable belongs here, though, and is the lesson worth keeping: the
+`Odyssey.ResolveServerObject(objectId) == 0` guard in `PeerDamageController.ApplyOwed` used to
+`continue` in silence. Holding an unresolvable debt is the RIGHT behaviour — it lands when the
+creature does, and never on a stranger — but doing it silently makes an entire failure class
+unfalsifiable: both ends look healthy, for ever. It now logs
+`combat: a peer owes N damage to 0xID, which does not resolve here` on its own bounded budget,
+separate from the successful-apply budget so a flood of applies cannot crowd it out. That one
+line turned "nothing happened" into a located defect inside a single run.

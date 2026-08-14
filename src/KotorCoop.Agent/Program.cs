@@ -804,6 +804,12 @@ internal static class Program
         if (bridge is KotorGameBridge resolveDiag)
         {
             resolveDiag.ResolveDiagnostic = message => Console.WriteLine($"[resolve] {message}");
+
+            // And why the enemy census is smaller than the scan. A creature-shaped object the
+            // engine's own array does not hold is an id nobody can key work by — the peer
+            // damage forwarded against one is owed for ever — so the drop is stated, never
+            // silent.
+            resolveDiag.CensusDiagnostic = message => Console.WriteLine($"[census] {message}");
         }
 
         using SessionManager manager = new(bridge, agentSettings);

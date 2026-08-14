@@ -331,6 +331,19 @@ internal sealed unsafe class CheatController(SharedBlockView block)
     /// Resolves the request's target: an explicit object id when the agent supplied one,
     /// otherwise the tag in the text field, swept for the same way dialogue and barks resolve
     /// a named creature.
+    ///
+    /// ⚠ AN EXPLICIT ID IS TRANSLATED INTO THIS ENGINE'S SPACE FIRST, on an instance that
+    /// mirrors somebody else's enemies. The agent's bare-<c>slay</c> sweep reads the OWNER's
+    /// published census there — that is the only id space a forwarded kill can be keyed by —
+    /// so what arrives is an owner id, and owner ids resolve here only by GIT identity.
+    /// Wherever the mirror had to materialise a stand-in they do not: resolving the owner's
+    /// number directly finds nothing and the kill is refused as "no creature here answers to
+    /// that", or finds a DIFFERENT creature that happens to hold that number and judges the
+    /// phantom/companion/plot rules against the wrong body.
+    ///
+    /// <paramref name="targetId"/> comes back in the LOCAL space, which is what every rule
+    /// below it is expressed in; the owner key for a forwarded debt is recovered from it with
+    /// <c>MaterialisedEnemies.ToOwner</c> at the point of use.
     /// </summary>
     private bool TryResolveTarget(out uint targetId, out nint creature, out string what)
     {
@@ -339,8 +352,23 @@ internal sealed unsafe class CheatController(SharedBlockView block)
 
         if (targetId != 0)
         {
-            creature = Odyssey.ResolveServerObject(targetId);
-            what = creature != 0 ? string.Empty : $"no object 0x{targetId:X} in this module";
+            // ToLocal is consulted first deliberately: on a mirroring instance the ids that
+            // arrive are the owner's, so "this number is an owner id we hold a body for"
+            // outranks "this number is also one of our own stand-in ids".
+            (uint localId, _) = block.DamageDealtEnabled
+                ? CheatAuthority.MirrorIds(
+                    targetId, MaterialisedEnemies.ToLocal(targetId), MaterialisedEnemies.ToOwner(targetId))
+                : (targetId, targetId);
+
+            creature = Odyssey.ResolveServerObject(localId);
+
+            what = creature != 0
+                ? string.Empty
+                : localId == targetId
+                    ? $"no object 0x{targetId:X} in this module"
+                    : $"the owner's 0x{targetId:X} is our 0x{localId:X}, which nothing here answers to";
+
+            targetId = localId;
             return creature != 0;
         }
 

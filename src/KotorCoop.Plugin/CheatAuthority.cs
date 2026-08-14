@@ -50,6 +50,42 @@ internal static class CheatAuthority
     public const uint ForwardedKillDamage = 100_000;
 
     /// <summary>
+    /// Sorts out WHICH ID SPACE a requested target is in, on an instance that has two of
+    /// them: the owner's ids (what the enemy census carries, and the only ids a forwarded
+    /// debt can be keyed by) and this engine's own (what can actually be resolved here).
+    ///
+    /// ⚠ THE CONSOLE CAN HAND OVER EITHER, and until this existed the caller assumed the
+    /// second. A bare <c>slay</c> on a mirroring instance now picks the nearest enemy out of
+    /// the OWNER's published census, so the id it hands down is an owner id — which resolves
+    /// locally only by the luck of GIT identity. Where the mirror had to materialise a
+    /// stand-in there is no such luck: the owner's <c>0x1A</c> is our <c>0x135</c>, resolving
+    /// <c>0x1A</c> here finds nothing (or, worse, a different creature that happens to hold
+    /// that number) and the kill is refused as "no creature here answers to that".
+    ///
+    /// The two maps are asymmetric on purpose, so both directions are covered:
+    /// <paramref name="mappedLocal"/> is <c>MaterialisedEnemies.ToLocal(requested)</c> — non-zero
+    /// only when the request was an OWNER id we have a body for — and
+    /// <paramref name="mappedOwner"/> is <c>ToOwner(requested)</c>, non-zero only when it was
+    /// one of OUR stand-in ids. With neither, the ordinary GIT-identity assumption stands: the
+    /// same creature carries the same id in both engines.
+    /// </summary>
+    /// <returns>The id to resolve a body with here, and the id to key a forwarded debt by.</returns>
+    public static (uint Local, uint Owner) MirrorIds(uint requested, uint mappedLocal, uint mappedOwner)
+    {
+        if (mappedLocal != 0)
+        {
+            return (mappedLocal, requested);
+        }
+
+        if (mappedOwner != 0)
+        {
+            return (requested, mappedOwner);
+        }
+
+        return (requested, requested);
+    }
+
+    /// <summary>
     /// Decides what a <c>slay</c> against this target means on this instance.
     ///
     /// <paramref name="mirrorsEnemies"/> is the authority discriminator and it is not

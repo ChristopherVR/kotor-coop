@@ -324,12 +324,45 @@ forwards against it is held for ever. Mirroring still works because the client M
 what it cannot find (`materialise: owner 0x1A -> local 0x135`), which masks the divergence for
 every channel except the debt.
 
-Next diagnostic (not run): dump the host's published census beside `creatures.ps1` output and
-find which ids in it have no resolvable creature — the suspicion is the census is read in a
-different id space (KOTOR's client/server halves — the host dump shows the same id at two
-addresses) or holds entries for creatures already destroyed. Until that is settled, a client's
-forwarded damage against a naturally-present enemy is only reliable where the ids happen to
-agree, which the ID counts (38 vs 45) say is not guaranteed.
+**Answered 2026-08-15 (code, not live) — the census was publishing GHOSTS.** Not a
+client/server half mix-up: the client half is `CSWCCreature` (vtable `0x74F5F8`) and the scan
+only matches `CSWSCreature`. The census comes from a sweep of committed memory for the
+`CSWSCreature` vtable word, and that **cannot tell a live creature from the intact bytes of a
+destroyed one** — `operator delete` leaves the vtable and the object id exactly where they
+were. The duplicate in the dump is the proof that needs no theory: the engine's array maps one
+id to one object, so `0x38` appearing at both `0x1505B674` and `0x1923A620` means at least one
+of them was never in it. Fix, root cause and fail-safes:
+`docs/research/enemy-presence-sync.md` §"Root cause 2026-08-15". The agent now confirms every
+scanned creature through the engine's own `CGameObjectArray` (transcribed from
+`CGameObjectArray::GetGameObject` 0x004D8230) before publishing, and the cheat path's
+owner/local id confusion (`CheatAuthority.MirrorIds`) is fixed alongside it.
+
+**The live check that confirms it** (unattended, both instances up in the same module):
+
+```powershell
+# 1. the ghosts are seen and named on the HOST's agent log - the fix working, visibly
+Select-String -Path $env:TEMP\kotorcoop-demo\agent1.log -Pattern '\[census\]'
+#    expect: "[census] N of M creature-shaped objects are not in the engine's object array"
+#    with N small and non-zero. N = 0 forever means no ghosts existed this run (fine, but
+#    inconclusive); "confirmed NONE of M" means the OFFSETS are wrong - the gate then
+#    publishes everything, exactly as before, and nothing is lost.
+
+# 2. the client's forwarded kill now lands
+pwsh tools\blockpoke.ps1 -ProcId <client> console 'slay'
+#    client: "slaying the nearest enemy 0xNN (...) [from owner census, ...]" then
+#            "queued a killing blow for the owner, keyed by owner id 0xNN"
+#    HOST plugin log: "combat: applied 100000 of a peer's damage to 0xNN"
+#            and NOT "which does not resolve here"
+#    both dashboards: the dead count goes up by one; the body is gone on both screens.
+
+# 3. and the id it chose really is one the host holds
+pwsh tools\creatures.ps1 -ProcId <host>   # 0xNN must be in this list
+```
+
+Reading the result: `does not resolve here` still appearing for the id the client just named
+would mean the confirmation is not reaching the census (check `[census]` fired at all);
+`no creature here answers to that` on the CLIENT would mean `MirrorIds` did not translate —
+the id was the owner's and the mirror had no stand-in for it.
 
 ### Still unverified — item identity apply
 

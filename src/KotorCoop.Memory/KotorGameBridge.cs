@@ -591,15 +591,26 @@ public sealed class KotorGameBridge : IGameBridge
         // TTL keeps the melt-down protection (still at most ~1 scan/s while worldless,
         // the same rate the resolve limiter allows) without ever hiding a fresh world.
         int ttlMs = _creatureCache is { Count: 0 } ? EmptyCreatureCacheMs : CreatureCacheMs;
-        if (_creatureCache is not null && nowMs - _creatureCacheAtMs < ttlMs)
+        if (_creatureCache is null || nowMs - _creatureCacheAtMs >= ttlMs)
         {
-            return _creatureCache;
+            _creatureCache = ScanCreatures();
+            _creatureCacheAtMs = nowMs;
+            _liveCache = null;
         }
 
-        List<CreatureRef> scanned = ScanCreatures();
-        _creatureCache = scanned;
-        _creatureCacheAtMs = nowMs;
-        return scanned;
+        // ⚠ CONFIRMED FAR MORE OFTEN THAN IT IS SCANNED, and that is the point. The scan
+        // answers "where are the creature-shaped objects", which is stable for a module; the
+        // confirmation answers "which of them does the engine still own", which changes the
+        // moment anything dies and is destroyed. Publishing an id the engine no longer holds
+        // is not a cosmetic staleness — a peer's forwarded damage keyed by it is owed for
+        // ever (docs/research/enemy-presence-sync.md).
+        if (_liveCache is null || nowMs - _liveCacheAtMs >= LiveConfirmMs)
+        {
+            _liveCache = Confirm(_creatureCache);
+            _liveCacheAtMs = nowMs;
+        }
+
+        return _liveCache;
     }
 
     /// <summary>How long a creature-address scan is reused. Long enough that scanning stops
@@ -610,13 +621,90 @@ public sealed class KotorGameBridge : IGameBridge
     /// <summary>How long an EMPTY creature scan is reused — see the warning above.</summary>
     private const int EmptyCreatureCacheMs = 750;
 
+    /// <summary>How long a liveness confirmation is reused. Two small reads per creature, so
+    /// four times a second costs a few hundred microseconds — cheap enough to sit in front of
+    /// every census publish, which is where an id that has stopped existing does its damage.</summary>
+    private const int LiveConfirmMs = 250;
+
     private List<CreatureRef>? _creatureCache;
     private long _creatureCacheAtMs;
+
+    private List<CreatureRef>? _liveCache;
+    private long _liveCacheAtMs;
+
+    /// <summary>Last ghost count reported, so the log says something only when it changes.</summary>
+    private int _ghostsLogged = -1;
+
+    /// <summary>Whether the "the gate confirmed nothing" line has been said. Once is enough:
+    /// it is a standing condition, not an event.</summary>
+    private bool _gateDistrustLogged;
+
+    /// <summary>
+    /// Optional sink for census-liveness notes. An id that the publisher's own engine cannot
+    /// resolve MUST NOT leave silently — a silent skip on the receiving end is what made this
+    /// whole failure class invisible for weeks (see PeerDamageController).
+    /// </summary>
+    public Action<string>? CensusDiagnostic { get; set; }
+
+    /// <summary>
+    /// Drops the creature-shaped memory the engine does not actually own.
+    ///
+    /// Fails SAFE in both directions: with no server (the main menu, a transition) there is
+    /// nothing to ask, so the scan is passed through unchanged; and a gate that confirms
+    /// nothing at all distrusts itself rather than emptying the world — see
+    /// <see cref="LiveObjectGate"/>.
+    /// </summary>
+    private List<CreatureRef> Confirm(List<CreatureRef> scanned)
+    {
+        if (scanned.Count == 0 || !EngineGlobals.TryGetServerObjectArray(_memory, out nint objectArray))
+        {
+            return scanned;
+        }
+
+        LiveObjectGate gate = new(id =>
+            EngineGlobals.TryResolveServerObject(_memory, objectArray, id, out nint address) ? address : 0);
+
+        List<CreatureRef> live = gate.Confirm(scanned, c => (c.ObjectId, c.Address), out LiveObjectVerdict verdict);
+
+        if (!verdict.Trusted)
+        {
+            if (!_gateDistrustLogged)
+            {
+                _gateDistrustLogged = true;
+                CensusDiagnostic?.Invoke(
+                    $"census: the object array at 0x{objectArray:X} confirmed NONE of {scanned.Count} "
+                    + "scanned creatures - distrusting the check and publishing them all "
+                    + "(offsets or a rebuild, not an empty world)");
+            }
+
+            return live;
+        }
+
+        _gateDistrustLogged = false;
+
+        if (verdict.Dropped != _ghostsLogged)
+        {
+            _ghostsLogged = verdict.Dropped;
+
+            if (verdict.Dropped > 0)
+            {
+                CensusDiagnostic?.Invoke(
+                    $"census: {verdict.Dropped} of {scanned.Count} creature-shaped objects are not in "
+                    + "the engine's object array (destroyed bodies whose memory still reads); "
+                    + $"publishing the {verdict.Kept} it can resolve");
+            }
+        }
+
+        return live;
+    }
 
     /// <summary>Drops the cached creature list — call when the world changes underneath it.</summary>
     public void InvalidateCreatureCache()
     {
         _creatureCache = null;
+        _liveCache = null;
+        _ghostsLogged = -1;
+        _gateDistrustLogged = false;
         _scanCache.Clear();
     }
 

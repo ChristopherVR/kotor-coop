@@ -44,6 +44,149 @@ public static class EngineGlobals
         return TryGetServer(memory, out nint server) && TryDeref(memory, server + InternalOffset, out serverInternal);
     }
 
+    // ---- the server's object array: the engine's own answer to "is this id real" ------
+
+    /// <summary>
+    /// CServerExoAppInternal + this = CGameObjectArray*, straight out of
+    /// <c>CServerExoApp::GetObjectArray</c> (0x004AED70), which is three instructions:
+    /// <c>mov eax,[ecx+4]</c> (the internal) / <c>mov eax,[eax+0x1005C]</c> / <c>ret</c>.
+    /// </summary>
+    private const int InternalObjectArrayOffset = 0x1005C;
+
+    /// <summary>CGameObjectArray + this = the bucket table, <c>GameObjectArrayEntry**</c>
+    /// (symbol database: <c>object_tree</c>, offset 0).</summary>
+    private const int ObjectArrayTree = 0x00;
+
+    // GameObjectArrayEntry, size 0xC in the symbol database, laid out exactly as
+    // CGameObjectArray::GetGameObject (0x004D8230) walks it.
+    private const int EntryObjectId = 0x00;
+    private const int EntryObject = 0x04;
+    private const int EntryNext = 0x08;
+
+    /// <summary>
+    /// A bound on the bucket chain walk. The buckets are 8192 wide over a few hundred live
+    /// objects, so a real chain is one or two nodes; anything longer means the memory was
+    /// read mid-rehash or is not a chain at all, and this is a read of ANOTHER process's
+    /// heap — it must not be able to spin.
+    /// </summary>
+    private const int MaxChainWalk = 64;
+
+    /// <summary>Resolves the server's <c>CGameObjectArray</c>. False at the main menu and
+    /// while a module is being torn down — the array is destroyed and re-allocated by
+    /// UnloadModule, which is also why its address makes a module-lifetime token.</summary>
+    public static bool TryGetServerObjectArray(ProcessMemory memory, out nint objectArray)
+    {
+        objectArray = 0;
+        return TryGetServerInternal(memory, out nint serverInternal)
+            && TryDeref(memory, serverInternal + InternalObjectArrayOffset, out objectArray);
+    }
+
+    /// <summary>
+    /// The engine's own id → object lookup, performed from outside the process.
+    ///
+    /// ⚠ THIS IS THE ONLY HONEST LIVENESS TEST AVAILABLE TO THE AGENT. Everything else the
+    /// bridge knows about creatures comes from a vtable scan of committed memory, and a scan
+    /// cannot tell a live object from the intact bytes of a destroyed one: the vtable word
+    /// and the object id survive in a freed heap block until something else claims it. Ids
+    /// that came from such a ghost are in nobody's id space — the publishing instance itself
+    /// cannot resolve them — and any damage a peer forwards keyed by one is owed for ever
+    /// (docs/research/enemy-presence-sync.md, "the census published ghosts").
+    ///
+    /// A transcription of <c>CGameObjectArray::GetGameObject</c> (0x004D8230), which is small
+    /// enough to reproduce exactly:
+    /// <code>
+    ///   bucket = ((id >> 31) &amp; 1) &lt;&lt; 12 | (id &amp; 0xFFF)   // 8192 buckets
+    ///   for (e = tree[bucket]; e; e = e->next)
+    ///       if (e->id == (id &amp; 0x7FFFFFFF)) return e->object;
+    ///   return 0;
+    /// </code>
+    /// The high bit splits the two id spaces the engine allocates from (ordinary objects and
+    /// characters), which is why it selects a bucket half rather than being masked away.
+    /// </summary>
+    /// <returns>True when the array holds the id; <paramref name="address"/> is the object
+    /// pointer the engine would hand back.</returns>
+    public static bool TryResolveServerObject(
+        ProcessMemory memory, nint objectArray, uint objectId, out nint address)
+    {
+        address = 0;
+
+        if (objectArray == 0
+            || !memory.TryReadPointer(objectArray + ObjectArrayTree, out nint tree) || tree == 0)
+        {
+            return false;
+        }
+
+        bool found = TryLookupObject(
+            a => memory.TryReadUInt32(a, out uint value) ? value : null, tree, objectId, out uint pointer);
+
+        address = (nint)pointer;
+        return found;
+    }
+
+    /// <summary>
+    /// The bucket arithmetic and chain walk on their own, over any reader.
+    ///
+    /// Split out so the transcription can be ASSERTED rather than described: it is the one
+    /// part of this that is arithmetic rather than a pointer chain, so it is the one part a
+    /// unit test can prove — the bucket split on the id's high bit especially, which is easy
+    /// to "simplify" into a mask and would then resolve character ids onto ordinary objects.
+    ///
+    /// Every field of the structure is 4 bytes wide because the game is x86; the agent that
+    /// reads it is x64, so the widths are stated here rather than inherited from the reader.
+    /// </summary>
+    /// <param name="read32">Reads a 4-byte word out of the game, or null when it cannot.</param>
+    public static bool TryLookupObject(Func<nint, uint?> read32, nint tree, uint objectId, out uint address)
+    {
+        address = 0;
+
+        uint bucket = (((objectId >> 31) & 1) << 12) | (objectId & 0xFFF);
+        uint key = objectId & 0x7FFF_FFFF;
+
+        if (read32(tree + (nint)(bucket * 4)) is not { } head)
+        {
+            return false;
+        }
+
+        uint entry = head;
+
+        for (int walked = 0; entry != 0 && walked < MaxChainWalk; walked++)
+        {
+            if (read32((nint)entry + EntryObjectId) is not { } entryId)
+            {
+                return false;
+            }
+
+            if (entryId == key)
+            {
+                if (read32((nint)entry + EntryObject) is not { } obj || obj == 0)
+                {
+                    return false;
+                }
+
+                address = obj;
+                return true;
+            }
+
+            if (read32((nint)entry + EntryNext) is not { } next)
+            {
+                return false;
+            }
+
+            entry = next;
+        }
+
+        return false;
+    }
+
+    /// <summary>Convenience overload that resolves the array first. Prefer the other one in
+    /// a loop: the array pointer is worth reading once, not once per id.</summary>
+    public static bool TryResolveServerObject(ProcessMemory memory, uint objectId, out nint address)
+    {
+        address = 0;
+        return TryGetServerObjectArray(memory, out nint objectArray)
+            && TryResolveServerObject(memory, objectArray, objectId, out address);
+    }
+
     /// <summary>CServerExoAppInternal + this = CServerInfo* (symbol database: server_info).</summary>
     private const int ServerInfoOffset = 0x10004;
 
