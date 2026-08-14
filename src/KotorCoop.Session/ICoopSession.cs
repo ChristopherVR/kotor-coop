@@ -309,4 +309,14 @@ public sealed record SessionSettings
     /// to a hash on the wire — a stranger-gate, not a security boundary.
     /// </summary>
     public string Password { get; init; } = string.Empty;
+
+    /// <summary>
+    /// This player's stable identity, independent of its network address — the value a client
+    /// puts in its Hello nonce and the host keys its peer slot on. 0 (the default) means "mint
+    /// a fresh one for this session", which is the behaviour every caller had before this
+    /// existed; a caller with somewhere to persist one uses <see cref="PeerIdentity"/>.
+    ///
+    /// Ignored by a host, which is peer 1 by definition and never dials anyone.
+    /// </summary>
+    public uint PeerIdentity { get; init; }
 }

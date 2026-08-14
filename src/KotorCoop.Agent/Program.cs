@@ -515,6 +515,24 @@ internal static class Program
     }
 
     /// <summary>
+    /// The directory the attached game runs from, or null when it cannot be resolved. The
+    /// same lookup <see cref="TryLoadCoopConfig"/> does, named separately because it is also
+    /// where per-install state that is not configuration lives (see <c>PeerIdentity</c>).
+    /// </summary>
+    private static string? TryResolveInstallDirectory(int processId)
+    {
+        try
+        {
+            using Process game = Process.GetProcessById(processId);
+            return Path.GetDirectoryName(game.MainModule?.FileName);
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    /// <summary>
     /// Reads coop.ini beside the attached game's own executable, or null when it is absent
     /// or unreadable — the command line and the built-in defaults stand in that case.
     /// </summary>
@@ -724,6 +742,12 @@ internal static class Program
         // never blocks a session.
         ContentDigest digest = ComputeInstallDigest(memory.ProcessId);
 
+        // This install's stable identity, so a client that relaunches (or issues the console's
+        // `reconnect`, which builds a fresh session object) reclaims its existing peer slot
+        // instead of joining as a stranger while the old slot ages out. Keyed on the game
+        // directory, which is what already separates two instances on one machine.
+        uint peerIdentity = PeerIdentity.ForDirectory(TryResolveInstallDirectory(memory.ProcessId));
+
         // The player name: coop.ini's wins for menu-driven connects, the command line's for
         // scripted ones. A password typed with an in-game command (connect <ip> <password>,
         // host <password>) beats everything; then --password; then coop.ini's — in EVERY
@@ -785,6 +809,7 @@ internal static class Program
             Digest = digest,
             AllowDifferentSave = options.AllowDifferentSave,
             Password = sessionPassword.Length > 0 ? sessionPassword : fallbackPassword,
+            PeerIdentity = peerIdentity,
         };
 
         // The dispatcher owns every command surface and the one LAN listener. It re-reads
