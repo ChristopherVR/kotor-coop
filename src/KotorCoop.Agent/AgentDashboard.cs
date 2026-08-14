@@ -201,77 +201,24 @@ public sealed class AgentDashboard(
             : $"pickup refused: 0x{item.ItemId:X} is not on this instance's floor";
     }
 
+    /// <summary>
+    /// Drops a blueprint, or a LIVE item named as <c>#&lt;hex&gt;</c>. The decision itself
+    /// lives in <see cref="ItemDropRequest"/>, shared with the <c>dropitem</c> console verb,
+    /// so the two front doors cannot drift into giving different answers.
+    /// </summary>
     private void Drop(string? requestedResref)
     {
-        CoopAgent? agent = manager.Agent;
-        if (agent is null)
-        {
-            _lastDropNote = "drop: not connected";
-            return;
-        }
-
-        PlayerState local = agent.LastLocalState;
-        if (!local.IsPlausible || !agent.LastReadSucceeded)
-        {
-            _lastDropNote = "drop refused: local player not readable";
-            return;
-        }
-
         string resref = requestedResref ?? DropCycle[_dropIndex % DropCycle.Length];
+        ItemDropRequest.Outcome outcome = ItemDropRequest.Drop(manager, bridge, resref);
 
-        // "#1f" names a LIVE item in this instance by engine object id rather than a
-        // blueprint, and that is the only form that can exercise item identity: a conjured
-        // blueprint has no instance to read a stack size or an upgrade mask off. It does not
-        // remove the item from wherever it is — this is the same harness as the rest of the
-        // drop key, and duplicating an item locally is a cheaper price than needing the game
-        // to have a drop UI it does not have.
-        ItemIdentity identity = ItemIdentity.Unknown;
-        if (resref.StartsWith('#'))
+        // The cycle only advances on a drop that happened. A refused one used to advance it
+        // too, so pressing D through a disconnected patch silently skipped blueprints.
+        if (outcome.Dropped)
         {
-            if (bridge is not KotorGameBridge live)
-            {
-                _lastDropNote = "drop #id needs --kotor";
-                return;
-            }
-
-            if (!uint.TryParse(resref[1..], System.Globalization.NumberStyles.HexNumber, null, out uint objectId))
-            {
-                _lastDropNote = $"drop: {resref} is not a hex object id";
-                return;
-            }
-
-            string liveResref = live.ItemResref(objectId);
-            if (liveResref.Length == 0 || !live.TryReadItemIdentity(objectId, out identity))
-            {
-                _lastDropNote = $"drop: object 0x{objectId:X} is not a readable item here";
-                return;
-            }
-
-            resref = liveResref;
+            _dropIndex++;
         }
 
-        // In front of the player, along their facing, rather than at a fixed world offset:
-        // the camera sits behind the character, so a world-axis offset drops the item
-        // off-screen as often as not. Facing is the angle of the orientation vector, so
-        // forward is (cos, sin) of it.
-        const float DropDistance = 1.6f;
-        Vector3f at = new(
-            local.Position.X + (MathF.Cos(local.Facing) * DropDistance),
-            local.Position.Y + (MathF.Sin(local.Facing) * DropDistance),
-            local.Position.Z);
-
-        uint itemId = agent.Session.DropItem(resref, local.Module, at, identity);
-        if (itemId == 0)
-        {
-            _lastDropNote = $"drop refused: {resref} (not connected, or ground full)";
-            return;
-        }
-
-        _dropIndex++;
-        _lastDropNote = identity.IsKnown
-            ? $"dropped {resref} as item 0x{itemId:X} (stack {identity.StackSize}, "
-              + $"charges {identity.Charges}/{identity.MaxCharges}, upgrades 0x{identity.Upgrades:X})"
-            : $"dropped {resref} as item 0x{itemId:X}";
+        _lastDropNote = outcome.Note;
     }
 
     /// <summary>

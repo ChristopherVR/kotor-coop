@@ -1033,21 +1033,43 @@ internal static unsafe class Odyssey
         (delegate* unmanaged[Thiscall]<nint, nint, void>)0x00584AC0;
 
     /// <summary>
+    /// Why the last <see cref="ResolveItemBase"/> refused, in words, or empty when it
+    /// succeeded.
+    ///
+    /// This exists because the failure it reports is invisible otherwise. `ApplyItemIdentity`
+    /// deliberately does nothing when the id is not a live item — a wrong write into a
+    /// stranger's object is far worse than a stock item — but "did nothing" and "is broken"
+    /// look identical from outside, and that ambiguity is exactly what left the whole apply
+    /// path unverified through a live pass (docs/live-verification.md, 2026-08-15). A guard
+    /// that fails safe still has to say what it saw.
+    /// </summary>
+    public static string LastItemResolveNote = string.Empty;
+
+    /// <summary>
     /// Resolves an item object id to its CSWSItem base, vtable-checked. Mirrors the two-shape
     /// id logic the ground-item reader uses: GetGameObject may hand back the CSWSItem base
-    /// (id at +0x14) or the embedded CSWSObject (id at +0x04). Returns 0 if not a live item.
+    /// (id at +0x14) or the embedded CSWSObject (id at +0x04). Returns 0 if not a live item,
+    /// leaving <see cref="LastItemResolveNote"/> saying which step refused and what it read.
+    ///
+    /// The vtable constant is not a guess: <c>CSWSItem::Constructor</c> 0x005530A0 writes
+    /// <c>0x748DA0</c> to <c>[this]</c> and <c>0x748CC0</c> to <c>[this+0x10]</c> (the
+    /// embedded CGameObject's own vptr) at 0x005530EE/0x005530F4. So the base carries
+    /// 0x748DA0 and the subobject carries something else, which is why a vtable test applied
+    /// to the RAW pointer rejects every item and one applied to the resolved base does not.
     /// </summary>
     private static nint ResolveItemBase(uint itemId)
     {
         nint server = GetServer();
         if (server == 0)
         {
+            LastItemResolveNote = "no server (not in a world)";
             return 0;
         }
 
         nint pointer = GetGameObjectFn(server, itemId);
         if (pointer == 0)
         {
+            LastItemResolveNote = $"no object 0x{itemId:X} in this module";
             return 0;
         }
 
@@ -1062,11 +1084,83 @@ internal static unsafe class Odyssey
         }
         else
         {
+            LastItemResolveNote =
+                $"0x{itemId:X} resolves to 0x{pointer:X}, but its id is neither at +0x14 "
+                + $"(0x{*(uint*)(pointer + 0x14):X}) nor at +0x04 (0x{*(uint*)(pointer + 0x04):X})";
             return 0;
         }
 
-        return *(nint*)itemBase == ItemVtable ? itemBase : 0;
+        nint vtable = *(nint*)itemBase;
+        if (vtable != ItemVtable)
+        {
+            LastItemResolveNote =
+                $"0x{itemId:X} is at 0x{itemBase:X} but its vtable is 0x{vtable:X}, "
+                + $"not CSWSItem's 0x{ItemVtable:X} — it is some other kind of object";
+            return 0;
+        }
+
+        LastItemResolveNote = string.Empty;
+        return itemBase;
     }
+
+    /// <summary>
+    /// A live <c>CSWSItem</c>'s per-instance state, exactly as the five fields hold it. Raw
+    /// engine values rather than the wire shape: this is what a read-back has to report, and
+    /// re-encoding it would hide the very difference a read-back exists to reveal.
+    /// </summary>
+    internal struct ItemIdentityFields
+    {
+        public uint StackSize;
+        public uint Charges;
+        public uint MaxCharges;
+        public uint Upgrades;
+
+        /// <summary>The whole +0x288 dword, uncarried bits included — a read-back that
+        /// silently dropped bits 3/4/7/8 could not show that the write left them alone.</summary>
+        public uint BitFlags;
+
+        /// <summary>The possessor id at +0x268; <see cref="ObjectInvalid"/> means the item is
+        /// lying on the floor. Not part of identity, but it is the one fact that tells a
+        /// listing whose pack an item is in.</summary>
+        public uint Possessor;
+    }
+
+    /// <summary>
+    /// Reads one live item's identity fields through the engine's own object lookup.
+    ///
+    /// The counterpart to <see cref="ApplyItemIdentity"/> and the read-back that proves it:
+    /// the plugin writes, then reads the same five addresses back and reports what is really
+    /// there, so "applied" means the values are in the item rather than that a function
+    /// returned true. False leaves <see cref="LastItemResolveNote"/> saying why.
+    ///
+    /// MAIN THREAD ONLY (it calls GetGameObject).
+    /// </summary>
+    internal static bool TryReadItemIdentityFields(uint itemId, out ItemIdentityFields fields)
+    {
+        fields = default;
+
+        nint item = ResolveItemBase(itemId);
+        if (item == 0)
+        {
+            return false;
+        }
+
+        fields = ReadItemFields(item);
+        return true;
+    }
+
+    /// <summary>The five identity fields plus the possessor, straight off a resolved item.
+    /// One reader shared by the plain read and by the apply's read-back, so the two can never
+    /// disagree about which addresses they are talking about.</summary>
+    private static ItemIdentityFields ReadItemFields(nint item) => new()
+    {
+        StackSize = *(uint*)(item + ItemStackSize),
+        Charges = *(uint*)(item + ItemCharges),
+        MaxCharges = *(uint*)(item + ItemMaxCharges),
+        Upgrades = *(uint*)(item + ItemUpgrades),
+        BitFlags = *(uint*)(item + ItemBitFlags),
+        Possessor = *(uint*)(item + ItemPossessor),
+    };
 
     /// <summary>
     /// Deletes item <paramref name="itemId"/> from placeable <paramref name="placeable"/>'s
@@ -1189,9 +1283,12 @@ internal static unsafe class Odyssey
     ///
     /// MAIN THREAD ONLY.
     /// </summary>
-    public static bool ApplyItemIdentity(
-        uint itemId, uint upgrades, uint stackSize, uint charges, uint maxCharges, uint flags)
+    internal static bool ApplyItemIdentity(
+        uint itemId, uint upgrades, uint stackSize, uint charges, uint maxCharges, uint flags,
+        out ItemIdentityFields after)
     {
+        after = default;
+
         nint item = ResolveItemBase(itemId);
         if (item == 0)
         {
@@ -1213,6 +1310,13 @@ internal static unsafe class Odyssey
         bits = Set(bits, ItemBitStolen, (flags & SharedBlock.ItemIdentityStolen) != 0);
         bits = Set(bits, ItemBitNonEquippable, (flags & SharedBlock.ItemIdentityNonEquippable) != 0);
         *(uint*)(item + ItemBitFlags) = bits;
+
+        // Read back from the SAME addresses that were just written, rather than reporting the
+        // values we intended. The distinction is the whole point of the out parameter: an
+        // apply that logs its inputs proves only that it was asked; an apply that logs what
+        // is now in the item proves the write landed where the offsets say it does — which is
+        // the one claim in docs/research/item-identity.md nothing had ever measured.
+        after = ReadItemFields(item);
 
         return true;
 

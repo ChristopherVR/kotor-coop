@@ -46,6 +46,10 @@ internal static unsafe class FuncInterpHook
         // engine's own registered names (docs/research/console-cheats.md) — so intercepting
         // them takes nothing away from the player.
         "god", "topup", "standup", "getup", "slay", "tp", "goto", "dropitem", "cheats",
+
+        // The item-identity harness. "item"/"items"/"setitem" are ours: the engine registers
+        // giveitem and nothing else beginning with "item".
+        "items", "item", "setitem",
     ];
 
     /// <summary>

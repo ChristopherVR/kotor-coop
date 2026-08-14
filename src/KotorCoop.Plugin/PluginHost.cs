@@ -383,7 +383,8 @@ internal static unsafe class PluginHost
         // not found" — which looks like a broken install rather than a version skew.
         // 37 = the load-screen texture in the browser details array (SharedBlock, version 37).
         // 39 = per-instance item identity in the item slot's tail (SharedBlock, version 39).
-        _block->Version = 40;
+        // 41 = the four `setitem` identity fields at the cheat region's tail (version 41).
+        _block->Version = 41;
 
         // A guard dword after the version. Magic plus version alone was not selective
         // enough: a scan once matched something else at a lower address and the agent

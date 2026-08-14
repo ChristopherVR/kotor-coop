@@ -246,13 +246,25 @@ internal sealed unsafe class ItemController(SharedBlockView block)
         {
             bool applied = Odyssey.ApplyItemIdentity(
                 objectId, desired.Upgrades, desired.StackSize,
-                desired.Charges, desired.MaxCharges, desired.IdentityFlags);
+                desired.Charges, desired.MaxCharges, desired.IdentityFlags,
+                out Odyssey.ItemIdentityFields after);
 
+            // ⚠ The success line reports what the item NOW HOLDS, read back out of the same
+            // five addresses, not what the request asked for. An apply that echoes its own
+            // inputs cannot distinguish "the write landed" from "the function returned true",
+            // and this line is the marker an unattended verification run greps for.
+            //
+            // The refusal names what the resolve actually saw — no such object, an id at
+            // neither shape's offset, a vtable belonging to some other class. The old wording
+            // ("not a live item here") was true and useless: it is the same sentence whether
+            // the item was destroyed a frame ago or the id space is wrong.
             PluginHost.Log(applied
-                ? $"item slot {slot}: identity applied to 0x{objectId:X} "
+                ? $"item slot {slot}: identity applied to 0x{objectId:X} — asked for "
                   + $"(stack {desired.StackSize}, charges {desired.Charges}/{desired.MaxCharges}, "
-                  + $"upgrades 0x{desired.Upgrades:X}, flags 0x{desired.IdentityFlags:X})"
-                : $"item slot {slot}: identity SKIPPED for 0x{objectId:X} — not a live item here");
+                  + $"upgrades 0x{desired.Upgrades:X}, flags 0x{desired.IdentityFlags:X}), "
+                  + $"item now reads (stack {after.StackSize}, charges {after.Charges}/{after.MaxCharges}, "
+                  + $"upgrades 0x{after.Upgrades:X}, bits 0x{after.BitFlags:X})"
+                : $"item slot {slot}: identity SKIPPED for 0x{objectId:X} — {Odyssey.LastItemResolveNote}");
         }
 
         nint serverObject = Odyssey.ResolveServerObject(objectId);

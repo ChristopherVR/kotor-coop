@@ -60,8 +60,16 @@ internal static class ConsoleVerbCatalog
         ("slay", "slay [tag|id]  (blank = nearest hostile)"),
         ("tp", "tp <x> <y> [z]"),
         ("goto", "goto <player|#n>"),
-        ("dropitem", "dropitem <resref>"),
+        ("dropitem", "dropitem <resref|0x131>"),
         ("cheats", "cheats"),
+
+        // The item-identity harness. `items` finds a target, `setitem` makes it worth
+        // sending, `dropitem 0x..` sends it, `item` reads back what arrived — the whole loop
+        // is these four, and none of them shadows a retail verb (the engine's list has
+        // giveitem and nothing else in this family; docs/research/console-cheats.md §2).
+        ("items", "items [n]"),
+        ("item", "item <0x131>"),
+        ("setitem", "setitem <0x131> [stack=N] [charges=N] [max=N] [upgrades=0xN] [identified=0|1]"),
 
         // Completable, but NEVER recorded: ConsoleHistoryRing drops password/pw lines, so
         // completion may offer the verb while recall can never replay the secret.
