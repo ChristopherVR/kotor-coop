@@ -37,9 +37,15 @@ public static class CheatKinds
     public const uint Teleport = 5;
     public const uint DropItem = 6;
 
-    /// <summary>Ask the plugin what this engine knows about one object id, in one frame, on
-    /// the game thread. See SharedBlock.CheatKindResolve.</summary>
-    public const uint Resolve = 7;
+    /// <summary>
+    /// Ask the plugin what this engine knows about one object id, in one frame, on the game
+    /// thread. See SharedBlock.CheatKindResolve.
+    ///
+    /// ⚠ 9, NOT 7: kinds 7 and 8 (StageMovie, SetItem) were taken by work developed in
+    /// parallel. CheatKindsMatchTheBlockTests asserts this table against the plugin's, because
+    /// a number that disagrees across the two halves runs a DIFFERENT VERB from the one typed.
+    /// </summary>
+    public const uint Resolve = 9;
 }
 
 /// <summary>The plugin's verdicts, mirroring <c>SharedBlock.CheatStatus*</c>.</summary>

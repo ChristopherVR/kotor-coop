@@ -340,6 +340,10 @@ internal sealed unsafe class CheatController(SharedBlockView block)
     /// is several times that; a diagnostic that is cut off exactly where it becomes
     /// interesting is how the previous round's evidence was lost.
     /// </summary>
+    /// <summary>How many refused targets have written their full chain to the log. A cheat is
+    /// typed by a person, so a handful is a session's worth.</summary>
+    private int _resolveFailuresLogged;
+
     private void Resolve()
     {
         uint objectId = block.CheatTarget;
@@ -401,6 +405,21 @@ internal sealed unsafe class CheatController(SharedBlockView block)
                 : localId == targetId
                     ? $"no object 0x{targetId:X} in this module"
                     : $"the owner's 0x{targetId:X} is our 0x{localId:X}, which nothing here answers to";
+
+            // ⚠ A REFUSAL PRINTS ITS OWN WORKING. "No object 0x35 in this module" was measured
+            // live at the same minute that the `resolve` verb — the same function, the same
+            // thread — handed back a live pointer for the same id. Two answers that cannot both
+            // be right were seconds apart and neither carried enough to say which had moved. So
+            // the refusal now records the whole chain AT THE INSTANT IT REFUSES: array both
+            // ways, the engine's lookup, the in-process walk, and what came back. If the engine
+            // resolves it here and this still refused, the fault is between the two and the
+            // line proves it; if the engine returns nothing, the object really did go away and
+            // the line dates it.
+            if (creature == 0 && _resolveFailuresLogged < 5)
+            {
+                _resolveFailuresLogged++;
+                PluginHost.Log($"cheat: refusing target - {Odyssey.DescribeObjectResolution(localId)}");
+            }
 
             targetId = localId;
             return creature != 0;

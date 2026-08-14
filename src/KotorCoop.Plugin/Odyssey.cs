@@ -655,6 +655,19 @@ internal static unsafe class Odyssey
     /// Resolves an object id to its server-side object through the engine's own lookup:
     /// [AppManagerPtr] -&gt; CAppManager -&gt; +0x08 CServerExoApp -&gt; GetGameObject.
     /// Returns a CSWSObject-shaped pointer (position +0x90, area id +0x8C), or 0.
+    ///
+    /// ⚠ THE GENERIC GETTER, DELIBERATELY. <c>CServerExoApp::GetGameObject</c> (0x004AE750) is
+    /// a thunk onto 0x004B1700, which walks <c>CGameObjectArray</c> and returns whatever it
+    /// finds. Its neighbours in the vtable-adjacent block —
+    /// <c>GetItemByGameObjectID</c> (0x004AE760 -&gt; 0x004B1740) and
+    /// <c>GetCreatureByGameObjectID</c> (0x004AE770 -&gt; 0x004B1790) — do the SAME walk and then
+    /// additionally test the object type byte at <c>+0x08</c>, which is exactly the field the
+    /// object-type trap says never to test (it carries flag bits; a live creature reads
+    /// 0x40005, not 5). Nothing in this plugin may resolve through those, and nothing does:
+    /// every call site funnels through this method. If a future one reaches for a typed
+    /// getter "because it wants a creature", it will reject live creatures intermittently and
+    /// silently — check the vtable after resolving instead, the way EnemyPresenceController
+    /// does.
     /// </summary>
     public static nint ResolveServerObject(uint objectId)
     {
@@ -688,8 +701,28 @@ internal static unsafe class Odyssey
             return gameObject + 0x10;
         }
 
+        // ⚠ THE ENGINE FOUND IT AND WE THREW IT AWAY. This branch used to be the last silent
+        // failure on this path: the array holds the id, the lookup succeeds, and the caller is
+        // told "nothing answers to that" because neither layout probe matched. It has to say
+        // so, because from the caller's side it is indistinguishable from a missing object —
+        // and that ambiguity is what three live rounds were spent on. Bounded, since this sits
+        // inside a per-frame path.
+        if (_layoutRefusals < 10)
+        {
+            _layoutRefusals++;
+            PluginHost.Log(
+                $"resolve: engine returned 0x{gameObject:X} for 0x{objectId:X} but neither layout "
+                + $"matched (+0x04 = 0x{*(uint*)(gameObject + 0x04):X}, "
+                + $"+0x14 = 0x{*(uint*)(gameObject + 0x14):X}, vtable 0x{*(nint*)gameObject:X}) "
+                + "- refusing it");
+        }
+
         return 0;
     }
+
+    /// <summary>How many "the engine found it, we refused it" lines have been said. A handful
+    /// is evidence; a flood inside a per-frame path is a second bug.</summary>
+    private static int _layoutRefusals;
 
     /// <summary>Reads the area id of a resolved server object (module-lifetime stable).</summary>
     public static uint GetAreaId(nint serverObject) => *(uint*)(serverObject + 0x8C);
