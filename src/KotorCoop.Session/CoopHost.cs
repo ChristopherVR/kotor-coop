@@ -851,11 +851,7 @@ public sealed class CoopHost : ICoopSession
     {
         WorldDigestComparison mismatch = WorldDigest.Compare(_localWorld, peer.World);
 
-        return ContentCompatibility.ApplyWorldMismatch(
-            peer.InstallVerdict,
-            mismatch.GlobalsCatalogueMismatch,
-            mismatch.SaveIdentityMismatch,
-            mismatch.ModuleGitMismatch);
+        return ContentCompatibility.ApplyWorldMismatch(peer.InstallVerdict, mismatch);
     }
 
     /// <summary>
@@ -938,6 +934,10 @@ public sealed class CoopHost : ICoopSession
         List<SnapshotEntry> entries;
         List<PeerConnection> recipients;
 
+        // Peers whose world-time verdict came back a REFUSAL rather than a degradation, with
+        // the reason to tell them. Filled under the lock, told outside it.
+        List<(IPEndPoint EndPoint, string Reason)>? evicted = null;
+
         lock (_gate)
         {
             List<uint>? expired = null;
@@ -946,6 +946,21 @@ public sealed class CoopHost : ICoopSession
                 if (now - peer.LastSeenMs > _settings.PeerTimeoutMs)
                 {
                     (expired ??= []).Add(id);
+                    continue;
+                }
+
+                // ⚠ A refusal has to be CARRIED OUT to mean anything. The world-time compare
+                // can only refuse under RequireIdenticalSave, and before this it did so by
+                // narrowing this peer's capabilities to nothing — which, because the session
+                // takes the narrowest set across all peers, silently switched every channel
+                // off for EVERYONE while the refused peer stayed connected and never learned
+                // why. Now they are told, in the same typed form the Hello path uses, and
+                // dropped; the rest of the lobby is untouched.
+                CompatibilityVerdict verdict = EffectiveVerdict(peer);
+                if (!verdict.Admitted)
+                {
+                    (expired ??= []).Add(id);
+                    (evicted ??= []).Add((peer.EndPoint, verdict.Summary));
                 }
             }
 
@@ -973,6 +988,18 @@ public sealed class CoopHost : ICoopSession
             }
 
             recipients = [.. _peers.Values];
+        }
+
+        if (evicted is not null)
+        {
+            foreach ((IPEndPoint endPoint, string reason) in evicted)
+            {
+                int rejectLength = PacketCodec.Write(_sendBuffer, new RejectPacket(reason));
+                if (rejectLength > 0)
+                {
+                    _channel.Send(endPoint, _sendBuffer.AsSpan(0, rejectLength));
+                }
+            }
         }
 
         WorldSnapshotPacket snapshot = new(now, Flags.Version, Items.Version, Journal.Version, entries);
@@ -1398,7 +1425,7 @@ public sealed class CoopHost : ICoopSession
         // Content compatibility is judged before admission. A refusal (different exe, or a
         // different save when that is not allowed) is sent as a typed Reject so the client
         // stops retrying and can tell the player why, rather than hanging on a silent host.
-        ContentCompatibility.AllowDifferentSave = _settings.AllowDifferentSave;
+        ContentCompatibility.RequireIdenticalSave = _settings.RequireIdenticalSave;
         CompatibilityVerdict verdict = ContentCompatibility.Compare(_settings.Digest, hello.Digest);
         _compatibility = verdict;
 

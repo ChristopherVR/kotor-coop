@@ -95,12 +95,20 @@ all-or-nothing:
 - a different **executable** is refused (every engine address is per-binary);
 - a different **`appearance.2da`** just drops the appearance sync (the phantom keeps a
   default look) rather than risk painting the wrong body;
-- a different **save** or a mod-**edited module** drops the object-id-keyed channels
-  (enemies, doors, items) for that module while phantoms, journal and the rest continue;
+- a mod-**edited module** drops the object-id-keyed channels (enemies, doors, items, party)
+  *for that module only* — they come back by themselves in the next module the two installs
+  agree on — while phantoms, journal and the rest continue throughout;
+- a different **save** drops the same channels and tells you to rejoin, because joining
+  *takes the host's world* (your character, their world) and that makes the two saves
+  identical by construction; `--require-identical-save` refuses instead;
 - a different **global-variable table** drops shared quest state (its keys would name
   different variables);
 - differing **override folders** — the normal case for two modded installs — just
   produce a warning that explains any gear or item that does not appear.
+
+Every one of those decisions carries a code (`E_EXE`, `W_GIT`, `W_SAVE`, ...) naming the
+channels it switched off, and is **said on screen** as it happens — a channel that goes quiet
+for safety is otherwise indistinguishable from one that broke.
 
 Everything co-op ships as a game file uses a `k_coop_` name, so it can never collide with
 a mod, and only ever adds to the override folder.
@@ -115,9 +123,9 @@ has been warped live through Taris' Lower City (where the client set off the Bla
 ambushes — see above) and Tatooine's Sand People territory, where the census ran at its
 full 32-creature cap with the client mirroring 32 of 32 through a real multi-enemy battle
 that wore both players down through their own damage pipelines
-(`docs/research/transition-window-races.md` is the trail of what those transitions found). The mod-compatibility handshake is unit-tested (279
-tests); it has been observed agreeing on two identical installs but its mismatch paths have
-not had a live pass. See `docs/research/` for the precise per-feature status and the
+(`docs/research/transition-window-races.md` is the trail of what those transitions found). The mod-compatibility handshake is unit-tested (628
+tests in the suite); it has been observed agreeing on two identical installs but its mismatch
+paths have not had a live pass. See `docs/research/` for the precise per-feature status and the
 reverse-engineering behind each.
 
 ## Requirements
@@ -267,6 +275,15 @@ tools/                   RE helpers, demo scripts, the kotor1_0_3 symbol databas
   key, which can now name a live item by object id to send its real state). And the apply
   path has not had a live pass: every offset is read out of the retail binary's own save/load
   routines, but a guarded no-op is what a wrong one produces, not a crash.
-- **The world-time compatibility check covers the globals catalogue**; save-identity and
-  per-module GIT digests (to also gate on a mod-edited module) are a planned follow-up.
+- **The compatibility check is complete but has never seen a real mismatch.** It now covers
+  the executable, the override folder, `appearance.2da`, the other 2DAs, `dialog.tlk`,
+  `global.jrl`, the module census, the globals catalogue, **save identity** (module +
+  `Mod_NextObjId` counters + the stored GIT's id list) and **each module's GIT**, computed
+  lazily off the game thread on the way into that module and re-judged on every module change.
+  Each difference produces a coded decision (`E_EXE`, `W_GIT`, `W_SAVE`...) that names the
+  channels it cost and says so on screen. What is still open is evidence: every mismatch path
+  is unit-tested and none has been run live — two identical installs only ever exercise the
+  agreeing case. And note what the bullet above does *not* buy you here: an item now carries
+  its own mutable state, but it is still named by resref, so two installs whose *same* resref
+  names a differently-modded item are not detected at all.
 - KOTOR 2 is untouched, and only GOG v1.0.3 addresses are known.

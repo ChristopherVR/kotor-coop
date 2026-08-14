@@ -68,6 +68,11 @@ public sealed class CoopCommandDispatcher(
     /// "Malak left the game" (see <see cref="PeerAnnouncer"/> for why this exists).</summary>
     private readonly PeerAnnouncer _peerAnnouncer = new();
 
+    /// <summary>Content differences become lines on screen too — see
+    /// <see cref="CompatibilityAnnouncer"/> for why a degradation that is only logged is
+    /// indistinguishable from a bug.</summary>
+    private readonly CompatibilityAnnouncer _compatibilityAnnouncer = new();
+
     /// <summary>Polls the block for console/menu commands and reflects status until cancelled.</summary>
     public async Task RunAsync(CancellationToken cancellationToken)
     {
@@ -94,6 +99,7 @@ public sealed class CoopCommandDispatcher(
                     PublishBrowserList();
                     ReflectPhase();
                     AnnouncePeerChanges();
+                    AnnounceCompatibilityChanges();
                     DrainChat();
                 }
                 catch (Exception ex) when (ex is not OperationCanceledException)
@@ -378,6 +384,24 @@ public sealed class CoopCommandDispatcher(
         // never depends on the player resolve — the pump's RemoteCount does, and its 1 Hz
         // resolve is precisely why the load screen used to drop before the first sync.
         _kotor?.PublishSessionPeerCount(peers.Count);
+    }
+
+    /// <summary>
+    /// Puts content-compatibility findings on the player's screen, through the same trio
+    /// every reply uses. Without this the per-channel mod policy is invisible where it
+    /// matters: a channel switched off for safety looks exactly like a channel that broke,
+    /// and the one place the verdict was visible — the agent's console readout — is not
+    /// where a player is looking.
+    /// </summary>
+    private void AnnounceCompatibilityChanges()
+    {
+        if (manager.Current is not { } session)
+        {
+            _compatibilityAnnouncer.Reset();
+            return;
+        }
+
+        _compatibilityAnnouncer.Observe(session.Compatibility, Reply);
     }
 
     /// <summary>Posts the session roster: the local player first, then each remote peer with

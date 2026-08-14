@@ -9,6 +9,18 @@ namespace KotorCoop.Session;
 public readonly record struct WorldFile(string Name, byte[] Data);
 
 /// <summary>
+/// A world as it arrived, plus what the host said its save-identity digest is.
+/// </summary>
+/// <param name="Files">The save directory's files.</param>
+/// <param name="SaveIdentity">The host's own <c>SaveDigest</c> identity for the world it
+/// served, or 0 if the host could not compute one. This is what makes an adoption
+/// SELF-CHECKING: after staging, the joiner digests what it wrote and compares. Equal means
+/// the world genuinely crossed and the object-id-keyed channels rest on solid ground;
+/// different means something went wrong on the way and it is better to say so at a menu than
+/// to discover it as enemies dying in the wrong places an hour later.</param>
+public readonly record struct FetchedWorld(IReadOnlyList<WorldFile> Files, uint SaveIdentity);
+
+/// <summary>
 /// Ships the host's world to a joining player: the save directory itself, over TCP, beside
 /// the UDP session.
 ///
@@ -39,10 +51,16 @@ public static class WorldTransfer
     /// port is rejected without reading a payload.</summary>
     private const ushort Magic = 0x574B; // 'KW' little-endian: Kotor World
 
-    /// <summary>Bumped when the framing changes. Independent of the session protocol
-    /// version: the two negotiate separately and a mismatch here is not fatal to a session
-    /// that has already agreed on everything else.</summary>
-    private const byte Version = 1;
+    /// <summary>
+    /// Bumped when the framing changes. Independent of the session protocol version: the two
+    /// negotiate separately and a mismatch here is not fatal to a session that has already
+    /// agreed on everything else — it only means an adoption cannot happen between these two
+    /// builds, which is reported as a refusal at a menu.
+    ///
+    /// v2 widened the reply header from 4 to 8 bytes to carry the host's save-identity
+    /// digest, so a joiner can prove the world it staged is the world it was sent.
+    /// </summary>
+    private const byte Version = 2;
 
     private const byte StatusOk = 0;
     private const byte StatusBadMagic = 1;
@@ -127,10 +145,15 @@ public static class WorldTransfer
     /// which is right for the traffic: joins are rare, a transfer is under a second, and a
     /// queue is simpler than concurrency for something that runs once per player.
     /// </summary>
+    /// <param name="saveIdentity">This host's own save-identity digest for the world being
+    /// served, or 0 when it could not be computed. Sent in the reply header so the joiner can
+    /// check what it staged against what it was promised; 0 skips the check, per the
+    /// house rule that an unknown never blocks anything.</param>
     public static async Task ServeAsync(
         IReadOnlyList<WorldFile> world,
         int port,
         uint passwordHash,
+        uint saveIdentity,
         Action<string>? log,
         CancellationToken cancellationToken)
     {
@@ -148,7 +171,8 @@ public static class WorldTransfer
 
                 try
                 {
-                    await ServeOneAsync(client, world, passwordHash, log, cancellationToken).ConfigureAwait(false);
+                    await ServeOneAsync(client, world, passwordHash, saveIdentity, log, cancellationToken)
+                        .ConfigureAwait(false);
                 }
                 catch (Exception ex) when (ex is IOException or SocketException or InvalidDataException)
                 {
@@ -171,6 +195,7 @@ public static class WorldTransfer
         TcpClient client,
         IReadOnlyList<WorldFile> world,
         uint passwordHash,
+        uint saveIdentity,
         Action<string>? log,
         CancellationToken cancellationToken)
     {
@@ -192,7 +217,14 @@ public static class WorldTransfer
             : world.Count == 0 ? StatusNoWorld
             : StatusOk;
 
-        byte[] header = [(byte)(Magic & 0xFF), (byte)(Magic >> 8), Version, status];
+        // The identity trails the status in every reply, refusals included, so the framing is
+        // one fixed-size read on the other end whatever the answer is.
+        byte[] header = new byte[8];
+        header[0] = (byte)(Magic & 0xFF);
+        header[1] = (byte)(Magic >> 8);
+        header[2] = Version;
+        header[3] = status;
+        WriteU32(header, 4, status == StatusOk ? saveIdentity : 0);
         await stream.WriteAsync(header, cancellationToken).ConfigureAwait(false);
 
         if (status != StatusOk)
@@ -225,7 +257,7 @@ public static class WorldTransfer
     /// Fetches the host's world. Throws <see cref="InvalidDataException"/> on a refusal or a
     /// malformed reply, so a caller can report exactly why a join could not adopt.
     /// </summary>
-    public static async Task<IReadOnlyList<WorldFile>> FetchAsync(
+    public static async Task<FetchedWorld> FetchAsync(
         IPEndPoint host,
         uint passwordHash,
         CancellationToken cancellationToken)
@@ -244,7 +276,7 @@ public static class WorldTransfer
         WriteU32(request, 4, passwordHash);
         await stream.WriteAsync(request, cancellationToken).ConfigureAwait(false);
 
-        byte[] header = new byte[4];
+        byte[] header = new byte[8];
         await ReadExactlyAsync(stream, header, cancellationToken).ConfigureAwait(false);
 
         if ((ushort)(header[0] | (header[1] << 8)) != Magic)
@@ -308,7 +340,7 @@ public static class WorldTransfer
             files.Add(new WorldFile(SafeName(Encoding.Latin1.GetString(name)), data));
         }
 
-        return files;
+        return new FetchedWorld(files, ReadU32(header, 4));
     }
 
     /// <summary>

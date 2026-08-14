@@ -433,31 +433,67 @@ public static class SaveDigest
 }
 
 /// <summary>
-/// Session-lived cache over <see cref="SaveDigest"/> for the bridge: the identity is
-/// computed once (the staged save exists before the world does, or never will), and each
-/// module's GIT digest once per module — the pump asks every heavy tick, and re-reading
-/// archives from disk at 5 Hz would be pure waste. Failures latch as 0 for the same
-/// reason: a save that is unreadable now will not become readable next tick, and the
-/// soft-fail rule says unknown only ever warns.
+/// Session-lived cache over <see cref="SaveDigest"/> for the bridge: the save identity once,
+/// and each module's GIT digest once per module — the pump asks every heavy tick, and
+/// re-reading archives from disk at 5 Hz would be pure waste.
+///
+/// ⚠ NOTHING HERE BLOCKS THE CALLER. Both answers cost real disk work — opening a save's
+/// nested ERFs, or a module's RIMs plus one blueprint per GIT entry — and the caller is the
+/// agent's heavy pump, which is also what carries a player through a module transition. The
+/// transition is the most fragile few seconds in this codebase
+/// (<c>docs/research/transition-window-races.md</c>), and the first tick in a new module is
+/// exactly when a fresh module's digest is asked for. So a digest that is not ready yet is
+/// computed on a background thread and reported as 0 = unknown until it lands, which under
+/// the Unknown-is-not-mismatch rule can only ever warn. A digest that arrives a tick or two
+/// late costs nothing; a pump that stalls at a transition costs a session.
+///
+/// The staged save is re-checked rather than latched forever, because world adoption writes
+/// it AFTER an agent may already have looked: a joiner that adopted the host's world would
+/// otherwise keep reporting the identity of the save it had before, and be told its save
+/// does not match the host's when in fact it now literally IS the host's.
 /// </summary>
 public sealed class SaveDigestCache(string gameDirectory)
 {
+    private readonly object _gate = new();
     private readonly Dictionary<string, uint> _moduleGit = new(StringComparer.OrdinalIgnoreCase);
-    private bool _saveResolved;
+    private readonly HashSet<string> _pending = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>The key for the identity job, in the same pending set as the modules so one
+    /// mechanism covers both. Not a legal module name, so it can never collide.</summary>
+    private const string IdentityJob = "\0identity";
+
     private uint _saveIdentity;
     private string? _saveDirectory;
 
-    /// <summary>The staged/current save's identity digest, 0 when unknown.</summary>
+    /// <summary>What the current identity was computed from: the save directory plus its
+    /// SAVEGAME.sav size and write time. A change means a different world was staged.</summary>
+    private (string Path, long Length, long Ticks) _identityStamp;
+
+    /// <summary>How often the staged save is re-stat'ed. Two file-system calls, far apart
+    /// enough to be free, often enough that an adoption is noticed within a heartbeat.</summary>
+    private const int StampCheckIntervalMs = 2000;
+
+    /// <summary>Deliberately not <c>long.MinValue</c>: the staleness test is a subtraction,
+    /// and subtracting the minimum overflows to a negative interval that would read as "just
+    /// checked" forever, so the very first refresh would never run.</summary>
+    private long _lastStampCheckMs = -2 * StampCheckIntervalMs;
+
+    /// <summary>The staged/current save's identity digest, 0 while unknown (including "not
+    /// computed yet" — the first ask starts the work and answers on a later tick).</summary>
     public uint SaveIdentity
     {
         get
         {
-            EnsureSaveResolved();
-            return _saveIdentity;
+            RefreshSaveIfStale();
+
+            lock (_gate)
+            {
+                return _saveIdentity;
+            }
         }
     }
 
-    /// <summary>The named module's GIT digest, 0 when unknown.</summary>
+    /// <summary>The named module's GIT digest, 0 when unknown or not computed yet.</summary>
     public uint ModuleGit(string module)
     {
         if (string.IsNullOrEmpty(module))
@@ -465,33 +501,183 @@ public sealed class SaveDigestCache(string gameDirectory)
             return 0;
         }
 
-        EnsureSaveResolved();
+        RefreshSaveIfStale();
 
-        if (!_moduleGit.TryGetValue(module, out uint digest))
+        lock (_gate)
         {
-            digest = SaveDigest.TryComputeModuleGit(gameDirectory, _saveDirectory, module, out uint computed)
-                ? computed
-                : 0;
-            _moduleGit[module] = digest;
+            if (_moduleGit.TryGetValue(module, out uint digest))
+            {
+                return digest;
+            }
+
+            if (!_pending.Add(module))
+            {
+                return 0; // already being computed; the answer lands on a later tick
+            }
         }
 
-        return digest;
+        string? saveDirectory;
+        (string, long, long) stamp;
+        lock (_gate)
+        {
+            saveDirectory = _saveDirectory;
+            stamp = _identityStamp;
+        }
+
+        Run(module, () =>
+        {
+            uint computed = SaveDigest.TryComputeModuleGit(gameDirectory, saveDirectory, module, out uint value)
+                ? value
+                : 0;
+
+            lock (_gate)
+            {
+                // A GIT read out of a save that has since been replaced (an adoption landing
+                // mid-read) describes ids this session will never deal. Drop it silently; the
+                // next tick asks again against the world we actually have.
+                if (_identityStamp == stamp)
+                {
+                    _moduleGit[module] = computed;
+                }
+            }
+        });
+
+        return 0;
     }
 
-    private void EnsureSaveResolved()
+    /// <summary>
+    /// Waits for every digest started so far. For tests and for a caller that genuinely
+    /// wants the answer synchronously (the adoption self-check, which runs at a menu with
+    /// no world to stall). Returns false on timeout rather than throwing — a slow disk is
+    /// not a failure, it is another "unknown".
+    /// </summary>
+    public bool WaitForPending(TimeSpan timeout)
     {
-        if (_saveResolved)
+        DateTime deadline = DateTime.UtcNow + timeout;
+
+        while (DateTime.UtcNow < deadline)
         {
-            return;
+            lock (_gate)
+            {
+                if (_pending.Count == 0)
+                {
+                    return true;
+                }
+            }
+
+            Thread.Sleep(5);
         }
 
-        _saveResolved = true;
-        _saveDirectory = SaveDigest.FindSessionSave(gameDirectory);
-
-        if (_saveDirectory is not null
-            && SaveDigest.TryComputeSaveIdentity(_saveDirectory, out uint digest))
+        lock (_gate)
         {
-            _saveIdentity = digest;
+            return _pending.Count == 0;
+        }
+    }
+
+    /// <summary>
+    /// Notices a newly staged save (an adoption, or the player loading a different game) and
+    /// starts a fresh identity job when one appears. Cheap: a stat of one file, at most every
+    /// <see cref="StampCheckIntervalMs"/>.
+    /// </summary>
+    private void RefreshSaveIfStale()
+    {
+        long now = Environment.TickCount64;
+
+        lock (_gate)
+        {
+            if (now - _lastStampCheckMs < StampCheckIntervalMs)
+            {
+                return;
+            }
+
+            _lastStampCheckMs = now;
+
+            if (_pending.Contains(IdentityJob))
+            {
+                return; // a job is already in flight for whatever is on disk now
+            }
+        }
+
+        string? directory = SaveDigest.FindSessionSave(gameDirectory);
+        (string Path, long Length, long Ticks) stamp = StampOf(directory);
+
+        lock (_gate)
+        {
+            if (stamp == _identityStamp)
+            {
+                return;
+            }
+
+            // The staged world changed under us. Everything derived from it is now suspect:
+            // a module GIT read out of the OLD save describes ids this session will never
+            // deal. Drop them and let them be recomputed against the world we actually have.
+            _identityStamp = stamp;
+            _saveDirectory = directory;
+            _saveIdentity = 0;
+            _moduleGit.Clear();
+
+            if (!_pending.Add(IdentityJob))
+            {
+                return;
+            }
+        }
+
+        Run(IdentityJob, () =>
+        {
+            uint computed = directory is not null
+                && SaveDigest.TryComputeSaveIdentity(directory, out uint value)
+                    ? value
+                    : 0;
+
+            lock (_gate)
+            {
+                // Only publish if the world has not moved on again while we were reading.
+                if (_identityStamp == stamp)
+                {
+                    _saveIdentity = computed;
+                }
+            }
+        });
+    }
+
+    /// <summary>Runs one digest job off the caller's thread and clears its pending mark
+    /// whatever happens — a job that threw must not wedge the slot forever.</summary>
+    private void Run(string job, Action work) => Task.Run(() =>
+    {
+        try
+        {
+            work();
+        }
+        catch (Exception)
+        {
+            // Best effort by design: the digest stays 0 = unknown, which only warns.
+        }
+        finally
+        {
+            lock (_gate)
+            {
+                _pending.Remove(job);
+            }
+        }
+    });
+
+    private static (string, long, long) StampOf(string? saveDirectory)
+    {
+        if (saveDirectory is null)
+        {
+            return (string.Empty, 0, 0);
+        }
+
+        try
+        {
+            FileInfo info = new(Path.Combine(saveDirectory, "SAVEGAME.sav"));
+            return info.Exists
+                ? (saveDirectory, info.Length, info.LastWriteTimeUtc.Ticks)
+                : (saveDirectory, 0, 0);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return (saveDirectory, 0, 0);
         }
     }
 }

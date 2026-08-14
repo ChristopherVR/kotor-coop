@@ -55,12 +55,25 @@ public sealed class WorldAdoptionTests : IDisposable
         Assert.True(SaveDigest.TryComputeSaveIdentity(joinerSave, out uint joinerIdentity));
         Assert.NotEqual(hostIdentity, joinerIdentity);
 
-        // Before: the world-time check refuses outright.
-        ContentCompatibility.AllowDifferentSave = false;
+        // Before: the world-time check costs every object-id-keyed channel (and, for a host
+        // that asked for the strict pre-adoption rule, the whole session).
+        ContentCompatibility.RequireIdenticalSave = false;
         CompatibilityVerdict before = ContentCompatibility.ApplyWorldMismatch(
             Admitted(), globalsCatalogueMismatch: false, saveIdentityMismatch: true, moduleGitMismatch: false);
-        Assert.False(before.Admitted);
-        Assert.Equal(RefusalReason.SaveGame, before.Refusal);
+        Assert.True(before.Admitted);
+        Assert.Equal(SessionCapabilities.None, before.Allowed & ContentCompatibility.ObjectIdKeyed);
+
+        try
+        {
+            ContentCompatibility.RequireIdenticalSave = true;
+            CompatibilityVerdict strict = ContentCompatibility.ApplyWorldMismatch(
+                Admitted(), globalsCatalogueMismatch: false, saveIdentityMismatch: true, moduleGitMismatch: false);
+            Assert.Equal(RefusalReason.SaveGame, strict.Refusal);
+        }
+        finally
+        {
+            ContentCompatibility.RequireIdenticalSave = false;
+        }
 
         // Adopt.
         string joinerGame = BuildGameDirectory();
@@ -156,6 +169,37 @@ public sealed class WorldAdoptionTests : IDisposable
     }
 
     [Fact]
+    public async Task TheHostsOwnStatedIdentityIsEnoughToSelfCheckAnAdoption()
+    {
+        // The gap this closes: `agent adopt` had no way to learn the host's identity, so it
+        // passed 0 and the self-check never ran on the path that actually ships. The host
+        // now states it in the transfer header, and a wrong one is caught with no caller
+        // help at all.
+        string hostSave = BuildSave("tar_m02aa", 0x341, "Bastila Shan", [(2u, "n_sith")]);
+        string joinerSave = BuildSave("end_m01aa", 0x127, "Yasuko Kaar", [(2u, "n_trask")]);
+
+        Assert.True(SaveDigest.TryComputeSaveIdentity(hostSave, out uint hostIdentity));
+
+        // A host telling the truth: the adoption verifies and succeeds, caller passing 0.
+        int honest = await ServeAsync(WorldTransfer.ReadSaveDirectory(hostSave), hostIdentity);
+        AdoptedWorld? adopted = await WorldAdoption.TryAdoptAsync(
+            BuildGameDirectory(), joinerSave, Local(honest), SessionPassword.None,
+            expectedSaveIdentity: 0, log: null, _cts.Token);
+
+        Assert.NotNull(adopted);
+        Assert.Equal(hostIdentity, adopted!.Value.SaveIdentity);
+
+        // A host whose stated identity does not match what it actually sent: refused.
+        int lying = await ServeAsync(WorldTransfer.ReadSaveDirectory(hostSave), hostIdentity ^ 0xFFFFu);
+        List<string> log = [];
+        Assert.Null(await WorldAdoption.TryAdoptAsync(
+            BuildGameDirectory(), joinerSave, Local(lying), SessionPassword.None,
+            expectedSaveIdentity: 0, log.Add, _cts.Token));
+
+        Assert.Contains(log, line => line.Contains("refusing to play a world we did not receive"));
+    }
+
+    [Fact]
     public async Task AWorldThatDoesNotFingerprintAsTheHostsIsRefused()
     {
         // The self-check. If what we staged is not what the host is playing, every id-keyed
@@ -195,10 +239,10 @@ public sealed class WorldAdoptionTests : IDisposable
 
     private static IPEndPoint Local(int port) => new(IPAddress.Loopback, port);
 
-    private async Task<int> ServeAsync(IReadOnlyList<WorldFile> world)
+    private async Task<int> ServeAsync(IReadOnlyList<WorldFile> world, uint saveIdentity = 0)
     {
         int port = FreePort();
-        _ = WorldTransfer.ServeAsync(world, port, SessionPassword.None, null, _cts.Token);
+        _ = WorldTransfer.ServeAsync(world, port, SessionPassword.None, saveIdentity, null, _cts.Token);
 
         for (int attempt = 0; attempt < 200; attempt++)
         {

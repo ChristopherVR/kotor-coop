@@ -396,17 +396,17 @@ public class SessionIntegrationTests
     }
 
     [Fact]
-    public async Task ASaveIdentityMismatchDegradesToIdIndependentChannelsWhenAllowed()
+    public async Task ASaveIdentityMismatchDegradesToIdIndependentChannels()
     {
-        // Two deliberately different saves under --allow-different-save: the id-keyed
-        // channels (enemies/doors/items/party) must go, while the id-independent ones
-        // (phantoms, appearance, equipment, journal) keep the pair playing together.
+        // Two deliberately different saves, with nobody demanding identical ones: the
+        // id-keyed channels (enemies/doors/items/party) must go, while the id-independent
+        // ones (phantoms, appearance, equipment, journal) keep the pair playing together.
         using CoopHost host = new(new SessionSettings
         {
-            PlayerName = "Revan", Port = 0, TickRate = 30, AllowDifferentSave = true,
+            PlayerName = "Revan", Port = 0, TickRate = 30,
         });
         using CoopClient client = new(
-            new SessionSettings { PlayerName = "Malak", TickRate = 30, AllowDifferentSave = true },
+            new SessionSettings { PlayerName = "Malak", TickRate = 30 },
             new IPEndPoint(IPAddress.Loopback, host.ListenEndPoint.Port));
 
         using CancellationTokenSource cts = new(Timeout + TimeSpan.FromSeconds(15));
@@ -449,7 +449,60 @@ public class SessionIntegrationTests
         {
             // The compare policy is a process-wide static (set from each session's
             // settings during its handshake); put the default back for the other tests.
-            ContentCompatibility.AllowDifferentSave = false;
+            ContentCompatibility.RequireIdenticalSave = false;
+        }
+
+        await cts.CancelAsync();
+        await Task.WhenAll(hostTask, clientTask);
+    }
+
+    [Fact]
+    public async Task AStrictHostCarriesOutItsSaveRefusalInsteadOfGoingQuiet()
+    {
+        // ⚠ THE BUG THIS PINS. A world-time refusal used to be applied by narrowing the
+        // peer's capabilities to nothing — and because the session takes the NARROWEST set
+        // across all peers, that switched every channel off for everyone while the refused
+        // peer stayed connected, forever, never told why. A refusal must be carried out:
+        // the peer is dropped and given the reason in the same typed form Hello uses.
+        using CoopHost host = new(new SessionSettings
+        {
+            PlayerName = "Revan", Port = 0, TickRate = 30, RequireIdenticalSave = true,
+        });
+        using CoopClient client = new(
+            new SessionSettings { PlayerName = "Malak", TickRate = 30, RequireIdenticalSave = true },
+            new IPEndPoint(IPAddress.Loopback, host.ListenEndPoint.Port));
+
+        using CancellationTokenSource cts = new(Timeout + TimeSpan.FromSeconds(15));
+        Task hostTask = host.RunAsync(cts.Token);
+        Task clientTask = client.RunAsync(cts.Token);
+
+        try
+        {
+            PlayerState state = new(Vector3f.Zero, 0f, "end_m01aa", 100, 0);
+            void Publish()
+            {
+                host.PublishLocalState(state);
+                client.PublishLocalState(state);
+                host.PublishWorldDigest(new WorldDigest(0xABCD, 0x1111_1111, "end_m01aa", 0));
+                client.PublishWorldDigest(new WorldDigest(0xABCD, 0x2222_2222, "end_m01aa", 0));
+            }
+
+            Assert.True(await WaitForAsync(() => client.IsConnected, Timeout, Publish));
+
+            Assert.True(
+                await WaitForAsync(
+                    () => client.GetStats().Status.Contains("E_SAVE", StringComparison.Ordinal),
+                    Timeout,
+                    Publish),
+                "the strict host never told the client why it was refused");
+
+            Assert.Empty(host.GetRemotePeers());
+        }
+        finally
+        {
+            // The compare policy is a process-wide static (set from each session's settings
+            // during its handshake); put the default back for the other tests.
+            ContentCompatibility.RequireIdenticalSave = false;
         }
 
         await cts.CancelAsync();

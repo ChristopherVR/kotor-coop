@@ -307,9 +307,14 @@ public sealed record SessionSettings
     /// </summary>
     public ContentDigest Digest { get; init; } = ContentDigest.Unknown;
 
-    /// <summary>Whether to admit a peer whose save differs, degrading to id-independent
-    /// channels instead of refusing. Mirrors <see cref="ContentCompatibility.AllowDifferentSave"/>.</summary>
-    public bool AllowDifferentSave { get; init; }
+    /// <summary>
+    /// Whether a peer on a different save is refused outright rather than admitted with the
+    /// object-id-keyed channels switched off. Off by default: world adoption makes the saves
+    /// match by construction, so a mismatch is a failed adoption to be reported and worked
+    /// around, not a session to end. Mirrors
+    /// <see cref="ContentCompatibility.RequireIdenticalSave"/>.
+    /// </summary>
+    public bool RequireIdenticalSave { get; init; }
 
     /// <summary>
     /// Session password. Empty means an open session. A host with a password admits only
