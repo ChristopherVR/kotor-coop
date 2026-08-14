@@ -392,4 +392,24 @@ public class ConsoleCommandTests
     {
         Assert.False(ConsoleCommand.TryParseObjectId(token, out _));
     }
+
+    /// <summary>The census dump has to be reachable from an unattended console line — it is
+    /// the only way to ask a running instance what it thinks it is publishing.</summary>
+    [Fact]
+    public void CensusParsesBare()
+    {
+        CoopCommand c = ConsoleCommand.Parse("census");
+        Assert.Equal(CoopCommandKind.Census, c.Kind);
+        Assert.Null(c.Address);
+    }
+
+    /// <summary>With an id it becomes a question about ONE creature, which is the form an
+    /// argument about a specific id actually needs.</summary>
+    [Fact]
+    public void CensusCarriesAnOptionalId()
+    {
+        CoopCommand c = ConsoleCommand.Parse("census 0x35");
+        Assert.Equal(CoopCommandKind.Census, c.Kind);
+        Assert.Equal("0x35", c.Address);
+    }
 }

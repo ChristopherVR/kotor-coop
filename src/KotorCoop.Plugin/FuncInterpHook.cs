@@ -37,6 +37,10 @@ internal static unsafe class FuncInterpHook
         "password", "pw",
         "stat", "commands", "?", "warp", "who", "peers", "where",
 
+        // A diagnostic, not a cheat: prints what this instance's enemy census holds and what
+        // its own engine says about each id. It shadows nothing the retail console owns.
+        "census",
+
         // "netsim" only, not its "net" alias: a three-letter word is far too likely to shadow
         // something the engine's own console owns, and `coop net ...` already routes through
         // the "coop" prefix for anyone who wants the short form.

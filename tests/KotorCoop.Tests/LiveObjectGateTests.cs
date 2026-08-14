@@ -203,4 +203,95 @@ public class LiveObjectGateTests
         Assert.Empty(kept);
         Assert.True(verdict.Trusted);
     }
+
+    // ---- the same rule at the publish point, where only ids exist -------------------
+
+    /// <summary>
+    /// The published census carries wire records, not addresses, so the last-mile gate can
+    /// only ask "does the array hold this id at all". It must still refuse the ones it does
+    /// not: an id that leaves this instance is a promise that a peer can key a forwarded kill
+    /// or a damage debt by it.
+    /// </summary>
+    [Fact]
+    public void ThePublishGateRefusesAnIdTheArrayDoesNotHold()
+    {
+        LiveObjectGate gate = new(id => id == 0x1A ? 0x1923_A620 : 0);
+
+        List<uint> kept = gate.ConfirmIds([0x1Au, 0x35u], id => id, out LiveObjectVerdict verdict);
+
+        Assert.Equal([0x1Au], kept);
+        Assert.Equal(1, verdict.Dropped);
+        Assert.True(verdict.Trusted);
+    }
+
+    /// <summary>The publish gate shares the scan gate's self-distrust — one rule, one place,
+    /// so the two cannot drift apart.</summary>
+    [Fact]
+    public void ThePublishGateAlsoDistrustsItselfWhenNothingResolves()
+    {
+        LiveObjectGate gate = new(_ => 0);
+
+        List<uint> kept = gate.ConfirmIds([0x1Au, 0x35u], id => id, out LiveObjectVerdict verdict);
+
+        Assert.Equal(2, kept.Count);
+        Assert.False(verdict.Trusted);
+    }
+
+    // ---- the report: silence must never be ambiguous --------------------------------
+
+    /// <summary>
+    /// ⚠ THE CONTRACT THAT COST A LIVE ROUND. The first version of the gate only logged when
+    /// it dropped something, so an empty log meant any of "no ghosts", "the gate never ran" or
+    /// "the sink was never wired" — three findings that need three different fixes. Every
+    /// state must describe itself, so a log line always exists and always says which one it is.
+    /// </summary>
+    [Fact]
+    public void EveryGateStateDescribesItself()
+    {
+        foreach (CensusGateState state in Enum.GetValues<CensusGateState>())
+        {
+            CensusGateReport report = new(state, 0x0ABC_0000, 38, 31, 7, [0x35u]);
+            string described = report.Describe();
+
+            Assert.False(string.IsNullOrWhiteSpace(described), $"{state} has no description");
+            Assert.StartsWith("gate:", described);
+        }
+    }
+
+    /// <summary>The one state that used to be silent is the one that most resembles the bug —
+    /// the census going out ungated — so it says so in as many words.</summary>
+    [Fact]
+    public void NotCheckingAtAllIsStatedLoudly()
+    {
+        string described = new CensusGateReport(
+            CensusGateState.NoObjectArray, 0, 38, 38, 0, []).Describe();
+
+        Assert.Contains("NOT CHECKING", described);
+        Assert.Contains("38", described);
+    }
+
+    /// <summary>A clean pass still reports, and names the numbers — "no ghosts" is a finding,
+    /// not a reason to say nothing.</summary>
+    [Fact]
+    public void ACleanPassStillReportsItsNumbers()
+    {
+        string described = new CensusGateReport(
+            CensusGateState.Confirmed, 0x0ABC_0000, 38, 38, 0, []).Describe();
+
+        Assert.Contains("confirmed 38 of 38", described);
+        Assert.Contains("no ghosts", described);
+    }
+
+    /// <summary>A drop names the ids it dropped: "7 ghosts" and "7 ghosts, one of which was
+    /// 0x35" are different findings, and only the second settles an argument about 0x35.</summary>
+    [Fact]
+    public void ADropNamesTheIdsItDropped()
+    {
+        string described = new CensusGateReport(
+            CensusGateState.Confirmed, 0x0ABC_0000, 38, 31, 7, [0x35u, 0x36u]).Describe();
+
+        Assert.Contains("dropped 7", described);
+        Assert.Contains("0x35", described);
+        Assert.Contains("...", described);
+    }
 }

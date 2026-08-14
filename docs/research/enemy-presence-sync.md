@@ -275,17 +275,72 @@ only the address the array names, and the distrust-yourself fail-safe.
 
 - The `+0x1005C` array pointer and the bucket walk were transcribed from the instruction
   stream, not observed. The fail-safe makes a wrong one harmless (it confirms nothing, so
-  everything is published and the log says so) — but the confirming evidence is the log line
-  `[census] N of M ...` appearing with N small and non-zero, plus a client `slay` that kills.
+  everything is published and the log says so) — but the confirming evidence is a `[census]`
+  line naming a live array address, plus a client `slay` that kills.
 - Whether ghost ids are dominated by a previous module generation (the duplicate-id pattern
   suggests it) or by ordinary mid-module destruction. The fix does not care; the answer would
   tell us whether the 15 s scan TTL is also worth shortening.
+
+### ⚠ Round two, 2026-08-15: A SILENT DIAGNOSTIC IS NOT A DIAGNOSTIC
+
+The first live run of the fix produced a result nobody could read, and the reason is worth
+more than the fix itself.
+
+The gate only spoke when it DROPPED something. So an empty log meant any of:
+
+1. it ran and found no ghosts;
+2. it never ran, because the object array did not resolve — the pass-through case, which was
+   coded to return quietly;
+3. the diagnostic sink was never wired at all.
+
+Those three need three different fixes, and the run could not distinguish them. Worse, the
+one number that did move (census 32 → 25) was equally consistent with all three, because the
+32 was the census CAP and any change to the world moves the count. A whole round produced no
+usable evidence.
+
+What changed:
+
+- **Every pass reports, including the do-nothing ones.** `CensusGateReport` has a state for
+  each of the four outcomes — never run, nothing scanned, no object array (`NOT CHECKING`),
+  confirmed, distrusted — and each describes itself. A line is emitted on change and, failing
+  that, every 30 s. Silence is now provably "this code is not running".
+- **The drop names the ids it dropped.** "7 ghosts" does not settle an argument about `0x35`;
+  "7 ghosts, one of which was `0x35`" does.
+- **The gate is applied at the PUBLISH point too** (`ConfirmPublished`, sharing
+  `LiveObjectGate.ConfirmIds` so there is one rule and not two). The scan gate sits behind a
+  cache and a cap, and after a round spent asking "is the gate even on the list being
+  published?" the answer needed to be structural rather than argued: nothing leaves
+  `ReadEnemies` that the object array did not confirm on the way out.
+- **The state can be ASKED for, not waited for**: a new `census [id]` console verb prints the
+  gate state, how many published ids this engine resolves, and — for any disputed id — its
+  verdict in all three lists at once (object array, raw memory scan, census). Their
+  disagreement IS the finding, so they are printed on one line:
+
+  ```
+  census: 0x35  object array: NOT HELD  |  raw scan: absent  |  census: hp 12/12 at 33.6,22.7
+  ```
+
+  In the raw scan but not the array is a ghost the gate should have caught. In neither means
+  the id never came from this instance at all — which would move the search to the wire (a
+  snapshot from an older world) rather than to memory.
+
+Open, and the reason the verb exists: on the failing run the disputed id was in the host's
+published census but in NEITHER the host's `creatures.ps1` scan nor its in-process
+`ResolveServerObject`. Nothing in this codebase can currently produce that combination — the
+census is built only from `EnumerateCreatures` (verified by reading every line of
+`ReadEnemies`) — so one of the three observations is not measuring what it appears to.
+`creatures.ps1` is a candidate: it reads each region in ONE `ReadProcessMemory` and silently
+skips the whole region when that fails, where the agent's scanner reads in chunks. `census`
+answers the question from inside the publisher instead of inferring it from three outside
+views.
 
 ## Files
 
 - `src/KotorCoop.Memory/EngineGlobals.cs` — the server object array walk
   (`TryGetServerObjectArray`, `TryResolveServerObject`, `TryLookupObject`).
-- `src/KotorCoop.Memory/LiveObjectGate.cs` — the keep/drop policy and its self-distrust.
+- `src/KotorCoop.Memory/LiveObjectGate.cs` — the keep/drop policy, its self-distrust, and
+  `CensusGateReport`, which makes every outcome (including the two that check nothing) speak.
+- `src/KotorCoop.Agent/CoopCommandDispatcher.cs` — the `census [id]` verb.
 - `src/KotorCoop.Protocol` — `EnemyState` presence fields, snapshot codec, protocol v12.
 - `src/KotorCoop.Memory/KotorGameBridge.cs` — presence reads in `ReadEnemies`, presence
   region writes in `TryWriteEnemies`, block signature v20, and the liveness confirmation in

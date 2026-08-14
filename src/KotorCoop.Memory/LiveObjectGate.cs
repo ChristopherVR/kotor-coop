@@ -1,5 +1,62 @@
 namespace KotorCoop.Memory;
 
+/// <summary>Which of the four things the liveness gate did on its last pass. Every one of
+/// them is REPORTED; there is no state in which the gate says nothing, because "no line in
+/// the log" was ambiguous between three of these and that cost a live round.</summary>
+public enum CensusGateState
+{
+    /// <summary>No pass has run yet.</summary>
+    NeverRun,
+
+    /// <summary>Nothing was scanned — no world, or the scan came back empty.</summary>
+    NothingToCheck,
+
+    /// <summary>⚠ The server object array could not be resolved, so NOTHING WAS CHECKED and
+    /// the scan was published as-is. Expected at the main menu and mid-transition; in a
+    /// loaded world it means the pointer chain is wrong.</summary>
+    NoObjectArray,
+
+    /// <summary>The array answered and its verdict was acted on.</summary>
+    Confirmed,
+
+    /// <summary>The array confirmed nothing at all, so the gate distrusted ITSELF and passed
+    /// everything through — a broken check is likelier than an imaginary world.</summary>
+    Distrusted,
+}
+
+/// <summary>
+/// What the liveness gate did last, in a shape both a log line and the <c>census</c> console
+/// verb can render. Held as state rather than only logged so the question "is the gate
+/// running, and what is it seeing?" can be ASKED on a live rig instead of waited for.
+/// </summary>
+public readonly record struct CensusGateReport(
+    CensusGateState State,
+    nint ObjectArray,
+    int Scanned,
+    int Confirmed,
+    int Dropped,
+    IReadOnlyList<uint> DroppedIds)
+{
+    /// <summary>One line, always safe to print, that names the state and its numbers.</summary>
+    public string Describe() => State switch
+    {
+        CensusGateState.NeverRun => "gate: no pass has run yet",
+        CensusGateState.NothingToCheck => "gate: nothing scanned (no world loaded)",
+        CensusGateState.NoObjectArray =>
+            $"gate: NOT CHECKING - no server object array; all {Scanned} scanned creatures pass "
+            + "unchecked (normal at the menu or mid-transition, a wrong pointer chain otherwise)",
+        CensusGateState.Distrusted =>
+            $"gate: the object array at 0x{ObjectArray:X} confirmed NONE of {Scanned} scanned "
+            + "creatures - distrusting the check and publishing them all (offsets or a rebuild, "
+            + "not an empty world)",
+        _ => $"gate: array 0x{ObjectArray:X} confirmed {Confirmed} of {Scanned} scanned creatures"
+            + (Dropped > 0
+                ? $", dropped {Dropped} not in it ({string.Join(", ", DroppedIds.Select(id => $"0x{id:X}"))}"
+                    + (Dropped > DroppedIds.Count ? ", ...)" : ")")
+                : " (no ghosts)"),
+    };
+}
+
 /// <summary>What a <see cref="LiveObjectGate"/> pass did, for the caller's log.</summary>
 /// <param name="Kept">How many candidates the engine's own object array confirmed.</param>
 /// <param name="Dropped">How many were ghosts — bytes that look like an object but that the
@@ -58,6 +115,36 @@ public sealed class LiveObjectGate(Func<uint, nint> resolve)
             }
         }
 
+        return Decide(candidates, kept, out verdict);
+    }
+
+    /// <summary>
+    /// Keeps the candidates whose id the array holds at all, for callers that have an id and
+    /// no address to match it against — the published census, whose entries are wire records
+    /// rather than memory.
+    ///
+    /// Same self-distrust rule, deliberately shared rather than re-implemented: the two gates
+    /// guard the same invariant at different points on the path, and a rule that exists twice
+    /// is a rule that will differ once.
+    /// </summary>
+    public List<T> ConfirmIds<T>(IReadOnlyList<T> candidates, Func<T, uint> key, out LiveObjectVerdict verdict)
+    {
+        List<T> kept = new(candidates.Count);
+
+        foreach (T candidate in candidates)
+        {
+            uint id = key(candidate);
+            if (id != 0 && resolve(id) != 0)
+            {
+                kept.Add(candidate);
+            }
+        }
+
+        return Decide(candidates, kept, out verdict);
+    }
+
+    private static List<T> Decide<T>(IReadOnlyList<T> candidates, List<T> kept, out LiveObjectVerdict verdict)
+    {
         if (kept.Count == 0 && candidates.Count > 0)
         {
             verdict = new LiveObjectVerdict(candidates.Count, 0, Trusted: false);
