@@ -117,6 +117,45 @@ name. Bounded at `MaxPeers * 8` departures, oldest dropped — and the failure m
 is "a very old identity is treated as a new player", which every cumulative channel handles
 correctly (first sight adopts, never double-counts).
 
+#### Why `Bye` retires too — the rule, since this was contested
+
+The obvious objection is that a clean farewell should be final: the session announced "so-and-so
+left", so a returning player is a new player. The premise does not survive contact with the
+code.
+
+- **What a departing player tears down is on *their* machine.** `SessionManager.Disconnect`
+  disposes their session and calls `ClearCoopState`. On the host, nothing keyed on their peer id
+  is discarded by the announcement — and two of the tables that matter are never discarded at
+  all, deliberately: `_phantomDamageIn` (dropping a row walks a monotonic total backwards) and
+  `CoopAgent`'s `PeerDamageLedger`, which is scoped to the **module** and knows nothing about
+  sessions.
+- **Their own counters survive as well.** The running total of damage they have dealt lives in
+  the plugin's `DamageDealtTable`. `ClearCoopState` does not touch it — it clears the presence
+  counts, the dialogue flag and the encounter request, nothing damage-related. The only thing
+  that clears it is `PluginHost.InvalidateAll`, which fires on world unload, module change and a
+  flushed transition. Never a disconnect. `Generation` is bumped in the same place, so it does
+  not move either.
+
+So a player who quits to the menu and rejoins **in the same module** reports the same cumulative
+total under the same generation. Deal them a fresh id and the ledger finds no prior row, banks
+all of it as new damage, and the enemy takes their entire historic contribution a second time —
+with rule 3 unable to help, because the generation is exactly what did not change. The
+third-party phantom-damage tables double the same way, and there the victim is a player's own
+hit points.
+
+**The invariant is therefore not "clean exit versus dropped link". It is: an identity must live
+as long as the counters keyed on it, and those are scoped to the module, not to the
+connection.** Where a departure genuinely does reset them — a module change, a restarted agent,
+a new game — the returning player carries a **new nonce** (a fresh `CoopClient` mints one), so
+nothing is reclaimed and every channel correctly treats them as first sight. "A farewell is
+final" therefore remains true for every departure that actually resets anything; it is enforced
+by the nonce, which knows, rather than by the Bye, which does not.
+
+A corollary worth knowing: only a client object that *survived* can present a nonce that has
+said Bye, and that is precisely the client whose counters survived with it — so this path is
+nearly unreachable in production, and where it is reachable, reclaiming is the safe answer.
+`ByeIdentityTests` constructs both halves.
+
 ### 2.2 Container-loot removals were destroyed the moment a client dropped
 
 `ReliableLootSender.CollectDue` retired every pending op when the recipient list was empty —
@@ -301,6 +340,16 @@ the host is concerned, and the cumulative channels treat it as one — first sig
 without spending them. Safe, and the right default, but it means the process-restart recovery
 recorded in `live-verification.md` and the link-drop recovery described here are genuinely
 different paths. Only the second keeps a peer's contributions.
+
+This is not quite airtight, and it is the one place worth watching. A rebuilt *agent* mints a
+new nonce, but the *plugin* keeps its `DamageDealtTable` — `InvalidateAll` fires on a module
+change, not on an agent restart. So an agent restarted in place presents a new identity while
+its game still holds the old running totals, and the host banks them again as first-sight
+damage. The `PeerDamageLedger`'s generation rule cannot see it, for the same reason as above:
+the generation is module-derived and did not change. The clean fix is for the ledger's
+first-sight branch to adopt-without-spending the way the progression ledger already does, rather
+than banking the opening total; it is a small change, it is not in this pass, and the exposure
+today is bounded by how rarely an agent is restarted mid-module.
 
 ### 4.6 Latency simulation reorders packets
 

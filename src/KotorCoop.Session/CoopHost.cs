@@ -52,6 +52,14 @@ public sealed class CoopHost : ICoopSession
     /// and silently dropped whatever it earned during the outage, and every other client kept
     /// the old id's phantom standing there for another full timeout while the new one spawned
     /// beside it.
+    ///
+    /// THE RULE, stated once so it is not re-litigated at each call site: an identity must
+    /// live as long as the CUMULATIVE COUNTERS KEYED ON IT, and those are scoped to the module
+    /// (the plugin's damage table, the ledger's epoch), not to the connection. So both
+    /// departures retire — a timeout and a clean Bye alike — and the case where the counters
+    /// really do restart takes care of itself, because a peer whose agent was rebuilt arrives
+    /// with a new nonce and is correctly treated as first sight. <see cref="HandleBye"/> has
+    /// the full argument and the binary evidence behind it.
     /// </summary>
     private sealed record RetiredPeer(uint Id, string Name, long RetiredAtMs);
 
@@ -1914,9 +1922,46 @@ public sealed class CoopHost : ICoopSession
 
         lock (_gate)
         {
-            // A polite departure retires the identity exactly like a timeout does: a player
-            // who quits to the menu and rejoins is the same player, and every cumulative
-            // channel keyed on their peer id says so.
+            // ⚠ A POLITE DEPARTURE RETIRES THE IDENTITY EXACTLY LIKE A TIMEOUT DOES. This was
+            // contested — the argument against is that the session has announced "so-and-so
+            // left" and everyone tore down accordingly, so resurrecting the id resurrects
+            // state that was deliberately discarded. That premise does not hold here, and the
+            // binary says why.
+            //
+            // WHAT A DEPARTING PLAYER ACTUALLY TEARS DOWN is on THEIR machine:
+            // SessionManager.Disconnect disposes their session and calls ClearCoopState. On
+            // THIS host nothing keyed on their peer id is discarded by the announcement — and
+            // two of the tables that matter are never discarded at all, by design:
+            // _phantomDamageIn (rows are kept deliberately; dropping one walks a monotonic
+            // total backwards) and CoopAgent's PeerDamageLedger, which is scoped to the MODULE
+            // and knows nothing about sessions.
+            //
+            // AND THE DEPARTING PLAYER'S OWN COUNTERS SURVIVE TOO. The running total of damage
+            // they have dealt lives in the plugin's DamageDealtTable, and ClearCoopState does
+            // not touch it (it clears the presence counts, the dialogue flag and the encounter
+            // request — nothing damage-related). The only thing that clears it is
+            // PluginHost.InvalidateAll, which fires on world unload, module change and a
+            // flushed transition — never on a disconnect. Its GENERATION is bumped in the same
+            // place, so it does not move either.
+            //
+            // So a player who quits to the menu and rejoins in the same module reports the SAME
+            // cumulative total under the SAME generation. Deal them a fresh peer id and the
+            // ledger finds no prior row for it, treats all of it as new, and hands the enemy
+            // that player's entire historic contribution a second time — with rule 3 unable to
+            // help, because the generation is exactly what did not change. The third-party
+            // phantom-damage tables double in the same way, and there the victim is a player's
+            // own hit points.
+            //
+            // The invariant is therefore not "clean exit versus dropped link". It is: AN
+            // IDENTITY MUST LIVE AS LONG AS THE COUNTERS KEYED ON IT, and those are scoped to
+            // the module, not to the connection. When a departure really does reset them — a
+            // module change, a restarted agent, a new game — the reset is already announced by
+            // the generation/epoch machinery, and the returning player carries a NEW nonce
+            // anyway (a fresh CoopClient mints one), so nothing is reclaimed and every
+            // cumulative channel correctly treats them as first sight. Which is also why this
+            // line is nearly unreachable in production: only a client object that SURVIVED can
+            // present a nonce that has said Bye, and that is precisely the client whose
+            // counters survived with it. See ByeIdentityTests.
             if (_peers.TryGetValue(bye.PeerId, out PeerConnection? leaving))
             {
                 Retire(leaving, SessionClock.NowMs);
