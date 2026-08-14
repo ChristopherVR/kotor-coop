@@ -116,6 +116,8 @@ internal sealed unsafe class CheatController(SharedBlockView block)
 
             case SharedBlock.CheatKindStageMovie:
                 StageMovie();
+                break;
+
             case SharedBlock.CheatKindSetItem:
                 SetItem();
                 break;
@@ -690,6 +692,9 @@ internal sealed unsafe class CheatController(SharedBlockView block)
         }
 
         return length == 0 ? string.Empty : Encoding.ASCII.GetString(text, length);
+    }
+
+    /// <summary>
     /// Reads one live item's per-instance identity, and pokes whichever of the five fields
     /// the request named — through <see cref="Odyssey.ApplyItemIdentity"/>, the very function
     /// the ground-item channel calls on a peer's dropped item.

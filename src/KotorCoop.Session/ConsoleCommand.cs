@@ -125,6 +125,26 @@ public enum CoopCommandKind
     /// <see cref="CoopCommand.Address"/> the destination module for the warp form.
     /// </summary>
     StageMovie,
+
+    /// <summary>
+    /// List the live items this instance can see, with their object ids and per-instance
+    /// state. <see cref="CoopCommand.Amount"/> caps how many rows are printed.
+    ///
+    /// The point is picking a target: item identity can only be exercised by sending an item
+    /// that genuinely differs from its blueprint, and nothing before this could say which of
+    /// the hundreds of items in a loaded module those are.
+    /// </summary>
+    Items,
+
+    /// <summary>Print one item's per-instance state; the id is in
+    /// <see cref="CoopCommand.Address"/>. This is the READ-BACK half of an identity test —
+    /// run it on the receiving instance against the object id its plugin log names.</summary>
+    InspectItem,
+
+    /// <summary>Poke one live item's per-instance state, so a sender has something worth
+    /// sending. The id is in <see cref="CoopCommand.Address"/> and the fields in
+    /// <see cref="CoopCommand.Item"/>.</summary>
+    SetItem,
 }
 
 /// <summary>
@@ -147,24 +167,6 @@ public static class StageMovieModes
 
     /// <summary>Report what is queued and change nothing.</summary>
     public const int Show = 3;
-    /// List the live items this instance can see, with their object ids and per-instance
-    /// state. <see cref="CoopCommand.Amount"/> caps how many rows are printed.
-    ///
-    /// The point is picking a target: item identity can only be exercised by sending an item
-    /// that genuinely differs from its blueprint, and nothing before this could say which of
-    /// the hundreds of items in a loaded module those are.
-    /// </summary>
-    Items,
-
-    /// <summary>Print one item's per-instance state; the id is in
-    /// <see cref="CoopCommand.Address"/>. This is the READ-BACK half of an identity test —
-    /// run it on the receiving instance against the object id its plugin log names.</summary>
-    InspectItem,
-
-    /// <summary>Poke one live item's per-instance state, so a sender has something worth
-    /// sending. The id is in <see cref="CoopCommand.Address"/> and the fields in
-    /// <see cref="CoopCommand.Item"/>.</summary>
-    SetItem,
 }
 
 /// <summary>
