@@ -1223,6 +1223,12 @@ internal struct SharedBlock
     /// ResolveServerObject said it was not — same process, same id. Nothing outside the game
     /// can settle that, because every outside view is a different moment. This asks both
     /// questions in one frame and writes the whole chain to the plugin log.
+    ///
+    /// ⚠ 9, NOT 7. Kinds 7 and 8 belong to work developed in parallel (StageMovie, SetItem)
+    /// and were already merged; this one was renumbered by hand at integration, in two files,
+    /// which is exactly the manual step the "keep in sync" warning above says is dangerous.
+    /// Take the next free number rather than the next number you see, and leave 7 and 8 alone
+    /// even if they look absent from the branch you are on.
     /// </summary>
     public const uint CheatKindResolve = 9;
 

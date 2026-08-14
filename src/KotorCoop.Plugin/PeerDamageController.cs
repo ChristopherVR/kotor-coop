@@ -64,6 +64,73 @@ internal sealed unsafe class PeerDamageController(SharedBlockView block)
     /// failure, so it must not be crowded out of the log by successful applies.</summary>
     private int _unresolvedLogged;
 
+    /// <summary>How many full engine chains have been written beside a refusal. Expensive to
+    /// read and long to print, so a few is plenty — the one-line verdict carries the rest.</summary>
+    private int _chainsLogged;
+
+    /// <summary>
+    /// Ids that resolved here at least once since the epoch reset, and the ids already
+    /// complained about — both fixed-size, because this runs on the game thread and a
+    /// dictionary that grows during a fight is a stutter nobody can explain later.
+    /// </summary>
+    private readonly uint[] _wasResolvable = new uint[64];
+
+    private readonly uint[] _complainedAbout = new uint[16];
+
+    /// <summary>
+    /// True the FIRST time an id is refused. Ten lines about one id told us nothing three
+    /// rounds running, while a second unresolvable id would have been the whole story.
+    /// </summary>
+    private bool NoteUnresolved(uint objectId)
+    {
+        for (int i = 0; i < _complainedAbout.Length; i++)
+        {
+            if (_complainedAbout[i] == objectId)
+            {
+                return false;
+            }
+
+            if (_complainedAbout[i] == 0)
+            {
+                _complainedAbout[i] = objectId;
+                _unresolvedLogged++;
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private void RememberResolvable(uint objectId)
+    {
+        for (int i = 0; i < _wasResolvable.Length; i++)
+        {
+            if (_wasResolvable[i] == objectId)
+            {
+                return;
+            }
+
+            if (_wasResolvable[i] == 0)
+            {
+                _wasResolvable[i] = objectId;
+                return;
+            }
+        }
+    }
+
+    private bool WasResolvableHere(uint objectId)
+    {
+        foreach (uint id in _wasResolvable)
+        {
+            if (id == objectId)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     /// <summary>
     /// A module change reassigns every object id, so both halves start again — and they must
     /// start again TOGETHER, which is what the agent's epoch is for. This clears the local
@@ -74,8 +141,19 @@ internal sealed unsafe class PeerDamageController(SharedBlockView block)
     {
         _countdown = 0;
         _owed.Clear();
+        ForgetResolutionHistory();
         block.DamageOwedCount = 0;
         block.DamageDealtCount = 0;
+    }
+
+    /// <summary>Drops what is known about which ids resolve here. Object ids are per module
+    /// load, so this must happen wherever the ledger itself restarts.</summary>
+    private void ForgetResolutionHistory()
+    {
+        Array.Clear(_wasResolvable);
+        Array.Clear(_complainedAbout);
+        _unresolvedLogged = 0;
+        _chainsLogged = 0;
     }
 
     public void OnFrame()
@@ -199,10 +277,17 @@ internal sealed unsafe class PeerDamageController(SharedBlockView block)
         uint count = Math.Min(block.DamageOwedCount, (uint)SharedBlock.DamageLedgerCapacity);
         uint epoch = block.DamageOwedEpoch;
 
-        if (_owed.AdoptEpoch(epoch) && _logged < 20)
+        if (_owed.AdoptEpoch(epoch))
         {
-            _logged++;
-            PluginHost.Log($"combat: peer-damage ledger reset for epoch {epoch:X8}");
+            // Both histories are keyed by object id, and a new epoch reassigns every id — so
+            // "it resolved here earlier" would be a claim about a different creature.
+            ForgetResolutionHistory();
+
+            if (_logged < 20)
+            {
+                _logged++;
+                PluginHost.Log($"combat: peer-damage ledger reset for epoch {epoch:X8}");
+            }
         }
 
         if (count == 0)
@@ -246,17 +331,36 @@ internal sealed unsafe class PeerDamageController(SharedBlockView block)
             // flood.
             if (Odyssey.ResolveServerObject(objectId) == 0)
             {
-                if (_unresolvedLogged < 10)
+                // ⚠ ONE LINE PER ID, and it says whether the id was EVER ours. "Does not
+                // resolve" is three different findings wearing one sentence: an id from
+                // another instance's space (never here), a creature that has since been
+                // destroyed (was here, gone now), and a transition window (here again in a
+                // moment). Only the middle one is a race, and only the first one is the bug
+                // the census gate exists to stop — so the message names which it is, and the
+                // full engine chain goes beside it the first few times.
+                if (NoteUnresolved(objectId))
                 {
-                    _unresolvedLogged++;
                     PluginHost.Log(
                         $"combat: a peer owes {amount} damage to 0x{objectId:X}, which does not "
-                        + "resolve here - holding the debt (normal mid-transition; permanent if "
-                        + "the peer keyed it in its OWN id space)");
+                        + (WasResolvableHere(objectId)
+                            ? "resolve here ANY MORE - it did earlier this epoch, so the body was "
+                                + "destroyed; holding the debt in case it comes back"
+                            : "resolve here and never has this epoch - the peer keyed it in an id "
+                                + "space this instance does not share; the debt can never land"));
+
+                    if (_chainsLogged < 3)
+                    {
+                        _chainsLogged++;
+                        PluginHost.Log($"combat: {Odyssey.DescribeObjectResolution(objectId)}");
+                    }
                 }
 
                 continue;
             }
+
+            // Remembered BEFORE the apply, so "it was here once" is true even if the damage
+            // itself is refused: the two failures are different and must not be conflated.
+            RememberResolvable(objectId);
 
             if (Odyssey.ApplyDamageEffect(objectId, amount, out int failure))
             {

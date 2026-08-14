@@ -337,8 +337,9 @@ scanned creature through the engine's own `CGameObjectArray` (transcribed from
 `CGameObjectArray::GetGameObject` 0x004D8230) before publishing, and the cheat path's
 owner/local id confusion (`CheatAuthority.MirrorIds`) is fixed alongside it.
 
-**Round one was INCONCLUSIVE** (the diagnostic was silent — see the gate's four states now).
-**Round two localised it to one contradiction**, verbatim from the rig:
+**Round one was INCONCLUSIVE** (silent diagnostic). **Round two** localised it to one
+contradiction. **Round three** put `resolve` on the game thread and killed the lookup
+hypothesis outright:
 
 - agent, host: `census 0x35` -> `object array: held at 0x19179E38 | raw scan: 0x19179E38 'end_weld'`
 - plugin, host: `slay 0x35` -> `no object 0x35 in this module`
@@ -403,14 +404,66 @@ pwsh tools\blockpoke.ps1 -ProcId <client> console 'slay'
 #    host plugin log: "combat: applied 100000 of a peer's damage to 0xNN"
 #                     and NOT "which does not resolve here"
 ```
+resolve: 0x35: ... array(+0x1005C) 0x33EE540 array(engine) 0x33EE540
+   | engine 0x19169BB8 walk 0x19169BB8 resolve 0x19169BB8 | at 0x19169BB8: vtable 0x7470C8 id+4 0x35 ...
+```
 
-⚠ `#NN` and bare numbers are now **hex** in every console verb (`slay #35` killed `0x23`
-before this run — it parsed as decimal 35). A bare token with letters is still a TAG, so
-`slay beef` aims at the creature tagged `beef`, not at `0xBEEF`.
+One array, and the engine's call, the transcription and `ResolveServerObject` all agree on a
+live pointer — while `slay 0x35` and the peer-damage pass, in the same process, refuse the
+same id. Also settled: **`+0x14` is the third word of the object's `last_name`** (the
+constructor at 0x004CFCB0 builds `CExoLocString` at `+0x0C` and `tag` at `+0x18`), so
+`0x130014` vs `0x0` means "this one has a localised name" and nothing more. And **every call
+site provably reaches the generic `CServerExoApp::GetGameObject`** — the type-filtered getters
+appear nowhere in the codebase. See `docs/research/enemy-presence-sync.md` §"Round four".
 
-⚠ Console answers are capped at 96 bytes and truncate without a mark. Every diagnostic line is
-now built to fit, and anything longer (the `resolve` chain) goes to the plugin log instead —
-read that file, not just the console.
+What is left is either a TRANSIENT object (the three commands looked at different moments) or
+something in the integration tree between the lookup and the caller. Round four makes every
+refusal print its own working, so one run separates them.
+
+**The live check, round four.** Run 1 and 2 back to back, in that order, within a few seconds.
+
+```powershell
+# 1. THE FAILING CALL, WHICH NOW EXPLAINS ITSELF. Read the plugin log afterwards:
+pwsh tools\blockpoke.ps1 -ProcId <host> console 'slay 0x35'
+#    <gamedir>\kotorcoop-plugin.log now carries, from INSIDE the refusal:
+#      "cheat: refusing target - 0x35: ... | engine 0x.. walk 0x.. resolve 0x.. | at 0x..: ..."
+#    engine/resolve non-zero here => the lookup worked and the refusal came from ABOVE it
+#                                    (paste the merged CheatController.TryResolveTarget)
+#    engine/resolve zero here     => the object really was absent at that instant: it is
+#                                    transient, and rounds 1-3 compared different moments
+
+# 2. THE SAME QUESTION, SECONDS LATER, from the verb that succeeded before.
+pwsh tools\blockpoke.ps1 -ProcId <host> console 'resolve 0x35'
+#    Both lines are timestamped in the log; if they disagree, the object is transient and
+#    the timestamps bound how fast it comes and goes.
+
+# 3. THE CONTROL, and it matters as much as the failing case. 0x1A resolves and used to be
+#    killable, so if THIS refuses too, the slay path regressed generally in the merge and
+#    0x35 was never special.
+pwsh tools\blockpoke.ps1 -ProcId <host> console 'slay 0x1A'
+
+# 4. The debt's own verdict, which now names which kind of unresolvable it hit.
+#    In the host plugin log, after the client forwards a kill:
+pwsh tools\blockpoke.ps1 -ProcId <client> console 'slay'
+#    "combat: a peer owes N damage to 0xNN, which does not resolve here ANY MORE - it did
+#     earlier this epoch, so the body was destroyed"      -> a race; the debt is held
+#    "... and never has this epoch - the peer keyed it in an id space this instance does not
+#     share; the debt can never land"                     -> the census defect
+
+# 5. Everything above lands in the COMBINED plugin log (the split channel files do not carry
+#    the 'resolve:'/'cheat:' prefixes). One grep collects the whole round, timestamps and all:
+Select-String -Path '<gamedir>\kotorcoop-plugin.log' `
+    -Pattern 'resolve:|cheat: refusing|combat: a peer owes|combat: applied'
+```
+
+⚠ If check 1 shows the engine resolving the id while the cheat refused it, please paste the
+integration tree's `CheatController.TryResolveTarget` — this branch's copy calls
+`Odyssey.ResolveServerObject` and nothing else, and two other agents' cheats now live in that
+same file.
+
+⚠ Cheat kind for `resolve` is **9** in this branch now (7 and 8 belong to StageMovie and
+SetItem), so the merge should no longer need renumbering; `CheatKindSyncTests` fails the build
+if the two halves ever disagree or if two verbs share a number.
 
 ### Still unverified — item identity apply
 

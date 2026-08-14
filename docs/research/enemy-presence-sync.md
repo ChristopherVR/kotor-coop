@@ -399,6 +399,92 @@ Until that line exists, any "fix" would be a guess dressed as a change.
   explained them. Every diagnostic line is now built to fit, with a unit test asserting it
   against `CensusGateReport.MaxLineLength`, and the long form goes to the logs instead.
 
+### Round four, 2026-08-15: the lookup is exonerated, and `+0x14` is a red herring
+
+`resolve` answered, and it answered cleanly (host, plugin log, verbatim):
+
+```
+resolve: 0x35: ... array(+0x1005C) 0x33EE540 array(engine) 0x33EE540
+   | engine 0x19169BB8 walk 0x19169BB8 resolve 0x19169BB8
+   | at 0x19169BB8: vtable 0x7470C8 id+4 0x35 id+0x14 0x130014 type 0x5
+resolve: 0x1A: ... array(+0x1005C) 0x33EE540 array(engine) 0x33EE540
+   | engine 0x191DD240 walk 0x191DD240 resolve 0x191DD240
+   | at 0x191DD240: vtable 0x7470C8 id+4 0x1A id+0x14 0x0 type 0x5
+```
+
+**So the lookup is not the defect.** One array (the `+0x1005C` field and the engine's own
+accessor agree), and for the disputed id the engine's call, the in-process transcription and
+`Odyssey.ResolveServerObject` all return the same live pointer. Everything this investigation
+suspected of the lookup is now excluded by measurement rather than by argument.
+
+#### What `+0x14` is: part of the object's name, not a flag
+
+`CSWSObject::Constructor` (0x004CFCB0) builds its members in address order —
+`lea ecx,[esi+0x0C]` into the `CExoLocString` constructor (0x005E9E10), then
+`lea ebp,[esi+0x18]` into the `CExoString` constructor for `tag`, then `[esi+0x20]` for the
+`CResRef` portrait — and it never touches `+0x10` or `+0x14` separately.
+`CSWSObject::GetLastName` (0x004D0190) is one instruction, `lea eax,[ecx+0x0C]`. So
+**`0x0C..0x18` is the whole of `last_name`, and `+0x14` is its third word** (the symbol
+database's `CExoLocString size=0x8` is one of its known-stale rows; the constructor is the
+authority).
+
+`0x130014` versus `0x0` therefore says only that `end_weld` carries a localised name payload
+and `0x1A` does not. It is not a type, not a flag, not a liveness marker, and it cannot be the
+discriminator: `ResolveServerObject`'s FIRST probe (`+0x04 == id`) matched for both ids, which
+is exactly what the `resolve` line shows it returning. (For completeness: creature display
+names do not live here at all — `CSWSCreature::GetFirstName`/`GetLastName` (0x004F8310 /
+0x004F8330) both read the stats block at `+0xA74`.)
+
+#### Which getter each call site reaches — traced, and it is the same one
+
+| Call site | Reaches |
+| --- | --- |
+| `Odyssey.ResolveServerObject` | `GetGameObjectFn` = **0x004AE750**, `CServerExoApp::GetGameObject` — the generic getter |
+| `CheatController.TryResolveTarget` (the `slay` refusal) | `Odyssey.ResolveServerObject` |
+| `PeerDamageController.ApplyOwed` (the debt refusal) | `Odyssey.ResolveServerObject` |
+
+There is no second path: a grep for the typed getters (`0x004AE760` / `0x004B1740`
+`GetItemByGameObjectID`, `0x004AE770` / `0x004B1790` `GetCreatureByGameObjectID`) finds them
+nowhere in the codebase — the only mention is a comment about the CLIENT-side creature getter
+in an unrelated camera path. The type-filter hypothesis is a good one and it is dead in this
+tree, though the reason it was worth having is now written into `ResolveServerObject`'s doc
+comment: those getters re-test the object type byte at `+0x08`, which is the field the
+object-type trap says never to trust, so a future call site that reaches for one "because it
+wants a creature" will reject live creatures intermittently and silently.
+
+#### What is left, and how the next run tells them apart
+
+Three observations that cannot all be of the same instant: `resolve` finds the object,
+`slay 0x35` refuses it, and the peer-damage pass refuses it. What survives is either that the
+object is TRANSIENT (the three commands looked at different moments), or that something
+between `ResolveServerObject` returning a pointer and the caller acting on it differs from
+this branch (the integration tree carries two other agents' cheats in the same file). So every
+refusal now prints its own working:
+
+- **`ResolveServerObject` no longer discards a found object silently.** The engine returning a
+  pointer whose `+0x04` and `+0x14` both fail to match was the last silent branch on this
+  path; it now logs the pointer, both fields and the vtable. From a caller's side that case
+  was indistinguishable from a missing object.
+- **A refused cheat target logs the full chain at the instant it refuses** — the same line
+  `resolve` prints, taken inside the failing call. If the engine resolves the id there and the
+  cheat still refused, the fault is between the two and the line proves it.
+- **The damage ledger says WHICH KIND of unresolvable.** It records the ids that have resolved
+  at least once this epoch, so a refusal now reads either "does not resolve here ANY MORE - it
+  did earlier this epoch, so the body was destroyed" (a race, and the debt is held for its
+  return) or "never has this epoch - the peer keyed it in an id space this instance does not
+  share" (the census defect, and the debt can never land). It also complains **once per
+  distinct id** instead of ten times about one — three rounds of logs were ten lines about a
+  single id while a second id would have been the whole story.
+
+#### Cheat kinds collided in the merge, and now a test catches that
+
+Three agents in parallel each took "the next" cheat kind; two picked 7, and a human caught it
+while merging and renumbered both halves by hand. The table is written twice on purpose (the
+halves cannot share a type) and a mismatch runs a DIFFERENT VERB from the one typed — a silent
+failure of exactly the family this whole investigation is about. `Resolve` is **9** here now,
+and `CheatKindSyncTests` reads both source files and asserts they agree and that no two kinds
+share a number.
+
 ## Files
 
 - `src/KotorCoop.Memory/EngineGlobals.cs` — the server object array walk

@@ -44,6 +44,7 @@ public static class CheatKinds
     /// <summary>Stage a cinematic onto a module transition. <c>Amount</c> is the mode
     /// (<c>StageMovieModes</c>) and <c>Text</c> the comma-separated movie names.</summary>
     public const uint StageMovie = 7;
+
     /// <summary>Read, and optionally poke, one live item's per-instance identity — the
     /// staging cheat that makes the ground channel's apply path testable without a human.
     /// Mirrors <c>SharedBlock.CheatKindSetItem</c>.</summary>
@@ -52,8 +53,15 @@ public static class CheatKinds
     /// <summary>"Leave this identity field alone." Mirrors
     /// <c>SharedBlock.CheatFieldUnchanged</c>; see there for why all-ones is safe.</summary>
     public const uint Unchanged = 0xFFFF_FFFF;
-    /// <summary>Ask the plugin what this engine knows about one object id, in one frame, on
-    /// the game thread. See SharedBlock.CheatKindResolve.</summary>
+
+    /// <summary>
+    /// Ask the plugin what this engine knows about one object id, in one frame, on the game
+    /// thread. See SharedBlock.CheatKindResolve.
+    ///
+    /// ⚠ 9, NOT 7: kinds 7 and 8 (StageMovie, SetItem) were taken by work developed in
+    /// parallel. CheatKindsMatchTheBlockTests asserts this table against the plugin's, because
+    /// a number that disagrees across the two halves runs a DIFFERENT VERB from the one typed.
+    /// </summary>
     public const uint Resolve = 9;
 }
 
