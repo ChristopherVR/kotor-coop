@@ -337,32 +337,52 @@ scanned creature through the engine's own `CGameObjectArray` (transcribed from
 `CGameObjectArray::GetGameObject` 0x004D8230) before publishing, and the cheat path's
 owner/local id confusion (`CheatAuthority.MirrorIds`) is fixed alongside it.
 
-**The live check that confirms it** (unattended, both instances up in the same module):
+**Round one ran 2026-08-15 and was INCONCLUSIVE — the diagnostic was silent.** The census
+count moved (32 → 25, but 32 was the cap, so that number moves for any reason), no `[census]`
+line appeared at all, and `0x35` still survived and still did not resolve on the host. The
+gate only spoke when it dropped something, so "no line" meant any of "no ghosts", "never ran"
+or "sink not wired" — three findings needing three different fixes. That ambiguity is now
+removed: every pass reports on a 30 s heartbeat, the drop names the ids it dropped, the gate
+is applied at the publish point as well as the scan, and the state can be ASKED for.
+
+**The live check, round two** (unattended, both instances up in the same module). Run all
+four; the first two alone settle where the defect is.
 
 ```powershell
-# 1. the ghosts are seen and named on the HOST's agent log - the fix working, visibly
-Select-String -Path $env:TEMP\kotorcoop-demo\agent1.log -Pattern '\[census\]'
-#    expect: "[census] N of M creature-shaped objects are not in the engine's object array"
-#    with N small and non-zero. N = 0 forever means no ghosts existed this run (fine, but
-#    inconclusive); "confirmed NONE of M" means the OFFSETS are wrong - the gate then
-#    publishes everything, exactly as before, and nothing is lost.
+# 1. ASK THE HOST what it is publishing and what its own engine says about each id.
+pwsh toolslockpoke.ps1 -ProcId <host> console 'census'
+#    line 1  "census: gate: ..." - one of:
+#      "array 0x... confirmed K of N ... (no ghosts)"   -> the check runs and the scan is clean
+#      "array 0x... confirmed K of N, dropped D (0x..)" -> the check runs and is removing ghosts
+#      "NOT CHECKING - no server object array"          -> the pointer chain is wrong; that is
+#                                                          the bug, and nothing was ever gated
+#    line 2  "census: my own census holds N id(s) ...; N resolve in MY engine, 0 do not"
+#            As the OWNER, any non-zero "do not" is the defect, and each is then named.
 
-# 2. the client's forwarded kill now lands
-pwsh tools\blockpoke.ps1 -ProcId <client> console 'slay'
-#    client: "slaying the nearest enemy 0xNN (...) [from owner census, ...]" then
-#            "queued a killing blow for the owner, keyed by owner id 0xNN"
-#    HOST plugin log: "combat: applied 100000 of a peer's damage to 0xNN"
-#            and NOT "which does not resolve here"
-#    both dashboards: the dead count goes up by one; the body is gone on both screens.
+# 2. ASK BOTH SIDES ABOUT THE DISPUTED ID. This is the line that ends the argument.
+pwsh toolslockpoke.ps1 -ProcId <host>   console 'census 0x35'
+pwsh toolslockpoke.ps1 -ProcId <client> console 'census 0x35'
+#    "census: 0x35  object array: ...  |  raw scan: ...  |  census: ..."
+#      array NOT HELD + raw scan present -> a ghost the gate should have caught (gate bug)
+#      array NOT HELD + raw scan absent  -> the id never came from this instance at all;
+#                                           the search moves to the wire, not to memory
+#      array held                        -> the agent and the plugin disagree; go to check 3
 
-# 3. and the id it chose really is one the host holds
-pwsh tools\creatures.ps1 -ProcId <host>   # 0xNN must be in this list
+# 3. THE PLUGIN'S OWN VERDICT on the same id, through the engine, on the game thread.
+pwsh toolslockpoke.ps1 -ProcId <host> console 'slay #35'
+#    "no object 0x35 in this module" = the plugin cannot resolve it either (agree)
+#    a kill, or any other refusal   = the plugin CAN resolve it (disagree with check 2)
+
+# 4. The end-to-end result, once 1-3 agree.
+pwsh toolslockpoke.ps1 -ProcId <client> console 'slay'
+#    client: "queued a killing blow for the owner, keyed by owner id 0xNN"
+#    host plugin log: "combat: applied 100000 of a peer's damage to 0xNN"
+#                     and NOT "which does not resolve here"
 ```
 
-Reading the result: `does not resolve here` still appearing for the id the client just named
-would mean the confirmation is not reaching the census (check `[census]` fired at all);
-`no creature here answers to that` on the CLIENT would mean `MirrorIds` did not translate —
-the id was the owner's and the mirror had no stand-in for it.
+Please paste checks 1-3 verbatim even if they look boring — the previous round's evidence was
+three outside views that disagreed, and these are the same question asked from inside each
+instance.
 
 ### Still unverified — item identity apply
 

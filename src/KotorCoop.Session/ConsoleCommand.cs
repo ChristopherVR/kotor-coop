@@ -61,6 +61,17 @@ public enum CoopCommandKind
     Where,
 
     /// <summary>
+    /// Dump the enemy census and the engine's own verdict on every id in it — the diagnostic
+    /// for "an id in the census names nothing its own publisher can resolve".
+    ///
+    /// Answers from whichever side it is typed on: on the fight's OWNER it reports what this
+    /// instance is publishing and whether its own object array holds each id; on a mirroring
+    /// instance it reports what the owner sent and which of those ids resolve locally.
+    /// An optional id in <see cref="CoopCommand.Address"/> narrows it to one creature.
+    /// </summary>
+    Census,
+
+    /// <summary>
     /// Inject a transport fault on the live session so a disconnect can be reproduced with
     /// nobody touching a cable. The sub-verb is in <see cref="CoopCommand.Address"/> and its
     /// argument (percentage, milliseconds, seconds, direction) in
@@ -292,6 +303,12 @@ public static class ConsoleCommand
 
             case "where":
                 return new CoopCommand(CoopCommandKind.Where);
+
+            // An optional id turns the dump into a single question about one creature, which
+            // is what an argument about a specific id actually needs.
+            case "census":
+                return new CoopCommand(
+                    CoopCommandKind.Census, Address: rest.Length > 0 ? rest[0] : null);
 
             // ---- staging cheats -------------------------------------------------
 
@@ -567,7 +584,7 @@ public static class ConsoleCommand
 
     /// <summary>One-line help listing the commands, for the overlay and dashboard.</summary>
     public const string HelpText =
-        "commands: servers | connect <ip|#n> [password] | password <pw> | host | disconnect | reconnect | say <msg> | clear | status | warp <module> | who | where | cheats | netsim <off|status|loss|latency|blackout> | help";
+        "commands: servers | connect <ip|#n> [password] | password <pw> | host | disconnect | reconnect | say <msg> | clear | status | warp <module> | who | where | census | cheats | netsim <off|status|loss|latency|blackout> | help";
 
     /// <summary>
     /// The staging-cheat listing. Two halves on purpose: what co-op adds, and what the
@@ -590,6 +607,7 @@ public static class ConsoleCommand
         // is only the line that tells a player it is there.
         "test harness:",
         "  netsim <off|status|loss <pct>|latency <ms> <jitter>|blackout <s> [in|out|both]>",
+        "  census [id]         what my enemy census holds, and what my own engine says of each id",
         "retail console cheats, already co-op-safe (they touch only your game):",
         "  giveitem <resref> | givecredits <n> | addexp <n> | addlevel | heal",
         "  revealmap | infiniteuses | invulnerability | whereami | bright | turbo",

@@ -392,6 +392,10 @@ public sealed class CoopCommandDispatcher(
 
                 break;
 
+            case CoopCommandKind.Census:
+                Census(command.Address);
+                break;
+
             // ---- staging cheats ---------------------------------------------
 
             case CoopCommandKind.God:
@@ -668,6 +672,131 @@ public sealed class CoopCommandDispatcher(
 
         distance = best;
         return objectId != 0;
+    }
+
+    /// <summary>
+    /// Dumps the enemy census beside the engine's own verdict on every id in it.
+    ///
+    /// ⚠ THIS EXISTS BECAUSE THE ARGUMENT COULD NOT BE SETTLED FROM OUTSIDE. The failure it
+    /// serves is "an id in the census names nothing its own publisher can resolve", and the
+    /// evidence for it came from three places that disagreed — a peer's console reply, the
+    /// other instance's plugin log, and a `creatures.ps1` scan — with no way to ask either
+    /// side what it thought it was publishing. Every branch of that question is answered here,
+    /// on demand, from the side that knows:
+    ///
+    /// <list type="bullet">
+    /// <item>the liveness gate's state, including the two cases in which it checks NOTHING;</item>
+    /// <item>how many published ids this engine's own object array holds, and which do not;</item>
+    /// <item>for a disputed id, whether it is in the raw memory scan, in the object array, and
+    /// in the census — "in the scan but not the array" is a ghost the gate should have caught,
+    /// while "in neither" means the id never came from this instance at all.</item>
+    /// </list>
+    /// </summary>
+    private void Census(string? token)
+    {
+        if (_kotor is null)
+        {
+            Reply("census: only the KOTOR bridge can answer that");
+            return;
+        }
+
+        bool mirror = manager.Current is { IsEnemyAuthority: false };
+        string module = bridge.TryReadLocalState(out PlayerState here) ? here.Module : string.Empty;
+
+        // Always first, and always printed: this is the line whose ABSENCE from a log was
+        // ambiguous between "no ghosts", "never ran" and "never wired".
+        Reply($"census: {_kotor.LastCensusGate.Describe()}");
+
+        // The owner is asked what it WOULD publish right now (the same call the pump makes,
+        // gate and all); a mirror is asked what it was sent.
+        IReadOnlyList<EnemyState> census = mirror
+            ? manager.Current?.GetEnemies(module) ?? []
+            : bridge.ReadEnemies([]);
+
+        string source = mirror ? "the owner's census" : "my own census";
+
+        List<uint> unresolved = [];
+        foreach (EnemyState enemy in census)
+        {
+            if (!_kotor.TryResolveObjectHere(enemy.ObjectId, out _))
+            {
+                unresolved.Add(enemy.ObjectId);
+            }
+        }
+
+        Reply(
+            $"census: {source} holds {census.Count} id(s) for '{(module.Length > 0 ? module : "?")}'; "
+            + $"{census.Count - unresolved.Count} resolve in MY engine, {unresolved.Count} do not"
+            + (mirror
+                ? " (a mirror is not expected to resolve them all - materialised stand-ins carry local ids)"
+                : " (as the owner, ANY that do not is the defect)"));
+
+        if (!mirror && _kotor.CensusPublishRejected.Count > 0)
+        {
+            Reply(
+                "census: the publish gate refused "
+                + string.Join(", ", _kotor.CensusPublishRejected.Select(id => $"0x{id:X}"))
+                + " on the last pass");
+        }
+
+        foreach (uint id in unresolved.Take(CensusDetailLines))
+        {
+            Reply($"census: {DescribeId(id, census)}");
+        }
+
+        if (unresolved.Count > CensusDetailLines)
+        {
+            Reply($"census: ...and {unresolved.Count - CensusDetailLines} more");
+        }
+
+        if (!string.IsNullOrWhiteSpace(token) && ConsoleCommand.TryParseObjectId(token, out uint asked))
+        {
+            Reply($"census: {DescribeId(asked, census)}");
+        }
+    }
+
+    /// <summary>How many per-id lines a dump prints before summarising. A console overlay is
+    /// a few lines tall; a log can take more, but an unbounded dump helps nobody.</summary>
+    private const int CensusDetailLines = 8;
+
+    /// <summary>
+    /// One id, checked against all three lists at once: the engine's object array (the
+    /// authority), the raw memory scan (what a vtable sweep sees, ghosts included), and the
+    /// census itself. Their DISAGREEMENT is the finding, so they are printed together.
+    /// </summary>
+    private string DescribeId(uint objectId, IReadOnlyList<EnemyState> census)
+    {
+        string array = _kotor!.TryResolveObjectHere(objectId, out nint address)
+            ? $"object array: held at 0x{address:X}"
+            : "object array: NOT HELD (nothing here answers to it)";
+
+        CreatureRef? scanned = null;
+        foreach (CreatureRef creature in _kotor.UnconfirmedCreatureScan())
+        {
+            if (creature.ObjectId == objectId)
+            {
+                scanned = creature;
+                break;
+            }
+        }
+
+        string scan = scanned is null
+            ? "raw scan: absent"
+            : $"raw scan: 0x{scanned.Address:X} '{(scanned.Tag.Length > 0 ? scanned.Tag : "untagged")}'";
+
+        string listed = "census: absent";
+        foreach (EnemyState enemy in census)
+        {
+            if (enemy.ObjectId == objectId)
+            {
+                listed = $"census: hp {enemy.CurrentHealth}/{enemy.MaxHealth}"
+                    + $" at {enemy.Position.X:F1},{enemy.Position.Y:F1}"
+                    + (enemy.Dead ? " (dead)" : string.Empty);
+                break;
+            }
+        }
+
+        return $"0x{objectId:X}  {array}  |  {scan}  |  {listed}";
     }
 
     /// <summary>

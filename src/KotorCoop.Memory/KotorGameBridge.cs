@@ -632,19 +632,30 @@ public sealed class KotorGameBridge : IGameBridge
     private List<CreatureRef>? _liveCache;
     private long _liveCacheAtMs;
 
-    /// <summary>Last ghost count reported, so the log says something only when it changes.</summary>
-    private int _ghostsLogged = -1;
-
-    /// <summary>Whether the "the gate confirmed nothing" line has been said. Once is enough:
-    /// it is a standing condition, not an event.</summary>
-    private bool _gateDistrustLogged;
-
     /// <summary>
     /// Optional sink for census-liveness notes. An id that the publisher's own engine cannot
     /// resolve MUST NOT leave silently — a silent skip on the receiving end is what made this
     /// whole failure class invisible for weeks (see PeerDamageController).
+    ///
+    /// ⚠ AND SILENCE MUST NOT BE AMBIGUOUS EITHER. The first version of this only spoke when
+    /// it dropped something, so "no line in the log" meant any of "no ghosts", "the gate never
+    /// ran", or "the sink was never wired" — and a whole live round was spent not being able
+    /// to tell those apart. Every pass now reports, including the do-nothing ones, on a
+    /// heartbeat (see <see cref="GateHeartbeatMs"/>).
     /// </summary>
     public Action<string>? CensusDiagnostic { get; set; }
+
+    /// <summary>What the last liveness pass did. Read by the <c>census</c> console verb, so
+    /// the state can be asked for on demand instead of waited for in a log.</summary>
+    public CensusGateReport LastCensusGate { get; private set; } =
+        new(CensusGateState.NeverRun, 0, 0, 0, 0, []);
+
+    /// <summary>However quiet the state is, say it at least this often. A log that has said
+    /// nothing for a minute is then provably a log whose agent is not running this code.</summary>
+    private const int GateHeartbeatMs = 30_000;
+
+    private long _gateSpokeAtMs;
+    private string _gateLastLine = string.Empty;
 
     /// <summary>
     /// Drops the creature-shaped memory the engine does not actually own.
@@ -656,8 +667,18 @@ public sealed class KotorGameBridge : IGameBridge
     /// </summary>
     private List<CreatureRef> Confirm(List<CreatureRef> scanned)
     {
-        if (scanned.Count == 0 || !EngineGlobals.TryGetServerObjectArray(_memory, out nint objectArray))
+        if (scanned.Count == 0)
         {
+            Report(new CensusGateReport(CensusGateState.NothingToCheck, 0, 0, 0, 0, []));
+            return scanned;
+        }
+
+        if (!EngineGlobals.TryGetServerObjectArray(_memory, out nint objectArray))
+        {
+            // ⚠ THIS CASE USED TO BE SILENT, and it is the one that most resembles the bug:
+            // the census goes out ungated and nothing says so. It is legitimate at the main
+            // menu and mid-transition; in a loaded world it means the pointer chain is wrong.
+            Report(new CensusGateReport(CensusGateState.NoObjectArray, 0, scanned.Count, scanned.Count, 0, []));
             return scanned;
         }
 
@@ -666,36 +687,147 @@ public sealed class KotorGameBridge : IGameBridge
 
         List<CreatureRef> live = gate.Confirm(scanned, c => (c.ObjectId, c.Address), out LiveObjectVerdict verdict);
 
-        if (!verdict.Trusted)
+        // A sample of what was dropped, because "7 ghosts" and "7 ghosts, and 0x35 was one of
+        // them" are different findings and only the second one settles an argument.
+        uint[] droppedIds = [];
+        if (verdict.Dropped > 0)
         {
-            if (!_gateDistrustLogged)
-            {
-                _gateDistrustLogged = true;
-                CensusDiagnostic?.Invoke(
-                    $"census: the object array at 0x{objectArray:X} confirmed NONE of {scanned.Count} "
-                    + "scanned creatures - distrusting the check and publishing them all "
-                    + "(offsets or a rebuild, not an empty world)");
-            }
-
-            return live;
+            HashSet<nint> keptAddresses = [.. live.Select(c => c.Address)];
+            droppedIds =
+            [
+                .. scanned.Where(c => !keptAddresses.Contains(c.Address))
+                    .Select(c => c.ObjectId)
+                    .Take(DroppedIdSample),
+            ];
         }
 
-        _gateDistrustLogged = false;
-
-        if (verdict.Dropped != _ghostsLogged)
-        {
-            _ghostsLogged = verdict.Dropped;
-
-            if (verdict.Dropped > 0)
-            {
-                CensusDiagnostic?.Invoke(
-                    $"census: {verdict.Dropped} of {scanned.Count} creature-shaped objects are not in "
-                    + "the engine's object array (destroyed bodies whose memory still reads); "
-                    + $"publishing the {verdict.Kept} it can resolve");
-            }
-        }
+        Report(new CensusGateReport(
+            verdict.Trusted ? CensusGateState.Confirmed : CensusGateState.Distrusted,
+            objectArray,
+            scanned.Count,
+            verdict.Kept,
+            verdict.Dropped,
+            droppedIds));
 
         return live;
+    }
+
+    /// <summary>How many dropped ids are named in the report. Enough to recognise a specific
+    /// id in an argument, few enough that the line stays one line.</summary>
+    private const int DroppedIdSample = 8;
+
+    /// <summary>Publishes the gate's state and says it out loud when it changes — or every
+    /// <see cref="GateHeartbeatMs"/> regardless, so silence can only ever mean "this code is
+    /// not running".</summary>
+    private void Report(CensusGateReport report)
+    {
+        LastCensusGate = report;
+
+        string line = report.Describe();
+        long nowMs = Environment.TickCount64;
+
+        if (line == _gateLastLine && nowMs - _gateSpokeAtMs < GateHeartbeatMs)
+        {
+            return;
+        }
+
+        _gateLastLine = line;
+        _gateSpokeAtMs = nowMs;
+        CensusDiagnostic?.Invoke(line);
+    }
+
+    /// <summary>
+    /// The last-mile gate, applied to the list that is actually PUBLISHED.
+    ///
+    /// ⚠ Deliberately a second application of the same rule, and not redundant. The list this
+    /// filters has been through a cache and a cap since it was confirmed, and after a live
+    /// round spent asking "is the gate even on the publish path?" the answer needs to be
+    /// structural rather than argued: nothing leaves this method that the engine's own object
+    /// array did not confirm at the moment of leaving.
+    /// </summary>
+    private List<EnemyState> ConfirmPublished(List<EnemyState> enemies)
+    {
+        CensusPublishRejected = [];
+
+        if (enemies.Count == 0 || !EngineGlobals.TryGetServerObjectArray(_memory, out nint objectArray))
+        {
+            return enemies;
+        }
+
+        LiveObjectGate gate = new(id =>
+            EngineGlobals.TryResolveServerObject(_memory, objectArray, id, out nint address) ? address : 0);
+
+        List<EnemyState> kept = gate.ConfirmIds(enemies, e => e.ObjectId, out LiveObjectVerdict verdict);
+
+        // Same self-distrust as the scan gate: resolving none of a full census is a broken
+        // check, not an empty world.
+        if (!verdict.Trusted)
+        {
+            Speak(
+                $"census publish: the object array resolved NONE of {enemies.Count} ids - "
+                + "publishing them all unchecked (the check is broken, not the world)");
+            return kept;
+        }
+
+        if (verdict.Dropped == 0)
+        {
+            return kept;
+        }
+
+        HashSet<uint> keptIds = [.. kept.Select(e => e.ObjectId)];
+        List<uint> rejected = [.. enemies.Where(e => !keptIds.Contains(e.ObjectId)).Select(e => e.ObjectId)];
+
+        CensusPublishRejected = [.. rejected.Take(DroppedIdSample)];
+        Speak(
+            $"census publish: refusing to publish {rejected.Count} id(s) this engine cannot "
+            + $"resolve ({string.Join(", ", CensusPublishRejected.Select(id => $"0x{id:X}"))}"
+            + (rejected.Count > CensusPublishRejected.Count ? ", ..." : string.Empty)
+            + $") - {kept.Count} published");
+
+        return kept;
+    }
+
+    private string _publishLastLine = string.Empty;
+    private long _publishSpokeAtMs;
+
+    /// <summary>Says a publish-gate line when it changes, and on the same heartbeat as the
+    /// scan gate otherwise. The census runs several times a second — an unthrottled line here
+    /// would bury the log it is meant to make readable.</summary>
+    private void Speak(string line)
+    {
+        long nowMs = Environment.TickCount64;
+
+        if (line == _publishLastLine && nowMs - _publishSpokeAtMs < GateHeartbeatMs)
+        {
+            return;
+        }
+
+        _publishLastLine = line;
+        _publishSpokeAtMs = nowMs;
+        CensusDiagnostic?.Invoke(line);
+    }
+
+    /// <summary>Ids the last publish refused, for the <c>census</c> verb.</summary>
+    public IReadOnlyList<uint> CensusPublishRejected { get; private set; } = [];
+
+    /// <summary>The engine's own id → object answer, for callers that want to check an id
+    /// this instance did not scan (the <c>census</c> verb asks it about a peer's ids).</summary>
+    public bool TryResolveObjectHere(uint objectId, out nint address) =>
+        EngineGlobals.TryResolveServerObject(_memory, objectId, out address);
+
+    /// <summary>
+    /// The creature scan BEFORE the liveness gate — what memory LOOKS like, as opposed to what
+    /// the engine owns.
+    ///
+    /// Diagnostics only; publishing from this is the bug the gate exists for. It is here
+    /// because the difference between the two lists is the whole question when an id is
+    /// disputed: in the raw scan but not the array means a ghost the gate should have caught,
+    /// while in neither means the id never came from this instance at all.
+    /// </summary>
+    public IReadOnlyList<CreatureRef> UnconfirmedCreatureScan()
+    {
+        EnumerateCreatures();
+        return _creatureCache ?? [];
     }
 
     /// <summary>Drops the cached creature list — call when the world changes underneath it.</summary>
@@ -703,8 +835,7 @@ public sealed class KotorGameBridge : IGameBridge
     {
         _creatureCache = null;
         _liveCache = null;
-        _ghostsLogged = -1;
-        _gateDistrustLogged = false;
+        _gateLastLine = string.Empty;
         _scanCache.Clear();
     }
 
@@ -3744,7 +3875,10 @@ public sealed class KotorGameBridge : IGameBridge
             enemies.Add(candidates[i].State);
         }
 
-        return enemies;
+        // The last word before these ids leave this instance: every one of them must be an id
+        // this engine can resolve, because that is the only thing that makes it an id a peer
+        // can key a forwarded kill or a damage debt by.
+        return ConfirmPublished(enemies);
     }
 
 

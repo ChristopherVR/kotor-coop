@@ -42,6 +42,7 @@ internal static class ConsoleVerbCatalog
         ("who", "who"),
         ("peers", "peers"),
         ("where", "where"),
+        ("census", "census [id]  (what my enemy census holds, and what my engine says of it)"),
         ("netsim", "netsim <off|status|loss <pct>|latency <ms> [jitter]|blackout <secs> [in|out|both]>"),
 
         // ---- staging cheats ------------------------------------------------------
