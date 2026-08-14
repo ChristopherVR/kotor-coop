@@ -14,15 +14,27 @@
 #   pwsh tools\blockpoke.ps1 -ProcId 1234 cheat           # read the answer + detail
 #   pwsh tools\blockpoke.ps1 -ProcId 1234 console 'netsim blackout 10'
 #   pwsh tools\blockpoke.ps1 -ProcId 1234 console         # read the latest agent reply
+#   pwsh tools\blockpoke.ps1 -ProcId 1234 item            # the cheat channel's item fields
 #
 # The `console` verb writes the same agent<-plugin channel the in-game ~ console writes,
 # which is the ONLY way to drive a co-op verb unattended: injected keystrokes never reach
 # this game (docs/live-verification.md), so without this every console-routed feature —
 # netsim, the staging cheats, status — was live-testable by a human and nobody else.
+#
+# The item-identity harness rides that same channel, which is why it has no verb of its own
+# here (its arguments are named, and this script's Arg1/Arg2 pair cannot carry them):
+#
+#   console 'items'                              list live items with ids and identities
+#   console 'setitem 0x131 stack=20 charges=3'   make one worth sending
+#   console 'dropitem 0x131'                     replicate it, identity and all
+#   console 'item 0x131'                         read one back (run this on the RECEIVER)
+#
+# `item` below is the raw view of what the last setitem put on the wire, for when the answer
+# and the request need to be compared byte for byte.
 param(
     [string]$ProcessName = 'swkotor',
     [int]$ProcId = 0,
-    [Parameter(Position = 0)][ValidateSet('state', 'travel', 'journal', 'pause', 'browser', 'death', 'hitphantom', 'combat', 'talk', 'walk', 'dialogue', 'attack', 'encounters', 'cheat', 'console')]
+    [Parameter(Position = 0)][ValidateSet('state', 'travel', 'journal', 'pause', 'browser', 'death', 'hitphantom', 'combat', 'talk', 'walk', 'dialogue', 'attack', 'encounters', 'cheat', 'console', 'item')]
     [string]$Command = 'state',
     [Parameter(Position = 1)][string]$Arg1 = '',
     [Parameter(Position = 2)][int]$Arg2 = 0
@@ -167,6 +179,23 @@ switch ($Command) {
         "  last command: '{0}'" -f (Ascii 0x9F8 96)
         "  reply:        '{0}'" -f (Ascii 0xA5C 96)
     }
+    'item' {
+        # The raw item-identity half of the cheat channel (SharedBlock version 41,
+        # 0x33B0..0x33C0). 4294967295 in a field means "the request left this one alone" —
+        # which is not the same as zero, and confusing the two is how a poked stack would
+        # silently empty a medpac's charges.
+        #
+        # Also prints the plugin's answer, because for setitem the answer IS the measurement:
+        # it reports what the item reads AFTER the write, not what the write asked for.
+        $status = U32 0x3368
+        if ($status -gt 0x7FFFFFFF) { $status = [int64]$status - 4294967296 }
+
+        "  request: kind {0}  target 0x{1:X}  stack {2}" -f (U32 0x332C), (U32 0x3330), (U32 0x3334)
+        "  fields:  charges {0}  maxCharges {1}  upgrades 0x{2:X}  flags 0x{3:X}" -f `
+            (U32 0x33B0), (U32 0x33B4), (U32 0x33B8), (U32 0x33BC)
+        "  answer:  serial {0}  applied {1}  status {2}" -f (U32 0x3328), (U32 0x3364), $status
+        "  detail:  '{0}'" -f (Ascii 0x336C 64)
+    }
     'cheat' {
         # The staging cheats, without needing the console or a keyboard — which is the whole
         # point, since injected input does not reach this game (see docs/live-verification.md).
@@ -176,7 +205,7 @@ switch ($Command) {
         $kinds = @{ 'god' = 1; 'topup' = 2; 'standup' = 3; 'slay' = 4 }
         if ($Arg1.Length -gt 0) {
             if (-not $kinds.ContainsKey($Arg1)) {
-                Write-Error "cheat kinds: $($kinds.Keys -join ', ')  (tp/dropitem need the console)"
+                Write-Error "cheat kinds: $($kinds.Keys -join ', ')  (tp/dropitem/setitem need the console)"
                 exit 1
             }
 
@@ -189,6 +218,14 @@ switch ($Command) {
             WU32 0x3330 ([uint32]$target)
             WU32 0x3334 ([uint32]$amount)
             WAscii 0x3344 '' 32
+
+            # The setitem fields go back to "unchanged" so a leftover value from an earlier
+            # poke cannot ride along with an unrelated kind.
+            WU32 0x33B0 0xFFFFFFFF
+            WU32 0x33B4 0xFFFFFFFF
+            WU32 0x33B8 0xFFFFFFFF
+            WU32 0x33BC 0xFFFFFFFF
+
             WU32 0x3368 0
             WAscii 0x336C '' 64
             WU32 0x3328 ((U32 0x3328) + 1)

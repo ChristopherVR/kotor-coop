@@ -724,6 +724,16 @@ internal sealed unsafe class SharedBlockView(byte* baseAddress)
     /// <summary>Pointer to the null-terminated tag/resref argument (32 bytes).</summary>
     public byte* CheatText => baseAddress + SharedBlock.OffsetCheatText;
 
+    /// <summary>Agent -&gt; plugin, <see cref="SharedBlock.CheatKindSetItem"/> only.
+    /// <see cref="SharedBlock.CheatFieldUnchanged"/> means "leave this field as it is".</summary>
+    public uint CheatItemCharges => *U32(SharedBlock.OffsetCheatCharges);
+
+    public uint CheatItemMaxCharges => *U32(SharedBlock.OffsetCheatMaxCharges);
+
+    public uint CheatItemUpgrades => *U32(SharedBlock.OffsetCheatUpgrades);
+
+    public uint CheatItemFlags => *U32(SharedBlock.OffsetCheatItemFlags);
+
     public uint CheatApplied
     {
         get => *U32(SharedBlock.OffsetCheatApplied);

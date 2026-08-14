@@ -278,7 +278,7 @@ a re-announcement that knows the identity replaces one that does not; a stock re
 never overwrites a known one; and an authoritative host snapshot decides *which* items are on
 the ground but cannot *forget* an identity (`GroundItemStore.Drop` / `ReplaceAll`).
 
-**Shared block (version 39).** The item slot's stride was already `0x30` and only `0x24`
+**Shared block (version 39, now 41).** The item slot's stride was already `0x30` and only `0x24`
 bytes were used, so identity lives in the tail: `upgrades u32 @0x24`, `stackSize u32 @0x28`,
 and `charges | maxCharges<<8 | flags<<16` packed into one dword `@0x2C`. One dword rather
 than three bytes because the agent writes each field with a separate `WriteProcessMemory`
@@ -295,7 +295,11 @@ which is a worse trade than one stale floor item.
 `KotorGameBridge.PluginSignature`'s embedded `27 00 00 00`. The layout is technically
 backward-compatible (an old agent leaves the tail zeroed, which reads as "unknown" and
 changes nothing), but the *meaning* of those bytes changed, and a mixed pair silently losing
-item identity is worse than a mixed pair refusing to find each other.
+item identity is worse than a mixed pair refusing to find each other. It has since moved to
+**41** (`29 00 00 00`) for the four `setitem` fields at `0x33B0..0x33C0` — see §9.
+`ItemHarnessTests.TheBlockVersionIsTheSameNumberInBothHalves` compares the two literals,
+because nothing at runtime can: the version is *inside* the pattern the agent scans for, so a
+half-bump presents as "plugin shared block not found" and reads like a broken install.
 
 **Apply.** `Odyssey.ApplyItemIdentity` runs on the frame hook straight after
 `SpawnItemOnFloor` returns an object id: resolve → vtable check → five field writes. No
@@ -313,28 +317,128 @@ machine.
 
 ---
 
-## 8. NEEDS-LIVE
+## 8. Why the apply path could not be reached, and what fixed it (2026-08-15)
 
-Nothing here was measured in a running game. In order of what would invalidate the most:
+The first live pass could not exercise the apply at all. The symptom, recorded in
+`docs/live-verification.md`: the plugin logs
+`item slot 0: spawned item 0x10001 as object 0x131`, so the ground body genuinely IS object
+`0x131` — and four seconds later `drop #131` answers
+`drop: object 0x131 is not a readable item here`.
 
-1. **The apply lands.** Drop an item with a known identity from one instance and read the
-   receiving instance's `CSWSItem` back: `+0x28C` == the sent stack size, `+0x294` == the
-   sent mask, `+0x258` == the sent charges, `+0x288` bit 0 == the sent identified bit. The
-   plugin log line `item slot N: identity applied to 0xID (...)` is the marker to grep for;
-   `identity SKIPPED` means the vtable check refused, which is the fail-safe firing.
-2. **The read is reading an item.** `TryReadItemIdentity` on a known live item (use the
-   agent's own item scan to pick one) should return the values the inventory screen shows.
-   The specific risk is the scan handing back an address whose `+0x14` is an id but which is
-   not the `CSWSItem` base; the re-check guards it, so the failure mode is a false "unknown",
-   not a bad write.
-3. **An upgraded weapon really does reconstitute from mask alone.** Build a lightsaber with
-   two upgrade parts at a workbench, drop it via `#<objectId>` on the dashboard, and confirm
-   the receiving instance's copy shows the same upgrade slots filled and the same stats. This
-   is the one claim in §3 that is an inference from the *consumer* rather than a direct
-   observation of the result.
-4. **A stack survives.** Drop a stack of 20 grenades and confirm 20 arrive, and that picking
-   them up merges into the picker's inventory as 20 (`CSWSItem::MergeItem` `0x00553F90` is
-   the merge, and it is untouched by any of this).
-5. **The block version skew is clean.** After `build.ps1 -Install`, an agent from before this
+### 8.1 The root cause was an ORDER, not an offset
+
+`AgentDashboard.Drop` asked two questions joined by `||`:
+
+```csharp
+string liveResref = live.ItemResref(objectId);
+if (liveResref.Length == 0 || !live.TryReadItemIdentity(objectId, out identity))
+```
+
+`ItemResref` is a pure lookup in a cache it cannot populate. `TryReadItemIdentity` is the
+only method that could rebuild that cache. `||` short-circuits. So the one call able to go
+and look was never reached, and the caches were whatever a sweep had built when the agent
+attached — long before object `0x131` existed.
+
+The agent log times it exactly: the host attached at 08:11:54, the item was created at
+08:12:44, and the refusal came at 08:12:48. Nothing between those two moments could have
+re-swept, because `ReadEquippedResref` — the only other rebuild trigger — resolves the
+player's three equipped ids out of the cache and therefore never misses.
+
+**None of the reverse-engineering in this document was wrong.** The offsets, the vtable, the
+two-shape id resolve and the write sequence were all fine; a cache-refresh path was missing
+in front of them. That is worth saying plainly, because the obvious hypotheses — "a ground
+item is not a bare `CSWSItem`", "the vtable guard is rejecting it" — were both wrong, and
+both were checked:
+
+- **A ground item IS a bare `CSWSItem`.** `CreateItemOnFloor` builds one, and the plugin's
+  own floor probe resolves object `0x131` through `GetGameObject` and reads its possessor
+  field successfully on every frame it is alive.
+- **The vtable constant is right for THIS binary. VERIFIED.**
+  `CSWSItem::Constructor 0x005530A0` writes `mov dword [esi], 0x748DA0` at `0x005530EE` and
+  `mov dword [edi], 0x748CC0` at `0x005530F4`, where `edi = esi + 0x10`. So a `CSWSItem`
+  carries **two** vtable pointers — its own at `+0x00` and the embedded `CGameObject`'s at
+  `+0x10` (`CSWSItem_GameObject`, per `tools/kotor1_0_3.db`). That is why a vtable test
+  applied to the pointer `GetGameObject` hands back — which is the subobject — rejects every
+  item, the failure `Odyssey.GetItemFloorState`'s comment records, and why the same test
+  applied to the *resolved base* is correct. The same constructor writes the possessor
+  default at `0x0055315F` (`[esi+0x268]`), confirming `+0x268`.
+
+### 8.2 Three more defects in the same read path, all found by reading it
+
+- **The sweep silently truncated at 512 hits.** `PatternScanner.ScanAll` stops the moment it
+  has `limit` hits — mid-region, in ascending address order — so every item allocated above
+  the cut was invisible, and the item a test cares about is usually the one allocated last.
+  Now 4096, and `KotorGameBridge.LastItemScanNote` says when the cap was reached anyway.
+- **The refusal named neither half.** "not a readable item here" is the same sentence for a
+  wrong id, an unswept id, a freed item and an unreadable tag. Each now says which.
+- **`+0x28` is the Tag, and the tag is a PROXY for the resref.** VERIFIED from `SaveItem` at
+  `0x0055CCEE`, which writes `[esi+0x28]` under the GFF label at `0x747A28` = `"Tag"`. A live
+  `CSWSItem` does not retain its template name at all — `SaveItem` writes `BaseItem` and the
+  property list and never a `TemplateResRef`, because an item is rebuilt from its own fields.
+  Base-game blueprints set `Tag` to the resref in upper case (`g_w_blstrpstl001.uti` has
+  `Tag = G_W_BLSTRPSTL001`), which is what makes the proxy work and what a mod could break.
+
+---
+
+## 9. The unattended harness
+
+KOTOR has no drop UI and no workbench a script can reach, so an unattended run could produce
+a sender but never an *interesting* sender: every drop it could make named a blueprint, which
+by construction carries no identity. Fixing the read bug alone would therefore have bought a
+drop that still carried a stock identity — the second half of why the apply had never run.
+Four console verbs close the loop; all of them reach the game through
+`pwsh tools/blockpoke.ps1 -ProcId <pid> console '<line>'`.
+
+| Verb | Where it runs | What it is for |
+| --- | --- | --- |
+| `items [n]` | agent (ReadProcessMemory) | Every live `CSWSItem` the sweep can see, most interesting first, with id, tag, holder and identity. Prints the sweep's own account of itself first, because a short list has two very different causes. |
+| `setitem <id> [stack=N] [charges=N] [max=N] [upgrades=0xN] [identified=0\|1]` | plugin (game thread) | Pokes the named fields through **`Odyssey.ApplyItemIdentity`** — the same function an arriving item goes through — and answers with the fields read back. Naming no field is a pure read. |
+| `dropitem <resref\|0x131>` | agent → session | Announces a shared ground item. The `0x131` form sends a LIVE item's real identity. |
+| `item <id>` | agent (ReadProcessMemory) | Reads one item's fields back, from outside the game, independently of the plugin that wrote them. |
+
+Two independent readers is the point of the split: the plugin's read-back proves the write
+reached the address, and the agent's `item` proves the address holds the item.
+
+`dropitem` also changed meaning, and the old meaning was wrong. It used to file a `DropItem`
+staging cheat, which calls `CreateItemOnFloor` in the typist's own game — and nothing scans
+the floor for items to publish, so that drop reached no peer at all, while both the help text
+and `docs/research/console-cheats.md` §4 said "the item channel shares it". It now goes
+through the session's own drop, which is the thing that shares it; the local body then arrives
+the same way a peer's does, spawned by the plugin from the item slot with identity applied.
+
+### 9.1 Ids are hex and must say so
+
+`0x131` or `#131`. A bare `131` is refused, deliberately: it is both a legal resref and a
+legal decimal id, and reading it as decimal would aim at object `0x83` — a different object
+that will usually resolve, so the mistake would be silent.
+
+---
+
+## 10. NEEDS-LIVE
+
+**Still nothing in this document has been measured in a running game.** What changed is that
+it now *can* be, without a human at the controls. In order of what would invalidate the most:
+
+1. **The apply lands.** `setitem` on the sender, `dropitem 0x<id>`, then read the receiver.
+   Three witnesses have to agree: the sender's `setitem` answer, the receiver's plugin log
+   line `item slot N: identity applied to 0xID — asked for (...), item now reads (...)`, and
+   the receiver's own `item 0x<newId>`. `identity SKIPPED for 0xID — <reason>` means the
+   resolve refused and now names why.
+2. **The read is reading an item.** `items` on a loaded save should list items whose stack
+   sizes and charges match the inventory screen. The specific risk is the sweep handing back
+   an address whose `+0x14` is an id but which is not the `CSWSItem` base; the vtable+id
+   re-check at read time guards it, so the failure mode is a false "unknown", not a bad write.
+3. **An upgraded weapon really does reconstitute from mask alone.** `setitem <saber>
+   upgrades=0x5`, drop it, and confirm the receiving instance's copy shows the same upgrade
+   slots filled and the same stats. This is the one claim in §3 that is an inference from the
+   *consumer* rather than a direct observation of the result — and it is the reason `setitem`
+   can write the mask at all, since no script can install an upgrade.
+4. **A stack survives.** `setitem <grenades> stack=20`, drop, and confirm 20 arrive and that
+   picking them up merges into the picker's inventory as 20 (`CSWSItem::MergeItem`
+   `0x00553F90` is the merge, and it is untouched by any of this).
+5. **The sweep is not truncating.** `items` reports `⚠ the sweep STOPPED at its 4096 cap` if
+   it ever does. Seeing that line once would mean the cap is the wrong shape of answer.
+6. **The block version skew is clean.** After `build.ps1 -Install`, an agent from before this
    change must report "plugin shared block not found" rather than attaching and writing the
-   wrong offsets. That is the intended behaviour of the bump, and it is worth seeing once.
+   wrong offsets. That is the intended behaviour of the bump (40 → 41 for the four `setitem`
+   fields at `0x33B0..0x33C0`), and it is worth seeing once.

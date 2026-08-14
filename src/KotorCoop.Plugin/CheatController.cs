@@ -116,6 +116,8 @@ internal sealed unsafe class CheatController(SharedBlockView block)
 
             case SharedBlock.CheatKindStageMovie:
                 StageMovie();
+            case SharedBlock.CheatKindSetItem:
+                SetItem();
                 break;
 
             default:
@@ -688,6 +690,141 @@ internal sealed unsafe class CheatController(SharedBlockView block)
         }
 
         return length == 0 ? string.Empty : Encoding.ASCII.GetString(text, length);
+    /// Reads one live item's per-instance identity, and pokes whichever of the five fields
+    /// the request named — through <see cref="Odyssey.ApplyItemIdentity"/>, the very function
+    /// the ground-item channel calls on a peer's dropped item.
+    ///
+    /// ⚠ Two jobs on purpose, and the same code path for both. A request that names no field
+    /// is a pure read; a request that names some reads first, overlays them, and writes the
+    /// whole set back — so the "leave this alone" case is a value the writer was handed
+    /// rather than a branch inside the writer. That matters because the writer is the thing
+    /// under test: a `setitem` that took a different route to memory would prove nothing
+    /// about what an arriving item gets.
+    ///
+    /// Why a staging cheat is the right shape for this. The apply path only ever runs on an
+    /// item the far side has genuinely modified, and KOTOR gives a script no way to modify
+    /// one: there is no drop UI, the workbench is a mouse-driven panel, and a blueprint
+    /// spawned by `dropitem` is stock by definition. So an unattended run could produce a
+    /// SENDER but never an interesting sender, which is precisely why the feature shipped
+    /// with its whole apply half unmeasured. This makes the interesting sender.
+    ///
+    /// The answer always reports the fields READ BACK out of the item afterwards, never the
+    /// values that were asked for.
+    /// </summary>
+    private void SetItem()
+    {
+        uint itemId = block.CheatTarget;
+        if (itemId is 0 or Odyssey.ObjectInvalid)
+        {
+            Answer(SharedBlock.CheatStatusNoTarget, "setitem needs an item object id");
+            return;
+        }
+
+        if (!Odyssey.TryReadItemIdentityFields(itemId, out Odyssey.ItemIdentityFields before))
+        {
+            // The resolve note names what it saw — no such object, an id at neither of the
+            // two layouts' offsets, or a vtable belonging to some other class entirely.
+            Answer(SharedBlock.CheatStatusNoTarget, Odyssey.LastItemResolveNote);
+            return;
+        }
+
+        int stack = block.CheatAmount;
+        uint charges = block.CheatItemCharges;
+        uint maxCharges = block.CheatItemMaxCharges;
+        uint upgrades = block.CheatItemUpgrades;
+        uint wireFlags = block.CheatItemFlags;
+
+        bool changes = stack > 0
+            || charges != SharedBlock.CheatFieldUnchanged
+            || maxCharges != SharedBlock.CheatFieldUnchanged
+            || upgrades != SharedBlock.CheatFieldUnchanged
+            || wireFlags != SharedBlock.CheatFieldUnchanged;
+
+        if (!changes)
+        {
+            Answer(SharedBlock.CheatStatusApplied, Describe(itemId, before));
+            return;
+        }
+
+        // The engine's own bit numbers going in, the wire's flag numbers coming out of the
+        // request: ApplyItemIdentity takes the WIRE shape (it is fed by the block's item
+        // slot), so an unchanged flags field has to be re-encoded from the item's live bits
+        // rather than passed through.
+        uint flags = wireFlags != SharedBlock.CheatFieldUnchanged
+            ? wireFlags | SharedBlock.ItemIdentityKnown
+            : ToWireFlags(before.BitFlags);
+
+        bool applied = Odyssey.ApplyItemIdentity(
+            itemId,
+            upgrades != SharedBlock.CheatFieldUnchanged ? upgrades : before.Upgrades,
+            stack > 0 ? (uint)stack : before.StackSize,
+            charges != SharedBlock.CheatFieldUnchanged ? charges : before.Charges,
+            maxCharges != SharedBlock.CheatFieldUnchanged ? maxCharges : before.MaxCharges,
+            flags,
+            out Odyssey.ItemIdentityFields after);
+
+        if (!applied)
+        {
+            // It resolved a moment ago, so this is the interesting failure: something freed
+            // the item between the read and the write. Say that rather than repeating "no
+            // target", which would read as a typo in the id.
+            Answer(
+                SharedBlock.CheatStatusEngineRefused,
+                $"0x{itemId:X} stopped resolving mid-poke: {Odyssey.LastItemResolveNote}");
+            return;
+        }
+
+        // The full before/after goes to the LOG, where there is room for it, and the short
+        // "what it holds now" goes in the block's 64-byte detail field. Splitting them is not
+        // cosmetic: SetCheatDetail truncates without complaint, and the field it would have
+        // cut off is the upgrade mask — the one number this whole feature exists to carry.
+        PluginHost.Log(
+            $"setitem 0x{itemId:X}: stack {before.StackSize}->{after.StackSize}, "
+            + $"charges {before.Charges}/{before.MaxCharges}->{after.Charges}/{after.MaxCharges}, "
+            + $"upgrades 0x{before.Upgrades:X}->0x{after.Upgrades:X}, "
+            + $"bits 0x{before.BitFlags:X}->0x{after.BitFlags:X}, "
+            + $"possessor 0x{after.Possessor:X}");
+
+        Answer(SharedBlock.CheatStatusApplied, Describe(itemId, after));
+    }
+
+    /// <summary>
+    /// One item's state in a sentence short enough to survive the block's 64-byte detail
+    /// field, worst case included: a 0x7FFFFFFF id with every field at its maximum still
+    /// fits. Hex without the 0x prefix for the two mask fields, because those four saved
+    /// characters are the difference.
+    /// </summary>
+    private static string Describe(uint itemId, Odyssey.ItemIdentityFields fields) =>
+        $"0x{itemId:X}: stk {fields.StackSize} chg {fields.Charges}/{fields.MaxCharges} "
+        + $"upg {fields.Upgrades:X} bits {fields.BitFlags:X}";
+
+    /// <summary>
+    /// The engine's +0x288 bits as the wire's identity flags. The inverse of what
+    /// <see cref="Odyssey.ApplyItemIdentity"/> does on the way in, and it deliberately covers
+    /// only the three bits this channel carries — the other five real bits in that dword
+    /// (dropable, pickpocketable, new-item, DELETING) are engine bookkeeping that
+    /// docs/research/item-identity.md §5 explains we must not move.
+    /// </summary>
+    private static uint ToWireFlags(uint bits)
+    {
+        uint flags = SharedBlock.ItemIdentityKnown;
+
+        if ((bits & (1u << 0)) != 0)
+        {
+            flags |= SharedBlock.ItemIdentityIdentified;
+        }
+
+        if ((bits & (1u << 5)) != 0)
+        {
+            flags |= SharedBlock.ItemIdentityStolen;
+        }
+
+        if ((bits & (1u << 6)) != 0)
+        {
+            flags |= SharedBlock.ItemIdentityNonEquippable;
+        }
+
+        return flags;
     }
 
     /// <summary>Writes the answer where both the agent and the log will find it. Status and

@@ -147,6 +147,41 @@ public static class StageMovieModes
 
     /// <summary>Report what is queued and change nothing.</summary>
     public const int Show = 3;
+    /// List the live items this instance can see, with their object ids and per-instance
+    /// state. <see cref="CoopCommand.Amount"/> caps how many rows are printed.
+    ///
+    /// The point is picking a target: item identity can only be exercised by sending an item
+    /// that genuinely differs from its blueprint, and nothing before this could say which of
+    /// the hundreds of items in a loaded module those are.
+    /// </summary>
+    Items,
+
+    /// <summary>Print one item's per-instance state; the id is in
+    /// <see cref="CoopCommand.Address"/>. This is the READ-BACK half of an identity test —
+    /// run it on the receiving instance against the object id its plugin log names.</summary>
+    InspectItem,
+
+    /// <summary>Poke one live item's per-instance state, so a sender has something worth
+    /// sending. The id is in <see cref="CoopCommand.Address"/> and the fields in
+    /// <see cref="CoopCommand.Item"/>.</summary>
+    SetItem,
+}
+
+/// <summary>
+/// Which of an item's per-instance fields a <see cref="CoopCommandKind.SetItem"/> line named.
+/// Null means "leave it alone", which is a first-class answer here: a `setitem` that named
+/// nothing is a pure read, and one that named a stack must not silently reset the charges.
+/// </summary>
+public readonly record struct ItemFields(
+    uint? StackSize = null,
+    uint? Charges = null,
+    uint? MaxCharges = null,
+    uint? Upgrades = null,
+    bool? Identified = null)
+{
+    public bool Any =>
+        StackSize is not null || Charges is not null || MaxCharges is not null
+        || Upgrades is not null || Identified is not null;
 }
 
 /// <summary>
@@ -162,7 +197,8 @@ public readonly record struct CoopCommand(
     int Amount = 0,
     float X = 0f,
     float Y = 0f,
-    float Z = 0f)
+    float Z = 0f,
+    ItemFields Item = default)
 {
     /// <summary>
     /// Resolves <see cref="Address"/> to an endpoint, applying <paramref name="defaultPort"/>
@@ -451,14 +487,35 @@ public static class ConsoleCommand
                 {
                     return new CoopCommand(
                         CoopCommandKind.Invalid,
-                        Error: "dropitem needs a blueprint, e.g. dropitem g_w_blstrpstl001");
+                        Error: "dropitem needs a blueprint or a live item id, "
+                            + "e.g. dropitem g_w_blstrpstl001 or dropitem 0x131");
+                }
+
+                // Two forms, and only the second can exercise item identity. A blueprint name
+                // conjures a stock item — there is no instance to read a stack size or an
+                // upgrade mask off, and inventing one would be indistinguishable from having
+                // read a genuinely stock item. An object id names a LIVE item here, whose
+                // real state travels with it.
+                //
+                // ⚠ An id must be spelled "#131" or "0x131", never a bare "131". Both a resref
+                // and a decimal id can be digits, and guessing between them would silently
+                // drop the wrong thing; the two forms that cannot be a resref are the two we
+                // accept. ItemDropRequest does the parsing so the drop FILE and this verb
+                // cannot disagree about what "#131" means (it is hex, because every id this
+                // project logs is printed in hex).
+                if (rest[0].StartsWith('#')
+                    || rest[0].StartsWith("0x", StringComparison.OrdinalIgnoreCase))
+                {
+                    return new CoopCommand(
+                        CoopCommandKind.DropItem, Address: rest[0].ToLowerInvariant());
                 }
 
                 if (!IsResRef(rest[0], maxLength: 16))
                 {
                     return new CoopCommand(
                         CoopCommandKind.Invalid,
-                        Error: $"'{rest[0]}' is not a blueprint resref (letters, digits, _; max 16)");
+                        Error: $"'{rest[0]}' is neither a blueprint resref (letters, digits, _; "
+                            + "max 16) nor an object id (write one as 0x131 or #131)");
                 }
 
                 return new CoopCommand(CoopCommandKind.DropItem, Address: rest[0].ToLowerInvariant());
@@ -470,6 +527,27 @@ public static class ConsoleCommand
             // maintains is unattended. That is a thing to ask for on purpose.
             case "moviewarp":
                 return ParseStageMovie(rest);
+            case "items":
+                // A cap rather than a page: the listing goes to the agent's log, where a
+                // hundred rows costs nothing, but the on-screen overlay is a handful of lines
+                // and a full module would scroll everything else off it.
+                return new CoopCommand(
+                    CoopCommandKind.Items,
+                    Amount: rest.Length > 0 && int.TryParse(rest[0], out int cap) ? cap : 0);
+
+            case "item":
+                if (rest.Length == 0 || !TryParseItemId(rest[0], out uint inspectId))
+                {
+                    return new CoopCommand(
+                        CoopCommandKind.Invalid,
+                        Error: "item needs an object id written as 0x131 or #131 "
+                            + "(`items` lists them)");
+                }
+
+                return new CoopCommand(CoopCommandKind.InspectItem, Address: $"#{inspectId:x}");
+
+            case "setitem":
+                return ParseSetItem(rest);
 
             case "cheats":
                 return new CoopCommand(CoopCommandKind.Cheats);
@@ -739,6 +817,155 @@ public static class ConsoleCommand
         return uint.TryParse(span, out objectId);
     }
 
+    /// <summary>
+    /// Parses an ITEM object id, which — unlike a creature target — must be written in hex
+    /// with an explicit marker: <c>0x131</c> or <c>#131</c>.
+    ///
+    /// The strictness is deliberate and it is about copy-paste. Every id these verbs deal in
+    /// arrives from a log line that printed it as <c>0x131</c>, and a bare <c>131</c> read as
+    /// decimal names object 0x83 — a real, different object that will usually resolve. A verb
+    /// whose whole job is to write into an object must not have a spelling that silently aims
+    /// at the wrong one.
+    /// </summary>
+    public static bool TryParseItemId(string value, out uint objectId)
+    {
+        objectId = 0;
+
+        ReadOnlySpan<char> span = value.AsSpan();
+        if (span.Length > 0 && span[0] == '#')
+        {
+            span = span[1..];
+        }
+
+        if (span.StartsWith("0x", StringComparison.OrdinalIgnoreCase))
+        {
+            span = span[2..];
+        }
+        else if (value.Length == 0 || value[0] != '#')
+        {
+            // Neither marker: refuse rather than guess a base.
+            return false;
+        }
+
+        return span.Length > 0
+            && uint.TryParse(
+                span, System.Globalization.NumberStyles.HexNumber,
+                System.Globalization.CultureInfo.InvariantCulture, out objectId)
+            && objectId != 0;
+    }
+
+    /// <summary>
+    /// Parses <c>setitem &lt;id&gt; [stack=N] [charges=N] [max=N] [upgrades=0xN]
+    /// [identified=0|1]</c>.
+    ///
+    /// Named arguments rather than positional ones because "leave this field alone" has to be
+    /// expressible: the verb's other job is to poke ONE field of an item and see it change,
+    /// and a positional form would make every unnamed field a silent overwrite. A bare
+    /// <c>setitem &lt;id&gt;</c> names nothing and is therefore a pure read.
+    /// </summary>
+    private static CoopCommand ParseSetItem(string[] rest)
+    {
+        if (rest.Length == 0 || !TryParseItemId(rest[0], out uint objectId))
+        {
+            return new CoopCommand(
+                CoopCommandKind.Invalid,
+                Error: "setitem needs an object id written as 0x131 or #131, then "
+                    + "stack=N charges=N max=N upgrades=0xN identified=0|1");
+        }
+
+        ItemFields fields = default;
+
+        for (int i = 1; i < rest.Length; i++)
+        {
+            string token = rest[i];
+            int equals = token.IndexOf('=');
+            if (equals <= 0 || equals == token.Length - 1)
+            {
+                return new CoopCommand(
+                    CoopCommandKind.Invalid,
+                    Error: $"'{token}' is not a field=value pair "
+                        + "(stack, charges, max, upgrades, identified)");
+            }
+
+            string name = token[..equals].ToLowerInvariant();
+            string value = token[(equals + 1)..];
+
+            if (!TryParseFieldValue(value, out uint number))
+            {
+                return new CoopCommand(
+                    CoopCommandKind.Invalid, Error: $"'{value}' is not a number (or 0x-number)");
+            }
+
+            switch (name)
+            {
+                case "stack" or "stacksize":
+                    // Zero is refused HERE rather than clamped later: the engine never makes a
+                    // stack of nothing, and an item with one is unpickable. A caller who typed
+                    // it meant something else.
+                    if (number is 0 or > ushort.MaxValue)
+                    {
+                        return new CoopCommand(
+                            CoopCommandKind.Invalid,
+                            Error: $"stack={number} is outside 1..{ushort.MaxValue}");
+                    }
+
+                    fields = fields with { StackSize = number };
+                    break;
+
+                case "charges":
+                    if (number > byte.MaxValue)
+                    {
+                        return new CoopCommand(
+                            CoopCommandKind.Invalid, Error: "charges is a byte (0..255)");
+                    }
+
+                    fields = fields with { Charges = number };
+                    break;
+
+                case "max" or "maxcharges":
+                    if (number > byte.MaxValue)
+                    {
+                        return new CoopCommand(
+                            CoopCommandKind.Invalid, Error: "max charges is a byte (0..255)");
+                    }
+
+                    fields = fields with { MaxCharges = number };
+                    break;
+
+                case "upgrades" or "upgrade":
+                    fields = fields with { Upgrades = number };
+                    break;
+
+                case "identified" or "id":
+                    fields = fields with { Identified = number != 0 };
+                    break;
+
+                default:
+                    return new CoopCommand(
+                        CoopCommandKind.Invalid,
+                        Error: $"unknown field '{name}' "
+                            + "(stack, charges, max, upgrades, identified)");
+            }
+        }
+
+        return new CoopCommand(
+            CoopCommandKind.SetItem, Address: $"#{objectId:x}", Item: fields);
+    }
+
+    /// <summary>A field value: decimal, or hex with an explicit 0x. Unlike an object id a
+    /// bare number here is unambiguous — a stack of 20 is 20 — so decimal is the default.</summary>
+    private static bool TryParseFieldValue(string value, out uint number)
+    {
+        if (value.StartsWith("0x", StringComparison.OrdinalIgnoreCase))
+        {
+            return uint.TryParse(
+                value.AsSpan(2), System.Globalization.NumberStyles.HexNumber,
+                System.Globalization.CultureInfo.InvariantCulture, out number);
+        }
+
+        return uint.TryParse(value, out number);
+    }
+
     /// <summary>Invariant-culture float parse: a console line is typed with a dot whatever
     /// the machine's locale says, and a comma-decimal locale would otherwise read "12.5" as
     /// 125.</summary>
@@ -766,6 +993,11 @@ public static class ConsoleCommand
         "  tp <x> <y> [z]      move yourself inside this area",
         "  goto <player>       move yourself to a peer (same module)",
         "  dropitem <resref>   drop a blueprint; the item channel shares it",
+        "  dropitem 0x131      drop a copy of a LIVE item, carrying its real state",
+        "  items [n]           list live items here: id, resref, holder, stack/charges/upgrades",
+        "  item 0x131          what one item's per-instance state actually reads",
+        "  setitem 0x131 stack=20 charges=3 upgrades=0x5 identified=0",
+        "                      poke those fields, so there is something worth sending",
         // Listed here because it is the same family — a verb that exists to stage a test —
         // and discoverability is the point of this listing. It is owned by the network
         // fault-injection work, which registers its own catalog entry and parser case; this

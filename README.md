@@ -89,7 +89,10 @@ Both players, each in their own full game:
   | `slay [tag\|id]` | kill an enemy (blank = nearest) | the enemies' owner kills it for real; a client sends the kill through the damage ledger so the host's engine produces the death for both. Refuses a player, a phantom, a companion or a plot creature — out loud |
   | `tp <x> <y> [z]` | move yourself in this area | yours alone; your position already replicates |
   | `goto <player>` | move yourself to a peer | same module only |
-  | `dropitem <resref>` | drop a blueprint at your feet | becomes shared world state through the existing item channel — the other player can see and take it |
+  | `dropitem <resref\|0x131>` | drop a blueprint, or a copy of a live item, at your feet | goes through the item channel, so every instance materialises it and it vanishes for all of them when any one takes it. The `0x131` form carries the item's real stack size, charges and upgrades |
+  | `items [n]` | list live items here with their object ids and state | read-only; how you find an item worth sending |
+  | `item <0x131>` | what one item's per-instance state actually reads | read-only; the far side's copy is checked with this |
+  | `setitem <0x131> …` | poke one item's stack / charges / upgrades / identified bit | staging only, local. KOTOR gives a script no way to spend a charge or install an upgrade, so this is how an identity test gets something worth testing |
   | `cheats` | lists these and the retail ones | — |
 
   `docs/research/console-cheats.md` has the full reference and what each one pokes.

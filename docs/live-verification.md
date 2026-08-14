@@ -412,3 +412,68 @@ pwsh tools\blockpoke.ps1 -ProcId <host pid> console 'moviewarp clear'           
 
 `01c` is 6.4 MB and present in both installs (61 identical `.bik` each, checked), so a stall
 under ~6 s means no movie played — a bare module load already measured 5.1-5.3 s here.
+**Diagnosed and fixed on 2026-08-15 (block 41); see the next section for the run to make.**
+The read path was not failing to read a ground item — it was never asked to. `ItemResref` is
+a cache lookup that cannot populate itself, `TryReadItemIdentity` was the only thing that
+could rebuild the cache, and the two were joined by `||` with the cache lookup first. Full
+write-up in `docs/research/item-identity.md` §8.
+
+## Item identity, end to end — the unattended run (block 41, NOT YET RUN)
+
+Everything below goes through `pwsh tools/blockpoke.ps1 -ProcId <pid> console '<line>'`, which
+is the only channel that reaches a co-op verb without a keyboard. Replies come back on the
+same channel; the multi-line ones (`items`) land in the agent's window and in `agent1.log` /
+`agent2.log` as `[coop] …` lines.
+
+**Ids are hex: `0x131` or `#131`. A bare `131` is refused on purpose** — it is also a legal
+resref, and reading it as decimal would name object `0x83` silently.
+
+```powershell
+# The two game pids and the two game directories, the same way every other section gets them.
+$pid1, $pid2 = (Get-Process swkotor | Sort-Object StartTime).Id
+$Game1 = 'C:\GOG Games\Star Wars KOTOR (GOG)'   # demo.ps1's defaults
+$Game2 = 'D:\Games\swkotor-gog-p2'
+
+# 0. Both halves must be the NEW build. build.ps1 -Install, then confirm the version moved:
+pwsh tools\blockpoke.ps1 -ProcId $pid1 state      # expect "version 41"
+
+# 1. On the HOST: find an item worth sending. Most interesting first; the sweep reports
+#    itself on the first line, so a short list cannot be mistaken for a truncated one.
+pwsh tools\blockpoke.ps1 -ProcId $pid1 console 'items'
+#    -> [coop] items: 214 item bodies, 214 with a readable tag
+#    -> [coop]   0x9F  g_i_frggren01  yours  stack 1  charges 0/0  upgrades 0x0
+
+# 2. Make it genuinely non-stock. This writes through Odyssey.ApplyItemIdentity — the SAME
+#    function an arriving item goes through — and answers with the fields read BACK.
+pwsh tools\blockpoke.ps1 -ProcId $pid1 console 'setitem 0x9f stack=20 charges=3 max=50 upgrades=0x5'
+#    -> reply: 0x9F: stk 20 chg 3/50 upg 5 bits 9
+#    -> host plugin log: setitem 0x9F: stack 1->20, charges 0/0->3/50, upgrades 0x0->0x5, ...
+#    ⚠ If the reply says "stk 1" the write did not land: that is finding (1) failing, and it
+#      fails BEFORE the network is involved, which is the cheapest possible place to learn it.
+
+# 3. Replicate it. Both instances spawn a body from the item slot, so BOTH plugin logs
+#    should show the apply — the host is not a special case here.
+pwsh tools\blockpoke.ps1 -ProcId $pid1 console 'dropitem 0x9f'
+#    -> reply: dropped g_i_frggren01 as item 0x10001 (stack 20, charges 3/50, upgrades 0x5, flags 0x3)
+
+# 4. Read both plugin logs for the marker. The success line reports what the item NOW HOLDS,
+#    not what was asked for; the two halves of it must agree.
+Select-String -Path "$Game1\kotorcoop-plugin.log","$Game2\kotorcoop-plugin.log" -Pattern 'identity (applied|SKIPPED)' | Select-Object -Last 4
+#    -> item slot 0: identity applied to 0x132 — asked for (stack 20, charges 3/50,
+#       upgrades 0x5, flags 0x3), item now reads (stack 20, charges 3/50, upgrades 0x5, bits 0x9)
+#    -> "identity SKIPPED for 0xID — <reason>" now names what the resolve saw.
+
+# 5. Read the receiver back from OUTSIDE its plugin, using the object id step 4 named.
+pwsh tools\blockpoke.ps1 -ProcId $pid2 console 'item 0x132'
+#    -> item 0x132 g_i_frggren01: stack 20, charges 3/50, upgrades 0x5, identified
+```
+
+Three independent witnesses have to agree at step 5: the sender's `setitem` read-back, the
+receiver's plugin log read-back, and the receiver's external `item`. Two of them share no
+code and the third is in a different process.
+
+**The one thing this run cannot prove.** `setitem upgrades=0x5` writes the mask; whether the
+engine then *renders and applies* two upgrades from that mask alone is
+`docs/research/item-identity.md` §3's inference from `HasUpgrade`'s consumer. Confirming it
+needs a human to look at the receiving instance's item description and see the upgrade slots
+filled — one screenshot, and the only step in this whole feature that still wants eyes.

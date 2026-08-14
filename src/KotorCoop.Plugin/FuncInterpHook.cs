@@ -55,6 +55,9 @@ internal static unsafe class FuncInterpHook
         // has no "net" alias here: a verb that arranges a multi-second window in which this
         // plugin does not run is not something to reach by a near-miss.
         "moviewarp",
+        // The item-identity harness. "item"/"items"/"setitem" are ours: the engine registers
+        // giveitem and nothing else beginning with "item".
+        "items", "item", "setitem",
     ];
 
     /// <summary>

@@ -1079,11 +1079,18 @@ internal struct SharedBlock
     public const uint AdoptLoginSavedCharacter = 1;
     public const uint AdoptLoginCarriedCharacter = 2;
 
-    // ---- co-op cheats (version 40, region 0x3328..0x33B0) ------------------------
+    // ---- co-op cheats (version 41, region 0x3328..0x33C0) ------------------------
     //
     // Version 40, not 39: this landed in the same integration as item identity, which took
     // 39 first. Two builds that disagree about whether this region exists must fail to find
     // each other rather than read each other's fields as noise, so the number has to move.
+    //
+    // Version 41 grew the region's tail by four dwords (0x33B0..0x33C0) for the `setitem`
+    // staging cheat — the four identity fields that do not fit the generic target/amount
+    // pair. Nothing already in the region moved, and a mixed pair would technically survive
+    // (an old plugin answers "unknown cheat kind 7" and an old agent never sends it), but
+    // the rule here is that the layout number moves whenever the layout does: a channel whose
+    // meaning is decided by which build you are running is not a channel anyone can debug.
     //
     // The staging surface: one serial-edged request the agent writes and the plugin runs on
     // the game thread, because every one of these ends in an engine call and engine calls
@@ -1138,6 +1145,33 @@ internal struct SharedBlock
 
     public const int CheatDetailLength = 64;
 
+    // The four identity fields `setitem` can poke that have nowhere else to ride. Stack size
+    // reuses OffsetCheatAmount (0 = leave it alone), because a stack of zero is not a thing
+    // the engine produces; these four have no such spare value, so each carries its own
+    // "leave alone" sentinel instead of overloading a legal one.
+
+    /// <summary>Agent -&gt; plugin. New charges for <see cref="CheatKindSetItem"/>, or
+    /// <see cref="CheatFieldUnchanged"/>.</summary>
+    public const int OffsetCheatCharges = 0x33B0;
+
+    /// <summary>Agent -&gt; plugin. New max charges, or <see cref="CheatFieldUnchanged"/>.</summary>
+    public const int OffsetCheatMaxCharges = 0x33B4;
+
+    /// <summary>Agent -&gt; plugin. New installed-upgrade MASK, or
+    /// <see cref="CheatFieldUnchanged"/>.</summary>
+    public const int OffsetCheatUpgrades = 0x33B8;
+
+    /// <summary>Agent -&gt; plugin. New identity flag bits (the <c>ItemIdentity*</c> wire
+    /// flags, not the engine's own bit numbers), or <see cref="CheatFieldUnchanged"/>.</summary>
+    public const int OffsetCheatItemFlags = 0x33BC;
+
+    /// <summary>"Do not touch this field." Chosen as all-ones because every one of the four
+    /// is a value the engine keeps far below it — charges and max charges are persisted as
+    /// GFF bytes, and the upgrade mask indexes upgrade SLOTS, of which there are single
+    /// digits. A caller that really did mean 0xFFFFFFFF upgrades is asking for every one of
+    /// 32 slots at once, which no item has.</summary>
+    public const uint CheatFieldUnchanged = 0xFFFF_FFFF;
+
     /// <summary>Toggle the local player's min-1-hit-point pin. Amount 1 on, 0 off, -1 report.</summary>
     public const uint CheatKindGod = 1;
 
@@ -1168,6 +1202,19 @@ internal struct SharedBlock
     /// loud, rather than a silent no-op.
     /// </summary>
     public const uint CheatKindStageMovie = 7;
+    /// Read — and optionally poke — one live item's per-instance identity, through the very
+    /// same <c>Odyssey.ApplyItemIdentity</c> the ground-item channel uses on a peer's dropped
+    /// item.
+    ///
+    /// This is a staging cheat and says so, but it is also the only way the apply path can be
+    /// exercised without a human: KOTOR has no drop UI and no workbench a script can reach, so
+    /// there was no way to produce an item carrying a stack of twenty or an upgrade mask —
+    /// which meant the whole feature's live check could never start (docs/live-verification.md,
+    /// 2026-08-15). Staging one here makes the sender's item genuinely non-stock, and the
+    /// answer reports the fields READ BACK out of the item, so it is a test of the writer
+    /// rather than a test of our intentions.
+    /// </summary>
+    public const uint CheatKindSetItem = 8;
 
     /// <summary>The request was carried out here.</summary>
     public const int CheatStatusApplied = 1;

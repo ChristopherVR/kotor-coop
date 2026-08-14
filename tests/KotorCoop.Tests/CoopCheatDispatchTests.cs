@@ -95,9 +95,8 @@ public class CoopCheatDispatchTests
             Type(dispatcher, "topup 25");
             Type(dispatcher, "standup");
             Type(dispatcher, "tp 3 -4 5");
-            Type(dispatcher, "dropitem g_w_blstrpstl001");
 
-            Assert.Equal(5, bridge.Requests.Count);
+            Assert.Equal(4, bridge.Requests.Count);
 
             Assert.Equal(CheatKinds.God, bridge.Requests[0].Kind);
             Assert.Equal(1, bridge.Requests[0].Amount);
@@ -111,9 +110,117 @@ public class CoopCheatDispatchTests
             Assert.Equal(3f, bridge.Requests[3].X);
             Assert.Equal(-4f, bridge.Requests[3].Y);
             Assert.Equal(5f, bridge.Requests[3].Z);
+        }
+    }
 
-            Assert.Equal(CheatKinds.DropItem, bridge.Requests[4].Kind);
-            Assert.Equal("g_w_blstrpstl001", bridge.Requests[4].Text);
+    /// <summary>
+    /// ⚠ <c>dropitem</c> is NOT a staging cheat and must never file one.
+    ///
+    /// It used to: the verb wrote a <c>DropItem</c> request, the plugin called
+    /// CreateItemOnFloor, and a body appeared in the typist's own game and nowhere else —
+    /// because nothing scans the floor for items to publish. Both the help text and
+    /// docs/research/console-cheats.md §4 meanwhile said "the item channel shares it". The
+    /// session's own drop is the thing that shares it, so that is the path the verb takes,
+    /// and this test exists to stop the cheat route creeping back.
+    /// </summary>
+    [Fact]
+    public void DropItemGoesThroughTheSessionRatherThanTheCheatChannel()
+    {
+        (CoopCommandDispatcher dispatcher, CheatBridge bridge, SessionManager manager) = NewDispatcher();
+        using (manager)
+        {
+            Type(dispatcher, "dropitem g_w_blstrpstl001");
+
+            Assert.Empty(bridge.Requests);
+        }
+    }
+
+    /// <summary>
+    /// The two spellings that can name a live item, and the one that cannot.
+    ///
+    /// A bare number is refused on purpose: it is both a legal resref and a legal decimal id,
+    /// and guessing between them would silently drop something other than what was asked for.
+    /// </summary>
+    [Theory]
+    [InlineData("dropitem 0x131", "0x131")]
+    [InlineData("dropitem #131", "#131")]
+    [InlineData("item 0x131", "#131")]
+    [InlineData("setitem 0x131 stack=20", "#131")]
+    public void ItemVerbsCarryTheObjectIdTheyWereGiven(string line, string expectedAddress)
+    {
+        CoopCommand command = ConsoleCommand.Parse(line);
+
+        Assert.NotEqual(CoopCommandKind.Invalid, command.Kind);
+        Assert.Equal(expectedAddress, command.Address);
+    }
+
+    [Theory]
+    [InlineData("item 131")]
+    [InlineData("item")]
+    [InlineData("setitem 131 stack=2")]
+    [InlineData("setitem 0x131 stack=0")]
+    [InlineData("setitem 0x131 charges=999")]
+    [InlineData("setitem 0x131 wobble=2")]
+    [InlineData("setitem 0x131 stack")]
+    public void AnItemVerbRefusesRatherThanGuesses(string line)
+    {
+        CoopCommand command = ConsoleCommand.Parse(line);
+
+        Assert.Equal(CoopCommandKind.Invalid, command.Kind);
+        Assert.NotEqual(string.Empty, command.Error);
+    }
+
+    /// <summary>
+    /// Every field <c>setitem</c> did not name stays null, and null is what the dispatcher
+    /// turns into "leave this alone". A positional grammar could not express that, which is
+    /// why this one is named — poking a stack must not silently reset the charges.
+    /// </summary>
+    [Fact]
+    public void SetItemNamesOnlyTheFieldsItWasGiven()
+    {
+        CoopCommand command = ConsoleCommand.Parse("setitem 0x131 stack=20 upgrades=0x5");
+
+        Assert.Equal(CoopCommandKind.SetItem, command.Kind);
+        Assert.Equal(20u, command.Item.StackSize);
+        Assert.Equal(5u, command.Item.Upgrades);
+        Assert.Null(command.Item.Charges);
+        Assert.Null(command.Item.MaxCharges);
+        Assert.Null(command.Item.Identified);
+        Assert.True(command.Item.Any);
+    }
+
+    /// <summary>A bare <c>setitem &lt;id&gt;</c> names nothing, which the plugin reads as
+    /// "just tell me what this item holds" — the read half of the same verb.</summary>
+    [Fact]
+    public void ABareSetItemIsAPureRead()
+    {
+        CoopCommand command = ConsoleCommand.Parse("setitem 0x131");
+
+        Assert.Equal(CoopCommandKind.SetItem, command.Kind);
+        Assert.False(command.Item.Any);
+    }
+
+    /// <summary>
+    /// A <c>setitem</c> reaches the plugin with a sentinel in every field the line did not
+    /// name. The sentinel matters more than the values: 0 is a legal charge count, so
+    /// "unchanged" cannot be spelled as zero without silently emptying a medpac.
+    /// </summary>
+    [Fact]
+    public void SetItemFilesSentinelsForTheFieldsItDidNotName()
+    {
+        (CoopCommandDispatcher dispatcher, CheatBridge bridge, SessionManager manager) = NewDispatcher();
+        using (manager)
+        {
+            Type(dispatcher, "setitem 0x131 stack=20 upgrades=0x5");
+
+            CheatRequest request = Assert.Single(bridge.Requests);
+            Assert.Equal(CheatKinds.SetItem, request.Kind);
+            Assert.Equal(0x131u, request.Target);
+            Assert.Equal(20, request.Amount);
+            Assert.Equal(5u, request.Upgrades);
+            Assert.Equal(CheatKinds.Unchanged, request.Charges);
+            Assert.Equal(CheatKinds.Unchanged, request.MaxCharges);
+            Assert.Equal(CheatKinds.Unchanged, request.ItemFlags);
         }
     }
 

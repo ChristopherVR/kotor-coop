@@ -119,7 +119,10 @@ staged that nothing else reaches. Parsed in `ConsoleCommand`, dispatched by
 | `slay [tag\|id]` | see below | **The whole point.** Decided by `CheatAuthority.ForSlay`. |
 | `tp <x> <y> [z]` | `Odyssey.SnapTo` on the local PC | **Yours only.** Your position replicates every tick, so the peer's phantom of you follows with nothing being told about the teleport. |
 | `goto <player\|#n>` | the same teleport, aimed at a peer's last known position | **Same module only** — peer positions are area coordinates, so the same numbers name a different place in a different module. Refuses across modules and names both. |
-| `dropitem <resref>` | `CreateItemOnFloor` at your feet | **Shared by construction.** A ground item is already replicated state: the peer's instance materialises a real clickable object and it vanishes for both when either picks it up. This is "give the party an item" obeying the replication rule the mod already has — unlike retail `giveitem`, which puts it in your pack where no peer will ever see it. |
+| `dropitem <resref\|0x131>` | **the session's own ground-item drop**, which every instance (this one included) materialises through `CreateItemOnFloor` | **Shared by construction, now for real.** A ground item is already replicated state: every instance materialises a clickable object and it vanishes for all of them when any one picks it up. ⚠ **This verb used to file a `DropItem` staging cheat instead**, which called `CreateItemOnFloor` in the typist's own game and nowhere else — nothing scans the floor for items to publish, so the drop reached no peer at all while this table said it did. The `0x131` form drops a copy of a LIVE item, carrying its real stack size, charges and upgrade mask. |
+| `items [n]` | the agent's own `CSWSItem` sweep (ReadProcessMemory; no engine call) | **Read-only, local.** Lists live items with id, tag, holder and identity, most interesting first, and reports what the sweep itself saw. Exists so an unattended run can PICK a target for an identity test rather than guess one. |
+| `item <0x131>` | the same sweep, one item | **Read-only, local.** The read-back half of an identity test: run it on the RECEIVING instance against the id its plugin log named. |
+| `setitem <0x131> [stack=N] [charges=N] [max=N] [upgrades=0xN] [identified=0\|1]` | `Odyssey.ApplyItemIdentity` on the game thread | **Yours to stage, local only.** Pokes one live item's per-instance fields through the very function an arriving item goes through, and answers with the fields read back. KOTOR gives a script no way to spend a charge, build a stack or install an upgrade, so without this there was no way to produce an item whose replication proves anything — which is why the ground channel's apply half shipped unmeasured. Naming no field is a pure read. |
 | `cheats` | prints both halves of this document's verb list | — |
 
 ### The `slay` authority rule
@@ -157,7 +160,7 @@ instance built for itself has a local spawn id that means nothing to the owner.
 
 ### The transport
 
-One serial-edged slot in the shared block, `0x3328..0x33B0` (version 39), mirrored in
+One serial-edged slot in the shared block, `0x3328..0x33C0` (version 41), mirrored in
 `KotorGameBridge` the way every other block region is:
 
 ```
@@ -165,7 +168,14 @@ One serial-edged slot in the shared block, `0x3328..0x33B0` (version 39), mirror
 0x332C kind     0x3330 target id   0x3334 amount
 0x3338 x  0x333C y  0x3340 z       0x3344 text[32]  (tag or resref)
 0x3364 applied  (plugin -> agent)  0x3368 status    0x336C detail[64]
+0x33B0 charges  0x33B4 maxCharges  0x33B8 upgrades  0x33BC itemFlags   (setitem only)
 ```
+
+Those last four exist because `setitem` has four numbers and the generic slot has room for
+one. Each carries `0xFFFFFFFF` for "leave this field alone" rather than overloading a legal
+value: 0 is a perfectly good charge count, and spelling "unchanged" as zero would silently
+empty a medpac. The stack size rides on `amount`, where 0 *can* mean unchanged, because a
+stack of nothing is not a value the engine produces.
 
 The **detail string is not decoration**. A cheat that cannot be applied has to say *what it
 saw* — "0x2A is a peer's phantom, not an enemy", "no creature tagged 'foo' here", "'x' did not
@@ -234,5 +244,6 @@ console UI itself (1–5) genuinely need somebody at the keyboard.
 | 9 | `slay` on the **client** | Same, on the joining instance. Expect `0x.. is the host's; sent the kill to them` and then the enemy dying on **both** screens through the normal mirror. This is the single most important check here — it is the authority split. | If the enemy dies only on the client, the ledger id translation is wrong. |
 | 10 | `slay` refusals | `slay <the peer's player name>` → "their character is theirs, not yours to kill". Aim it at a companion's tag (e.g. `slay Trask`) → `0x.. is a party companion`. | Both are logged lines; a silent no-op is a bug. |
 | 11 | `tp` / `goto` | `where` to read your coordinates, `tp <x+5> <y>`, confirm you moved and the peer's phantom of you followed. Then on the client `goto <host name>`; you should land on the host. **Walkmesh is not consulted** — if `tp` drops you through the floor, that is the known risk and `goto` is the safe form. | `refusing to teleport to the area origin` guards the one degenerate case. |
-| 12 | `dropitem` | `dropitem g_w_blstrpstl001`. Expect `dropped 'g_w_blstrpstl001' as 0x..` and the item appearing as a real clickable object on the **other** player's screen; either player picking it up removes it for both. | `did not spawn (failure N; wrong resref?)` names the resref. |
-| 13 | The cheat block region itself (`0x3328..0x33B0`) | `pwsh tools\blockpoke.ps1 -ProcId <pid> cheat god 1`, then the bare `cheat` — expect `applied` to catch up to `serial` and a detail of `god ON - damage floors at 1 hp`. | Silence from every cheat while the console still routes `status` means the region, not the verbs. |
+| 12 | `dropitem` | `dropitem g_w_blstrpstl001`. Expect `dropped g_w_blstrpstl001 as item 0x.. (no identity — a blueprint drop carries none…)` and the item appearing as a real clickable object on the **other** player's screen; either player picking it up removes it for both. | `drop refused: … (not connected, or ground full)` names which. |
+| 12b | `items` / `setitem` / `dropitem 0x..` / `item` | The full item-identity loop, unattended — the exact command sequence is in `docs/live-verification.md`, "Item identity, end to end". | Every refusal names what it saw; see `docs/research/item-identity.md` §8. |
+| 13 | The cheat block region itself (`0x3328..0x33C0`) | `pwsh tools\blockpoke.ps1 -ProcId <pid> cheat god 1`, then the bare `cheat` — expect `applied` to catch up to `serial` and a detail of `god ON - damage floors at 1 hp`. `blockpoke … item` shows the four `setitem` fields raw. | Silence from every cheat while the console still routes `status` means the region, not the verbs. |
