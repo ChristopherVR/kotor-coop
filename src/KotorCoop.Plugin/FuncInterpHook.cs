@@ -36,6 +36,11 @@ internal static unsafe class FuncInterpHook
         "say", "chat", "msg", "clear", "cls", "servers", "browse", "list", "status", "help", "coop",
         "password", "pw",
         "stat", "commands", "?", "warp", "who", "peers", "where",
+
+        // "netsim" only, not its "net" alias: a three-letter word is far too likely to shadow
+        // something the engine's own console owns, and `coop net ...` already routes through
+        // the "coop" prefix for anyone who wants the short form.
+        "netsim",
     ];
 
     /// <summary>

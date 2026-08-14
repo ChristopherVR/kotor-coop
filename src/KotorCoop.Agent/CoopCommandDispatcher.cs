@@ -344,6 +344,10 @@ public sealed class CoopCommandDispatcher(
                 ListPlayers(who);
                 break;
 
+            case CoopCommandKind.NetSim:
+                ApplyNetSim(command.Address ?? "status", command.Password ?? string.Empty);
+                break;
+
             case CoopCommandKind.Where:
                 if (bridge.TryReadLocalState(out PlayerState local) && local.Module.Length > 0)
                 {
@@ -357,6 +361,56 @@ public sealed class CoopCommandDispatcher(
 
                 break;
         }
+    }
+
+    /// <summary>
+    /// Arms (or clears) the transport fault injector on the live session, so a disconnect can
+    /// be produced on the rig without unplugging anything and without killing a process — a
+    /// killed process is a clean socket close, which is the one failure shape that was already
+    /// known to recover. See <see cref="NetworkSim"/>.
+    ///
+    /// Deliberately applied to the LIVE session only: a fault outlives no session, so
+    /// disconnecting is always a way out of one you set by mistake.
+    /// </summary>
+    private void ApplyNetSim(string sub, string args)
+    {
+        if (manager.Current?.Network is not { } sim)
+        {
+            Reply("netsim: not connected - nothing to break");
+            return;
+        }
+
+        string[] parts = args.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
+
+        switch (sub)
+        {
+            case "off":
+                sim.Clear();
+                break;
+
+            case "loss":
+                sim.SetLoss(double.Parse(parts[0]));
+                break;
+
+            case "latency":
+                sim.SetLatency(int.Parse(parts[0]), parts.Length > 1 ? int.Parse(parts[1]) : 0);
+                break;
+
+            case "blackout":
+                NetSimDirection direction = parts.Length > 1
+                    ? parts[1].ToLowerInvariant() switch
+                    {
+                        "in" => NetSimDirection.Inbound,
+                        "out" => NetSimDirection.Outbound,
+                        _ => NetSimDirection.Both,
+                    }
+                    : NetSimDirection.Both;
+
+                sim.StartBlackout((int)(double.Parse(parts[0]) * 1000), direction);
+                break;
+        }
+
+        Reply(sim.Describe());
     }
 
     /// <summary>Diffs the admitted roster each tick and posts joins/leaves through the same

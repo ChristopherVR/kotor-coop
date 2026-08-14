@@ -14,7 +14,8 @@ namespace KotorCoop.Session;
 /// dedups by op sequence), so the host can simply broadcast each due op to everyone rather
 /// than tracking per-peer send addresses.
 /// </summary>
-public sealed class ReliableLootSender(int retransmitIntervalMs = 250, int maxAttempts = 120)
+public sealed class ReliableLootSender(
+    int retransmitIntervalMs = 250, int maxIntervalMs = 4000, int maxPending = 1024)
 {
     private sealed class Pending
     {
@@ -56,6 +57,14 @@ public sealed class ReliableLootSender(int retransmitIntervalMs = 250, int maxAt
                 }
             }
 
+            if (_pending.Count >= maxPending)
+            {
+                // The bound exists so a session that never sees another ack cannot grow
+                // without limit. Refusing the NEW op rather than evicting an old one is
+                // deliberate: the old ones are the removals nobody has confirmed yet.
+                return null;
+            }
+
             uint sequence = _nextSequence++;
             ContainerLootPacket packet = new(originPeerId, sequence, containerId, itemId);
 
@@ -77,8 +86,16 @@ public sealed class ReliableLootSender(int retransmitIntervalMs = 250, int maxAt
     }
 
     /// <summary>
-    /// Returns ops due for another broadcast, and marks them sent. An op that every current
-    /// recipient has acked (or that has no recipients left) is retired here.
+    /// Returns ops due for another broadcast, and marks them sent. An op every current
+    /// recipient has acked is retired here.
+    ///
+    /// ⚠ AN EMPTY RECIPIENT LIST IS NOT "EVERYONE HAS ACKED". It used to be, and that was the
+    /// single worst disconnect bug in this layer: a client whose link dropped is removed from
+    /// the host's peer table after five seconds, at which point the recipient list goes empty
+    /// and every unacked removal — every chest the host emptied during the outage — was
+    /// retired UNSENT. The client came back, was never told, and could loot the same items a
+    /// second time, which is precisely the duplication this whole channel exists to prevent.
+    /// Ops now wait for somebody to send them to.
     /// </summary>
     public List<ContainerLootPacket> CollectDue(IReadOnlyCollection<uint> recipients, long nowMs)
     {
@@ -90,6 +107,13 @@ public sealed class ReliableLootSender(int retransmitIntervalMs = 250, int maxAt
 
             foreach ((uint sequence, Pending pending) in _pending)
             {
+                if (recipients.Count == 0)
+                {
+                    // Nobody to tell yet. Hold it: this is world truth, and the peer that
+                    // needs it may simply be reconnecting.
+                    continue;
+                }
+
                 bool allAcked = true;
                 foreach (uint recipient in recipients)
                 {
@@ -100,24 +124,20 @@ public sealed class ReliableLootSender(int retransmitIntervalMs = 250, int maxAt
                     }
                 }
 
-                if (recipients.Count == 0 || allAcked)
+                if (allAcked)
                 {
                     (finished ??= []).Add(sequence);
                     continue;
                 }
 
                 // Always emit an op that has never been sent (Attempts == 0), so a freshly
-                // enqueued removal goes out on the very next tick; only re-sends wait for the
-                // interval.
-                if (pending.Attempts > 0 && nowMs - pending.LastSentMs < retransmitIntervalMs)
+                // enqueued removal goes out on the very next tick; only re-sends wait, and
+                // they back off so a long outage costs a trickle rather than 4 packets a
+                // second per unacked removal for as long as it lasts.
+                if (pending.Attempts > 0
+                    && nowMs - pending.LastSentMs < RetransmitBackoff.IntervalMs(
+                        pending.Attempts, retransmitIntervalMs, maxIntervalMs))
                 {
-                    continue;
-                }
-
-                if (pending.Attempts >= maxAttempts)
-                {
-                    // Give up rather than retransmit forever into a dead link.
-                    (finished ??= []).Add(sequence);
                     continue;
                 }
 
@@ -136,6 +156,23 @@ public sealed class ReliableLootSender(int retransmitIntervalMs = 250, int maxAt
         }
 
         return due;
+    }
+
+    /// <summary>
+    /// Makes every pending op due again. Called when a peer is admitted, so a rejoining
+    /// player is brought up to date on the next tick instead of waiting out a backoff that
+    /// grew while there was nobody to talk to.
+    /// </summary>
+    public void ResetBackoff()
+    {
+        lock (_gate)
+        {
+            foreach (Pending pending in _pending.Values)
+            {
+                pending.Attempts = 0;
+                pending.LastSentMs = 0;
+            }
+        }
     }
 
     public void Clear()

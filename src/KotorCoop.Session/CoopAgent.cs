@@ -1116,9 +1116,25 @@ public sealed class CoopAgent(IGameBridge bridge, ICoopSession session, AgentSet
         // A wipe needs every player down — including this one. A peer in another module is
         // not part of this fight, but it is also not a corpse: it can still come back for
         // us, so it counts as standing. That is why this takes the UNFILTERED list.
+        //
+        // ⚠ A peer with NO MODULE is a different thing again: it has not loaded a world at
+        // all (sitting at the main menu, or its agent has not resolved its player yet). It
+        // cannot be down and it cannot come and rescue anybody, so it is not a participant.
+        // Counting it as a standing player is how a full party wipe became impossible: an
+        // unpublished avatar is all zeroes, all zeroes is finite, finite is "plausible", and
+        // a plausible undowned peer holds the game-over suppression on forever.
         bool everyPeerDown = true;
+        int participants = 0;
+
         for (int i = 0; i < peers.Count; i++)
         {
+            if (peers[i].State.Module.Length == 0)
+            {
+                continue;
+            }
+
+            participants++;
+
             if (!peers[i].State.IsDowned)
             {
                 everyPeerDown = false;
@@ -1126,7 +1142,7 @@ public sealed class CoopAgent(IGameBridge bridge, ICoopSession session, AgentSet
             }
         }
 
-        bool allDown = local.IsDowned && peers.Count > 0 && everyPeerDown;
+        bool allDown = local.IsDowned && participants > 0 && everyPeerDown;
 
         // Hold the game-over unless the session really is wiped; always hold the control
         // swap (it fights the control lock and hands a client the host's companions).

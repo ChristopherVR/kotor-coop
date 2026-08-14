@@ -264,6 +264,13 @@ public interface ICoopSession : IDisposable
     /// until a peer has been evaluated.</summary>
     CompatibilityVerdict? Compatibility { get; }
 
+    /// <summary>
+    /// This session's transport fault injector, or null for a session with no real socket
+    /// (the test stubs). Off by default. Driving it is how a drop is reproduced on the live
+    /// rig without touching a cable — see <c>coop netsim</c> in <see cref="ConsoleCommand"/>.
+    /// </summary>
+    NetworkSim? Network => null;
+
     Task RunAsync(CancellationToken cancellationToken);
 }
 

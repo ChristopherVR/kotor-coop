@@ -5,9 +5,12 @@ namespace KotorCoop.Session;
 /// <summary>
 /// Retransmit-until-ack for ground-item ops, the item twin of
 /// <see cref="ReliableFlagSender"/>. "A lightsaber is lying there" is world truth, not a
-/// disposable position sample, so the op is repeated until the host confirms it.
+/// disposable position sample, so the op is repeated until the host confirms it — and, as
+/// with flags, never abandoned. See <see cref="ReliableFlagSender"/> for why giving up on an
+/// unacked op silently loses a change that nothing will ever re-announce.
 /// </summary>
-public sealed class ReliableItemSender(int retransmitIntervalMs = 250, int maxAttempts = 60)
+public sealed class ReliableItemSender(
+    int retransmitIntervalMs = 250, int maxIntervalMs = 4000, int maxPending = 4096)
 {
     private sealed class Pending
     {
@@ -38,12 +41,15 @@ public sealed class ReliableItemSender(int retransmitIntervalMs = 250, int maxAt
             uint sequence = _nextSequence++;
             ItemOpPacket packet = new(originPeerId, sequence, kind, item);
 
-            _pending[sequence] = new Pending
+            if (_pending.Count < maxPending)
             {
-                Packet = packet,
-                LastSentMs = nowMs,
-                Attempts = 1,
-            };
+                _pending[sequence] = new Pending
+                {
+                    Packet = packet,
+                    LastSentMs = nowMs,
+                    Attempts = 1,
+                };
+            }
 
             return packet;
         }
@@ -64,20 +70,11 @@ public sealed class ReliableItemSender(int retransmitIntervalMs = 250, int maxAt
 
         lock (_gate)
         {
-            List<uint>? exhausted = null;
-
-            foreach ((uint sequence, Pending pending) in _pending)
+            foreach (Pending pending in _pending.Values)
             {
-                if (nowMs - pending.LastSentMs < retransmitIntervalMs)
+                if (nowMs - pending.LastSentMs < RetransmitBackoff.IntervalMs(
+                        pending.Attempts, retransmitIntervalMs, maxIntervalMs))
                 {
-                    continue;
-                }
-
-                if (pending.Attempts >= maxAttempts)
-                {
-                    // Give up rather than retransmit forever into a dead link. The
-                    // version-mismatch resync path will repair the state if it returns.
-                    (exhausted ??= []).Add(sequence);
                     continue;
                 }
 
@@ -85,17 +82,22 @@ public sealed class ReliableItemSender(int retransmitIntervalMs = 250, int maxAt
                 pending.LastSentMs = nowMs;
                 due.Add(pending.Packet);
             }
-
-            if (exhausted is not null)
-            {
-                foreach (uint sequence in exhausted)
-                {
-                    _pending.Remove(sequence);
-                }
-            }
         }
 
         return due;
+    }
+
+    /// <summary>Makes every pending op due immediately; called when a dropped link returns.</summary>
+    public void ResetBackoff()
+    {
+        lock (_gate)
+        {
+            foreach (Pending pending in _pending.Values)
+            {
+                pending.Attempts = 0;
+                pending.LastSentMs = 0;
+            }
+        }
     }
 
     public void Clear()
