@@ -78,6 +78,17 @@ public sealed class CoopCommandDispatcher(
     private static readonly TimeSpan CheatAnswerTimeout = TimeSpan.FromSeconds(3);
 
     /// <summary>
+    /// What to do once the pending cheat has been answered, and what to do instead if it was
+    /// refused. Exactly one command needs it — <c>moviewarp</c>, whose two halves (stage the
+    /// cinematic, then travel) MUST NOT be filed in the same tick, because the plugin's frame
+    /// takes the travel branch and returns before it ever reaches the cheat channel. Modelling
+    /// that as "wait for the answer" rather than "sleep a bit" is what makes a refused staging
+    /// stop the warp instead of silently producing the movie-less transition that has already
+    /// been tested. See <see cref="CheatFollowUp"/>.
+    /// </summary>
+    private readonly CheatFollowUp _afterCheat = new();
+
+    /// <summary>
     /// Armed by a connect/host that originated inside the game (Co-op button, browser
     /// panel, ~ console) — i.e. one made while the player could plausibly still be at the
     /// main menu. When such a session reaches its load condition the save auto-loads once,
@@ -350,19 +361,11 @@ public sealed class CoopCommandDispatcher(
                 // travel uses): the plugin flushes everything it spawned, then the engine's
                 // own move-to-module path runs — party collection, store-out, load screen.
                 // The parser already validated the resref, so a false here means no plugin.
-                if (_kotor is null || !_kotor.SupportsTravel)
-                {
-                    Reply("warp needs the in-game plugin (no shared block found)");
-                }
-                else if (_kotor.TryRequestTravel(command.Address!, command.Password ?? string.Empty))
-                {
-                    Reply($"warping to {command.Address}...");
-                }
-                else
-                {
-                    Reply($"could not request warp to {command.Address}");
-                }
+                Warp(command.Address!, command.Password ?? string.Empty);
+                break;
 
+            case CoopCommandKind.StageMovie:
+                StageMovie(command);
                 break;
 
             case CoopCommandKind.Who:
@@ -433,6 +436,65 @@ public sealed class CoopCommandDispatcher(
     }
 
     /// <summary>
+    /// Asks the plugin to move this instance to another module. Extracted so the staged
+    /// cinematic can reuse the EXACT path a typed <c>warp</c> takes — a staging verb that
+    /// travels a different way would be measuring its own plumbing.
+    /// </summary>
+    private void Warp(string module, string waypoint)
+    {
+        if (_kotor is null || !_kotor.SupportsTravel)
+        {
+            Reply("warp needs the in-game plugin (no shared block found)");
+        }
+        else if (_kotor.TryRequestTravel(module, waypoint))
+        {
+            Reply($"warping to {module}...");
+        }
+        else
+        {
+            Reply($"could not request warp to {module}");
+        }
+    }
+
+    /// <summary>
+    /// Stages a cinematic onto a module transition (docs/research/cinematics.md §7) — a test
+    /// instrument, not a feature, and the only command here that deliberately arranges for the
+    /// in-game plugin to stop running for several seconds.
+    ///
+    /// The warp form is TWO STEPS ON PURPOSE, and the order is the whole point. The plugin
+    /// arms the movie names first and answers; only when that answer arrives does the travel
+    /// request go out. Filing both at once would race: the plugin's frame does the travel
+    /// branch and returns BEFORE it reaches the cheat channel, so a travel filed in the same
+    /// tick as its cinematic would warp without one and the movie would sit armed, waiting to
+    /// ambush whatever transition came next.
+    ///
+    /// A refusal therefore stops the whole thing rather than warping anyway. "The movie was
+    /// refused but we travelled" is the outcome that would waste a live run: a movie-less
+    /// transition already passed this test on 2026-08-15 and proves nothing about the case
+    /// under investigation.
+    /// </summary>
+    private void StageMovie(CoopCommand command)
+    {
+        string movies = command.Password ?? string.Empty;
+        string module = command.Address ?? string.Empty;
+
+        if (command.Amount != StageMovieModes.WarpWithMovies)
+        {
+            SendCheat(new CheatRequest(CheatKinds.StageMovie, Amount: command.Amount, Text: movies));
+            return;
+        }
+
+        SendCheat(
+            new CheatRequest(CheatKinds.StageMovie, Amount: command.Amount, Text: movies),
+            onApplied: () =>
+            {
+                Reply($"staged {movies}; now warping to {module} - the movie plays on the way in");
+                Warp(module, string.Empty);
+            },
+            onRefused: () => Reply($"the cinematic was not staged, so the warp to {module} was NOT attempted"));
+    }
+
+    /// <summary>
     /// Arms (or clears) the transport fault injector on the live session, so a disconnect can
     /// be produced on the rig without unplugging anything and without killing a process — a
     /// killed process is a clean socket close, which is the one failure shape that was already
@@ -487,11 +549,16 @@ public sealed class CoopCommandDispatcher(
     /// reported. Refuses out loud when there is no plugin: "nothing happened" is the one
     /// outcome a staging command must never produce silently.
     /// </summary>
-    private void SendCheat(CheatRequest request)
+    private void SendCheat(CheatRequest request, Action? onApplied = null, Action? onRefused = null)
     {
+        // Whatever the previous cheat was going to do next, it is not going to do it now:
+        // only one request is in flight, so filing a new one abandons the old one's answer.
+        _afterCheat.Clear();
+
         if (!bridge.SupportsCheats)
         {
             Reply("staging cheats need the in-game plugin (no shared block found)");
+            onRefused?.Invoke();
             return;
         }
 
@@ -499,10 +566,12 @@ public sealed class CoopCommandDispatcher(
         {
             _pendingCheatSerial = serial;
             _pendingCheatFiled = DateTime.UtcNow;
+            _afterCheat.Arm(onApplied, onRefused);
         }
         else
         {
             Reply("could not reach the plugin to run that");
+            onRefused?.Invoke();
         }
     }
 
@@ -525,6 +594,7 @@ public sealed class CoopCommandDispatcher(
             {
                 _pendingCheatSerial = 0;
                 Reply("the game never answered that - is a world loaded? (cheats run on the game's frame)");
+                _afterCheat.Take(applied: false)?.Invoke();
             }
 
             return;
@@ -544,6 +614,10 @@ public sealed class CoopCommandDispatcher(
         };
 
         Reply(detail.Length > 0 ? prefix + detail : $"the plugin answered with status {status} and no detail");
+
+        // The follow-up runs AFTER the plugin's own sentence is on screen, so a reader sees
+        // what the game said before what we did about it.
+        _afterCheat.Take(applied: status is CheatStatus.Applied or CheatStatus.Forwarded)?.Invoke();
     }
 
     /// <summary>

@@ -90,11 +90,13 @@ are known not to be trustworthy. Both halves are useful; the second is the point
 | --- | --- | --- | --- | --- | --- |
 | `0x00401380` | `CAppManager::CreateServer` | Thiscall | 2 | `ret-imm 4` | MenuLoadController |
 | `0x00401C10` | `Global::UpdateScreen` | Cdecl | 3 | `ret 0` | MenuLoadController |
-| `0x0040BC70` | `CSWGuiManager::AddPanel` | Thiscall | 4 | `ret-imm 12` | MenuLoadController, NativeBrowserController |
-| `0x0040BD70` | `CSWGuiManager::PanelExists` | Thiscall | 2 | `ret-imm 4` | NativeBrowserController |
+| `0x00401E00` | `Global::ActivateRenderWindow` | Stdcall | 0 | `ret 0` | Odyssey |
+| `0x0040BC70` | `CSWGuiManager::AddPanel` | Thiscall | 4 | `ret-imm 12` | MenuLoadController, NativeBrowserController, PasswordEntryModal |
+| `0x0040BD70` | `CSWGuiManager::PanelExists` | Thiscall | 2 | `ret-imm 4` | NativeBrowserController, PasswordEntryModal |
 | `0x0040BE00` | `CSWGuiManager::PopModalPanel` | Thiscall | 1 | `ret 0` | MenuLoadController |
 | `0x00414C00` | `CSWGuiBorderParams::SetFillImage` | Thiscall | 3 | `ret-imm 8` | NativeBrowserController |
-| `0x00415E00` | `CSWGuiTextParams::SetText` | Thiscall | 2 | `ret-imm 4` | NativeBrowserController, Odyssey |
+| `0x00415E00` | `CSWGuiTextParams::SetText` | Thiscall | 2 | `ret-imm 4` | NativeBrowserController, Odyssey, PasswordEntryModal |
+| `0x00416490` | `CSWGuiEditText::SetText` | Thiscall | 2 | `ret-imm 4` | PasswordEntryModal |
 | `0x00418D80` | `CSWGuiButton::Initialize_2` | Thiscall | 3 | `ret-imm 8` | NativeBrowserController |
 | `0x0041AB20` | `CSWGuiControl::AddEvent` | Thiscall | 4 | `ret-imm 12` | Odyssey |
 | `0x0041C040` | `CSWGuiListBox::SetSelectedControl` | Thiscall | 3 | `ret-imm 8` | NativeBrowserController |
@@ -112,22 +114,29 @@ are known not to be trustworthy. Both halves are useful; the second is the point
 | `0x004AED30` | `CServerExoApp::SetMoveToModuleStartWaypoint` | Thiscall | 2 | `ret-imm 4` | Odyssey |
 | `0x004AED70` | `CServerExoApp::GetObjectArray` | Thiscall | 1 | `ret 0` | Odyssey |
 | `0x004AEDE0` | `CServerExoApp::GetWorldTimer` | Thiscall | 1 | `ret 0` | MenuLoadController, Odyssey |
+| `0x004AEFA0` | `CServerExoApp::ClearAllQueuedCombatActions` | Thiscall | 2 | `ret-imm 4` | Odyssey |
 | `0x004AEFC0` | `CServerExoApp::GetFactionManager` | Thiscall | 1 | `ret 0` | Odyssey |
 | `0x004AF090` | `CServerExoApp::SetDoingStartNewModule` | Thiscall | 2 | `ret-imm 4` | MenuLoadController |
 | `0x004B2820` | `CServerExoApp::GetPlayerCreature` | Thiscall | 1 | `ret 0` | Odyssey |
 | `0x004CB4F0` | `CSWSObject::StopDialog` | Thiscall | 1 | `ret 0` | Odyssey |
+| `0x004CC250` | `CSWSObject::ClearDirtyFlag` | Thiscall | 2 | `ret-imm 4` | Odyssey |
 | `0x004CC280` | `CSWSObject::SetCurrentHitPoints` | Thiscall | 2 | `ret-imm 4` | Odyssey |
 | `0x004CCD80` | `CSWSObject::ClearAllActions` | Thiscall | 2 | `ret-imm 4` | Odyssey |
 | `0x004CD170` | `CSWSObject::SetOrientation` | Thiscall | 2 | `ret-imm 4` | Odyssey |
 | `0x004CD1A0` | `CSWSObject::SetPosition` | Thiscall | 5 | `ret-imm 16` | Odyssey |
+| `0x004CD2D0` | `CSWSObject::IsDialogDelay` | Thiscall | 1 | `ret 0` | Odyssey |
 | `0x004ED850` | `CSWSCreature::UpdateAppearanceDependantInfo` | Thiscall | 2 | `ret-imm 4` | Odyssey |
 | `0x004EF890` | `CSWSCreature::GetDeadTemp` | Thiscall | 1 | `ret 0` | Odyssey |
 | `0x004EFEF0` | `CSWSCreature::SetAmbientAnimationState` | Thiscall | 2 | `ret-imm 4` | Odyssey |
+| `0x004F2610` | `CSWSCreature::SetCombatState` | Thiscall | 3 | `ret-imm 8` | Odyssey |
 | `0x004FD960` | `CSWSCreature::PacifyCreature` | Thiscall | 1 | `ret 0` | Odyssey |
 | `0x00513FC0` | `CSWSCreature::GetFaction` | Thiscall | 1 | `ret 0` | Odyssey |
 | `0x00516630` | `CSWSCreature::WalkUpdateLocationDistance` | Thiscall | 5 | `ret-imm 16` | Odyssey |
 | `0x0052B3B0` | `CFactionManager::GetFaction` | Thiscall | 2 | `ret-imm 4` | Odyssey |
+| `0x0052DE70` | `CSWVirtualMachineCommands::ExecuteCommandAddPartyMember` | Thiscall | 3 | `ret-imm 8` | Odyssey |
 | `0x0052F820` | `CSWVirtualMachineCommands::ExecuteCommandCreateObject` | Thiscall | 3 | `ret-imm 8` | Odyssey |
+| `0x00541C00` | `CSWVirtualMachineCommands::ExecuteCommandRemovePartyMember` | Thiscall | 3 | `ret-imm 8` | Odyssey |
+| `0x00543ED0` | `CSWVirtualMachineCommands::ExecuteCommandSpawnAvailableNPC` | Thiscall | 3 | `ret-imm 8` | Odyssey |
 | `0x00563CF0` | `CSWPartyTable::ResetCurrentSessionStartTim` | Stdcall | 0 | `ret 0` | MenuLoadController |
 | `0x00578ED0` | `CSWSAreaMap::GetMapRotateCCWFromWorldOrientation` | Thiscall | 4 | `ret-imm 12` | Odyssey |
 | `0x005790C0` | `CSWSAreaMap::SetPartyMemberWorldLocation` | Thiscall | 5 | `ret-imm 16` | Odyssey |
@@ -137,11 +146,13 @@ are known not to be trustworthy. Both halves are useful; the second is the point
 | `0x00589680` | `CSWSDoor::MoveToNextOpenState` | Thiscall | 1 | `ret 0` | Odyssey |
 | `0x00590090` | `CSWSEncounter::GetInActivateArea` | Thiscall | 2 | `ret-imm 4` | Odyssey |
 | `0x00593BE0` | `CSWSEncounter::SpawnIfAppropriate` | Thiscall | 3 | `ret-imm 8` | Odyssey |
+| `0x005A4010` | `CSWSDialog::SendDialogEntry` | Thiscall | 5 | `ret-imm 16` | Odyssey |
 | `0x005BFA70` | `CSWSFaction::AddMember` | Thiscall | 3 | `ret-imm 8` | Odyssey |
 | `0x005C5A40` | `CSWSJournal::SetState` | Thiscall | 4 | `ret-imm 12` | Odyssey |
 | `0x005C7E70` | `CSWSWaypoint::Constructor` | Thiscall | 2 | `ret-imm 4` | Odyssey |
 | `0x005C8350` | `CSWSWaypoint::RemoveFromArea` | Thiscall | 1 | `ret 0` | Odyssey |
 | `0x005C8580` | `CSWSWaypoint::AddToArea` | Thiscall | 6 | `ret-imm 20` | Odyssey |
+| `0x005D1000` | `CVirtualMachine::StackPopInteger` | Thiscall | 2 | `ret-imm 4` | Odyssey |
 | `0x005D1010` | `CVirtualMachine::StackPushInteger` | Thiscall | 2 | `ret-imm 4` | Odyssey |
 | `0x005D1030` | `CVirtualMachine::StackPushFloat` | Thiscall | 2 | `ret-imm 4` | Odyssey |
 | `0x005D1090` | `CVirtualMachine::StackPushString` | Thiscall | 2 | `ret-imm 4` | Odyssey |
@@ -152,8 +163,8 @@ are known not to be trustworthy. Both halves are useful; the second is the point
 | `0x005D57D0` | `CNetLayer::ProcessReceivedFrames` | Thiscall | 2 | `ret-imm 4` | MenuLoadController |
 | `0x005DF4E0` | `CExoInput::ClearEvents` | Thiscall | 1 | `ret 0` | Odyssey |
 | `0x005DF520` | `CExoInput::KeyboardModeOn` | Thiscall | 1 | `ret 0` | Odyssey |
-| `0x005E5A90` | `CExoString::CStrConstructor` | Thiscall | 2 | `ret-imm 4` | MenuLoadController, NativeBrowserController, Odyssey |
-| `0x005E5C20` | `CExoString::Destructor_2` | Thiscall | 1 | `ret 0` | NativeBrowserController, Odyssey |
+| `0x005E5A90` | `CExoString::CStrConstructor` | Thiscall | 2 | `ret-imm 4` | MenuLoadController, NativeBrowserController, Odyssey, PasswordEntryModal |
+| `0x005E5C20` | `CExoString::Destructor_2` | Thiscall | 1 | `ret 0` | NativeBrowserController, Odyssey, PasswordEntryModal |
 | `0x005E9EA0` | `CExoLocString::ClearLocString` | Thiscall | 1 | `ret 0` | Odyssey |
 | `0x005EA340` | `CExoLocString::AddString` | Thiscall | 4 | `ret-imm 12` | Odyssey |
 | `0x005ED420` | `CClientExoApp::DisplayMainMenu` | Thiscall | 2 | `ret-imm 4` | NativeBrowserController |
@@ -161,7 +172,7 @@ are known not to be trustworthy. Both halves are useful; the second is the point
 | `0x005ED490` | `CClientExoApp::GetClientName` | Thiscall | 2 | `ret-imm 4` | MenuLoadController |
 | `0x005ED4F0` | `CClientExoApp::GetWorldTimer` | Thiscall | 1 | `ret 0` | MenuLoadController, Odyssey |
 | `0x005ED530` | `CClientExoApp::GetModule` | Thiscall | 1 | `ret 0` | MenuLoadController, Odyssey |
-| `0x005ED540` | `CClientExoApp::GetPlayerCreature` | Thiscall | 1 | `ret 0` | MenuLoadController |
+| `0x005ED540` | `CClientExoApp::GetPlayerCreature` | Thiscall | 1 | `ret 0` | MenuLoadController, Odyssey |
 | `0x005ED580` | `CClientExoApp::GetGameObject` | Thiscall | 2 | `ret-imm 4` | Odyssey |
 | `0x005ED650` | `CClientExoApp::SetPauseState` | Thiscall | 4 | `ret-imm 12` | Odyssey |
 | `0x005ED690` | `CClientExoApp::GetInGameGui` | Thiscall | 1 | `ret 0` | MenuLoadController |
@@ -172,12 +183,16 @@ are known not to be trustworthy. Both halves are useful; the second is the point
 | `0x005EDA80` | `CClientExoApp::ShowLoadScreen` | Thiscall | 4 | `ret-imm 12` | MenuLoadController |
 | `0x005EDA90` | `CClientExoApp::HideLoadScreen` | Thiscall | 3 | `ret-imm 8` | MenuLoadController |
 | `0x005EDAE0` | `CClientExoApp::SetAreaNotReadyToDisplay` | Thiscall | 2 | `ret-imm 4` | MenuLoadController |
+| `0x005EDB40` | `CClientExoApp::IsMoviePlaying` | Thiscall | 1 | `ret 0` | Odyssey |
+| `0x005EDB50` | `CClientExoApp::AddMoveToModuleMovie` | Thiscall | 2 | `ret-imm 4` | Odyssey |
 | `0x005EDBE0` | `CClientExoApp::DisableInput` | Thiscall | 1 | `ret 0` | MenuLoadController |
 | `0x005EDBF0` | `CClientExoApp::EnableInput` | Thiscall | 1 | `ret 0` | MenuLoadController |
 | `0x005EDC80` | `CClientExoApp::SetCanSendDialog` | Thiscall | 2 | `ret-imm 4` | Odyssey |
 | `0x005EDCF0` | `CClientExoApp::SetLoadScreenByModuleName` | Thiscall | 2 | `ret-imm 4` | MenuLoadController |
 | `0x005EDD30` | `CClientExoApp::SetLoadMusic` | Thiscall | 2 | `ret-imm 4` | MenuLoadController |
 | `0x005EDD40` | `CClientExoApp::SetLoadBarProgress` | Thiscall | 3 | `ret-imm 8` | MenuLoadController |
+| `0x005EE380` | `CClientExoApp::RemoveMoveToModuleMovies` | Thiscall | 1 | `ret 0` | Odyssey |
+| `0x005F2C90` | `CClientExoAppInternal::BarkString` | Thiscall | 5 | `ret-imm 16` | Odyssey |
 | `0x0060D600` | `CSWCCreature::SetName` | Thiscall | 3 | `ret-imm 8` | Odyssey |
 | `0x0060F620` | `CSWCCreature::ActionInitiateDialog` | Thiscall | 3 | `ret-imm 8` | Odyssey |
 | `0x006183D0` | `CSWCCreature::AddFireForgetAnimation` | Thiscall | 3 | `ret-imm 8` | Odyssey |
@@ -190,11 +205,11 @@ are known not to be trustworthy. Both halves are useful; the second is the point
 | `0x0063C300` | `CSWCObject::AnimationLooping` | Thiscall | 2 | `ret-imm 4` | Odyssey |
 | `0x0063C380` | `CSWCObject::AnimationFireAndForget` | Thiscall | 2 | `ret-imm 4` | Odyssey |
 | `0x0063C410` | `CSWCObject::AnimationOverlay` | Thiscall | 2 | `ret-imm 4` | Odyssey |
+| `0x0063F9D0` | `CSWCModule::SetCameraFollow` | Thiscall | 3 | `ret-imm 8` | Odyssey |
 | `0x006775E0` | `CSWCMessage::SendPlayerToServerStatus_RequestStatus` | Thiscall | 1 | `ret 0` | MenuLoadController |
 | `0x00677EA0` | `CSWCMessage::SendPlayerToServerInput_Dialog` | Thiscall | 2 | `ret-imm 4` | Odyssey |
-| `0x006A7110` | `CSWGuiDialog::SelectReply` | Thiscall | 2 | `ret-imm 4` | Odyssey |
 | `0x006CA250` | `CSWGuiSaveLoad::LoadPCAutoSave` | Thiscall | 2 | `ret-imm 4` | MenuLoadController |
+| `0x006CAE70` | `CSWGuiSaveNamePanel::Constructor` | Thiscall | 2 | `ret-imm 4` | PasswordEntryModal |
 | `0x006CB940` | `CSWGuiSaveLoadEntry::Constructor` | Thiscall | 1 | `ret 0` | NativeBrowserController |
 | `0x006CC680` | `CSWGuiSaveLoad::Constructor` | Thiscall | 4 | `ret-imm 12` | MenuLoadController, NativeBrowserController |
-| `0x006FA7E6` | `Global::operator_new_2` | Cdecl | 1 | `ret 0` | MenuLoadController, NativeBrowserController, Odyssey |
-
+| `0x006FA7E6` | `Global::operator_new_2` | Cdecl | 1 | `ret 0` | MenuLoadController, NativeBrowserController, Odyssey, PasswordEntryModal |

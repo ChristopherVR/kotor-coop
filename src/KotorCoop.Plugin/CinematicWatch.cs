@@ -69,6 +69,32 @@ internal static unsafe class CinematicWatch
     /// </summary>
     private static bool _reportedMenuMovie;
 
+    /// <summary>
+    /// Told, by <see cref="TravelController"/>, that it has just written <paramref name="count"/>
+    /// movies into the transition queue on this very frame.
+    ///
+    /// This is not bookkeeping, it is the difference between a readable log and a misleading
+    /// one. The queue watch below polls from <see cref="MainLoopHook"/>, whose stub runs at the
+    /// CLIENT MainLoop call site — but a staged warp writes the queue from the SwapBuffers hook
+    /// INSIDE that client MainLoop and raises the pending flag with it, and the SERVER MainLoop
+    /// that immediately follows drains the queue and blocks on the movie. So the rising edge
+    /// happens entirely between two callbacks and this watch never sees it: without this, the
+    /// stall line that follows would report "0 transition movie(s) were queued going in" for a
+    /// stall that was a cinematic, which is exactly the wrong answer to the only question the
+    /// line exists to answer.
+    ///
+    /// It sets the level rather than logging, deliberately: the staging path has already said
+    /// what it wrote, and a second sentence claiming to have OBSERVED it would be a lie about
+    /// where the fact came from.
+    /// </summary>
+    public static void NoteStaged(int count)
+    {
+        if (count > 0)
+        {
+            _lastQueued = count;
+        }
+    }
+
     /// <summary>Forgets everything but keeps the clock honest. Called on a world epoch change
     /// so a stall measured in the old world is never attributed to the new one.</summary>
     public static void Invalidate()

@@ -46,6 +46,11 @@ internal static unsafe class FuncInterpHook
         // engine's own registered names (docs/research/console-cheats.md) — so intercepting
         // them takes nothing away from the player.
         "god", "topup", "standup", "getup", "slay", "tp", "goto", "dropitem", "cheats",
+
+        // The cinematic staging instrument. Full spelling only, for the same reason "netsim"
+        // has no "net" alias here: a verb that arranges a multi-second window in which this
+        // plugin does not run is not something to reach by a near-miss.
+        "moviewarp",
     ];
 
     /// <summary>

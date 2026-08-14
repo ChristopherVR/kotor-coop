@@ -106,6 +106,36 @@ public enum CoopCommandKind
 
     /// <summary>List the staging cheats and the retail console cheats worth knowing.</summary>
     Cheats,
+
+    /// <summary>
+    /// Stage a cinematic onto a module transition — a TEST INSTRUMENT, not a convenience.
+    /// <see cref="CoopCommand.Amount"/> carries a <see cref="StageMovieModes"/> value,
+    /// <see cref="CoopCommand.Password"/> the comma-separated movie names, and
+    /// <see cref="CoopCommand.Address"/> the destination module for the warp form.
+    /// </summary>
+    StageMovie,
+}
+
+/// <summary>
+/// What a <c>moviewarp</c> line asks for. Mirrored in <c>MovieStaging.Mode*</c> on the plugin
+/// side (which cannot reference this assembly), the same way <c>CheatKinds</c> mirrors the
+/// shared block's kind constants.
+/// </summary>
+public static class StageMovieModes
+{
+    /// <summary>Arm the movies, then warp: they are written into the engine's queue on the
+    /// frame the travel path fires, and nowhere else.</summary>
+    public const int WarpWithMovies = 0;
+
+    /// <summary>Write them into the queue now and leave them, so the NEXT transition of any
+    /// kind — a door, a script, the escape pod — carries them.</summary>
+    public const int QueueOnly = 1;
+
+    /// <summary>Empty the queue again.</summary>
+    public const int Clear = 2;
+
+    /// <summary>Report what is queued and change nothing.</summary>
+    public const int Show = 3;
 }
 
 /// <summary>
@@ -416,6 +446,14 @@ public static class ConsoleCommand
 
                 return new CoopCommand(CoopCommandKind.DropItem, Address: rest[0].ToLowerInvariant());
 
+            // The staging instrument. Spelled in full, with no alias and no short form,
+            // deliberately: what it arranges is a movie playing across a module transition,
+            // and a movie parks the game's main thread for its whole length — several seconds
+            // in which this plugin is not slow, it is UNREACHABLE, and every invariant it
+            // maintains is unattended. That is a thing to ask for on purpose.
+            case "moviewarp":
+                return ParseStageMovie(rest);
+
             case "cheats":
                 return new CoopCommand(CoopCommandKind.Cheats);
 
@@ -493,6 +531,133 @@ public static class ConsoleCommand
             default:
                 return new CoopCommand(CoopCommandKind.Invalid, Error: usage);
         }
+    }
+
+    /// <summary>
+    /// Parses the <c>moviewarp</c> sub-grammar — the one verb here that exists to arrange a
+    /// multi-second window in which the in-game plugin does not run at all.
+    ///
+    /// Validated hard, in the parser, for the reason <c>netsim</c> is: a typo in a staging
+    /// command must not silently arm nothing. It must also not silently arm SOMETHING ELSE —
+    /// the engine's own queue add (`AddMovieToExoArrayList 0x005FBBF0`) builds
+    /// <c>MOVIES:&lt;name&gt;</c> and quietly refuses a file it cannot open, so a mistyped
+    /// movie produces a transition with no cinematic that looks exactly like the defect this
+    /// verb was typed to measure.
+    ///
+    /// <c>moviewarp &lt;module&gt; &lt;movie&gt; [movie...]</c> stages and warps ·
+    /// <c>moviewarp queue &lt;movie&gt; [movie...]</c> stages only, so the next transition of
+    /// ANY kind carries it · <c>moviewarp clear</c> disarms · <c>moviewarp show</c> reports.
+    /// </summary>
+    private static CoopCommand ParseStageMovie(string[] rest)
+    {
+        const string usage =
+            "moviewarp <module> <movie> [movie...] | moviewarp queue <movie> [movie...] | "
+            + "moviewarp clear | moviewarp show";
+
+        if (rest.Length == 0)
+        {
+            return new CoopCommand(CoopCommandKind.Invalid, Error: usage);
+        }
+
+        string first = rest[0].ToLowerInvariant();
+
+        if (first is "clear" or "off")
+        {
+            return new CoopCommand(CoopCommandKind.StageMovie, Amount: StageMovieModes.Clear);
+        }
+
+        if (first is "show" or "status")
+        {
+            return new CoopCommand(CoopCommandKind.StageMovie, Amount: StageMovieModes.Show);
+        }
+
+        bool queueOnly = first == "queue";
+        string module = queueOnly ? string.Empty : first;
+
+        if (!queueOnly && !IsResRef(first, maxLength: 16))
+        {
+            return new CoopCommand(
+                CoopCommandKind.Invalid,
+                Error: $"'{rest[0]}' is not a module name (letters, digits, _; max 16)");
+        }
+
+        if (rest.Length < 2)
+        {
+            return new CoopCommand(
+                CoopCommandKind.Invalid,
+                Error: queueOnly
+                    ? "moviewarp queue needs a movie, e.g. moviewarp queue 01c"
+                    : "moviewarp needs a movie as well as a module, e.g. moviewarp tar_m02af 01c "
+                      + "(plain `warp` moves with no cinematic)");
+        }
+
+        // Commas or spaces, because both are natural to type and the wire form is commas.
+        List<string> names = [];
+        foreach (string word in rest[1..])
+        {
+            foreach (string piece in word.Split(',', StringSplitOptions.RemoveEmptyEntries))
+            {
+                names.Add(piece);
+            }
+        }
+
+        if (names.Count == 0)
+        {
+            return new CoopCommand(CoopCommandKind.Invalid, Error: "moviewarp needs at least one movie name");
+        }
+
+        // ⚠ These three limits mirror MovieStaging on the plugin side, which cannot be
+        // referenced from here (it compiles for win-x86 inside the game). MaxMovies is the
+        // engine's own ceiling — NWScript StartNewModule takes exactly six movie arguments —
+        // and MaxJoined is the shared block's 32-byte cheat text field, one byte reserved for
+        // the terminator. MovieStagingTests asserts the two halves still agree.
+        const int maxMovies = 6;
+        const int maxJoined = 31;
+
+        if (names.Count > maxMovies)
+        {
+            return new CoopCommand(
+                CoopCommandKind.Invalid,
+                Error: $"{names.Count} movies named; the engine's own queue takes at most {maxMovies}");
+        }
+
+        for (int i = 0; i < names.Count; i++)
+        {
+            if (!IsResRef(names[i], maxLength: 16))
+            {
+                return new CoopCommand(
+                    CoopCommandKind.Invalid,
+                    Error: $"'{names[i]}' is not a movie name (letters, digits, _; max 16)");
+            }
+
+            // Refused rather than de-duplicated, because the ENGINE de-duplicates silently
+            // (the queue add is CExoArrayList<CExoString>::AddUnique), which would leave the
+            // reply claiming two movies where one was staged.
+            for (int j = 0; j < i; j++)
+            {
+                if (names[i].Equals(names[j], StringComparison.OrdinalIgnoreCase))
+                {
+                    return new CoopCommand(
+                        CoopCommandKind.Invalid,
+                        Error: $"'{names[i]}' is named twice; the engine's queue add is unique-only");
+                }
+            }
+        }
+
+        string joined = string.Join(',', names);
+        if (joined.Length > maxJoined)
+        {
+            return new CoopCommand(
+                CoopCommandKind.Invalid,
+                Error: $"the movie list is {joined.Length} characters; it travels in a "
+                    + $"{maxJoined}-character field, so name fewer movies");
+        }
+
+        return new CoopCommand(
+            CoopCommandKind.StageMovie,
+            Address: module,
+            Password: joined,
+            Amount: queueOnly ? StageMovieModes.QueueOnly : StageMovieModes.WarpWithMovies);
     }
 
     /// <summary>True for a resref-shaped token: 1..maxLength chars of ASCII letter/digit/underscore.</summary>
@@ -590,6 +755,11 @@ public static class ConsoleCommand
         // is only the line that tells a player it is there.
         "test harness:",
         "  netsim <off|status|loss <pct>|latency <ms> <jitter>|blackout <s> [in|out|both]>",
+        // ⚠ Listed with the warning attached, because the thing it arranges is not "a video":
+        // a movie parks the game's main thread for its whole length, and for those seconds
+        // the co-op plugin is unreachable rather than idle.
+        "  moviewarp <module> <movie...>   warp WITH a cinematic (the plugin stops for it)",
+        "  moviewarp queue <movie...> | clear | show",
         "retail console cheats, already co-op-safe (they touch only your game):",
         "  giveitem <resref> | givecredits <n> | addexp <n> | addlevel | heal",
         "  revealmap | infiniteuses | invulnerability | whereami | bright | turbo",

@@ -238,7 +238,7 @@ There are three sibling script commands, all present in this build:
 | …which is driven by the server's own frame loop | `xrefs 0x004BA920` = one site, `CServerExoAppInternal::MainLoop 0x004BABB0` at `0x004BAD93` |
 | A save carries its pending transition movies | `CSWGuiSaveLoad::LoadPCAutoSave 0x006CA250` calls `AddMoveToModuleMovie` six times (`0x006CA8B8`–`0x006CA91E`) |
 | An area event can queue one too | `CSWSArea::EventHandler 0x0050D6C0` at `0x0050DA9F` |
-| `AddMovieToExoArrayList 0x005FBBF0` refuses a name it cannot use (returns 0) | early-out at `0x005FBC2C` after a string check; `PlayMovie` tests the result at `0x00602D17`. That it validates the *file* is **INFERRED** — the path-building constants were not fully traced. |
+| `AddMovieToExoArrayList 0x005FBBF0` refuses a name it cannot use (returns 0) | **VERIFIED, and it really does check the file.** `0x005FBC1A` compares the name against `""` (`CExoString::operator!= 0x005E5390`) and returns 0 at `0x005FBF39` if it is empty. Then `0x005FBC37` searches it for `':'` (`0x0073E2A0`); a name WITHOUT one falls into `0x005FBC99`, which formats `MOVIES:%s` (`0x0073D7D8`), opens it `"rb"` (`0x0073D5B0`) as resource type `0x80F`, and — if that fails — tries the `LIVE%d` (`0x007453C0`) variants before returning 0 and adding **nothing**. The add itself is `CExoArrayList<CExoString>::AddUnique 0x005F7C10`, so it also **silently drops a duplicate name**. |
 
 Ordering worth knowing, because it decides what state the movie plays *over*.
 `CServerExoAppInternal::StartNewModule 0x004BA920` runs a prologue before it ever gets to the
@@ -764,7 +764,9 @@ Select-String -Path 'C:\GOG Games\Star Wars KOTOR (GOG)\dinput8.dll' -Pattern 'c
   replicated items become permanent residents of the stored module and the object-id counter
   shifts for the rest of the playthrough. **Check for it explicitly**: after the run, warp back
   to the departed module and look for a stray `coop_phantom`-tagged body. This is the highest-
-  value thing this test can find and it has never been looked for.
+  value thing this test can find and it has never been looked for. **§7 makes it stageable
+  without the escape-pod conversation — and §7.4 says which of the two forms actually tests
+  this, because the obvious one does not.**
 * **`ClearAgentWorldInputs` is delayed by the length of the movie** (§2.2). The window in which
   the agent's stale world inputs are live is now seconds, not milliseconds.
 * **A transition closes any live conversation** before the movie plays (§1.5). If a player is
@@ -806,7 +808,8 @@ Plus the read-only engine accessors in `Odyssey` (`IsMoviePlaying`,
 * **No `AddMoveToModuleMovie` call.** The lever in §1.5 is verified statically and is the right
   design, but writing into a transition the plugin cannot observe is precisely the shape of
   every bug in `transition-window-races.md`. It wants its own pass, its own protocol version,
-  and the live evidence this test produces.
+  and the live evidence this test produces. ⚠ **Superseded by §7**, which adds the call behind
+  a debug verb and a guard — still with no protocol change and no automatic producer.
 * **No skip handling.** §3.2.3 argues it should never be added.
 * **No change to the stunt gate.** §4.3 is a finding, not a fix. Accumulating movie lists
   across a declined follow (§3.2.2) is the right answer and it belongs with the protocol
@@ -817,6 +820,230 @@ cutscenes: `ingame-gui-transition.md`'s "dialog/cutscene flag" at `0x00641980` i
 `CSWCModule::GetMiniGame` (§1.6), and `docs/re/frame-hook.md`'s "switch to the call-site detour
 if a callback is genuinely needed during movie playback" does not work — that detour does not
 fire during a movie either.
+
+---
+
+## 7. Staging a movie-carrying transition on purpose (2026-08-15)
+
+§5 needs a movie playing across a module transition, and the only way the base game produces
+one is the escape-pod conversation — a human, playing. §6 deliberately shipped no
+`AddMoveToModuleMovie` call, so the first live pass could only test a transition with **no
+movie**, which it did: the pre-store flush ran correctly and **that result does not touch the
+hypothesis at all** (`docs/live-verification.md`, 2026-08-15).
+
+This section is the instrument that closes that gap: a console verb that puts movies into
+`move_to_module_movies` and then triggers a transition, so the whole thing runs unattended.
+
+### 7.1 The verb
+
+```
+moviewarp <module> <movie> [movie...]     stage the cinematic, then warp
+moviewarp queue <movie> [movie...]        stage only; the NEXT transition of any kind takes it
+moviewarp clear                           empty the queue and disarm
+moviewarp show                            report what is queued, change nothing
+```
+
+Driven on the rig exactly like every other verb:
+
+```powershell
+pwsh tools\blockpoke.ps1 -ProcId <pid> console 'moviewarp tar_m03aa 01c'
+```
+
+⚠ `blockpoke console` waits for **one** reply-serial change, so it prints only the first
+answer — `armed 01c for the next warp (was: nothing)`. The second half (`staged 01c; now
+warping to ...`) lands about a dispatcher tick later and is in the agent console and the
+plugin log; do not read the first reply as the whole outcome.
+
+Movie names are comma- or space-separated; the wire form is commas. `01c` (6.4 MB, the escape
+pod) and `01f` (3.5 MB, waking on Taris) are present in **both** rig installs — 61 identical
+`.bik` files each, checked — and `01c` is the canonical one for this test because it is the
+movie the real chain fires (§4.2).
+
+### 7.2 Where the engine write happens, and why there
+
+| Form | Written by | When |
+| --- | --- | --- |
+| `moviewarp <module> <movie>` | `TravelController.QueueStagedMovies` | on the frame the warp fires, **after** every plugin-spawned body has been flushed and immediately before `Odyssey.TravelToModule` |
+| `moviewarp queue <movie>` | `CheatController.StageMovie` | at once, and left there |
+
+The warp form is **two round trips on purpose**. The plugin arms the names and answers; only
+then does the agent file the travel. Filing both in one tick cannot work — `PluginHost.OnFrame`
+takes the travel branch and `return`s **before** it ever reaches `_cheats.OnFrame()`, so the
+warp would go out with no movie and the cinematic would sit armed, waiting to ambush whatever
+transition happened next. `CheatFollowUp` is that rule, and it also guarantees the other half:
+**a refused staging does not warp.** A movie-less transition has already been tested and proves
+nothing here, so silently running one again would waste the pass.
+
+The write sits immediately before `TravelToModule` because that is where the real feature will
+put it (§3.2.2): the pending flag this controller raises is consumed by
+`CServerExoAppInternal::StartNewModule 0x004BA920`, which is the same function that drains the
+queue. The debug verb is only the first producer of `TravelController.StagedMovies`; a peer
+replaying an owner's transition movies writes to exactly the same arm.
+
+### 7.3 The guard
+
+`MovieStaging.Decide` (pure, unit-tested) refuses, **naming what it saw**, when: there is no
+client application; no names; more than the engine's own six; **a transition is already
+pending** (writing into one in flight is the shape of every defect in
+`transition-window-races.md`); a movie is already playing; or **the queue is not empty** —
+because a cinematic the GAME staged is not ours to add to, and doing so would make the
+resulting stall un-attributable to either.
+
+Around that:
+
+* the verb is spelled in full with no alias, in both `FuncInterpHook.Verbs` and the completion
+  catalog — the same rule `netsim` follows, for the stronger reason;
+* the parser refuses a malformed line rather than arming nothing: a duplicate name (the engine's
+  `AddUnique` would drop it **silently**), a non-resref name, a list too long for the 32-byte
+  cheat text field;
+* the engine's own verdict is reported per name. `AddMovieToExoArrayList` opens `MOVIES:<name>`
+  and adds nothing if it cannot (§1.5), so `the engine REFUSED '01x'` is a real and expected
+  outcome, and it is the difference between "the design is wrong" and "that file is not here";
+* the arm **expires after 15 s** and is dropped at any epoch change, both out loud. An arm that
+  outlived its run would attach a multi-second main-thread stall to an unrelated transition with
+  nothing in the log connecting the two.
+
+### 7.4 ⚠ What each form does and does NOT test
+
+This is the part to read before booking rig time.
+
+**`moviewarp <module> <movie>` tests**: that the queue write reaches the engine on the co-op
+warp path at all (§1.5, the whole design lever, VERIFIED statically and never once live); that
+a session survives the longest main-thread stall it has ever been asked to survive; that both
+instances re-converge afterwards.
+
+**It does NOT, by construction, test the pre-store flush hypothesis.** On this path the plugin
+initiates the transition, so `PluginHost.OnFrame` has already destroyed every spawned body
+*before* raising the pending flag — the `IsAreaTransitionPending` flush branch is not even
+needed. If phantoms are baked in anyway on this path, that is a **new and worse** finding
+(the flush is insufficient, not merely skippable), but a clean result here means nothing about
+the risk case.
+
+**`moviewarp queue <movie>` is the one that tests it.** It leaves the queue armed and then a
+transition the plugin did NOT initiate — walking through a door, an area trigger, a script —
+drains it. That is exactly the shape of the escape pod: no advance warning, the flush branch is
+the only thing standing between a phantom and the stored module, and the movie turns off the
+hook that branch runs on. Stage it, then walk the host through a door with a peer's phantom
+standing in the module.
+
+### 7.5 The live procedure
+
+Preconditions as §5.0 (**`build.ps1 -Install` on both installs** — `demo.ps1` does not deploy
+the plugin), then:
+
+1. Bring the pair up and confirm the control line
+   `cinematic: a movie is playing with no world up (the main menu's own loop)` once per instance.
+2. `moviewarp show` on the host. Expect `queued: nothing; armed: nothing` — this proves the
+   channel is live and the readers agree before anything is written.
+3. **Run A, the lever.** On the host:
+   `pwsh tools\blockpoke.ps1 -ProcId <host pid> console 'moviewarp tar_m03aa 01c'`
+4. **Run B, the hypothesis.** Back in a module with both players together and a phantom
+   standing: `moviewarp queue 01c` on the host, confirm with `moviewarp show`, then move the
+   host through an ordinary door/area transition (or `warp` — a plain `warp` is also
+   plugin-initiated, so a DOOR is what makes run B different from run A).
+5. Whatever the outcome, `moviewarp clear` afterwards. An armed queue outlives the test.
+
+### 7.6 What PASS and FAIL look like, line by line
+
+All lines are in `kotorcoop-plugin.log`; the `cinematic:` ones are also in
+`kotorcoop-plugin.cinematic.log`, the `travel:` ones in `kotorcoop-plugin.travel.log`, and the
+flush lines only in the combined file (they are prefixed `flush...`, which is not a channel).
+
+**Run A, the expected shape on the host, in this order:**
+
+```
+cinematic: armed 01c for the next co-op warp (previously armed: nothing)
+cheat: armed 01c for the next warp (was: nothing) (status 1)
+flush, before the module is stored: destroyed phantom 0x136 (slot 0)
+flush: destroyed item body 0x131 (item 0x...) before the module is stored
+cinematic: staged 1 of 1 movie(s) onto this transition: 01c
+travel: moving to module 'tar_m03aa' on the session's authority
+cinematic: the main thread was gone for NNNNN ms (in a world; 1 transition movie(s) were queued going in) ...
+epoch: module changed; clearing phantom, item, combat and door state
+```
+
+* **The movie actually played** ⟺ `staged 1 of 1` is followed by a stall of **thousands** of
+  milliseconds. `01c` is 6.4 MB and runs about 25 s unskipped; a module load alone measured
+  5.1–5.3 s on this rig (2026-08-15), so **a stall under ~6 s did not include a movie** and the
+  run is void — check `moviewarp show` and the per-name engine verdict before believing
+  anything else.
+* ⚠ `1 transition movie(s) were queued going in` in the stall line comes from
+  `CinematicWatch.NoteStaged`, i.e. from **us**, not from an observation. It cannot be
+  observed: the queue rises and is drained between two `MainLoopHook` callbacks (the write is
+  on the SwapBuffers hook inside the client MainLoop; the drain is in the server MainLoop that
+  follows). The independent confirmation is the per-name engine verdict, and — in run B only —
+  `cinematic: the module transition has queued 1 movie(s): 01c`, which IS an observation,
+  produced by walking `CClientExoAppInternal+0x2D8` with a completely different code path.
+* **FAIL, and stop**: `the engine REFUSED '01c'` (the file is missing or the name is wrong —
+  nothing was staged and the transition that follows is an ordinary movie-less one);
+  `NOT staging ... the game has already queued` (the module itself was about to play something);
+  `the staged movie(s) ... expired unused` (the travel half never arrived — look at the agent
+  console for `the cinematic was not staged, so the warp to X was NOT attempted`).
+
+**The pre-store-flush hypothesis — the three outcomes and what each means.** Compare the flush
+lines against the stall line:
+
+| Outcome | Reading |
+| --- | --- |
+| flush lines **before** the stall | The window was not swallowed. In **run A** this is the expected result and proves only that the plugin-initiated path flushes ahead of itself, which was already known. In **run B** it is the real answer: the engine raised the pending flag, the plugin got at least one frame in it, and the flush completed before the movie took the thread. |
+| flush lines **after** the stall, or interleaved with `epoch:` | The flush started but did not finish before the movie. Anything still standing at that moment is already in the stored module. Expect a partial: some `destroyed phantom` lines, then the stall, then the epoch. **This is a real defect** and the fix is to flush on the pending EDGE rather than one body per frame. |
+| **no flush lines at all** between the stage and the stall | The hypothesis is confirmed: the pending window fell entirely inside the movie. Every phantom and every replicated item standing at that moment is now a permanent resident of the stored module. Confirm with 7.7 before believing it — "there was nothing to flush" produces the same silence, so the run is only interpretable if a phantom and an item body were verifiably standing (grep the run for `spawned phantom` / `spawned item` with no matching destroy). |
+
+**The session survived** ⟺ both logs continue after the stall, both show `epoch: module
+changed` and then phantoms re-spawned, the frame counter in `blockpoke state` advances again,
+and neither log contains `FIRST-CHANCE access violation`.
+
+### 7.7 The check for a baked-in phantom
+
+The thing nobody has ever looked for. After the run, go back to the module that was stored and
+count the bodies the co-op blueprint leaves behind:
+
+```powershell
+pwsh tools\blockpoke.ps1 -ProcId <pid> console 'warp end_m01aa'     # the departed module
+pwsh tools\creatures.ps1 -ProcId <pid>                              # every creature in it
+```
+
+A phantom baked into the save is a creature whose **tag is `coop_phantom`** and which no peer
+is currently driving. The tag is the identifier that matters — the census already excludes
+creatures by that tag precisely because the id table clears before the body finishes dying
+(`transition-window-races.md` §2), so tag is the one thing that survives to the last readable
+moment.
+
+* **CLEAN**: exactly as many `coop_phantom` creatures as there are peers standing in that
+  module right now (normally one), and they disappear on `disconnect`.
+* **BAKED**: a `coop_phantom` creature that is still there with the session down — or, more
+  visibly, **two** of them after re-entering the module a second time. The count growing by one
+  per visit is the signature, and it is unmistakable.
+* Same check for items: a ground item body that persists across a re-entry with no session.
+
+⚠ Do the check with a save that is **discarded afterwards**. A baked phantom is written into
+the save, and it also shifts the object-id counter for the rest of that playthrough.
+
+### 7.8 If it crashes in the window
+
+The transition window is where this codebase historically dies, and a movie makes it seconds
+longer. A crash here presents as **one instance disappearing with nothing after the stall line**
+— the NativeAOT fail-fast bypasses the log entirely.
+
+```powershell
+pwsh tools\crashlog.ps1                      # the Windows Error Reporting record: eip + module
+```
+
+If `eip` is **outside** the `swkotor.exe` image it is our `dinput8.dll`. Take the module's load
+base from the same record, subtract it, and hand the RVA to `llvm-symbolizer` (ships with VS;
+the PDB sits next to the installed dll):
+
+```powershell
+llvm-symbolizer --obj='C:\GOG Games\Star Wars KOTOR (GOG)\dinput8.dll' --relative-address 0x<rva>
+```
+
+That is how `EncounterController.HandleWatch` was found. The first suspects for THIS window,
+in order: a controller dereferencing `block.PlayerCreature` rather than resolving fresh
+(pattern 1 — the block's pointer is a liveness signal only); `ClearAgentWorldInputs` running
+seconds late because the epoch gate could not run during the movie (§2.2), so the agent's stale
+world inputs were live for the whole film; and a `0xC0000409` **anywhere unrelated**, which
+means a stack-skewed engine call — re-run `python tools/callaudit.py --bad` before looking
+anywhere else.
 
 ---
 
@@ -833,14 +1060,16 @@ fire during a movie either.
 | `0x00540ED0` | `CSWVirtualMachineCommands::ExecuteCommandPlayMovie` — NWScript `PlayMovie`; pops the name, `HideLoadScreen(0,1)`, then `PlayMovie` |
 | `0x005481E0` / `0x00548210` / `0x005482D0` | script `IsMoviePlaying` / `QueueMovie` / `PlayMovieQueue`; `movie_queue` at `CClientExoAppInternal+0x2E4` |
 | **`CClientExoAppInternal+0x2D8`** | **`move_to_module_movies : CExoArrayList<CExoString>`** — the transition queue |
-| `0x005EDB50` → `0x006027A0` | `CClientExoApp::AddMoveToModuleMovie(CExoString*)` — appends to it; **the design lever** |
+| `0x005EDB50` → `0x006027A0` | `CClientExoApp::AddMoveToModuleMovie(CExoString*)` — appends to it; **the design lever, and now CALLED** (§7). `__thiscall`, `ret 4` at `0x006027B1`, and EAX carries `AddMovieToExoArrayList`'s verdict straight out |
+| `0x005FBBF0` | `CClientExoAppInternal::AddMovieToExoArrayList(CExoString*, CExoArrayList*)` — `ret 8`. Refuses `""`; for a name with no `:` opens `MOVIES:%s` and returns **0, adding nothing**, if the file is not there; adds through `AddUnique 0x005F7C10`, so a duplicate is dropped silently |
+| `0x005EE380` | `CClientExoApp::RemoveMoveToModuleMovies` — `mov eax,[ecx+4]; mov [eax+0x2DC],0; ret`. A bare `ret`: no arguments. Zeroes the list's SIZE field; `moviewarp clear` is this |
 | `0x005EDB60` | `CClientExoApp::GetMoveToModuleMovies` — `mov eax,[ecx+4]; add eax,0x2D8; ret` |
 | `0x005EDB20` → `0x00602650` | `CClientExoApp::PlayLoadModuleMovies` — one caller only |
 | **`0x004BA920`** | **`CServerExoAppInternal::StartNewModule`** — calls `PlayLoadModuleMovies` at `0x004BA9CA`; one caller, `CServerExoAppInternal::MainLoop 0x004BABB0` at `0x004BAD93`. **The co-op warp path lands here too.** |
 | `0x00544390` | `ExecuteCommandStartNewModule` — NWScript `StartNewModule(module, waypoint, movie1..6)`; six `AddMoveToModuleMovie` calls at `0x0054459E`–`0x005445DA` |
 | `0x006CA250` | `CSWGuiSaveLoad::LoadPCAutoSave` — restores six queued transition movies (`0x006CA8B8`–`0x006CA91E`) |
 | `0x0050D6C0` | `CSWSArea::EventHandler` — queues a transition movie at `0x0050DA9F` |
-| `0x005EE380` / `0x005EE160` / `0x0070C1E0` | `RemoveMoveToModuleMovies` / `CClientExoApp::CancelMovie` / `CExoMoviePlayer::CancelMovie` |
+| `0x005EE160` / `0x0070C1E0` | `CClientExoApp::CancelMovie` / `CExoMoviePlayer::CancelMovie` (`RemoveMoveToModuleMovies` is above) |
 | `0x00405B30` / `0x00405E50` | `Global::MoviePlaybackWorker` (a thread proc; parks the current player in the global `0x007A3CF4`) / `CExoMoviePlayerInternal::PlayMoviesAsync` — sets the playing flag at `0x00405EBF`; playback is on its own thread and `WaitForMovie` is what makes it look synchronous |
 | `0x00404C80` | `CExoMoviePlayerInternal::PlayMovieLoop` — the Bink frame loop with its own message pump. ⚠ **`ret 4`**, not the DB's 0 |
 | `0x00405190` | `Global::MovieWinMessageHandler` — the movie window's WndProc; ESC at `0x00405221`, mouse at `0x004052E8`/`0x00405342`, `WM_ACTIVATEAPP` at `0x00405255`, all → `CExoMoviePlayerInternal::CancelMovie 0x00404C40` |

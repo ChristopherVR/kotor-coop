@@ -114,6 +114,10 @@ internal sealed unsafe class CheatController(SharedBlockView block)
                 DropItem(player);
                 break;
 
+            case SharedBlock.CheatKindStageMovie:
+                StageMovie();
+                break;
+
             default:
                 Answer(SharedBlock.CheatStatusRefused, $"unknown cheat kind {kind}");
                 break;
@@ -484,6 +488,178 @@ internal sealed unsafe class CheatController(SharedBlockView block)
         }
 
         Answer(SharedBlock.CheatStatusApplied, $"dropped '{resref}' as 0x{itemId:X}");
+    }
+
+    /// <summary>
+    /// Stages a cinematic onto a module transition. The instrument that makes the highest-value
+    /// unknown in docs/research/cinematics.md testable without a human playing the escape-pod
+    /// conversation: it puts movie names into the engine's own <c>move_to_module_movies</c>
+    /// queue, which <c>CServerExoAppInternal::StartNewModule</c> drains on the next module load.
+    ///
+    /// It has four modes, and only two of them touch the engine:
+    ///
+    /// <list type="bullet">
+    /// <item><b>warp</b> — ARM the names; <see cref="TravelController"/> writes them into the
+    ///   queue on the frame it fires the warp, after every plugin-spawned body has been
+    ///   flushed. Nothing is written here, so a warp that never happens leaves no trace on the
+    ///   engine.</item>
+    /// <item><b>queue</b> — write them NOW and leave them, so the next transition of ANY kind
+    ///   carries them. This is the honest reproduction of the risk case: a transition the
+    ///   plugin did not initiate and therefore did not flush ahead of.</item>
+    /// <item><b>clear</b> — empty the queue and disarm. The way out.</item>
+    /// <item><b>show</b> — read the queue back and change nothing.</item>
+    /// </list>
+    ///
+    /// Every refusal names what it saw (<see cref="MovieStaging.Explain"/>). This is the
+    /// verb where a silent guard would be worst: "nothing happened" and "the movie played and
+    /// the plugin was unreachable for six seconds" leave almost the same evidence.
+    /// </summary>
+    private void StageMovie()
+    {
+        int mode = block.CheatAmount;
+        int queued = Odyssey.QueuedTransitionMovieCount();
+
+        if (mode == MovieStaging.ModeShow)
+        {
+            Answer(
+                SharedBlock.CheatStatusApplied,
+                $"queued: {DescribeQueue(queued)}; armed: {TravelController.StagedMovies.Describe()}");
+            return;
+        }
+
+        if (mode == MovieStaging.ModeClear)
+        {
+            bool forgot = TravelController.StagedMovies.Forget("cleared by hand", out string dropped);
+            bool cleared = Odyssey.ClearQueuedTransitionMovies();
+
+            if (forgot)
+            {
+                PluginHost.Log($"cinematic: {dropped}");
+            }
+
+            Answer(
+                cleared ? SharedBlock.CheatStatusApplied : SharedBlock.CheatStatusEngineRefused,
+                cleared
+                    ? $"transition movie queue emptied (held {queued}); armed: nothing"
+                    : "no client application here, so there is no queue to empty");
+            return;
+        }
+
+        if (!MovieStaging.TrySplit(ReadCheatText(), out string[] names, out string error))
+        {
+            Answer(SharedBlock.CheatStatusRefused, error);
+            return;
+        }
+
+        MovieStagingVerdict verdict = MovieStaging.Decide(
+            hasClient: Odyssey.HasClient,
+            transitionPending: Odyssey.IsAreaTransitionPending(),
+            moviePlaying: Odyssey.IsMoviePlaying(),
+            alreadyQueued: queued,
+            nameCount: names.Length);
+
+        if (verdict != MovieStagingVerdict.Stage)
+        {
+            Answer(SharedBlock.CheatStatusRefused, MovieStaging.Explain(verdict, queued));
+            return;
+        }
+
+        if (mode == MovieStaging.ModeQueueOnly)
+        {
+            int accepted = QueueMoviesNow(names);
+            Answer(
+                accepted == names.Length ? SharedBlock.CheatStatusApplied : SharedBlock.CheatStatusEngineRefused,
+                accepted == names.Length
+                    ? $"the engine queued {accepted}: {string.Join(", ", names)} - the NEXT transition plays them"
+                    : $"the engine took only {accepted} of {names.Length} (missing .bik?)");
+            return;
+        }
+
+        string previous = TravelController.StagedMovies.Arm(names, Environment.TickCount64);
+
+        PluginHost.Log(
+            $"cinematic: armed {string.Join(", ", names)} for the next co-op warp "
+            + $"(previously armed: {previous})");
+
+        Answer(
+            SharedBlock.CheatStatusApplied,
+            $"armed {string.Join(", ", names)} for the next warp (was: {previous})");
+    }
+
+    /// <summary>
+    /// Writes each name into the engine's queue and counts how many the ENGINE took. It
+    /// refuses a name it has no <c>.bik</c> for (see <c>Odyssey.QueueTransitionMovie</c>), and
+    /// that refusal is the difference between "the cinematic did not play because the design
+    /// is wrong" and "because the file is not in this install" — worth one log line each.
+    /// </summary>
+    private static int QueueMoviesNow(string[] names)
+    {
+        int accepted = 0;
+        byte* buffer = stackalloc byte[MovieStaging.MaxNameLength + 1];
+
+        foreach (string name in names)
+        {
+            int length = name.Length <= MovieStaging.MaxNameLength ? name.Length : MovieStaging.MaxNameLength;
+            for (int i = 0; i < length; i++)
+            {
+                buffer[i] = (byte)name[i];
+            }
+
+            bool ok = Odyssey.QueueTransitionMovie(buffer, length);
+            if (ok)
+            {
+                accepted++;
+            }
+
+            PluginHost.Log(ok
+                ? $"cinematic: the engine accepted '{name}' onto the transition movie queue"
+                : $"cinematic: the engine REFUSED '{name}' - no such movie in this install");
+        }
+
+        return accepted;
+    }
+
+    /// <summary>The engine's queue in words, for an answer a reader can act on.</summary>
+    private static string DescribeQueue(int queued)
+    {
+        if (queued <= 0)
+        {
+            return "nothing";
+        }
+
+        StringBuilder names = new();
+        byte* buffer = stackalloc byte[MovieStaging.MaxNameLength + 1];
+
+        for (int i = 0; i < queued; i++)
+        {
+            int length = Odyssey.ReadQueuedTransitionMovie(i, buffer, MovieStaging.MaxNameLength);
+            if (length <= 0)
+            {
+                continue;
+            }
+
+            if (names.Length > 0)
+            {
+                names.Append(", ");
+            }
+
+            names.Append(Encoding.ASCII.GetString(buffer, length));
+        }
+
+        return names.Length > 0 ? names.ToString() : $"{queued} unreadable";
+    }
+
+    /// <summary>The request's text field as a string, cut at the first null.</summary>
+    private string ReadCheatText()
+    {
+        byte* text = block.CheatText;
+        int length = 0;
+        while (length < SharedBlock.CheatTextLength - 1 && text[length] != 0)
+        {
+            length++;
+        }
+
+        return length == 0 ? string.Empty : Encoding.ASCII.GetString(text, length);
     }
 
     /// <summary>Writes the answer where both the agent and the log will find it. Status and

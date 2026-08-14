@@ -538,6 +538,16 @@ internal static unsafe class PluginHost
         // Focus first: the others do nothing useful in a paused world.
         _focus?.OnFrame();
 
+        // Before either transition branch below, because both of them `return`: a staged
+        // cinematic that nothing came to collect has to expire and SAY so. An arm left
+        // sitting would attach a movie — and the multi-second main-thread stall that comes
+        // with it — to whatever transition happened next, with nothing in the log connecting
+        // the two. See docs/research/cinematics.md §7.
+        if (TravelController.StagedMovies.Expire(Environment.TickCount64, out string expired))
+        {
+            Log($"cinematic: {expired}");
+        }
+
         if (Odyssey.IsAreaTransitionPending())
         {
             // Pre-store flush: StoreCurrentModule serialises every non-party creature and
