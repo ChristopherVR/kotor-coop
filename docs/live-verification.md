@@ -589,3 +589,90 @@ engine then *renders and applies* two upgrades from that mask alone is
 `docs/research/item-identity.md` §3's inference from `HasUpgrade`'s consumer. Confirming it
 needs a human to look at the receiving instance's item description and see the upgrade slots
 filled — one screenshot, and the only step in this whole feature that still wants eyes.
+
+## Three open items closed live (2026-08-15, third pass)
+
+### Client `slay` — WORKS, and the hunt was chasing an aftermath
+
+The forwarded kill had been landing; what looked like failure was the corpse. The decisive
+log, host side:
+
+```
+combat: applied 200 of a peer's damage to 0x35 (owed 100000)   x3
+combat: a peer owes 200 damage to 0x35, which does not resolve here ANY MORE
+        - it did earlier this epoch, so the body was destroyed; holding the debt
+```
+
+and on the client, through the engine's own death path:
+
+```
+combat: killed 0x35 on the owner's authority     <- the client's forwarded slay
+combat: killed 0x1A on the owner's authority     <- the host's own slay, mirrored down
+combat: killed 0x17 on the owner's authority     <- a second forwarded slay, fresh target
+```
+
+The owner census fell 25 -> 23 as they died. Chain confirmed: client forwards a debt keyed
+in owner space -> host spends it as REAL engine damage -> the enemy dies with corpse, loot
+and OnDeath -> the death mirrors back.
+
+**What actually cost three rounds was a diagnostic that could not tell two states apart.**
+"Does not resolve here" was emitted both for *never resolved* (the real defect: an id keyed
+in a space this instance does not share) and for *resolved earlier, then the body was
+destroyed* (success, one tick later). Splitting that one sentence in two ended the hunt
+immediately. Three separate measurements — `census`, `resolve`, `slay` — were also taken
+seconds and processes apart, so each was reading a different world; `resolve` answering both
+lookups in ONE frame is what made them comparable.
+
+Everything else on the way was real and stays fixed: the census liveness gate (a freed
+creature block keeps its vtable and id, so a ghost reads as a creature until the memory is
+reused), ids parsed as hex everywhere (`slay #35` used to kill `0x23`), and diagnostics built
+to fit the 96-byte reply channel with the long form in the log.
+
+### Item identity — WORKS end to end
+
+```
+setitem 0x34 stack=20 charges=3 max=50 upgrades=0x5   ->  0x34: stk 20 chg 3/50 upg 5
+dropitem 0x34                                         ->  dropped g_w_blstrrfl001 as item 0x10002
+receiver plugin: item slot 1: identity applied to 0x132 - asked for (stack 20, charges 3/50,
+                 upgrades 0x5, flags 0x3), item now reads (stack 20, charges 3/50, upgrades 0x5)
+receiver, read externally: item 0x132 g_w_blstrrfl001: stack 20, chg 3/50, upg 0x5, identified
+sender,   read externally: item 0x132 g_w_blstrrfl001: stack 20, chg 3/50, upg 0x5, identified
+```
+
+Three independent witnesses agree, so the README bullet retires on evidence.
+
+⚠ **The previous round's failure was a typo of mine, and the reason it cost a round is now a
+guard.** `CreateItemOnFloor 0x00547F60` calls `LoadFromTemplate` and **never tests the
+result**, so `g_w_blstrpstl01` (the real blueprint is `...001`) produced a live, addressable,
+perfectly valid `CSWSItem` carrying only constructor defaults — and every "did it spawn?"
+check reported success. That body is the whole explanation for `charges 50/1768092`: the
+constructor writes `Charges = 50` and never writes MaxCharges at all. The offset was right;
+the memory had never been written. The spawn now says so:
+`spawned 0x131 but it has NO TAG and 50 charges - the blueprint almost certainly does not
+exist in this install`.
+
+Still needing one human look: whether the engine RENDERS two upgrades from the mask alone
+(the receiving item's description).
+
+### Cinematics — the instrument works; the hypothesis is still open
+
+`moviewarp tar_m03aa 01c` staged and played a real movie on the co-op warp path:
+
+```
+cinematic: armed 01c for the next co-op warp
+flush, before the module is stored: destroyed phantom 0x12D (slot 0)
+cinematic: staged 1 of 1 movie(s) onto this transition: 01c
+travel: moving to module 'tar_m03aa' on the session's authority
+cinematic: the main thread was gone for 15531 ms
+```
+
+**15.5 s against 5.1-5.3 s for a bare module load, so the movie genuinely played** — and the
+mod is unreachable for every one of those seconds. `AddMoveToModuleMovie` is correctly wired
+and the co-op warp path carries a queued movie, which is the design lever `cinematics.md`
+proposed, now confirmed on the running game.
+
+The flush ran BEFORE the stall and the baked-phantom check was clean (two `coop_phantom` rows
+but one distinct id, for one peer). **This does not settle the hypothesis**: on this path the
+plugin initiates the transition and has already destroyed spawned bodies before raising the
+pending flag, so the flush branch under test never runs. That needs `moviewarp queue` plus an
+ENGINE-initiated transition (a door), per `cinematics.md` §7.4 — still outstanding.
