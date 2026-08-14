@@ -104,7 +104,10 @@ public sealed class CoopClient : ICoopSession
         // Bind an ephemeral port: two clients on one machine must not fight over 27015.
         _channel = new UdpChannel(0);
         _buffer = new SnapshotBuffer(settings.InterpolationDelayMs);
-        _nonce = (uint)Random.Shared.Next(1, int.MaxValue);
+        // The identity the host keys our peer slot on. A configured one survives the process,
+        // so a relaunch reclaims the slot instead of joining as a stranger; 0 keeps the old
+        // per-session behaviour. See PeerIdentity.
+        _nonce = settings.PeerIdentity != 0 ? settings.PeerIdentity : PeerIdentity.Mint();
     }
 
     public uint LocalPeerId => _localPeerId;
