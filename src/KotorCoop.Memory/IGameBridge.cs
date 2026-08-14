@@ -52,6 +52,9 @@ public static class CheatKinds
     /// <summary>"Leave this identity field alone." Mirrors
     /// <c>SharedBlock.CheatFieldUnchanged</c>; see there for why all-ones is safe.</summary>
     public const uint Unchanged = 0xFFFF_FFFF;
+    /// <summary>Ask the plugin what this engine knows about one object id, in one frame, on
+    /// the game thread. See SharedBlock.CheatKindResolve.</summary>
+    public const uint Resolve = 9;
 }
 
 /// <summary>The plugin's verdicts, mirroring <c>SharedBlock.CheatStatus*</c>.</summary>

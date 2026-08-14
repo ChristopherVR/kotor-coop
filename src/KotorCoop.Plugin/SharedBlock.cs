@@ -1215,6 +1215,16 @@ internal struct SharedBlock
     /// rather than a test of our intentions.
     /// </summary>
     public const uint CheatKindSetItem = 8;
+    /// Report, ON THE GAME THREAD, everything this engine knows about one object id.
+    ///
+    /// A diagnostic rather than a cheat, and it exists because two lookups that are supposed
+    /// to be the same lookup disagreed: the external agent's transcription of
+    /// CGameObjectArray::GetGameObject said an id was held, and the plugin's in-process
+    /// ResolveServerObject said it was not — same process, same id. Nothing outside the game
+    /// can settle that, because every outside view is a different moment. This asks both
+    /// questions in one frame and writes the whole chain to the plugin log.
+    /// </summary>
+    public const uint CheatKindResolve = 9;
 
     /// <summary>The request was carried out here.</summary>
     public const int CheatStatusApplied = 1;

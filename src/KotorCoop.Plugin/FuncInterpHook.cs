@@ -39,7 +39,7 @@ internal static unsafe class FuncInterpHook
 
         // A diagnostic, not a cheat: prints what this instance's enemy census holds and what
         // its own engine says about each id. It shadows nothing the retail console owns.
-        "census",
+        "census", "resolve",
 
         // "netsim" only, not its "net" alias: a three-letter word is far too likely to shadow
         // something the engine's own console owns, and `coop net ...` already routes through

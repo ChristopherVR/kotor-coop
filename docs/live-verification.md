@@ -337,52 +337,51 @@ scanned creature through the engine's own `CGameObjectArray` (transcribed from
 `CGameObjectArray::GetGameObject` 0x004D8230) before publishing, and the cheat path's
 owner/local id confusion (`CheatAuthority.MirrorIds`) is fixed alongside it.
 
-**Round one ran 2026-08-15 and was INCONCLUSIVE — the diagnostic was silent.** The census
-count moved (32 → 25, but 32 was the cap, so that number moves for any reason), no `[census]`
-line appeared at all, and `0x35` still survived and still did not resolve on the host. The
-gate only spoke when it dropped something, so "no line" meant any of "no ghosts", "never ran"
-or "sink not wired" — three findings needing three different fixes. That ambiguity is now
-removed: every pass reports on a 30 s heartbeat, the drop names the ids it dropped, the gate
-is applied at the publish point as well as the scan, and the state can be ASKED for.
+**Round one was INCONCLUSIVE** (the diagnostic was silent — see the gate's four states now).
+**Round two localised it to one contradiction**, verbatim from the rig:
 
-**The live check, round two** (unattended, both instances up in the same module). Run all
-four; the first two alone settle where the defect is.
+- agent, host: `census 0x35` -> `object array: held at 0x19179E38 | raw scan: 0x19179E38 'end_weld'`
+- plugin, host: `slay 0x35` -> `no object 0x35 in this module`
+
+Same process, same id, two lookups that are supposed to BE the same lookup. The binary rules
+out the easy explanations (same array field `+0x1005C` both ways, the `[0x74666C]` sentinel is
+`0x00` in read-only `.rdata`, identical bucket arithmetic) — see
+`docs/research/enemy-presence-sync.md` §"Round three".
+
+**The live check, round three.** The point of run three is ONE line: the plugin answering both
+questions in the same frame.
 
 ```powershell
-# 1. ASK THE HOST what it is publishing and what its own engine says about each id.
-pwsh toolslockpoke.ps1 -ProcId <host> console 'census'
-#    line 1  "census: gate: ..." - one of:
-#      "array 0x... confirmed K of N ... (no ghosts)"   -> the check runs and the scan is clean
-#      "array 0x... confirmed K of N, dropped D (0x..)" -> the check runs and is removing ghosts
-#      "NOT CHECKING - no server object array"          -> the pointer chain is wrong; that is
-#                                                          the bug, and nothing was ever gated
-#    line 2  "census: my own census holds N id(s) ...; N resolve in MY engine, 0 do not"
-#            As the OWNER, any non-zero "do not" is the defect, and each is then named.
+# 1. THE DECIDING MEASUREMENT — in-process, one frame, on the game thread.
+pwsh tools\blockpoke.ps1 -ProcId <host> console 'resolve 0x35'
+#    console answers a summary; THE FULL LINE IS IN THE PLUGIN LOG:
+#      <gamedir>\kotorcoop-plugin.log   ->   "resolve: 0x35: server 0x.. internal 0x..
+#      array(+0x1005C) 0x.. array(engine) 0x.. | engine 0x.. walk 0x.. resolve 0x..
+#      | at 0x..: vtable 0x.. id+4 0x.. id+0x14 0x.. type 0x.."
+#    Please paste that whole line. It is the entire round.
+#      engine 0 + walk non-zero  -> the engine call is not the lookup we think; agent is right
+#      engine non-zero + resolve 0 -> the post-check is rejecting it, and id+4/id+0x14 say why
+#      both 0                    -> compare array(+0x1005C) with array(engine) on the same line
 
-# 2. ASK BOTH SIDES ABOUT THE DISPUTED ID. This is the line that ends the argument.
-pwsh toolslockpoke.ps1 -ProcId <host>   console 'census 0x35'
-pwsh toolslockpoke.ps1 -ProcId <client> console 'census 0x35'
-#    "census: 0x35  object array: ...  |  raw scan: ...  |  census: ..."
-#      array NOT HELD + raw scan present -> a ghost the gate should have caught (gate bug)
-#      array NOT HELD + raw scan absent  -> the id never came from this instance at all;
-#                                           the search moves to the wire, not to memory
-#      array held                        -> the agent and the plugin disagree; go to check 3
+# 2. The same question of an id that WORKS, as the control. Pick any id the host can kill
+#    (e.g. one `census` lists and `slay` accepts) so the two lines can be diffed.
+pwsh tools\blockpoke.ps1 -ProcId <host> console 'resolve 0x1A'
 
-# 3. THE PLUGIN'S OWN VERDICT on the same id, through the engine, on the game thread.
-pwsh toolslockpoke.ps1 -ProcId <host> console 'slay #35'
-#    "no object 0x35 in this module" = the plugin cannot resolve it either (agree)
-#    a kill, or any other refusal   = the plugin CAN resolve it (disagree with check 2)
+# 3. Unchanged from round two, for context beside the above.
+pwsh tools\blockpoke.ps1 -ProcId <host>   console 'census'
+pwsh tools\blockpoke.ps1 -ProcId <host>   console 'census 0x35'
 
-# 4. The end-to-end result, once 1-3 agree.
-pwsh toolslockpoke.ps1 -ProcId <client> console 'slay'
-#    client: "queued a killing blow for the owner, keyed by owner id 0xNN"
-#    host plugin log: "combat: applied 100000 of a peer's damage to 0xNN"
-#                     and NOT "which does not resolve here"
+# 4. Only once 1-2 agree: the end-to-end result.
+pwsh tools\blockpoke.ps1 -ProcId <client> console 'slay'
 ```
 
-Please paste checks 1-3 verbatim even if they look boring — the previous round's evidence was
-three outside views that disagreed, and these are the same question asked from inside each
-instance.
+⚠ `#NN` and bare numbers are now **hex** in every console verb (`slay #35` killed `0x23`
+before this run — it parsed as decimal 35). A bare token with letters is still a TAG, so
+`slay beef` aims at the creature tagged `beef`, not at `0xBEEF`.
+
+⚠ Console answers are capped at 96 bytes and truncate without a mark. Every diagnostic line is
+now built to fit, and anything longer (the `resolve` chain) goes to the plugin log instead —
+read that file, not just the console.
 
 ### Still unverified — item identity apply
 

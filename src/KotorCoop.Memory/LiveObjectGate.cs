@@ -37,24 +37,34 @@ public readonly record struct CensusGateReport(
     int Dropped,
     IReadOnlyList<uint> DroppedIds)
 {
-    /// <summary>One line, always safe to print, that names the state and its numbers.</summary>
+    /// <summary>
+    /// One line, always safe to print, that names the state and its numbers.
+    ///
+    /// ⚠ KEPT UNDER <see cref="MaxLineLength"/>. The console answer channel is 96 bytes
+    /// (<c>SharedBlock.ConsoleReplyLength</c>) and truncates without a mark, which on
+    /// 2026-08-15 cut the tail off every diagnostic answer exactly where it became
+    /// interesting — the sentence explaining the numbers survived and the numbers did not.
+    /// A diagnostic that does not fit the channel it is read through is not a diagnostic, so
+    /// the prose lives in this file's comments and the line carries facts.
+    /// </summary>
     public string Describe() => State switch
     {
-        CensusGateState.NeverRun => "gate: no pass has run yet",
-        CensusGateState.NothingToCheck => "gate: nothing scanned (no world loaded)",
+        CensusGateState.NeverRun => "gate: no pass yet",
+        CensusGateState.NothingToCheck => "gate: nothing scanned (no world)",
         CensusGateState.NoObjectArray =>
-            $"gate: NOT CHECKING - no server object array; all {Scanned} scanned creatures pass "
-            + "unchecked (normal at the menu or mid-transition, a wrong pointer chain otherwise)",
+            $"gate: NOT CHECKING - no object array; all {Scanned} pass unchecked",
         CensusGateState.Distrusted =>
-            $"gate: the object array at 0x{ObjectArray:X} confirmed NONE of {Scanned} scanned "
-            + "creatures - distrusting the check and publishing them all (offsets or a rebuild, "
-            + "not an empty world)",
-        _ => $"gate: array 0x{ObjectArray:X} confirmed {Confirmed} of {Scanned} scanned creatures"
+            $"gate: array 0x{ObjectArray:X} confirmed 0 of {Scanned} - distrusting it, publishing all",
+        _ => $"gate: array 0x{ObjectArray:X} confirmed {Confirmed} of {Scanned}"
             + (Dropped > 0
-                ? $", dropped {Dropped} not in it ({string.Join(", ", DroppedIds.Select(id => $"0x{id:X}"))}"
-                    + (Dropped > DroppedIds.Count ? ", ...)" : ")")
+                ? $", dropped {Dropped} ({string.Join(" ", DroppedIds.Take(3).Select(id => $"0x{id:X}"))}"
+                    + (Dropped > Math.Min(3, DroppedIds.Count) ? " ..)" : ")")
                 : " (no ghosts)"),
     };
+
+    /// <summary>The console answer channel is 96 bytes and silently truncates; every line a
+    /// diagnostic emits must fit inside it with room for the caller's own prefix.</summary>
+    public const int MaxLineLength = 88;
 }
 
 /// <summary>What a <see cref="LiveObjectGate"/> pass did, for the caller's log.</summary>

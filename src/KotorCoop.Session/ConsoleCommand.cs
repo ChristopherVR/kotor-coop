@@ -72,6 +72,17 @@ public enum CoopCommandKind
     Census,
 
     /// <summary>
+    /// Ask the PLUGIN what this engine knows about one object id — the pointer chain, both
+    /// ways of reaching the object array, the engine's own lookup and an in-process
+    /// transcription of it, all in one frame on the game thread. The id is in
+    /// <see cref="CoopCommand.Address"/>.
+    ///
+    /// The companion to <see cref="Census"/>, which answers the same question from the
+    /// AGENT's side. Running both is how a disagreement between them is localised.
+    /// </summary>
+    ResolveObject,
+
+    /// <summary>
     /// Inject a transport fault on the live session so a disconnect can be reproduced with
     /// nobody touching a cable. The sub-verb is in <see cref="CoopCommand.Address"/> and its
     /// argument (percentage, milliseconds, seconds, direction) in
@@ -377,6 +388,11 @@ public static class ConsoleCommand
             case "census":
                 return new CoopCommand(
                     CoopCommandKind.Census, Address: rest.Length > 0 ? rest[0] : null);
+
+            case "resolve":
+                return rest.Length == 0
+                    ? new CoopCommand(CoopCommandKind.Invalid, Error: "resolve <id>  (e.g. resolve 0x35)")
+                    : new CoopCommand(CoopCommandKind.ResolveObject, Address: rest[0]);
 
             // ---- staging cheats -------------------------------------------------
 
@@ -794,6 +810,19 @@ public static class ConsoleCommand
     /// Parses an object id in the three spellings a person types. Public because the agent
     /// resolves the same token against the world and must agree with the parser about what
     /// counts as an id.
+    ///
+    /// ⚠ ALL THREE SPELLINGS ARE HEX, and the two that did not used to be were a live
+    /// footgun. Every id this project ever shows a person — engine log, plugin log, agent
+    /// reply, `creatures.ps1` dump, this file's own error messages — is printed in hex, so
+    /// the only thing anyone can type is a number they just read in hex. Measured on
+    /// 2026-08-15: `slay #35` was typed to kill the disputed `0x35` and killed `0x23`
+    /// instead, silently, because `#35` parsed as decimal 35. There is no source anywhere in
+    /// this project for a DECIMAL object id, so the base that produced that accident had no
+    /// user at all.
+    ///
+    /// Peer-list indices (`connect #2`, `goto #1`) are a different thing that happens to
+    /// share the `#` character; they are parsed by their own callers and stay decimal, which
+    /// is right — they are positions in a numbered list a person is reading, not ids.
     /// </summary>
     public static bool TryParseObjectId(string value, out uint objectId)
     {
@@ -809,14 +838,37 @@ public static class ConsoleCommand
             span = span[1..];
         }
 
+        bool marked = span.Length != value.Length;
+
         if (span.StartsWith("0x", StringComparison.OrdinalIgnoreCase))
         {
-            return uint.TryParse(
-                span[2..], System.Globalization.NumberStyles.HexNumber,
-                System.Globalization.CultureInfo.InvariantCulture, out objectId);
+            span = span[2..];
+            marked = true;
         }
 
-        return uint.TryParse(span, out objectId);
+        if (span.IsEmpty)
+        {
+            return false;
+        }
+
+        // ⚠ A BARE token competes with TAGS, and plenty of real tags are valid hex —
+        // `end_weld` is not, but `cad`, `beef` and `add` are, and reading one of those as a
+        // number would target a creature nobody named. So a bare token is only an id when it
+        // is all digits; anything with a letter has to say `0x` or `#` and mean it.
+        if (!marked)
+        {
+            foreach (char c in span)
+            {
+                if (c is < '0' or > '9')
+                {
+                    return false;
+                }
+            }
+        }
+
+        return uint.TryParse(
+            span, System.Globalization.NumberStyles.HexNumber,
+            System.Globalization.CultureInfo.InvariantCulture, out objectId);
     }
 
     /// <summary>
@@ -978,7 +1030,7 @@ public static class ConsoleCommand
 
     /// <summary>One-line help listing the commands, for the overlay and dashboard.</summary>
     public const string HelpText =
-        "commands: servers | connect <ip|#n> [password] | password <pw> | host | disconnect | reconnect | say <msg> | clear | status | warp <module> | who | where | census | cheats | netsim <off|status|loss|latency|blackout> | help";
+        "commands: servers | connect <ip|#n> [password] | password <pw> | host | disconnect | reconnect | say <msg> | clear | status | warp <module> | who | where | census | resolve <id> | cheats | netsim <off|status|loss|latency|blackout> | help";
 
     /// <summary>
     /// The staging-cheat listing. Two halves on purpose: what co-op adds, and what the
@@ -1012,6 +1064,7 @@ public static class ConsoleCommand
         "  moviewarp <module> <movie...>   warp WITH a cinematic (the plugin stops for it)",
         "  moviewarp queue <movie...> | clear | show",
         "  census [id]         what my enemy census holds, and what my own engine says of each id",
+        "  resolve <id>        what the ENGINE knows about one id, in one frame (plugin log has the chain)",
         "retail console cheats, already co-op-safe (they touch only your game):",
         "  giveitem <resref> | givecredits <n> | addexp <n> | addlevel | heal",
         "  revealmap | infiniteuses | invulnerability | whereami | bright | turbo",
