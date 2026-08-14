@@ -1087,6 +1087,16 @@ public static class PacketCodec
         w.WriteString(item.Resref, ProtocolConstants.MaxResrefLength);
         w.WriteString(item.Module, ProtocolConstants.MaxModuleLength);
         w.WriteVector3(item.Position);
+
+        // Nine fixed bytes of per-instance state, always present. A variable-length
+        // encoding would save eight bytes on an unknown identity and buy a second way for
+        // the two sides to disagree about how long an item entry is; the worst-case
+        // snapshot still fits one datagram with the fixed form (asserted by a test).
+        w.WriteUInt16(item.Identity.StackSize);
+        w.WriteUInt8(item.Identity.Charges);
+        w.WriteUInt8(item.Identity.MaxCharges);
+        w.WriteUInt32(item.Identity.Upgrades);
+        w.WriteUInt8(item.Identity.Flags);
     }
 
     // ---- read -----------------------------------------------------------------
@@ -1408,7 +1418,18 @@ public static class PacketCodec
         string resref = r.ReadString();
         string module = r.ReadString();
         Vector3f position = r.ReadVector3();
-        return r.Failed ? null : new GroundItem(itemId, resref, module, position);
+
+        ushort stackSize = r.ReadUInt16();
+        byte charges = r.ReadUInt8();
+        byte maxCharges = r.ReadUInt8();
+        uint upgrades = r.ReadUInt32();
+        byte flags = r.ReadUInt8();
+
+        return r.Failed
+            ? null
+            : new GroundItem(
+                itemId, resref, module, position,
+                new ItemIdentity(stackSize, charges, maxCharges, upgrades, flags));
     }
 
     public static int Write(Span<byte> buffer, PartyRosterPacket packet)

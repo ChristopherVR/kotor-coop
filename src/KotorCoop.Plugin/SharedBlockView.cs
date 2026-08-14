@@ -66,6 +66,24 @@ internal readonly unsafe struct ItemSlotView(byte* slot)
 
     /// <summary>Pointer to the null-terminated ascii resref, 16 bytes.</summary>
     public byte* Resref => slot + 0x14;
+
+    /// <summary>Installed-upgrade bitmask for <c>CSWSItem+0x294</c>.</summary>
+    public uint Upgrades => *(uint*)(slot + 0x24);
+
+    /// <summary>Stack size for <c>CSWSItem+0x28C</c>.</summary>
+    public uint StackSize => *(uint*)(slot + 0x28);
+
+    private uint Packed => *(uint*)(slot + 0x2C);
+
+    public uint Charges => Packed & 0xFF;
+
+    public uint MaxCharges => (Packed >> 8) & 0xFF;
+
+    public uint IdentityFlags => (Packed >> 16) & 0xFF;
+
+    /// <summary>Whether the agent actually read this item's state. False means the slot
+    /// carries a blueprint name and nothing more, and the spawned item must be left alone.</summary>
+    public bool IdentityKnown => (IdentityFlags & SharedBlock.ItemIdentityKnown) != 0;
 }
 
 /// <summary>

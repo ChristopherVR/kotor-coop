@@ -117,7 +117,8 @@ public sealed class CoopClient : ICoopSession
 
     public GroundItemStore Items { get; } = new();
 
-    public uint DropItem(string resref, string module, Vector3f position)
+    public uint DropItem(
+        string resref, string module, Vector3f position, ItemIdentity identity = default)
     {
         if (_localPeerId == 0)
         {
@@ -130,7 +131,7 @@ public sealed class CoopClient : ICoopSession
             itemId = (_localPeerId << 16) | (_nextItemSequence++ & 0xFFFF);
         }
 
-        GroundItem item = new(itemId, resref, module, position);
+        GroundItem item = new(itemId, resref, module, position, identity);
 
         // Applied locally straight away so the dropping player is not waiting on a round
         // trip; the host's authoritative version will confirm or correct it.

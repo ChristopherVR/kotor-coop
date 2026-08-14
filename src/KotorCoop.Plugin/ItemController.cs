@@ -238,6 +238,23 @@ internal sealed unsafe class ItemController(SharedBlockView block)
             return;
         }
 
+        // The engine made a stock copy of the blueprint; the peer sent us THEIR copy.
+        // Reconcile the difference before anything can look at the item — but only when the
+        // agent actually read the far side's state, because an unknown identity must leave
+        // the item exactly as the engine made it rather than assert a stock one.
+        if (desired.IdentityKnown)
+        {
+            bool applied = Odyssey.ApplyItemIdentity(
+                objectId, desired.Upgrades, desired.StackSize,
+                desired.Charges, desired.MaxCharges, desired.IdentityFlags);
+
+            PluginHost.Log(applied
+                ? $"item slot {slot}: identity applied to 0x{objectId:X} "
+                  + $"(stack {desired.StackSize}, charges {desired.Charges}/{desired.MaxCharges}, "
+                  + $"upgrades 0x{desired.Upgrades:X}, flags 0x{desired.IdentityFlags:X})"
+                : $"item slot {slot}: identity SKIPPED for 0x{objectId:X} — not a live item here");
+        }
+
         nint serverObject = Odyssey.ResolveServerObject(objectId);
         uint areaId = serverObject != 0 ? Odyssey.GetAreaId(serverObject) : 0;
 

@@ -503,13 +503,14 @@ public sealed class KotorGameBridge : IGameBridge
     private const uint BlockPartyRosterSlotMask = 0x1FF;
     private const uint BlockPartyRosterValid = 0x8000_0000;
 
-    /// <summary>16-byte signature: "KOCOOP01" + version 38 + guard 0xC0FFEE01. The version is
+    /// <summary>16-byte signature: "KOCOOP01" + version 39 + guard 0xC0FFEE01. The version is
     /// part of the pattern deliberately: an agent must not attach to a plugin whose block
     /// layout it does not know, and a stale pair fails to find each other rather than reading
     /// the wrong offsets. ⚠ Bump this WITH PluginHost's `_block->Version` — they are one
     /// number in two files, and a half-bump reads as "plugin shared block not found", which
-    /// looks like a broken install rather than a version skew.</summary>
-    public const string PluginSignature = "4B 4F 43 4F 4F 50 30 31 26 00 00 00 01 EE FF C0";
+    /// looks like a broken install rather than a version skew.
+    /// 39 = per-instance item identity in the item slot's tail (SharedBlock, version 39).</summary>
+    public const string PluginSignature = "4B 4F 43 4F 4F 50 30 31 27 00 00 00 01 EE FF C0";
 
     /// <summary>Agent's view of which coop item id occupies each plugin item slot.</summary>
     private readonly uint[] _itemSlotIds = new uint[BlockItemCapacity];
@@ -972,6 +973,7 @@ public sealed class KotorGameBridge : IGameBridge
             _cachedForModule = module;
             InvalidateCreatureCache();
             _itemTags.Clear();
+            _itemAddresses.Clear();
             _itemTagMisses.Clear();
             _itemTagsBuiltAtMs = 0;
         }
@@ -1372,8 +1374,22 @@ public sealed class KotorGameBridge : IGameBridge
         {
             GroundItem item = items[j];
 
-            if (item.ItemId == 0 || FindItemSlot(item.ItemId) >= 0)
+            if (item.ItemId == 0)
             {
+                continue;
+            }
+
+            int assigned = FindItemSlot(item.ItemId);
+            if (assigned >= 0)
+            {
+                // Already published. Its identity can still have been LEARNED since — the
+                // store merges one upward whenever a better-informed announcement arrives —
+                // so keep the slot current. The plugin only reads identity when it spawns a
+                // body, so this does not retro-fix an item already on the floor; it means a
+                // respawn after a module transition gets the item right instead of stock.
+                WriteItemIdentity(
+                    _pluginBlock + BlockItemSlots + (assigned * BlockItemSlotStride),
+                    item.Identity);
                 continue;
             }
 
@@ -1399,6 +1415,8 @@ public sealed class KotorGameBridge : IGameBridge
             ok &= _memory.TryWrite(slot + 0x0C, item.Position.Y);
             ok &= _memory.TryWrite(slot + 0x10, item.Position.Z);
             ok &= _memory.TryWriteAsciiString(slot + 0x14, item.Resref, BlockItemResrefLength);
+
+            ok &= WriteItemIdentity(slot, item.Identity);
 
             // Wanted last, so the plugin never observes a half-written slot.
             ok &= _memory.TryWrite(slot + 0x00, 1u);
@@ -1442,6 +1460,24 @@ public sealed class KotorGameBridge : IGameBridge
         }
 
         return vanished;
+    }
+
+    /// <summary>
+    /// Publishes an item's per-instance state into the slot's tail (block version 39).
+    ///
+    /// The charges/max-charges/flags trio goes out as ONE dword because the plugin reads the
+    /// slot on its own frames: three separate WriteProcessMemory calls are three moments it
+    /// could see a half-updated identity, and one is none. An unknown identity writes zeroes,
+    /// which is exactly what the plugin reads as "leave the item you just made alone".
+    /// </summary>
+    private bool WriteItemIdentity(nint slot, ItemIdentity identity)
+    {
+        bool ok = _memory.TryWrite(slot + 0x24, identity.Upgrades);
+        ok &= _memory.TryWrite(slot + 0x28, (uint)identity.StackSize);
+        ok &= _memory.TryWrite(slot + 0x2C, identity.Charges
+            | ((uint)identity.MaxCharges << 8)
+            | ((uint)identity.Flags << 16));
+        return ok;
     }
 
     private int FindItemSlot(uint itemId)
@@ -4305,10 +4341,17 @@ public sealed class KotorGameBridge : IGameBridge
     }
 
     /// <summary>CSWSItem vtable; every 4-byte occurrence in private memory is an item.</summary>
-    private const uint ItemVtable = 0x00748DA0;
+    private const uint ItemVtable = ItemIdentityLayout.ItemVtable;
 
     /// <summary>objectId -&gt; lowercased tag, rebuilt when an id is not found.</summary>
     private readonly Dictionary<uint, string> _itemTags = [];
+
+    /// <summary>objectId -&gt; the CSWSItem BASE address the same scan found it at, so an
+    /// item's per-instance state can be read without a second sweep. Kept beside the tag
+    /// map rather than folded into it because the two have different lifetimes in practice:
+    /// a tag is cached for the whole module, an address is only worth believing while the
+    /// vtable at it still says "item".</summary>
+    private readonly Dictionary<uint, nint> _itemAddresses = [];
 
     /// <summary>
     /// Reads the tag of the item equipped in an inventory slot, lowercased so it can be
@@ -4410,6 +4453,7 @@ public sealed class KotorGameBridge : IGameBridge
     private void RebuildItemTagCache()
     {
         _itemTags.Clear();
+        _itemAddresses.Clear();
 
         // A fresh scan can resolve ids that missed before (an item just picked up), so the
         // miss list must not outlive it.
@@ -4436,6 +4480,11 @@ public sealed class KotorGameBridge : IGameBridge
                 continue;
             }
 
+            // The scan hit the vtable POINTER, which is the CSWSItem base by construction —
+            // the vtable is at +0x00. That is the address the per-instance state fields are
+            // measured from, so record it whether or not the tag reads.
+            _itemAddresses[id] = address;
+
             string tag = SanitiseResref(ReadExoString(tagAddress));
             if (tag.Length > 0)
             {
@@ -4443,6 +4492,68 @@ public sealed class KotorGameBridge : IGameBridge
             }
         }
     }
+
+    /// <summary>
+    /// Reads one live item's per-instance state — stack size, charges, upgrade mask and the
+    /// identified/stolen bits — so a drop can carry THIS item rather than its blueprint.
+    ///
+    /// Pure reads: no engine call, nothing written, so a wrong address costs a false answer
+    /// and never a crash in the game. The vtable is re-checked at the moment of reading
+    /// rather than trusted from the scan, because an item picked up and merged into a stack
+    /// really is freed and its memory reused (see <c>Odyssey.GetItemFloorState</c>'s note on
+    /// the same hazard). A miss returns <see cref="ItemIdentity.Unknown"/>, which every
+    /// consumer treats as "leave the far side's fresh item alone".
+    /// </summary>
+    public bool TryReadItemIdentity(uint itemObjectId, out ItemIdentity identity)
+    {
+        identity = ItemIdentity.Unknown;
+
+        if (itemObjectId is 0 or >= 0x7F000000)
+        {
+            return false;
+        }
+
+        if (!_itemAddresses.TryGetValue(itemObjectId, out nint address))
+        {
+            // Same rate limit as the tag lookup, and for the same reason: a sweep of the
+            // game's committed memory per miss per tick is what once dropped the pump to
+            // about 4 Hz.
+            long nowMs = Environment.TickCount64;
+            if (nowMs - _itemTagsBuiltAtMs < ItemTagRebuildMs)
+            {
+                return false;
+            }
+
+            _itemTagsBuiltAtMs = nowMs;
+            RebuildItemTagCache();
+
+            if (!_itemAddresses.TryGetValue(itemObjectId, out address))
+            {
+                return false;
+            }
+        }
+
+        if (!_memory.TryReadUInt32(address, out uint vtable) || vtable != ItemVtable
+            || !_memory.TryReadUInt32(address + 0x14, out uint id) || id != itemObjectId)
+        {
+            _itemAddresses.Remove(itemObjectId);
+            return false;
+        }
+
+        byte[] window = new byte[ItemIdentityLayout.WindowLength];
+        if (!_memory.TryRead(address + ItemIdentityLayout.WindowStart, window))
+        {
+            return false;
+        }
+
+        identity = ItemIdentityLayout.Decode(window);
+        return identity.IsKnown;
+    }
+
+    /// <summary>The blueprint resref of a live item, if the tag scan has seen it. Empty when
+    /// it has not — the caller must not invent one.</summary>
+    public string ItemResref(uint itemObjectId) =>
+        _itemTags.TryGetValue(itemObjectId, out string? tag) ? tag : string.Empty;
 
     /// <summary>Reads a CExoString: a char* and a length, not a null-terminated buffer.</summary>
     private string ReadExoString(nint address)

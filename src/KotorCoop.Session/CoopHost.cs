@@ -92,7 +92,8 @@ public sealed class CoopHost : ICoopSession
         Flags.Set(flagId, value);
     }
 
-    public uint DropItem(string resref, string module, Vector3f position)
+    public uint DropItem(
+        string resref, string module, Vector3f position, ItemIdentity identity = default)
     {
         uint itemId;
         lock (_gate)
@@ -100,7 +101,9 @@ public sealed class CoopHost : ICoopSession
             itemId = (HostPeerId << 16) | (_nextItemSequence++ & 0xFFFF);
         }
 
-        return Items.Drop(new GroundItem(itemId, resref, module, position)) ? itemId : 0;
+        return Items.Drop(new GroundItem(itemId, resref, module, position, identity))
+            ? itemId
+            : 0;
     }
 
     public void RemoveItem(uint itemId) => Items.Remove(itemId);
