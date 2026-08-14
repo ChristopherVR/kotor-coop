@@ -114,6 +114,10 @@ internal sealed unsafe class CheatController(SharedBlockView block)
                 DropItem(player);
                 break;
 
+            case SharedBlock.CheatKindResolve:
+                Resolve();
+                break;
+
             default:
                 Answer(SharedBlock.CheatStatusRefused, $"unknown cheat kind {kind}");
                 break;
@@ -325,6 +329,36 @@ internal sealed unsafe class CheatController(SharedBlockView block)
                 Answer(SharedBlock.CheatStatusRefused, explanation);
                 break;
         }
+    }
+
+    /// <summary>
+    /// Reports what this engine knows about one object id — the whole chain, both lookups,
+    /// one frame.
+    ///
+    /// ⚠ The full line goes to the PLUGIN LOG, and only a summary to the console answer. The
+    /// answer channel is 96 characters (<c>SharedBlock.ConsoleReplyLength</c>) and this line
+    /// is several times that; a diagnostic that is cut off exactly where it becomes
+    /// interesting is how the previous round's evidence was lost.
+    /// </summary>
+    private void Resolve()
+    {
+        uint objectId = block.CheatTarget;
+
+        if (objectId == 0)
+        {
+            Answer(SharedBlock.CheatStatusNoTarget, "no id given");
+            return;
+        }
+
+        string detail = Odyssey.DescribeObjectResolution(objectId);
+        PluginHost.Log($"resolve: {detail}");
+
+        // The summary keeps the one comparison that decides everything: what the engine's own
+        // lookup returned, and what the resolver made of it.
+        nint resolved = Odyssey.ResolveServerObject(objectId);
+        Answer(
+            resolved != 0 ? SharedBlock.CheatStatusApplied : SharedBlock.CheatStatusNoTarget,
+            $"0x{objectId:X} resolves to 0x{resolved:X} here; chain in the plugin log");
     }
 
     /// <summary>

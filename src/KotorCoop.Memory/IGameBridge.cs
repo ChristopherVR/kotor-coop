@@ -36,6 +36,10 @@ public static class CheatKinds
     public const uint Slay = 4;
     public const uint Teleport = 5;
     public const uint DropItem = 6;
+
+    /// <summary>Ask the plugin what this engine knows about one object id, in one frame, on
+    /// the game thread. See SharedBlock.CheatKindResolve.</summary>
+    public const uint Resolve = 7;
 }
 
 /// <summary>The plugin's verdicts, mirroring <c>SharedBlock.CheatStatus*</c>.</summary>

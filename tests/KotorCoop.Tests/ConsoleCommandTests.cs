@@ -373,11 +373,45 @@ public class ConsoleCommandTests
         Assert.Contains(ConsoleCommand.CheatsText, l => l.Contains("giveitem"));
     }
 
+    /// <summary>
+    /// ⚠ ALL THREE SPELLINGS ARE HEX, and this test is the regression for a live footgun.
+    /// Every id this project prints — logs, replies, creatures.ps1 — is hex, so the only
+    /// number anyone can type is one they read in hex. Measured 2026-08-15: `slay #35`,
+    /// typed to kill the disputed 0x35, silently killed 0x23 because `#35` parsed as
+    /// decimal. There is no source anywhere for a decimal object id.
+    /// </summary>
     [Theory]
     [InlineData("0x2A", 0x2Au)]
-    [InlineData("#42", 42u)]
-    [InlineData("42", 42u)]
-    public void ObjectIdsParseInAllThreeSpellings(string token, uint expected)
+    [InlineData("#42", 0x42u)]
+    [InlineData("42", 0x42u)]
+    [InlineData("#35", 0x35u)]
+    [InlineData("0x35", 0x35u)]
+    public void ObjectIdsParseAsHexInAllThreeSpellings(string token, uint expected)
+    {
+        Assert.True(ConsoleCommand.TryParseObjectId(token, out uint id));
+        Assert.Equal(expected, id);
+    }
+
+    /// <summary>
+    /// The other half of that rule: a BARE token competes with tags, and plenty of real tags
+    /// are valid hex. `slay beef` must aim at the creature tagged "beef", not at object
+    /// 0xBEEF — so hex letters need `0x` or `#` to say they are a number.
+    /// </summary>
+    [Theory]
+    [InlineData("beef")]
+    [InlineData("cad")]
+    [InlineData("end_weld")]
+    public void ABareTokenWithLettersIsATagNotAnId(string token)
+    {
+        Assert.False(ConsoleCommand.TryParseObjectId(token, out _));
+    }
+
+    /// <summary>Marked forms may carry hex letters, because the mark says "this is a
+    /// number".</summary>
+    [Theory]
+    [InlineData("#beef", 0xBEEFu)]
+    [InlineData("0xbeef", 0xBEEFu)]
+    public void AMarkedTokenMayCarryHexLetters(string token, uint expected)
     {
         Assert.True(ConsoleCommand.TryParseObjectId(token, out uint id));
         Assert.Equal(expected, id);
@@ -388,9 +422,20 @@ public class ConsoleCommandTests
     [InlineData("")]
     [InlineData("#")]
     [InlineData("0xzz")]
+    [InlineData("#zz")]
     public void ANonIdIsNotAnObjectId(string token)
     {
         Assert.False(ConsoleCommand.TryParseObjectId(token, out _));
+    }
+
+    /// <summary>The in-process resolve question needs an id and refuses without one — it is
+    /// a measurement of ONE object, and a blank one would silently measure nothing.</summary>
+    [Fact]
+    public void ResolveNeedsAnId()
+    {
+        Assert.Equal(CoopCommandKind.ResolveObject, ConsoleCommand.Parse("resolve 0x35").Kind);
+        Assert.Equal("0x35", ConsoleCommand.Parse("resolve 0x35").Address);
+        Assert.Equal(CoopCommandKind.Invalid, ConsoleCommand.Parse("resolve").Kind);
     }
 
     /// <summary>The census dump has to be reachable from an unattended console line — it is

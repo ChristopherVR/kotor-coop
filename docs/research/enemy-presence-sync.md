@@ -334,13 +334,79 @@ skips the whole region when that fails, where the agent's scanner reads in chunk
 answers the question from inside the publisher instead of inferring it from three outside
 views.
 
+### Round three, 2026-08-15: the two lookups disagree IN THE SAME PROCESS
+
+Round two's diagnostics worked and narrowed the defect to a single contradiction. Verbatim
+from the rig (host in `END_M01AA`):
+
+| Question | Answer |
+| --- | --- |
+| agent: `census` on the host | `25 id(s); 25 resolve in MY engine, 0 do not` |
+| agent: `census 0x35` on the host | `object array: held at 0x19179E38 | raw scan: 0x19179E38 'end_weld'` |
+| plugin: `slay 0x35` on the host | `no object 0x35 in this module` |
+| host plugin log | `combat: a peer owes 200 damage to 0x35, which does not resolve here` |
+
+So the agent's external transcription of `CGameObjectArray::GetGameObject` says the id is
+held, at an address the raw vtable scan agrees carries an `end_weld` — and the plugin's
+in-process `Odyssey.ResolveServerObject`, which calls the engine's own
+`CServerExoApp::GetGameObject` (0x004AE750), says nothing answers to it. **Same process, same
+id.**
+
+What the binary rules OUT (all read this round, so nobody re-derives them):
+
+- **It is not a different array.** `CServerExoApp::GetObjectArray` (0x004AED70) is
+  `mov eax,[ecx+4]; mov eax,[eax+0x1005C]; ret`, and `CServerExoAppInternal::GetGameObject`
+  (0x004B1700) reads `[ecx+0x1005C]` for its own lookup. The agent walks
+  `[[0x007A39FC]+0x08]+0x04+0x1005C`. Identical field, identical chain.
+- **It is not the not-found sentinel.** The engine returns the object only when the array's
+  return byte equals `[0x74666C]`, and that byte is **0x00 in `.rdata`** — read-only, so
+  nothing writes it at runtime. `CGameObjectArray::GetGameObject` returns `al = 0` on a hit,
+  so the gate passes. (The neighbouring typed getters — `GetItemByGameObjectID` 0x004B1740,
+  `GetCreatureByGameObjectID` 0x004B1790 — use the SAME sentinel and then additionally check
+  the object type at `+0x08`; the generic one this code calls does not.)
+- **It is not the bucket arithmetic.** Both sides compute
+  `((id>>31)&1)<<12 | (id&0xFFF)` and compare `id & 0x7FFFFFFF`.
+
+Which leaves possibilities that only the running game can separate, and every previous
+attempt compared measurements taken seconds and processes apart. So this round ships the
+instrument that asks both questions **in one frame, on the game thread**: a `resolve <id>`
+verb whose plugin half (`Odyssey.DescribeObjectResolution`) prints the pointer chain, the
+array reached BOTH ways (the `+0x1005C` field and the engine's own accessor), the engine's
+lookup, an in-process transcription of that same lookup, and what `ResolveServerObject`
+finally decides — plus the vtable, `+0x04`, `+0x14` and type at whatever pointer came back.
+The full line goes to the plugin log; only a summary to the 96-byte console answer.
+
+Reading its answer decides the fix:
+
+| `engine` | `walk` | Meaning |
+| --- | --- | --- |
+| `0` | non-zero | The engine's call is not the lookup we think it is; the agent's gate is right and `ResolveServerObject` must change |
+| non-zero | non-zero | The call works and the POST-CHECK is rejecting it — `+0x04`/`+0x14` in the same line say why |
+| `0` | `0` | The array genuinely lacks the id, and `array(+0x1005C)` vs `array(engine)` in the same line says whether the agent walked a different table |
+
+Until that line exists, any "fix" would be a guess dressed as a change.
+
+### Two footguns closed in passing
+
+- **`#NN` parsed as DECIMAL.** `slay #35`, typed to kill the disputed `0x35`, silently killed
+  `0x23`. Every id this project prints is hex, and the drop harness already read `#1f` as hex
+  (`AgentDashboard`), so the console parser was the odd one out rather than this being a
+  matter of taste. All three spellings are hex now; a BARE token is only an id when it is all
+  digits, because real tags (`beef`, `cad`) are valid hex and `slay beef` must still mean the
+  tag.
+- **Diagnostics were being truncated at 96 characters** (`SharedBlock.ConsoleReplyLength`),
+  which cut every answer off exactly where the numbers started while keeping the prose that
+  explained them. Every diagnostic line is now built to fit, with a unit test asserting it
+  against `CensusGateReport.MaxLineLength`, and the long form goes to the logs instead.
+
 ## Files
 
 - `src/KotorCoop.Memory/EngineGlobals.cs` — the server object array walk
   (`TryGetServerObjectArray`, `TryResolveServerObject`, `TryLookupObject`).
 - `src/KotorCoop.Memory/LiveObjectGate.cs` — the keep/drop policy, its self-distrust, and
   `CensusGateReport`, which makes every outcome (including the two that check nothing) speak.
-- `src/KotorCoop.Agent/CoopCommandDispatcher.cs` — the `census [id]` verb.
+- `src/KotorCoop.Agent/CoopCommandDispatcher.cs` — the `census [id]` and `resolve <id>` verbs.
+- `src/KotorCoop.Plugin/Odyssey.cs` — `DescribeObjectResolution`, both lookups in one frame.
 - `src/KotorCoop.Protocol` — `EnemyState` presence fields, snapshot codec, protocol v12.
 - `src/KotorCoop.Memory/KotorGameBridge.cs` — presence reads in `ReadEnemies`, presence
   region writes in `TryWriteEnemies`, block signature v20, and the liveness confirmation in

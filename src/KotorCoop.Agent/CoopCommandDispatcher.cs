@@ -396,6 +396,20 @@ public sealed class CoopCommandDispatcher(
                 Census(command.Address);
                 break;
 
+            case CoopCommandKind.ResolveObject:
+                // Straight to the plugin: this question can only be answered on the game
+                // thread, and the value of the answer is that it is taken in ONE frame.
+                if (ConsoleCommand.TryParseObjectId(command.Address ?? string.Empty, out uint resolveId))
+                {
+                    SendCheat(new CheatRequest(CheatKinds.Resolve, Target: resolveId));
+                }
+                else
+                {
+                    Reply($"resolve: '{command.Address}' is not an object id (try 0x35)");
+                }
+
+                break;
+
             // ---- staging cheats ---------------------------------------------
 
             case CoopCommandKind.God:
@@ -724,24 +738,29 @@ public sealed class CoopCommandDispatcher(
             }
         }
 
+        // ⚠ Short lines, deliberately. The console answer channel is 96 bytes and truncates
+        // without a mark; the previous round's answers were all cut off mid-sentence.
         Reply(
-            $"census: {source} holds {census.Count} id(s) for '{(module.Length > 0 ? module : "?")}'; "
-            + $"{census.Count - unresolved.Count} resolve in MY engine, {unresolved.Count} do not"
-            + (mirror
-                ? " (a mirror is not expected to resolve them all - materialised stand-ins carry local ids)"
-                : " (as the owner, ANY that do not is the defect)"));
+            $"census: {(mirror ? "MIRROR" : "OWNER")} {census.Count} id(s) '{module}': "
+            + $"{census.Count - unresolved.Count} resolve here, {unresolved.Count} do not");
+
+        if (unresolved.Count > 0)
+        {
+            Reply(mirror
+                ? "census: a mirror need not resolve them all (stand-ins carry local ids)"
+                : "census: as the OWNER, every id that does not resolve here is the defect");
+        }
 
         if (!mirror && _kotor.CensusPublishRejected.Count > 0)
         {
             Reply(
-                "census: the publish gate refused "
-                + string.Join(", ", _kotor.CensusPublishRejected.Select(id => $"0x{id:X}"))
-                + " on the last pass");
+                "census: publish refused "
+                + string.Join(" ", _kotor.CensusPublishRejected.Take(4).Select(id => $"0x{id:X}")));
         }
 
         foreach (uint id in unresolved.Take(CensusDetailLines))
         {
-            Reply($"census: {DescribeId(id, census)}");
+            DescribeId(id, census);
         }
 
         if (unresolved.Count > CensusDetailLines)
@@ -751,7 +770,7 @@ public sealed class CoopCommandDispatcher(
 
         if (!string.IsNullOrWhiteSpace(token) && ConsoleCommand.TryParseObjectId(token, out uint asked))
         {
-            Reply($"census: {DescribeId(asked, census)}");
+            DescribeId(asked, census);
         }
     }
 
@@ -762,13 +781,15 @@ public sealed class CoopCommandDispatcher(
     /// <summary>
     /// One id, checked against all three lists at once: the engine's object array (the
     /// authority), the raw memory scan (what a vtable sweep sees, ghosts included), and the
-    /// census itself. Their DISAGREEMENT is the finding, so they are printed together.
+    /// census itself. Their DISAGREEMENT is the finding, so they are reported together — but
+    /// across TWO short lines, because one line of all three does not survive the 96-byte
+    /// console answer channel.
     /// </summary>
-    private string DescribeId(uint objectId, IReadOnlyList<EnemyState> census)
+    private void DescribeId(uint objectId, IReadOnlyList<EnemyState> census)
     {
         string array = _kotor!.TryResolveObjectHere(objectId, out nint address)
-            ? $"object array: held at 0x{address:X}"
-            : "object array: NOT HELD (nothing here answers to it)";
+            ? $"array 0x{address:X}"
+            : "array NOT HELD";
 
         CreatureRef? scanned = null;
         foreach (CreatureRef creature in _kotor.UnconfirmedCreatureScan())
@@ -781,23 +802,30 @@ public sealed class CoopCommandDispatcher(
         }
 
         string scan = scanned is null
-            ? "raw scan: absent"
-            : $"raw scan: 0x{scanned.Address:X} '{(scanned.Tag.Length > 0 ? scanned.Tag : "untagged")}'";
+            ? "scan absent"
+            : $"scan 0x{scanned.Address:X} '{Shorten(scanned.Tag)}'";
 
-        string listed = "census: absent";
+        Reply($"census 0x{objectId:X}: {array} | {scan}");
+
         foreach (EnemyState enemy in census)
         {
             if (enemy.ObjectId == objectId)
             {
-                listed = $"census: hp {enemy.CurrentHealth}/{enemy.MaxHealth}"
+                Reply(
+                    $"census 0x{objectId:X}: listed hp {enemy.CurrentHealth}/{enemy.MaxHealth}"
                     + $" at {enemy.Position.X:F1},{enemy.Position.Y:F1}"
-                    + (enemy.Dead ? " (dead)" : string.Empty);
-                break;
+                    + (enemy.Dead ? " dead" : string.Empty));
+                return;
             }
         }
 
-        return $"0x{objectId:X}  {array}  |  {scan}  |  {listed}";
+        Reply($"census 0x{objectId:X}: not listed in this census");
     }
+
+    /// <summary>Keeps a tag from pushing a diagnostic line past the answer channel's 96
+    /// bytes. Tags are resref-sized; a long one is still recognisable from its head.</summary>
+    private static string Shorten(string tag) =>
+        tag.Length == 0 ? "untagged" : tag.Length <= 24 ? tag : tag[..24];
 
     /// <summary>
     /// Moves the local player to a peer's last known position.

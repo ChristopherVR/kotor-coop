@@ -694,6 +694,98 @@ internal static unsafe class Odyssey
     /// <summary>Reads the area id of a resolved server object (module-lifetime stable).</summary>
     public static uint GetAreaId(nint serverObject) => *(uint*)(serverObject + 0x8C);
 
+    // ---- the object-array disagreement, asked in one frame ----------------------
+
+    /// <summary>CServerExoAppInternal + this = CGameObjectArray*. The same field
+    /// <c>CServerExoApp::GetObjectArray</c> (0x004AED70) reads, and the same one the external
+    /// agent walks — declared here so the two can be COMPARED rather than assumed equal.</summary>
+    private const int InternalObjectArrayOffset = 0x1005C;
+
+    /// <summary>
+    /// A transcription of <c>CGameObjectArray::GetGameObject</c> (0x004D8230), run in-process.
+    ///
+    /// Not a replacement for the engine's own call — it exists so the plugin can ask the
+    /// SAME QUESTION THE AGENT ASKS, in the same frame as the engine's answer, and print both.
+    /// Two lookups that must be identical disagreed live on 2026-08-15; every previous attempt
+    /// to settle it compared measurements taken seconds and processes apart.
+    /// </summary>
+    private static nint WalkObjectArray(nint objectArray, uint objectId)
+    {
+        if (objectArray == 0)
+        {
+            return 0;
+        }
+
+        nint tree = *(nint*)objectArray;
+        if (tree == 0)
+        {
+            return 0;
+        }
+
+        uint bucket = (((objectId >> 31) & 1) << 12) | (objectId & 0xFFF);
+        uint key = objectId & 0x7FFF_FFFF;
+
+        nint entry = *(nint*)(tree + (nint)(bucket * 4));
+
+        for (int walked = 0; entry != 0 && walked < 64; walked++)
+        {
+            if (*(uint*)entry == key)
+            {
+                return *(nint*)(entry + 4);
+            }
+
+            entry = *(nint*)(entry + 8);
+        }
+
+        return 0;
+    }
+
+    /// <summary>
+    /// Everything this engine knows about one object id, gathered on the game thread in a
+    /// single frame: the pointer chain, BOTH ways of reaching the object array, the engine's
+    /// own lookup, an in-process transcription of that lookup, and what
+    /// <see cref="ResolveServerObject"/> finally decides.
+    ///
+    /// ⚠ THIS IS A MEASUREMENT, NOT A FEATURE. It answers the one question that no amount of
+    /// reading could: when the agent says an id is held at an address and the plugin says
+    /// nothing answers to it, WHICH STEP differs. Every line is a fact read at the same
+    /// instant, so the answer cannot be "you looked at different moments".
+    /// </summary>
+    public static string DescribeObjectResolution(uint objectId)
+    {
+        nint appManager = Deref(AppManagerPtr);
+        if (appManager == 0)
+        {
+            return $"0x{objectId:X}: no app manager at 0x{AppManagerPtr:X}";
+        }
+
+        nint server = Deref(appManager + AppServerOffset);
+        if (server == 0)
+        {
+            return $"0x{objectId:X}: app manager 0x{appManager:X} has no server (+0x08)";
+        }
+
+        nint serverInternal = Deref(server + AppServerOffsetInternal);
+        nint arrayByOffset = serverInternal == 0 ? 0 : Deref(serverInternal + InternalObjectArrayOffset);
+        nint arrayByEngine = GetObjectArrayFn(server);
+
+        nint viaEngine = GetGameObjectFn(server, objectId);
+        nint viaWalk = WalkObjectArray(arrayByEngine, objectId);
+        nint resolved = ResolveServerObject(objectId);
+
+        string at = string.Empty;
+        nint probe = viaEngine != 0 ? viaEngine : viaWalk;
+        if (probe != 0)
+        {
+            at = $" | at 0x{probe:X}: vtable 0x{*(nint*)probe:X} id+4 0x{*(uint*)(probe + 0x04):X}"
+                + $" id+0x14 0x{*(uint*)(probe + 0x14):X} type 0x{*(ushort*)(probe + 0x08):X}";
+        }
+
+        return $"0x{objectId:X}: server 0x{server:X} internal 0x{serverInternal:X} "
+            + $"array(+0x1005C) 0x{arrayByOffset:X} array(engine) 0x{arrayByEngine:X} | "
+            + $"engine 0x{viaEngine:X} walk 0x{viaWalk:X} resolve 0x{resolved:X}{at}";
+    }
+
     // ---- item floor state ------------------------------------------------------
 
     private const nint ItemVtable = 0x00748DA0;

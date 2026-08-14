@@ -292,6 +292,29 @@ public class LiveObjectGateTests
 
         Assert.Contains("dropped 7", described);
         Assert.Contains("0x35", described);
-        Assert.Contains("...", described);
+        Assert.Contains("..", described);
+    }
+
+    /// <summary>
+    /// ⚠ EVERY LINE MUST FIT THE CHANNEL IT IS READ THROUGH. The in-game console answer is 96
+    /// bytes (`SharedBlock.ConsoleReplyLength`) and truncates with no mark. Measured
+    /// 2026-08-15: every diagnostic answer of the previous round was cut off mid-sentence,
+    /// losing exactly the numbers it was asked for while keeping the prose explaining them.
+    /// A diagnostic that does not fit is not a diagnostic.
+    /// </summary>
+    [Fact]
+    public void EveryGateLineFitsTheConsoleAnswerChannel()
+    {
+        uint[] manyIds = [0x35u, 0x36u, 0x37u, 0x38u, 0x39u, 0x3Au, 0x3Bu, 0x3Cu];
+
+        foreach (CensusGateState state in Enum.GetValues<CensusGateState>())
+        {
+            string described = new CensusGateReport(
+                state, 0x1FFF_FFFF, 512, 400, 112, manyIds).Describe();
+
+            Assert.True(
+                described.Length <= CensusGateReport.MaxLineLength,
+                $"{state} renders {described.Length} chars: {described}");
+        }
     }
 }
