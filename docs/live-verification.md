@@ -706,3 +706,63 @@ the baked-phantom check for the departed module is §8.6.
 ⚠ One silent failure it predicts rather than suffers: `CSWParty::IsPartyTogether 0x00635350`
 false makes the door run `k_trg_transfail` and move nobody, with no other trace. `usedoor`
 reads the same predicate and says so up front.
+
+## Companion control, session teardown and the ghost that looks like a leak (2026-08-15)
+
+**The reported bug — "after disconnecting, Trask is back but clicking him does nothing" — was
+never about Trask.** It was the client control lock left armed after teardown. The lock is a
+byte patch: a 5-byte `jmp` at `CClientExoAppInternal::ChangeCharacter` (`0x005F6B60`) into a
+stub that returns immediately while a flag word is set, and that one funnel is Tab, all three
+party portraits, and the death auto-swap. The flag is a LEVEL, rewritten into the stub every
+frame, raised once per client session and never lowered — `ClearCoopState()` cleared the peer
+count, the presence counts, the dialogue flag, the encounter fields and the command, and not
+that word. Verified live:
+
+```
+connected:            suppress: gameOver 1  swap 1
+after `disconnect`:   suppress: gameOver 0  swap 0      <- the fix
+                      command 0,  partystate: soloMode 0, member 0x127 (Trask) present
+session: released - undoing what it did to this game
+death: suppressions lifted - Tab and the party portraits answer again
+interaction: dropped every peer lock - nobody else is holding anything here
+party roster: your party is yours again - nothing left to reconcile against
+portraits: restored the party widgets (the session ended)
+```
+
+Three more session levels leaked identically (game-over suppression, peer interaction locks,
+peer party roster), plus mirrored companions left in faction Neutral and pinned min-1-hp.
+
+**Then the phantom.** The peer's body survived teardown — `phantoms 1`, `remotes 0`, stable
+across 10,000 frames. Two causes, neither the one I guessed (I assumed the destroy sat behind
+the command gate; it does not): a gate on a derived count the branch never recomputed, and —
+the real one — **`Odyssey.DestroyObjectById` returns failure 4 while the script VM is mid-call,
+and all four spawners cleared their bookkeeping regardless of the outcome.** Teardown made
+exactly one attempt on an arbitrary frame, so a single declined call orphaned the body
+permanently, with nothing left that remembered it. Destroys are now retried (bounded at 3) and
+a write-off names the id and the failure code. Verified live:
+
+```
+session released: destroyed phantom 0x12D (slot 0)
+session: nothing it spawned was left standing
+state -> phantoms 0
+```
+
+### ⚠ `tools/creatures.ps1` cannot answer "is this body still alive"
+
+After that clean teardown, `creatures.ps1` **still listed `0x12D coop_phantom`**. It is a raw
+sweep for the `CSWSCreature` vtable with no liveness gate, and `operator delete` clears neither
+the vtable nor the id — so a destroyed creature keeps reading as one until its memory is
+reused. The engine's own object array settles it:
+
+```
+resolve: 0x12D: ... array(+0x1005C) 0x345E138  array(engine) 0x345E138
+              | engine 0x0  walk 0x0  resolve 0x0
+```
+
+Nothing holds it. The body is gone and the row is a ghost — the same artifact behind the
+enemy-census hunt, and behind run A's "two `coop_phantom` rows" which were one body seen twice.
+
+**Consequence for the cinematics work: the baked-phantom CLEAN criterion in `cinematics.md`
+must not count `creatures.ps1` rows.** Use `console 'resolve <id>'` and believe the object
+array, or the check will report a freed block as a baked body. Any BAKED reading taken before
+today was also measuring the teardown leak above rather than the transition window.
