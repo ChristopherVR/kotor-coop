@@ -645,6 +645,11 @@ internal static unsafe class PluginHost
         // before PhantomController starts destroying the bodies the camera may be following).
         PumpSessionLifecycle();
 
+        // Immediately after it, and before any world controller: destroy the bodies the
+        // session spawned. Armed by the release above and re-run every frame until clean,
+        // because the engine declines a destroy while the script VM is mid-call.
+        DrainSessionSpawns();
+
         // Death first among the world controllers: a downed player must be published (and a
         // pending revive applied) before the phantom/combat passes read the same creature.
         _death?.OnFrame();
@@ -767,6 +772,90 @@ internal static unsafe class PluginHost
         _interactionLocks?.ReleaseSession();
         _partyRoster?.ReleaseSession();
         _portraits?.ReleaseSession();
+
+        // And last, the BODIES the session put in the world. Armed rather than done here,
+        // because a destroy can be refused; DrainSessionSpawns finishes the job.
+        _spawnDrainPasses = SpawnDrainPasses;
+        _spawnsAtRelease = -1;
+    }
+
+    /// <summary>
+    /// Passes the spawn drain is allowed. One destroy attempt per body per pass, and a
+    /// refusal is written off after three (see PhantomController.MaxDestroyAttempts), so this
+    /// only has to outlast that — the rest is headroom for a busy script VM.
+    /// </summary>
+    private const int SpawnDrainPasses = 12;
+
+    private static int _spawnDrainPasses;
+
+    /// <summary>How many bodies the session had standing when it was released; -1 until the
+    /// first drain pass has counted them.</summary>
+    private static int _spawnsAtRelease;
+
+    /// <summary>
+    /// Destroys everything the session SPAWNED — peer phantoms, replicated ground items,
+    /// materialised enemies and map pins — and keeps at it until the world is clean.
+    ///
+    /// ⚠ THIS IS NOT BELT AND BRACES; IT IS THE THIRD LEAK OF THE TEARDOWN CLASS. Measured on
+    /// the rig after the suppression fix landed: forty seconds past a disconnect, with
+    /// `remotes 0` and `command 0`, a `coop_phantom` was still standing in the client's game
+    /// and the readout still said `phantoms 1`. Two causes, both of the shape this pass
+    /// exists to remove. PhantomController's idle branch was gated on a DERIVED count it
+    /// never recomputed, so the gate lied; and every one of the four spawners cleared its
+    /// slot whether the engine's destroy succeeded or REFUSED — and a destroy is refused
+    /// whenever the script VM is mid-call, which a disconnect landing on an arbitrary frame
+    /// routinely is. One declined call orphaned the body forever.
+    ///
+    /// Why it matters more than a stray body: the disconnected player is left with the other
+    /// player's corpse-shaped creature standing in their single-player game, and if they
+    /// save, StoreCurrentModule serialises it in permanently. That is the "baked phantom" the
+    /// cinematics work is separately hunting, whose CLEAN criterion is literally "no
+    /// coop_phantom with the session down".
+    ///
+    /// Runs before every world controller, so nothing acts on a body that is going away.
+    /// </summary>
+    private static void DrainSessionSpawns()
+    {
+        if (_spawnDrainPasses <= 0)
+        {
+            return;
+        }
+
+        _spawnDrainPasses--;
+
+        int standing = (_controller?.ReleaseSession() ?? 0)
+            + (_items?.ReleaseSession() ?? 0)
+            + MaterialisedEnemies.ReleaseSession()
+            + (_mapMarkers?.ReleaseSession() ?? 0);
+
+        (SpawnDrainOutcome outcome, _spawnsAtRelease) =
+            SpawnDrainRule.Decide(standing, _spawnsAtRelease, _spawnDrainPasses);
+
+        switch (outcome)
+        {
+            case SpawnDrainOutcome.NothingWasStanding:
+                _spawnDrainPasses = 0;
+
+                // The required NEGATIVE report: silence here is indistinguishable from a
+                // drain that never ran, and that ambiguity is what cost the last rig round.
+                Log("session: nothing it spawned was left standing");
+                break;
+
+            case SpawnDrainOutcome.Cleaned:
+                _spawnDrainPasses = 0;
+                Log($"session: removed {_spawnsAtRelease} object(s) it had spawned — "
+                    + "nothing left standing");
+                break;
+
+            case SpawnDrainOutcome.Refused:
+                Log($"session: {standing} of {_spawnsAtRelease} spawned object(s) REFUSED to be "
+                    + "destroyed and are still standing — a save now would bake them into the module");
+                break;
+
+            case SpawnDrainOutcome.KeepDraining:
+            default:
+                break;
+        }
     }
 
     private static void InvalidateAll(string reason)
@@ -777,6 +866,13 @@ internal static unsafe class PluginHost
         // are stale (the agent's reads fail through a transition, so it cannot clear them
         // itself), and a controller acting on them spawns bodies for the wrong world.
         _view?.ClearAgentWorldInputs();
+
+        // A world that has gone has taken every spawned body with it, so a drain still
+        // running would report on slots the Invalidate calls below are about to forget —
+        // and "removed them all" would be a claim about objects UnloadModule freed, not
+        // about anything this plugin did.
+        _spawnDrainPasses = 0;
+        _spawnsAtRelease = -1;
 
         CinematicWatch.Invalidate();
         _controller?.Invalidate();

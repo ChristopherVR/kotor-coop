@@ -303,15 +303,73 @@ the installed `CAurBehaviorCameraFollow` keeps the followed client creature as a
 at `+0x14` which it reads every frame — while `PhantomController` despawns exactly that body,
 one per frame, starting immediately.
 
+## The third leak: the peer's body outlived the session (2026-08-15, found on the rig)
+
+The teardown above was confirmed live — `suppress: gameOver 0  swap 0` after `disconnect`,
+the whole release chain in one millisecond, `soloMode 0` — and the same run found one more
+leak of exactly this class. Forty seconds after the disconnect, with `remotes 0` and
+`command 0`, the client still reported `phantoms 1` and `creatures.ps1` still found the body:
+
+```
+0x158B1D9C   0x12D   coop_phantom   (19.01, 21.15, -1.27)   30 hp
+```
+
+Stable, not slow: frames advanced 27,222 → 37,506 with it still there.
+
+This is not a stray prop. `StoreCurrentModule` serialises every non-party creature on the way
+out of an area, so a body left standing becomes a **permanent resident of the saved module** —
+the departed player's corpse-shaped creature living in somebody's single-player game. It is
+the "baked phantom" the cinematics work hunts separately, whose CLEAN criterion is literally
+"no `coop_phantom` with the session down".
+
+**Two causes, both the shape this whole pass exists to remove.**
+
+1. **A gate on a derived count that was never recomputed.** `PhantomController`'s idle branch
+   read `if (_phantomCount > 0) FlushOneBody();`, and `_phantomCount` is derived from the slot
+   array by `PublishPhantomCount()` — which that branch never called. So it sat at whatever
+   the live session last left. Read one way it let the branch run against nothing forever;
+   read the other — a slot cleared by the active "peer left" path on the frame the command
+   fell — it stopped the branch running while a body was still standing. Either way the
+   agent's `phantoms N` readout was fiction, which is what made this take a second round to
+   see. The gate is gone; `FlushOneBody` is an eight-slot scan that terminates by itself.
+
+2. **A refused destroy cleared the slot anyway — in all four spawners.**
+   `Odyssey.DestroyObjectById` returns `failure = 4` when `CallStackSize != 0`, i.e. whenever
+   the script VM is mid-call, which on a game running area heartbeats is a large fraction of
+   frames. Teardown lands on an arbitrary frame and made **exactly one attempt**.
+   `PhantomController.DestroySlot`, `ItemController`, `MaterialisedEnemies.Destroy` and
+   `MapMarkerController` all then cleared their bookkeeping regardless, so one declined call
+   orphaned the body permanently: the controller forgot it and nothing ever retried.
+
+**The fix.** A refusal now KEEPS the slot, so the next pass tries again;
+`MaxDestroyAttempts = 3` writes it off after that — bounded, because the pre-store flush
+window is finite and a wedged transition is worse than a leaked body — and the write-off logs
+loudly, naming the id and the failure code, because at that point a save really would bake it
+in. `FlushOneBody` returning true on a refusal is now correct rather than incidental: the body
+IS still there and the caller must come back for it.
+
+`PluginHost.DrainSessionSpawns` is the session's counterpart, armed by the release edge and
+run every frame before any world controller until clean: a full sweep of all four spawners,
+bounded by `SpawnDrainPasses = 12` (comfortably more than the retry cap needs). Its reporting
+is `SpawnDrainRule`, pure and unit-tested, and the property the tests pin is that **it never
+ends silently** — `nothing it spawned was left standing` is an outcome, not an absence of one,
+because in a log those two are the same thing and that ambiguity is what cost the round.
+
 ## Verification tags (this section)
 
 - VERIFIED (source + the reported symptom): the swap suppression is a block level, mirrored
   into the stub every frame, raised once per client session and not cleared by teardown.
 - VERIFIED (disasm, unchanged from above): `ChangeCharacter 0x005F6B60` is the single funnel;
   `SetCameraFollow 0x0063F9D0` is called from inside it at `0x5F6C27`.
-- NEEDS-LIVE: that the portraits and Tab answer again after `disconnect`; that a companion
-  mirrored under `local_combat` reads faction PLAYER after a disconnect; that connecting
-  while controlling Trask ends with the camera on the PC.
+- LIVE-VERIFIED 2026-08-15 (END_M01AA, two instances): after `console 'disconnect'` on the
+  client, `blockpoke death` reads `suppress: gameOver 0  swap 0`, `state` reads `command 0`,
+  the whole release chain logs within one millisecond, and `partystate` reads
+  `companions 1  soloMode 0` with Trask present. The click itself is still unverified — the
+  rig cannot inject keystrokes this game accepts — but every value the memory can show is
+  released.
+- NEEDS-LIVE: that `phantoms 0` and no `coop_phantom` remain after a disconnect (the drain
+  above); that a companion mirrored under `local_combat` reads faction PLAYER afterwards;
+  that connecting while controlling Trask ends with the camera on the PC.
 
 ## Key addresses
 
