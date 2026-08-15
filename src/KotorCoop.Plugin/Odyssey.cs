@@ -1203,6 +1203,131 @@ internal static unsafe class Odyssey
         return party == 0 || IsPartyTogetherFn(party) != 0;
     }
 
+    /// <summary>
+    /// CServerExoApp::GetPartyTable 0x004AEE70 — <c>mov eax,[ecx+4]; add eax,0x1B770; ret</c>.
+    /// A bare <c>ret</c>: no arguments, no dereference past <c>this</c>. The table is EMBEDDED
+    /// in CServerExoAppInternal, so this can never be null while the server exists.
+    /// </summary>
+    private static readonly delegate* unmanaged[Thiscall]<nint, nint> GetPartyTableFn =
+        (delegate* unmanaged[Thiscall]<nint, nint>)0x004AEE70;
+
+    /// <summary>
+    /// CSWPartyTable::PositionParty 0x00565B00 — <c>__thiscall</c>, NO arguments (bare
+    /// <c>ret</c> at 0x00565D1C). The engine's own "put the party where it belongs": for each
+    /// member it computes a formation offset around the player
+    /// (<c>CSWParty::GetWorldFormationPosition</c> data at party+0xD4), snaps it to something
+    /// walkable with <c>CServerExoApp::ComputeSafeLocation 0x004AEB60</c> and a 10 m search
+    /// radius, then writes it with <c>CSWSObject::SetPosition 0x004CD1A0</c> and
+    /// <c>SetOrientation 0x004CD170</c>. On the way in it calls
+    /// <c>CSWParty::ResetAllFollowData 0x00637890</c> with the player's position; on the way
+    /// out, <c>UnstealthParty(0)</c> and it clears <c>pt_solomode</c> (+0x190).
+    ///
+    /// Its ONE caller in the whole binary is
+    /// <c>CServerExoAppInternal::MovePlayerToArea 0x004B3D10</c> at 0x004B3E9E — i.e. this is
+    /// exactly the party collection a module transition performs, which is why it is the right
+    /// call for "gather the party to me" and not a reimplementation of one.
+    ///
+    /// ⚠ It reads the player creature unconditionally (<c>GetPlayerCreatureId</c> →
+    /// <c>GetGameObject</c> → <c>[creature+0x9C]</c>), so it must never be called without a
+    /// player, and it reads <c>CClientExoApp::GetSWParty</c>, so it must never be called
+    /// without a party object either. <see cref="GatherParty"/> checks both.
+    /// </summary>
+    private static readonly delegate* unmanaged[Thiscall]<nint, void> PositionPartyFn =
+        (delegate* unmanaged[Thiscall]<nint, void>)0x00565B00;
+
+    /// <summary>
+    /// CSWPartyTable + this = a one-shot "skip the positioning" flag. PositionParty tests it
+    /// at 0x00565B6E and, when it is non-zero, jumps STRAIGHT to the exit — which clears it
+    /// and does nothing else. So a call made while it is set positions nobody and the NEXT
+    /// call works. <see cref="GatherParty"/> reads it first rather than discovering that by
+    /// having its first attempt silently do nothing.
+    /// </summary>
+    private const int PartyTableSkipPositioning = 0x10C;
+
+    /// <summary>CSWPartyTable + 0 = how many members the party holds; +4 begins their ids.
+    /// Read out of PositionParty's own loop bound (<c>cmp [ebx], ebp; jle</c> at 0x00565B7A
+    /// and <c>lea ebp,[ebx+4]</c> at 0x00565BAC).</summary>
+    private const int PartyTableMemberCount = 0x00;
+
+    /// <summary>How many members the party table currently holds, or 0.</summary>
+    public static int GetPartyMemberCount()
+    {
+        nint server = GetServer();
+        if (server == 0)
+        {
+            return 0;
+        }
+
+        nint table = GetPartyTableFn(server);
+        if (table == 0)
+        {
+            return 0;
+        }
+
+        int count = *(int*)(table + PartyTableMemberCount);
+        return count is > 0 and <= 16 ? count : 0;
+    }
+
+    /// <summary>
+    /// Teleports every party companion into formation around the local player, through the
+    /// engine's own <c>PositionParty</c> — the same call a module transition makes.
+    ///
+    /// This exists for one reason. A KOTOR door transition is gated on
+    /// <see cref="IsPartyTogether"/> (0x0058C228), and a staging verb that moves only the PC
+    /// leaves the companions where they were and the gate then cancels the transition into
+    /// <c>k_trg_transfail</c> — silently. Moving the party with the engine's own routine gets
+    /// the walkmesh snap, the formation and the follow-data reset for free, which is exactly
+    /// what a hand-rolled position write would get wrong.
+    ///
+    /// Returns false, without calling anything, when the preconditions PositionParty
+    /// dereferences are not met.
+    ///
+    /// MAIN THREAD ONLY.
+    /// </summary>
+    public static bool GatherParty(out int members, out bool skipFlagWasSet)
+    {
+        members = 0;
+        skipFlagWasSet = false;
+
+        nint server = GetServer();
+        if (server == 0 || GetPlayerCreatureFn(server) == 0)
+        {
+            return false;
+        }
+
+        nint client = GetClient();
+        if (client == 0 || GetSWPartyFn(client) == 0)
+        {
+            return false;
+        }
+
+        nint table = GetPartyTableFn(server);
+        if (table == 0)
+        {
+            return false;
+        }
+
+        members = *(int*)(table + PartyTableMemberCount);
+        if (members is < 0 or > 16)
+        {
+            return false;
+        }
+
+        skipFlagWasSet = *(int*)(table + PartyTableSkipPositioning) != 0;
+
+        PositionPartyFn(table);
+
+        // The flag was set, so that call only cleared it and moved nobody (0x00565B6E). The
+        // second call is the one that positions the party — deterministic, not a retry: the
+        // branch is read out of the function, and the flag is provably clear now.
+        if (skipFlagWasSet)
+        {
+            PositionPartyFn(table);
+        }
+
+        return true;
+    }
+
     /// <summary>True when this door is a module transition, by the engine's own definition.</summary>
     public static bool DoorIsLinked(nint door) => door != 0 && DoorGetIsLinkedFn(door) != 0;
 

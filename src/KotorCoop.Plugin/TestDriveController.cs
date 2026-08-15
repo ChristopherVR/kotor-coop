@@ -191,6 +191,35 @@ internal sealed unsafe class TestDriveController(SharedBlockView block)
                 + " (not here, already talking, or refused)");
     }
 
+    /// <summary>
+    /// Queues the engine's own move action on the LOCAL PLAYER.
+    ///
+    /// ⚠ THIS DOES NOT MOVE THE PLAYER CHARACTER, and the reason is worth writing down
+    /// because it cost a live round. Measured 2026-08-15: two requests, both acknowledged with
+    /// a serial, and the PC never left (20.2, 23.0).
+    ///
+    /// <see cref="Odyssey.MoveToLocation"/> queues NWScript <c>ActionMoveToLocation</c>, which
+    /// is the AI action queue — and that is what it was built and verified for, on PHANTOMS,
+    /// which have no player driving them. The player character does not move that way in this
+    /// build. The proof is negative and complete: every one of the 17 call sites of
+    /// <c>CSWCMessage::SendPlayerToServerMessage 0x00677410</c> was enumerated and the message
+    /// type read off each, and on the player-input channel (6) the only types this game ever
+    /// sends are 2 Attack, 3 ChangeDoorState, 7 UseSkill, 8 Dialog, 9 UseItem, 0xB UseObject,
+    /// 0xC UnlockObject and 0x12 CastSpell. Type **1**, <c>WalkToWaypoint</c>, whose server
+    /// handler <c>CSWSMessage::HandlePlayerToServerInputWalkToWaypoint 0x005235B0</c> is a
+    /// complete implementation, is **never sent by anything** — dead code inherited from the
+    /// networked lineage this engine came from. There is simply no "walk the player here"
+    /// message to borrow, which is exactly why `usedoor` could go through a message and this
+    /// cannot. The PC is moved by drive control from local input instead.
+    ///
+    /// INFERRED, not proven: whether the queued action is cancelled by the drive controller or
+    /// never run at all for a player-controlled creature. The logging below is what will
+    /// settle it — before this pass, three of the four ways out of here said nothing at all,
+    /// which is why "the walk did nothing" could not be told from "the walk was never tried".
+    ///
+    /// To move the party for a staging run, use <c>tp</c> (which moves the PC) and then
+    /// <c>usedoor</c>, which gathers the companions through the engine's own PositionParty.
+    /// </summary>
     private void HandleWalk()
     {
         uint serial = block.TestWalkSerial;
@@ -204,12 +233,14 @@ internal sealed unsafe class TestDriveController(SharedBlockView block)
         uint playerId = Odyssey.GetPlayerObjectId();
         if (playerId == 0)
         {
+            PluginHost.Log("test: walk ignored - no player object id (not in a module yet)");
             return;
         }
 
         nint player = Odyssey.ResolveServerObject(playerId);
         if (player == 0)
         {
+            PluginHost.Log($"test: walk ignored - player id 0x{playerId:X} does not resolve here");
             return;
         }
 
@@ -219,7 +250,9 @@ internal sealed unsafe class TestDriveController(SharedBlockView block)
         bool ok = Odyssey.MoveToLocation(playerId, destination, run: true, out int failure);
 
         PluginHost.Log(ok
-            ? $"test: walking to ({destination.X:F2}, {destination.Y:F2})"
+            ? $"test: queued a move for 0x{playerId:X} from ({here.X:F2}, {here.Y:F2}) to "
+              + $"({destination.X:F2}, {destination.Y:F2}) - NOTE the PC is drive-controlled, "
+              + "so an action-queue move may not move it at all; use tp then usedoor"
             : $"test: walk refused (failure {failure})");
     }
 }

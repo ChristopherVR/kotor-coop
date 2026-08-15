@@ -847,22 +847,7 @@ internal sealed unsafe class CheatController(SharedBlockView block)
             $"door: using door 0x{doorId:X} at {distance:F1}m - it links to module "
             + $"'{module}' at waypoint '{entry}'");
 
-        // Predicted, not refused. CSWSDoor::EventHandler tests IsPartyTogether at 0x0058C228
-        // and runs k_trg_transfail instead of transitioning when it is false — a failure with
-        // NO trace at all: the door is used, no fade starts, no module is stored. Saying so up
-        // front turns a silent nothing into a named prediction.
-        //
-        // Not a refusal, because the test is applied by the engine AFTER the walk and this
-        // reading is taken before it. Refusing on a predicate that may have changed by the
-        // time it matters would invent failures; announcing it cannot.
-        bool together = Odyssey.IsPartyTogether();
-        if (!together)
-        {
-            PluginHost.Log(
-                "door: WARNING - the engine says the party is NOT together, and a door "
-                + "transition is gated "
-                + "on that (0x0058C228), so this use will run k_trg_transfail and move nobody");
-        }
+        bool together = GatherPartyIfScattered();
 
         if (!Odyssey.UseObject(doorId))
         {
@@ -875,6 +860,71 @@ internal sealed unsafe class CheatController(SharedBlockView block)
             together
                 ? $"walking to door 0x{doorId:X} ({distance:F1}m) -> '{module}'"
                 : $"door 0x{doorId:X} -> '{module}' BUT the party is not together");
+    }
+
+    /// <summary>
+    /// Brings the party to the player when the engine says it is scattered, and reports
+    /// whether that worked. Returns the state of the gate as it stands after the attempt.
+    ///
+    /// WHY THIS IS PART OF USING A DOOR. `CSWSDoor::EventHandler` tests
+    /// `CSWParty::IsPartyTogether` at 0x0058C228 and, when it is false, runs the script
+    /// `k_trg_transfail` INSTEAD of transitioning — a failure with no trace at all: the door
+    /// is used, no fade starts, no module is stored. Measured live on 2026-08-15, exactly
+    /// that: the PC teleported to the door, Trask stayed a hundred metres back at the module
+    /// start, and the transition never happened.
+    ///
+    /// Gathering here rather than leaving it to the caller is what makes the verb
+    /// self-sufficient, and it is also what a player does — you walk to a door WITH your
+    /// party. It goes through the engine's own `PositionParty`, the very call a module
+    /// transition makes, so the walkmesh snap and the formation are the engine's problem.
+    ///
+    /// ⚠ Host-side staging only, and deliberately unconditional about that: companions are
+    /// host-authoritative, so on a mirroring instance this moves bodies whose owner will
+    /// republish them. That is acceptable for a debug verb and would not be for a feature.
+    /// </summary>
+    private static bool GatherPartyIfScattered()
+    {
+        bool wasTogether = Odyssey.IsPartyTogether();
+        bool gatherRan = false;
+        int members = 0;
+        bool skipFlagWasSet = false;
+
+        if (!wasTogether)
+        {
+            PluginHost.Log(
+                "door: the engine says the party is NOT together, and a door transition is gated "
+                + "on that (0x0058C228) - gathering it first");
+
+            gatherRan = Odyssey.GatherParty(out members, out skipFlagWasSet);
+        }
+
+        PartyGateOutcome outcome = DoorUse.ClassifyGate(
+            wasTogether, gatherRan, togetherNow: !wasTogether && Odyssey.IsPartyTogether());
+
+        switch (outcome)
+        {
+            case PartyGateOutcome.GatheredAndTogether:
+                PluginHost.Log(
+                    $"door: gathered {members} party member(s) to you"
+                    + (skipFlagWasSet
+                        ? " (the table's one-shot skip flag was set, so it was positioned twice)"
+                        : string.Empty));
+                break;
+
+            case PartyGateOutcome.GatheredButStillApart:
+                PluginHost.Log(
+                    $"door: gathered {members} party member(s) and the engine STILL says the "
+                    + "party is not together - this use will run k_trg_transfail and move nobody");
+                break;
+
+            case PartyGateOutcome.CouldNotGather:
+                PluginHost.Log(
+                    "door: could not gather the party (no player, no party object, or no table) "
+                    + "- this use will run k_trg_transfail and move nobody");
+                break;
+        }
+
+        return DoorUse.GateWillPass(outcome);
     }
 
     /// <summary>

@@ -114,6 +114,7 @@ are known not to be trustworthy. Both halves are useful; the second is the point
 | `0x004AED30` | `CServerExoApp::SetMoveToModuleStartWaypoint` | Thiscall | 2 | `ret-imm 4` | Odyssey |
 | `0x004AED70` | `CServerExoApp::GetObjectArray` | Thiscall | 1 | `ret 0` | Odyssey |
 | `0x004AEDE0` | `CServerExoApp::GetWorldTimer` | Thiscall | 1 | `ret 0` | MenuLoadController, Odyssey |
+| `0x004AEE70` | `CServerExoApp::GetPartyTable` | Thiscall | 1 | `ret 0` | Odyssey |
 | `0x004AEFA0` | `CServerExoApp::ClearAllQueuedCombatActions` | Thiscall | 2 | `ret-imm 4` | Odyssey |
 | `0x004AEFC0` | `CServerExoApp::GetFactionManager` | Thiscall | 1 | `ret 0` | Odyssey |
 | `0x004AF090` | `CServerExoApp::SetDoingStartNewModule` | Thiscall | 2 | `ret-imm 4` | MenuLoadController |
@@ -138,6 +139,7 @@ are known not to be trustworthy. Both halves are useful; the second is the point
 | `0x00541C00` | `CSWVirtualMachineCommands::ExecuteCommandRemovePartyMember` | Thiscall | 3 | `ret-imm 8` | Odyssey |
 | `0x00543ED0` | `CSWVirtualMachineCommands::ExecuteCommandSpawnAvailableNPC` | Thiscall | 3 | `ret-imm 8` | Odyssey |
 | `0x00563CF0` | `CSWPartyTable::ResetCurrentSessionStartTim` | Stdcall | 0 | `ret 0` | MenuLoadController |
+| `0x00565B00` | `CSWPartyTable::PositionParty` | Thiscall | 1 | `ret 0` | Odyssey |
 | `0x00578ED0` | `CSWSAreaMap::GetMapRotateCCWFromWorldOrientation` | Thiscall | 4 | `ret-imm 12` | Odyssey |
 | `0x005790C0` | `CSWSAreaMap::SetPartyMemberWorldLocation` | Thiscall | 5 | `ret-imm 16` | Odyssey |
 | `0x005791B0` | `CSWSAreaMap::GetPartyMemberMapLocation` | Thiscall | 4 | `ret-imm 12` | Odyssey |

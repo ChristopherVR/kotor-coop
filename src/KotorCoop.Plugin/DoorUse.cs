@@ -37,6 +37,26 @@ internal enum DoorUseVerdict
     RefuseTooFar,
 }
 
+/// <summary>
+/// How the party stood when the door was used — the gate that decides whether the transition
+/// happens at all, reduced to the four outcomes a caller must tell apart.
+/// </summary>
+internal enum PartyGateOutcome
+{
+    /// <summary>The engine already said the party was together; nothing was moved.</summary>
+    AlreadyTogether,
+
+    /// <summary>It was scattered, we gathered it, and the engine now says it is together.</summary>
+    GatheredAndTogether,
+
+    /// <summary>We gathered it and the engine STILL says it is not. The transition will be
+    /// cancelled into <c>k_trg_transfail</c> and nobody will move.</summary>
+    GatheredButStillApart,
+
+    /// <summary>The gather could not run at all — no player, no party object, no table.</summary>
+    CouldNotGather,
+}
+
 /// <summary>One door the sweep found, reduced to the facts the choice needs.</summary>
 /// <param name="ObjectId">The engine object id.</param>
 /// <param name="Linked">True when <c>GetIsLinked</c> says it is a module transition.</param>
@@ -197,6 +217,35 @@ internal static class DoorUse
 
         return best;
     }
+
+    /// <summary>
+    /// Classifies the party gate from the three facts around a gather attempt.
+    ///
+    /// The rule that matters is the last one: <see cref="PartyGateOutcome.GatheredButStillApart"/>
+    /// and <see cref="PartyGateOutcome.CouldNotGather"/> are NOT successes, and must never be
+    /// reported as one. A door used with the party scattered runs <c>k_trg_transfail</c> and
+    /// moves nobody, leaving no trace whatsoever — so a verb that answered "walking to the
+    /// door" in that state would be lying in exactly the way that costs a live round, which
+    /// is how this rule was found.
+    /// </summary>
+    public static PartyGateOutcome ClassifyGate(bool wasTogether, bool gatherRan, bool togetherNow)
+    {
+        if (wasTogether)
+        {
+            return PartyGateOutcome.AlreadyTogether;
+        }
+
+        if (!gatherRan)
+        {
+            return PartyGateOutcome.CouldNotGather;
+        }
+
+        return togetherNow ? PartyGateOutcome.GatheredAndTogether : PartyGateOutcome.GatheredButStillApart;
+    }
+
+    /// <summary>True when the transition can actually be expected to happen.</summary>
+    public static bool GateWillPass(PartyGateOutcome outcome) =>
+        outcome is PartyGateOutcome.AlreadyTogether or PartyGateOutcome.GatheredAndTogether;
 
     /// <summary>
     /// What the sweep saw, for the answer when it found nothing usable. "No transition door

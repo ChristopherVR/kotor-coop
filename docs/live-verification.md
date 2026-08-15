@@ -691,11 +691,25 @@ phase — on use — raises `CSWSArea::SetTransitionPending(1, id)` and starts a
 (0x0058C230), and `trans_pending` at CSWSArea+0x2C4 is the exact byte `IsAreaTransitionPending`
 reads. That half-second IS the pre-store flush window; a co-op warp never opens it.
 
+**First attempt, live: the verb worked and the party gate stopped it.** `usedoor end_door10`
+from 101.7 m was refused with the distance (good). After `tp 47.4 116 -0.04` it reported
+`door: using door 0x4A at 4.1m - it links to module 'end_m01ab' at waypoint 'from_01a'` and then
+warned that the party was not together — and it was right: Trask was still at the module start,
+`CSWSDoor::EventHandler` cancelled the transition into `k_trg_transfail`, and there was no
+`area transition pending:` line and no flush at all.
+
+**So `usedoor` now gathers the party first**, through `CSWPartyTable::PositionParty 0x00565B00`
+— the engine's own party collection, whose only caller is `MovePlayerToArea`, i.e. the very
+thing a module transition does. It is skipped entirely when the party is already together, and
+`CSWPartyTable+0x10C` (a one-shot "skip positioning" flag tested at 0x00565B6E) is read first so
+a set flag cannot make the first call silently move nobody.
+
 ```powershell
-pwsh toolslockpoke.ps1 -ProcId <host pid> console 'moviewarp queue 01c'        # arm, do not warp
-pwsh toolslockpoke.ps1 -ProcId <host pid> console 'dropitem g_w_blstrrfl001'   # something to flush
-pwsh toolslockpoke.ps1 -ProcId <host pid> console 'usedoor end_door10'         # the ENGINE transitions
-pwsh toolslockpoke.ps1 -ProcId <host pid> console 'moviewarp clear'            # always, afterwards
+pwsh tools\blockpoke.ps1 -ProcId <host pid> console 'moviewarp queue 01c'        # arm, do not warp
+pwsh tools\blockpoke.ps1 -ProcId <host pid> console 'dropitem g_w_blstrrfl001'   # something to flush
+pwsh tools\blockpoke.ps1 -ProcId <host pid> console 'tp 47.4 116 -0.04'          # PC beside the door
+pwsh tools\blockpoke.ps1 -ProcId <host pid> console 'usedoor end_door10'         # gathers, then transitions
+pwsh tools\blockpoke.ps1 -ProcId <host pid> console 'moviewarp clear'            # always, afterwards
 ```
 
 `area transition pending: flushing spawned objects` is the line that makes it run B — it
@@ -703,6 +717,22 @@ cannot appear on a co-op warp at all. Whether the `flush,` lines land before tha
 after it, or not at all is the entire answer; the three readings are `cinematics.md` §8.5, and
 the baked-phantom check for the departed module is §8.6.
 
-⚠ One silent failure it predicts rather than suffers: `CSWParty::IsPartyTogether 0x00635350`
-false makes the door run `k_trg_transfail` and move nobody, with no other trace. `usedoor`
-reads the same predicate and says so up front.
+### Why `blockpoke walk` no-ops on the player character — settled
+
+It queues NWScript `ActionMoveToLocation`, the AI action queue, which is what it was built and
+verified for — on PHANTOMS. **The PC does not move that way in this build.** All 17 call sites
+of `CSWCMessage::SendPlayerToServerMessage 0x00677410` were enumerated and the message type read
+off each; on the player-input channel (6) this game only ever sends 2 Attack, 3 ChangeDoorState,
+7 UseSkill, 8 Dialog, 9 UseItem, 0xB UseObject, 0xC UnlockObject, 0x12 CastSpell. Type **1**,
+`WalkToWaypoint`, whose server handler `0x005235B0` is a complete implementation, is **never
+sent by anything** — dead code from the networked lineage this engine came from. There is no
+"walk the player here" message to borrow, which is exactly why `usedoor` could go through a
+message and a walk cannot; the PC is moved by drive control from local input.
+
+The channel used to `return` silently on three of its four paths. It now logs every one, so
+"the walk did nothing" can be told from "the walk was never tried". Use `tp` plus `usedoor`
+(which gathers the party) instead. **INFERRED, not proven:** whether the queued action is
+cancelled by the drive controller or simply never run for a player-controlled creature.
+
+⚠ Also measured: a same-module `warp <module> <waypoint>` **ignores the waypoint** —
+`warp end_m01aa end_wp_traskdie` put the party back at the module start (20.2, 23.0).

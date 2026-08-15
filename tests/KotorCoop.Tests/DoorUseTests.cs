@@ -143,6 +143,64 @@ public class DoorUseTests
         Assert.Equal(DoorUseVerdict.Use, Decide(distance: DoorUse.MaxUseDistance));
     }
 
+    // ---- the party gate ------------------------------------------------------------
+
+    /// <summary>
+    /// The gate that silently cancels a door transition. `CSWSDoor::EventHandler` tests
+    /// `CSWParty::IsPartyTogether` at 0x0058C228 and, when it is false, runs `k_trg_transfail`
+    /// INSTEAD of transitioning — no fade, no store, no trace. Measured live on 2026-08-15:
+    /// the PC was teleported to the door, Trask stayed 100 m back at the module start, and
+    /// nothing happened.
+    /// </summary>
+    [Fact]
+    public void TheGateIsClassifiedFromWhatWasActuallyMeasured()
+    {
+        Assert.Equal(
+            PartyGateOutcome.AlreadyTogether,
+            DoorUse.ClassifyGate(wasTogether: true, gatherRan: false, togetherNow: false));
+
+        Assert.Equal(
+            PartyGateOutcome.GatheredAndTogether,
+            DoorUse.ClassifyGate(wasTogether: false, gatherRan: true, togetherNow: true));
+
+        Assert.Equal(
+            PartyGateOutcome.GatheredButStillApart,
+            DoorUse.ClassifyGate(wasTogether: false, gatherRan: true, togetherNow: false));
+
+        Assert.Equal(
+            PartyGateOutcome.CouldNotGather,
+            DoorUse.ClassifyGate(wasTogether: false, gatherRan: false, togetherNow: false));
+    }
+
+    /// <summary>
+    /// The rule the whole verb rests on: only the two outcomes where the engine will really
+    /// transition count as passing. Reporting "walking to the door" while the gate is shut is
+    /// a lie of exactly the kind that costs a live round — the door IS used, and nothing at
+    /// all happens.
+    /// </summary>
+    [Fact]
+    public void OnlyAGenuinelyGatheredPartyCountsAsPassingTheGate()
+    {
+        Assert.True(DoorUse.GateWillPass(PartyGateOutcome.AlreadyTogether));
+        Assert.True(DoorUse.GateWillPass(PartyGateOutcome.GatheredAndTogether));
+
+        Assert.False(DoorUse.GateWillPass(PartyGateOutcome.GatheredButStillApart));
+        Assert.False(DoorUse.GateWillPass(PartyGateOutcome.CouldNotGather));
+    }
+
+    /// <summary>A party that was already together is never moved — the gather is a repair,
+    /// not a ritual, and teleporting companions that did not need it would be a side effect
+    /// nobody asked a door for.</summary>
+    [Fact]
+    public void APartyAlreadyTogetherIsLeftAlone()
+    {
+        PartyGateOutcome outcome =
+            DoorUse.ClassifyGate(wasTogether: true, gatherRan: false, togetherNow: false);
+
+        Assert.Equal(PartyGateOutcome.AlreadyTogether, outcome);
+        Assert.True(DoorUse.GateWillPass(outcome));
+    }
+
     // ---- choosing the nearest ------------------------------------------------------
 
     [Fact]
