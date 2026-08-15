@@ -126,6 +126,10 @@ internal sealed unsafe class CheatController(SharedBlockView block)
                 Resolve();
                 break;
 
+            case SharedBlock.CheatKindUseDoor:
+                UseDoor(player);
+                break;
+
             default:
                 Answer(SharedBlock.CheatStatusRefused, $"unknown cheat kind {kind}");
                 break;
@@ -716,6 +720,210 @@ internal sealed unsafe class CheatController(SharedBlockView block)
         }
 
         return accepted;
+    }
+
+    /// <summary>Doors one module can hold. The Endar Spire's busiest area has a dozen; a
+    /// hundred and twenty-eight is a ceiling, not an expectation, and the sweep stops there
+    /// rather than writing past the buffer.</summary>
+    private const int DoorSweepCapacity = 128;
+
+    /// <summary>
+    /// Makes the local player USE a door, so the ENGINE starts a module transition.
+    ///
+    /// This is the other half of the cinematic instrument, and the half that can actually
+    /// answer the question. <c>moviewarp</c> stages a movie onto a transition the PLUGIN
+    /// starts — and on that path <see cref="PluginHost"/> has already destroyed every spawned
+    /// body before it raises the move-to-module flag, so the pre-store flush window is never
+    /// needed and never tested. A door is the opposite: <c>CSWSDoor::EventHandler</c> raises
+    /// <c>CSWSArea::SetTransitionPending(1, id)</c> and starts a half-second fade FIRST
+    /// (0x0058C2A0), and only when that fade completes does it do the move-to-module calls
+    /// (0x0058C185). Those intervening frames are the entire flush window, and a movie playing
+    /// across them is the case docs/research/cinematics.md has never been able to stage.
+    ///
+    /// The click itself is the engine's own input message, not a hand-rolled module load —
+    /// see <c>Odyssey.UseObject</c> for the full chain from the message to the door's event.
+    /// Everything before it is guard: <see cref="DoorUse.Decide"/> gets facts measured on this
+    /// frame and nothing else, and every refusal names what it saw.
+    /// </summary>
+    private void UseDoor(nint player)
+    {
+        uint requestedId = block.CheatTarget;
+        string text = ReadCheatText();
+
+        nint door;
+        string what;
+        int doorsSeen = 0;
+        int linkedSeen = 0;
+
+        if (requestedId != 0)
+        {
+            // ResolveDoor is vtable-checked, so a non-door id comes back as 0 — which would
+            // read as "missing". Resolve generically first so the answer can tell a wrong id
+            // from a right id naming the wrong kind of thing.
+            door = Odyssey.ResolveDoor(requestedId);
+            what = $"0x{requestedId:X}";
+
+            if (door == 0 && Odyssey.ResolveServerObject(requestedId) != 0)
+            {
+                Answer(
+                    SharedBlock.CheatStatusNoTarget,
+                    DoorUse.Explain(DoorUseVerdict.RefuseNotADoor, what, 0f));
+                return;
+            }
+        }
+        else if (text.Length > 0)
+        {
+            byte* tag = block.CheatText;
+            int length = 0;
+            while (length < SharedBlock.CheatTextLength - 1 && tag[length] != 0)
+            {
+                length++;
+            }
+
+            door = Odyssey.FindDoorByTag(tag, length);
+            what = $"'{text}'";
+        }
+        else
+        {
+            door = FindNearestTransitionDoor(player, out doorsSeen, out linkedSeen);
+            what = "the nearest transition door";
+        }
+
+        float distance = door != 0 ? Distance(Odyssey.GetPosition(player), Odyssey.GetPosition(door)) : 0f;
+
+        DoorUseVerdict verdict = DoorUse.Decide(
+            hasPlayer: player != 0,
+            found: door != 0,
+            isDoor: door != 0,
+            linked: door != 0 && Odyssey.DoorIsLinked(door),
+            openState: door != 0 ? Odyssey.GetDoorOpenState(door) : 0,
+            transitionPending: Odyssey.IsAreaTransitionPending(),
+            moviePlaying: Odyssey.IsMoviePlaying(),
+            distance: distance);
+
+        if (verdict != DoorUseVerdict.Use)
+        {
+            string detail = DoorUse.Explain(verdict, what, distance);
+
+            // A failed sweep has to say what it swept. "No transition door here" is the wrong
+            // module; "no doors at all" is a broken sweep, and a reader with neither number
+            // cannot tell them apart.
+            if (verdict == DoorUseVerdict.RefuseMissing && requestedId == 0 && text.Length == 0)
+            {
+                detail = DoorUse.DescribeSweep(doorsSeen, linkedSeen);
+            }
+
+            // The link flags are the one refusal worth the extra byte: 0 means the module data
+            // never linked this door, which is a fact about the module and not about us.
+            if (verdict == DoorUseVerdict.RefuseNotLinked)
+            {
+                PluginHost.Log(
+                    $"door: refusing to use {what} - linked_to_flags reads "
+                    + $"{Odyssey.GetDoorLinkFlags(door)} (1 or 2 would be a module transition)");
+            }
+
+            Answer(SharedBlock.CheatStatusRefused, detail);
+            return;
+        }
+
+        uint doorId = *(uint*)(door + 0x04);
+
+        byte* destination = stackalloc byte[SharedBlock.TravelNameLength];
+        int destinationLength = Odyssey.ReadDoorLinkedModule(door, destination, SharedBlock.TravelNameLength);
+        string module = destinationLength > 0
+            ? Encoding.ASCII.GetString(destination, destinationLength)
+            : "(unreadable)";
+
+        byte* waypoint = stackalloc byte[SharedBlock.TravelNameLength];
+        int waypointLength = Odyssey.ReadDoorLinkedWaypoint(door, waypoint, SharedBlock.TravelNameLength);
+        string entry = waypointLength > 0
+            ? Encoding.ASCII.GetString(waypoint, waypointLength)
+            : "(none)";
+
+        // Logged BEFORE the send, because the send is the last thing this instance is certain
+        // to do: if a movie is queued, the very next transition takes the main thread away and
+        // anything written afterwards would have to survive the window to be written at all.
+        PluginHost.Log(
+            $"door: using door 0x{doorId:X} at {distance:F1}m - it links to module "
+            + $"'{module}' at waypoint '{entry}'");
+
+        // Predicted, not refused. CSWSDoor::EventHandler tests IsPartyTogether at 0x0058C228
+        // and runs k_trg_transfail instead of transitioning when it is false — a failure with
+        // NO trace at all: the door is used, no fade starts, no module is stored. Saying so up
+        // front turns a silent nothing into a named prediction.
+        //
+        // Not a refusal, because the test is applied by the engine AFTER the walk and this
+        // reading is taken before it. Refusing on a predicate that may have changed by the
+        // time it matters would invent failures; announcing it cannot.
+        bool together = Odyssey.IsPartyTogether();
+        if (!together)
+        {
+            PluginHost.Log(
+                "door: WARNING - the engine says the party is NOT together, and a door "
+                + "transition is gated "
+                + "on that (0x0058C228), so this use will run k_trg_transfail and move nobody");
+        }
+
+        if (!Odyssey.UseObject(doorId))
+        {
+            Answer(SharedBlock.CheatStatusEngineRefused, "no client message pipe to send the click on");
+            return;
+        }
+
+        Answer(
+            SharedBlock.CheatStatusApplied,
+            together
+                ? $"walking to door 0x{doorId:X} ({distance:F1}m) -> '{module}'"
+                : $"door 0x{doorId:X} -> '{module}' BUT the party is not together");
+    }
+
+    /// <summary>
+    /// Sweeps the module for doors and returns the nearest one that is a module transition,
+    /// with the counts so a failure can describe itself.
+    ///
+    /// Linked-only is the guard, not a convenience: a bare <c>usedoor</c> has to be incapable
+    /// of doing anything except starting a transition, and an ordinary door two metres away
+    /// would otherwise win the distance comparison and merely open — which looks exactly like
+    /// the command working.
+    /// </summary>
+    private static nint FindNearestTransitionDoor(nint player, out int doorsSeen, out int linkedSeen)
+    {
+        nint* doors = stackalloc nint[DoorSweepCapacity];
+        doorsSeen = Odyssey.CollectDoors(doors, DoorSweepCapacity);
+        linkedSeen = 0;
+
+        Vec3 here = Odyssey.GetPosition(player);
+        nint best = 0;
+        float bestDistance = float.MaxValue;
+
+        for (int i = 0; i < doorsSeen; i++)
+        {
+            if (!Odyssey.DoorIsLinked(doors[i]))
+            {
+                continue;
+            }
+
+            linkedSeen++;
+
+            float distance = Distance(here, Odyssey.GetPosition(doors[i]));
+            if (distance >= bestDistance)
+            {
+                continue;
+            }
+
+            best = doors[i];
+            bestDistance = distance;
+        }
+
+        return best;
+    }
+
+    private static float Distance(Vec3 a, Vec3 b)
+    {
+        float dx = a.X - b.X;
+        float dy = a.Y - b.Y;
+        float dz = a.Z - b.Z;
+        return MathF.Sqrt((dx * dx) + (dy * dy) + (dz * dz));
     }
 
     /// <summary>The engine's queue in words, for an answer a reader can act on.</summary>

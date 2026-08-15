@@ -142,6 +142,7 @@ are known not to be trustworthy. Both halves are useful; the second is the point
 | `0x005790C0` | `CSWSAreaMap::SetPartyMemberWorldLocation` | Thiscall | 5 | `ret-imm 16` | Odyssey |
 | `0x005791B0` | `CSWSAreaMap::GetPartyMemberMapLocation` | Thiscall | 4 | `ret-imm 12` | Odyssey |
 | `0x00584AC0` | `CSWSPlaceable::RemoveItem` | Thiscall | 2 | `ret-imm 4` | Odyssey |
+| `0x005890D0` | `CSWSDoor::GetIsLinked` | Thiscall | 1 | `ret 0` | Odyssey |
 | `0x00589600` | `CSWSDoor::SetOpenState` | Thiscall | 3 | `ret-imm 8` | Odyssey |
 | `0x00589680` | `CSWSDoor::MoveToNextOpenState` | Thiscall | 1 | `ret 0` | Odyssey |
 | `0x00590090` | `CSWSEncounter::GetInActivateArea` | Thiscall | 2 | `ret-imm 4` | Odyssey |
@@ -178,6 +179,7 @@ are known not to be trustworthy. Both halves are useful; the second is the point
 | `0x005ED690` | `CClientExoApp::GetInGameGui` | Thiscall | 1 | `ret 0` | MenuLoadController |
 | `0x005ED6F0` | `CClientExoApp::GetSWCMessage` | Thiscall | 1 | `ret 0` | MenuLoadController, Odyssey |
 | `0x005ED730` | `CClientExoApp::InitializeInGameGUI` | Thiscall | 1 | `ret 0` | MenuLoadController |
+| `0x005ED8B0` | `CClientExoApp::GetSWParty` | Thiscall | 1 | `ret 0` | Odyssey |
 | `0x005EDA20` | `CClientExoApp::TurnOffKeyboardModal` | Thiscall | 1 | `ret 0` | Odyssey |
 | `0x005EDA60` | `CClientExoApp::SetInputClass` | Thiscall | 3 | `ret-imm 8` | MenuLoadController |
 | `0x005EDA80` | `CClientExoApp::ShowLoadScreen` | Thiscall | 4 | `ret-imm 12` | MenuLoadController |
@@ -202,11 +204,13 @@ are known not to be trustworthy. Both halves are useful; the second is the point
 | `0x0062CBA0` | `CGuiInGame::HideSWInGameGui` | Thiscall | 2 | `ret-imm 4` | MenuLoadController |
 | `0x0062DEF0` | `CGuiInGame::SetPaused` | Thiscall | 3 | `ret-imm 8` | Odyssey |
 | `0x006332B0` | `CGuiInGame::CloseDialog` | Thiscall | 1 | `ret 0` | Odyssey |
+| `0x00635350` | `CSWParty::IsPartyTogether` | Thiscall | 1 | `ret 0` | Odyssey |
 | `0x0063C300` | `CSWCObject::AnimationLooping` | Thiscall | 2 | `ret-imm 4` | Odyssey |
 | `0x0063C380` | `CSWCObject::AnimationFireAndForget` | Thiscall | 2 | `ret-imm 4` | Odyssey |
 | `0x0063C410` | `CSWCObject::AnimationOverlay` | Thiscall | 2 | `ret-imm 4` | Odyssey |
 | `0x0063F9D0` | `CSWCModule::SetCameraFollow` | Thiscall | 3 | `ret-imm 8` | Odyssey |
 | `0x006775E0` | `CSWCMessage::SendPlayerToServerStatus_RequestStatus` | Thiscall | 1 | `ret 0` | MenuLoadController |
+| `0x00677D10` | `CSWCMessage::SendPlayerToServerInput_UseObject` | Thiscall | 2 | `ret-imm 4` | Odyssey |
 | `0x00677EA0` | `CSWCMessage::SendPlayerToServerInput_Dialog` | Thiscall | 2 | `ret-imm 4` | Odyssey |
 | `0x006CA250` | `CSWGuiSaveLoad::LoadPCAutoSave` | Thiscall | 2 | `ret-imm 4` | MenuLoadController |
 | `0x006CAE70` | `CSWGuiSaveNamePanel::Constructor` | Thiscall | 2 | `ret-imm 4` | PasswordEntryModal |

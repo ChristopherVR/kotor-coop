@@ -920,11 +920,14 @@ needed. If phantoms are baked in anyway on this path, that is a **new and worse*
 the risk case.
 
 **`moviewarp queue <movie>` is the one that tests it.** It leaves the queue armed and then a
-transition the plugin did NOT initiate — walking through a door, an area trigger, a script —
-drains it. That is exactly the shape of the escape pod: no advance warning, the flush branch is
-the only thing standing between a phantom and the stored module, and the movie turns off the
-hook that branch runs on. Stage it, then walk the host through a door with a peer's phantom
-standing in the module.
+transition the plugin did NOT initiate — a door, an area trigger, a script — drains it. That is
+exactly the shape of the escape pod: no advance warning, the flush branch is the only thing
+standing between a phantom and the stored module, and the movie turns off the hook that branch
+runs on.
+
+⚠ **A KOTOR transition door is USED, not walked into**, and `end_m01aa` has no area-transition
+triggers at all — so there is no walk-in route and this needed a second verb. **`usedoor` is
+it, and §8 is the whole of run B.**
 
 ### 7.5 The live procedure
 
@@ -1047,6 +1050,245 @@ anywhere else.
 
 ---
 
+## 8. Run A happened; run B needed a door (2026-08-15, later)
+
+### 8.1 Run A, measured
+
+`moviewarp tar_m03aa 01c` on the host of a live pair:
+
+```
+cinematic: armed 01c for the next co-op warp (previously armed: nothing)
+flush, before the module is stored: destroyed phantom 0x12D (slot 0)
+cinematic: staged 1 of 1 movie(s) onto this transition: 01c
+travel: moving to module 'tar_m03aa' on the session's authority
+epoch: module changed; clearing phantom, item, combat and door state
+cinematic: the main thread was gone for 15531 ms
+```
+
+**15,531 ms**, against 5.1–5.3 s for a bare module load on the same rig. The movie genuinely
+played. `AddMoveToModuleMovie` is correctly wired and **the co-op warp path carries a queued
+movie through `CServerExoAppInternal::StartNewModule` exactly as §1.5 said it would** — the
+design lever is now VERIFIED live, not just statically. The baked-phantom check afterwards was
+clean: back in `end_m01aa`, two `coop_phantom` rows resolving to **one** distinct id (`0x139`)
+for one peer.
+
+`moviewarp queue 01c` also works, and produced the independent confirmation §7.6 promised —
+the array walk, on a different code path from the write:
+
+```
+cinematic: the engine accepted '01c' onto the transition movie queue
+cinematic: the module transition has queued 1 movie(s): .\movies\01c.bik
+```
+
+⚠ Note what the engine stored: **`.\movies\01c.bik`, not `01c`**. `AddMovieToExoArrayList`
+normalises the name into a path before adding it (§1.5), so `moviewarp show` echoes the path
+and not the name you typed. That is the engine agreeing with you, not disagreeing.
+
+And exactly as §7.4 predicted, none of it tests the hypothesis. The flush ran **before** the
+stall because on that path it always does.
+
+### 8.2 Why a door, and why nothing else would do
+
+The blocker was blunt: with the movie queued, there was no way to make the engine start a
+transition. `end_m01aa` has one transition door (`end_door10` → `end_m01ab`) and **no area
+transition triggers at all** — all fourteen of its triggers are script triggers — so there is
+no walk-in route. And a KOTOR transition door is not walked into; it is USED. Walking the PC
+onto it does nothing, which is what the rig measured.
+
+Reading the engine settles why the distinction matters, and it is sharper than expected.
+**A door transition and a co-op warp end in the SAME three calls.** `CSWSDoor::EventHandler`
+at `0x0058C185`:
+
+```
+0x0058C18E  push 1     ; ecx = CServerExoApp
+0x0058C192  call 0x004AECC0            ; SetMoveToModulePending(1)
+0x0058C197  lea eax,[esi+0x390]        ; door->linked_to_module
+0x0058C1A0  call 0x004AECD0            ; SetMoveToModuleString(...)
+0x0058C1A5  add esi,0x388              ; door->linked_to
+0x0058C1AE  call 0x004AED30            ; SetMoveToModuleStartWaypoint(...)
+0x0058C1B9  call 0x00506B30            ; CSWSArea::SetTransitionPending(0, 0)
+```
+
+That is `Odyssey.TravelToModule`, verbatim, plus one line. **What differs is everything
+before it**, and it is what this whole investigation is about. The door path has two phases:
+
+| Phase | What runs | Where |
+| --- | --- | --- |
+| **1 — on use** | `CSWSArea::GetNextTransitionPendingID 0x00506AC0`, `CGuiInGame::StartGlobalFade 0x0062ABF0` (0.5 s), **`CSWSArea::SetTransitionPending(1, id) 0x00506B30`**, `CServerExoApp::SetPauseState(2, 0)` | `0x0058C230`–`0x0058C315` |
+| **2 — when the fade completes** | the four calls above; the transition actually happens | `0x0058C185`–`0x0058C1BE` |
+
+`SetTransitionPending` writes `CSWSArea::trans_pending` at **`+0x2C4`** — the exact byte
+`Odyssey.IsAreaTransitionPending()` reads, and therefore the exact flag that opens
+`PluginHost.OnFrame`'s pre-store flush branch. So:
+
+* **a door transition gives the plugin a ~0.5 s window** (the fade) in which to destroy every
+  body it spawned, and only then stores the area;
+* **a co-op warp gives it none, and needs none**, because the plugin flushed before it raised
+  anything.
+
+That one asymmetry is the whole reason run A cannot answer the question and run B can. It also
+confirms, from the binary, the premise the flush branch was written on.
+
+### 8.3 The verb: `usedoor`
+
+```
+usedoor                  the nearest module transition door
+usedoor <tag>            that door by tag, e.g. usedoor end_door10
+usedoor <id>             that door by object id (0x1F, #31 or 31)
+```
+
+The primitive is **`CSWCMessage::SendPlayerToServerInput_UseObject 0x00677D10`** — literally
+what clicking an object sends. The full chain, all of it read out of this binary:
+
+1. `SendPlayerToServerInput_UseObject(doorId)` — `__thiscall`, `ret 4` at `0x00677D4E`;
+2. `CSWSMessage::HandlePlayerToServerInputMessage 0x005254C0`, jump table at `0x0052684C`,
+   message type **`0x0B`** → `0x00525B1A`;
+3. that does `CSWSCreature::ActionManager(2)` then
+   **`CSWSObject::AddUseObjectAction 0x0057C810`** on the player;
+4. the queued action runs `CSWSObject::AIActionUseObject 0x0057E8C0`, which paths the PC to the
+   door's action point and posts the signal event (`0x0057ECC7` / `0x0057F3C9`);
+5. `CSWSDoor::EventHandler 0x0058B850` turns that event into phase 1 above.
+
+**It is deliberately NOT the door's `OnUsed` script and not a hand-rolled module load.**
+`end_door10` has no `OnOpen`/`OnClick` script at all (§4.2) — the transition is engine
+behaviour, not script behaviour — and a hand-rolled `SetMoveToModule*` would be the co-op warp
+again, which is the thing run B exists to avoid. It is also not `CSWCDoor`'s client-side menu
+helpers (`GetTargetActions 0x00684410`, `MenuAction* 0x00683E50`): those have gates a mouse
+click satisfies and we do not, the same lesson `SendDialogRequest` already paid for.
+
+**The guard** (`DoorUse.Decide`, pure and unit-tested) refuses, naming what it saw: no world;
+nothing answering to that tag or id; something that answers but is **not a door** (vtable, not
+the object-type byte); **a door with no `LinkedToModule`** — `CSWSDoor::GetIsLinked 0x005890D0`
+reads `linked_to_flags` (+0x384) and accepts only 1 or 2, and the log additionally prints the
+raw flag byte; a destroyed door (open state 3); a transition already pending; a movie already
+playing; or a door further than **40 m**, so a mistyped tag cannot send the PC on a walk whose
+cause nobody is still watching for when it lands. A bare `usedoor` searches **linked doors
+only**, so it is incapable of doing anything except starting a transition — an ordinary door
+standing closer would merely open, which looks exactly like the command working.
+
+⚠ **One gate is reported rather than refused, and it is the one most likely to eat a run.**
+`CSWSDoor::EventHandler` tests **`CSWParty::IsPartyTogether 0x00635350`** at `0x0058C228` and,
+when it is false, jumps to `0x0058C31A` — which runs the script `k_trg_transfail` (string at
+`0x007499C4`) **instead of transitioning**. That failure has no trace at all: the door is used,
+no fade starts, no module is stored. So `usedoor` reads the same predicate and, when it is
+false, logs
+
+```
+door: WARNING - the engine says the party is NOT together, and a door transition is gated on
+that (0x0058C228), so this use will run k_trg_transfail and move nobody
+```
+
+and says so in its answer too. Not a refusal, because the engine applies the test *after* the
+walk and this reading is taken before it: refusing on a predicate that may have changed would
+invent failures, whereas announcing it cannot.
+
+Costs worth knowing: `usedoor` with no argument does one full address-space sweep for the door
+vtable (`0x007498B0`) — the same machinery `FindByTag` has used on dialogue edges for months,
+tens of milliseconds, but it is on the game thread. **Prefer the tag form for a measured run**,
+so the sweep early-outs and cannot contribute to the number you are about to read.
+
+### 8.4 Run B, verbatim
+
+Both players in the same module, with a phantom and ideally a replicated item standing — the
+flush needs something to flush, or its silence means nothing (§7.6).
+
+```powershell
+# 1. Confirm the queue is empty and the channel is live.
+pwsh tools\blockpoke.ps1 -ProcId <host pid> console 'moviewarp show'
+#    expect: queued: nothing; armed: nothing
+
+# 2. Queue the movie WITHOUT warping. Nothing transitions yet.
+pwsh tools\blockpoke.ps1 -ProcId <host pid> console 'moviewarp queue 01c'
+#    expect: the engine queued 1: 01c - the NEXT transition plays them
+pwsh tools\blockpoke.ps1 -ProcId <host pid> console 'moviewarp show'
+#    expect: queued: .\movies\01c.bik; armed: nothing
+
+# 3. Prove there is something to flush.
+pwsh tools\blockpoke.ps1 -ProcId <host pid> console 'dropitem g_w_blstrpstl001'
+#    and check the host log has a `spawned phantom` with no matching destroy.
+
+# 4. Make the ENGINE start the transition.
+pwsh tools\blockpoke.ps1 -ProcId <host pid> console 'usedoor end_door10'
+#    expect: walking to door 0x<id> (N.Nm) -> 'end_m01ab'
+
+# 5. Afterwards, always.
+pwsh tools\blockpoke.ps1 -ProcId <host pid> console 'moviewarp clear'
+```
+
+If step 4 answers `no door 'end_door10' in this module`, try bare `usedoor` — it will report
+`the sweep found N door(s), M of them module transitions`, which distinguishes the wrong module
+from a broken sweep.
+
+### 8.5 Run B: PASS and FAIL, line by line
+
+The host log should read, in this order:
+
+```
+cinematic: the engine accepted '01c' onto the transition movie queue
+cinematic: the module transition has queued 1 movie(s): .\movies\01c.bik
+door: using door 0x<id> at N.Nm - it links to module 'end_m01ab' at waypoint 'from_01a'
+cheat: walking to door 0x<id> (N.Nm) -> 'end_m01ab' (status 1)
+area transition pending: flushing spawned objects before the module is stored
+flush, before the module is stored: destroyed phantom 0x<id> (slot 0)
+flush: destroyed item body 0x<id> (item 0x<id>) before the module is stored
+cinematic: the main thread was gone for NNNNN ms (in a world; ...)
+epoch: module changed; clearing phantom, item, combat and door state
+```
+
+`area transition pending:` is the line that makes run B run B — it is `PluginHost` seeing
+`CSWSArea::trans_pending`, and it **cannot appear on a co-op warp at all**. If it is missing,
+the door did not start a transition and everything after it is about something else.
+
+**The three outcomes, and what each means.** Compare the two `flush` lines against the stall:
+
+| Outcome | Reading |
+| --- | --- |
+| **flush lines BEFORE the stall** — PASS | The fade window survived the movie. The engine raised `trans_pending`, the plugin got frames inside the 0.5 s fade, and every spawned body was destroyed before `StoreCurrentModule` ran. The hypothesis is **refuted**, and the flush branch is correct as written. |
+| **flush lines AFTER the stall, or interleaved with `epoch:`** — PARTIAL FAIL | The flush started and did not finish before the movie took the thread. Expect some `destroyed phantom` lines, then the stall, then the epoch — and whatever was still standing at that moment is already in the stored module. **Real defect**: the fix is to flush every body on the pending EDGE rather than one per frame, since one-per-frame assumes ~150 frames of window and a movie leaves zero. |
+| **`area transition pending:` with NO flush lines before the stall** — FAIL, hypothesis confirmed | The pending window fell entirely inside the movie. Every phantom and replicated item standing at that moment is now a permanent resident of the stored module, and the object-id counter has shifted for the rest of that playthrough. Only interpretable if step 3 verifiably left something to flush. |
+
+Two more things to record either way:
+
+* the stall must be **thousands** of ms — `01c` runs ~25 s unskipped and a bare module load
+  measured 5.1–5.3 s here, so under ~6 s means no movie played and the run is void;
+* the client's log, for the absence: it has no queue line and no stall, and gets a bare
+  `travel:` line at the end. That gap is the measured cost of §4.3.
+
+### 8.6 The baked-phantom check for the DEPARTED module
+
+The departed module is `end_m01aa` (run B leaves it for `end_m01ab`). After the run, go back and
+count the bodies the co-op blueprint left behind:
+
+```powershell
+pwsh tools\blockpoke.ps1 -ProcId <pid> console 'warp end_m01aa'
+pwsh tools\creatures.ps1 -ProcId <pid>
+```
+
+Count creatures **tagged `coop_phantom`**, and count DISTINCT OBJECT IDS — run A's check found
+two rows for one id, which is the same body seen twice and is not a leak. The tag is the
+identifier that matters: the census already excludes by it, because the id table clears before
+a dying body finishes dying and the tag survives to the last readable moment
+(`transition-window-races.md` §2).
+
+* **CLEAN**: distinct `coop_phantom` ids == peers standing in that module right now (normally
+  one), and they disappear on `disconnect`.
+* **BAKED**: a `coop_phantom` still there with the session down, or the distinct count growing
+  by one on each re-entry. The growth is the unmistakable signature.
+* Same for items: a ground item body that survives a re-entry with no session.
+
+⚠ Do it on a save you then **discard**. A baked phantom is written into the save and shifts the
+object-id counter for good.
+
+### 8.7 If it crashes
+
+Unchanged from §7.8 — `tools\crashlog.ps1`, an `eip` outside the exe image means our
+`dinput8.dll`, and `llvm-symbolizer --obj=<installed dll> --relative-address 0x<rva>` names the
+line. The suspect list gains one entry specific to run B: the flush branch now runs with a
+movie about to start, so a body destroyed on the last frame before `WaitForMovie` is the newest
+place a freed pointer can be read from.
+
+---
+
 ## Key addresses
 
 | Address | Symbol / meaning |
@@ -1083,4 +1325,9 @@ anywhere else.
 | `0x007A3CF4` / `0x007A39D8` / `0x007A39D4` | current `CExoMoviePlayerInternal*` / main HWND / movie HWND |
 | `0x0061D230` / `0x0061D3D0` | `CClientOptions::Set/GetMovieShown` — the per-save "already seen" bits |
 | `0x004AECC0` / `0x004AECD0` | `SetMoveToModulePending` / `SetMoveToModuleString` — what `Odyssey.TravelToModule` writes |
+| **`0x0058B850`** | **`CSWSDoor::EventHandler`** — the door transition, in two phases: `0x0058C230`-`0x0058C315` raises `SetTransitionPending(1, id)` + a 0.5 s fade, and `0x0058C185`-`0x0058C1BE` does the same three move-to-module calls a co-op warp does, then `SetTransitionPending(0, 0)`. **§8.2** |
+| `0x00506B30` / `0x00506AC0` | `CSWSArea::SetTransitionPending(int, char)` — writes `trans_pending` at **CSWSArea+0x2C4**, the byte `Odyssey.IsAreaTransitionPending` reads / `GetNextTransitionPendingID` |
+| `0x00635350` @ `0x0058C228` | **`CSWParty::IsPartyTogether`** — bare `ret`. False here and the door runs `k_trg_transfail` (`0x007499C4`) INSTEAD of transitioning, with no trace. The silent failure `usedoor` predicts out loud |
+| `0x00677D10` | **`CSWCMessage::SendPlayerToServerInput_UseObject`** — `ret 4`; what a click sends. Server side: `HandlePlayerToServerInputMessage 0x005254C0`, jump table `0x0052684C`, type `0x0B` -> `0x00525B1A` -> `ActionManager(2)` + `AddUseObjectAction 0x0057C810` -> `AIActionUseObject 0x0057E8C0` -> the door event |
+| `0x005890D0` | `CSWSDoor::GetIsLinked` — `linked_to_flags` at **CSWSDoor+0x384**, 1 or 2 = a module transition. `linked_to` +0x388, `linked_to_module` +0x390 |
 | `0x0073D00C` / `0x004046BD` | the SwapBuffers IAT slot (movie-gated, so `FrameHook` is dead during a movie) / the `MainLoop` call site `MainLoopHook` rewrites |
