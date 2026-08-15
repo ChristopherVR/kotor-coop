@@ -226,14 +226,14 @@ internal static class MovieStaging
         MovieStagingVerdict.RefuseNoWorld => "no client application here (main menu?)",
         MovieStagingVerdict.RefuseNoNames => "no movie named",
         MovieStagingVerdict.RefuseTooMany => $"more than {MaxMovies} movies named",
+        // ⚠ Under the cheat channel's 63-character detail cap, every one of them: a refusal
+        // whose reason runs past it arrives as half a reason.
         MovieStagingVerdict.RefuseTransitionPending =>
-            "a module transition is already pending - staging into one in flight is the "
-            + "transition-window race, so nothing was written",
+            "a transition is already pending; nothing was written",
         MovieStagingVerdict.RefuseMoviePlaying =>
-            "a movie is already playing (and the frame hook still ran, which is itself news)",
+            "a movie is playing - and the frame hook still ran, which is news",
         MovieStagingVerdict.RefuseQueueBusy =>
-            $"the game has already queued {alreadyQueued} transition movie(s) - refusing to "
-            + "add to a cinematic it staged itself",
+            $"the game has already queued {alreadyQueued} movie(s) here; refusing",
         _ => $"refused ({verdict})",
     };
 }

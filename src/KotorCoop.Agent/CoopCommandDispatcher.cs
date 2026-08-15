@@ -368,6 +368,10 @@ public sealed class CoopCommandDispatcher(
                 StageMovie(command);
                 break;
 
+            case CoopCommandKind.UseDoor:
+                UseDoor(command.Address ?? string.Empty);
+                break;
+
             case CoopCommandKind.Who:
                 if (manager.Current is not { } who)
                 {
@@ -752,6 +756,30 @@ public sealed class CoopCommandDispatcher(
                 Warp(module, string.Empty);
             },
             onRefused: () => Reply($"the cinematic was not staged, so the warp to {module} was NOT attempted"));
+    }
+
+    /// <summary>
+    /// Asks the plugin to make the local player use a door — the ENGINE-initiated half of the
+    /// cinematic test (docs/research/cinematics.md §8).
+    ///
+    /// One request, no follow-up: unlike <c>moviewarp</c> there is nothing to sequence, because
+    /// the movie was queued by a SEPARATE earlier command and is already sitting in the
+    /// engine's own transition queue. That separation is the point — the plugin must not be
+    /// the thing that starts this transition, or the flush window under test never opens.
+    ///
+    /// The token is passed through as text and resolved inside the game, deliberately: a door
+    /// tag means nothing to the agent, and an object id resolved out here would be resolved
+    /// against a census that is a frame or two old.
+    /// </summary>
+    private void UseDoor(string token)
+    {
+        if (ConsoleCommand.TryParseObjectId(token, out uint objectId) && objectId != 0)
+        {
+            SendCheat(new CheatRequest(CheatKinds.UseDoor, Target: objectId));
+            return;
+        }
+
+        SendCheat(new CheatRequest(CheatKinds.UseDoor, Text: token));
     }
 
     /// <summary>

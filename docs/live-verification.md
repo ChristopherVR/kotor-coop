@@ -676,3 +676,33 @@ but one distinct id, for one peer). **This does not settle the hypothesis**: on 
 plugin initiates the transition and has already destroyed spawned bodies before raising the
 pending flag, so the flush branch under test never runs. That needs `moviewarp queue` plus an
 ENGINE-initiated transition (a door), per `cinematics.md` §7.4 — still outstanding.
+
+### Run B is now stageable — `usedoor` (2026-08-15, later)
+
+A KOTOR transition door is **used, not walked into**, and `end_m01aa` has no area-transition
+trigger at all, so there was no way to make the engine start a transition unattended. `usedoor`
+sends the engine's own click — `CSWCMessage::SendPlayerToServerInput_UseObject 0x00677D10`,
+whose server handler queues `AddUseObjectAction` on the PC, whose action posts the event
+`CSWSDoor::EventHandler` turns into a transition.
+
+Why only that opens the window: a door transition and a co-op warp end in the *same* three
+`SetMoveToModule*` calls (0x0058C185), but the door does them in a SECOND phase. The first
+phase — on use — raises `CSWSArea::SetTransitionPending(1, id)` and starts a 0.5 s fade
+(0x0058C230), and `trans_pending` at CSWSArea+0x2C4 is the exact byte `IsAreaTransitionPending`
+reads. That half-second IS the pre-store flush window; a co-op warp never opens it.
+
+```powershell
+pwsh toolslockpoke.ps1 -ProcId <host pid> console 'moviewarp queue 01c'        # arm, do not warp
+pwsh toolslockpoke.ps1 -ProcId <host pid> console 'dropitem g_w_blstrrfl001'   # something to flush
+pwsh toolslockpoke.ps1 -ProcId <host pid> console 'usedoor end_door10'         # the ENGINE transitions
+pwsh toolslockpoke.ps1 -ProcId <host pid> console 'moviewarp clear'            # always, afterwards
+```
+
+`area transition pending: flushing spawned objects` is the line that makes it run B — it
+cannot appear on a co-op warp at all. Whether the `flush,` lines land before that run's stall,
+after it, or not at all is the entire answer; the three readings are `cinematics.md` §8.5, and
+the baked-phantom check for the departed module is §8.6.
+
+⚠ One silent failure it predicts rather than suffers: `CSWParty::IsPartyTogether 0x00635350`
+false makes the door run `k_trg_transfail` and move nobody, with no other trace. `usedoor`
+reads the same predicate and says so up front.

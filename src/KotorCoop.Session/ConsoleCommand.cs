@@ -156,6 +156,15 @@ public enum CoopCommandKind
     /// sending. The id is in <see cref="CoopCommand.Address"/> and the fields in
     /// <see cref="CoopCommand.Item"/>.</summary>
     SetItem,
+
+    /// <summary>
+    /// Make the local player USE a door, so the ENGINE starts a module transition — the other
+    /// half of the cinematic instrument, and the only half that opens the plugin's pre-store
+    /// flush window. <see cref="CoopCommand.Address"/> carries the door's tag, or an object id
+    /// in the three spellings <see cref="ConsoleCommand.TryParseObjectId"/> accepts; empty
+    /// means "the nearest module transition door".
+    /// </summary>
+    UseDoor,
 }
 
 /// <summary>
@@ -545,6 +554,35 @@ public static class ConsoleCommand
             // maintains is unattended. That is a thing to ask for on purpose.
             case "moviewarp":
                 return ParseStageMovie(rest);
+
+            // The other half of the instrument, and spelled in full for the same reason: it
+            // asks the ENGINE to start a module transition, which stores the outgoing area.
+            // Anything the plugin has spawned and not destroyed by then is written into the
+            // save permanently.
+            case "usedoor":
+                if (rest.Length == 0)
+                {
+                    // No argument is a legitimate form — "the nearest module transition door"
+                    // — and it is SAFE because the nearest-door search refuses every door that
+                    // is not a transition. A bare usedoor can do nothing else.
+                    return new CoopCommand(CoopCommandKind.UseDoor);
+                }
+
+                if (rest.Length > 1)
+                {
+                    return new CoopCommand(
+                        CoopCommandKind.Invalid,
+                        Error: "usedoor takes one door, e.g. usedoor end_door10 (or bare, for the nearest)");
+                }
+
+                if (!TryParseObjectId(rest[0], out _) && !IsResRef(rest[0], maxLength: 31))
+                {
+                    return new CoopCommand(
+                        CoopCommandKind.Invalid,
+                        Error: $"'{rest[0]}' is not a door tag or object id");
+                }
+
+                return new CoopCommand(CoopCommandKind.UseDoor, Address: rest[0]);
             case "items":
                 // A cap rather than a page: the listing goes to the agent's log, where a
                 // hundred rows costs nothing, but the on-screen overlay is a handful of lines
@@ -1063,6 +1101,9 @@ public static class ConsoleCommand
         // the co-op plugin is unreachable rather than idle.
         "  moviewarp <module> <movie...>   warp WITH a cinematic (the plugin stops for it)",
         "  moviewarp queue <movie...> | clear | show",
+        // The pair: queue the movie, then make the ENGINE start the transition. Only this
+        // order opens the pre-store flush window a movie might swallow.
+        "  usedoor [tag|id]                walk through a transition door (nearest by default)",
         "  census [id]         what my enemy census holds, and what my own engine says of each id",
         "  resolve <id>        what the ENGINE knows about one id, in one frame (plugin log has the chain)",
         "retail console cheats, already co-op-safe (they touch only your game):",

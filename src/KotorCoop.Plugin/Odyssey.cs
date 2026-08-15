@@ -1076,7 +1076,9 @@ internal static unsafe class Odyssey
 
     // ---- doors -------------------------------------------------------------------
 
-    private const nint DoorVtable = 0x007498B0;
+    /// <summary>CSWSDoor vtable. Shared with the sweep rather than written twice — a constant
+    /// with two copies is a constant that drifts.</summary>
+    private const nint DoorVtable = CreatureFinder.DoorVtable;
 
     /// <summary>CSWSDoor + this = committed open state: 0 closed, 1/2 open, 3 destroyed.</summary>
     private const int DoorOpenState = 0x2CC;
@@ -1106,6 +1108,189 @@ internal static unsafe class Odyssey
         nint door = ResolveServerObject(objectId);
         return door != 0 && *(nint*)door == DoorVtable ? door : 0;
     }
+
+    // ---- door module transitions: reading the link, and asking to walk through it ----
+    //
+    // See docs/research/cinematics.md §8 and DoorUse. A door's transition is TWO phases, and
+    // the first one is the whole reason this exists: on use, CSWSDoor::EventHandler raises
+    // CSWSArea::SetTransitionPending(1, id) 0x00506B30 and starts a 0.5 s fade
+    // (0x0058C2A0-0x0058C315); when the fade completes it does the three move-to-module calls
+    // (0x0058C185-0x0058C1BE) that Odyssey.TravelToModule also does, and clears the flag.
+    // Phase 1 is what opens PluginHost's pre-store flush window, and a plugin-initiated warp
+    // never opens it, which is why only a real door can test what a movie does to it.
+
+    /// <summary>CSWSDoor + this = <c>linked_to_flags</c> (1 or 2 = a module transition).</summary>
+    private const int DoorLinkedToFlags = 0x384;
+
+    /// <summary>CSWSDoor + this = <c>linked_to</c>, the destination waypoint tag (CExoString).
+    /// The engine passes exactly this to SetMoveToModuleStartWaypoint at 0x0058C1AB.</summary>
+    private const int DoorLinkedTo = 0x388;
+
+    /// <summary>CSWSDoor + this = <c>linked_to_module</c> (CExoString). The engine passes
+    /// exactly this to SetMoveToModuleString at 0x0058C197.</summary>
+    private const int DoorLinkedToModule = 0x390;
+
+    /// <summary>
+    /// CSWSDoor::GetIsLinked 0x005890D0 — <c>__thiscall</c>, NO arguments. The entire function
+    /// is <c>mov al,[ecx+0x384]; cmp al,1; je ok; cmp al,2; je ok; xor eax,eax; ret</c> — a
+    /// bare <c>ret</c>, so the argument size is 0, and it dereferences nothing beyond
+    /// <c>this</c>. Called rather than reading the byte ourselves because the ENGINE owns the
+    /// definition of "this door is a module transition" (transition-window rule 4: identity
+    /// comes from the engine whenever an in-process call exists).
+    /// </summary>
+    private static readonly delegate* unmanaged[Thiscall]<nint, int> DoorGetIsLinkedFn =
+        (delegate* unmanaged[Thiscall]<nint, int>)0x005890D0;
+
+    /// <summary>
+    /// CSWCMessage::SendPlayerToServerInput_UseObject 0x00677D10 — <c>__thiscall</c>, ONE
+    /// argument (the object id). <c>ret 4</c> at 0x00677D4E and 0x00677D6A.
+    ///
+    /// This is LITERALLY what clicking an object does. Its server handler is
+    /// <c>CSWSMessage::HandlePlayerToServerInputMessage 0x005254C0</c>, whose jump table at
+    /// 0x0052684C sends message type 0x0B to 0x00525B1A, which does
+    /// <c>CSWSCreature::ActionManager(2)</c> and then
+    /// <c>CSWSObject::AddUseObjectAction 0x0057C810</c> on the player. The queued action runs
+    /// <c>CSWSObject::AIActionUseObject 0x0057E8C0</c>, which walks the PC to the door's
+    /// action point and posts the signal event (0x0057ECC7 / 0x0057F3C9) that
+    /// <c>CSWSDoor::EventHandler 0x0058B850</c> turns into the transition.
+    ///
+    /// ⚠ The DIRECT send, not the client-side wrapper — the same lesson
+    /// <see cref="SendDialogRequest"/> paid for. <c>CSWCDoor</c>'s own menu helpers
+    /// (<c>GetTargetActions 0x00684410</c>, <c>MenuAction* 0x00683E50</c>) have client-side
+    /// gates that a mouse click satisfies and we do not, and driving them from here leaves the
+    /// interaction half-started. The send is both the smaller and the safer half.
+    /// </summary>
+    private static readonly delegate* unmanaged[Thiscall]<nint, uint, void> SendUseObjectInputFn =
+        (delegate* unmanaged[Thiscall]<nint, uint, void>)0x00677D10;
+
+    /// <summary>
+    /// CClientExoApp::GetSWParty 0x005ED8B0 — <c>mov eax,[ecx+4]; mov eax,[eax+0x270]; ret</c>.
+    /// A bare <c>ret</c>: no arguments, and two loads with no call.
+    /// </summary>
+    private static readonly delegate* unmanaged[Thiscall]<nint, nint> GetSWPartyFn =
+        (delegate* unmanaged[Thiscall]<nint, nint>)0x005ED8B0;
+
+    /// <summary>
+    /// CSWParty::IsPartyTogether 0x00635350 — <c>__thiscall</c>, NO arguments (bare <c>ret</c>
+    /// at 0x0063538D). Reads the player's position and compares every party member's against
+    /// it.
+    ///
+    /// ⚠ THIS IS THE GATE THAT SILENTLY CANCELS A DOOR TRANSITION. <c>CSWSDoor::EventHandler</c>
+    /// tests it at 0x0058C228 and, when it is false, jumps to 0x0058C31A — which runs the
+    /// script <c>k_trg_transfail</c> (string at 0x007499C4) instead of starting the transition.
+    /// Nothing about that failure is visible: the door is used, the fade never starts, and no
+    /// module is stored. Reported rather than refused, deliberately — see
+    /// <c>CheatController.UseDoor</c>.
+    /// </summary>
+    private static readonly delegate* unmanaged[Thiscall]<nint, int> IsPartyTogetherFn =
+        (delegate* unmanaged[Thiscall]<nint, int>)0x00635350;
+
+    /// <summary>
+    /// True when the engine currently considers the party gathered — the predicate a door
+    /// transition is gated on. False here predicts <c>k_trg_transfail</c> rather than a move.
+    /// Returns true when there is no party object to ask, because "unknown" must not read as
+    /// "broken".
+    /// </summary>
+    public static bool IsPartyTogether()
+    {
+        nint client = GetClient();
+        if (client == 0)
+        {
+            return true;
+        }
+
+        nint party = GetSWPartyFn(client);
+        return party == 0 || IsPartyTogetherFn(party) != 0;
+    }
+
+    /// <summary>True when this door is a module transition, by the engine's own definition.</summary>
+    public static bool DoorIsLinked(nint door) => door != 0 && DoorGetIsLinkedFn(door) != 0;
+
+    /// <summary>The raw <c>linked_to_flags</c> byte, for an answer that says what it saw
+    /// rather than just "no".</summary>
+    public static byte GetDoorLinkFlags(nint door) => *(byte*)(door + DoorLinkedToFlags);
+
+    /// <summary>Copies the door's destination module resref. Returns bytes written.</summary>
+    public static int ReadDoorLinkedModule(nint door, byte* destination, int capacity) =>
+        ReadExoString(door + DoorLinkedToModule, destination, capacity);
+
+    /// <summary>Copies the door's destination waypoint tag. Returns bytes written.</summary>
+    public static int ReadDoorLinkedWaypoint(nint door, byte* destination, int capacity) =>
+        ReadExoString(door + DoorLinkedTo, destination, capacity);
+
+    /// <summary>
+    /// Copies a CExoString at <paramref name="field"/> as ASCII, cutting at the first null.
+    ///
+    /// Cutting rather than trusting the length is deliberate and load-bearing: a CExoString's
+    /// length field COUNTS THE TERMINATOR, and believing it has produced three separate
+    /// off-by-one bugs in this codebase. Every pointer is validated before it is followed,
+    /// because a door read during a transition can hold a header that is already garbage.
+    /// </summary>
+    private static int ReadExoString(nint field, byte* destination, int capacity)
+    {
+        if (destination == null || capacity <= 0)
+        {
+            return 0;
+        }
+
+        nint chars = Deref(field);
+        int length = *(int*)(field + 4);
+
+        if (!LooksLikeHeapPointer(chars) || length is <= 0 or > 256)
+        {
+            return 0;
+        }
+
+        int written = 0;
+        while (written < capacity && written < length)
+        {
+            byte c = *(byte*)(chars + written);
+            if (c == 0)
+            {
+                break;
+            }
+
+            destination[written++] = c;
+        }
+
+        return written;
+    }
+
+    /// <summary>
+    /// Sends the local player's "I clicked that" for <paramref name="objectId"/>, through the
+    /// engine's own client-to-server input pipe. Returns false when there is no client or no
+    /// message object — never silently.
+    ///
+    /// MAIN THREAD ONLY.
+    /// </summary>
+    public static bool UseObject(uint objectId)
+    {
+        nint client = GetClient();
+        if (client == 0)
+        {
+            return false;
+        }
+
+        nint message = GetSWCMessageFn(client);
+        if (message == 0)
+        {
+            return false;
+        }
+
+        SendUseObjectInputFn(message, objectId);
+        return true;
+    }
+
+    /// <summary>
+    /// Copies every door in the loaded module into <paramref name="into"/>, returning how many
+    /// were written. One full address-space sweep; a debug verb only, never per frame.
+    /// </summary>
+    public static int CollectDoors(nint* into, int capacity) =>
+        CreatureFinder.CollectByVtable(DoorVtable, into, capacity);
+
+    /// <summary>Finds a door by tag. 0 when this module has no door with that tag.</summary>
+    public static nint FindDoorByTag(byte* tag, int length) =>
+        length <= 0 ? 0 : CreatureFinder.FindDoorByTag(new ReadOnlySpan<byte>(tag, length));
 
     // CSWSPlaceable. Unlike a door, a placeable has no walkmesh coupling, so mirroring its
     // locked/open state is a plain field write — no engine call, no crash risk (see

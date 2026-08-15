@@ -63,6 +63,16 @@ public static class CheatKinds
     /// a number that disagrees across the two halves runs a DIFFERENT VERB from the one typed.
     /// </summary>
     public const uint Resolve = 9;
+
+    /// <summary>
+    /// Make the local player use a door, so the ENGINE starts a module transition and the
+    /// plugin's pre-store flush window is the only thing between a phantom and the stored
+    /// module. <c>Text</c> is the door tag, <c>Target</c> its object id; both empty means "the
+    /// nearest module transition door". See SharedBlock.CheatKindUseDoor.
+    ///
+    /// ⚠ 10, because 7, 8 and 9 are taken. Take the next FREE number.
+    /// </summary>
+    public const uint UseDoor = 10;
 }
 
 /// <summary>The plugin's verdicts, mirroring <c>SharedBlock.CheatStatus*</c>.</summary>

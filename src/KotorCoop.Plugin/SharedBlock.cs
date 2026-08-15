@@ -1232,6 +1232,24 @@ internal struct SharedBlock
     /// </summary>
     public const uint CheatKindResolve = 9;
 
+    /// <summary>
+    /// Make the local player USE a door — the second half of the cinematic instrument, and
+    /// the only one of the two that can test the pre-store flush hypothesis.
+    ///
+    /// <c>moviewarp</c> stages a movie onto a transition the PLUGIN starts, and on that path
+    /// the plugin has already flushed every spawned body before it raises anything, so the
+    /// flush window is never needed. A door transition is the opposite: the ENGINE raises
+    /// <c>CSWSArea::trans_pending</c> and gives us half a second of fade to destroy those
+    /// bodies in — and a movie playing over that half second is exactly the case nobody has
+    /// ever been able to stage. <see cref="OffsetCheatText"/> carries the door's tag, or
+    /// <see cref="OffsetCheatTarget"/> its object id; both empty means "the nearest module
+    /// transition door". See docs/research/cinematics.md §8.
+    ///
+    /// ⚠ 10, because 7, 8 and 9 are taken. Take the next FREE number, not the next number you
+    /// see on your branch — three parallel agents already collided on 7 once.
+    /// </summary>
+    public const uint CheatKindUseDoor = 10;
+
     /// <summary>The request was carried out here.</summary>
     public const int CheatStatusApplied = 1;
 

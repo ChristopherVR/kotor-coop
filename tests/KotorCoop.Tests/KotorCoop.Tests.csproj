@@ -37,6 +37,7 @@
     <Compile Include="..\..\src\KotorCoop.Plugin\CheatAuthority.cs" Link="Plugin\CheatAuthority.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\MovieStaging.cs" Link="Plugin\MovieStaging.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\ControlReturnRule.cs" Link="Plugin\ControlReturnRule.cs" />
+    <Compile Include="..\..\src\KotorCoop.Plugin\DoorUse.cs" Link="Plugin\DoorUse.cs" />
   </ItemGroup>
 
   <ItemGroup>

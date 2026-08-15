@@ -97,7 +97,55 @@ internal static unsafe partial class CreatureFinder
     /// </summary>
     public static nint FindByTag(ReadOnlySpan<byte> tag) => tag.IsEmpty ? 0 : Sweep(0, tag);
 
-    private static nint Sweep(uint objectId, ReadOnlySpan<byte> tag)
+    /// <summary>CSWSDoor vtable. Same technique, different class — see
+    /// <see cref="CollectByVtable"/> for why doors need collecting rather than finding.</summary>
+    public const nint DoorVtable = 0x007498B0;
+
+    /// <summary>Finds a DOOR by tag, for the door-use staging verb.</summary>
+    public static nint FindDoorByTag(ReadOnlySpan<byte> tag) =>
+        tag.IsEmpty ? 0 : Sweep(0, tag, DoorVtable);
+
+    /// <summary>
+    /// Copies every object with <paramref name="vtable"/> into <paramref name="into"/> and
+    /// returns how many were written (never more than <paramref name="capacity"/>).
+    ///
+    /// The find-style sweeps above stop at the first match, which is right when the caller
+    /// already knows what it is looking for. "The nearest transition door" is the other shape:
+    /// it cannot be answered until every door has been seen, because the nearest one is only
+    /// nearest relative to all the others. One full pass, on a debug verb, once — never on the
+    /// per-frame path.
+    /// </summary>
+    public static int CollectByVtable(nint vtable, nint* into, int capacity)
+    {
+        if (into == null || capacity <= 0)
+        {
+            return 0;
+        }
+
+        _collected = into;
+        _collectCapacity = capacity;
+        _collectCount = 0;
+
+        Sweep(0, default, vtable, collect: true);
+
+        int count = _collectCount;
+        _collected = null;
+        _collectCapacity = 0;
+        _collectCount = 0;
+        return count;
+    }
+
+    // Collection state. Statics rather than a closure because the scan runs inside a `fixed`
+    // block in a method that cannot capture, and because — like everything else here — it only
+    // ever runs on the game's own thread, one call at a time.
+    private static nint* _collected;
+    private static int _collectCapacity;
+    private static int _collectCount;
+
+    private static nint Sweep(uint objectId, ReadOnlySpan<byte> tag) =>
+        Sweep(objectId, tag, CreatureVtable);
+
+    private static nint Sweep(uint objectId, ReadOnlySpan<byte> tag, nint vtable, bool collect = false)
     {
         nuint structSize = (nuint)Marshal.SizeOf<MemoryBasicInformation>();
 
@@ -126,8 +174,8 @@ internal static unsafe partial class CreatureFinder
 
             if (usable && size <= 64L * 1024 * 1024)
             {
-                nint found = ScanRegion(info.BaseAddress, size, objectId, tag);
-                if (found != 0)
+                nint found = ScanRegion(info.BaseAddress, size, objectId, tag, vtable, collect);
+                if (found != 0 && !collect)
                 {
                     return found;
                 }
@@ -148,7 +196,8 @@ internal static unsafe partial class CreatureFinder
     /// <summary>CSWSObject + this = the object's tag (CExoString: char* @0, length @4).</summary>
     private const int TagOffset = 0x18;
 
-    private static nint ScanRegion(nint start, long size, uint objectId, ReadOnlySpan<byte> tag)
+    private static nint ScanRegion(
+        nint start, long size, uint objectId, ReadOnlySpan<byte> tag, nint vtable, bool collect)
     {
         fixed (byte* buffer = Chunk)
         {
@@ -169,12 +218,22 @@ internal static unsafe partial class CreatureFinder
                 // Creature pointers are 4-byte aligned, and so is the vtable slot at 0.
                 for (int offset = 0; offset + CandidateBytes <= want; offset += 4)
                 {
-                    if (*(nint*)(buffer + offset) != CreatureVtable)
+                    if (*(nint*)(buffer + offset) != vtable)
                     {
                         continue;
                     }
 
                     nint candidate = start + (nint)position + offset;
+
+                    if (collect)
+                    {
+                        if (_collectCount < _collectCapacity)
+                        {
+                            _collected[_collectCount++] = candidate;
+                        }
+
+                        continue;
+                    }
 
                     if (tag.IsEmpty)
                     {

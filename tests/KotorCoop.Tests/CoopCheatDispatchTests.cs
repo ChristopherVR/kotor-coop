@@ -381,12 +381,42 @@ public class CoopCheatDispatchTests
         }
     }
 
+    /// <summary>
+    /// The door half of the cinematic instrument. One request, no follow-up: the movie was
+    /// queued by an earlier, separate command and is already in the engine's own transition
+    /// queue, and the plugin must NOT be the thing that starts this transition or the flush
+    /// window under test never opens.
+    /// </summary>
+    [Fact]
+    public void UsingADoorByTagSendsTheTagAndByIdSendsTheId()
+    {
+        (CoopCommandDispatcher dispatcher, CheatBridge bridge, SessionManager manager) = NewDispatcher();
+        using (manager)
+        {
+            Type(dispatcher, "usedoor end_door10");
+            Assert.Equal(CheatKinds.UseDoor, bridge.Requests[0].Kind);
+            Assert.Equal("end_door10", bridge.Requests[0].Text);
+            Assert.Equal(0u, bridge.Requests[0].Target);
+
+            Type(dispatcher, "usedoor 0x1F");
+            Assert.Equal(0x1Fu, bridge.Requests[1].Target);
+            Assert.Equal(string.Empty, bridge.Requests[1].Text);
+
+            // Bare: neither, and the plugin sweeps for the nearest transition door.
+            Type(dispatcher, "usedoor");
+            Assert.Equal(0u, bridge.Requests[2].Target);
+            Assert.Equal(string.Empty, bridge.Requests[2].Text);
+        }
+    }
+
     /// <summary>A staging line the parser refuses must not become an engine call — the same
     /// demand every other cheat is held to, and more so for this one.</summary>
     [Theory]
     [InlineData("moviewarp")]
     [InlineData("moviewarp tar_m02af")]
     [InlineData("moviewarp tar_m02af 01c 01c")]
+    [InlineData("usedoor end door 10")]
+    [InlineData("usedoor end-door-10")]
     public void ARefusedStagingLineNeverReachesThePlugin(string line)
     {
         (CoopCommandDispatcher dispatcher, CheatBridge bridge, SessionManager manager) = NewDispatcher();
