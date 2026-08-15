@@ -1122,36 +1122,103 @@ public sealed class KotorGameBridge : IGameBridge
         && applied != 0;
 
     /// <summary>
-    /// Clears the co-op state the plugin is driving so a disconnect leaves a clean game:
-    /// zero remote peers (the plugin despawns the phantoms it spawned for them), the party
-    /// freeze released, and the spawn command set idle. Best-effort — a disconnect must
-    /// never throw.
+    /// EVERY agent-written LEVEL that belongs to a session rather than to the process, in the
+    /// order <see cref="ClearCoopState"/> lowers them. This list is the teardown: a field that
+    /// is written while connected and is not named here stays at its last session value for
+    /// the rest of the process, because with the agent gone nothing else ever lowers it.
     ///
-    /// The remote-dialogue flag matters most here: it is level-written by the agent every
-    /// tick, so once the agent is gone nothing else would ever lower it — and a spectator
-    /// mid-follow when the session died would stay locked out of its own replies forever.
-    /// Lowering it makes the plugin's spectate controller close the mirrored conversation
-    /// and restore reply control on its next frame. The presence counts are cleared for
-    /// the same staleness reason (their drives are also gated on the command, so this is
-    /// belt and braces).
+    /// ⚠ THIS EXISTS BECAUSE THE PER-FIELD VERSION KEPT MISSING ONE. The reported symptom was
+    /// "after disconnecting, Trask comes back but clicking him does nothing": the client's
+    /// swap suppression (0x1030) was still 1, so the plugin's byte patch kept turning
+    /// CClientExoAppInternal::ChangeCharacter — the single funnel for Tab, the portraits and
+    /// the death auto-swap — into an immediate return, for the rest of the process. Three more
+    /// fields were leaking the same way beside it (the game-over suppression, the peer
+    /// interaction locks, and the host's party roster, whose own comment already claimed a
+    /// disconnected agent would clear it). One list, cleared in one place, is the fix for the
+    /// CLASS rather than for the field.
+    ///
+    /// Only LEVELS belong here. Serials (travel, journal, revive, chat) are edge-compared
+    /// against an applied counter, and zeroing one would re-fire the last event rather than
+    /// cancel it.
+    ///
+    /// <c>BlockCommand</c> is deliberately LAST: the plugin reads it as "a session is driving
+    /// this instance", every mirroring controller gates on it, and its falling edge is what
+    /// runs the plugin's own release (PluginHost.ReleaseSession). Lowering it first would let
+    /// that release run against a block still full of the previous session's levels.
+    /// </summary>
+    internal static readonly (string Name, int Offset)[] SessionScopedBlockLevels =
+    [
+        ("remote peers", BlockRemoteCount),
+        ("enemy census", BlockEnemyCount),
+        ("enemy presence", BlockEnemyPresenceCount),
+        ("companion presence", BlockPartyPresenceCount),
+
+        // Level-written every tick by the agent, so once the agent is gone nothing else would
+        // ever lower it — a spectator mid-follow when the session died would stay locked out
+        // of its own replies forever.
+        ("remote dialogue", BlockRemoteDialogueActive),
+
+        // A leftover request would keep offering an encounter on behalf of a peer that is no
+        // longer in the session.
+        ("encounter requests", BlockEncounterRequestCount),
+        ("encounter watch", BlockEncounterWatch),
+
+        // ⚠ THE UNCLICKABLE-COMPANION BUG. Both of these drive byte patches in the plugin that
+        // stay armed as long as the word reads non-zero: the swap guard makes Tab and every
+        // party portrait inert, the game-over guard swallows the death screen.
+        ("game-over suppression", BlockSuppressGameOver),
+        ("control-swap suppression", BlockSuppressSwap),
+
+        // The plugin holds every locked creature still (clearing its action queue several
+        // times a second) for as long as the count says a peer owns it.
+        ("peer interaction locks", BlockInteractionLockCount),
+
+        // The roster the plugin reconciles this instance's party AGAINST. Left valid, a
+        // disconnected client keeps adding and removing party members to match a party the
+        // host had when the link died.
+        ("peer party roster", BlockHostPartyRoster),
+
+        ("damage owed", BlockDamageOwedCount),
+        ("incoming damage", BlockIncomingDamage),
+
+        // "This instance mirrors the world" — what the portrait hiding and the companion
+        // faction hold both key on.
+        ("mirroring", BlockDamageDealtEnabled),
+
+        ("session combat", BlockSessionInCombat),
+        ("session peers", BlockSessionPeers),
+        ("mirrored pause", BlockRemotePauseDesired),
+        ("door census", BlockDoorCount),
+        ("placeable census", BlockPlaceableCount),
+        ("ground loot", BlockLootCount),
+
+        // LAST, always. See the remarks.
+        ("command", BlockCommand),
+    ];
+
+    /// <summary>
+    /// Clears the co-op state the plugin is driving so a disconnect leaves a clean game: no
+    /// remote peers (the plugin despawns the phantoms it spawned for them), no suppressions,
+    /// no peer claims, the party freeze released and the spawn command idle. Best-effort — a
+    /// disconnect must never throw.
+    ///
+    /// The set is <see cref="SessionScopedBlockLevels"/>; see its remarks for why teardown is
+    /// a list rather than a run of hand-written writes.
     /// </summary>
     public void ClearCoopState()
     {
         if (_pluginBlock != 0)
         {
-            _memory.TryWrite(_pluginBlock + BlockRemoteCount, 0u);
-            _memory.TryWrite(_pluginBlock + BlockEnemyCount, 0u);
-            _memory.TryWrite(_pluginBlock + BlockEnemyPresenceCount, 0u);
-            _memory.TryWrite(_pluginBlock + BlockPartyPresenceCount, 0u);
-            _memory.TryWrite(_pluginBlock + BlockRemoteDialogueActive, 0u);
+            foreach ((_, int offset) in SessionScopedBlockLevels)
+            {
+                _memory.TryWrite(_pluginBlock + offset, 0u);
+            }
 
-            // Same staleness reason as the presence counts: with the agent gone nothing
-            // refreshes these, and a leftover request would keep offering an encounter on
-            // behalf of a peer that is no longer in the session.
-            _memory.TryWrite(_pluginBlock + BlockEncounterRequestCount, 0u);
-            _memory.TryWrite(_pluginBlock + BlockEncounterWatch, 0u);
+            // Every agent-side LATCH whose only job is "I have already raised that level".
+            // Lowering a level without lowering its latch is worse than not lowering it at
+            // all: the next session never raises it again.
             _encounterWatchWritten = false;
-            _memory.TryWrite(_pluginBlock + BlockCommand, (uint)0);
+            _damageDealtEnabled = false;
         }
 
         // A new session deals fresh peer ids, so keeping the old slot map would hold slots
@@ -3660,8 +3727,15 @@ public sealed class KotorGameBridge : IGameBridge
         return (generation, damage);
     }
 
-    /// <summary>Whether we have told the plugin to start accumulating. One write, latched:
-    /// the flag lives in the block and only a fresh block (a restarted game) clears it.</summary>
+    /// <summary>
+    /// Whether we have told the plugin to start accumulating.
+    ///
+    /// ⚠ MUST BE CLEARED WHENEVER THE BLOCK FIELD IS. Teardown now lowers the flag in the
+    /// block (it is what the portrait hiding, the companion faction hold and the control
+    /// return all key on), so a latch that survived teardown would mean the next session
+    /// never raised it again — every one of those would silently stay off for the rest of
+    /// the process. <see cref="ClearCoopState"/> resets both together.
+    /// </summary>
     private bool _damageDealtEnabled;
 
     /// <summary>Hits the plugin's ledger had no room for. Non-zero means a peer's damage is

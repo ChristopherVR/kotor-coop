@@ -230,7 +230,12 @@ tools/                   RE helpers, demo scripts, the kotor1_0_3 symbol databas
 
 - **Only the host can switch party character.** The companions are driven by the host's own
   AI and mirrored to everyone else, so a client taking one over would fight its own mirror;
-  Tab and the portraits are locked there on purpose. On the host they work normally.
+  Tab and the portraits are locked there on purpose. On the host they work normally. The lock
+  lasts exactly as long as the session: disconnecting hands the whole party straight back —
+  Tab, the portraits, and the companions themselves, out of the mirror's faction hold and off
+  its health pin — and if you were playing *as* a companion when you connected, control and
+  the camera come back to your own character rather than leaving you stuck watching a body
+  the host now drives. (`control_return=0` opts out of the camera half.)
 - **One conversation at a time.** While a player is talking, nobody else can start a
   dialogue; the other player spectates rather than getting their own copy. That is the
   design (it keeps one plot line advancing), not a limitation to be lifted. While a player

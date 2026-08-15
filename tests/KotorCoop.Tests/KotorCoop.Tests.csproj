@@ -34,6 +34,7 @@
     <Compile Include="..\..\src\KotorCoop.Plugin\ConsoleVerbCatalog.cs" Link="Plugin\ConsoleVerbCatalog.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\JournalTags.cs" Link="Plugin\JournalTags.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\SpectateCycle.cs" Link="Plugin\SpectateCycle.cs" />
+    <Compile Include="..\..\src\KotorCoop.Plugin\ControlReturnRule.cs" Link="Plugin\ControlReturnRule.cs" />
   </ItemGroup>
 
   <ItemGroup>

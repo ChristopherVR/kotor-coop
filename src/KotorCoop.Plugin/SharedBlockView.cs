@@ -1065,6 +1065,19 @@ internal sealed unsafe class SharedBlockView(byte* baseAddress)
     public uint InteractionLockCount =>
         Math.Min(*U32(SharedBlock.OffsetInteractionLockCount), (uint)SharedBlock.InteractionLockCapacity);
 
+    /// <summary>
+    /// Agent-written, but lowered by the PLUGIN when a session is released: the count is a
+    /// level, so an agent that goes away without tearing the block down would otherwise leave
+    /// its peers' claims standing for the life of the process. The agent overwrites it again
+    /// on its next publish, so clearing it costs a live session nothing.
+    /// </summary>
+    public void ClearInteractionLocks() => *U32(SharedBlock.OffsetInteractionLockCount) = 0;
+
+    /// <summary>Same reasoning as <see cref="ClearInteractionLocks"/>: without the valid bit
+    /// the roster reconciler has nothing to reconcile against, which is the correct state for
+    /// an instance with no peers.</summary>
+    public void ClearHostPartyRoster() => *U32(SharedBlock.OffsetHostPartyRoster) = 0;
+
     /// <summary>Agent-written lock entry base: peerId u32 @0, kind u32 @4, tag[32] @8.</summary>
     public byte* InteractionLock(int index) =>
         baseAddress + SharedBlock.OffsetInteractionLocks
