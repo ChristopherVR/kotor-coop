@@ -887,3 +887,64 @@ enemy-census hunt, and behind run A's "two `coop_phantom` rows" which were one b
 must not count `creatures.ps1` rows.** Use `console 'resolve <id>'` and believe the object
 array, or the check will report a freed block as a baked body. Any BAKED reading taken before
 today was also measuring the teardown leak above rather than the transition window.
+
+## Run B: the phantom-baking hypothesis is REFUTED (2026-08-15)
+
+The question `cinematics.md` has carried since it was written — *does a movie playing across a
+module transition swallow the pre-store flush window, baking `coop_phantom` bodies permanently
+into the stored module?* — is answered. **It does not.**
+
+Staged on the host with a phantom and a dropped rifle standing, `01c` queued and confirmed by
+the engine, then an ENGINE-initiated transition through `end_door10`:
+
+```
+11:39:47.767  door: 0x4A at 2.9m links to module 'end_m01ab' at waypoint 'from_01a'; open state 2
+11:39:48.669  area transition pending: flushing spawned objects before the module is stored
+11:39:48.669  flush, before the module is stored: destroyed phantom 0x12D (slot 0)
+11:39:48.672  flush, before the module is stored: destroyed item body 0x131 (item 0x10001)
+11:39:49.216  cinematic: a movie is playing
+11:39:57.355  cinematic: the main thread was gone for 7407 ms
+11:39:57      epoch: module changed
+where -> module end_m01ab at 49.9 120.3
+```
+
+`area transition pending:` is the line that makes this run B — it cannot appear on a co-op
+warp, because a plugin-initiated warp never opens phase 1's fade. **The flush lines precede the
+stall**, so the window survives the movie and the flush branch is correct as written. The movie
+did play: the queue was consumed (`moviewarp show` → `queued: nothing`), `a movie is playing`
+was logged, and the stall exceeds the 5.1–5.3 s bare-load baseline.
+
+Baked-phantom check, using the CORRECTED criterion (the object array, not a row count): back in
+`end_m01aa` the sweep offers two candidate rows, both id `0x138` — one distinct id for one
+connected peer, i.e. the new phantom. The body that existed across the transition, `0x12D`,
+`resolves to 0x0`. Nothing was baked.
+
+### What it took to stage, recorded so nobody repeats it
+
+Four wrong premises died on the way, each looking exactly like a bug in the mod:
+
+1. **"A door is used, not walked into."** Backwards. `CSWSDoor::EventHandler` reaches the
+   transition arm only on event `0x1E`, which is built exclusively by movement updates — a
+   creature CROSSING into the door's sub-area. Using a door posts `0x1A`, which runs OnUsed and
+   nothing else. No amount of using a door transitions it.
+2. **A `tp` onto the door can never fire it** — a `SetPosition` snap runs no movement update, so
+   nothing notices the crossing.
+3. **A shut door is a wall.** `MoveToNextOpenState` calls `CSWSArea::BudgeCreatures`, which is
+   what stops the area treating the door as solid; the walk ended at its face until the door was
+   opened through the engine's own `OpenDoor` (which also picks the swing from which side the
+   opener stands, opens the linked twin, and runs OnOpen — none of it reproducible by hand).
+4. **Aim along the door's own facing, not the approach vector.** With the PC at (47.4, 116) —
+   beside a doorway whose bearing is −1.57079 — the crossing axis is X, the side test is
+   degenerate, and the path routed AROUND: the watch line reported the player ending 7.9 m away
+   having started at 4.1 m. Repositioning onto the axis at (44.5, 120.1) crossed on the first
+   try.
+
+The watch line (`600 frames after the walk the player is N.Nm from 0x<id> (was M.Mm), at X,Y;
+aimed at X,Y`) is what turned round four from a guess into a measurement, and it is the reason
+this closed instead of continuing.
+
+⚠ Also learned, and unrelated to the game: **`dotnet build` at the repo root does not compile
+the plugin** — `KotorCoop.slnx` deliberately omits the NativeAOT win-x86 project, so only
+`src/KotorCoop.Plugin/build.ps1` ever type-checks most plugin code. And **grepping a built DLL
+for a log string is worthless as negative evidence**: literals that have shipped for weeks read
+as absent to the same scan that "confirms" others. Positive evidence only.
