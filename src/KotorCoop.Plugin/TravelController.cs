@@ -125,26 +125,39 @@ internal sealed unsafe class TravelController(SharedBlockView block)
     /// watches and, worse, make the resulting stall un-attributable. Refusing keeps the arm,
     /// which then expires on its own and says so.
     /// </summary>
-    private static void QueueStagedMovies()
+    private void QueueStagedMovies()
     {
-        if (!StagedMovies.IsArmed)
+        // The SESSION's list first, the debug arm second. They are the same mechanism with
+        // different producers: the session's names came from whichever peer actually reached
+        // the trigger (docs/research/cinematics.md §3.2.2), the arm from `moviewarp`. A
+        // session-driven follow is the real feature and must win, so that a staging arm left
+        // over from a manual test cannot silently replace the cinematic a peer is owed.
+        string[]? names = ReadSessionMovies();
+        string source = "the session";
+
+        if (names is null)
         {
-            return;
+            if (!StagedMovies.IsArmed)
+            {
+                return;
+            }
+
+            names = StagedMovies.Take(Environment.TickCount64);
+            source = "the staging arm";
+
+            if (names is null)
+            {
+                PluginHost.Log("cinematic: the staged movie(s) went stale before this warp; nothing was written");
+                return;
+            }
         }
 
         int alreadyQueued = Odyssey.QueuedTransitionMovieCount();
         if (alreadyQueued > 0)
         {
             PluginHost.Log(
-                $"cinematic: NOT staging {StagedMovies.Describe()} - the game has already "
-                + $"queued {alreadyQueued} movie(s) for this transition");
-            return;
-        }
-
-        string[]? names = StagedMovies.Take(Environment.TickCount64);
-        if (names is null)
-        {
-            PluginHost.Log("cinematic: the staged movie(s) went stale before this warp; nothing was written");
+                $"cinematic: NOT staging {string.Join(", ", names)} from {source} - the game "
+                + $"has already queued {alreadyQueued} movie(s) for this transition");
             return;
         }
 
@@ -175,7 +188,44 @@ internal sealed unsafe class TravelController(SharedBlockView block)
         CinematicWatch.NoteStaged(accepted);
 
         PluginHost.Log(
-            $"cinematic: staged {accepted} of {names.Length} movie(s) onto this transition: "
-            + string.Join(", ", names));
+            $"cinematic: staged {accepted} of {names.Length} movie(s) from {source} onto this "
+            + "transition: " + string.Join(", ", names));
+    }
+
+    /// <summary>
+    /// The movie resrefs the session attached to this travel request, or null when it
+    /// attached none — which is the ordinary case for every transition that carries no
+    /// cinematic.
+    ///
+    /// Read here rather than remembered, on the frame the travel executes: the agent writes
+    /// these BEFORE it bumps the travel serial, exactly as it writes the module and the
+    /// waypoint, so by the time this runs they belong to this request and no other.
+    /// </summary>
+    private string[]? ReadSessionMovies()
+    {
+        int count = block.TravelMovieCount;
+        if (count <= 0)
+        {
+            return null;
+        }
+
+        List<string> names = new(count);
+
+        for (int i = 0; i < count; i++)
+        {
+            byte* slot = block.TravelMovie(i);
+            int length = 0;
+            while (length < SharedBlock.CinematicNameLength && slot[length] != 0)
+            {
+                length++;
+            }
+
+            if (length > 0)
+            {
+                names.Add(Encoding.ASCII.GetString(slot, length));
+            }
+        }
+
+        return names.Count > 0 ? [.. names] : null;
     }
 }

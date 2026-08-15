@@ -974,3 +974,36 @@ block region and therefore a version bump on both halves (the travel region `0x9
 full), and on the canonical Endar Spire → Taris chain the follower must ACCUMULATE the movie
 lists of the transitions it correctly declines (the `stunt*` gate refuses `STUNT_00`) and hand
 the whole set — `["01c", "01f"]` — to the warp it finally does issue.
+
+### Built, not yet run — cinematic parity (2026-08-15)
+
+The wire above now exists. Both halves it joins were already measured: the follower's empty
+queue (7,407 ms of host stall against no `cinematic:` line at all, above) and the receiving
+path (run A, a queued movie playing for 15,531 ms on the co-op warp).
+
+`PacketType.TransitionMovies = 40`, protocol **25**, shared block **42** (`0x2A`), block grown
+to `0x3A00`. Packet type 39 is deliberately skipped — `network-topology.md` reserves it on
+paper — and two new tests fail the build on a duplicate packet type or a half-bumped block
+version, which nothing had ever enforced.
+
+⚠ **The one that would have failed silently**: the engine stores a movie as the resolved path
+`.\movies\01c.bik`, not as the name the script gave it. Handing that back to
+`AddMoveToModuleMovie` makes it build `MOVIES:.\movies\01c.bik`, fail to open it, and refuse
+the movie — so an unstripped forward would have looked exactly like no channel at all. The
+names are reduced to resrefs at publication.
+
+Acceptance procedure and the full PASS/FAIL reading: `docs/research/cinematics.md` §9.7. The
+short form, with the pair CONNECTED and both in END_M01AA:
+
+```powershell
+pwsh tools\blockpoke.ps1 -ProcId <host pid> console 'moviewarp queue 01c'
+pwsh tools\blockpoke.ps1 -ProcId <host pid> console 'dropitem g_w_blstrrfl001'
+pwsh tools\blockpoke.ps1 -ProcId <host pid> console 'tp 44.5 120.1 -0.04'
+pwsh tools\blockpoke.ps1 -ProcId <host pid> console 'usedoor end_door10'
+pwsh tools\blockpoke.ps1 -ProcId <host pid> console 'moviewarp clear'
+```
+
+PASS is symmetric: the FOLLOWER must log `cinematic: the module transition has queued 1
+movie(s)` BEFORE its `travel:` line, and both sides must stall well past the 5.1-5.3 s
+bare-load baseline. Run the negative control too — with nothing queued, neither side may stall
+beyond baseline and `staged N of M` must appear nowhere.

@@ -42,9 +42,14 @@ public class TravelPumpTests
 
         public bool TryWriteRemotePeers(IReadOnlyList<RemotePeer> peers) => true;
 
-        public bool TryRequestTravel(string module, string waypoint = "")
+        /// <summary>The movies attached to each travel request, so the cinematic parity
+        /// channel can be asserted on the thing that actually reaches the plugin.</summary>
+        public List<string[]> RequestMovies { get; } = [];
+
+        public bool TryRequestTravel(string module, string waypoint = "", IReadOnlyList<string>? movies = null)
         {
             Requests.Add((module, waypoint));
+            RequestMovies.Add(movies is null ? [] : [.. movies]);
             return true;
         }
 
@@ -55,6 +60,17 @@ public class TravelPumpTests
 
     private sealed class StubSession : ICoopSession
     {
+        /// <summary>Announcements waiting to be handed to the agent, as if they had just
+        /// arrived off the wire.</summary>
+        public List<TransitionMoviePacket> IncomingMovies { get; } = [];
+
+        public IReadOnlyList<TransitionMoviePacket> DrainTransitionMovies()
+        {
+            List<TransitionMoviePacket> ready = [.. IncomingMovies];
+            IncomingMovies.Clear();
+            return ready;
+        }
+
         public List<RemotePeer> Peers { get; } = [];
 
         public bool EnemyAuthority { get; set; }
@@ -138,7 +154,7 @@ public class TravelPumpTests
     }
 
     private static (CoopAgent Agent, TravelBridge Bridge, StubSession Session) Build(
-        bool follow = true, int retryMs = 15_000, int settleMs = 0)
+        bool follow = true, int retryMs = 15_000, int settleMs = 0, int combatPumpMs = 150)
     {
         TravelBridge bridge = new();
         StubSession session = new();
@@ -146,6 +162,10 @@ public class TravelPumpTests
         {
             FollowHostModule = follow,
             FollowRetryMs = retryMs,
+
+            // The cinematic pump shares the combat cadence. Tests that need it to run on
+            // EVERY pump pass 0; the rest keep the real interval.
+            CombatPumpIntervalMs = combatPumpMs,
 
             // These tests are about the DEBOUNCE. The post-arrival settle window is a
             // separate rule with its own test below, and leaving it on here would mean
@@ -357,5 +377,153 @@ public class TravelPumpTests
 
         Assert.Equal(2, bridge.Requests.Count);
         Assert.Equal("dan_m13aa", bridge.Requests[1].Module);
+    }
+
+    // ---- the cinematic that rides with the follow ----------------------------------
+
+    private static TransitionMoviePacket Announcement(uint serial, params string[] movies) =>
+        new(CoopHost.HostPeerId, "end_m01ab", serial, movies);
+
+    /// <summary>An ordinary follow carries no movies, and must not invent any.</summary>
+    [Fact]
+    public void AFollowWithNothingAnnouncedCarriesNoMovies()
+    {
+        (CoopAgent agent, TravelBridge bridge, StubSession session) = Build();
+        session.Peers.Add(HostPeer(HostModule));
+
+        agent.PumpOnce();
+
+        Assert.Empty(Assert.Single(bridge.RequestMovies));
+    }
+
+    [Fact]
+    public void AnAnnouncedMovieRidesWithTheFollow()
+    {
+        (CoopAgent agent, TravelBridge bridge, StubSession session) = Build(combatPumpMs: 0);
+        session.IncomingMovies.Add(Announcement(1, "01c"));
+        session.Peers.Add(HostPeer(HostModule));
+
+        agent.PumpOnce();
+
+        Assert.Equal(["01c"], Assert.Single(bridge.RequestMovies));
+    }
+
+    /// <summary>
+    /// The case the accumulation exists for. Endar Spire → Taris is TWO transitions through
+    /// the stunt module STUNT_00, and the follow logic correctly refuses to enter a `stunt*`
+    /// module — so the follower declines the first (movie <c>01c</c>) and finally warps to
+    /// tar_m02af (movie <c>01f</c>). The transition it actually makes must carry both, in
+    /// order, or the player who followed sees half the story.
+    /// </summary>
+    [Fact]
+    public void MoviesAnnouncedWhileTheFollowIsDeclinedAreAccumulated()
+    {
+        (CoopAgent agent, TravelBridge bridge, StubSession session) = Build(combatPumpMs: 0);
+
+        // The host disappears into the stunt module, announcing 01c on the way.
+        session.IncomingMovies.Add(Announcement(1, "01c"));
+        session.Peers.Add(HostPeer("STUNT_00"));
+        agent.PumpOnce();
+
+        Assert.Empty(bridge.Requests); // correctly refused to follow
+
+        // Its scene ends and it announces 01f on the way to Taris.
+        session.IncomingMovies.Add(Announcement(2, "01f"));
+        session.Peers.Clear();
+        session.Peers.Add(HostPeer("tar_m02af"));
+        agent.PumpOnce();
+
+        Assert.Equal("tar_m02af", Assert.Single(bridge.Requests).Module);
+        Assert.Equal(["01c", "01f"], Assert.Single(bridge.RequestMovies));
+    }
+
+    /// <summary>Spent, not kept: the same names must never ride a second, unrelated
+    /// transition.</summary>
+    [Fact]
+    public void TheAccumulationIsSpentByTheFollowThatCarriesIt()
+    {
+        (CoopAgent agent, TravelBridge bridge, StubSession session) = Build(combatPumpMs: 0);
+        session.IncomingMovies.Add(Announcement(1, "01c"));
+        session.Peers.Add(HostPeer(HostModule));
+        agent.PumpOnce();
+
+        session.Peers.Clear();
+        session.Peers.Add(HostPeer("dan_m13aa"));
+        agent.PumpOnce();
+
+        Assert.Equal(2, bridge.RequestMovies.Count);
+        Assert.Equal(["01c"], bridge.RequestMovies[0]);
+        Assert.Empty(bridge.RequestMovies[1]);
+    }
+
+    /// <summary>A repeated announcement is the SENDER's redundancy against a dropped
+    /// datagram, not five cinematics.</summary>
+    [Fact]
+    public void ARepeatedAnnouncementIsAccumulatedOnce()
+    {
+        (CoopAgent agent, TravelBridge bridge, StubSession session) = Build(combatPumpMs: 0);
+
+        session.IncomingMovies.Add(Announcement(1, "01c"));
+        session.IncomingMovies.Add(Announcement(1, "01c"));
+        session.IncomingMovies.Add(Announcement(1, "01c"));
+        session.Peers.Add(HostPeer("STUNT_00"));
+        agent.PumpOnce();
+
+        session.Peers.Clear();
+        session.Peers.Add(HostPeer(HostModule));
+        agent.PumpOnce();
+
+        Assert.Equal(["01c"], Assert.Single(bridge.RequestMovies));
+    }
+
+    /// <summary>
+    /// Arriving where the host already is drops the accumulation. Holding it would attach
+    /// somebody else's film to whatever this player did next, minutes later — the same "left
+    /// armed" hazard the staging arm expires to avoid.
+    /// </summary>
+    [Fact]
+    public void BeingWithTheHostDropsTheAccumulation()
+    {
+        (CoopAgent agent, TravelBridge bridge, StubSession session) = Build(combatPumpMs: 0);
+
+        session.IncomingMovies.Add(Announcement(1, "01c"));
+        session.Peers.Add(HostPeer("STUNT_00"));
+        agent.PumpOnce();
+
+        // The host comes back to us: nothing pending any more.
+        session.Peers.Clear();
+        session.Peers.Add(HostPeer(ClientModule));
+        agent.PumpOnce();
+
+        // And now it leaves again, with no cinematic of its own.
+        session.Peers.Clear();
+        session.Peers.Add(HostPeer(HostModule));
+        agent.PumpOnce();
+
+        Assert.Empty(Assert.Single(bridge.RequestMovies));
+    }
+
+    /// <summary>The engine's own queue takes six; a hoard past that is capped rather than
+    /// sent, because AddMoveToModuleMovie would refuse the extras anyway.</summary>
+    [Fact]
+    public void TheAccumulationIsCappedAtTheEnginesOwnSix()
+    {
+        (CoopAgent agent, TravelBridge bridge, StubSession session) = Build(combatPumpMs: 0);
+
+        for (uint i = 1; i <= 9; i++)
+        {
+            session.IncomingMovies.Add(Announcement(i, $"mov{i}"));
+        }
+
+        session.Peers.Add(HostPeer("STUNT_00"));
+        agent.PumpOnce();
+
+        session.Peers.Clear();
+        session.Peers.Add(HostPeer(HostModule));
+        agent.PumpOnce();
+
+        string[] carried = Assert.Single(bridge.RequestMovies);
+        Assert.Equal(TransitionMoviePacket.MaxMovies, carried.Length);
+        Assert.Equal(["mov1", "mov2", "mov3", "mov4", "mov5", "mov6"], carried);
     }
 }

@@ -130,6 +130,22 @@ public interface ICoopSession : IDisposable
     IReadOnlyList<BarkPacket> DrainBarks(string module) => [];
 
     /// <summary>
+    /// Announces the movies this instance's imminent module transition is about to play, so
+    /// whoever follows can queue the same ones and see the same cinematic.
+    ///
+    /// Sent BEFORE the transition, because there is no after: the queue is drained by the
+    /// load and a playing movie parks the announcer's main thread for seconds. Repeat calls
+    /// with the same <paramref name="serial"/> are the sender's own redundancy against a
+    /// dropped datagram and are de-duplicated by the receiver.
+    /// </summary>
+    void PublishTransitionMovies(string module, uint serial, string[] movies) { }
+
+    /// <summary>Transition-movie announcements from other peers since the last call, oldest
+    /// first. NOT module-filtered, unlike <see cref="DrainBarks"/>: these name no object ids,
+    /// and the announcer is by definition about to leave the module it announced from.</summary>
+    IReadOnlyList<TransitionMoviePacket> DrainTransitionMovies() => [];
+
+    /// <summary>
     /// Host only: the encounters clients are asking for right now, in
     /// <paramref name="module"/>, deduplicated. Empty on a client.
     /// </summary>

@@ -1,0 +1,237 @@
+using System.Text.RegularExpressions;
+using KotorCoop.Plugin;
+using KotorCoop.Protocol;
+using Xunit;
+
+namespace KotorCoop.Tests;
+
+/// <summary>
+/// Cinematic parity: both players should see the same film.
+///
+/// Measured on 2026-08-15 that they do not. The owner's transition parked its main thread for
+/// 7,407 ms playing <c>01c</c>; the follower flushed, followed and logged no <c>cinematic:</c>
+/// line at all. The follower was never GATED — its <c>move_to_module_movies</c> queue is empty,
+/// and the engine plays what is in the queue — so the only thing that has to travel is the
+/// names, and the receiving half was already proved live (run A: a queued movie played for
+/// 15,531 ms on the co-op warp path).
+///
+/// These are the parts of that wire that can be asserted without a game.
+/// </summary>
+public class TransitionMovieTests
+{
+    // ---- the resref strip, which is load-bearing -----------------------------------
+
+    /// <summary>
+    /// ⚠ THE ONE THAT WOULD HAVE FAILED SILENTLY. The engine does not store the name a script
+    /// passed to <c>StartNewModule</c> — <c>AddMovieToExoArrayList</c> resolves it to a path
+    /// and stores THAT, so reading the queue back yields <c>.\movies\01c.bik</c>. Feed the
+    /// stored form back in and the add takes the no-colon branch, builds
+    /// <c>MOVIES:.\movies\01c.bik</c>, cannot open it, and refuses the movie — returning 0 and
+    /// adding nothing. The follower would then transition with an empty queue, exactly as if
+    /// the channel did not exist.
+    /// </summary>
+    [Theory]
+    [InlineData(@".\movies\01c.bik", "01c")]
+    [InlineData(@".\MOVIES\05_1c.BIK", "05_1c")]
+    [InlineData("movies/01f.bik", "01f")]
+    [InlineData("01c", "01c")]
+    [InlineData("  01c  ", "01c")]
+    public void TheEnginesStoredPathIsReducedToTheResRefItWillAccept(string stored, string expected)
+    {
+        Assert.True(MovieStaging.TryStripToResRef(stored, out string resref));
+        Assert.Equal(expected, resref);
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("   ")]
+    [InlineData(@".\movies\.bik")]                 // nothing left after stripping
+    [InlineData(@".\movies\not a name.bik")]       // not a resref
+    [InlineData("aaaaaaaaaaaaaaaaa")]              // 17 chars: past a resref
+    public void AStoredNameThatCannotBecomeAResRefIsRefusedRatherThanForwarded(string? stored)
+    {
+        Assert.False(MovieStaging.TryStripToResRef(stored, out string resref));
+        Assert.Equal(string.Empty, resref);
+    }
+
+    /// <summary>A name that survives the strip must still be one the engine would take —
+    /// forwarding something we already know will be refused is just a slower refusal.</summary>
+    [Fact]
+    public void EveryStrippedNameIsAValidMovieName()
+    {
+        Assert.True(MovieStaging.TryStripToResRef(@".\movies\01c.bik", out string resref));
+        Assert.True(MovieStaging.IsMovieName(resref));
+    }
+
+    // ---- the wire ------------------------------------------------------------------
+
+    [Fact]
+    public void TheAnnouncementRoundTrips()
+    {
+        Span<byte> buffer = stackalloc byte[ProtocolConstants.MaxPacketSize];
+
+        TransitionMoviePacket original = new(PeerId: 3, "end_m01ab", Serial: 9, ["01c", "01f"]);
+
+        int length = PacketCodec.Write(buffer, original);
+        Assert.True(length > 0);
+
+        TransitionMoviePacket? read = PacketCodec.ReadTransitionMovies(buffer[..length]);
+        Assert.NotNull(read);
+        Assert.Equal(original.PeerId, read!.PeerId);
+        Assert.Equal(original.Module, read.Module);
+        Assert.Equal(original.Serial, read.Serial);
+        Assert.Equal(original.Movies, read.Movies);
+    }
+
+    /// <summary>An announcement with no movies is still a well-formed packet — it is what a
+    /// transition that carries no cinematic looks like, and it must not read as malformed.</summary>
+    [Fact]
+    public void AnEmptyAnnouncementRoundTrips()
+    {
+        Span<byte> buffer = stackalloc byte[ProtocolConstants.MaxPacketSize];
+
+        int length = PacketCodec.Write(buffer, new TransitionMoviePacket(1, "tar_m03aa", 2, []));
+        Assert.True(length > 0);
+
+        TransitionMoviePacket? read = PacketCodec.ReadTransitionMovies(buffer[..length]);
+        Assert.NotNull(read);
+        Assert.Empty(read!.Movies);
+    }
+
+    /// <summary>The full six the engine allows, at the resref cap, still fits a datagram.</summary>
+    [Fact]
+    public void AFullSixMovieAnnouncementFitsOneDatagram()
+    {
+        Span<byte> buffer = stackalloc byte[ProtocolConstants.MaxPacketSize];
+
+        string[] movies =
+        [
+            new('a', 16), new('b', 16), new('c', 16),
+            new('d', 16), new('e', 16), new('f', 16),
+        ];
+
+        int length = PacketCodec.Write(buffer, new TransitionMoviePacket(8, new string('m', 32), 1, movies));
+
+        Assert.True(length > 0, "a full announcement did not fit and was dropped");
+        Assert.True(length <= ProtocolConstants.MaxPacketSize);
+        Assert.Equal(movies, PacketCodec.ReadTransitionMovies(buffer[..length])!.Movies);
+    }
+
+    /// <summary>
+    /// A count this side never writes is malformed, not an allocation instruction. The count
+    /// is a byte off the wire and it decides an array size, so a peer choosing 200 must be
+    /// refused rather than believed.
+    /// </summary>
+    [Fact]
+    public void AnImpossibleMovieCountIsRefused()
+    {
+        Span<byte> buffer = stackalloc byte[ProtocolConstants.MaxPacketSize];
+        int length = PacketCodec.Write(buffer, new TransitionMoviePacket(1, "end_m01aa", 1, ["01c"]));
+
+        // The count byte sits after the header, peer id, module string and serial. Find it by
+        // its value rather than by arithmetic over the header layout.
+        int countIndex = -1;
+        for (int i = length - 1; i >= 0; i--)
+        {
+            if (buffer[i] == 1 && i + 1 < length && buffer[i + 1] == 3)
+            {
+                countIndex = i; // the count, followed by the length byte of "01c"
+                break;
+            }
+        }
+
+        Assert.True(countIndex > 0, "could not locate the movie count in the encoded packet");
+
+        buffer[countIndex] = (byte)(TransitionMoviePacket.MaxMovies + 1);
+        Assert.Null(PacketCodec.ReadTransitionMovies(buffer[..length]));
+    }
+
+    // ---- the numbers that three agents have already collided on --------------------
+
+    /// <summary>
+    /// ⚠ Two packet types sharing a number is a wire-level catastrophe that no test caught
+    /// before: the receiver dispatches one payload into the other's reader. Three agents in
+    /// this tree have already claimed "the next free" cheat kind simultaneously, and packet
+    /// types are the same hazard with a worse blast radius.
+    /// </summary>
+    [Fact]
+    public void NoTwoPacketTypesShareANumber()
+    {
+        Dictionary<byte, List<string>> byValue = [];
+
+        foreach (PacketType type in Enum.GetValues<PacketType>())
+        {
+            byte value = (byte)type;
+            if (!byValue.TryGetValue(value, out List<string>? names))
+            {
+                names = [];
+                byValue[value] = names;
+            }
+
+            names.Add(type.ToString());
+        }
+
+        List<string> clashes =
+        [
+            .. byValue.Where(entry => entry.Value.Count > 1)
+                .Select(entry => $"{entry.Key} = {string.Join(" and ", entry.Value)}"),
+        ];
+
+        Assert.True(clashes.Count == 0, "two packet types share a number: " + string.Join("; ", clashes));
+    }
+
+    /// <summary>
+    /// The channel added with protocol 25 must actually be on the enum at the number its
+    /// changelog claims — and 39 must stay free, because network-topology.md reserves it on
+    /// paper for a channel nobody has written yet.
+    /// </summary>
+    [Fact]
+    public void TheTransitionMovieChannelIsWhereTheChangelogSaysItIs()
+    {
+        Assert.Equal(40, (byte)PacketType.TransitionMovies);
+        Assert.DoesNotContain(Enum.GetValues<PacketType>(), type => (byte)type == 39);
+    }
+
+    /// <summary>
+    /// The shared block version is one number in two files, and a half-bump does not fail
+    /// loudly — it reads as "plugin shared block not found", which looks like a broken
+    /// install. A guard exists; this asserts it covers the number this pass moved.
+    /// </summary>
+    [Fact]
+    public void TheBlockVersionMovedInBothHalves()
+    {
+        string root = RepositoryRoot();
+
+        string pluginSource = File.ReadAllText(Path.Combine(root, "src", "KotorCoop.Plugin", "PluginHost.cs"));
+        Match version = Regex.Match(pluginSource, @"_block->Version\s*=\s*(\d+)\s*;");
+        Assert.True(version.Success, "could not find _block->Version in PluginHost.cs");
+
+        string bridgeSource = File.ReadAllText(
+            Path.Combine(root, "src", "KotorCoop.Memory", "KotorGameBridge.cs"));
+        Match signature = Regex.Match(
+            bridgeSource, @"PluginSignature\s*=\s*""(?:[0-9A-F]{2} ){8}([0-9A-F]{2})");
+        Assert.True(signature.Success, "could not find the version byte in PluginSignature");
+
+        Assert.Equal(
+            int.Parse(version.Groups[1].Value),
+            Convert.ToInt32(signature.Groups[1].Value, 16));
+
+        // And it really is the version this pass shipped, so a future edit that moves one
+        // half and not the other cannot pass by moving both to the wrong place.
+        Assert.Equal(42, int.Parse(version.Groups[1].Value));
+    }
+
+    private static string RepositoryRoot()
+    {
+        DirectoryInfo? directory = new(AppContext.BaseDirectory);
+
+        while (directory is not null && !File.Exists(Path.Combine(directory.FullName, "KotorCoop.slnx")))
+        {
+            directory = directory.Parent;
+        }
+
+        Assert.True(directory is not null, $"no KotorCoop.slnx above {AppContext.BaseDirectory}");
+        return directory!.FullName;
+    }
+}

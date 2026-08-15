@@ -303,6 +303,13 @@ public sealed class CoopAgent(IGameBridge bridge, ICoopSession session, AgentSet
             _moduleSettledAtMs = SessionClock.NowMs;
         }
 
+        // BEFORE PumpTravel, and that ordering is the whole point: a follow decided this tick
+        // must carry the cinematic announced this tick. Below it, every announcement would be
+        // one tick late — which happens to work in the field, because a movie buys seconds of
+        // slack, and is exactly the kind of accidental correctness that breaks silently the
+        // first time a transition carries no movie.
+        PumpTransitionMovies(local);
+
         // Pause and travel are cheap flag checks and must feel immediate.
         PumpTravel(local, peers);
         PumpPause(local, visible);
@@ -435,6 +442,106 @@ public sealed class CoopAgent(IGameBridge bridge, ICoopSession session, AgentSet
         {
             bridge.TryWriteBark(bark.Speaker, bark.Text, bark.SoundResRef, bark.Flags, bark.Serial);
         }
+    }
+
+    // ---- transition cinematics -------------------------------------------------------
+    //
+    // Both players should see the same film. The follower is not gated — its move-to-module
+    // queue is empty, and the engine plays what is in the queue — so all that has to travel
+    // is the names. See docs/research/cinematics.md §3.2.2 and §9.
+
+    /// <summary>The cinematic serial this agent has already announced, so the same
+    /// transition is published once however long its names sit in the block.</summary>
+    private uint _announcedCinematicSerial;
+
+    /// <summary>How many more ticks to repeat the current announcement. Cheap redundancy in
+    /// place of an ack: the channel is unreliable by design, and a single dropped datagram
+    /// would otherwise cost the follower its cinematic. There are seconds of slack between
+    /// the announcement and the follow, so a handful of ticks is ample.</summary>
+    private int _announceRepeatsLeft;
+
+    private const int AnnounceRepeats = 5;
+
+    /// <summary>
+    /// The movies a peer's transitions have announced since this agent last travelled —
+    /// ACCUMULATED, not replaced.
+    ///
+    /// The accumulation is the whole point on the canonical chain. Endar Spire → Taris is two
+    /// transitions through the stunt module STUNT_00, and the follow logic correctly refuses
+    /// to enter a `stunt*` module. So the follower declines the first transition (whose movie
+    /// is <c>01c</c>), declines nothing at the second, and finally warps to <c>tar_m02af</c>
+    /// (whose movie is <c>01f</c>) — and the transition it actually makes must carry BOTH.
+    ///
+    /// Bounded by three things, none of which is a timeout: it is spent when a travel request
+    /// is issued, cleared when this player is already with the host (nothing is pending), and
+    /// capped at the engine's own six. A timeout was considered and rejected — the stunt
+    /// vision it exists to span runs for a minute or more, so any timeout short enough to
+    /// bound a hoard is also short enough to drop <c>01c</c> before <c>01f</c> arrives, which
+    /// is precisely the case the accumulation was written for.
+    /// </summary>
+    private readonly List<string> _pendingFollowMovies = [];
+
+    /// <summary>The last cinematic serial taken from each peer, so a repeated announcement is
+    /// accumulated once rather than five times.</summary>
+    private readonly Dictionary<uint, uint> _seenCinematicSerials = [];
+
+    private void PumpTransitionMovies(in PlayerState local)
+    {
+        // Announce our own. Deliberately NOT gated on the module being readable: this fires
+        // on the frame a transition is being set up, which is exactly when the module label
+        // is least trustworthy, and the names do not depend on it.
+        if (bridge.TryReadTransitionMovies(out uint serial, out string[] movies))
+        {
+            if (serial != _announcedCinematicSerial)
+            {
+                _announcedCinematicSerial = serial;
+                _announceRepeatsLeft = AnnounceRepeats;
+                Log?.Invoke($"announcing {movies.Length} transition movie(s): {string.Join(", ", movies)}");
+            }
+
+            if (_announceRepeatsLeft > 0)
+            {
+                _announceRepeatsLeft--;
+                session.PublishTransitionMovies(local.Module, serial, movies);
+            }
+        }
+
+        // Take everyone else's.
+        foreach (TransitionMoviePacket packet in session.DrainTransitionMovies())
+        {
+            if (_seenCinematicSerials.TryGetValue(packet.PeerId, out uint seen) && seen == packet.Serial)
+            {
+                continue;
+            }
+
+            _seenCinematicSerials[packet.PeerId] = packet.Serial;
+            AccumulateFollowMovies(packet.Movies);
+        }
+    }
+
+    /// <summary>Adds names to the pending set, in order, without duplicates and without
+    /// exceeding the engine's own six-movie queue.</summary>
+    private void AccumulateFollowMovies(string[] movies)
+    {
+        foreach (string movie in movies)
+        {
+            if (movie.Length == 0 || _pendingFollowMovies.Contains(movie, StringComparer.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            if (_pendingFollowMovies.Count >= TransitionMoviePacket.MaxMovies)
+            {
+                Log?.Invoke(
+                    $"dropping transition movie '{movie}': already holding "
+                    + $"{TransitionMoviePacket.MaxMovies}, the engine's own queue limit");
+                return;
+            }
+
+            _pendingFollowMovies.Add(movie);
+        }
+
+        Log?.Invoke($"transition movies pending for the next follow: {string.Join(", ", _pendingFollowMovies)}");
     }
 
     /// <summary>
@@ -1302,6 +1409,18 @@ public sealed class CoopAgent(IGameBridge bridge, ICoopSession session, AgentSet
             // Together (or the host is unreadable): clear the debounce so the next real
             // separation acts immediately.
             _lastTravelRequest = string.Empty;
+
+            // And drop any accumulated cinematic. We are where the host is, so there is no
+            // transition of ours left for those movies to ride, and holding them would attach
+            // somebody else's film to whatever we do next.
+            if (_pendingFollowMovies.Count > 0)
+            {
+                Log?.Invoke(
+                    $"dropping {_pendingFollowMovies.Count} pending transition movie(s): "
+                    + "we are already where the host is");
+                _pendingFollowMovies.Clear();
+            }
+
             return;
         }
 
@@ -1328,11 +1447,25 @@ public sealed class CoopAgent(IGameBridge bridge, ICoopSession session, AgentSet
             return;
         }
 
-        if (bridge.TryRequestTravel(target))
+        // The cinematic the host's transitions announced on the way here rides with the warp:
+        // TravelController queues these immediately before Odyssey.TravelToModule, which is
+        // the same path a movie was measured playing on for real (15,531 ms, run A).
+        string[] movies = [.. _pendingFollowMovies];
+
+        if (bridge.TryRequestTravel(target, string.Empty, movies))
         {
             _lastTravelRequest = target;
             _travelRetryAtMs = now + settings.FollowRetryMs;
-            Log?.Invoke($"following the host to '{target}'");
+
+            // Spent, not kept. A retry of the SAME follow re-sends them (the request is
+            // rewritten from scratch each time), but they must not survive into a later,
+            // unrelated transition.
+            _pendingFollowMovies.Clear();
+
+            Log?.Invoke(movies.Length > 0
+                ? $"following the host to '{target}' with {movies.Length} transition movie(s): "
+                  + string.Join(", ", movies)
+                : $"following the host to '{target}'");
         }
     }
 

@@ -398,6 +398,17 @@ public sealed class KotorGameBridge : IGameBridge
     private const int BlockTravelWaypoint = 0x944;
     private const int BlockTravelNameLength = 32;
 
+    /// <summary>Transition-cinematic channel (shared block version 42). Plugin -&gt; agent:
+    /// what our own next transition plays. Agent -&gt; plugin: what the pending travel should
+    /// queue. Mirrors <c>SharedBlock.OffsetCinematic*</c>/<c>OffsetTravelMovie*</c>.</summary>
+    private const int BlockCinematicSerial = 0x3800;
+    private const int BlockCinematicCount = 0x3804;
+    private const int BlockCinematicNames = 0x3808;
+    private const int BlockTravelMovieCount = 0x3880;
+    private const int BlockTravelMovieNames = 0x3884;
+    private const int BlockCinematicNameLength = 16;
+    private const int BlockCinematicCapacity = 6;
+
     // Staging cheats, mirroring SharedBlock version 41 (region 0x3328..0x33C0).
     private const int BlockCheatSerial = 0x3328;
     private const int BlockCheatKind = 0x332C;
@@ -533,8 +544,11 @@ public sealed class KotorGameBridge : IGameBridge
     /// number in two files, and a half-bump reads as "plugin shared block not found", which
     /// looks like a broken install rather than a version skew.
     /// 39 = per-instance item identity in the item slot's tail (SharedBlock, version 39).
-    /// 41 = the four `setitem` identity fields at the cheat region's tail (0x29 = 41).</summary>
-    public const string PluginSignature = "4B 4F 43 4F 4F 50 30 31 29 00 00 00 01 EE FF C0";
+    /// 41 = the four `setitem` identity fields at the cheat region's tail (0x29 = 41).
+    /// 42 = the transition-cinematic channel, block grown to 0x3A00 (0x2A = 42).
+    /// <b>BlockVersionSyncTests reads both files and fails the build if they disagree</b> —
+    /// added with 42, because nothing had ever enforced the warning above.</summary>
+    public const string PluginSignature = "4B 4F 43 4F 4F 50 30 31 2A 00 00 00 01 EE FF C0";
 
     /// <summary>Agent's view of which coop item id occupies each plugin item slot.</summary>
     private readonly uint[] _itemSlotIds = new uint[BlockItemCapacity];
@@ -3467,7 +3481,7 @@ public sealed class KotorGameBridge : IGameBridge
     /// first (so nothing is serialised into the stored module on the way out), then the
     /// engine's MainLoop performs the transition exactly as the shipped `warp` cheat does.
     /// </summary>
-    public bool TryRequestTravel(string module, string waypoint = "")
+    public bool TryRequestTravel(string module, string waypoint = "", IReadOnlyList<string>? movies = null)
     {
         if (_pluginBlock == 0 || string.IsNullOrEmpty(module) || module.Length >= BlockTravelNameLength)
         {
@@ -3477,12 +3491,69 @@ public sealed class KotorGameBridge : IGameBridge
         bool ok = _memory.TryWriteAsciiString(_pluginBlock + BlockTravelModule, module, BlockTravelNameLength);
         ok &= _memory.TryWriteAsciiString(_pluginBlock + BlockTravelWaypoint, waypoint, BlockTravelNameLength);
 
+        // The cinematic this warp should carry. The COUNT IS ALWAYS WRITTEN, including the
+        // zero: without that, a previous request's movies would still be sitting in the block
+        // and would ride along with the next unrelated transition — the same "left armed"
+        // hazard the staging arm expires to avoid, but with no expiry to save it.
+        int count = 0;
+        if (movies is not null)
+        {
+            for (int i = 0; i < movies.Count && count < BlockCinematicCapacity; i++)
+            {
+                string name = movies[i];
+                if (string.IsNullOrEmpty(name) || name.Length >= BlockCinematicNameLength)
+                {
+                    continue;
+                }
+
+                ok &= _memory.TryWriteAsciiString(
+                    _pluginBlock + BlockTravelMovieNames + (count * BlockCinematicNameLength),
+                    name,
+                    BlockCinematicNameLength);
+                count++;
+            }
+        }
+
+        ok &= _memory.TryWrite(_pluginBlock + BlockTravelMovieCount, count);
+
         // Serial last, so the plugin never observes a half-written request. Continue from
         // whatever the block already holds: the plugin outlives the agent, and restarting
         // from zero would replay whichever request the previous agent left behind.
         ok &= _memory.TryReadUInt32(_pluginBlock + BlockTravelSerial, out uint serial);
         ok &= _memory.TryWrite(_pluginBlock + BlockTravelSerial, serial + 1);
         return ok;
+    }
+
+    /// <inheritdoc />
+    public bool TryReadTransitionMovies(out uint serial, out string[] movies)
+    {
+        serial = 0;
+        movies = [];
+
+        if (_pluginBlock == 0
+            || !_memory.TryReadUInt32(_pluginBlock + BlockCinematicSerial, out serial)
+            || serial == 0
+            || !_memory.TryReadInt32(_pluginBlock + BlockCinematicCount, out int count)
+            || count is <= 0 or > BlockCinematicCapacity)
+        {
+            return false;
+        }
+
+        List<string> names = new(count);
+        for (int i = 0; i < count; i++)
+        {
+            if (_memory.TryReadAsciiString(
+                    _pluginBlock + BlockCinematicNames + (i * BlockCinematicNameLength),
+                    BlockCinematicNameLength,
+                    out string name)
+                && name.Length > 0)
+            {
+                names.Add(name);
+            }
+        }
+
+        movies = [.. names];
+        return movies.Length > 0;
     }
 
     // ---- staging cheats --------------------------------------------------------

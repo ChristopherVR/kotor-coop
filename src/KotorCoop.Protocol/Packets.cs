@@ -327,6 +327,31 @@ public sealed record BarkPacket(
     public const int ResRefBytes = 16;
 }
 
+/// <summary>
+/// any -&gt; all: "the transition I am about to make plays these movies".
+///
+/// <paramref name="Module"/> is the module the announcer is LEAVING, not the destination —
+/// at the moment the queue fills, the destination has been written to the engine's
+/// move-to-module fields but the announcer has not moved, and the follower does not need it
+/// (it decides where to go from the owner's published module, as it always has). It rides
+/// along for the log and for telling two announcements apart.
+///
+/// <paramref name="Movies"/> are RESREFS, stripped of the path and extension the engine
+/// stores. That is a correctness requirement, not tidiness: <c>AddMovieToExoArrayList</c>
+/// resolves a name to <c>.\movies\01c.bik</c> and stores THAT, and feeding the stored form
+/// back in makes the engine build <c>MOVIES:.\movies\01c.bik</c>, fail to open it and refuse
+/// the movie — silently, on every transition. See <c>MovieStaging.TryStripToResRef</c>.
+/// </summary>
+public sealed record TransitionMoviePacket(uint PeerId, string Module, uint Serial, string[] Movies)
+{
+    /// <summary>The engine's own ceiling: NWScript <c>StartNewModule</c> takes exactly six
+    /// movie arguments, so six is the longest queue the game can build.</summary>
+    public const int MaxMovies = 6;
+
+    /// <summary>An Odyssey resref is 16 characters.</summary>
+    public const int MaxMovieLength = 16;
+}
+
 /// <summary>host -> all: the authoritative conversation token (see <see cref="DialogueState"/>).</summary>
 public sealed record DialogueSnapshotPacket(long ServerTimeMs, DialogueState State);
 

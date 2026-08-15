@@ -63,6 +63,10 @@ internal static unsafe class CinematicWatch
     private static bool _wasPlaying;
     private static int _lastQueued;
 
+    /// <summary>The block to publish the queue into, or null before one exists. Set on every
+    /// callback rather than held, because this class outlives no session and owns nothing.</summary>
+    private static SharedBlockView? _block;
+
     /// <summary>
     /// One line per menu visit, not one per frame: the menu movie is playing on every one of
     /// hundreds of frames, and the fact is worth stating once.
@@ -113,8 +117,10 @@ internal static unsafe class CinematicWatch
     /// global or touches nothing but our own statics, so there is no pointer here that can
     /// survive a module transition (transition-window rule 1).
     /// </summary>
-    public static void OnFrame()
+    public static void OnFrame(SharedBlockView? block = null)
     {
+        _block = block;
+
         long now = Environment.TickCount64;
         long previous = _lastFrameMs;
         _lastFrameMs = now;
@@ -166,6 +172,13 @@ internal static unsafe class CinematicWatch
         StringBuilder names = new();
         byte* buffer = stackalloc byte[NameCapacity];
 
+        // Stripped to resrefs as they are read, because the engine stores a PATH
+        // (`.\movies\01c.bik`) and only the resref can be handed back to
+        // AddMoveToModuleMovie — see MovieStaging.TryStripToResRef for what happens if it
+        // is not. The log keeps the raw form, which is what the engine really holds.
+        string[] resrefs = new string[queued];
+        int resrefCount = 0;
+
         for (int i = 0; i < queued; i++)
         {
             int length = Odyssey.ReadQueuedTransitionMovie(i, buffer, NameCapacity);
@@ -174,17 +187,41 @@ internal static unsafe class CinematicWatch
                 continue;
             }
 
+            string stored = Encoding.ASCII.GetString(buffer, length);
+
             if (names.Length > 0)
             {
                 names.Append(", ");
             }
 
-            names.Append(Encoding.ASCII.GetString(buffer, length));
+            names.Append(stored);
+
+            if (MovieStaging.TryStripToResRef(stored, out string resref))
+            {
+                resrefs[resrefCount++] = resref;
+            }
+            else
+            {
+                PluginHost.Log(
+                    $"cinematic: cannot reduce '{stored}' to a movie resref - a peer will not "
+                    + "be able to replay it");
+            }
         }
 
         PluginHost.Log(names.Length > 0
             ? $"cinematic: the module transition has queued {queued} movie(s): {names}"
             : $"cinematic: the module transition has queued {queued} movie(s) (names unreadable)");
+
+        // Published so the session can hand these to whoever follows us. This is the ONE
+        // frame it can be done on: the module load drains the queue, and if a movie plays
+        // the main thread is gone before anything else of ours runs again.
+        if (_block is { } block && resrefCount > 0)
+        {
+            block.PublishCinematic(resrefs[..resrefCount]);
+            PluginHost.Log(
+                $"cinematic: published {resrefCount} movie resref(s) for the session: "
+                + string.Join(", ", resrefs[..resrefCount]));
+        }
     }
 
     /// <summary>

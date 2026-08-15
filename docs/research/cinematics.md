@@ -808,8 +808,9 @@ Plus the read-only engine accessors in `Odyssey` (`IsMoviePlaying`,
 * **No `AddMoveToModuleMovie` call.** The lever in §1.5 is verified statically and is the right
   design, but writing into a transition the plugin cannot observe is precisely the shape of
   every bug in `transition-window-races.md`. It wants its own pass, its own protocol version,
-  and the live evidence this test produces. ⚠ **Superseded by §7**, which adds the call behind
-  a debug verb and a guard — still with no protocol change and no automatic producer.
+  and the live evidence this test produces. ⚠ **Superseded twice**: by §7, which added the call
+  behind a debug verb and a guard, and by **§9**, which gave it the automatic producer and the
+  protocol version this bullet asked for — after both halves had been measured live.
 * **No skip handling.** §3.2.3 argues it should never be added.
 * **No change to the stunt gate.** §4.3 is a finding, not a fix. Accumulating movie lists
   across a declined follow (§3.2.2) is the right answer and it belongs with the protocol
@@ -1508,6 +1509,165 @@ Unchanged from §7.8 — `tools\crashlog.ps1`, an `eip` outside the exe image me
 line. The suspect list gains one entry specific to run B: the flush branch now runs with a
 movie about to start, so a body destroyed on the last frame before `WaitForMovie` is the newest
 place a freed pointer can be read from.
+
+---
+
+## 9. Cinematic parity: the wire between the two proven halves (2026-08-15)
+
+§3.2.2 designed this and §6 deliberately did not ship it. Both halves have since been measured
+live, so what was left was the wire between them.
+
+### 9.1 What was measured
+
+The follower's half of run B, verbatim:
+
+```
+11:39:50.646  flush, before the module is stored: destroyed phantom 0x12D (slot 0)
+11:39:50.648  flush, before the module is stored: destroyed item body 0x131 (item 0x10001)
+11:39:50.652  travel: moving to module 'end_m01ab' on the session's authority
+11:39:50.663  epoch: world unloading; clearing phantom, item, combat and door state
+```
+
+It flushed correctly, followed correctly, and logged **no `cinematic:` line at all** while the
+owner's main thread was gone for **7,407 ms**. The follower is not gated and needs no new
+engine call: its `move_to_module_movies` queue is simply empty, and the engine plays what is
+in the queue. Run A had already proved the other half — a movie queued by us on the co-op warp
+path played for real, 15,531 ms. So the only missing thing was the names.
+
+### 9.2 The channel
+
+| Direction | Carrier | When |
+| --- | --- | --- |
+| plugin → agent | shared block `0x3800` (serial, count, 6 × 16 resrefs) | the frame `CinematicWatch` sees the engine's queue rise |
+| agent → wire | **`PacketType.TransitionMovies = 40`**, protocol **25** | the tick the block's serial changes, repeated 5 ticks |
+| host | relays verbatim to everyone but the sender | its own tick, beside the bark relay |
+| wire → agent | accumulated into the follower's pending set | before the follow decision |
+| agent → plugin | the travel request's own movie list (`0x3880`) | written before the travel serial, like the module |
+| plugin → engine | `AddMoveToModuleMovie` in `TravelController` | immediately before `Odyssey.TravelToModule` |
+
+The last step is unchanged code — it is the path run A measured.
+
+### 9.3 ⚠ The names must be stripped, or the whole thing fails silently
+
+**The engine does not store the name a script gave it.** `AddMovieToExoArrayList 0x005FBBF0`
+resolves the name and stores the resolved form, so reading the queue back yields
+`.\movies\01c.bik` — which is exactly what `moviewarp show` reported and what made this
+visible. Feed that stored form back into `AddMoveToModuleMovie` and the add takes the
+**no-colon** branch, builds `MOVIES:.\movies\01c.bik`, fails to open it, and refuses the movie:
+returns 0, adds nothing.
+
+Had this shipped unstripped, every follower would have transitioned with an empty queue —
+identical to having no channel at all — and the only trace would have been one
+`the engine REFUSED` line per movie. So `MovieStaging.TryStripToResRef` reduces the stored form
+to `01c` at the point of publication, and refuses anything that cannot become a resref rather
+than forwarding a name the far end will certainly reject.
+
+### 9.4 The accumulation rule, and what bounds it
+
+A follower that correctly declines to follow (the `stunt*` gate refusing `STUNT_00`) keeps that
+transition's movies and hands the whole set to the warp it finally does issue. On the canonical
+chain that means the one warp into `tar_m02af` carries **`["01c", "01f"]`** — both movies, in
+order, played by the follower's own `StartNewModule`, while it never enters `STUNT_00` at all.
+
+Three bounds, and deliberately **no timeout**:
+
+* **spent by the follow that carries it** — the set is cleared the moment a travel request is
+  filed, so the same names can never ride a second, unrelated transition;
+* **dropped when already with the host** — arriving where the host is means no transition of
+  ours is pending, so holding names would attach somebody else's film to whatever we did next;
+* **capped at six**, the engine's own ceiling (`StartNewModule` takes exactly six movie
+  arguments), with the overflow named in the log rather than dropped quietly.
+
+A timeout was considered and rejected, and the reason is the case the accumulation exists for:
+the stunt vision between `01c` and `01f` runs for a minute or more, so any timeout short enough
+to bound a hoard is also short enough to drop `01c` before `01f` arrives. The three bounds
+above are all event-shaped and all tied to something that provably ends the wait.
+
+### 9.5 Reliability, and the two things deliberately not built
+
+**Unreliable, like barks.** A lost announcement costs a cinematic, never consistency — the
+rendezvous is arrival in the module, which the travel channel already guarantees on its own.
+The sender repeats each announcement over 5 ticks so one drop cannot lose it, and receivers
+de-duplicate on `(peer, serial)`. There is no ack: adding one would put a handshake in front of
+something whose failure mode is cosmetic.
+
+**No skip mirroring**, for the reason §3.2.3 established and nothing has changed: a skip is
+consumed inside `WaitForMovie`, where the skipper cannot send and the peer cannot receive. A
+player who skips simply arrives first, which this mod handles every day.
+
+**No block field for "a movie is playing"** — §3.2.4. The plugin cannot write one during the
+window it would describe.
+
+### 9.6 Versions moved — check these before blaming anything else
+
+| Number | From | To | Guard |
+| --- | --- | --- | --- |
+| `ProtocolConstants.Version` | 24 | **25** | `PacketReader` rejects a mismatch; a stale peer gets a typed `Reject` |
+| `PluginHost._block->Version` | 41 | **42** | `TransitionMovieTests.TheBlockVersionMovedInBothHalves` |
+| `KotorGameBridge.PluginSignature` byte 8 | `0x29` | **`0x2A`** | same test — it reads both files |
+| `SharedBlock.TotalSize` | `0x3800` | **`0x3A00`** | the region would not fit either existing gap |
+
+⚠ **Packet type 40, not 39.** `network-topology.md` reserves 39 on paper for `PrimaryPlayer`,
+and three agents in this tree have already collided on a number only one of them could see.
+`TransitionMovieTests.NoTwoPacketTypesShareANumber` now fails the build on any duplicate, and a
+second test pins 39 as free.
+
+A half-bump of the block version presents as "plugin shared block not found" — a broken install,
+not a version skew. That warning existed for three bumps and nothing enforced it; it does now.
+
+### 9.7 The live acceptance run
+
+Everything is as §8.4 except that the pair must be **connected**, and the follower needs
+somewhere to be. Note the staging point: `usedoor` crosses on the door's own facing axis, so
+put the PC on it.
+
+```powershell
+# Both instances up and connected, both in END_M01AA, phantom + item standing.
+pwsh tools\blockpoke.ps1 -ProcId <host pid> console 'moviewarp show'
+#    expect: queued: nothing; armed: nothing
+
+pwsh tools\blockpoke.ps1 -ProcId <host pid> console 'moviewarp queue 01c'
+pwsh tools\blockpoke.ps1 -ProcId <host pid> console 'dropitem g_w_blstrrfl001'
+pwsh tools\blockpoke.ps1 -ProcId <host pid> console 'tp 44.5 120.1 -0.04'
+pwsh tools\blockpoke.ps1 -ProcId <host pid> console 'usedoor end_door10'
+pwsh tools\blockpoke.ps1 -ProcId <host pid> console 'moviewarp clear'
+```
+
+**PASS is symmetric evidence in BOTH plugin logs.** On the host, as before, plus its agent:
+
+```
+cinematic: published 1 movie resref(s) for the session: 01c
+[agent] announcing 1 transition movie(s): 01c
+```
+
+On the FOLLOWER — every one of these is new, and the first two are what this pass is for:
+
+```
+[agent] transition movies pending for the next follow: 01c
+[agent] following the host to 'end_m01ab' with 1 transition movie(s): 01c
+cinematic: the module transition has queued 1 movie(s): .\movies\01c.bik
+cinematic: staged 1 of 1 movie(s) from the session onto this transition: 01c
+travel: moving to module 'end_m01ab' on the session's authority
+cinematic: the main thread was gone for NNNNN ms
+```
+
+* the follower's queue line must appear **before** its `travel:` line;
+* **both** stalls must be comfortably above the 5.1–5.3 s bare-load baseline (`01c` runs ~25 s
+  unskipped, and the owner's was 7,407 ms);
+* both flush their spawned bodies before travelling, both arrive in `end_m01ab`, neither log
+  contains a `FIRST-CHANCE` access violation.
+
+**The negative control matters as much.** Repeat with no `moviewarp queue`: neither side may
+stall beyond baseline, the follower must log `following the host to '...'` with no movie clause,
+and `staged N of M` must not appear anywhere. A channel that attaches a cinematic to a
+transition that had none is worse than one that attaches nothing.
+
+**FAIL signatures worth naming.** `the engine REFUSED '<name>'` on the follower means its
+install lacks the file — the transition still completes, by design, and that is degradation
+rather than breakage. `NOT staging ... the game has already queued` means the follower's own
+engine had staged something and ours correctly stood aside. No follower queue line at all,
+with the host's announcement present, puts the fault on the wire or the accumulation — check
+the follower agent for `transition movies pending`.
 
 ---
 

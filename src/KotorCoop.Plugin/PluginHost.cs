@@ -386,7 +386,10 @@ internal static unsafe class PluginHost
         // 37 = the load-screen texture in the browser details array (SharedBlock, version 37).
         // 39 = per-instance item identity in the item slot's tail (SharedBlock, version 39).
         // 41 = the four `setitem` identity fields at the cheat region's tail (version 41).
-        _block->Version = 41;
+        // 42 = the transition-cinematic channel, and the block grown to 0x3A00 to hold it
+        //      (SharedBlock, version 42) — so both players can see the same movie.
+        // BlockVersionSyncTests now fails the build on a half-bump; it did not exist for 41.
+        _block->Version = 42;
 
         // A guard dword after the version. Magic plus version alone was not selective
         // enough: a scan once matched something else at a lower address and the agent
@@ -435,7 +438,7 @@ internal static unsafe class PluginHost
         // and the only evidence a cinematic played is the gap it leaves between two of these
         // callbacks. Measuring it here brackets exactly the client tick, the server tick and
         // the present. See docs/research/cinematics.md.
-        CinematicWatch.OnFrame();
+        CinematicWatch.OnFrame(_view);
 
         // The native browser first: its IsOpen gate tells the others the main-menu object
         // is currently freed (a shown child panel reclaims the menu until close rebuilds it).

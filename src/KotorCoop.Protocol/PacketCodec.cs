@@ -501,6 +501,55 @@ public static class PacketCodec
         return r.Failed ? null : new BarkPacket(peerId, module, speaker, text, resRef, flags, serial);
     }
 
+    public static int Write(Span<byte> buffer, TransitionMoviePacket packet)
+    {
+        PacketWriter w = new(buffer);
+        w.WriteHeader(PacketType.TransitionMovies);
+        w.WriteUInt32(packet.PeerId);
+        w.WriteString(packet.Module, ProtocolConstants.MaxModuleLength);
+        w.WriteUInt32(packet.Serial);
+
+        string[] movies = packet.Movies ?? [];
+        int count = Math.Min(movies.Length, TransitionMoviePacket.MaxMovies);
+        w.WriteUInt8((byte)count);
+
+        for (int i = 0; i < count; i++)
+        {
+            w.WriteString(movies[i], TransitionMoviePacket.MaxMovieLength);
+        }
+
+        return w.Failed ? 0 : w.Position;
+    }
+
+    public static TransitionMoviePacket? ReadTransitionMovies(ReadOnlySpan<byte> buffer)
+    {
+        PacketReader r = new(buffer);
+        if (r.ReadHeader() != PacketType.TransitionMovies)
+        {
+            return null;
+        }
+
+        uint peerId = r.ReadUInt32();
+        string module = r.ReadString();
+        uint serial = r.ReadUInt32();
+
+        int count = r.ReadUInt8();
+        if (count > TransitionMoviePacket.MaxMovies)
+        {
+            // A count this side never writes: treat the datagram as malformed rather than
+            // allocating on a number a peer chose.
+            return null;
+        }
+
+        string[] movies = new string[count];
+        for (int i = 0; i < count; i++)
+        {
+            movies[i] = r.ReadString();
+        }
+
+        return r.Failed ? null : new TransitionMoviePacket(peerId, module, serial, movies);
+    }
+
     public static int Write(Span<byte> buffer, EncounterTriggerPacket packet)
     {
         PacketWriter w = new(buffer);

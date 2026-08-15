@@ -294,7 +294,30 @@ public interface IGameBridge : IDisposable
     /// This is what keeps a client in the host's module — travelling together is the
     /// difference between shared co-op and two parallel campaigns.
     /// </summary>
-    bool TryRequestTravel(string module, string waypoint = "") => false;
+    /// <param name="movies">
+    /// Movie resrefs to queue on the engine's transition list immediately before the warp, so
+    /// a follower plays the same cinematic the owner did. Null or empty for the ordinary case.
+    /// Written BEFORE the request serial, like the module and the waypoint — and the count is
+    /// written even when there are none, so a previous request's movies can never ride along
+    /// with this one.
+    /// </param>
+    bool TryRequestTravel(string module, string waypoint = "", IReadOnlyList<string>? movies = null) => false;
+
+    /// <summary>
+    /// The movie resrefs this instance's own imminent transition is about to play, with the
+    /// serial the plugin stamped them with, or an empty list when it has announced none.
+    ///
+    /// A LEVEL plus a serial rather than a queue: the plugin gets exactly one frame to write
+    /// this (the module load drains the engine's queue, and a playing movie then takes its
+    /// main thread away entirely), so the agent must be able to read it late and still be
+    /// right. De-duplicate on the serial.
+    /// </summary>
+    bool TryReadTransitionMovies(out uint serial, out string[] movies)
+    {
+        serial = 0;
+        movies = [];
+        return false;
+    }
 
     /// <summary>False when this bridge cannot see or drive enemy health.</summary>
     bool SupportsEnemySync => false;

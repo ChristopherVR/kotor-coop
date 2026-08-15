@@ -63,7 +63,10 @@ internal struct SharedBlock
     /// <summary>Grown from 0x3400 for the browser details array (version 36): the server rows
     /// at 0xE20 cannot widen, because the death region begins exactly where they end. Grown
     /// again for the load-screen texture in that array (version 37).</summary>
-    public const int TotalSize = 0x3800;
+    /// <summary>Grown from 0x3800 for the transition-cinematic channel (version 42): the
+    /// browser details array runs to 0x3780 and the cheat region's tail to 0x33C0, so neither
+    /// gap could hold two six-name movie lists. Same reasoning as the growth to 0x3800.</summary>
+    public const int TotalSize = 0x3A00;
 
     public const int ProfileVisibleSize = 0x250;
 
@@ -1417,6 +1420,62 @@ internal struct SharedBlock
     public const int BrowserDetailLoadScreen = 0x58;
 
     public const int BrowserDetailLoadScreenLength = 16;
+
+    // ---- transition cinematics (version 42, region 0x3800..0x3A00) ----------------
+    //
+    // Both players should see the same cinematic. Measured on 2026-08-15: the owner's
+    // transition stalled its main thread for 7,407 ms playing `01c` while the follower logged
+    // no `cinematic:` line at all and simply loaded in. The follower is not GATED — its
+    // move_to_module_movies queue is empty, and the engine plays what is in the queue.
+    //
+    // Two directions, because the two halves of the fix are different facts:
+    //
+    //   plugin -> agent   "the transition I am about to make plays these movies". The one
+    //                     frame of warning the engine gives: NWScript StartNewModule fills
+    //                     CClientExoAppInternal+0x2D8 and the module load drains it, and
+    //                     CinematicWatch is reading that list on the frame the script writes
+    //                     it. Published as a level plus a serial, not an event — a follower
+    //                     that misses a tick must not miss the cinematic.
+    //
+    //   agent -> plugin   "queue these before the pending travel". Consumed by
+    //                     TravelController immediately before Odyssey.TravelToModule, which
+    //                     is the same path run A proved plays a movie for real (15,531 ms).
+    //
+    // ⚠ THE NAMES ARE STRIPPED TO RESREFS, and that is load-bearing rather than tidy. The
+    // engine does not store what the script passed: AddMovieToExoArrayList resolves the name
+    // to a path and stores THAT, so the queue reads `.\movies\01c.bik`. Feeding that back to
+    // AddMoveToModuleMovie fails — the string contains no ':', so the no-colon branch builds
+    // `MOVIES:.\movies\01c.bik`, cannot open it, and refuses the name. Forwarding the raw
+    // stored string would degrade the whole feature to "the engine refused every movie",
+    // silently, on every transition. See MovieStaging.StripToResRef.
+
+    /// <summary>Plugin -&gt; agent. Bumped when this instance observes its own transition queue
+    /// fill. Written LAST, after the names, so a half-written list is never visible.</summary>
+    public const int OffsetCinematicSerial = 0x3800;
+
+    /// <summary>Plugin -&gt; agent. How many of <see cref="OffsetCinematicNames"/> are valid.</summary>
+    public const int OffsetCinematicCount = 0x3804;
+
+    /// <summary>Plugin -&gt; agent. <see cref="CinematicCapacity"/> movie resrefs, each
+    /// <see cref="CinematicNameLength"/> bytes of null-padded ASCII. Occupies
+    /// 0x3808..0x3868.</summary>
+    public const int OffsetCinematicNames = 0x3808;
+
+    /// <summary>Agent -&gt; plugin. How many movies the pending travel request should queue.
+    /// Written BEFORE <see cref="OffsetTravelSerial"/>, like every other travel field.</summary>
+    public const int OffsetTravelMovieCount = 0x3880;
+
+    /// <summary>Agent -&gt; plugin. The movie resrefs for the pending travel, same layout as
+    /// <see cref="OffsetCinematicNames"/>. Occupies 0x3884..0x38E4.</summary>
+    public const int OffsetTravelMovieNames = 0x3884;
+
+    /// <summary>Engine resrefs are 16 characters; the names here are already stripped to
+    /// resrefs, so this is the exact width rather than a guess.</summary>
+    public const int CinematicNameLength = 16;
+
+    /// <summary>The engine's own ceiling: NWScript <c>StartNewModule</c> takes exactly six
+    /// movie arguments, so six is the longest queue the game can ever build.</summary>
+    public const int CinematicCapacity = 6;
 
     // ---- co-op death handling (version 14, region 0x1020..0x1080) -----------------
     //

@@ -158,6 +158,62 @@ internal static class MovieStaging
         return true;
     }
 
+    /// <summary>
+    /// Reduces what the ENGINE stored back to the resref a caller can hand to
+    /// <c>AddMoveToModuleMovie</c>: <c>.\movies\01c.bik</c> becomes <c>01c</c>.
+    ///
+    /// ⚠ This is not cosmetic, it is the difference between the feature working and failing
+    /// silently on every transition. `AddMovieToExoArrayList 0x005FBBF0` does not store the
+    /// name it was given — it resolves it to a path and stores that, which is why reading the
+    /// queue back yields `.\movies\01c.bik`. Feed that path in again and the add takes the
+    /// NO-COLON branch (there is no ':' in it), builds <c>MOVIES:.\movies\01c.bik</c>, fails
+    /// to open it, and refuses the name — returning 0 and adding nothing. The follower would
+    /// then transition with an empty queue, exactly as if the channel did not exist, and the
+    /// only trace would be one "the engine REFUSED" line per movie.
+    ///
+    /// Strips any directory prefix (both separators, because the engine writes <c>\</c> and a
+    /// mod could write <c>/</c>) and any extension, then returns it only if what is left is
+    /// resref-shaped — a name that survives this and still fails <see cref="IsMovieName"/> is
+    /// one we should not be forwarding at all.
+    /// </summary>
+    public static bool TryStripToResRef(string? stored, out string resref)
+    {
+        resref = string.Empty;
+
+        if (string.IsNullOrWhiteSpace(stored))
+        {
+            return false;
+        }
+
+        ReadOnlySpan<char> span = stored.AsSpan().Trim();
+
+        int separator = span.LastIndexOfAny('\\', '/');
+        if (separator >= 0)
+        {
+            span = span[(separator + 1)..];
+        }
+
+        int dot = span.LastIndexOf('.');
+        if (dot > 0)
+        {
+            span = span[..dot];
+        }
+
+        if (span.Length == 0)
+        {
+            return false;
+        }
+
+        string candidate = new(span);
+        if (!IsMovieName(candidate))
+        {
+            return false;
+        }
+
+        resref = candidate;
+        return true;
+    }
+
     /// <summary>True for a resref-shaped movie name: 1..16 chars of ASCII letter/digit/_.</summary>
     public static bool IsMovieName(string value)
     {

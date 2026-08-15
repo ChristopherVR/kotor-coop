@@ -430,6 +430,65 @@ public sealed class CoopClient : ICoopSession
         }
     }
 
+    // ---- transition cinematics -----------------------------------------------------
+    //
+    // Same shape as barks, same reliability, and the same reason: a lost announcement costs
+    // a cinematic, never consistency. Arrival in the module is the rendezvous and the travel
+    // channel already guarantees it.
+
+    private readonly Queue<TransitionMoviePacket> _movieOutbox = new();
+    private readonly Queue<TransitionMoviePacket> _movieInbox = new();
+
+    public void PublishTransitionMovies(string module, uint serial, string[] movies)
+    {
+        lock (_gate)
+        {
+            _movieOutbox.Enqueue(new TransitionMoviePacket(_localPeerId, module, serial, movies));
+        }
+    }
+
+    public IReadOnlyList<TransitionMoviePacket> DrainTransitionMovies()
+    {
+        lock (_gate)
+        {
+            if (_movieInbox.Count == 0)
+            {
+                return [];
+            }
+
+            List<TransitionMoviePacket> ready = [];
+            while (_movieInbox.Count > 0)
+            {
+                ready.Add(_movieInbox.Dequeue());
+            }
+
+            return ready;
+        }
+    }
+
+    private void FlushTransitionMovies()
+    {
+        while (true)
+        {
+            TransitionMoviePacket movies;
+            lock (_gate)
+            {
+                if (_movieOutbox.Count == 0)
+                {
+                    return;
+                }
+
+                movies = _movieOutbox.Dequeue();
+            }
+
+            int length = PacketCodec.Write(_sendBuffer, movies);
+            if (length > 0)
+            {
+                _channel.Send(_hostEndPoint, _sendBuffer.AsSpan(0, length));
+            }
+        }
+    }
+
     private void FlushChat()
     {
         while (true)
@@ -837,6 +896,7 @@ public sealed class CoopClient : ICoopSession
         SendEncounterTriggers();
         FlushChat();
         FlushBarks();
+        FlushTransitionMovies();
 
         if (now - _lastPingMs >= PingIntervalMs)
         {
@@ -1314,6 +1374,17 @@ public sealed class CoopClient : ICoopSession
                     lock (_gate)
                     {
                         _barkInbox.Enqueue(bark);
+                    }
+                }
+
+                break;
+
+            case PacketType.TransitionMovies:
+                if (PacketCodec.ReadTransitionMovies(span) is { } movies)
+                {
+                    lock (_gate)
+                    {
+                        _movieInbox.Enqueue(movies);
                     }
                 }
 

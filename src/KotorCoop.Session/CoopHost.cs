@@ -847,6 +847,95 @@ public sealed class CoopHost : ICoopSession
         }
     }
 
+    // ---- transition cinematics --------------------------------------------------------
+    //
+    // Same shape and same reliability as barks: any instance can be the one whose engine
+    // reached the trigger, everyone else should see the same film, and a lost announcement
+    // costs a cinematic rather than consistency.
+
+    private readonly Queue<TransitionMoviePacket> _movieInbox = new();
+    private readonly Queue<(TransitionMoviePacket Packet, uint ExceptPeer)> _movieOutbox = new();
+
+    public void PublishTransitionMovies(string module, uint serial, string[] movies)
+    {
+        TransitionMoviePacket packet = new(LocalPeerId, module, serial, movies);
+        lock (_gate)
+        {
+            _movieOutbox.Enqueue((packet, LocalPeerId));
+        }
+    }
+
+    public IReadOnlyList<TransitionMoviePacket> DrainTransitionMovies()
+    {
+        lock (_gate)
+        {
+            if (_movieInbox.Count == 0)
+            {
+                return [];
+            }
+
+            List<TransitionMoviePacket> ready = [];
+            while (_movieInbox.Count > 0)
+            {
+                ready.Add(_movieInbox.Dequeue());
+            }
+
+            return ready;
+        }
+    }
+
+    private void HandleTransitionMovies(ReadOnlySpan<byte> span)
+    {
+        if (PacketCodec.ReadTransitionMovies(span) is not { } movies)
+        {
+            _channel.NoteMalformed();
+            return;
+        }
+
+        lock (_gate)
+        {
+            if (!_peers.ContainsKey(movies.PeerId))
+            {
+                return; // only a known peer, and it cannot announce for another
+            }
+
+            _movieInbox.Enqueue(movies);
+            _movieOutbox.Enqueue((movies, movies.PeerId)); // everyone but the sender
+        }
+    }
+
+    private void BroadcastTransitionMovies(List<PeerConnection> recipients)
+    {
+        List<(TransitionMoviePacket Packet, uint ExceptPeer)> pending;
+        lock (_gate)
+        {
+            if (_movieOutbox.Count == 0)
+            {
+                return;
+            }
+
+            pending = [.. _movieOutbox];
+            _movieOutbox.Clear();
+        }
+
+        foreach ((TransitionMoviePacket packet, uint except) in pending)
+        {
+            int length = PacketCodec.Write(_sendBuffer, packet);
+            if (length <= 0)
+            {
+                continue;
+            }
+
+            foreach (PeerConnection peer in recipients)
+            {
+                if (peer.Id != except)
+                {
+                    _channel.Send(peer.EndPoint, _sendBuffer.AsSpan(0, length));
+                }
+            }
+        }
+    }
+
     private void BroadcastPhantomDamage(List<PeerConnection> recipients)
     {
         List<KeyValuePair<(uint Target, uint Source), (uint Damage, uint Attacker)>> owed;
@@ -1106,6 +1195,7 @@ public sealed class CoopHost : ICoopSession
         BroadcastContainerLoot(now, recipients);
         BroadcastPhantomDamage(recipients);
         BroadcastBarks(recipients);
+        BroadcastTransitionMovies(recipients);
         BroadcastInteractionLocks(recipients);
         BroadcastWorldDigest(now, recipients);
         FlushChat(recipients);
@@ -1443,6 +1533,10 @@ public sealed class CoopHost : ICoopSession
 
             case PacketType.Bark:
                 HandleBark(span);
+                break;
+
+            case PacketType.TransitionMovies:
+                HandleTransitionMovies(span);
                 break;
 
             case PacketType.InteractionClaim:

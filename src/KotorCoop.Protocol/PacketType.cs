@@ -236,4 +236,34 @@ public enum PacketType : byte
     /// stealth XP — and a max carries that up without touching the rest.
     /// </summary>
     ProgressionReport = 38,
+
+    // 39 is DELIBERATELY SKIPPED. docs/research/network-topology.md §"the primary player"
+    // reserves it on paper for `PrimaryPlayer`, and three agents in this tree have already
+    // collided on a number that only one of them could see. Taking the next value nobody has
+    // written down costs nothing; PacketTypeTests now fails the build on any duplicate.
+
+    /// <summary>
+    /// any -&gt; all, relayed by the host: "the module transition I am about to make plays these
+    /// movies".
+    ///
+    /// WHY IT EXISTS. A KOTOR movie is played by the engine from the transition queue at
+    /// <c>CClientExoAppInternal+0x2D8</c>, which <c>StartNewModule</c> drains during the load.
+    /// A peer that follows through the co-op travel channel has an EMPTY queue, so it loads
+    /// straight in — measured 2026-08-15: the owner's main thread was gone for 7,407 ms
+    /// playing <c>01c</c> while the follower logged no cinematic at all. The follower is not
+    /// gated and needs no new engine call; it needs the names.
+    ///
+    /// A PRE-ANNOUNCEMENT, and it has to be. The queue fills on the frame the script calls
+    /// <c>StartNewModule</c> and is drained by the load, and if a movie plays the announcer's
+    /// main thread is inside <c>WaitForMovie</c> for seconds afterwards — so the one moment
+    /// this can be sent is before the transition, not during or after it.
+    ///
+    /// UNRELIABLE, like <see cref="Bark"/>, and for a stronger reason than "it is cheap": a
+    /// lost announcement costs a cinematic, never a desync. The rendezvous is arrival in the
+    /// module, which the travel channel already guarantees on its own. The sender repeats the
+    /// announcement over a few ticks so one drop does not lose it, and receivers de-duplicate
+    /// on (peer, serial) — there is no ack, and adding one would put a handshake in front of
+    /// something whose failure mode is cosmetic.
+    /// </summary>
+    TransitionMovies = 40,
 }

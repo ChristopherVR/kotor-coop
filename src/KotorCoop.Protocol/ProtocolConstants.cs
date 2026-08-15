@@ -77,8 +77,13 @@ public static class ProtocolConstants
     /// its blueprint resref. Before this the receiving instance re-created a pristine stock
     /// item, so a half-spent stack of twenty arrived as one fresh one and an upgraded
     /// lightsaber arrived with its upgrades stripped. A zeroed identity still means
-    /// "unknown", which is what the harness sends and what the receiver leaves alone.</summary>
-    public const byte Version = 24;
+    /// "unknown", which is what the harness sends and what the receiver leaves alone.
+    /// Version 25: TransitionMovies (40) — the movies a transition is about to play,
+    /// announced before it happens so a follower's own transition plays them too. The
+    /// follower was never gated; its move-to-module queue was simply empty, so it loaded
+    /// straight in while the owner's main thread was gone for 7,407 ms playing 01c. Packet
+    /// type 39 is deliberately skipped: network-topology.md reserves it on paper.</summary>
+    public const byte Version = 25;
 
     /// <summary>Journal quest tags are resrefs plus a little slack.</summary>
     public const int MaxJournalTagLength = 32;

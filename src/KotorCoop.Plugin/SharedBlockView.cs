@@ -691,6 +691,62 @@ internal sealed unsafe class SharedBlockView(byte* baseAddress)
     /// <summary>Pointer to the null-terminated start waypoint tag (32 bytes).</summary>
     public byte* TravelWaypoint => baseAddress + SharedBlock.OffsetTravelWaypoint;
 
+    // ---- transition cinematics ---------------------------------------------------
+
+    /// <summary>
+    /// Plugin -&gt; agent. Publishes the movie resrefs this instance's own transition is about
+    /// to play, and bumps the serial LAST so the agent can never read a half-written list.
+    ///
+    /// Called from the frame on which the engine's queue rises — the only frame that exists
+    /// for this, because the module load drains the queue and a movie then takes the main
+    /// thread away entirely.
+    /// </summary>
+    public void PublishCinematic(string[] names)
+    {
+        int count = Math.Min(names.Length, SharedBlock.CinematicCapacity);
+
+        for (int i = 0; i < SharedBlock.CinematicCapacity; i++)
+        {
+            byte* slot = baseAddress + SharedBlock.OffsetCinematicNames
+                + (i * SharedBlock.CinematicNameLength);
+
+            for (int b = 0; b < SharedBlock.CinematicNameLength; b++)
+            {
+                slot[b] = 0;
+            }
+
+            if (i >= count)
+            {
+                continue;
+            }
+
+            string name = names[i];
+            int length = Math.Min(name.Length, SharedBlock.CinematicNameLength - 1);
+            for (int b = 0; b < length; b++)
+            {
+                slot[b] = (byte)name[b];
+            }
+        }
+
+        *I32(SharedBlock.OffsetCinematicCount) = count;
+        *U32(SharedBlock.OffsetCinematicSerial) = *U32(SharedBlock.OffsetCinematicSerial) + 1;
+    }
+
+    /// <summary>Agent -&gt; plugin. How many movies the pending travel should queue.</summary>
+    public int TravelMovieCount
+    {
+        get
+        {
+            int count = *I32(SharedBlock.OffsetTravelMovieCount);
+            return count is > 0 and <= SharedBlock.CinematicCapacity ? count : 0;
+        }
+    }
+
+    /// <summary>Agent -&gt; plugin. Pointer to travel movie <paramref name="index"/>, 16 bytes
+    /// of null-padded ASCII.</summary>
+    public byte* TravelMovie(int index) =>
+        baseAddress + SharedBlock.OffsetTravelMovieNames + (index * SharedBlock.CinematicNameLength);
+
     public uint TravelApplied
     {
         get => *U32(SharedBlock.OffsetTravelApplied);
