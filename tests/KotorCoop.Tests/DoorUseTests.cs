@@ -153,15 +153,23 @@ public class DoorUseTests
     /// cross the threshold, and aiming AT the door lets it stop short. Measured: the engine's
     /// own use-action stopped 1.5 m away and nothing happened.
     /// </summary>
+    private static readonly Vec3 NoFacing = new() { X = 0f, Y = 0f, Z = 0f };
+
+    /// <summary>
+    /// The destination is on the far side of the door, chosen by the DOOR'S OWN facing — the
+    /// same axis, and the same sign test, that `CSWSDoor::OpenDoor` uses at 0x00589C97 to pick
+    /// its swing direction. A doorway has exactly one axis you can cross it on.
+    /// </summary>
     [Fact]
-    public void TheWalkAimsPastTheDoorAlongTheApproach()
+    public void TheWalkCrossesTheDoorOnItsOwnAxis()
     {
-        Vec3 player = new() { X = 0f, Y = 0f, Z = 0f };
         Vec3 door = new() { X = 10f, Y = 0f, Z = -1f };
+        Vec3 facing = new() { X = 1f, Y = 0f, Z = 0f };
+        Vec3 player = new() { X = 0f, Y = 0f, Z = 0f };   // on the -X side
 
-        Vec3 through = DoorUse.WalkThroughPoint(player, door, 2.5f);
+        Vec3 through = DoorUse.WalkThroughPoint(player, door, facing, 2.5f);
 
-        Assert.Equal(12.5f, through.X, 3);
+        Assert.Equal(12.5f, through.X, 3);   // pushed to the +X side
         Assert.Equal(0f, through.Y, 3);
 
         // Z is the door's, never interpolated: the move action snaps to the walkmesh, and a
@@ -169,31 +177,81 @@ public class DoorUseTests
         Assert.Equal(-1f, through.Z, 3);
     }
 
+    /// <summary>Approach from the other side and the target flips with it — otherwise the walk
+    /// would aim back the way the player came and never cross anything.</summary>
     [Fact]
-    public void TheOvershootFollowsTheDirectionOfApproach()
+    public void TheSideIsChosenFromWhereThePlayerStands()
+    {
+        Vec3 door = new() { X = 10f, Y = 0f, Z = 0f };
+        Vec3 facing = new() { X = 1f, Y = 0f, Z = 0f };
+
+        Vec3 fromMinus = DoorUse.WalkThroughPoint(new Vec3 { X = 0f }, door, facing, 2.5f);
+        Vec3 fromPlus = DoorUse.WalkThroughPoint(new Vec3 { X = 20f }, door, facing, 2.5f);
+
+        Assert.Equal(12.5f, fromMinus.X, 3);
+        Assert.Equal(7.5f, fromPlus.X, 3);
+    }
+
+    /// <summary>
+    /// The case the approach-vector version got wrong and its first test could not catch: a
+    /// diagonal approach. The door's axis still decides, so the target stays in the opening
+    /// instead of drifting into the wall beside it.
+    /// </summary>
+    [Fact]
+    public void ADiagonalApproachStillCrossesSquare()
+    {
+        Vec3 door = new() { X = 0f, Y = 0f, Z = 0f };
+        Vec3 facing = new() { X = 0f, Y = 1f, Z = 0f };     // the doorway opens along Y
+        Vec3 player = new() { X = -8f, Y = -1f, Z = 0f };   // well off to one side
+
+        Vec3 through = DoorUse.WalkThroughPoint(player, door, facing, 2f);
+
+        Assert.Equal(0f, through.X, 3);
+        Assert.Equal(2f, through.Y, 3);
+    }
+
+    /// <summary>With no usable facing it falls back to carrying on the way the player was
+    /// walking, which is better than refusing to move at all.</summary>
+    [Fact]
+    public void ADegenerateFacingFallsBackToTheApproach()
     {
         Vec3 player = new() { X = 4f, Y = 4f, Z = 0f };
         Vec3 door = new() { X = 1f, Y = 0f, Z = 0f };   // 5 m away, direction (-0.6, -0.8)
 
-        Vec3 through = DoorUse.WalkThroughPoint(player, door, 5f);
+        Vec3 through = DoorUse.WalkThroughPoint(player, door, NoFacing, 5f);
 
         Assert.Equal(1f + (-0.6f * 5f), through.X, 3);
         Assert.Equal(0f + (-0.8f * 5f), through.Y, 3);
     }
 
-    /// <summary>A zero-length approach has no direction to extend, and normalising it would
+    /// <summary>A zero-length vector has no direction to extend, and normalising it would
     /// produce NaN — which the engine would accept and then walk somewhere undefined.</summary>
     [Fact]
     public void StandingOnTheDoorAimsAtTheDoorRatherThanNowhere()
     {
         Vec3 door = new() { X = 7f, Y = -3f, Z = 2f };
 
-        Vec3 through = DoorUse.WalkThroughPoint(door, door, DoorUse.WalkThroughOvershoot);
+        Vec3 through = DoorUse.WalkThroughPoint(door, door, NoFacing, DoorUse.WalkThroughOvershoot);
 
         Assert.Equal(door.X, through.X, 3);
         Assert.Equal(door.Y, through.Y, 3);
         Assert.Equal(door.Z, through.Z, 3);
         Assert.False(float.IsNaN(through.X) || float.IsNaN(through.Y));
+    }
+
+    /// <summary>Standing exactly in the door's plane gives the sign test nothing to work with,
+    /// so it falls through to the approach rather than picking a side by rounding error.</summary>
+    [Fact]
+    public void StandingInTheDoorsPlaneFallsBackToTheApproach()
+    {
+        Vec3 door = new() { X = 0f, Y = 0f, Z = 0f };
+        Vec3 facing = new() { X = 1f, Y = 0f, Z = 0f };
+        Vec3 player = new() { X = 0f, Y = -5f, Z = 0f };   // dot with facing is 0
+
+        Vec3 through = DoorUse.WalkThroughPoint(player, door, facing, 2f);
+
+        Assert.Equal(0f, through.X, 3);
+        Assert.Equal(2f, through.Y, 3);
     }
 
     // ---- the party gate ------------------------------------------------------------

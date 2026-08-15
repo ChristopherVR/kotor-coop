@@ -147,6 +147,7 @@ are known not to be trustworthy. Both halves are useful; the second is the point
 | `0x005890D0` | `CSWSDoor::GetIsLinked` | Thiscall | 1 | `ret 0` | Odyssey |
 | `0x00589600` | `CSWSDoor::SetOpenState` | Thiscall | 3 | `ret-imm 8` | Odyssey |
 | `0x00589680` | `CSWSDoor::MoveToNextOpenState` | Thiscall | 1 | `ret 0` | Odyssey |
+| `0x00589C70` | `CSWSDoor::OpenDoor` | Thiscall | 2 | `ret-imm 4` | Odyssey |
 | `0x00590090` | `CSWSEncounter::GetInActivateArea` | Thiscall | 2 | `ret-imm 4` | Odyssey |
 | `0x00593BE0` | `CSWSEncounter::SpawnIfAppropriate` | Thiscall | 3 | `ret-imm 8` | Odyssey |
 | `0x005A4010` | `CSWSDialog::SendDialogEntry` | Thiscall | 5 | `ret-imm 16` | Odyssey |

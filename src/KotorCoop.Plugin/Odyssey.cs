@@ -1109,6 +1109,56 @@ internal static unsafe class Odyssey
         return door != 0 && *(nint*)door == DoorVtable ? door : 0;
     }
 
+    /// <summary>
+    /// CSWSDoor::OpenDoor 0x00589C70 — <c>__thiscall</c>, ONE argument (the OPENER's object
+    /// id); <c>ret 4</c> at 0x00589D3A.
+    ///
+    /// The engine's own door opening, and worth every byte of it rather than a state poke. It
+    /// resolves the opener, takes the dot product of (opener.position − door.position) with the
+    /// door's own orientation vector at +0x9C and picks swing state **1 or 2 from which side
+    /// the opener is standing** (0x00589C97–0x00589CE1); records the opener at +0x31C; calls
+    /// <c>SetOpenState(state, bDeferred=1)</c>; opens the door's LINKED twin the same way
+    /// (<c>GetLinkedObject 0x00589580</c>, so double doors move together); and finally runs the
+    /// door's OnOpen script at +0x228 through <c>CVirtualMachine::RunScript 0x005D0FC0</c>.
+    /// Not one of those five things is reproducible by writing a byte.
+    ///
+    /// It leaves the state PENDING, exactly as the engine does — the swing animation commits
+    /// it. <see cref="OpenDoorFully"/> commits it immediately instead, because a staging verb
+    /// needs the walkmesh open now rather than in a second and a half.
+    /// </summary>
+    private static readonly delegate* unmanaged[Thiscall]<nint, uint, void> OpenDoorFn =
+        (delegate* unmanaged[Thiscall]<nint, uint, void>)0x00589C70;
+
+    /// <summary>
+    /// Opens a door through the engine's own path and commits the swing at once, so the
+    /// walkmesh is open on this frame.
+    ///
+    /// The commit is <see cref="CommitDoorOpenState"/> (<c>MoveToNextOpenState 0x00589680</c>),
+    /// which moves pending → current and then calls <c>CSWSArea::BudgeCreatures 0x00508180</c>
+    /// with the door's position and its new open/closed bit — the update that makes the door
+    /// stop being an obstacle. That is why the animation cannot simply be skipped by writing
+    /// +0x2CC: the byte moves the collision without telling the area.
+    ///
+    /// Returns the open state the door actually ended up in, so the caller reports what the
+    /// engine did rather than what it asked for. MAIN THREAD ONLY.
+    /// </summary>
+    public static byte OpenDoorFully(nint door, uint openerId)
+    {
+        if (door == 0)
+        {
+            return 0;
+        }
+
+        OpenDoorFn(door, openerId);
+        MoveToNextOpenStateFn(door);
+
+        return GetDoorOpenState(door);
+    }
+
+    /// <summary>The object's facing vector (CSWSObject::Orientation, +0x9C). For a door this
+    /// is the axis <c>OpenDoor</c> itself uses to decide which side the opener is on.</summary>
+    public static Vec3 GetOrientation(nint obj) => *(Vec3*)(obj + ObjOrientation);
+
     // ---- door module transitions: reading the link, and asking to walk through it ----
     //
     // See docs/research/cinematics.md §8 and DoorUse. A door's transition is TWO phases, and

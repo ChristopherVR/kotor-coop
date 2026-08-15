@@ -47,8 +47,10 @@ internal sealed unsafe class CheatController(SharedBlockView block)
         _pendingHitPoints = 0;
         _pendingHitPointTarget = 0;
 
-        // A walk armed in the world we just left names a door that no longer exists.
+        // A walk armed in the world we just left names a door that no longer exists — and if
+        // the module changed BECAUSE the walk worked, the watch has nothing left to report.
         _walkFramesLeft = 0;
+        _walkWatchFrames = 0;
         _walkDoorId = 0;
     }
 
@@ -56,6 +58,7 @@ internal sealed unsafe class CheatController(SharedBlockView block)
     {
         ApplyPendingHitPoints();
         RetryPendingDoorWalk();
+        WatchDoorWalk();
 
         uint serial = block.CheatSerial;
         if (serial == _appliedSerial)
@@ -132,7 +135,7 @@ internal sealed unsafe class CheatController(SharedBlockView block)
                 break;
 
             case SharedBlock.CheatKindUseDoor:
-                UseDoor(player);
+                UseDoor(player, playerId);
                 break;
 
             default:
@@ -735,9 +738,18 @@ internal sealed unsafe class CheatController(SharedBlockView block)
     /// </summary>
     private const int WalkRetryFrames = 120;
 
+    /// <summary>
+    /// How long to watch a queued walk before reporting where it actually ended up. Ten
+    /// seconds at 60 fps: far longer than a four-metre walk, and the watch is cancelled the
+    /// moment the transition it was staging happens.
+    /// </summary>
+    private const int WalkWatchFrames = 600;
+
     private uint _walkDoorId;
     private Vec3 _walkTarget;
     private int _walkFramesLeft;
+    private int _walkWatchFrames;
+    private float _walkStartDistance;
 
     /// <summary>
     /// Queues the walk that carries the player through the door, and reports the engine's own
@@ -786,8 +798,60 @@ internal sealed unsafe class CheatController(SharedBlockView block)
             PluginHost.Log(
                 $"door: gave up queueing the walk through 0x{_walkDoorId:X} after "
                 + $"{WalkRetryFrames} frames (last failure {failure}) - nobody is walking anywhere");
+            _walkWatchFrames = 0;
         }
     }
+
+    /// <summary>
+    /// Says where the walk actually ENDED, once, some seconds after it was queued.
+    ///
+    /// This exists because of a specific ambiguity that cost a live round: the verb reported
+    /// "walking through door 0x4A" and the run produced no transition, and nothing anywhere
+    /// could distinguish "it walked into a shut door and stopped at the face" from "it mis-aimed
+    /// and walked somewhere else". The answer turned out to be the first, and it took a manual
+    /// `where` and a coordinate subtraction to find out. A staging verb that stages something
+    /// unobservable has staged nothing.
+    ///
+    /// It reports only on the frame the watch expires, and it is cancelled by
+    /// <see cref="Invalidate"/> — so the success case, where the module changes and the epoch
+    /// resets everything, prints nothing at all.
+    /// </summary>
+    private void WatchDoorWalk()
+    {
+        if (_walkWatchFrames <= 0)
+        {
+            return;
+        }
+
+        if (--_walkWatchFrames > 0)
+        {
+            return;
+        }
+
+        nint door = Odyssey.ResolveDoor(_walkDoorId);
+        nint player = Odyssey.GetPlayerCreaturePointer();
+
+        if (door == 0 || player == 0)
+        {
+            PluginHost.Log(
+                $"door: {WalkWatchFrames} frames after the walk, door 0x{_walkDoorId:X} or the "
+                + "player no longer resolves here - something moved worlds");
+            return;
+        }
+
+        Vec3 here = Odyssey.GetPosition(player);
+        float now = Distance(here, Odyssey.GetPosition(door));
+
+        PluginHost.Log(
+            $"door: {WalkWatchFrames} frames after the walk the player is {now:F1}m from "
+            + $"0x{_walkDoorId:X} (was {_walkStartDistance:F1}m), at "
+            + $"{here.X:F1},{here.Y:F1}; aimed at {_walkTarget.X:F1},{_walkTarget.Y:F1}. "
+            + "No transition happened - the door is still an obstacle, or the path stopped short.");
+    }
+
+    /// <summary>Door open state 0 = closed. 1 and 2 are the two swing directions, 3 is
+    /// destroyed (see <c>Odyssey.GetDoorOpenState</c>).</summary>
+    private const byte DoorClosedState = 0;
 
     /// <summary>Doors one module can hold. The Endar Spire's busiest area has a dozen; a
     /// hundred and twenty-eight is a ceiling, not an expectation, and the sweep stops there
@@ -832,7 +896,7 @@ internal sealed unsafe class CheatController(SharedBlockView block)
     /// as the player crosses. Everything before it is guard: <see cref="DoorUse.Decide"/> gets
     /// facts measured on this frame and nothing else, and every refusal names what it saw.
     /// </summary>
-    private void UseDoor(nint player)
+    private void UseDoor(nint player, uint playerId)
     {
         uint requestedId = block.CheatTarget;
         string text = ReadCheatText();
@@ -927,23 +991,50 @@ internal sealed unsafe class CheatController(SharedBlockView block)
             ? Encoding.ASCII.GetString(waypoint, waypointLength)
             : "(none)";
 
-        // Logged BEFORE the send, because the send is the last thing this instance is certain
-        // to do: if a movie is queued, the very next transition takes the main thread away and
-        // anything written afterwards would have to survive the window to be written at all.
+        // Logged BEFORE anything is done, because what follows may take the main thread away:
+        // if a movie is queued, the transition parks it inside WaitForMovie and nothing written
+        // afterwards would survive the window to be written at all. The OPEN STATE is part of
+        // the line for a reason paid for live - a walk that stopped short was indistinguishable
+        // from a walk that mis-aimed, and that ambiguity cost a whole round.
+        byte openState = Odyssey.GetDoorOpenState(door);
         PluginHost.Log(
-            $"door: using door 0x{doorId:X} at {distance:F1}m - it links to module "
-            + $"'{module}' at waypoint '{entry}'");
+            $"door: 0x{doorId:X} at {distance:F1}m links to module '{module}' at waypoint "
+            + $"'{entry}'; open state {openState}"
+            + (Odyssey.IsDoorLocked(door) ? ", LOCKED" : string.Empty));
+
+        // A CLOSED DOOR IS A WALL. Measured live: the walk-through ran and stopped 1.8 m short
+        // of the door face, because the closed door is a pathing obstacle and the path ended
+        // at it. So open it first, through the engine's own OpenDoor - which picks the swing
+        // side from where the opener stands, moves the linked twin, and runs the OnOpen script
+        // - and commit the swing at once so the walkmesh is open on this frame.
+        if (openState == DoorClosedState)
+        {
+            byte opened = Odyssey.OpenDoorFully(door, playerId);
+
+            PluginHost.Log(opened != DoorClosedState
+                ? $"door: opened 0x{doorId:X} (state {openState} -> {opened}) so the walk has "
+                  + "somewhere to go"
+                : $"door: 0x{doorId:X} REFUSED to open (still state {opened}) - the walk will "
+                  + "stop at its face, as it did before");
+
+            openState = opened;
+        }
 
         bool together = GatherPartyIfScattered();
 
         // WALK THROUGH IT. Not "use" it — see WalkThroughDoor for why using a transition door
         // provably cannot transition.
         Vec3 through = DoorUse.WalkThroughPoint(
-            Odyssey.GetPosition(player), Odyssey.GetPosition(door), DoorUse.WalkThroughOvershoot);
+            Odyssey.GetPosition(player),
+            Odyssey.GetPosition(door),
+            Odyssey.GetOrientation(door),
+            DoorUse.WalkThroughOvershoot);
 
         _walkDoorId = doorId;
         _walkTarget = through;
         _walkFramesLeft = WalkRetryFrames;
+        _walkWatchFrames = WalkWatchFrames;
+        _walkStartDistance = distance;
 
         if (!TryWalkThroughDoor(out int failure))
         {
@@ -959,6 +1050,7 @@ internal sealed unsafe class CheatController(SharedBlockView block)
             if (failure != 4)
             {
                 _walkFramesLeft = 0;
+                _walkWatchFrames = 0;
             }
 
             return;

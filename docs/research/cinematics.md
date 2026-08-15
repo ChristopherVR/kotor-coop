@@ -1201,12 +1201,70 @@ is the human case: a player walking their PC into the door.
   no-ops were not one bug wearing two hats; they were two different mistakes that happened to
   look alike.
 
-**So `usedoor` now walks the player THROUGH the door.** It queues `ActionMoveToLocation` (the
+**So `usedoor` walks the player THROUGH the door.** It queues `ActionMoveToLocation` (the
 routine that becomes `AIActionMoveToPoint`) to a point `DoorUse.WalkThroughOvershoot` = 2.5 m
-*past* the door along the approach direction, and lets the movement update post the event as
-the player crosses. Aiming at the door instead would let the walk stop short — which is
-precisely what the use-action did. The verb keeps its name because live runs are staged
-against it; the name is now a historical artefact and the log says what it really does.
+*past* the door, and lets the movement update post the event as the player crosses. Aiming at
+the door instead would let the walk stop short — which is precisely what the use-action did.
+The verb keeps its name because live runs are staged against it; the name is now a historical
+artefact and the log says what it really does.
+
+### 8.3b ⚠ A closed door is a wall, and that is the second thing that stopped it
+
+The first walk-through run got further than anything before it and still did not transition:
+the walk was queued, the PC *moved* — from (47.4, 116.0) to (46.6, 118.4) — and stopped
+**1.8 m short** of the door at (47.4172, 120.126), nowhere near the 2.5 m-past target. Moving
+and stopping short is a different failure from not moving at all, and it has an obvious
+physical reading: **`end_door10` was shut, and a shut door is a pathing obstacle, so the path
+ended at its face.**
+
+The engine agrees. `CSWSDoor::MoveToNextOpenState 0x00589680` commits pending → current
+(+0x2CD → +0x2CC) and then calls **`CSWSArea::BudgeCreatures 0x00508180`** with the door's
+position and its new open/closed bit — the update that makes the area stop treating the door
+as solid. That is exactly why a raw write to +0x2CC is forbidden: the byte moves the collision
+without telling the area.
+
+So the real sequence is **both events, in order** — open it, then cross it — and `usedoor` now
+does both:
+
+1. **Open**, if `GetDoorOpenState` reads 0, through the engine's own
+   **`CSWSDoor::OpenDoor 0x00589C70`** (`__thiscall`, `ret 4`, argument = the OPENER's object
+   id). It is worth the call rather than a state poke for five reasons, all of them in the
+   disassembly: it takes `dot(opener.position − door.position, door.orientation@+0x9C)` and
+   picks swing state **1 or 2 from which side the opener is standing** (0x00589C97–0x00589CE1);
+   it records the opener at +0x31C; it calls `SetOpenState(state, bDeferred=1)`, the engine's
+   own idiom; it opens the door's LINKED twin the same way (`GetLinkedObject 0x00589580`, so
+   double doors move together); and it runs the door's OnOpen script at +0x228. None of those
+   is reproducible by writing a byte.
+2. **Commit** immediately with `MoveToNextOpenState`, so the walkmesh is open on this frame
+   rather than at the end of a swing animation.
+3. **Then** queue the walk.
+
+⚠ `OpenDoor` does **not** consult the lock — it sets the state regardless. `end_door011.utd` is
+`Locked = 0` so it does not arise here, but the entry line reports the lock state anyway
+because a staging verb that quietly ignores a lock is lying about what it did.
+
+**The walk direction now comes from the door, not the approach.** `DoorUse.WalkThroughPoint`
+takes the door's own facing (`CSWSObject::Orientation`, +0x9C) and picks the far side with the
+sign of `dot(player − door, facing)` — the identical test `OpenDoor` uses for its swing. A
+doorway has one axis you can cross it on, and an approach-vector overshoot aims at the wall
+beside the opening whenever you arrive at an angle. The two agree only when you walk in dead
+square, which is how the approach-only version survived its first test: the teleport to
+(47.4, 116) happened to be due south of a door bearing −1.57079. It falls back to the approach
+when the facing is degenerate, and to the door itself when the player is standing on it.
+
+**And the outcome is now self-reporting.** Ten seconds after the walk is queued, and only if no
+transition happened, the verb logs where the player actually ended up:
+
+```
+door: 600 frames after the walk the player is N.Nm from 0x4A (was M.Mm), at X,Y;
+      aimed at X,Y. No transition happened - the door is still an obstacle, or the path
+      stopped short.
+```
+
+That line exists because its absence cost a round: "walked into a shut door" and "mis-aimed"
+left identical evidence, and the difference had to be recovered by hand from a `where` and a
+coordinate subtraction. The watch is cancelled by the epoch reset, so a successful run prints
+nothing.
 
 `Odyssey.MoveToLocation` declines with **failure 4** while the script VM is mid-call — the same
 transient refusal that orphaned a phantom on teardown until destroys were retried. The walk is
@@ -1365,8 +1423,9 @@ The host log should read, in this order:
 ```
 cinematic: the engine accepted '01c' onto the transition movie queue
 cinematic: the module transition has queued 1 movie(s): .\movies\01c.bik
+door: 0x<id> at N.Nm links to module 'end_m01ab' at waypoint 'from_01a'; open state 0
+door: opened 0x<id> (state 0 -> 1) so the walk has somewhere to go
 door: gathered 1 party member(s) to you
-door: using door 0x<id> at N.Nm - it links to module 'end_m01ab' at waypoint 'from_01a'
 cheat: walking through door 0x<id> (N.Nm) -> 'end_m01ab' (status 1)
 area transition pending: flushing spawned objects before the module is stored
 flush, before the module is stored: destroyed phantom 0x<id> (slot 0)
@@ -1498,5 +1557,7 @@ place a freed pointer can be read from.
 | **0x1E is built ONLY by movement** | `HandleSubAreaStateChanges 0x00516020` (×3, and only for party index 0 — `0x00516263`), `WalkUpdateLocation 0x0051BB10` (×2), `DriveUpdateLocation 0x0051CD20`, `WalkUpdateLocation_QuickWalk 0x0051D9C0`, `AIActionMoveToPoint 0x0051F4F0` (×2). **A transition is a creature CROSSING INTO the door, noticed by its own movement update** — which is why a `tp` snap can never fire one |
 | `0x00677D10` | `CSWCMessage::SendPlayerToServerInput_UseObject` — `ret 4`. ⚠ The **placeable** message: one caller, `CSWCPlaceable::UsePlaceable 0x00682660`. Server side type `0x0B` -> `0x00525B1A` -> `AddUseObjectAction 0x0057C810` -> `AIActionUseObject`, which walks to the action point and stops SHORT of the threshold. Cannot transition |
 | `0x00677D70` / `0x00683D90` | `SendPlayerToServerInput_ChangeDoorState` (`ret 8`, `0x2725` opens) / `CSWCDoor::ToggleDoorState`, its only caller. The door input message — and it cannot transition either, because it posts `0x1A` too |
+| **`0x00589C70`** | **`CSWSDoor::OpenDoor(openerId)`** — `ret 4`. Picks swing state 1 or 2 from `dot(opener − door, orientation@+0x9C)` (`0x00589C97`), records the opener at +0x31C, `SetOpenState(state, deferred)`, opens the LINKED twin (`GetLinkedObject 0x00589580`), runs OnOpen at +0x228. Ignores the lock |
+| `0x00589680` → `0x00508180` | `MoveToNextOpenState` commits pending → current and calls **`CSWSArea::BudgeCreatures`** with the door's position and its open bit — the update that stops the area treating the door as solid. **A closed door is a pathing obstacle**, which is why a walk-through ends at its face |
 | `0x005890D0` | `CSWSDoor::GetIsLinked` — `linked_to_flags` at **CSWSDoor+0x384**, 1 or 2 = a module transition. `linked_to` +0x388, `linked_to_module` +0x390 |
 | `0x0073D00C` / `0x004046BD` | the SwapBuffers IAT slot (movie-gated, so `FrameHook` is dead during a movie) / the `MainLoop` call site `MainLoopHook` rewrites |

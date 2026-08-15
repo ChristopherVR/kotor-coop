@@ -231,14 +231,50 @@ internal static class DoorUse
 
     /// <summary>
     /// The point to walk to so the player passes THROUGH <paramref name="door"/>: the door,
-    /// carried on along the approach direction by <see cref="WalkThroughOvershoot"/>.
+    /// carried on by <see cref="WalkThroughOvershoot"/> to the side the player is NOT on.
     ///
-    /// Falls back to the door itself when the player is standing on it, because a zero-length
-    /// approach vector has no direction to extend and normalising it would produce NaN — which
-    /// the engine would happily accept and then walk somewhere undefined.
+    /// The direction comes from the DOOR'S OWN FACING (<paramref name="facing"/>,
+    /// <c>CSWSObject::Orientation</c> at +0x9C) rather than from the approach vector, and the
+    /// side is chosen by the sign of <c>dot(player − door, facing)</c> — the identical test
+    /// <c>CSWSDoor::OpenDoor</c> uses at 0x00589C97 to decide which way the door swings. A
+    /// doorway has one axis you can cross it on; approaching it diagonally does not change
+    /// that, and an approach-vector overshoot would aim at the wall beside the opening. (The
+    /// two happen to agree when you walk in dead square, which is how an approach-only version
+    /// survived its first test.)
+    ///
+    /// Falls back to the approach direction when the facing is degenerate, and to the door
+    /// itself when the player is standing on it — a zero-length vector has no direction to
+    /// extend, and normalising it yields NaN, which the engine accepts and then walks
+    /// somewhere undefined.
     /// </summary>
-    public static Vec3 WalkThroughPoint(Vec3 player, Vec3 door, float overshoot)
+    public static Vec3 WalkThroughPoint(Vec3 player, Vec3 door, Vec3 facing, float overshoot)
     {
+        float axisX = facing.X;
+        float axisY = facing.Y;
+        float axisLength = MathF.Sqrt((axisX * axisX) + (axisY * axisY));
+
+        if (axisLength >= 0.01f)
+        {
+            axisX /= axisLength;
+            axisY /= axisLength;
+
+            // Which side is the player on? Cross to the other one.
+            float side = ((player.X - door.X) * axisX) + ((player.Y - door.Y) * axisY);
+
+            if (MathF.Abs(side) >= 0.01f)
+            {
+                float sign = side > 0f ? -1f : 1f;
+                return new Vec3
+                {
+                    X = door.X + (axisX * overshoot * sign),
+                    Y = door.Y + (axisY * overshoot * sign),
+                    Z = door.Z,
+                };
+            }
+        }
+
+        // No usable facing, or the player is exactly in the door's plane: carry on the way
+        // they were walking.
         float dx = door.X - player.X;
         float dy = door.Y - player.Y;
         float length = MathF.Sqrt((dx * dx) + (dy * dy));

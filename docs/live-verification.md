@@ -717,6 +717,59 @@ cannot appear on a co-op warp at all. Whether the `flush,` lines land before tha
 after it, or not at all is the entire answer; the three readings are `cinematics.md` §8.5, and
 the baked-phantom check for the departed module is §8.6.
 
+### ⚠ Two verification gaps found the hard way (2026-08-15)
+
+Both cost time this session and neither is about the game.
+
+* **`dotnet build` at the repo root does not compile the plugin.** `KotorCoop.slnx` lists five
+  projects and the test project; `KotorCoop.Plugin` is deliberately absent because it is
+  NativeAOT win-x86 and cannot be referenced. So a "Build succeeded" at the root says nothing
+  about plugin code, and the test project only compiles the handful of dependency-free plugin
+  files it links in. **`pwsh src\KotorCoop.Plugin\build.ps1` is the only compiler that ever
+  sees the rest**, and it caught a plain `CS0103` this round that the root build had passed
+  over. Run it before claiming a plugin change builds.
+* **Grepping the built `dinput8.dll` for a log string is not a reliable check.** NativeAOT does
+  not store every literal where a naive UTF-16 scan of the file finds it: control strings that
+  have shipped for weeks (`god was already ON`, `no target given`) read as absent by exactly
+  the same method that "confirms" others. It is useful as positive evidence and worthless as
+  negative evidence — a missing hit means nothing. The compiler is the gate.
+
+### ⚠ …and a closed door is a wall (the second half of the same problem)
+
+The first walk-through run got further than anything before it: the walk was queued, the PC
+**moved** — (47.4, 116.0) → (46.6, 118.4) — and stopped **1.8 m short** of the door at
+(47.4172, 120.126), nowhere near the 2.5 m-past target. Moving and stopping short is a
+different failure from not moving, and the reading is physical: `end_door10` was **shut**, and
+a shut door is a pathing obstacle, so the path ended at its face.
+
+The engine agrees: `CSWSDoor::MoveToNextOpenState 0x00589680` commits pending → current and
+then calls **`CSWSArea::BudgeCreatures 0x00508180`** with the door's position and its new
+open/closed bit — the update that stops the area treating the door as solid. (Which is also
+why writing +0x2CC directly is forbidden: the byte moves the collision without telling the
+area.)
+
+So the real sequence is **both events in order — open it, then cross it** — and `usedoor` now
+does both. It opens through the engine's own **`CSWSDoor::OpenDoor 0x00589C70`** (`ret 4`,
+argument = the opener's object id), which picks the swing side from
+`dot(opener − door, orientation@+0x9C)`, records the opener, opens the LINKED twin so double
+doors move together, and runs the OnOpen script — none of which a state poke reproduces — then
+commits the swing immediately so the walkmesh is open on this frame, then walks.
+
+Two more fixes in the same pass:
+
+* **The walk direction now comes from the door's own facing**, not the approach vector, with
+  the far side chosen by the same sign test `OpenDoor` uses. A doorway has one axis you can
+  cross it on; an approach overshoot aims at the wall beside the opening whenever you arrive at
+  an angle. They agreed only because the teleport to (47.4, 116) was due south of a door
+  bearing −1.57079.
+* **The outcome self-reports.** Ten seconds after the walk, and only if no transition happened,
+  the verb logs the player's distance to the door, where it ended up and where it was aimed.
+  That line exists because its absence cost this round: "walked into a shut door" and
+  "mis-aimed" left identical evidence and had to be told apart by hand.
+
+The entry line now also carries the door's **open state and lock state**, so the next run
+cannot be ambiguous about what it walked into.
+
 ### ⚠ A transition door is WALKED INTO, not used — the premise was backwards
 
 Run B's first real attempt: party gathered (the gather works — a second `usedoor` moments later
