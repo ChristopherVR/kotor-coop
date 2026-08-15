@@ -717,6 +717,44 @@ cannot appear on a co-op warp at all. Whether the `flush,` lines land before tha
 after it, or not at all is the entire answer; the three readings are `cinematics.md` §8.5, and
 the baked-phantom check for the departed module is §8.6.
 
+### ⚠ A transition door is WALKED INTO, not used — the premise was backwards
+
+Run B's first real attempt: party gathered (the gather works — a second `usedoor` moments later
+raised no gate warning at all), `door: using door 0x4A at 4.1m -> 'end_m01ab'`, console replied
+`walking to door 0x4A (1.5m)`, the PC visibly moved 4.1 m → 1.5 m — **and then nothing.** No
+`area transition pending:`, no flush, no stall, no conversation, no error.
+
+The binary explains all of it. `CSWSDoor::EventHandler` switches on the event type through the
+jump table at `0x0058C594`/`0x0058C5C8`, and **only event `0x1E`** reaches the transition arm
+(`0x0058C0BE`). Using an object posts **`0x1A`** — `AIActionUseObject` at `0x0057ECC0` and
+`AIActionOpenDoor` at `0x0057D661` both build that — which lands at `0x0058BD62`, the arm that
+runs the door's OnUsed script and nothing else.
+
+Event `0x1E` is built in exactly five functions and **every one is movement**:
+`HandleSubAreaStateChanges 0x00516020` (×3, and only for party index 0 — `0x00516263`),
+`WalkUpdateLocation 0x0051BB10` (×2), `DriveUpdateLocation 0x0051CD20`,
+`WalkUpdateLocation_QuickWalk 0x0051D9C0`, `AIActionMoveToPoint 0x0051F4F0` (×2). A module
+transition is **a creature crossing into the door's sub-area, noticed by its own movement
+update**.
+
+Three consequences, and they close every dead end of the last two passes:
+
+* **`tp` onto the door can never transition** — a `SetPosition` snap runs no movement update, so
+  nothing notices the crossing. Every "teleport next to the door and it does nothing" result was
+  this.
+* **A use/open input can never transition** — it posts `0x1A`. The 4.1 → 1.5 m walk was
+  `AIActionUseObject` pathing to the door's *action point*, which stops short of the threshold
+  by design.
+* **The PC's action queue works.** That same walk proves it. The two no-ops were not one bug
+  wearing two hats — they were two different mistakes that looked alike. The session is not
+  implicated and the disconnected control run is not needed.
+
+`usedoor` now **walks the player through the door**: `ActionMoveToLocation` to a point 2.5 m
+past it along the approach, letting `AIActionMoveToPoint` post the event as the PC crosses.
+`MoveToLocation` declines with failure 4 while the script VM is mid-call, so the walk is retried
+for up to 120 frames and says so if it gives up. Procedure unchanged otherwise —
+`cinematics.md` §8.3 has the full derivation.
+
 ### Why `blockpoke walk` no-ops on the player character — settled
 
 It queues NWScript `ActionMoveToLocation`, the AI action queue, which is what it was built and

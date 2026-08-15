@@ -219,6 +219,47 @@ internal static class DoorUse
     }
 
     /// <summary>
+    /// How far PAST the door to aim the walk.
+    ///
+    /// The transition fires while the creature is MOVING, from the movement update that
+    /// notices it entered the door's sub-area — not on arrival at a destination. So the
+    /// destination only has to make the path cross the threshold, and aiming a little beyond
+    /// the door is what guarantees that: aiming AT it lets the walk stop short (the engine's
+    /// own use-action stopped 1.5 m away, measured) and never cross anything.
+    /// </summary>
+    public const float WalkThroughOvershoot = 2.5f;
+
+    /// <summary>
+    /// The point to walk to so the player passes THROUGH <paramref name="door"/>: the door,
+    /// carried on along the approach direction by <see cref="WalkThroughOvershoot"/>.
+    ///
+    /// Falls back to the door itself when the player is standing on it, because a zero-length
+    /// approach vector has no direction to extend and normalising it would produce NaN — which
+    /// the engine would happily accept and then walk somewhere undefined.
+    /// </summary>
+    public static Vec3 WalkThroughPoint(Vec3 player, Vec3 door, float overshoot)
+    {
+        float dx = door.X - player.X;
+        float dy = door.Y - player.Y;
+        float length = MathF.Sqrt((dx * dx) + (dy * dy));
+
+        if (length < 0.01f)
+        {
+            return door;
+        }
+
+        return new Vec3
+        {
+            X = door.X + (dx / length * overshoot),
+            Y = door.Y + (dy / length * overshoot),
+
+            // Z is the engine's problem: the move action snaps to the walkmesh, and a height
+            // guessed from two points either side of a doorway is worse than none.
+            Z = door.Z,
+        };
+    }
+
+    /// <summary>
     /// Classifies the party gate from the three facts around a gather attempt.
     ///
     /// The rule that matters is the last one: <see cref="PartyGateOutcome.GatheredButStillApart"/>

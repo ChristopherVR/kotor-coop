@@ -143,6 +143,59 @@ public class DoorUseTests
         Assert.Equal(DoorUseVerdict.Use, Decide(distance: DoorUse.MaxUseDistance));
     }
 
+    // ---- walking THROUGH the door --------------------------------------------------
+
+    /// <summary>
+    /// The destination is past the door, not at it. A KOTOR module transition is posted by the
+    /// creature's own MOVEMENT update as it crosses into the door's sub-area (event 0x1E,
+    /// built only in `HandleSubAreaStateChanges`, `WalkUpdateLocation`, `DriveUpdateLocation`,
+    /// `WalkUpdateLocation_QuickWalk` and `AIActionMoveToPoint`) — so the walk only has to
+    /// cross the threshold, and aiming AT the door lets it stop short. Measured: the engine's
+    /// own use-action stopped 1.5 m away and nothing happened.
+    /// </summary>
+    [Fact]
+    public void TheWalkAimsPastTheDoorAlongTheApproach()
+    {
+        Vec3 player = new() { X = 0f, Y = 0f, Z = 0f };
+        Vec3 door = new() { X = 10f, Y = 0f, Z = -1f };
+
+        Vec3 through = DoorUse.WalkThroughPoint(player, door, 2.5f);
+
+        Assert.Equal(12.5f, through.X, 3);
+        Assert.Equal(0f, through.Y, 3);
+
+        // Z is the door's, never interpolated: the move action snaps to the walkmesh, and a
+        // height guessed from two points either side of a doorway is worse than none.
+        Assert.Equal(-1f, through.Z, 3);
+    }
+
+    [Fact]
+    public void TheOvershootFollowsTheDirectionOfApproach()
+    {
+        Vec3 player = new() { X = 4f, Y = 4f, Z = 0f };
+        Vec3 door = new() { X = 1f, Y = 0f, Z = 0f };   // 5 m away, direction (-0.6, -0.8)
+
+        Vec3 through = DoorUse.WalkThroughPoint(player, door, 5f);
+
+        Assert.Equal(1f + (-0.6f * 5f), through.X, 3);
+        Assert.Equal(0f + (-0.8f * 5f), through.Y, 3);
+    }
+
+    /// <summary>A zero-length approach has no direction to extend, and normalising it would
+    /// produce NaN — which the engine would accept and then walk somewhere undefined.</summary>
+    [Fact]
+    public void StandingOnTheDoorAimsAtTheDoorRatherThanNowhere()
+    {
+        Vec3 door = new() { X = 7f, Y = -3f, Z = 2f };
+
+        Vec3 through = DoorUse.WalkThroughPoint(door, door, DoorUse.WalkThroughOvershoot);
+
+        Assert.Equal(door.X, through.X, 3);
+        Assert.Equal(door.Y, through.Y, 3);
+        Assert.Equal(door.Z, through.Z, 3);
+        Assert.False(float.IsNaN(through.X) || float.IsNaN(through.Y));
+    }
+
     // ---- the party gate ------------------------------------------------------------
 
     /// <summary>

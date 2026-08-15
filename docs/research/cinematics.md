@@ -1109,9 +1109,13 @@ stall because on that path it always does.
 
 The blocker was blunt: with the movie queued, there was no way to make the engine start a
 transition. `end_m01aa` has one transition door (`end_door10` → `end_m01ab`) and **no area
-transition triggers at all** — all fourteen of its triggers are script triggers — so there is
-no walk-in route. And a KOTOR transition door is not walked into; it is USED. Walking the PC
-onto it does nothing, which is what the rig measured.
+transition triggers at all** — all fourteen of its triggers are script triggers.
+
+⚠ This paragraph originally continued "and a KOTOR transition door is not walked into; it is
+USED". **That was wrong, and §8.3 has the proof.** Walking into it is exactly what fires it;
+what does not work is *teleporting* onto it, because a `SetPosition` snap runs no movement
+update and the transition is posted by the movement update. The rig had measured a `tp`, not a
+walk, and the wrong conclusion was drawn from it — by me.
 
 Reading the engine settles why the distinction matters, and it is sharper than expected.
 **A door transition and a co-op warp end in the SAME three calls.** `CSWSDoor::EventHandler`
@@ -1147,7 +1151,7 @@ before it**, and it is what this whole investigation is about. The door path has
 That one asymmetry is the whole reason run A cannot answer the question and run B can. It also
 confirms, from the binary, the premise the flush branch was written on.
 
-### 8.3 The verb: `usedoor`
+### 8.3 The verb: `usedoor` — and the correction that matters
 
 ```
 usedoor                  the nearest module transition door
@@ -1155,24 +1159,60 @@ usedoor <tag>            that door by tag, e.g. usedoor end_door10
 usedoor <id>             that door by object id (0x1F, #31 or 31)
 ```
 
-The primitive is **`CSWCMessage::SendPlayerToServerInput_UseObject 0x00677D10`** — literally
-what clicking an object sends. The full chain, all of it read out of this binary:
+⚠ **CORRECTION (2026-08-15, third pass). A KOTOR module transition door is entered by WALKING
+INTO IT, not by using it — the exact opposite of what the first two passes of this section
+said, mine included.** The first live run failed on this and nothing about the failure was
+visible: the click was accepted, the PC walked from 4.1 m to 1.5 m, and then nothing at all
+happened — no transition, no conversation, no error.
 
-1. `SendPlayerToServerInput_UseObject(doorId)` — `__thiscall`, `ret 4` at `0x00677D4E`;
-2. `CSWSMessage::HandlePlayerToServerInputMessage 0x005254C0`, jump table at `0x0052684C`,
-   message type **`0x0B`** → `0x00525B1A`;
-3. that does `CSWSCreature::ActionManager(2)` then
-   **`CSWSObject::AddUseObjectAction 0x0057C810`** on the player;
-4. the queued action runs `CSWSObject::AIActionUseObject 0x0057E8C0`, which paths the PC to the
-   door's action point and posts the signal event (`0x0057ECC7` / `0x0057F3C9`);
-5. `CSWSDoor::EventHandler 0x0058B850` turns that event into phase 1 above.
+The binary settles it completely. `CSWSDoor::EventHandler` switches on the event's type word
+through the jump table at `0x0058C594` (indexed by `0x0058C5C8`), and **only event `0x1E`**
+reaches the transition arm at `0x0058C0BE` — `GetIsLinked`, then the `linked_to_module` length,
+then the `trans_pending` test that forks into phase 1 or phase 2. Using an object posts
+**`0x1A`**: both `AIActionUseObject` (`0x0057ECC0`) and `AIActionOpenDoor` (`0x0057D661`) build
+that type, and it lands at `0x0058BD62` — the arm that runs the door's OnUsed script and
+nothing else.
 
-**It is deliberately NOT the door's `OnUsed` script and not a hand-rolled module load.**
-`end_door10` has no `OnOpen`/`OnClick` script at all (§4.2) — the transition is engine
-behaviour, not script behaviour — and a hand-rolled `SetMoveToModule*` would be the co-op warp
-again, which is the thing run B exists to avoid. It is also not `CSWCDoor`'s client-side menu
-helpers (`GetTargetActions 0x00684410`, `MenuAction* 0x00683E50`): those have gates a mouse
-click satisfies and we do not, the same lesson `SendDialogRequest` already paid for.
+Event `0x1E` is built in exactly five functions, and **every one of them is movement**:
+
+| Builder | Address |
+| --- | --- |
+| `CSWSCreature::HandleSubAreaStateChanges` (3 sites) | `0x00516020` |
+| `CSWSCreature::WalkUpdateLocation` (2 sites) | `0x0051BB10` |
+| `CSWSCreature::DriveUpdateLocation` | `0x0051CD20` |
+| `CSWSCreature::WalkUpdateLocation_QuickWalk` | `0x0051D9C0` |
+| `CSWSCreature::AIActionMoveToPoint` (2 sites) | `0x0051F4F0` |
+
+So a module transition is **a creature crossing into the door's sub-area, noticed by its own
+movement update**. `HandleSubAreaStateChanges` additionally builds the event only when
+`CSWParty::GetIndex` returns 0 (`0x00516263`) — the party leader — which is exactly what the
+door's own `GetIsLeader` check at `0x0058C206` agrees with. `DriveUpdateLocation` in that list
+is the human case: a player walking their PC into the door.
+
+**Three consequences, and they explain every dead end of the last two passes:**
+
+* **`tp` onto or beside the door can never transition.** It is a `SetPosition` snap; no
+  movement update runs, so nothing notices a crossing. That is why teleporting the PC to the
+  doorway did nothing.
+* **Sending a use/open input can never transition.** It posts `0x1A`. This is what `usedoor`
+  did on its first version, and the 4.1 m → 1.5 m walk was `AIActionUseObject` pathing to the
+  door's *action point* — real movement, but it stops short of the threshold on purpose.
+* **The action queue on the player character works.** That same walk proves it. The two
+  no-ops were not one bug wearing two hats; they were two different mistakes that happened to
+  look alike.
+
+**So `usedoor` now walks the player THROUGH the door.** It queues `ActionMoveToLocation` (the
+routine that becomes `AIActionMoveToPoint`) to a point `DoorUse.WalkThroughOvershoot` = 2.5 m
+*past* the door along the approach direction, and lets the movement update post the event as
+the player crosses. Aiming at the door instead would let the walk stop short — which is
+precisely what the use-action did. The verb keeps its name because live runs are staged
+against it; the name is now a historical artefact and the log says what it really does.
+
+`Odyssey.MoveToLocation` declines with **failure 4** while the script VM is mid-call — the same
+transient refusal that orphaned a phantom on teardown until destroys were retried. The walk is
+therefore retried for up to 120 frames and **says so when it gives up**
+(`gave up queueing the walk through 0x<id> after 120 frames`), rather than reporting a walk
+that never started.
 
 **The guard** (`DoorUse.Decide`, pure and unit-tested) refuses, naming what it saw: no world;
 nothing answering to that tag or id; something that answers but is **not a door** (vtable, not
@@ -1183,6 +1223,19 @@ playing; or a door further than **40 m**, so a mistyped tag cannot send the PC o
 cause nobody is still watching for when it lands. A bare `usedoor` searches **linked doors
 only**, so it is incapable of doing anything except starting a transition — an ordinary door
 standing closer would merely open, which looks exactly like the command working.
+
+Costs worth knowing: `usedoor` with no argument does one full address-space sweep for the door
+vtable (`0x007498B0`) — the same machinery `FindByTag` has used on dialogue edges for months,
+tens of milliseconds, but it is on the game thread. **Prefer the tag form for a measured run**,
+so the sweep early-outs and cannot contribute to the number you are about to read.
+
+⚠ Kept but no longer called for doors: `CSWCMessage::SendPlayerToServerInput_UseObject
+0x00677D10` is the **placeable** message — its one caller in the binary is
+`CSWCPlaceable::UsePlaceable 0x00682660` — and the only door input sender is
+`CSWCDoor::ToggleDoorState 0x00683D90`, which sends `ChangeDoorState 0x00677D70` with `0x2725`
+to open. Neither transitions. The binding stays, declared honestly, because the address is
+right for a placeable and the comment is what stops the next person repeating the mistake.
+
 
 ### 8.3a The party gate, and why `usedoor` gathers
 
@@ -1267,7 +1320,8 @@ pwsh tools\blockpoke.ps1 -ProcId <host pid> console 'tp 47.4 116 -0.04'
 pwsh tools\blockpoke.ps1 -ProcId <host pid> console 'usedoor end_door10'
 #    log:    door: gathered N party member(s) to you
 #            door: using door 0x<id> at N.Nm - it links to module 'end_m01ab' at ...
-#    answer: walking to door 0x<id> (N.Nm) -> 'end_m01ab'
+#    answer: walking through door 0x<id> (N.Nm) -> 'end_m01ab'
+#    the PC then WALKS through the doorway; the transition fires as it crosses.
 
 # 6. Afterwards, always.
 pwsh tools\blockpoke.ps1 -ProcId <host pid> console 'moviewarp clear'
@@ -1313,7 +1367,7 @@ cinematic: the engine accepted '01c' onto the transition movie queue
 cinematic: the module transition has queued 1 movie(s): .\movies\01c.bik
 door: gathered 1 party member(s) to you
 door: using door 0x<id> at N.Nm - it links to module 'end_m01ab' at waypoint 'from_01a'
-cheat: walking to door 0x<id> (N.Nm) -> 'end_m01ab' (status 1)
+cheat: walking through door 0x<id> (N.Nm) -> 'end_m01ab' (status 1)
 area transition pending: flushing spawned objects before the module is stored
 flush, before the module is stored: destroyed phantom 0x<id> (slot 0)
 flush: destroyed item body 0x<id> (item 0x<id>) before the module is stored
@@ -1440,6 +1494,9 @@ place a freed pointer can be read from.
 | **`0x00565B00`** | **`CSWPartyTable::PositionParty`** — bare `ret`, no args; the engine's own party collection. One caller: `CServerExoAppInternal::MovePlayerToArea 0x004B3D10` @ `0x004B3E9E`. Uses `ComputeSafeLocation 0x004AEB60` + `SetPosition`/`SetOrientation` per member, resets follow data (`0x00637890`), clears `pt_solomode` (+0x190). ⚠ **CSWPartyTable+0x10C is a one-shot skip flag** tested at `0x00565B6E`: set means this call moves nobody and only clears it |
 | `0x004AEE70` | `CServerExoApp::GetPartyTable` — `mov eax,[ecx+4]; add eax,0x1B770; ret`. The table is embedded, so it cannot be null while the server lives. +0x00 member count, +0x04 ids |
 | `0x005235B0` | `CSWSMessage::HandlePlayerToServerInputWalkToWaypoint` — a complete implementation that **nothing ever sends** (input type 1; all 17 `SendPlayerToServerMessage 0x00677410` sites enumerated). Dead code, and the reason `blockpoke walk` cannot move the PC |
-| `0x00677D10` | **`CSWCMessage::SendPlayerToServerInput_UseObject`** — `ret 4`; what a click sends. Server side: `HandlePlayerToServerInputMessage 0x005254C0`, jump table `0x0052684C`, type `0x0B` -> `0x00525B1A` -> `ActionManager(2)` + `AddUseObjectAction 0x0057C810` -> `AIActionUseObject 0x0057E8C0` -> the door event |
+| **`0x0058C594` / `0x0058C5C8`** | **The door EventHandler's event jump table.** Only event **`0x1E`** reaches the transition arm (`0x0058C0BE`). Using an object posts **`0x1A`** (`AIActionUseObject` `0x0057ECC0`, `AIActionOpenDoor` `0x0057D661`), which lands at `0x0058BD62` — the OnUsed-script arm, and no transition |
+| **0x1E is built ONLY by movement** | `HandleSubAreaStateChanges 0x00516020` (×3, and only for party index 0 — `0x00516263`), `WalkUpdateLocation 0x0051BB10` (×2), `DriveUpdateLocation 0x0051CD20`, `WalkUpdateLocation_QuickWalk 0x0051D9C0`, `AIActionMoveToPoint 0x0051F4F0` (×2). **A transition is a creature CROSSING INTO the door, noticed by its own movement update** — which is why a `tp` snap can never fire one |
+| `0x00677D10` | `CSWCMessage::SendPlayerToServerInput_UseObject` — `ret 4`. ⚠ The **placeable** message: one caller, `CSWCPlaceable::UsePlaceable 0x00682660`. Server side type `0x0B` -> `0x00525B1A` -> `AddUseObjectAction 0x0057C810` -> `AIActionUseObject`, which walks to the action point and stops SHORT of the threshold. Cannot transition |
+| `0x00677D70` / `0x00683D90` | `SendPlayerToServerInput_ChangeDoorState` (`ret 8`, `0x2725` opens) / `CSWCDoor::ToggleDoorState`, its only caller. The door input message — and it cannot transition either, because it posts `0x1A` too |
 | `0x005890D0` | `CSWSDoor::GetIsLinked` — `linked_to_flags` at **CSWSDoor+0x384**, 1 or 2 = a module transition. `linked_to` +0x388, `linked_to_module` +0x390 |
 | `0x0073D00C` / `0x004046BD` | the SwapBuffers IAT slot (movie-gated, so `FrameHook` is dead during a movie) / the `MainLoop` call site `MainLoopHook` rewrites |

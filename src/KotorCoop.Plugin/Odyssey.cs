@@ -1145,7 +1145,18 @@ internal static unsafe class Odyssey
     /// CSWCMessage::SendPlayerToServerInput_UseObject 0x00677D10 — <c>__thiscall</c>, ONE
     /// argument (the object id). <c>ret 4</c> at 0x00677D4E and 0x00677D6A.
     ///
-    /// This is LITERALLY what clicking an object does. Its server handler is
+    /// ⚠ **THIS IS THE PLACEABLE MESSAGE, NOT THE DOOR ONE, AND IT CANNOT START A TRANSITION.**
+    /// Its ONE caller in the whole binary is `CSWCPlaceable::UsePlaceable 0x00682660`; the only
+    /// thing that sends a door input is `CSWCDoor::ToggleDoorState 0x00683D90`, which sends
+    /// `SendPlayerToServerInput_ChangeDoorState 0x00677D70` with 0x2725 to open. Neither one
+    /// transitions: a module transition is event **0x1E** on the door, and 0x1E is built only
+    /// by movement code (see `CheatController.UseDoor`). Sending this for a door queues
+    /// `AddUseObjectAction`, walks the player to the door's action point and stops there —
+    /// measured live: 4.1 m to 1.5 m, then nothing at all. Kept, declared honestly, because
+    /// the address is right for a PLACEABLE and the comment is what stops the next person
+    /// repeating the mistake.
+    ///
+    /// This is LITERALLY what clicking a placeable does. Its server handler is
     /// <c>CSWSMessage::HandlePlayerToServerInputMessage 0x005254C0</c>, whose jump table at
     /// 0x0052684C sends message type 0x0B to 0x00525B1A, which does
     /// <c>CSWSCreature::ActionManager(2)</c> and then

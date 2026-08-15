@@ -46,11 +46,16 @@ internal sealed unsafe class CheatController(SharedBlockView block)
     {
         _pendingHitPoints = 0;
         _pendingHitPointTarget = 0;
+
+        // A walk armed in the world we just left names a door that no longer exists.
+        _walkFramesLeft = 0;
+        _walkDoorId = 0;
     }
 
     public void OnFrame()
     {
         ApplyPendingHitPoints();
+        RetryPendingDoorWalk();
 
         uint serial = block.CheatSerial;
         if (serial == _appliedSerial)
@@ -722,6 +727,68 @@ internal sealed unsafe class CheatController(SharedBlockView block)
         return accepted;
     }
 
+    /// <summary>
+    /// How many frames a refused walk keeps being retried. `Odyssey.MoveToLocation` declines
+    /// with failure 4 while the script VM is mid-call — transient, frame-shaped, and the same
+    /// refusal that orphaned a phantom on teardown until destroys were retried. Two seconds of
+    /// frames is far more than a VM call lasts and still bounded.
+    /// </summary>
+    private const int WalkRetryFrames = 120;
+
+    private uint _walkDoorId;
+    private Vec3 _walkTarget;
+    private int _walkFramesLeft;
+
+    /// <summary>
+    /// Queues the walk that carries the player through the door, and reports the engine's own
+    /// refusal code rather than a boolean.
+    /// </summary>
+    private bool TryWalkThroughDoor(out int failure)
+    {
+        failure = 0;
+
+        uint playerId = Odyssey.GetPlayerObjectId();
+        if (playerId == 0)
+        {
+            failure = 1;
+            return false;
+        }
+
+        return Odyssey.MoveToLocation(playerId, _walkTarget, run: true, out failure);
+    }
+
+    /// <summary>
+    /// Retries a walk the VM was too busy to accept. Runs every frame, does nothing on almost
+    /// all of them, and — this is the point — SAYS SO when it gives up. A staging verb that
+    /// reports "walking" and then quietly stops trying is the exact silent-guard shape that has
+    /// cost this project several rounds.
+    /// </summary>
+    private void RetryPendingDoorWalk()
+    {
+        if (_walkFramesLeft <= 0)
+        {
+            return;
+        }
+
+        _walkFramesLeft--;
+
+        if (TryWalkThroughDoor(out int failure))
+        {
+            PluginHost.Log(
+                $"door: the walk through 0x{_walkDoorId:X} was accepted after "
+                + $"{WalkRetryFrames - _walkFramesLeft} retries");
+            _walkFramesLeft = 0;
+            return;
+        }
+
+        if (_walkFramesLeft == 0)
+        {
+            PluginHost.Log(
+                $"door: gave up queueing the walk through 0x{_walkDoorId:X} after "
+                + $"{WalkRetryFrames} frames (last failure {failure}) - nobody is walking anywhere");
+        }
+    }
+
     /// <summary>Doors one module can hold. The Endar Spire's busiest area has a dozen; a
     /// hundred and twenty-eight is a ceiling, not an expectation, and the sweep stops there
     /// rather than writing past the buffer.</summary>
@@ -740,10 +807,30 @@ internal sealed unsafe class CheatController(SharedBlockView block)
     /// (0x0058C185). Those intervening frames are the entire flush window, and a movie playing
     /// across them is the case docs/research/cinematics.md has never been able to stage.
     ///
-    /// The click itself is the engine's own input message, not a hand-rolled module load —
-    /// see <c>Odyssey.UseObject</c> for the full chain from the message to the door's event.
-    /// Everything before it is guard: <see cref="DoorUse.Decide"/> gets facts measured on this
-    /// frame and nothing else, and every refusal names what it saw.
+    /// ⚠ **THE VERB WALKS THROUGH THE DOOR; IT DOES NOT USE IT**, and the name is a historical
+    /// artefact kept because live runs are staged against it. Using a transition door provably
+    /// cannot transition, and the binary is unambiguous about why. `CSWSDoor::EventHandler`
+    /// switches on the event's type word through the jump table at 0x0058C594/0x0058C5C8, and
+    /// only **event 0x1E** reaches the transition arm at 0x0058C0BE (GetIsLinked, then
+    /// `linked_to_module` length, then the `trans_pending` test that forks into phase 1 or
+    /// phase 2). Using an object posts **0x1A** — both `AIActionUseObject` (0x0057ECC0) and
+    /// `AIActionOpenDoor` (0x0057D661) build that type — which lands at 0x0058BD62, the arm
+    /// that runs the door's OnUsed script and nothing else.
+    ///
+    /// Event 0x1E is built in exactly five functions, and every one of them is MOVEMENT:
+    /// `CSWSCreature::HandleSubAreaStateChanges` (0x00516020, three sites),
+    /// `WalkUpdateLocation` (0x0051BB10), `DriveUpdateLocation` (0x0051CD20),
+    /// `WalkUpdateLocation_QuickWalk` (0x0051D9C0) and `AIActionMoveToPoint` (0x0051F4F0).
+    /// A KOTOR module transition is a creature CROSSING INTO the door's sub-area, noticed by
+    /// its own movement update — which is also why `tp` onto the door does nothing: a
+    /// `SetPosition` snap runs no movement update, so nothing ever notices the crossing.
+    /// (`HandleSubAreaStateChanges` additionally builds the event only for party index 0, i.e.
+    /// the leader — 0x00516263 — which agrees with the door's own `GetIsLeader` check.)
+    ///
+    /// So this queues `ActionMoveToLocation` to a point just PAST the door
+    /// (<see cref="DoorUse.WalkThroughPoint"/>) and lets `AIActionMoveToPoint` post the event
+    /// as the player crosses. Everything before it is guard: <see cref="DoorUse.Decide"/> gets
+    /// facts measured on this frame and nothing else, and every refusal names what it saw.
     /// </summary>
     private void UseDoor(nint player)
     {
@@ -849,16 +936,41 @@ internal sealed unsafe class CheatController(SharedBlockView block)
 
         bool together = GatherPartyIfScattered();
 
-        if (!Odyssey.UseObject(doorId))
+        // WALK THROUGH IT. Not "use" it — see WalkThroughDoor for why using a transition door
+        // provably cannot transition.
+        Vec3 through = DoorUse.WalkThroughPoint(
+            Odyssey.GetPosition(player), Odyssey.GetPosition(door), DoorUse.WalkThroughOvershoot);
+
+        _walkDoorId = doorId;
+        _walkTarget = through;
+        _walkFramesLeft = WalkRetryFrames;
+
+        if (!TryWalkThroughDoor(out int failure))
         {
-            Answer(SharedBlock.CheatStatusEngineRefused, "no client message pipe to send the click on");
+            // Failure 4 is the script VM being mid-call, which is transient and frame-shaped —
+            // the same refusal the teardown destroys hit. Keep the retry armed and say so
+            // rather than reporting a walk that never started.
+            Answer(
+                failure == 4 ? SharedBlock.CheatStatusApplied : SharedBlock.CheatStatusEngineRefused,
+                failure == 4
+                    ? $"door 0x{doorId:X}: VM busy, retrying the walk for {WalkRetryFrames} frames"
+                    : $"the engine refused the walk to door 0x{doorId:X} (failure {failure})");
+
+            if (failure != 4)
+            {
+                _walkFramesLeft = 0;
+            }
+
             return;
         }
+
+        // Accepted first time: nothing left to retry.
+        _walkFramesLeft = 0;
 
         Answer(
             SharedBlock.CheatStatusApplied,
             together
-                ? $"walking to door 0x{doorId:X} ({distance:F1}m) -> '{module}'"
+                ? $"walking through door 0x{doorId:X} ({distance:F1}m) -> '{module}'"
                 : $"door 0x{doorId:X} -> '{module}' BUT the party is not together");
     }
 
