@@ -1019,6 +1019,16 @@ moment.
   per visit is the signature, and it is unmistakable.
 * Same check for items: a ground item body that persists across a re-entry with no session.
 
+⚠ **"They disappear on `disconnect`" was NOT true until 2026-08-15**, so a BAKED reading taken
+before that date is measuring a teardown leak rather than the transition window. Two causes,
+both fixed and written up in `client-control-lock.md`: `PhantomController`'s idle despawn was
+gated on a derived count it never recomputed, and — the one that matters for every spawner —
+a destroy REFUSED by the engine (`failure 4`, the script VM mid-call) cleared the slot anyway,
+so one declined call orphaned the body permanently with nothing left to retry it. Refusals are
+retried now, and `PluginHost.DrainSessionSpawns` sweeps all four spawners on the session's
+falling edge and says either how many it removed or that none were standing. If a
+`coop_phantom` survives a `disconnect` again, the log will name it and its failure code.
+
 ⚠ Do the check with a save that is **discarded afterwards**. A baked phantom is written into
 the save, and it also shifts the object-id counter for the rest of that playthrough.
 

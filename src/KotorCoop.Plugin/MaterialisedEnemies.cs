@@ -341,7 +341,8 @@ internal static unsafe class MaterialisedEnemies
     /// <summary>
     /// Destroys one live body for the pre-store flush window — same contract as
     /// PhantomController.FlushOneBody: a materialised body left standing when the area is
-    /// stored becomes a permanent resident of the saved module. Returns false once clean.
+    /// stored becomes a permanent resident of the saved module. Returns false once clean —
+    /// a refused destroy still returns true, because the body IS still there.
     /// </summary>
     public static bool FlushOneBody()
     {
@@ -374,7 +375,40 @@ internal static unsafe class MaterialisedEnemies
         _provenCount = 0;   // a module change reassigns every object id
     }
 
-    private static void Destroy(int slot, string reason)
+    /// <summary>
+    /// Destroys every body this mirror built and reports how many are still standing. The
+    /// session's counterpart to <see cref="FlushOneBody"/>: a full sweep, because a mirrored
+    /// enemy left standing in a disconnected player's game is baked into their next save the
+    /// same way a phantom is — and there can be up to <c>Capacity</c> of them.
+    /// </summary>
+    public static int ReleaseSession()
+    {
+        int standing = 0;
+
+        for (int i = 0; i < OwnerIds.Length; i++)
+        {
+            if (OwnerIds[i] != 0 && !Destroy(i, "session released"))
+            {
+                standing++;
+            }
+        }
+
+        return standing;
+    }
+
+    /// <summary>How many refusals before a body is written off. See PhantomController's
+    /// constant of the same name.</summary>
+    private const int MaxDestroyAttempts = 3;
+
+    private static readonly int[] DestroyAttempts = new int[SharedBlock.EnemyCapacity];
+
+    /// <summary>
+    /// ⚠ THE SLOT SURVIVES A REFUSAL, so the next pass tries again. A single declined
+    /// destroy — which is what the script VM returns whenever it is mid-call — used to
+    /// orphan the body permanently: this class forgot it and nothing ever retried.
+    /// </summary>
+    /// <returns>True once the slot is finished with (destroyed, or written off).</returns>
+    private static bool Destroy(int slot, string reason)
     {
         uint localId = LocalIds[slot];
         if (Bodies[slot] != 0)
@@ -382,16 +416,29 @@ internal static unsafe class MaterialisedEnemies
             Odyssey.ForgetGait(Bodies[slot]);
         }
 
-        Odyssey.DestroyObjectById(localId, out int failure);
-        if (_logged < 20 || failure != 0)
+        if (Odyssey.DestroyObjectById(localId, out int failure))
         {
-            _logged++;
-            PluginHost.Log(failure == 0
-                ? $"materialise: destroyed local 0x{localId:X} — {reason}"
-                : $"materialise: destroy refused for local 0x{localId:X} (failure {failure}) — {reason}");
+            if (_logged < 20)
+            {
+                _logged++;
+                PluginHost.Log($"materialise: destroyed local 0x{localId:X} — {reason}");
+            }
+        }
+        else if (++DestroyAttempts[slot] < MaxDestroyAttempts)
+        {
+            PluginHost.Log($"materialise: destroy refused for local 0x{localId:X} (failure "
+                + $"{failure}) — {reason}; retrying ({DestroyAttempts[slot]} of {MaxDestroyAttempts})");
+            return false;
+        }
+        else
+        {
+            PluginHost.Log($"materialise: GIVING UP on local 0x{localId:X} (failure {failure}) "
+                + $"after {MaxDestroyAttempts} attempts — {reason}; the body is LEFT STANDING "
+                + "and a save would bake it into the module");
         }
 
         Clear(slot);
+        return true;
     }
 
     private static void Clear(int slot)
@@ -401,6 +448,7 @@ internal static unsafe class MaterialisedEnemies
         Bodies[slot] = 0;
         LastSeen[slot] = 0;
         SpawnedAt[slot] = 0;
+        DestroyAttempts[slot] = 0;
     }
 
     /// <summary>CSWSCreature + this = the appearance.2da row, u16 — the same field the

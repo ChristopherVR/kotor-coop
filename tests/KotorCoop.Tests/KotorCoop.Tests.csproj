@@ -38,6 +38,7 @@
     <Compile Include="..\..\src\KotorCoop.Plugin\MovieStaging.cs" Link="Plugin\MovieStaging.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\ControlReturnRule.cs" Link="Plugin\ControlReturnRule.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\DoorUse.cs" Link="Plugin\DoorUse.cs" />
+    <Compile Include="..\..\src\KotorCoop.Plugin\SpawnDrainRule.cs" Link="Plugin\SpawnDrainRule.cs" />
   </ItemGroup>
 
   <ItemGroup>
