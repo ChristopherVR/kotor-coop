@@ -948,3 +948,29 @@ the plugin** — `KotorCoop.slnx` deliberately omits the NativeAOT win-x86 proje
 `src/KotorCoop.Plugin/build.ps1` ever type-checks most plugin code. And **grepping a built DLL
 for a log string is worthless as negative evidence**: literals that have shipped for weeks read
 as absent to the same scan that "confirms" others. Positive evidence only.
+
+### Measured in the same run: the follower does not see the movie
+
+The client half of run B, from its own log:
+
+```
+11:39:50.646  flush, before the module is stored: destroyed phantom 0x12D (slot 0)
+11:39:50.648  flush, before the module is stored: destroyed item body 0x131 (item 0x10001)
+11:39:50.652  travel: moving to module 'end_m01ab' on the session's authority
+11:39:50.663  epoch: world unloading; clearing phantom, item, combat and door state
+```
+
+It flushed correctly and followed correctly — and there is **no `cinematic:` line anywhere near
+the transition**, where the host logged a 7,407 ms stall. So the movie played for one player
+and not the other. That is not a regression and not a gate refusing it: the follower arrives
+through `TravelController` → `Odyssey.TravelToModule` and **nothing ever writes a movie into
+its queue**, so the engine plays an empty queue, which is a plain load.
+
+The receiving half is already proven — run A showed a movie queued by us on that same co-op
+travel path plays for real (15,531 ms). What is missing is only the wire: the owner announcing
+the names it is about to play, the host relaying them, and the follower's travel command
+carrying them. Two things make it its own pass rather than a footnote: it needs a new shared
+block region and therefore a version bump on both halves (the travel region `0x920`–`0x96C` is
+full), and on the canonical Endar Spire → Taris chain the follower must ACCUMULATE the movie
+lists of the transitions it correctly declines (the `stunt*` gate refuses `STUNT_00`) and hand
+the whole set — `["01c", "01f"]` — to the warp it finally does issue.
