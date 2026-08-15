@@ -183,6 +183,194 @@ confirm the early-return leaves GUI state consistent.)
   portrait/ability desync is ≤1 frame and self-heals; confirm the in-process early-return
   leaves GUI consistent.
 
+---
+
+# The lock that outlived the session (implemented 2026-08-15)
+
+Reported from play: *"when disconnecting, the Trask player is returned to the client, but
+when attempting to click on it, it's not doing anything."* Trask was back in the party and
+completely inert — and so was Tab, and so were the other two portraits.
+
+## The cause: one level nobody lowered
+
+Recipe B was implemented not as a hook but as a **byte patch** on the same funnel, in
+`DeathController` (see `death-handling.md`): five bytes at `ChangeCharacter` (`0x005F6B60`)
+jump to a stub that tests a flag word and, when set, executes `ret 8` before the prologue.
+That covers Tab, all three portraits and the engine's death auto-swap in one place, which is
+exactly what was wanted.
+
+The flag is a **level**, mirrored out of the shared block into the stub's word every single
+frame by `DeathController.OnFrame`:
+
+```
+_flags[FlagSuppressSwap] = block.SuppressControlSwap ? 1 : 0;   // block 0x1030
+```
+
+and the agent raises it, once, at the first death pump of a client session
+(`CoopAgent.PumpDeath` → `SetDeathSuppression(suppressGameOver: !allDown,
+suppressSwap: !session.IsEnemyAuthority)`). It is never lowered again while connected —
+correctly, since a client must never take a host-owned companion.
+
+**`KotorGameBridge.ClearCoopState()` did not clear it.** It cleared the peer count, the two
+presence counts, the dialogue flag, the encounter fields and the command — and nothing else.
+So on disconnect the word stayed at 1, `DeathController.OnFrame` (which has no command gate,
+deliberately) kept writing 1 into the stub every frame, and `ChangeCharacter` returned
+immediately **for the rest of the process**. Nothing about the companion was wrong; the
+click had nowhere to go.
+
+Three more agent-written levels were leaking through the same gap, each with its own visible
+symptom on a disconnected client:
+
+| block | field | what it kept doing |
+|---|---|---|
+| `0x102C` | game-over suppression | the death screen stayed swallowed — a solo party wipe just lay there |
+| `0x1358` | peer interaction locks | `InteractionLockController` (no command gate either) kept calling `ClearAllActions` on every locked creature ~6×/s: an NPC that ignores every order |
+| `0x3304` | peer party roster | `PartyRosterController` kept reconciling the local party to the host's last roster — dismiss a companion after disconnecting and it is put straight back |
+
+And one leak on the plugin side with no block field at all: `PartyPresenceController` holds
+mirrored companions in the **Neutral faction** and pinned at **min-1-hp** under
+`local_combat`, and its own comment claimed "this instance ceasing to mirror puts them back
+in the player faction on the next pass". It does not — that restore is behind the same
+command gate that stops the pass running. Both are SAVED state.
+
+## The fix: teardown is a list, and the command's falling edge is a release
+
+Two halves, deliberately symmetric.
+
+1. **`KotorGameBridge.SessionScopedBlockLevels`** — every agent-written LEVEL that belongs to
+   a session rather than to the process, named, in the order `ClearCoopState` lowers them.
+   Only levels: serials (travel, journal, revive, chat) are edge-compared against an applied
+   counter, and zeroing one re-fires the last event rather than cancelling it. `BlockCommand`
+   is **last**, because its falling edge is what runs the plugin's own release, and that
+   release must not read a block still full of the previous session's levels.
+   `SessionTeardownTests` pins the four fields above by offset, and pins the ordering.
+
+2. **`PluginHost.PumpSessionLifecycle`** — the one place a session is undone in-process. It
+   watches `block.Command` and, on the falling edge, calls `ReleaseSession()` on every
+   controller that holds engine or GUI state, in a fixed order: spectate camera and control
+   return first (before `PhantomController` starts destroying bodies), then the companion
+   bodies, then the suppressions, locks, roster and portraits. `DeathController.ReleaseSession`
+   zeroes the stub words directly, so a player whose agent DIED without tearing down still
+   gets their portraits back.
+
+The rule that follows from it: **anything a controller does to the world while a session is
+live belongs in that controller's `ReleaseSession`** — never in a second copy of the list.
+
+## The other half: control came back, the camera did not
+
+Recipe A reverts control by writing an object id from another process. The engine's own
+camera handoff is **inside** `ChangeCharacter` — the `SetCameraFollow` at `0x5F6C27`
+(`spectate-camera.md`) — so an external id write does not go through it.
+
+Consequence, and it is exactly the case the report asked about: a player who is playing AS
+Trask at the moment they **connect** (or when the unattended auto-reconnect in `CoopClient`
+fires) gets their PC's controls back with the camera still bolted to Trask, and cannot fix
+it, because the same session has just armed the patch that makes `ChangeCharacter` a no-op.
+Tab dead, portraits dead, view stuck on a body the host now drives.
+
+`ControlReturnController` closes it, as a **level, not a one-shot**:
+
+- Runs only where the lock runs — `Command == SpawnAndDrive && DamageDealtEnabled`, the
+  "this instance mirrors the world" predicate `PortraitController` already uses. A host owns
+  its companions and is untouched.
+- Notices when the controlled creature's id is one of this instance's party roster bodies
+  (`partyTable + 0x0C + 4*slot`, slots 0..8 — the whole roster, because at the instant of
+  connect the companion presence has not arrived yet). It **logs the id it saw** and arms a
+  hand-back; it does not move the camera then, because the controlled creature IS the
+  companion at that point.
+- When control lands back on the player's own character it calls
+  `Odyssey.RestoreCameraToControlledCreature()` (the engine's own
+  `CSWCModule::SetCameraFollow`) for a bounded budget of passes — bounded because that call
+  silently no-ops while the client is in combat mode, so one call lands or is lost with no
+  way to tell which, and because a permanent re-assert would make this the camera's owner.
+- Defers completely to dialogue and to the spectate camera (`IsConversationActive`, or the
+  controlled creature being down), and **keeps** the budget across the deferral so a
+  hand-back owed when a conversation opened still happens after it closes.
+- Writes no control id of its own. That lever is the agent's, at ~30 Hz; a second writer of
+  the same field in a second process is how two halves come to disagree about who the player
+  is. This half owns the camera only.
+
+The decision is `ControlReturnRule`, pure and unit-tested (`ControlReturnRuleTests`), the
+same split `SpectateCycle` uses. Kill switch `control_return=0`.
+
+Fail-safe direction is fixed: **the player controls their own PC**. The worst case if the
+hand-back cannot be made is the stock camera the engine restores at the next area attach —
+never a client driving a shared body.
+
+`SpectateController.ReleaseSession` is part of the same story and is not cosmetic: its
+`OnFrame` is command-gated, so a disconnect while spectating simply stopped it running, and
+the installed `CAurBehaviorCameraFollow` keeps the followed client creature as a raw pointer
+at `+0x14` which it reads every frame — while `PhantomController` despawns exactly that body,
+one per frame, starting immediately.
+
+## The third leak: the peer's body outlived the session (2026-08-15, found on the rig)
+
+The teardown above was confirmed live — `suppress: gameOver 0  swap 0` after `disconnect`,
+the whole release chain in one millisecond, `soloMode 0` — and the same run found one more
+leak of exactly this class. Forty seconds after the disconnect, with `remotes 0` and
+`command 0`, the client still reported `phantoms 1` and `creatures.ps1` still found the body:
+
+```
+0x158B1D9C   0x12D   coop_phantom   (19.01, 21.15, -1.27)   30 hp
+```
+
+Stable, not slow: frames advanced 27,222 → 37,506 with it still there.
+
+This is not a stray prop. `StoreCurrentModule` serialises every non-party creature on the way
+out of an area, so a body left standing becomes a **permanent resident of the saved module** —
+the departed player's corpse-shaped creature living in somebody's single-player game. It is
+the "baked phantom" the cinematics work hunts separately, whose CLEAN criterion is literally
+"no `coop_phantom` with the session down".
+
+**Two causes, both the shape this whole pass exists to remove.**
+
+1. **A gate on a derived count that was never recomputed.** `PhantomController`'s idle branch
+   read `if (_phantomCount > 0) FlushOneBody();`, and `_phantomCount` is derived from the slot
+   array by `PublishPhantomCount()` — which that branch never called. So it sat at whatever
+   the live session last left. Read one way it let the branch run against nothing forever;
+   read the other — a slot cleared by the active "peer left" path on the frame the command
+   fell — it stopped the branch running while a body was still standing. Either way the
+   agent's `phantoms N` readout was fiction, which is what made this take a second round to
+   see. The gate is gone; `FlushOneBody` is an eight-slot scan that terminates by itself.
+
+2. **A refused destroy cleared the slot anyway — in all four spawners.**
+   `Odyssey.DestroyObjectById` returns `failure = 4` when `CallStackSize != 0`, i.e. whenever
+   the script VM is mid-call, which on a game running area heartbeats is a large fraction of
+   frames. Teardown lands on an arbitrary frame and made **exactly one attempt**.
+   `PhantomController.DestroySlot`, `ItemController`, `MaterialisedEnemies.Destroy` and
+   `MapMarkerController` all then cleared their bookkeeping regardless, so one declined call
+   orphaned the body permanently: the controller forgot it and nothing ever retried.
+
+**The fix.** A refusal now KEEPS the slot, so the next pass tries again;
+`MaxDestroyAttempts = 3` writes it off after that — bounded, because the pre-store flush
+window is finite and a wedged transition is worse than a leaked body — and the write-off logs
+loudly, naming the id and the failure code, because at that point a save really would bake it
+in. `FlushOneBody` returning true on a refusal is now correct rather than incidental: the body
+IS still there and the caller must come back for it.
+
+`PluginHost.DrainSessionSpawns` is the session's counterpart, armed by the release edge and
+run every frame before any world controller until clean: a full sweep of all four spawners,
+bounded by `SpawnDrainPasses = 12` (comfortably more than the retry cap needs). Its reporting
+is `SpawnDrainRule`, pure and unit-tested, and the property the tests pin is that **it never
+ends silently** — `nothing it spawned was left standing` is an outcome, not an absence of one,
+because in a log those two are the same thing and that ambiguity is what cost the round.
+
+## Verification tags (this section)
+
+- VERIFIED (source + the reported symptom): the swap suppression is a block level, mirrored
+  into the stub every frame, raised once per client session and not cleared by teardown.
+- VERIFIED (disasm, unchanged from above): `ChangeCharacter 0x005F6B60` is the single funnel;
+  `SetCameraFollow 0x0063F9D0` is called from inside it at `0x5F6C27`.
+- LIVE-VERIFIED 2026-08-15 (END_M01AA, two instances): after `console 'disconnect'` on the
+  client, `blockpoke death` reads `suppress: gameOver 0  swap 0`, `state` reads `command 0`,
+  the whole release chain logs within one millisecond, and `partystate` reads
+  `companions 1  soloMode 0` with Trask present. The click itself is still unverified — the
+  rig cannot inject keystrokes this game accepts — but every value the memory can show is
+  released.
+- NEEDS-LIVE: that `phantoms 0` and no `coop_phantom` remain after a disconnect (the drain
+  above); that a companion mirrored under `local_combat` reads faction PLAYER afterwards;
+  that connecting while controlling Trask ends with the camera on the PC.
+
 ## Key addresses
 
 ```

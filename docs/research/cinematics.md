@@ -998,6 +998,11 @@ and neither log contains `FIRST-CHANCE access violation`.
 
 ### 7.7 The check for a baked-in phantom
 
+⚠ **SUPERSEDED BY §8.6.** The tag-and-count recipe below reads `tools/creatures.ps1`, which is
+a raw vtable sweep with no liveness gate and lists destroyed bodies as live ones. Use §8.6,
+which asks the engine's own object array through `resolve <id>`. The paragraph is kept because
+the reasoning about the TAG is still right; only the verdict step was wrong.
+
 The thing nobody has ever looked for. After the run, go back to the module that was stored and
 count the bodies the co-op blueprint leaves behind:
 
@@ -1018,6 +1023,16 @@ moment.
   visibly, **two** of them after re-entering the module a second time. The count growing by one
   per visit is the signature, and it is unmistakable.
 * Same check for items: a ground item body that persists across a re-entry with no session.
+
+⚠ **"They disappear on `disconnect`" was NOT true until 2026-08-15**, so a BAKED reading taken
+before that date is measuring a teardown leak rather than the transition window. Two causes,
+both fixed and written up in `client-control-lock.md`: `PhantomController`'s idle despawn was
+gated on a derived count it never recomputed, and — the one that matters for every spawner —
+a destroy REFUSED by the engine (`failure 4`, the script VM mid-call) cleared the slot anyway,
+so one declined call orphaned the body permanently with nothing left to retry it. Refusals are
+retried now, and `PluginHost.DrainSessionSpawns` sweeps all four spawners on the session's
+falling edge and says either how many it removed or that none were standing. If a
+`coop_phantom` survives a `disconnect` again, the log will name it and its failure code.
 
 ⚠ Do the check with a save that is **discarded afterwards**. A baked phantom is written into
 the save, and it also shifts the object-id counter for the rest of that playthrough.
@@ -1069,8 +1084,11 @@ cinematic: the main thread was gone for 15531 ms
 played. `AddMoveToModuleMovie` is correctly wired and **the co-op warp path carries a queued
 movie through `CServerExoAppInternal::StartNewModule` exactly as §1.5 said it would** — the
 design lever is now VERIFIED live, not just statically. The baked-phantom check afterwards was
-clean: back in `end_m01aa`, two `coop_phantom` rows resolving to **one** distinct id (`0x139`)
-for one peer.
+clean — but read §8.6 before believing it. It was `two coop_phantom rows, one distinct id
+(0x139), for one peer`, and both halves of that criterion have since been shown unsound: a raw
+vtable sweep lists freed blocks as live creatures, so neither the row count nor the distinct-id
+count is evidence either way. Run A is **not a CLEAN result**; it is an unmeasured one. Nothing
+about run A depended on it.
 
 `moviewarp queue 01c` also works, and produced the independent confirmation §7.6 promised —
 the array walk, on a different code path from the write:
@@ -1325,27 +1343,50 @@ Two more things to record either way:
 ### 8.6 The baked-phantom check for the DEPARTED module
 
 The departed module is `end_m01aa` (run B leaves it for `end_m01ab`). After the run, go back and
-count the bodies the co-op blueprint left behind:
+ask whether any body the co-op blueprint spawned is still a real object there.
+
+⚠ **`tools/creatures.ps1` cannot answer that question, and an earlier version of this section
+was wrong to ask it.** It is a raw sweep for the `CSWSCreature` vtable with no liveness gate,
+and `operator delete` clears neither the vtable nor the object id — so a destroyed creature
+keeps reading as one until its memory is reused. Measured on 2026-08-15, after a teardown that
+provably destroyed the body: the plugin logged `destroyed phantom 0x12D`, `state` reported
+`phantoms 0`, and `creatures.ps1` **still listed `0x12D coop_phantom`**. It is the same artifact
+that cost the enemy-census hunt, and counting distinct ids does not save the criterion either —
+one destroyed body still leaves exactly one row. As written it would have reported a freed
+block as a baked body and sent everyone hunting a transition-window bug that was not there.
+
+**Ask the engine's object array instead.** The sweep is only a way to produce CANDIDATES; the
+verdict belongs to `resolve`:
 
 ```powershell
 pwsh tools\blockpoke.ps1 -ProcId <pid> console 'warp end_m01aa'
-pwsh tools\creatures.ps1 -ProcId <pid>
+pwsh tools\creatures.ps1  -ProcId <pid>                       # candidates only
+pwsh tools\blockpoke.ps1 -ProcId <pid> console 'resolve 0x12D'  # the verdict, per candidate id
 ```
 
-Count creatures **tagged `coop_phantom`**, and count DISTINCT OBJECT IDS — run A's check found
-two rows for one id, which is the same body seen twice and is not a leak. The tag is the
-identifier that matters: the census already excludes by it, because the id table clears before
-a dying body finishes dying and the tag survives to the last readable moment
-(`transition-window-races.md` §2).
+`resolve` asks the game thread, in one frame, whether the engine still holds that id:
 
-* **CLEAN**: distinct `coop_phantom` ids == peers standing in that module right now (normally
-  one), and they disappear on `disconnect`.
-* **BAKED**: a `coop_phantom` still there with the session down, or the distinct count growing
-  by one on each re-entry. The growth is the unmistakable signature.
-* Same for items: a ground item body that survives a re-entry with no session.
+```
+resolve: 0x12D: ... array(+0x1005C) 0x345E138  array(engine) 0x345E138
+              | engine 0x0  walk 0x0  resolve 0x0        <- nothing holds it: the row is a ghost
+```
 
-⚠ Do it on a save you then **discard**. A baked phantom is written into the save and shifts the
-object-id counter for good.
+* **CLEAN**: every `coop_phantom` candidate that is not a peer standing there right now
+  **resolves to 0**. A row with no object behind it is a freed block, not a leak.
+* **BAKED**: a `coop_phantom` id that **still resolves** with the session down — or, most
+  visibly, the count of *resolving* ones growing by one on each re-entry.
+* Same rule for items: a ground item body that still resolves after a re-entry with no session.
+
+⚠ **Any BAKED reading taken before 2026-08-15 was measuring something else.**
+`Odyssey.DestroyObjectById` declines with failure 4 while the script VM is mid-call, and all
+four spawners used to clear their bookkeeping regardless of the result — so one refused call
+orphaned a body permanently and "they vanish on `disconnect`" was simply not true. Destroys are
+retried now (bounded at 3, and a write-off names the id and the failure code). A pre-fix BAKED
+result is a teardown leak, not a transition-window one.
+
+⚠ Do it on a save you then **discard**. A genuinely baked phantom is written into the save and
+shifts the object-id counter for good.
+
 
 ### 8.7 If it crashes
 

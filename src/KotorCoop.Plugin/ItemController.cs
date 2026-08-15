@@ -54,7 +54,8 @@ internal sealed unsafe class ItemController(SharedBlockView block)
     /// replicated item left on the floor when the area is stored gets serialised into the
     /// saved module. The slot's status deliberately goes back to None, NOT Vanished —
     /// Vanished means "picked up here" and would propagate a session-wide removal.
-    /// Returns false once nothing is left to destroy.
+    /// Returns false once nothing is left to destroy — a refused destroy still returns true,
+    /// because the body IS still on the floor and the caller must come back for it.
     /// </summary>
     public bool FlushOneBody()
     {
@@ -65,18 +66,81 @@ internal sealed unsafe class ItemController(SharedBlockView block)
                 continue;
             }
 
-            Odyssey.DestroyObjectById(_objectIds[slot], out int failure);
-            PluginHost.Log(failure == 0
-                ? $"flush: destroyed item body 0x{_objectIds[slot]:X} (item 0x{_itemIds[slot]:X}) before the module is stored"
-                : $"flush: destroy refused for item body 0x{_objectIds[slot]:X} (failure {failure})");
-
-            _states[slot] = SharedBlock.ItemStateNone;
-            _objectIds[slot] = 0;
-            block.SetItemStatus(slot, _itemIds[slot], 0, SharedBlock.ItemStateNone, 0);
+            DestroyBody(slot, "flush, before the module is stored");
             return true;
         }
 
         return false;
+    }
+
+    /// <summary>
+    /// Destroys every item body this controller put on the floor and reports how many are
+    /// still there. The session's counterpart to <see cref="FlushOneBody"/>: a full sweep,
+    /// because nothing is waiting behind teardown, and a replicated item left lying in a
+    /// disconnected player's game is baked into their next save exactly like a phantom.
+    /// </summary>
+    public int ReleaseSession()
+    {
+        int standing = 0;
+
+        for (int slot = 0; slot < SharedBlock.ItemSlotCapacity; slot++)
+        {
+            if (_states[slot] != SharedBlock.ItemStateAlive)
+            {
+                continue;
+            }
+
+            if (!DestroyBody(slot, "session released"))
+            {
+                standing++;
+            }
+        }
+
+        return standing;
+    }
+
+    /// <summary>How many refusals before a body is written off. See PhantomController's
+    /// constant of the same name: a declined destroy is normally the script VM being
+    /// mid-call, which the next frame clears.</summary>
+    private const int MaxDestroyAttempts = 3;
+
+    private readonly int[] _destroyAttempts = new int[SharedBlock.ItemSlotCapacity];
+
+    /// <summary>
+    /// Destroys one slot's body.
+    ///
+    /// ⚠ THE SLOT SURVIVES A REFUSAL, so the next pass tries again — the same orphaning that
+    /// left a peer's phantom standing after a disconnect applied here to every replicated
+    /// item on the floor. The status deliberately goes back to None, NOT Vanished: Vanished
+    /// means "picked up here" and would propagate a session-wide removal.
+    /// </summary>
+    /// <returns>True once the slot is finished with (destroyed, or written off).</returns>
+    private bool DestroyBody(int slot, string reason)
+    {
+        uint objectId = _objectIds[slot];
+
+        if (Odyssey.DestroyObjectById(objectId, out int failure))
+        {
+            PluginHost.Log($"{reason}: destroyed item body 0x{objectId:X} (item 0x{_itemIds[slot]:X})");
+        }
+        else if (++_destroyAttempts[slot] < MaxDestroyAttempts)
+        {
+            PluginHost.Log($"{reason}: destroy refused for item body 0x{objectId:X} "
+                + $"(failure {failure}) — retrying ({_destroyAttempts[slot]} of {MaxDestroyAttempts})");
+            return false;
+        }
+        else
+        {
+            PluginHost.Log($"{reason}: GIVING UP on item body 0x{objectId:X} (failure "
+                + $"{failure}) after {MaxDestroyAttempts} attempts — it is LEFT ON THE FLOOR "
+                + "and a save would bake it into the module");
+        }
+
+        _states[slot] = SharedBlock.ItemStateNone;
+        _objectIds[slot] = 0;
+        _destroyAttempts[slot] = 0;
+        block.SetItemStatus(slot, _itemIds[slot], 0, SharedBlock.ItemStateNone, 0);
+        return true;
     }
 
     public void OnFrame()
@@ -360,6 +424,7 @@ internal sealed unsafe class ItemController(SharedBlockView block)
         _objectIds[slot] = 0;
         _states[slot] = SharedBlock.ItemStateNone;
         _areaIds[slot] = 0;
+        _destroyAttempts[slot] = 0;
         block.SetItemStatus(slot, 0, 0, SharedBlock.ItemStateNone, 0);
     }
 }

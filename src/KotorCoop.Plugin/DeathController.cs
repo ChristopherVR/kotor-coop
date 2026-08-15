@@ -87,6 +87,36 @@ internal sealed unsafe class DeathController(SharedBlockView block)
         }
     }
 
+    /// <summary>
+    /// The session ended: disarm both byte patches immediately.
+    ///
+    /// ⚠ THIS IS THE FIX FOR THE UNCLICKABLE COMPANION. The two suppressions are LEVELS the
+    /// agent raises in the shared block and <see cref="OnFrame"/> mirrors into the stubs every
+    /// frame — and a client raises the swap suppression once, at the first death pump, and
+    /// never lowers it. Nothing lowered it on teardown either, so after a disconnect the guard
+    /// stayed armed for the life of the process: <c>ChangeCharacter</c> returned immediately,
+    /// which is Tab, EVERY party portrait and the engine's own death auto-swap all inert. The
+    /// player got Trask back in the party and could not click him.
+    ///
+    /// The block is now cleared on teardown too (KotorGameBridge.SessionScopedBlockLevels), so
+    /// this is the second of two locks on the same door: OnFrame would lower the stubs anyway
+    /// on its next in-world frame, but only if the agent got as far as clearing the block. A
+    /// player whose agent died without tearing down still gets their portraits back here.
+    /// </summary>
+    public void ReleaseSession()
+    {
+        if (_flags == null)
+        {
+            return;
+        }
+
+        _flags[FlagSuppressSwap] = 0;
+        _flags[FlagSuppressGameOver] = 0;
+        _flags[FlagGameOverWanted] = 0;
+
+        PluginHost.Log("death: suppressions lifted — Tab and the party portraits answer again");
+    }
+
     public void OnFrame()
     {
         if (_flags == null)

@@ -58,6 +58,22 @@ internal sealed class MapMarkerController(SharedBlockView block)
         return false;
     }
 
+    /// <summary>
+    /// Destroys every peer pin this controller created and reports how many are left (always
+    /// zero — <c>DestroyMapMarker</c> reports no failure, so there is nothing to retry). Part
+    /// of the session release for the same reason as the phantoms: a waypoint the session
+    /// created is still an object the module store would serialise.
+    /// </summary>
+    public int ReleaseSession()
+    {
+        while (FlushOneBody())
+        {
+            // One per call by construction; sweep them all, teardown has nothing waiting.
+        }
+
+        return 0;
+    }
+
     public void OnFrame()
     {
         if (_countdown > 0)

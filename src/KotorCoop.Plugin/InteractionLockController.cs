@@ -93,6 +93,24 @@ internal sealed unsafe class InteractionLockController(SharedBlockView block)
         _heldLogged = -1;
     }
 
+    /// <summary>
+    /// The session ended: stop holding creatures still on behalf of players who are gone.
+    ///
+    /// ⚠ THIS PASS HAS NO COMMAND GATE, which is deliberate (a lock has to survive the frames
+    /// around a transition) and is exactly why it needed releasing explicitly. A lock left
+    /// standing keeps calling ClearAllActions on the named creature several times a second
+    /// forever — an NPC, quite possibly a companion, that stands there ignoring every order
+    /// the player gives it. The agent now lowers the count on teardown as well; this covers
+    /// the case where it never got the chance.
+    /// </summary>
+    public void ReleaseSession()
+    {
+        block.ClearInteractionLocks();
+        Invalidate();
+        _lockCountLogged = -1;
+        PluginHost.Log("interaction: dropped every peer lock — nobody else is holding anything here");
+    }
+
     public void OnFrame()
     {
         if (!_enabled)

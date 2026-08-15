@@ -8,4 +8,15 @@
     <ProjectReference Include="..\KotorCoop.Protocol\KotorCoop.Protocol.csproj" />
   </ItemGroup>
 
+  <!--
+    The shared-block offsets are deliberately private: nothing outside the bridge should be
+    poking the plugin's block by address. The ONE thing worth asserting from a test is the
+    teardown LIST (KotorGameBridge.SessionScopedBlockLevels) — a field missing from it is a
+    session level that survives a disconnect, which is exactly the class of bug the list was
+    introduced for. Reaching that without making every offset public needs this.
+  -->
+  <ItemGroup>
+    <InternalsVisibleTo Include="KotorCoop.Tests" />
+  </ItemGroup>
+
 </Project>

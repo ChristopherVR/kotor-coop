@@ -183,7 +183,8 @@ internal sealed unsafe class PhantomController(SharedBlockView block)
     /// Destroys one live phantom body through the engine, for the pre-store flush window:
     /// a phantom left standing when the area is stored gets serialised into the saved
     /// module as a permanent NPC. One per call keeps the flush allocation-free and cheap.
-    /// Returns false once nothing is left to destroy.
+    /// Returns false once nothing is left to destroy — a refused destroy still returns true,
+    /// because the body IS still there and the caller must come back for it.
     /// </summary>
     public bool FlushOneBody()
     {
@@ -205,7 +206,50 @@ internal sealed unsafe class PhantomController(SharedBlockView block)
     }
 
     /// <summary>
+    /// Destroys every body this controller still holds and reports how many are STILL
+    /// standing afterwards, so the caller can come back for the refusals.
+    ///
+    /// ⚠ A FULL SWEEP, not the one-per-frame the flush window uses. Teardown has nothing
+    /// waiting on it — no store about to serialise the area, no warp queued behind it — and
+    /// a peer's body left standing in somebody's single-player game is the whole defect.
+    /// </summary>
+    public int ReleaseSession()
+    {
+        for (int i = 0; i < _phantoms.Length; i++)
+        {
+            if (_phantoms[i] != 0)
+            {
+                DestroySlot(i, "session released");
+            }
+        }
+
+        // ⚠ THE COUNT IS DERIVED AND MUST BE REPUBLISHED HERE. The idle branch of OnFrame
+        // destroyed bodies without ever recomputing it, so `phantoms N` in the agent's
+        // readout stayed at whatever the live session left — which is how a disconnected
+        // game reported one phantom for forty seconds with the controller holding none.
+        PublishPhantomCount();
+        return _phantomCount;
+    }
+
+    /// <summary>How many times a refused destroy is retried before the body is written off.
+    /// A refusal is normally transient — <c>DestroyObjectById</c> declines outright while the
+    /// script VM is mid-call (failure 4), and a disconnect lands on an arbitrary frame — so
+    /// one attempt was never enough. Bounded, because the pre-store flush window is finite
+    /// and a wedged transition is worse than a leaked body.</summary>
+    private const int MaxDestroyAttempts = 3;
+
+    /// <summary>Refusals so far per slot; reset with the slot.</summary>
+    private readonly int[] _destroyAttempts = new int[SharedBlock.SlotCapacity];
+
+    /// <summary>
     /// Destroys one slot's body through the engine and forgets everything derived from it.
+    ///
+    /// ⚠ THE SLOT SURVIVES A REFUSAL. It used to be cleared whichever way the destroy went,
+    /// so a single declined call — which is what the VM returns whenever it is mid-script —
+    /// orphaned the body permanently: the controller forgot it, nothing retried, and a
+    /// coop_phantom stood in the player's game until they reloaded. Now a refusal keeps the
+    /// slot so the next pass tries again, and only <see cref="MaxDestroyAttempts"/> failures
+    /// write it off — loudly, because at that point a save really would bake it in.
     ///
     /// The slot is CLEARED, never compacted. A slot belongs to one peer for as long as that
     /// peer is in the block, so sliding the survivors down would hand a departing player's
@@ -213,7 +257,8 @@ internal sealed unsafe class PhantomController(SharedBlockView block)
     /// index - which is precisely the class of bug three players makes reachable and two
     /// never could.
     /// </summary>
-    private void DestroySlot(int slot, string reason)
+    /// <returns>True once the slot is finished with (destroyed, or written off).</returns>
+    private bool DestroySlot(int slot, string reason)
     {
         uint objectId = _phantomIds[slot];
 
@@ -222,12 +267,26 @@ internal sealed unsafe class PhantomController(SharedBlockView block)
             Odyssey.ForgetGait(_phantoms[slot]);
         }
 
-        Odyssey.DestroyObjectById(objectId, out int failure);
-        PluginHost.Log(failure == 0
-            ? $"{reason}: destroyed phantom 0x{objectId:X} (slot {slot})"
-            : $"{reason}: destroy refused for phantom 0x{objectId:X} (slot {slot}, failure {failure})");
+        if (Odyssey.DestroyObjectById(objectId, out int failure))
+        {
+            PluginHost.Log($"{reason}: destroyed phantom 0x{objectId:X} (slot {slot})");
+            ClearSlot(slot);
+            return true;
+        }
 
+        if (++_destroyAttempts[slot] < MaxDestroyAttempts)
+        {
+            PluginHost.Log($"{reason}: destroy refused for phantom 0x{objectId:X} "
+                + $"(slot {slot}, failure {failure}) — retrying "
+                + $"({_destroyAttempts[slot]} of {MaxDestroyAttempts})");
+            return false;
+        }
+
+        PluginHost.Log($"{reason}: GIVING UP on phantom 0x{objectId:X} (slot {slot}, "
+            + $"failure {failure}) after {MaxDestroyAttempts} attempts — the body is LEFT "
+            + "STANDING and a save would bake it into the module");
         ClearSlot(slot);
+        return true;
     }
 
     /// <summary>Forgets everything a slot derived from its body, without touching the engine.</summary>
@@ -249,6 +308,7 @@ internal sealed unsafe class PhantomController(SharedBlockView block)
         _lastAnim[slot] = 0;
         _lastOneShotSerial[slot] = 0;
         _twinNamed[slot] = false;
+        _destroyAttempts[slot] = 0;
 
         for (int j = 0; j < SharedBlock.EquipCount; j++)
         {
@@ -288,11 +348,18 @@ internal sealed unsafe class PhantomController(SharedBlockView block)
         if (block.Command != SharedBlock.CommandSpawnAndDrive)
         {
             // Idle (a disconnect): despawn any phantoms so a player who left does not leave
-            // a frozen body behind. One per frame keeps it cheap; reset the bookkeeping once
-            // the last body is gone.
-            if (_phantomCount > 0)
+            // a frozen body behind. One per frame keeps it cheap.
+            //
+            // ⚠ NOT GATED ON THE CACHED COUNT, and that gate is half of why a body could
+            // survive a disconnect. `_phantomCount` is DERIVED, and this branch never
+            // recomputed it — so it sat at whatever the live session left. Read one way it
+            // let this branch run against nothing forever; read the other (a slot cleared by
+            // the active "peer left" path on the frame the command fell) it stopped the
+            // branch running at all while a body was still standing. FlushOneBody is an
+            // eight-slot scan that terminates by itself; it needs no gate.
+            if (FlushOneBody())
             {
-                FlushOneBody();
+                PublishPhantomCount();
             }
 
             return;
