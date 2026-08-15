@@ -46,6 +46,7 @@ internal static unsafe class PluginHost
     private static BarkController? _barks;
     private static InteractionLockController? _interactionLocks;
     private static PartyRosterController? _partyRoster;
+    private static ControlReturnController? _controlReturn;
     private static MenuLoadController? _menuLoad;
     private static ConnectMenuController? _connectMenu;
     private static ChatInputController? _chatInput;
@@ -147,6 +148,7 @@ internal static unsafe class PluginHost
             _barks = new BarkController(_view);
             _interactionLocks = new InteractionLockController(_view);
             _partyRoster = new PartyRosterController(_view);
+            _controlReturn = new ControlReturnController(_view);
 
             // The minimap draw runs on the render path and has no other route to peer
             // positions, so it reads the block directly.
@@ -638,6 +640,11 @@ internal static unsafe class PluginHost
             }
         }
 
+        // Before every world controller: if the session ended since the last frame, undo what
+        // it did to this game before anything acts on the cleared block (most importantly,
+        // before PhantomController starts destroying the bodies the camera may be following).
+        PumpSessionLifecycle();
+
         // Death first among the world controllers: a downed player must be published (and a
         // pending revive applied) before the phantom/combat passes read the same creature.
         _death?.OnFrame();
@@ -686,6 +693,10 @@ internal static unsafe class PluginHost
         _barks?.OnFrame();
         _interactionLocks?.OnFrame();
 
+        // After the companion mirror and the portraits, because it decides what the player is
+        // driving and where the camera points from the state those two have just settled.
+        _controlReturn?.OnFrame();
+
         // Read-only: publishes the owner's current conversation line for the other player to
         // spectate. Runs in-world only (a conversation needs a live server + GUI).
         _dialogueSpectate?.OnFrame();
@@ -697,6 +708,65 @@ internal static unsafe class PluginHost
         // phantom table, the party roster and the mirror's pin, all of which this frame's
         // passes have just brought up to date.
         _cheats?.OnFrame();
+    }
+
+    /// <summary>Whether a session was driving this instance on the previous frame; the falling
+    /// edge is a disconnect (or a session the agent tore down for any other reason).</summary>
+    private static bool _sessionActive;
+
+    /// <summary>
+    /// THE ONE PLACE A SESSION IS UNDONE.
+    ///
+    /// ⚠ THIS EXISTS BECAUSE PER-FIELD TEARDOWN KEPT MISSING ONE. Reported from play: after a
+    /// client disconnected, Trask was back in the party but clicking him did nothing — the
+    /// agent's control-swap suppression was still raised in the block, so DeathController kept
+    /// arming the byte patch that turns <c>ChangeCharacter</c> (Tab, every party portrait, and
+    /// the death auto-swap) into an immediate return. Beside it, mirrored companions were left
+    /// in the Neutral faction and pinned at min-1-hp, the spectate camera could stay bolted to
+    /// a phantom the very next controller was about to destroy, and the party portraits stayed
+    /// parked off-screen. Each was a separate omission of the same shape.
+    ///
+    /// So the rule is now structural: <c>block.Command</c> is the session's presence, and its
+    /// FALLING edge releases every controller that holds engine or GUI state, in one ordered
+    /// list. Anything a controller does to the world on connect belongs in its
+    /// <c>ReleaseSession</c> — not in a second copy of this list somewhere else.
+    ///
+    /// The agent lowers the command LAST when it clears the block
+    /// (KotorGameBridge.SessionScopedBlockLevels), so by the time this runs every other level
+    /// is already down and a controller's release reads a clean block.
+    /// </summary>
+    private static void PumpSessionLifecycle()
+    {
+        bool active = _view is { } view && view.Command == SharedBlock.CommandSpawnAndDrive;
+        if (active == _sessionActive)
+        {
+            return;
+        }
+
+        _sessionActive = active;
+
+        if (active)
+        {
+            Log("session: a co-op session is driving this instance");
+            return;
+        }
+
+        Log("session: released — undoing what it did to this game");
+
+        // Camera first, and before PhantomController's despawn pass: the follow behaviour
+        // holds a raw client-creature pointer, so a camera left on a phantom outlives the
+        // body by however long the give-back takes.
+        _spectate?.ReleaseSession();
+        _controlReturn?.ReleaseSession();
+
+        // Then the bodies: faction and the min-1-hp pin, which are SAVED state.
+        _partyPresence?.ReleaseSession();
+
+        // Then everything that was holding the player's own game hostage.
+        _death?.ReleaseSession();
+        _interactionLocks?.ReleaseSession();
+        _partyRoster?.ReleaseSession();
+        _portraits?.ReleaseSession();
     }
 
     private static void InvalidateAll(string reason)

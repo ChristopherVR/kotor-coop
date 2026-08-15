@@ -161,6 +161,20 @@ the roster (see the boundary below).
 actually gets wrong is the PARTY SEAT, and that is what this fixes. A slot the peer has in its
 party and this instance never recruited is logged once, by slot, and skipped.
 
+## Giving the companions back (2026-08-15)
+
+Everything this document does to a companion on a mirroring instance is now undone on the
+falling edge of `block.Command`, through `PartyPresenceController.ReleaseSession` —
+solo mode via `ReleasePartyFreeze`, the Neutral faction hold and the min-1-hp pin, the
+roster reconciliation, and the interaction locks that hold a body still. The write-up of
+why they were leaking (and of the control-swap suppression that made the returned companion
+unclickable, which is the same class of bug) is in `client-control-lock.md`.
+
+Two things a mirroring pass writes are still NOT restored, deliberately, and both self-heal:
+`ClaimCreature` leaves `commandable` (+0xE8) at 1, which is a party member's normal value
+anyway, and leaves `run_flag` (+0xA98) at 0, which the engine's own follow path rewrites at
+the next gait change. Restoring either would mean writing a value we never measured.
+
 Still open: `force_dialogue_party` remains off. The roster now reconciles after a recruitment
 conversation, but a player driven into one whose scripts do not run to the end here can still
 end up without the companion — that is the availability gap above, not a roster one.

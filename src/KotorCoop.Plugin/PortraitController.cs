@@ -124,6 +124,33 @@ internal sealed unsafe class PortraitController(SharedBlockView block)
         }
     }
 
+    /// <summary>
+    /// The session ended: put the party widgets back now rather than on the next 15-frame
+    /// pass. OnFrame would get there by itself — this is about the ORDER, since the whole
+    /// point of the release is that a player who disconnects finds a working party bar, and a
+    /// quarter of a second of missing portraits reads as the bug they just reported.
+    /// </summary>
+    public void ReleaseSession()
+    {
+        if (!_hiding)
+        {
+            return;
+        }
+
+        _hiding = false;
+        _countdown = 0;
+
+        nint mainInterface = Odyssey.GetMainInterface();
+        if (mainInterface == 0)
+        {
+            // No HUD to move; a rebuilt one comes back with the engine's own layout.
+            return;
+        }
+
+        Apply(mainInterface, 0);
+        PluginHost.Log("portraits: restored the party widgets (the session ended)");
+    }
+
     private void Snapshot(nint mainInterface)
     {
         for (int w = FirstHiddenWidget; w < PartyWidgetCount; w++)

@@ -66,6 +66,23 @@ internal sealed unsafe class PartyRosterController(SharedBlockView block)
         block.ClearLocalPartyRoster();
     }
 
+    /// <summary>
+    /// The session ended: stop reconciling this instance's party against a peer's.
+    ///
+    /// <see cref="Reconcile"/> already names "a disconnected agent" as one of the cases where
+    /// there is nothing to reconcile against — but the peer roster is an agent-written LEVEL
+    /// with a valid bit, and nothing lowered it on teardown, so the claim was false. A
+    /// disconnected client went on adding and removing its own party members to match whatever
+    /// party the host had at the moment the link died: dismiss Trask after disconnecting and
+    /// the reconciler put him straight back.
+    /// </summary>
+    public void ReleaseSession()
+    {
+        block.ClearHostPartyRoster();
+        Invalidate();
+        PluginHost.Log("party roster: your party is yours again — nothing left to reconcile against");
+    }
+
     public void OnFrame()
     {
         if (!_enabled)

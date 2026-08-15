@@ -71,6 +71,55 @@ internal sealed unsafe class PartyPresenceController(SharedBlockView block)
         _drivenLogged = -1;
     }
 
+    /// <summary>
+    /// The session ended: give every companion this instance was mirroring back to the local
+    /// game before forgetting it.
+    ///
+    /// ⚠ THE CLASS COMMENT ON <see cref="ApplyCompanionFaction"/> USED TO CLAIM THIS HAPPENED
+    /// BY ITSELF — "switching local_combat off, or this instance ceasing to mirror, puts them
+    /// back in the player faction on the next pass". The second half was never true: ceasing
+    /// to mirror means <see cref="OnFrame"/> returns at its command gate, so the restoring
+    /// pass never runs. A client that disconnected mid-fight left Trask in the NEUTRAL faction
+    /// and pinned at min-1-hp — no longer a target, no longer killable, no longer fighting
+    /// for the player — and both of those are SAVED state, so it baked into the next save.
+    ///
+    /// The bodies are re-resolved by id rather than trusted from the cache: teardown can land
+    /// on the same frame as a module change, and a cached creature pointer is the one thing in
+    /// this file that is never safe to use unverified.
+    /// </summary>
+    public void ReleaseSession()
+    {
+        int restored = 0;
+
+        for (int i = 0; i < SharedBlock.PartyPresenceCapacity; i++)
+        {
+            if (!_factionKnown[i] || !_heldNeutral[i] || _trackedId[i] == 0)
+            {
+                continue;
+            }
+
+            uint objectId = _trackedId[i];
+            nint creature = Odyssey.ResolveServerObject(objectId);
+            if (creature == 0 || *(uint*)(creature + 0x04) != objectId)
+            {
+                // The world went before the session did; there is no body left to restore.
+                PluginHost.Log($"party drive: companion 0x{objectId:X} is gone — "
+                    + "cannot put it back in the player faction");
+                continue;
+            }
+
+            ApplyCompanionFaction(i, creature, objectId, neutral: false);
+            restored++;
+        }
+
+        if (restored > 0)
+        {
+            PluginHost.Log($"party drive: released {restored} companion(s) back to your own game");
+        }
+
+        Invalidate();
+    }
+
     public void OnFrame()
     {
         if (!_enabled || block.Command != SharedBlock.CommandSpawnAndDrive)
@@ -153,8 +202,10 @@ internal sealed unsafe class PartyPresenceController(SharedBlockView block)
         // for companion health, so the host never sees any of it.
         //
         // Held Neutral they stop being targets; pinned min-1-hp they stop being killable here.
-        // Applied in BOTH directions, so switching local_combat off — or this instance ceasing
-        // to mirror — puts them back in the player faction on the next pass.
+        // Applied in BOTH directions, so switching local_combat off puts them back in the
+        // player faction on the next pass. CEASING TO MIRROR DOES NOT COME BACK THROUGH HERE —
+        // this whole method is behind OnFrame's command gate — which is what
+        // ReleaseSession is for.
         ApplyCompanionFaction(
             slot, creature, objectId,
             neutral: EnemyPresenceController.LocalCombat && block.DamageDealtEnabled);
@@ -286,9 +337,10 @@ internal sealed unsafe class PartyPresenceController(SharedBlockView block)
     /// that cannot die is never released by the engine's own retention test. That is exactly
     /// the mistake the original aggro-sink phantom design made.
     ///
-    /// ⚠ SAVE HAZARD, UNRESOLVED. Faction membership and min-1-hp are both persisted. A client
-    /// that saves while local_combat is on could bake a Neutral, unkillable companion into
-    /// that save. Restoring on the way out covers a live toggle but not a crash mid-session.
+    /// ⚠ SAVE HAZARD, PARTLY RESOLVED. Faction membership and min-1-hp are both persisted. A
+    /// client that saves while local_combat is on could bake a Neutral, unkillable companion
+    /// into that save. A live toggle restores here and a disconnect restores through
+    /// <see cref="ReleaseSession"/>; a CRASH mid-session still bakes it, because nothing runs.
     /// </summary>
     private void ApplyCompanionFaction(int slot, nint creature, uint objectId, bool neutral)
     {

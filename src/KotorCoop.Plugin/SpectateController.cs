@@ -74,6 +74,31 @@ internal sealed unsafe class SpectateController(SharedBlockView block)
         _advanceQueued = false;
     }
 
+    /// <summary>
+    /// The session ended: hand the camera back now, not on the next pass.
+    ///
+    /// ⚠ NOT THE SAME AS <see cref="Invalidate"/>, and the difference is a dangling pointer.
+    /// OnFrame is gated on the command, so a disconnect while spectating would simply stop it
+    /// running — leaving the camera on a peer's phantom, which PhantomController despawns one
+    /// body per frame from the very next frame onwards. The installed CAurBehaviorCameraFollow
+    /// keeps the followed CLIENT creature as a raw pointer at +0x14 and reads its position
+    /// every frame (GetTargetWorldPosition 0x49F0E0), so the view does not merely stick — it
+    /// is reading a destroyed object. A module change is different and Invalidate is still
+    /// right there: the whole world goes, and the engine's own area attach re-points the
+    /// camera as part of the load.
+    /// </summary>
+    public void ReleaseSession()
+    {
+        _advanceQueued = false;
+        _cycleKeyWasDown = false;
+        _countdown = 0;
+
+        // Deliberately NOT deferred to a conversation the way OnFrame is: the body is about to
+        // be destroyed, and a camera on a freed creature is worse than a camera move a
+        // dialogue did not ask for.
+        StopSpectating("the session ended — the camera is yours again");
+    }
+
     public void OnFrame()
     {
         if (!_enabled || block.Command != SharedBlock.CommandSpawnAndDrive)
