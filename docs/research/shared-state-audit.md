@@ -2317,6 +2317,40 @@ replicate-the-engine approach for something that doesn't need to understand the 
 suite 953/953, both builds clean, rig torn down and confirmed clean (`Get-Process`). New console
 verb: `firescript <id> fire 270` fires the `+0x270` slot instead of the default `+0x260`.
 
+### Round 35 — "a peer is connected at all" is REFUTED as the variable, decisively
+
+Round 34's own hand-off, run immediately: reproduced round 27's exact winning scenario (host-local
+creature, untouched, `k_def_combend01` fired, targeting the host's own local player) with a client
+**genuinely connected the whole time** (`phantoms 1 remotes 1` confirmed on the host) but never
+touched, never moved, never brought anywhere near the test creature.
+
+**Result: it still works.** `sub+0xB0` armed (`=1`), `sub+0x5c` changed 0→4 (matching round 35's
+own earlier host-local success exactly), and the target's `vtbl+0x9C(0)` readout fell 12→6 across
+the capture — a real, progressing fight, with a peer connected the entire time.
+
+**This settles it: "a session exists / a peer is connected" is not the variable.** Combined with
+round 29 (a completely untouched, zero-driven creature on the CLIENT still fails) and round 33
+(target identity — phantom vs. true local player — makes no difference on the CLIENT), the
+remaining candidates narrow to one specific axis nothing has yet isolated: **something about being
+the CLIENT process/role itself** — not "is a session connected," not "is this specific creature
+driven," not "which target" — since a host-local creature on the SAME connected session, same
+script, same everything, works fine.
+
+**The next precise test, not yet run:** is this really about CLIENT ROLE (e.g. `CClientExoApp`
+vs. `CServerExoApp` — this engine's own internal client/server split, already documented elsewhere
+in this codebase as real and load-bearing, not just this mod's own host/client distinction), or is
+it still, somehow, about the specific creature being part of whatever the co-op plugin's own
+enumeration/census touches AT ALL — even read-only, even with every write skipped (round 29 only
+verified writes were skipped, not that the creature was absent from every census/list the plugin
+walks)? The cleanest way to separate these: on the CLIENT, fire `k_def_combend01` on a creature
+FAR outside any census this session's plugin would ever enumerate (a creature in a part of the
+module the mirrored-enemy census caps or excludes entirely, not merely one this session chose not
+to touch) and see if it STILL fails. If it does, that points at the client role/process itself; if
+it finally works, it points at census membership, not client-vs-host role.
+
+`local_combat` untouched, stays off. Full suite 953/953, both builds clean, rig torn down and
+confirmed clean (`Get-Process`).
+
 ## 3. A client's XP is actively erased
 
 `ProgressionSnapshotPacket` is host→client only and absolute (CoopAgent.cs, `PumpProgression`):
