@@ -503,6 +503,37 @@ public class TravelPumpTests
         Assert.Empty(Assert.Single(bridge.RequestMovies));
     }
 
+    /// <summary>
+    /// The race the accumulation guard exists for: the host announces a movie the instant its
+    /// engine accepts it onto the transition queue, which is BEFORE its main thread blocks to
+    /// play it — so its published module has not changed yet, and for as long as the stall
+    /// lasts (the whole length of the movie) every pump still reads "together". None of that
+    /// is a real reunion, so none of it may drop the movie.
+    /// </summary>
+    [Fact]
+    public void AnnouncingWhileTheHostStillReadsAsTogetherDoesNotDropTheMovie()
+    {
+        (CoopAgent agent, TravelBridge bridge, StubSession session) = Build(combatPumpMs: 0);
+
+        // Announced, but the host's published module has not caught up to its own departure -
+        // it still reads as standing right where we are.
+        session.IncomingMovies.Add(Announcement(1, "01c"));
+        session.Peers.Add(HostPeer(ClientModule));
+        agent.PumpOnce();
+
+        // Several more pumps while its main thread is still blocked playing the movie: the
+        // published module never changes, so "together" keeps reading true throughout.
+        agent.PumpOnce();
+        agent.PumpOnce();
+
+        // The stall ends and the host's real module finally lands.
+        session.Peers.Clear();
+        session.Peers.Add(HostPeer(HostModule));
+        agent.PumpOnce();
+
+        Assert.Equal(["01c"], Assert.Single(bridge.RequestMovies));
+    }
+
     /// <summary>The engine's own queue takes six; a hoard past that is capped rather than
     /// sent, because AddMoveToModuleMovie would refuse the extras anyway.</summary>
     [Fact]

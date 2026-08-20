@@ -482,7 +482,7 @@ public sealed class CoopAgent(IGameBridge bridge, ICoopSession session, AgentSet
     private readonly List<string> _pendingFollowMovies = [];
 
     /// <summary>
-    /// The module we (and, as far as we knew, the host) were standing in when
+    /// Whether we have observed the host NOT in our module at least once since
     /// <see cref="_pendingFollowMovies"/> started filling from empty.
     ///
     /// The host announces a movie the instant its own engine accepts it onto the transition
@@ -490,14 +490,16 @@ public sealed class CoopAgent(IGameBridge bridge, ICoopSession session, AgentSet
     /// the host's published <c>PlayerState.Module</c> has any chance to change. For the entire
     /// window between "announced" and "the host's module update finally lands" (which can be
     /// the whole length of the movie, since a blocked main thread publishes nothing), this
-    /// player and the host still read as being in the SAME module. Without this guard, the
-    /// very next pump after accumulating a movie sees "together" and wipes it before the host
-    /// has actually gone anywhere — measured live: the "pending for the next follow" and
-    /// "dropping ... we are already where the host is" lines landed in the same logged second.
-    /// This field lets the "together" check tell "the host genuinely hasn't left yet" (still
-    /// equal to this) from "we caught up some other way and these are truly stale" (not equal).
+    /// player and the host still read as being in the SAME module. Comparing OUR OWN module
+    /// against a snapshot of itself cannot tell that window apart from a later, genuine
+    /// reunion — we rarely move in between, so the snapshot trivially still matches either
+    /// way. What actually distinguishes them is whether the HOST was ever seen elsewhere in
+    /// between: if not, "together" just means the host has not left yet; if so, a later
+    /// "together" means it came back and the movies are truly stale. Measured live: the
+    /// "pending for the next follow" and "dropping ... we are already where the host is" lines
+    /// landed in the same logged second, before the host had been seen away even once.
     /// </summary>
-    private string _pendingFollowMoviesFromModule = string.Empty;
+    private bool _pendingFollowMoviesSawHostAway;
 
     /// <summary>The last cinematic serial taken from each peer, so a repeated announcement is
     /// accumulated once rather than five times.</summary>
@@ -533,17 +535,17 @@ public sealed class CoopAgent(IGameBridge bridge, ICoopSession session, AgentSet
             }
 
             _seenCinematicSerials[packet.PeerId] = packet.Serial;
-            AccumulateFollowMovies(local.Module, packet.Movies);
+            AccumulateFollowMovies(packet.Movies);
         }
     }
 
     /// <summary>Adds names to the pending set, in order, without duplicates and without
     /// exceeding the engine's own six-movie queue.</summary>
-    private void AccumulateFollowMovies(string localModule, string[] movies)
+    private void AccumulateFollowMovies(string[] movies)
     {
         if (_pendingFollowMovies.Count == 0)
         {
-            _pendingFollowMoviesFromModule = localModule;
+            _pendingFollowMoviesSawHostAway = false;
         }
 
         foreach (string movie in movies)
@@ -1433,25 +1435,33 @@ public sealed class CoopAgent(IGameBridge bridge, ICoopSession session, AgentSet
             // separation acts immediately.
             _lastTravelRequest = string.Empty;
 
-            // And drop any accumulated cinematic — but ONLY if we are together somewhere OTHER
-            // than the module these movies were announced from. The host announces a movie the
-            // instant its engine accepts it onto the transition queue, which is BEFORE its main
-            // thread blocks to play it and therefore before its published module has any chance
-            // to change; for that whole window "together" just means the host has not left yet,
-            // not that the movies are stale. Only a mismatch against
-            // _pendingFollowMoviesFromModule means we caught up some other way and these really
-            // are leftovers from an earlier, already-resolved transition.
-            if (_pendingFollowMovies.Count > 0
-                && !string.Equals(local.Module, _pendingFollowMoviesFromModule, StringComparison.OrdinalIgnoreCase))
+            // And drop any accumulated cinematic — but ONLY if the host was actually seen
+            // somewhere else at some point since we started accumulating. The host announces a
+            // movie the instant its engine accepts it onto the transition queue, which is
+            // BEFORE its main thread blocks to play it and therefore before its published
+            // module has any chance to change; for that whole window "together" just means the
+            // host has not left yet, not that the movies are stale. Only having actually
+            // observed the host away in between means this "together" is a genuine reunion and
+            // these really are leftovers from an earlier, already-resolved transition.
+            if (_pendingFollowMovies.Count > 0 && _pendingFollowMoviesSawHostAway)
             {
                 Log?.Invoke(
                     $"dropping {_pendingFollowMovies.Count} pending transition movie(s): "
                     + "we are already where the host is");
                 _pendingFollowMovies.Clear();
-                _pendingFollowMoviesFromModule = string.Empty;
+                _pendingFollowMoviesSawHostAway = false;
             }
 
             return;
+        }
+
+        // We just established the host is NOT in our module — regardless of what happens next
+        // (a stunt module, an unreadable name, or a real follow), this is the observation that
+        // makes a LATER "together" trustworthy rather than the same announce-before-departure
+        // race the guard above exists to ignore.
+        if (_pendingFollowMovies.Count > 0)
+        {
+            _pendingFollowMoviesSawHostAway = true;
         }
 
         // Stunt modules stage cutscenes. The host will be dumped back into a real module
@@ -1491,7 +1501,7 @@ public sealed class CoopAgent(IGameBridge bridge, ICoopSession session, AgentSet
             // rewritten from scratch each time), but they must not survive into a later,
             // unrelated transition.
             _pendingFollowMovies.Clear();
-            _pendingFollowMoviesFromModule = string.Empty;
+            _pendingFollowMoviesSawHostAway = false;
 
             Log?.Invoke(movies.Length > 0
                 ? $"following the host to '{target}' with {movies.Length} transition movie(s): "
