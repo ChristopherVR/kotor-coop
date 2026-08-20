@@ -7201,11 +7201,65 @@ internal static unsafe class Odyssey
         int sub40 = *(int*)(sub + 0x40);
         int sub4 = *(int*)(sub + 4);
 
+        // ROUND 32: full disassembly of UpdateCombatRoundTimer's EXPIRY path (0x004FAFE3
+        // onward, reached when delay - creature+0xCC <= 0, i.e. the moment round+0x960 hits
+        // zero) found the actual commit/reset fork. If sub+0xB0 is still 0 at that instant it
+        // falls straight through to the reset call (0x004D4620) with no further checks — the
+        // "never armed at all" case every round to date has measured. But the code ALSO
+        // re-checks target validity on every loop iteration while sub+0xB0 IS positive
+        // (0x4FAFF0's loop), and unconditionally, right before EITHER exit, re-resolves
+        // round+0x9CC fresh via GetGameObject (0x004AE750 — same as ResolveServerObject),
+        // casts it (vtbl+0x10, "AsSWSObject" per round 17/19's naming), checks GetDead
+        // (vtbl+0x94 - already known live-false for our target), then on a live target casts
+        // again (vtbl+0x30, "AsCreature") and calls CSWSCreature::GetDeadTemp (0x004EF890 -
+        // named in tools/kotor1_0_3.db, not a guess) on the result. GetDeadTemp returning
+        // TRUE routes straight into the reset call; returning FALSE just returns with no
+        // reset AND no commit. GetDeadTemp's own body (disassembled this round): walks
+        // CClientExoApp::GetSWParty()'s roster (CSWParty::GetCharacter per slot), converts
+        // the passed-in target's id via CClientExoAppInternal::ServerToClientObjectId, and
+        // only if the target IS found in the CLIENT's own local party does it go on to read
+        // vtbl+0x9c(0) on the target and return (that value <= 0). Log the raw chain here so
+        // a live pass can see exactly which branch fires for the real failing target, not just
+        // GetDeadTemp's own final boolean.
+        int deadTemp = -1;
+        short vtbl9cRaw = short.MinValue;
+        nint resolvedTarget = ResolveServerObject(currentTarget);
+        nint asSwsObject = 0;
+        int getDeadResult = -1;
+        nint asCreature = 0;
+        if (resolvedTarget != 0)
+        {
+            nint vtbl0 = *(nint*)resolvedTarget;
+            var asSwsObjectFn = (delegate* unmanaged[Thiscall]<nint, nint>)(*(nint*)(vtbl0 + 0x10));
+            asSwsObject = asSwsObjectFn(resolvedTarget);
+            if (asSwsObject != 0)
+            {
+                nint vtbl1 = *(nint*)asSwsObject;
+                var getDeadFn = (delegate* unmanaged[Thiscall]<nint, int>)(*(nint*)(vtbl1 + 0x94));
+                getDeadResult = getDeadFn(asSwsObject);
+                if (getDeadResult == 0)
+                {
+                    var asCreatureFn = (delegate* unmanaged[Thiscall]<nint, nint>)(*(nint*)(vtbl1 + 0x30));
+                    asCreature = asCreatureFn(asSwsObject);
+                    if (asCreature != 0)
+                    {
+                        nint vtbl2 = *(nint*)asCreature;
+                        var vtbl9cFn = (delegate* unmanaged[Thiscall]<nint, int, short>)(*(nint*)(vtbl2 + 0x9C));
+                        vtbl9cRaw = vtbl9cFn(asCreature, 0);
+                        var getDeadTempFn = (delegate* unmanaged[Thiscall]<nint, int>)0x004EF890;
+                        deadTemp = getDeadTempFn(asCreature);
+                    }
+                }
+            }
+        }
+
         log($"firescript watch: frame -{framesLeft}, creature=0x{creature:X}, head action=0x{headType:X} "
             + $"(is fight action: {IsFightAction(headType)}), round+0x9CC target=0x{currentTarget:X}, "
             + $"round+0x958 timer={timerActive}, round+0x960 delay={delay}, "
             + $"round+0x96C sub-index={subIndex} sub+0xB0={subB0}, sub+0x5c={sub5c}, "
-            + $"party-slot-0 resolves to=0x{partySlot0:X}, sub+0x40=0x{sub40:X}, sub+4=0x{sub4:X}");
+            + $"party-slot-0 resolves to=0x{partySlot0:X}, sub+0x40=0x{sub40:X}, sub+4=0x{sub4:X}, "
+            + $"resolvedTarget=0x{resolvedTarget:X}, asSwsObject=0x{asSwsObject:X}, GetDead={getDeadResult}, "
+            + $"asCreature=0x{asCreature:X}, vtbl+0x9C(0)={vtbl9cRaw}, GetDeadTemp={deadTemp}");
     }
 
     /// <summary>ROUND 30: bare call to 0x004B4CB0, the real body behind the

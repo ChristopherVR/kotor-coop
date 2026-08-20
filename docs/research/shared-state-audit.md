@@ -2133,6 +2133,72 @@ whether the host's untouched copy is quietly fighting the phantom on its own.
 to avoid re-measuring what this one already settled. Full suite 953/953, both builds clean, rig
 torn down and confirmed clean (verified via `Get-Process`, not assumed).
 
+### Round 32 — the expiry-decision branch fully mapped, `GetDeadTemp` measured false throughout,
+### and the round's own target turns out to be a stale phantom, not the real player
+
+Full disassembly of `UpdateCombatRoundTimer`'s EXPIRY path itself (`0x004FAFE3` onward, the
+branch reached when `delay - creature+0xCC <= 0`), separate from the entry gates every prior
+round mapped. Both the "still armed, drain the loop" path and the "never armed" path converge at
+`0x004FB017`, which — regardless of which one led there — re-resolves the round's OWN target
+field (`round+0x9CC`) fresh via `GetGameObject` (`0x004AE750`), casts it (`vtbl+0x10` twice,
+"AsSWSObject"), checks `GetDead` (`vtbl+0x94`), and on a live target casts again (`vtbl+0x30`,
+"AsCreature") and calls `CSWSCreature::GetDeadTemp` (`0x004EF890` — a NAMED function in
+`tools/kotor1_0_3.db`, not a guessed address) on the result. `GetDeadTemp` returning TRUE falls
+straight into the round-reset call (`0x004D4620`, already identified in round 15/20 as the
+helper that zeroes the arming state); returning FALSE takes a path this disassembly found ends
+in a bare return with **no reset call at all** — which does not match the empirically-observed
+behaviour (the timer DOES reset every cycle) and is flagged below as unresolved.
+
+`GetDeadTemp`'s own body (fully disassembled this round, also confirmed via named symbols):
+walks `CClientExoApp::GetSWParty()`'s roster (`CSWParty::GetCharacter` per slot), converts the
+passed-in target's id via `CClientExoAppInternal::ServerToClientObjectId`, and only if the
+target is found in the CLIENT's own local party does it go on to read `vtbl+0x9c(0)` on the
+target and return `(that value <= 0)`.
+
+**Live-measured the entire chain, unconditionally, every frame, for the full 2400-frame watch
+(two full round cycles observed in one run — the round re-armed and reset a SECOND time within
+the window, not just once).** Across every single sample, in both cycles: `GetDead=0`,
+`vtbl+0x9C(0)=30` (a real, stable, positive value), `GetDeadTemp=0` (FALSE) — never once true.
+**This refutes `GetDeadTemp` as the reset trigger, at least as directly measured** — the branch
+that reads FALSE from `0x4ef890` (per the disassembly) should return WITHOUT calling
+`0x004D4620`, yet the timer still resets every cycle. Either there is a still-unfound second
+writer of `round+0x958`, or the live-measured `GetDeadTemp` value differs from what the ENGINE's
+OWN internal call sees at the precise instant it checks (a timing mismatch this diagnostic,
+sampled independently rather than hooked inline, cannot rule out).
+
+**The bigger finding, and probably the more important one: `round+0x9CC` (the round's own
+target) reads `0x12D` — not `0x7FFFFFFF`, the "current player" sentinel every prior round's
+manual `QueueAttackAction`/`AddAttackAction` calls have hardcoded as the target.** Resolved and
+confirmed live: `0x12D` is a genuine `coop_phantom` — specifically the CLIENT's own phantom of
+the HOST player, rendered at the host's real position. The creature's OWN, genuinely
+AI-acquired target is a co-op phantom body, not the "real" player object every round to date
+assumed it would target. Given the round was ALREADY active (`timer=1`, a nonzero delay already
+counting down) at frame -2400 — the very first sample after firing the script this round — the
+target was almost certainly acquired and the round started well BEFORE this test began, likely
+left over from an earlier, unrelated interaction with this same creature/phantom pair earlier in
+the session. This reframes the test methodology itself: firing `+0x260`
+(`k_def_combend01`/`OnCombatRoundEnd`) repeatedly appears to CONTINUE whatever round already
+exists rather than freshly re-running target acquisition each time — `OnCombatRoundEnd` is an
+end-of-round continuation handler, not necessarily a fresh-decision entry point. A genuinely
+clean test would need either a creature with NO pre-existing round state at all, or a script
+slot that unambiguously forces fresh acquisition (`OnPerception`/`OnHeartbeat`, not
+`OnCombatRoundEnd`) before drawing conclusions from the target it ends up with.
+
+**Status: the actual "commit vs. reset" branch is now fully mapped at the instruction level**,
+but the live evidence gathered this round doesn't yet cleanly explain WHY it always resets —
+`GetDeadTemp` reads false throughout, which per the disassembly should skip the reset entirely,
+not always trigger it. Two concrete next steps, precise enough not to need re-deriving: (1) hook
+`0x004D4620` itself (or its call site) directly rather than independently re-measuring
+`GetDeadTemp` after the fact, to see definitively whether it's even being reached, and what
+routes it there if `GetDeadTemp` genuinely reads false at the real call site too; (2) rerun the
+whole test against a creature and target pair with NO pre-existing round state (a genuinely
+fresh combat round, target-acquired from scratch during the observation window, ideally against
+the real local player rather than a leftover phantom target) to know whether the phantom-vs-
+real-player distinction found here matters at all.
+
+`local_combat` untouched, stays off. Full suite 953/953, both builds clean, rig torn down and
+confirmed clean (`Get-Process`, not assumed).
+
 ## 3. A client's XP is actively erased
 
 `ProgressionSnapshotPacket` is host→client only and absolute (CoopAgent.cs, `PumpProgression`):
