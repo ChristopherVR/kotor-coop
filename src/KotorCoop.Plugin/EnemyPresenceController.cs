@@ -125,6 +125,43 @@ internal sealed unsafe class EnemyPresenceController(SharedBlockView block)
     public static readonly bool LocalCombat = PluginConfig.ReadBool("local_combat", false);
 
     /// <summary>
+    /// ROUND 29 DIAGNOSTIC, TEMPORARY. An owner-space object id (hex, e.g. `0x35`) that this
+    /// controller will not touch AT ALL — no ClaimCreature, no PermitAttacking, no Drive
+    /// (position/facing), no ClearPositionDirty, no RecordEngagement, no QueueAttackAction.
+    /// Everything the base presence path does for every OTHER mirrored enemy is skipped for
+    /// this one, unconditionally, regardless of local_combat. Its position on THIS instance
+    /// will drift from the owner's real position — expected, not a bug, for this diagnostic.
+    ///
+    /// Exists to answer the one question rounds 1-28 never isolated: does a mirrored creature
+    /// fail to fight because of something local_combat's OWN extra calls do (already tested,
+    /// round 28, and refuted with local_combat=0 — but that still left the BASE per-frame
+    /// SetPosition/SetFacing/ClaimCreature running), or because of the base presence-drive
+    /// itself, which is unconditional and was never actually turned off for any creature
+    /// before this round. See docs/research/shared-state-audit.md §2, Round 29.
+    ///
+    /// 0 (default, coop.ini unset) disables this entirely — every creature is driven as
+    /// normal. Remove this field once Round 29's question is settled either way.
+    /// </summary>
+    private static readonly uint DiagUndrivenObjectId = ParseHexOrZero(PluginConfig.Read("local_combat_diag_undriven_id"));
+
+    private static uint ParseHexOrZero(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return 0;
+        }
+
+        string trimmed = value.Trim();
+        if (trimmed.StartsWith("0x", StringComparison.OrdinalIgnoreCase))
+        {
+            trimmed = trimmed[2..];
+        }
+
+        return uint.TryParse(trimmed, System.Globalization.NumberStyles.HexNumber,
+            System.Globalization.CultureInfo.InvariantCulture, out uint parsed) ? parsed : 0;
+    }
+
+    /// <summary>
     /// How close a driven enemy's local body must be to this player before its owner's report
     /// may be absorbed, in world units (coop.ini <c>local_combat_range</c>).
     ///
@@ -364,6 +401,15 @@ internal sealed unsafe class EnemyPresenceController(SharedBlockView block)
         if (*(uint*)(creature + CrePartyFollowInfo) != 0)
         {
             return false;
+        }
+
+        // ROUND 29 DIAGNOSTIC: this one hand-picked creature is left completely untouched —
+        // no claim, no permit, no drive, no engagement recording, no attack queuing. See
+        // DiagUndrivenObjectId's own doc comment. Still counts as present (return true), it is
+        // simply never written to by this controller.
+        if (DiagUndrivenObjectId != 0 && enemy.ObjectId == DiagUndrivenObjectId)
+        {
+            return true;
         }
 
         // Re-claim every pass, not once: the local AI re-queues combat and movement

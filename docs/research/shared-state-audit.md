@@ -139,9 +139,21 @@ itself, across four attempts on two creatures over ~50 seconds, and the round ne
 (A first HP-based reading in that round looked positive but was a confound — the pre-existing,
 unrelated phantom damage-forwarding feature, not this mechanism; see round 28 for the full
 account.) So: PROVEN to work for a host-local creature, PROVEN not to work for a driven one —
-the same wall rounds 1-27 hit, reached by a different route, which narrows the real question to
-what marks a creature as "driven" in the engine's own eyes at all. See round 28's closing
-paragraph for the precise next step.
+the same wall rounds 1-27 hit, reached by a different route.
+
+**Round 29 then refuted round 28's own "driven puppet" hypothesis.** A creature with GENUINELY
+ZERO writes from this plugin (no position, no facing, no claim — a new diagnostic,
+`local_combat_diag_undriven_id`) hit the exact same wall via the exact same organic script
+fire: the round genuinely armed and counted down (`round+0x958`/`round+0x960`, smoothly,
+organically, proving those are real fields a live decision process uses) and then reset at
+expiry instead of committing — never reaching `sub+0xB0` — with no artificial driving involved
+at all. So the block is not about being mirrored, driven, or touched by this plugin in any way
+that's been tested. The one constant across every failure in 29 rounds is a connected co-op
+session with a remote peer present. The strongest remaining candidate: whatever
+participant/roster table the engine's per-tick round-advancement loop consults before
+committing (round 27's "party-table-style field" gate) may simply never register the connected
+remote player as a valid participant — a session/party-table-level question, not a
+creature-level one. See round 29's own entry for the full evidence.
 
 ### The state cannot be replicated by writing it — measured
 
@@ -1927,6 +1939,79 @@ ever complete for it. The next concrete step is not another call to trace — it
 WHAT marks a creature as "driven" in the engine's own eyes in the first place, since that mark
 appears to persist and block round-arming even when every co-op-specific per-frame write is
 turned off.
+
+### Round 29 (2026-08-21) — the "driven puppet" hypothesis is refuted too: zero writes, same wall
+
+Round 28 closed on a specific hypothesis: that something about a creature being tracked by
+`EnemyPresenceController`'s base presence path (`SetPosition`/`SetFacing`, unconditional
+regardless of `local_combat`) marks it as ineligible for the engine's own round-advancement loop,
+independent of `local_combat`'s own extra calls (already ruled out with `local_combat=0`). That
+was never actually tested — round 28's "undriven" creature still had its position/facing written
+every frame by the base drive, which runs for every mirrored enemy unconditionally. Nobody had
+ever tested a creature with genuinely ZERO writes from this plugin.
+
+**What this round built.** A temporary, hand-picked-id diagnostic in `EnemyPresenceController`
+(`DiagUndrivenObjectId`, `coop.ini local_combat_diag_undriven_id`) that skips the ENTIRE
+per-pass touch for one creature — no `ClaimCreature`, no `PermitAttacking`, no `Drive`
+(position/facing), no `ClearPositionDirty`, no `RecordEngagement`, no `QueueAttackAction`. The
+creature is present in the world, perceivable, alive, and completely untouched by the co-op
+plugin — its position on the mirroring client is left to drift from the owner's real position,
+which is expected and correct for this diagnostic, not a bug.
+
+**Live test, clean.** Two `sithsoldier`s in `END_M01AA`: `0xE` (attacked normally via
+`blockpoke.ps1 attack`, staging a genuine host-side fight — `state IN COMBAT`,
+`combat [FIGHT ... engaged: you, Malak]`) and `0x10` (the diagnostic target, `tp`'d the client
+player beside it, then fired its own `+0x260` script — `k_def_combend01` — via
+`FireCreatureScriptSlot0x260`, the SAME Strategy 2 mechanism proven host-local in round 27).
+`0x10` was never touched by anything else this session.
+
+**Result: the round genuinely armed and ran, organically, then reset at expiry — never reaching
+`sub+0xB0`.** The per-frame native-state watch (unthrottled, all 180 frames captured) shows,
+starting the very first sampled frame after the fire:
+
+    frame -180: round+0x9CC target=0x7FFFFFFF, round+0x958 timer=1, round+0x960 delay=335, sub+0xB0=0
+    frame -106: round+0x958 timer=1, round+0x960 delay=13
+    frame -104: round+0x958 timer=1, round+0x960 delay=4
+    frame -103: round+0x958 timer=0, round+0x960 delay=0     <- reset, not armed
+    (every frame -103 through -1: timer=0, delay=0, sub+0xB0=0, head action=0x3F, never a fight action)
+
+`round+0x9CC` (the current-target field) was set to `0x7FFFFFFF` — the local player — by
+something in this run, and NOTHING in this run could have set it except the script itself: no
+`StartCombatRound`, no `QueueAttackAction`, no prior-round diagnostic call touched this
+creature. That is genuine, organic evidence the script's own `DetermineCombatRound` logic
+picked the player as a target. `round+0x958`/`round+0x960` then armed and counted down
+SMOOTHLY and ORGANICALLY from 335 to 0 over ~77 real frames — proof these are exactly the
+fields a real decision process uses, driven by the engine's own logic, not by anything this
+investigation wrote. And then, at the moment the delay expired — the exact point where round
+27 found the real arming call lives, deep inside the engine's own per-tick loop over combat
+participants, "a branch gated on a party-table-style field that routes to an entirely different
+path if it's out of range" — the round reset to inactive instead of committing. `sub+0xB0`
+never went nonzero across all 180 frames. The client's own HP did drop (12→1) and briefly
+showed `state IN COMBAT`, but that is the SAME phantom-forwarding confound round 28 already
+identified: the client's phantom stood near the HOST's own genuine fight against `0xE`, and
+the host's engine forwarded that unrelated damage — not evidence of anything happening on
+`0x10`, which the native-state watch settles independently of HP.
+
+**Conclusion: the "driven puppet" hypothesis from round 28 is REFUTED.** A creature this
+plugin has NEVER touched — no position write, no facing write, no claim, no permit, nothing —
+hits the exact same wall, reached organically, through the engine's own real AI decision
+process. This rules out every per-creature, per-write theory this investigation has produced
+across 29 rounds: it is not about being mirrored, not about being driven, not about
+`local_combat`'s extra calls, not about any specific field this plugin writes. The one thing
+every failing test has shared, including this one, is a CONNECTED CO-OP SESSION with a REMOTE
+PEER standing near the creature. Round 27's "party-table-style field" gate — never identified
+precisely, only located structurally — is now the single strongest remaining candidate:
+whatever roster or participant-table the engine's per-tick round-advancement loop consults
+before committing to a swing may simply never have the connected remote player registered in
+it as a valid combat participant, regardless of anything happening at the individual creature
+level. That is a SESSION-level or PARTY-TABLE-level question, not a creature-level one — a
+genuinely different kind of thing to investigate than anything the first 29 rounds tried.
+
+`local_combat` stays off (untouched this round; the diagnostic runs independently of it).
+`coop.ini local_combat_diag_undriven_id` diagnostic left in the tree, default unset (0,
+disabled) — remove once this question is settled. Rig torn down and confirmed clean
+(`Get-Process` empty for both `swkotor` and `KotorCoop.Agent`). Full suite 953/953, both
+builds clean.
 
 ## 3. A client's XP is actively erased
 
