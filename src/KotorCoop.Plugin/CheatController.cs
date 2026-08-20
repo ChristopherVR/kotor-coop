@@ -435,13 +435,19 @@ internal sealed unsafe class CheatController(SharedBlockView block)
             return;
         }
 
+        // ROUND 39: neither slot auto-arms the diagnostic watch any more (production code -
+        // EnemyPresenceController.StartLocalFight - now calls FireCreatureScriptSlot0x260 for
+        // every real fight, and it must not spam 6000 frames of log per fight). The manual
+        // diagnostic path still wants the watch, so arm it explicitly here for both slots.
         if (useSlot270)
         {
             Odyssey.FireCreatureScriptSlot0x270(creature);
+            Odyssey.ArmFireScriptWatch(creature);
         }
         else
         {
             Odyssey.FireCreatureScriptSlot0x260(creature);
+            Odyssey.ArmFireScriptWatch(creature);
         }
 
         PluginHost.Log($"firescript: fired 0x{objectId:X} +0x{slotOffset:X} = '{slot}'");

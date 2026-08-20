@@ -494,6 +494,12 @@ public interface IGameBridge : IDisposable
     /// </summary>
     bool TryWriteEnemies(IReadOnlyList<EnemyState> enemies) => false;
 
+    /// <summary>ROUND 39: the owner id of the mirrored enemy this instance is currently
+    /// letting fight the local player for real under `local_combat`, or 0 for none. The
+    /// caller must keep this id out of what it writes back via <see cref="TryWriteEnemies"/> —
+    /// see <c>KotorGameBridge.ReadLocalCombatExcludedId</c> for why.</summary>
+    uint ReadLocalCombatExcludedId() => 0;
+
     /// <summary>False when this bridge cannot see or drive party companions.</summary>
     bool SupportsPartySync => false;
 

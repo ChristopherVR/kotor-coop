@@ -2526,6 +2526,106 @@ which is buildable and testable without ever knowing why it's needed.
 Both `coop.ini` unchanged, `local_combat` untouched, `BlockEnemyCapacity` restored to 32. Full
 suite 953/953, both builds clean, rig torn down and confirmed clean (`Get-Process`).
 
+### Round 39 (2026-08-21) — the pragmatic fix, built from the empirical result, flipped live
+
+Round 38 left two paths forward: chase the census-boundary mechanism into OS-level territory, or
+design and build the fix directly from the empirical result without ever knowing why it's needed.
+Took the second path.
+
+**The design.** When one of this instance's mirrored enemies is genuinely engaging the local
+player (`EnemyPresenceController.IsEngaged`, a plain planar-distance test, `local_combat_range`
+squared, default 20 units — see the constant's own doc comment for why 20 and not a modelled
+weapon reach), pull that ONE creature out of this instance's own published census for the
+duration of the fight and fire its `k_def_combend01` event script (Strategy 2, proven live rounds
+27-38) through the engine's real dispatcher. No new wire packet: "excluded from the census" is a
+purely local, self-healing level, not an edge — `SharedBlock.OffsetLocalCombatExcludedId` (a
+single spare `uint32`, plugin-written every frame from `EnemyPresenceController`) is read back by
+`CoopAgent` immediately before it writes the outgoing enemy list into the SAME shared block, and
+filtered out there. The excluded id simply stops appearing in `block.EnemyPresenceCount`'s list
+on the very next tick, which means `EnemyPresenceController.DriveOne`'s loop — the thing that was
+still touching a "removed" creature in every round-37/38 negative case — never reaches it again.
+Re-inclusion needs nothing extra either: the moment `_locallyFightingId` is cleared, the id simply
+resumes appearing in the published list on the next pump.
+
+**Lifecycle** (`MaintainLocalFight`, run at the very top of `OnFrame`, before every early-return
+in the function — round 37/38's own census-membership finding means a fight that got stuck
+excluded through an early return would never un-stick): ends the fight and clears the exclusion
+on any of three conditions — the creature is dead or unresolvable (`Odyssey.IsCreatureDead`, the
+same `AsSWSObject`→`GetDead` vtable chain the round-32 diagnostic proved live), the player has
+moved out of `IsEngaged` range, or a bounded safety-net timeout (`local_combat_timeout_s`,
+default 25s, clamped 5-120s) expires. Nothing else needed reconciling on rejoin — the exclusion
+was never anything more than "not in this list right now."
+
+**A real invulnerability bug, found and fixed before anything was committed.** The first working
+draft kept the existing `DriveOne`/`RecordEngagement` call — the thing that licenses
+`IncomingDamageController`'s absorb-standdown — running unconditionally for EVERY nearby driven
+enemy under `LocalCombat`, not just the one actually excluded and fighting. Historically harmless,
+because the old `QueueAttackAction` mechanism this replaces never made ANY creature fight for
+real, so which ids got marked "engaged" never mattered. Once one specific creature started
+genuinely fighting, it became live: a live stress test — one creature (`0xE`) staged fighting
+locally via the automatic trigger, while the HOST was separately commanded (`blockpoke.ps1 ...
+attack 0x10 0x12D`) to make a DIFFERENT, merely-nearby creature (`0x10`) attack the client's
+phantom directly — showed `IncomingDamageController`'s own built-in watchdog line firing for
+`0x10`'s forwarded damage: `absorbed N forwarded damage ... this engine says in-combat=False` —
+exactly the invulnerability smell that log line exists to catch. Fix: deleted the unconditional
+`RecordEngagement` call and the now-dead `RecordEngagement` method entirely; only
+`MaintainLocalFight` marks engagement now, and only for `_locallyFightingId` specifically. Rebuilt,
+reran the identical stress scenario: no new absorb line for `0x10`, and the client's HP dropped
+correctly from `0x10`'s forwarded damage instead of being wrongly swallowed, while `0xE`'s damage
+stayed genuinely local (no double-count either direction).
+
+**Live-verified end to end, twice** — once before a diagnostic-logging cleanup pass, once after
+(see below), both on a fresh `END_M01AA` rig with no host-side scripting: the automatic trigger
+fires purely off proximity with no manual `firescript` call, the exclusion correctly drops the
+mirrored count by exactly one (`enemy drive: mirroring 25 ... 24 of the owner's ... enemies`
+either side of the exclusion write), the 25s timeout fires and the creature rejoins cleanly when
+nothing resolves the fight (expected in an unattended rig — nothing here provides real player
+combat input, so a fight that isn't resolved by an actual attack cycles on timeout rather than
+death, exactly the safety net's job), `player disengaged` fires correctly the instant the player
+is teleported more than `local_combat_range` away mid-fight, and the very next in-range creature
+picks up the exclusion on the following frame with no gap.
+
+**One diagnostic dead end worth recording, so a future round does not re-walk it.** The
+round-28-era per-frame `firescript watch` (`TickFireScriptWatch`, `round+0x96C sub-index`,
+`sub+0xB0`) is a **Strategy 1** diagnostic — it watches for the NATIVE combat-round-arming write
+that rounds 9-27 spent proving is a permanent no-op for a mirrored creature. Re-arming it against
+a genuinely Strategy-2-fighting creature this round (`firescript 0x1A fire`, `firescript 0xE fire`,
+point-blank) showed `sub+0xB0` staying 0 and `head action=0xFFFFFFFF` throughout — which is NOT a
+regression signal, because Strategy 2 was adopted specifically because it does not go through that
+arming path at all; nothing about round 39 makes `sub+0xB0` a meaningful witness for it, and it
+never was. The correct live proof for round 39 is the one already used above: does the mirrored
+count actually drop, does the exclusion/timeout/disengage cycle actually run, and does
+`IncomingDamageController`'s absorb-vs-apply attribution land on the right creature. A separate,
+harmless red herring chased the same session: `CheatController`'s `topup` cheat reported "the
+player reports 0 maximum hit points" consistently through this round's testing on BOTH the host
+(fighting a purely native, pre-round-27 local fight) and the client. This is §1 of this document,
+not a round 39 finding — `Odyssey.GetMaxHitPoints` reads the base `CSWSObject::GetMaxHitPoints`
+offset (`+0xE0`), which §1 already established reads 0 for a PC unconditionally, because
+`CSWSCreature`'s own override computes a PC's max HP from the per-level stat records instead of
+storing it there at all. `topup`'s use of the base-class getter for a player is a pre-existing gap
+in that one cheat, orthogonal to combat state entirely, and reproducing identically on a fight
+round 39 never touched (the host's native combat with `0xE`, proven back in round 11) rules out
+any connection to this round's changes. Left as a known gap for whoever next touches `topup`.
+
+**Diagnostic-logging cleanup** (the piece deferred since round 9, closed out this round):
+`FireCreatureScriptSlot0x260` no longer auto-arms the round-28 per-frame watch — production code
+(`StartLocalFight`) now calls it for every real fight, and 6000 lines of per-frame log per fight
+is not something a shipped feature does. The manual `firescript <id> fire[/270]` console verb
+(`CheatController.FireScript`) now arms the watch explicitly via a new `Odyssey.ArmFireScriptWatch`
+after firing, for both the `+0x260` and diagnostic-only `+0x270` slots, so the diagnostic surface
+keeps working exactly as before while the production path stays quiet.
+
+**Decision: `local_combat` is now ON by default**, `PluginConfig.ReadBool("local_combat", true)` in
+`EnemyPresenceController.cs`, and `profiles/coop.ini.example` updated to match. This is the first
+time this section's own standing rule — "did it work, not did it avoid breaking something" — has
+been satisfiable: the mechanism genuinely arms a mirrored creature's own combat AI, the lifecycle
+around it (trigger, timeout, disengage, re-inclusion) is live-verified clean, and the one real
+correctness bug this round's own adversarial stress-testing found was fixed and reconfirmed closed
+before the flip, not after. Full suite 953/953 (one known-flaky, pre-existing, unrelated test —
+`DisconnectRecoveryTests.HeavyPacketLossStillConverges`, a randomized-loss network-convergence
+test with no seed — failed once in the full run and passed in isolation immediately after; not a
+regression), both builds clean, rig torn down and confirmed clean (`Get-Process`).
+
 ## 3. A client's XP is actively erased
 
 `ProgressionSnapshotPacket` is host→client only and absolute (CoopAgent.cs, `PumpProgression`):

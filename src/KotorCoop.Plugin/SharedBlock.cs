@@ -606,7 +606,19 @@ internal struct SharedBlock
     /// </summary>
     public const int OffsetRemotePauseReleaseSerial = 0x1E58;
 
-    // 0x1E5C..0x1E60 is spare inside this region.
+    /// <summary>
+    /// ROUND 39: the owner id (in the OWNER's id space — the census/phantom-damage space) of
+    /// the mirrored enemy this instance is currently letting fight the local player for real,
+    /// under `local_combat`, or 0 for none. Plugin-written, agent-read: the agent filters this
+    /// id out of what it writes back into `EnemyPresenceCount`'s array on every pump, which is
+    /// what actually removes the creature from the census (round 37/38's proven mechanism —
+    /// genuinely absent from the published set, not merely un-driven). A level, not an edge:
+    /// self-healing if a packet is lost, and the plugin clears it back to 0 itself once the
+    /// local fight ends (the enemy dies, the player disengages, or a bounded timeout), which
+    /// lets the creature rejoin the census on the very next pump with no separate "un-exclude"
+    /// message needed. See docs/research/shared-state-audit.md §2, round 39.
+    /// </summary>
+    public const int OffsetLocalCombatExcludedId = 0x1E5C;
 
     // ---- door replication (version 4) -------------------------------------------
     //

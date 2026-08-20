@@ -1775,7 +1775,31 @@ public sealed class CoopAgent(IGameBridge bridge, ICoopSession session, AgentSet
         // do not belong here", and leaving the previous snapshot in the shared block would
         // let the plugin keep driving the old module's ids onto the new module's creatures —
         // exactly the thing the gate exists to stop. Writing a count of zero clears them.
-        bridge.TryWriteEnemies(session.GetEnemies(local.Module));
+        //
+        // ROUND 39: the plugin's own local_combat exclusion filters here, not before — the
+        // list itself must still exist upstream (the owner keeps publishing normally; only
+        // THIS instance's own presence array omits it), so a bounded timeout or the fight
+        // ending cleanly resumes normal mirroring on the very next pump with no separate
+        // "un-exclude" round trip. Genuinely absent from the array is round 37/38's proven
+        // mechanism; filtering here (not skipping DriveOne per-creature) is what makes that
+        // true rather than an approximation of it.
+        IReadOnlyList<EnemyState> enemies = session.GetEnemies(local.Module);
+        uint excludedId = bridge.ReadLocalCombatExcludedId();
+        if (excludedId != 0)
+        {
+            List<EnemyState> filtered = new(enemies.Count);
+            foreach (EnemyState enemy in enemies)
+            {
+                if (enemy.ObjectId != excludedId)
+                {
+                    filtered.Add(enemy);
+                }
+            }
+
+            enemies = filtered;
+        }
+
+        bridge.TryWriteEnemies(enemies);
 
         // Report what we have DEALT, so our fight counts.
         //

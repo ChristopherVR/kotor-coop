@@ -734,6 +734,32 @@ internal static unsafe class Odyssey
     /// <summary>Reads the area id of a resolved server object (module-lifetime stable).</summary>
     public static uint GetAreaId(nint serverObject) => *(uint*)(serverObject + 0x8C);
 
+    /// <summary>
+    /// CSWSObject::GetDead through the engine's own vtable — AsSWSObject (vtbl+0x10) then
+    /// GetDead (vtbl+0x94) on the result, exactly the two-call chain the round 32 diagnostic
+    /// already proved out live. True on a resolution failure too: a creature this cannot even
+    /// find is not one anything should keep treating as a live fight.
+    /// </summary>
+    public static bool IsCreatureDead(nint creature)
+    {
+        if (creature == 0)
+        {
+            return true;
+        }
+
+        nint vtbl0 = *(nint*)creature;
+        var asSwsObjectFn = (delegate* unmanaged[Thiscall]<nint, nint>)(*(nint*)(vtbl0 + 0x10));
+        nint asSwsObject = asSwsObjectFn(creature);
+        if (asSwsObject == 0)
+        {
+            return true;
+        }
+
+        nint vtbl1 = *(nint*)asSwsObject;
+        var getDeadFn = (delegate* unmanaged[Thiscall]<nint, int>)(*(nint*)(vtbl1 + 0x94));
+        return getDeadFn(asSwsObject) != 0;
+    }
+
     // ---- the object-array disagreement, asked in one frame ----------------------
 
     /// <summary>CServerExoAppInternal + this = CGameObjectArray*. The same field
@@ -7114,22 +7140,20 @@ internal static unsafe class Odyssey
 
         uint creatureId = *(uint*)(creature + ObjectIdOffset);
         RunScriptFn(vm, creature + CreScriptSlot0x260, creatureId, 1);
+    }
 
-        // ROUND 28: RunScript's own body (0x005D45D0) is a QUEUE-based dispatcher (a
-        // pending-list at +0x1AC, a counter at +0x28) — the script does NOT run synchronously
-        // inside this call, it runs on a LATER engine frame. Arm an unthrottled, per-frame
-        // watch so the isolated (local_combat=0) test can see exactly which frame the round
-        // struct actually changes on, rather than sampling every 3s and missing a fast
-        // arm-then-wipe cycle the way earlier rounds' throttled diagnostics could have.
-        // ROUND 31: extended from 180 to 2400 frames. A watch this round found round+0x960
-        // (the delay field) sits at 0 for ~128 ticks after firing, THEN jumps to ~1500 and
-        // counts down at only ~4-5 per tick — a full cycle needs ~470+ ticks minimum, well
-        // past every prior round's 180-frame window. Nobody has ever actually watched long
-        // enough to see this delay reach zero.
-        // ROUND 33: 2400 frames still cut off mid-cycle live (a round observed re-arming and
-        // starting a SECOND ~470-tick countdown within the window, never reaching the second
-        // expiry). Extended to 6000 to comfortably cover at least one full idle-plateau +
-        // countdown + expiry sequence in a single capture.
+    /// <summary>
+    /// ROUND 39 CLEANUP: the per-frame diagnostic watch (rounds 28-33 built it, rounds 34-38
+    /// depended on it) used to arm automatically inside <see cref="FireCreatureScriptSlot0x260"/>
+    /// itself — harmless for a hand-fired diagnostic console command, but <c>local_combat</c>
+    /// now calls that same function for every real fight, and 6000 lines of per-frame logging
+    /// per fight is not something a shipped feature does. Diagnostic callers (the `firescript`
+    /// console verb) call this explicitly right after firing; <see cref="EnemyPresenceController.StartLocalFight"/>
+    /// does not call it at all.
+    /// </summary>
+    public static void ArmFireScriptWatch(nint creature)
+    {
+        uint creatureId = creature != 0 ? *(uint*)(creature + ObjectIdOffset) : 0;
         _fireScriptWatchCreature = creature;
         _fireScriptWatchFramesLeft = 6000;
         PluginHost.Log($"firescript watch: armed on 0x{creatureId:X} for 6000 frames");
@@ -7180,8 +7204,10 @@ internal static unsafe class Odyssey
     }
 
     /// <summary>Fires +0x270 through the same RunScript dispatch <see
-    /// cref="FireCreatureScriptSlot0x260"/> uses, and arms the same firescript watch. MAIN
-    /// THREAD ONLY.</summary>
+    /// cref="FireCreatureScriptSlot0x260"/> uses. Diagnostic-only slot (no production caller
+    /// exists), so the watch is armed the same explicit way — see <see
+    /// cref="ArmFireScriptWatch"/> — by the `firescript ... fire 270` console verb, not by this
+    /// function itself. MAIN THREAD ONLY.</summary>
     public static void FireCreatureScriptSlot0x270(nint creature)
     {
         if (creature == 0)
@@ -7197,10 +7223,6 @@ internal static unsafe class Odyssey
 
         uint creatureId = *(uint*)(creature + ObjectIdOffset);
         RunScriptFn(vm, creature + CreScriptSlot0x270, creatureId, 1);
-
-        _fireScriptWatchCreature = creature;
-        _fireScriptWatchFramesLeft = 6000;
-        PluginHost.Log($"firescript watch (slot 0x270): armed on 0x{creatureId:X} for 6000 frames");
     }
 
     private static nint _fireScriptWatchCreature;

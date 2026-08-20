@@ -245,6 +245,9 @@ public sealed class KotorGameBridge : IGameBridge
     private const int BlockDamageOwedCount = 0x2010;
     private const int BlockDamageDealtEnabled = 0x2118;
 
+    /// <summary>ROUND 39: mirrors <c>SharedBlock.OffsetLocalCombatExcludedId</c> exactly.</summary>
+    private const int BlockLocalCombatExcludedId = 0x1E5C;
+
     // NPC barks (block v27): a small ring each way, speaker + three verbatim engine
     // arguments + a serial written last per entry.
     // Bark rings (block version 31). ⚠ Mirror of SharedBlock — a slot now carries the bark's
@@ -4094,6 +4097,24 @@ public sealed class KotorGameBridge : IGameBridge
         }
 
         return ids;
+    }
+
+    /// <summary>
+    /// ROUND 39: the owner id of the mirrored enemy the plugin is currently letting fight the
+    /// local player for real under `local_combat`, or 0 for none. The caller's job is to keep
+    /// this id out of whatever it writes into <c>EnemyPresenceCount</c>'s array — genuinely
+    /// absent, not merely un-driven — which is what actually excludes it from the census the
+    /// way round 37/38 proved works. See <c>SharedBlock.OffsetLocalCombatExcludedId</c>.
+    /// </summary>
+    public uint ReadLocalCombatExcludedId()
+    {
+        if (_pluginBlock == 0)
+        {
+            return 0;
+        }
+
+        _memory.TryReadUInt32(_pluginBlock + BlockLocalCombatExcludedId, out uint id);
+        return id;
     }
 
     /// <summary>

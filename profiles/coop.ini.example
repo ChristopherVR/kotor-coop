@@ -67,10 +67,17 @@ combat_state_sync=0
 # rises during a peer's fight. Moves damage authority too: with this on, the owner's
 # forwarded phantom damage is absorbed instead of applied, or every hit lands twice.
 # The structural defects that kept this off (target divergence, companion health,
-# blanket absorb) are fixed as of 2026-08-14, but the feature has never been proven
-# live against a real AI-started fight - see docs/research/shared-state-audit.md #2.
-# Leave this at 0 until that live pass has actually run.
-local_combat=0
+# blanket absorb) were fixed as of 2026-08-14, but the mechanism itself then spent
+# rounds 9-38 provably never arming a mirrored creature's native combat round under any
+# input tried - the earlier "fixed" claim was about the risks in a working mechanism,
+# not proof the mechanism worked. Round 39 (2026-08-21) found why (still being
+# enumerated in this instance's own published census blocks a creature's own AI from
+# ever picking a target, independent of whether anything drives it) and fixed it by
+# pulling the one creature genuinely fighting the local player out of that census for
+# the fight's duration and firing its own event script through the engine's real
+# dispatcher. Live-verified end to end - trigger, 25s timeout, disengage detection,
+# clean re-inclusion - see docs/research/shared-state-audit.md #2, round 39.
+local_combat=1
 
 # Activate the render window at launch. Without this an instance draws nothing until it
 # is clicked into - with two windows that means clicking both, every launch.

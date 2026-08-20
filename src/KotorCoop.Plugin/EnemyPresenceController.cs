@@ -113,16 +113,30 @@ internal sealed unsafe class EnemyPresenceController(SharedBlockView block)
     /// phantom over there. IncomingDamageController reads this same flag and stands down when
     /// it is set, so the two always move together.
     ///
-    /// ⚠ OFF BY DEFAULT, and this default has now been paid for twice. The shared-state
-    /// audit's adversarial review left four structural items open ("do not default this
-    /// on"), a bare `dev` commit flipped it to on anyway, and the predicted failure then
-    /// happened live on tat_m20aa (2026-08-14): 15 points of forwarded damage were
-    /// absorbed as "attributed to mirrored enemies we are driving" while this engine's
-    /// own in-combat flag read FALSE — the local copy never dealt the replacement damage,
-    /// and the player was simply invulnerable for that hit. Opt in via coop.ini once the
-    /// audit's items 4-7 are closed.
+    /// ON BY DEFAULT as of round 39 (2026-08-21) of docs/research/shared-state-audit.md §2.
+    /// This default was paid for three times before it was earned: the shared-state audit's
+    /// adversarial review left four structural items open ("do not default this on"), a bare
+    /// `dev` commit flipped it to on anyway, and the predicted failure happened live on
+    /// tat_m20aa (2026-08-14) — 15 points of forwarded damage absorbed as "attributed to
+    /// mirrored enemies we are driving" while this engine's own in-combat flag read FALSE, so
+    /// the player was simply invulnerable for that hit. The audit's items 4-7 closed the
+    /// risks in a working mechanism; the mechanism itself then spent rounds 9-38 provably NOT
+    /// arming a mirrored creature's native combat round under any input tried. Round 39 found
+    /// why (a creature still enumerated in this instance's own published census — regardless
+    /// of whether anything actually drives it — silently blocks its own AI from ever picking
+    /// a target) and built the fix directly from that: the one creature genuinely fighting the
+    /// local player is pulled out of the census for the duration of the fight (StartLocalFight
+    /// / MaintainLocalFight below) and its own `k_def_combend01` event script is fired through
+    /// the engine's real dispatcher — Strategy 2, proven live rounds 27-39 — instead of trying
+    /// to replicate the native arming calls by hand, which rounds 9-27 spent proving is a
+    /// permanent dead end for a mirrored copy specifically. Re-verified live this round after
+    /// a diagnostic-logging refactor: full automatic lifecycle (trigger on engagement, 25s
+    /// timeout, disengage detection, clean re-inclusion) cycling correctly end to end, and a
+    /// real invulnerability bug this round's own live stress test found (every nearby driven
+    /// enemy was licensing the absorb standdown, not just the one actually fighting) fixed and
+    /// reconfirmed closed before this flip.
     /// </summary>
-    public static readonly bool LocalCombat = PluginConfig.ReadBool("local_combat", false);
+    public static readonly bool LocalCombat = PluginConfig.ReadBool("local_combat", true);
 
     /// <summary>
     /// ROUND 29 DIAGNOSTIC, TEMPORARY. An owner-space object id (hex, e.g. `0x35`) that this
@@ -189,6 +203,31 @@ internal sealed unsafe class EnemyPresenceController(SharedBlockView block)
     /// fighting and every forwarded point is this player's to take.</summary>
     private static readonly long EngagedFreshTicks = TimeSpan.FromSeconds(1).Ticks;
 
+    // ---- ROUND 39: the actual local_combat mechanism, built from what rounds 9-38 proved
+    // works (excluded from the census entirely, script-fired) rather than what the original
+    // design guessed would work (QueueAttackAction, proven a permanent no-op — see
+    // docs/research/shared-state-audit.md §2). One fight at a time: a second engaged
+    // creature simply waits its turn rather than starting a second concurrent exclusion,
+    // which keeps the id-space this needs (one shared block field) trivial. Frame thread
+    // only, both writes and reads, same as the engagement record above.
+
+    /// <summary>0 = not currently letting anything fight locally. Non-zero = the OWNER-space
+    /// id of the one mirrored enemy this instance has pulled out of the census so its own AI
+    /// can complete a real combat round.</summary>
+    private uint _locallyFightingId;
+
+    /// <summary>When the current local fight started (Stopwatch-relative seconds, same clock
+    /// <see cref="OnFrame"/> already uses), for the timeout safety net.</summary>
+    private double _locallyFightingSince;
+
+    /// <summary>Hard ceiling on how long one creature may sit excluded from the census. A
+    /// fight that never ends any other way (the player walks off without the engine's own
+    /// disengage logic catching it, a stuck state this investigation has not observed but has
+    /// no way to rule out either) still returns the creature to normal mirroring on its own.
+    /// coop.ini `local_combat_timeout_s`.</summary>
+    private static readonly double LocalCombatTimeoutSeconds =
+        Math.Clamp(PluginConfig.ReadFloat("local_combat_timeout_s", 25f), 5f, 120f);
+
     /// <summary>
     /// Whether <paramref name="ownerObjectId"/> — an attacker id in the OWNER's id space, the
     /// space the enemy census and the phantom-damage channel both use — is an enemy this
@@ -241,11 +280,39 @@ internal sealed unsafe class EnemyPresenceController(SharedBlockView block)
         // billed to a completely different creature.
         _engagedCount = 0;
         _engagedAtTicks = 0;
+
+        // ROUND 39: same reason — a fight tracked by an id from the module just left behind
+        // must not keep a completely different creature in the new module excluded from the
+        // census by coincidence of numeric id reuse.
+        _locallyFightingId = 0;
+        block.LocalCombatExcludedId = 0;
     }
 
     public void OnFrame()
     {
         double now = _clock.Elapsed.TotalSeconds;
+
+        // Rebuilt from scratch every pass, so a body that stops being driven — or walks out
+        // of range — stops licensing an absorb on the very next pass rather than decaying.
+        // Reset HERE, ahead of everything below including MaintainLocalFight, so its own
+        // contribution (the excluded creature's id, re-added every frame it is still a real
+        // fight) is not immediately wiped by a reset that used to run much later.
+        _engagedCount = 0;
+
+        // ROUND 39: ahead of every early return below, on purpose. A conversation opening,
+        // the session command changing, or this controller being disabled mid-fight must
+        // never be able to leave a creature excluded from the census with nothing left that
+        // ever checks on it — the timeout safety net only means anything if it is actually
+        // reached every single frame, not just the frames where the rest of this method also
+        // runs. Also covers the count==0 case below directly: excluding the one creature
+        // being locally fought is exactly what can make EnemyPresenceCount drop to 0.
+        //
+        // Resolved fresh, never taken from the block: the agent-written pointer survives a
+        // module transition stale, and RecordEngagement/MaintainLocalFight both dereference
+        // this (same fault class as the EncounterController travel-follow crash).
+        nint player = Odyssey.GetPlayerCreaturePointer();
+        MaintainLocalFight(now, player);
+        block.LocalCombatExcludedId = _locallyFightingId;
 
         if (block.Command != SharedBlock.CommandSpawnAndDrive)
         {
@@ -283,15 +350,7 @@ internal sealed unsafe class EnemyPresenceController(SharedBlockView block)
             return;
         }
 
-        // Resolved fresh, never taken from the block: the agent-written pointer survives a
-        // module transition stale, and RecordEngagement dereferences this (same fault class
-        // as the EncounterController travel-follow crash).
-        nint player = Odyssey.GetPlayerCreaturePointer();
         int driven = 0;
-
-        // Rebuilt from scratch every pass, so a body that stops being driven — or walks out
-        // of range — stops licensing an absorb on the very next pass rather than decaying.
-        _engagedCount = 0;
 
         for (int i = 0; i < count; i++)
         {
@@ -468,15 +527,30 @@ internal sealed unsafe class EnemyPresenceController(SharedBlockView block)
             // bit, the local AI does not. See Odyssey.ClearPositionDirty.
             Odyssey.ClearPositionDirty(creature);
 
-            RecordEngagement(enemy.ObjectId, creature, player);
-
-            // The missing piece PermitAttacking/ClaimCreatureForFight never provided: a
-            // reason for the AI to decide to fight at all. See Odyssey.QueueAttackAction.
-            // Gated to the same engagement range as RecordEngagement — a mirrored enemy
-            // three rooms away has no business being handed a target.
-            if (player != 0 && IsEngaged(creature, player))
+            // ⚠ ROUND 39: RecordEngagement for EVERY nearby driven enemy USED TO run here
+            // unconditionally, licensing the absorb-standdown for all of them. That was
+            // harmless while QueueAttackAction never actually armed anything (rounds 9-32) —
+            // nothing was genuinely dealing local damage either way, so which ids were
+            // "engaged" made no real difference. It stopped being harmless the moment ONE
+            // specific creature could genuinely fight for real: every OTHER nearby enemy was
+            // still marked engaged by mere proximity, absorbing ITS forwarded damage too even
+            // though nothing local was replacing it — invulnerability against every enemy
+            // except the one actually fighting. Caught live, first real local_combat pass:
+            // "absorbed 2 forwarded damage... last attacker 0xE; this engine says
+            // in-combat=False" — the existing watchdog's own warning text, firing exactly as
+            // designed. MaintainLocalFight is now the ONLY place that marks engagement, and
+            // only for the one id it is actually driving a real fight for.
+            //
+            // ROUND 39: QueueAttackAction (Odyssey.cs) is PROVEN a permanent no-op for a
+            // creature still in the census — 30 rounds of live testing, never once armed.
+            // The only mechanism 38 rounds of investigation found that actually works is
+            // pulling the creature OUT of the census and letting its own engine-native AI
+            // take over, script-fired the same way round 27 first proved live. One fight at
+            // a time (see _locallyFightingId's own doc comment); a second engaged creature
+            // waits for the first to finish rather than starting a concurrent exclusion.
+            if (player != 0 && _locallyFightingId == 0 && IsEngaged(creature, player))
             {
-                Odyssey.QueueAttackAction(creature, *(uint*)(player + ObjId));
+                StartLocalFight(enemy.ObjectId, creature, now);
             }
         }
 
@@ -484,29 +558,85 @@ internal sealed unsafe class EnemyPresenceController(SharedBlockView block)
     }
 
     /// <summary>
-    /// Records a driven enemy as "close enough to be fighting this player HERE" -- the fact
-    /// that licenses IncomingDamageController to absorb the owner report for it.
-    ///
-    /// Planar distance: the Z of a driven body is the owner's, and a ramp between two players
-    /// standing in the same fight is a metre of height, not a different floor.
+    /// ROUND 39: pulls one mirrored enemy out of the census and lets the engine's own AI
+    /// fight it for real, via the exact mechanism 11 rounds (27-38) spent proving actually
+    /// works: firing the creature's own +0x260 event script through the engine's real
+    /// dispatcher, not replicating its native combat calls by hand. See
+    /// docs/research/shared-state-audit.md §2 for the full trail; <c>Odyssey.QueueAttackAction</c>
+    /// (kept, not deleted — its own doc now says why it never worked) is the thing this
+    /// replaces.
     /// </summary>
-    private static void RecordEngagement(uint ownerObjectId, nint creature, nint player)
+    private void StartLocalFight(uint ownerId, nint creature, double now)
     {
-        if (player == 0 || _engagedCount >= EngagedOwnerId.Length)
+        _locallyFightingId = ownerId;
+        _locallyFightingSince = now;
+        Odyssey.FireCreatureScriptSlot0x260(creature);
+        PluginHost.Log(
+            $"local combat: 0x{ownerId:X} pulled out of the census to fight for real "
+            + $"(timeout {LocalCombatTimeoutSeconds:F0}s)");
+    }
+
+    /// <summary>
+    /// ROUND 39: the per-frame heartbeat for whichever creature <see cref="StartLocalFight"/>
+    /// most recently armed. Runs every single frame regardless of every other early return in
+    /// <see cref="OnFrame"/> — see the call site's own comment for why that is load-bearing,
+    /// not incidental.
+    ///
+    /// Three ways a fight ends, checked in the order a player would actually notice them: the
+    /// engine's own creature reads dead (<see cref="Odyssey.IsCreatureDead"/> — genuinely
+    /// dead OR simply no longer resolvable, which are the same "nothing left to fight" case
+    /// from here), the player has moved out of engagement range (the same test
+    /// <see cref="IsEngaged"/> already licenses the absorb with), or the timeout has run out
+    /// (the safety net for anything the first two do not catch). Any of the three clears
+    /// <see cref="_locallyFightingId"/>, which is the ENTIRE re-inclusion mechanism: the
+    /// creature's id simply stops being read out of <see cref="SharedBlock.OffsetLocalCombatExcludedId"/>
+    /// on the very next pump, the agent resumes writing it into the published census, and
+    /// normal mirroring picks it back up exactly like any other tracked enemy — there is
+    /// nothing else to reconcile on rejoin, because nothing outside this controller's own
+    /// per-creature slot cache (<see cref="Forget"/>, already re-run for a fresh id) ever knew
+    /// it had left.
+    /// </summary>
+    private void MaintainLocalFight(double now, nint player)
+    {
+        if (_locallyFightingId == 0)
         {
             return;
         }
 
-        if (IsEngaged(creature, player))
+        nint creature = Odyssey.ResolveServerObject(_locallyFightingId);
+        bool dead = Odyssey.IsCreatureDead(creature);
+        bool disengaged = !dead && (player == 0 || !IsEngaged(creature, player));
+        bool timedOut = now - _locallyFightingSince > LocalCombatTimeoutSeconds;
+
+        if (dead || disengaged || timedOut)
         {
-            EngagedOwnerId[_engagedCount++] = ownerObjectId;
+            string reason = dead ? "dead or gone" : disengaged ? "player disengaged" : "timed out";
+            PluginHost.Log($"local combat: 0x{_locallyFightingId:X} fight ended ({reason}), rejoining the census");
+            _locallyFightingId = 0;
+            return;
         }
+
+        // Same licence RecordEngagement grants a normally-driven creature — this one just
+        // earns it here instead, since DriveOne no longer runs for an id the census does not
+        // publish any more.
+        if (_engagedCount < EngagedOwnerId.Length)
+        {
+            EngagedOwnerId[_engagedCount++] = _locallyFightingId;
+        }
+
+        // Matches the stamp at the bottom of a normal OnFrame pass exactly. Stamped here too
+        // because the count==0 early return (the common case once the one tracked enemy is
+        // the one now excluded) would otherwise never reach that stamp at all, and a stale
+        // engagement record is indistinguishable from a genuinely ended one to
+        // IsLocallyEngaged.
+        _engagedAtTicks = DateTime.UtcNow.Ticks;
     }
 
-    /// <summary>Planar distance test shared by <see cref="RecordEngagement"/> (licenses damage
-    /// absorption) and the local_combat attack-queuing gate — one fight radius, one place it is
-    /// computed. The Z of a driven body is the owner's, and a ramp between two players standing
-    /// in the same fight is a metre of height, not a different floor.</summary>
+    /// <summary>Planar distance test shared by <see cref="MaintainLocalFight"/> (licenses
+    /// damage absorption for the ONE creature actually fighting) and the local_combat
+    /// attack-initiation gate — one fight radius, one place it is computed. The Z of a driven
+    /// body is the owner's, and a ramp between two players standing in the same fight is a
+    /// metre of height, not a different floor.</summary>
     private static bool IsEngaged(nint creature, nint player)
     {
         Vec3 body = Odyssey.GetPosition(creature);

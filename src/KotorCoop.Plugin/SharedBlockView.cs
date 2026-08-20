@@ -303,6 +303,14 @@ internal sealed unsafe class SharedBlockView(byte* baseAddress)
         set => *U32(SharedBlock.OffsetEnemyPresenceCount) = value;
     }
 
+    /// <summary>ROUND 39: plugin-written, agent-read. See
+    /// <see cref="SharedBlock.OffsetLocalCombatExcludedId"/>.</summary>
+    public uint LocalCombatExcludedId
+    {
+        get => *U32(SharedBlock.OffsetLocalCombatExcludedId);
+        set => *U32(SharedBlock.OffsetLocalCombatExcludedId) = value;
+    }
+
     public EnemyPresenceView GetEnemyPresence(int index)
     {
         byte* slot = baseAddress + SharedBlock.OffsetEnemyPresenceSlots
