@@ -6880,6 +6880,15 @@ internal static unsafe class Odyssey
         // become the same self-defeating per-frame spam round 13 found and fixed for the bare
         // append call — it can only keep trying until it succeeds, then the outer gate closes
         // the door.
+        // ROUND 21 DIAGNOSTIC: MaxCleaveRange (0x004FFAD0) is a real, weapon-derived value —
+        // its sub-call (0x4FB0F0) reads a pointer at creature+0xA2C (an equipment slot) and
+        // branches on data reached through it. A driven puppet's equipment state has never
+        // been directly checked against this specific field. A null/zero pointer here would
+        // make the range gate degenerate for EVERY candidate, independent of any race — worth
+        // ruling in or out before trusting the "it's a scan-timing race" framing further,
+        // especially since point-blank positioning this round did not change the outcome.
+        nint equipSlotPtr = *(nint*)(creature + 0xA2C);
+
         CreateNewAttackActionsFn(creature, 1, 0, targetId);
 
         byte subIndexNow = *(byte*)(round + 0x96C);
@@ -6891,7 +6900,8 @@ internal static unsafe class Odyssey
                 $"queueattack ROUND20 diag: CreateNewAttackActionsFn(creature=0x{creature:X}, "
                 + $"target=0x{targetId:X}) returned. round+0x96C sub-index={subIndexNow} "
                 + $"sub+0xB0={subB0Now}, head action right after=0x{headRightAfterCreate:X}, "
-                + $"is fight action: {IsFightAction(headRightAfterCreate)}");
+                + $"is fight action: {IsFightAction(headRightAfterCreate)}, "
+                + $"ROUND21: creature+0xA2C equip slot ptr=0x{equipSlotPtr:X}");
         }
 
         int roundTimerAfter = *(int*)(round + 0x958);
