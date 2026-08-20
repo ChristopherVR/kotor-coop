@@ -190,6 +190,20 @@ public sealed class CoopHost : ICoopSession
     /// agent to re-declare to the game.</summary>
     public IReadOnlyList<ContainerLootRemoval> ContainerLootRemovals => _lootStore.Snapshot();
 
+    private readonly MaterialisedLootSender _materialisedLootSender = new();
+
+    /// <summary>
+    /// One of our own enemies just died holding this real loot; broadcast it reliably so every
+    /// mirroring peer's stand-in (if it has one — see
+    /// docs/research/enemy-materialisation.md §6) can receive the same items. Enqueue-only —
+    /// the tick loop, which owns the send buffer, does the actual broadcasting and retransmits.
+    /// A duplicate call for an id already in flight is a no-op (dedup lives in
+    /// <see cref="MaterialisedLootSender.Enqueue"/>), so a death-detection loop that fires
+    /// twice for the same creature never double-sends.
+    /// </summary>
+    public void PublishMaterialisedLoot(uint ownerEnemyId, IReadOnlyList<MaterialisedLootItem> items) =>
+        _materialisedLootSender.Enqueue(HostPeerId, ownerEnemyId, items, SessionClock.NowMs);
+
     /// <summary>The host is the enemy authority: its fights are the ones that count.</summary>
     public bool IsEnemyAuthority => true;
 
@@ -1193,6 +1207,7 @@ public sealed class CoopHost : ICoopSession
         BroadcastDialogue(now, recipients);
         BroadcastProgression(now, recipients);
         BroadcastContainerLoot(now, recipients);
+        BroadcastMaterialisedLoot(now, recipients);
         BroadcastPhantomDamage(recipients);
         BroadcastBarks(recipients);
         BroadcastTransitionMovies(recipients);
@@ -1213,6 +1228,31 @@ public sealed class CoopHost : ICoopSession
         List<uint> recipientIds = [.. recipients.Select(p => p.Id)];
 
         foreach (ContainerLootPacket op in _lootSender.CollectDue(recipientIds, now))
+        {
+            int length = PacketCodec.Write(_sendBuffer, op);
+            if (length == 0)
+            {
+                continue;
+            }
+
+            foreach (PeerConnection peer in recipients)
+            {
+                _channel.Send(peer.EndPoint, _sendBuffer.AsSpan(0, length));
+            }
+        }
+    }
+
+    /// <summary>
+    /// Retransmits captured materialised-enemy death-loot to every client until each has acked.
+    /// Reliable rather than snapshot-broadcast, for the same reason as
+    /// <see cref="BroadcastContainerLoot"/>: an enemy dies once, so a dropped packet must not
+    /// silently mean a mirroring peer's stand-in never receives it.
+    /// </summary>
+    private void BroadcastMaterialisedLoot(long now, List<PeerConnection> recipients)
+    {
+        List<uint> recipientIds = [.. recipients.Select(p => p.Id)];
+
+        foreach (MaterialisedLootPacket op in _materialisedLootSender.CollectDue(recipientIds, now))
         {
             int length = PacketCodec.Write(_sendBuffer, op);
             if (length == 0)
@@ -1495,6 +1535,15 @@ public sealed class CoopHost : ICoopSession
 
                 break;
 
+            case PacketType.MaterialisedLootAck:
+                if (PacketCodec.ReadMaterialisedLootAck(span) is { } materialisedLootAck)
+                {
+                    _materialisedLootSender.Acknowledge(
+                        materialisedLootAck.PeerId, materialisedLootAck.OpSequence);
+                }
+
+                break;
+
             case PacketType.JournalOp:
                 HandleJournalOp(datagram.From, span);
                 break;
@@ -1682,6 +1731,15 @@ public sealed class CoopHost : ICoopSession
             // Anything still unacked backed off while there was nobody to send it to; a peer
             // arriving is the moment to try again rather than 4 seconds later.
             _lootSender.ResetBackoff();
+
+            // Same reasoning, for materialised-enemy death loot. ⚠ UNLIKE container loot,
+            // there is no permanent store to re-offer from here — MaterialisedLootSender only
+            // tracks ops still in flight, and an op already retired (every THEN-connected peer
+            // acked it while this one was away) is gone for good. A death this peer missed
+            // entirely during an outage will not be resent; only a death still pending when it
+            // reconnects gets this speed-up. Narrow, and the same class of gap
+            // enemy-materialisation.md §6 already flags as open, not new to this pass.
+            _materialisedLootSender.ResetBackoff();
         }
 
         WelcomePacket welcome = new(

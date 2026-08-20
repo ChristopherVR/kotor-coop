@@ -157,6 +157,33 @@ public sealed record ContainerLootPacket(
 /// </summary>
 public sealed record ContainerLootAckPacket(uint PeerId, uint OpSequence);
 
+/// <summary>One item off a materialised enemy's real corpse, by resref plus the same identity
+/// fields <see cref="GroundItem"/> carries. No object id: the receiving side spawns a fresh
+/// local item, it does not need to name the sender's.</summary>
+public readonly record struct MaterialisedLootItem(string Resref, ItemIdentity Identity);
+
+/// <summary>
+/// The full real loot of one owner-authoritative enemy that just died, for a mirroring peer's
+/// materialised stand-in to receive. See <see cref="PacketType.MaterialisedLoot"/> for why this
+/// is host -&gt; clients only and reliable. <paramref name="OwnerEnemyId"/> is the id in the
+/// HOST's own id space — the same id <c>CheatController.GiveLoot</c> already expects and
+/// translates via <c>MaterialisedEnemies.ToLocal</c>.
+/// </summary>
+public sealed record MaterialisedLootPacket(
+    uint OriginPeerId, uint OpSequence, uint OwnerEnemyId,
+    IReadOnlyList<MaterialisedLootItem> Items)
+{
+    /// <summary>A corpse's worth of loot fits comfortably inside one datagram at this cap —
+    /// asserted by <c>PacketCodecTests</c>. A count past it is truncated at capture time, not
+    /// silently dropped whole.</summary>
+    public const int MaxItems = 8;
+}
+
+/// <summary>A client's acknowledgement of a <see cref="MaterialisedLootPacket"/>. Carries the
+/// acking peer id so the host, which broadcasts to several clients, can tell whose ack this
+/// is — exactly like <see cref="ContainerLootAckPacket"/>.</summary>
+public sealed record MaterialisedLootAckPacket(uint PeerId, uint OpSequence);
+
 public sealed record ItemSyncRequestPacket(uint PeerId, uint KnownVersion);
 
 public sealed record ItemSnapshotPacket(uint Version, IReadOnlyList<GroundItem> Items);

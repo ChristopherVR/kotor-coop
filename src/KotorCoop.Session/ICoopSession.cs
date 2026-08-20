@@ -269,6 +269,22 @@ public interface ICoopSession : IDisposable
     /// </summary>
     IReadOnlyList<ContainerLootRemoval> ContainerLootRemovals => [];
 
+    /// <summary>
+    /// Host only: announces that <paramref name="ownerEnemyId"/> — one of the host's own
+    /// enemies — just died holding <paramref name="items"/>, delivered reliably to every client
+    /// so a mirroring peer's materialised stand-in (if it has one for this id — see
+    /// docs/research/enemy-materialisation.md §6) can receive the same real loot. A client is a
+    /// no-op: only the host's engine ever holds the real corpse to read this from.
+    /// </summary>
+    void PublishMaterialisedLoot(uint ownerEnemyId, IReadOnlyList<MaterialisedLootItem> items) { }
+
+    /// <summary>
+    /// Client only: every materialised-enemy death-loot packet received since the last drain,
+    /// oldest first, for the agent to apply and clear. Empty on the host, which never receives
+    /// this (it is the only sender). Matches <see cref="DrainTransitionMovies"/>'s shape.
+    /// </summary>
+    IReadOnlyList<MaterialisedLootPacket> DrainMaterialisedLoot() => [];
+
     /// <summary>The shared quest journal, merged upward across every player.</summary>
     JournalStore Journal { get; }
 

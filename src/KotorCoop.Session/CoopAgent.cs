@@ -1650,6 +1650,17 @@ public sealed class CoopAgent(IGameBridge bridge, ICoopSession session, AgentSet
         }
     }
 
+    /// <summary>Owner-authority side only: enemy ids read as alive on the last clean census in
+    /// <see cref="_deathCensusModule"/>. An id that drops out of this set with a
+    /// <c>Dead</c> reading is a genuine death; one that drops out silently (out of census
+    /// range, cap-shed) is not — see <see cref="DetectMaterialisedDeaths"/>.</summary>
+    private readonly HashSet<uint> _knownAliveEnemies = [];
+
+    /// <summary>The module <see cref="_knownAliveEnemies"/> was built for. Object ids are
+    /// reassigned per module load, so a module change must clear the set rather than reading
+    /// last module's ids as freshly dead this module.</summary>
+    private string _deathCensusModule = string.Empty;
+
     /// <summary>
     /// Moves enemy state between the game and the session in whichever direction this peer
     /// is responsible for. Exactly one peer owns enemies; it publishes what its own engine
@@ -1715,7 +1726,9 @@ public sealed class CoopAgent(IGameBridge bridge, ICoopSession session, AgentSet
             // talking, would have their own fight go quiet for the duration.
             if (!bridge.IsInDialogue)
             {
-                session.PublishEnemies(censusModule, bridge.ReadEnemies(otherPlayers));
+                List<EnemyState> ownedEnemies = bridge.ReadEnemies(otherPlayers);
+                session.PublishEnemies(censusModule, ownedEnemies);
+                DetectMaterialisedDeaths(censusModule, ownedEnemies);
             }
 
             // Where a peer's damage becomes real. Its copies are pinned at 1 hp, so its
@@ -1820,6 +1833,86 @@ public sealed class CoopAgent(IGameBridge bridge, ICoopSession session, AgentSet
             if (dealt.Count > 0)
             {
                 session.ReportEnemyDamage(local.Module, generation, dealt);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Owner-authority side: notices which enemies just died and captures their real corpses'
+    /// actual loot for <see cref="ICoopSession.PublishMaterialisedLoot"/> — the automatic wire
+    /// docs/research/enemy-materialisation.md §6 was still missing. A death is an id dropping
+    /// out of <see cref="_knownAliveEnemies"/> WITH a <c>Dead</c> reading, not merely dropping
+    /// out of the census — the census sheds by distance and cap, and a creature that is merely
+    /// far away must never be read as a kill.
+    ///
+    /// One <see cref="IGameBridge.ReadPossessedItems"/> sweep for however many died on this
+    /// tick, not one per creature — see that method's own doc for why a per-death call would
+    /// be a real cost against an ambush wave dying together.
+    /// </summary>
+    private void DetectMaterialisedDeaths(string module, IReadOnlyList<EnemyState> enemies)
+    {
+        if (!string.Equals(module, _deathCensusModule, StringComparison.OrdinalIgnoreCase))
+        {
+            // A fresh module: ids are reassigned per load, so anything remembered from the
+            // last one names a different creature now (or nothing at all). Seed from this
+            // census rather than reading every currently-alive id as freshly dead.
+            _deathCensusModule = module;
+            _knownAliveEnemies.Clear();
+            foreach (EnemyState enemy in enemies)
+            {
+                if (!enemy.Dead)
+                {
+                    _knownAliveEnemies.Add(enemy.ObjectId);
+                }
+            }
+
+            return;
+        }
+
+        HashSet<uint>? newlyDead = null;
+        foreach (EnemyState enemy in enemies)
+        {
+            if (enemy.Dead)
+            {
+                if (_knownAliveEnemies.Remove(enemy.ObjectId))
+                {
+                    (newlyDead ??= []).Add(enemy.ObjectId);
+                }
+            }
+            else
+            {
+                _knownAliveEnemies.Add(enemy.ObjectId);
+            }
+        }
+
+        if (newlyDead is null)
+        {
+            return;
+        }
+
+        Dictionary<uint, List<MaterialisedLootItem>> byOwner = [];
+        foreach ((uint possessor, string resref, ItemIdentity identity) in
+            bridge.ReadPossessedItems(newlyDead))
+        {
+            if (resref.Length == 0)
+            {
+                continue;
+            }
+
+            if (!byOwner.TryGetValue(possessor, out List<MaterialisedLootItem>? items))
+            {
+                items = [];
+                byOwner[possessor] = items;
+            }
+
+            items.Add(new MaterialisedLootItem(resref, identity));
+        }
+
+        foreach (uint deadId in newlyDead)
+        {
+            if (byOwner.TryGetValue(deadId, out List<MaterialisedLootItem>? items) && items.Count > 0)
+            {
+                session.PublishMaterialisedLoot(deadId, items);
             }
         }
     }

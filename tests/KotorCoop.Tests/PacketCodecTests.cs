@@ -384,6 +384,54 @@ public class PacketCodecTests
     }
 
     [Fact]
+    public void MaterialisedLootPacketsRoundTrip()
+    {
+        Span<byte> buffer = stackalloc byte[ProtocolConstants.MaxPacketSize];
+
+        MaterialisedLootItem[] items =
+        [
+            new MaterialisedLootItem("g_w_blstrpstl001", new ItemIdentity(1, 0, 0, 0, ItemIdentity.FlagKnown)),
+            new MaterialisedLootItem(
+                "g_a_class4001",
+                new ItemIdentity(20, 3, 50, 0x5, ItemIdentity.FlagKnown | ItemIdentity.FlagIdentified)),
+        ];
+
+        MaterialisedLootPacket op = new(1, 42, 0xE, items);
+        int opLength = PacketCodec.Write(buffer, op);
+        MaterialisedLootPacket? read = PacketCodec.ReadMaterialisedLoot(buffer[..opLength]);
+
+        Assert.NotNull(read);
+        Assert.Equal(op.OriginPeerId, read.OriginPeerId);
+        Assert.Equal(op.OpSequence, read.OpSequence);
+        Assert.Equal(op.OwnerEnemyId, read.OwnerEnemyId);
+        Assert.Equal(items, read.Items);
+
+        MaterialisedLootAckPacket ack = new(3, 42);
+        int ackLength = PacketCodec.Write(buffer, ack);
+        Assert.Equal(ack, PacketCodec.ReadMaterialisedLootAck(buffer[..ackLength]));
+    }
+
+    [Fact]
+    public void MaterialisedLootFitsInOneDatagramAtMaxItems()
+    {
+        Span<byte> buffer = stackalloc byte[ProtocolConstants.MaxPacketSize];
+
+        // Every resref at its cap length, which is the true worst case for one death.
+        MaterialisedLootItem[] items = [.. Enumerable.Range(1, MaterialisedLootPacket.MaxItems)
+            .Select(i => new MaterialisedLootItem(
+                new string('a', ProtocolConstants.MaxResrefLength),
+                new ItemIdentity((ushort)i, 3, 50, 0xFFFFFFFF, 0xFF)))];
+
+        MaterialisedLootPacket op = new(1, 1, 0xE, items);
+        int length = PacketCodec.Write(buffer, op);
+
+        Assert.True(length > 0);
+        MaterialisedLootPacket? read = PacketCodec.ReadMaterialisedLoot(buffer[..length]);
+        Assert.NotNull(read);
+        Assert.Equal(MaterialisedLootPacket.MaxItems, read.Items.Count);
+    }
+
+    [Fact]
     public void FullItemSnapshotFitsInOneDatagram()
     {
         Span<byte> buffer = stackalloc byte[ProtocolConstants.MaxPacketSize];
