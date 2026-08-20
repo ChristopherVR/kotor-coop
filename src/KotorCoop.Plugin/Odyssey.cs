@@ -6348,6 +6348,45 @@ internal static unsafe class Odyssey
         (delegate* unmanaged[Thiscall]<nint, int, int, void>)0x004D28F0;
 
     /// <summary>
+    /// CSWSCombatRound + this = the round; a small, three-branch, two-arg setter at
+    /// <c>0x004D2920</c> — a SEPARATE function from <see cref="SetRoundTimerActiveFn"/>
+    /// (which ends with `ret 8` at <c>0x004D2918</c>; this one starts five NOP-padding bytes
+    /// later at <c>0x004D2920</c> and is its own complete function with three `ret 8` exits).
+    /// VERIFIED by full disassembly of all three branches AND cross-checked against the exact
+    /// same engine combat-decision routine that calls <c>StartCombatRound</c> and
+    /// <see cref="SetRoundTimerActiveFn"/> (<c>0x005BC630</c>/<c>0x005BC6BF</c>, both
+    /// <c>push 0; push &lt;delayMs&gt;; call 0x4D2920</c>, immediately after the matching
+    /// <c>SetRoundTimerActiveFn</c> call in the same sequence):
+    ///
+    /// <c>round+0x964 = arg2</c> always, first. Then: if <c>arg2 != 0</c>, <c>round+0x960 =
+    /// arg1</c> directly. If <c>arg2 == 0</c>: <c>arg1 == 0</c> sets <c>round+0x960 = 0</c>;
+    /// otherwise, if the CURRENT <c>round+0x960</c> is already positive it ACCUMULATES
+    /// (<c>round+0x960 += arg1</c>), else it sets <c>round+0x960 = arg1</c> directly.
+    ///
+    /// This is the actual answer to why the previous round's fix (this call was missing
+    /// entirely) still did not work, live-confirmed by disassembling <c>UpdateCombatRoundTimer</c>
+    /// (<c>0x004FAF20</c>) past its <c>round+0x958</c> gate: passing that gate is not enough.
+    /// A SECOND check follows — <c>ebx = round+0x960 - creature+0xCC</c> (creature's own
+    /// current-time-ish field) — and only when that is POSITIVE does the function reach the
+    /// real action-processing call (<c>0x005B8050</c>, via <c>0x004FAFA7</c>-<c>0x004FAFD9</c>).
+    /// When it is not positive (which it never is if <c>round+0x960</c> was left at its
+    /// `StartCombatRound`-zeroed default — <c>StartCombatRound</c> zeroes THIS field too,
+    /// confirmed by reading its full body, so it does not establish it either), the function
+    /// instead takes a shortcut (<c>0x004FAFE3</c> onward) that resolves a leftover
+    /// <c>round+0x9CC</c> target through a chain of vtable validity checks and then calls the
+    /// round-reset helper (<c>0x004D4620</c>, confirmed by <c>fieldwrites.py 0x958</c> and
+    /// cross-referenced via <c>xrefs.py</c> to a call site right where this shortcut ends,
+    /// <c>0x004FB0BA</c>) — which zeroes <c>round+0x958</c> back to 0 along with <c>+0x934</c>,
+    /// <c>+0x944</c>, <c>+0x94c</c>, <c>+0x960</c> and others. This is why the diagnostic
+    /// always read <c>BEFORE=0</c>: not "normal consumption" and not "something else resetting
+    /// it before the gate" as originally framed — the ONLY branch reachable without this call
+    /// is the shortcut that ends in exactly that reset, every time, without ever reaching the
+    /// action-processing call that would change the head action.
+    /// </summary>
+    private static readonly delegate* unmanaged[Thiscall]<nint, int, int, void> SetRoundDelayFn =
+        (delegate* unmanaged[Thiscall]<nint, int, int, void>)0x004D2920;
+
+    /// <summary>
     /// The missing half of `local_combat`: nothing else ever gives a mirrored enemy a reason
     /// to attack. `CSWSCreature::CreateNewAttackActions` (the ONLY place a NEW attack action
     /// gets queued, per `docs/research/combat-participation.md` §1.1) has exactly one caller,
@@ -6433,18 +6472,29 @@ internal static unsafe class Odyssey
         // before/after so a live pass can see the actual before/after state, not just infer it.
         nint pendingListBefore = *(nint*)(round + 0x9B0);
         int roundTimerBefore = *(int*)(round + 0x958);
+        int roundDelayBefore = *(int*)(round + 0x960);
 
         SetRoundTimerActiveFn(round, 1, (int)(*(uint*)(creature + ObjectIdOffset)));
+
+        // The second gate UpdateCombatRoundTimer checks past round+0x958 — see SetRoundDelayFn.
+        // 0x5DC (1500ms) matches the delay AddAttackActionFn's own 4th argument already uses
+        // for this same round elsewhere in this call; the engine's own two call sites pass a
+        // computed value here, but this function's own logic (SET or ACCUMULATE a duration)
+        // does not care about the source, only that it lands a positive value in round+0x960.
+        SetRoundDelayFn(round, 0x5DC, 0);
+
         AddAttackActionFn(round, targetId, 0, 0, 0x5DC, 1);
 
         int roundTimerAfter = *(int*)(round + 0x958);
+        int roundDelayAfter = *(int*)(round + 0x960);
         int headAfter = GetHeadActionType(creature);
         if (diagLog)
         {
             PluginHost.Log(
-                $"queueattack diag: CALLED SetRoundTimerActive+AddAttackAction(round=0x{round:X}, target=0x{targetId:X}) on creature 0x{creature:X}, "
+                $"queueattack diag: CALLED SetRoundTimerActive+SetRoundDelay+AddAttackAction(round=0x{round:X}, target=0x{targetId:X}) on creature 0x{creature:X}, "
                 + $"round+0x9B0 pending-list = 0x{pendingListBefore:X}, "
                 + $"round+0x958 timer-active BEFORE={roundTimerBefore} AFTER={roundTimerAfter}, "
+                + $"round+0x960 delay BEFORE={roundDelayBefore} AFTER={roundDelayAfter}, "
                 + $"head action before 0x{headType:X}, IMMEDIATELY after 0x{headAfter:X} "
                 + $"(is fight action now: {IsFightAction(headAfter)})");
         }

@@ -575,6 +575,71 @@ inside `UpdateCombatRoundTimer`'s branch itself (the disassembly needs to go fur
 and that write needs to be found with `fieldwrites.py 0x958` cross-referenced against a timestamp
 window rather than assumed to be `UpdateCombatRoundTimer`'s own consumption.
 
+### `UpdateCombatRoundTimer` has a SECOND gate past `+0x958`, and it was never established (2026-08-20, seventh round)
+
+Full disassembly of `UpdateCombatRoundTimer` (`0x004FAF20`) past the `+0x958` check settles both
+prior explanations at once: **neither is right.** Passing the `+0x958` gate is necessary but not
+sufficient. Immediately after, the function computes `ebx = round+0x960 - creature+0xCC` (creature's
+own current-tick-ish field) and only when `ebx > 0` does it reach the real action-processing call,
+`0x005B8050` (via `0x004FAFA7`-`0x004FAFD9`). When `ebx <= 0` — which it always is if `round+0x960`
+was left at its constructed/reset default of 0, since `creature+0xCC` is a live, positive,
+ever-increasing tick counter — the function instead takes a shortcut (`0x004FAFE3` onward) that
+resolves a leftover `round+0x9CC` target through a chain of vtable validity checks
+(`AsSWSObject`/`GetDead`/two more vtable calls) and, if all pass, calls the SAME round-reset helper
+(`0x004D4620`, the one `fieldwrites.py 0x958` already found) that zeroes `+0x958` back to 0 along
+with `+0x934`, `+0x944`, `+0x94c`, `+0x960` and others — **cross-confirmed via `xrefs.py 0x4D4620`**,
+which lists `0x004FB0BA` (the exact end of this shortcut) among its 9 call sites. This is why the
+diagnostic always read `BEFORE=0`: the only reachable branch without `+0x960` being set ends in
+exactly this reset, every time, without ever reaching `0x5B8050` — the call that would actually
+change the head action.
+
+**`StartCombatRound` does NOT establish `+0x960` either — it zeroes it too** (`0x004D602F`,
+confirmed by reading its full body), so the previous round's conclusion that `StartCombatRound`
+"turned out not to be necessary" was based on an incomplete trace; it stopped at the first gate.
+
+**Found the real setter with the same method as before — `fieldwrites.py 0x960`, not more
+guessing.** `0x004D2932` sits five NOP-padding bytes after `SetRoundTimerActiveFn`'s own `ret 8`
+at `0x004D2918` — a genuinely SEPARATE, complete function (`0x004D2920`, three `ret 8` exits, fully
+disassembled, no unexplored branches): `round+0x964 = arg2` always first, then if `arg2 != 0`,
+`round+0x960 = arg1` directly; if `arg2 == 0`, either zeroes `+0x960` (both args 0) or
+sets-or-accumulates it from `arg1`. **`xrefs.py 0x4D2920` finds 21 call sites**, two of which
+(`0x005BC630`, `0x005BC6BF`) sit in the EXACT SAME engine combat-decision routine that makes the
+already-confirmed `StartCombatRound` and `SetRoundTimerActiveFn` calls, immediately after each
+`SetRoundTimerActiveFn` call, both `push 0; push <delayMs>; call 0x4D2920` — the third setup step
+the engine always pairs with the other two, that this fix was still missing.
+
+**Implemented**, `src/KotorCoop.Plugin/Odyssey.cs`: `SetRoundDelayFn` wraps `0x004D2920`.
+`QueueAttackAction` now calls `SetRoundDelayFn(round, 0x5DC, 0)` immediately after
+`SetRoundTimerActiveFn` and before `AddAttackActionFn` — `0x5DC` (1500ms) matches the delay already
+used elsewhere in the same call for consistency; the function's own logic does not care about the
+source of the value, only that a positive duration lands in `round+0x960`. Diagnostic extended to
+log `round+0x960` before/after alongside the existing `+0x958`/`+0x9B0` reads. Full suite 953/953,
+both builds clean.
+
+**Live pass attempted, blocked by an unrelated baseline reproduction failure — not by this fix.**
+Rebuilt, reinstalled into both live game directories, `local_combat=1` set on both, host launched
+alone and `tp`'d beside the same `sithsoldier` pair every prior round used (`(29.74,144.46)` /
+`(31.86,141.99)` in `END_M01AA`, player landed within ~1.7m of both) — but the host's OWN NATIVE AI
+never aggroed at all: 40+ seconds of no movement, no HP change, no combat-state change. A second
+attempt at a completely different creature pair elsewhere in the module (`end_sith2`/`end_sith3` at
+`(46.78,33.27)`/`(45.18,32.45)`) showed the identical non-response over another 20+ seconds. This is
+the HOST's own unmodified engine failing to do what every prior round's host reliably did in ~1s —
+something this session's environment, save state, or the specific `sithsoldier` pair's own scripting
+(nearby `end_bridgerep1`/`end_bridgerep2`/`carth` tags suggest this location may be a scripted bridge
+sequence, not a generic wild encounter) is different about, and it is NOT something `local_combat` or
+this fix could cause: the host plays with its own completely unmodified engine, no plugin code from
+this investigation runs on host-owned creatures at all. `creatures.ps1` also read the player's own
+`hp` column as `0` throughout despite `god` reporting "1 hp floor" already on — plausibly the same
+"a getter that is one `mov` is not proof the field is live" PC-read limitation noted elsewhere in
+this document, but worth a look before the next live pass in case it is connected.
+
+**The fix itself is implemented, unit-tested, and evidence-complete** (full disassembly of both
+`UpdateCombatRoundTimer` past both gates and `SetRoundDelayFn` in its entirety, cross-verified
+against real engine call sites for every value used) — what remains is purely procedural: get a
+real fight going on the host at all, in this environment, before the client-side mechanism this
+section is actually about can be exercised. `local_combat` stays off. Config reverted to
+`local_combat=0` in both installs, rig fully torn down.
+
 ## 3. A client's XP is actively erased
 
 `ProgressionSnapshotPacket` is host→client only and absolute (CoopAgent.cs, `PumpProgression`):
