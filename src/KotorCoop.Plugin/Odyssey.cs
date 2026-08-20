@@ -6324,6 +6324,30 @@ internal static unsafe class Odyssey
         (delegate* unmanaged[Thiscall]<nint, uint, int, int, int, int, void>)0x004D38B0;
 
     /// <summary>
+    /// CSWSCombatRound + this = the round; a small, two-arg setter at <c>0x004D28F0</c>.
+    /// VERIFIED by disassembly of the function itself AND cross-checked against three real,
+    /// byte-identical call sites in the engine's own combat-decision code
+    /// (<c>0x005BC61E</c>/<c>0x005BC67D</c>/<c>0x005BC6AD</c>, all <c>push &lt;objectId&gt;;
+    /// push 1; call 0x4D28F0</c>): unconditionally writes <c>round+0x95c = arg2</c> then
+    /// <c>round+0x958 = arg1</c>, in that order, with no branch that skips either store when
+    /// arg1 is nonzero.
+    ///
+    /// This is the actual missing initiation step, found one round after
+    /// <see cref="AddAttackActionFn"/> was confirmed to append correctly: `round+0x9B0` being
+    /// non-null (VERIFIED live) only means the action is ON the list — `UpdateCombatRoundTimer`
+    /// (<c>0x004FAF20</c>, called unconditionally every tick for every creature, no
+    /// combat-state or mirrored gate at its call site) reads `round+0x958` and, if it's still
+    /// the zero `StartCombatRound` (`0x004D5F70`) itself leaves it at, takes a bare
+    /// `IncrementTimer`-only fallback (`0x004FB0D3`) that never touches the queued action at
+    /// all — that fallback is the actual silent-discard mechanism, not anything inside
+    /// `AddAttackAction`. This call is what the engine's own code makes, in the same function
+    /// that calls `StartCombatRound`, to flip `+0x958` nonzero afterward so the real
+    /// processing branch runs instead.
+    /// </summary>
+    private static readonly delegate* unmanaged[Thiscall]<nint, int, int, void> SetRoundTimerActiveFn =
+        (delegate* unmanaged[Thiscall]<nint, int, int, void>)0x004D28F0;
+
+    /// <summary>
     /// The missing half of `local_combat`: nothing else ever gives a mirrored enemy a reason
     /// to attack. `CSWSCreature::CreateNewAttackActions` (the ONLY place a NEW attack action
     /// gets queued, per `docs/research/combat-participation.md` §1.1) has exactly one caller,
@@ -6398,25 +6422,29 @@ internal static unsafe class Odyssey
             return;
         }
 
-        // TEMPORARY DIAGNOSTIC (2026-08-20, round 2) — instruction-level disassembly of
-        // AddAttackAction (0x004D38B0) found every allocation path funnels through a shared
-        // append helper (0x004D3660) that discards the freshly-allocated node without linking
-        // it in if round+0x9B0 (the round's own pending-action list) is null. This one read,
-        // taken in the SAME frame as the call below, is the single cheap fact that decides
-        // between the two remaining candidates: null means AddAttackAction's own silent-discard
-        // path is confirmed and StartCombatRound needs calling first; non-null means this
-        // branch is a dead end and the real cause is upstream of AddAttackAction entirely.
-        // See docs/research/shared-state-audit.md §2. Remove once this is settled.
-        nint pendingList = *(nint*)(round + 0x9B0);
+        // round+0x9B0 (the pending-action list) was CONFIRMED non-null live on two different
+        // mirrored creatures over a full failed fight — AddAttackAction's own append path is
+        // not the problem. round+0x958 is: it gates whether UpdateCombatRoundTimer (called
+        // unconditionally every tick, no mirrored/combat-state gate) does anything with a
+        // queued action at all, or just increments a timer and returns. StartCombatRound
+        // leaves it at 0; only this setter (see SetRoundTimerActiveFn) flips it — and the
+        // engine's own code always calls it in the same breath as StartCombatRound, which our
+        // driven puppet never gets because its own AI script never runs. Read both offsets
+        // before/after so a live pass can see the actual before/after state, not just infer it.
+        nint pendingListBefore = *(nint*)(round + 0x9B0);
+        int roundTimerBefore = *(int*)(round + 0x958);
 
+        SetRoundTimerActiveFn(round, 1, (int)(*(uint*)(creature + ObjectIdOffset)));
         AddAttackActionFn(round, targetId, 0, 0, 0x5DC, 1);
 
+        int roundTimerAfter = *(int*)(round + 0x958);
         int headAfter = GetHeadActionType(creature);
         if (diagLog)
         {
             PluginHost.Log(
-                $"queueattack diag: CALLED AddAttackAction(round=0x{round:X}, target=0x{targetId:X}) on creature 0x{creature:X}, "
-                + $"round+0x9B0 pending-list pointer BEFORE the call = 0x{pendingList:X}, "
+                $"queueattack diag: CALLED SetRoundTimerActive+AddAttackAction(round=0x{round:X}, target=0x{targetId:X}) on creature 0x{creature:X}, "
+                + $"round+0x9B0 pending-list = 0x{pendingListBefore:X}, "
+                + $"round+0x958 timer-active BEFORE={roundTimerBefore} AFTER={roundTimerAfter}, "
                 + $"head action before 0x{headType:X}, IMMEDIATELY after 0x{headAfter:X} "
                 + $"(is fight action now: {IsFightAction(headAfter)})");
         }

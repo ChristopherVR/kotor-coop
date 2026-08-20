@@ -437,6 +437,111 @@ directly re-verifying the field this reader uses against the field `0x004D3660` 
 rather than assuming they're the same list. (a) and (c) are both cheap, targeted disassembly;
 (b) is the natural next full read.
 
+### The append was never the problem — nothing was running to consume it (2026-08-20, fourth round)
+
+Wrong question. `AddAttackAction` appending to a genuinely non-null `round+0x9B0` is not evidence
+the append *worked* in the sense that matters — it only proves the LIST HAS SPACE. Whether
+anything ever looks at that list again is a separate mechanism entirely, and it does not.
+
+**`UpdateCombatRoundTimer` (`0x004FAF20`) is the function that would.** Confirmed called
+unconditionally every tick for every creature, no mirrored/combat-state gate anywhere near its
+call site (`0x004FE300`) — so it fires on our mirrored `sithsoldier` bodies exactly as it does on
+a real one. Its very first real decision, disassembled directly:
+
+```
+0x004FAF4A  mov ecx, dword ptr [edi + 0x9c8]   ; round = creature->CombatRound
+0x004FAF50  mov eax, dword ptr [ecx + 0x958]   ; eax = round->+0x958
+0x004FAF56  test eax, eax
+0x004FAF58  je 0x4fb0d3                         ; ZERO -> bare fallback, nothing else runs
+...
+0x004FB0D3  mov edx, dword ptr [edi + 0xcc]
+0x004FB0D9  push edx
+0x004FB0DA  call 0x4d4c10                       ; IncrementTimer(edx) — literally just this, then ret
+0x004FB0DF  ...ret
+```
+
+If `round+0x958` is zero, `UpdateCombatRoundTimer` runs `IncrementTimer` and returns — it never
+reaches the branch (`0x4d45e0`/`0x4d45b0`/`0x5b8050`) that would process a queued action into
+anything `GetHeadActionType` sees change. **This is the actual silent-discard mechanism**,
+downstream of `AddAttackAction` entirely — not inside it, which is why every precondition inside
+`AddAttackAction` checked out clean and it still did nothing observable.
+
+**`StartCombatRound` (`0x004D5F70`) was disassembled in full and does NOT set `+0x958` nonzero —
+it sets it to ZERO**, unconditionally, near the end of its own body:
+
+```
+0x004D6019  mov dword ptr [esi + 0x934], 1      ; the round "active" flag -> 1
+0x004D6023  mov dword ptr [esi + 0x944], ebp     ; ebp = 0 (xor ebp,ebp earlier)   elapsed timer -> 0
+0x004D6029  mov dword ptr [esi + 0x958], ebp     ; -> 0, a FRESH round's timer-active field starts at 0
+```
+
+This directly refutes the prior round's hypothesis (`StartCombatRound` sets `+0x958`) — it does
+the opposite. `+0x934` (a real boolean, confirmed set to `1` here) is the round's "active" flag;
+`+0x958` is something else, reset to a clean 0 as part of a fresh start, same as `+0x944` (the
+elapsed-time accumulator) and several neighbouring fields.
+
+**Found the real setter by using `fieldwrites.py` instead of guessing further.** `python
+tools/fieldwrites.py 0x958` lists every instruction in the binary that writes that offset — 9
+total, one of which is `StartCombatRound` (above, zeroing it) and one of which (`0x004D2906`) is
+inside a small, self-contained two-argument function that does nothing else:
+
+```
+0x004D28F0  mov edx, dword ptr [esp + 8]        ; edx = arg2
+0x004D28F4  mov eax, dword ptr [esp + 4]        ; eax = arg1
+0x004D28F8  mov dword ptr [ecx + 0x95c], edx    ; +0x95c = arg2   (unconditional)
+0x004D28FE  mov edx, dword ptr [ecx + 0x964]
+0x004D2904  test edx, edx
+0x004D2906  mov dword ptr [ecx + 0x958], eax    ; +0x958 = arg1   (unconditional, both stores
+0x004D290C  je 0x4d2918                          ; happen before this branch is even tested)
+...
+```
+
+**`xrefs.py 0x4D28F0` finds 23 call sites.** Three of them sit in the exact same function that
+made all three `StartCombatRound` calls this section already traced (the per-attacker
+combat-decision routine near `0x5BC49F`–`0x5BC6C4`) — and all three are byte-identical in shape:
+
+```
+0x005BC60F  push edx            ; edx = the relevant creature's own object id (esi+4, or a
+                                 ; resolved target's, depending which of the 3 sites)
+0x005BC61C  push 1              ; arg1 (last pushed) = literal 1, EVERY site, no exceptions
+0x005BC61E  call 0x4d28f0
+```
+
+Same pattern repeats at `0x5BC67D` and `0x5BC6AD`, once for the attacker's own round (right after
+the `StartCombatRound` branch converges) and twice more for a resolved target's round (retaliation
+setup, paired with `target+0x4DC = 1` a few lines earlier — a field 4 bytes from `+0x4E0`, the
+`FlagInCombat` field this entire section opened with). **This is the missing initiation step the
+engine's own code always pairs with `StartCombatRound`, and our driven puppet — whose AI script
+never runs — never got it.**
+
+**Implemented, `src/KotorCoop.Plugin/Odyssey.cs`:** `SetRoundTimerActiveFn` wraps `0x004D28F0`.
+`QueueAttackAction` now calls `SetRoundTimerActiveFn(round, 1, creature's own object id)`
+immediately before `AddAttackActionFn`, and the diagnostic now reads `round+0x958` before and
+after so a live pass sees the actual flip rather than inferring it.
+
+**Deliberately did NOT call `StartCombatRound` itself.** Its own 5-argument signature remains
+only partially traced (arg1 = a target/attacker id depending on call site, confirmed; arg2 →
+`+0x9b8`, arg3 → `+0x9bc`, confirmed by reading its body; args 4 and 5's semantics were not
+pinned down to real confidence) — a wrong thiscall argument corrupts the stack on a live process,
+and per this whole investigation's standing rule that risk is not worth taking on an unproven
+argument. It also turned out not to be necessary for this fix: `UpdateCombatRoundTimer`'s gate,
+read in full, depends on `round+0x958` alone — nothing in the branch past it was seen checking
+`+0x934` or any other `StartCombatRound`-initialized field. `SetRoundTimerActiveFn`'s own 2-arg
+signature, by contrast, has full confidence: verified both by disassembling the function's own
+body AND against three real, byte-identical engine call sites, with no branch or ambiguity in
+either argument's role.
+
+⚠ **STILL NOT LIVE-VERIFIED.** `local_combat` stays off by default. What a live pass needs to
+check, in order: (1) the diagnostic's own `round+0x958 timer-active BEFORE=0 AFTER=1` line, to
+confirm the flip actually happens on a live mirrored creature (the one fact this round could not
+itself observe without the rig); (2) whether the enemy then visibly swings within the next tick or
+two, not just whether the head-action-type changes; (3) the client's own `+0x4E0` `FlagInCombat`
+rising — the original gap this whole section exists to close; (4) `IncomingDamageController`'s
+absorb-gate standing down correctly once local hits land, so damage is not double-applied; (5)
+engagement-range stopping cleanly on separation. If (1) shows the flip does NOT happen — e.g. if
+`round+0x958` reads something other than 0 before the call in a way not yet explained — that
+reopens the investigation at a much narrower point than any prior round started from.
+
 ## 3. A client's XP is actively erased
 
 `ProgressionSnapshotPacket` is host→client only and absolute (CoopAgent.cs, `PumpProgression`):
