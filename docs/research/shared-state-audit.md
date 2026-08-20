@@ -2199,6 +2199,64 @@ real-player distinction found here matters at all.
 `local_combat` untouched, stays off. Full suite 953/953, both builds clean, rig torn down and
 confirmed clean (`Get-Process`, not assumed).
 
+### Round 33 — the "stale phantom" theory is refuted; the round genuinely spins forever regardless
+### of target, and Strategy 2's own script may never reach the queue step at all
+
+Round 32's `round+0x9CC = 0x12D` was NOT contaminated leftover state. Reproduced on THREE separate
+fresh sessions (fresh `demo.ps1` launches, `0xE` never previously fired): every single time,
+`k_def_combend01`'s own acquisition picked the `coop_phantom` (`0x12D`) over the client's true
+local player (`0x7FFFFFFF`) — even once measured while the true local player was PHYSICALLY CLOSER
+to `0xE` (2.27m vs 3.47m) than the phantom. This is genuine, repeatable engine behavior, not test
+contamination: a phantom is a real, alive, PLAYER-faction `CSWSCreature` and a legitimate
+acquisition target in its own right.
+
+**Extended the watch from 2400 to 6000 frames** (`Odyssey.cs`, `_fireScriptWatchFramesLeft`) —
+2400 was cutting off mid-cycle; the round genuinely re-arms and restarts its own ~1500-tick
+countdown roughly every 1.5 real seconds, on a clean, perfectly regular loop
+(`timer=1,delay=1500` → counts down → `timer=0,delay=0` → jumps back to `timer=1,delay=1500` →
+repeat), confirmed unbroken across **12+ complete cycles** spanning three test runs.
+
+**The decisive result: `sub+0xB0` never went nonzero ONCE, in any cycle, against either target.**
+Then the phantom was eliminated as a variable entirely — the host was moved far from `0xE`
+(`(30,141)` → `(20,22)`), removing its phantom from `0xE`'s vicinity — and `0xE`'s script was
+refired. Acquisition correctly locked onto the TRUE local player this time
+(`round+0x9CC = 0x7FFFFFFF`, confirmed), and a full clean 6000-frame capture (multiple complete
+1500-tick cycles) still never saw `sub+0xB0` leave 0. **The phantom-vs-real-player distinction
+this round set out to resolve makes no difference at all — the round spins forever against either
+target.**
+
+**A sharper, more fundamental observation than the target question: across every single sample in
+every Strategy 2 test this round ran — both targets, all 12+ cycles — `head action` never once
+left `0xFFFFFFFF` (a genuinely empty queue).** This is a real, structural difference from every
+Strategy 1 test (rounds 9-27), which consistently showed `head action=0x6` (SOMETHING queued, just
+never promoted to a committed fight action) after calling `AddAttackAction`/
+`CreateNewAttackActions` directly. Strategy 2 fires `k_def_combend01` — literally
+"`OnCombatRoundEnd`" — and per standard Aurora-engine scripting convention this is very plausibly
+a MID-ROUND continuation/retarget handler, not the script responsible for INITIATING a fight from
+cold. If so, firing it on a creature with no round already in flight may just be exercising the
+round-timer's own idle-reset bookkeeping (which the `timer=1,delay=1500 → 0 → 1500` cycle is
+completely consistent with) without ever reaching whatever queues the first action — which would
+mean Strategy 2, as built, has never actually tested "let the engine's real AI decide to fight,"
+only "let the engine's round-timer spin." Round 27's original host-local success (real, verified
+HP loss) used this SAME script and SAME mechanism — that result stands and is not contradicted
+here, but this round did not re-instrument it with the current diagnostic, so whether IT also
+showed `head action=0xFFFFFFFF` the whole time (fight happening through some path this diagnostic
+can't see) or `0x6`+ (matching Strategy 1) is now an open, checkable question rather than an
+assumption.
+
+**Next concrete step, precise enough not to need re-deriving:** find and fire whatever script slot
+governs `OnPerception`/`OnNotice` (the "I just saw a hostile, should I act" handler) instead of
+`OnCombatRoundEnd`, on a creature with a verified-idle round, and watch the SAME diagnostic fields.
+If THAT reaches a nonzero head action or arms `sub+0xB0`, it confirms `k_def_combend01` was simply
+the wrong trigger all along, independent of every driven/undriven/target-identity finding from
+rounds 9-32. If it shows the identical spin-forever symptom, the block is confirmed to be entirely
+downstream of script selection, in the round-advancement machinery itself, exactly as rounds 27-32
+concluded.
+
+`local_combat` untouched, stays off (Strategy 2 doesn't read or need it). Diagnostic watch budget
+raised 2400→6000 frames — kept, since it's what let this round's clean multi-cycle capture happen
+at all. Full suite 953/953, both builds clean, rig torn down and confirmed clean (`Get-Process`).
+
 ## 3. A client's XP is actively erased
 
 `ProgressionSnapshotPacket` is host→client only and absolute (CoopAgent.cs, `PumpProgression`):

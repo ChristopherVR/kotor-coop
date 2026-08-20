@@ -7126,9 +7126,13 @@ internal static unsafe class Odyssey
         // counts down at only ~4-5 per tick — a full cycle needs ~470+ ticks minimum, well
         // past every prior round's 180-frame window. Nobody has ever actually watched long
         // enough to see this delay reach zero.
+        // ROUND 33: 2400 frames still cut off mid-cycle live (a round observed re-arming and
+        // starting a SECOND ~470-tick countdown within the window, never reaching the second
+        // expiry). Extended to 6000 to comfortably cover at least one full idle-plateau +
+        // countdown + expiry sequence in a single capture.
         _fireScriptWatchCreature = creature;
-        _fireScriptWatchFramesLeft = 2400;
-        PluginHost.Log($"firescript watch: armed on 0x{creatureId:X} for 2400 frames");
+        _fireScriptWatchFramesLeft = 6000;
+        PluginHost.Log($"firescript watch: armed on 0x{creatureId:X} for 6000 frames");
     }
 
     private static nint _fireScriptWatchCreature;
