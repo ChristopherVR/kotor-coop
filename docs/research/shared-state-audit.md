@@ -1415,6 +1415,76 @@ reconsidered, going back to first principles on why attempt 2 succeeded even onc
 `local_combat` stays off (unresolved). Both `coop.ini` restored to `0`; rig torn down and
 confirmed clean. Full suite 953/953, both builds clean.
 
+### Round 24 — the outward walk disassembled in full; the "race" framing itself was wrong
+
+Full disassembly of `GetNearestEnemy` (`0x004F2DE0`) from the anchor step (round 20's stopping
+point) through the walk body, both arms, to their shared per-candidate check block
+(`0x004F2ECF`-`0x004F3144`) and the loop-continuation logic (`0x004F3179` onward, symmetric
+for the second arm). No black box remains in this function.
+
+**Structure, precisely:** the area pointer (`ebp = area+0x190`) and the anchor index (found by
+the self-lookup's linear scan) are computed once, at entry — as they must be, there is only
+one array to search. But **the array's own data pointer (`[ebp]`, i.e. `area+0x190` itself)
+and its count (`[ebp+4]`, i.e. `area+0x194`) are both re-read FRESH on every single iteration
+of the walk**, not cached into a local at entry (`0x004F2ECF`: `mov eax, [ebp]` — inside the
+per-step loop body, executed every pass; `0x004F2EB2`/`0x004F3189`: `cmp edx, [ebp+4]` — the
+bound re-checked live every pass, both arms). Per-candidate, each step independently re-runs
+resolve (`GetGameObject`), self/exclude checks, hostility (`GetAIStateReputation`, confirmed
+in round 18's own live read), the `AsCreature` cast, alive checks, perception
+(`GetVisibleListElement` + the seen bit), the range comparison, and line-of-sight
+(`ClearLineOfSight`, `0x0050C330`) — nothing here trusts a pre-filtered set or a snapshot from
+the anchor step; every check combat-participation.md §1.4 already documents is re-run exactly
+as described, live, per step, matching every live measurement this investigation has taken.
+
+**This refutes the "mid-walk corruption from a reorder" mechanism outright — not because the
+array can't reorder, but because it structurally can't happen mid-instruction.** This plugin's
+own position-write drive pass and the game's own `GetNearestEnemy` call both run on the SAME
+single game thread, sequentially. There is no possible interleaving where a `SetPosition` call
+executes DURING a `GetNearestEnemy` call already in progress — the entire function, both arms,
+runs to completion atomically within one frame's worth of code before anything else on that
+thread executes. A stale cached pointer/count could have been corrupted by a reorder that
+happened moments before a NEW call started (which is why fresh re-reads exist — they are
+DEFENSIVE against exactly that, and they work); nothing can corrupt a call already underway.
+The round 20/21 "race" framing borrowed language from multi-threaded reasoning that does not
+apply to this single-threaded engine.
+
+**What intermittent success/failure across otherwise-identical calls actually means, then: the
+array's CURRENT valid sort order genuinely differs from one call to the next** (because this
+plugin's own drive pass churns positions for many creatures every frame, and the array is
+correctly, atomically re-sorted after each write) **and the x-distance-bounded early
+termination is a provably correct algorithm on whatever that current, valid order is** — so a
+"miss" is not evidence of a broken walk. It is evidence that, at the exact frame a given call
+ran, either the real spatial arrangement did not actually put the player within the computed
+range along BOTH the x-bound and the true 3D distance-minus-radii check, or (still open, see
+below) the walk's OWN early termination — while individually correct per step — interacts with
+a range value tight enough that ordinary positional noise decides the outcome.
+
+**The one number this investigation has still never read: the actual final float
+`MaxCleaveRange` returns for our engaged pair.** Round 23 confirmed the computation is not
+degenerate (a real, bounds-checked appearance-radius sum, not zero/NaN) but never read its
+magnitude. If that sum is genuinely small — a personal-space radius is not a weapon-reach
+number, and round 23's traced fallback path sums exactly that for BOTH creatures plus a small
+constant — a value under, say, 2-3 meters would make round 21's "point-blank, 0m separation"
+test the decisive control it was meant to be (and that test's own null result, unchanged from
+the ~2m case, already argues against range magnitude being the answer) — but it was never
+directly measured, only inferred from a null result on a positioning test that could itself
+have been imprecise (`tp`'s target coordinates vs. the creature's actual body-center, personal
+space radius, or collision geometry are not necessarily one and the same "0m").
+
+**Round 25's job, precisely, and it is now a single, cheap, decisive live read:** log the exact
+float returned by the `0x4FFAD0`/`0x4FB0F0` call chain (not its intermediate inputs, which
+round 23 already read) for the real engaged pair, and separately log the actual computed
+distance-minus-radii value the walk compares it against (`0x004F3078`-`0x004F3096`'s FPU
+sequence) on both a call that succeeds and one that fails, side by side. This settles, with a
+number instead of a theory, whether the margin is genuinely razor-thin (a real, if awkward,
+range-tuning issue with a concrete fix — widen the constant, or accept it as intentionally
+tight melee range and adjust the test's positioning instead) or whether something else neither
+this nor any prior round has considered is still hiding in the comparison itself.
+
+`local_combat` stays off (unresolved — no code change this round beyond documentation; the
+walk itself needed no fix, since none was found). No live rig used. Full suite 953/953, both
+builds clean.
+
 ## 3. A client's XP is actively erased
 
 `ProgressionSnapshotPacket` is host→client only and absolute (CoopAgent.cs, `PumpProgression`):
