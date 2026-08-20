@@ -1441,6 +1441,10 @@ public sealed class CoopClient : ICoopSession
                 HandleContainerLoot(span);
                 break;
 
+            case PacketType.MaterialisedLoot:
+                HandleMaterialisedLoot(span);
+                break;
+
             case PacketType.Pong:
                 if (PacketCodec.ReadPong(span) is { } pong)
                 {
@@ -1522,6 +1526,72 @@ public sealed class CoopClient : ICoopSession
         if (length > 0)
         {
             _channel.Send(_hostEndPoint, _replyBuffer.AsSpan(0, length));
+        }
+    }
+
+    /// <summary>An owner enemy id we have already queued (or discarded) a
+    /// <see cref="MaterialisedLootPacket"/> for this session. Dedup by OWNER ENEMY ID, not op
+    /// sequence: unlike a container removal, applying this loot is not idempotent
+    /// (<c>GiveItemToInventory</c> mints a fresh item every call), so a retransmit that slips
+    /// in before our ack lands must never reach the drain queue a second time.
+    ///
+    /// ⚠ NOT reset on module change. An id space is per-module, so a reused id after a
+    /// transition would be silently ignored here — narrow and cosmetic (one enemy's loot stays
+    /// unsynced rather than the game desyncing or crashing), left as a known limitation rather
+    /// than adding epoch-tracking plumbing this pass does not otherwise need.</summary>
+    private readonly HashSet<uint> _materialisedLootSeen = [];
+
+    private readonly Queue<MaterialisedLootPacket> _materialisedLootInbox = new();
+
+    /// <summary>
+    /// Records a materialised enemy's captured death-loot from the host and acks it.
+    /// Unconditionally, like <see cref="HandleContainerLoot"/> — a duplicate arriving means our
+    /// previous ack was lost, not that the enemy died twice. Queued for the agent's own pump to
+    /// drain and actually apply; this layer only receives, dedups and acknowledges.
+    /// </summary>
+    private void HandleMaterialisedLoot(ReadOnlySpan<byte> span)
+    {
+        if (PacketCodec.ReadMaterialisedLoot(span) is not { } loot)
+        {
+            _channel.NoteMalformed();
+            return;
+        }
+
+        if (_materialisedLootSeen.Add(loot.OwnerEnemyId))
+        {
+            lock (_gate)
+            {
+                _materialisedLootInbox.Enqueue(loot);
+            }
+        }
+
+        int length = PacketCodec.Write(
+            _replyBuffer, new MaterialisedLootAckPacket(_localPeerId, loot.OpSequence));
+        if (length > 0)
+        {
+            _channel.Send(_hostEndPoint, _replyBuffer.AsSpan(0, length));
+        }
+    }
+
+    /// <summary>Every materialised-loot death received since the last drain, oldest first.
+    /// Matches <see cref="DrainTransitionMovies"/>'s shape: the agent pump owns applying
+    /// these, this layer only queues them.</summary>
+    public IReadOnlyList<MaterialisedLootPacket> DrainMaterialisedLoot()
+    {
+        lock (_gate)
+        {
+            if (_materialisedLootInbox.Count == 0)
+            {
+                return [];
+            }
+
+            List<MaterialisedLootPacket> ready = [];
+            while (_materialisedLootInbox.Count > 0)
+            {
+                ready.Add(_materialisedLootInbox.Dequeue());
+            }
+
+            return ready;
         }
     }
 

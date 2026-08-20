@@ -132,3 +132,68 @@ work — the scenario becomes producible without an ambush save.
 
 None of this has been tried live — same caveat as the rest of this document until an
 ambush's actual death-and-loot sequence runs against it.
+
+### Items 1 and 2 built: death capture and the wire — item 3 (automatic apply) still open
+
+Closes the first two gaps above. Item 3 — draining this automatically into `GiveLoot` without
+colliding with a human typing at the console — is a SEPARATE piece of work, not built here.
+
+**Death detection and capture (`CoopAgent.DetectMaterialisedDeaths`, owner-authority side of
+`PumpEnemies`).** Tracks which enemy ids read alive on the last clean census
+(`_knownAliveEnemies`), cleared on a module change (ids are reassigned per load, so an id
+remembered from the last module names a different creature now — or nothing). An id that drops
+off the alive set WITH a `Dead` reading is a genuine kill; one that drops off the CENSUS without
+ever reading `Dead` is not — the census sheds by distance and cap, and a creature merely far
+away must never be read as a kill. On a real death, one `IGameBridge.ReadPossessedItems` sweep
+covers however many enemies died on that tick (not one sweep per creature — `ListItems()`'s own
+doc warns it is a full memory sweep, "not free," and an ambush wave dying together would stall
+the pump repeatedly at one sweep each). Enemies with nothing captured publish nothing.
+
+**The wire (`PacketType.MaterialisedLoot = 41` / `MaterialisedLootAck = 42`).** Host -> clients
+only, reliable via retransmit-until-ack — the same shape as `ContainerLoot`/`ContainerLootAck`,
+including `MaterialisedLootSender` (a dedicated retransmit-until-ack sender keyed by owner enemy
+id, not container+item pair, since a creature dies once). Up to `MaterialisedLootPacket.MaxItems`
+(8) items per death, each carrying resref plus the same identity fields `GroundItem`/`SetItem`
+already carry — a corpse's worth fits one datagram at the cap (asserted by
+`PacketCodecTests.MaterialisedLootFitsInOneDatagramAtMaxItems`). `CoopHost.PublishMaterialisedLoot`
+enqueues; `CoopClient` receives, dedups by OWNER ENEMY ID (not op sequence — unlike a container
+removal, applying this is NOT idempotent, `GiveItemToInventory` mints a fresh item every call, so
+a retransmit slipping in before our ack lands must never reach the drain queue twice), acks
+unconditionally (a duplicate arriving means our ack was lost, not that the death happened twice),
+and queues for `ICoopSession.DrainMaterialisedLoot()` — the agent pump's job to drain and apply,
+matching `DrainTransitionMovies`'s shape exactly.
+
+**⚠ Known gaps in the wire itself, not deferred to item 3:**
+- **No permanent resync store.** Unlike `ContainerLootStore` (a full historical snapshot
+  re-offered to a rejoining peer via `ResyncContainerLoot`), `MaterialisedLootSender` only
+  tracks ops still IN FLIGHT. An op already retired (every then-connected peer acked it) before
+  a peer disconnects-and-reconnects is gone for good — that peer's stand-in never receives that
+  death's loot. `ResetBackoff()` is called on peer readmission for consistency with the
+  container-loot pattern, but it only speeds up ops still pending; it cannot resurrect a retired
+  one. Same class of gap this document already accepts elsewhere, not new to this pass.
+- **The client-side dedup set (`_materialisedLootSeen`) is not reset on module change.** An id
+  space is per-module; a reused id after a transition would be silently ignored. Narrow and
+  cosmetic (one enemy's loot stays unsynced, nothing desyncs or crashes) — left as a known
+  limitation rather than adding epoch-tracking plumbing this pass did not otherwise need.
+
+**⚠ Unconfirmed, needs a live look before trusting this end to end:**
+`docs/research/placeables-containers.md` documents a SEPARATE loot mechanism —
+`CSWSPlaceable+0x36C`, a "body bag" the retail engine may convert a killed creature's dropped
+items into for the normal loot-container UI, distinct from a creature's own `ItemPossessor`-
+tagged inventory (which is what `ReadPossessedItems`/`ListItems()` reads, and where
+`GiveItemToInventory` writes on the receiving side — the same target `GiveLoot` already uses).
+Whether a real enemy's items are STILL possessor-tagged to the creature itself at the instant of
+death (this capture reads them correctly) or have already moved into a body-bag placeable by
+then (this capture would read nothing, or the wrong location) is not established either way —
+this needs a live death, not more reading. If the body-bag path turns out to be what actually
+holds a real corpse's loot, the capture side needs to read `+0x36C` instead of/in addition to
+`ItemPossessor`. Separately: `ContainerLoot`'s existing removal-sync operates on that SAME
+placeable body-bag mechanism, not on a creature's own inventory — so it is not relevant to a
+materialised stand-in's corpse either way, since `MarkAsMirroredEnemy` already marks a stand-in's
+corpse unselectable (§2) and this feature writes straight into its inventory, never through a
+body-bag placeable at all.
+
+Tests: `PacketCodecTests.MaterialisedLootPacketsRoundTrip`,
+`.MaterialisedLootFitsInOneDatagramAtMaxItems`; `MaterialisedLootPumpTests` (death vs.
+census-drop, empty corpse, one-sweep-for-several-deaths, module-change reseeding). None of this
+has run against a live game — same caveat as the rest of this section.

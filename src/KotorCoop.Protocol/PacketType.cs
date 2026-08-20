@@ -266,4 +266,25 @@ public enum PacketType : byte
     /// something whose failure mode is cosmetic.
     /// </summary>
     TransitionMovies = 40,
+
+    /// <summary>
+    /// host -&gt; clients: an owner-authoritative enemy just died, carrying the resref + full
+    /// per-instance identity of everything its real corpse was holding — see
+    /// docs/research/enemy-materialisation.md §6. Enemies are always host-owned, so unlike
+    /// <see cref="TransitionMovies"/> this never needs relaying, only broadcasting.
+    ///
+    /// Reliable via retransmit-until-ack, like <see cref="ContainerLoot"/>: a death happens
+    /// once, so a dropped packet must not silently mean no loot ever arrives. A receiver with
+    /// no materialised stand-in for <c>OwnerEnemyId</c> (the common case: a peer holding the
+    /// real, GIT-identical creature already rolled its own equivalent loot independently) acks
+    /// and discards it — see <see cref="MaterialisedLootAck"/> and
+    /// <c>CheatController.GiveLoot</c>'s identical refusal rule, which the receiving side
+    /// reuses rather than re-deciding.
+    /// </summary>
+    MaterialisedLoot = 41,
+
+    /// <summary>A client's acknowledgement of a <see cref="MaterialisedLoot"/> packet. Carries
+    /// the acking peer id so the host, which broadcasts to several clients, can tell whose ack
+    /// this is — exactly like <see cref="ContainerLootAck"/>.</summary>
+    MaterialisedLootAck = 42,
 }

@@ -5299,6 +5299,32 @@ public sealed class KotorGameBridge : IGameBridge
         return listings;
     }
 
+    /// <summary>
+    /// One sweep of <see cref="ListItems"/>, filtered to whichever of <paramref
+    /// name="possessorIds"/> actually hold something. See the interface doc on
+    /// <see cref="IGameBridge.ReadPossessedItems"/> for why this takes a SET rather than being
+    /// called once per creature.
+    /// </summary>
+    public IReadOnlyList<(uint Possessor, string Resref, ItemIdentity Identity)> ReadPossessedItems(
+        IReadOnlySet<uint> possessorIds)
+    {
+        if (possessorIds.Count == 0)
+        {
+            return [];
+        }
+
+        List<(uint, string, ItemIdentity)> result = [];
+        foreach (ItemListing item in ListItems())
+        {
+            if (possessorIds.Contains(item.Possessor))
+            {
+                result.Add((item.Possessor, item.Resref, item.Identity));
+            }
+        }
+
+        return result;
+    }
+
     /// <summary>Reads a CExoString: a char* and a length, not a null-terminated buffer.</summary>
     private string ReadExoString(nint address)
     {
