@@ -96,6 +96,16 @@ public static class CheatKinds
     /// ⚠ 12, because 7-11 are taken. Take the next FREE number.
     /// </summary>
     public const uint FireScript = 12;
+
+    /// <summary>
+    /// ROUND 36 TEMPORARY DIAGNOSTIC: snaps <c>Target</c> to a hardcoded position near
+    /// END_M01AA's `sithsoldier 0xE`, so a genuinely non-census creature (a party member) has a
+    /// valid in-range target to test +0x260 firing against. See SharedBlock.CheatKindMoveNear
+    /// and docs/research/shared-state-audit.md §2, round 36. Remove once settled.
+    ///
+    /// ⚠ 13, because 7-12 are taken. Take the next FREE number.
+    /// </summary>
+    public const uint MoveNear = 13;
 }
 
 /// <summary>The plugin's verdicts, mirroring <c>SharedBlock.CheatStatus*</c>.</summary>

@@ -417,6 +417,18 @@ public sealed class CoopCommandDispatcher(
 
                 break;
 
+            case CoopCommandKind.MoveNear:
+                if (ConsoleCommand.TryParseObjectId(command.Address ?? string.Empty, out uint moveId))
+                {
+                    SendCheat(new CheatRequest(CheatKinds.MoveNear, Target: moveId));
+                }
+                else
+                {
+                    Reply($"movenear: '{command.Address}' is not an object id (try 0x127)");
+                }
+
+                break;
+
             case CoopCommandKind.FireScript:
                 if (ConsoleCommand.TryParseObjectId(command.Address ?? string.Empty, out uint scriptId))
                 {

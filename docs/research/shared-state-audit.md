@@ -2351,6 +2351,51 @@ it finally works, it points at census membership, not client-vs-host role.
 `local_combat` untouched, stays off. Full suite 953/953, both builds clean, rig torn down and
 confirmed clean (`Get-Process`).
 
+### Round 36 — no naturally-excluded hostile exists here; the companion substitute is invalid;
+### the intended test could not be cleanly run
+
+**No creature in this area/save is naturally outside the census.** `census` on the client read
+`MIRROR 25 id(s) 'END_M01AA': 25 resolve here, 0 do not`, against 27 real distinct creatures
+confirmed by the object-array check (`array 0x353DDF0 confirmed 27 of 27 (no ghosts)`). The 27-25
+gap is exactly `carth` and `end_trask` — the two party members, excluded because they're not
+enemies, not because of the 32-slot cap (`BlockEnemyCapacity`) or any distance cutoff; every real
+hostile in the area (25 of them) is comfortably under the cap and genuinely in the census. There
+was no naturally-occurring test subject to find.
+
+**Constructed one instead, and it doesn't answer the question.** Built real, working diagnostic
+infrastructure to make this possible: a new cheat kind (`CheatKindMoveNear`, 13; no shared-block
+version bump, same pattern as `FireScript`) that snaps a target creature to a hardcoded position
+near `sithsoldier 0xE`, plus a `movenear <id>` console verb, wired through
+`ConsoleCommand.cs`/`CoopCommandDispatcher.cs`/`CheatController.cs`. Used it to move `end_trask`
+(genuinely, structurally never touched by `EnemyPresenceController` — party members go through
+`PartyPresenceController` entirely) to 1.21m from `0xE`, well inside the ~2.6m range round 25
+measured working. **Position write independently confirmed** by reading it straight back
+(`ObjPosition +0x090`) rather than trusting `creatures.ps1`'s known-unreliable raw scan (which
+still showed the old, stale position — the ghost-scan artifact this investigation has hit
+repeatedly, not a real failure).
+
+Fired `+0x260` on Trask at that position anyway: `round+0x9CC` stayed at the not-found sentinel
+(`0x7F000000`) throughout a full 6000-frame capture, `round+0x958 timer=0` the entire time — the
+round never even STARTED, let alone armed. Checked what script was actually fired:
+**`k_hen_combend01`, not `k_def_combend01`** — "hen" for "henchman," KOTOR's own naming for the
+companion/party-AI script family, a genuinely different script than every hostile creature this
+investigation has tested. Party members do not independently perceive-and-decide the way hostile
+monsters do (they follow the party leader's own combat engagement rather than run their own
+`GetNearestEnemy` loop), so this result says nothing about census membership at all — it's
+confounded by testing an entirely different AI script, not a controlled variant of the same one.
+
+**Honest conclusion: this round's intended test could not be cleanly executed with what's
+available in this save/area.** A genuinely clean version needs either (a) a hostile creature
+verified to run `k_def_combend01` (or equivalent) that the census provably excludes — which
+doesn't exist here, everything is under the 32-cap — or (b) forcing more than 32 real hostiles
+into one census scope to trigger the cap for real, which this save's population can't reach. The
+`movenear`/`CheatKindMoveNear` infrastructure is kept (not removed) since it's real, working,
+and would let a future round retest this cleanly against a genuine hostile-AI creature once one
+is available (a more crowded area, or a different save).
+
+Both `coop.ini` unchanged, `local_combat` untouched. Full suite 953/953, both builds clean, rig
+torn down and confirmed clean (`Get-Process`).
+
 ## 3. A client's XP is actively erased
 
 `ProgressionSnapshotPacket` is host→client only and absolute (CoopAgent.cs, `PumpProgression`):

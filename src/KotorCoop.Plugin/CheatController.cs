@@ -146,6 +146,10 @@ internal sealed unsafe class CheatController(SharedBlockView block)
                 FireScript();
                 break;
 
+            case SharedBlock.CheatKindMoveNear:
+                MoveNear();
+                break;
+
             default:
                 Answer(SharedBlock.CheatStatusRefused, $"unknown cheat kind {kind}");
                 break;
@@ -442,6 +446,43 @@ internal sealed unsafe class CheatController(SharedBlockView block)
 
         PluginHost.Log($"firescript: fired 0x{objectId:X} +0x{slotOffset:X} = '{slot}'");
         Answer(SharedBlock.CheatStatusApplied, $"fired 0x{objectId:X} +0x{slotOffset:X} = '{slot}'");
+    }
+
+    /// <summary>
+    /// ROUND 36 TEMPORARY DIAGNOSTIC (2026-08-21). Snaps the target creature ~1.3m from
+    /// END_M01AA's `sithsoldier 0xE` (29.74, 144.46), inside the ~2.6m attack range round 23
+    /// measured — so a genuinely non-census creature (a party member, never touched by
+    /// EnemyPresenceController) has a valid, in-range hostile to test +0x260 firing against.
+    /// A no-target result from a non-census creature otherwise proves nothing either way. See
+    /// docs/research/shared-state-audit.md §2, round 36. Remove once settled.
+    /// </summary>
+    private void MoveNear()
+    {
+        uint objectId = block.CheatTarget;
+        if (objectId == 0)
+        {
+            Answer(SharedBlock.CheatStatusNoTarget, "no id given");
+            return;
+        }
+
+        nint creature = Odyssey.ResolveServerObject(objectId);
+        if (creature == 0)
+        {
+            Answer(SharedBlock.CheatStatusNoTarget, $"0x{objectId:X} does not resolve here");
+            return;
+        }
+
+        Vec3 destination = new() { X = 29.0f, Y = 143.5f, Z = 0.0f };
+        Odyssey.SnapTo(creature, destination);
+
+        // ROUND 36: read the position straight back (ObjPosition, +0x090 - see Odyssey.cs)
+        // rather than trust the write blind - creatures.ps1's raw scan is known-unreliable
+        // for fresh state.
+        Vec3 readBack = *(Vec3*)(creature + 0x090);
+        PluginHost.Log(
+            $"movenear: snapped 0x{objectId:X} to ({destination.X:F1}, {destination.Y:F1}, {destination.Z:F1}), "
+            + $"read back ({readBack.X:F1}, {readBack.Y:F1}, {readBack.Z:F1})");
+        Answer(SharedBlock.CheatStatusApplied, $"0x{objectId:X} snapped near 0xE");
     }
 
     /// <summary>

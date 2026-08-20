@@ -1288,6 +1288,18 @@ internal struct SharedBlock
     /// </summary>
     public const uint CheatKindFireScript = 12;
 
+    /// <summary>
+    /// ROUND 36 TEMPORARY DIAGNOSTIC (2026-08-21): snaps <see cref="SharedBlock.CheatTarget"/>
+    /// to a hardcoded position near END_M01AA's `sithsoldier 0xE` (29.74, 144.46), so a
+    /// genuinely non-census creature (a party member, never touched by
+    /// EnemyPresenceController at all) can have a valid, in-range hostile to test
+    /// <c>+0x260</c> firing against — the census-membership question needs a real target, not
+    /// just "no target found." Uses <c>CheatTarget</c> for the creature id; no new fields, no
+    /// version bump. See docs/research/shared-state-audit.md §2, round 36. Remove once this
+    /// question is settled.
+    /// </summary>
+    public const uint CheatKindMoveNear = 13;
+
     /// <summary>The request was carried out here.</summary>
     public const int CheatStatusApplied = 1;
 

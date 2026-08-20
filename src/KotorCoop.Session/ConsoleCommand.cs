@@ -91,6 +91,15 @@ public enum CoopCommandKind
     FireScript,
 
     /// <summary>
+    /// ROUND 36 TEMPORARY DIAGNOSTIC (2026-08-21): snaps a creature to a hardcoded position
+    /// near a known hostile, so a genuinely non-census creature (a party member) can be given
+    /// a valid, in-range target before firing its own +0x260 script. <see
+    /// cref="CoopCommand.Address"/> is the object id to move. See
+    /// docs/research/shared-state-audit.md §2, round 36. Remove once settled.
+    /// </summary>
+    MoveNear,
+
+    /// <summary>
     /// Inject a transport fault on the live session so a disconnect can be reproduced with
     /// nobody touching a cable. The sub-verb is in <see cref="CoopCommand.Address"/> and its
     /// argument (percentage, milliseconds, seconds, direction) in
@@ -437,6 +446,12 @@ public static class ConsoleCommand
                 }
 
                 return new CoopCommand(CoopCommandKind.FireScript, Address: rest[0], Amount: slotAmount);
+
+            // movenear <id>  - ROUND 36 TEMPORARY DIAGNOSTIC, snaps <id> near a known hostile
+            case "movenear":
+                return rest.Length == 0
+                    ? new CoopCommand(CoopCommandKind.Invalid, Error: "movenear <id>  (e.g. movenear 0x127)")
+                    : new CoopCommand(CoopCommandKind.MoveNear, Address: rest[0]);
 
             // ---- staging cheats -------------------------------------------------
 
