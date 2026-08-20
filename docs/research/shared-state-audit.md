@@ -1548,6 +1548,64 @@ five rounds trying to light up.
 both `swkotor`/`KotorCoop.Agent`), both `coop.ini` restored to `local_combat = 0`. Full suite
 953/953, both builds clean.
 
+### Round 26 — `UpdateAttackTargetForAllAction` fully opened: a genuine dead end, and a correction to round 25
+
+**No live rig needed — static analysis settles both questions this round was asked.**
+
+**`UpdateAttackTargetForAllAction` (`0x004D3E50`) is a real function, and much smaller than its
+name suggested — only `0x5F` bytes (`0x004D3E50`-`0x004D3EAE`, `ret 4`). An earlier request for
+too large a byte range walked past its `ret` into an unrelated adjacent function (a
+field-by-field debug dump, `0x004D3EC0`+, recognisable by its string-labelled calls to
+`0x412620`/`0x412760`/`0x4127B0` for dozens of round fields — not part of this function at
+all, and not investigated further). The real function's complete body: if `round+0x9B0` (the
+pending-action list) is null or empty, it returns immediately, touching nothing. Otherwise it
+walks every node in that list and, for each node whose `[node+0x10]==1` AND `[node+0x18]==1`,
+overwrites `[node+0x14] = newId` (the second argument) — redirecting an EXISTING queued
+action's target. **It never writes `round+0x9CC`. It never touches `sub+0xB0` or anything in
+the `round+4+(round+0x96C)*0x14C` sub-structure array. If the list is empty when it's called
+(exactly our case, every time), it is a complete no-op.** This is a definitive, fully-verified
+dead end — not a candidate for either the target-write or the arming step.
+
+**Correction to round 25: `round+0x9CC`'s correct value is not evidence acquisition ever
+succeeded.** `python tools/fieldwrites.py 0x9CC` lists 13 writers; cross-referencing against
+what this codebase already calls narrows it immediately: `0x004D60A8` sits inside
+`StartCombatRound`'s own body (confirmed by direct disassembly of `0x004D6090`-`0x004D60BA`) —
+`mov dword ptr [esi+0x9cc], ebx` where `ebx` derives from `StartCombatRound`'s own arguments
+(the same `targetId` `Odyssey.QueueAttackAction` already passes as `StartCombatRoundFn`'s
+second argument, per the existing call at `Odyssey.cs` line 6732:
+`StartCombatRoundFn(round, targetId, contextSlot, context2, 0, 0)`), gated by a comparison
+against `[ecx+4]` where `ecx = [round+0x9b4]` (a different, not-yet-identified field) — real
+value on one branch, the `0x7F000000` sentinel on the other. **`round+0x9CC` reading the real
+player id was never proof `GetNearestEnemy` found anything — it is a direct, mechanical
+artifact of the `StartCombatRound` call this investigation has been making since round 17,
+which writes the target we already told it to use.** The distinction round 25 drew between "the
+search finds the player" and "the round gets armed" still stands as the right frame, but the
+evidence for the FIRST half was never real; only the second half (`sub+0xB0` never arming) was
+ever actually established.
+
+**What's genuinely left, now that both `UpdateAttackTargetForAllAction` and the `round+0x9CC`
+question are closed:** round 17 already named the real remaining candidate and no round since
+has opened it. `sub+0xB0`'s only real `Add` (`0x004D57A0`) is reached exclusively through
+`0x004D5A50`, which "assembles a full attack descriptor from weapon/roll fields computed deep
+inside an untraceable ~7-argument validation loop" (round 17's own words, never revisited) —
+and `0x004D5A50` itself is called from `UpdateCombatRoundTimer`'s own processing branch
+(`0x5B8050`, flagged by round 15 as doing "real per-tick interdependent logic... not a single
+counter a hand-written poke could satisfy," also never fully dissected). This is now the ONLY
+unopened box left in the entire chain from round-init through acquisition through queueing —
+everything else, across 26 rounds, has been individually verified sound.
+
+**Round 27's job:** disassemble `0x5B8050` and `0x004D5A50` together, in full, to find what
+precondition — beyond everything already confirmed correct (round timer active, delay set,
+target valid, action queued, range fine, walk sound) — gates whether a genuine engine tick
+ever actually calls the real `Add` into `sub+0xB0`. This may require accepting that arming
+only happens across MULTIPLE ticks of genuine round processing rather than synchronously
+within one `QueueAttackAction` call, in which case the fix may be patience (poll across several
+frames after queueing) rather than a missing call.
+
+`local_combat` stays off. No live rig used this round (pure static analysis; `UpdateAttackTargetForAllAction`
+needed no live confirmation once fully disassembled — it provably does nothing on an empty
+list). Full suite 953/953, both builds clean.
+
 ## 3. A client's XP is actively erased
 
 `ProgressionSnapshotPacket` is host→client only and absolute (CoopAgent.cs, `PumpProgression`):
