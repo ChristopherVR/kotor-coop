@@ -2444,6 +2444,88 @@ position sync for enemies that are just being mirrored, not actively fought.
 Restored `BlockEnemyCapacity` to 32. Both `coop.ini` unchanged, `local_combat` untouched. Full
 suite 953/953, both builds clean, rig torn down and confirmed clean (`Get-Process`).
 
+### Round 38 — the boundary is confirmed real (order-controlled), but no write-based mechanism
+### explains it; `local_combat` NOT flipped, and here is exactly why
+
+**Part 1: `ClaimCreature`/`ClaimCreatureForFight` is NOT a one-shot claim.** Its own doc comment
+already says so — `EnemyPresenceController re-claims every mirrored enemy every pass` — and its
+body (`Odyssey.cs:369-385`) writes exactly three things, every single frame a creature is driven:
+`ObjCommandable=1`, `CreMovePermitted|=2`, `CreRunFlag=0`, plus a conditional `ClearAllActionsFn`.
+None of round 29's or round 37's diagnostics ever reach this function for their test creature in
+EITHER condition — round 29's `DiagUndrivenObjectId` bails out of `DriveOne` BEFORE `ClaimCreature`
+is ever called (`EnemyPresenceController.cs:410-413`); round 37/38's cap-excluded creature is
+never in the loop at all. So `ClaimCreature` was never a live variable in either test — it was
+already controlled out before this round started.
+
+**Part 2: reproduced round 37's result with the confound the coordinator raised in mind — order.**
+Re-ran with `BlockEnemyCapacity=1` again, but fired the EXCLUDED creature (`0x10`) FIRST this
+time (not second, as round 37 had it), then the still-tracked one (`0xE`) third. Result unchanged:
+`0x10` armed again (1865/6000 samples nonzero `sub+0xB0`, HP-like value 28→24, and — a new
+confirming detail — `sub+4` finally read a real, nonzero pointer (`0x43203AC`) by the end of the
+capture, something never once observed in 37 rounds of failures); `0xE` failed again (0/6000).
+**Order is ruled out as a confound.** The boundary is real, reproducible, and specifically about
+census membership, exactly as round 37 found.
+
+**Part 3: exhaustive disassembly of every candidate write site found NONE.** Traced every piece of
+code that runs differently between "published, resolved, but otherwise untouched" (round 29's
+condition) and "never published at all" (round 37/38's condition):
+- `EnemyPresenceController.Resolve()` (`EnemyPresenceController.cs:521-542`) — caches a pointer
+  in a MANAGED array (`_creature[slot]`), calls `Odyssey.ResolveServerObject`. No engine write.
+- `Odyssey.ResolveServerObject` (`Odyssey.cs:679-728`) — calls the engine's own
+  `CServerExoApp::GetGameObject` (`0x004AE750` → `0x004B1700`), then tests the returned pointer's
+  layout. `0x004B1700` itself (disassembled in full this round) does nothing but forward into
+  `CGameObjectArray::GetGameObject` (`0x004D8230`) with a scratch stack local — no writes to
+  anything the caller doesn't own.
+- `CGameObjectArray::GetGameObject` (`0x004D8230`, disassembled in full this round, every
+  instruction) — a hash-bucket lookup and linked-list walk, comparing the masked id against each
+  node and writing the FOUND POINTER into the CALLER's own out-parameter (`[edx] = ...`) on
+  success. **No write to the object it finds, confirmed at the instruction level.** This is the
+  single engine-level call `Resolve()` makes that round 29's creature received and round 37/38's
+  excluded creature never did — and it is provably, completely read-only.
+- `MaterialisedEnemies.Seen()` (`MaterialisedEnemies.cs:131-141`) — a managed-array timestamp
+  write, no engine touch, called for every published slot before the per-creature diagnostic
+  bail-out in both round 29 and this round.
+- The HOST-side census scan (`KotorGameBridge.cs:3888-4020`, re-read this round) — every field
+  (`OffCurrentHitPoints`, `OffPosition`, `OffOrientation`, `OffAnimation`, `OffAppearanceType`,
+  `OffCreatureStats`) is read through `_memory.TryRead*` — raw `ReadProcessMemory`, not an engine
+  call, and identical for every candidate whether or not it survives the cap. The only place a
+  candidate's fate diverges is a pure managed-list `Add()` after the cap/sort — no further engine
+  touch of any kind.
+
+**Conclusion: the boundary is real and reproducible, but nothing in the entire call chain this
+investigation can find writes to the creature, the round struct, or anything engine-side,
+differently for a published-but-untouched creature versus a never-published one.** Every
+plausible write-based mechanism has now been checked and ruled out at the instruction level. This
+either means the real mechanism is something this investigation's method — tracing explicit
+field writes — cannot see (a heap-layout or memory-paging effect from `ReadProcessMemory`/
+`WriteProcessMemory` traffic itself, something at the OS/hardware level rather than the game's own
+logic, which would be a genuinely different kind of investigation entirely), or there is a
+touch-point still unfound despite this round's search.
+
+**Decision: `local_combat`'s default is NOT flipped.** Not because the mechanism doesn't work —
+round 37 and this round both proved, twice, with order controlled, that it genuinely does, for a
+creature outside the census — but because shipping this needs an actual DESIGN (some way to
+temporarily exclude an actively-fighting creature from the published census without breaking its
+visual position sync for the rest of the fight, which is a real host↔client protocol question,
+not a config flip) and this round could not identify why the boundary exists, only that it does.
+Flipping a default on a mechanism whose cause is unknown, however well-reproduced the symptom, is
+exactly the kind of thing this section's own standing rule — "did it work, not did it avoid
+breaking something" — argues against; "it works when a creature happens to fall outside a
+cap that was never meant to gate combat" is not yet "it works."
+
+**What a round 39 needs, concretely:** either (a) find the actual mechanism — the most promising
+unexplored angle is OS/engine-level (does an external process's `ReadProcessMemory`/
+`WriteProcessMemory` traffic on a specific creature's page(s) trigger something — a copy-on-write
+fault, a guard page, an anti-tamper heuristic — that a purely code-level trace cannot see, which
+would need a genuinely different kind of instrumentation than disassembly); or (b) skip finding
+the mechanism and design the actual fix directly from the empirical result — a protocol addition
+letting the client tell the host "stop publishing creature X to me for N seconds while
+`local_combat` lets it genuinely fight," accepting a brief position-sync gap during that window,
+which is buildable and testable without ever knowing why it's needed.
+
+Both `coop.ini` unchanged, `local_combat` untouched, `BlockEnemyCapacity` restored to 32. Full
+suite 953/953, both builds clean, rig torn down and confirmed clean (`Get-Process`).
+
 ## 3. A client's XP is actively erased
 
 `ProgressionSnapshotPacket` is host→client only and absolute (CoopAgent.cs, `PumpProgression`):
