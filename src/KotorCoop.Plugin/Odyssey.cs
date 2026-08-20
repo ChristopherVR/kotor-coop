@@ -6398,6 +6398,17 @@ internal static unsafe class Odyssey
             return;
         }
 
+        // TEMPORARY DIAGNOSTIC (2026-08-20, round 2) — instruction-level disassembly of
+        // AddAttackAction (0x004D38B0) found every allocation path funnels through a shared
+        // append helper (0x004D3660) that discards the freshly-allocated node without linking
+        // it in if round+0x9B0 (the round's own pending-action list) is null. This one read,
+        // taken in the SAME frame as the call below, is the single cheap fact that decides
+        // between the two remaining candidates: null means AddAttackAction's own silent-discard
+        // path is confirmed and StartCombatRound needs calling first; non-null means this
+        // branch is a dead end and the real cause is upstream of AddAttackAction entirely.
+        // See docs/research/shared-state-audit.md §2. Remove once this is settled.
+        nint pendingList = *(nint*)(round + 0x9B0);
+
         AddAttackActionFn(round, targetId, 0, 0, 0x5DC, 1);
 
         int headAfter = GetHeadActionType(creature);
@@ -6405,6 +6416,7 @@ internal static unsafe class Odyssey
         {
             PluginHost.Log(
                 $"queueattack diag: CALLED AddAttackAction(round=0x{round:X}, target=0x{targetId:X}) on creature 0x{creature:X}, "
+                + $"round+0x9B0 pending-list pointer BEFORE the call = 0x{pendingList:X}, "
                 + $"head action before 0x{headType:X}, IMMEDIATELY after 0x{headAfter:X} "
                 + $"(is fight action now: {IsFightAction(headAfter)})");
         }
