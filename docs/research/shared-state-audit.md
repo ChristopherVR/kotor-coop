@@ -687,6 +687,59 @@ No source code changed this round. `local_combat` untouched, `coop.ini` never mo
 install (phase 1 never completed, so phase 2 — the actual `local_combat` retest — did not run).
 Process torn down clean.
 
+### Round 11 — the unification hypothesis holds, and a real fight finally happened
+
+Before any live work: read `Odyssey.AttackTarget`'s implementation directly. It dispatches
+through the NWScript VM's own `ActionAttack()` command table entry — i.e. the exact
+`ExecuteCommandAttack` (`0x0052E7F0`) → `CSWSCreature::AddAttackActions` (`0x004FDE40`) →
+`AddAttackAction` (`0x004D38B0`) chain this whole investigation has been fixing.
+`python tools/xrefs.py 0x004D28F0` and `0x004D2920` (the two setters `QueueAttackAction` now
+calls) list 21-23 call sites each, and NONE of them are inside `AddAttackActions`'s own preamble
+helpers (`0x004D3770`/`0x004D37E0`) or `AddAttackAction` itself — confirmed by address, not
+inferred. So `AttackTarget`, the "official" path, is missing the identical precondition
+`QueueAttackAction` was missing before `fb8d5dc`. Round 10's "the staging tool itself is broken"
+was never a second mystery; it was the same bug, reached through a different door.
+
+Applied the same two calls (`SetRoundTimerActiveFn`/`SetRoundDelayFn`) to `AttackTarget` itself,
+immediately before its VM dispatch, and tested live on a genuinely fresh single host process
+(fresh launch, no prior console commands, verified clean process teardown beforehand):
+
+- `attacktarget diag: 0xE round+0x958 0->1, round+0x960 0->5DC` — both fields read exactly 0
+  immediately before the call (a truly untouched creature, not a reused/damaged one from a prior
+  round) and flipped correctly.
+- Ordered first on `0xE` while the player was ~120 units away (an accidental control: nothing
+  visibly happened while out of reach, ruling out a "the flip alone teleports/forces an attack"
+  false positive).
+- Moved the player to `tp 29.74 141.46 -0.00`, ~3m from `0xE`. Within 5s: player HP `12/12 -> 8/12`
+  (`console 'where'`), `0xE`'s position moved from `(29.74, 144.46)` toward the player, to
+  `(29.74, 143.26)` (`creatures.ps1`) — a real, engine-driven approach and swing, not a number
+  written from outside.
+- Ordered a SECOND, still-untouched creature (`0x10`) to attack with the player already close:
+  within 4s, player HP `8/12 -> 1/12` and `0x10` closed from `(31.86, 141.99)` to
+  `(31.48, 141.90)`. Fast, and consistent with the ~1s aggro speed every earlier round measured
+  for genuinely organic host combat.
+- `god` was unexpectedly already ON on this fresh process (not set by anything in this session,
+  no `coop.ini` key, no code default found) — this is why the player survived to 1 hp instead of
+  dying; noted as an open anomaly, not chased further, since it does not change what was measured
+  (damage genuinely flowed and was only floored, not absent).
+- Broken off cleanly afterward (`attack <id> 0` on both, the documented "target zero = stop
+  fighting" convention) before process teardown; player left at a stable 1/12, not downed.
+
+**This is the first real, physically-observed fight this entire investigation has produced.**
+It confirms the `round+0x958`/`round+0x960` mechanism `fb8d5dc` implemented is genuinely correct
+and sufficient to take a creature from cold to a real, damage-dealing fight — on the HOST's own
+engine, driving its own (non-mirrored) creature. It does NOT yet directly prove the CLIENT
+mirrored-enemy case (`local_combat`'s actual purpose: a driven puppet fighting a REMOTE player
+through the co-op session, on a machine that owns none of the input) — `QueueAttackAction` calls
+the identical two functions, but the mid-fight-join, two-instance scenario has still never
+completed end to end. Given the mechanism is now proven in the general case, the next round
+should go straight back to that scenario with real confidence instead of re-litigating whether
+the fix works at all.
+
+`local_combat` and both installs' `coop.ini` were not touched this round (this test needed only
+a single host instance). Process torn down and confirmed clean. Full suite 953/953, both builds
+clean.
+
 ## 3. A client's XP is actively erased
 
 `ProgressionSnapshotPacket` is host→client only and absolute (CoopAgent.cs, `PumpProgression`):

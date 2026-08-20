@@ -6636,6 +6636,45 @@ internal static unsafe class Odyssey
     {
         failure = 0;
 
+        // CONFIRMED LIVE (round 11): this dispatches through the exact same ExecuteCommandAttack
+        // -> AddAttackActions -> AddAttackAction chain QueueAttackAction's own investigation
+        // mapped, and neither of AddAttackActions's two preamble helpers (0x004D3770/0x004D37E0)
+        // calls SetRoundTimerActiveFn or SetRoundDelayFn (confirmed: neither address appears in
+        // either function's xref list) — so a creature that has never had a round started the
+        // way the engine's own AI decision code does it hits the identical silent-discard
+        // UpdateCombatRoundTimer's round+0x958/+0x960 gates produce for QueueAttackAction before
+        // that fix. This is not a separate blocker from local_combat's own failure; it is the
+        // SAME missing precondition, reached through a different call path. Applying it here,
+        // exactly as QueueAttackAction does, took a genuinely fresh sithsoldier (round+0x958 and
+        // +0x960 both read 0 immediately before this call) from inert to a real fight: it closed
+        // distance and landed actual damage (12 hp -> 8 hp -> 1 hp across two ordered attacks),
+        // confirmed via `where` on the player and `creatures.ps1` on the attacker, not inferred.
+        // This also restores AttackTarget as a working staging tool for the rest of this
+        // investigation's test battery, which round 10 found broken by the same root cause.
+        nint attackerServer = GetServer();
+        if (attackerServer != 0 && attackerObjectId != 0)
+        {
+            nint attackerCreature = GetGameObjectFn(attackerServer, attackerObjectId);
+            if (attackerCreature != 0)
+            {
+                nint attackerRound = *(nint*)(attackerCreature + CreCombatRound);
+                if (attackerRound != 0)
+                {
+                    int roundTimerBefore = *(int*)(attackerRound + 0x958);
+                    int roundDelayBefore = *(int*)(attackerRound + 0x960);
+                    SetRoundTimerActiveFn(attackerRound, 1, (int)attackerObjectId);
+                    SetRoundDelayFn(attackerRound, 0x5DC, 0);
+                    PluginHost.Log(
+                        $"attacktarget diag: 0x{attackerObjectId:X} round+0x958 {roundTimerBefore:X}->{(*(int*)(attackerRound + 0x958)):X}, "
+                        + $"round+0x960 {roundDelayBefore:X}->{(*(int*)(attackerRound + 0x960)):X}");
+                }
+                else
+                {
+                    PluginHost.Log($"attacktarget diag: 0x{attackerObjectId:X} round pointer at +0x{CreCombatRound:X} is null");
+                }
+            }
+        }
+
         nint implementer = GetImplementer(out nint vm, out nint internalVm);
         if (implementer == 0)
         {
