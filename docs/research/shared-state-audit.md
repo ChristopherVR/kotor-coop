@@ -1485,6 +1485,69 @@ this nor any prior round has considered is still hiding in the comparison itself
 walk itself needed no fix, since none was found). No live rig used. Full suite 953/953, both
 builds clean.
 
+### Round 25 — range is decisively not the gate; a bigger discovery than the measurement itself
+
+**First, `0x004FFAD0`'s real argument mapping, fully re-traced.** It is a straight 3-argument
+passthrough to `0x004FB0F0` (its two "extra" pushes at the real call site are the SUBSEQUENT
+`GetNearestEnemy` call's own setup, pre-staged before `0x004FFAD0`'s `ret 0xc` consumes only
+the top 3 of 5 pushed values — not part of this call at all). The real call site (attempt 2,
+`0x005B6B08`-`0x005B6B14`) resolves to `MaxCleaveRange(ownId, 0, 1)` — matching
+`combat-participation.md`'s own already-verified notation (line 134/136) exactly, arg-for-arg.
+Called `0x004FB0F0` directly (bypassing `0x004FFAD0`'s stack-reuse entirely, now that the
+passthrough is proven exact) with these confirmed-safe arguments — `MaxCleaveRangeFn` in
+`Odyssey.cs`.
+
+**The measurement, live, on the actual engaged creature, repeated 15+ times over 45+ seconds
+without variation:** `MaxCleaveRange(ownId,0,1) = 2.6`. Real distance-minus-both-radii,
+computed in managed code from the same fields the walk itself reads (position `+0x90`,
+personal-space radius `[+0x340]+0x08`) rather than hooking mid-function: `adjustedDistance =
+0.688`. **Range exceeds distance by 1.91 — comfortably in range, not a close call, and never
+once the other way around.** This decisively answers the coordinator's question: range/distance
+is NOT the gate. The player is well inside the computed search radius every single time this
+was sampled.
+
+**The real discovery this round: `round+0x9CC` (the round's own "current target" field) is
+ALREADY `0x7FFFFFFF` — the real player id, not the `0x7F000000` invalid sentinel — on EVERY
+sampled call.** This means target acquisition has genuinely succeeded and written this field at
+some point for this creature this session; it is not the case that `GetNearestEnemy` simply
+never finds the player. Full disassembly of `CreateNewAttackActions`'s branch structure with
+this in hand: since `bUseAttemptedTarget=0` in our call, `round+0x9CC` (not `this+0x524`) is
+read as the existing target at `0x005B69A1`; being non-invalid skips the "totally fresh, jump
+straight to search" shortcut at `0x005B69AD`, but — critically — since `bMayAcquireNewTarget=1`
+(our other argument) is checked again at the `0x005B6AE3` merge point regardless of which path
+got there, the function re-runs the FULL acquisition search (both `GetNearestEnemy` attempts)
+on every call either way. The "VALIDATE-EXISTING vs ACQUIRE-NEW" framing this round's own
+diagnostic label used is technically accurate about which target-source is read, but does NOT
+mean acquisition is skipped — a false alarm caught and corrected within this same round rather
+than chased further.
+
+**What actually matters: `round+0x9CC` being correctly populated separates two previously
+conflated questions.** "Does the search find the player" — evidently yes, at least once, since
+something wrote this field with the real player id. "Does the round ever get armed to actually
+process a swing" (`sub+0xB0`, the field rounds 16-17 traced as `UpdateCombatRoundTimer`'s real
+gate) — still, after 25 rounds, always 0. Whatever writes `round+0x9CC` and whatever arms
+`sub+0xB0` are evidently NOT the same effect of the same success — `combat-participation.md`
+§1.3's own success-tail description (`this+0x84`, `this+0x50C`, `UpdateAttackTargetForAllAction
+(round, newId)`, `this+0x4E8=1`) does not list `round+0x9CC` as one of the direct writes, so
+`UpdateAttackTargetForAllAction` (`0x004D3E50`) — named twice now across this investigation,
+never once disassembled — is the strongest remaining candidate for where `round+0x9CC` actually
+gets set, and for whether it is ALSO responsible for arming `sub+0xB0` (in which case something
+inside IT is the real, final gap) or whether arming is a separate, later step this investigation
+still hasn't located at all.
+
+**Round 26's job, precisely:** disassemble `UpdateAttackTargetForAllAction` (`0x004D3E50`)
+completely — it is the one function this investigation has cited by name and address twice
+without ever opening it. Confirm whether it writes `round+0x9CC` (settling where that field's
+correct value comes from) and trace everything else it does, looking specifically for any write
+to `round+4+(round+0x96C)*0x14C+0xB0` or a call to whatever `0x004D2920`
+(`SetRoundDelayFn`-adjacent, already used in this codebase for `round+0x958`/`0x95C`) or a
+sibling function might be needed to actually arm the sub-structure this investigation has spent
+five rounds trying to light up.
+
+`local_combat` stays off. Live rig used and torn down clean (`Get-Process` confirmed empty for
+both `swkotor`/`KotorCoop.Agent`), both `coop.ini` restored to `local_combat = 0`. Full suite
+953/953, both builds clean.
+
 ## 3. A client's XP is actively erased
 
 `ProgressionSnapshotPacket` is host→client only and absolute (CoopAgent.cs, `PumpProgression`):

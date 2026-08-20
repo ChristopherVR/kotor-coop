@@ -6491,6 +6491,23 @@ internal static unsafe class Odyssey
         (delegate* unmanaged[Thiscall]<nint, nint>)0x005B4790;
 
     /// <summary>
+    /// ROUND 25 DIAGNOSTIC. <c>0x004FFAD0</c>'s own body was fully re-traced this round and is
+    /// a straight 3-argument passthrough to <c>0x004FB0F0</c> (its "extra" pushes at the real
+    /// call site are the callee's OWN 12-byte <c>ret 0xc</c> cleanup consuming only the top 3
+    /// of 5 pushed values — the caller pre-stages an unrelated 4th/5th push pair for the
+    /// SUBSEQUENT <c>GetNearestEnemy</c> call, not for this one). Traced the real call site
+    /// (<c>0x005B6B08</c>-<c>0x005B6B14</c>, attempt 2) to concrete values: arg1=the ATTACKER's
+    /// own object id, arg2=0, arg3=1 — i.e. exactly <c>MaxCleaveRange(ownId,0,1)</c>, matching
+    /// `combat-participation.md`'s own already-verified call notation (line 134/136)
+    /// byte-for-byte. This is the missing cross-check that confirms the derivation rather than
+    /// trusting it blind. Calls <c>0x004FB0F0</c> directly (thiscall, 3 stack args) instead of
+    /// <c>0x004FFAD0</c>, bypassing its stack-reuse entirely now that the passthrough is proven
+    /// exact.
+    /// </summary>
+    private static readonly delegate* unmanaged[Thiscall]<nint, uint, int, int, float> MaxCleaveRangeFn =
+        (delegate* unmanaged[Thiscall]<nint, uint, int, int, float>)0x004FB0F0;
+
+    /// <summary>
     /// ROUND 18 DIAGNOSTIC. <c>CSWSObject::GetAIStateReputation</c> (<c>0x0057CD90</c>, thiscall,
     /// one stack arg, <c>ret 4</c>) — VERIFIED in <c>docs/research/combat-participation.md</c>
     /// §1.4/§2 independently of this investigation: <c>GetNearestEnemy</c>'s hostility test is
@@ -6914,6 +6931,39 @@ internal static unsafe class Odyssey
         byte weaponFlagByte = weaponAccessor != 0 ? *(byte*)(weaponAccessor + 0x1A) : (byte)0xFF;
         float weaponRangeField = weaponAccessor != 0 ? *(float*)(weaponAccessor + 0x34) : float.NaN;
 
+        // ROUND 25 DIAGNOSTIC: the two real numbers this investigation has never directly
+        // compared. (1) MaxCleaveRange(ownId,0,1) — the actual search-radius seed, called
+        // exactly as the real code does (see MaxCleaveRangeFn above). (2) the actual
+        // distance-minus-both-radii value the walk itself computes per candidate
+        // (0x004F3061-0x004F3096 in GetNearestEnemy), replicated here in managed code from the
+        // same fields (position at +0x90, personal-space radius at [+0x340]+0x08) rather than
+        // hooking mid-function, which is not something this investigation has ever needed to
+        // do and is not worth the risk now.
+        // ROUND 25 DIAGNOSTIC (2nd measurement): with bUseAttemptedTarget=0 (our call passes
+        // arg2=0), CreateNewAttackActions reads its "current target" from round+0x9CC — if
+        // that is NOT the invalid sentinel, the function takes the "validate/renew existing
+        // target" branch (combat-participation.md §1.2) instead of the "acquire a NEW target"
+        // branch (§1.3, the one this investigation has been assuming runs every call). If a
+        // prior partial attempt left round+0x9CC non-invalid, every SUBSEQUENT retry this
+        // round-init gate makes could be silently taking the validate path instead, which may
+        // not include the same UpdateAttackTargetForAllAction arming step §1.3 documents.
+        uint currentTargetBeforeCall = *(uint*)(round + 0x9CC);
+        float maxCleaveRange = MaxCleaveRangeFn(creature, *(uint*)(creature + ObjectIdOffset), 0, 1);
+        nint playerObjR25 = ResolveServerObject(targetId);
+        float adjustedDistance = float.NaN;
+        if (playerObjR25 != 0)
+        {
+            float dx = *(float*)(creature + 0x90) - *(float*)(playerObjR25 + 0x90);
+            float dy = *(float*)(creature + 0x94) - *(float*)(playerObjR25 + 0x94);
+            float dz = *(float*)(creature + 0x98) - *(float*)(playerObjR25 + 0x98);
+            float rawDistance = MathF.Sqrt(dx * dx + dy * dy + dz * dz);
+            nint attackerPathInfo = *(nint*)(creature + 0x340);
+            nint playerPathInfo = *(nint*)(playerObjR25 + 0x340);
+            float attackerRadius = attackerPathInfo != 0 ? *(float*)(attackerPathInfo + 8) : 0f;
+            float playerRadius = playerPathInfo != 0 ? *(float*)(playerPathInfo + 8) : 0f;
+            adjustedDistance = rawDistance - attackerRadius - playerRadius;
+        }
+
         CreateNewAttackActionsFn(creature, 1, 0, targetId);
 
         byte subIndexNow = *(byte*)(round + 0x96C);
@@ -6928,7 +6978,11 @@ internal static unsafe class Odyssey
                 + $"is fight action: {IsFightAction(headRightAfterCreate)}, "
                 + $"ROUND21: creature+0xA2C equip slot ptr=0x{equipSlotPtr:X}, "
                 + $"ROUND23: weaponObj=0x{weaponObj:X} weaponAccessor=0x{weaponAccessor:X} "
-                + $"flagByte@+0x1A=0x{weaponFlagByte:X2} rangeField@+0x34={weaponRangeField}");
+                + $"flagByte@+0x1A=0x{weaponFlagByte:X2} rangeField@+0x34={weaponRangeField}, "
+                + $"ROUND25: MaxCleaveRange(ownId,0,1)={maxCleaveRange} adjustedDistance={adjustedDistance} "
+                + $"(range-distance={maxCleaveRange - adjustedDistance}, inRange={adjustedDistance <= maxCleaveRange}), "
+                + $"ROUND25b: round+0x9CC BEFORE the call=0x{currentTargetBeforeCall:X} "
+                + $"(taking {(currentTargetBeforeCall == 0x7F000000 ? "ACQUIRE-NEW" : "VALIDATE-EXISTING")} branch)");
         }
 
         int roundTimerAfter = *(int*)(round + 0x958);
