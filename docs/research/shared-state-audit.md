@@ -1606,6 +1606,77 @@ frames after queueing) rather than a missing call.
 needed no live confirmation once fully disassembled — it provably does nothing on an empty
 list). Full suite 953/953, both builds clean.
 
+### Round 27 — the arming write is found, and it is structural, not a missing call
+
+**`0x5B8050` (`UpdateCombatRoundTimer`'s real processing branch) is downstream of the gate,
+not the gate itself, and much larger than a state machine.** Disassembled its opening several
+hundred bytes: it reads `round+0x96C` to select the sub-structure exactly as documented, then
+begins copying dozens of individual byte/word fields (`sub+0xC1` through at least `sub+0xD5`)
+one at a time through a per-field setter call (`0x4D76B0`) — recognisably an
+animation/attack-style parameter block being assembled, not anything that decides WHETHER to
+process. This function only runs once `sub+0xB0>0` already — it cannot explain why that field
+never becomes nonzero, only what happens after it does. Not pursued further; it is provably the
+wrong target for this question.
+
+**`0x004D5A50` is genuinely the arming write — round 17's suspicion confirmed.** Full
+disassembly: `this` (`ebx`, from `mov ebx,ecx` at entry) is the per-participant SUB-STRUCTURE
+itself, not the round — it copies a large block of fields FROM `ebx` (an `0xD0`-byte descriptor:
+weapon/roll-adjacent fields at `ebx+0x1c` through `ebx+0x128`, matching the "attack descriptor"
+round 17 described) and, at its very end, calls the real `Add` (`0x004D57A0`) with
+`this = ebx+0xac` — four bytes before `sub+0xB0`, the exact `CExoArrayList`-style
+data-pointer-then-count pair this whole investigation has been trying to get populated. This
+is the confirmed, real, final arming write.
+
+**But it is only ever reached from inside a large, stateful per-participant loop, not
+callable in isolation.** `xrefs.py` finds exactly one call site (`0x005BBA15`), inside a
+function with a genuine bounded loop (`xor ebp,ebp` at `0x5BB8C6`, iterating to a count read
+earlier, `inc ebp; cmp ebp,eax; jl 0x5bb8d4` closing it at `0x5BBA2A`-`0x5BBA2D`). Each
+iteration, BEFORE `0x004D5A50` is called: two unconditional setup calls (`0x5EDCE0`,
+`0x5B4F30`); a conditional block gated on `word [ebx+0x64]` that calls `0x5BA8E0` only if
+nonzero; a range check on a BYTE field (`[ebx+0x5c]`, the same field flagged in rounds 15 and
+18 as a party-table-style lookup) — only values `-1` or `0..3` continue toward the arming call
+at all, anything else falls through to a DIFFERENT pair of calls (`0x5BB440`, `0x5B8B00`)
+instead; only past all of that does `0x004D5A50` finally run, immediately followed by another
+call (`0x5B7400`) before the loop advances. This is not a small utility with a guessable
+signature — it is a substantial, multi-step engine subroutine with its own internal
+preconditions, iteration state, and branch-dependent setup that no single additional call this
+plugin could make would safely or correctly replicate. Its own caller was not identified (one
+call site found, its enclosing function's start address was not traced) — doing so, and then
+tracing THAT function's own preconditions for reaching this loop at all, would be its own
+multi-round undertaking with no better odds than the 27 already spent.
+
+**Conclusion: this is the structural wall the coordinator's own fallback anticipated.** Every
+individual piece this investigation has touched — round initialization, target validity, the
+weapon/range computation, the acquisition scan and its walk, the append call, target
+redirection — has been traced, measured, and confirmed sound in isolation, across 27 rounds.
+The one piece that remains, the actual write that arms a round for real processing, exists only
+inside the engine's own multi-step, stateful, per-participant round-advancement loop — the same
+kind of thing a genuine AI-driven or player-driven combat round goes through as a side effect of
+normal engine flow, and not something this investigation's approach (finding the missing native
+call and making it directly) can reach. Replicating it correctly would mean re-implementing a
+meaningful slice of the engine's own round-participant bookkeeping externally — a fundamentally
+different, much larger undertaking than anything attempted in this investigation, with a real
+chance of getting the iteration/precondition state subtly wrong in ways that surface as new
+crashes or corruption rather than a clean pass/fail.
+
+**Recommendation:** stop the single-function-hunting approach here. `local_combat` stays off,
+correctly, and every fix landed across rounds 9-26 (the round-timer/delay setters, the second
+gate, `CreateNewAttackActions` itself, the safety fixes from the earlier structural-defect
+pass) is real, verified progress that should stay in the tree even though the feature itself
+remains unfinished — each of those closed a genuine gap and left the mechanism measurably
+closer to working, even though the final arming step turned out to be out of reach by this
+method. A future attempt at this specific goal should consider either (a) the much larger
+project of reverse-engineering the enclosing round-advancement loop and its own caller chain in
+full, accepting the scope that implies, or (b) a different strategy entirely — finding a way to
+make the engine's OWN AI script genuinely run for a driven puppet (the original, harder-seeming
+option this investigation moved away from after round 1's "permission vs initiation" finding),
+since that would get this loop to run through its own normal, engine-native path instead of
+needing external replication at all.
+
+`local_combat` stays off. No live rig used this round (the conclusion is fully supported by
+static evidence — the loop's existence and preconditions are what settle this, not a live
+read). Full suite 953/953, both builds clean.
+
 ## 3. A client's XP is actively erased
 
 `ProgressionSnapshotPacket` is host→client only and absolute (CoopAgent.cs, `PumpProgression`):
