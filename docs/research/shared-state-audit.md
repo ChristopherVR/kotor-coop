@@ -397,6 +397,46 @@ No source code changed this round — the risk of guessing `StartCombatRound`'s 
 thiscall wrong (stack corruption on a live game process) was judged higher than the value of a
 guess, when one cheap live read settles which of the two remaining branches is real.
 
+### The decisive read ran (2026-08-20) — `round+0x9B0` is non-null; the branch is dead
+
+Reproduced the exact mid-fight-join scenario again: host `tp`'d beside the live `sithsoldier`
+pair, aggroed for real (`hp 1/12`, `state IN COMBAT`, `combat [FIGHT in END_M01AA - engaged:
+you]`), then a second instance connected and was `tp`'d to the same spot while the host kept
+fighting.
+
+The added diagnostic (`Odyssey.QueueAttackAction`, commit `3fc0937`) answered cleanly, on
+**two different mirrored creatures**, every ~3s for over a minute straight:
+
+    queueattack diag: CALLED AddAttackAction(round=0x192BC5A0, target=0x7FFFFFFF) on creature
+    0x192BBAD0, round+0x9B0 pending-list pointer BEFORE the call = 0x3400780, head action
+    before 0x6, IMMEDIATELY after 0x6 (is fight action now: False)
+
+    queueattack diag: CALLED AddAttackAction(round=0x1920E510, target=0x7FFFFFFF) on creature
+    0x1920D600, round+0x9B0 pending-list pointer BEFORE the call = 0x3400F20, head action
+    before 0xFFFFFFFF, IMMEDIATELY after 0xFFFFFFFF (is fight action now: False)
+
+`round+0x9B0` is **non-null on both creatures**, every single read. The
+`0x004D3660`-helper's null-check bail is NOT what's firing here — that branch is a dead end.
+Both `sithsoldier` bodies stayed at full HP (`creatures.ps1`) and the client's own state stayed
+`exploring (not in combat, not paused)` / `their engine is not in combat` for the full duration,
+identical to every prior run. `local_combat` restored to `0` in both installs' `coop.ini`
+afterward; no source change this round (nothing to implement — the leading hypothesis was
+refuted, not confirmed). Full suite 953/953, both builds clean.
+
+**Where this leaves it.** `AddAttackAction` is called with a resolvable target, a live round
+pointer, AND a non-null pending-action list — every precondition this investigation has checked
+is satisfied — and it STILL appends nothing. The remaining open branches from the disassembly
+round: (a) the `vtbl[0x10]` `AsSWSObject` cast on the resolved target (branch 2 in the table
+above) was never actually ruled out, only deprioritized — worth checking directly now that the
+more likely candidate is dead; (b) the round struct may have some OTHER gate this investigation
+hasn't read yet — the shared append helper at `0x004D3660` was only disassembled as far as its
+first two instructions (the null check); the REST of that function, past the null check, has
+never been read and may contain its own silent bail; (c) whether `head action type`
+(`GetHeadActionType`) is even reading the same list `AddAttackAction` appends to — worth
+directly re-verifying the field this reader uses against the field `0x004D3660` links into,
+rather than assuming they're the same list. (a) and (c) are both cheap, targeted disassembly;
+(b) is the natural next full read.
+
 ## 3. A client's XP is actively erased
 
 `ProgressionSnapshotPacket` is host→client only and absolute (CoopAgent.cs, `PumpProgression`):
