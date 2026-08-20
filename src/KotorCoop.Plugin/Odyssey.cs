@@ -6475,6 +6475,28 @@ internal static unsafe class Odyssey
         (delegate* unmanaged[Thiscall]<nint, int, int, uint, void>)0x005B6980;
 
     /// <summary>
+    /// ROUND 18 DIAGNOSTIC. <c>CSWSObject::GetAIStateReputation</c> (<c>0x0057CD90</c>, thiscall,
+    /// one stack arg, <c>ret 4</c>) — VERIFIED in <c>docs/research/combat-participation.md</c>
+    /// §1.4/§2 independently of this investigation: <c>GetNearestEnemy</c>'s hostility test is
+    /// <c>GetAIStateReputation(candidate, vsId) == 2</c> (1 friendly / 2 hostile / 0 neutral).
+    /// Measuring this live, for (mirrored creature, local player 0x7FFFFFFF), is round 18's
+    /// entire job — see shared-state-audit.md §2.
+    /// </summary>
+    private static readonly delegate* unmanaged[Thiscall]<nint, uint, int> GetAIStateReputationFn =
+        (delegate* unmanaged[Thiscall]<nint, uint, int>)0x0057CD90;
+
+    /// <summary>
+    /// ROUND 18 DIAGNOSTIC. <c>CSWSCreature::GetVisibleListElement</c> (<c>0x00517A20</c>,
+    /// thiscall, one stack arg) — linear scan of the perceptions list at <c>+0x920</c>/<c>+0x924</c>,
+    /// returns the node or null. Node byte at <c>+4</c> bit 0 is SEEN
+    /// (`combat-participation.md` §3.1). `GetNearestEnemy` requires a node to exist AND the
+    /// SEEN bit set — checked here as the other candidate gate, since it comes right after
+    /// reputation in the real check order and is just as cheap to measure in the same pass.
+    /// </summary>
+    private static readonly delegate* unmanaged[Thiscall]<nint, uint, nint> GetVisibleListElementFn =
+        (delegate* unmanaged[Thiscall]<nint, uint, nint>)0x00517A20;
+
+    /// <summary>
     /// The missing half of `local_combat`: nothing else ever gives a mirrored enemy a reason
     /// to attack. `CSWSCreature::CreateNewAttackActions` (the ONLY place a NEW attack action
     /// gets queued, per `docs/research/combat-participation.md` §1.1) has exactly one caller,
@@ -6637,6 +6659,42 @@ internal static unsafe class Odyssey
             // UpdateAttackTargetForAllAction(round, newId) (0x004D3E50) — a call this file has
             // NEVER made before this round, and the strongest remaining candidate for whatever
             // actually arms the round's real per-tick state.
+            // ROUND 18 DIAGNOSTIC — measure the two GetNearestEnemy gates BEFORE the call that
+            // depends on them, for the exact (creature, targetId) pair about to be used.
+            // Reputation per combat-participation.md §1.4: candidate.GetAIStateReputation(vsId)
+            // where vsId is the "versus" object — here that's the target (targetId), asking
+            // "how does the target see the candidate" per the vsId-valid branch. Perception per
+            // §3.1: a visible-list node must exist AND its SEEN bit (byte+4, bit 0) must be set.
+            int repVsTarget = GetAIStateReputationFn(creature, targetId);
+            nint visNode = GetVisibleListElementFn(creature, targetId);
+            byte visFlags = visNode != 0 ? *(byte*)(visNode + 4) : (byte)0xFF;
+            bool visSeen = visNode != 0 && (visFlags & 1) != 0;
+
+            // ROUND 18 EXTENSION: combat-participation.md §1.4's actual scan direction is
+            // GetAIStateReputation(candidateCre, vsId) where the SCANNED candidate is `this` and
+            // vsId is the search's "versus" argument — for GetNearestEnemy's attempt 1
+            // (this=player position anchor, vsId=attacker), a candidate found near the player is
+            // accepted only if GetAIStateReputation(candidate, attackerId)==2. If the PLAYER
+            // themselves is the candidate being evaluated, that's player.GetAIStateReputation
+            // (attackerId) — the OPPOSITE thiscall direction from repVsTarget above
+            // (attacker.GetAIStateReputation(playerId)). §2.3 documents faction 0 (PLAYER) as
+            // going through an argument-swapped matrix lookup, so these are not guaranteed equal
+            // — measure both before assuming symmetry.
+            nint playerObj = ResolveServerObject(targetId);
+            int repPlayerVsAttacker = -1;
+            uint attackerRealId = playerObj != 0 ? *(uint*)(creature + ObjectIdOffset) : 0;
+            if (playerObj != 0)
+            {
+                repPlayerVsAttacker = GetAIStateReputationFn(playerObj, attackerRealId);
+            }
+
+            PluginHost.Log(
+                $"queueattack ROUND18 diag: creature=0x{creature:X} target=0x{targetId:X} "
+                + $"GetAIStateReputation(attacker,player)={repVsTarget} "
+                + $"visibleListNode=0x{visNode:X} flags=0x{visFlags:X} seenBit={visSeen} "
+                + $"| playerObj=0x{playerObj:X} attackerRealId=0x{attackerRealId:X} "
+                + $"GetAIStateReputation(player,attacker)={repPlayerVsAttacker} (2=hostile,1=friendly,0=neutral)");
+
             CreateNewAttackActionsFn(creature, 1, 0, targetId);
 
             // TEMPORARY DIAGNOSTIC (round 17) — unconditional, not throttled: this whole branch

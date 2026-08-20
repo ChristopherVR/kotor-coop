@@ -1118,6 +1118,44 @@ default stays off; both live installs' `coop.ini` restored to `0`. Full suite 95
 builds clean. Diagnostic logging (throttled and unconditional) both left in the tree
 deliberately — this is still not settled.
 
+### Round 18 — both `GetNearestEnemy` gates measured live, both pass, and it still does not fire
+
+Read live, for the exact pair in question. Added a diagnostic reading `GetAIStateReputation`
+AND `GetVisibleListElement`'s seen bit right before `CreateNewAttackActionsFn` is called, for
+the mirrored creature actually engaged in the host's fight (attacker real id `0xE`, target
+`0x7FFFFFFF`):
+
+    GetAIStateReputation(attacker,player)=2 visibleListNode=0x1C571738 flags=0x3 seenBit=True
+    playerObj=0x182D96A0 attackerRealId=0xE GetAIStateReputation(player,attacker)=2
+
+**Both directions measured, both hostile (=2), symmetric.** §1.4's own worked example checks
+`GetAIStateReputation(candidateCre, vsId)` — for a scan anchored at the player's position with
+`vsId=attackerId` (`GetNearestEnemy` attempt 1), that's `player.GetAIStateReputation(attackerId)`,
+the OPPOSITE thiscall direction from what round 17's hypothesis assumed. §2.3 flags faction 0
+(PLAYER) as going through an argument-swapped matrix lookup, so symmetry was not guaranteed —
+measured directly rather than assumed, and it holds: both directions return exactly 2. **The
+reputation candidate is REFUTED**, in both directions this time, not just the one round 17
+originally suspected. The seen-bit perception gate is also confirmed set (`flags=0x3`, bit 0
+set) — genuinely perceived, not a stale/missing node.
+
+So of `GetNearestEnemy`'s six documented gates (§1.4), the first four (resolves, hostility,
+alive, perception) are now directly measured and all pass for the actual engaged pair. The
+two never yet measured are #5 (distance beats the best-so-far seed) and #6 (line of sight) —
+both plausible next candidates, though the player was `tp`'d to within ~2m of the attacker with
+nothing between them, so neither looks likely on its face. More probable: something downstream
+of a SUCCESSFUL acquisition (§1.3's own tail — `SetLockOrientationToObject`,
+`UpdateAttackTargetForAllAction`, the final "queues the attack action" step) is where this
+actually breaks, since every INPUT gate to acquisition now checks out clean. Round 19 should
+either measure #5/#6 directly (cheap, same technique) to close out the acquisition-gate list
+entirely, or — more likely productive — trace what `UpdateAttackTargetForAllAction`
+(`0x004D3E50`) actually does and whether it, not `GetNearestEnemy`, is where a found target
+fails to translate into `sub+0xB0` gaining an entry.
+
+`local_combat` stays off; both `coop.ini` restored to `0`. Rig torn down, confirmed clean
+(`Get-Process` returned none). Full suite 953/953, both builds clean. Diagnostic logging from
+rounds 9-18 all left in the tree deliberately — still not settled, and each round's diagnostic
+has been load-bearing for the next.
+
 ## 3. A client's XP is actively erased
 
 `ProgressionSnapshotPacket` is host→client only and absolute (CoopAgent.cs, `PumpProgression`):
