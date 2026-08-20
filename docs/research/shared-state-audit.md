@@ -1337,6 +1337,84 @@ Full suite 953/953, both builds clean.
 
 `local_combat` stays off (unchanged this round — no code touched, docs only). No live rig used this round.
 
+### Round 22 correction (2026-08-20, same day) — a param-order error, and the real acquisition semantics were already verified elsewhere
+
+Round 22's own analysis mislabeled `CreateNewAttackActions`'s arguments — it is fully decoded
+already, in `docs/research/combat-participation.md` §1 (verified independently of this
+investigation): `arg1 = bMayAcquireNewTarget`, `arg2 = bUseAttemptedTarget`, `arg3 =
+candidateId`. Our call, `CreateNewAttackActionsFn(creature, 1, 0, targetId)`, passes
+`candidateId = targetId` (the real player id) — NOT unset/zero as round 22 concluded. Attempt
+1 genuinely resolves and searches (per §1.3) `GetNearestEnemy(candidateCre=player, ...,
+excludeId=ownId, vsId=ownId)` — hostility judged FROM the attacker's perspective, TOWARD
+whatever third creature the walk finds near the PLAYER's position, excluding both the player
+itself and the attacker itself. Near a lone player with no other hostiles standing next to
+them, this legitimately finds nothing almost every time — expected behaviour, not a bug.
+Attempt 2 (`GetNearestEnemy(this=attacker, ..., vsId=OBJECT_INVALID)`, hostility judged from
+the attacker's own perspective toward whatever the walk finds near ITS position) is the real
+"find the player" search, exactly as every diagnostic since round 19 has modeled it. Round
+22's core, still-standing finding — there is no hidden gate between the two attempts, and the
+diagnostics have been faithfully exercising the real code path — is unaffected by this
+correction; only the specific claim about `candidateId` being unset was wrong.
+
+### Round 23 — reading the real weapon-derived range instead of the 50.0f stand-in
+
+Full disassembly of `MaxCleaveRange`'s sub-call (`0x004FB0F0`, thiscall, `ecx`=the searching
+creature): resolves the equipped weapon at slot `0x10` via `0x005A4C20(equipSlotPtr, 0x10)`;
+if non-null, an accessor (`0x005B4790(weaponObj)`) yields a struct whose `+0x1A` byte gates
+the branch (nonzero → capable weapon) and whose `+0x34` float is the weapon's own range
+field, used or replaced by a global constant depending on a second comparison. If the
+equipped-weapon lookup returns null, a DIFFERENT fallback function (`0x004FB156`, calling
+`0x004F1310` plus a global constant — an unarmed/body-based range) runs instead. Nothing in
+either path obviously produces zero/negative/NaN under normal conditions — this weakens, but
+does not retire, the "degenerate range" hypothesis; only a live read settles it.
+
+Added a read-only diagnostic (`GetEquippedItemFn`/`WeaponAccessorFn` in `Odyssey.cs`,
+replicating these two clean thiscalls directly rather than `0x004FFAD0`'s own confusing
+caller-side stack-argument reuse, which is not safe to guess blind on a live process) that
+logs `weaponObj`, the accessor result, the `+0x1A` flag byte and the `+0x34` range float
+alongside the existing round-init diagnostic.
+
+**Live result — the degenerate-range hypothesis is now weakened further, likely refuted.**
+Reproduced the standard scenario: host `tp`'d beside the real `sithsoldier` pair, staged via
+`blockpoke attack 0x10 0x7FFFFFFF`, HP fell 12→10→8→1 under genuine engine AI (the deck's own
+min-1-hp pin). Client connected mid-fight, `tp`'d beside the same pair. Two mirrored creatures
+logged:
+
+    creature 0x1926C1E8: weaponObj=0x0 (unarmed slot) — the "no weapon" fallback runs directly
+    creature 0x1925B960 (the one with head action 0xFFFFFFFF, i.e. the one QueueAttackAction is
+      actively retrying every pass): weaponObj=0x1925D250 (non-null — it DOES have a weapon),
+      weaponAccessor=0x32892E4, flagByte@+0x1A=0x00, rangeField@+0x34=0
+
+`flagByte=0` routes this creature into the SAME `0x004FB156` fallback `weaponObj=0` would have
+used — the weapon exists but its `+0x1A` capability bit is off, so the weapon-derived
+`+0x34` float (which does read `0`) is never actually consulted; a completely different
+computation runs instead. Traced that fallback fully: `0x004FB156` → `0x004F1310` (with a
+nonzero third arg, confirmed by disassembly of the `je 0x4f137d` branch) → two calls to
+`0x00413350`, a properly bounds-checked (`edi≥0 && edi<[esi+0x24]`, `ecx≥0 && ecx<[esi+0x28]`)
+2D table lookup keyed off each creature's own appearance id (`creature+0xA60`) — the same
+"personal-space radius from appearance data" pattern `combat-participation.md` §1.4 test 5
+already documents for a different (stored-field) source. Both results get summed with a
+global constant added at each step. **Nothing in this traced path is degenerate** — a
+standard `sithsoldier` appearance id will resolve to a real, positive radius from a real data
+table, not zero or garbage. `flagByte=0`/`rangeField@+0x34=0` reads exactly as they do simply
+because that whole branch is never taken, not because anything is broken.
+
+**Verdict: the degenerate-range hypothesis does not hold up under a full trace of the actual
+code path our engaged creature takes.** This was the last untested static candidate in the
+acquisition chain proper. What remains, per round 20/21's own conclusion (never fully
+resolved): `GetNearestEnemy`'s outward-walk loop itself, past the anchor step, has still never
+been disassembled to completion, and the timing-race framing (our own per-frame `SetPosition`
+calls re-sorting the x-sorted array the walk depends on) is the best-supported remaining
+explanation. Round 24's job, precisely: disassemble the outward walk
+(`0x004F3144`/`0x004F341A` per `combat-participation.md` §1.4) instruction by instruction and
+determine whether a mid-walk reorder can make it terminate early/wrongly (in which case a real
+fix exists — e.g. holding the array stable for the duration of one scan), or whether the walk
+is provably robust to a reorder (in which case the race framing itself needs to be
+reconsidered, going back to first principles on why attempt 2 succeeded even once).
+
+`local_combat` stays off (unresolved). Both `coop.ini` restored to `0`; rig torn down and
+confirmed clean. Full suite 953/953, both builds clean.
+
 ## 3. A client's XP is actively erased
 
 `ProgressionSnapshotPacket` is host→client only and absolute (CoopAgent.cs, `PumpProgression`):

@@ -6475,6 +6475,22 @@ internal static unsafe class Odyssey
         (delegate* unmanaged[Thiscall]<nint, int, int, uint, void>)0x005B6980;
 
     /// <summary>
+    /// ROUND 23 DIAGNOSTIC. Two clean, unambiguous thiscalls from <c>MaxCleaveRange</c>'s own
+    /// sub-call (<c>0x004FB0F0</c>) — read directly instead of trying to replicate
+    /// <c>0x004FFAD0</c>'s confusing caller-side stack-argument reuse, which is not safe to
+    /// guess on a live process. <c>0x005A4C20(equipSlotPtr, 0x10)</c> resolves the equipped
+    /// weapon at slot 0x10; <c>0x005B4790(weaponObj)</c> is an accessor whose result's
+    /// <c>+0x1A</c> byte and <c>+0x34</c> float are what <c>0x004FB0F0</c> branches on and
+    /// returns. If <c>weaponObj</c> is null, the "no weapon" fallback path runs instead
+    /// (<c>0x004FB156</c>, a different function entirely, not read by this diagnostic).
+    /// </summary>
+    private static readonly delegate* unmanaged[Thiscall]<nint, int, nint> GetEquippedItemFn =
+        (delegate* unmanaged[Thiscall]<nint, int, nint>)0x005A4C20;
+
+    private static readonly delegate* unmanaged[Thiscall]<nint, nint> WeaponAccessorFn =
+        (delegate* unmanaged[Thiscall]<nint, nint>)0x005B4790;
+
+    /// <summary>
     /// ROUND 18 DIAGNOSTIC. <c>CSWSObject::GetAIStateReputation</c> (<c>0x0057CD90</c>, thiscall,
     /// one stack arg, <c>ret 4</c>) — VERIFIED in <c>docs/research/combat-participation.md</c>
     /// §1.4/§2 independently of this investigation: <c>GetNearestEnemy</c>'s hostility test is
@@ -6889,6 +6905,15 @@ internal static unsafe class Odyssey
         // especially since point-blank positioning this round did not change the outcome.
         nint equipSlotPtr = *(nint*)(creature + 0xA2C);
 
+        // ROUND 23 DIAGNOSTIC: read the real weapon-derived range inputs MaxCleaveRange
+        // computes from, instead of trusting round 19's hardcoded 50.0f stand-in. Read-only,
+        // two clean thiscalls — see GetEquippedItemFn/WeaponAccessorFn above for why this path
+        // was chosen over replicating 0x004FFAD0's own confusing stack-argument reuse.
+        nint weaponObj = equipSlotPtr != 0 ? GetEquippedItemFn(equipSlotPtr, 0x10) : 0;
+        nint weaponAccessor = weaponObj != 0 ? WeaponAccessorFn(weaponObj) : 0;
+        byte weaponFlagByte = weaponAccessor != 0 ? *(byte*)(weaponAccessor + 0x1A) : (byte)0xFF;
+        float weaponRangeField = weaponAccessor != 0 ? *(float*)(weaponAccessor + 0x34) : float.NaN;
+
         CreateNewAttackActionsFn(creature, 1, 0, targetId);
 
         byte subIndexNow = *(byte*)(round + 0x96C);
@@ -6901,7 +6926,9 @@ internal static unsafe class Odyssey
                 + $"target=0x{targetId:X}) returned. round+0x96C sub-index={subIndexNow} "
                 + $"sub+0xB0={subB0Now}, head action right after=0x{headRightAfterCreate:X}, "
                 + $"is fight action: {IsFightAction(headRightAfterCreate)}, "
-                + $"ROUND21: creature+0xA2C equip slot ptr=0x{equipSlotPtr:X}");
+                + $"ROUND21: creature+0xA2C equip slot ptr=0x{equipSlotPtr:X}, "
+                + $"ROUND23: weaponObj=0x{weaponObj:X} weaponAccessor=0x{weaponAccessor:X} "
+                + $"flagByte@+0x1A=0x{weaponFlagByte:X2} rangeField@+0x34={weaponRangeField}");
         }
 
         int roundTimerAfter = *(int*)(round + 0x958);
