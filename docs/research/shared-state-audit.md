@@ -851,6 +851,75 @@ gate this investigation has not yet reached.
 Process torn down and confirmed clean (`Get-Process KotorCoop.Agent,swkotor` returned none). Full
 suite 953/953, both builds clean.
 
+### Round 14 — the drive-loop-interference hypothesis is a dead end; `UpdateCombatRoundTimer`'s real gate was misread, and `StartCombatRound` turns out to do far more than two fields
+
+Static-only round (no live rig used). Two corrections to round 13's own conclusions, found by
+disassembling further than round 13 had time for.
+
+**`EnemyPresenceController`'s per-pass order was re-checked and is not the problem.**
+`ClaimCreatureForFight`, `PermitAttacking`, one-shot replay, `Drive()` (position/facing),
+`ClearPositionDirty`, `RecordEngagement`, THEN `QueueAttackAction` — in that order, every pass.
+Nothing runs between `QueueAttackAction`'s writes and the next pass's `ClaimCreatureForFight`
+that could plausibly reset round state; `ClaimCreatureForFight`'s move-only wipe was already
+confirmed (round 9) to be structurally incapable of touching a fight-type action, and nothing in
+this pass touches `round+0x9xx` fields directly by address. The interference hypothesis this
+round was assigned to test is **not supported by the call sequence itself**.
+
+**`UpdateCombatRoundTimer`'s gate was misread in round 13.** Full disassembly of `0x004FAF20`
+past the point round 13 stopped: the `round+0x960 - creature+0xCC <= 0` branch (`jle 0x4fafe3`)
+is **not** a dead end that always resets — it falls into a loop that calls the SAME processing
+functions (`0x4d45b0`, `0x5b8050`) as the "positive" branch, gated instead on
+`[esi + 0xb0] > 0`, where `esi = 0x004D2B50(round, byte at round+0x96C)` — an array indexer:
+`esi = round + 4 + (that byte, clamped >= 0) * 0x14C`, i.e. ONE of **five embedded 0x14C-byte
+per-participant sub-structures** starting at `round+4`, selected by `round+0x96C`. The `ebx`
+sign only decides which of two paths reaches the same processing calls; it is not itself a
+block. What actually blocks all processing is `[esi+0xb0] <= 0` on whichever sub-structure
+`round+0x96C` currently selects — a field this investigation has never read or written.
+
+**And `round+0x96C` was never set by anything this investigation has done**, because
+`StartCombatRound` (`0x004D5F70`, now fully disassembled end to end, `0x4D5F70`-`0x4D60EA`)
+does far more than the two fields `SetRoundTimerActiveFn`/`SetRoundDelayFn` cover: it zeroes
+`+0x944`/`+0x958`/`+0x960`/`+0x938`/`+0x93c`, sets `+0x934=1`, `+0x95c=0x7f000000` (a sentinel),
+`+0x94c=0xbb8` (3000, likely a real default interval), stores two of its five args into
+`+0x9b8`/`+0x9bc`/`+0x940`, conditionally resets a stale prior round via `0x4d4620` — **and runs
+a loop over all five `round+4+i*0x14C` sub-structures, calling `0x004D3010` (an
+initializer/constructor, not yet dissected) on each one**, before three more setup calls
+(`0x4d2a10`, `0x4d2a70`, `0x4f34a0`). None of that has ever run on a driven puppet's round. The
+five sub-structures `UpdateCombatRoundTimer` indexes into via `round+0x96C` are very likely
+sitting in whatever state the creature's constructor left them in — not the state
+`StartCombatRound`'s loop would put them in — and `[esi+0xb0]` is a field inside one of them.
+
+**Argument-shape work on `StartCombatRound` itself, real but incomplete.** Fresh disassembly of
+call site `0x005BC537` (with full caller context this time, `0x5BC480`-`0x5BC63B`) maps the
+push order to argument roles more precisely than round 12 managed: arg1 = a caller-local value
+also reassigned into `ecx` (`[esp+0x14]`, stored into `round`'s `+0x9c0`/`+0x9ac`/`+0x9cc`
+target-like fields), arg2 = the return of `call 0x4d2c30([esp+0x10])`, arg3 = the return of
+`call 0x4d2d60([esp+0x10], &[esp+0x54])`, arg4 = `[esp+0x50]` (never seen explicitly read
+inside the callee body captured so far — possibly genuinely unused), arg5 = `[esp+0x6c]`
+(stored into `+0x940`, passed on into `0x4d2a10`). **This is NOT full confidence** — arg2 and
+arg3 both derive from two OTHER function calls (`0x4d2c30`, `0x4d2d60`) whose own return values
+were not traced to a concrete meaning, and the caller-local stack slots (`[esp+0x10]`,
+`[esp+0x50]`, `[esp+0x6c]`, `[esp+0x14]`) were not traced back to where the ENCLOSING function
+(a large combat-decision routine starting well before `0x5BC480`) itself populates them from.
+Per the standing rule this investigation has followed since round 12 — do not guess a
+thiscall's argument shape against a live process without real confidence — **no live test was
+attempted this round and no code was changed**.
+
+**What round 15 needs, precisely:** either (a) trace `0x4d2c30`, `0x4d2d60`, and the enclosing
+function's population of `[esp+0x10]`/`[esp+0x50]`/`[esp+0x6c]`/`[esp+0x14]` back far enough to
+pin all 5 `StartCombatRound` arguments with real confidence, then call the real function (which
+handles the five-sub-structure init and `+0x96C` internally — no need to hand-replicate
+`0x4D3010` or the three follow-up calls), or (b) find and dissect whatever sets `round+0x96C`
+directly (11 write sites found via `fieldwrites.py 0x96C`, not yet individually checked against
+this creature's case) and the five sub-structures' constructor (`0x4D3010`) to see if `+0xb0`
+specifically can be set directly and cheaply without needing the full `StartCombatRound` call.
+Route (a) is very likely more correct (it is what the engine's own working combat AI actually
+calls) but route (b) may be cheaper if `0x4D3010` turns out to be a simple zero-fill the
+creature's own constructor already performs adequately, in which case only `round+0x96C` itself
+(picking sub-structure 0, which is almost certainly what a fresh, never-fought creature already
+has by construction) might be the missing single write. Either route is genuinely findable with
+the same static tools this round used; it was not a matter of the tools failing, only of budget.
+
 ## 3. A client's XP is actively erased
 
 `ProgressionSnapshotPacket` is host→client only and absolute (CoopAgent.cs, `PumpProgression`):
