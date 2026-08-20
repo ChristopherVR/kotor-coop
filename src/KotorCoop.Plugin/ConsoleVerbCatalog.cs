@@ -80,6 +80,7 @@ internal static class ConsoleVerbCatalog
         ("items", "items [n]"),
         ("item", "item <0x131>"),
         ("setitem", "setitem <0x131> [stack=N] [charges=N] [max=N] [upgrades=0xN] [identified=0|1]"),
+        ("giveloot", "giveloot <owner id> <resref> [stack]"),
 
         // Completable, but NEVER recorded: ConsoleHistoryRing drops password/pw lines, so
         // completion may offer the verb while recall can never replay the secret.

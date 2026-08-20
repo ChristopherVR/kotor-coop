@@ -459,6 +459,10 @@ public sealed class CoopCommandDispatcher(
                 SetItem(command.Address ?? string.Empty, command.Item);
                 break;
 
+            case CoopCommandKind.GiveLoot:
+                GiveLoot(command.Address ?? string.Empty, command.Password ?? string.Empty, command.Amount);
+                break;
+
             case CoopCommandKind.Cheats:
                 foreach (string line in ConsoleCommand.CheatsText)
                 {
@@ -697,6 +701,26 @@ public sealed class CoopCommandDispatcher(
             MaxCharges: fields.MaxCharges ?? CheatKinds.Unchanged,
             Upgrades: fields.Upgrades ?? CheatKinds.Unchanged,
             ItemFlags: flags));
+    }
+
+    /// <summary>
+    /// Gives a materialised enemy's local stand-in one item of its real corpse's actual loot —
+    /// the staging instrument for docs/research/enemy-materialisation.md §5/§6's still-open
+    /// loot-sync gap, the same role `setitem`/`dropitem` play for item identity.
+    /// </summary>
+    private void GiveLoot(string ownerToken, string resref, int stack)
+    {
+        if (!ConsoleCommand.TryParseItemId(ownerToken, out uint ownerId))
+        {
+            Reply($"giveloot: '{ownerToken}' is not an object id (write it as 0x35)");
+            return;
+        }
+
+        SendCheat(new CheatRequest(
+            CheatKinds.GiveLoot,
+            Target: ownerId,
+            Text: resref,
+            Amount: stack));
     }
 
     /// <summary>

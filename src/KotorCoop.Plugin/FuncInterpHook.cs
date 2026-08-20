@@ -57,7 +57,7 @@ internal static unsafe class FuncInterpHook
         "moviewarp", "usedoor",
         // The item-identity harness. "item"/"items"/"setitem" are ours: the engine registers
         // giveitem and nothing else beginning with "item".
-        "items", "item", "setitem",
+        "items", "item", "setitem", "giveloot",
     ];
 
     /// <summary>

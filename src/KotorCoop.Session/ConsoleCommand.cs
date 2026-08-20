@@ -165,6 +165,12 @@ public enum CoopCommandKind
     /// means "the nearest module transition door".
     /// </summary>
     UseDoor,
+
+    /// <summary>Give a materialised enemy's local stand-in one item of its real corpse's
+    /// actual loot. The owner's enemy id is in <see cref="CoopCommand.Address"/>, the resref
+    /// in <see cref="CoopCommand.Password"/>, and the stack count in
+    /// <see cref="CoopCommand.Amount"/>.</summary>
+    GiveLoot,
 }
 
 /// <summary>
@@ -605,6 +611,9 @@ public static class ConsoleCommand
             case "setitem":
                 return ParseSetItem(rest);
 
+            case "giveloot":
+                return ParseGiveLoot(rest);
+
             case "cheats":
                 return new CoopCommand(CoopCommandKind.Cheats);
 
@@ -1044,6 +1053,34 @@ public static class ConsoleCommand
             CoopCommandKind.SetItem, Address: $"#{objectId:x}", Item: fields);
     }
 
+    /// <summary>
+    /// Parses <c>giveloot &lt;owner id&gt; &lt;resref&gt; [stack]</c>. The id is the OWNER's
+    /// enemy object id — the one every peer's census agrees on — not whatever local id this
+    /// instance's own materialisation table spawned the stand-in under; only the receiving
+    /// plugin can translate one to the other, which is why it takes the id rather than a name.
+    /// </summary>
+    private static CoopCommand ParseGiveLoot(string[] rest)
+    {
+        if (rest.Length < 2 || !TryParseItemId(rest[0], out uint ownerId)
+            || !IsResRef(rest[1], maxLength: 31))
+        {
+            return new CoopCommand(
+                CoopCommandKind.Invalid,
+                Error: "giveloot needs the owner's enemy id and a resref, e.g. "
+                    + "giveloot 0x35 g_w_blstrpstl001 [stack]");
+        }
+
+        int stack = 1;
+        if (rest.Length > 2 && (!int.TryParse(rest[2], out stack) || stack <= 0))
+        {
+            return new CoopCommand(
+                CoopCommandKind.Invalid, Error: $"stack '{rest[2]}' is not a positive number");
+        }
+
+        return new CoopCommand(
+            CoopCommandKind.GiveLoot, Address: $"#{ownerId:x}", Password: rest[1], Amount: stack);
+    }
+
     /// <summary>A field value: decimal, or hex with an explicit 0x. Unlike an object id a
     /// bare number here is unambiguous — a stack of 20 is 20 — so decimal is the default.</summary>
     private static bool TryParseFieldValue(string value, out uint number)
@@ -1090,6 +1127,7 @@ public static class ConsoleCommand
         "  item 0x131          what one item's per-instance state actually reads",
         "  setitem 0x131 stack=20 charges=3 upgrades=0x5 identified=0",
         "                      poke those fields, so there is something worth sending",
+        "  giveloot <owner id> <resref> [stack]   give a materialised stand-in its real loot",
         // Listed here because it is the same family — a verb that exists to stage a test —
         // and discoverability is the point of this listing. It is owned by the network
         // fault-injection work, which registers its own catalog entry and parser case; this
