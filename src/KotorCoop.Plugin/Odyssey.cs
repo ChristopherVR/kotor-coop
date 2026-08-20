@@ -6350,25 +6350,64 @@ internal static unsafe class Odyssey
     ///
     /// MAIN THREAD ONLY.
     /// </summary>
+    private static long _queueAttackDiagLoggedAtMs;
+
     public static void QueueAttackAction(nint creature, uint targetId)
     {
+        // TEMPORARY DIAGNOSTIC (2026-08-20 live-verify pass) — this call has never fired
+        // observably on a running game, and none of its three early returns had a witness.
+        // One throttled line per ~3s says which branch is actually being taken, so a silent
+        // no-op can be told from "it fired and the engine ignored it." Remove once the first
+        // live pass either confirms or refutes this path.
+        long diagNowMs = Environment.TickCount64;
+        bool diagLog = diagNowMs - _queueAttackDiagLoggedAtMs >= 3000;
+        if (diagLog)
+        {
+            _queueAttackDiagLoggedAtMs = diagNowMs;
+        }
+
         if (creature == 0 || targetId is 0 or ObjectInvalid)
         {
+            if (diagLog)
+            {
+                PluginHost.Log($"queueattack diag: bailed - creature 0x{creature:X} targetId 0x{targetId:X}");
+            }
+
             return;
         }
 
-        if (IsFightAction(GetHeadActionType(creature)))
+        int headType = GetHeadActionType(creature);
+        if (IsFightAction(headType))
         {
+            if (diagLog)
+            {
+                PluginHost.Log($"queueattack diag: bailed - 0x{creature:X} head action 0x{headType:X} is already a fight action");
+            }
+
             return;
         }
 
         nint round = *(nint*)(creature + CreCombatRound);
         if (round == 0)
         {
+            if (diagLog)
+            {
+                PluginHost.Log($"queueattack diag: bailed - 0x{creature:X} round pointer at +0x{CreCombatRound:X} is null, head action 0x{headType:X}");
+            }
+
             return;
         }
 
         AddAttackActionFn(round, targetId, 0, 0, 0x5DC, 1);
+
+        int headAfter = GetHeadActionType(creature);
+        if (diagLog)
+        {
+            PluginHost.Log(
+                $"queueattack diag: CALLED AddAttackAction(round=0x{round:X}, target=0x{targetId:X}) on creature 0x{creature:X}, "
+                + $"head action before 0x{headType:X}, IMMEDIATELY after 0x{headAfter:X} "
+                + $"(is fight action now: {IsFightAction(headAfter)})");
+        }
     }
 
     // ---- faction, the targetability switch ---------------------------------------

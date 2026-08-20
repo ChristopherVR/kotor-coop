@@ -279,6 +279,57 @@ slower than intended, since their exact meaning (a delay in ms, and an unidentif
 never fully decoded, only matched byte-for-byte against a real engine call site.
 `local_combat` stays off by default until this runs clean.
 
+### The live pass ran (2026-08-20, same day) — the call reaches the engine and does nothing
+
+Reproduced the exact mid-fight-join scenario from the earlier failure: host aggroed for real
+on a live `sithsoldier` pair (`tp` to 2m, HP falling under the engine's own AI, pinned at
+1 hp by the Endar Spire deck's own `SetMinOneHP`), then a second instance connected and was
+moved to the same spot while the host was still actively fighting.
+
+**Two hypotheses this pass killed, with evidence:**
+
+- **Target resolution is fine.** `Odyssey.QueueAttackAction` passes `targetId = *(uint*)(player
+  + 0x04)`, which reads `0x7FFFFFFF` for the local player — alarming on its own (every other
+  call site in this codebase treats `0 or ObjectInvalid or 0x7FFFFFFF` as "not a real id" and
+  filters it out), but `0x7FFFFFFF` turns out to be this engine's own reserved sentinel for
+  "the current player," not garbage: `console 'resolve 0x7FFFFFFF'` on the live client answered
+  `0x7FFFFFFF resolves to 0x19371C68 here`, and the plugin log's full chain confirms it lands on
+  a genuine `CSWSCreature` (vtable `0x7470C8`, `id+4 0x7FFFFFFF`, `type 0x5`) — the actual local
+  player object. `AddAttackAction`'s internal target resolution calls the exact same
+  `GetGameObject` (`0x004AE750`) that `Odyssey.ResolveServerObject` wraps (proven working every
+  day via damage-forwarding), so there is no reason to believe the engine's OWN resolution of
+  this id fails inside `AddAttackAction` either.
+- **`ClaimCreatureForFight`'s move-only wipe is not re-clearing the freshly queued attack.**
+  It only clears when `IsMoveAction(GetHeadActionType(creature))`, and the fight-action and
+  move-action code lists are disjoint, so a genuine fight action at the head is never touched.
+
+**What actually happens: `AddAttackAction` is called, does not crash, and changes nothing.**
+Added a throttled diagnostic to `Odyssey.QueueAttackAction` (still in the tree, useful for
+whoever continues this) logging the head action type immediately before AND immediately after
+the call. Real output, unedited:
+
+    queueattack diag: CALLED AddAttackAction(round=0x19352178, target=0x7FFFFFFF) on creature
+    0x19351268, head action before 0xFFFFFFFF, IMMEDIATELY after 0xFFFFFFFF (is fight action now: False)
+
+Repeated identically every ~3s for 40+ seconds straight, on a stable non-null `round` pointer.
+An "unconditionally allocates and appends" function, called successfully with a resolvable
+target and a live round pointer, left the head-of-queue completely unchanged in the SAME
+instant it returned — not reverted later, never applied at all. This rules out a race with
+some other wipe (there was no window for one) and narrows the open question to inside
+`AddAttackAction` itself: either the disassembly's read of its calling convention has a
+mistake not yet found (a missing/misordered argument, a wrong flag value in the `0x5DC, 1`
+tail nobody has decoded), or the function contains a precondition this investigation hasn't
+identified yet (a hostility/faction check on the target, an attacker-side gate unrelated to
+the target at all, or something specific to being called from outside the engine's own
+call sites, none of which are ever reached from managed code anywhere else in this
+codebase).
+
+**Decision: `local_combat` stays off.** Both live installs' `coop.ini` restored to
+`local_combat=0`. This is real progress — from "the client's engine never enters combat, cause
+unknown" to "the queue-append call itself is a silent no-op, for a reason not yet
+identified, with resolution and the wipe-guard both cleared as suspects" — but it is not a
+working mechanism yet.
+
 ## 3. A client's XP is actively erased
 
 `ProgressionSnapshotPacket` is host→client only and absolute (CoopAgent.cs, `PumpProgression`):
