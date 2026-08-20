@@ -805,3 +805,81 @@ which is the direction the rest of both hooks already fails in.
 
 This is what defect 2 costs if it is not done: the flag is only correct while the frame pass
 runs, and the frame pass does not always run.
+
+## The second-conversation client crash (2026-08-21 investigation, root cause NOT confirmed live)
+
+Two real access-violation crashes were observed on the client instance during a 2026-08-15
+session (Windows Application event log + `kotorcoop-plugin.log`), both with an identical
+signature: a session's SECOND local `StartDialog` is fatal, its FIRST always ran fine.
+
+    [13:44:41.890] dialogue: engine reached StartDialog (2 so far)
+    [13:44:44.040] FIRST-CHANCE access violation (0xC0000005)      <- 2.1s later, plugin hook region
+    [20:56:04.985] dialogue: engine reached StartDialog (2 so far)
+    [20:56:05.006] FIRST-CHANCE access violation (0xC0000005)      <- 21ms later, INSIDE swkotor.exe
+
+The original hypothesis (from the log alone) was stale per-session dialogue state carried by
+`DialogueGateHook`/`DialogueSpectateController` across two conversations in the same module.
+**That hypothesis does not survive reading the current code.** `DialogueSpectateController`
+already resets `LocalDialogueNode`, the pick log and `LocalDialoguePartnerTag` at the end of
+EVERY conversation (`PublishLocal`'s `!active` branch, not only `Invalidate()`'s module-change
+path) — this reset already existed before this investigation and is correct. Whatever crashes
+these two sessions, it is not this class of staleness.
+
+### The crash #2 address, decoded
+
+`0x589112` (event-log fault offset `0x189112` + image base `0x400000`) disassembles to:
+
+    0x005890F0  movzx eax, byte ptr [ecx + 0x2cc]
+    0x005890F7  mov   eax, dword ptr [ecx + eax*4 + 0x32c]   ; per-object-type array lookup
+    0x005890FE  test  eax, eax
+    0x00589100  jne   0x589105                               ; null IS guarded
+    0x00589102  ret   0x18
+    0x00589105  push  ebx
+    0x00589106  add   eax, 0x20
+    ...
+    0x00589110  mov   esi, dword ptr [edx]        ; edx = ecx+0x90 (source)
+    0x00589112  mov   dword ptr [eax], esi         ; <- THE FAULT: write through eax
+
+The null check at `0x5890FE` already guards against an empty slot. The crash is therefore a
+write through a **non-null but stale/dangling** pointer sitting in the `ecx+0x32c` array — the
+same general shape `ShotCameraGuardHook.cs` (this file's own §"Stops CGuiInGame::UpdateShotCamera")
+already documents and fixes for a *different* address (`0x006306E0`, `gui+0x170`/`gui+0x174`):
+"an id the client no longer holds is an access violation... a peer's conversation ending, a
+follow timing out, or losing the token race all end a conversation from OUR frame hook, and one
+stray reply list arriving afterwards is enough." This is very plausibly the same bug CLASS, one
+call site over, never previously found because nobody had the crashing address to start from.
+
+`0x5890F0` is entered from `0x004BBE6E`, itself reached (per the surrounding code at `0x4BBDE0`
+region) via `mov eax, [0x7a39fc]` — the SAME app-manager global chain this document's own
+headline table already verifies for the dialogue subsystem — then `CClientExoApp::GetGameObject`
+(`0x4ae750`, null-checked correctly), then a branch that only proceeds for the resolved object's
+type byte (`ecx+8`) equal to 9 or 10; type 10 additionally casts through `vtbl+0x18` first (the
+same door-cast slot `AddAttackAction`'s disassembly elsewhere in this session identified). This
+is consistent with per-conversation camera/shot positioning data tied to a door or similar
+type-10 object referenced by the conversation, going stale exactly the way `ShotCameraGuardHook`
+describes.
+
+### Why this is NOT fixed here, and what the real fix needs
+
+The pointer at fault is non-null, so a `ShotCameraGuardHook`-style bare null-check guard at the
+call site would not catch it — the value looks valid and only turns out to reference freed
+memory. Applying this codebase's own ghost-object liveness gate (`CGameObjectArray`-based,
+already proven for exactly this "freed block still reads as alive" shape in the enemy-census
+fix) would need confirming the `ecx+0x32c[index]` slot actually holds a `CGameObject`-family
+pointer and not something else (a camera-cue cache entry, a GUI element, unconfirmed either way)
+— getting this wrong and hooking blind risks a NEW crash on a native patch nobody has verified
+live, which this whole codebase's own established discipline (see every `Install()` in this
+directory: verify-bytes-or-refuse, nothing shipped without a live pass) argues strongly against.
+
+Reproducing this live needs two real, sequential in-game conversations against the SAME client
+instance — no console verb currently exists to trigger `StartDialog` synthetically, and mouse
+injection into this game is documented elsewhere (`docs/live-verification.md`) as needing a
+window minimise/restore cycle to be delivered at all, which was not attempted this pass given
+the residual risk of a wrong native patch outweighing a rushed live click sequence.
+
+**Next step, concrete:** either (a) build a click-and-repro test using the minimise/restore
+trick to reproduce this crash on current HEAD first (confirming it still happens at all — it
+may already be moot, since dialogue state handling has visibly hardened since 2026-08-15), or
+(b) add a read-only diagnostic at `0x004BBE6E`'s call site (logging the resolved object type
+and the `ecx+0x32c[index]` pointer value, no behavior change) and correlate its firing with a
+real two-conversation session, before attempting any native guard.
