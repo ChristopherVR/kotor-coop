@@ -462,6 +462,13 @@ internal static unsafe class Odyssey
         type is 0x00 or 0x01 or 0x02 or 0x03 or 0x04 or 0x09 or 0x10 or 0x11
              or 0x2B or 0x2C or 0x2F or 0x32 or 0x36 or 0x39 or 0x3C or 0x3F;
 
+    /// <summary>The head-of-queue types that mean "already fighting" — <see cref="QueueAttackAction"/>
+    /// must not stack a second attack behind one of these, per the RunActions dispatch table
+    /// comment above: 0x0B PhysicalAttacks, 0x3E Combat, 0x0E CastSpell, 0x31 CounterSpell,
+    /// 0x0F WaitForEndOfRound.</summary>
+    private static bool IsFightAction(int type) =>
+        type is 0x0B or 0x3E or 0x0E or 0x31 or 0x0F;
+
     /// <summary>
     /// Stops a creature WALKING, and nothing else — the hold a peer's interaction lock buys.
     /// Returns true when something was actually cleared.
@@ -6292,6 +6299,77 @@ internal static unsafe class Odyssey
     /// </summary>
     public static void PermitAttacking(nint creature) =>
         *(int*)(creature + CreMovePermitted) |= CreAttackPermittedBit;
+
+    /// <summary>CSWSCreature + this = its CSWSCombatRound sub-object. VERIFIED: the field
+    /// AddAttackAction below is called through (<c>mov ecx, dword ptr [esi + 0x9c8]</c> at
+    /// <c>0x004FDE7C</c>, inside the engine's own <c>CSWSCreature::AddAttackActions</c>).</summary>
+    private const int CreCombatRound = 0x9C8;
+
+    /// <summary>
+    /// CSWSCombatRound::AddAttackAction(uint targetId, int, int, int nDelayMs, int) —
+    /// queues one swing at <c>targetId</c> on the round's pending-action list. VERIFIED by
+    /// disassembly at <c>0x004D38B0</c>: resolves the target via <c>GetGameObject</c>
+    /// (<c>0x004AE750</c>, matching arg1 = the id at <c>[esp+8]</c>), checks it is alive
+    /// (<c>vtbl+0x94</c>, <c>CSWSCreature::GetDead</c>) and not a closed door/destroyed
+    /// placeable (<c>vtbl+0x18</c> then <c>+0x2CC</c>), then unconditionally allocates a new
+    /// 0x88-byte action node and appends it — there is no "already queued" check inside this
+    /// function, which is why <see cref="QueueAttackAction"/> gates on the head action type
+    /// before calling it rather than calling it every pass. Cross-confirmed against
+    /// `docs/research/combat-participation.md` §1.2, which independently documents this same
+    /// address and signature from the CALLER side (<c>CreateNewAttackActions</c>'s
+    /// re-validation branch: "If the target survives validation, AddAttackAction(round,
+    /// targetId, 0, 0, 0x5DC, 1) queues the next swing and the lock continues").
+    /// </summary>
+    private static readonly delegate* unmanaged[Thiscall]<nint, uint, int, int, int, int, void> AddAttackActionFn =
+        (delegate* unmanaged[Thiscall]<nint, uint, int, int, int, int, void>)0x004D38B0;
+
+    /// <summary>
+    /// The missing half of `local_combat`: nothing else ever gives a mirrored enemy a reason
+    /// to attack. `CSWSCreature::CreateNewAttackActions` (the ONLY place a NEW attack action
+    /// gets queued, per `docs/research/combat-participation.md` §1.1) has exactly one caller,
+    /// `EndCombatRound`, which is only ever reached from the round timers or a round already
+    /// in progress — and starting that first round is normally the AI script's job
+    /// (`DetermineCombatRound`/`ActionAttack`), which never runs for a body this instance only
+    /// drives. `PermitAttacking`/`ClaimCreatureForFight` only ever gated an attack ALREADY
+    /// queued (VERIFIED: `AIActionPhysicalAttacks` 0x005BBBF0 tests the `CreAttackPermittedBit`
+    /// right before executing a queued swing, and nothing upstream of it ever queues the first
+    /// one) — permission and initiation are two different things, and this call is the
+    /// initiation `local_combat` was missing.
+    ///
+    /// Gated on the creature's own head action NOT already being a fight action (see
+    /// <see cref="IsFightAction"/>) so this does not stack a duplicate swing behind one still
+    /// running — <see cref="AddAttackActionFn"/> has no dedup of its own, it allocates and
+    /// appends unconditionally every call.
+    ///
+    /// ⚠ NOT YET LIVE-VERIFIED. The calling convention (`this` = the round object at
+    /// creature+0x9C8, stack args `targetId, 0, 0, 0x5DC, 1`) is read from two independent
+    /// sources (direct disassembly of both this function and its only prior wrapper) but this
+    /// exact call — a client's plugin queuing a native attack action on a creature it does not
+    /// own control input for — has never been made on a running game. See
+    /// `docs/research/shared-state-audit.md` §2 for what a live pass needs to check first.
+    ///
+    /// MAIN THREAD ONLY.
+    /// </summary>
+    public static void QueueAttackAction(nint creature, uint targetId)
+    {
+        if (creature == 0 || targetId is 0 or ObjectInvalid)
+        {
+            return;
+        }
+
+        if (IsFightAction(GetHeadActionType(creature)))
+        {
+            return;
+        }
+
+        nint round = *(nint*)(creature + CreCombatRound);
+        if (round == 0)
+        {
+            return;
+        }
+
+        AddAttackActionFn(round, targetId, 0, 0, 0x5DC, 1);
+    }
 
     // ---- faction, the targetability switch ---------------------------------------
     //

@@ -234,6 +234,51 @@ result this section has ever had; treat "already fixed" claims about items 4-7 a
 "the identified risks in a working mechanism were closed," not as "the mechanism works" —
 those are different claims, and only the second one is what a player experiences.
 
+### The missing initiation call — implemented, NOT yet live-verified (2026-08-20)
+
+A later `local_combat` live pass (a real fight, both instances connected, client standing
+beside two genuinely hostile creatures) found something more basic than anything above: the
+client's engine never entered combat AT ALL, not once in 90+ seconds, even though
+`PermitAttacking`/`ClaimCreatureForFight` ran on the mirrored enemies every drive pass. The
+cause, found by disassembly: `PermitAttacking` only sets the `CreAttackPermittedBit` — an
+EXECUTION-time gate `AIActionPhysicalAttacks` (`0x005BBBF0`) checks right before running an
+attack action ALREADY on the queue. Nothing in the native engine ever queues that first
+action on its own; `CSWSCreature::CreateNewAttackActions` (the only place a NEW one gets
+queued) has exactly one caller, `EndCombatRound`, reached only from round timers or a round
+already in progress — starting the first one is normally the AI script's job
+(`DetermineCombatRound`/`ActionAttack`), which never runs for a body this instance only
+drives. Permission and initiation are two different things; the mechanism as built only ever
+granted the former.
+
+Fix: `Odyssey.QueueAttackAction(creature, targetId)` (`src/KotorCoop.Plugin/Odyssey.cs`) calls
+`CSWSCombatRound::AddAttackAction` (`0x004D38B0`, thiscall on the creature's own
+`CSWSCombatRound` sub-object at `+0x9C8`, args `targetId, 0, 0, 0x5DC, 1`) directly — the
+SAME call `CreateNewAttackActions`'s own re-validation branch makes each round to queue "the
+next swing" (independently documented from the caller side in
+`docs/research/combat-participation.md` §1.2, matching this disassembly). Gated on the
+creature's head action not already being a fight-type action (`Odyssey.IsFightAction`) since
+`AddAttackAction` itself has no dedup — it unconditionally allocates and appends a new action
+node every call. Wired into `EnemyPresenceController`'s `local_combat` drive pass
+(`EnemyPresenceController.cs`, after `RecordEngagement`), gated to the same engagement-range
+distance check (factored out as `IsEngaged`, shared with `RecordEngagement`) so a mirrored
+enemy nowhere near the local player is never handed a target.
+
+⚠ **NOT YET LIVE-VERIFIED.** This is a genuinely new kind of write for this codebase: a
+client's plugin queuing a native combat action on a creature it does not own control input
+for, via an engine address (`0x004D38B0`) never previously called from managed code. The
+calling convention is read from two independent static sources (direct disassembly of both
+this function and its documented caller) but a live pass needs to check, in order: (1) does
+the queued action actually survive to execute — does the mirrored enemy visibly swing; (2)
+does the client's own `+0x4E0` in-combat flag rise as a result, closing the original gap this
+whole section is about; (3) does `IncomingDamageController`'s absorb-gate (`IsLocallyEngaged`)
+correctly stand down once local hits are landing, so damage is not double-applied; (4) does
+the engagement-range gate correctly stop queuing once the player and enemy separate, so a
+fight does not follow a fleeing player forever; (5) whether the `0x5DC`/`1` constants (copied
+verbatim from the engine's own call) produce a normal attack cadence or something faster/
+slower than intended, since their exact meaning (a delay in ms, and an unidentified flag) was
+never fully decoded, only matched byte-for-byte against a real engine call site.
+`local_combat` stays off by default until this runs clean.
+
 ## 3. A client's XP is actively erased
 
 `ProgressionSnapshotPacket` is host→client only and absolute (CoopAgent.cs, `PumpProgression`):

@@ -423,6 +423,15 @@ internal sealed unsafe class EnemyPresenceController(SharedBlockView block)
             Odyssey.ClearPositionDirty(creature);
 
             RecordEngagement(enemy.ObjectId, creature, player);
+
+            // The missing piece PermitAttacking/ClaimCreatureForFight never provided: a
+            // reason for the AI to decide to fight at all. See Odyssey.QueueAttackAction.
+            // Gated to the same engagement range as RecordEngagement — a mirrored enemy
+            // three rooms away has no business being handed a target.
+            if (player != 0 && IsEngaged(creature, player))
+            {
+                Odyssey.QueueAttackAction(creature, *(uint*)(player + ObjId));
+            }
         }
 
         return true;
@@ -442,15 +451,23 @@ internal sealed unsafe class EnemyPresenceController(SharedBlockView block)
             return;
         }
 
+        if (IsEngaged(creature, player))
+        {
+            EngagedOwnerId[_engagedCount++] = ownerObjectId;
+        }
+    }
+
+    /// <summary>Planar distance test shared by <see cref="RecordEngagement"/> (licenses damage
+    /// absorption) and the local_combat attack-queuing gate — one fight radius, one place it is
+    /// computed. The Z of a driven body is the owner's, and a ramp between two players standing
+    /// in the same fight is a metre of height, not a different floor.</summary>
+    private static bool IsEngaged(nint creature, nint player)
+    {
         Vec3 body = Odyssey.GetPosition(creature);
         Vec3 them = Odyssey.GetPosition(player);
         float dx = body.X - them.X;
         float dy = body.Y - them.Y;
-
-        if ((dx * dx) + (dy * dy) <= EngagementRangeSquared)
-        {
-            EngagedOwnerId[_engagedCount++] = ownerObjectId;
-        }
+        return (dx * dx) + (dy * dy) <= EngagementRangeSquared;
     }
 
     /// <summary>Resolves and caches the slot's creature, revalidating the cached pointer
