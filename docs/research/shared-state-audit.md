@@ -118,15 +118,25 @@ That is the wall: not a missing call, but a piece of engine logic that only exis
 of a combat round the engine itself is already advancing — which a driven puppet, by definition,
 never is.
 
-**Status.** `local_combat` stays off by default. Nothing about this investigation found or left
-anything unsafe — every fix from rounds 1-27 is real, tested, and stays in the tree; they were
-all genuine, verified improvements even though the final step turned out to be structurally out of
-reach this way. Two ways forward: (a) reverse-engineer the engine's own round-advancement loop and
-its full caller chain as its own project, at the scale this investigation was; or (b) stop trying
-to externally replicate the engine's native combat calls piece by piece, and instead find a way to
-make the engine's OWN AI script actually run for a driven puppet — the thing that starts a fight
-for every other creature in the game, host-local or not, and the only thing this investigation
-never tried.
+**Status after round 27.** `local_combat` stays off by default. Nothing about this investigation
+found or left anything unsafe — every fix from rounds 1-27 is real, tested, and stays in the tree;
+they were all genuine, verified improvements even though the final step turned out to be
+structurally out of reach this way. Two ways forward were identified: (a) reverse-engineer the
+engine's own round-advancement loop and its full caller chain as its own project; or (b) stop
+externally replicating the engine's native combat calls, and instead make the engine's OWN AI
+script actually run for a driven puppet.
+
+**Strategy 2 (2026-08-21, same day, immediately after) — route (b), and it is real.** Found the
+engine's own generic script-event dispatcher (`RunScript`, already proven live-working elsewhere
+in this codebase for a door's OnOpen script) and the creature's own combat-AI script slot
+(`creature+0x260`, confirmed live to hold `k_def_combend01`, KOTOR's real default
+`OnCombatRoundEnd` script). **Firing it on a HOST-LOCAL creature produced a genuine, real fight —
+player HP 12→1, independently verified — the first positive result of the entire investigation,
+using none of the 27 rounds' hand-replicated native calls.** Firing the SAME thing on a
+MIRRORED/driven creature did not (yet) produce a hit, but that result is confounded by the old
+per-frame mechanism running concurrently and is explicitly NOT a refutation — see the dated
+"Strategy 2" entry below for the full account and the precise next test. This is now the most
+promising open thread, not the 27-round mechanical one.
 
 ### The state cannot be replicated by writing it — measured
 
@@ -1758,6 +1768,83 @@ needing external replication at all.
 `local_combat` stays off. No live rig used this round (the conclusion is fully supported by
 static evidence — the loop's existence and preconditions are what settle this, not a live
 read). Full suite 953/953, both builds clean.
+
+### Strategy 2 (2026-08-21) — firing the creature's own script: a real breakthrough, and a real open question
+
+A different approach from all 27 rounds above: instead of replicating the engine's native
+combat-round mechanics piece by piece, ask the engine's own event system to notify the
+creature the way it notifies every other creature in the game, and let its assigned NWScript
+AI (which normally decides to fight) run.
+
+**The mechanism.** `CVirtualMachine::RunScript` (`0x005D0FC0` is an MI thunk; the real body is
+`0x005D45D0`, a queue-based script dispatcher with a pending-list at `+0x1AC` and a counter at
+`+0x28`) is already used, live and working, by `CSWSDoor::OpenDoor` to fire a door's OnOpen
+script (`Odyssey.cs:1208`, call site `0x00589D32`). Searching all 83 real call sites to that
+dispatcher for one inside a known AI-tick function found `0x004DA8B6`: a per-creature event
+dispatcher that, on a DIFFERENT branch of the same 13-case jump table, also calls
+`UpdateVisibleList` (`0x0051B050`, the perception scan already confirmed unmodified for a
+mirrored creature) — i.e. this is a general "signal event N to this creature" function, and the
+branch reaching `0x004DA8B6` fires whatever script sits at `creature+0x260`.
+
+A first live read of that field, taken naively as raw ASCII bytes, produced garbage
+(`'.q/..'`) — a real methodology bug, not a dead end: `+0x260` is not an inline resref buffer,
+it's an indirect string handle (`{ char* data; int length; }`, CExoString-shaped). The first
+4-5 raw bytes are a little-endian HEAP POINTER, which happens to look like short,
+printable-ish noise when read as text. Dereferencing it correctly (confirmed with a
+standalone `ReadProcessMemory` call against the live pointer) reads **`k_def_combend01`** — a
+real, well-known KOTOR default AI script: the `OnCombatRoundEnd` slot, whose body normally
+calls NWScript's `DetermineCombatRound()`, the exact routine that decides to queue an attack.
+`Odyssey.PeekCreatureScriptSlot0x260` was corrected to dereference properly rather than
+ship the ASCII-garbage version.
+
+Added `Odyssey.FireCreatureScriptSlot0x260` (calls `RunScriptFn` with the SAME argument shape
+`OpenDoor` uses: `this` = one dereference of `VirtualMachinePtr` (`0x7A3A00`, NOT the
+double-derefed "inner" object `GetImplementer` resolves for the stack-push routines — matched
+`OpenDoor`'s proven-working call exactly), arg1 = `&creature+0x260`, arg2 = the creature's own
+id, arg3 = 1) and a new `firescript <id> [fire]` console verb (`CheatKindFireScript = 12`,
+wired end to end through `SharedBlock`/`IGameBridge`/`ConsoleCommand`/`CoopCommandDispatcher`/
+`CheatController`/`ConsoleVerbCatalog`/`FuncInterpHook`, matching the existing
+`resolve`/`giveloot` pattern) so the field can be peeked safely before ever being fired.
+
+**Live result, HOST-LOCAL case: CONFIRMED WORKING, and it is the first genuinely NEW positive
+result of the whole investigation.** Fired `k_def_combend01` on a fresh, untouched, host-local
+`sithsoldier` standing ~2m from the local player. No crash. Within ~12 seconds: player HP
+`12/12 → 1/12` (floored by the Endar Spire deck's own min-1-hp pin, the same pin every other
+real fight this investigation has measured hits), independently confirmed via `console 'where'`
+— a genuine, physically-verified hit through the real engine damage pipeline, produced entirely
+by the creature's OWN AI deciding to fight after being told to check, not by any native call
+this investigation wrote.
+
+**Live result, MIRRORED (driven) case: INCONCLUSIVE, not refuted.** The same fire on a
+client-mirrored copy of an untouched `sithsoldier` (client player `tp`'d to ~1.2m, confirmed
+in-range via the existing `ROUND25` distance diagnostic) produced no HP change over 20+
+seconds. This is NOT a clean result: `local_combat=1` was set for this test (reasoned that
+`local_combat=0`'s full `ClearAllActions` wipe would delete a script-queued attack action
+before it executes), which means the OLD per-frame `QueueAttackAction`/`CreateNewAttackActionsFn`
+machinery from rounds 9-27 was ALSO running concurrently on the same creature, every frame,
+throughout the test — its own diagnostic lines are interleaved with the fire in the log, so
+whether the mirrored case's failure is (a) the script-triggered path genuinely not working on a
+driven puppet, or (b) interference from the old parallel mechanism (e.g. its own
+`ClaimCreatureForFight`/`PermitAttacking` calls, or its own unsuccessful `CreateNewAttackActionsFn`
+attempts leaving `round+0x9CC` pre-set so a subsequent real attempt takes a different internal
+branch) is NOT distinguished by this pass. `local_combat` correctly stays off; both `coop.ini`
+restored.
+
+**What round 28 needs to do, precisely:** rerun the exact same mirrored-case test with
+`local_combat=0` this time (so the OLD automatic mechanism is fully off), and watch CLOSELY —
+within roughly one engine tick, not the 3-second-throttled diagnostic cadence — whether the
+script-fire has ANY visible effect (a position/facing change toward the player, a head-action
+change) before the next frame's full `ClearAllActions` wipe could plausibly land. If the
+arming itself happens synchronously inside the script-triggered call chain (plausible, since
+`DetermineCombatRound`/`ActionAttack` go through the engine's OWN `EndCombatRound`/
+`CreateNewAttackActions` path, not a bare `AddAttackAction` append), it may not matter that the
+ACTION gets wiped a frame later — the round could already be armed and reprocess a fresh
+action on its own. That distinction (was the round ever actually armed, independent of whether
+one particular queued action survived) is the one thing this pass did not measure.
+
+Full suite: 953/953 (`DisconnectRecoveryTests.HeavyPacketLossStillConverges` is a known-flaky
+probabilistic test, confirmed passing in isolation both before and after this round — not a
+regression). Both builds clean.
 
 ## 3. A client's XP is actively erased
 

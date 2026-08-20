@@ -7053,9 +7053,17 @@ internal static unsafe class Odyssey
     private const int CreScriptSlot0x260 = 0x260;
 
     /// <summary>
-    /// Reads the raw bytes at a creature's +0x260 script slot, for a diagnostic read before
-    /// ever firing it — confirm it looks like a real resref (short, printable, non-empty)
-    /// rather than firing blind into an unverified field.
+    /// Reads a creature's +0x260 script slot, for a diagnostic read before ever firing it.
+    ///
+    /// VERIFIED LIVE (2026-08-21): this is NOT an inline resref buffer — it is an indirect
+    /// string handle, `{ char* data; int length; ... }` (CExoString-shaped: the first DWORD is
+    /// a genuine heap pointer to the text, the second its length). Reading the raw bytes as
+    /// ASCII (the original version of this method) produces garbage, because the first 4-5
+    /// bytes are a little-endian pointer, not text — e.g. a pointer ending in 0x00 74 ('t',
+    /// then a null) reads as a short, printable-looking but WRONG string. Dereferencing
+    /// correctly, on a live untouched `sithsoldier`, reads `k_def_combend01` — a real,
+    /// well-known KOTOR default AI script (the OnCombatRoundEnd slot, whose body normally
+    /// calls NWScript's `DetermineCombatRound()` — the exact routine that decides to attack).
     /// </summary>
     public static string PeekCreatureScriptSlot0x260(nint creature)
     {
@@ -7064,11 +7072,20 @@ internal static unsafe class Odyssey
             return string.Empty;
         }
 
-        byte* p = (byte*)(creature + CreScriptSlot0x260);
-        System.Text.StringBuilder sb = new();
-        for (int i = 0; i < 32 && p[i] != 0; i++)
+        nint* p = (nint*)(creature + CreScriptSlot0x260);
+        nint dataPtr = p[0];
+        int length = (int)p[1];
+
+        if (dataPtr == 0 || length <= 0 || length > 64)
         {
-            char c = (char)p[i];
+            return $"(no readable string here: ptr=0x{dataPtr:X} length={length})";
+        }
+
+        byte* text = (byte*)dataPtr;
+        System.Text.StringBuilder sb = new();
+        for (int i = 0; i < length && text[i] != 0; i++)
+        {
+            char c = (char)text[i];
             sb.Append(c is >= (char)0x20 and < (char)0x7F ? c : '.');
         }
 
