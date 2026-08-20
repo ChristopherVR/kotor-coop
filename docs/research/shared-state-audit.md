@@ -920,6 +920,56 @@ creature's own constructor already performs adequately, in which case only `roun
 has by construction) might be the missing single write. Either route is genuinely findable with
 the same static tools this round used; it was not a matter of the tools failing, only of budget.
 
+### Round 15 — route (b) refuted: `0x4D3010` clears `+0xb0`, it does not set it
+
+Static-only round (no live rig used; route (b) collapsed before reaching a testable fix).
+
+**`0x4D3010` is not an initializer that leaves a sub-structure ready — it is a reset/clear
+function, and it explicitly ZEROES `+0xb0`.** Full disassembly (`0x4D3010`-`0x4D310D`): after
+tearing down two embedded lists (`call 0x5e5140` twice) and freeing an owned array's elements
+(a loop over `[esi+0x88]`/`[esi+0x8c]` calling `0x503590` then `0x6fa390` — the SAME free
+helper `AddAttackAction` itself uses to discard its orphaned node when `+0x9b0` is null, round
+9), the tail of the function is a block of zeroing writes: `[esi+0x8c]=0`, `[esi+0x98]=0`,
+`[esi+0xa4]=0`, **`[esi+0xb0]=0`**, `[esi+0xb8]=0`, all from the same zeroed register. This
+refutes round 14's cheaper hope directly: a "fresh, never-fought" sub-structure is not sitting
+at `+0xb0 > 0` by construction — if anything, whatever state a sub-structure is born in, THIS
+function (which per its call sites is a per-sub-structure RESET, called in a loop from
+`StartCombatRound` before the real setup happens) actively drives it to `+0xb0 = 0`, i.e. the
+gate-CLOSED state. Setting `round+0x96C` alone, with nothing else, would at best point the
+gate at a sub-structure already known (by this function's own behavior) to read `<= 0`.
+
+**The actual processing function (`0x5B8050`, `UpdateCombatRoundTimer`'s real destination) was
+also disassembled far enough to rule out a shortcut.** It re-derives the sub-structure pointer
+itself (`ecx = round; movzx eax, byte [round+0x96c]; call 0x4d2b50` — confirming `+0x96C` IS
+read live, every call, not cached), then branches on a STATE BYTE at `sub+0x5c` compared
+against `2`, cross-checked against a lookup through `0x4aea40` (looks like a party-table or
+target-resolution call, `ecx` loaded from a global at `0x7a39fc+8`), conditionally calls a
+notification pair (`0x4aed80`→`0x4b08d0`) on a mismatch, then reads `sub+0x40` and `sub+4` to
+decide between two further branches — one of which allocates via `0x6fa7e6(0x34)`. This is
+real per-tick round-advancement logic with several interdependent checks, not a counter a
+single hand-written write could satisfy; forcing `+0xb0` positive without also matching
+whatever `sub+0x5c`/`sub+0x40`/`sub+4` are supposed to hold would very likely just fail a
+different check one line later, or read genuinely uninitialized garbage through those other
+fields.
+
+**Verdict: option (b) is dead. Route (a) — fully tracing `StartCombatRound`'s five arguments
+and calling the real function — is now the only remaining path**, exactly as round 14 predicted
+it might be ("very likely more correct... it is what the engine's own working combat AI
+actually calls"). Per the standing rule, no live test was attempted and no code was changed
+this round; forcing a partial write into a structure this interconnected, without the real
+constructor, risks producing a NEW, harder-to-diagnose failure mode (a sub-structure that looks
+selected and half-initialized) rather than the current clean "does nothing" failure.
+
+**What round 16 needs, precisely:** trace `0x4d2c30` and `0x4d2d60` (the two sub-calls whose
+return values become `StartCombatRound`'s arg2/arg3 at call site `0x5BC537`) to a concrete
+meaning, and trace the enclosing combat-decision routine's own population of
+`[esp+0x10]`/`[esp+0x50]`/`[esp+0x6c]`/`[esp+0x14]` back to where THEY originate, far enough to
+pin all 5 arguments with real confidence. Once pinned, `StartCombatRound` handles the whole
+five-sub-structure reset-then-init sequence (including the exact `0x4D3010` calls this round
+just dissected) and `+0x96C`/`+0x9B8`/`+0x9BC`/`+0x940` internally — calling it for real,
+rather than hand-replicating pieces of it, is the correct shape for the fix once the argument
+trace closes.
+
 ## 3. A client's XP is actively erased
 
 `ProgressionSnapshotPacket` is host→client only and absolute (CoopAgent.cs, `PumpProgression`):
