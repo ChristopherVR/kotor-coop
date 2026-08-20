@@ -640,6 +640,53 @@ real fight going on the host at all, in this environment, before the client-side
 section is actually about can be exercised. `local_combat` stays off. Config reverted to
 `local_combat=0` in both installs, rig fully torn down.
 
+### Round 10 (2026-08-20) — the "dead enemies" theory is refuted, and the real blocker is bigger than this fix
+
+Chased why the host's own baseline aggro failed. `creatures.ps1` on a completely fresh launch
+(save slot 1 reloaded from scratch) showed both `sithsoldier`s — and all 27 creatures — alive at
+full stated HP (`15 10` columns unchanged from a clean load). **The save is not corrupted or
+exhausted by nine rounds of prior testing.** That theory is dead.
+
+What's actually true, confirmed by reading `tools/blockpoke.ps1`'s own `attack` verb source
+(`TestDriveController.HandleAttack`, `src/KotorCoop.Plugin/TestDriveController.cs:104-107`) —
+its own doc comment says it outright: **"the starting area's enemies never aggro on their own,
+so without it the damage forward, the swing animations and the phantom's targetability have no
+way to be exercised outside a human playthrough."** Every prior round's "aggroed in ~1 second"
+result was staged through this tool (`Odyssey.AttackTarget`, the native `ActionAttack()` VM
+call), not organic proximity aggro. `tp`-ing next to a `sithsoldier` alone was never going to
+work, in this round or any prior one that reported it working from proximity alone — a
+methodology gap in how the result was described, not a finding about the engine.
+
+Corrected the target: player object id is not a normal small id here — it reads back as
+`0x7FFFFFFF`, the engine's own "current player" sentinel (confirmed via `console 'resolve
+0x7FFFFFFF'` resolving to a live, valid creature, matching an earlier round's finding). Ran
+`attack 0xE 0x7FFFFFFF` correctly this time (a first attempt with no explicit target silently
+means "break off combat", logged plainly as `test: 0xE ordered to break off combat` —
+`TestDriveController.cs:126-138`, working as designed once understood).
+
+**`Odyssey.AttackTarget` reported success — `ok=true`, no failure code — and still nothing
+happened.** No movement, no swing, no HP change, over 40+ seconds. `god`/console responsiveness
+confirmed the engine and script VM are NOT frozen (`god` correctly answered "already ON", the
+tutorial deck's own `k_pend_area01` min-1-hp pin, matching documented behaviour exactly). So this
+is not a hung process — it is the SAME "call succeeds, nothing observable happens" symptom this
+entire nine-round investigation has been chasing inside `local_combat`'s own code, except this
+time on the OFFICIAL, previously-reliable native `ActionAttack()` staging path itself, which
+every earlier successful round depended on to manufacture a fight at all.
+
+**This reframes the open question.** Either: (a) something has changed in this specific
+environment/session since the rounds that reported staged attacks working (worth checking
+against an entirely fresh game launch with a clean process, not just a fresh save-load inside a
+session that has been repeatedly launched/torn down many times today), or (b) the "worked before"
+reports were never as clean as described and the underlying fragility has been present the whole
+time, surfacing now by chance. Round 11 should start here — with `AttackTarget`/`ActionAttack()`
+itself, on a completely fresh process launch, before returning to `local_combat`'s own code at
+all, since if the OFFICIAL path cannot manufacture a fight, no amount of further work on
+`QueueAttackAction` can be verified either.
+
+No source code changed this round. `local_combat` untouched, `coop.ini` never modified in either
+install (phase 1 never completed, so phase 2 — the actual `local_combat` retest — did not run).
+Process torn down clean.
+
 ## 3. A client's XP is actively erased
 
 `ProgressionSnapshotPacket` is host→client only and absolute (CoopAgent.cs, `PumpProgression`):
