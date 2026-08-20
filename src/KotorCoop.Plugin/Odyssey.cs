@@ -7161,13 +7161,39 @@ internal static unsafe class Odyssey
         int timerActive = *(int*)(round + 0x958);
         int delay = *(int*)(round + 0x960);
         byte subIndex = *(byte*)(round + 0x96C);
-        int subB0 = *(int*)(round + 4 + subIndex * 0x14C + 0xB0);
+        nint sub = round + 4 + subIndex * 0x14C;
+        int subB0 = *(int*)(sub + 0xB0);
+
+        // ROUND 30: sub+0x5c is a STATE BYTE round 15/18 flagged and round 27 confirmed gates
+        // entry to the arming loop (only -1 or 0..3 continue toward it). 0x5B8050's own real
+        // processing branch cross-checks it against 2 via a call through 0x4AEA40 (a
+        // this-adjustor thunk) -> 0x4B4CB0, which — fully disassembled this round — takes NO
+        // real arguments: it reads the fixed global CServerExoApp-shaped singleton at
+        // 0x7A39FC, derefs +8 (a party-table-shaped sub-object), and calls another thunk
+        // chain (0x4AE920 -> 0x4B2AE0) with hardcoded args (0, 1) that walks one of two
+        // lists at [that+0x10064]/[that+0x10068] looking for an entry whose id-field equals
+        // the hardcoded key 0 — i.e. "is party slot 0 (THIS INSTANCE's own local player)
+        // resolvable right now" — returning either the resolved id or the not-found sentinel
+        // 0x7F000000. It is a pure read (two accessor calls, no writes observed), safe to
+        // call directly as a bare zero-argument function — the adjusted `this` the thunk
+        // chain sets up is never actually read by 0x4B4CB0's body.
+        byte sub5c = *(byte*)(sub + 0x5C);
+        uint partySlot0 = ResolvePartySlot0Fn();
 
         log($"firescript watch: frame -{framesLeft}, creature=0x{creature:X}, head action=0x{headType:X} "
             + $"(is fight action: {IsFightAction(headType)}), round+0x9CC target=0x{currentTarget:X}, "
             + $"round+0x958 timer={timerActive}, round+0x960 delay={delay}, "
-            + $"round+0x96C sub-index={subIndex} sub+0xB0={subB0}");
+            + $"round+0x96C sub-index={subIndex} sub+0xB0={subB0}, sub+0x5c={sub5c}, "
+            + $"party-slot-0 resolves to=0x{partySlot0:X}");
     }
+
+    /// <summary>ROUND 30: bare call to 0x004B4CB0, the real body behind the
+    /// 0x4AEA40/0x4B4CB0/0x4AE920/0x4B2AE0 thunk chain 0x5B8050's real processing branch uses
+    /// to cross-check its target against "is party slot 0 resolvable." Cdecl, zero real
+    /// arguments (confirmed by full disassembly — it never reads a stack argument or uses the
+    /// incoming `this`), returns the resolved creature id or 0x7F000000 (not found).</summary>
+    private static readonly delegate* unmanaged[Cdecl]<uint> ResolvePartySlot0Fn =
+        (delegate* unmanaged[Cdecl]<uint>)0x004B4CB0;
 
     // ---- faction, the targetability switch ---------------------------------------
     //

@@ -2013,6 +2013,59 @@ disabled) — remove once this question is settled. Rig torn down and confirmed 
 (`Get-Process` empty for both `swkotor` and `KotorCoop.Agent`). Full suite 953/953, both
 builds clean.
 
+### Round 30 (2026-08-21) — the party-table-style gate opened, and it is not the blocker
+
+Round 27's "party-table-style field" candidate, never previously disassembled, is now open —
+and it is real, understood, and **refuted** as the explanation for the arming failure.
+
+**The mechanism, fully traced.** `UpdateCombatRoundTimer`'s real processing branch (`0x5B8050`,
+per round 15) branches on `sub+0x5c` compared against `2`, cross-checked through a call chain:
+an adjustor thunk (`0x4AEA40`, `mov ecx,[ecx+4]; jmp 0x4B4CB0`) into `0x4B4CB0`, which — despite
+being reached as if it were a virtual member call — takes NO real arguments and never uses the
+adjusted `this`: it reads a fixed global singleton at `0x7A39FC`, derefs `+8` (a
+party-table-shaped sub-object), and calls a second thunk chain (`0x4AE920` → `0x4B2AE0`) with
+two HARDCODED stack arguments `(0, 1)`. `0x4B2AE0` walks one of two lists at
+`[that+0x10064]`/`[that+0x10068]` (selected by the second argument, `1` in our case) searching
+for an entry whose id-field equals the FIRST argument, `0` — i.e. this whole chain answers one
+fixed question, "is party slot 0 (this instance's own local player) currently resolvable,"
+returning either the resolved id or the not-found sentinel `0x7F000000`. It is a pure read, two
+accessor calls, no writes observed anywhere in the chain.
+
+**Live-tested directly, reusing round 28/29's proven `firescript`/watch infrastructure — no new
+scenario needed.** Extended `TickFireScriptWatch` to log `sub+0x5c` and a bare call to
+`0x004B4CB0` every frame. Fired on a completely untouched, never-driven mirrored `sithsoldier`
+(`0x10`, object pointer `0x1835A2D8` on the client) exactly as round 29 did. Across the full
+180-frame watch: **`sub+0x5c` reads `0` on every sample — which IS within the "-1 or 0..3"
+range round 27's OWN loop-entry gate requires to continue toward the arming call at all** (i.e.
+this specific creature was never being rejected by that gate in the first place). And
+**`0x4B4CB0` resolves party slot 0 to `0x7FFFFFFF` on every sample — the CLIENT's own local
+player, correctly** (each KOTOR process trivially has its own PC as party slot 0; there was
+never a "the remote peer isn't registered as slot 0" mismatch to find, because nothing in this
+chain ever asks about the remote peer — it only ever asks about whoever is running THIS
+process). `round+0x958`/`+0x960` ran their normal countdown to exhaustion (timer=0, delay=0 at
+the watch's end) and `sub+0xB0` stayed 0 throughout — the same wall, unmoved.
+
+**What this settles and what it doesn't.** The `0x5B8050`/party-slot-0 cross-check is real and
+now fully understood, but it was never actually on the critical path to arming to begin with —
+round 27 already established `0x5B8050` only runs AFTER `sub+0xB0>0`, so it cannot be gating the
+transition to `sub+0xB0>0` in the first place; this round closes out that open question from
+rounds 15/18 rather than finding the actual blocker. The REAL loop-entry gate round 27 found
+(the range check on `[ebx+0x5c]` inside the function containing the arming call site
+`0x005BBA15`) is now directly confirmed passing (`0`, in-range) for a creature that still never
+arms — which narrows the search to the three pieces of that loop round 27 flagged but never
+opened: the two unconditional setup calls (`0x5EDCE0`, `0x5B4F30`), the conditional block on
+`word[ebx+0x64]`, and — likely the more fruitful target — the loop's OWN caller, never
+identified, whose preconditions for reaching this loop at all have never been examined. Given
+round 29's finding that the wall persists even with zero co-op-plugin writes of any kind, the
+next genuinely new question is whether that outer caller is ever reached/ticked with the same
+frequency or under the same conditions for a creature a REMOTE peer is fighting versus one only
+the local session's own player is fighting — i.e., is the enclosing function itself gated on
+something session-related, upstream of everything traced so far.
+
+`local_combat` untouched, stays off. `Odyssey.cs`'s `TickFireScriptWatch` diagnostic extended
+(not removed — the underlying question this investigation opened is still unresolved). Full
+suite 953/953, both builds clean, rig torn down and confirmed clean.
+
 ## 3. A client's XP is actively erased
 
 `ProgressionSnapshotPacket` is host→client only and absolute (CoopAgent.cs, `PumpProgression`):
