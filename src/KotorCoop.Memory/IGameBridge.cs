@@ -73,6 +73,18 @@ public static class CheatKinds
     /// ⚠ 10, because 7, 8 and 9 are taken. Take the next FREE number.
     /// </summary>
     public const uint UseDoor = 10;
+
+    /// <summary>
+    /// Gives a materialised enemy's local stand-in one item out of its real corpse's actual
+    /// inventory. <c>Target</c> is the OWNER's enemy object id (not a local one — only the
+    /// receiving instance's own materialisation table can translate it), <c>Text</c> the item
+    /// resref, and Amount/Charges/MaxCharges/Upgrades/ItemFlags its identity, exactly as
+    /// <see cref="SetItem"/> already carries for an existing item. See
+    /// SharedBlock.CheatKindGiveLoot and docs/research/enemy-materialisation.md §5.
+    ///
+    /// ⚠ 11, because 7-10 are taken. Take the next FREE number.
+    /// </summary>
+    public const uint GiveLoot = 11;
 }
 
 /// <summary>The plugin's verdicts, mirroring <c>SharedBlock.CheatStatus*</c>.</summary>

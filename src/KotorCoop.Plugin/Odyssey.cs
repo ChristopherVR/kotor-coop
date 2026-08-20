@@ -1074,6 +1074,85 @@ internal static unsafe class Odyssey
         }
     }
 
+    /// <summary>
+    /// Gives a creature an item by blueprint straight into its inventory, through
+    /// CreateItemOnObject alone — no ActionEquipItem, so it lands in the backpack rather
+    /// than a visible slot. The first half of <see cref="EquipItemFromTemplate"/>, split out
+    /// because a corpse's loot has no slot to equip into; it only has to be there to loot.
+    ///
+    /// MAIN THREAD ONLY.
+    /// </summary>
+    public static uint GiveItemToInventory(
+        uint creatureObjectId, byte* resrefAscii, int resrefLength, int stackSize, out int failure)
+    {
+        failure = 0;
+
+        nint implementer = GetImplementer(out nint vm, out nint internalVm);
+        if (implementer == 0)
+        {
+            failure = 1;
+            return ObjectInvalid;
+        }
+
+        nint table = Deref(implementer + CommandsTableOffset);
+        if (table == 0)
+        {
+            failure = 2;
+            return ObjectInvalid;
+        }
+
+        if (_routineCreateItemOnObject < 0)
+        {
+            _routineCreateItemOnObject = FindRoutine(table, ExpectedCreateItemOnObject);
+        }
+
+        if (_routineCreateItemOnObject < 0)
+        {
+            failure = 3;
+            return ObjectInvalid;
+        }
+
+        if (*(int*)(internalVm + CallStackSizeOffset) != 0)
+        {
+            failure = 4;
+            return ObjectInvalid;
+        }
+
+        ExoString resref = new() { CString = (nint)resrefAscii, Length = (uint)resrefLength };
+
+        // CreateItemOnObject(string sTemplate, object oTarget, int nStackSize),
+        // pushed in reverse declaration order.
+        if (StackPushInteger(vm, Math.Max(1, stackSize)) == 0
+            || StackPushObject(vm, creatureObjectId) == 0
+            || StackPushString(vm, &resref) == 0)
+        {
+            failure = 5;
+            return ObjectInvalid;
+        }
+
+        var create = (delegate* unmanaged[Thiscall]<nint, int, int, int>)ExpectedCreateItemOnObject;
+        if (create(implementer, _routineCreateItemOnObject, 3) != 0)
+        {
+            failure = 6;
+            return ObjectInvalid;
+        }
+
+        uint itemId = ObjectInvalid;
+        if (StackPopObject(vm, &itemId) == 0)
+        {
+            failure = 7;
+            return ObjectInvalid;
+        }
+
+        if (itemId == ObjectInvalid)
+        {
+            // The blueprint does not exist in this install (peer has a mod we lack).
+            failure = 8;
+        }
+
+        return itemId;
+    }
+
     // ---- doors -------------------------------------------------------------------
 
     /// <summary>CSWSDoor vtable. Shared with the sweep rather than written twice — a constant

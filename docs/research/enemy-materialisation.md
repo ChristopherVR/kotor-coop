@@ -86,3 +86,49 @@ Kill switch `enemy_materialise=0`.
 - Known limitation: loot on a stand-in's corpse does not sync (its container id exists
   only locally). A real ambush end-to-end (tar_m03aa) remains the outstanding live test —
   no save reaches it yet.
+
+## 6. Loot on a stand-in's corpse — the instrument exists, the automatic wire does not
+
+The gap in §5 now has a way to stage it, on the same model StageMovie/UseDoor/Resolve gave
+`cinematics.md`: `CheatController.GiveLoot` (`SharedBlock.CheatKindGiveLoot = 11`, no version
+bump — every field it uses already exists) spawns one item, by resref and full identity
+(stack/charges/max charges/upgrades/flags — the same four `SetItem` already carries),
+straight into a materialised stand-in's inventory via a new primitive,
+`Odyssey.GiveItemToInventory` — `CreateItemOnObject` alone, split out of
+`EquipItemFromTemplate` without the `ActionEquipItem` half, since a corpse's loot only has
+to be there to be looted, not equipped.
+
+The target field is the **OWNER's** enemy object id, not a local one — the caller cannot
+resolve the translation itself; only this instance's own `MaterialisedEnemies.ToLocal` can,
+and it does that translation inside the handler. An owner id with no stand-in here is
+REFUSED, not a silent no-op: the common case is a peer holding the REAL creature (same GIT
+id), which already rolled equivalent loot on its own when it died, and applying this there
+too would double it.
+
+**What this closes:** a live pass can now stage "give this materialised stand-in this exact
+item" by hand and confirm the write lands (read it back via the existing `item <id>`
+diagnostic), which is the same kind of unblock `moviewarp`/`usedoor` gave the cinematics
+work — the scenario becomes producible without an ambush save.
+
+**What this does NOT close — the automatic wire is still open:**
+
+1. **Nothing yet detects an owner's real enemy dying and captures its actual inventory.**
+   The owner-side read exists as a building block (`KotorGameBridge.ListItems()`, filtered
+   by `Possessor == the dying creature's id`, already returns full identity per item — it is
+   the same sweep the `items`/`setitem` staging cheats use) but nothing calls it at the
+   moment of death yet.
+2. **Nothing crosses the wire.** The owner and the mirror are different processes, often
+   different machines; getting a captured loot list from one to the other needs a new
+   packet (the `TransitionMovies`-style "any -> all, relayed by host" shape does not apply
+   here — enemies are always host-owned, so this would be host -> clients only, simpler).
+3. **The receiving side cannot yet issue this automatically.** `GiveLoot` only runs through
+   the staging-cheat channel, and that channel is DELIBERATELY single-request — built for a
+   human typing a few times a minute, not for a burst of enemies dying in one ambush wave
+   at the same time a player might be typing a console command. Feeding it from the
+   automatic session pump (`CoopAgent`, alongside `PumpEnemies`/`PumpTransitionMovies`)
+   without colliding with the human-typed console channel needs its own small design pass —
+   likely a short local FIFO on the agent side draining one request per pump tick, since the
+   channel's own turnaround is well under a tick.
+
+None of this has been tried live — same caveat as the rest of this document until an
+ambush's actual death-and-loot sequence runs against it.

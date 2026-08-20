@@ -1253,6 +1253,30 @@ internal struct SharedBlock
     /// </summary>
     public const uint CheatKindUseDoor = 10;
 
+    /// <summary>
+    /// Gives a materialised enemy's local stand-in one item out of its real corpse's actual
+    /// inventory — the fix for the loot gap docs/research/enemy-materialisation.md §5 names
+    /// ("its container id exists only locally"). <see cref="OffsetCheatTarget"/> is the
+    /// OWNER's enemy object id, not a local one: only this instance's own
+    /// <c>MaterialisedEnemies.ToLocal</c> can translate it, so the caller (an external agent,
+    /// or eventually the network path) cannot resolve it itself and must not try.
+    /// <see cref="OffsetCheatText"/> carries the item resref, and
+    /// Amount/Charges/MaxCharges/Upgrades/ItemFlags its identity — exactly the same four
+    /// fields <see cref="CheatKindSetItem"/> already carries for an existing item.
+    ///
+    /// A stand-in this instance does not have for that owner id is REFUSED, not a silent
+    /// no-op: the common case is a peer holding the REAL creature (same GIT id), which
+    /// already rolled its own equivalent loot independently when it died, and applying this
+    /// there too would double it.
+    ///
+    /// Staged manually for now (this is the instrument, not the automatic wire): nothing yet
+    /// detects a materialised enemy's owner dying and issues this on its own. See
+    /// docs/research/enemy-materialisation.md §5 for what that still needs.
+    ///
+    /// ⚠ 11, because 7-10 are taken. NO VERSION BUMP: every field it uses already exists.
+    /// </summary>
+    public const uint CheatKindGiveLoot = 11;
+
     /// <summary>The request was carried out here.</summary>
     public const int CheatStatusApplied = 1;
 
