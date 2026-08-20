@@ -531,16 +531,49 @@ signature, by contrast, has full confidence: verified both by disassembling the 
 body AND against three real, byte-identical engine call sites, with no branch or ambiguity in
 either argument's role.
 
-⚠ **STILL NOT LIVE-VERIFIED.** `local_combat` stays off by default. What a live pass needs to
-check, in order: (1) the diagnostic's own `round+0x958 timer-active BEFORE=0 AFTER=1` line, to
-confirm the flip actually happens on a live mirrored creature (the one fact this round could not
-itself observe without the rig); (2) whether the enemy then visibly swings within the next tick or
-two, not just whether the head-action-type changes; (3) the client's own `+0x4E0` `FlagInCombat`
-rising — the original gap this whole section exists to close; (4) `IncomingDamageController`'s
-absorb-gate standing down correctly once local hits land, so damage is not double-applied; (5)
-engagement-range stopping cleanly on separation. If (1) shows the flip does NOT happen — e.g. if
-`round+0x958` reads something other than 0 before the call in a way not yet explained — that
-reopens the investigation at a much narrower point than any prior round started from.
+### The live pass ran (2026-08-20, fifth round) — the flip works, and it still does not work
+
+Same scenario as every round: host `tp`'d beside a live, untouched `sithsoldier` pair in
+`END_M01AA`, aggroed for real (`state IN COMBAT`, HP falling under the engine's own AI, floored
+at 1 by the deck's min-1-hp pin — `god was already ON`), then a second instance connected and was
+`tp`'d to stand beside the same two hostiles while the host kept fighting. Watched for **2 minutes
+40 seconds**, not just the usual 90.
+
+**Check (1) passed, cleanly and repeatedly.** The diagnostic fired every ~3s for the entire
+window, and the flip is real every single time:
+
+    [18:26:57.791] queueattack diag: CALLED SetRoundTimerActive+AddAttackAction(round=0x1847F948,
+    target=0x7FFFFFFF) on creature 0x1847EE78, round+0x9B0 pending-list = 0x32D7BE8, round+0x958
+    timer-active BEFORE=0 AFTER=1, head action before 0x6, IMMEDIATELY after 0x6
+    (is fight action now: False)
+
+`SetRoundTimerActiveFn` genuinely writes the field, on the real object, every call, no exception —
+that part of the fix is proven, not inferred. **Checks (2) and (3) both failed.** The head action
+never once changed from `0x6` across ~50 logged calls spanning 2:40. The host's own dashboard
+confirms the client side from the other end the whole time:
+`combat [FIGHT in END_M01AA - engaged: you; mirroring only: Malak (their engine is not in
+combat)]` — identical wording to every prior round's failure, unchanged for the full duration.
+`kotorcoop-combat.log` on the client independently confirms the absorb path is still the only
+thing moving: `combat: absorbed N forwarded damage in total ... this engine says in-combat=False`.
+
+**The genuinely new fact this round adds: `round+0x958` reads BEFORE=0 on EVERY call, not just the
+first.** If the field we set to 1 were actually being consumed by `UpdateCombatRoundTimer`'s
+"process the round" branch — the behaviour the whole hypothesis depends on — a successful
+consumption resetting it back toward 0 as part of normal round bookkeeping would be unsurprising.
+But that is indistinguishable, from this diagnostic alone, from `UpdateCombatRoundTimer` **never
+reaching that branch at all** and something else entirely resetting the field to 0 every tick
+before our own write is checked next cycle — which would mean the branch this whole fix aims at is
+still never firing, just at a point one step further down than round four thought.
+
+`local_combat` stays off. Config reverted (`local_combat=0` in both installs), full suite 953/953,
+both builds clean. **This is the sixth round to narrow the mechanism without closing it.** The
+next diagnostic that would actually separate the two explanations above: log `round+0x958`
+immediately on entry to `UpdateCombatRoundTimer` itself (not just before/after our own write, three
+seconds apart) — if it reads 1 there and the processing branch still isn't reached, the bug is
+inside `UpdateCombatRoundTimer`'s branch itself (the disassembly needs to go further than
+`0x004FAF58`); if it reads 0 there, something between our write and the next tick is clearing it,
+and that write needs to be found with `fieldwrites.py 0x958` cross-referenced against a timestamp
+window rather than assumed to be `UpdateCombatRoundTimer`'s own consumption.
 
 ## 3. A client's XP is actively erased
 
