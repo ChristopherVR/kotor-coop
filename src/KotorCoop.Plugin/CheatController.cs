@@ -138,6 +138,10 @@ internal sealed unsafe class CheatController(SharedBlockView block)
                 UseDoor(player, playerId);
                 break;
 
+            case SharedBlock.CheatKindGiveLoot:
+                GiveLoot();
+                break;
+
             default:
                 Answer(SharedBlock.CheatStatusRefused, $"unknown cheat kind {kind}");
                 break;
@@ -599,6 +603,82 @@ internal sealed unsafe class CheatController(SharedBlockView block)
         }
 
         Answer(SharedBlock.CheatStatusApplied, $"dropped '{resref}' as 0x{itemId:X}");
+    }
+
+    /// <summary>
+    /// Gives a materialised enemy's local stand-in one item of its real corpse's actual
+    /// loot. See <see cref="SharedBlock.CheatKindGiveLoot"/> for the full field layout and
+    /// why the target is the OWNER's id, not a local one.
+    /// </summary>
+    private void GiveLoot()
+    {
+        uint ownerEnemyId = block.CheatTarget;
+        if (ownerEnemyId is 0 or Odyssey.ObjectInvalid)
+        {
+            Answer(SharedBlock.CheatStatusNoTarget, "giveloot needs the owner's enemy object id");
+            return;
+        }
+
+        uint localId = MaterialisedEnemies.ToLocal(ownerEnemyId);
+        if (localId == 0)
+        {
+            // Not an error: the overwhelmingly common case is a peer holding the REAL
+            // creature (same GIT id), which already rolled its own equivalent loot
+            // independently when it died — applying this here too would double it. Only a
+            // materialised stand-in has none of its own, and only one maps through this table.
+            Answer(
+                SharedBlock.CheatStatusRefused,
+                $"0x{ownerEnemyId:X} is not a materialised stand-in here - nothing to give");
+            return;
+        }
+
+        byte* text = block.CheatText;
+        int length = 0;
+        while (length < SharedBlock.CheatTextLength - 1 && text[length] != 0)
+        {
+            length++;
+        }
+
+        if (length == 0)
+        {
+            Answer(SharedBlock.CheatStatusRefused, "no item resref given");
+            return;
+        }
+
+        string resref = Encoding.ASCII.GetString(text, length);
+        int stack = block.CheatAmount;
+
+        uint itemId = Odyssey.GiveItemToInventory(localId, text, length, Math.Max(1, stack), out int failure);
+        if (itemId is 0 or Odyssey.ObjectInvalid)
+        {
+            Answer(
+                SharedBlock.CheatStatusEngineRefused,
+                $"'{resref}' did not spawn onto 0x{localId:X} (failure {failure}; wrong resref?)");
+            return;
+        }
+
+        uint charges = block.CheatItemCharges;
+        uint maxCharges = block.CheatItemMaxCharges;
+        uint upgrades = block.CheatItemUpgrades;
+        uint wireFlags = block.CheatItemFlags;
+
+        bool applied = Odyssey.ApplyItemIdentity(
+            itemId,
+            upgrades == SharedBlock.CheatFieldUnchanged ? 0 : upgrades,
+            (uint)Math.Max(1, stack),
+            charges == SharedBlock.CheatFieldUnchanged ? 0 : charges,
+            maxCharges == SharedBlock.CheatFieldUnchanged ? 0 : maxCharges,
+            (wireFlags == SharedBlock.CheatFieldUnchanged ? 0 : wireFlags) | SharedBlock.ItemIdentityKnown,
+            out Odyssey.ItemIdentityFields after);
+
+        PluginHost.Log(applied
+            ? $"materialise: gave loot '{resref}' (0x{itemId:X}) to stand-in 0x{localId:X} for "
+              + $"owner 0x{ownerEnemyId:X} — stack {after.StackSize}, "
+              + $"charges {after.Charges}/{after.MaxCharges}, upgrades 0x{after.Upgrades:X}"
+            : $"materialise: '{resref}' spawned as 0x{itemId:X} on 0x{localId:X} but identity "
+              + $"apply failed — {Odyssey.LastItemResolveNote}");
+
+        Answer(SharedBlock.CheatStatusApplied, $"gave '{resref}' to 0x{localId:X}");
     }
 
     /// <summary>
