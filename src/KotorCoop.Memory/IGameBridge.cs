@@ -85,6 +85,17 @@ public static class CheatKinds
     /// ⚠ 11, because 7-10 are taken. Take the next FREE number.
     /// </summary>
     public const uint GiveLoot = 11;
+
+    /// <summary>
+    /// STRATEGY 2 DIAGNOSTIC (2026-08-21): peek (<c>Amount</c> 0) or fire (<c>Amount</c>
+    /// nonzero) a creature's +0x260 event script through the engine's own RunScript
+    /// dispatcher, instead of replicating combat-round mechanics natively. <c>Target</c> is
+    /// the creature's object id. See SharedBlock.CheatKindFireScript and
+    /// docs/research/shared-state-audit.md §2, "Strategy 2."
+    ///
+    /// ⚠ 12, because 7-11 are taken. Take the next FREE number.
+    /// </summary>
+    public const uint FireScript = 12;
 }
 
 /// <summary>The plugin's verdicts, mirroring <c>SharedBlock.CheatStatus*</c>.</summary>

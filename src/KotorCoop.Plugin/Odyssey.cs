@@ -7010,6 +7010,95 @@ internal static unsafe class Odyssey
         }
     }
 
+    // ---- STRATEGY 2 (2026-08-21): fire the creature's own event script instead of
+    // replicating the engine's native combat calls piece by piece ------------------
+    //
+    // 27 rounds (above) got the round-arming write itself into view, then hit a wall: that
+    // write lives inside the engine's own bounded loop over combat participants, called
+    // from one site deep in stateful per-tick round-advancement machinery — not a small
+    // utility a plugin can call in isolation. This is a different approach: instead of
+    // driving the C++ mechanics ourselves, ask the engine's OWN event system to notify the
+    // creature the way it notifies every other creature in the game, and let its assigned
+    // NWScript AI (which normally decides to fight) take it from there.
+    //
+    // CVirtualMachine::RunScript (0x005D0FC0 is a thunk; the real body is 0x005D45D0,
+    // confirmed via disassembly: a queue-based dispatcher with a pending-script list at
+    // +0x1AC and a counter at +0x28, not a simple synchronous call). VERIFIED via two real,
+    // already-shipped call sites:
+    //   - CSWSDoor::OpenDoor (0x00589D32): RunScript(Deref(VirtualMachinePtr),
+    //     &door+0x228 [the OnOpen script field, documented at Odyssey.cs:1208],
+    //     *(door+4) [the door's own object id], 1).
+    //   - A per-creature event dispatcher at 0x004DA8B6: RunScript(Deref(VirtualMachinePtr),
+    //     &creature+0x260, *(creature+4), 1) — found by searching every xref to the RunScript
+    //     thunk (83 call sites total) for one inside a known AI-tick function. This ONE
+    //     function also calls UpdateVisibleList (0x0051B050, the perception scan an earlier
+    //     round already confirmed runs unmodified for a mirrored creature) via a DIFFERENT
+    //     branch of the same 13-case jump table (dispatched on the return of 0x00503690) —
+    //     i.e. this is a generic "signal event N to this creature" dispatcher, and +0x260 is
+    //     whichever named event reaches this specific branch. The exact event name (heartbeat?
+    //     OnNotice/perception-noticed? something else?) is NOT decoded — this is a real,
+    //     working script-resref field on a live creature object, confirmed by a real call
+    //     site, nothing more asserted than that.
+    //
+    // `this` for RunScript is the SAME single dereference of VirtualMachinePtr (0x7A3A00)
+    // both real call sites use — NOT the double-derefed "inner" object GetImplementer
+    // resolves for the stack-push routines. Matching the proven-working OpenDoor call
+    // exactly, not guessing at a different chain.
+    private static readonly delegate* unmanaged[Thiscall]<nint, nint, uint, int, void> RunScriptFn =
+        (delegate* unmanaged[Thiscall]<nint, nint, uint, int, void>)0x005D0FC0;
+
+    /// <summary>Creature script slot at +0x260 — see the block comment above. NOT YET
+    /// LIVE-VERIFIED: the field has never been read to confirm it holds a real, non-empty
+    /// script resref, and firing it has never been tried on a running game.</summary>
+    private const int CreScriptSlot0x260 = 0x260;
+
+    /// <summary>
+    /// Reads the raw bytes at a creature's +0x260 script slot, for a diagnostic read before
+    /// ever firing it — confirm it looks like a real resref (short, printable, non-empty)
+    /// rather than firing blind into an unverified field.
+    /// </summary>
+    public static string PeekCreatureScriptSlot0x260(nint creature)
+    {
+        if (creature == 0)
+        {
+            return string.Empty;
+        }
+
+        byte* p = (byte*)(creature + CreScriptSlot0x260);
+        System.Text.StringBuilder sb = new();
+        for (int i = 0; i < 32 && p[i] != 0; i++)
+        {
+            char c = (char)p[i];
+            sb.Append(c is >= (char)0x20 and < (char)0x7F ? c : '.');
+        }
+
+        return sb.ToString();
+    }
+
+    /// <summary>
+    /// Fires the creature's own +0x260 event script through the SAME dispatcher the engine
+    /// uses for every other object's scripted events (proven live-working for a door's
+    /// OnOpen). This does not touch any round/combat-round state directly — if it works, it
+    /// works by letting the creature's OWN NWScript AI decide to fight, the way it already
+    /// does for every non-mirrored creature in the game. MAIN THREAD ONLY.
+    /// </summary>
+    public static void FireCreatureScriptSlot0x260(nint creature)
+    {
+        if (creature == 0)
+        {
+            return;
+        }
+
+        nint vm = Deref(VirtualMachinePtr);
+        if (vm == 0)
+        {
+            return;
+        }
+
+        uint creatureId = *(uint*)(creature + ObjectIdOffset);
+        RunScriptFn(vm, creature + CreScriptSlot0x260, creatureId, 1);
+    }
+
     // ---- faction, the targetability switch ---------------------------------------
     //
     // Hostility in KOTOR 1 is faction-vs-faction with no personal reputation list, and

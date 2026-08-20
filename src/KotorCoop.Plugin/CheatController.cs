@@ -142,6 +142,10 @@ internal sealed unsafe class CheatController(SharedBlockView block)
                 GiveLoot();
                 break;
 
+            case SharedBlock.CheatKindFireScript:
+                FireScript();
+                break;
+
             default:
                 Answer(SharedBlock.CheatStatusRefused, $"unknown cheat kind {kind}");
                 break;
@@ -387,6 +391,43 @@ internal sealed unsafe class CheatController(SharedBlockView block)
         Answer(
             resolved != 0 ? SharedBlock.CheatStatusApplied : SharedBlock.CheatStatusNoTarget,
             $"0x{objectId:X} resolves to 0x{resolved:X} here; chain in the plugin log");
+    }
+
+    /// <summary>
+    /// STRATEGY 2 DIAGNOSTIC (2026-08-21). <c>CheatAmount</c> 0 peeks the creature's +0x260
+    /// event script slot without firing it (a safe read, confirms the field looks like a real
+    /// resref before ever touching it live); nonzero fires it through
+    /// <see cref="Odyssey.FireCreatureScriptSlot0x260"/>. See docs/research/shared-state-audit.md
+    /// §2, "Strategy 2," for what this is and why.
+    /// </summary>
+    private void FireScript()
+    {
+        uint objectId = block.CheatTarget;
+        if (objectId == 0)
+        {
+            Answer(SharedBlock.CheatStatusNoTarget, "no id given");
+            return;
+        }
+
+        nint creature = Odyssey.ResolveServerObject(objectId);
+        if (creature == 0)
+        {
+            Answer(SharedBlock.CheatStatusNoTarget, $"0x{objectId:X} does not resolve here");
+            return;
+        }
+
+        string slot = Odyssey.PeekCreatureScriptSlot0x260(creature);
+
+        if (block.CheatAmount == 0)
+        {
+            PluginHost.Log($"firescript: 0x{objectId:X} +0x260 = '{slot}' (peek only, not fired)");
+            Answer(SharedBlock.CheatStatusApplied, $"0x{objectId:X} +0x260 = '{slot}'");
+            return;
+        }
+
+        Odyssey.FireCreatureScriptSlot0x260(creature);
+        PluginHost.Log($"firescript: fired 0x{objectId:X} +0x260 = '{slot}'");
+        Answer(SharedBlock.CheatStatusApplied, $"fired 0x{objectId:X} +0x260 = '{slot}'");
     }
 
     /// <summary>

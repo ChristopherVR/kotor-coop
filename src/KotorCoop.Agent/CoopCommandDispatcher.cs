@@ -417,6 +417,18 @@ public sealed class CoopCommandDispatcher(
 
                 break;
 
+            case CoopCommandKind.FireScript:
+                if (ConsoleCommand.TryParseObjectId(command.Address ?? string.Empty, out uint scriptId))
+                {
+                    SendCheat(new CheatRequest(CheatKinds.FireScript, Target: scriptId, Amount: command.Amount));
+                }
+                else
+                {
+                    Reply($"firescript: '{command.Address}' is not an object id (try 0x35)");
+                }
+
+                break;
+
             // ---- staging cheats ---------------------------------------------
 
             case CoopCommandKind.God:

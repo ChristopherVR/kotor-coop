@@ -1277,6 +1277,17 @@ internal struct SharedBlock
     /// </summary>
     public const uint CheatKindGiveLoot = 11;
 
+    /// <summary>
+    /// STRATEGY 2 DIAGNOSTIC (2026-08-21): peeks the creature's +0x260 script slot (reads the
+    /// raw resref, does NOT fire it) when <see cref="SharedBlock.CheatAmount"/> is 0, or fires
+    /// it through the engine's own RunScript dispatcher (see Odyssey.cs's block comment on
+    /// FireCreatureScriptSlot0x260) when nonzero — a single verb for both the safe read and
+    /// the live test, so nobody fires blind into an unverified field. Uses
+    /// <see cref="SharedBlock.CheatTarget"/> for the creature id; no new fields, no version
+    /// bump.
+    /// </summary>
+    public const uint CheatKindFireScript = 12;
+
     /// <summary>The request was carried out here.</summary>
     public const int CheatStatusApplied = 1;
 

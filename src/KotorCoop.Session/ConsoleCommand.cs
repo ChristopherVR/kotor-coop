@@ -83,6 +83,14 @@ public enum CoopCommandKind
     ResolveObject,
 
     /// <summary>
+    /// STRATEGY 2 DIAGNOSTIC (2026-08-21): peek or fire a creature's +0x260 event script.
+    /// <see cref="CoopCommand.Address"/> is the object id; <see cref="CoopCommand.Amount"/>
+    /// is 0 for a safe read-only peek, nonzero to actually fire it through the engine's own
+    /// RunScript dispatcher. See docs/research/shared-state-audit.md §2, "Strategy 2."
+    /// </summary>
+    FireScript,
+
+    /// <summary>
     /// Inject a transport fault on the live session so a disconnect can be reproduced with
     /// nobody touching a cable. The sub-verb is in <see cref="CoopCommand.Address"/> and its
     /// argument (percentage, milliseconds, seconds, direction) in
@@ -408,6 +416,17 @@ public static class ConsoleCommand
                 return rest.Length == 0
                     ? new CoopCommand(CoopCommandKind.Invalid, Error: "resolve <id>  (e.g. resolve 0x35)")
                     : new CoopCommand(CoopCommandKind.ResolveObject, Address: rest[0]);
+
+            // firescript <id>          - peek only, does not fire
+            // firescript <id> fire     - actually fires the +0x260 event script
+            case "firescript":
+                return rest.Length == 0
+                    ? new CoopCommand(
+                        CoopCommandKind.Invalid, Error: "firescript <id> [fire]  (e.g. firescript 0x35)")
+                    : new CoopCommand(
+                        CoopCommandKind.FireScript,
+                        Address: rest[0],
+                        Amount: rest.Length > 1 && rest[1].Equals("fire", StringComparison.OrdinalIgnoreCase) ? 1 : 0);
 
             // ---- staging cheats -------------------------------------------------
 
