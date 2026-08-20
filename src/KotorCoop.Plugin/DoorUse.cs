@@ -226,8 +226,15 @@ internal static class DoorUse
     /// destination only has to make the path cross the threshold, and aiming a little beyond
     /// the door is what guarantees that: aiming AT it lets the walk stop short (the engine's
     /// own use-action stopped 1.5 m away, measured) and never cross anything.
+    ///
+    /// 2.5 m still measured short 0.9-2.4 m of the time across repeated live runs at the
+    /// SAME coordinates that worked cleanly on other attempts — the path-arrival tolerance
+    /// (or a corner the pathfinder cuts near the doorway) eats enough of a 2.5 m margin to
+    /// occasionally land the "arrived" event before the crossing does. 4 m keeps the same
+    /// margin of safety this constant was already built around, just wide enough that the
+    /// same jitter no longer eats all of it.
     /// </summary>
-    public const float WalkThroughOvershoot = 2.5f;
+    public const float WalkThroughOvershoot = 4.0f;
 
     /// <summary>
     /// The point to walk to so the player passes THROUGH <paramref name="door"/>: the door,

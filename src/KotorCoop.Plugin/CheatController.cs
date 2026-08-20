@@ -825,6 +825,18 @@ internal sealed unsafe class CheatController(SharedBlockView block)
     /// </summary>
     private const int WalkWatchFrames = 600;
 
+    /// <summary>
+    /// How far into the watch to check whether the walk has stalled and, if so, reissue it
+    /// once. Three seconds at 60 fps: comfortably longer than the walk itself should take, so
+    /// this fires only once the accepted walk has had every reasonable chance to have already
+    /// crossed. Repeated live runs at coordinates that had worked before still measured the
+    /// walk stopping 0.9-2.4 m short of the door despite <see cref="DoorUse.WalkThroughOvershoot"/>
+    /// being enlarged for exactly this — the path-arrival tolerance (or a corner the
+    /// pathfinder cuts near the doorway) can eat a queued walk before the crossing event
+    /// fires, and nothing else re-issues it. This is the retry that does.
+    /// </summary>
+    private const int WalkStallCheckFrame = 180;
+
     private uint _walkDoorId;
     private Vec3 _walkTarget;
     private int _walkFramesLeft;
@@ -903,6 +915,11 @@ internal sealed unsafe class CheatController(SharedBlockView block)
             return;
         }
 
+        if (_walkWatchFrames == WalkWatchFrames - WalkStallCheckFrame)
+        {
+            RetryStalledDoorWalk();
+        }
+
         if (--_walkWatchFrames > 0)
         {
             return;
@@ -927,6 +944,47 @@ internal sealed unsafe class CheatController(SharedBlockView block)
             + $"0x{_walkDoorId:X} (was {_walkStartDistance:F1}m), at "
             + $"{here.X:F1},{here.Y:F1}; aimed at {_walkTarget.X:F1},{_walkTarget.Y:F1}. "
             + "No transition happened - the door is still an obstacle, or the path stopped short.");
+    }
+
+    /// <summary>
+    /// Fires once, partway through the watch: if the walk has not carried the player near the
+    /// door by then, reissue it to the same target. A transition that already happened has
+    /// already zeroed <see cref="_walkWatchFrames"/> via <see cref="Invalidate"/>, so this
+    /// never fires after a success — only while something queued is still, apparently, going
+    /// nowhere.
+    /// </summary>
+    private void RetryStalledDoorWalk()
+    {
+        nint door = Odyssey.ResolveDoor(_walkDoorId);
+        nint player = Odyssey.GetPlayerCreaturePointer();
+
+        if (door == 0 || player == 0)
+        {
+            // Already gone from this world one way or another; the frame-0 report (if the
+            // watch is still running at all) says so.
+            return;
+        }
+
+        float now = Distance(Odyssey.GetPosition(player), Odyssey.GetPosition(door));
+        if (now <= 1.0f)
+        {
+            // Close enough that the walk is either about to cross or already did and the
+            // transition just has not landed on this frame yet - do not fight it.
+            return;
+        }
+
+        uint playerId = Odyssey.GetPlayerObjectId();
+        if (playerId == 0)
+        {
+            return;
+        }
+
+        bool accepted = Odyssey.MoveToLocation(playerId, _walkTarget, run: true, out int failure);
+        PluginHost.Log(accepted
+            ? $"door: {WalkStallCheckFrame} frames in, still {now:F1}m from 0x{_walkDoorId:X} - "
+              + "reissued the walk to the same point"
+            : $"door: {WalkStallCheckFrame} frames in, still {now:F1}m from 0x{_walkDoorId:X}, "
+              + $"and the reissue was refused (failure {failure})");
     }
 
     /// <summary>Door open state 0 = closed. 1 and 2 are the two swing directions, 3 is
