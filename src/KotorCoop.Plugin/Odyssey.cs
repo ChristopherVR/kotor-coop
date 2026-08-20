@@ -6474,14 +6474,30 @@ internal static unsafe class Odyssey
         int roundTimerBefore = *(int*)(round + 0x958);
         int roundDelayBefore = *(int*)(round + 0x960);
 
-        SetRoundTimerActiveFn(round, 1, (int)(*(uint*)(creature + ObjectIdOffset)));
+        // ROUND 12, LIVE FINDING: SetRoundDelayFn ACCUMULATES rather than sets — confirmed live,
+        // round+0x960 climbed by exactly +1500 on EVERY call (BEFORE=2238005 AFTER=2239505, next
+        // BEFORE=4483506 AFTER=4485006, ...), hundreds of times per second, because this whole
+        // block used to run unconditionally on every drive pass whenever the head-action gate
+        // above wasn't yet satisfied — which it never was, since nothing was making it true. That
+        // is a self-defeating feedback loop: the round's own due time was pushed further into the
+        // future faster than real time could ever catch up to it, so UpdateCombatRoundTimer could
+        // never see it as due. This also explains why the one thing that DID produce a real fight
+        // (round 11, Odyssey.AttackTarget) worked: it fires from a single console command, once —
+        // never from a per-frame drive loop. Only initialize the round ONCE, on the genuine 0->1
+        // transition, and let the head-action gate at the top of this function do its job for
+        // every pass after that.
+        if (roundTimerBefore == 0)
+        {
+            SetRoundTimerActiveFn(round, 1, (int)(*(uint*)(creature + ObjectIdOffset)));
 
-        // The second gate UpdateCombatRoundTimer checks past round+0x958 — see SetRoundDelayFn.
-        // 0x5DC (1500ms) matches the delay AddAttackActionFn's own 4th argument already uses
-        // for this same round elsewhere in this call; the engine's own two call sites pass a
-        // computed value here, but this function's own logic (SET or ACCUMULATE a duration)
-        // does not care about the source, only that it lands a positive value in round+0x960.
-        SetRoundDelayFn(round, 0x5DC, 0);
+            // The second gate UpdateCombatRoundTimer checks past round+0x958 — see
+            // SetRoundDelayFn. 0x5DC (1500ms) matches the delay AddAttackActionFn's own 4th
+            // argument already uses for this same round elsewhere in this call; the engine's own
+            // two call sites pass a computed value here, but this function's own logic (SET or
+            // ACCUMULATE a duration) does not care about the source, only that it lands a
+            // positive value in round+0x960 — ONCE, not every pass (see above).
+            SetRoundDelayFn(round, 0x5DC, 0);
+        }
 
         AddAttackActionFn(round, targetId, 0, 0, 0x5DC, 1);
 

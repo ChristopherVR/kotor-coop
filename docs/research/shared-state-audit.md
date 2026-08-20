@@ -740,6 +740,61 @@ the fix works at all.
 a single host instance). Process torn down and confirmed clean. Full suite 953/953, both builds
 clean.
 
+### Round 12 — the actual mid-fight-join test, a real bug found and fixed, and the symptom survives it
+
+The scenario `local_combat` exists for, finally run against a mechanism already proven correct in
+the general case. Host launched alone, `tp`'d to `(28, 143, 0)`, `attack 0xE 0x7FFFFFFF` staged —
+HP `12/12 -> 10/12` within 5s, confirmed the same way round 11 did. With the host still actively
+fighting, a second instance launched, loaded, connected (`phantoms 1 remotes 1` both sides), and
+`tp`'d to the identical `(28, 143, 0)` — genuinely mid-fight, not staged separately.
+
+**A real bug surfaced immediately, before the actual question could even be asked.**
+`round+0x960` climbed by exactly `+1500` on every single logged call — `BEFORE=2238005
+AFTER=2239505`, then `BEFORE=4483506 AFTER=4485006`, `BEFORE=6871505 AFTER=6873005` — hundreds of
+times a second, because `QueueAttackAction`'s whole setup block ran unconditionally on every
+`EnemyPresenceController` drive pass whenever the head-action gate at the top of the function
+wasn't satisfied, which it never was (nothing was making it true — the exact thing being tested).
+`SetRoundDelayFn` **accumulates**, it does not set, so the round's own due time was pushed further
+into the future faster than real time could ever catch up — a self-defeating feedback loop that
+also explains why round 11 worked at all: `AttackTarget` fires from a single console command,
+once, never from a per-frame drive loop.
+
+**Fixed live, mid-round-12, and retested in the same session** (`Odyssey.cs`,
+`QueueAttackAction`): gated `SetRoundTimerActiveFn`/`SetRoundDelayFn` behind `roundTimerBefore ==
+0` — initialize the round ONCE, on the genuine 0->1 transition, and let the existing head-action
+gate do its job for every pass after that. Rebuilt, reinstalled, retested the identical
+mid-fight-join scenario end to end a second time: `round+0x960` now behaves sanely (`BEFORE=0
+AFTER=1500` once, then small organic drift — `4`, `7`, `332`, `331`, `333`... — never another
+`+1500` jump). The accumulation bug is real and is fixed.
+
+**The core symptom survives it.** Over the full retest, the client's own HP never moved from
+`12/12` (`console 'where'`, checked repeatedly), head action stayed `0x6`/`0xFFFFFFFF`
+throughout, and the plugin's own absorb line kept firing (`combat: absorbed N forwarded damage in
+total ... this engine says in-combat=False`) — the same pre-existing forwarded-damage path that
+works regardless of `local_combat`, not new local engagement. The host's own fight, checked in
+parallel, correctly ran the whole time (its HP reached `1/12`, the deck's own min-1-hp floor) —
+confirming nothing else broke and the test rig itself was sound throughout.
+
+**What this narrows the question to.** Round 11 proved the round-init mechanism sufficient for a
+HOST-LOCAL creature (no mirroring, no drive loop touching it every frame, no peer involved) —
+that was ALWAYS a single-instance test. Round 12 is the first time a genuinely MIRRORED creature
+has been driven through a correctly-initialized (not spamming) round, and it still does not
+attack. The one structural difference between the two cases that round 12 did not yet isolate:
+`EnemyPresenceController`'s own per-frame `SetPosition`/`SetFacing` drive calls run on this exact
+creature every single pass, continuously, for as long as it is mirrored — round 11's creature had
+no such competing per-frame writer. Candidate 2 from earlier in this investigation (drive writes
+starving perception) was refuted specifically for PERCEPTION; it was never re-checked against
+ROUND PROCESSING specifically, and round processing is a different code path
+(`UpdateCombatRoundTimer`) than perception (`UpdateVisibleList`). Worth a targeted check next: does
+suspending the position/facing drive on ONE test creature (leaving everything else — the
+attack-permitted bit, the round-init call — untouched) let its round process normally? That would
+cleanly separate "driven puppets structurally cannot complete a combat round while being driven"
+from "something else, specific to the mirrored/remote-target case, is still missing."
+
+`local_combat` and both installs' `coop.ini` restored to their code defaults (`0`) afterward.
+Process torn down and confirmed clean (`Get-Process KotorCoop.Agent,swkotor` returned none). Full
+suite 953/953, both builds clean.
+
 ## 3. A client's XP is actively erased
 
 `ProgressionSnapshotPacket` is host→client only and absolute (CoopAgent.cs, `PumpProgression`):
