@@ -6387,6 +6387,70 @@ internal static unsafe class Odyssey
         (delegate* unmanaged[Thiscall]<nint, int, int, void>)0x004D2920;
 
     /// <summary>
+    /// ROUND 16 (`docs/research/shared-state-audit.md` §2). The real gate-closer neither
+    /// <see cref="SetRoundTimerActiveFn"/> nor <see cref="SetRoundDelayFn"/> ever reaches:
+    /// `UpdateCombatRoundTimer`'s SECOND check (past `round+0x958`/`round+0x960`) is
+    /// `[round+4+(round+0x96C)*0x14C+0xB0] &gt; 0` — one of FIVE embedded per-participant
+    /// sub-structures, selected by `round+0x96C`, a field only `CSWSCombatRound::StartCombatRound`
+    /// (`0x004D5F70`) ever sets, via a loop that resets (not initializes ready-to-use — round 15
+    /// disassembled `0x4D3010` and found it explicitly zeroes `+0xb0`) all five sub-structures
+    /// before real setup. There is no shortcut around calling this function for real.
+    ///
+    /// Full disassembly of the body (`0x4D5F70`-`0x4D60EA`) plus the real caller's argument
+    /// setup (`0x005BC480`-`0x5BC537`) pins the 5-argument thiscall:
+    /// <list type="bullet">
+    /// <item>`this` = the round (creature+0x9C8), same as every other call here.</item>
+    /// <item>arg1 = the OPPONENT's object id. Resolved via `GetGameObject` (`0x004AE770`)
+    /// inside the callee and stored into `round+0x9C0`/`+0x9C4`, THEN mirrored onto the
+    /// resolved opponent's OWN round at the same offsets — this is why the engine's real
+    /// caller makes a symmetric second call with the roles reversed (`this`=target's round,
+    /// arg1=attacker's own id, at `0x005BC56D`) right after this one; that second call is not
+    /// replicated here because our target is the local player, whose own round the plugin has
+    /// no reason to independently arm.</item>
+    /// <item>arg2/arg3 — NOT independently meaningful constants; they are the two return
+    /// values of a fixed two-call sequence the real caller performs immediately before this
+    /// call, on the SAME targetId, threading an in/out slot between them
+    /// (`0x005BC4B3`-`0x005BC4D6`): `arg2 = ComputeRoundContextFn(round, targetId)`, written
+    /// into a stack slot, then `arg3 = ResolveRoundContextFn(round, targetId, &thatSlot)` —
+    /// which may itself modify the slot — after which arg2 is RE-READ from the slot
+    /// post-call. Replicated here call-for-call rather than reasoned about semantically,
+    /// since round 14/15 confirmed the destination fields (`round+0x9B8`=arg2,
+    /// `round+0x9BC`=arg3) are load-bearing (0x4D2C30 itself reads a resolved target's
+    /// `round+0x9BC` to decide whether that target "needs a new round").</item>
+    /// <item>arg4 — read inside `0x4D2A10` as a 16-bit value compared against a small, fixed
+    /// set of constants (`0xb`/`0x5b`/`0x35`/`0x1e`/`0x5c`/`0x1a`) to decide whether to
+    /// increment a derived counter at `round+0x990`; never dereferenced as a pointer, so any
+    /// integer is memory-safe regardless of its full semantic role (plausibly an attack-style
+    /// code). 0 matches none of the listed constants, i.e. the ordinary/no-special-case path.</item>
+    /// <item>arg5 — stored directly into `round+0x940` (`0x004D604B`), a plain DWORD, never
+    /// read again inside the portion of `StartCombatRound` itself that was disassembled and
+    /// not part of the confirmed critical gate chain (`+0x958`/`+0x960`/`+0x96C`→sub`+0xB0`).
+    /// Also memory-safe for any integer value. 0.</item>
+    /// </list>
+    ///
+    /// ⚠ NOT YET LIVE-VERIFIED. arg1's destination and arg2/arg3's call recipe are traced with
+    /// real confidence (byte-exact, cross-checked against the engine's own field writes and a
+    /// second, symmetric call site). arg4/arg5 are confirmed memory-safe (plain integer
+    /// writes/comparisons, not pointers) but their full gameplay semantics were not traced
+    /// past "does not corrupt anything" — see `docs/research/shared-state-audit.md` §2 round
+    /// 16 for what a live pass should watch for if the attack cadence looks wrong even after
+    /// the enemy starts fighting (arg4/arg5 are the first place to look).
+    /// </summary>
+    private static readonly delegate* unmanaged[Thiscall]<nint, uint, int> ComputeRoundContextFn =
+        (delegate* unmanaged[Thiscall]<nint, uint, int>)0x004D2C30;
+
+    /// <summary>See <see cref="ComputeRoundContextFn"/> — the second half of the same
+    /// two-call recipe, called on the SAME targetId with a pointer to the first call's
+    /// result. VERIFIED by disassembly of `0x004D2D60`.</summary>
+    private static readonly delegate* unmanaged[Thiscall]<nint, uint, nint, int> ResolveRoundContextFn =
+        (delegate* unmanaged[Thiscall]<nint, uint, nint, int>)0x004D2D60;
+
+    /// <summary>See <see cref="ComputeRoundContextFn"/>. `ret 0x14` confirms exactly 5 stack
+    /// DWORDs, matching all 5 arguments traced.</summary>
+    private static readonly delegate* unmanaged[Thiscall]<nint, uint, int, int, int, int, void> StartCombatRoundFn =
+        (delegate* unmanaged[Thiscall]<nint, uint, int, int, int, int, void>)0x004D5F70;
+
+    /// <summary>
     /// The missing half of `local_combat`: nothing else ever gives a mirrored enemy a reason
     /// to attack. `CSWSCreature::CreateNewAttackActions` (the ONLY place a NEW attack action
     /// gets queued, per `docs/research/combat-participation.md` §1.1) has exactly one caller,
@@ -6503,6 +6567,15 @@ internal static unsafe class Odyssey
         // working case (Odyssey.AttackTarget, a single staged call, never repeated).
         if (roundTimerBefore == 0)
         {
+            // ROUND 16: StartCombatRound FIRST, matching the engine's own program order
+            // (0x005BC480-0x5BC537 calls it before either setter below) — round+0x96C, the
+            // five sub-structures, and the +0xB0 gate UpdateCombatRoundTimer's SECOND check
+            // depends on are only ever established here. Without this, +0x958/+0x960 passing
+            // their own gates was never sufficient (rounds 12-15 confirmed exactly that).
+            int contextSlot = ComputeRoundContextFn(round, targetId);
+            int context2 = ResolveRoundContextFn(round, targetId, (nint)(&contextSlot));
+            StartCombatRoundFn(round, targetId, contextSlot, context2, 0, 0);
+
             SetRoundTimerActiveFn(round, 1, (int)(*(uint*)(creature + ObjectIdOffset)));
 
             // The second gate UpdateCombatRoundTimer checks past round+0x958 — see
@@ -6519,6 +6592,14 @@ internal static unsafe class Odyssey
         int roundTimerAfter = *(int*)(round + 0x958);
         int roundDelayAfter = *(int*)(round + 0x960);
         int headAfter = GetHeadActionType(creature);
+
+        // ROUND 16 DIAGNOSTIC: the second gate UpdateCombatRoundTimer checks past +0x958/+0x960
+        // — round+0x96C selects one of five embedded 0x14C-byte sub-structures at round+4, and
+        // [sub+0xB0] > 0 is what actually lets processing reach the call that would change the
+        // head action. Read both directly to see whether StartCombatRoundFn established this.
+        byte subIndex = *(byte*)(round + 0x96C);
+        int subB0 = *(int*)(round + 4 + subIndex * 0x14C + 0xB0);
+
         if (diagLog)
         {
             PluginHost.Log(
@@ -6527,6 +6608,7 @@ internal static unsafe class Odyssey
                 + $"round+0x9B0 pending-list = 0x{pendingListBefore:X}, "
                 + $"round+0x958 timer-active BEFORE={roundTimerBefore} AFTER={roundTimerAfter}, "
                 + $"round+0x960 delay BEFORE={roundDelayBefore} AFTER={roundDelayAfter}, "
+                + $"round+0x96C sub-index={subIndex} sub+0xB0={subB0}, "
                 + $"head action before 0x{headType:X}, IMMEDIATELY after 0x{headAfter:X} "
                 + $"(is fight action now: {IsFightAction(headAfter)})");
         }

@@ -970,6 +970,91 @@ just dissected) and `+0x96C`/`+0x9B8`/`+0x9BC`/`+0x940` internally — calling i
 rather than hand-replicating pieces of it, is the correct shape for the fix once the argument
 trace closes.
 
+### Round 16 — `StartCombatRound` called for real, and it sticks — but the sub-structure gate stays closed
+
+Static phase first, then live. Re-disassembled all three known call sites with full enclosing
+context (`0x005BC480`-`0x005BC63B`) and pinned the full 5-argument thiscall with real
+confidence:
+
+- `this` = the round (`creature+0x9C8`).
+- arg1 = the OPPONENT's object id — confirmed by `0x004D5F70`'s own body: it resolves arg1 via
+  `GetGameObject` (`0x004AE770`) and stores it into `round+0x9C0`/`+0x9C4`, THEN mirrors those
+  same writes onto the resolved opponent's OWN round at the identical offsets — which is why
+  the engine's real caller makes a second, symmetric call right after (`this`=target's round,
+  arg1=attacker's own id, at `0x005BC56D`). Independently confirms round 14's own finding from
+  the caller side (arg1 stored into "target-like fields").
+- arg2/arg3 — not independent constants; the exact return values of a fixed two-call sequence
+  the real caller performs on the SAME targetId immediately before this call
+  (`0x005BC4B3`-`0x005BC4D6`): `arg2 = 0x004D2C30(round, targetId)` written to a stack slot,
+  then `arg3 = 0x004D2D60(round, targetId, &thatSlot)` — which may itself modify the slot —
+  after which arg2 is RE-READ from the slot post-call. `0x4D2C30` resolves the target,
+  double-casts it via `vtbl+0x30` (the SAME slot pattern seen twice in a row — a compiler
+  artifact of an un-cached virtual call across a branch, not two different casts), then reads
+  the TARGET's own `round+0x934`/an id-sentinel comparison at target+0x50c to decide "does the
+  target need a round too." `0x4D2D60` reads that same result back through the out-pointer and
+  does further validation against `round+0x9b4` (a per-round pointer to something not yet
+  identified) before returning. Replicated call-for-call rather than reasoned about
+  semantically — round 14/15 already confirmed the destination fields (`round+0x9B8`=arg2,
+  `round+0x9BC`=arg3) are load-bearing (`0x4D2C30` itself reads a resolved target's
+  `round+0x9BC` as part of its own decision).
+- arg4 — read inside `0x4D2A10` as a 16-bit value compared against a small fixed constant set
+  (`0xb`/`0x5b`/`0x35`/`0x1e`/`0x5c`/`0x1a`) to decide whether to increment a derived counter at
+  `round+0x990`; never dereferenced as a pointer, so any integer is memory-safe. 0 matches none
+  of the listed constants (the ordinary/no-special-case path) — but see the live result below,
+  this default is now the prime suspect.
+- arg5 — stored directly into `round+0x940` (`0x004D604B`), a plain DWORD, not part of the
+  confirmed critical gate chain. Also memory-safe for any value. 0.
+
+`ret 0x14` (5 DWORDs) confirms the stack shape matches exactly what was traced. Implemented
+`Odyssey.ComputeRoundContextFn`/`ResolveRoundContextFn`/`StartCombatRoundFn`, wired into
+`QueueAttackAction`'s existing one-shot gate (`roundTimerBefore == 0`) BEFORE the two setters,
+matching the engine's own program order.
+
+**Live result: real, measurable progress — the first-ever non-zero persistence — but the core
+symptom did not resolve.** Reproduced the mid-fight-join scenario (host staged into a genuine
+fight via `AttackTarget`, second instance connected and `tp`'d beside the same hostiles).
+For the first time in this entire investigation, `round+0x958`/`round+0x960` on the mirrored
+client STUCK: `round+0x958 timer-active BEFORE=1 AFTER=1` (never `0` again once set),
+`round+0x960` drifting sanely (403→407→411→414, small organic increments, not the earlier
+explosive accumulation bug). `StartCombatRoundFn` executed without crashing and produced
+durable state — real confirmation the call is landing correctly.
+
+Added one more targeted diagnostic (`round+0x96C` sub-index and the selected sub-structure's
+`+0xB0`) and reinstalled to get the decisive read:
+
+    round+0x96C sub-index=0 sub+0xB0=0
+
+A valid sub-structure IS selected (index 0, not garbage) — but its gate field reads exactly
+`0`, unchanged, on every sampled tick. `StartCombatRound`'s own sub-structure loop (`0x4D3010`,
+round 15) explicitly zeroes `+0xB0` as a RESET step; whatever the "three more setup calls"
+(`0x4d2a10`, `0x4d2a70`, `0x4f34a0`) that follow are supposed to do to actually ARM it never
+lands with arg4/arg5 defaulted to 0. Prime suspect: arg4, the one argument whose full semantic
+role (beyond "compared against six constants, never dereferenced") was never traced past
+`0x4D2A10`'s partial body, and whose value is passed on into functions this round didn't open
+at all (`0x4d2a70`, `0x4f34a0`).
+
+Also measured, real but secondary: the `AttackTarget` staging call itself is flaky
+PER-CREATURE, independent of any of this investigation's changes — the same command against
+one fresh `sithsoldier` (`0xE`) produced no damage after 45+ seconds this round, while the
+SAME command against its twin (`0x10`) worked within 8 seconds, on the same save, same
+session. Worth a look separately; it is not this section's mechanism.
+
+**Decision: `local_combat` stays off.** Both `coop.ini` restored to `0`. Full suite 953/953
+(one pre-existing flaky test in `DisconnectRecoveryTests`, confirmed passing in isolation, not
+a regression from this round's changes — only `Odyssey.cs` was touched).
+
+**What round 17 needs, precisely:** fully disassemble `0x4d2a70` and `0x4f34a0` (not opened
+this round at all) and finish `0x4D2A10`'s body past the constant-comparison block already
+read, looking specifically for a write to `+0xB0` on the sub-structure `round+0x96C` selects —
+and whether that write is conditioned on arg4 (or arg5) being a specific non-zero value rather
+than the 0 defaults used here. If none of the three setup calls ever write `+0xB0` regardless
+of argument value, the write happens somewhere else entirely (possibly triggered by the
+ENGINE'S OWN next tick reading a state this round's call correctly primed but round 16 did not
+wait long enough to observe — the live pass ran ~45s per attempt, and `+0xB0` might only get
+set on a delayed follow-up condition, e.g. once `round+0x960`'s delay actually elapses against
+`creature+0xCC`, which `SetRoundDelayFn`'s own doc comment already flags as the OTHER live gate
+`UpdateCombatRoundTimer` checks alongside this one).
+
 ## 3. A client's XP is actively erased
 
 `ProgressionSnapshotPacket` is host→client only and absolute (CoopAgent.cs, `PumpProgression`):
