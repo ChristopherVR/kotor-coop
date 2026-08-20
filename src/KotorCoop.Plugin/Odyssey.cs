@@ -7121,9 +7121,14 @@ internal static unsafe class Odyssey
         // watch so the isolated (local_combat=0) test can see exactly which frame the round
         // struct actually changes on, rather than sampling every 3s and missing a fast
         // arm-then-wipe cycle the way earlier rounds' throttled diagnostics could have.
+        // ROUND 31: extended from 180 to 2400 frames. A watch this round found round+0x960
+        // (the delay field) sits at 0 for ~128 ticks after firing, THEN jumps to ~1500 and
+        // counts down at only ~4-5 per tick — a full cycle needs ~470+ ticks minimum, well
+        // past every prior round's 180-frame window. Nobody has ever actually watched long
+        // enough to see this delay reach zero.
         _fireScriptWatchCreature = creature;
-        _fireScriptWatchFramesLeft = 180;
-        PluginHost.Log($"firescript watch: armed on 0x{creatureId:X} for 180 frames");
+        _fireScriptWatchFramesLeft = 2400;
+        PluginHost.Log($"firescript watch: armed on 0x{creatureId:X} for 2400 frames");
     }
 
     private static nint _fireScriptWatchCreature;
@@ -7180,11 +7185,27 @@ internal static unsafe class Odyssey
         byte sub5c = *(byte*)(sub + 0x5C);
         uint partySlot0 = ResolvePartySlot0Fn();
 
+        // ROUND 31: two fields inside 0x5B8050 (UpdateCombatRoundTimer's real processing
+        // branch) never previously read. Full disassembly (this round) found, right after the
+        // sub+0x5c/party-slot-0 cross-check already logged above:
+        //   mov eax, [sub+0x40]
+        //   test eax, eax
+        //   je continue-normally
+        //   cmp [sub+4], 0
+        //   je BAIL (a far jump past the entire ~0x700-byte weapon/attack-descriptor build
+        //            and, critically, past everything that leads to sub+0xB0's own Add call)
+        // i.e.: "if sub+0x40 is set AND sub+4 is still zero, skip the whole thing." If sub+4
+        // is meant to hold this participant's own resolved target pointer (a level BELOW the
+        // round's own +0x9CC target field StartCombatRound already populates) and nothing this
+        // investigation has ever called populates it, this is the actual missing write.
+        int sub40 = *(int*)(sub + 0x40);
+        int sub4 = *(int*)(sub + 4);
+
         log($"firescript watch: frame -{framesLeft}, creature=0x{creature:X}, head action=0x{headType:X} "
             + $"(is fight action: {IsFightAction(headType)}), round+0x9CC target=0x{currentTarget:X}, "
             + $"round+0x958 timer={timerActive}, round+0x960 delay={delay}, "
             + $"round+0x96C sub-index={subIndex} sub+0xB0={subB0}, sub+0x5c={sub5c}, "
-            + $"party-slot-0 resolves to=0x{partySlot0:X}");
+            + $"party-slot-0 resolves to=0x{partySlot0:X}, sub+0x40=0x{sub40:X}, sub+4=0x{sub4:X}");
     }
 
     /// <summary>ROUND 30: bare call to 0x004B4CB0, the real body behind the

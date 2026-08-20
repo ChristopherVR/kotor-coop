@@ -2066,6 +2066,73 @@ something session-related, upstream of everything traced so far.
 (not removed — the underlying question this investigation opened is still unresolved). Full
 suite 953/953, both builds clean, rig torn down and confirmed clean.
 
+### Round 31 — the caller identified as `CSWSCreature::ResolveAttack`/`ResolveMeleeAttack`, a
+### real candidate gate refuted after live measurement, and the FULL round-timer cycle watched
+### to completion for the first time — it resets to idle instead of ever arming
+
+Round 30 left two things unidentified: the two unopened setup calls inside `ResolveMeleeAttack`'s
+loop, and — flagged as more promising — the loop's own caller, never traced.
+
+**The caller chain, found via the symbol database rather than blind disassembly.** The
+`functions` table in `tools/kotor1_0_3.db` already names the function containing the arming call
+site (`0x005BBA15`): `CSWSCreature::ResolveMeleeAttack` (`0x5bb890`). `xrefs.py` on that address
+finds exactly one caller, `CSWSCreature::ResolveAttack` (`0x5bba80`), which itself has exactly two
+callers: `AIActionCastSpell` (`0x514af0`) and `AIActionPhysicalAttacks` (`0x5bbbf0`) — the SAME
+function round 17 already identified as the execution-time handler for a queued attack action,
+gated on `CreAttackPermittedBit`. This confirms the structural picture: `AIActionPhysicalAttacks`
+only runs when a creature's action QUEUE (what `GetHeadActionType` reads) has a fight action at
+its head, and only then does it resolve down into `ResolveAttack` → `ResolveMeleeAttack` → the
+arming write. Since head action has never once changed from `0x6`/`0xFFFFFFFF` in 30+ rounds,
+`AIActionPhysicalAttacks` structurally never runs for our creature — `ResolveMeleeAttack`'s own
+loop was never reachable at all, which is consistent with `sub+0xB0` never arming, but does not
+yet explain WHY the head action itself never promotes.
+
+**A concrete candidate found and live-refuted.** Full disassembly of `ResolveAttack` found a real
+early-exit gate inside `UpdateCombatRoundTimer`'s processing branch (`0x5B8050`, reached once
+`round+0x958` ticks past its own gates): `if (sub+0x40 != 0 && sub+4 == 0) → skip the entire
+weapon/attack-descriptor build`. Extended `TickFireScriptWatch` to log both fields. Live-measured
+on the actual failing creature: **`sub+0x40 = 0` on every sample** — the gate's own condition
+requires `sub+0x40 != 0` to even consider bailing, so this specific branch is never taken; the
+code always falls through into the descriptor-build block normally. Refuted as the blocker.
+
+**The decisive new measurement: nobody had ever watched a full cycle before.** The existing
+180-frame watch turned out to be a hard ceiling nobody had questioned — `round+0x960` (delay) sat
+at `0` for the first ~128 ticks after firing, then jumped to `1500` and began counting down at
+only ~4-5 per tick. At that rate a full cycle needs roughly 470+ ticks, well past every prior
+round's 180-frame window. Extended the watch to 2400 frames and reran the identical live scenario
+(host staged for real via `firescript 0xE fire`, HP 12→10 under genuine AI; client connected
+mid-fight, `firescript 0x10 fire` on the untouched target). This time the delay counted all the
+way down — `1500 → ... → 31 → 26 → 22 → 18 → 14 → 9 → 5 → 1 → 0` — and at the instant it hit
+zero, **`round+0x958` (timer-active) reset to `0` too**. `sub+0xB0` stayed `0` for the entire
+2400-frame watch, including the moment of expiry. **The round does not stall waiting for more
+ticks — it runs its full, real cycle and then resets to idle instead of ever committing an
+attack.** This closes off "the window was too short" as an explanation for good; the actual
+question is now why expiry resets rather than arms.
+
+**An ambiguous, NOT independently confirmed observation, flagged rather than claimed.** In the
+same run, the client's own real player HP (`console 'where'`) dropped to `1/12`, and
+`kotorcoop-combat.log` showed several `combat: took 2 damage from a hit on our phantom (attacker
+0x10)` lines. Tracing `IncomingDamageController.cs` line 285 confirms this damage is applied
+directly to `Odyssey.GetPlayerObjectId()` — the client's real character — via the cross-network
+phantom-damage-forwarding channel (`CoopAgent.cs`'s `TryWriteIncomingDamage`, sourced from
+`bridge.TryReadPhantomHit` on the HOST side), the exact same pre-existing, unrelated mechanism
+rounds 28/29 already identified as a confound (a connected client's own phantom, rendered in the
+host's world wherever the client's own position places it, can draw real aggro from the host's
+untouched local creatures). The host's own combat log shows zero activity involving `0x10` in the
+current session, which argues against the organic-host-aggro explanation, but the host's
+phantom-hit hook is only confirmed to log at install time, not per-hit, so this could not be
+ruled in or out with confidence in the time available. **Do not read this HP drop as evidence
+`0x10` fought locally — the clean, decisive evidence this round produced is the full-cycle
+round-timer measurement above, not this.** The next round should isolate this properly: either
+position the client's own player far enough from anything that could organically aggro on its
+phantom, or add a direct read of the HOST's own `DamageDealtTable`/`sub+0xB0` for `0x10` to settle
+whether the host's untouched copy is quietly fighting the phantom on its own.
+
+`local_combat` untouched, stays off. `TickFireScriptWatch`'s window is now 2400 frames (up from
+180) and its `sub+0x40`/`sub+4` reads stay in the tree — both are load-bearing for the next round
+to avoid re-measuring what this one already settled. Full suite 953/953, both builds clean, rig
+torn down and confirmed clean (verified via `Get-Process`, not assumed).
+
 ## 3. A client's XP is actively erased
 
 `ProgressionSnapshotPacket` is host→client only and absolute (CoopAgent.cs, `PumpProgression`):
