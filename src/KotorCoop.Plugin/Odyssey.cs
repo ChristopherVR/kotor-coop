@@ -6512,6 +6512,67 @@ internal static unsafe class Odyssey
         (delegate* unmanaged[Thiscall]<nint, float, uint, uint, uint>)0x004F2DE0;
 
     /// <summary>
+    /// ROUND 20 DIAGNOSTIC. Zero-arg thiscall getter at <c>0x004CB120</c> — confirmed by
+    /// disassembling <see cref="GetNearestEnemyFn"/>'s own prologue (<c>0x004F2DE0</c>-
+    /// <c>0x004F2E13</c>): it is the VERY FIRST thing the function calls on <c>this</c>, and
+    /// the returned pointer is immediately offset by <c>+0x190</c>/<c>+0x194</c> to walk the
+    /// x-sorted object-id array (`docs/research/combat-participation.md` §1.4: "CSWSArea+0x190
+    /// ids, +0x194 count"). Almost certainly <c>CSWSObject::GetArea()</c>. `GetNearestEnemy`
+    /// bails to <see cref="ObjectInvalid"/> immediately if this returns 0.
+    /// </summary>
+    private static readonly delegate* unmanaged[Thiscall]<nint, nint> GetAreaFn =
+        (delegate* unmanaged[Thiscall]<nint, nint>)0x004CB120;
+
+    /// <summary>
+    /// ROUND 20 DIAGNOSTIC. Full disassembly of <see cref="GetNearestEnemyFn"/>
+    /// (<c>0x004F2DE0</c>-<c>0x004F2E4F</c>) found the VERY FIRST thing it does, before ever
+    /// looking at a candidate, is a LINEAR SELF-LOOKUP: get <c>this</c>'s own area
+    /// (<see cref="GetAreaFn"/>), read the area's x-sorted id array (<c>area+0x190</c> = data
+    /// pointer, <c>area+0x194</c> = count), and scan every element for one equal to
+    /// <c>this</c>'s own id (<c>this+0x04</c>, <see cref="ObjectIdOffset"/>). If not found
+    /// anywhere in that array, the function returns <see cref="ObjectInvalid"/> IMMEDIATELY —
+    /// before any hostility, perception, or distance check ever runs. This matches round 19's
+    /// finding exactly: both search attempts failed identically regardless of which
+    /// per-candidate gate was independently tested, because the scan never got past its own
+    /// anchor step. This measures, for a real object, whether it is actually PRESENT in its
+    /// own area's array at all — a plain linear scan is order-independent for a presence
+    /// check, so this is not a sort-order/staleness question, it is a genuine presence
+    /// question. Capped at 200000 iterations as a safety bound against a garbage count.
+    /// </summary>
+    private static (bool Found, int Index, int Count, nint AreaPtr, nint ArrayPtr) FindSelfInAreaArray(nint obj)
+    {
+        if (obj == 0)
+        {
+            return (false, -1, -1, 0, 0);
+        }
+
+        nint area = GetAreaFn(obj);
+        if (area == 0)
+        {
+            return (false, -1, -1, 0, 0);
+        }
+
+        int count = *(int*)(area + 0x194);
+        nint arrayPtr = *(nint*)(area + 0x190);
+        uint ownId = *(uint*)(obj + ObjectIdOffset);
+
+        if (count <= 0 || count > 200000 || arrayPtr == 0)
+        {
+            return (false, -1, count, area, arrayPtr);
+        }
+
+        for (int i = 0; i < count; i++)
+        {
+            if (*(uint*)(arrayPtr + i * 4) == ownId)
+            {
+                return (true, i, count, area, arrayPtr);
+            }
+        }
+
+        return (false, -1, count, area, arrayPtr);
+    }
+
+    /// <summary>
     /// The missing half of `local_combat`: nothing else ever gives a mirrored enemy a reason
     /// to attack. `CSWSCreature::CreateNewAttackActions` (the ONLY place a NEW attack action
     /// gets queued, per `docs/research/combat-participation.md` §1.1) has exactly one caller,
@@ -6776,19 +6837,58 @@ internal static unsafe class Odyssey
                     + $"attacker(sithsoldier)=0x{attackerAreaId:X} MATCH={playerAreaId == attackerAreaId}");
             }
 
-            CreateNewAttackActionsFn(creature, 1, 0, targetId);
-
-            // TEMPORARY DIAGNOSTIC (round 17) — unconditional, not throttled: this whole branch
-            // is a one-shot gate that fires on a single frame, far narrower than the 3s
-            // throttle window an external live-verify pass can poll against. Read the sub+0xB0
-            // array-list state (count at sub+0xAC+4) and head action IMMEDIATELY after the
-            // call returns, so the one moment that matters is never missed. Remove once this
-            // is settled.
-            byte subIndexNow = *(byte*)(round + 0x96C);
-            int subB0Now = *(int*)(round + 4 + subIndexNow * 0x14C + 0xB0);
-            int headRightAfterCreate = GetHeadActionType(creature);
+            // ROUND 20 DIAGNOSTIC: is the attacker itself, and separately the player, actually
+            // PRESENT in their own area's x-sorted object array — the exact array
+            // GetNearestEnemy's self-lookup step (never before disassembled) scans first,
+            // before any candidate is ever evaluated. See FindSelfInAreaArray.
+            (bool Found, int Index, int Count, nint AreaPtr, nint ArrayPtr) attackerSelf = FindSelfInAreaArray(creature);
+            (bool Found, int Index, int Count, nint AreaPtr, nint ArrayPtr) playerSelf =
+                playerObj != 0 ? FindSelfInAreaArray(playerObj) : (false, -1, -1, 0, 0);
             PluginHost.Log(
-                $"queueattack UNCONDITIONAL diag: CreateNewAttackActionsFn(creature=0x{creature:X}, "
+                $"queueattack ROUND20 diag: attacker self-lookup in its own area array: "
+                + $"area=0x{attackerSelf.AreaPtr:X} arrayPtr=0x{attackerSelf.ArrayPtr:X} "
+                + $"count={attackerSelf.Count} found={attackerSelf.Found} index={attackerSelf.Index} "
+                + $"| player self-lookup: area=0x{playerSelf.AreaPtr:X} arrayPtr=0x{playerSelf.ArrayPtr:X} "
+                + $"count={playerSelf.Count} found={playerSelf.Found} index={playerSelf.Index}");
+
+        }
+
+        // ROUND 20: moved OUT of the one-shot round-init gate above. Full disassembly of
+        // GetNearestEnemy's own anchor step (never before dissected) confirmed both the
+        // attacker AND the player ARE present with valid indices in the exact same area's
+        // x-sorted object array (CSWSArea+0x190/+0x194) that GetNearestEnemy walks — the
+        // "spatial-index registration failure" theory round 19 proposed is REFUTED. Instead,
+        // the SAME live session's own GetNearestEnemy calls show the real mechanism: attempt2
+        // (searched from the attacker) returns the player's own sentinel id (0x7FFFFFFF, a
+        // genuine find) on SOME calls and the "nothing found" sentinel (0x7F000000) on
+        // others, sub-second apart, across different mirrored creatures each hitting their
+        // own first pass. That is a RACE, not a categorical failure: our own per-frame
+        // SetPosition calls constantly re-sort this exact array (the attacker's own index in
+        // it bounced between 85/86/110/121/118 across consecutive diagnostic samples), and
+        // the outward walk's x-distance-bounded termination can miss the player depending on
+        // exactly when, relative to the last re-sort, the scan happens to run. A single
+        // one-shot attempt (the old placement, inside the round-init gate above) had only one
+        // roll of that race and could permanently fail on an unlucky frame.
+        //
+        // CreateNewAttackActionsFn now retries every pass instead — this is safe to call
+        // repeatedly (unlike a bare AddAttackActionFn, which has no dedup): its acquisition
+        // path re-runs GetNearestEnemy fresh each time (giving the race another roll), and
+        // its re-validation path (once a target is already set) is the engine's own normal
+        // per-round bookkeeping, called every round in real play. The existing
+        // IsFightAction(headType) gate at the very TOP of this function already stops all
+        // future calls the instant one attempt actually lands a queued swing, so this cannot
+        // become the same self-defeating per-frame spam round 13 found and fixed for the bare
+        // append call — it can only keep trying until it succeeds, then the outer gate closes
+        // the door.
+        CreateNewAttackActionsFn(creature, 1, 0, targetId);
+
+        byte subIndexNow = *(byte*)(round + 0x96C);
+        int subB0Now = *(int*)(round + 4 + subIndexNow * 0x14C + 0xB0);
+        int headRightAfterCreate = GetHeadActionType(creature);
+        if (diagLog)
+        {
+            PluginHost.Log(
+                $"queueattack ROUND20 diag: CreateNewAttackActionsFn(creature=0x{creature:X}, "
                 + $"target=0x{targetId:X}) returned. round+0x96C sub-index={subIndexNow} "
                 + $"sub+0xB0={subB0Now}, head action right after=0x{headRightAfterCreate:X}, "
                 + $"is fight action: {IsFightAction(headRightAfterCreate)}");

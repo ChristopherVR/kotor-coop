@@ -1219,6 +1219,90 @@ never-transitioned client puppet might never have established correctly.
 Diagnostic logging from rounds 9-19 all left in the tree deliberately — still not settled, and
 each round's diagnostic has been load-bearing for the next.
 
+### Round 20 — the registration theory is REFUTED; the real mechanism is a scan race, and a natural fix for it did not close the gap
+
+Full disassembly of `GetNearestEnemy` (`0x004F2DE0`-`0x004F2E4F`) — never dissected before this
+round, every prior round only read its RESULT — confirms `combat-participation.md` §1.4's own
+description exactly: the very first thing it does, before any candidate check, is a LINEAR
+self-lookup: get `this`'s own area (`GetAreaFn`, `0x004CB120` — a zero-arg thiscall, called
+unconditionally as the function's first instruction; if it returns 0 the whole call bails to
+`ObjectInvalid` immediately, `0x004F2DF0`-`0x004F2DFE`), then scan the area's x-sorted id array
+(`area+0x190` data pointer, `area+0x194` count) for an entry equal to `this+0x04` (own id). If
+`this` itself is never found in its own area's array, the function returns "nothing found"
+before ever looking at a candidate — matching round 19's universal failure exactly.
+
+**The registration hypothesis, directly measured and REFUTED.** Implemented `FindSelfInAreaArray`
+(`Odyssey.cs`) — the identical self-lookup, callable as a read-only diagnostic — and ran it live
+on both the real engaged attacker and the real player object, mid-fight-join, same rig as every
+round: `area=0x33899F8 arrayPtr=0x192A4B60 count=221 found=True index=85` (attacker) and
+`found=True index=65` (player), same area, same array, both PRESENT with valid indices. This is
+a plain linear scan (order-independent for a presence check), so this rules out a
+registration-step failure outright — both objects are exactly where `GetNearestEnemy`'s own
+anchor step would find them.
+
+**What the SAME live session's own `GetNearestEnemy` calls showed instead: not a categorical
+failure, a RACE.** The existing round-19 diagnostic (still in the code, same call) logged
+`attempt2(from attacker)=0x7FFFFFFF` on one of five mirrored creatures that session —
+`0x7FFFFFFF` is not a sentinel here, it is the PLAYER'S OWN REAL OBJECT ID (confirmed earlier in
+this investigation: `console 'resolve 0x7FFFFFFF'` resolves it to a real, alive creature) — i.e.
+`GetNearestEnemy` genuinely found the player as a candidate and returned its id, a real success,
+on that one call. The other four creatures' one-shot calls returned `0x7F000000` (not found) in
+the same session, sub-second apart. The attacker's own index in the array was also observed
+bouncing between samples (`85, 86, 110, 121, 118, 85` across consecutive ~1s-apart diagnostic
+reads) — consistent with our own per-frame `SetPosition` calls constantly re-sorting this exact
+array, which the outward-walk's x-distance-bounded termination (`combat-participation.md` §1.4:
+"terminating each arm as soon as the x-distance alone exceeds the best hit so far") could plausibly
+miss depending on exactly when, relative to the last re-sort, a given call happens to run.
+
+**Fix attempted: retry instead of one shot.** The existing round-init gate
+(`roundTimerBefore == 0`) had `CreateNewAttackActionsFn` fire exactly ONCE per creature — a single
+roll of what looked like a race. Moved the call OUT of that one-shot gate (keeping
+`StartCombatRoundFn`/`SetRoundTimerActiveFn`/`SetRoundDelayFn` one-shot, unchanged — those ARE
+confirmed self-defeating if repeated, rounds 12/13) so it retries every drive pass instead. This
+is safe against round 13's spam failure mode by construction: `CreateNewAttackActionsFn`'s
+acquisition path re-runs `GetNearestEnemy` fresh each call (a genuine new roll, not a duplicate
+append) and the existing `IsFightAction(headType)` gate at the very TOP of `QueueAttackAction`
+already stops all future calls the instant one attempt actually lands a queued swing — the retry
+can only keep trying until it succeeds, then the outer gate closes the door on its own.
+
+**Live-retested, and the retry did NOT reproduce success.** Rebuilt, reinstalled, ran the
+identical mid-fight-join scenario a second time from a genuinely fresh pair of instances. Over
+40+ seconds, `CreateNewAttackActionsFn` retried on a ~3s cadence across THREE different mirrored
+creatures (`0x1826BBE0`, `0x1825B358`, `0x18264420`) — `sub+0xB0` read 0 on every single logged
+call, no exceptions. If the true per-attempt success rate were anywhere near what the single
+round-19 sample suggested (1 real success logged out of 5 one-shot attempts, ballpark 20%), this
+many independent retries should very likely have landed at least once; that it did not suggests
+either the round-19 sample's apparent success rate was itself an outlier (small-sample noise, not
+a stable rate), or something about this session's specific conditions (a fight already in
+progress longer, the specific creatures' positions relative to the player, or something not yet
+identified) made every attempt systematically less favorable than that one sample — the two test
+runs are not proven to be equivalent trials of the same stationary process.
+
+**Left in place, not reverted:** the retry-instead-of-one-shot change is strictly safe (confirmed
+non-spamming via the existing outer gate, confirmed non-crashing across 40+ seconds and three
+creatures) and gives strictly more chances at success than the one-shot version it replaced, so
+there is no reason to revert it even though it did not close the gap this round. ⚠ **Performance
+caveat for whoever continues:** unlike the one-shot version, this now runs a full
+`CreateNewAttackActionsFn` (including a real `GetNearestEnemy` area scan, up to array-size
+iterations) on EVERY drive pass for every engaged-but-not-yet-successfully-attacking mirrored
+creature, indefinitely, for as long as it keeps failing — no retry cap exists yet. Acceptable
+while this stays off by default and unresolved; worth capping (or backing off) before this is
+ever considered for real use.
+
+**What round 21 needs:** the outward-walk loop itself (`0x4F2E52` onward — past the anchor
+step this round fully mapped) has never been disassembled to completion in this investigation;
+neither has `GetFirstObjectIndiceByX` (`0x00506F20`), which round 19 flagged as the likely
+mechanism and this round's evidence did not actually require (the linear anchor-scan this round
+disassembled does not call it — check whether the OUTWARD walk uses it instead, or whether it
+is a separate/unused code path for this particular call shape). Given the race-not-registration
+finding holds, the more promising direction may be instrumenting the outward walk itself to see
+exactly which pruning branch discards the player as a candidate on a representative FAILING call
+— round 20's diagnostics answered "is it present" (yes) but not "why does the walk that starts
+from a present anchor still not reach a present candidate."
+
+`local_combat` stays off; both `coop.ini` restored to `0`. Rig torn down and confirmed clean.
+Full suite 953/953, both builds clean.
+
 ## 3. A client's XP is actively erased
 
 `ProgressionSnapshotPacket` is host→client only and absolute (CoopAgent.cs, `PumpProgression`):
