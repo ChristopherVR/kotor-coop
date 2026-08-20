@@ -1156,6 +1156,69 @@ fails to translate into `sub+0xB0` gaining an entry.
 rounds 9-18 all left in the tree deliberately — still not settled, and each round's diagnostic
 has been load-bearing for the next.
 
+### Round 19 — the acquisition tail is settled; `GetNearestEnemy`'s own scan never finds the player
+
+Full disassembly of `CreateNewAttackActions`'s (`0x005B6980`) success tail (`0x005B6B58`-
+`0x005B6C34`) closes the "queues the attack action" ambiguity §1.3's own prose left open:
+**both** the re-validation path (§1.2, `round+0x9CC` valid and survives the six release tests)
+and the acquisition-success path (§1.3, `GetNearestEnemy` finds a new target) converge on the
+identical tail call — `AddAttackAction(round, target, 0, 0, 0x5DC, 1)` at `0x005B6C1D`. There
+is no separate, untested "queue" step; `CreateNewAttackActionsFn` already reaches the same
+`AddAttackAction` every earlier round called directly. `UpdateAttackTargetForAllAction`
+(`0x005B6BA0`) and `SetLockOrientationToObject`/`0x4F34A0` (`0x005B6B88`) both run, unconditionally,
+on the way there — neither gates the tail call, so round 17/18's suspicion of them was
+misplaced; they are cosmetic/bookkeeping relative to the actual queue.
+
+**Two live-measured hypotheses this round, both refuted with direct evidence:**
+
+- **`AsCreature` (`vtbl+0x30`) cast on the re-resolved target, `0x005B6B6B`** — the acquisition
+  path's one previously-untested step, since a failed cast takes the exact same silent
+  "acquisition failed" bail (`0x5b48b0`, disassembled: `SetLockOrientationToObject
+  (OBJECT_INVALID)`, pause animation, `SetCombatMode` stand-down) as if nothing were found.
+  Measured live, unconditional per-call: `AsCreature(vtbl+0x30) cast on the player object:
+  SUCCEEDS`, every sample, both test passes. REFUTED.
+- **`area_id` mismatch (`creature+0x8C`)** — `docs/research/realtime-creature-movement.md` §1
+  documents `SetPosition`'s own area-resolve step verbatim: `this->area_id` (`+0x8C`) is looked
+  up through the engine's object array to find the `CSWSArea`, and only THEN does
+  `UpdatePositionInObjectsArray` register the object into that area's x-sorted spatial index
+  (`CSWSArea+0x190`/`+0x194` — the exact array `GetNearestEnemy` walks, §1.4). A stale/wrong
+  `area_id` on the client's local player object would let raw x/y/z read correct while the
+  object sits in the wrong area's index entirely, invisible to a scan anchored where the
+  sithsoldiers actually are. Measured live: `area_id (creature+0x8C) - player=0x1
+  attacker(sithsoldier)=0x1 MATCH=True`, every sample. REFUTED.
+
+**The actual, decisive measurement — `GetNearestEnemy` called directly, both of §1.3's search
+attempts, replicating the exact scan `CreateNewAttackActionsFn` performs internally:**
+
+    GetNearestEnemy attempt1(from playerObj)=0x7F000000 attempt2(from attacker)=0x7F000000
+    (repeated identically, every sample, both live test passes)
+
+**`GetNearestEnemy`'s own area scan never finds the player as a candidate, in EITHER search
+direction, ever** — not "found but rejected by a gate downstream," genuinely never found, even
+though every individual per-candidate condition the function is documented to check (resolve,
+hostility both directions, perception/seen-bit, and now the `AsCreature` cast) independently
+measures as passing, and even though the spatial-index area assignment matches. This means the
+failure is not in a targeting RULE at all — it is somewhere in the scan MECHANISM itself: either
+the x-sorted array genuinely does not contain the player's entry despite matching `area_id` (a
+registration-step failure, not an assignment failure), or the scan's own "find my anchor's index,
+then walk outward" first step (§1.4's opening line) fails for one of the two anchors used here
+(`playerObj` for attempt 1, the attacker itself for attempt 2) in a way that aborts the walk
+before it ever reaches a real candidate.
+
+**What round 20 needs, precisely:** `GetFirstObjectIndiceByX` (`0x00506F20`, already tabulated in
+`combat-participation.md` as "binary search into the x-sorted array") is the most likely
+"find my own index" entry point `GetNearestEnemy` calls before walking outward — disassemble
+`GetNearestEnemy` (`0x004F2DE0`) itself in full for the first time (every round so far has
+treated it as a black box and only measured its RESULT) to see exactly what it does with its own
+`this` argument before the outward walk begins, and specifically whether it independently
+re-resolves the anchor's area/array position or trusts a cached index that a driven,
+never-transitioned client puppet might never have established correctly.
+
+`local_combat` stays off; both `coop.ini` restored to `0`. Rig torn down and confirmed clean
+(`Get-Process` returned none, both process names). Full suite 953/953, both builds clean.
+Diagnostic logging from rounds 9-19 all left in the tree deliberately — still not settled, and
+each round's diagnostic has been load-bearing for the next.
+
 ## 3. A client's XP is actively erased
 
 `ProgressionSnapshotPacket` is host→client only and absolute (CoopAgent.cs, `PumpProgression`):

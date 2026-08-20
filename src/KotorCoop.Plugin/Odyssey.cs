@@ -6497,6 +6497,21 @@ internal static unsafe class Odyssey
         (delegate* unmanaged[Thiscall]<nint, uint, nint>)0x00517A20;
 
     /// <summary>
+    /// ROUND 19 DIAGNOSTIC. <c>CSWSCreature::GetNearestEnemy</c> (<c>0x004F2DE0</c>, thiscall,
+    /// ret 0xC — 3 stack args): <c>(this, fMaxRange, excludeId, vsId)</c>, per
+    /// `combat-participation.md` §1.3/§1.4. Called directly with a generously large fixed range
+    /// (bypassing the engine's own `MaxCleaveRange` computation, irrelevant at ~2m) to answer
+    /// one question directly: does the area scan this function performs actually FIND the local
+    /// player as a candidate at all, independent of whether `CreateNewAttackActionsFn`'s own
+    /// internal call to the same function succeeds. Every individual gate (resolve, hostility
+    /// both directions, perception) is confirmed passing (round 18) and the post-acquisition
+    /// `AsCreature` cast is confirmed succeeding (round 19) — this isolates whether the SCAN
+    /// itself ever reaches the player object in the area's x-sorted array in the first place.
+    /// </summary>
+    private static readonly delegate* unmanaged[Thiscall]<nint, float, uint, uint, uint> GetNearestEnemyFn =
+        (delegate* unmanaged[Thiscall]<nint, float, uint, uint, uint>)0x004F2DE0;
+
+    /// <summary>
     /// The missing half of `local_combat`: nothing else ever gives a mirrored enemy a reason
     /// to attack. `CSWSCreature::CreateNewAttackActions` (the ONLY place a NEW attack action
     /// gets queued, per `docs/research/combat-participation.md` §1.1) has exactly one caller,
@@ -6694,6 +6709,72 @@ internal static unsafe class Odyssey
                 + $"visibleListNode=0x{visNode:X} flags=0x{visFlags:X} seenBit={visSeen} "
                 + $"| playerObj=0x{playerObj:X} attackerRealId=0x{attackerRealId:X} "
                 + $"GetAIStateReputation(player,attacker)={repPlayerVsAttacker} (2=hostile,1=friendly,0=neutral)");
+
+            // ROUND 19 DIAGNOSTIC: full disassembly of CreateNewAttackActions's
+            // acquisition-success path (0x005B6B58-0x005B6B76) found a step never tested by any
+            // prior round. After GetNearestEnemy finds a candidate id, the function RE-RESOLVES
+            // it (GetGameObject) and calls the resolved object's own vtbl+0x30 ("AsCreature" —
+            // the SAME cast this function's own top half uses to validate a pre-existing target,
+            // combat-participation.md line 104). If that cast returns null, the function takes
+            // the exact same silent "acquisition failed" bail (0x5b48b0: SetLockOrientationToObject
+            // (OBJECT_INVALID), pause animation, SetCombatMode stand-down — confirmed by
+            // disassembling 0x5b48b0 itself) as if GetNearestEnemy had found nothing at all — no
+            // crash, no error, just the documented "creature stands down" path. Every INPUT gate
+            // to acquisition (resolve, hostility both directions, perception) is confirmed
+            // passing (round 18); this AsCreature cast on the RESOLVED target is the one
+            // remaining untested step between "target found" and "attack queued". playerObj
+            // above is already resolved via ResolveServerObject, confirmed to call the identical
+            // GetGameObjectFn(server, id) the engine's own disassembly uses (same appManager ->
+            // AppServerOffset -> server chain, same call) — so its own vtbl+0x30 tells us
+            // directly whether the engine's internal cast on the SAME object would succeed.
+            bool asCreatureCastOk = false;
+            nint playerVtableForCast = 0;
+            if (playerObj != 0)
+            {
+                playerVtableForCast = *(nint*)playerObj;
+                nint asCreatureSlot = *(nint*)(playerVtableForCast + 0x30);
+                var asCreatureFn = (delegate* unmanaged[Thiscall]<nint, nint>)asCreatureSlot;
+                asCreatureCastOk = asCreatureFn(playerObj) != 0;
+            }
+
+            PluginHost.Log(
+                $"queueattack ROUND19 diag: playerObj=0x{playerObj:X} vtable=0x{playerVtableForCast:X} "
+                + $"AsCreature(vtbl+0x30) cast on the player object: {(asCreatureCastOk ? "SUCCEEDS" : "FAILS")}");
+
+            // ROUND 19 DIAGNOSTIC, continued: does the area scan itself ever find the player?
+            // Attempt 1 per §1.3: GetNearestEnemy(candidateCre=playerObj, range, excludeId=own,
+            // vsId=own) — "nearest enemy of mine, searched from the candidate's position".
+            // Attempt 2 fallback: GetNearestEnemy(this=attacker, range, excludeId=own,
+            // vsId=OBJECT_INVALID). A large fixed range stands in for MaxCleaveRange, irrelevant
+            // at ~2m separation.
+            uint scanAttempt1 = playerObj != 0
+                ? GetNearestEnemyFn(playerObj, 50.0f, attackerRealId, attackerRealId)
+                : ObjectInvalid;
+            uint scanAttempt2 = GetNearestEnemyFn(creature, 50.0f, attackerRealId, ObjectInvalid);
+            PluginHost.Log(
+                $"queueattack ROUND19 diag: GetNearestEnemy attempt1(from playerObj)=0x{scanAttempt1:X} "
+                + $"attempt2(from attacker)=0x{scanAttempt2:X} (0x7F000000=nothing found, "
+                + $"expected a real object id if the scan reaches the player)");
+
+            // ROUND 19 DIAGNOSTIC, final: the scan never finding the player, despite every
+            // individual gate passing, points at spatial-index registration rather than a
+            // targeting rule. docs/research/realtime-creature-movement.md §1 (`SetPosition`)
+            // documents the area resolve step verbatim: `this->area_id` at creature+0x8C is
+            // looked up through the engine's own object array (0x004D8230) to find the area,
+            // and ONLY THEN does UpdatePositionInObjectsArray register this object into that
+            // area's x-sorted spatial index (CSWSArea+0x190/+0x194, the exact array
+            // GetNearestEnemy walks). If the client's local player object carries a stale or
+            // wrong area_id, its raw x/y/z can be correct while it is registered in the WRONG
+            // area's index entirely — invisible to a scan anchored in the area the sithsoldiers
+            // are actually in, no matter how close the coordinates read. Compare directly.
+            if (playerObj != 0)
+            {
+                uint playerAreaId = *(uint*)(playerObj + 0x8C);
+                uint attackerAreaId = *(uint*)(creature + 0x8C);
+                PluginHost.Log(
+                    $"queueattack ROUND19 diag: area_id (creature+0x8C) - player=0x{playerAreaId:X} "
+                    + $"attacker(sithsoldier)=0x{attackerAreaId:X} MATCH={playerAreaId == attackerAreaId}");
+            }
 
             CreateNewAttackActionsFn(creature, 1, 0, targetId);
 
