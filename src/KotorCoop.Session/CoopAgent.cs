@@ -481,6 +481,24 @@ public sealed class CoopAgent(IGameBridge bridge, ICoopSession session, AgentSet
     /// </summary>
     private readonly List<string> _pendingFollowMovies = [];
 
+    /// <summary>
+    /// The module we (and, as far as we knew, the host) were standing in when
+    /// <see cref="_pendingFollowMovies"/> started filling from empty.
+    ///
+    /// The host announces a movie the instant its own engine accepts it onto the transition
+    /// queue — which is BEFORE the host's main thread blocks to play it, and therefore before
+    /// the host's published <c>PlayerState.Module</c> has any chance to change. For the entire
+    /// window between "announced" and "the host's module update finally lands" (which can be
+    /// the whole length of the movie, since a blocked main thread publishes nothing), this
+    /// player and the host still read as being in the SAME module. Without this guard, the
+    /// very next pump after accumulating a movie sees "together" and wipes it before the host
+    /// has actually gone anywhere — measured live: the "pending for the next follow" and
+    /// "dropping ... we are already where the host is" lines landed in the same logged second.
+    /// This field lets the "together" check tell "the host genuinely hasn't left yet" (still
+    /// equal to this) from "we caught up some other way and these are truly stale" (not equal).
+    /// </summary>
+    private string _pendingFollowMoviesFromModule = string.Empty;
+
     /// <summary>The last cinematic serial taken from each peer, so a repeated announcement is
     /// accumulated once rather than five times.</summary>
     private readonly Dictionary<uint, uint> _seenCinematicSerials = [];
@@ -515,14 +533,19 @@ public sealed class CoopAgent(IGameBridge bridge, ICoopSession session, AgentSet
             }
 
             _seenCinematicSerials[packet.PeerId] = packet.Serial;
-            AccumulateFollowMovies(packet.Movies);
+            AccumulateFollowMovies(local.Module, packet.Movies);
         }
     }
 
     /// <summary>Adds names to the pending set, in order, without duplicates and without
     /// exceeding the engine's own six-movie queue.</summary>
-    private void AccumulateFollowMovies(string[] movies)
+    private void AccumulateFollowMovies(string localModule, string[] movies)
     {
+        if (_pendingFollowMovies.Count == 0)
+        {
+            _pendingFollowMoviesFromModule = localModule;
+        }
+
         foreach (string movie in movies)
         {
             if (movie.Length == 0 || _pendingFollowMovies.Contains(movie, StringComparer.OrdinalIgnoreCase))
@@ -1410,15 +1433,22 @@ public sealed class CoopAgent(IGameBridge bridge, ICoopSession session, AgentSet
             // separation acts immediately.
             _lastTravelRequest = string.Empty;
 
-            // And drop any accumulated cinematic. We are where the host is, so there is no
-            // transition of ours left for those movies to ride, and holding them would attach
-            // somebody else's film to whatever we do next.
-            if (_pendingFollowMovies.Count > 0)
+            // And drop any accumulated cinematic — but ONLY if we are together somewhere OTHER
+            // than the module these movies were announced from. The host announces a movie the
+            // instant its engine accepts it onto the transition queue, which is BEFORE its main
+            // thread blocks to play it and therefore before its published module has any chance
+            // to change; for that whole window "together" just means the host has not left yet,
+            // not that the movies are stale. Only a mismatch against
+            // _pendingFollowMoviesFromModule means we caught up some other way and these really
+            // are leftovers from an earlier, already-resolved transition.
+            if (_pendingFollowMovies.Count > 0
+                && !string.Equals(local.Module, _pendingFollowMoviesFromModule, StringComparison.OrdinalIgnoreCase))
             {
                 Log?.Invoke(
                     $"dropping {_pendingFollowMovies.Count} pending transition movie(s): "
                     + "we are already where the host is");
                 _pendingFollowMovies.Clear();
+                _pendingFollowMoviesFromModule = string.Empty;
             }
 
             return;
@@ -1461,6 +1491,7 @@ public sealed class CoopAgent(IGameBridge bridge, ICoopSession session, AgentSet
             // rewritten from scratch each time), but they must not survive into a later,
             // unrelated transition.
             _pendingFollowMovies.Clear();
+            _pendingFollowMoviesFromModule = string.Empty;
 
             Log?.Invoke(movies.Length > 0
                 ? $"following the host to '{target}' with {movies.Length} transition movie(s): "
