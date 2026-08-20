@@ -6486,6 +6486,21 @@ internal static unsafe class Odyssey
         // never from a per-frame drive loop. Only initialize the round ONCE, on the genuine 0->1
         // transition, and let the head-action gate at the top of this function do its job for
         // every pass after that.
+        // ROUND 13, STATIC FINDING: AddAttackActionFn was being called unconditionally on
+        // EVERY pass, gated only by the head-action check at the top of this function — which
+        // never trips, because head action never leaves 0x6 in the failing case. AddAttackAction
+        // has NO dedup of its own (documented above: "unconditionally allocates and appends a
+        // new action node every call"), so a driven puppet under LocalCombat was having a fresh,
+        // undeduplicated action node appended to round+0x9B0's pending list on every single
+        // drive pass — tens of times a second, for as long as the creature stayed engaged. The
+        // engine's own normal flow (CreateNewAttackActions, reached only from EndCombatRound)
+        // calls this exactly once per round, never in a tight per-frame loop. This is the same
+        // shape of bug ROUND 12 already found and fixed one level up (SetRoundDelayFn
+        // self-defeating via repeated accumulation) — appending here every pass is equally
+        // self-defeating if whatever processes the pending list expects one entry, not an
+        // ever-growing backlog. Queue the attack action in the SAME gate as the round-init
+        // setters: once, on the genuine 0->1 transition — exactly matching round 11's only
+        // working case (Odyssey.AttackTarget, a single staged call, never repeated).
         if (roundTimerBefore == 0)
         {
             SetRoundTimerActiveFn(round, 1, (int)(*(uint*)(creature + ObjectIdOffset)));
@@ -6497,9 +6512,9 @@ internal static unsafe class Odyssey
             // ACCUMULATE a duration) does not care about the source, only that it lands a
             // positive value in round+0x960 — ONCE, not every pass (see above).
             SetRoundDelayFn(round, 0x5DC, 0);
-        }
 
-        AddAttackActionFn(round, targetId, 0, 0, 0x5DC, 1);
+            AddAttackActionFn(round, targetId, 0, 0, 0x5DC, 1);
+        }
 
         int roundTimerAfter = *(int*)(round + 0x958);
         int roundDelayAfter = *(int*)(round + 0x960);
@@ -6507,7 +6522,8 @@ internal static unsafe class Odyssey
         if (diagLog)
         {
             PluginHost.Log(
-                $"queueattack diag: CALLED SetRoundTimerActive+SetRoundDelay+AddAttackAction(round=0x{round:X}, target=0x{targetId:X}) on creature 0x{creature:X}, "
+                $"queueattack diag: round=0x{round:X}, target=0x{targetId:X}, creature=0x{creature:X}, "
+                + $"queued-this-pass={roundTimerBefore == 0}, "
                 + $"round+0x9B0 pending-list = 0x{pendingListBefore:X}, "
                 + $"round+0x958 timer-active BEFORE={roundTimerBefore} AFTER={roundTimerAfter}, "
                 + $"round+0x960 delay BEFORE={roundDelayBefore} AFTER={roundDelayAfter}, "

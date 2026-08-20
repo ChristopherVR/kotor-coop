@@ -795,6 +795,62 @@ from "something else, specific to the mirrored/remote-target case, is still miss
 Process torn down and confirmed clean (`Get-Process KotorCoop.Agent,swkotor` returned none). Full
 suite 953/953, both builds clean.
 
+### Round 13 — the append itself had the same bug the setters did, and fixing it is not enough
+
+Before touching the drive-loop-interference question round 12 left open, a closer read of
+`QueueAttackAction` found a second instance of round 12's exact bug, one call further down:
+`AddAttackActionFn(round, targetId, 0, 0, 0x5DC, 1)` was running UNCONDITIONALLY on every
+call, gated only by the head-action check at the top of the function — which never trips,
+because head action never leaves `0x6`. `AddAttackAction` has no dedup of its own
+(documented since the instruction-level dissection round: "unconditionally allocates and
+appends a new action node every call"), so a driven, engaged mirrored creature was having a
+fresh, undeduplicated action node appended to `round+0x9B0`'s pending list on every single
+drive pass — tens of times a second, for as long as it stayed in range. The engine's own
+normal flow (`CreateNewAttackActions`, reached only from `EndCombatRound`) calls this exactly
+once per round, never in a tight per-frame loop; this is the same shape of self-defeating bug
+as round 12's `SetRoundDelayFn` accumulation, one layer closer to the actual append.
+
+**Fixed** (`Odyssey.cs`, `QueueAttackAction`): moved `AddAttackActionFn`'s call inside the same
+`roundTimerBefore == 0` gate as the two setters, so all three fire together, exactly once, on
+the genuine 0->1 transition — matching round 11's only working case (`AttackTarget`, a single
+staged call, never repeated) as closely as this code path can.
+
+**Live-retested, full mid-fight-join scenario, third time end to end.** Host staged into a
+real fight (`AttackTarget` via `blockpoke.ps1 attack`, HP `12/12` -> confirmed dropping under
+the fight, reaching the deck's `1/12` min-hp floor); client connected mid-fight and `tp`'d
+beside the same two `sithsoldier`s. Confirmed the fix holds: `round+0x958`/`round+0x960` on
+the mirrored copies now show a clean single `queued-this-pass=True` transition followed by
+`queued-this-pass=False` on every subsequent pass, with `round+0x960` drifting by small, sane
+per-tick amounts (`14`, `16`, `18`, `20`, ...) rather than exploding — the append-side bug is
+real and is fixed, the same way the setter-side one was.
+
+**The core symptom still survives it, and there is a new, sharper piece of evidence.** Head
+action never left `0x6`/`0xFFFFFFFF` across the whole test. And the client's own damage log
+now shows the actual shape of the failure rather than just its absence: `combat: absorbed 2 /
+6 / 10 / 18 / 24 forwarded damage in total ... this engine says in-combat=False` — a strictly
+growing absorbed total, tracking the host's real fight — while `console 'where'` confirmed the
+client's own HP never moved from `12/12` at any point. This is the exact INVULNERABLE failure
+mode `local_combat`'s own safety notes have warned about since it was first built: forwarded
+damage is being absorbed on the promise that the local copy is dealing the same damage for
+real, and it is not, so the damage is simply discarded. Two round-13 fixes in, the mechanism
+that would make that promise true (round processing itself) is still not completing for a
+driven creature, even though round-init and the append are both now individually correct.
+
+**What remains open, precisely:** round 11 proved the round-init + append mechanism sufficient
+end-to-end for a creature nothing else was writing to every frame. Rounds 12 and 13 both used
+that same, now-doubly-fixed mechanism on a creature `EnemyPresenceController` continuously
+drives (`SetPosition`/`SetFacing` every pass), and it still never completes a round. The
+targeted check round 12 proposed and did not yet run — suspending the position/facing drive on
+one test creature while leaving the attack-permitted bit and the round-init/append calls
+untouched, to see whether ITS round processes normally — is still the next concrete step, and
+is now better-motivated than before: with both known self-inflicted bugs fixed, whatever is
+left is either genuinely specific to being continuously driven, or a third, still-undiscovered
+gate this investigation has not yet reached.
+
+`local_combat` and both installs' `coop.ini` restored to their code defaults (`0`) afterward.
+Process torn down and confirmed clean (`Get-Process KotorCoop.Agent,swkotor` returned none). Full
+suite 953/953, both builds clean.
+
 ## 3. A client's XP is actively erased
 
 `ProgressionSnapshotPacket` is host→client only and absolute (CoopAgent.cs, `PumpProgression`):
