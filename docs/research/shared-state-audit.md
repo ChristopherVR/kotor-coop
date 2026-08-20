@@ -189,6 +189,51 @@ run the live pass this section has asked for since the day it was written.
 and says which engines are engaged and which are only mirroring, so the asymmetry reads as
 what it is rather than as a dropped packet.
 
+### The live pass ran (2026-08-20) — and it does not work
+
+First real attempt, with `local_combat=1` set on both installs, against a genuine fight —
+not a teleported-in enemy. A single host instance was moved next to a live, untouched
+`sithsoldier` pair in `END_M01AA` (`tp`, not a position write on the enemy) and aggroed for
+real within ~1 second: `state IN COMBAT combat [FIGHT in END_M01AA - engaged: you]`, HP
+falling 12 → 1 under the engine's own AI, no scripting or synthetic trigger involved.
+
+With the host still actively fighting, a second instance connected and was moved to stand
+directly beside the same two hostiles (`tp` to within ~2m, matching the proximity that made
+the host aggro in ~1s). Over more than 90 seconds standing there:
+
+    connected to 127.0.0.1:27015 as peer 2 ... state exploring (not in combat, not paused)
+    combat [FIGHT in END_M01AA - engaged: Lanik; mirroring only: you (their engine is not in combat)]
+
+The client's own engine never entered combat, not once. This is not the target-divergence,
+aggro-sink, or absorb-attribution failure modes items 4/5/6 above were fixed against — those
+are about a fight going WRONG once engaged. This is more basic: the fight never started
+locally at all. Confirmed via the log that the mechanism was genuinely exercised, not
+silently skipped — `enemy drive: mirroring 25 of the owner's 25 enemies` fired on the
+client at the moment of connection, meaning the two `sithsoldier` bodies were in the driven
+set and `EnemyPresenceController.ApplyEnemy` ran `Odyssey.ClaimCreatureForFight` and
+`Odyssey.PermitAttacking` on them every pass, per the code at lines 384-399 above. Permitting
+an attack and not wiping one in progress was evidently not sufficient to make the mirrored
+copy's own AI independently decide to start one — unlike the host's identical, non-mirrored
+copy of the same creature type, which aggroed almost instantly under the same proximity.
+
+**Root cause not found.** Candidates worth checking next, in rough order of suspicion:
+whether `Odyssey.PermitAttacking`/`ClaimCreatureForFight` only preserve an attack action
+already in the queue rather than doing anything to help the AI decide to queue one in the
+first place (in which case the fix as built cannot work on a creature that never got a
+`NEW ClaimCreatureForFight`-armed hostile role at all — permission and initiation may be two
+different things); whether `Drive()`'s per-frame `SetPosition`/`SetFacing` writes reset or
+starve whatever internal state a perception/aggro decision depends on, even with the dirty
+bit suppressed; or whether these particular creatures never actually reach hostile toward
+THIS SPECIFIC client object at all (reputation/faction is per-object-pair in this engine, and
+a client's PC is adopted through a different code path than the host's).
+
+**Decision: `local_combat` stays off by default.** The binary safety rule this section has
+held since it was written is not "did it break something," it is "did it work" — and it did
+not. `profiles/coop.ini.example` is unchanged (`local_combat=0`). This is the first live
+result this section has ever had; treat "already fixed" claims about items 4-7 above as
+"the identified risks in a working mechanism were closed," not as "the mechanism works" —
+those are different claims, and only the second one is what a player experiences.
+
 ## 3. A client's XP is actively erased
 
 `ProgressionSnapshotPacket` is host→client only and absolute (CoopAgent.cs, `PumpProgression`):
