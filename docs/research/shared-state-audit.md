@@ -133,10 +133,15 @@ in this codebase for a door's OnOpen script) and the creature's own combat-AI sc
 `OnCombatRoundEnd` script). **Firing it on a HOST-LOCAL creature produced a genuine, real fight —
 player HP 12→1, independently verified — the first positive result of the entire investigation,
 using none of the 27 rounds' hand-replicated native calls.** Firing the SAME thing on a
-MIRRORED/driven creature did not (yet) produce a hit, but that result is confounded by the old
-per-frame mechanism running concurrently and is explicitly NOT a refutation — see the dated
-"Strategy 2" entry below for the full account and the precise next test. This is now the most
-promising open thread, not the 27-round mechanical one.
+MIRRORED/driven creature does NOT work — round 28 reran this cleanly isolated
+(`local_combat=0`, no competing mechanism) with a real per-frame watch on the round struct
+itself, across four attempts on two creatures over ~50 seconds, and the round never armed once.
+(A first HP-based reading in that round looked positive but was a confound — the pre-existing,
+unrelated phantom damage-forwarding feature, not this mechanism; see round 28 for the full
+account.) So: PROVEN to work for a host-local creature, PROVEN not to work for a driven one —
+the same wall rounds 1-27 hit, reached by a different route, which narrows the real question to
+what marks a creature as "driven" in the engine's own eyes at all. See round 28's closing
+paragraph for the precise next step.
 
 ### The state cannot be replicated by writing it — measured
 
@@ -1815,20 +1820,23 @@ real fight this investigation has measured hits), independently confirmed via `c
 by the creature's OWN AI deciding to fight after being told to check, not by any native call
 this investigation wrote.
 
-**Live result, MIRRORED (driven) case: INCONCLUSIVE, not refuted.** The same fire on a
-client-mirrored copy of an untouched `sithsoldier` (client player `tp`'d to ~1.2m, confirmed
+**Live result, MIRRORED (driven) case, first pass: INCONCLUSIVE, not refuted.** The same fire on
+a client-mirrored copy of an untouched `sithsoldier` (client player `tp`'d to ~1.2m, confirmed
 in-range via the existing `ROUND25` distance diagnostic) produced no HP change over 20+
-seconds. This is NOT a clean result: `local_combat=1` was set for this test (reasoned that
+seconds. This was NOT a clean result: `local_combat=1` was set for this test (reasoned that
 `local_combat=0`'s full `ClearAllActions` wipe would delete a script-queued attack action
 before it executes), which means the OLD per-frame `QueueAttackAction`/`CreateNewAttackActionsFn`
 machinery from rounds 9-27 was ALSO running concurrently on the same creature, every frame,
 throughout the test — its own diagnostic lines are interleaved with the fire in the log, so
-whether the mirrored case's failure is (a) the script-triggered path genuinely not working on a
-driven puppet, or (b) interference from the old parallel mechanism (e.g. its own
-`ClaimCreatureForFight`/`PermitAttacking` calls, or its own unsuccessful `CreateNewAttackActionsFn`
-attempts leaving `round+0x9CC` pre-set so a subsequent real attempt takes a different internal
-branch) is NOT distinguished by this pass. `local_combat` correctly stays off; both `coop.ini`
-restored.
+whether the mirrored case's failure was (a) the script-triggered path genuinely not working on a
+driven puppet, or (b) interference from the old parallel mechanism was NOT distinguished by this
+pass. `local_combat` correctly stays off; both `coop.ini` restored.
+
+⚠ **UPDATE — round 28 (below) reran this cleanly isolated (`local_combat=0`, so none of the old
+machinery runs) with a proper unthrottled per-frame watch, and the mirrored case is now
+REFUTED, not merely inconclusive.** A first HP-based reading in that round looked positive but
+turned out to be a confound (the pre-existing phantom damage-forwarding feature, unrelated to
+this mechanism) — see round 28's full account for why, and for the actual decisive evidence.
 
 **What round 28 needs to do, precisely:** rerun the exact same mirrored-case test with
 `local_combat=0` this time (so the OLD automatic mechanism is fully off), and watch CLOSELY —
@@ -1845,6 +1853,80 @@ one particular queued action survived) is the one thing this pass did not measur
 Full suite: 953/953 (`DisconnectRecoveryTests.HeavyPacketLossStillConverges` is a known-flaky
 probabilistic test, confirmed passing in isolation both before and after this round — not a
 regression). Both builds clean.
+
+### Round 28 (2026-08-21) — cleanly isolated, and the mirrored case is REFUTED (the earlier "it worked" reading was a confound)
+
+Added `Odyssey.TickFireScriptWatch`, called unconditionally from `PluginHost.OnFrame` (right
+after `_enemyPresence?.OnFrame()`, independent of `local_combat` — it runs regardless of that
+setting) — logs the creature's head action, `round+0x9CC` target, `round+0x958`/`+0x960` timer
+fields, and `round+0x96C` sub-index/`sub+0xB0` EVERY SINGLE FRAME for 180 frames after a
+`firescript ... fire` call, armed by `FireCreatureScriptSlot0x260` itself. This exists because
+`RunScript`'s own body is a queue-based dispatcher (a pending-list at `+0x1AC`, a counter at
+`+0x28`) — the fired script does NOT run synchronously inside the call that fires it, it runs on
+a LATER engine frame, so only real per-frame observation (not the 3-second-throttled diagnostics
+rounds 9-27 used) can see a fast arm-then-something cycle.
+
+**Procedure:** fresh two-instance session, `local_combat=0` on BOTH installs (confirmed via
+`grep` before launch), host hosting via `console 'host'`, client connecting via
+`console 'connect'` — clean, with NONE of rounds 9-27's automatic per-frame
+`QueueAttackAction`/`CreateNewAttackActionsFn` machinery running (that machinery is gated on
+`LocalCombat`, which was off). Client `tp`'d to within ~2m of a mirrored, untouched
+`sithsoldier`, `firescript <id> fire` sent on the CLIENT.
+
+**First signal, and why it was wrong.** The client's `kotorcoop-plugin.log` showed
+`combat: took 2 damage from a hit on our phantom (attacker 0xE)` starting ~5s after the fire,
+and `console 'where'` confirmed real HP loss (12→1, the same min-1-hp floor every real fight in
+this investigation hits). This looked like confirmation. **It was not the mechanism working —
+it was a pre-existing, unrelated, already-documented feature catching the test off guard.**
+`IncomingDamageController.cs:293`'s exact log text ("hit on our phantom") is the FORWARDED
+damage channel (`block.IncomingDamageAttacker`/`IncomingDamageApplied`, wire-synced fields) —
+not a local hit. Checking the HOST confirmed why: `creatures.ps1` on the host showed a live
+`coop_phantom` sitting at `(29.70, 142.40, 0.00)` — EXACTLY the coordinate the client `tp`'d to,
+because a connected player's own position always publishes a phantom body at that same spot on
+every peer's screen, by design (README: "Your partner's body is a real combat target in your
+game… enemies pick it, swing at it"). The host's OWN untouched `sithsoldier`s, sitting at their
+original unmoved spawn positions the whole session, evidently found this nearby PLAYER-faction
+phantom fair game and fought it organically on the HOST's own engine — completely independent of
+anything fired on the CLIENT. Positioning a connected client's real player near ANY module
+creature unavoidably also positions their phantom there on every other peer's screen, so this
+confound is inherent to the very scenario being tested, not a mistake specific to this run — it
+just needs to be told apart from the real signal, which is why the per-frame native-state watch
+exists at all.
+
+**The real, unambiguous evidence: `sub+0xB0` never left 0.** Across FOUR separate
+`firescript ... fire` calls on TWO different mirrored creatures (`0xE` and `0x10`), each
+followed by a full 180-frame (~3s) unthrottled per-frame watch, spanning roughly 50 seconds of
+real time in total: `round+0x9CC` target read `0x7FFFFFFF` (the player) from the very first
+sampled frame — already set, before this round's own fire, most likely a leftover from an
+earlier session's `AddAttackAction`/`CreateNewAttackActionsFn` diagnostic calls, since
+`+0x9CC` was never reset between sessions and nothing in this pass wrote it — `round+0x958`
+stayed `1` and `round+0x960` counted down smoothly and organically the entire time (proof the
+round IS ticking normally, not stuck or corrupted), and `head action` never once left
+`0xFFFFFFFF` (not a fight action). **Not one of the 720+ sampled frames across all four attempts
+showed `sub+0xB0` as anything but `0`.** This is the same wall rounds 1-27 hit, reached this time
+by a completely different route (a real, engine-native script event instead of hand-replicated
+calls) — which is itself informative: whatever prevents a driven puppet's round from arming is
+not specific to HOW the round gets initiated (our own calls, or the engine's own script-driven
+path), it is specific to the creature BEING a driven puppet.
+
+**Conclusion.** Strategy 2 remains a genuine, confirmed-real result for a HOST-LOCAL creature
+(round 27's fight — HP 12→8→1, unconfounded, no phantom involved since a host-local test has no
+connected peer at all). It is now REFUTED, not merely unconfirmed, for the MIRRORED case — four
+clean attempts, no ambiguity, `local_combat=0` throughout so no competing mechanism was running.
+`local_combat` stays off. Both `coop.ini` restored to `0` (unchanged — they already were).
+Rig torn down and confirmed clean. Full suite 953/953 (no flake this run), both builds clean.
+
+**What this actually narrows down, for whoever continues:** the block is not in initiating the
+round (proven — a real engine script can do it, on a host-local creature) and not in reaching
+`AddAttackAction`'s queue (round 17-19 proved that separately). It is specifically in whatever
+makes a round ACTUALLY PROCESS once armed-or-arming, and that process appears to depend on the
+creature not being externally driven — something about being a `local_combat`/`EnemyPresenceController`-tracked
+puppet (even with the position/action-wipe machinery OFF, since `local_combat=0` was set this
+round) still marks the creature as not eligible for the engine's own round-advancement loop to
+ever complete for it. The next concrete step is not another call to trace — it's determining
+WHAT marks a creature as "driven" in the engine's own eyes in the first place, since that mark
+appears to persist and block round-arming even when every co-op-specific per-frame write is
+turned off.
 
 ## 3. A client's XP is actively erased
 

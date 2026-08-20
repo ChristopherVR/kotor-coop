@@ -7114,6 +7114,59 @@ internal static unsafe class Odyssey
 
         uint creatureId = *(uint*)(creature + ObjectIdOffset);
         RunScriptFn(vm, creature + CreScriptSlot0x260, creatureId, 1);
+
+        // ROUND 28: RunScript's own body (0x005D45D0) is a QUEUE-based dispatcher (a
+        // pending-list at +0x1AC, a counter at +0x28) — the script does NOT run synchronously
+        // inside this call, it runs on a LATER engine frame. Arm an unthrottled, per-frame
+        // watch so the isolated (local_combat=0) test can see exactly which frame the round
+        // struct actually changes on, rather than sampling every 3s and missing a fast
+        // arm-then-wipe cycle the way earlier rounds' throttled diagnostics could have.
+        _fireScriptWatchCreature = creature;
+        _fireScriptWatchFramesLeft = 180;
+        PluginHost.Log($"firescript watch: armed on 0x{creatureId:X} for 180 frames");
+    }
+
+    private static nint _fireScriptWatchCreature;
+    private static int _fireScriptWatchFramesLeft;
+
+    /// <summary>
+    /// ROUND 28 DIAGNOSTIC. Called every frame from PluginHost.OnFrame, unconditionally (no
+    /// throttle) while a watch is armed — logs the creature's head action type and the full
+    /// round-struct state (+0x9CC target, +0x958/+0x960 timer, +0x96C sub-index, sub+0xB0)
+    /// every single frame for 180 frames after a firescript call, so a transient arm-then-wipe
+    /// this fast cannot hide between two 3-second-throttled samples the way it could in rounds
+    /// 9-27's own diagnostics. Independent of local_combat — runs regardless of that setting,
+    /// which is the whole point of an isolated round 28 pass with local_combat=0.
+    /// </summary>
+    public static void TickFireScriptWatch(System.Action<string> log)
+    {
+        if (_fireScriptWatchFramesLeft <= 0 || _fireScriptWatchCreature == 0)
+        {
+            return;
+        }
+
+        nint creature = _fireScriptWatchCreature;
+        int framesLeft = _fireScriptWatchFramesLeft--;
+
+        int headType = GetHeadActionType(creature);
+        nint round = *(nint*)(creature + CreCombatRound);
+
+        if (round == 0)
+        {
+            log($"firescript watch: frame -{framesLeft}, creature=0x{creature:X}, head action=0x{headType:X}, round pointer is NULL");
+            return;
+        }
+
+        uint currentTarget = *(uint*)(round + 0x9CC);
+        int timerActive = *(int*)(round + 0x958);
+        int delay = *(int*)(round + 0x960);
+        byte subIndex = *(byte*)(round + 0x96C);
+        int subB0 = *(int*)(round + 4 + subIndex * 0x14C + 0xB0);
+
+        log($"firescript watch: frame -{framesLeft}, creature=0x{creature:X}, head action=0x{headType:X} "
+            + $"(is fight action: {IsFightAction(headType)}), round+0x9CC target=0x{currentTarget:X}, "
+            + $"round+0x958 timer={timerActive}, round+0x960 delay={delay}, "
+            + $"round+0x96C sub-index={subIndex} sub+0xB0={subB0}");
     }
 
     // ---- faction, the targetability switch ---------------------------------------

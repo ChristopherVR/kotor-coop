@@ -668,6 +668,7 @@ internal static unsafe class PluginHost
         // After the combat pass so a death applied this frame is respected (the presence
         // slot's dead flag and the kill both come from the same owner tick).
         _enemyPresence?.OnFrame();
+        Odyssey.TickFireScriptWatch(Log);
         _partyPresence?.OnFrame();
 
         // After the companion mirror, not before: reconciling the roster can spawn a companion
