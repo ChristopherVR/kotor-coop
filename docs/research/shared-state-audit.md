@@ -2396,6 +2396,54 @@ is available (a more crowded area, or a different save).
 Both `coop.ini` unchanged, `local_combat` untouched. Full suite 953/953, both builds clean, rig
 torn down and confirmed clean (`Get-Process`).
 
+### Round 37 — ANSWERED. Census membership is the variable, not client role. `sub+0xB0` armed
+### for real, on the client, for a creature outside the census
+
+Round 36's construction (moving a real creature) was overkill — round 37 used a far simpler one:
+temporarily lowered `KotorGameBridge.BlockEnemyCapacity` 32→1 (the same constant that already
+sorts candidates by "fighting first, then nearest distance" and truncates the published census —
+`docs/research/enemy-presence-sync.md`/`peer-damage-ledger.md`'s "census cap and distance
+shedding," confirmed live, not assumed). With this save's ~25 real `sithsoldier`s, that split them
+cleanly across the census boundary using nothing but the existing mechanism: `census 0xE` on the
+client read `listed hp 15/15 at 29.7,144.5` (still tracked, the nearest one), `census 0x10` read
+`not listed in this census` (genuinely, structurally un-enumerated — the plugin's own log
+confirms the drop: `enemy drive: mirroring 1 of the owner's 1 enemies`).
+
+**Fired `k_def_combend01` — the exact same proven script every round has used — on both, from the
+CLIENT process, in the same session, same positions, same everything except census membership:**
+
+- **`0xE` (still tracked):** `sub+0xB0=0` throughout, timer ran a normal cycle, never armed —
+  identical to every mirrored-case failure in rounds 9-36. Confirms the baseline is unchanged.
+- **`0x10` (genuinely outside the census):** **`sub+0xB0=1`** — armed, for real, on the client
+  process. Sustained across 2081 of 6000 sampled frames (not a one-tick blip), first observed
+  ~70ms after firing and still armed at the end of the capture window. The target's `vtbl+0x9C(0)`
+  readout fell 16→12 across that armed window — a real, ongoing fight, matching every other
+  confirmed-genuine success in this investigation (rounds 27, 35).
+
+**This answers the question round 35 opened and round 36 couldn't close.** "A session/peer
+connected at all" was already refuted (round 35: host-local still works with a peer connected).
+Now "being the client process/role itself" is refuted too: the SAME client process, same
+connected session, armed a real fight for a creature it had simply never enumerated. **The
+variable is census membership** — being tracked/enumerated by the co-op plugin's `EnemyPresenceController`
+at all, independent of whether its position is ever driven (round 29 already showed writes alone
+aren't it; this round shows read-only enumeration is enough by itself).
+
+**What this means for a fix, and why it wasn't found by looking at position/per-frame writes:**
+something about the act of ENUMERATING a creature into the tracked set — not writing to it —
+marks it in a way the engine's own combat-round machinery respects. The most likely mechanism,
+given everything already ruled out in rounds 4-30 (the round struct fields, the acquisition
+chain, the party-table gate): `Odyssey.ClaimCreature`/`ClaimCreatureForFight`'s initial claim
+(called once when a creature FIRST enters the tracked set, separate from the per-frame drive
+pass) sets something that persists for the creature's whole time in the census, not just during
+active writes. That one-shot claim call — not the per-frame position/facing writes rounds 14 and
+29 already cleared — is the concrete next target: find exactly what it sets, on FIRST entry to
+the tracked set specifically, and whether un-claiming (or narrowing the claim) a creature the
+moment `local_combat` wants it to genuinely fight would let this work without sacrificing visual
+position sync for enemies that are just being mirrored, not actively fought.
+
+Restored `BlockEnemyCapacity` to 32. Both `coop.ini` unchanged, `local_combat` untouched. Full
+suite 953/953, both builds clean, rig torn down and confirmed clean (`Get-Process`).
+
 ## 3. A client's XP is actively erased
 
 `ProgressionSnapshotPacket` is host→client only and absolute (CoopAgent.cs, `PumpProgression`):
