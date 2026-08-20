@@ -6451,6 +6451,30 @@ internal static unsafe class Odyssey
         (delegate* unmanaged[Thiscall]<nint, uint, int, int, int, int, void>)0x004D5F70;
 
     /// <summary>
+    /// ROUND 17: <c>CSWSCreature::CreateNewAttackActions</c> (<c>0x005B6980</c>, thiscall,
+    /// `ret 0xC` — 3 stack args). Already fully decoded and VERIFIED in
+    /// `docs/research/combat-participation.md` §1, independently of this investigation — this
+    /// is the engine's OWN single entry point for "acquire/validate a target and queue the
+    /// swing," and its own single caller is <c>EndCombatRound</c>, reached only from the round
+    /// timers or a round already in progress (never from a driven puppet's own, non-running AI
+    /// script). <see cref="AddAttackActionFn"/> alone (what this file called directly through
+    /// round 16) only replicates ONE line of this function's body — "if the target survives
+    /// validation, AddAttackAction(...) queues the next swing" — and that line is reached only
+    /// when `round+0x9B0` (the pending list) is EMPTY, which our own prior `AddAttackActionFn`
+    /// call had already made false. With `bMayAcquireNewTarget != 0` the function instead runs
+    /// its ACQUISITION path (§1.3), which does everything the revalidation path skips: two
+    /// `GetNearestEnemy` searches, then on success `SetLockOrientationToObject`, writes
+    /// `this+0x84`/`this+0x50C`, **`UpdateAttackTargetForAllAction(round, newId)`
+    /// (`0x004D3E50`, never previously called from this file)**, `this+0x4E8 = 1`, a client-GUI
+    /// notification, and only THEN queues the attack action — this is the real candidate for
+    /// whatever actually arms a round's ready-to-process state, since nothing this
+    /// investigation has called before now ever touched `UpdateAttackTargetForAllAction` at
+    /// all.
+    /// </summary>
+    private static readonly delegate* unmanaged[Thiscall]<nint, int, int, uint, void> CreateNewAttackActionsFn =
+        (delegate* unmanaged[Thiscall]<nint, int, int, uint, void>)0x005B6980;
+
+    /// <summary>
     /// The missing half of `local_combat`: nothing else ever gives a mirrored enemy a reason
     /// to attack. `CSWSCreature::CreateNewAttackActions` (the ONLY place a NEW attack action
     /// gets queued, per `docs/research/combat-participation.md` §1.1) has exactly one caller,
@@ -6586,7 +6610,49 @@ internal static unsafe class Odyssey
             // positive value in round+0x960 — ONCE, not every pass (see above).
             SetRoundDelayFn(round, 0x5DC, 0);
 
-            AddAttackActionFn(round, targetId, 0, 0, 0x5DC, 1);
+            // ROUND 17: CreateNewAttackActions, not a bare AddAttackAction. Six rounds of
+            // manually replicating pieces of the engine's own combat-decision routine
+            // (StartCombatRound, the two round-timer setters, AddAttackAction) left the queued
+            // action a silent no-op — round+0x958/+0x960 genuinely stuck, but nothing ever
+            // advanced the round's REAL per-participant processing state
+            // (round+0x96C's selected sub-structure, +0xB0/+0xAC — an array-list of fully
+            // computed, ready-to-execute swings that UpdateCombatRoundTimer's per-tick loop
+            // actually iterates, entirely separate from the +0x9B0 "raw intent" list
+            // AddAttackAction appends to). Full disassembly traced that array's only real
+            // populator to CSWSCombatRound::AddAttackAction (0x004D57A0, `sub+0xAC`'s
+            // push_back) <- called only by an "assemble a full attack descriptor from
+            // already-computed weapon/roll fields" function (0x004D5A50) <- called only from
+            // deep inside a per-target validation loop this investigation never traced to real
+            // confidence. Rather than hand-populate those descriptor fields (a much larger and
+            // more fragile undertaking), call the engine's own already-fully-documented single
+            // entry point for exactly this job (`docs/research/combat-participation.md` §1,
+            // VERIFIED independently of this investigation): with bMayAcquireNewTarget=1 it
+            // runs the ACQUISITION path (§1.3), not the bare revalidation line — the
+            // revalidation line only fires when round+0x9B0 is empty, which the queued state
+            // above has already made false, so a bare AddAttackAction call here was always
+            // hitting a path this function's own body would skip entirely. Acquisition does
+            // real GetNearestEnemy searches (biased toward our target by passing its id as the
+            // search origin — the search resolves to the origin itself when nothing else
+            // closer is also hostile) and, on success, calls
+            // UpdateAttackTargetForAllAction(round, newId) (0x004D3E50) — a call this file has
+            // NEVER made before this round, and the strongest remaining candidate for whatever
+            // actually arms the round's real per-tick state.
+            CreateNewAttackActionsFn(creature, 1, 0, targetId);
+
+            // TEMPORARY DIAGNOSTIC (round 17) — unconditional, not throttled: this whole branch
+            // is a one-shot gate that fires on a single frame, far narrower than the 3s
+            // throttle window an external live-verify pass can poll against. Read the sub+0xB0
+            // array-list state (count at sub+0xAC+4) and head action IMMEDIATELY after the
+            // call returns, so the one moment that matters is never missed. Remove once this
+            // is settled.
+            byte subIndexNow = *(byte*)(round + 0x96C);
+            int subB0Now = *(int*)(round + 4 + subIndexNow * 0x14C + 0xB0);
+            int headRightAfterCreate = GetHeadActionType(creature);
+            PluginHost.Log(
+                $"queueattack UNCONDITIONAL diag: CreateNewAttackActionsFn(creature=0x{creature:X}, "
+                + $"target=0x{targetId:X}) returned. round+0x96C sub-index={subIndexNow} "
+                + $"sub+0xB0={subB0Now}, head action right after=0x{headRightAfterCreate:X}, "
+                + $"is fight action: {IsFightAction(headRightAfterCreate)}");
         }
 
         int roundTimerAfter = *(int*)(round + 0x958);

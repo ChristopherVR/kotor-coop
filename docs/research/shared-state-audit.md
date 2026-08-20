@@ -1055,6 +1055,69 @@ set on a delayed follow-up condition, e.g. once `round+0x960`'s delay actually e
 `creature+0xCC`, which `SetRoundDelayFn`'s own doc comment already flags as the OTHER live gate
 `UpdateCombatRoundTimer` checks alongside this one).
 
+### Round 17 — `sub+0xB0` decoded: it is an array-list count, and the real Add call still does not arm it
+
+Full instruction-level tracing (not guessing) of every function that touches `+0xB0` in the
+combat-round code region:
+
+- **Refuted the round-16 "arg4 arms it" hypothesis outright.** `0x4D2A10` (arg4's consumer)
+  only ever writes `+0x990` (a counter, unrelated). `0x4D2A70` writes `+0x994` (a boolean).
+  `0x4F34A0` (the third setup call) writes `+0x944` and calls `0x4CD170` (target-lock
+  bookkeeping). None of `StartCombatRound`'s three follow-up setup calls, disassembled in full,
+  ever touch `+0xB0`.
+- **`+0xB0` is the COUNT field of a `push_back`-style array-list whose data pointer lives at
+  `+0xAC`** (0xD0-byte elements). `0x004D2EE0` is its `RemoveAt` (decrements `+0xB0`, shifts
+  elements down) — called from `0x004D32D0`, itself called at the tail of
+  `UpdateCombatRoundTimer`'s per-tick processing loop, confirming `UpdateCombatRoundTimer`
+  actually LOOPS "while `sub+0xB0` > 0", consuming one element per real attack processed. This
+  is a genuinely separate mechanism from `round+0x9B0` (the list `AddAttackAction` appends
+  to) — the two have never been the same list.
+- **The real `Add`: `0x004D57A0`** (`this = sub+0xAC`, one 0xD0-byte element pushed on the
+  stack, `ret 0xD0`) — confirmed by full disassembly, writes `[this+4]` = count+1. Its only two
+  callers both live inside `0x004D5A50`, a function that assembles the full 0xD0-byte element
+  from fields ALREADY PRESENT on the sub-structure itself (`+0x1c`, `+0x3a`, `+0x5c`, `+0x64`,
+  `+0xc0`, `+0xe0`/`+0xf4` — weapon/roll data, `+0xfe`, `+0x128`) before calling `Add` — i.e.
+  this is a "commit a fully-computed attack" step, not something that could be satisfied by a
+  bare struct poke; those fields would need populating first, and where they come from was
+  never traced (its own single caller sits deep inside an unrelated, ~7-argument per-target
+  validation loop near `0x5BB890`/`0x5BB590`, never traced to real confidence, and this thread
+  was abandoned as too large and too risky to guess-call).
+- **The actual fix implemented instead: `CSWSCreature::CreateNewAttackActions`
+  (`0x005B6980`)** — the engine's own single, already-fully-decoded-and-VERIFIED entry point
+  for this exact job (`docs/research/combat-participation.md` §1, written independently of
+  this investigation). `QueueAttackAction` now calls it with `bMayAcquireNewTarget=1` instead
+  of a bare `AddAttackAction`: the bare-revalidation line inside `CreateNewAttackActions` only
+  ever fires when `round+0x9B0` is EMPTY (per §1.2), which our own prior `AddAttackAction` call
+  had already made false — so every earlier round's direct `AddAttackAction` call was hitting a
+  path this function's own body would always skip. The ACQUISITION path (§1.3, only runs when
+  `bMayAcquireNewTarget != 0`) does real `GetNearestEnemy` searches and, on success, calls
+  `UpdateAttackTargetForAllAction(round, newId)` (`0x004D3E50`) — never previously called from
+  this file, and the strongest remaining candidate for arming the round's real state.
+
+**Live result: `CreateNewAttackActionsFn` executes cleanly — and still does not arm `sub+0xB0`.**
+The first live attempt showed `queued-this-pass=False` on every throttled (3s) sample, because
+the one-shot gate fires within a single engine frame — far narrower than any external poll can
+catch. Added an UNCONDITIONAL log immediately after the `CreateNewAttackActionsFn` call
+(no throttle) and reran the mid-fight-join scenario clean: **five independent mirrored
+creatures** each called `CreateNewAttackActionsFn(creature, 1, 0, 0x7FFFFFFF)`, all returned
+without crashing, and every single one showed `round+0x96C sub-index=0 sub+0xB0=0` and
+`head action right after=0xFFFFFFFF` **immediately after the call returned** — i.e. the function
+ran to completion and did not queue anything, on 5/5 creatures, not a fluke.
+
+**What this rules out and what it points at.** The function itself is proven safe (no crash
+across 5 live invocations) but its internal logic must be bailing before reaching the
+acquisition-success path. Per §1.3's own documented gate, `GetNearestEnemy`'s hostility test is
+`GetAIStateReputation(candidateCre, vsId) == 2` (exactly 2 = hostile; NOT the same
+`GetReputation ≤ 10` numeric test the separate revalidation table's test 6 uses) — this specific
+mapped value has never been directly checked for the pair (mirrored creature, local player id
+`0x7FFFFFFF`). If it returns anything other than 2 for this pair, `GetNearestEnemy` finds
+nothing and the whole acquisition path silently no-ops, which matches the observed symptom
+exactly. **Round 18 should read `GetAIStateReputation` live for this exact pair before touching
+any more code** — a read-only diagnostic, not another implementation guess. The `local_combat`
+default stays off; both live installs' `coop.ini` restored to `0`. Full suite 953/953, both
+builds clean. Diagnostic logging (throttled and unconditional) both left in the tree
+deliberately — this is still not settled.
+
 ## 3. A client's XP is actively erased
 
 `ProgressionSnapshotPacket` is host→client only and absolute (CoopAgent.cs, `PumpProgression`):
