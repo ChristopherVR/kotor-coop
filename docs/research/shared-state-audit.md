@@ -330,6 +330,73 @@ unknown" to "the queue-append call itself is a silent no-op, for a reason not ye
 identified, with resolution and the wipe-guard both cleared as suspects" — but it is not a
 working mechanism yet.
 
+### Instruction-level dissection of `AddAttackAction` (2026-08-20) — the silent-discard site found
+
+Full disassembly of `CSWSCombatRound::AddAttackAction` (`0x004D38B0`, `python tools/disasm.py
+0x004D38B0 0x500`) against a live report that the call executes without crashing but never
+changes the queue's head action type. Four distinct early-return paths were mapped, all
+returning to the shared epilogue at `0x004D399F` with nothing appended:
+
+| # | Address | Condition | Verdict for our case |
+|---|---|---|---|
+| 1 | `0x004D38CB` | `CServerExoApp::GetGameObject(targetId)` (`0x004AE750`) returns null | ruled out — this is literally the same function `Odyssey.cs`'s `GetGameObjectFn` already calls, and target resolution was independently confirmed live |
+| 2 | `0x004D38DA` | `target->vtbl[0x10]()` (AsSWSObject cast) returns null | not ruled out, see below |
+| 3 | `0x004D38F3` | `[that]->vtbl[0x94]()` (`GetDead`) returns non-zero | ruled out on paper — `death-handling.md` documents party members' `GetDead` as permanently false, and our target is the local player |
+| 4 | `0x004D3913` | target is a door (`vtbl[0x18]` succeeds) AND its `+0x2CC` destroyed flag is set | ruled out — target is a creature, not a door |
+
+**But none of those is actually the mechanism that matches the symptom.** Every branch that
+DOES reach the allocation path (`0x004D3919` onward, all five call shapes further down the
+function for the different `AddAttackAction` overload variants at `0x004D3B30`/`0x004D3BA0`/
+`0x004D3C30`/`0x004D3CE0`) funnels through **one shared helper, `0x004D3660`**, to actually
+link the freshly-allocated `0x88`-byte action node into the round's live queue. That helper's
+first two instructions are the whole answer:
+
+```
+0x004D3664  mov eax, dword ptr [esi + 0x9b0]   ; esi = the round struct (creature+0x9C8)
+0x004D366A  test eax, eax
+0x004D366D  je 0x4d374b                         ; NULL -> free the new node, return, append NOTHING
+```
+
+`round+0x9B0` is already documented (`combat-participation.md` §1.2, line 98 and the field
+table) as `CExoLinkedList<CSWSCombatRoundAction>*` — the round's own pending-action list —
+and as **set by `StartCombatRound` (`0x004D60A8`)**. If that pointer is null, `AddAttackAction`
+allocates a brand-new action node, discovers there is nowhere to put it, frees it via
+`0x006FA390`, and returns — silently, with no error, exactly matching the live observation
+(call succeeds, head-action-type unchanged, no crash).
+
+**Cross-checked against the "proper" NWScript entry point.** `CSWSCreature::AddAttackActions`
+(`0x004FDE40`, plural — what `ExecuteCommandAttack` calls for `ActionAttack()`) was also
+disassembled. It calls `ClearAllActions(1)` (`0x004CCD80`), then two more round-struct helpers
+(`0x004D3770` — frees the existing action list's contents IF `+0x9B0` is already non-null, a
+no-op otherwise; `0x004D37E0` — reinitializes five embedded `0x14C`-byte sub-structures at
+`round+4`, unrelated to `+0x9B0`) — **then calls the exact same `AddAttackAction`
+(`0x004D38B0`) our fix already calls**, with the same five-argument shape
+`(targetId, 0, 0, 0x5DC, 1)`. Neither of those two helpers allocates `+0x9B0` if it is null.
+
+**What this means, precisely:** either `+0x9B0` is allocated once at the round struct's own
+construction time and stays allocated for the object's whole lifetime (in which case a
+genuinely retail-spawned creature — which is exactly what our mirrored `sithsoldier` bodies
+are, per the client-encounters/enemy-presence docs: both installs spawn them naturally from
+the module's own creature list, not from a client-side blueprint) should already have a
+non-null container, and this bail is NOT what's firing — or something about being driven as a
+mirrored puppet (a prior `ClearAllActions` call, or some other engine path) nulls it out. The
+round struct's own constructor was NOT dissected this round; that is the one remaining gap.
+
+**The one decisive next step, and it is cheap — a live read, not more disassembly:** on a live
+mirrored enemy, read `*(void**)(creature + 0x9C8 + 0x9B0)` (e.g. via a throttled diagnostic
+log line, the same mechanism the prior round's `QueueAttackAction` diagnostic already used) at
+the moment `QueueAttackAction` is about to call `AddAttackAction`. Null confirms this exact
+mechanism and makes `StartCombatRound` (`0x004D5F70`, thiscall on `creature+0x9C8`, five stack
+args — call sites found at `0x005BC537`/`0x005BC56D`/`0x005BC59E`, argument semantics not yet
+fully pinned down beyond "one of them is the candidate/target id") the next thing to call
+first. Non-null means this whole branch is a dead end and the real cause is upstream of
+`AddAttackAction` entirely (something before it ever gets called, or a precondition on the
+*attacker* rather than the target).
+
+No source code changed this round — the risk of guessing `StartCombatRound`'s five-argument
+thiscall wrong (stack corruption on a live game process) was judged higher than the value of a
+guess, when one cheap live read settles which of the two remaining branches is real.
+
 ## 3. A client's XP is actively erased
 
 `ProgressionSnapshotPacket` is host→client only and absolute (CoopAgent.cs, `PumpProgression`):
