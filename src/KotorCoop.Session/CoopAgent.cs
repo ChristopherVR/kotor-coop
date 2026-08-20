@@ -352,6 +352,7 @@ public sealed class CoopAgent(IGameBridge bridge, ICoopSession session, AgentSet
             _lastCombatPumpMs = combatNowMs;
             PumpEnemies(local, visible, caps);
             PumpPhantomDamage(caps);
+            PumpMaterialisedLoot();
             PumpParty(caps);
             PumpPartyRoster(caps);
 
@@ -577,6 +578,66 @@ public sealed class CoopAgent(IGameBridge bridge, ICoopSession session, AgentSet
     /// This is what makes enemies dangerous to everyone rather than only to whoever owns
     /// them. Running totals, so a dropped datagram costs a tick rather than a hit.
     /// </summary>
+    /// <summary>
+    /// One item still owed to one materialised stand-in, queued for the automatic give-loot
+    /// path to submit through the same arbitrated cheat channel a human's <c>giveloot</c>
+    /// console command uses — see <see cref="TryDequeuePendingLoot"/>.
+    /// </summary>
+    public readonly record struct PendingMaterialisedLootGive(uint OwnerEnemyId, MaterialisedLootItem Item);
+
+    /// <summary>
+    /// A materialised enemy's real corpse can carry several items, and an ambush can kill
+    /// several enemies in one wave — bounded generously past any single real encounter, so a
+    /// burst is queued rather than dropped, but a queue that never stops growing (a stuck
+    /// drain, a malformed peer) must not grow unbounded.
+    /// </summary>
+    private const int MaxPendingLoot = 256;
+
+    private readonly Queue<PendingMaterialisedLootGive> _pendingLoot = new();
+
+    /// <summary>
+    /// Takes the materialised-loot packets a connected host has published since the last
+    /// pump and queues one give-request per item. This is deliberately the ONLY writer of
+    /// <see cref="_pendingLoot"/> — actually applying an item to the game engine needs the
+    /// same single-slot cheat channel a human typing <c>giveloot</c> at the console uses
+    /// (docs/research/enemy-materialisation.md §6 item 3), and that channel has exactly one
+    /// request in flight at a time. Rather than build a second, parallel engine-write path
+    /// that could race the first, this queue is drained from OUTSIDE the session/agent pump
+    /// entirely — by whatever already arbitrates that single channel (the console command
+    /// dispatcher's own pending-cheat-serial check) — one request per its own tick, so an
+    /// automatic give can never collide with, or be silently overwritten by, a human's.
+    /// </summary>
+    private void PumpMaterialisedLoot()
+    {
+        foreach (MaterialisedLootPacket packet in session.DrainMaterialisedLoot())
+        {
+            foreach (MaterialisedLootItem item in packet.Items)
+            {
+                if (_pendingLoot.Count >= MaxPendingLoot)
+                {
+                    Log?.Invoke(
+                        $"dropping materialised loot '{item.Resref}' for owner 0x{packet.OwnerEnemyId:X}: "
+                        + $"already holding {MaxPendingLoot} queued gives, the drain has fallen behind");
+                    return;
+                }
+
+                _pendingLoot.Enqueue(new PendingMaterialisedLootGive(packet.OwnerEnemyId, item));
+            }
+        }
+    }
+
+    /// <summary>
+    /// Called by whatever already arbitrates the single-slot staging-cheat channel (the
+    /// command dispatcher's pending-cheat-serial check), at most once per ITS tick, so an
+    /// automatic give-loot request is submitted through the exact same call path a human's
+    /// typed <c>giveloot</c> takes and can never be filed alongside one in flight. Returns
+    /// false with nothing queued to give.
+    /// </summary>
+    public bool TryDequeuePendingLoot(out PendingMaterialisedLootGive next)
+    {
+        return _pendingLoot.TryDequeue(out next);
+    }
+
     private void PumpPhantomDamage(SessionCapabilities caps)
     {
         if ((caps & SessionCapabilities.Enemies) == 0)

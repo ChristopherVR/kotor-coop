@@ -137,6 +137,7 @@ public sealed class CoopCommandDispatcher(
                     AnnounceCompatibilityChanges();
                     DrainChat();
                     ReflectCheatAnswer();
+                    DrainAutomaticLoot();
                 }
                 catch (Exception ex) when (ex is not OperationCanceledException)
                 {
@@ -745,6 +746,49 @@ public sealed class CoopCommandDispatcher(
             Target: ownerId,
             Text: resref,
             Amount: stack));
+    }
+
+    /// <summary>
+    /// The automatic half of <see cref="GiveLoot"/>: drains one queued give per tick from
+    /// the connected <see cref="CoopAgent"/> (materialised loot received over the wire,
+    /// docs/research/enemy-materialisation.md §6) through the EXACT same
+    /// <see cref="SendCheat"/> call a typed <c>giveloot</c> console command uses — but,
+    /// unlike the console verb's stack-only argument, carries the FULL identity
+    /// (<see cref="CheatKinds.GiveLoot"/>'s handler already accepts it, the same four
+    /// fields <c>setitem</c> writes) since this is exactly the path that identity was
+    /// built for.
+    ///
+    /// Deliberately gated on <see cref="_pendingCheatSerial"/> already being idle: this is
+    /// the same single-slot channel a human can be mid-command on, and <see cref="SendCheat"/>
+    /// itself says so — "only one request is in flight". Firing here anyway would silently
+    /// abandon whichever answer — the player's or this one's — was already in flight, and an
+    /// item that never actually reaches a corpse would look identical to one that did.
+    /// Skipping this tick when busy is correct: the queue holds the request until the
+    /// channel is free again, which given its own well-under-a-tick turnaround is at most a
+    /// few ticks later.
+    /// </summary>
+    private void DrainAutomaticLoot()
+    {
+        if (_pendingCheatSerial != 0)
+        {
+            return;
+        }
+
+        if (manager.Agent is not { } agent || !agent.TryDequeuePendingLoot(out CoopAgent.PendingMaterialisedLootGive give))
+        {
+            return;
+        }
+
+        ItemIdentity identity = give.Item.Identity;
+        SendCheat(new CheatRequest(
+            CheatKinds.GiveLoot,
+            Target: give.OwnerEnemyId,
+            Text: give.Item.Resref,
+            Amount: identity.StackSize,
+            Charges: identity.Charges,
+            MaxCharges: identity.MaxCharges,
+            Upgrades: identity.Upgrades,
+            ItemFlags: identity.Flags));
     }
 
     /// <summary>
