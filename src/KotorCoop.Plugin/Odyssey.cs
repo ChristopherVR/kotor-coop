@@ -7135,6 +7135,74 @@ internal static unsafe class Odyssey
         PluginHost.Log($"firescript watch: armed on 0x{creatureId:X} for 6000 frames");
     }
 
+    // ROUND 34: +0x260's dispatcher (0x004DA846) was fully mapped — 9 of its 13 event codes
+    // funnel into the SAME +0x260 slot; the other two branches never call RunScript at all.
+    // There is no second script reachable through that one dispatcher. Found instead via a
+    // DIFFERENT call site, 0x004EB79D (inside the perception/heartbeat area, near
+    // UpdateVisibleList/DoPerceptionUpdateOnCreature): `lea eax, [esi+0x270]` then RunScript,
+    // gated on `[esi+0xa24] == 0x7F000000` (no current target — the same "not found" sentinel
+    // GetNearestEnemy's failure case uses) AND `[esi+0xa88] == 0`, then LATCHED via
+    // `[esi+0x34c] = 1` so it never re-fires. This is exactly OnNotice's real-world shape:
+    // "I don't have a target yet — evaluate once." +0x270 is a plausible, betterfitting
+    // candidate for the script that's actually supposed to decide to fight from cold, as
+    // opposed to +0x260 (confirmed to hold k_def_combend01, "OnCombatRoundEnd" by name,
+    // called by 9/13 unrelated event codes through the SAME generic dispatcher — its true
+    // semantic role was never nailed down beyond "a real script slot on a live creature").
+    private const int CreScriptSlot0x270 = 0x270;
+
+    /// <summary>Same indirect-string-handle read as <see cref="PeekCreatureScriptSlot0x260"/>,
+    /// at +0x270 instead.</summary>
+    public static string PeekCreatureScriptSlot0x270(nint creature)
+    {
+        if (creature == 0)
+        {
+            return string.Empty;
+        }
+
+        nint* p = (nint*)(creature + CreScriptSlot0x270);
+        nint dataPtr = p[0];
+        int length = (int)p[1];
+
+        if (dataPtr == 0 || length <= 0 || length > 64)
+        {
+            return $"(no readable string here: ptr=0x{dataPtr:X} length={length})";
+        }
+
+        byte* text = (byte*)dataPtr;
+        System.Text.StringBuilder sb = new();
+        for (int i = 0; i < length && text[i] != 0; i++)
+        {
+            char c = (char)text[i];
+            sb.Append(c is >= (char)0x20 and < (char)0x7F ? c : '.');
+        }
+
+        return sb.ToString();
+    }
+
+    /// <summary>Fires +0x270 through the same RunScript dispatch <see
+    /// cref="FireCreatureScriptSlot0x260"/> uses, and arms the same firescript watch. MAIN
+    /// THREAD ONLY.</summary>
+    public static void FireCreatureScriptSlot0x270(nint creature)
+    {
+        if (creature == 0)
+        {
+            return;
+        }
+
+        nint vm = Deref(VirtualMachinePtr);
+        if (vm == 0)
+        {
+            return;
+        }
+
+        uint creatureId = *(uint*)(creature + ObjectIdOffset);
+        RunScriptFn(vm, creature + CreScriptSlot0x270, creatureId, 1);
+
+        _fireScriptWatchCreature = creature;
+        _fireScriptWatchFramesLeft = 6000;
+        PluginHost.Log($"firescript watch (slot 0x270): armed on 0x{creatureId:X} for 6000 frames");
+    }
+
     private static nint _fireScriptWatchCreature;
     private static int _fireScriptWatchFramesLeft;
 

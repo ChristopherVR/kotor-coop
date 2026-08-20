@@ -417,16 +417,26 @@ public static class ConsoleCommand
                     ? new CoopCommand(CoopCommandKind.Invalid, Error: "resolve <id>  (e.g. resolve 0x35)")
                     : new CoopCommand(CoopCommandKind.ResolveObject, Address: rest[0]);
 
-            // firescript <id>          - peek only, does not fire
-            // firescript <id> fire     - actually fires the +0x260 event script
+            // firescript <id>              - peek slot +0x260, does not fire
+            // firescript <id> fire         - fires +0x260 (OnCombatRoundEnd, k_def_combend01)
+            // firescript <id> fire 270     - fires +0x270 instead (ROUND 34's OnNotice
+            //                                candidate - ties Amount to the slot offset
+            //                                directly rather than adding a new field)
             case "firescript":
-                return rest.Length == 0
-                    ? new CoopCommand(
-                        CoopCommandKind.Invalid, Error: "firescript <id> [fire]  (e.g. firescript 0x35)")
-                    : new CoopCommand(
-                        CoopCommandKind.FireScript,
-                        Address: rest[0],
-                        Amount: rest.Length > 1 && rest[1].Equals("fire", StringComparison.OrdinalIgnoreCase) ? 1 : 0);
+                if (rest.Length == 0)
+                {
+                    return new CoopCommand(
+                        CoopCommandKind.Invalid, Error: "firescript <id> [fire [270]]  (e.g. firescript 0x35)");
+                }
+
+                bool fire = rest.Length > 1 && rest[1].Equals("fire", StringComparison.OrdinalIgnoreCase);
+                int slotAmount = fire ? 1 : 0;
+                if (fire && rest.Length > 2 && rest[2] == "270")
+                {
+                    slotAmount = 0x270;
+                }
+
+                return new CoopCommand(CoopCommandKind.FireScript, Address: rest[0], Amount: slotAmount);
 
             // ---- staging cheats -------------------------------------------------
 

@@ -2257,6 +2257,66 @@ concluded.
 raised 2400→6000 frames — kept, since it's what let this round's clean multi-cycle capture happen
 at all. Full suite 953/953, both builds clean, rig torn down and confirmed clean (`Get-Process`).
 
+### Round 34 — round 27's win confirmed genuinely real; the `+0x270` guess was wrong, but what it
+### revealed matters more than the miss
+
+**Part 1: round 27's host-local result is real, not a false positive.** Reproduced the exact
+scenario (single host instance, `k_def_combend01` fired on a fresh, untouched `sithsoldier`
+targeting the host's own local player) with round 33's full diagnostic running. Result:
+**`sub+0xB0` went nonzero (`=1`) for the first time in the entire investigation**, `sub+0x5c`
+changed from 0 to 4, and the target's `vtbl+0x9C(0)` readout (very plausibly HP) fell from 12 to 4
+over the capture window — all independently consistent with a genuinely committing, progressing
+fight. This settles the open question cleanly: `k_def_combend01` DOES reach a real commit when
+fired host-local, and round 27's claim was not a confound. The wall is specific to the
+mirrored/client case, not to script choice in general.
+
+**Part 2: the `+0x270` candidate was wrong.** Found via `xrefs.py` on `RunScriptFn` — a call site
+at `0x004EB79D` (inside the perception/heartbeat code area) fires `creature+0x270`, gated on "no
+current target yet" and latched so it only fires once, which read as a strong OnNotice match by
+shape alone. Live peek on a real `sithsoldier`, though, read `k_pend_room3_02` — an area/room
+script by naming convention, not a combat-AI script. Firing it produced the identical spin-forever
+symptom on a mirrored creature (`sub+0xB0=0` throughout a full 6000-frame capture, `head
+action=0xFFFFFFFF` throughout) — but that result doesn't test the hypothesis it was meant to,
+since the fired script itself has nothing to do with deciding to fight. The `+0x260` dispatcher
+(`0x004DA846`, fully mapped this round via its remap table and jump table, read directly from the
+binary) turned out to fold 9 of its 13 event codes into that SAME `+0x260` slot; the other two
+branches never call `RunScript` at all. There is no genuinely separate "OnNotice" script reachable
+through that specific dispatcher — a different one, if it exists, is fired from somewhere else in
+the binary not yet found.
+
+**The one thing this miss still proved, and it's significant:** the round-timer's own 1500-tick
+cycle ran identically (delay counting down, `timer` flipping 0↔1 on schedule) whether the fired
+script was `k_def_combend01` (a real combat script) or `k_pend_room3_02` (an unrelated area
+script). **The round-timer machinery does not appear to depend on what the fired script actually
+does at all** — something in the dispatch call sequence itself (not the script's own NWScript
+body) is what starts/maintains that cycle. This reframes the open question again: it was never
+really about finding the "right" script to fire — round 27 already had the right one. It's about
+what's different, in the CALL SEQUENCE ITSELF or the STATE IT RUNS AGAINST, between a host-local
+creature (which commits) and a mirrored one (which spins forever, target identity and script
+choice both proven irrelevant across rounds 29-34).
+
+**Honest assessment.** 34 rounds have now individually ruled out: per-creature drive state (round
+29), the party-table gate (round 30), the acquisition chain in full — hostility, perception,
+range, the walk (rounds 18-25), target identity — phantom vs true local player (round 33), and
+script choice, so far as this round could test it (round 34). What remains genuinely unexplored:
+(a) whether `+0x270`'s ACTUAL semantic slot (a real OnNotice/OnHeartbeat script, still unfound) has
+been miscategorized to a completely different offset the `k_def_combend01` dispatcher doesn't
+reach and this round didn't find either; (b) anything in the ATTACKER's or the SESSION's state
+that differs specifically between "playing as the host, no client connected" and "hosting with a
+client connected" that has nothing to do with any individual creature at all — untested, because
+round 27's positive result was measured on the same rig, in the same connected session, as every
+mirrored failure, and nobody has yet tried the control of firing on a host-local creature WHILE a
+client is actively connected versus with no session at all. That specific control — same script,
+same creature type, same host, session connected vs not — is the most concrete next step this
+round can hand off. Absent that, this is a reasonable point to call the practical edge of what
+disassembly-first, live-diagnostic RE can resolve without a fundamentally different technique
+(full engine decompilation of the round-advancement caller chain, or abandoning the
+replicate-the-engine approach for something that doesn't need to understand the internals at all).
+
+`local_combat` untouched, stays off. Both `coop.ini` unchanged (Strategy 2 doesn't use it). Full
+suite 953/953, both builds clean, rig torn down and confirmed clean (`Get-Process`). New console
+verb: `firescript <id> fire 270` fires the `+0x270` slot instead of the default `+0x260`.
+
 ## 3. A client's XP is actively erased
 
 `ProgressionSnapshotPacket` is host→client only and absolute (CoopAgent.cs, `PumpProgression`):

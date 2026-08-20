@@ -416,18 +416,32 @@ internal sealed unsafe class CheatController(SharedBlockView block)
             return;
         }
 
-        string slot = Odyssey.PeekCreatureScriptSlot0x260(creature);
+        // ROUND 34: CheatAmount now doubles as a slot selector - 0x270 fires the OnNotice
+        // candidate found this round, anything else nonzero still means "fire +0x260".
+        bool useSlot270 = block.CheatAmount == 0x270;
+        int slotOffset = useSlot270 ? 0x270 : 0x260;
+        string slot = useSlot270
+            ? Odyssey.PeekCreatureScriptSlot0x270(creature)
+            : Odyssey.PeekCreatureScriptSlot0x260(creature);
 
         if (block.CheatAmount == 0)
         {
-            PluginHost.Log($"firescript: 0x{objectId:X} +0x260 = '{slot}' (peek only, not fired)");
-            Answer(SharedBlock.CheatStatusApplied, $"0x{objectId:X} +0x260 = '{slot}'");
+            PluginHost.Log($"firescript: 0x{objectId:X} +0x{slotOffset:X} = '{slot}' (peek only, not fired)");
+            Answer(SharedBlock.CheatStatusApplied, $"0x{objectId:X} +0x{slotOffset:X} = '{slot}'");
             return;
         }
 
-        Odyssey.FireCreatureScriptSlot0x260(creature);
-        PluginHost.Log($"firescript: fired 0x{objectId:X} +0x260 = '{slot}'");
-        Answer(SharedBlock.CheatStatusApplied, $"fired 0x{objectId:X} +0x260 = '{slot}'");
+        if (useSlot270)
+        {
+            Odyssey.FireCreatureScriptSlot0x270(creature);
+        }
+        else
+        {
+            Odyssey.FireCreatureScriptSlot0x260(creature);
+        }
+
+        PluginHost.Log($"firescript: fired 0x{objectId:X} +0x{slotOffset:X} = '{slot}'");
+        Answer(SharedBlock.CheatStatusApplied, $"fired 0x{objectId:X} +0x{slotOffset:X} = '{slot}'");
     }
 
     /// <summary>
