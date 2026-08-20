@@ -1,3 +1,4 @@
+using System.Linq;
 using System.Net;
 using KotorCoop.Session;
 using Xunit;
@@ -169,6 +170,47 @@ public class ServerDiscoveryTests
         IReadOnlyList<ServerInfo> servers = list.Snapshot(6000);
         Assert.Single(servers);
         Assert.Equal(3, servers[0].PlayerCount);
+    }
+
+    /// <summary>
+    /// Snapshot() orders newest-seen first, and two independently-beaconing hosts have no
+    /// coordinated timing, so their relative row order can flip on every single call with no
+    /// player action involved — a re-beacon 1ms apart is enough. A consumer that remembers "the
+    /// player picked row 0" instead of "the player picked server X" will silently point at a
+    /// different server the moment that happens (the native browser panel's session-swap bug).
+    /// <see cref="ServerInfo.Address"/> is the stable identity that survives the reorder; this
+    /// pins that contract so a future change to Snapshot's ordering can't quietly break it.
+    /// </summary>
+    [Fact]
+    public void RowOrderFlipsOnBeaconTimingButEachServersAddressStaysStable()
+    {
+        ServerList list = new();
+        IPEndPoint serverA = new(IPAddress.Parse("10.0.0.1"), 27140);
+        IPEndPoint serverB = new(IPAddress.Parse("10.0.0.2"), 27140);
+
+        list.Observe(serverA, new ServerBeacon(1, 27140, 1, 8, "Alpha"), 1000);
+        list.Observe(serverB, new ServerBeacon(1, 27140, 1, 8, "Bravo"), 1001);
+
+        IReadOnlyList<ServerInfo> before = list.Snapshot(2000);
+        Assert.Equal(2, before.Count);
+        Assert.Equal("Bravo", before[0].Name);  // newest-seen first: B (1001) ahead of A (1000)
+        Assert.Equal("Alpha", before[1].Name);
+
+        // A re-beacon from A, with no player action at all, is enough to flip the row order.
+        list.Observe(serverA, new ServerBeacon(1, 27140, 1, 8, "Alpha"), 2500);
+
+        IReadOnlyList<ServerInfo> after = list.Snapshot(3000);
+        Assert.Equal(2, after.Count);
+        Assert.Equal("Alpha", after[0].Name);   // order DID flip
+        Assert.Equal("Bravo", after[1].Name);
+
+        // What must NOT change: each server's own address, which a consumer resolves by rather
+        // than by row index.
+        Assert.Equal("10.0.0.1:27140", after.Single(s => s.Name == "Alpha").Address);
+        Assert.Equal("10.0.0.2:27140", after.Single(s => s.Name == "Bravo").Address);
+        Assert.Equal(
+            before.Single(s => s.Name == "Alpha").Address,
+            after.Single(s => s.Name == "Alpha").Address);
     }
 
     [Fact]

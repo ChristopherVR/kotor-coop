@@ -92,6 +92,15 @@ internal sealed unsafe class NativeBrowserController
     private static readonly delegate* unmanaged[Thiscall]<nint, void> ExoStringDtor =
         (delegate* unmanaged[Thiscall]<nint, void>)0x005E5C20;
 
+    // CSWGuiButton::SetEnabled(bool) — vtbl+0x88, 0x00418DB0. Retail's ShowGame calls this on
+    // the delete button when a real save row is selected (docs/research/native-browser-panel.md
+    // §4); co-op rows never trigger ShowGame (event 0x00 is deliberately left unbound), so the
+    // Host button (the repurposed delete control) may never receive it. The doc describes this
+    // call only as "a text-color toggle" and never independently verifies that, so this is a
+    // best-effort fix for a reported "Host does nothing" bug, not a confirmed root cause.
+    private static readonly delegate* unmanaged[Thiscall]<nint, int, void> SetEnabled =
+        (delegate* unmanaged[Thiscall]<nint, int, void>)0x00418DB0;
+
     // ---- object layout -----------------------------------------------------------
 
     private const nint AppManagerPtr = 0x007A39FC;
@@ -147,6 +156,15 @@ internal sealed unsafe class NativeBrowserController
     private bool _connectPending;
     private bool _hostPending;
     private int _pendingSelection;
+
+    /// <summary>The <see cref="SharedBlock.BrowserEntryAddress"/> of whichever row was last
+    /// confirmed highlighted while the shown rows still matched the published list — i.e. before
+    /// any pending reorder. A row REBUILD restores the highlight to wherever this address now
+    /// sits (or drops it) instead of blindly reapplying the old numeric slot, which is what let
+    /// a beacon-timing reorder silently swap the details pane / connect target underneath a
+    /// player's click. See <see cref="PopulateRows"/>.</summary>
+    private string? _selectedAddress;
+
     private uint _shownListSerial;
     private int _serverRows;
     private bool _f9WasDown;
@@ -349,11 +367,19 @@ internal sealed unsafe class NativeBrowserController
 
         _f9WasDown = f9;
 
-        // Mirror the live highlight for the agent/diagnostics.
+        // Mirror the live highlight for the agent/diagnostics. Captured BEFORE the serial check
+        // below, while the shown rows still match what BrowserEntry currently holds — once a new
+        // serial has landed, the entry at this same index may already be a different server.
         short selected = *(short*)(_panel + PanelSelection);
         if (selected >= 0)
         {
             _block.BrowserSelection = (ushort)selected;
+            if (selected < _serverRows)
+            {
+                _selectedAddress = ReadAscii(
+                    _block.BrowserEntry(selected) + SharedBlock.BrowserEntryAddress,
+                    SharedBlock.BrowserEntryAddressLength);
+            }
         }
 
         // LAN discovery found something new while the player is looking: rebuild the rows.
@@ -361,7 +387,7 @@ internal sealed unsafe class NativeBrowserController
         if (_block.BrowserListSerial != _shownListSerial)
         {
             _shownListSerial = _block.BrowserListSerial;
-            PopulateRows(_panel, restoreSelection: selected);
+            PopulateRows(_panel, restoreAddress: _selectedAddress);
         }
     }
 
@@ -433,6 +459,7 @@ internal sealed unsafe class NativeBrowserController
             0x1,
             (nint)(delegate* unmanaged[Thiscall]<nint, nint, void>)&OnHostClicked);
         *(uint*)(panel + PanelHostFlags) |= 2u;
+        SetEnabled(panel + PanelHostButton, 1);
 
         Odyssey.BindControlClick(
             panel + PanelConnectButton,
@@ -440,7 +467,8 @@ internal sealed unsafe class NativeBrowserController
             (nint)(delegate* unmanaged[Thiscall]<nint, nint, void>)&OnConnectClicked);
 
         _shownListSerial = _block.BrowserListSerial;
-        PopulateRows(panel, restoreSelection: -1);
+        _selectedAddress = null;
+        PopulateRows(panel, restoreAddress: null);
 
         // Show, then mark the menu for the sweep — retail order. From here until the close
         // path rebuilds it, the main menu pointer is poison. Re-read the state bits: the
@@ -460,8 +488,17 @@ internal sealed unsafe class NativeBrowserController
     /// Builds one engine-cloned row per published server and hands them to the listbox, which
     /// frees whatever rows it held (stock save rows on open, our own on refresh). With no
     /// servers yet, a single unconnectable placeholder row keeps the panel honest.
+    ///
+    /// <paramref name="restoreAddress"/> is the <see cref="SharedBlock.BrowserEntryAddress"/> of
+    /// the server that was highlighted before this rebuild (or null on first open / nothing
+    /// selected). Every publish reorders <c>_block</c>'s rows by last-seen time
+    /// (<c>ServerList.Snapshot</c>), which happens on pure beacon-timing jitter with no player
+    /// action at all — so re-applying the OLD numeric row index here silently re-highlights
+    /// whatever server now happens to occupy that slot, which is the "clicking one session shows
+    /// another one's details" bug. Resolving by address instead keeps the highlight pinned to
+    /// the SAME server across a reorder.
     /// </summary>
-    private void PopulateRows(nint panel, int restoreSelection)
+    private void PopulateRows(nint panel, string? restoreAddress)
     {
         nint proto = *(nint*)(panel + PanelProtoRow);
         if (!LooksLikeHeapPointer(proto))
@@ -512,16 +549,41 @@ internal sealed unsafe class NativeBrowserController
         triple[2] = built;
         AddControls(panel + PanelListBox, (nint)triple, 1, 0, 0);
 
-        // Keep the previous highlight across a refresh; otherwise start on the first row, so
-        // Enter connects to the top server without a click (the row-select event this fires
-        // is unbound on our rows — verified safe).
-        int select = restoreSelection >= 0 ? restoreSelection : 0;
+        // Keep the previous highlight on the SAME SERVER across a refresh, by address, not by
+        // slot; otherwise start on the first row, so Enter connects to the top server without a
+        // click (the row-select event this fires is unbound on our rows — verified safe). A
+        // server that dropped off the list (restoreAddress no longer present) falls back to the
+        // first row exactly like "nothing was selected before."
+        int select = 0;
+        if (restoreAddress is not null)
+        {
+            for (int i = 0; i < count; i++)
+            {
+                string address = ReadAscii(
+                    _block.BrowserEntry(i) + SharedBlock.BrowserEntryAddress,
+                    SharedBlock.BrowserEntryAddressLength);
+                if (address == restoreAddress)
+                {
+                    select = i;
+                    break;
+                }
+            }
+        }
+
         if (built > 0 && select < built)
         {
             SetSelectedControl(panel + PanelListBox, select, 1);
         }
 
         ShowDetails(panel, built > 0 ? select : -1);
+
+        // Re-anchor to whatever is now actually highlighted, so the NEXT refresh compares
+        // against the right identity even if this one changed or lost the selection.
+        _selectedAddress = count > 0 && select < count
+            ? ReadAscii(
+                _block.BrowserEntry(select) + SharedBlock.BrowserEntryAddress,
+                SharedBlock.BrowserEntryAddressLength)
+            : null;
     }
 
     /// <summary>
@@ -779,8 +841,16 @@ internal sealed unsafe class NativeBrowserController
     {
         try
         {
+            // Unconditional and first, before any guard can return early: this is what lets a
+            // live pass tell "the click never reached the handler" from "it reached the handler
+            // and something after this silently failed" — see the Host-button lead in
+            // docs/research/native-browser-panel.md.
+            PluginHost.Log("native browser: Host button clicked");
+
             if (_instance is not { _panel: not 0, _closing: false } self)
             {
+                PluginHost.Log(
+                    "native browser: Host click ignored - no live instance/panel, or already closing");
                 return;
             }
 
