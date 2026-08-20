@@ -66,7 +66,11 @@ combat_state_sync=0
 # Let this instance's mirrored enemies fight for themselves, so its own combat state
 # rises during a peer's fight. Moves damage authority too: with this on, the owner's
 # forwarded phantom damage is absorbed instead of applied, or every hit lands twice.
-local_combat=1
+# The structural defects that kept this off (target divergence, companion health,
+# blanket absorb) are fixed as of 2026-08-14, but the feature has never been proven
+# live against a real AI-started fight - see docs/research/shared-state-audit.md #2.
+# Leave this at 0 until that live pass has actually run.
+local_combat=0
 
 # Activate the render window at launch. Without this an instance draws nothing until it
 # is clicked into - with two windows that means clicking both, every launch.

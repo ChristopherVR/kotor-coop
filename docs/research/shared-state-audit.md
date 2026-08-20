@@ -124,43 +124,66 @@ FIXED:
 3. **Silent failure.** The absorb logged five times and then went quiet forever — total
    invulnerability with nothing in the log. Now a running total on a 10-second heartbeat.
 
-STILL OPEN — do not default this on:
+FIXED SINCE (2026-08-13/14) — code-complete, still never live-verified:
 
-4. **Target divergence breaks the authority split.** The split assumes the local enemies
-   attack the local PC. Nothing enforces it: a peer's phantom is faction PLAYER while that
-   peer lives, and `GetNearestEnemy` ranks by hostility + LOS + distance, so the client's
-   copy of an enemy can lock onto the HOST's phantom while the host's copy hits the client's
-   phantom. Both sides then absorb and nobody loses a hit point. The lock is sticky —
-   `CreateNewAttackActions` releases only on dead / unresolvable / reputation flip, and a
-   phantom is min-1-hp and stays faction 0. Likely fix: hold peer phantoms at Neutral on a
-   mirroring instance so the only player-faction targets are the local PC and companions.
-5. **Blanket absorb, partial local reproduction.** Census cap and distance shedding, the
-   strict type test that skips creatures reading `0x40005`, phantom-id collisions, mines and
-   traps and scripted `EffectDamage`, and the conversation hold all produce forwarded damage
-   with no local analogue. Absorption should be attributable — the attacker id is already on
-   the channel.
-6. **Mirrored companions become an immortal aggro sink** and can be permanently downed: they
-   are faction PLAYER, not min-1-hp pinned, cannot fight back, and their health is only
-   force-written when the host's value is positive — so a burst between passes lays one down
-   with a full health bar, forever.
-7. **The position fight returns.** `DriveBody` passes the suppress-dirty-bit argument for a
-   measured reason; the local AI's own `SetPosition` does not, so the "flying" artifact can
-   come back. Worse, `MotionSmoother` never reads the engine's position, so a queued
-   `MoveToPoint` can never reduce its distance, never completes, and wedges the queue head —
-   the transient condition the wipe existed for, made permanent. A targeted wipe (move
-   actions only) is the likely answer rather than no wipe.
+4. **Target divergence breaks the authority split.** Fixed: `PhantomController.ApplyTargetable`
+   (`src/KotorCoop.Plugin/PhantomController.cs:680-740`) holds a peer's phantom at faction
+   Neutral on a MIRRORING instance (`holdNeutral = LocalCombat && block.DamageDealtEnabled`,
+   never on the owning instance), so the only player-faction targets `GetNearestEnemy` can
+   pick are the local PC and mirrored companions. `PacifyPhantom` also releases any attacker
+   already locked on when the flag flips.
+6. **Mirrored companions become an immortal aggro sink.** Fixed:
+   `PartyPresenceController` (`src/KotorCoop.Plugin/PartyPresenceController.cs:149-316`) holds
+   a mirrored companion Neutral and min-1-hp pinned under `local_combat` (same mechanism as
+   phantoms), and — the sharper fix — health is now force-written unconditionally, including
+   to zero (`Odyssey.GetCurrentHitPoints(creature) != member.Health`, no longer gated on
+   `member.Health > 0`), so a burst between sync passes can no longer leave a companion downed
+   under a full health bar forever.
+7. **The position fight returns.** Fixed: `Odyssey.ClaimCreatureForFight`
+   (`src/KotorCoop.Plugin/Odyssey.cs:511-512`) reads the queue's head action type and clears
+   only when it is move-class, leaving a queued attack alone. `EnemyPresenceController`'s drive
+   pass (`src/KotorCoop.Plugin/EnemyPresenceController.cs:384-391`) calls this instead of the
+   blanket `ClaimCreature(..., clearActions: true)` when `LocalCombat` is on. The doc's own
+   "leave the queue alone" first attempt was tried and rejected in the code comment at the same
+   site — confirmed worse than the bug it replaced, for exactly the wedged-`MotionSmoother`
+   reason predicted here.
+5. **Blanket absorb, partial local reproduction.** Substantially mitigated, not merely
+   asserted: `IncomingDamageController` (`src/KotorCoop.Plugin/IncomingDamageController.cs:
+   109-229`) now only absorbs when `EnemyPresenceController.IsLocallyEngaged(attackerId)` is
+   true — a freshness-gated (`EngagedFreshTicks`) membership check against the set of enemies
+   this instance is actually driving right now — so mines, traps, scripted `EffectDamage`,
+   census-shed or out-of-range enemies, and the conversation hold all fall through to APPLY
+   rather than being silently absorbed, because none of them will ever appear in that set.
+   On top of attribution, a **self-correcting watchdog** samples the local player's own hit
+   points every pass: if `AbsorbProofThreshold` (40) worth of damage has been absorbed on the
+   claim that local copies are dealing it, and this player's health has not actually fallen
+   even once, the claim is treated as false and the channel reverts to applying forwarded
+   damage again — logged loudly (`WATCHDOG TRIPPED`), not silently. This directly answers the
+   invulnerability failure mode this section used to warn about: the fallback is now automatic
+   rather than something a human has to notice and disable. Not yet closed: whether the
+   3-frame attribution window (`LocalCombatIntervalFrames`) is short enough in every case to
+   avoid mixing an attributable attacker's delta with an unattributable one in the same pass —
+   this needs the live test below to actually stress it, not further reasoning.
 
-The honest test is not "did it feel like a fight" — it is a scripted comparison of hit points
-lost on the mirroring instance against the owner's forwarded total over the same battle.
+None of this has been proven against a real fight. The honest test is not "did it feel like a
+fight" — it is a scripted comparison of hit points lost on the mirroring instance against the
+owner's forwarded total over the same battle, started by the engine's own AI perceiving a
+player (not a teleported-in enemy, which raises no perception event and proves nothing — see
+the still-current warning above). `local_combat` stays off by default in
+`profiles/coop.ini.example` until that pass has actually run; it was found shipping as `=1` in
+the example (contradicting this section's own long-standing warning) and was reverted to `=0`
+on the same day this section was corrected.
 
-### The real fix
+### The real fix — implemented, unproven
 
 Give the client's engine a genuine reason to be in combat instead of asserting the
 conclusion: stop clearing the attack-permitted bit in `Odyssey.MarkAsMirroredEnemy` for
 enemies near the local player, so its own copies swing at it and its combat state rises for
-the same reason the host's does. That is an ownership change, not a poke, and it needs the
-damage reconciliation thought through first — a client whose mirrored enemies really attack
-must not also apply the owner's damage report for the same swing, or every hit lands twice.
+the same reason the host's does. That ownership change is built (`local_combat`) and the
+damage reconciliation it needed is built too — attribution plus the self-correcting watchdog
+above are exactly "a client whose mirrored enemies really attack must not also apply the
+owner's damage report for the same swing." What is still missing is proof: nobody has yet
+run the live pass this section has asked for since the day it was written.
 
 `AgentDashboard.DescribeSharedCombat` meanwhile combines the flags into a session-level view
 and says which engines are engaged and which are only mirroring, so the asymmetry reads as
