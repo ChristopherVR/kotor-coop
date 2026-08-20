@@ -46,6 +46,88 @@ MIRRORS — driven puppets, not creatures its own AI is fighting — so the clie
 genuinely never enters combat. Forcing `+0x4E0` on the client would be a lie the engine
 recomputes away, and combat state gates round timing and AI.
 
+### Summary of the whole investigation (2026-08-11 through round 27, 2026-08-21) — read this first
+
+Everything below this point, through "Round 27," is the full dated trail — kept in full because
+each entry is load-bearing evidence for the next, and because the false leads are as useful as
+the true ones to whoever picks this up. This summary is for orientation; it does not replace the
+trail, and nothing below has been pruned.
+
+**What `local_combat` is.** A client's forwarded-damage mirroring already works without it
+(enemy health/death and damage numbers all replicate correctly). What doesn't: the client's OWN
+engine never believes it is "in combat," because its enemies are driven puppets, not creatures
+its own AI is fighting. `local_combat` (`coop.ini`, default OFF) is the attempt to fix that
+properly — let a mirrored enemy genuinely fight the local player through the engine's own combat
+system, with `IncomingDamageController` standing down from absorbing forwarded damage once a
+local hit is confirmed landing, so nothing is double-counted.
+
+**Phase 1 (2026-08-11 to 2026-08-14) — the design's own structural defects, found and fixed.** An
+independent review found four defects that would have made a naively-enabled `local_combat`
+actively unsafe: target divergence (a mirrored enemy could lock onto the wrong player — fixed by
+holding peer phantoms Neutral on a mirroring instance), a full-queue action wipe that would have
+left materialised/ambush enemies permanently unable to swing (fixed with a move-only wipe), a
+companion aggro sink that could leave a party member permanently downed with a full health bar
+(fixed with unconditional health force-writes and min-1-hp pinning), and a blanket damage absorb
+with no per-attacker attribution (fixed, gated on `IsLocallyEngaged`, with a self-correcting
+watchdog that reverts to forwarding damage if local absorption isn't actually happening). All
+four are confirmed still present and correct as of round 11 (2026-08-20) — this part of the
+mechanism is safe.
+
+**Phase 2 (2026-08-20, one day, 27 rounds) — is the mechanism itself real, and it wasn't, until it
+nearly was.** The first live test (with all four safety fixes in place) found the mechanism does
+NOTHING: a mirrored enemy standing next to a genuinely-fighting host's remote player never enters
+combat, not once in 90+ seconds, even though it is correctly in the driven set. Twenty-seven
+rounds of disassembly-first reverse engineering (rounds 1-27, all dated `### Round N` below)
+progressively found and fixed FIVE real, independently-verified bugs in the attempted mechanism:
+
+1. **The round-timer was never initialized** (`round+0x958`, set via a real engine call,
+   `0x004D28F0`, confirmed against 3 real engine call sites).
+2. **A second, undocumented gate right next to it** (`round+0x960`, same call, second field) also
+   had to be set for the timer to actually run.
+3. **Two self-defeating "fires every frame instead of once" bugs**, each looking exactly like
+   the original problem until diagnosed (the round-delay setter accumulating into the far future;
+   the attack-append call spamming duplicate, unprocessed nodes) — both fixed by gating on a
+   one-shot "has this round already been armed" check.
+4. **`StartCombatRound`'s real 5-argument signature**, traced to full confidence across three
+   rounds and finally called for real — after which the round-timer genuinely STUCK for the first
+   time (previously it silently reverted to 0 within the same tick).
+5. **The `AttackTarget` test-staging tool itself was broken by this exact same missing
+   precondition** — round 11 proved the whole mechanism was sound in principle by fixing this
+   separate tool and producing the first real, independently-measured fight of the whole
+   investigation (host-local creature, player HP 12→8→1, verified via position tracking, not a
+   log line).
+
+**Every other candidate explanation was tested and individually refuted, with live evidence,
+across the remaining rounds:** target-resolution correctness, hostility (`GetAIStateReputation`,
+both directions, measured exactly `2` as required), perception/the "seen" bit, area membership,
+the `AsCreature` cast, the search-range value (measured live: `2.6` vs an actual distance of
+`0.688` — the player was never outside range), the outward-walk scan itself (fully disassembled,
+structurally sound, and — importantly — the "it's a live timing race against our own position
+writes" theory that several rounds were built on was itself refuted in round 24: this engine is
+single-threaded, so a scan in progress cannot be corrupted mid-walk by a position write; what
+looked like a race was just different-but-internally-consistent snapshots), and
+`UpdateAttackTargetForAllAction` (fully opened in round 26: a real dead end, redirects targets on
+actions already queued, never arms anything).
+
+**Where it stopped (round 27).** The actual write that arms a round to process a queued attack
+was finally located — but it lives inside the engine's own bounded loop over combat participants,
+with multiple conditional setup steps per iteration, called from exactly one site deep inside the
+engine's own stateful per-tick round-advancement machinery. It is not a small utility a plugin can
+call in isolation with a hand-traced signature, the way every other piece of this mechanism was.
+That is the wall: not a missing call, but a piece of engine logic that only exists to run as part
+of a combat round the engine itself is already advancing — which a driven puppet, by definition,
+never is.
+
+**Status.** `local_combat` stays off by default. Nothing about this investigation found or left
+anything unsafe — every fix from rounds 1-27 is real, tested, and stays in the tree; they were
+all genuine, verified improvements even though the final step turned out to be structurally out of
+reach this way. Two ways forward: (a) reverse-engineer the engine's own round-advancement loop and
+its full caller chain as its own project, at the scale this investigation was; or (b) stop trying
+to externally replicate the engine's native combat calls piece by piece, and instead find a way to
+make the engine's OWN AI script actually run for a driven puppet — the thing that starts a fight
+for every other creature in the game, host-local or not, and the only thing this investigation
+never tried.
+
 ### The state cannot be replicated by writing it — measured
 
 A full channel was built (`SharedBlock.OffsetSessionInCombat` at 0x1E50, block version 29,
