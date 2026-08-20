@@ -872,14 +872,30 @@ live, which this whole codebase's own established discipline (see every `Install
 directory: verify-bytes-or-refuse, nothing shipped without a live pass) argues strongly against.
 
 Reproducing this live needs two real, sequential in-game conversations against the SAME client
-instance — no console verb currently exists to trigger `StartDialog` synthetically, and mouse
-injection into this game is documented elsewhere (`docs/live-verification.md`) as needing a
-window minimise/restore cycle to be delivered at all, which was not attempted this pass given
-the residual risk of a wrong native patch outweighing a rushed live click sequence.
+instance. A prior pass here believed no console verb could trigger `StartDialog` synthetically —
+that was wrong: `TestDriveController.HandleTalk` (`src/KotorCoop.Plugin/TestDriveController.cs`)
+already exists for exactly this, driven through the shared block via
+`pwsh tools\blockpoke.ps1 -ProcId <pid> talk <tag>` (and `talk close` to end one), sending "the
+same player-to-server dialogue request a click produces" with no mouse injection needed at all.
 
-**Next step, concrete:** either (a) build a click-and-repro test using the minimise/restore
-trick to reproduce this crash on current HEAD first (confirming it still happens at all — it
-may already be moot, since dialogue state handling has visibly hardened since 2026-08-15), or
-(b) add a read-only diagnostic at `0x004BBE6E`'s call site (logging the resolved object type
-and the `ecx+0x32c[index]` pointer value, no behavior change) and correlate its firing with a
-real two-conversation session, before attempting any native guard.
+### RESOLVED (2026-08-21, live-confirmed): does not reproduce on current HEAD
+
+Reproduced live on `D:\Games\swkotor-gog-p2` (a single instance, no co-op session needed — both
+original crashes were purely client-local with the host idle): loaded save 1 into `END_M01AA`,
+then `talk end_trask` → `StartDialog (1 so far)` → `talk close` → `talk end_trask` →
+`StartDialog (2 so far)` — the exact fatal step in both 2026-08-15 crashes. The process survived,
+stayed `Responding: True`, and kept surviving through TWO more rapid-fire close/reopen cycles
+(one with only ~1s between close and the next open, tighter than either original crash's
+2.1s/21ms window), reaching `StartDialog (4 so far)` with no fault. `kotorcoop-plugin.log` shows
+zero `0xC0000005` access violations anywhere after the test began — the only matches in the whole
+file are the two original historical crash lines from 2026-08-15 and the pre-existing, harmless
+`0x406D1388` thread-naming marker (documented elsewhere as expected and inert).
+
+**This closes the open question: the crash does not reproduce on current HEAD.** The decoded fault
+mechanism above (a stale-but-non-null pointer at `ecx+0x32c[index]`, same class as
+`ShotCameraGuardHook`'s fix) is left in this document as-is — it's still the best available
+explanation for what the two 2026-08-15 crashes were, and worth keeping as a reference if a
+similar symptom ever resurfaces — but nothing needed shipping today, since extensive intervening
+dialogue-subsystem hardening this session (`DialogueSpectateController`'s per-conversation-end
+reset, among other changes) already closed whatever window let it happen. No source changed for
+this; a guess-patch against a non-reproducing crash would only have added unverified risk.
