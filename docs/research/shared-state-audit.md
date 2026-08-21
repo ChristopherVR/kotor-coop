@@ -46,10 +46,45 @@ MIRRORS — driven puppets, not creatures its own AI is fighting — so the clie
 genuinely never enters combat. Forcing `+0x4E0` on the client would be a lie the engine
 recomputes away, and combat state gates round timing and AI.
 
-### Status as of round 50 (2026-08-21) — read this before the round-27 summary below
+### Status as of round 51 (2026-08-21) — read this first; supersedes every status note below it
 
-The summary immediately below is frozen as it was written, after round 27; it does not reflect
-rounds 28-50 and its own "Status after round 27" paragraph is stale. The honest current picture:
+**The single biggest finding in 51 rounds: the ground-truth check was never being read.** Every
+round from 9 through 50 used `is fight action: True` (a specific head-action code sampled from
+the per-participant round struct) as its sole signal for "did a real fight happen." Round 51 ran
+three trials that independently, directly verified the PLAYER'S OWN HIT POINTS (`console 'where'`)
+instead, and in all three the player's HP genuinely fell from `12/12` to the documented `1/12`
+min-1-hp floor within ~30 seconds of firing a confirmed-hostile creature's own AI script
+(`n_sithsoldier004`, the same pair rounds 49-50 used) — while `is fight action: True` read `False`
+for every one of the `6000` sampled frames in every trial, including the successful ones. **The
+diagnostic this whole document has trusted does not detect success even when a real hit lands**,
+which means the "freeze" reported across rounds 9-50 was never proven by the evidence those rounds
+actually collected; it needs re-reading against HP, not this proxy, before it can be trusted again.
+
+**What round 51 settled.** Two of the three trials were run with literally no session or agent
+connection at all — no census, no `EnemyPresenceController`, nothing this plugin's combat code can
+touch — one on the CLIENT install, one on the HOST install, both cold-loaded from the same save.
+Both produced the real, independently-verified hit described above. **This refutes the client
+install/instance itself as an explanation for anything**: whatever the "freeze" is, it is not a
+property of being the client build or process, since the client build fights fine when nothing
+else is touching the creature. A third trial, with a live two-instance session up, ALSO showed the
+player take real damage — but that trial is confounded by a separate, already-documented, always-on
+mechanism (the host's own unmirrored copy of the creature fighting the client's phantom body
+directly, forwarding damage over the network) that started before the manual fire ran, and this
+area's min-1-hp scene pin means a single small forwarded hit is sufficient on its own to produce
+the exact `12→1` reading observed — so this trial cannot distinguish "the client's own local
+mechanism also worked" from "only the pre-existing forwarding channel did." **Whether
+`local_combat`'s own client-side mechanism works once a live session's automatic exclusion and the
+standing forwarding channel are both running on the same creature remains genuinely open** — no
+round, including this one, has yet measured player HP with that specific confound controlled out.
+
+Static disassembly this round also corrected round 27's own account of the per-participant arming
+call: `0x004D5A50` (round 27's "the arming write") is NOT gated by the `sub+0x5c` range check —
+both branches of that check converge on the identical call site and both arm unconditionally; the
+check only gates two extra setup calls (`0x5BB440`, `0x5B8B00`). `sub+0x5c=4` is not an anomaly:
+it is the hardcoded sentinel `StartCombatRound` (`0x005BB590`) itself writes at `0x005BB668` before
+any maneuver is selected, overwritten with a real `0`/`1`/`2`/`3` value only if a maneuver-selection
+dispatch later finds one. See round 51 at the end of this section for the full evidence table,
+the disassembly, and the precise next experiment.
 
 **Round 50 is the decisive control this document has been missing since round 9: a census-listed
 creature that literally NO plugin consumer touches — not `Resolve()`, not `MaterialisedEnemies.Seen`,
@@ -3991,6 +4026,171 @@ agent's own census-writing path can perform on the creature — the cause, whate
 entirely inside the engine's own per-creature combat-round state, is not affected by census
 membership status alone (round 37/38's own claim to the contrary does not reproduce today), and
 the most concrete lead on hand is the `sub+0x5c=4` anomaly named above.**
+
+### Round 51 (2026-08-21) — the ground-truth diagnostic never fired even when the mechanism
+### worked; the client install is refuted, the session-role question is still open
+
+Round 50 left one concrete lead (`sub+0x5c=4`) and one untested split: nobody had ever tested the
+client INSTANCE without a session, or the client INSTALL standalone. This round did both, plus the
+static disassembly the task asked for first.
+
+**Part 1: static — `sub+0x5c` disassembled at the source (20-minute budget).** `tools/fieldwrites.py`
+cannot scan offset `0x5C` (it fits a disp8, not the disp32 the tool requires), so this round wrote a
+one-off disp8/disp32 byte scanner (same technique, smaller displacement form) and disassembled every
+candidate with `tools/disasm.py`. Two real write sites found, both inside the SAME function:
+
+- **`0x005BB590`** — this is `StartCombatRound` itself (matches round 27's own description: a
+  5-argument entry, `edi+0x40=1` set immediately, a per-round counter at `[eax+0x974]`
+  incremented). Early in the function, at **`0x005BB668`**, it writes a HARDCODED default:
+  `mov byte ptr [edi+0x5c], 4` — unconditionally, before any maneuver has been chosen. `4` is not
+  an anomaly or an out-of-spec value; it is this round's own "nothing selected yet" sentinel.
+- **`0x005BAD8A`-`0x005BADC5`** — a maneuver-selection dispatch, reached later in the same function,
+  that overwrites the sentinel with a real value: `al` (a computed value) if `[esp+0x30]` is set,
+  `3` if `[esi+0x4c]` is nonzero, `1` if `[edi+0x8d4]` is nonzero, or falls through unwritten
+  (leaving whatever `0`/`1`/`2` a prior pass already wrote) otherwise.
+
+**The bigger correction: round 27's own account of the per-participant loop is wrong about what the
+range check gates.** Full disassembly of the loop (`0x005BB8C6`-`0x005BBA33`, the loop round 27
+already found) shows the check on `[ebx+0x5c]` (`0x005BB9CE`-`0x005BB9EA`, values `-1` or `0..3`
+continue one way, anything else — including `4` — jumps to `0x005BBA0D`) does **not** skip the
+arming call. Both the "in-range" path (which also runs two extra setup calls, `0x005BB440` and
+`0x005B8B00`, reading/writing per-target state — an alloc'd `0x8C`-byte object, a comparison against
+`[esi+0]`'s vtable, `[edi+0x48]=1`) and the "out-of-range" path converge on the exact same
+instruction, `0x005BBA0D`, and BOTH unconditionally call the arming function `0x004D5A50` at
+`0x005BBA15`. **The range check only decides whether the two extra setup calls run — it does not
+decide whether the round arms.** This matches every live reading rounds 49-51 have taken: `sub+0xB0`
+(the arming list's own count) goes nonzero in every trial this round ran, `sub+0x5c=4` throughout
+most of them, and the two are not in tension — they were never supposed to be. `sub+0x5c=4` means
+"this participant's round has not yet had a maneuver selected," not "arming is blocked."
+
+**Part 2: the rig, and the first pass (C1, incomplete methodology — recorded, then corrected).**
+`tools/demo.ps1` was read in full for this round: `launch --instance 2` gives the client its own
+renamed mutex and does not require instance 1 to be running at all; `agent launch`/`agent load` can
+be driven directly, without `demo.ps1`'s two-instance orchestration, to bring up ONE install alone.
+Both installs ship `coop.ini auto_start_agent=1` by default, and `AgentLauncher` starts that agent
+in `--menu` mode (no `--host`, no `--join`) — so launching a game alone, with no `demo.ps1` session
+at all, still gets an attached agent processing console commands (confirmed live: `blockpoke.ps1
+... state` read `phantoms 0  remotes 0` the whole time). This is the "no session" condition the
+task asked for, achieved without any code change.
+
+Cold-loaded the CLIENT install (`D:\Games\swkotor-gog-p2`) alone, save slot 1 (`agent load
+--load-save 1` reports `staged '000002 - Game1' as the autosave` — this is the save both installs
+load; it is NOT a fresh per-round save, the same file every round back to 44 has used), module
+`END_M01AA`. `tools/creatures.ps1` found the same `n_sithsoldier004` pair rounds 49-50 used, same
+ids: `0x3B (47.56,60.54)`, `0x38 (43.96,62.92)`. Teleported to `dist=4.20` from `0x3B`
+(`console 'tp 43.90 62.60 -1.3'`), waited 30s with NO script fired: **zero movement, zero HP change
+on the creature** — no natural aggro in this window, on this install, standalone (a second
+passive-wait control, on the HOST install, gave the identical zero-aggro result — see Part 4).
+Fired `console 'firescript 0x3B fire'`, waited ~30s, checked only the creature's own state
+(`creatures.ps1`: unchanged) and the `is fight action` diagnostic (0/6000 sampled frames). This
+LOOKED like the established freeze. **It was an incomplete measurement**: this pass never read the
+PLAYER's own HP, only the attacker's — which would never move regardless of what happened to the
+player. This gap is exactly the one closed in Part 3.
+
+**Part 3: C1 redone, C2, and C3 — all three measured with the ground-truth check.** Every trial
+below used `console 'where'` immediately after loading/teleporting (baseline) and again ~30s after
+firing (result) — the one check the whole document has been missing.
+
+| Trial | Install | Session | Baseline HP | Result HP | `is fight action: True` (of 6000) |
+|---|---|---|---|---|---|
+| C1 (redo) | client (`swkotor-gog-p2`) | none (`phantoms 0 remotes 0`) | `12/12` | **`1/12`** | 0 |
+| C2 | host (`GOG Games\...`) | none (`phantoms 0 remotes 0`) | `12/12` | **`1/12`** | 0 |
+| C3 | client | live (`phantoms 1 remotes 1`) | `12/12` | **`1/12`** | 0 |
+
+`1/12` is the documented min-1-hp scene floor for this Endar Spire command-deck area (round 49:
+"floored by the Endar Spire deck's own min-1-hp pin, the same pin every other real fight this
+investigation has measured hits") — a REAL, independently-verified hit, not a proxy reading, in
+**all three** trials. `is fight action: True` was `False` on all 6000 sampled frames in every one,
+including C1 and C2, where the hit is completely unconfounded (no session exists, so no census, no
+`EnemyPresenceController`, no phantom, no forwarding channel — nothing this plugin can touch was
+running at all; the only thing that happened between baseline and result was the manual
+`firescript` fire and the creature's own subsequent engine-native AI). This settles instruction 3's
+branch directly: **C1 passed and C2 passed. Per the task's own branching, this means V2 (session
+role), not V1 (the client install), is the live variable** — the client BUILD fights fine when
+nothing else is touching the creature; whatever the "freeze" chased since round 9 is, it is not a
+property of being the client instance.
+
+**C3 is real but confounded, and the confound is quantitatively sufficient to explain it alone.**
+The client's plugin log for the C3 session shows the automatic `local_combat` proximity exclusion
+already pulled `0x3B` out of the census the moment the player teleported into range — BEFORE the
+manual fire ran — and the standing forwarded-damage channel (the host's own unmirrored copy of
+`0x3B`, genuinely fighting the client's phantom body on the HOST's own engine, forwarding damage
+over the network; a separate, already-documented mechanism unrelated to `local_combat`) was already
+delivering damage seconds before the manual fire:
+
+    [19:22:26.694] local combat: 0x3B pulled out of the census to fight for real (timeout 25s)
+    [19:22:32.653] combat: absorbed 2 forwarded damage in total, attributed to mirrored enemies
+      we are driving (last attacker 0x3B); this engine says in-combat=True
+    [19:22:35.985] firescript watch: armed on 0x3B for 6000 frames
+    [19:22:35.986] firescript: fired 0x3B +0x260 = 'k_def_combend01'
+    [19:22:52.956] combat: took 2 damage from a hit on our phantom (attacker 0x3B)
+    [19:22:55.616] combat: took 2 damage from a hit on our phantom (attacker 0x3B)
+
+Only two "took" lines (4 points total) appear between the manual fire and the `where` check, far
+short of the 11-point drop from `12` to `0` a normal floor would need — but this area's min-1-hp
+pin does not require a large hit, only a nonzero one (round 49's `min1hp=True` reading, documented
+as flooring "every real fight this investigation has measured hits" regardless of size). **A single
+one of those two forwarded hits is sufficient, on its own, to fully explain the `12→1` reading.**
+C3 therefore cannot distinguish "the client's own local mechanism also fired successfully" from
+"only the pre-existing, already-working forwarding channel did" — the same phantom-forwarding
+confound rounds 28 and 49 already named, now shown to be strong enough to single-handedly produce
+the exact signature this whole investigation has used as its evidence of a working fight, whether or
+not `local_combat`'s own mechanism ever does anything at all in-session. **V2 is not settled by this
+round.**
+
+**Part 4: the passive-wait control, both installs.** Before firing anything, both C1 and C2 stood
+the player at `dist=4.20` from `0x3B` for 30s with no script fired: zero movement, zero HP change on
+the creature in both cases. The creature's own perception/heartbeat AI does not aggro on its own in
+this window at this range, on either install — the manual (or `local_combat`'s automatic) script
+fire is doing real, necessary work, not standing in for something that would have happened anyway.
+
+**An open discrepancy with round 49, named rather than papered over.** Round 49's own automatic-
+trigger test, same creature pair, same save, explicitly checked player HP and reported it "stayed
+12/12 throughout every local_combat probe window" for a full 25s cycle, twice (both `0x3B` and
+`0x38`), attributing the ONE HP change it saw entirely to the forwarding channel and only after the
+exclusion window had already closed. This round's three trials, by contrast, found the fight (client
+standalone, host standalone, and the client's C3 trial) landing a real hit within roughly 25-30s
+every time, 3 for 3. Both rounds used `console 'where'`-equivalent ground truth (round 49 via the
+dashboard's own HP readout, round 51 via the console verb) — this is not obviously a methodology gap
+on either side. Two honest readings, not resolved this round: either the underlying hit is
+probabilistic/timing-sensitive (round 49 unlucky twice, round 51 lucky three times), or something
+about firing via the `firescript` cheat verb directly (round 51's method, all three trials) differs
+in a way that matters from the creature being pulled out and re-fired through `local_combat`'s own
+automatic `StartLocalFight` path (round 49's method) even though round 50's own consumer audit says
+both call the same `FireCreatureScriptSlot0x260`. Whoever continues this should rerun round 49's
+exact automatic-trigger test with a `where` check bracketing the window, since round 49 predates
+this round's discovery that the diagnostic it otherwise relied on cannot be trusted either.
+
+**Verdict.** V1 (the client install/instance itself) is refuted, decisively, by two clean,
+unconfounded trials (C1 redo, C2). The deeper and more consequential finding is methodological: the
+`is fight action` diagnostic this document has used as its ground truth since round 9 does not
+detect success even when a real, independently-verified hit lands — every prior round's "0/6000,
+therefore frozen" conclusion was never actually testing what it claimed to test, and needs
+re-reading against player HP, not this proxy, before being trusted further. V2 (session role) is
+narrowed but not settled: a hit was observed with a session live (C3), but the standing forwarded-
+damage channel is quantitatively sufficient to explain it alone, so this round cannot yet say
+whether `local_combat`'s own client-side mechanism contributes anything once a session is up.
+
+**Next step, concrete.** A clean C3 needs the forwarding-channel confound controlled OUT before the
+manual (or automatic) fire runs — e.g. keep the player's phantom outside the HOST's own perception
+range of the creature until after the fire is armed, or temporarily neutral-hold the HOST's own copy
+of the creature via its console, so only the CLIENT's own mechanism can possibly be producing a hit
+— then bracket that window with `console 'where'` on both sides. Separately, round 49's own
+automatic-trigger positive/negative pattern should be re-run with the same `where` bracketing this
+round used, since it predates the discovery that `is fight action` cannot be trusted as a negative
+result either.
+
+**Safety.** No permanent exclusion or corruption in any trial; both creatures remained alive,
+GIT-identical, and un-materialised throughout (`n_sithsoldier004` was never a stand-in). No code
+changes were made this round (`git status` clean going in and coming out other than this
+documentation and roadmap update) — this was a pure diagnostic round, static analysis plus live
+instrumentation the codebase already ships (`firescript`, `ArmFireScriptWatch`, `console 'where'`,
+`console 'tp'`). Full suite `dotnet test tests/KotorCoop.Tests`: **1192/1192**, no flakes this run.
+`dotnet build KotorCoop.slnx`: 0 warnings, 0 errors. `src\KotorCoop.Plugin\build.ps1 -Install
+-GameDir "C:\GOG Games\Star Wars KOTOR (GOG)"` and again with `-GameDir "D:\Games\swkotor-gog-p2"`:
+both succeeded, 0 warnings, 0 errors. Rig torn down (`demo.ps1 -Stop`) and confirmed clean
+(`Get-Process swkotor,KotorCoop.Agent` returned none), `auto_start_agent` restored to `1` in both
+installs.
 
 ## 3. A client's XP is actively erased
 
