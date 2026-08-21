@@ -162,8 +162,18 @@ public static class ProtocolConstants
     /// PlayNow/Defer/Ignore decision existed and changed nothing: nothing captured WHICH movie
     /// a mid-module PlayMovie call played (docs/research/trigger-relay.md §6). Gated OFF by
     /// default (coop.ini <c>movie_relay</c>) until live-verified, like PeerEffect and
-    /// CreatureLiveness before it. See docs/research/cinematics.md's 2026-08-22 section.</summary>
-    public const byte Version = 34;
+    /// CreatureLiveness before it. See docs/research/cinematics.md's 2026-08-22 section.
+    /// Version 35: WorldDigestPacket gains LoadSerial (roadmap item 14 phase 2,
+    /// docs/research/session-save.md's Phase 2 section) — the sender's own count of world
+    /// teardowns its plugin judged UNANNOUNCED (a Load Game action, not an ordinary module
+    /// transition), riding the existing 1 Hz world-digest channel rather than a new packet.
+    /// Lets a receiver classify a PEER's SaveIdentity change as a save or a load the same way
+    /// each side already classifies its own (<c>KotorCoop.Session.SaveOrLoadClassifier</c>),
+    /// which is what host-mid-session-load re-adoption (coop.ini <c>host_load_readopt</c>)
+    /// needs to tell "the host saved" apart from "the host loaded a different save" without a
+    /// dedicated broadcast packet. Gated OFF by default, like every roadmap-14-phase-2 action,
+    /// until live-verified.</summary>
+    public const byte Version = 35;
 
     /// <summary>Journal quest tags are resrefs plus a little slack.</summary>
     public const int MaxJournalTagLength = 32;

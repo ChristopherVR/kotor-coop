@@ -460,6 +460,16 @@ public interface ICoopSession : IDisposable
     CompatibilityVerdict? Compatibility { get; }
 
     /// <summary>
+    /// Roadmap item 14 phase 2: the raw <see cref="WorldDigest"/> most recently received from
+    /// "the" remote peer — meaningful on a <c>CoopClient</c> (the host), where it drives
+    /// <c>host_load_readopt</c>'s classifier; a host has many peers and no single "the remote",
+    /// so it is left at the default (<see cref="WorldDigest.Empty"/>) there. See
+    /// <c>CoopClient.HostWorldDigest</c>'s own doc comment for why the raw fields, not the
+    /// already-compared <see cref="Compatibility"/> verdict, are what this needs.
+    /// </summary>
+    WorldDigest RemoteWorldDigest => WorldDigest.Empty;
+
+    /// <summary>
     /// This session's transport fault injector, or null for a session with no real socket
     /// (the test stubs). Off by default. Driving it is how a drop is reproduced on the live
     /// rig without touching a cable — see <c>coop netsim</c> in <see cref="ConsoleCommand"/>.

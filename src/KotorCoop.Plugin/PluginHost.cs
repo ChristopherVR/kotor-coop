@@ -461,7 +461,9 @@ internal static unsafe class PluginHost
         // 48 = the mid-module movie relay region at 0x392C..0x396C (the DETECTION half
         //      docs/research/trigger-relay.md §6 shipped without a hook for) — see
         //      docs/research/cinematics.md's 2026-08-22 section.
-        _block->Version = 48;
+        // 49 = the world-load edge at 0x396C (roadmap item 14 phase 2's save-vs-load
+        //      detection primitive) — see docs/research/session-save.md's Phase 2 section.
+        _block->Version = 49;
 
         // A guard dword after the version. Magic plus version alone was not selective
         // enough: a scan once matched something else at a lower address and the agent
@@ -597,6 +599,16 @@ internal static unsafe class PluginHost
             // against freed objects on the first frame of the new module.
             if (_epoch != 0)
             {
+                // Roadmap item 14 phase 2's load-detection primitive (see WorldLoadRule.cs):
+                // judged HERE, before _transitionPending is reset below, because that reset is
+                // exactly what would otherwise erase the one fact this decision needs — whether
+                // an area transition was ANNOUNCED before the world it belonged to went away.
+                if (WorldLoadRule.IsUnannouncedTeardown(_transitionPending))
+                {
+                    _view?.PublishWorldLoadObserved();
+                    Log("world: unannounced teardown - treating as a load, not a transition");
+                }
+
                 _epoch = 0;
                 _transitionPending = false;
                 InvalidateAll("world unloading");

@@ -927,6 +927,21 @@ internal sealed unsafe class SharedBlockView(byte* baseAddress)
         *U32(SharedBlock.OffsetMidModuleMovieSerial) = *U32(SharedBlock.OffsetMidModuleMovieSerial) + 1;
     }
 
+    // ---- world-load edge (roadmap item 14 phase 2) ----------------------------------
+
+    /// <summary>
+    /// Plugin -&gt; agent. Bumps <see cref="SharedBlock.OffsetWorldLoadSerial"/> — called once
+    /// per world teardown <c>PluginHost</c> judged unannounced (<c>WorldLoadRule.IsUnannouncedTeardown</c>).
+    /// See that field's own doc comment in <c>SharedBlock</c> for why a plain counter, no
+    /// payload, is all that crosses here.
+    /// </summary>
+    public void PublishWorldLoadObserved() =>
+        *U32(SharedBlock.OffsetWorldLoadSerial) = *U32(SharedBlock.OffsetWorldLoadSerial) + 1;
+
+    /// <summary>Plugin -&gt; agent. The raw counter, for a caller that wants the current value
+    /// rather than to bump it (tests; a future diagnostic line).</summary>
+    public uint WorldLoadSerial => *U32(SharedBlock.OffsetWorldLoadSerial);
+
     /// <summary>Agent -&gt; plugin. The request serial; a request is pending while it is ahead
     /// of <see cref="MidModulePlayApplied"/>.</summary>
     public uint MidModulePlayRequestSerial => *U32(SharedBlock.OffsetMidModulePlayRequestSerial);

@@ -26,6 +26,15 @@ namespace KotorCoop.Agent;
 /// exactly once for that edge; the caller announces the refusal line and drops the session,
 /// which is the design doc's recommended safe default (refuse first, re-adopt is phase 2).</item>
 /// </list>
+///
+/// PHASE 2 (docs/research/session-save.md's Phase 2 section) answers what phase 1 could not: a
+/// save and a load are now distinguishable, via <see cref="ObserveOwnVerdict"/>/
+/// <see cref="ObserveRemoteVerdict"/> and the world-load edge <c>KotorCoop.Plugin.WorldLoadRule</c>
+/// adds alongside the digest. <c>CoopCommandDispatcher</c> uses the verdict, not the raw digest
+/// edge above, to drive <c>client_load_rejoin</c>/<c>host_load_readopt</c> — and now also to
+/// decide when the legacy <see cref="ObserveHost"/> refusal itself acts, closing the exact
+/// false-positive (an ordinary transition trips the digest edge too) that shipped it OFF by
+/// default in phase 1.
 /// </summary>
 public sealed class SessionSaveWatch(string gameDirectory)
 {
@@ -42,15 +51,74 @@ public sealed class SessionSaveWatch(string gameDirectory)
     /// unknown, which the preference rule never treats as a mismatch).</summary>
     private uint _sessionBaselineIdentity;
 
+    // ---- roadmap item 14 phase 2: save-vs-load classification ---------------------------
+    //
+    // A SEPARATE watch pair from `_watch` above, deliberately: `_watch`/`ObserveHost`/
+    // `ObserveClient` are phase 1's pure digest-edge detector, unchanged, still driving the
+    // "capture on save" and (still flag-gated) legacy refusal paths exactly as shipped. These
+    // additional watches feed the SAME digest readings into `SaveOrLoadClassifier`, which
+    // needs its own independent edge state to correlate against the world-load serial —
+    // running two pure observers over the same input stream is cheap and cannot diverge
+    // (`SaveIdentityWatch.Observe` is a deterministic function of its inputs), so this is
+    // simpler than threading one shared watch through two different consumers with different
+    // needs.
+
+    private SaveIdentityWatchState _ownClassifyWatch = SaveIdentityWatchState.Initial;
+    private SerialEdgeWatchState _ownLoadWatch = SerialEdgeWatchState.Initial;
+    private readonly SaveOrLoadClassifier _ownClassifier = new();
+
+    /// <summary>The REMOTE peer's digest/load-edge — meaningful only on a CLIENT watching the
+    /// HOST's reported <see cref="KotorCoop.Protocol.WorldDigest"/> for <c>host_load_readopt</c>
+    /// (design doc §3.2, "have every client run the same auto-rejoin"). A host has many peers
+    /// and no single "the remote", so it never calls <see cref="ObserveRemoteVerdict"/>.</summary>
+    private SaveIdentityWatchState _remoteClassifyWatch = SaveIdentityWatchState.Initial;
+    private SerialEdgeWatchState _remoteLoadWatch = SerialEdgeWatchState.Initial;
+    private readonly SaveOrLoadClassifier _remoteClassifier = new();
+
     private string SavesDirectory => Path.Combine(gameDirectory, "saves");
 
     /// <summary>A new connection (or none): forget everything, so the next real reading
     /// becomes THIS connection's fresh baseline rather than being compared against a stale
-    /// one from whatever ran before.</summary>
+    /// one from whatever ran before. This is also what makes "the load that IS the adoption"
+    /// invisible to the phase 2 classifiers — see <c>ClientLoadRejoinRule</c>'s own doc
+    /// comment: the first post-Reset reading of everything below becomes a baseline, never a
+    /// change, for exactly the same reason <c>_watch</c> already worked this way in phase 1.</summary>
     public void Reset()
     {
         _watch = SaveIdentityWatchState.Initial;
         _sessionBaselineIdentity = 0;
+
+        _ownClassifyWatch = SaveIdentityWatchState.Initial;
+        _ownLoadWatch = SerialEdgeWatchState.Initial;
+        _ownClassifier.Reset();
+
+        _remoteClassifyWatch = SaveIdentityWatchState.Initial;
+        _remoteLoadWatch = SerialEdgeWatchState.Initial;
+        _remoteClassifier.Reset();
+    }
+
+    /// <summary>
+    /// Roadmap item 14 phase 2: classifies THIS instance's own digest+load-edge readings for
+    /// this tick. Both roles use this — a host for <c>host_load_readopt</c>/the rewired
+    /// <c>session_save_host_refusal</c>, a client for <c>client_load_rejoin</c> — since each
+    /// side only ever needs to watch itself for its OWN save/load edge, same as phase 1.
+    /// </summary>
+    public SaveOrLoadVerdict ObserveOwnVerdict(uint digestNow, uint loadSerialNow, long nowMs)
+    {
+        (_ownClassifyWatch, bool digestChanged) = SaveIdentityWatch.Observe(_ownClassifyWatch, digestNow);
+        (_ownLoadWatch, bool loadEdge) = SerialEdgeWatch.Observe(_ownLoadWatch, loadSerialNow);
+        return _ownClassifier.Observe(nowMs, loadEdge, digestChanged);
+    }
+
+    /// <summary>
+    /// Roadmap item 14 phase 2, client-only: classifies the HOST's reported digest+load-edge
+    /// (<see cref="KotorCoop.Session.CoopClient.RemoteWorldDigest"/>) for <c>host_load_readopt</c>.
+    /// </summary>
+    public SaveOrLoadVerdict ObserveRemoteVerdict(uint remoteDigestNow, uint remoteLoadSerialNow, long nowMs)
+    {
+        (_remoteClassifyWatch, bool digestChanged) = SaveIdentityWatch.Observe(_remoteClassifyWatch, remoteDigestNow);
+        (_remoteLoadWatch, bool loadEdge) = SerialEdgeWatch.Observe(_remoteLoadWatch, remoteLoadSerialNow);
+        return _remoteClassifier.Observe(nowMs, loadEdge, digestChanged);
     }
 
     /// <summary>

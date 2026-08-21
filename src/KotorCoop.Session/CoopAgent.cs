@@ -527,7 +527,8 @@ public sealed class CoopAgent(IGameBridge bridge, ICoopSession session, AgentSet
             bridge.GlobalsCatalogueDigest,
             bridge.SaveIdentityDigest,
             local.Module,
-            bridge.ModuleGitDigest(local.Module)));
+            bridge.ModuleGitDigest(local.Module),
+            bridge.WorldLoadSerial));
 
         PumpItems(local, caps);
         PumpProgression(caps);

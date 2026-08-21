@@ -1357,6 +1357,12 @@ public static class PacketCodec
         w.WriteUInt32(packet.Digest.SaveIdentity);
         w.WriteUInt32(packet.Digest.ModuleGit);
         w.WriteString(packet.Digest.Module, ProtocolConstants.MaxModuleLength);
+        // Roadmap item 14 phase 2 (docs/research/session-save.md): the sender's own
+        // world-load edge counter, so a receiver can classify a peer's SaveIdentity change
+        // as a save or a load without a new packet — see WorldDigest.LoadSerial's own doc
+        // comment. Appended after the existing fields so a peer running the previous wire
+        // shape (protocol version bump handles the mismatch at Hello) is never mis-parsed.
+        w.WriteUInt32(packet.Digest.LoadSerial);
         return w.Failed ? 0 : w.Position;
     }
 
@@ -1373,9 +1379,10 @@ public static class PacketCodec
         uint saveIdentity = r.ReadUInt32();
         uint moduleGit = r.ReadUInt32();
         string module = r.ReadString();
+        uint loadSerial = r.ReadUInt32();
         return r.Failed
             ? null
-            : new WorldDigestPacket(peerId, new WorldDigest(globals, saveIdentity, module, moduleGit));
+            : new WorldDigestPacket(peerId, new WorldDigest(globals, saveIdentity, module, moduleGit, loadSerial));
     }
 
     public static int Write(Span<byte> buffer, JournalOpPacket packet)

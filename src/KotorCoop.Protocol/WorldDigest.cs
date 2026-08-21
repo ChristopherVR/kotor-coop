@@ -17,19 +17,33 @@ namespace KotorCoop.Protocol;
 /// standing in NOW, does the GIT hand out the same ids? A mod that edits one module's
 /// placements shifts ids there and nowhere else, so this is judged per module and
 /// re-judged on every module change.</item>
+/// <item><see cref="LoadSerial"/> — roadmap item 14 phase 2 (docs/research/session-save.md):
+/// the sender's own count of world teardowns its plugin judged UNANNOUNCED — a Load Game
+/// action, not an ordinary module transition (<c>KotorCoop.Plugin.WorldLoadRule</c>,
+/// <c>SharedBlock.OffsetWorldLoadSerial</c>). Riding here, unmodified, is what lets a
+/// RECEIVER classify a peer's <see cref="SaveIdentity"/> change as a save or a load without a
+/// new packet: the same edge-plus-digest correlation each side already runs on its OWN
+/// readings (<c>KotorCoop.Session.SaveOrLoadClassifier</c>) works identically against a
+/// peer's reported pair. A plain counter, not a bool, survives a lost datagram on this 1 Hz
+/// channel without losing the edge — the receiver's own <c>SerialEdgeWatch</c> only cares
+/// that the value it last saw differs, not by how much.</item>
 /// </list>
 ///
 /// Every field follows the house convention: 0 (or an empty module) means "not resolved",
 /// and per the Unknown-is-not-mismatch rule an unresolved field can never degrade
-/// anything — only two peers that both computed a value can disagree.
+/// anything — only two peers that both computed a value can disagree. <see cref="LoadSerial"/>
+/// is the one exception to "0 means not resolved": 0 is its legitimate starting value (no
+/// load observed yet this process), so it is read only as an EDGE (did it change), never
+/// compared for equality/mismatch the way the other three are.
 /// </summary>
 public readonly record struct WorldDigest(
     uint GlobalsCatalogue,
     uint SaveIdentity,
     string Module,
-    uint ModuleGit)
+    uint ModuleGit,
+    uint LoadSerial = 0)
 {
-    public static WorldDigest Empty => new(0, 0, string.Empty, 0);
+    public static WorldDigest Empty => new(0, 0, string.Empty, 0, 0);
 
     /// <summary>True when nothing here is worth putting on the wire yet.</summary>
     public bool IsEmpty => GlobalsCatalogue == 0 && SaveIdentity == 0 && ModuleGit == 0;

@@ -1,5 +1,6 @@
 using System.Net;
 using KotorCoop.Memory;
+using KotorCoop.Memory.GameFiles;
 using KotorCoop.Protocol;
 using KotorCoop.Session;
 
@@ -148,6 +149,31 @@ public sealed class CoopCommandDispatcher(
 
     private bool SessionSaveHostRefusalEnabled =>
         _sessionSaveHostRefusalEnabled ??= loadConfig?.Invoke()?.SessionSaveHostRefusal ?? false;
+
+    /// <summary>coop.ini <c>client_load_rejoin</c> — see <see cref="CoopConfig.ClientLoadRejoin"/>'s
+    /// own doc comment. OFF by default.</summary>
+    private bool? _clientLoadRejoinEnabled;
+
+    private bool ClientLoadRejoinEnabled =>
+        _clientLoadRejoinEnabled ??= loadConfig?.Invoke()?.ClientLoadRejoin ?? false;
+
+    /// <summary>coop.ini <c>host_load_readopt</c> — see <see cref="CoopConfig.HostLoadReadopt"/>'s
+    /// own doc comment. OFF by default.</summary>
+    private bool? _hostLoadReadoptEnabled;
+
+    private bool HostLoadReadoptEnabled =>
+        _hostLoadReadoptEnabled ??= loadConfig?.Invoke()?.HostLoadReadopt ?? false;
+
+    /// <summary>Roadmap item 14 phase 2's rejoin decision state — see
+    /// <see cref="ClientLoadRejoinRule"/>. Best-effort threading: written synchronously from
+    /// this dispatcher's own tick when a rejoin starts, and once more (back to Idle) by the
+    /// background rejoin task's own completion — the two never race in practice because the
+    /// tick thread never writes it again until <see cref="TriggerRejoin"/> is called, which
+    /// only happens after a fresh verdict, itself gated by this same field already reading
+    /// <see cref="RejoinPhase.InFlight"/>.</summary>
+    private RejoinDecisionState _rejoinState = RejoinDecisionState.Idle;
+
+    private Task? _rejoinTask;
 
     /// <summary>Polls the block for console/menu commands and reflects status until cancelled.</summary>
     public async Task RunAsync(CancellationToken cancellationToken)
@@ -1567,11 +1593,25 @@ public sealed class CoopCommandDispatcher(
     }
 
     /// <summary>
-    /// Roadmap item 14 phase 1: watches this instance's own save-identity digest once per
-    /// tick and reacts per role. A CLIENT saving mid-session gets its progressed character
-    /// captured into the "resume tomorrow" sidecar; a HOST loading a different save
-    /// mid-session gets refused on screen and the session dropped, so every client falls
-    /// back to the reconnect path it already has. See <see cref="SessionSaveWatch"/>.
+    /// Roadmap item 14 phases 1 AND 2: watches this instance's own save-identity digest (and,
+    /// since phase 2, the world-load edge alongside it) once per tick and reacts per role.
+    ///
+    /// Phase 1, unchanged: a CLIENT saving mid-session gets its progressed character captured
+    /// into the "resume tomorrow" sidecar (<see cref="SessionSaveWatch.ObserveClient"/>, on
+    /// EVERY digest change — a save and a load alike, deliberately: design doc §4.2 item 3
+    /// wants the character captured out of whatever the client just loaded too, and this
+    /// already does that for free).
+    ///
+    /// Phase 2, new: <see cref="SessionSaveWatch.ObserveOwnVerdict"/>/<see cref="SessionSaveWatch.ObserveRemoteVerdict"/>
+    /// classify the SAME edges into <see cref="SaveOrLoadVerdict.Load"/> vs
+    /// <see cref="SaveOrLoadVerdict.Save"/> — see <c>WorldLoadRule</c>/<c>SaveOrLoadClassifier</c>.
+    /// A HOST's own Load verdict now drives the (still gated) legacy refusal INSTEAD of the
+    /// raw digest edge — closing shared-state-audit.md round 53's false-positive, where an
+    /// ordinary transition tripped the same digest — and, when <c>host_load_readopt</c> is on,
+    /// announces re-adoption instead. A CLIENT's own Load verdict, or a Load verdict on the
+    /// HOST's REMOTE digest (received over the wire, <see cref="ICoopSession.RemoteWorldDigest"/>
+    /// — the mechanism design doc §3.2's "have every client run the same auto-rejoin" needed),
+    /// triggers <see cref="TriggerRejoin"/> when its gate is on.
     /// </summary>
     private void MaintainSessionSave()
     {
@@ -1583,29 +1623,45 @@ public sealed class CoopCommandDispatcher(
         if (manager.Current is not { } session)
         {
             _sessionSaveWatch.Reset();
+            _rejoinState = RejoinDecisionState.Idle;
             return;
         }
 
         uint digest = bridge.SaveIdentityDigest;
+        uint loadSerial = bridge.WorldLoadSerial;
+        long nowMs = SessionClock.NowMs;
 
         if (session is CoopHost)
         {
-            // The edge is still detected (and logged) unconditionally — see
-            // SessionSaveHostRefusalEnabled's own doc comment for why acting on it is gated
-            // off by default: an ordinary module transition trips this same edge.
-            if (_sessionSaveWatch.ObserveHost(digest))
-            {
-                Log?.Invoke("session-save: host-side save-identity edge detected"
-                    + (SessionSaveHostRefusalEnabled ? " - refusing" : " - NOT refusing (session_save_host_refusal=0)"));
+            // Legacy phase-1 edge: still computed (SessionSaveWatchTests pins its pure
+            // behaviour), no longer what gates the action below.
+            _sessionSaveWatch.ObserveHost(digest);
 
-                if (SessionSaveHostRefusalEnabled)
+            SaveOrLoadVerdict verdict = _sessionSaveWatch.ObserveOwnVerdict(digest, loadSerial, nowMs);
+            if (verdict == SaveOrLoadVerdict.Load)
+            {
+                Log?.Invoke("session-save: host-side load verdict"
+                    + (HostLoadReadoptEnabled ? " - announcing re-adoption"
+                        : SessionSaveHostRefusalEnabled ? " - refusing"
+                        : " - NOT acting (host_load_readopt=0, session_save_host_refusal=0)"));
+
+                if (HostLoadReadoptEnabled)
+                {
+                    // Nothing further to DO from the host's own instance — re-adoption is a
+                    // CLIENT action, and every connected client already sees this edge for
+                    // itself the moment its own WorldDigestPacket poll runs
+                    // ObserveRemoteVerdict (LoadSerial rides that packet unmodified). This
+                    // line is purely so the host's own player knows what is about to happen.
+                    Reply("host loaded a save - everyone re-joins");
+                }
+                else if (SessionSaveHostRefusalEnabled)
                 {
                     Reply(SessionSaveWatch.HostRefusalMessage);
                     manager.Disconnect();
                 }
             }
         }
-        else if (session is CoopClient)
+        else if (session is CoopClient client)
         {
             string? currentSave = SaveDigest.FindSessionSave(gameDirectory);
             string? outcome = _sessionSaveWatch.ObserveClient(digest, currentSave);
@@ -1613,7 +1669,113 @@ public sealed class CoopCommandDispatcher(
             {
                 Reply(outcome);
             }
+
+            SaveOrLoadVerdict ownVerdict = _sessionSaveWatch.ObserveOwnVerdict(digest, loadSerial, nowMs);
+            WorldDigest hostDigest = client.RemoteWorldDigest;
+            SaveOrLoadVerdict remoteVerdict = _sessionSaveWatch.ObserveRemoteVerdict(
+                hostDigest.SaveIdentity, hostDigest.LoadSerial, nowMs);
+
+            if (ownVerdict == SaveOrLoadVerdict.Load)
+            {
+                Reply("you loaded a save - rejoining the host's world");
+                TriggerRejoin(RejoinTrigger.OwnLoad);
+            }
+            else if (remoteVerdict == SaveOrLoadVerdict.Load)
+            {
+                Reply("host loaded a save - rejoining their world");
+                TriggerRejoin(RejoinTrigger.HostReload);
+            }
         }
+    }
+
+    /// <summary>
+    /// Roadmap item 14 phase 2's rejoin action, gated by <see cref="ClientLoadRejoinRule.Decide"/>
+    /// (idempotent while a rejoin is already <see cref="RejoinPhase.InFlight"/>). Runs
+    /// <see cref="SessionManager.RejoinAfterLoadAsync"/> in the background — network I/O and a
+    /// polled engine load, neither of which may block this dispatcher's own tick — then, once
+    /// the local load settles, calls <see cref="SessionManager.Reconnect"/> to reopen the coop
+    /// socket against the same host. Carries whatever the phase-1 "resume tomorrow" sidecar
+    /// currently holds as the character to bring in — <see cref="SessionSaveWatch.ObserveClient"/>
+    /// already wrote it fresh this same tick for an own-load trigger (see
+    /// <see cref="MaintainSessionSave"/>'s own doc comment on why that capture is unconditional).
+    /// </summary>
+    private void TriggerRejoin(RejoinTrigger trigger)
+    {
+        bool gateEnabled = trigger switch
+        {
+            RejoinTrigger.OwnLoad => ClientLoadRejoinEnabled,
+            RejoinTrigger.HostReload => HostLoadReadoptEnabled,
+            _ => false,
+        };
+
+        (bool shouldStart, RejoinDecisionState next) = ClientLoadRejoinRule.Decide(_rejoinState, trigger, gateEnabled);
+        _rejoinState = next;
+
+        if (!shouldStart)
+        {
+            if (!gateEnabled)
+            {
+                Log?.Invoke($"session-save: {trigger} rejoin trigger seen - NOT acting (gate off)");
+            }
+
+            return;
+        }
+
+        Log?.Invoke($"session-save: starting rejoin ({trigger})");
+
+        (GffStruct Player, SidecarMetadata Metadata)? carried = null;
+        if (ClientCharacterPersistence.TryReadSidecar(
+            Path.Combine(gameDirectory, "saves"), out GffStruct sidecarPlayer, out SidecarMetadata sidecarMeta, out _))
+        {
+            carried = (sidecarPlayer, sidecarMeta);
+        }
+
+        _rejoinTask = Task.Run(async () =>
+        {
+            try
+            {
+                AdoptedWorld? adopted = await manager
+                    .RejoinAfterLoadAsync(bridge, gameDirectory, carried, CancellationToken.None)
+                    .ConfigureAwait(false);
+
+                if (adopted is null)
+                {
+                    Reply("rejoin failed - see the log; reconnect manually if it does not recover");
+                    return;
+                }
+
+                // RejoinAfterLoadAsync only FIRES the local engine load (its own doc comment
+                // explains why it cannot block on the game there) — poll for it to settle
+                // before reopening the coop socket.
+                DateTime deadline = DateTime.UtcNow + TimeSpan.FromSeconds(60);
+                while (DateTime.UtcNow < deadline)
+                {
+                    if (bridge.TryGetAdoptedWorldLoadStatus(out uint applied, out int status) && applied != 0)
+                    {
+                        if (status != 0)
+                        {
+                            Reply($"rejoin: the local load failed (status {status})");
+                            return;
+                        }
+
+                        break;
+                    }
+
+                    await Task.Delay(500).ConfigureAwait(false);
+                }
+
+                manager.Reconnect();
+                Reply($"rejoined '{adopted.Value.Module}'");
+            }
+            catch (Exception ex)
+            {
+                Log?.Invoke($"session-save: rejoin failed - {ex.Message}");
+            }
+            finally
+            {
+                _rejoinState = ClientLoadRejoinRule.Complete(_rejoinState);
+            }
+        });
     }
 
     /// <summary>

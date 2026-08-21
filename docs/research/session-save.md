@@ -493,3 +493,246 @@ client-capture wiring), and two new cases in `tests/KotorCoop.Tests/WorldAdoptio
 all against real temp save directories and the real `PlayerIfo`/`WorldAdoption` code, no
 mocking of the GFF layer. 1106 total in the merged suite (was ~1080 before this pass), 0
 failing.
+
+## Phase 2 shipped (2026-08-22)
+
+Roadmap item 14 phase 2: item (a) (distinguish a LOAD from a SAVE on the client, so a client
+loading a save mid-session auto-rejoins) and item (b) (host mid-session load → full
+re-adoption instead of refusal), both landed behind new gates, both default OFF. **No engine
+RE was done for this pass either** — the detection primitive reuses two facts PluginHost
+already tracked for other reasons (the world epoch, and the pre-transition announcement flag),
+and the rejoin action reuses the exact two calls `agent adopt` already makes for the first
+join. Tag key as elsewhere in this tree: **VERIFIED** · **INFERRED** · **NEEDS-LIVE**.
+
+### 1. The detection primitive
+
+Phase 1's own "What phase 1 does NOT do" section named the blocker precisely: "a save and a
+load are not distinguishable from a content digest alone." `Odyssey.TryGetWorldEpoch` is the
+fix's other half — its own doc comment already states the mechanism: the epoch combines the
+server's object-array pointer (which `UnloadModule` replaces) with a module-name hash. A plain
+SAVE never calls `UnloadModule` — nothing about writing the current world to disk tears the
+object array down — so **the epoch does not change on a save (INFERRED** from the disassembly
+that doc comment already cites; not measured against a real in-game save).
+
+The remaining problem: an ORDINARY module transition changes the epoch too (`UnloadModule`
+runs on every module load, load or transition alike), and — live-measured, shared-state-audit.md
+round 53 — KOTOR's own engine autosaves through every transition, so the save-identity DIGEST
+changes on an ordinary transition as well. Digest-change-alone and epoch-change-alone therefore
+BOTH fire on both a load and an ordinary transition; neither distinguishes them by itself.
+
+The primitive that closes the gap is `Odyssey.IsAreaTransitionPending` (`trans_pending`),
+already tracked by `PluginHost` as `_transitionPending` for the pre-store flush window
+(destroying spawned phantoms before `StoreCurrentModule` serialises the area). Its own doc
+comment: a byte the engine sets **roughly half a second before** a door/trigger transition
+stores the area. An ordinary transition is therefore always ANNOUNCED by this flag going true
+first; a Load Game action — main menu or the in-game pause menu — goes straight from
+`CSWGuiSaveLoad`'s LOAD branch into `ExecuteLoadModule` with no such precursor, because
+`trans_pending` belongs to `CSWSArea`'s own scripted-transition bookkeeping, unrelated to the
+save/load UI. **INFERRED**, not measured live — this is the one assumption the whole feature
+rests on, and it is named, not hidden, in `WorldLoadRule.IsUnannouncedTeardown`'s own doc
+comment (`src/KotorCoop.Plugin/WorldLoadRule.cs`), a deliberately one-line pure function so the
+assumption is exactly what a test pins.
+
+**The wire primitive.** `PluginHost.OnFrame`, at the exact point a world teardown is noticed
+(`TryGetWorldEpoch` starts returning false), now judges `WorldLoadRule.IsUnannouncedTeardown(_transitionPending)`
+BEFORE `_transitionPending` is reset for the next epoch (resetting it first would erase the one
+fact the decision needs). An unannounced teardown bumps a new block field,
+`SharedBlock.OffsetWorldLoadSerial` (a plain monotonic counter, no payload) — block **version
+49**, in the free tail the mid-module-movie region's own comment had already measured
+(0x396C..0x3970 of the 0x94 free bytes at 0x396C..0x3A00; no `TotalSize` growth). Half-bump
+guarded the usual way: `_block->Version = 49` (`PluginHost.cs`) and the version byte in
+`KotorGameBridge.PluginSignature` bumped together (0x30 → 0x31), pinned by
+`TransitionMovieTests.TheBlockVersionMovedInBothHalves`.
+
+**The agent-side classification.** `KotorCoop.Session.SerialEdgeWatch` is `SaveIdentityWatch`'s
+same edge-detector shape, minus its "0 = unresolved" special case (a load serial legitimately
+starts at 0). `KotorCoop.Session.SaveOrLoadClassifier` correlates a digest-change edge against
+a load edge within a 5-second window (`SaveDigestCache`'s own documented up-to-2-second re-stat
+interval, the same order of magnitude `SaveIdentitySettle.DefaultSettleMs` already uses for a
+structurally similar "let a related signal catch up" wait): a digest change WITH a load edge in
+the window is `SaveOrLoadVerdict.Load`; a digest change with none is `Save`. A load edge that
+never gets a matching digest change simply expires unconsumed and produces no verdict — this
+deliberately does NOT fix phase 1's own NEEDS-LIVE item 1 (whether a genuine Load Game action
+touches the watched save file at all); it only fixes CLASSIFYING the digest-changes that do
+fire, which is everything this phase needed.
+
+`SessionSaveWatch` (`src/KotorCoop.Agent/SessionSaveWatch.cs`) gained `ObserveOwnVerdict`
+(either role, its own digest+load-serial) and `ObserveRemoteVerdict` (client only, the HOST's
+reported values). Both watches share `Reset()`'s lifecycle with phase 1's `_watch`, so a fresh
+connection's first reading of everything becomes a baseline, never a change — this is what
+makes "the load that IS the adoption" (the world adoption that just carried a joiner INTO the
+session) invisible to the classifier with no special-casing at all, the same way phase 1's own
+baseline rule already worked.
+
+**A free side-effect worth naming**: `CoopCommandDispatcher.MaintainSessionSave` now gates the
+LEGACY `session_save_host_refusal` action on the classifier's verdict instead of the raw digest
+edge — closing shared-state-audit.md round 53's exact false positive (an ordinary transition
+tripping the refusal) as a consequence of building the real primitive, not a separate fix. That
+rewiring itself has no live pass yet, so the flag stays default OFF regardless.
+
+### 2. Client load → auto-rejoin (`client_load_rejoin`, default OFF)
+
+On a CLIENT's own `SaveOrLoadVerdict.Load`: prints "you loaded a save - rejoining the host's
+world" and calls a new `SessionManager.RejoinAfterLoadAsync`, gated through
+`KotorCoop.Session.ClientLoadRejoinRule` — a pure two-state machine (`Idle`/`InFlight`) that
+swallows a second trigger while a rejoin is already running rather than queueing or restarting
+one (the in-flight attempt fetches the host's CURRENT world at the moment it actually runs, so
+a second signal has nothing to add).
+
+`RejoinAfterLoadAsync` reuses, rather than re-derives, the exact two pieces `agent adopt`
+(`Program.cs`'s `AdoptAsync`, the first-join path) already composes: `WorldAdoption.TryAdoptAsync`
+for the network half (fetch the host's world, stage it, write the carried character — the
+character is whatever the phase-1 "resume tomorrow" sidecar holds, which `SessionSaveWatch.ObserveClient`
+already wrote fresh THIS SAME TICK for an own-load trigger, since it captures on every digest
+change unconditionally, save or load alike — design doc §4.2 item 3's own intent), and the new
+`KotorGameBridge.TryRequestAdoptedWorldLoad` (wrapping `PluginMenuLoader.TryRequestLoad(adoptedWorld: true)`,
+the same call the first join makes) for the local engine half. `CoopCommandDispatcher.TriggerRejoin`
+then polls `bridge.TryGetAdoptedWorldLoadStatus` (up to 60 s) and calls `SessionManager.Reconnect()`
+once it settles, to reopen the coop socket against the same host.
+
+**⚠ The one gap this honestly does not close.** `MenuLoadController`'s replay is a MAIN-MENU-ONLY
+mechanism — it acks and no-ops the instant `Odyssey.HasServer` is true (its own header). A
+mid-session client Load Game action (the in-game pause menu, not the main menu) tears down the
+old server and stands up a NEW one entirely inside the ENGINE's own unmodified load path, with
+no main-menu visit in between — whether the game has genuinely returned to "no server" by the
+time `TryRequestAdoptedWorldLoad` fires, or whether it silently acks-and-moots against the
+player's own freshly-loaded server, has never been measured. **This is new RE this pass did not
+attempt** (driving a load from an ALREADY-ACTIVE session is a different code path than the
+main-menu autosave branch `MenuLoadController`'s own header already names as everything it
+replays), and it is why `client_load_rejoin` ships default OFF rather than claimed working.
+
+### 3. Host load → re-adoption (`host_load_readopt`, default OFF)
+
+Design doc §3.2's recommendation, taken literally: "reuse the join path, do not build a new
+one," and — for the trigger — "have every client run the same auto-rejoin." No new broadcast
+packet: `WorldDigest` (the in-world fingerprint already exchanged every 1 Hz on the existing
+`WorldDigestPacket`) gained a fifth field, `LoadSerial` (protocol **version 35**), carrying the
+sender's own `WorldLoadSerial` counter unmodified. A CLIENT already receives the host's raw
+`SaveIdentity` and now its `LoadSerial` too (`CoopClient.RemoteWorldDigest`, new); running the
+SAME `SaveOrLoadClassifier` against those two fields (`SessionSaveWatch.ObserveRemoteVerdict`)
+classifies the HOST's edge exactly as it classifies its own, entirely client-side, with no
+signal the host has to explicitly send beyond what was already on the wire.
+
+On the HOST's own `SaveOrLoadVerdict.Load`, with `host_load_readopt` on: prints "host loaded a
+save - everyone re-joins" on the host's own screen and does nothing else — re-adoption is a
+CLIENT action by construction, and every connected client already sees the edge for itself the
+moment its own `WorldDigestPacket` poll runs `ObserveRemoteVerdict`. When BOTH `host_load_readopt`
+and the legacy `session_save_host_refusal` are on, re-adoption takes priority (a working
+re-adoption is strictly better than a refusal); the refusal remains the safe fallback if
+re-adoption is ever turned back off. Each client's own reaction is `TriggerRejoin(RejoinTrigger.HostReload)`
+— the IDENTICAL machinery §2 built, reused rather than duplicated, per the design doc's own
+instruction.
+
+**What "settling" means here, and where round 54's debounce comes in.** §3's design explicitly
+warned that re-adoption must copy the host's world AFTER the host's own load settles, not the
+stale mid-write state. `WorldAdoption.TryAdoptAsync` already fetches the host's world fresh at
+the moment it runs (a TCP pull of the CURRENT save directory, not a cached copy), and
+`ContentCompatibility`'s existing `SaveIdentitySettle` (round 54, `DefaultSettleMs` 5000)
+already exists for exactly this class of "a related signal has not caught up yet" problem —
+`SaveOrLoadClassifier`'s own correlation window is deliberately the same order of magnitude for
+the same reason, though it is a separate instance rather than a shared one (they debounce
+different things: one a peer-comparison mismatch, one an edge correlation).
+
+**⚠ Gaps this pass did not close, named rather than hidden:**
+
+1. Everything §2's gap names applies here too, once per client — `TryRequestAdoptedWorldLoad`'s
+   main-menu-only replay is unverified against a live "already in a session" state.
+2. **Whether re-adoption survives a host load that changes which MODULE is loaded**, not just
+   the save state within one. Design doc §6 item 1 flagged this as the biggest open risk
+   already: `transition-window-races.md`'s fixes were proven against ordinary module-to-module
+   travel, a similar-shaped but unmeasured-for-THIS-case discontinuity (a save load reverts
+   EVERY piece of world state to the save, not just the module identity).
+3. **Wire latency**: whether `WorldDigest.LoadSerial`, riding the existing 1 Hz channel, reaches
+   a client fast enough that the correlation window (5 s) reliably still contains it once the
+   client's own digest classification runs. Not measured.
+
+### 4. Tests
+
+All pure, no game, no filesystem beyond what phase 1's existing helpers already used:
+
+- `tests/KotorCoop.Tests/WorldLoadRuleTests.cs` — the plugin-side primitive
+  (`WorldLoadRule.IsUnannouncedTeardown`), both cases.
+- `tests/KotorCoop.Tests/WorldLoadWatchTests.cs` — `SerialEdgeWatch` (baseline-not-a-change
+  including a zero baseline, repeats, an advancing edge, a skipped range still one edge) and
+  `SaveOrLoadClassifier` (a bare digest change is a save; a coinciding load edge is a load; a
+  load edge that arrives BEFORE the digest catches up still correlates; one outside the window
+  does not; a load edge is consumed by the first digest change and cannot match a second;
+  `Reset` forgets a pending edge).
+- `tests/KotorCoop.Tests/ClientLoadRejoinRuleTests.cs` — the rejoin decision state machine: no
+  trigger or a gated-off trigger does nothing, a genuine trigger (either `RejoinTrigger`) starts
+  a rejoin and moves to `InFlight`, a second trigger while `InFlight` is swallowed not queued or
+  restarted, `Complete` returns to `Idle` and frees the next trigger.
+- `tests/KotorCoop.Tests/SessionSaveWatchTests.cs` — new cases for `ObserveOwnVerdict`/
+  `ObserveRemoteVerdict`: establishing both baselines together is never a verdict (the
+  composition that makes "the load that IS the adoption" invisible), a bare digest change
+  classifies as Save, a coinciding load edge classifies as Load, the own and remote watches are
+  independent, and `Reset` forgets both.
+- `tests/KotorCoop.Tests/CoopConfigTests.cs` — `client_load_rejoin`/`host_load_readopt` default
+  OFF and can be turned on, mirroring `session_save_host_refusal`'s existing cases.
+- `tests/KotorCoop.Tests/PacketCodecTests.cs` — `WorldDigestLoadSerialRoundTrips`, alongside the
+  existing `WorldDigestRoundTrips`/`AnEmptyWorldDigestRoundTripsWithoutLosingItsEmptiness` (both
+  of which still pass unmodified — `LoadSerial` defaults to 0, so a caller that never mentions
+  it round-trips exactly as before).
+- **Not attempted**: a `SessionIntegrationTests`-style real-socket loopback exercising a
+  simulated load edge end-to-end. That harness drives `CoopHost`/`CoopClient` directly; the
+  detection and rejoin logic this pass added lives one layer up, in `CoopCommandDispatcher`
+  (which needs a real or stubbed `IGameBridge` with a settable `WorldLoadSerial`/`SaveIdentityDigest`
+  threaded through `SessionManager`) — building that harness is a larger, separate undertaking
+  than this pass's scope, and the pure state-machine tests above already pin every property a
+  loopback test would additionally exercise except real wire timing, which is precisely what
+  the live script below is for.
+
+### NEEDS-LIVE — nothing in this section has run against the game
+
+1. **Whether `TryGetWorldEpoch` changes on a plain SAVE.** The load-bearing INFERRED claim
+   §1 rests on — reasoned from the `UnloadModule`/object-array doc comment `TryGetWorldEpoch`
+   already cited before this pass, never measured against a real in-game save.
+2. **Whether `trans_pending` (`IsAreaTransitionPending`) is NEVER set ahead of a Load Game
+   action**, mid-session (pause menu) as well as at the main menu. If it turns out to be set —
+   even coincidentally, even rarely — `WorldLoadRule.IsUnannouncedTeardown` would silently
+   misclassify that load as an ordinary transition and neither `client_load_rejoin` nor
+   `host_load_readopt` would fire for it.
+3. **Whether `TryRequestAdoptedWorldLoad` (`MenuLoadController`'s replay) does anything at all
+   once a co-op session was already running** — as opposed to acking-and-no-opping against
+   `Odyssey.HasServer` being true from the player's own just-completed load. §2/§3's single
+   biggest open question.
+4. **End-to-end rejoin timing**: from the moment a client's Load Game action lands to the
+   moment `manager.Reconnect()` fires — whether the 60 s poll deadline in
+   `CoopCommandDispatcher.TriggerRejoin` is anywhere near the right order of magnitude.
+5. **Whether re-adoption survives a host load that changes the MODULE**, not just the save
+   state within one module (§3, gap 2).
+6. **Wire latency for `WorldDigest.LoadSerial`** reaching a client inside the 5 s correlation
+   window (§3, gap 3).
+
+### Live-test script, once the above are checked off
+
+Two real GOG installs, rebuilt plugin and agent on both (`build.ps1 -Install`), a live co-op
+session already running (host + one client, both in the same module).
+
+1. **A plain save does NOT trigger anything.** On EITHER side, save normally (in-game Save
+   menu, any slot). Expect: on a client, the existing phase-1 "session-saved character"
+   capture line only — no "rejoining" line, no disconnect, no reconnect. On the host with
+   `host_load_readopt=1`, no "everyone re-joins" line at all.
+2. **Client loads a different save mid-session.** With `client_load_rejoin=1` on the client:
+   from the in-game pause menu (NOT the main menu), Load a different save. Expect within a few
+   seconds: "you loaded a save - rejoining the host's world" on the client's screen, the co-op
+   session tears down and re-establishes, and the client lands back in the HOST's current
+   module — not the save it just picked. Watch specifically for whether the local reload
+   (`TryRequestAdoptedWorldLoad`) does anything (NEEDS-LIVE item 3) — a log line
+   `menu: autosave load refused (failure ...)` or no plugin log activity at all around the
+   request means it silently no-op'd.
+3. **Host loads a save mid-session.** With `host_load_readopt=1` on the host and
+   `client_load_rejoin=1` on every client: from the host's in-game pause menu, Load a save
+   (same module first, then repeat into a DIFFERENT module). Expect: "host loaded a save -
+   everyone re-joins" on the host's screen, and — within the 5 s correlation window plus the 1
+   Hz digest cadence — every client independently prints "host loaded a save - rejoining their
+   world" and goes through the same rejoin sequence as item 2, landing in the host's NEW
+   module.
+4. **Confirm the character survived.** After either rejoin, check hit points, experience,
+   inventory and alignment match what the loaded/reloaded character actually had — not the
+   module entry point's fresh spawn (`world-adoption.md` §7's own warning: judge health on
+   stats, never on position, for the identical reason here).
+5. **Confirm the flags are still off by default.** With both gates left at 0 (coop.ini
+   default), repeat steps 2 and 3: expect ONLY the log line ("session-save: ... verdict... NOT
+   acting (gate off)") and no visible effect on either player's game — the phase 1 behaviour
+   (client capture, host's legacy refusal if THAT flag is separately on) must be unchanged.

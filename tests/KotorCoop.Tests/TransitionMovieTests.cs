@@ -222,10 +222,11 @@ public class TransitionMovieTests
         // cannot pass by moving both to the wrong place. This pass's own bump was 42 (the
         // transition-cinematic channel); it has moved again since (43 the agent-heartbeat
         // field, 44 the peer-effect channel, 47 the transition-announce channel, 48 the
-        // mid-module movie relay region — 45 and 46 are reserved by other agents working this
-        // tree concurrently) — see the changelog comments beside `_block->Version` and
-        // `PluginSignature` for the full history.
-        Assert.Equal(48, int.Parse(version.Groups[1].Value));
+        // mid-module movie relay region, 49 the world-load edge (roadmap item 14 phase 2) —
+        // 45 and 46 are reserved by other agents working this tree concurrently) — see the
+        // changelog comments beside `_block->Version` and `PluginSignature` for the full
+        // history.
+        Assert.Equal(49, int.Parse(version.Groups[1].Value));
     }
 
     private static string RepositoryRoot()
