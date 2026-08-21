@@ -708,30 +708,52 @@ internal sealed unsafe class CheatController(SharedBlockView block)
     }
 
     /// <summary>
-    /// Gives a materialised enemy's local stand-in one item of its real corpse's actual
-    /// loot. See <see cref="SharedBlock.CheatKindGiveLoot"/> for the full field layout and
-    /// why the target is the OWNER's id, not a local one.
+    /// Gives an item to either of two targets, decided by <see cref="SharedBlock.CheatTarget"/>:
+    /// a materialised enemy's local stand-in, one item of its real corpse's actual loot (the
+    /// OWNER's enemy object id, translated locally — see
+    /// <see cref="SharedBlock.CheatKindGiveLoot"/> for the full field layout); or, when the
+    /// target is the <see cref="SharedBlock.CheatTargetLocalPlayer"/> sentinel, THIS instance's
+    /// own player directly — the receiving half of the dialogue item-grant channel
+    /// (docs/research/dialogue-consequences.md §3.4), which needs no translation at all.
     /// </summary>
     private void GiveLoot()
     {
         uint ownerEnemyId = block.CheatTarget;
-        if (ownerEnemyId is 0 or Odyssey.ObjectInvalid)
+        uint localId;
+
+        if (ownerEnemyId == SharedBlock.CheatTargetLocalPlayer)
+        {
+            // The dialogue item-grant channel (docs/research/dialogue-consequences.md §3.4):
+            // give straight to THIS instance's own player. No owner-id translation is involved
+            // — "the local player" already names the same creature on every instance — so
+            // MaterialisedEnemies.ToLocal must never be consulted for this sentinel.
+            localId = Odyssey.GetPlayerObjectId();
+            if (localId == 0)
+            {
+                Answer(SharedBlock.CheatStatusNoTarget, "giveloot: no local player to give to");
+                return;
+            }
+        }
+        else if (ownerEnemyId is 0 or Odyssey.ObjectInvalid)
         {
             Answer(SharedBlock.CheatStatusNoTarget, "giveloot needs the owner's enemy object id");
             return;
         }
-
-        uint localId = MaterialisedEnemies.ToLocal(ownerEnemyId);
-        if (localId == 0)
+        else
         {
-            // Not an error: the overwhelmingly common case is a peer holding the REAL
-            // creature (same GIT id), which already rolled its own equivalent loot
-            // independently when it died — applying this here too would double it. Only a
-            // materialised stand-in has none of its own, and only one maps through this table.
-            Answer(
-                SharedBlock.CheatStatusRefused,
-                $"0x{ownerEnemyId:X} is not a materialised stand-in here - nothing to give");
-            return;
+            localId = MaterialisedEnemies.ToLocal(ownerEnemyId);
+            if (localId == 0)
+            {
+                // Not an error: the overwhelmingly common case is a peer holding the REAL
+                // creature (same GIT id), which already rolled its own equivalent loot
+                // independently when it died — applying this here too would double it. Only a
+                // materialised stand-in has none of its own, and only one maps through this
+                // table.
+                Answer(
+                    SharedBlock.CheatStatusRefused,
+                    $"0x{ownerEnemyId:X} is not a materialised stand-in here - nothing to give");
+                return;
+            }
         }
 
         byte* text = block.CheatText;
@@ -773,9 +795,13 @@ internal sealed unsafe class CheatController(SharedBlockView block)
             (wireFlags == SharedBlock.CheatFieldUnchanged ? 0 : wireFlags) | SharedBlock.ItemIdentityKnown,
             out Odyssey.ItemIdentityFields after);
 
+        string forWhom = ownerEnemyId == SharedBlock.CheatTargetLocalPlayer
+            ? "the local player (dialogue grant)"
+            : $"owner 0x{ownerEnemyId:X}";
+
         PluginHost.Log(applied
             ? $"materialise: gave loot '{resref}' (0x{itemId:X}) to stand-in 0x{localId:X} for "
-              + $"owner 0x{ownerEnemyId:X} — stack {after.StackSize}, "
+              + $"{forWhom} — stack {after.StackSize}, "
               + $"charges {after.Charges}/{after.MaxCharges}, upgrades 0x{after.Upgrades:X}"
             : $"materialise: '{resref}' spawned as 0x{itemId:X} on 0x{localId:X} but identity "
               + $"apply failed — {Odyssey.LastItemResolveNote}");

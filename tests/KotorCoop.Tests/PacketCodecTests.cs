@@ -477,6 +477,70 @@ public class PacketCodecTests
     }
 
     [Fact]
+    public void DialogueGrantPacketsRoundTrip()
+    {
+        Span<byte> buffer = stackalloc byte[ProtocolConstants.MaxPacketSize];
+
+        MaterialisedLootItem[] items =
+        [
+            new MaterialisedLootItem("g_w_blstrpstl001", new ItemIdentity(1, 0, 0, 0, ItemIdentity.FlagKnown)),
+            new MaterialisedLootItem(
+                "g_a_class4001",
+                new ItemIdentity(20, 3, 50, 0x5, ItemIdentity.FlagKnown | ItemIdentity.FlagIdentified)),
+        ];
+
+        DialogueGrantPacket op = new(7, 42, "end_trask01", items);
+        int opLength = PacketCodec.Write(buffer, op);
+        DialogueGrantPacket? read = PacketCodec.ReadDialogueGrant(buffer[..opLength]);
+
+        Assert.NotNull(read);
+        Assert.Equal(op.OriginPeerId, read.OriginPeerId);
+        Assert.Equal(op.OpSequence, read.OpSequence);
+        Assert.Equal(op.PartnerTag, read.PartnerTag);
+        Assert.Equal(items, read.Items);
+
+        DialogueGrantAckPacket ack = new(3, 7, 42);
+        int ackLength = PacketCodec.Write(buffer, ack);
+        Assert.Equal(ack, PacketCodec.ReadDialogueGrantAck(buffer[..ackLength]));
+    }
+
+    [Fact]
+    public void DialogueGrantFitsInOneDatagramAtMaxItems()
+    {
+        Span<byte> buffer = stackalloc byte[ProtocolConstants.MaxPacketSize];
+
+        MaterialisedLootItem[] items = [.. Enumerable.Range(1, DialogueGrantPacket.MaxItems)
+            .Select(i => new MaterialisedLootItem(
+                new string('a', ProtocolConstants.MaxResrefLength),
+                new ItemIdentity((ushort)i, 3, 50, 0xFFFFFFFF, 0xFF)))];
+
+        DialogueGrantPacket op = new(1, 1, new string('b', ProtocolConstants.MaxTagLength), items);
+        int length = PacketCodec.Write(buffer, op);
+
+        Assert.True(length > 0);
+        DialogueGrantPacket? read = PacketCodec.ReadDialogueGrant(buffer[..length]);
+        Assert.NotNull(read);
+        Assert.Equal(DialogueGrantPacket.MaxItems, read.Items.Count);
+    }
+
+    [Fact]
+    public void DialogueGrantWithTooManyItemsIsRejectedRatherThanAllocatingOnAPeersNumber()
+    {
+        Span<byte> buffer = stackalloc byte[ProtocolConstants.MaxPacketSize];
+
+        // Hand-write a header + an item count past MaxItems, so the reader must refuse it
+        // rather than trust a malicious/corrupt peer's byte.
+        PacketWriter w = new(buffer);
+        w.WriteHeader(PacketType.DialogueGrant);
+        w.WriteUInt32(1);
+        w.WriteUInt32(1);
+        w.WriteString("tag", ProtocolConstants.MaxTagLength);
+        w.WriteUInt8((byte)(DialogueGrantPacket.MaxItems + 1));
+
+        Assert.Null(PacketCodec.ReadDialogueGrant(buffer[..w.Position]));
+    }
+
+    [Fact]
     public void FullItemSnapshotFitsInOneDatagram()
     {
         Span<byte> buffer = stackalloc byte[ProtocolConstants.MaxPacketSize];

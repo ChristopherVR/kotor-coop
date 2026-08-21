@@ -208,6 +208,34 @@ public sealed record MaterialisedLootPacket(
 /// is — exactly like <see cref="ContainerLootAckPacket"/>.</summary>
 public sealed record MaterialisedLootAckPacket(uint PeerId, uint OpSequence);
 
+/// <summary>
+/// One conversation's worth of net-new items placed directly into the OWNER's speaker
+/// inventory, and/or a companion the owner's party table just made available — see
+/// <see cref="PacketType.DialogueGrant"/> for the full rationale. <paramref name="PartnerTag"/>
+/// is the NPC tag the conversation was with, carried for logging/diagnostics only — dedup is
+/// entirely on (<paramref name="OriginPeerId"/>, <paramref name="OpSequence"/>), never on this.
+/// </summary>
+public sealed record DialogueGrantPacket(
+    uint OriginPeerId, uint OpSequence, string PartnerTag,
+    IReadOnlyList<MaterialisedLootItem> Items)
+{
+    /// <summary>A single reward node granting more than one item at once is rare (§5 item 3 of
+    /// dialogue-consequences.md flags it as untested, not impossible); this cap matches
+    /// <see cref="MaterialisedLootPacket.MaxItems"/> for the same "fits one datagram
+    /// comfortably" reasoning — asserted by <c>PacketCodecTests</c>.</summary>
+    public const int MaxItems = 8;
+}
+
+/// <summary>
+/// Acknowledges one <see cref="DialogueGrantPacket"/> op, in either direction. Carries the
+/// acking peer's own id plus the (origin, sequence) pair being acked — unlike
+/// <see cref="ContainerLootAckPacket"/>'s bare sequence, <see cref="DialogueGrantPacket"/> keeps
+/// the TRUE reporting peer's origin on relay rather than re-attributing it to the host, so two
+/// different origins can legitimately reuse the same sequence number and the ack has to say
+/// which one it means.
+/// </summary>
+public sealed record DialogueGrantAckPacket(uint PeerId, uint OriginPeerId, uint OpSequence);
+
 public sealed record ItemSyncRequestPacket(uint PeerId, uint KnownVersion);
 
 public sealed record ItemSnapshotPacket(uint Version, IReadOnlyList<GroundItem> Items);

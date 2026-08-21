@@ -22,20 +22,40 @@ namespace KotorCoop.Plugin;
 /// roster every tick and this reconciles against it every pass; the steady state is that there
 /// is nothing to do, which costs two masks and a compare.
 ///
-/// ⚠ WHAT THIS DOES NOT DO: it never makes a companion AVAILABLE. Recruitment itself
+/// ⚠ BY DEFAULT THIS DOES NOT MAKE A COMPANION AVAILABLE. Recruitment itself
 /// (AddAvailableNPCByTemplate) needs the blueprint the script named, which is not readable from
 /// the roster afterwards — party table +0x30 is a bare flag, set to the literal 1 at
 /// 0x00564350. Availability is expected to arrive the way it already does: the same
 /// conversation running on both instances. What diverges in practice is the PARTY SEAT, which
-/// a partial or aborted conversation gets wrong on its own, and that is what this fixes. A slot
-/// the peer has in its party and this instance has never recruited is logged, once, and
-/// skipped — see <see cref="_unavailableLogged"/>.
+/// a partial or aborted conversation gets wrong on its own, and that is what this fixes by
+/// default. A slot the peer has in its party and this instance has never recruited is logged,
+/// once, and skipped — see <see cref="_unavailableLogged"/>.
+///
+/// Behind <c>dialogue_recruit_sync=1</c> (docs/research/dialogue-consequences.md §4.2), the
+/// exception: since K1's nine companion slots are a fixed, game-defined mapping identical on
+/// both installs, the ALREADY-broadcast <c>hostAvailable</c> mask is itself sufficient — no
+/// blueprint needed — so a peer's extra bit is poked directly onto this instance's own party
+/// table (<see cref="Odyssey.TrySetSlotAvailable"/>) instead of only logged. OFF by default:
+/// whether the bare flag is enough for <c>SpawnAvailableNpc</c> to resolve a template
+/// afterward is the design doc's own NEEDS-LIVE risk, not yet confirmed.
 ///
 /// Kill switch: <c>party_roster_sync=0</c> in coop.ini.
 /// </summary>
 internal sealed unsafe class PartyRosterController(SharedBlockView block)
 {
     private readonly bool _enabled = PluginConfig.ReadBool("party_roster_sync", true);
+
+    /// <summary>
+    /// Whether an availability bit the peer has and this instance lacks is POKED directly
+    /// (<see cref="Odyssey.TrySetSlotAvailable"/>) rather than only logged and skipped —
+    /// docs/research/dialogue-consequences.md §4.2. OFF by default: the design doc's own
+    /// biggest open risk is whether the bare flag is enough for <c>SpawnAvailableNpc</c> to
+    /// resolve a template afterward, or whether <c>AddAvailableNPCByTemplate</c> also records a
+    /// second association elsewhere in the table that a raw flag poke does not touch — NEEDS
+    /// the live check that doc names before this should default on. coop.ini
+    /// <c>dialogue_recruit_sync</c>.
+    /// </summary>
+    private readonly bool _pokeAvailability = PluginConfig.ReadBool("dialogue_recruit_sync", false);
 
     /// <summary>
     /// Frames between reconciliation passes. Deliberately slow: a roster changes a handful of
@@ -218,12 +238,25 @@ internal sealed unsafe class PartyRosterController(SharedBlockView block)
 
         int addSlot = LowestSlot(toAdd);
 
-        // Not recruited here. This is the documented boundary of the channel, not a bug to
-        // retry into the ground: availability comes from the recruitment conversation running
-        // on this instance too, and nothing in the roster records the blueprint that would let
-        // us synthesise it (party table +0x30 is a bare 1, written at 0x00564350).
+        // Not recruited here. Ordinarily the documented boundary of the channel: availability
+        // comes from the recruitment conversation running on this instance too, and nothing in
+        // the roster records the blueprint that would let us synthesise it (party table +0x30
+        // is a bare 1, written at 0x00564350). Behind dialogue_recruit_sync, poke the flag
+        // directly instead of giving up — docs/research/dialogue-consequences.md §4.2: K1's
+        // nine companion slots are a fixed, game-defined mapping (slot -> blueprint is baked
+        // into nwscript.nss and identical on both installs), so the party-roster channel
+        // ALREADY carries the one bit that matters (hostAvailable, on the wire every tick);
+        // the only missing step was acting on a bit the peer has that we do not.
         if ((localAvailable & (1u << addSlot)) == 0)
         {
+            if (_pokeAvailability && Odyssey.TrySetSlotAvailable(addSlot))
+            {
+                PluginHost.Log($"party roster: poking NPC slot {addSlot} available locally "
+                    + $"(peer recruited 0x{hostAvailable:X3}, here 0x{localAvailable:X3}) — "
+                    + "dialogue_recruit_sync; falls through to spawn+add next pass if it took");
+                return;
+            }
+
             if ((_unavailableLogged & (1u << addSlot)) == 0)
             {
                 _unavailableLogged |= 1u << addSlot;

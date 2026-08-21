@@ -144,6 +144,26 @@ party_roster_sync=1
 # Ordinary conversation is fine. Recruitment is still the case to test.
 force_dialogue_party=0
 
+# A reward node's SCRIPT only ever runs on the conversation OWNER's instance - the spectator
+# never calls HandleReply, so an item the script places into the speaker's inventory (the
+# common CreateItemOnObject/GiveItem case, docs/research/dialogue-consequences.md) landed on
+# one screen only. This diffs the owner's inventory across the conversation and gives the
+# other player the same item through the same giveloot cheat channel materialised loot already
+# uses. ON by default: without it, quest-turn-in and door-unlock checks that read
+# GetItemPossessedBy(GetFirstPC()) on the OTHER instance silently fail three areas later.
+dialogue_item_sync=1
+
+# The recruitment half of the same gap: when a conversation recruits a companion, only the
+# OWNER's party table gains the availability bit (party_roster_sync above reconciles the SEAT,
+# not availability itself - see its own comment). Because K1's nine companion slots are a
+# fixed, game-defined mapping identical on both installs, the peer's availability bit is
+# ALREADY on the wire every tick (party_roster_sync's own channel); this just acts on it,
+# poking the same flag locally instead of only logging "recruitment does not replicate".
+# OFF by default - NEEDS-LIVE: docs/research/dialogue-consequences.md SS4.2's open risk is
+# whether the bare flag is enough for the engine to spawn a body afterwards, or whether
+# AddAvailableNPCByTemplate also records a second association this raw poke does not touch.
+dialogue_recruit_sync=0
+
 # Let the mod own the HUD pause button. The engine's own toggle reads server mask bit 0x02,
 # which is also the focus-loss reason FocusKeeper must keep clearing - so it can pause but
 # never unpause. OFF until the hook is confirmed by hand: it swallows the click, so if the

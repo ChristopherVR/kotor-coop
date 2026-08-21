@@ -303,4 +303,32 @@ public enum PacketType : byte
     /// loss had nothing behind it but the retransmit itself.
     /// </summary>
     LootSyncRequest = 43,
+
+    // 44 is DELIBERATELY SKIPPED — reserved on paper for PeerEffect by a concurrent agent
+    // working the same tip. Taking the next value nobody has claimed (45) costs nothing;
+    // PacketTypeTests fails the build on any duplicate.
+
+    /// <summary>
+    /// peer -&gt; host, then host -&gt; every OTHER peer: the local conversation OWNER's reward
+    /// script just put item(s) into the speaker's inventory and/or made a companion available,
+    /// and the spectating side never ran <c>HandleReply</c> so its own game never saw either —
+    /// docs/research/dialogue-consequences.md. Symmetric like <see cref="ContainerLoot"/>: a
+    /// client sends this to the host, which relays it to every other connected peer under the
+    /// SAME (origin, sequence) identity rather than re-attributing it to itself, because the
+    /// receiving side must never re-apply its OWN grant when it echoes back — see
+    /// <see cref="DialogueGrantAck"/> and <c>KotorCoop.Session.DialogueGrantSender</c>.
+    ///
+    /// Reliable via retransmit-until-ack, like <see cref="MaterialisedLoot"/>: a reward node
+    /// runs once, so a dropped packet must not silently mean the item or the recruit never
+    /// arrives on the other screen.
+    /// </summary>
+    DialogueGrant = 45,
+
+    /// <summary>Acknowledges one <see cref="DialogueGrant"/> op, in either direction — a client
+    /// confirming a report reached the host, or a host confirming a broadcast reached a client.
+    /// Carries the acking peer id plus the (origin, sequence) pair being acked, unlike
+    /// <see cref="ContainerLootAck"/>'s bare sequence, because <see cref="DialogueGrant"/> keeps
+    /// the TRUE origin on relay and two different origins can reuse the same sequence number
+    /// independently.</summary>
+    DialogueGrantAck = 46,
 }

@@ -342,4 +342,20 @@ tools/                   RE helpers, demo scripts, the kotor1_0_3 symbol databas
   two-instance session — see [docs/research/minigames.md](docs/research/minigames.md) §7 for
   what a live pass needs to check, including whether damage taken during the sequence lands
   as a lump the instant it ends. Pazaak is unrelated engine machinery and is not covered.
+- **Dialogue reward-node consequences (item grants, recruitment) are built and not yet
+  live-verified at all.** A reward node's script only ever ran on the conversation OWNER's
+  instance — the spectator never calls `HandleReply` — so an item placed into the speaker's
+  inventory used to land on one screen only. The owner's inventory is now diffed across the
+  conversation and the net-new items are given to every other player through the same
+  giveloot cheat channel materialised loot already uses (`dialogue_item_sync`, on by
+  default). Alignment shifts are left to diverge on purpose — that is two people making
+  different choices in one story, not a bug. **Recruitment availability is the riskier
+  half and defaults OFF** (`dialogue_recruit_sync=0`): it pokes a peer's recruited-companion
+  flag directly onto this instance's own party table rather than only logging that
+  recruitment does not replicate, but whether the bare flag is enough for the engine to spawn
+  a real body afterward — or whether the game's own recruit routine also records a second
+  association elsewhere in the table that a raw flag poke does not touch — has never been
+  checked against the running game. See
+  [docs/research/dialogue-consequences.md](docs/research/dialogue-consequences.md)'s "Shipped"
+  section for the full list of what a live pass still needs to confirm.
 - KOTOR 2 is untouched, and only GOG v1.0.3 addresses are known.

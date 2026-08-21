@@ -97,7 +97,16 @@ public static class ProtocolConstants
     /// so it catches that tie. LootSyncRequest (43) is new for the same reason §4.8 flags:
     /// container loot was retransmit-only with no tripwire of its own, so a straggler under
     /// sustained loss had nothing behind it but the retransmit.</summary>
-    public const byte Version = 27;
+    /// Version 29: DialogueGrant (45) / DialogueGrantAck (46) — a reward node's SCRIPT only
+    /// ever ran on the conversation OWNER's instance (docs/research/dialogue-sync.md's Layer
+    /// 1/2 gets conversations to look the same on both screens, but never runs HandleReply on
+    /// the spectating side), so an item placed into the speaker's inventory landed on one
+    /// screen only. Reliable and symmetric like ContainerLoot: whichever peer owns the
+    /// conversation reports the net-new items, the host relays to everyone else under the
+    /// SAME (origin, sequence) identity, and a receiver gives them through the existing
+    /// giveloot cheat channel. Version 28 is left for a concurrent agent's PeerEffect work
+    /// (packet 44, reserved on paper) landing separately.</summary>
+    public const byte Version = 29;
 
     /// <summary>Journal quest tags are resrefs plus a little slack.</summary>
     public const int MaxJournalTagLength = 32;

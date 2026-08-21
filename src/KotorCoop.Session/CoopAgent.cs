@@ -92,6 +92,14 @@ public sealed record AgentSettings
     /// Opinionated (it changes a client's own totals), so it is escape-hatchable.
     /// </summary>
     public bool SyncProgression { get; init; } = true;
+
+    /// <summary>
+    /// When true, an item a reward node places into the LOCAL conversation owner's inventory
+    /// is diffed and published so the other peer's engine receives the same item through the
+    /// give-loot cheat channel — docs/research/dialogue-consequences.md §3. coop.ini
+    /// <c>dialogue_item_sync</c> (default on).
+    /// </summary>
+    public bool DialogueItemSync { get; init; } = true;
 }
 
 /// <summary>
@@ -610,11 +618,19 @@ public sealed class CoopAgent(IGameBridge bridge, ICoopSession session, AgentSet
     /// them. Running totals, so a dropped datagram costs a tick rather than a hit.
     /// </summary>
     /// <summary>
-    /// One item still owed to one materialised stand-in, queued for the automatic give-loot
-    /// path to submit through the same arbitrated cheat channel a human's <c>giveloot</c>
-    /// console command uses — see <see cref="TryDequeuePendingLoot"/>.
+    /// One item still owed to a target, queued for the automatic give-loot path to submit
+    /// through the same arbitrated cheat channel a human's <c>giveloot</c> console command
+    /// uses — see <see cref="TryDequeuePendingLoot"/>.
+    ///
+    /// <paramref name="TargetObjectId"/> carries TWO different id spaces depending on where the
+    /// give came from, and <c>CheatController.GiveLoot</c> is what tells them apart: a
+    /// materialised-loot give (docs/research/enemy-materialisation.md §6) carries the OWNER's
+    /// enemy object id, translated locally via <c>MaterialisedEnemies.ToLocal</c>; a
+    /// dialogue-grant give (docs/research/dialogue-consequences.md §3) carries the well-known
+    /// local-player sentinel <c>SharedBlock.CheatTargetLocalPlayer</c>, which needs no
+    /// translation because "the local player" means the same thing on every instance.
     /// </summary>
-    public readonly record struct PendingMaterialisedLootGive(uint OwnerEnemyId, MaterialisedLootItem Item);
+    public readonly record struct PendingMaterialisedLootGive(uint TargetObjectId, MaterialisedLootItem Item);
 
     /// <summary>
     /// A materialised enemy's real corpse can carry several items, and an ambush can kill
@@ -680,6 +696,137 @@ public sealed class CoopAgent(IGameBridge bridge, ICoopSession session, AgentSet
                 _pendingLoot.Enqueue(new PendingMaterialisedLootGive(packet.OwnerEnemyId, item));
             }
         }
+
+        // The receiving half of the dialogue item-grant channel: a peer's conversation put
+        // something in THEIR inventory, relayed here, still owed a give to ours. Rides the
+        // SAME pending-give queue and the SAME single-slot cheat channel as materialised loot
+        // — see PendingMaterialisedLootGive's own doc for the two id spaces it carries.
+        foreach (DialogueGrantPacket grant in session.DrainDialogueGrants())
+        {
+            Log?.Invoke(
+                $"dialogue grant: received {grant.Items.Count} item(s) from peer {grant.OriginPeerId} "
+                + $"('{grant.PartnerTag}'), queueing");
+
+            foreach (MaterialisedLootItem item in grant.Items)
+            {
+                if (_pendingLoot.Count >= MaxPendingLoot)
+                {
+                    Log?.Invoke(
+                        $"dropping dialogue grant '{item.Resref}' from peer {grant.OriginPeerId}: "
+                        + $"already holding {MaxPendingLoot} queued gives, the drain has fallen behind");
+                    return;
+                }
+
+                _pendingLoot.Enqueue(new PendingMaterialisedLootGive(LocalPlayerObjectId, item));
+            }
+        }
+    }
+
+    /// <summary>
+    /// The well-known object id of THIS instance's own local player creature —
+    /// <c>0x7FFFFFFF</c>, VERIFIED live and identical on every install
+    /// (docs/re/object-model.md: "Player object id is exactly 0x7FFFFFFF"). Mirrors
+    /// <c>SharedBlock.CheatTargetLocalPlayer</c> in the plugin, which cannot be referenced
+    /// from here — <c>KotorCoop.Plugin</c> is a NativeAOT win-x86 library nothing may
+    /// reference — so the two sides agree by VALUE, the same way every other
+    /// <c>0x7FFFFFFF</c> reference in this codebase already does.
+    /// </summary>
+    private const uint LocalPlayerObjectId = 0x7FFFFFFF;
+
+    /// <summary>Resref counts of the local PC's inventory the last time
+    /// <see cref="PumpDialogueItemGrants"/> sampled it, for the diff against the next sample.
+    /// Empty means "no baseline yet" (conversation just started, or sampling is off).</summary>
+    private List<(string Resref, ItemIdentity Identity)> _dialogueGrantBaseline = [];
+
+    private bool _dialogueGrantOwning;
+
+    private long _dialogueGrantLastSampleMs;
+
+    /// <summary>How often the PC's inventory is actually re-swept while a conversation runs.
+    /// <see cref="IGameBridge.ReadPossessedItems"/>'s own doc warns it is a full world memory
+    /// sweep, "not free" — this is independent of, and much slower than, the combat-cadence
+    /// tick <see cref="PumpDialogue"/> (and therefore this method) rides on, so a long
+    /// conversation that grants mid-way is still caught without sweeping every ~150 ms.
+    /// </summary>
+    private const long DialogueGrantSampleIntervalMs = 1000;
+
+    /// <summary>
+    /// Diffs the local PC's possessed items across the window this instance owns a
+    /// conversation, and publishes whatever appeared as a dialogue grant —
+    /// docs/research/dialogue-consequences.md §3.2. Sampled at conversation start, every
+    /// <see cref="DialogueGrantSampleIntervalMs"/> while it continues, and once more at the
+    /// end, so a reward mid-conversation is caught rather than only a reward on the final node.
+    ///
+    /// ⚠ ONLY WHILE THIS INSTANCE OWNS THE CONVERSATION. A spectator never runs
+    /// <c>HandleReply</c>, so its own inventory cannot have changed from the conversation —
+    /// diffing there would be noise at best, and at worst would double-detect the owner's own
+    /// grant once it arrives back over the wire (which <see cref="ICoopSession.DrainDialogueGrants"/>
+    /// already filters by origin, but there is no reason to also generate the false positive).
+    /// </summary>
+    private void PumpDialogueItemGrants(bool ownsActiveConversation, string partnerTag)
+    {
+        if (!settings.DialogueItemSync)
+        {
+            return;
+        }
+
+        if (!ownsActiveConversation)
+        {
+            if (_dialogueGrantOwning)
+            {
+                // The conversation just ended: one last diff so a reward on the FINAL node
+                // (the common case — most reward scripts run on the closing entry) is caught,
+                // then the baseline is cleared so the next conversation starts fresh.
+                SampleAndPublishDialogueGrant(partnerTag);
+            }
+
+            _dialogueGrantOwning = false;
+            _dialogueGrantBaseline = [];
+            return;
+        }
+
+        if (!_dialogueGrantOwning)
+        {
+            // Just started owning a conversation: snapshot now, publish nothing yet (there is
+            // nothing to diff against on the very first sample).
+            _dialogueGrantOwning = true;
+            _dialogueGrantLastSampleMs = Environment.TickCount64;
+            _dialogueGrantBaseline = [.. bridge.ReadPossessedItems(LocalPlayerIdSet)
+                .Select(i => (i.Resref, i.Identity))];
+            return;
+        }
+
+        long nowMs = Environment.TickCount64;
+        if (nowMs - _dialogueGrantLastSampleMs < DialogueGrantSampleIntervalMs)
+        {
+            return;
+        }
+
+        _dialogueGrantLastSampleMs = nowMs;
+        SampleAndPublishDialogueGrant(partnerTag);
+    }
+
+    /// <summary>Single-element set handed to <see cref="IGameBridge.ReadPossessedItems"/> every
+    /// sample. A field rather than a fresh allocation per call — the method is on a cadence
+    /// hot enough for that to matter over a long conversation.</summary>
+    private static readonly HashSet<uint> LocalPlayerIdSet = [LocalPlayerObjectId];
+
+    private void SampleAndPublishDialogueGrant(string partnerTag)
+    {
+        List<(string Resref, ItemIdentity Identity)> after =
+            [.. bridge.ReadPossessedItems(LocalPlayerIdSet).Select(i => (i.Resref, i.Identity))];
+
+        List<MaterialisedLootItem> gained = DialogueItemDiff.Compute(_dialogueGrantBaseline, after);
+        _dialogueGrantBaseline = after;
+
+        if (gained.Count == 0)
+        {
+            return;
+        }
+
+        Log?.Invoke($"dialogue grant: {gained.Count} new item(s) in the local speaker's inventory "
+            + $"('{partnerTag}'): {string.Join(", ", gained.Select(i => i.Resref))}");
+        session.PublishDialogueGrant(partnerTag, gained);
     }
 
     /// <summary>
@@ -1131,6 +1278,11 @@ public sealed class CoopAgent(IGameBridge bridge, ICoopSession session, AgentSet
             active ? _dialogueHeldPartnerTag : string.Empty, replySerial, replyIndex, pickLog,
             active ? _dialogueHeldNode : DialogueState.NoNode,
             active ? _dialogueHeldNodeSerial : 0);
+
+        // The item-grant channel needs "do WE own an active conversation right now", which is
+        // exactly what `active` already means (debounced across the engine's between-entries
+        // flicker) — computed once here rather than re-derived, so the two never drift apart.
+        PumpDialogueItemGrants(active, active ? _dialogueHeldPartnerTag : string.Empty);
 
         // The other direction: when a peer owns a conversation, hand the plugin who they are
         // talking to and which reply they last picked, so this instance runs the SAME

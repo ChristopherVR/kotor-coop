@@ -592,6 +592,56 @@ public sealed class CoopClient : ICoopSession
         _lootSender.Enqueue(_sessionPeerId, containerId, itemId, SessionClock.NowMs);
     }
 
+    // ---- dialogue item/recruit grants ----------------------------------------------------
+
+    private readonly DialogueGrantSender _dialogueGrantSender = new();
+
+    /// <summary>Grants a peer's conversation reported, relayed by the host, still owed a give
+    /// to THIS instance's own player. Self-origin echoes are filtered out in
+    /// <see cref="HandleDialogueGrant"/>, before they ever reach this queue.</summary>
+    private readonly Queue<DialogueGrantPacket> _dialogueGrantInbox = new();
+
+    /// <summary>(origin, sequence) pairs already queued or discarded this session. Unlike
+    /// <see cref="_materialisedLootSeen"/>, this never needs a module-change reset: a
+    /// dialogue-grant sequence is a peer's own ever-increasing counter for the life of the
+    /// connection, not an object id the engine reassigns per module load.</summary>
+    private readonly HashSet<(uint Origin, uint Sequence)> _dialogueGrantSeen = [];
+
+    /// <summary>This instance's own conversation just granted something; report it to the
+    /// host, which relays to every other peer. Queued under the last admitted identity, like
+    /// <see cref="PublishContainerLoot"/>.</summary>
+    public void PublishDialogueGrant(string partnerTag, IReadOnlyList<MaterialisedLootItem> items)
+    {
+        if (_sessionPeerId == 0)
+        {
+            return;
+        }
+
+        _dialogueGrantSender.EnqueueLocal(_sessionPeerId, partnerTag, items, SessionClock.NowMs);
+    }
+
+    /// <summary>Every dialogue-grant this instance still owes a give for, oldest first. Matches
+    /// <see cref="DrainMaterialisedLoot"/>'s shape: this layer only receives, dedups and
+    /// acknowledges; the agent pump applies.</summary>
+    public IReadOnlyList<DialogueGrantPacket> DrainDialogueGrants()
+    {
+        lock (_gate)
+        {
+            if (_dialogueGrantInbox.Count == 0)
+            {
+                return [];
+            }
+
+            List<DialogueGrantPacket> ready = [];
+            while (_dialogueGrantInbox.Count > 0)
+            {
+                ready.Add(_dialogueGrantInbox.Dequeue());
+            }
+
+            return ready;
+        }
+    }
+
     // ---- phantom damage (combat participation) -----------------------------------
 
     private readonly Dictionary<uint, (uint Damage, uint Attacker)> _phantomDamageOut = [];
@@ -942,6 +992,16 @@ public sealed class CoopClient : ICoopSession
             }
         }
 
+        // Same one-recipient shape as ContainerLoot above.
+        foreach (DialogueGrantPacket op in _dialogueGrantSender.CollectDue(LootRecipients, now))
+        {
+            int grantLength = PacketCodec.Write(_sendBuffer, op);
+            if (grantLength > 0)
+            {
+                _channel.Send(_hostEndPoint, _sendBuffer.AsSpan(0, grantLength));
+            }
+        }
+
         // Report our in-world digest so the host can judge the world-time match (globals,
         // save, module GIT). Mostly stable — only the module fields move, on a module
         // change — so a low rate is plenty; only once at least one field has resolved.
@@ -1240,7 +1300,7 @@ public sealed class CoopClient : ICoopSession
         // fresh with its own pings, and never work out that it had become a ghost. Only
         // traffic the host sends to MEMBERS counts: the snapshots, the levels, the handshake.
         if (type is not (PacketType.Pong or PacketType.FlagAck or PacketType.ItemAck
-            or PacketType.JournalAck or PacketType.ContainerLootAck))
+            or PacketType.JournalAck or PacketType.ContainerLootAck or PacketType.DialogueGrantAck))
         {
             _lastInboundMs = now;
         }
@@ -1305,6 +1365,19 @@ public sealed class CoopClient : ICoopSession
                     // The ack names its sender (the host) so the shared per-recipient
                     // sender can mark exactly that recipient done.
                     _lootSender.Acknowledge(lootAck.PeerId, lootAck.OpSequence);
+                }
+
+                break;
+
+            case PacketType.DialogueGrant:
+                HandleDialogueGrant(span);
+                break;
+
+            case PacketType.DialogueGrantAck:
+                if (PacketCodec.ReadDialogueGrantAck(span) is { } dialogueGrantAck)
+                {
+                    _dialogueGrantSender.Acknowledge(
+                        dialogueGrantAck.OriginPeerId, dialogueGrantAck.OpSequence, dialogueGrantAck.PeerId);
                 }
 
                 break;
@@ -1499,6 +1572,7 @@ public sealed class CoopClient : ICoopSession
             _itemSender.ResetBackoff();
             _journalSender.ResetBackoff();
             _lootSender.ResetBackoff();
+            _dialogueGrantSender.ResetBackoff();
 
             // ...and ask for the full world back, rather than trusting three version counters
             // that an outage can leave equal-but-different. See _resyncOnConnect.
@@ -1621,6 +1695,43 @@ public sealed class CoopClient : ICoopSession
             }
 
             return ready;
+        }
+    }
+
+    /// <summary>
+    /// Records a dialogue grant relayed by the host and acks it unconditionally, like
+    /// <see cref="HandleMaterialisedLoot"/> — a duplicate arriving means our previous ack was
+    /// lost, not that the conversation ran twice.
+    ///
+    /// ⚠ SELF-ORIGIN IS FILTERED HERE, not left for the agent pump to notice. The host relays
+    /// under the TRUE origin rather than re-attributing to itself (see
+    /// <see cref="CoopHost.HandleDialogueGrant"/>), so a report THIS instance sent comes back
+    /// over the same broadcast every other client receives it on. A container-loot echo is
+    /// harmless because removing an already-removed item is a no-op; giving an already-given
+    /// item is not (<c>GiveItemToInventory</c> mints a fresh one every call), so the echo must
+    /// never reach the drain queue.
+    /// </summary>
+    private void HandleDialogueGrant(ReadOnlySpan<byte> span)
+    {
+        if (PacketCodec.ReadDialogueGrant(span) is not { } grant)
+        {
+            _channel.NoteMalformed();
+            return;
+        }
+
+        lock (_gate)
+        {
+            if (grant.OriginPeerId != _localPeerId && _dialogueGrantSeen.Add((grant.OriginPeerId, grant.OpSequence)))
+            {
+                _dialogueGrantInbox.Enqueue(grant);
+            }
+        }
+
+        int length = PacketCodec.Write(
+            _replyBuffer, new DialogueGrantAckPacket(_localPeerId, grant.OriginPeerId, grant.OpSequence));
+        if (length > 0)
+        {
+            _channel.Send(_hostEndPoint, _replyBuffer.AsSpan(0, length));
         }
     }
 
