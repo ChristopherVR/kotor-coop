@@ -265,6 +265,12 @@ none of the five turn out to be things worth replaying.
 
 ## 4. Apply-side safety — why Knockdown has no constructor yet, and Slow/Choke/Whirlwind/Frightened/"Stun" do
 
+**SUPERSEDED for Knockdown by §7 (2026-08-22).** The "at least two parameters" hazard below is
+real for `ExecuteCommandEffectComplex` in general (its `0x85`/133 and `0xA4`/164 cases DO read
+extra script arguments), but §7 shows the type-8 family AND Knockdown's OWN case (routine 134)
+read ZERO script arguments — the hazard just did not apply to the specific case Knockdown needed.
+Left below as the historical record of why this pass's predecessor declined to guess.
+
 Calling a VM effect constructor from native code (the pattern `Odyssey.ApplyDamageEffectCore`
 already uses for `EffectDamage`) requires pushing the EXACT number of stack arguments the
 compiled routine expects, then invoking it with a matching `nParams`. Get the count wrong and
@@ -576,3 +582,228 @@ pass.
 directions, no crash, no regression" — was cleared with margin: all six constructed kinds, both
 directions, local smoke tests, explicit-duration fidelity, and a clean damage-forwarding
 regression check.
+
+---
+
+## 7. Naming the remaining sub-codes, and shipping Knockdown/Paralyze/Sleep (2026-08-22)
+
+This closes the gap §3.2/§3.3/§4 left open: the five unnamed `OnApplySetState` sub-codes
+{1, 2, 4, 5, 6} are now named, and Knockdown/Paralyze/Sleep now have real apply-side
+constructors, static analysis only (no game run this pass). All three independent
+cross-checks below AGREE EXACTLY on every routine number, which is the strongest
+confirmation this document's methodology can produce without a live test.
+
+### 7.1 Why the prior pass's scan missed the routine numbers — VERIFIED
+
+§2.2 already established the compaction/jump-table's internal `(nComplexType, type, subcode)`
+triples correctly. What it could not do was tie those numbers to NAMES, because a first attempt
+to find `ExecuteCommandEffectComplex`'s (`0x005313F0`) OWN routine number(s) via
+`tools/xrefs.py 0x005313F0` finds only **one** literal 4-byte occurrence of that address anywhere
+in `.text` — at `0x0054CCA8`, inside `CSWVirtualMachineCommands::InitializeCommands` (the same
+kind of table-builder `InitializeEffects` is for the OTHER dispatch table, §1.1). That one
+`mov eax, 0x5313F0` is immediately followed by exactly two stores reusing that same register:
+
+```
+0x0054CCA8  mov eax, 0x5313f0
+0x0054CCAD  mov dword ptr [edi+0xCC], eax   ; table offset 0xCC / 4 = 51
+0x0054CCB6  mov dword ptr [edi+0x3F0], eax  ; table offset 0x3F0 / 4 = 252
+```
+
+A raw address-literal scan (`xrefs.py`'s indirect-hit search) cannot see any MORE registrations
+than this, because the compiler's own CSE reuses the SAME `eax` for every later store without
+re-embedding the address — a routine pattern visible only by reading the surrounding
+instructions, not by searching for the constant. Doing exactly that — disassembling a much
+larger span of `InitializeCommands` (`0x54B000`..`0x554000`, `tools/disasm.py`) and grepping for
+stores to the SPECIFIC table offsets `§2.2`'s compaction table already implicated
+(`0x94*4=0x250`, `0x9A*4=0x268`, `0x9D*4=0x274`, `0x9E*4=0x268`... — see below) finds **fifteen
+more** registrations of the same address, reusing the SAME `eax` loaded at `0x0054CCA8` across a
+much longer run of individually-addressed `mov [edx+off], eax` stores:
+
+```
+0x0054CFD3  mov dword ptr [edx+0x274], eax   ; 157
+0x0054D044  mov dword ptr [edx+0x214], eax   ; 133
+0x0054D04D  mov dword ptr [edx+0x73C], eax   ; 463  (not decoded further — outside our targets)
+0x0054D056  mov dword ptr [edx+0x730], eax   ; 460  (not decoded further)
+0x0054D05F  mov dword ptr [edx+0x764], eax   ; 473  (not decoded further)
+0x0054D068  mov dword ptr [edx+0x208], eax   ; 130
+0x0054D07E  mov dword ptr [edx+0x690], eax   ; 420  (not decoded further)
+0x0054D0B7  mov dword ptr [edx+0x278], eax   ; 158
+0x0054D0C0  mov dword ptr [edx+0x438], eax   ; 270  (not decoded further)
+0x0054D0A1  mov dword ptr [edx+0x648], eax   ; 402  (not decoded further)
+0x0054D0FD  mov dword ptr [edx+0x218], eax   ; 134
+0x0054D147  mov dword ptr [edx+0x250], eax   ; 148
+0x0054D1B4  mov dword ptr [edx+0x268], eax   ; 154
+0x0054D1D7  mov dword ptr [edx+0x284], eax   ; 161
+0x0054D1FA  mov dword ptr [edx+0x74C], eax   ; 467  (not decoded further)
+```
+
+`0x5313F0` (`ExecuteCommandEffectComplex`) is therefore registered at **at least 17** routine
+numbers, not 2. The 7 relevant to this document's allowlist — `0x208`(130), `0x218`(134),
+`0x250`(148), `0x268`(154), `0x274`(157), `0x278`(158), `0x284`(161) — are EXACTLY the 7
+`nComplexType` values §2.2 already decoded from the compaction/jump-table data (`0x82, 0x86,
+0x94, 0x9A, 0x9D, 0x9E, 0xA1`). This is the first cross-check: two completely different
+disassembly techniques (reading a runtime table-population site vs. reading a compiled
+switch-table's own data bytes) landed on the identical 7 numbers.
+
+### 7.2 Why arg1 is the calling routine number, not a popped script value — VERIFIED
+
+Stack arithmetic on `ExecuteCommandEffectComplex`'s own prologue settles what `[esp+0x24]` (the
+value the function switches on, `0x00531443`) actually is. Its prologue is the standard MSVC
+`/EHsc` shape: `push -1; push <unwind-table>; push fs:[0]; mov fs:[0],esp; sub esp,8; push ebp;
+push esi; push edi; push 0x8C; call 0x6FA7E6; add esp,4` — and `0x6FA7E6` (disassembled
+separately) is a small `push 1; push [esp+8]; call 0x6FD8CF; pop ecx; pop ecx; ret` helper (a
+stack-probe wrapper) that is net-zero on the caller's `esp` once its call/ret and the
+caller's `add esp,4` are accounted for. Tallying every push/pop from function entry (`esp0`) to
+the read at `0x00531443` gives `esp0 - 32` at that point, so `[esp+0x24]` = `esp0 - 32 + 0x24` =
+`esp0 + 4` — **the first stack argument at function entry**, before any of this function's own
+pushes. Per this codebase's own established calling convention (`OdysseyEffects.cs`'s existing
+`effectCtor(implementer, cachedRoutine, nParams)` calls, already confirmed live in the §6 pass),
+that slot is `cachedRoutine` — the routine number the VM used to invoke this handler.
+Cross-checked against `ExecuteCommandEffectMovementSpeedDecrease` (0x005332E0), which reads its
+OWN one declared script parameter from the SAME NUMERIC OFFSET `[esp+0x24]` but only via an
+explicit `call 0x5D1000` pop gated on `nParams==1` (`cmp eax,1` on the raw entry arg2, checked
+BEFORE this function's own `/EHsc` prologue even runs) — a totally different code shape from
+`ExecuteCommandEffectComplex`'s unconditional, un-gated read. The two functions sharing a
+numeric offset is coincidence (different local-frame sizes); what matters is `EffectComplex`
+never pops a VM-stack value before branching, while `MovementSpeedDecrease` always does. This
+means `nComplexType` is not a real NWScript-visible parameter at all — it is simply "which
+routine number got you here", and every one of the 7 targets is thus safe to invoke with
+**zero pushed script arguments** (nothing to push, since nothing is ever popped for these cases).
+
+Reading the actual case bodies at each jump target confirms this directly — none of the 7 pop
+anything before writing the effect's type/sub-code and jumping to the shared epilogue at
+`0x531781`:
+
+```
+0x0053147A  (130, Entangle)   mov dx,[0x7466C4]; mov [esi+8],dx;            jmp 0x531781   ; type 18, no subcode
+0x005314FB  (134, Knockdown)  mov dx,[0x7466CC]; mov [esi+8],dx;            jmp 0x531781   ; type 20, no subcode
+0x0053150B  (148, Paralyze)   mov ax,[0x74669C]; push 5; mov [esi+8],ax; push 0; jmp 0x53177A ; type 8, SetInteger(0,5)
+0x0053151E  (154, Sleep)      mov cx,[0x74669C]; push 6; mov [esi+8],cx; push 0; jmp 0x53177A ; type 8, SetInteger(0,6)
+0x00531532  (157, Confused)   mov dx,[0x74669C]; push 1; mov [esi+8],dx; push 0; jmp 0x53177A ; type 8, SetInteger(0,1)
+0x00531546  (158, Frightened) mov ax,[0x74669C]; push 2; mov [esi+8],ax; push 0; jmp 0x53177A ; type 8, SetInteger(0,2)
+0x00531559  (161, Stunned)    mov cx,[0x74669C]; push 4; mov [esi+8],cx; push 0; jmp 0x53177A ; type 8, SetInteger(0,4)
+```
+
+`0x53177A` calls `CGameEffect::SetInteger(effect, 0, subcode)` (`0x005036A0`, the sibling of
+`GetInteger` at `0x00503690` already used elsewhere in this doc) then falls into the same
+`0x531781` epilogue Entangle/Knockdown reach directly. The epilogue does creator-copy and
+icon-push work off `esi`/`ebp` only — no `nParams`-dependent branch anywhere in it — so a call
+with `nParams = 0` is correct for every one of these 7 cases, exactly like the true zero-param
+constructors §3/§4 already ship.
+
+### 7.3 Naming them — VERIFIED, three independent sources agreeing exactly
+
+A K1 `nwscript.nss`'s DECLARATION ORDER assigns each native function a routine number
+sequentially at compile time (the same fact `quest-sync.md` and `dialogue-consequences.md`
+already used for `CreateObject`=243). Parsing one such file's ~877 top-level function
+prototypes and indexing them 0-based:
+
+| Anchor | Declaration-order index | Independently known value | Source |
+| --- | --- | --- | --- |
+| `GetFirstPC` | 548 | 548 | `min-one-hitpoint.md` |
+| `SetMinOneHP` | 716 | 716 | `min-one-hitpoint.md` |
+| `CreateObject` | 243 | 243 | `spawn.md` |
+| `EffectAssuredHit` | 51 | 51 | THIS session's own `InitializeCommands` disassembly (§7.1) |
+| `EffectAssuredDeflection` | 252 | 252 | THIS session's own `InitializeCommands` disassembly (§7.1) |
+
+5-for-5, and the last two are not circular — they were derived from the RAW BINARY BEFORE the
+`nwscript.nss` copy was ever consulted (§7.1's table-store disassembly), so their agreement is a
+genuine independent check, not the same fact read twice. A third, fully independent, public
+source — `xoreos-tools`' own community-maintained K1 routine table
+(`src/nwscript/game_kotor.h`, fetched fresh from `github.com/xoreos/xoreos-tools` this session)
+— was cross-checked against the same 7 indices and matches EXACTLY:
+
+| Routine # | `nwscript.nss` declaration order | `xoreos-tools/game_kotor.h` | Agree? |
+| --- | --- | --- | --- |
+| 130 | `EffectEntangle` | `EffectEntangle` | ✅ |
+| 134 | `EffectKnockdown` | `EffectKnockdown` | ✅ |
+| 148 | `EffectParalyze` | `EffectParalyze` | ✅ |
+| 154 | `EffectSleep` | `EffectSleep` | ✅ |
+| 157 | `EffectConfused` | `EffectConfused` | ✅ |
+| 158 | `EffectFrightened` | `EffectFrightened` | ✅ |
+| 161 | `EffectStunned` | `EffectStunned` | ✅ |
+
+Three independent methods (a fresh disassembly of this exact binary's own table-population
+code; a K1 `nwscript.nss` copy's declaration order; a community-maintained public routine table
+built independently for the `xoreos` NCS decompiler) agreeing on all 7 numbers is as strong a
+naming as this document's own VERIFIED/INFERRED discipline recognizes. Combined with §2.2's
+already-VERIFIED `(nComplexType, type, subcode)` triples, the final sub-code table is:
+
+| Sub-code (`OnApplySetState`, type 8) | Routine # | Name | Status |
+| --- | --- | --- | --- |
+| 1 | 157 | `EffectConfused` | **VERIFIED** — not shipped (no `PeerEffectKind`; out of scope this pass) |
+| 2 | 158 | `EffectFrightened` | **VERIFIED** — a genuinely DISTINCT native from sub-code 8 (see below); not shipped |
+| 3 | — (dedicated routine, §3) | `EffectDroidStun` | already shipped as `PeerEffectKind.Stun` |
+| 4 | 161 | `EffectStunned` (general, non-droid) | **VERIFIED** — not shipped; §3.1's open question ("does a separate non-droid stun exist among the unnamed sub-codes") is answered YES |
+| 5 | 148 | `EffectParalyze` | **VERIFIED** — now shipped as `PeerEffectKind.Paralyze`, §7.4 |
+| 6 | 154 | `EffectSleep` | **VERIFIED** — now shipped as `PeerEffectKind.Sleep`, §7.4 |
+| 7 | — (dedicated routine, §3) | `EffectChoke` | already shipped |
+| 8 | — (dedicated routine, §3) | `EffectHorrified` | already shipped as `PeerEffectKind.Frightened` — see the naming note below |
+| 10 | — (dedicated routine, §3) | `EffectWhirlWind` | already shipped |
+
+Direct-type effects (no sub-code): type 18 (`nComplexType` 130) = `EffectEntangle`, not on the
+allowlist; type 20 (`nComplexType` 134) = `EffectKnockdown`, now shipped, §7.4.
+
+**Naming correction: `PeerEffectKind.Frightened` (wire value 5, sub-code 8) is really
+`EffectHorrified`, not `EffectFrightened`.** K1's nwscript.nss declares BOTH as separate native
+effects — `EffectFrightened()` at routine 158 (sub-code 2, named for the first time this pass)
+and `EffectHorrified()` at its own dedicated routine (sub-code 8, §3). The prior pass used
+"Frightened" as an ENGLISH LABEL for sub-code 8 by semantic guess (its own comment already said
+so: "VERIFIED (dedicated VM routine, name literally says Horrified)"), before either the real
+`EffectFrightened` or `EffectHorrified`'s distinctness was knowable. The NUMERIC identity shipped
+under `PeerEffectKind.Frightened` (sub-code 8) is unchanged and correct; only the English label
+was ever a guess, and it is being left as-is (not renamed) to avoid a wire-breaking change to an
+already-shipped, live-tested kind — see the XML doc notes on `PeerEffectKind.Frightened` and
+`PeerEffectKind.Sleep` (`KotorCoop.Protocol/PeerEffectKind.cs`). The real `EffectFrightened`
+(sub-code 2) has no wire kind of its own; naming five more constructors and wiring three more
+peer-effect kinds was out of this pass's scope (task asked for Paralyze/Sleep/Knockdown
+specifically), but the mapping is now fully known for whoever picks it up next.
+
+### 7.4 Implementation
+
+`OdysseyEffects.cs` gained `ApplyComplexEffect(objectId, routineIndex, ref cachedRoutine,
+durationMs, out failure)` — the same push-args/construct/apply choreography
+`ApplyZeroParamEffect` already uses, with one deliberate difference: it does NOT use
+`FindRoutine`'s first-match linear table scan. `FindRoutine` would resolve to routine 51
+(`EffectAssuredHit`, the LOWEST-numbered of the 17+ aliases) for Knockdown/Paralyze/Sleep alike —
+silently building the wrong effect for all three. Instead it verifies the SPECIFIC, VERIFIED
+routine index directly: `table[routineIndex] == ExpectedEffectComplex` (`0x005313F0`), refusing
+(logged no-op, failure code 3) if it does not — the same "wrong offset is a refusal, not a
+guess" discipline `engine-write-rules` calls for, applied to a multiply-aliased handler instead
+of a single-address one. `PeerEffectRules.HasApplyConstructor` now returns `true` for all nine
+allowlist members; `PeerEffectRules.TryMapAllowlist` now accepts sub-codes 5 (Paralyze) and 6
+(Sleep) in addition to the existing 3/7/8/10.
+
+**Known asymmetry, left deliberately unresolved this pass.** `PhantomEffectHook.cs` (the
+NativeAOT plugin file that actually runs during a live capture) carries its OWN hand-copied
+allowlist, and this pass's task explicitly excluded editing it ("a rig agent owns them").
+Knockdown's `case 20:` entry there ALREADY existed before this pass (its capture path is
+untouched and already proven live, §6: "refused: no apply-side constructor for this kind yet" —
+routing worked, only the constructor was missing), so Knockdown is fully wired end to end by
+this pass alone. Paralyze/Sleep's sub-codes 5/6 are NOT yet in `PhantomEffectHook.cs`'s copy —
+only `PeerEffectRules.cs` (protocol side, used by tests) has them. This means: `applyeffect
+paralyze`/`applyeffect sleep` aimed at `me`/an explicit id (local apply, bypassing capture
+entirely) works today; aimed at a phantom (the full forward/capture/replay test) will NOT be
+captured until `PhantomEffectHook.cs`'s `TryMapAllowlist` gets the matching `case 5:`/`case 6:`
+lines — a two-line change intentionally left for whoever next owns that file.
+
+### 7.5 Live-test additions (not run this pass — static analysis only)
+
+The next live pass, per the task's request to describe forward/local additions:
+
+```
+applyeffect knockdown              (forward AND reverse should now APPLY — capture already worked)
+applyeffect paralyze  "" 0 0 me    (local-only: proves the constructor; use "me"/an explicit id)
+applyeffect sleep     "" 0 0 me    (local-only, same reason)
+applyeffect paralyze                (aimed at a phantom: EXPECTED to still show nothing captured/
+applyeffect sleep                   forwarded on the OUT ring — PhantomEffectHook.cs gap, §7.4 —
+                                     until that file's allowlist is updated; not a bug in this pass)
+```
+
+`effects` on both sides should show `knockdown` rows behaving exactly like the six kinds §6
+already proved (`captured/forwarded` on the sender, `applied` on the receiver, for both forward
+and reverse). `paralyze`/`sleep` should show an `applied` row ONLY when targeted locally
+(`me`/an explicit id) — a phantom-aimed attempt correctly produces no OUT-ring row at all (not
+even a refusal line, since the capture-side allowlist simply does not recognize the sub-code and
+silently drops it, per `PeerEffectRules.cs`'s own "an unmapped kind is a no-op, not a crash"
+rule) until `PhantomEffectHook.cs` is updated.

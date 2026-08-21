@@ -16,12 +16,14 @@ internal static class PeerEffectKindValues
     /// effect-sync.md §3.1. Has an apply-side constructor.</summary>
     public const uint Stun = 1;
 
-    /// <summary>Engine type 8, one of the unnamed sub-codes. Capture-only — no constructor.</summary>
+    /// <summary>Engine type 8, sub-code 5 (routine 148, <c>EffectParalyze</c>). Has an
+    /// apply-side constructor as of effect-sync.md §7 (2026-08-22).</summary>
     public const uint Paralyze = 2;
 
-    /// <summary>Engine type 20 (<c>OnApplyKnockdown</c>). Capture-only this pass — the VM
-    /// routine that mints it (<c>EffectComplex</c>) has an unverified full parameter list;
-    /// see effect-sync.md §4.</summary>
+    /// <summary>Engine type 20 (<c>OnApplyKnockdown</c>, routine 134 <c>EffectKnockdown</c>).
+    /// Has an apply-side constructor as of effect-sync.md §7 (2026-08-22) — the shared
+    /// <c>ExecuteCommandEffectComplex</c> handler dispatches on the calling routine number,
+    /// not a popped script argument, so it is safe to call with zero pushed arguments.</summary>
     public const uint Knockdown = 3;
 
     /// <summary>Engine type 29 (<c>OnApplyMovementSpeedDecrease</c>). Has an apply-side
@@ -32,7 +34,8 @@ internal static class PeerEffectKindValues
     /// constructor.</summary>
     public const uint Frightened = 5;
 
-    /// <summary>Engine type 8, one of the unnamed sub-codes. Capture-only — no constructor.</summary>
+    /// <summary>Engine type 8, sub-code 6 (routine 154, <c>EffectSleep</c>). Has an apply-side
+    /// constructor as of effect-sync.md §7 (2026-08-22).</summary>
     public const uint Sleep = 6;
 
     /// <summary>Engine type 8, sub-code 7 (<c>EffectChoke</c>). Has an apply-side

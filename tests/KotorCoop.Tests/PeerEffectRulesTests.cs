@@ -16,6 +16,8 @@ public class PeerEffectRulesTests
 
     [Theory]
     [InlineData((ushort)8, 3, PeerEffectKind.Stun)]        // EffectDroidStun
+    [InlineData((ushort)8, 5, PeerEffectKind.Paralyze)]     // EffectParalyze, routine 148 — effect-sync.md §7
+    [InlineData((ushort)8, 6, PeerEffectKind.Sleep)]        // EffectSleep, routine 154 — effect-sync.md §7
     [InlineData((ushort)8, 7, PeerEffectKind.Choke)]        // EffectChoke
     [InlineData((ushort)8, 8, PeerEffectKind.Frightened)]   // EffectHorrified
     [InlineData((ushort)8, 10, PeerEffectKind.Whirlwind)]   // EffectWhirlWind
@@ -29,11 +31,9 @@ public class PeerEffectRulesTests
     }
 
     [Theory]
-    [InlineData((ushort)8, 1)]   // unnamed OnApplySetState sub-code — effect-sync.md §3.2
-    [InlineData((ushort)8, 2)]
-    [InlineData((ushort)8, 4)]
-    [InlineData((ushort)8, 5)]
-    [InlineData((ushort)8, 6)]
+    [InlineData((ushort)8, 1)]   // EffectConfused, routine 157 — NAMED (effect-sync.md §7) but not shipped
+    [InlineData((ushort)8, 2)]   // EffectFrightened, routine 158 — NAMED but not shipped (distinct from sub-code 8)
+    [InlineData((ushort)8, 4)]   // EffectStunned (general, non-droid), routine 161 — NAMED but not shipped
     [InlineData((ushort)8, 9)]   // never minted by anything this pass found
     [InlineData((ushort)8, 0)]   // sub-code only meaningful for type 8; 0 is not one of them
     [InlineData((ushort)38, 0)]  // OnApplyDamage — a real handler, but PhantomHitHook's job
@@ -54,13 +54,33 @@ public class PeerEffectRulesTests
     [InlineData(PeerEffectKind.Choke, true)]
     [InlineData(PeerEffectKind.ForcePush, true)]
     [InlineData(PeerEffectKind.Whirlwind, true)]
-    [InlineData(PeerEffectKind.Knockdown, false)]   // EffectComplex's full signature is unverified
-    [InlineData(PeerEffectKind.Paralyze, false)]    // sub-code never matched to a name
-    [InlineData(PeerEffectKind.Sleep, false)]        // sub-code never matched to a name
+    [InlineData(PeerEffectKind.Knockdown, true)]    // routine 134 — effect-sync.md §7
+    [InlineData(PeerEffectKind.Paralyze, true)]     // routine 148 — effect-sync.md §7
+    [InlineData(PeerEffectKind.Sleep, true)]        // routine 154 — effect-sync.md §7
     [InlineData(PeerEffectKind.None, false)]
     public void ApplyConstructorCoverageMatchesEffectSyncMd(PeerEffectKind kind, bool expected)
     {
         Assert.Equal(expected, PeerEffectRules.HasApplyConstructor(kind));
+    }
+
+    /// <summary>Every allowlist member now has an apply-side constructor (effect-sync.md §7,
+    /// 2026-08-22) — pinned as its own fact so a future regression (someone reverting one of
+    /// the three new cases) fails loudly rather than only showing up as a parametrized-theory
+    /// gap.</summary>
+    [Fact]
+    public void AllNineAllowlistMembersHaveAnApplyConstructor()
+    {
+        foreach (PeerEffectKind kind in Enum.GetValues<PeerEffectKind>())
+        {
+            if (kind == PeerEffectKind.None)
+            {
+                continue;
+            }
+
+            Assert.True(
+                PeerEffectRules.HasApplyConstructor(kind),
+                $"{kind} should have an apply-side constructor as of effect-sync.md §7");
+        }
     }
 
     // ---- dedup (SelectNew) -----------------------------------------------------------

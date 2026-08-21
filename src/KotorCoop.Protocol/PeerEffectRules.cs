@@ -12,6 +12,17 @@ namespace KotorCoop.Protocol;
 /// sync by hand; a mismatch means the plugin captures an effect this table would refuse to
 /// name, which the receiving side simply never applies (an unmapped kind is a no-op, not a
 /// crash) — annoying, not dangerous.
+///
+/// ⚠ KNOWN DESYNC (2026-08-22): this copy now maps sub-codes 5/6 (Paralyze/Sleep,
+/// effect-sync.md §7) but <c>PhantomEffectHook.cs</c>'s copy does not yet — that file was out
+/// of scope for the pass that added them (a rig agent owns its detour). Knockdown's CAPTURE
+/// path already worked before this pass (type 20 has no sub-code gate), so it needs no
+/// PhantomEffectHook.cs change and is fully live-testable end to end today. Paralyze/Sleep's
+/// APPLY side (<c>OdysseyEffects.ApplyEffect</c>) works and is locally testable
+/// (<c>applyeffect paralyze/sleep me</c> or an explicit id), but a peer-forwarded live test
+/// (<c>applyeffect paralyze</c> against a phantom) will not be captured until
+/// <c>PhantomEffectHook.cs</c>'s <c>TryMapAllowlist</c> gets the same two <c>case 5</c> /
+/// <c>case 6</c> lines added — that edit is intentionally left for whoever owns that file next.
 /// </summary>
 public static class PeerEffectRules
 {
@@ -33,10 +44,17 @@ public static class PeerEffectRules
                 switch (subCode)
                 {
                     case 3: kind = PeerEffectKind.Stun; return true;        // EffectDroidStun
+                    case 5: kind = PeerEffectKind.Paralyze; return true;    // EffectParalyze (effect-sync.md §7)
+                    case 6: kind = PeerEffectKind.Sleep; return true;       // EffectSleep (effect-sync.md §7)
                     case 7: kind = PeerEffectKind.Choke; return true;       // EffectChoke
                     case 8: kind = PeerEffectKind.Frightened; return true;  // EffectHorrified
                     case 10: kind = PeerEffectKind.Whirlwind; return true;  // EffectWhirlWind
-                    default: kind = PeerEffectKind.None; return false;     // unnamed sub-codes — not shipped
+                    // 1 (EffectConfused), 2 (EffectFrightened — a DISTINCT native from the
+                    // EffectHorrified this table calls "Frightened" above) and 4
+                    // (EffectStunned, the general/non-droid stun) are now NAMED
+                    // (effect-sync.md §7) but not on the wire allowlist — no PeerEffectKind
+                    // exists for them yet; a future pass's call, not this one's.
+                    default: kind = PeerEffectKind.None; return false;
                 }
 
             case 20: kind = PeerEffectKind.Knockdown; return true;  // OnApplyKnockdown
@@ -50,22 +68,25 @@ public static class PeerEffectRules
     }
 
     /// <summary>
-    /// Which kinds have a real apply-side constructor today (<c>OdysseyEffects</c>) versus
-    /// which are captured and forwarded with no replay yet, because the engine call needed to
-    /// build them was not safe to guess (Knockdown — effect-sync.md §4) or was never named
-    /// (Paralyze, Sleep — effect-sync.md §3.2/§3.3). Kept here, not just in
+    /// Which kinds have a real apply-side constructor today (<c>OdysseyEffects</c>). As of
+    /// effect-sync.md §7 (2026-08-22) that is all nine allowlist members — Knockdown, Paralyze
+    /// and Sleep all route through the shared <c>ExecuteCommandEffectComplex</c> handler at
+    /// their own VERIFIED routine numbers (134, 148, 154). Kept here, not just in
     /// <c>OdysseyEffects</c>, so a test can assert the two lists agree without touching
     /// unmanaged code.
     /// </summary>
     public static bool HasApplyConstructor(PeerEffectKind kind) => kind switch
     {
         PeerEffectKind.Stun => true,
+        PeerEffectKind.Paralyze => true,
+        PeerEffectKind.Knockdown => true,
         PeerEffectKind.Slow => true,
         PeerEffectKind.Frightened => true,
+        PeerEffectKind.Sleep => true,
         PeerEffectKind.Choke => true,
         PeerEffectKind.ForcePush => true,
         PeerEffectKind.Whirlwind => true,
-        _ => false, // Knockdown, Paralyze, Sleep — captured, not yet replayed
+        _ => false,
     };
 
     /// <summary>

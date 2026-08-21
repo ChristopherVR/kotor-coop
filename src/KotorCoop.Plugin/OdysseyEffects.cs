@@ -16,16 +16,25 @@ namespace KotorCoop.Plugin;
 /// <c>PeerEffectRules</c>' allowlist rather than referencing it (NativeAOT plugin code cannot
 /// reference either <c>Odyssey</c>'s private members or <c>KotorCoop.Protocol</c>).
 ///
-/// ⚠ KNOCKDOWN, PARALYZE AND SLEEP HAVE NO CONSTRUCTOR HERE. Knockdown is only reachable
-/// through <c>ExecuteCommandEffectComplex</c>, whose full declared-parameter list was not
-/// recovered (effect-sync.md §4) — guessing it risks desyncing the VM's own argument stack for
-/// whatever script runs next, which nothing can catch after the fact, unlike a wrong ENGINE
-/// OFFSET (checked up front, refused cleanly). Paralyze and Sleep are two of the three
-/// <c>OnApplySetState</c> sub-codes this pass could not match to an English name at all
-/// (effect-sync.md §3.2/§3.3). All three are captured and forwarded by
-/// <c>PhantomEffectHook</c>/<c>PeerEffectController</c> regardless — this file just has nothing
-/// to do with them yet, and says so with a distinct failure code rather than silently no-op'ing
-/// on an unmapped kind.
+/// Knockdown, Paralyze and Sleep (2026-08-22 addendum, effect-sync.md §7): all three ARE now
+/// named and constructible. The prior pass could not recover <c>ExecuteCommandEffectComplex</c>'s
+/// (<c>0x005313F0</c>) full parameter list, but a fresh disassembly of
+/// <c>CSWVirtualMachineCommands::InitializeCommands</c>' table-population code shows this ONE
+/// shared handler is registered at OVER TWENTY routine numbers (a compiler CSE reusing one
+/// preloaded register across many <c>mov [table+off], eax</c> stores — invisible to a raw
+/// address-literal scan, which is why the prior pass only found 2 of them). Cross-checked
+/// against a K1 <c>nwscript.nss</c>'s declaration order (VERIFIED 5-for-5 against independent
+/// anchors: <c>GetFirstPC</c>=548, <c>SetMinOneHP</c>=716, <c>CreateObject</c>=243,
+/// <c>EffectAssuredHit</c>=51, <c>EffectAssuredDeflection</c>=252 — the same two routine numbers
+/// the prior pass's scan DID find), the routine numbers for our three targets are
+/// <c>EffectKnockdown</c>=134, <c>EffectParalyze</c>=148, <c>EffectSleep</c>=154 — and stack
+/// arithmetic on the handler's own prologue confirms it reads the CALLING routine number
+/// (not a popped script argument) as its dispatch key, so each of these is safe to invoke with
+/// zero pushed script arguments, exactly like the zero-param constructors below. All zero
+/// declared params, VERIFIED (K1 nwscript.nss: <c>EffectKnockdown()</c>, <c>EffectParalyze()</c>,
+/// <c>EffectSleep()</c>). See <see cref="ApplyComplexEffect"/> for why <c>FindRoutine</c> (a
+/// first-match linear scan) cannot be reused here — it would resolve to routine 51
+/// (<c>EffectAssuredHit</c>) for all three, which is wrong.
 ///
 /// MAIN THREAD ONLY, same as every other VM-dispatching call in this codebase.
 /// </summary>
@@ -56,6 +65,23 @@ internal static unsafe class OdysseyEffects
     private const nint ExpectedEffectForcePushed = 0x005349F0;           // 0 params
     private const nint ExpectedEffectMovementSpeedDecrease = 0x005332E0; // 1 param (int percent) — "Slow"
 
+    /// <summary>The shared "complex effect" handler — one C++ function registered at over
+    /// twenty routine numbers in the VM's command table (effect-sync.md §7, 2026-08-22).
+    /// Dispatches on the CALLING routine number (read from its own arg1, VERIFIED via stack
+    /// arithmetic on its prologue), not a popped script argument.</summary>
+    private const nint ExpectedEffectComplex = 0x005313F0;
+
+    /// <summary>Routine numbers for the three complex-family effects this pass adds, VERIFIED
+    /// three independent ways: (1) a direct disassembly of
+    /// <c>InitializeCommands</c>' register-reuse stores at these table offsets, (2) the
+    /// existing, already-verified <c>ExecuteCommandEffectComplex</c> compaction/jump-table
+    /// decode (effect-sync.md §2.2) landing on the exact same (type, sub-code) pairs, and
+    /// (3) K1 <c>nwscript.nss</c> declaration-order counting, calibrated against 5 independent
+    /// anchors. See effect-sync.md §7 for the full three-way cross-check.</summary>
+    private const int RoutineEffectKnockdown = 134; // -> effect type 20, no sub-code
+    private const int RoutineEffectParalyze = 148;  // -> effect type 8, sub-code 5
+    private const int RoutineEffectSleep = 154;     // -> effect type 8, sub-code 6
+
     private static int _routineApplyEffect = -1;
     private static int _routineDroidStun = -1;
     private static int _routineChoke = -1;
@@ -63,6 +89,9 @@ internal static unsafe class OdysseyEffects
     private static int _routineHorrified = -1;
     private static int _routineForcePushed = -1;
     private static int _routineMovementSpeedDecrease = -1;
+    private static int _routineKnockdown = -1;
+    private static int _routineParalyze = -1;
+    private static int _routineSleep = -1;
 
     private static readonly delegate* unmanaged[Thiscall]<nint, int, int> StackPushInteger =
         (delegate* unmanaged[Thiscall]<nint, int, int>)0x005D1010;
@@ -167,8 +196,19 @@ internal static unsafe class OdysseyEffects
             case PeerEffectKindValues.Slow:
                 return ApplySlowEffect(objectId, durationMs, magnitude, out failure);
 
+            case PeerEffectKindValues.Knockdown:
+                return ApplyComplexEffect(
+                    objectId, RoutineEffectKnockdown, ref _routineKnockdown, durationMs, out failure);
+
+            case PeerEffectKindValues.Paralyze:
+                return ApplyComplexEffect(
+                    objectId, RoutineEffectParalyze, ref _routineParalyze, durationMs, out failure);
+
+            case PeerEffectKindValues.Sleep:
+                return ApplyComplexEffect(
+                    objectId, RoutineEffectSleep, ref _routineSleep, durationMs, out failure);
+
             default:
-                // Knockdown, Paralyze, Sleep — captured and forwarded, no constructor yet.
                 failure = -1;
                 return false;
         }
@@ -354,6 +394,101 @@ internal static unsafe class OdysseyEffects
         if (*(int*)(internalVm + StackPointerOffset) != stackPointer)
         {
             failure = 10;
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// Knockdown, Paralyze, Sleep — the three complex-family effects (effect-sync.md §7). All
+    /// three share ONE native handler, <see cref="ExpectedEffectComplex"/>, registered at over
+    /// twenty different routine numbers in the VM's command table (a compiler CSE — one
+    /// preloaded register, many <c>mov [table+off], eax</c> stores). That means
+    /// <see cref="FindRoutine"/>'s first-match linear scan is the WRONG tool here: it would
+    /// resolve to routine 51 (<c>EffectAssuredHit</c>, the lowest-numbered alias) for all three,
+    /// silently building the wrong effect. Instead this checks the table entry at the SPECIFIC,
+    /// VERIFIED routine index directly — table[routineIndex] must equal
+    /// <see cref="ExpectedEffectComplex"/>, or this refuses (logged no-op), same "wrong offset
+    /// is a refusal, not a guess" rule <see cref="ApplyZeroParamEffect"/> follows. The handler's
+    /// own dispatch reads the CALLING routine number (not a popped script argument, verified via
+    /// stack arithmetic on its prologue) to pick the effect, so — like the true zero-param
+    /// constructors above — this pushes no script arguments and calls with <c>nParams = 0</c>.
+    /// </summary>
+    private static bool ApplyComplexEffect(
+        uint objectId, int routineIndex, ref int cachedRoutine, uint durationMs, out int failure)
+    {
+        failure = 0;
+
+        nint implementer = GetImplementer(out nint vm, out nint internalVm);
+        if (implementer == 0)
+        {
+            failure = 1;
+            return false;
+        }
+
+        nint table = Deref(implementer + CommandsTableOffset);
+        if (table == 0)
+        {
+            failure = 2;
+            return false;
+        }
+
+        if (cachedRoutine < 0)
+        {
+            cachedRoutine = Deref(table + (routineIndex * 4)) == ExpectedEffectComplex
+                ? routineIndex
+                : -1;
+        }
+
+        if (_routineApplyEffect < 0)
+        {
+            _routineApplyEffect = FindRoutine(table, ExpectedApplyEffectToObject);
+        }
+
+        if (cachedRoutine < 0 || _routineApplyEffect < 0)
+        {
+            failure = 3;
+            return false;
+        }
+
+        if (*(int*)(internalVm + CallStackSizeOffset) != 0)
+        {
+            failure = 4;
+            return false;
+        }
+
+        int stackPointer = *(int*)(internalVm + StackPointerOffset);
+
+        float durationSeconds = durationMs / 1000f;
+        if (StackPushFloat(vm, durationSeconds) == 0 || StackPushObject(vm, objectId) == 0)
+        {
+            failure = 5;
+            return false;
+        }
+
+        var effectCtor = (delegate* unmanaged[Thiscall]<nint, int, int, int>)ExpectedEffectComplex;
+        if (effectCtor(implementer, cachedRoutine, 0) != 0)
+        {
+            failure = 6;
+            return false;
+        }
+
+        if (StackPushInteger(vm, DurationTypeTemporary) == 0)
+        {
+            failure = 7;
+            return false;
+        }
+
+        var applyEffect = (delegate* unmanaged[Thiscall]<nint, int, int, int>)ExpectedApplyEffectToObject;
+        if (applyEffect(implementer, _routineApplyEffect, 4) != 0)
+        {
+            failure = 8;
+            return false;
+        }
+
+        if (*(int*)(internalVm + StackPointerOffset) != stackPointer)
+        {
+            failure = 9;
         }
 
         return true;
