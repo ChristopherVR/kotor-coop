@@ -52,6 +52,9 @@ internal sealed unsafe class PartyPresenceController(SharedBlockView block)
 
     private int _repairsLogged;
 
+    /// <summary>Edge state for <see cref="PartyFreezeRule"/> — was the roster frozen last pass.</summary>
+    private bool _rosterFrozen;
+
     // mirror_smooth_ms, not the phantom's smooth_ms: companions arrive on the agent's
     // combat pump (~150 ms apart), not the 30 Hz tick — see EnemyPresenceController.
     private readonly MotionSmoother _smoother = new(
@@ -69,6 +72,7 @@ internal sealed unsafe class PartyPresenceController(SharedBlockView block)
 
         block.PartyPresenceCount = 0;
         _drivenLogged = -1;
+        _rosterFrozen = false;
     }
 
     /// <summary>
@@ -89,6 +93,29 @@ internal sealed unsafe class PartyPresenceController(SharedBlockView block)
     /// </summary>
     public void ReleaseSession()
     {
+        int restored = ReleaseAllHeld();
+
+        if (restored > 0)
+        {
+            PluginHost.Log($"party drive: released {restored} companion(s) back to your own game");
+        }
+
+        Invalidate();
+    }
+
+    /// <summary>
+    /// Puts every companion this instance currently holds Neutral and min-1-hp pinned back in
+    /// the player faction, off the pin. The cache is left alone — unlike <see cref="Invalidate"/>,
+    /// a caller may still want <see cref="_trackedId"/>/<see cref="_creature"/> afterwards (the
+    /// roster-freeze guard in <see cref="OnFrame"/> re-resolves the same bodies the moment the
+    /// freeze lifts, through the ordinary <see cref="DriveOne"/> path).
+    ///
+    /// Bodies are re-resolved by id rather than trusted from the cache: this can be called on
+    /// the same frame as a module change, and a cached creature pointer is the one thing in this
+    /// file that is never safe to use unverified.
+    /// </summary>
+    private int ReleaseAllHeld()
+    {
         int restored = 0;
 
         for (int i = 0; i < SharedBlock.PartyPresenceCapacity; i++)
@@ -102,7 +129,7 @@ internal sealed unsafe class PartyPresenceController(SharedBlockView block)
             nint creature = Odyssey.ResolveServerObject(objectId);
             if (creature == 0 || *(uint*)(creature + 0x04) != objectId)
             {
-                // The world went before the session did; there is no body left to restore.
+                // The world went before the release did; there is no body left to restore.
                 PluginHost.Log($"party drive: companion 0x{objectId:X} is gone — "
                     + "cannot put it back in the player faction");
                 continue;
@@ -112,12 +139,7 @@ internal sealed unsafe class PartyPresenceController(SharedBlockView block)
             restored++;
         }
 
-        if (restored > 0)
-        {
-            PluginHost.Log($"party drive: released {restored} companion(s) back to your own game");
-        }
-
-        Invalidate();
+        return restored;
     }
 
     public void OnFrame()
@@ -132,6 +154,61 @@ internal sealed unsafe class PartyPresenceController(SharedBlockView block)
         if (Odyssey.IsConversationActive)
         {
             return;
+        }
+
+        // ⚠ ROSTER FROZEN: A SCRIPT OWNS ONE COMPANION, NOT THIS CONTROLLER. Party table
+        // +0xF0 != -1 is the engine's own "Add/Remove/CreateParty all refuse" flag — set for a
+        // Leviathan brig beat, the Rakatan temple, any forced-solo sequence — and
+        // PartyRosterController already backs off the roster itself for the same reason. This
+        // controller drives EVERY companion body every pass, not just the one the script has
+        // taken, so it has to back off too: claiming the scripted body re-asserts movement
+        // flags underneath the script, and pinning its health mid-sequence is the exact class of
+        // bug the min-1-hp pin exists to prevent, not cause. `PartyFreezeRule` is the edge
+        // detector so the log carries exactly two lines per freeze, not one per frame.
+        //
+        // The release on the freezing edge reuses `ReleaseAllHeld` — the same "hand the
+        // companion back" path a disconnect runs through `ReleaseSession` — because a companion
+        // can walk into a freeze already held Neutral and min-1-hp pinned from a fight seconds
+        // earlier, and the pin is what re-creates the aggro lock if it is left in place (see
+        // `ApplyCompanionFaction`). The cache itself is left alone: the freeze lifting re-drives
+        // the same bodies through the ordinary `DriveOne` path below on the very next pass, so
+        // nothing needs to be forgotten and re-resolved.
+        //
+        // Solo mode (party table +0x190) is deliberately NOT touched here. It is entirely owned
+        // by the C# agent (KotorGameBridge.TryWritePartyMembers/ReleasePartyFreeze, outside this
+        // plugin) and re-asserted every agent pump regardless of what this pass does; this
+        // controller has never written it and adding a write here — untested, unverifiable
+        // without a live rig — is exactly the kind of engine write the project's own rule
+        // forbids shipping unverified. More importantly there is no evidence it needs releasing:
+        // +0xF0 (one companion under direct script control) and +0x190 (the OTHER companions'
+        // follow-AI switched off) are different fields serving different purposes, and the
+        // script driving the controlled companion does not run through the follow-AI path
+        // +0x190 gates — turning solo mode off mid-sequence would only risk the engine's own
+        // follow-AI firing on the party members the script is NOT driving, which is the bug this
+        // whole channel exists to prevent. See docs/research/party-reconciliation.md, dated
+        // entry 2026-08-21, for the full reasoning.
+        PartyFreezeAction freezeAction = PartyFreezeRule.Decide(Odyssey.IsPartyRosterFrozen(), _rosterFrozen);
+        switch (freezeAction)
+        {
+            case PartyFreezeAction.ReleaseAndLog:
+                _rosterFrozen = true;
+                int released = ReleaseAllHeld();
+                PluginHost.Log(released > 0
+                    ? $"party drive: roster frozen by the engine — released {released} "
+                        + "companion(s) held neutral and stopped driving"
+                    : "party drive: roster frozen by the engine — stopped driving companions");
+                return;
+
+            case PartyFreezeAction.StayOff:
+                return;
+
+            case PartyFreezeAction.ResumeAndLog:
+                _rosterFrozen = false;
+                PluginHost.Log("party drive: roster freeze lifted — resuming companion drive");
+                break;
+
+            case PartyFreezeAction.Drive:
+                break;
         }
 
         uint count = Math.Min(block.PartyPresenceCount, (uint)SharedBlock.PartyPresenceCapacity);
@@ -204,8 +281,8 @@ internal sealed unsafe class PartyPresenceController(SharedBlockView block)
         // Held Neutral they stop being targets; pinned min-1-hp they stop being killable here.
         // Applied in BOTH directions, so switching local_combat off puts them back in the
         // player faction on the next pass. CEASING TO MIRROR DOES NOT COME BACK THROUGH HERE —
-        // this whole method is behind OnFrame's command gate — which is what
-        // ReleaseSession is for.
+        // this whole method is behind OnFrame's command gate and roster-freeze guard — which is
+        // what ReleaseSession and the freeze guard's own ReleaseAllHeld call are for.
         ApplyCompanionFaction(
             slot, creature, objectId,
             neutral: EnemyPresenceController.LocalCombat && block.DamageDealtEnabled);
@@ -339,8 +416,10 @@ internal sealed unsafe class PartyPresenceController(SharedBlockView block)
     ///
     /// ⚠ SAVE HAZARD, PARTLY RESOLVED. Faction membership and min-1-hp are both persisted. A
     /// client that saves while local_combat is on could bake a Neutral, unkillable companion
-    /// into that save. A live toggle restores here and a disconnect restores through
-    /// <see cref="ReleaseSession"/>; a CRASH mid-session still bakes it, because nothing runs.
+    /// into that save. A live toggle restores here, a disconnect restores through
+    /// <see cref="ReleaseSession"/>, and a roster freeze (party table +0xF0) restores through
+    /// the same <see cref="ReleaseAllHeld"/> those two share, from <see cref="OnFrame"/>'s
+    /// freeze guard; a CRASH mid-session still bakes it, because nothing runs.
     /// </summary>
     private void ApplyCompanionFaction(int slot, nint creature, uint objectId, bool neutral)
     {

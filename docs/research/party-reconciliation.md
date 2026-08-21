@@ -178,3 +178,48 @@ the next gait change. Restoring either would mean writing a value we never measu
 Still open: `force_dialogue_party` remains off. The roster now reconciles after a recruitment
 conversation, but a player driven into one whose scripts do not run to the end here can still
 end up without the companion — that is the availability gap above, not a roster one.
+
+## The presence mirror gets the same roster-freeze guard the roster controller has (2026-08-21)
+
+Roadmap item 9. `PartyRosterController.Reconcile` already backs off while
+`Odyssey.IsPartyRosterFrozen()` (party table +0xF0 != -1 — a script has taken one specific
+companion under direct control: the Leviathan brig, the Rakatan temple, any forced-solo beat).
+`PartyPresenceController` had no such guard, despite driving EVERY companion body every pass —
+not just the one the script owns — so a mirroring instance kept re-claiming movement flags and
+overwriting health on a body an engine script was mid-sequence with. Fixed by the same edge
+check, extracted as `PartyFreezeRule` (`Decide(frozenNow, frozenBefore)` — Drive / ReleaseAndLog
+/ StayOff / ResumeAndLog) and wired into `PartyPresenceController.OnFrame` right after the
+conversation guard. On the freezing edge it also hands back anything currently held Neutral and
+min-1-hp pinned, through `ReleaseAllHeld` — the same call `ReleaseSession` uses on disconnect,
+factored out of it — because a companion can walk into the freeze already pinned from a fight
+seconds earlier, and the pin alone re-creates the aggro lock if left in place (see
+`ApplyCompanionFaction`'s save-hazard note). Two log lines per freeze, not one per frame:
+`PartyFreezeRule` is edge-triggered on both sides.
+
+**Solo mode (+0x190) is deliberately NOT released by this guard.** Three reasons, in order of
+how much they matter:
+
+1. **It isn't this controller's to release.** Every write to +0x190 lives in
+   `KotorGameBridge.TryWritePartyMembers`/`ReleasePartyFreeze` — the C# agent, outside the
+   plugin — which re-asserts it every pump regardless of what any plugin controller does this
+   frame. `PartyPresenceController` has never written +0x190 and this task's scope (a plugin-side
+   guard, no new engine writes) does not license adding a first write to a field a different
+   project already owns and re-asserts continuously; a write here would just race the agent's own
+   next pump.
+2. **The two fields answer different questions.** +0xF0 (`pt_controlled_npc`) says "a script
+   currently drives ONE named companion directly"; +0x190 (solo mode) says "the OTHER companions'
+   own follow-AI is switched off". Per the engine findings above, the controlled-npc path is not
+   gated by solo mode at all — RunActions dispatches follow (action id 61) through a completely
+   separate check (+0xA88, +0x4C0, `+0x9F0 & 2`) that a directly-controlled companion does not
+   go through. Turning solo mode off for the freeze's duration would not free the scripted
+   companion from anything; it would only let the engine's own follow-AI fire on the companions
+   the script is NOT driving — reintroducing the exact drift (`RunActions` issuing
+   `ActionFollowLeader` on its own) this whole channel exists to suppress.
+3. **No live evidence either way.** This project's engine-write rule requires verifying a write
+   live before shipping it, and there is no rig access from this task. Absent a measured reason
+   to touch a field this controller has never owned, the conservative call is to leave it alone
+   and record the reasoning here rather than guess at a new write.
+
+If a future NEEDS-LIVE pass ever measures the controlled companion's AI fighting solo mode during
+a real forced-solo sequence, the fix belongs in `KotorGameBridge` (the field's owner) gated on
+`IsPartyRosterFrozen`, not in this guard.
