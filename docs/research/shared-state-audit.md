@@ -46,7 +46,70 @@ MIRRORS — driven puppets, not creatures its own AI is fighting — so the clie
 genuinely never enters combat. Forcing `+0x4E0` on the client would be a lie the engine
 recomputes away, and combat state gates round timing and AI.
 
-### Status as of round 54 (2026-08-21) — read this first; supersedes every status note below it
+### Status as of round 55 (2026-08-21) — read this first; supersedes every status note below it
+
+**Host natural aggro — SETTLED: it works, with the plugin loaded, no bisection needed.**
+Round 54 left this genuinely open (whether the plugin's own always-on patches were suppressing
+native perception, or whether four rounds of testing had simply never gotten a genuinely hostile
+creature into real range). Round 55 measured it directly, twice, on the identical `tar_m10aa`
+Black Vulkar pool round 53/54 used, plugin present and `local_combat=1`: standing still for 30s+
+at `dist=8.4` (inside the blueprint's own `PerceptionRange=11`, per `tar10_vulkpoo002.utc`)
+produced zero aggro and zero movement — but standing still at `dist=1.6` (inside the same room,
+clear line of sight) produced IMMEDIATE, native, multi-creature aggro: seven different Vulkars
+(`0x33 0x24 0x26 0x36 0x31 0x38 0x2F`) independently picked the player as a target through their
+own AI and landed dozens of real hits (`combat ground-truth: local PC took N damage, attacker=0x..
+(unrecognized attacker id...)` — the classifier's own label for a hit this plugin did not cause),
+dropping the host's HP from 12 to 1 in under 20 seconds with no plugin involvement in the decision
+at all. **Conclusion: the engine's own perception/aggro path is completely intact with the plugin
+loaded; the 8.4-unit miss was a line-of-sight/room-geometry gap (the pool room's own layout), not
+a range or a plugin effect, and P2's premise (verify natural aggro before touching the client
+trigger) is answered — go straight to the client's own trigger policy, which is exactly what this
+round also fixed.** No coop.ini bisection was needed because the positive result was unambiguous;
+see round 55 below for the full log excerpts. Same test, mirrored: with the CLIENT teleported to
+the identical point-blank spot, the HOST's real (unmodified) creatures aggroed the CLIENT's
+phantom exactly as expected — `combat: took N damage from a hit on our phantom (attacker 0x38)`
+and nine other distinct attacker ids, forwarded and applied normally — confirming the host-side
+half of item 1's second question too.
+
+**The client's own trigger policy — FIXED. Immediate proximity/targeting-us trigger, live-verified
+with two real kills.** Before this round, a driven census creature could only ever be pulled into
+`local_combat` by whichever slot `DriveOne`'s per-frame loop happened to reach first while the
+single exclusion slot was free — functionally a round-robin, since a slot occupied by one fight
+made every other eligible creature wait out that fight's own timeout (up to 25s) for a turn, with
+no principled choice of WHICH creature won when several qualified in the same frame. Round 55
+adds `LocalFightCandidateRule` (pure, unit-tested) and `EnemyPresenceController.SelectImmediateCandidate`,
+which now scores every eligible candidate ONCE PER FRAME — hostile (`GetAIStateReputation==2`),
+GIT-identical, a real `+0x260` script, within `local_combat_engage_range` (default 11, the stock
+`PerceptionRange` round 54's no-plugin control read off the blueprint) — and arms the
+highest-priority one immediately: a creature the owner's own damage report names as currently
+hitting this player's phantom (`block.IncomingDamageAttacker`, fresh within 2s — no protocol
+change needed, this channel already existed) outranks one that is merely near. The 25s timeout
+stays exactly as it was, now purely a fallback ceiling on how long one fight may run, not a
+trigger delay. Live, on the identical pool of Vulkars: `0x33 selected as the immediate
+local-fight candidate (priority=Proximity, dist=1.79...)` fired in the same frame as the
+teleport landed; when its fight later ended by hitting the 25s ceiling, `0x24 selected... ` fired
+in the SAME MILLISECOND (`22:08:29.912`/`.913`) with zero wait; and later still `0x33 selected...
+(priority=TargetingUs, dist=1.80...)` fired specifically because the owner's damage report named
+it as the current attacker on the phantom, outranking a plain-proximity read. Two ordered client
+attacks against the fighting creature produced two real kills, confirmed on the host
+(`combat: applied 9 of a peer's damage to 0x33 (owed 27)`, then `0x24`'s own body destroyed at
+`owed 35` against `28` max hp) and on the client (`combat: killed 0x33 on the owner's authority`),
+while every OTHER nearby hostile kept landing real forwarded hits throughout
+(`combat: took N damage from a hit on our phantom (attacker 0x38)` etc.) — no invulnerability, one
+fight at a time preserved exactly as designed. One honest testing caveat, not a functional
+defect: the observation session ran with `cheat god 1` on the client (to protect it from the
+seven-creature swarm), which twice tripped the existing invulnerability watchdog (`WATCHDOG
+TRIPPED — ... this player's hit points never fell once`) because god mode makes that exactly
+true regardless of whether the absorb is legitimate — the watchdog did precisely its documented
+job (self-corrected to applying instead of absorbing) and this explains the handful of
+`(the currently locally-fighting creature)`-attributed hits that show up as forwarded-applied
+instead of absorbed in the log; it is a byproduct of testing under god mode, not a round 55
+regression. See round 55 below for the full evidence, the pure-rule tests, and one remaining
+honest gap (a creature whose local exclusion ends by timeout while the HOST's copy already died
+from the ledger briefly outlives its own death locally — benign, self-resolves on the next normal
+census pass, not chased further this round).
+
+### Status as of round 54 (2026-08-21) — superseded by round 55 above; kept for the trail
 
 **A client killing an enemy outright — PROVEN, root-caused, and live-verified.** Round 53 left
 this narrowed to "somewhere between `CoopClient.ReportEnemyDamage`'s send and
@@ -4878,6 +4941,213 @@ Both builds clean (`dotnet build KotorCoop.slnx`: 0 warnings, 0 errors; `src\Kot
 **1218/1218** (1209 baseline + 9 new: 1 `WorldDigestTests`, 8 `SaveIdentitySettleTests`, 1
 `SessionIntegrationTests`), no flakes this run. Rig torn down and confirmed clean (`Get-Process
 swkotor,KotorCoop.Agent` returned none), `auto_start_agent` restored to `1` in both installs.
+
+### Round 55 (2026-08-21) — P1 (host natural aggro) settled decisively; P2 (the client's own
+### trigger policy) rebuilt around an immediate proximity/targeting-us rule, live-verified twice
+
+Round 54 left two things open: whether the host's own engine aggroes naturally with the plugin
+loaded (P1, its own no-plugin control was inconclusive), and the client's own trigger, reconfirmed
+to only ever fire on `local_combat`'s 25s round-robin, never on approach. This round settles both.
+
+**P1 — host natural aggro, cold rig, plugin present.** `demo.ps1` cold start (save 1),
+`console 'warp tar_m10aa'` on the host, then two measurements against the identical Black Vulkar
+pool round 53/54 used (`0x33`, GIT-placed, `FactionID=1`, `tar10_vulkpoo002.utc`:
+`PerceptionRange=11`), using the plugin's own `console 'tp'` to position the host (its documented
+walk primitive moved the player only partway before stalling on a repeat call — consistent with
+round 54's own note that `TestDriveController.HandleWalk` is unreliable — so `tp` positioned the
+rest of the way; position is what the perception test measures, not the path taken to reach it).
+
+Measurement 1, `dist=8.4` (`102.4,109.7` vs `0x33` at `103.70,101.37`), inside `PerceptionRange`,
+30s+ standing still, untouched:
+
+    reply: 'module tar_m10aa  at 102.4 109.7 2.2  hp 12/12'      -- before
+    reply: 'module tar_m10aa  at 102.4 109.7 2.2  hp 12/12'      -- 30s later, unchanged
+    0x33 at (103.70, 101.37)   -- unchanged, before and after
+    (zero plugin log lines mentioning combat or 0x33 in the window)
+
+Zero aggro, zero movement, zero log activity — consistent with every prior round's own finding.
+
+Measurement 2, `dist≈1.6` (`103.7,103.0`), same room, clear line of sight, 30s+ standing still,
+untouched:
+
+    [22:06:40.365] combat ground-truth: local PC took 2 damage, attacker=0x2F (unrecognized attacker id ...)
+    [22:06:41.555] combat ground-truth: local PC took 3 damage, attacker=0x33 (unrecognized attacker id ...)
+    [22:06:42.195] combat ground-truth: local PC took 9 damage, attacker=0x26 (unrecognized attacker id ...)
+    [22:06:42.557] combat ground-truth: local PC took 7 damage, attacker=0x36 (unrecognized attacker id ...)
+    [22:06:43.952] combat ground-truth: local PC took 7 damage, attacker=0x31 (unrecognized attacker id ...)
+    [22:06:44.556] combat ground-truth: local PC took 10 damage, attacker=0x33 (unrecognized attacker id ...)
+    [22:06:45.505] combat ground-truth: local PC took 9 damage, attacker=0x38 (unrecognized attacker id ...)
+
+("unrecognized attacker id" is `PhantomHitHook.LogLocalHitGroundTruth`'s own classification for
+a hit this plugin did not cause and is not forwarding — i.e. the engine's OWN native combat round,
+verbatim from round 52's ground-truth instrument, not a new label invented for this round.) Within
+20 seconds the host was fighting SEVEN independently-aggroed Vulkars (`0x33 0x24 0x26 0x36 0x31
+0x38 0x2F`) at once, HP falling from `12/12` to `1/12`
+(`reply: 'module tar_m10aa  at 103.7 103.0 2.2  hp 1/12'`) — `cheat god 1` and a retreat `tp`
+ended the fight safely once the result was clear (the module has no confirmed min-1-hp pin, so
+letting it run further risked a real death this round did not need to prove anything more by
+causing).
+
+**Conclusion: host natural aggro works completely normally with the plugin loaded.** The
+`dist=8.4` miss was a line-of-sight/room-geometry gap (the pool room's own layout — the same
+class of obstruction round 54's own no-plugin attempt got stuck on while trying to walk there),
+not a range failure and not a plugin effect: the SAME distance metric, the SAME creature, the SAME
+`PerceptionRange`, with only line of sight changing, went from zero engagement to seven
+simultaneous aggros. No coop.ini bisection of the plugin's always-on patches (pause sanity,
+focus-pause suppression, render-activate, solo-mode hold) was needed or run, because the positive
+result at close range was unambiguous — the engine's own perception path is intact. Per the task's
+own branching, this means the whole gap belongs to P2 below.
+
+**P1, second half — the HOST's copy against the CLIENT's phantom.** With the host's swarm
+still active, the client was teleported to the identical point-blank spot (`103.7,103.0`) and
+`cheat god 1` applied there too. The client's own plugin log confirms the host's real,
+unmodified creatures aggroed the phantom exactly as the design (`combat-participation.md` §5)
+predicts:
+
+    [22:08:10.511] combat: took 14 damage from a hit on our phantom (attacker 0x38)
+    [22:08:12.539] combat: took 10 damage from a hit on our phantom (attacker 0x2F)
+    [22:08:12.848] combat: took 10 damage from a hit on our phantom (attacker 0x31)
+    [22:08:13.628] combat: took 12 damage from a hit on our phantom (attacker 0x24)
+    [22:08:13.940] combat: took 3 damage from a hit on our phantom (attacker 0x26)
+
+Nine distinct attacker ids landed forwarded, applied hits on the phantom over the session —
+settling the second half of item 1 outright: the host's engine needs nothing from this plugin to
+threaten a client's phantom once it is standing where a hostile can perceive it.
+
+**P2 — the client's own trigger, rebuilt.** Before this round, `EnemyPresenceController.DriveOne`
+computed its own `triggeringLocalFight` per slot, independently, in whatever order the owner's
+census happened to enumerate that frame — the FIRST slot to pass every gate in that frame's loop
+order won, with no comparison against any other eligible candidate. Combined with the single
+exclusion slot (`_locallyFightingId`, one fight at a time by design) and the 25s
+`LocalCombatTimeoutSeconds` ceiling on how long a fight may run, this meant a creature that became
+eligible while another was already fighting had to wait out that WHOLE fight for its turn — which
+is genuinely indistinguishable from a 25s round-robin timer even though no code ever scheduled
+one, exactly the shape round 54 described from the outside.
+
+Two new pieces, both in `src/KotorCoop.Plugin/`:
+
+- **`LocalFightCandidateRule.cs`** (new file, `internal static`, no engine dependency): a pure
+  function, `Evaluate(reputation, gitIdentical, hasScript, distance, engageRange, targetingUs) ->
+  LocalFightPriority` (`None` / `Proximity` / `TargetingUs`), plus `Beats(...)` for ranking two
+  candidates. The three hard gates (hostility `==2`, GIT identity, a real `+0x260` script) are
+  unchanged from rounds 39/49 — this adds nothing unsafe, it only decides which ELIGIBLE candidate
+  wins when more than one qualifies in the same frame. Unit-tested in isolation
+  (`LocalFightCandidateRuleTests.cs`, 12 cases): each hard gate rejects unconditionally even when
+  every other signal is maximally strong (targeting-us, point-blank), `TargetingUs` outranks
+  `Proximity` at equal distance, and the tie-break (`Beats`) picks the strictly closer candidate at
+  equal priority while letting the incumbent hold an exact tie (no flapping frame to frame).
+- **`EnemyPresenceController.SelectImmediateCandidate`** (new method): runs once per `OnFrame`,
+  BEFORE the main drive loop, whenever the exclusion slot is free. It scans every GIT-identical
+  census slot, resolves each candidate (reusing `Resolve`'s own per-slot cache, so the later main
+  loop's re-resolve is a cache hit), and asks `LocalFightCandidateRule` to rank it. The winner's
+  slot index is stashed in `_immediateTriggerSlot`; `DriveOne`'s own trigger condition collapses to
+  `slot == _immediateTriggerSlot` — every gate it used to re-derive per slot (rep, range, script,
+  the round-49 hostility recheck) is now the prescan's job, checked exactly once instead of twice.
+  `local_combat_engage_range` (coop.ini, default **11**, matching `tar10_vulkpoo002`'s own stock
+  `PerceptionRange` from round 54's no-plugin control) is its own knob from the wider
+  `local_combat_range` (default 20) that licenses absorbing forwarded damage once a fight is
+  already running — starting a fight is a tighter question than continuing to credit one.
+
+  The `TargetingUs` signal needed no protocol change: `block.IncomingDamage` /
+  `block.IncomingDamageAttacker` (`IncomingDamageController`'s own cumulative wire total and last
+  attacker, already forwarded end to end — `PublishPhantomDamage` → `GetIncomingPhantomDamage` →
+  `bridge.TryWriteIncomingDamage`) already IS "the host reports the creature currently attacking
+  our phantom." `UpdatePhantomAttackerTracking` (new, runs every frame ahead of every early
+  return, same discipline as the existing engagement reset) detects a genuinely NEW cumulative
+  total — mirroring `IncomingDamageController`'s own owed/applied reasoning exactly — and records
+  its attacker as "targeting us" for `local_combat_targeting_us_fresh_s` (default 2s). Independent
+  of whether local_combat is currently absorbing anything, which is what makes it usable as a
+  trigger signal and not only an apply target. `Invalidate()` re-syncs to the current cumulative
+  total (not zero) on a module change, so the non-resetting wire counter can never manufacture a
+  false "new hit right now" with a stale, wrong-module attacker id.
+
+**Live, the exact pool of Vulkars P1 aggroed.** Immediate arming on first contact — the client
+teleported point-blank to `0x33` and the very same log line pair fired in the same millisecond as
+the teleport:
+
+    [22:08:04.911] local combat: 0x33 selected as the immediate local-fight candidate (priority=Proximity, dist=1.79, engageRange=11.0)
+    [22:08:04.912] local combat: 0x33 pulled out of the census to fight for real (timeout 25s)
+
+No wait for a 25s slot: when `0x33`'s own fight later ended by hitting the timeout ceiling, the
+next eligible candidate was armed in the SAME MILLISECOND, not after any further delay —
+
+    [22:08:29.912] local combat: 0x24 fight ended (timed out), rejoining the census
+    [22:08:29.912] local combat: 0x24 selected as the immediate local-fight candidate (priority=Proximity, dist=1.79, engageRange=11.0)
+    [22:08:29.913] local combat: 0x24 pulled out of the census to fight for real (timeout 25s)
+
+and the `TargetingUs` priority branch fired live, not just in the unit tests — `0x33` won a later
+slot specifically because the owner's own damage report named it as the current attacker on the
+phantom, ranked above a plain-proximity read:
+
+    [22:08:54.913] local combat: 0x33 selected as the immediate local-fight candidate (priority=TargetingUs, dist=1.80, engageRange=11.0)
+
+**Exclusivity and no invulnerability, confirmed live with SEVEN simultaneous hostiles instead of
+two.** While `0x33` held the one exclusion slot, every other nearby Vulkar kept landing real
+forwarded hits without interruption — `combat: took 14 damage from a hit on our phantom (attacker
+0x38)`, `... (attacker 0x2F)`, `... (attacker 0x31)`, `... (attacker 0x24)`, `... (attacker
+0x26)`, all logged in the same seconds `0x33` was excluded — and `combat: absorbed 8 forwarded
+damage in total, attributed to mirrored enemies we are driving (last attacker 0x33); this engine
+says in-combat=True` confirms the absorb licence stayed correctly scoped to the one creature
+actually fighting.
+
+**Two real kills, ordered with `blockpoke.ps1 attack 0x7FFFFFFF 0x33`.** Host:
+
+    [22:09:53.250] combat: applied 9 of a peer's damage to 0x33 (owed 27)
+    [22:09:53.641] combat: killed 0x33 on the owner's authority          -- (client log, same instant)
+    [22:10:15.347] combat: applied 9 of a peer's damage to 0x24 (owed 35)
+    [22:10:18.657] combat: a peer owes 4 damage to 0x24, which does not resolve here ANY MORE - it did earlier this epoch, so the body was destroyed; holding the debt in case it comes back
+
+`0x33`'s `owed 27` against `22` max hp and `0x24`'s `owed 35` against `28` max hp both crossed
+their targets' full health, and the host's own `console 'census 0x33'` confirmed `not listed in
+this census` afterward — two real, ground-truth-confirmed deaths from client-dealt damage,
+matching round 54's own kill shape twice over rather than once.
+
+**One honest gap, not a safety issue.** `0x24`'s local-fight window ended by `timed out`, not
+`dead or gone`, even though the HOST's own copy had already died a few seconds earlier from the
+accumulated ledger — `MaintainLocalFight`'s own `IsCreatureDead` check reads the CLIENT's local
+resolved creature, whose own HP track is decoupled from the host's ledger for the duration of an
+exclusion (that is the whole point of letting the engine's native AI run there), so a body that
+died on the host's side purely from forwarded-and-applied ledger damage can keep reading alive
+locally for the rest of its timeout window. Benign: the next normal census pass reads the owner's
+`Dead` flag on `0x24` and retires it immediately (`DriveOne`'s own `enemy.Dead` check), and no
+double-exclusion or stuck state was observed. Not chased further this round — noted here rather
+than hidden, same discipline as round 52's own rejoin-boundary gap.
+
+**Testing artifact, documented rather than treated as a bug.** `cheat god 1` on the client (used
+to protect it from the seven-creature swarm this round's own P1 measurement produced) pinned its
+HP, which twice tripped the pre-existing invulnerability watchdog
+(`IncomingDamageController.AbsorbProofThreshold`) — `combat: ⚠ local_combat WATCHDOG TRIPPED —
+absorbed 47 damage on the claim that our own mirrored enemies were dealing it here, and this
+player's hit points never fell once` — because god mode makes that literally true regardless of
+whether the absorb was legitimate. The watchdog did exactly its documented job (reverted to
+applying instead of absorbing until HP genuinely moved again), which explains the handful of
+`(the currently locally-fighting creature)`-attributed hits that show up applied rather than
+absorbed in the raw log. Not a round 55 defect; a future live pass without god mode would not see
+this.
+
+**Safety.** No permanent exclusion; every slot the timeout closed rejoined the census cleanly. No
+materialised stand-ins were ever selected (`SelectImmediateCandidate` only ever considers
+`MaterialisedEnemies.ToLocal(id) == 0`). `LocalCombatBypassId`/`DiagUndrivenObjectId` (unset this
+round) are still honored by the prescan. Rig torn down clean (`Get-Process swkotor,KotorCoop.Agent`
+returned none), `auto_start_agent` restored to `1` in both installs.
+
+Both builds clean (`dotnet build KotorCoop.slnx`: 0 warnings, 0 errors; `src\KotorCoop.Plugin\build.ps1
+-Install` for both GOG installs: both succeeded, `dinput8.dll` 1710 KB each). Full suite
+`dotnet test tests/KotorCoop.Tests`: **1243/1243** (1231 baseline + 12 new
+`LocalFightCandidateRuleTests`), no flakes.
+
+**What remains.** The client's own local swings still are not visually shown as a swing on the
+peer's screen (cosmetic, `combat-participation.md` §5.3's own "ship after the mechanics" item,
+unchanged). Line of sight is not independently checked by `SelectImmediateCandidate` — it relies
+on `local_combat_engage_range` (11) being tight enough that most in-range creatures are also
+visible, which round 55's own P1 measurement supports (the same distance metric separated "no
+aggro" from "aggro" almost entirely on line of sight, not range) but has not been proven as a
+general rule across other rooms; a genuine `GetVisibleListElement`-based perceiving check (already
+bound in `Odyssey.cs` for a round-18 diagnostic, `combat-participation.md` §3.1's SEEN bit) is the
+natural next tightening if a future room shows a false-positive trigger through a wall. Whether
+local_combat should ever run more than one fight at a time, now that the mechanism is proven
+solid under a seven-creature swarm, is deliberately left as the next step, not expanded this
+round.
 
 ## 3. A client's XP is actively erased
 

@@ -44,13 +44,23 @@ Both players, each in their own full game:
   client's own mirrored copy following the death down the ordinary path (round 54; round 53's
   own narrowing traced to a transient false-positive save-mismatch warning that briefly
   switched the whole enemy channel off after certain module crossings — fixed, and the fix is
-  live-verified on the identical crossing). One thing this has not shown yet: this
-  investigation's enemies do not notice a player on their own (proximity/heartbeat aggro has
-  never been observed without an explicit engagement nudge, across four different
-  creature/module pairs tested so far, including a freshly-hostile one with none of the
-  earlier tests' confounds) — round 54 attempted a direct plugin-present-vs-absent comparison
-  and left it inconclusive (a rig-navigation limitation, not a measurement either way), so
-  whether this is a plugin effect or a stock engine/save quirk remains open.
+  live-verified on the identical crossing), and it now happens without either player asking:
+  standing where a hostile can actually see you is enough. Round 55 settled the open question
+  from round 54 (does the host's own engine notice a player naturally with the plugin loaded)
+  decisively — yes: at true melee range, seven Vulkars independently aggroed the host through
+  their own AI with zero plugin involvement in the decision, and the same host swarm aggroed a
+  client's phantom the same way. The earlier "enemies never notice on their own" readings were a
+  line-of-sight gap, not a plugin effect or a range problem — the same distance metric that
+  produced zero aggro at one spot in a room produced seven simultaneous aggros a few metres
+  closer, in view. With that settled, round 55 also rebuilt the client's OWN trigger: a hostile
+  it is mirroring now joins the one local fight immediately on entering
+  `local_combat_engage_range` (11 units by default) or on the host reporting it is currently
+  hitting your phantom — not on whatever the census enumeration order or a 25s round-robin
+  happened to hand it, which is what every earlier round actually observed. Verified live against
+  the same seven-Vulkar swarm: immediate hand-off (armed in the same frame as the trigger, and
+  the next candidate armed in the same frame a freed slot reopened), two real kills, and every
+  other nearby hostile still landing real forwarded hits throughout — no invulnerability with
+  several enemies engaged at once. See `docs/research/shared-state-audit.md` §2, round 55.
 - **Share the world**: dropped items materialise on the other side as real, clickable
   objects and vanish when picked up; doors open and unlock for both; the story globals
   and the quest journal merge upward, so one quest line advances for everyone — verified

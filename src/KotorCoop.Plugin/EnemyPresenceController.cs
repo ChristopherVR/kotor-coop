@@ -89,11 +89,6 @@ internal sealed unsafe class EnemyPresenceController(SharedBlockView block)
     private readonly uint[] _appliedOneShot = new uint[SharedBlock.EnemyCapacity];
     private readonly bool[] _oneShotPrimed = new bool[SharedBlock.EnemyCapacity];
 
-    // ROUND 49: edge-triggered per creature id, not per frame — a friendly census actor sits
-    // in the same slot every pass, and without this the reputation-gate rejection line above
-    // would spam once per frame for the entire time it stays engaged-but-non-hostile.
-    private readonly bool[] _repRejectedLogged = new bool[SharedBlock.EnemyCapacity];
-
     // The measure-smooth-decide half, shared with the party controller.
     //
     // Its own knob, not the phantom's smooth_ms: phantoms arrive at the 30 Hz tick, where
@@ -288,6 +283,22 @@ internal sealed unsafe class EnemyPresenceController(SharedBlockView block)
 
     private static float Squared(float value) => value * value;
 
+    /// <summary>
+    /// ROUND 55: how close a hostile census creature must stand to THIS player before it may be
+    /// pulled out of the census to fight immediately, in world units (coop.ini
+    /// <c>local_combat_engage_range</c>). Deliberately its own, tighter knob from
+    /// <see cref="EngagementRangeSquared"/> above: that one licenses absorbing forwarded damage
+    /// for whichever creature IS already fighting (wide, ~20u, because a driven body's position
+    /// is the owner's and only needs to be "close enough to be hitting this player here"); this
+    /// one decides whether to START a fight at all, and defaults to
+    /// `tar10_vulkpoo002`'s own stock `PerceptionRange` (11, read from its `.utc` — round 54's
+    /// no-plugin control) rather than a value picked for the absorb math, since the whole point
+    /// is "would this creature's own perception plausibly have noticed the player," not "is a
+    /// swing physically reaching."
+    /// </summary>
+    private static readonly float ImmediateEngageRange =
+        Math.Clamp(PluginConfig.ReadFloat("local_combat_engage_range", 11f), 1f, 200f);
+
     /// <summary>Owner-side ids driven on the most recent pass whose local body stood close
     /// enough to this player for its own AI to be fighting them, and when that was recorded.
     /// Frame thread only, both writes and reads.</summary>
@@ -377,9 +388,58 @@ internal sealed unsafe class EnemyPresenceController(SharedBlockView block)
     /// fight that never ends any other way (the player walks off without the engine's own
     /// disengage logic catching it, a stuck state this investigation has not observed but has
     /// no way to rule out either) still returns the creature to normal mirroring on its own.
-    /// coop.ini `local_combat_timeout_s`.</summary>
+    /// coop.ini `local_combat_timeout_s`. This is now a FALLBACK ceiling, not the trigger: round
+    /// 55's <see cref="SelectImmediateCandidate"/> arms a fresh fight the same frame the slot
+    /// frees, so a second nearby hostile no longer has to wait out this whole window for its
+    /// turn — it only bounds how long ONE fight may run once it starts.</summary>
     private static readonly double LocalCombatTimeoutSeconds =
         Math.Clamp(PluginConfig.ReadFloat("local_combat_timeout_s", 25f), 5f, 120f);
+
+    // ---- ROUND 55: the immediate proximity/targeting-us trigger
+    // (docs/research/shared-state-audit.md §2, round 55). Before round 55 the ONLY thing that
+    // ever pulled a creature into local_combat was DriveOne finding it eligible in whatever
+    // order the owner's census happened to enumerate that frame — first found wins, which in
+    // practice meant a creature only got its turn once whatever slot was already fighting timed
+    // out, up to LocalCombatTimeoutSeconds later, looking indistinguishable from a round-robin
+    // timer even though nothing in this file ever scheduled one. SelectImmediateCandidate now
+    // looks at every eligible candidate THIS FRAME before arming anything, so the creature that
+    // starts fighting is the one LocalFightCandidateRule ranks highest (attacking our phantom
+    // right now, else nearest hostile within local_combat_engage_range) rather than an
+    // enumeration-order accident, and a freed slot is refilled the very next frame.
+
+    /// <summary>The slot <see cref="SelectImmediateCandidate"/> chose to trigger THIS frame, or
+    /// -1 when nothing qualifies. Computed once per <see cref="OnFrame"/> pass, before the main
+    /// drive loop runs, so <see cref="DriveOne"/> only ever has to ask "am I that slot" instead
+    /// of re-deriving eligibility itself.</summary>
+    private int _immediateTriggerSlot = -1;
+
+    /// <summary>Edge-triggered log dedupe: only the OWNER id that most recently won the slot,
+    /// so a creature that keeps winning frame after frame (nothing else nearby yet) does not
+    /// spam a line every single pass.</summary>
+    private uint _lastLoggedImmediateOwnerId;
+
+    /// <summary>The owner-space cumulative total <see cref="block"/>'s <c>IncomingDamage</c>
+    /// read on the most recent frame — mirrors <see cref="IncomingDamageController"/>'s own
+    /// "cumulative, never a delta" reasoning so a genuine NEW hit can be told apart from the
+    /// same total re-read every frame.</summary>
+    private uint _lastIncomingDamageSeen;
+
+    /// <summary>Owner-space id of whichever creature most recently landed a NEW hit on this
+    /// player's phantom, per the owner's own damage report — the strongest "is this creature
+    /// fighting us right now" signal this design has, since it is not inferred from position at
+    /// all, it is the owner's engine saying so. 0 when nothing has hit recently or the last
+    /// known attacker id was invalidated by a module change (<see cref="Invalidate"/>).</summary>
+    private uint _phantomAttackerId;
+
+    /// <summary>When <see cref="_phantomAttackerId"/> was last confirmed by a genuine NEW hit
+    /// (Stopwatch-relative seconds, same clock <see cref="OnFrame"/> already uses).</summary>
+    private double _phantomAttackerAt = double.NegativeInfinity;
+
+    /// <summary>Past this the attacker id is stale evidence — the wire total simply has not
+    /// moved in a while, which is the ordinary "not currently being hit" case, not proof this
+    /// creature stopped. coop.ini <c>local_combat_targeting_us_fresh_s</c>.</summary>
+    private static readonly double PhantomAttackerFreshSeconds =
+        Math.Clamp(PluginConfig.ReadFloat("local_combat_targeting_us_fresh_s", 2f), 0.5f, 10f);
 
     /// <summary>
     /// Whether <paramref name="ownerObjectId"/> — an attacker id in the OWNER's id space, the
@@ -443,11 +503,29 @@ internal sealed unsafe class EnemyPresenceController(SharedBlockView block)
         // ROUND 52: same reason, for the ground-truth diagnostic's own static mirrors.
         _locallyFightingIdShared = 0;
         _drivenCount = 0;
+
+        // ROUND 55: same reason again — the cumulative wire total does NOT reset on a module
+        // change (IncomingDamageController's own doc comment: resetting it would replay the
+        // session's whole damage history), so re-sync to whatever it already reads rather than
+        // zeroing it, or the very next frame would read it as one giant "new hit" and hand a
+        // stale, wrong-module attacker id top priority. The id itself is invalidated
+        // unconditionally — an old module's id could coincidentally name a live creature here.
+        _lastIncomingDamageSeen = block.IncomingDamage;
+        _phantomAttackerId = 0;
+        _phantomAttackerAt = double.NegativeInfinity;
+        _immediateTriggerSlot = -1;
+        _lastLoggedImmediateOwnerId = 0;
     }
 
     public void OnFrame()
     {
         double now = _clock.Elapsed.TotalSeconds;
+
+        // ROUND 55: ahead of everything else, same discipline as the engagement reset below —
+        // a hit can land on our phantom regardless of what else this pass does or skips, and a
+        // stale read here would misattribute "who is fighting us right now" to whatever id
+        // happened to be here last.
+        UpdatePhantomAttackerTracking(now);
 
         // Rebuilt from scratch every pass, so a body that stops being driven — or walks out
         // of range — stops licensing an absorb on the very next pass rather than decaying.
@@ -516,6 +594,10 @@ internal sealed unsafe class EnemyPresenceController(SharedBlockView block)
             return;
         }
 
+        // ROUND 55: decided ONCE, before any slot is claimed or driven this pass, so DriveOne
+        // never has to pick "whichever slot got here first" — see the field's own doc comment.
+        SelectImmediateCandidate(count, player);
+
         int driven = 0;
 
         for (int i = 0; i < count; i++)
@@ -559,6 +641,142 @@ internal sealed unsafe class EnemyPresenceController(SharedBlockView block)
             _drivenLogged = driven;
             PluginHost.Log($"enemy drive: mirroring {driven} of the owner's {count} enemies");
         }
+    }
+
+    /// <summary>
+    /// ROUND 55. Reads the owner's own damage report for a genuinely NEW hit on this player's
+    /// phantom (block.IncomingDamage is cumulative, exactly like IncomingDamageController's own
+    /// owed/applied pair, so a rising total is the "new hit" edge and a flat one is not) and, if
+    /// one arrived, records its attacker as "fighting us right now" for
+    /// <see cref="PhantomAttackerFreshSeconds"/>. Independent of local_combat's own absorb
+    /// state — this total keeps arriving whether or not anything is currently being absorbed,
+    /// which is exactly what makes it useful as a trigger signal rather than only an apply
+    /// target.
+    /// </summary>
+    private void UpdatePhantomAttackerTracking(double now)
+    {
+        uint incoming = block.IncomingDamage;
+        if (incoming > _lastIncomingDamageSeen)
+        {
+            _phantomAttackerId = block.IncomingDamageAttacker;
+            _phantomAttackerAt = now;
+        }
+
+        _lastIncomingDamageSeen = incoming;
+    }
+
+    /// <summary>Whether <paramref name="ownerObjectId"/> is the creature the owner's own damage
+    /// report most recently named as landing a hit on this player's phantom, within the
+    /// freshness window — see <see cref="UpdatePhantomAttackerTracking"/>.</summary>
+    private bool IsAttackingOurPhantom(uint ownerObjectId, double now) =>
+        ownerObjectId != 0 && ownerObjectId == _phantomAttackerId
+        && now - _phantomAttackerAt <= PhantomAttackerFreshSeconds;
+
+    /// <summary>
+    /// ROUND 55. Chooses which slot, if any, <see cref="DriveOne"/> should arm into a real fight
+    /// THIS frame — every eligible candidate is considered before anything is claimed, so the
+    /// winner is <see cref="LocalFightCandidateRule"/>'s highest-priority pick (attacking our
+    /// phantom right now, else nearest hostile within <see cref="ImmediateEngageRange"/>) rather
+    /// than whichever slot the owner's census happened to enumerate first. Only ever considers
+    /// GIT-identical slots (a materialised stand-in is never eligible — see DriveOne's own
+    /// "GIT-IDENTICAL CREATURES ONLY" note) and reuses <see cref="Resolve"/>'s own cache, so
+    /// calling it here and again from the main loop a few lines later costs nothing extra on the
+    /// common cache-hit path.
+    /// </summary>
+    private void SelectImmediateCandidate(uint count, nint player)
+    {
+        _immediateTriggerSlot = -1;
+
+        if (!LocalCombat || player == 0 || _locallyFightingId != 0)
+        {
+            return;
+        }
+
+        uint playerId = Odyssey.GetPlayerObjectId();
+        if (playerId == 0)
+        {
+            return;
+        }
+
+        double now = _clock.Elapsed.TotalSeconds;
+        LocalFightPriority bestPriority = LocalFightPriority.None;
+        float bestDistance = float.MaxValue;
+        uint bestOwnerId = 0;
+
+        for (int i = 0; i < count; i++)
+        {
+            EnemyPresenceView enemy = block.GetEnemyPresence(i);
+
+            if (enemy.ObjectId == 0 || enemy.ObjectId == Odyssey.ObjectInvalid || enemy.Dead
+                || (LocalCombatBypassId != 0 && enemy.ObjectId == LocalCombatBypassId)
+                || (DiagUndrivenObjectId != 0 && enemy.ObjectId == DiagUndrivenObjectId)
+                || MaterialisedEnemies.ToLocal(enemy.ObjectId) != 0)
+            {
+                // Dead/absent slots, the two diagnostics, and materialised stand-ins are never
+                // candidates — StartLocalFight only ever fires a GIT-identical creature's own
+                // script.
+                continue;
+            }
+
+            nint creature = Resolve(i, enemy.ObjectId);
+            if (creature == 0 || creature == player
+                || *(uint*)(creature + CrePartyFollowInfo) != 0)
+            {
+                // Unresolvable, the player's own body (defensive — should never collide here),
+                // or a mirrored companion party sync already owns.
+                continue;
+            }
+
+            float distance = PlanarDistance(creature, player);
+            if (distance > ImmediateEngageRange || !Odyssey.HasCreatureScriptSlot0x260(creature))
+            {
+                // Cheap gates first: an engine call (reputation, next) is only worth making once
+                // range and the script-slot requirement already pass.
+                continue;
+            }
+
+            int reputation = Odyssey.GetAIStateReputation(creature, playerId);
+            bool targetingUs = IsAttackingOurPhantom(enemy.ObjectId, now);
+
+            LocalFightPriority priority = LocalFightCandidateRule.Evaluate(
+                reputation, gitIdentical: true, hasScript: true, distance, ImmediateEngageRange,
+                targetingUs);
+
+            if (priority != LocalFightPriority.None
+                && LocalFightCandidateRule.Beats(priority, distance, bestPriority, bestDistance))
+            {
+                bestPriority = priority;
+                bestDistance = distance;
+                bestOwnerId = enemy.ObjectId;
+                _immediateTriggerSlot = i;
+            }
+        }
+
+        if (bestOwnerId != _lastLoggedImmediateOwnerId)
+        {
+            _lastLoggedImmediateOwnerId = bestOwnerId;
+            if (bestOwnerId != 0)
+            {
+                PluginHost.Log(
+                    $"local combat: 0x{bestOwnerId:X} selected as the immediate local-fight "
+                    + $"candidate (priority={bestPriority}, dist={bestDistance:F2}, "
+                    + $"engageRange={ImmediateEngageRange:F1})");
+            }
+        }
+    }
+
+    /// <summary>Planar distance between two resolved creatures, in world units. Shared by
+    /// <see cref="SelectImmediateCandidate"/> (immediate-trigger ranking) — <see cref="IsEngaged"/>
+    /// below computes the same dx/dy for its own squared-range test, kept separate because one
+    /// needs the real distance for ranking and logging and the other only ever needs a
+    /// threshold comparison.</summary>
+    private static float PlanarDistance(nint a, nint b)
+    {
+        Vec3 pa = Odyssey.GetPosition(a);
+        Vec3 pb = Odyssey.GetPosition(b);
+        float dx = pa.X - pb.X;
+        float dy = pa.Y - pb.Y;
+        return MathF.Sqrt((dx * dx) + (dy * dy));
     }
 
     private bool DriveOne(int slot, EnemyPresenceView enemy, double now, nint player)
@@ -679,44 +897,17 @@ internal sealed unsafe class EnemyPresenceController(SharedBlockView block)
             return true;
         }
 
-        // ROUND 46: decided BEFORE the claim below runs, not after — see that claim's own
-        // ROUND 46 note for why. This is the same trigger condition StartLocalFight's own
-        // call site tested after Drive() before this round; computed once here and reused
-        // below (nothing between here and there changes creature, player, or mapped).
-        bool triggeringLocalFight = LocalCombat && player != 0 && _locallyFightingId == 0
-            && mapped == 0 && IsEngaged(creature, player) && Odyssey.HasCreatureScriptSlot0x260(creature);
-
-        // ROUND 49 GATE. Round 48 found the freeze rounds 9-47 chased was never a mechanism
-        // bug: the census-tracked creature every round since 44 tested against read FRIENDLY
-        // (rep=1) toward the player through the engine's own GetAIStateReputation — measured
-        // on the unmodified HOST too. The co-op census deliberately carries non-hostile story
-        // actors (presence replication is not "this thing wants to fight"), so without this
-        // gate a candidate that can never win GN_DetermineCombatRound's own hostility check
-        // gets pulled out of the census anyway, sits there for the full timeout, and rejoins —
-        // a wasted exclusion, not a real fight. Reuses the exact engine call StartLocalFight's
-        // own probe already reads, so this decision and that probe's reading can never
-        // disagree. Checked ONLY once the cheaper gates above already passed — GetAIStateReputation
-        // is an engine call, not a field read.
-        if (triggeringLocalFight)
-        {
-            int repForGate = Odyssey.GetAIStateReputation(creature, Odyssey.GetPlayerObjectId());
-            if (repForGate != 2)
-            {
-                triggeringLocalFight = false;
-                if (!_repRejectedLogged[slot])
-                {
-                    _repRejectedLogged[slot] = true;
-                    PluginHost.Log(
-                        $"local combat: 0x{enemy.ObjectId:X} rejected as a local_combat "
-                        + $"candidate - rep(creature,player)={repForGate} "
-                        + "(2=hostile required, this is a friendly/neutral census actor)");
-                }
-            }
-            else
-            {
-                _repRejectedLogged[slot] = false;
-            }
-        }
+        // ROUND 55: decided by SelectImmediateCandidate BEFORE this loop ever started, not
+        // re-derived per slot. Every gate that used to live here — LocalCombat on, a player to
+        // fight, the slot free, GIT identity, range, a real +0x260 script, AND (round 49) the
+        // engine's own rep==2 hostility check — is exactly what SelectImmediateCandidate already
+        // required of the winner before naming it; re-checking any of it here would only risk
+        // disagreeing with the very decision this IS supposed to carry out. mapped==0 holds by
+        // construction whenever this is true (SelectImmediateCandidate only ever considers
+        // GIT-identical slots), so nothing downstream that used to gate on `mapped == 0` here
+        // needs to change.
+        bool triggeringLocalFight =
+            LocalCombat && player != 0 && _locallyFightingId == 0 && slot == _immediateTriggerSlot;
 
         // Re-claim every pass, not once: the local AI re-queues combat and movement
         // actions between frames, and an armed MoveToPoint at the queue head is the
@@ -1079,7 +1270,6 @@ internal sealed unsafe class EnemyPresenceController(SharedBlockView block)
         _appliedOneShot[slot] = 0;
         _oneShotPrimed[slot] = false;
         _originalCaptured[slot] = false;
-        _repRejectedLogged[slot] = false;
         _smoother.Reset(slot);
     }
 
