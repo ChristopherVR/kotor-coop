@@ -70,10 +70,10 @@ public class TransitionAnnounceTests
     {
         Assert.Equal(49, (byte)PacketType.TransitionAnnounce);
 
-        // 47 and 48 stay free for other agents working this tree concurrently — same rule
-        // as the pre-existing 39 reservation TransitionMovieTests already pins.
-        Assert.DoesNotContain(Enum.GetValues<PacketType>(), type => (byte)type == 47);
-        Assert.DoesNotContain(Enum.GetValues<PacketType>(), type => (byte)type == 48);
+        // 47 and 48 were reserved for concurrent work while this channel was built and have
+        // since landed as CreatureLiveness and TriggerRelay; the numbering stays contiguous.
+        Assert.Equal(47, (byte)PacketType.CreatureLiveness);
+        Assert.Equal(48, (byte)PacketType.TriggerRelay);
     }
 
     [Fact]
