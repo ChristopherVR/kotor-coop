@@ -46,7 +46,41 @@ MIRRORS — driven puppets, not creatures its own AI is fighting — so the clie
 genuinely never enters combat. Forcing `+0x4E0` on the client would be a lie the engine
 recomputes away, and combat state gates round timing and AI.
 
-### Status as of round 53 (2026-08-21) — read this first; supersedes every status note below it
+### Status as of round 54 (2026-08-21) — read this first; supersedes every status note below it
+
+**A client killing an enemy outright — PROVEN, root-caused, and live-verified.** Round 53 left
+this narrowed to "somewhere between `CoopClient.ReportEnemyDamage`'s send and
+`CoopHost.GetEnemyDamage`'s merge." Round 54 traced it: both directions of the channel share
+one gate, `CoopAgent.PumpEnemies`'s `(caps & SessionCapabilities.Enemies) == 0` early return
+(`CoopAgent.cs:2054`), and round 53's own transient `[W_SAVE]` — the thing round 43/44 called a
+self-resolving timing race — was silencing it. Root cause: `WorldDigest.Compare`'s
+save-identity check had no `sameModule` gate (unlike the module GIT check three lines below it,
+which already had one for the identical reason), so an ordinary crossing where one peer's
+autosave-on-transition lands before the other's reads as a save-identity mismatch by the letter
+of the check. **Fixed two ways**, both in `KotorCoop.Protocol`: `WorldDigest.Compare` now
+gates `SaveIdentityMismatch` on `sameModule`, and a new `SaveIdentitySettle` debounces the
+residual few seconds of same-module cache lag (a mismatch is honored only once observed
+continuously for 5s; agreement clears it instantly). Re-run live, the identical `tar_m10aa`
+crossing round 53 used: **no `[W_SAVE]` line at all this time**, and a real fight landed the
+kill both directions — host `combat: applied 6...7...9 of a peer's damage to 0x33 (owed 22)`
+(exactly `0x33`'s max hp), `materialised loot: 1 enemy death(s) noticed... captured 2 item(s)
+off 0x33's corpse`, and the client's own mirrored copy following it down the ordinary path,
+`combat: killed 0x33 on the owner's authority`. See round 54 at the end of this section for the
+fix, the tests (a loopback integration test confirming the session/protocol layer was never
+broken, a debounce unit suite, and a live-transient-crossing integration test), and the full
+evidence.
+
+**Natural aggro — still open.** Reconfirmed on tar_m10aa's genuinely-hostile (not stale-save
+friendly) Vulkars: only `local_combat`'s own 25-second round-robin timer ever engaged one, at
+`dist=14.56` — never proximity, never the engine's own perception. A direct no-plugin
+comparison (the task's own "cheapest test") was attempted this round and left inconclusive by
+the test rig's own navigation limits (no reliable way to position a character near a hostile
+without the plugin's own `tp`, and no reliable programmatic walk exists even WITH the plugin)
+— recorded honestly as a rig gap, not as a negative result. See round 54 for what was tried,
+what it ruled out along the way (the blueprint's own perception script is stock, unmodified),
+and the concrete next step (stage a save already in range before pulling the plugin).
+
+### Status as of round 53 (2026-08-21) — superseded by round 54 above; kept for the trail
 
 **Real lethality PROVEN, on a module without a min-1-hp pin.** Round 52 left three things
 open: natural aggro, real lethality, and a client killing an enemy outright. This round ran a
@@ -4677,6 +4711,172 @@ Build clean (`dotnet build KotorCoop.slnx`: 0 warnings, 0 errors; `build.ps1 -In
 GOG installs: both succeeded, 0 warnings, 0 errors). Full suite `dotnet test
 tests/KotorCoop.Tests`: **1194/1194** (1192 baseline + 2 new `CoopConfigTests` cases), no
 flakes. Rig torn down (`demo.ps1 -Stop`) and confirmed clean (`Get-Process
+swkotor,KotorCoop.Agent` returned none), `auto_start_agent` restored to `1` in both installs.
+
+### Round 54 (2026-08-21) — P1 (the transient `[W_SAVE]`) root-caused and fixed, live-verified
+### with a real kill; P2 (natural aggro) reconfirmed open, a direct no-plugin test attempted and
+### left inconclusive by the test rig's own navigation limits, not by anything measured
+
+Round 53 left two things open: why the client's dealt damage never reached the host's apply
+step, and whether the plugin or the harness explains zero natural aggro. This round closes the
+first with a live kill and narrows the second without settling it.
+
+**P1 — static trace first, per the task's own branch.** `SessionIntegrationTests.cs` already
+had `ClientEnemyDamageReachesTheHost` (a real host+client over loopback UDP, asserting
+`client.ReportEnemyDamage` reaches `host.GetEnemyDamage`) — run in isolation, it **passed**
+(`Passed! - Failed: 0, Passed: 1, Skipped: 0, Total: 1`), and the full suite passed at the
+pre-round baseline. This rules out a session/protocol-layer regression outright: the transport,
+`PacketCodec`, `CoopHost.HandleEnemyDamage`, and `PeerDamageLedger.Merge` (unit-tested
+separately in `PeerDamageLedgerTests.cs`) all work. Per the task's own branching, this makes the
+live cause capability-related, not a protocol regression — confirmed live below.
+
+**Root cause, found by tracing `CoopAgent.PumpEnemies`'s own gate.** Both halves of the
+damage channel — the client's `session.ReportEnemyDamage` call and the host's
+`session.GetEnemyDamage`/`_peerDamage.Merge`/`bridge.TryPublishDamageOwed` call — live inside
+the SAME function, `CoopAgent.PumpEnemies`, which returns at its very first line whenever
+`(caps & SessionCapabilities.Enemies) == 0` (`CoopAgent.cs:2054`). Round 43 already established
+that `W_SAVE`/`W_GIT` drop `ContentCompatibility.ObjectIdKeyed` (`Enemies | Doors | GroundItems
+| Party`) together as one mask — so the transient `[W_SAVE]` round 53 saw silences the ENTIRE
+function, both directions, for as long as it reads true. That much was already on record; this
+round found WHY the crossing reads as a mismatch at all.
+
+`SaveDigest.TryComputeSaveIdentity` (`src/KotorCoop.Memory/SaveDigest.cs:145`) folds the module
+the save is CURRENTLY standing in into the identity hash (`FnvString(FnvOffset,
+moduleSav.Resref...)`), alongside the `Mod_NextObjId` counters and the module's own GIT id
+list. That is exactly right for catching two genuinely different saves — but it also means the
+digest legitimately, correctly changes the instant EACH side's own engine autosaves into a new
+module on an ordinary transition. The two peers never autosave in the same instant: one follows
+the other by however long the travel and load take, plus `SaveDigestCache`'s own up-to-2-second
+re-stat interval on each side (`StampCheckIntervalMs = 2000`, `RefreshSaveIfStale`). For that
+whole window the faster peer's digest already names the new module while the slower peer's
+still names the old one — and critically, `WorldDigest.Compare`'s save-identity check
+(`src/KotorCoop.Protocol/WorldDigest.cs`) had **no gate on this at all**: unlike the module GIT
+check three lines below it, which is `sameModule &&`-gated for exactly this reason ("while one
+peer is mid-transit the digests describe different areas"), the save-identity comparison ran
+unconditionally. So an ordinary crossing reads, correctly by the letter of the check and
+incorrectly by its intent, as a save-identity mismatch — `W_SAVE` fires and drops combat for
+everyone, every single time one player's transition takes longer than the other's.
+
+**Fix, two layers, both in `KotorCoop.Protocol` where host and client both compute from
+(pure, no clock needed for the first one):**
+
+1. **`WorldDigest.Compare` now gates `SaveIdentityMismatch` on `sameModule`**, the same
+   boolean the GIT check already used. While the two peers report different modules — the
+   ordinary state of "still travelling" — a save-identity disagreement is uninformative
+   (nothing id-keyed is shared across two different modules anyway, so there is nothing to
+   protect by judging it) and is no longer compared at all. This closes the majority of the
+   race: the client hasn't even reported a new module yet, so the raw comparison never runs.
+2. **`SaveIdentitySettle` (new, `src/KotorCoop.Protocol/SaveIdentitySettle.cs`)** — a small
+   stateful debounce, one instance per client-side view and one per host-side peer connection
+   (`CoopClient._saveSettle`, `CoopHost.PeerConnection.SaveSettle`) — absorbs the RESIDUAL gap:
+   once both sides agree on the module, each side's own `SaveDigestCache` may still be holding
+   the pre-transition digest for up to its own 2-second re-stat interval (the identity job runs
+   off the save file's on-disk stamp, not the module read directly out of engine memory, so the
+   two do not update in lockstep). A save-identity mismatch is only honored once it has been
+   observed continuously for `DefaultSettleMs` (5000 ms); a single clean tick clears it
+   immediately, so recovery is never delayed — only the ONSET of a new mismatch is. Wired in at
+   `CoopClient.RefineCompatibility` and `CoopHost.EffectiveVerdict`, reset on a fresh Welcome
+   (client) and implicitly fresh on every new `PeerConnection` (host, since a reconnecting peer
+   gets a brand-new one already).
+
+**Tests.** `WorldDigestTests.SaveIdentityIsOnlyJudgedWhenBothPeersStandInTheSameModule` (mirrors
+the existing GIT test); `SaveIdentitySettleTests.cs` (8 cases: a single-tick mismatch is
+suppressed, a mismatch that persists past the window is honored, the exact transient-then-agree
+sequence never reads as a mismatch, recovery is instant, `Reset` forgets an in-flight timer);
+`SessionIntegrationTests.ATransientSaveIdentityMismatchNeverDropsCombat` (real `CoopHost` +
+`CoopClient` over loopback UDP: publishes a genuine crossing — host already in `tar_m10aa`,
+client still in `end_m01aa` for 1.5s, then both agree — and asserts `Enemies` is never dropped
+at any sampled point, then holds the agreeing state for 4 more seconds to confirm it never gets
+honored late either). The pre-existing `ASaveIdentityMismatchDegradesToIdIndependentChannels`
+and `AModuleGitMismatchDropsIdChannelsThereAndRestoresInTheNextModule` (both same-module by
+construction, so unaffected by the new gate) still pass unchanged, confirming a REAL,
+persistent mismatch still degrades exactly as designed.
+
+**Live re-run, the exact round-53 recipe, same rig, same module.** Fresh `demo.ps1` cold start
+(save 1), `console 'warp tar_m10aa'` on the host. This round's crossing:
+
+    [21:15:25] * warping to tar_m10aa...
+    [21:15:26] hosting on 0.0.0.0:27140  ...  module area1  ...  combat [FIGHT in area1 - engaged: you]
+    [21:15:26] * session-save: host-side save-identity edge detected - NOT refusing (session_save_host_refusal=0)
+    [21:15:27] hosting on 0.0.0.0:27140  ...  module tar_m10aa  ...  combat [nobody here is fighting]
+    [21:15:58] hosting on 0.0.0.0:27140  ...  module tar_m10aa  ...  combat [nobody here is fighting]
+
+**No `[W_SAVE]` line at all** — compare round 53's identical recipe, which fired it at
+`[21:09:35]`, ~5-7s after the warp landed. `console 'census'` on the client immediately after
+read `MIRROR 26 id(s) 'tar_m10aa': 26 resolve here, 0 do not` — the channel was never silenced
+this time.
+
+**The kill, live, both directions.** Client teleported to `dist≈2` from `0x33` (the identical
+Black Vulkar round 53 used, 22 hp) and ordered to attack (`blockpoke.ps1 attack 0x7FFFFFFF
+0x33`). Host's `kotorcoop-plugin.log`, verbatim:
+
+    [21:17:09.852] combat: applied 6 of a peer's damage to 0x33 (owed 6)
+    [21:17:12.832] combat: applied 7 of a peer's damage to 0x33 (owed 13)
+    [21:17:19.072] combat: applied 9 of a peer's damage to 0x33 (owed 22)
+
+22 applied = `0x33`'s exact max hp. Host agent readout, same moment: `* materialised loot: 1
+enemy death(s) noticed this pass: 0x33` / `* materialised loot: captured 2 item(s) off 0x33's
+corpse, publishing` — a REAL death, with a corpse and real loot, exactly as
+`peer-damage-ledger.md`'s headline promised and round 53 could not yet show. Host `census 0x33`
+immediately after: `not listed in this census` (dead, removed from the owner's own census).
+Client's plugin log, same window: `[21:17:19.398] combat: killed 0x33 on the owner's authority`
+— the client's own mirrored copy following the real death down the ordinary enemy-snapshot
+path, not a synthetic kill-request. This settles round 53's own open item: `DamageOwedCount`
+moved, `combat: applied` fired, and the kill produced a real death on both instances. The fight
+continued onto a second Vulkar (`0x24`) with the identical shape (`applied` climbing 7→16→22→
+29→36, then `does not resolve here ANY MORE - the body was destroyed`) — not a one-shot fluke.
+
+**P2 — reconfirmed open; a direct no-plugin test was attempted and is recorded as
+inconclusive, not negative.** Before the fix's own crossing, the client's plugin log showed
+`0x33` "fighting" the player for ~25s while the player stood `dist=14.56` away — but reading
+the surrounding lines shows this was `local_combat`'s own 25-second ROUND-ROBIN TIMER pulling
+`0x33` out of the census and forcing `StartLocalFight`'s `+0x260` script fire
+(`local combat: 0x33 pulled out of the census to fight for real (timeout 25s)`, logged at
+`dist=14.56`, not on approach) — not proximity- or perception-triggered engagement. This
+reconfirms rounds 44-53's own repeated finding on a FRESH creature/module pair: the probe read
+genuinely hostile (`local combat probe: 0x33 ... rep(creature,player)=2 rep(player,creature)=2`,
+avoiding round 48's stale-reputation confound), yet nothing organic ever engaged it — only the
+plugin's own timer-forced arming ever did, on every creature this whole investigation has ever
+tested.
+
+Attempted the task's own cheapest test — instance 1 launched with `dinput8.dll` renamed aside,
+same save (`Load Game` → `Auto Save`, confirmed `Taris / Black Vulkar Base`), navigated with
+`tools/click.ps1`/`tools/sendkey.ps1` and `tools/shot.ps1` for visual feedback (no plugin means
+no `blockpoke.ps1 tp`/`console`, and — newly confirmed this round — `TestDriveController.HandleWalk`'s
+own documented brokenness means there is no reliable programmatic walk EVEN WITH the plugin, so
+positioning near a hostile without the plugin has no proven-reliable primitive at all in this
+codebase today). Reached the Black Vulkar base's pool room and confirmed the blueprint itself
+is unremarkable (`tools/kotorfiles.py gff` on `tar10_vulkpoo002.utc`: `ScriptOnNotice
+k_def_percept01`, `PerceptionRange 11`, `FactionID 1`, `Plot 0` — the same stock perception
+script and range every ordinary KOTOR hostile uses), but blind keyboard/click navigation
+without a live visual-feedback loop could not reliably close the distance to a live Vulkar
+within the session's time budget (repeated `w`/`s`/`a`/`d` holds oscillated between two fixed
+points in a corridor, apparently blocked by a stationary Pool Droid and/or Trask's own scripted
+position near the entrance, confirmed by `tools/creatures.ps1`'s position reads — a raw
+memory-scan tool needing no plugin — rather than by anything resembling a pause). **This is a
+rig-navigation limitation, not a measurement either way** — recorded honestly rather than
+reported as a negative result. `dinput8.dll` was restored and confirmed identical to the
+freshly built one (`Get-FileHash`, both `A904346...73AF`, matching).
+
+**Recommended next step for whoever picks P2 up:** the blocker is specifically "no reliable way
+to position a character near a hostile without the plugin's own `tp`." Stage a save file
+already standing within `local_combat_range` of a live hostile in `tar_m10aa` (via the plugin's
+own `tp` + an in-game quicksave, which needs a scan-code addition to `tools/sendkey.ps1` — no
+quicksave key is mapped in it today — or a menu-driven manual save) BEFORE removing
+`dinput8.dll`, so the no-plugin instance only has to load, not navigate. With that in hand,
+round 51's own C1/C2 passive-wait methodology (30s untouched, `console 'where'`-equivalent
+ground truth before and after — here, `tools/creatures.ps1`'s raw memory read, since there is
+no plugin to ask) applies directly.
+
+**Safety.** No materialised stand-in selected on the P1 re-run (`0x33`/`0x24` both GIT-identical
+throughout). No permanent exclusion, no absorb/watchdog warnings. The P2 no-plugin instance
+never reached a live hostile, so it could not have damaged, materialised, or exclusion-locked
+anything; it was closed cleanly (`Stop-Process`) with no other instance running alongside it.
+
+Both builds clean (`dotnet build KotorCoop.slnx`: 0 warnings, 0 errors; `src\KotorCoop.Plugin\build.ps1
+-Install` for both GOG installs: both succeeded). Full suite `dotnet test tests/KotorCoop.Tests`:
+**1218/1218** (1209 baseline + 9 new: 1 `WorldDigestTests`, 8 `SaveIdentitySettleTests`, 1
+`SessionIntegrationTests`), no flakes this run. Rig torn down and confirmed clean (`Get-Process
 swkotor,KotorCoop.Agent` returned none), `auto_start_agent` restored to `1` in both installs.
 
 ## 3. A client's XP is actively erased

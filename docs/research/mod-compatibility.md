@@ -165,6 +165,17 @@ before a difference counts. The module GIT additionally requires both peers to r
 SAME module — while one is mid-transit the two digests describe different areas, and
 comparing them would flag every ordinary module change as a mod difference.
 
+⚠ **Updated 2026-08-21 (round 54, `shared-state-audit.md` §2): save identity gets the same
+same-module gate, and a short debounce besides.** `SaveIdentity` folds in the CURRENT module
+name, so it legitimately changes the instant each side's own engine autosaves into a new
+module — and the two peers never do that in the same instant. Comparing it while they report
+different modules produced a live, repeatable `W_SAVE` false alarm on an ordinary crossing
+(both saves genuinely identical, `Enemies|Doors|GroundItems|Party` dropped for several
+minutes). Fixed: `WorldDigest.Compare` now judges `SaveIdentityMismatch` only when
+`sameModule`, same as the GIT check above; `SaveIdentitySettle` additionally debounces the
+residual few seconds of same-module cache lag (`SaveDigestCache`'s own up-to-2-second re-stat
+interval on each side) so a mismatch is honored only once observed continuously for 5s.
+
 ## How a player finds out
 
 `CompatibilityVerdict` carries `CompatibilityNote(Code, Dropped, Text)` — machine-readable

@@ -303,14 +303,24 @@ maximum-length module name, a quarter of a datagram.
 
 ## 6. NEEDS-LIVE checklist
 
-Nothing below has been measured. The build compiles and 321 unit tests pass; that is all.
+⚠ Item 1 below is now measured — see `shared-state-audit.md` §2 round 54 (2026-08-21): the
+channel this whole document describes reached a real, engine-native kill live, on `tar_m10aa`
+against `0x33`. The break that made round 53 look like a plugin/protocol bug was a transient
+`[W_SAVE]` false alarm silencing the `Enemies` capability, not anything in this document's own
+design — fixed at the compat layer (`WorldDigest.Compare` + `SaveIdentitySettle`), not here.
+Everything else below is unchanged.
 
-1. **The lone fight still ends, and now without the crutches.** The §6a test verbatim:
+1. ✅ **The lone fight still ends, and now without the crutches.** The §6a test verbatim:
    client alone against a Sith Soldier, host's PC ~120 units away, attacking every 8
    seconds. Expect the enemy's health to fall in step on BOTH screens and
    `combat: killed 0xE on the owner's authority`-equivalent to be replaced by an ordinary
    death — the owner's log should show `combat: applied N of a peer's damage to 0xE` and
-   then no kill line at all, because the engine did it.
+   then no kill line at all, because the engine did it. **Measured (round 54, a Black Vulkar
+   on `tar_m10aa`, not a Sith Soldier on `END_M01AA` — the shape is identical):** host log
+   `combat: applied 6 of a peer's damage to 0x33 (owed 6)` / `... 7 ... (owed 13)` / `... 9
+   ... (owed 22)`, then `materialised loot: 1 enemy death(s) noticed this pass: 0x33` — an
+   ordinary engine death, no kill-request line, exactly as predicted. The client's own
+   mirrored copy followed it: `combat: killed 0x33 on the owner's authority`.
 2. **The numbers agree.** Diff the client's `dealt` total for one enemy against the total
    hit points that enemy actually lost on the host. They should match exactly (§2). A
    consistent ratio would mean a resistance is being applied twice; a consistent offset

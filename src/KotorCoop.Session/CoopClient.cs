@@ -114,6 +114,11 @@ public sealed class CoopClient : ICoopSession
     private WorldDigest _hostWorld = WorldDigest.Empty;
     private long _lastWorldDigestMs;
 
+    /// <summary>Absorbs the transient save-identity mismatch an ordinary module transition
+    /// produces while this client and the host cross at slightly different times — see
+    /// <see cref="SaveIdentitySettle"/>.</summary>
+    private readonly SaveIdentitySettle _saveSettle = new();
+
     public SessionCapabilities Capabilities => _compatibility?.Allowed ?? SessionCapabilities.All;
 
     public CompatibilityVerdict? Compatibility => _compatibility;
@@ -144,6 +149,7 @@ public sealed class CoopClient : ICoopSession
         }
 
         WorldDigestComparison mismatch = WorldDigest.Compare(_localWorld, _hostWorld);
+        mismatch = _saveSettle.Apply(mismatch, SessionClock.NowMs);
 
         _compatibility = ContentCompatibility.ApplyWorldMismatch(install, mismatch);
     }
@@ -1671,6 +1677,10 @@ public sealed class CoopClient : ICoopSession
             ContentCompatibility.RequireIdenticalSave = _settings.RequireIdenticalSave;
             _installVerdict = ContentCompatibility.Compare(_settings.Digest, welcome.Digest);
             _compatibility = _installVerdict;
+            // A fresh Welcome means a fresh crossing to judge — any settle timer left running
+            // from before this (re)connect named a peer/world this client is not comparing
+            // against any more.
+            _saveSettle.Reset();
             RefineCompatibility();
         }
     }

@@ -37,13 +37,20 @@ Both players, each in their own full game:
   a module with no min-1-hp pin, a real fight through that same client-side mechanism (26
   ground-truth-confirmed hits, zero forwarded-channel activity in the window at all) brought
   a player down for real — the engine's own death path fired, and the other player's screen
-  correctly showed them down too (round 53). Two things this has not shown yet: this
-  investigation's enemies do not notice a player on their own (proximity/heartbeat aggro was
-  never observed without an explicit engagement nudge, across three different creature/module
-  pairs tested so far), and a client's own damage against an enemy does not yet reach the
-  host — the client's local ledger tracks it correctly, but the host's copy of that enemy
-  never takes the damage, so a client cannot yet land the killing blow on a shared, one-world
-  enemy (round 53 narrowed this to the report between the client's send and the host's merge).
+  correctly showed them down too (round 53). And a client can land the killing blow: its own
+  damage against a shared, one-world enemy now reaches the host and is applied for real —
+  verified live, the same `tar_m10aa` Black Vulkar, `combat: applied` climbing to exactly the
+  enemy's max hit points, a real death with a corpse and real loot on the host, and the
+  client's own mirrored copy following the death down the ordinary path (round 54; round 53's
+  own narrowing traced to a transient false-positive save-mismatch warning that briefly
+  switched the whole enemy channel off after certain module crossings — fixed, and the fix is
+  live-verified on the identical crossing). One thing this has not shown yet: this
+  investigation's enemies do not notice a player on their own (proximity/heartbeat aggro has
+  never been observed without an explicit engagement nudge, across four different
+  creature/module pairs tested so far, including a freshly-hostile one with none of the
+  earlier tests' confounds) — round 54 attempted a direct plugin-present-vs-absent comparison
+  and left it inconclusive (a rig-navigation limitation, not a measurement either way), so
+  whether this is a plugin effect or a stock engine/save quirk remains open.
 - **Share the world**: dropped items materialise on the other side as real, clickable
   objects and vanish when picked up; doors open and unlock for both; the story globals
   and the quest journal merge upward, so one quest line advances for everyone — verified

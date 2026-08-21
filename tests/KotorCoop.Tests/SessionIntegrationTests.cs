@@ -572,6 +572,103 @@ public class SessionIntegrationTests
     }
 
     [Fact]
+    public async Task ATransientSaveIdentityMismatchNeverDropsCombat()
+    {
+        // Round 53's live crossing (docs/research/shared-state-audit.md §2): a
+        // [W_SAVE]-style disagreement flashed for a moment right at an ordinary module
+        // transition — one side's save-identity digest updates before the other's, exactly
+        // like a real crossing — and must never be honored long enough to silence enemies.
+        // SaveIdentitySettleTests exercises the debounce itself with an injected clock; this
+        // is the same shape end to end, through real sockets and both real session objects.
+        using CoopHost host = new(new SessionSettings { PlayerName = "Revan", Port = 0, TickRate = 30 });
+        using CoopClient client = new(
+            new SessionSettings { PlayerName = "Malak", TickRate = 30 },
+            new IPEndPoint(IPAddress.Loopback, host.ListenEndPoint.Port));
+
+        using CancellationTokenSource cts = new(Timeout + TimeSpan.FromSeconds(15));
+        Task hostTask = host.RunAsync(cts.Token);
+        Task clientTask = client.RunAsync(cts.Token);
+
+        PlayerState state = new(Vector3f.Zero, 0f, "end_m01aa", 100, 0);
+        WorldDigest agreeing = new(0xABCD, 0xBEEF, "end_m01aa", 0);
+        WorldDigest hostCrossed = new(0xABCD, 0x1111_1111, "tar_m10aa", 0);
+        WorldDigest clientNotYetCrossed = new(0xABCD, 0x2222_2222, "end_m01aa", 0);
+
+        void PublishAgreeing()
+        {
+            host.PublishLocalState(state);
+            client.PublishLocalState(state);
+            host.PublishWorldDigest(agreeing);
+            client.PublishWorldDigest(agreeing);
+        }
+
+        Assert.True(await WaitForAsync(() => client.IsConnected, Timeout, PublishAgreeing));
+        Assert.True(
+            await WaitForAsync(
+                () => (host.Capabilities & SessionCapabilities.Enemies) != 0
+                    && (client.Capabilities & SessionCapabilities.Enemies) != 0,
+                Timeout,
+                PublishAgreeing),
+            "the pair never reached a stable, fully-shared baseline before the crossing");
+
+        // The crossing: the host lands in the new module first, the client is still mid-hop
+        // one tick behind — a real disagreement by the letter of the check, held for well
+        // under the settle window, then resolved.
+        DateTime crossingDeadline = DateTime.UtcNow + TimeSpan.FromMilliseconds(1500);
+        bool everDropped = false;
+        while (DateTime.UtcNow < crossingDeadline)
+        {
+            host.PublishLocalState(state with { Module = "tar_m10aa" });
+            client.PublishLocalState(state);
+            host.PublishWorldDigest(hostCrossed);
+            client.PublishWorldDigest(clientNotYetCrossed);
+
+            if ((host.Capabilities & SessionCapabilities.Enemies) == 0
+                || (client.Capabilities & SessionCapabilities.Enemies) == 0)
+            {
+                everDropped = true;
+            }
+
+            await Task.Delay(20);
+        }
+
+        Assert.False(everDropped, "a single-crossing save-identity disagreement dropped enemies before it settled");
+
+        // The client catches up and both sides agree on the new module — a real crossing
+        // completing, well inside the settle window.
+        WorldDigest clientCrossed = hostCrossed;
+        PlayerState clientState = state with { Module = "tar_m10aa" };
+
+        void PublishCrossed()
+        {
+            host.PublishLocalState(state with { Module = "tar_m10aa" });
+            client.PublishLocalState(clientState);
+            host.PublishWorldDigest(hostCrossed);
+            client.PublishWorldDigest(clientCrossed);
+
+            if ((host.Capabilities & SessionCapabilities.Enemies) == 0
+                || (client.Capabilities & SessionCapabilities.Enemies) == 0)
+            {
+                everDropped = true;
+            }
+        }
+
+        DateTime settleDeadline = DateTime.UtcNow + TimeSpan.FromSeconds(4);
+        while (DateTime.UtcNow < settleDeadline)
+        {
+            PublishCrossed();
+            await Task.Delay(20);
+        }
+
+        Assert.False(everDropped, "the crossing was still honored as a mismatch after both sides agreed");
+        Assert.NotEqual(SessionCapabilities.None, host.Capabilities & SessionCapabilities.Enemies);
+        Assert.NotEqual(SessionCapabilities.None, client.Capabilities & SessionCapabilities.Enemies);
+
+        await cts.CancelAsync();
+        await Task.WhenAll(hostTask, clientTask);
+    }
+
+    [Fact]
     public async Task TheHostsPartyReachesTheClient()
     {
         using CoopHost host = new(new SessionSettings { PlayerName = "Revan", Port = 0, TickRate = 30 });

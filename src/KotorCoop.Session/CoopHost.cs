@@ -33,6 +33,13 @@ public sealed class CoopHost : ICoopSession
         /// <summary>The peer's in-world digest (globals catalogue, save identity, current
         /// module + GIT), every field 0/empty until it reports one.</summary>
         public WorldDigest World = WorldDigest.Empty;
+
+        /// <summary>Absorbs the transient save-identity mismatch an ordinary module
+        /// transition produces while this peer and the host cross at slightly different
+        /// times — see <see cref="SaveIdentitySettle"/>. One per peer: each crossing is its
+        /// own timer, and a peer that reconnects gets a fresh <see cref="PeerConnection"/>
+        /// and therefore a fresh one too.</summary>
+        public readonly SaveIdentitySettle SaveSettle = new();
     }
 
     /// <summary>
@@ -1193,6 +1200,7 @@ public sealed class CoopHost : ICoopSession
     private CompatibilityVerdict EffectiveVerdict(PeerConnection peer)
     {
         WorldDigestComparison mismatch = WorldDigest.Compare(_localWorld, peer.World);
+        mismatch = peer.SaveSettle.Apply(mismatch, SessionClock.NowMs);
 
         return ContentCompatibility.ApplyWorldMismatch(peer.InstallVerdict, mismatch);
     }

@@ -50,6 +50,23 @@ public class WorldDigestTests
     }
 
     [Fact]
+    public void SaveIdentityIsOnlyJudgedWhenBothPeersStandInTheSameModule()
+    {
+        // SaveDigest.TryComputeSaveIdentity hashes the CURRENT module into the identity, so
+        // it legitimately differs while one peer has already transitioned and the other has
+        // not — exactly like the GIT below, comparing it mid-transit would flag every
+        // ordinary crossing as a mismatch (round 54, 2026-08-21: a live [W_SAVE] false alarm
+        // crossing tar_m10aa, docs/research/shared-state-audit.md §2 round 53).
+        WorldDigestComparison apart = WorldDigest.Compare(
+            Digest(module: "end_m01aa", save: 1), Digest(module: "tar_m10aa", save: 2));
+        Assert.False(apart.SaveIdentityMismatch);
+
+        WorldDigestComparison together = WorldDigest.Compare(
+            Digest(module: "tar_m10aa", save: 1), Digest(module: "TAR_M10AA", save: 2));
+        Assert.True(together.SaveIdentityMismatch);
+    }
+
+    [Fact]
     public void ModuleGitIsOnlyJudgedWhenBothPeersStandInTheSameModule()
     {
         // Mid-transit the two digests describe different areas; comparing them would flag
