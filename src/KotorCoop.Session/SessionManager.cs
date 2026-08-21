@@ -1,4 +1,5 @@
 using System.Net;
+using System.Net.Sockets;
 using KotorCoop.Memory;
 
 namespace KotorCoop.Session;
@@ -38,6 +39,13 @@ public sealed class SessionManager(IGameBridge bridge, AgentSettings agentSettin
     private bool _lastHost;
     private IPEndPoint? _lastEndpoint;
     private SessionSettings? _lastSettings;
+
+    /// <summary>
+    /// When a CLIENT's current connect attempt must be given up on if nothing has happened
+    /// by then (<see cref="SessionClock.NowMs"/> units). 0 = no deadline armed — a host has
+    /// nobody to be admitted by, so it never sets one.
+    /// </summary>
+    private long _connectDeadlineMs;
 
     private volatile SessionPhase _phase = SessionPhase.Idle;
     private string _detail = "not connected";
@@ -109,7 +117,27 @@ public sealed class SessionManager(IGameBridge bridge, AgentSettings agentSettin
             _lastEndpoint = endpoint;
             _lastSettings = settings;
 
-            ICoopSession session = host ? new CoopHost(settings) : new CoopClient(settings, endpoint!);
+            ICoopSession session;
+            try
+            {
+                session = host ? new CoopHost(settings) : new CoopClient(settings, endpoint!);
+            }
+            catch (PortInUseException ex)
+            {
+                // Distinct, actionable line rather than a generic bind failure - and Idle,
+                // not Failed: nothing here ever half-started (the socket that would have
+                // backed it never came up), so there is nothing for Disconnect to unwind.
+                Fail(
+                    $"port {ex.Port} is already in use - is another co-op agent already running?",
+                    SessionPhase.Idle);
+                return;
+            }
+            catch (SocketException ex)
+            {
+                Fail($"could not start the session: {ex.Message}", SessionPhase.Idle);
+                return;
+            }
+
             CoopAgent agent = new(bridge, session, agentSettings);
 
             // Through a lambda so a sink assigned to this manager AFTER the session started
@@ -141,6 +169,12 @@ public sealed class SessionManager(IGameBridge bridge, AgentSettings agentSettin
                     portraits: bridge.ReadPartyPortraits);
             }
 
+            // A host has nobody to wait for; only a client's attempt can go unanswered
+            // forever, so only a client arms the timeout.
+            _connectDeadlineMs = host
+                ? 0
+                : SessionClock.NowMs + Math.Max(1, settings.ConnectTimeoutMs);
+
             _phase = SessionPhase.Connecting;
             _detail = host ? $"hosting on port {settings.Port}" : $"connecting to {endpoint}";
             Log?.Invoke(_detail);
@@ -148,11 +182,12 @@ public sealed class SessionManager(IGameBridge bridge, AgentSettings agentSettin
     }
 
     /// <summary>
-    /// Stops the current session. A client sends its Bye during the session's own shutdown,
-    /// so the host drops it cleanly. Blocks briefly for the loops to unwind, then clears the
-    /// game's co-op state so no phantoms or mirrored peers are left behind.
+    /// Cancels and disposes the live session/agent, if any, without deciding what phase or
+    /// message comes after — that is the caller's call, because <see cref="Disconnect"/>
+    /// and a connect timeout land in different places. Returns false when there was
+    /// nothing to tear down (mirrors the old <see cref="Disconnect"/> early-out exactly).
     /// </summary>
-    public void Disconnect()
+    private bool TearDownSession()
     {
         CancellationTokenSource? cts;
         ICoopSession? session;
@@ -175,7 +210,7 @@ public sealed class SessionManager(IGameBridge bridge, AgentSettings agentSettin
 
         if (cts is null)
         {
-            return;
+            return false;
         }
 
         try
@@ -192,10 +227,48 @@ public sealed class SessionManager(IGameBridge bridge, AgentSettings agentSettin
             session?.Dispose();
             cts.Dispose();
             bridge.ClearCoopState();
-            _phase = SessionPhase.Disconnected;
-            _detail = "disconnected";
-            Log?.Invoke(_detail);
         }
+
+        return true;
+    }
+
+    /// <summary>
+    /// Stops the current session. A client sends its Bye during the session's own shutdown,
+    /// so the host drops it cleanly. Blocks briefly for the loops to unwind, then clears the
+    /// game's co-op state so no phantoms or mirrored peers are left behind.
+    /// </summary>
+    public void Disconnect()
+    {
+        if (!TearDownSession())
+        {
+            return;
+        }
+
+        _connectDeadlineMs = 0;
+        _phase = SessionPhase.Disconnected;
+        _detail = "disconnected";
+        Log?.Invoke(_detail);
+    }
+
+    /// <summary>
+    /// A client's connect attempt went unanswered past its deadline: the host is down, the
+    /// port is firewalled, or the address was wrong — total silence looks the same from
+    /// here either way. Distinct from a wrong-password rejection (which the host DOES
+    /// answer, and which <see cref="Poll"/> resolves to <see cref="SessionPhase.Failed"/>
+    /// immediately, never through this path): lands on <see cref="SessionPhase.Idle"/>
+    /// instead, so a silent host does not read as the same kind of failure as a refused one.
+    /// </summary>
+    private void TimeoutConnect()
+    {
+        IPEndPoint? endpoint;
+        lock (_gate)
+        {
+            endpoint = _lastEndpoint;
+        }
+
+        TearDownSession();
+        _connectDeadlineMs = 0;
+        Fail($"no reply from {(endpoint is null ? "the host" : endpoint.ToString())}", SessionPhase.Idle);
     }
 
     /// <summary>Reconnects with the parameters of the last <see cref="Connect"/>.</summary>
@@ -232,14 +305,25 @@ public sealed class SessionManager(IGameBridge bridge, AgentSettings agentSettin
             return;
         }
 
+        // Checked before reading stats: a host that never answers Hello produces no status
+        // change at all, so nothing below would ever notice on its own.
+        if (_phase == SessionPhase.Connecting && !_lastHost
+            && _connectDeadlineMs != 0 && SessionClock.NowMs >= _connectDeadlineMs)
+        {
+            TimeoutConnect();
+            return;
+        }
+
         SessionStats stats = session.GetStats();
         if (stats.Connected)
         {
+            _connectDeadlineMs = 0;
             _phase = SessionPhase.Connected;
             _detail = stats.Status;
         }
         else if (stats.Status.Contains("rejected", StringComparison.OrdinalIgnoreCase))
         {
+            _connectDeadlineMs = 0;
             _phase = SessionPhase.Failed;
             _detail = stats.Status;
         }
@@ -250,9 +334,13 @@ public sealed class SessionManager(IGameBridge bridge, AgentSettings agentSettin
         }
     }
 
-    private void Fail(string reason)
+    /// <summary>Lands the manager on <paramref name="phase"/> (Failed by default) with a
+    /// message for the console/overlay. Also used with <see cref="SessionPhase.Idle"/> for
+    /// failures that never half-started anything — a port-in-use bind, a connect
+    /// timeout — which must not read as the same "Failed" state a wrong password does.</summary>
+    private void Fail(string reason, SessionPhase phase = SessionPhase.Failed)
     {
-        _phase = SessionPhase.Failed;
+        _phase = phase;
         _detail = reason;
         Log?.Invoke(reason);
     }

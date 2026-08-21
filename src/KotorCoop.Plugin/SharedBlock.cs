@@ -69,9 +69,9 @@ internal struct SharedBlock
     /// <summary>
     /// Grown from 0x3A00 for the peer-effect channel (version 44): the tail past
     /// <see cref="OffsetTravelMovieNames"/> (0x3884..0x38E4) only has 0x11C free bytes before
-    /// 0x3A00, and version 43 is ALREADY SPOKEN FOR by a concurrently-landing agent-heartbeat
-    /// field at the old tail — placing this region at 0x3A00 instead of squeezing into the
-    /// leftover 0x11C avoids a silent collision with that change. See
+    /// 0x3A00 — not enough for an 8-entry ring in each direction — and version 43 landed first
+    /// (<see cref="OffsetAgentHeartbeat"/>, 0x3780..0x3788, squeezed into the browser-details
+    /// tail's own leftover gap). This region starts cleanly at 0x3A00, past both. See
     /// docs/research/effect-sync.md.
     /// </summary>
     public const int TotalSize = 0x3C00;
@@ -770,14 +770,31 @@ internal struct SharedBlock
 
     public const int ConnectHostLength = 40;
 
-    /// <summary>Agent -&gt; plugin. 0 idle, 1 connecting, 2 connected, 3 failed — for the
-    /// menu to show a status line.</summary>
+    /// <summary>
+    /// Agent -&gt; plugin. Low byte: 0 idle, 1 connecting, 2 connected, 3 failed, 4
+    /// reconnecting — for the menu to show a status line. Since item 18
+    /// (roadmap-seamless.md, 2026-08-21) the NEXT byte up also carries the current peer
+    /// count, for the persistent in-game connection indicator
+    /// (<c>KotorCoop.Agent.ConnectionStatusAnnouncer</c>). No new field: this is the same
+    /// word the connect-flow write always used, whose only prior value was a bare 0-3 and
+    /// whose only reader — the plugin's own getter below — had none, so the wider bytes were
+    /// free. A reader that only ever compared the whole field against one of the four
+    /// original sentinels is unaffected exactly when the peer count is 0 (the state each of
+    /// those four is entered in): idle/connecting/failed always have no peer to count, and
+    /// "just connected, alone" packs to the same bare 2 it always did.
+    /// </summary>
     public const int OffsetConnectStatus = 0x9EC;
 
     public const uint ConnectStatusIdle = 0;
     public const uint ConnectStatusConnecting = 1;
     public const uint ConnectStatusConnected = 2;
     public const uint ConnectStatusFailed = 3;
+
+    /// <summary>Live session, but the underlying link is currently down and recovering on its
+    /// own — see docs/research/disconnect-reconnect.md. Distinct from
+    /// <see cref="ConnectStatusFailed"/>, which is a REFUSED join (wrong password, incompatible
+    /// save) that never became a session at all.</summary>
+    public const uint ConnectStatusReconnecting = 4;
 
     /// <summary>Agent -&gt; plugin. Nonzero FORCES the main-menu Co-op button on. No longer a
     /// prerequisite: the plugin shows the button by itself (coop.ini <c>menu_button</c>, read
@@ -1651,6 +1668,35 @@ internal struct SharedBlock
     public const int RemoteOneShotStride = 0x08;
     public const int RemoteOneShotAnim = 0x00;
     public const int RemoteOneShotSerial = 0x04;
+
+    // ---- agent liveness heartbeat (version 43, region 0x3780..0x3788) -------------
+    //
+    // The plugin's own Heartbeat field at 0x4C (below) proves the BLOCK is live — the
+    // worker thread bumps it every ~16ms whether or not any agent is attached, so it can
+    // never tell "an agent is pumping" from "an agent stopped responding an hour ago".
+    // This is the other half: the AGENT'S OWN clock, stamped every dispatcher tick, so the
+    // plugin can watch it stall and say so instead of quietly driving phantoms off a
+    // picture nobody is updating any more. See AgentLiveness and AgentLivenessController.
+    //
+    // The value is Environment.TickCount64 (Windows' system-uptime counter), not a
+    // sequence number: both this process and the plugin's read the SAME OS clock
+    // independently, so the plugin computes staleness directly (now - lastBeat) with no
+    // handshake and no risk of two processes' Stopwatches drifting apart. 0 means "no
+    // agent has ever pumped this block" — TickCount64 is essentially never exactly zero
+    // once written, so it doubles as the "ever live" sentinel with no separate flag.
+    //
+    // Placed in the gap the browser-details array leaves between itself and the OLD block
+    // end (0x3400 + 8*0x70 = 0x3780, TotalSize was 0x3800 before version 42): the version
+    // 42 comment above already establishes that gap is real and was deliberately left
+    // alone rather than reused ("the browser details array runs to 0x3780 ... so neither
+    // gap could hold two six-name movie lists" — the OTHER new region in that pass,
+    // OffsetCinematicSerial, starts exactly at the old 0x3800 boundary instead). Confirmed
+    // free by grepping every Offset* constant in this file for the range: nothing else
+    // claims 0x3780..0x3800.
+
+    /// <summary>Agent -&gt; plugin. Environment.TickCount64 at the agent's last dispatcher
+    /// tick. 0 = no agent has ever pumped this block.</summary>
+    public const int OffsetAgentHeartbeat = 0x3780;
 
     public const int ItemSlotCapacity = 8;
 

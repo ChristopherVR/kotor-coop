@@ -127,6 +127,94 @@ public class EventFlagStoreTests
         Assert.Equal(3, snapshot.Count);
         Assert.Contains(new KeyValuePair<uint, sbyte>(2, 0), snapshot);
     }
+
+    // ---- digest -----------------------------------------------------------------
+
+    [Fact]
+    public void DigestIsInvariantToInsertionOrder()
+    {
+        EventFlagStore forward = new();
+        forward.Set(1, 1);
+        forward.Set(2, 0);
+        forward.Set(3, -5);
+
+        EventFlagStore backward = new();
+        backward.Set(3, -5);
+        backward.Set(2, 0);
+        backward.Set(1, 1);
+
+        Assert.Equal(forward.Version, backward.Version);
+        Assert.Equal(forward.Digest, backward.Digest);
+    }
+
+    /// <summary>
+    /// The reason the digest exists at all: two stores that reached the same VERSION by
+    /// making the same number of changes, but different ones, must disagree on the digest —
+    /// the tie a bare counter cannot see (docs/research/disconnect-reconnect.md §4.1).
+    /// </summary>
+    [Fact]
+    public void EqualVersionWithDifferentContentProducesADifferentDigest()
+    {
+        EventFlagStore a = new();
+        a.Set(1, 1);
+        a.Set(2, 1);
+
+        EventFlagStore b = new();
+        b.Set(1, 1);
+        b.Set(2, 2);
+
+        Assert.Equal(a.Version, b.Version);
+        Assert.NotEqual(a.Digest, b.Digest);
+    }
+
+    [Fact]
+    public void DigestReturnsToAPriorValueWhenSetBackToIt()
+    {
+        // XOR-summing means the digest is its own inverse: toggling a flag away from a value
+        // and then back (via the unconstrained Set path) restores the exact digest the store
+        // had at that value, even though Version keeps counting forward the whole time.
+        EventFlagStore store = new();
+        store.Set(1, 1);
+        ulong atOne = store.Digest;
+
+        store.Set(1, 2);
+        Assert.NotEqual(atOne, store.Digest);
+
+        store.Set(1, 1);
+        Assert.Equal(atOne, store.Digest);
+        Assert.Equal(3u, store.Version);
+    }
+
+    [Fact]
+    public void ReplaceAllRecomputesTheDigestRatherThanCarryingStaleContributions()
+    {
+        EventFlagStore store = new();
+        store.Set(1, 1);
+        store.Set(2, 1);
+        ulong beforeDigest = store.Digest;
+
+        store.ReplaceAll([new KeyValuePair<uint, sbyte>(1, 1)], version: 9);
+
+        EventFlagStore direct = new();
+        direct.Seed([new KeyValuePair<uint, sbyte>(1, 1)]);
+
+        Assert.Equal(direct.Digest, store.Digest);
+        Assert.NotEqual(beforeDigest, store.Digest);
+    }
+
+    [Fact]
+    public void SeedUpdatesTheDigestEvenThoughItDoesNotBumpTheVersion()
+    {
+        // The digest is a content fingerprint, not a change count, so it has to reflect
+        // whatever the store actually holds regardless of how the content arrived.
+        EventFlagStore store = new();
+        ulong empty = store.Digest;
+
+        store.Seed([new KeyValuePair<uint, sbyte>(1, 1), new KeyValuePair<uint, sbyte>(2, 2)]);
+
+        Assert.Equal(0u, store.Version);
+        Assert.NotEqual(empty, store.Digest);
+    }
 }
 
 public class ReliableFlagSenderTests

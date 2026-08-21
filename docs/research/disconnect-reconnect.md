@@ -465,3 +465,75 @@ identity a Hello reclaims, whether an unacked op is kept, whether a snapshot is 
 overwritten, whether a stranger's ping is answered, and which packets prove membership. An old
 peer and a new peer still understand each other's bytes exactly as before; the new peer is
 simply the one that recovers.
+
+## 8. A content digest closes §4.1 and §4.8 (2026-08-21, NOT live-verified)
+
+Both remaining gaps §4 named — the version tripwire being a counter rather than a fingerprint,
+and container loot having no tripwire at all — share one fix, exactly as §4.1 predicted: "the
+real fix is a content digest in place of the counter... and it is the obvious next step here."
+
+**The mechanism.** `KotorCoop.Session.EntryDigest` is a per-entry 64-bit FNV-1a hash, combined
+across a whole store by XOR rather than by concatenation-and-rehash. XOR being its own inverse
+is the whole design: a store updates its digest in O(1) on every mutation — `digest ^=
+Hash(key, old); digest ^= Hash(key, new)` — without ever rehashing its full content, and the
+result is order-independent by construction, which a straight rolling hash would not be. Every
+one of the four world stores now carries a `Digest` beside its `Version`:
+`EventFlagStore`, `JournalStore`, `GroundItemStore` (all three previously had only a `Version`)
+and `ContainerLootStore`, which had **neither** — §4.8's "no version tripwire" is now literally
+untrue, and it also gets the digest in the same pass rather than as a second mechanism.
+
+**Why beside the counter, not instead of it.** The counter is still the cheap common-case
+check — most divergence changes the count — and is retained so a peer that is merely BEHIND
+(not tied) is not paying a hash comparison it did not need. The digest exists purely to catch
+what the counter structurally cannot: two stores that reached the same version by making the
+same NUMBER of changes, holding different content. The tripwire on every channel is now
+`version != version || digest != digest`, checked in `CoopClient.HandleWorldSnapshot`.
+
+**The wire.** `WorldSnapshotPacket` gains four `ulong` digests (`FlagDigest`, `ItemDigest`,
+`JournalDigest`, `LootDigest`) and one new `uint` (`LootVersion` — loot had no version to
+carry before this). Container loot also gets a new packet, `LootSyncRequest` (43): client to
+host, "my loot version or digest disagrees with your last snapshot, resync me." Unlike
+`FlagSyncRequest`/`ItemSyncRequest`/`JournalSyncRequest` it has no matching `...Snapshot` reply
+— loot's "full resync" already exists and is better than a one-shot snapshot would be: it is
+`CoopHost.ResyncContainerLoot`, the same reliable retransmit-until-every-peer-acks path §2.2's
+fix built for peer admission. `HandleLootSyncRequest` just calls it again. Protocol version is
+now **26** (`ProtocolConstants.cs` carries the full field-by-field rationale).
+
+**What this actually buys container loot.** Before this pass the channel was retransmit-only:
+correct against loss (an op is never abandoned) but with nothing to notice a straggler that
+had, for whatever reason, ended up holding different content than the host believes it holds.
+Now a still-connected client with a stale or wrong loot set finds out on the very next world
+snapshot — the same tick-by-tick check the other three channels have always had — rather than
+only at the moment it happens to reconnect (§2.2) or be freshly admitted.
+
+**What it does not buy.** `ContainerLootStore`'s digest tracks the retained 512-removal
+window, the same window `Snapshot()`/`Contains()` already use — not the store's full lifetime
+history. Two peers whose windows evicted different oldest entries (possible only after 512
+removals in one session, with different arrival order on each side) could see a digest
+mismatch with no real divergence in effect, since an evicted entry was already applied on both
+sides before it aged out. The cost of that false positive is a wasted `LootSyncRequest` and a
+`ResyncContainerLoot` that finds nothing new to say — not a correctness problem, just unneeded
+traffic, and only reachable at all in a session far longer than any tested.
+
+**Tests**, all in `tests/KotorCoop.Tests/`: `EventFlagStoreTests`, `JournalStoreTests`,
+`GroundItemStoreTests` and `ContainerLootTests` each gained digest-order-invariance and
+equal-version-different-content tests (the latter is the whole reason for the digest, so it is
+the one every store's suite proves directly); `ContainerLootTests` also covers the new
+`Version` counter and `Clear()` resetting both. `PacketCodecTests` round-trips the wider
+`WorldSnapshotPacket` and the new `LootSyncRequestPacket`. `DisconnectRecoveryTests` gained
+`ContainerLootConvergesByVersionAndDigestAcrossADeterministicBlackout` — modelled on
+`NoReliableWorldStateIsLostAcrossTheBlackout`/`HeavyPacketLossStillConverges` but using a
+`StartBlackout` deadline rather than `SetLoss`, deliberately: §4.8 itself measured
+`HeavyPacketLossStillConverges` as flaky under machine load (a percentage-loss budget is
+wall-clock, the attempts inside it are ticks), and a blackout's deadline is absolute against
+`SessionClock`, so this proves the same convergence property without depending on how busy the
+machine running the suite happens to be.
+
+**NEEDS-LIVE.** Nothing in this section was run against the game or the rig. In particular:
+whether a real two-instance session actually negotiates protocol version 26 (both sides need
+the rebuilt plugin/agent — a version mismatch is refused at Hello, per `HandleHello`), and
+whether `netsim blackout` on the live rig with a chest emptied mid-outage still shows the
+chest empty for the reconnecting player (item 4 in §6's existing NEEDS-LIVE list already
+covers the scenario; it now also exercises the digest path, not just the retransmit path,
+though the two are not distinguishable by eye on the rig — only in the test above, which
+constructs the tie directly).

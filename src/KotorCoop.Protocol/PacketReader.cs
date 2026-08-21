@@ -99,6 +99,12 @@ public ref struct PacketReader
         return Failed ? 0L : BinaryPrimitives.ReadInt64LittleEndian(slice);
     }
 
+    public ulong ReadUInt64()
+    {
+        ReadOnlySpan<byte> slice = Take(8);
+        return Failed ? 0UL : BinaryPrimitives.ReadUInt64LittleEndian(slice);
+    }
+
     public float ReadSingle()
     {
         ReadOnlySpan<byte> slice = Take(4);

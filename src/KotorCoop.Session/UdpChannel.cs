@@ -45,7 +45,18 @@ public sealed class UdpChannel : IDisposable
             }
         }
 
-        _socket.Bind(new IPEndPoint(IPAddress.Any, listenPort));
+        try
+        {
+            _socket.Bind(new IPEndPoint(IPAddress.Any, listenPort));
+        }
+        catch (SocketException ex) when (ex.SocketErrorCode == SocketError.AddressAlreadyInUse)
+        {
+            // Dispose before rethrowing: the constructor never finishes, so nothing else
+            // will ever close this handle otherwise.
+            _socket.Dispose();
+            throw new PortInUseException(listenPort, ex);
+        }
+
         LocalEndPoint = (IPEndPoint)_socket.LocalEndPoint!;
     }
 

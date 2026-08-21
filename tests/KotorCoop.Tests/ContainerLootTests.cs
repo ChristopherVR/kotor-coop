@@ -43,6 +43,99 @@ public class ContainerLootTests
         Assert.Contains(new ContainerLootRemoval(0x60, 0xD0), store.Snapshot());
     }
 
+    // ---- version + digest -------------------------------------------------------
+
+    /// <summary>
+    /// Before this pass this channel had no version at all — see
+    /// docs/research/disconnect-reconnect.md §4.8. It now bumps once per genuinely new
+    /// removal, exactly like the other three world stores, and a duplicate — whether the
+    /// same op replayed or a different op naming the same pair — must not move it.
+    /// </summary>
+    [Fact]
+    public void VersionBumpsOnceForEachDistinctRemoval()
+    {
+        ContainerLootStore store = new();
+        Assert.Equal(0u, store.Version);
+
+        Assert.True(store.ApplyOp(new ContainerLootPacket(1, 1, 0x53, 0xC9)));
+        Assert.Equal(1u, store.Version);
+
+        // Retransmit of the same op: no bump.
+        Assert.False(store.ApplyOp(new ContainerLootPacket(1, 1, 0x53, 0xC9)));
+        Assert.Equal(1u, store.Version);
+
+        // A different op naming the same pair: still no bump, the removal is not new.
+        Assert.False(store.ApplyOp(new ContainerLootPacket(1, 2, 0x53, 0xC9)));
+        Assert.Equal(1u, store.Version);
+
+        Assert.True(store.ApplyOp(new ContainerLootPacket(1, 3, 0x60, 0xD0)));
+        Assert.Equal(2u, store.Version);
+    }
+
+    /// <summary>
+    /// The digest must not care what order the removals arrived in — two peers that both
+    /// end up holding the same set never agree on delivery order, and the tripwire has to
+    /// compare equal anyway.
+    /// </summary>
+    [Fact]
+    public void DigestIsInvariantToInsertionOrder()
+    {
+        ContainerLootStore forward = new();
+        forward.ApplyOp(new ContainerLootPacket(1, 1, 0x53, 0xC9));
+        forward.ApplyOp(new ContainerLootPacket(1, 2, 0x60, 0xD0));
+        forward.ApplyOp(new ContainerLootPacket(1, 3, 0x70, 0xE1));
+
+        ContainerLootStore backward = new();
+        backward.ApplyOp(new ContainerLootPacket(1, 1, 0x70, 0xE1));
+        backward.ApplyOp(new ContainerLootPacket(1, 2, 0x60, 0xD0));
+        backward.ApplyOp(new ContainerLootPacket(1, 3, 0x53, 0xC9));
+
+        Assert.Equal(forward.Version, backward.Version);
+        Assert.Equal(forward.Digest, backward.Digest);
+    }
+
+    /// <summary>
+    /// The whole point of carrying a digest beside the counter: two stores that reached the
+    /// same VERSION by making the same number of changes, but different ones, must not
+    /// compare equal on the digest — that tie is exactly what a bare counter cannot see
+    /// (docs/research/disconnect-reconnect.md §4.1).
+    /// </summary>
+    [Fact]
+    public void EqualVersionWithDifferentContentProducesADifferentDigest()
+    {
+        ContainerLootStore a = new();
+        a.ApplyOp(new ContainerLootPacket(1, 1, 0x53, 0xC9));
+        a.ApplyOp(new ContainerLootPacket(1, 2, 0x60, 0xD0));
+
+        ContainerLootStore b = new();
+        b.ApplyOp(new ContainerLootPacket(1, 1, 0x70, 0xE1));
+        b.ApplyOp(new ContainerLootPacket(1, 2, 0x81, 0xF2));
+
+        Assert.Equal(a.Version, b.Version);
+        Assert.NotEqual(a.Digest, b.Digest);
+    }
+
+    [Fact]
+    public void AnEmptyStoreHasTheEmptyDigest()
+    {
+        ContainerLootStore store = new();
+        Assert.Equal(EntryDigest.Empty, store.Digest);
+        Assert.Equal(0u, store.Version);
+    }
+
+    [Fact]
+    public void ClearResetsVersionAndDigest()
+    {
+        ContainerLootStore store = new();
+        store.ApplyOp(new ContainerLootPacket(1, 1, 0x53, 0xC9));
+
+        store.Clear();
+
+        Assert.Equal(0u, store.Version);
+        Assert.Equal(EntryDigest.Empty, store.Digest);
+        Assert.Equal(0, store.Count);
+    }
+
     // ---- sender ---------------------------------------------------------------
 
     [Fact]

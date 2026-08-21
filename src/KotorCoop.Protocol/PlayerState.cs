@@ -64,6 +64,16 @@ public readonly record struct PlayerState(
     /// </summary>
     public const uint FlagPauseReleased = 16;
 
+    /// <summary>
+    /// The player is inside the engine's own minigame mode: a swoop race or a forced turret
+    /// sequence (<c>CSWCModule::GetMiniGame</c>, docs/research/minigames.md). They are not
+    /// meaningfully in the shared world for the duration — a peer's instance parks their
+    /// phantom instead of mirroring it, and this instance stops applying forwarded damage
+    /// and incoming phantom writes while the flag is set (coop.ini <c>minigame_hide_peer</c>
+    /// / the receiving side always gates the damage half).
+    /// </summary>
+    public const uint FlagInMinigame = 32;
+
     /// <summary>True while this player is asking to end a shared pause they did not start.</summary>
     public bool HasReleasedPause => (Flags & FlagPauseReleased) != 0;
 
@@ -79,6 +89,8 @@ public readonly record struct PlayerState(
     public bool IsInCombat => (Flags & FlagInCombat) != 0;
 
     public bool IsDowned => (Flags & FlagDowned) != 0;
+
+    public bool IsInMinigame => (Flags & FlagInMinigame) != 0;
 }
 
 /// <summary>A remote player as seen locally, after interpolation.</summary>

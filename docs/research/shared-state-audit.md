@@ -3090,6 +3090,140 @@ concrete step, not yet run.
 
 No live testing or code changes this round — pure static disassembly, in the main repo
 checkout. Full suite unaffected (no source touched).
+
+### Round 46 (2026-08-21) — the flag-restoration lead is REFUTED live; two real bugs found
+### and fixed along the way; the freeze survives both, and the mystery is narrower but open
+
+Started from round 45's own open question and the task's specific untested lead: does
+`ClaimCreature`/`ClaimCreatureForFight`/`PermitAttacking` leave `CreMovePermitted`/`CreRunFlag`
+in a state that blocks `AIActionPhysicalAttacks` (`0x005BBBF0`) even at melee range, and is
+anything restored on exclusion? Read `EnemyPresenceController.cs` in full and every `Odyssey.cs`
+site touching `ObjCommandable`/`CreMovePermitted`/`CreRunFlag`/`CreMoveState`.
+
+**Static read: the claim writes are OR-only, so a bit they set can never be a NEW restriction.**
+`ClaimCreature` does `CreMovePermitted |= 2` and `CreRunFlag = 0`; `PermitAttacking` does
+`CreMovePermitted |= CreAttackPermittedBit (0x04)`. Neither ever clears a bit. A creature that
+was never claimed (round 27, 37) and one that was claimed every frame for 90 seconds (this
+round's case) can only differ by having EXTRA bits set on the claimed one, never fewer — so on
+its face this lead looked already-refuted by inspection, before any disassembly. Two things kept
+it live anyway: `DriveEnemy` (not `ClaimCreature`) ASSIGNS `CreMoveState` and `CreRunFlag` every
+driven frame from the smoother's own "moving" bit — that is destructive, not additive — and
+nobody had actually disassembled `AIActionPhysicalAttacks` itself to see what it reads.
+
+**Disassembly of `0x005BBBF0` found a THIRD, previously undocumented gate bit.** Past its first
+three preconditions (a `GetDead`-style vtable call, `0x63e7f0`, `0x4ef890`), at `0x005BBD3B`:
+`mov ax, word ptr [esi+0x9f0]` (the `CreMovePermitted` word) / `test al,al` / `jns` (bails
+unless bit `0x80` of the LOW BYTE is set) / `test al,4` / `je` (bails unless the already-known
+attack-permitted bit is ALSO set) / then a self-attack guard. So the real gate is bits `0x80`
+AND `0x04` together, not just the documented `0x04` — and bit `0x80` is written by NOTHING in
+this plugin, anywhere (confirmed by a full byte-pattern scan of `.text` for every accessor of
+offset `0x9F0`/`0x9F1`, `tools/disasm.py`+a one-off capstone sweep, cross-checked against
+`tools/xrefs.py`'s call-site model). This looked like the answer.
+
+**Disassembling `ClearAllActionsFn` (`0x004CCD80`) in FULL (round 45 stopped partway) found a
+second, independent, genuinely destructive mechanism.** Past the action-queue loop, at
+`0x004CCEC9` its `bIsCurrentOnly` argument (which every call site in this codebase passes as
+`1`) gates a call to `0x004D37E0`, which loops 5 times (`i=0..4`, stride `0x14C`) calling
+`0x004D3010` on each of the creature's own `CSWSCombatRound` sub-structures. `0x004D3010` is a
+FULL reset of that sub-structure — frees any queued action nodes at `sub+0x88`, and zeroes
+`sub+0xB0` (verified at `0x004D3101`, `mov dword ptr [esi+0xb0], ebx` where `ebx=0`) — the exact
+field rounds 9-37 spent 27+ rounds proving is the write that arms a round. So every time
+`ClaimCreatureForFight`'s conditional wipe fires (whenever the driven creature's head action is
+move-class — the ordinary case for a body this controller force-overwrites every frame), it also
+disarms ALL FIVE of that creature's own round sub-structures. On the exact frame `StartLocalFight`
+fires `+0x260`, `ClaimCreatureForFight` had already run first in the same pass — a real,
+one-frame race that could disarm the very mechanism the script was about to rely on, one frame
+before it needed it. Round 45's read of this function stopped at the action-queue loop and never
+reached this branch, so "REFUTED" was too strong; it is real, just not a raw write to
+`+0x958..+0x9CC` the way that round's search was shaped to find.
+
+**Fix implemented, on `EnemyPresenceController.cs` and `Odyssey.cs`:** a new
+`Odyssey.ClaimSnapshot`, captured once per creature the first time `Resolve()` sees it in a slot
+(before this plugin's claim has ever touched it), holding `ObjCommandable`, the full
+`CreMovePermitted` dword, `CreRunFlag`, and `CreMoveState`. `DriveOne` now computes the
+engagement/trigger condition BEFORE the claim block (not after `Drive()`, as before); on the
+exact frame it is about to start a local fight it skips `ClaimCreatureForFight` entirely (so
+`ClearAllActionsFn`'s round-disarm branch never runs on the handoff frame), and after `Drive()`
+restores the captured snapshot before firing `+0x260`, with `PermitAttacking` re-asserted
+AFTER the restore so the attack-permitted bit can never be silently lost. Build clean, full
+suite green (see below).
+
+**Live-tested, twice, and BOTH the bit-0x80 theory and the flag-restoration fix are REFUTED —
+the freeze is unchanged.** Cold-restarted both instances (`tools/demo.ps1`, save slot 1,
+`END_M01AA`, clean census — `enemy drive: mirroring 25 of the owner's 25 enemies`, no `W_SAVE`).
+Picked `0x1A` (`end_soldier2`, confirmed live to carry `k_def_combend01` via `firescript 0x1A`),
+left it mirroring normally for 90+ seconds, then teleported the player to `dist=1.26` (genuine
+melee range) with `tp`. `local combat: 0x1A pulled out of the census to fight for real` fired
+correctly (proximity-triggered, no manual `firescript`), and a direct `ReadProcessMemory` probe
+of the live creature (a one-off script, not part of the tree) read, WHILE FROZEN:
+
+```
+ObjCommandable   (+0xE8)  = 1
+CreMovePermitted (+0x9F0) = 0x0000FFFF   (bit 0x80 = SET, bit 0x04 = SET, bit 0x02 = SET)
+CreRunFlag       (+0xA98) = 0
+CreMoveState     (+0xA8C) = -1 ("walking")
+round sub[0..4]  +0xB0    = 0, 0, 0, 0, 0   (still never armed)
+```
+
+Bit `0x80` — the theory's whole premise — was ALREADY SET, live, on the frozen creature, both
+before and after the fix. The gate `AIActionPhysicalAttacks` checks was never the blocker. 21+
+seconds at `dist=1.26`: zero movement, zero HP change, zero swing, exactly matching round 44's
+un-fixed baseline byte for byte. The fix changed nothing observable.
+
+**A live memory probe also refutes a THIRD candidate found and fixed this same round, before it
+was fixed.** `ClearAllActionsFn`'s tail (traced this round) also invalidates
+`creature+0x508` and `(creature+0x340)+0x254` — a per-creature "last enemy" cache
+(`ObjectInvalid`, `0x7F000000`) — every time its full body runs, which `ClaimSnapshot` was
+extended to capture and restore. Live probe on the SAME frozen creature, AFTER that fix: both
+fields still read `0x7F000000`, and the action queue was genuinely EMPTY (no head node at all).
+At first this looked like a second live-confirmed bug the fix hadn't reached — but the
+snapshot was captured on this creature's very FIRST resolve, before even one claim call had
+ever touched it, and it read the SAME `0x7F000000` at capture time. A standing guard that has
+never yet fought anyone has no "last enemy" to cache — that is its normal resting value, not
+something this plugin corrupted. Restoring an already-invalid value cannot fix anything, and
+round 27/37's WORKING creatures would have started from the identical natural default. This
+lead is refuted by the same evidence that first looked like it confirmed it — recorded in full
+because the false read is exactly the kind of thing a future round should not re-chase.
+
+**What's left, honestly.** All three concrete, disassembly-grounded candidates this investigation
+has produced across rounds 44-46 (`CreMovePermitted`/`CreRunFlag`/`CreMoveState`/`ObjCommandable`
+staleness, the `AIActionPhysicalAttacks` bit-`0x80` gate, `ClearAllActionsFn`'s round-disarm and
+target-cache side effects) are now checked, and none of them is the blocker — the two real,
+independently-valuable fixes from this round stay in the tree (defence in depth for a real
+one-frame race, and a real target-cache restore that is correct even though it wasn't the cause
+here), but they did not close the gap. The round sub-structures never arm (`+0xB0 = 0` across
+all five, every single time, in every failure this whole investigation has ever measured) — that
+part of the signature has not moved once in 46 rounds. The sharpest remaining fact: round 27 and
+37's creatures were NEVER touched by `DriveOne`'s claim/drive machinery even once before their
+script fired; every failure (round 44's `0x6`/`0x9`, this round's `0x1A`/`0x17`) was. Every FIELD
+that machinery is known to touch has now been checked and either was already fine or made no
+difference restored — which, following round 38's own precedent for an identical shape of dead
+end (an exhaustive field-write search across a real behavioural boundary that came up empty),
+points toward the same two remaining options round 38 named: either the real mechanism is not a
+field this investigation's method (managed-code field pokes, disassembly of the write side) can
+see at all — worth tracing `RunScript`'s real dispatcher (`0x005D45D0`, documented above as "a
+queue-based dispatcher with a pending-script list at `+0x1AC` and a counter at `+0x28`, not a
+simple synchronous call" — never actually opened) for a per-object throttle, generation counter,
+or "recently externally modified" flag that a creature driven every frame for real minutes could
+trip and a never-touched one could not; or there is still an unfound touch-point. Recommended
+next step for whoever picks this up: disassemble `0x005D45D0` in full before touching any more
+`CSWSCreature` fields — the round struct's own internals have now been checked from every angle
+this investigation's method can reach.
+
+Fixes kept: `Odyssey.ClaimSnapshot`/`CaptureClaimState`/`RestoreClaimState`, and `DriveOne`'s
+reordered trigger check that skips `ClaimCreatureForFight` on the handoff frame
+(`EnemyPresenceController.cs`, `Odyssey.cs`). Safety properties re-confirmed live on the same
+session: no materialised stand-in was ever selected (unchanged `mapped == 0` gate), and no
+permanent exclusion — `0x1A`/`0x17` cycled cleanly through repeated 25s timeouts
+(`local combat: 0x1A fight ended (timed out), rejoining the census` /
+`local combat: 0x17 pulled out of the census to fight for real`, alternating cleanly, no stuck
+state, no absorb/watchdog warnings). Full suite 1017/1017 (this branch's baseline moved from 966
+during this round due to unrelated, concurrent work landing on the same branch — see this
+session's commits around `583d8e6`/`1324f93`/`4373740`; a `git stash` race during test
+verification briefly touched `tests/KotorCoop.Tests/ReliableSenderTests.cs`, which this round
+does not own and left untouched). Both builds clean, rig torn down and confirmed clean
+(`Get-Process` returned none for either process name).
+
 ### Log rotation and diagnostic throttling (2026-08-21)
 
 Adjacent to this section only because it is the same class of "runs forever, never checked

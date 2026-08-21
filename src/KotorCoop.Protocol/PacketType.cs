@@ -289,6 +289,22 @@ public enum PacketType : byte
     MaterialisedLootAck = 42,
 
     /// <summary>
+    /// client -&gt; host: my container-loot version or digest disagrees with the one just
+    /// broadcast in <see cref="WorldSnapshot"/>, resync me.
+    ///
+    /// Unlike <see cref="FlagSyncRequest"/> / <see cref="ItemSyncRequest"/> /
+    /// <see cref="JournalSyncRequest"/>, this has no matching "Snapshot" reply type: loot's
+    /// full resync is already the reliable per-removal channel (<see cref="ContainerLoot"/>,
+    /// retransmitted until every current peer acks), so the host repairs a mismatch by
+    /// re-offering every removal it knows through that channel rather than by inventing a
+    /// second, unreliable one-shot snapshot for the same data. See
+    /// docs/research/disconnect-reconnect.md §4.1 and §4.8: before this, container loot was
+    /// the one world channel with no version tripwire at all, so a straggler under sustained
+    /// loss had nothing behind it but the retransmit itself.
+    /// </summary>
+    LootSyncRequest = 43,
+
+    /// <summary>
     /// A non-damage effect (stun, paralyze, knockdown, slow, frightened, sleep, choke, or Force
     /// push/whirlwind) that landed on a peer's phantom, addressed to the player that phantom
     /// stands for — the non-damage sibling of <see cref="PhantomDamage"/>. See
@@ -299,5 +315,5 @@ public enum PacketType : byte
     /// desync — the phantom's HEALTH, which is what actually matters for the fight, still
     /// crosses on <see cref="PhantomDamage"/> regardless of whether this arrives.
     /// </summary>
-    PeerEffect = 43,
+    PeerEffect = 44,
 }

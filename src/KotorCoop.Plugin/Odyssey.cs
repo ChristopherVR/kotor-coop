@@ -518,35 +518,80 @@ internal static unsafe class Odyssey
     public static void ClaimCreatureForFight(nint creature) =>
         ClaimCreature(creature, clearActions: IsMoveAction(GetHeadActionType(creature)));
 
+    /// <summary>CSWSCreature + this = a per-creature "path info" sub-object — VERIFIED
+    /// elsewhere in this file (the range-diagnostic reading creature+0x90 vs. this+0x08 as
+    /// "personal-space radius", <c>attackerPathInfo</c>/<c>playerPathInfo</c>) and, this
+    /// round, disassembled as the SAME pointer <c>AIActionPhysicalAttacks</c> (0x005BBBF0)
+    /// reads at its own entry (<c>mov eax,[esi+0x340]</c>) before touching anything about the
+    /// attack itself.</summary>
+    private const int CrePathInfo = 0x340;
+
+    /// <summary>(creature+0x340) + this = the path-info sub-object's own cached "last enemy"
+    /// id. ROUND 46, disassembled: <c>CSWSObject::ClearAllActions</c> (0x004CCD80) writes
+    /// <see cref="ObjectInvalid"/> here (0x004CCE92) every time its FULL body runs (whenever
+    /// the head action is a move-class action — the common case for a body this controller
+    /// force-overwrites every frame), immediately followed by zeroing a 12-byte Vec3 at
+    /// <c>+0x258</c> right after it (0x004CCE98-CCEC3, presumably the matching last-known
+    /// position). Live-confirmed on a creature that had been normally mirrored for ~90s then
+    /// excluded into local_combat: this field read <see cref="ObjectInvalid"/>, its action
+    /// queue was genuinely EMPTY (no head node at all), and <c>creature+0x508</c> below also
+    /// read <see cref="ObjectInvalid"/> — the <c>+0x260</c> script fired but the creature
+    /// never queued an attack, matching "no memory of ever having a target" more precisely
+    /// than any flag <see cref="ClaimSnapshot"/> already restored (which changed nothing when
+    /// tested live: see docs/research/shared-state-audit.md §2, round 46).</summary>
+    private const int PathInfoLastEnemyId = 0x254;
+
+    /// <summary>CSWSCreature + this — an undocumented field until this round: ROUND 46's full
+    /// disassembly of <c>ClearAllActions</c> found it written to <see cref="ObjectInvalid"/>
+    /// (0x004CCE7F) in the same unconditional tail as <see cref="PathInfoLastEnemyId"/> above,
+    /// on the creature itself rather than the path-info sub-object. Named for what the write
+    /// site implies rather than a confirmed engine symbol — treat the name as a working
+    /// hypothesis, not a verified fact the way the offset itself is.</summary>
+    private const int CreLastAttackTarget = 0x508;
+
     /// <summary>
-    /// ROUND 46: the four fields a creature's own AI needs back in the engine's own hands
-    /// when it is handed a real fight — <see cref="ObjCommandable"/>, the full
+    /// ROUND 46: the state a creature's own AI needs back in the engine's own hands when it
+    /// is handed a real fight — <see cref="ObjCommandable"/>, the full
     /// <see cref="CreMovePermitted"/> dword (not just the two bits <see cref="ClaimCreature"/>
-    /// ORs on), <see cref="CreRunFlag"/>, and <see cref="CreMoveState"/>.
+    /// ORs on), <see cref="CreRunFlag"/>, <see cref="CreMoveState"/>, and the two target-cache
+    /// fields <see cref="ClearAllActionsFn"/> silently invalidates every time it runs its full
+    /// body on a driven creature.
     ///
     /// Captured once per creature, the first time it is resolved into a slot — BEFORE this
     /// plugin's own claim has ever touched it — so a creature that spent real minutes being
     /// mirrored can be handed back to its own AI in the state the ENGINE actually had it in,
     /// not "whatever the last claim/drive pass happened to leave." <see cref="CreMoveState"/>
-    /// matters most: <c>DriveEnemy</c> assigns it (not ORs) every driven frame from the
-    /// smoother's own "moving" bit, so a creature excluded mid-step is left holding
-    /// <c>-1</c> ("walking") forever — a value normally only ever set by the engine's OWN
-    /// pathing code as a live, actively-updated claim on the movement system, not something
-    /// meant to sit frozen. See docs/research/shared-state-audit.md §2, round 46.
+    /// and the target-cache pair matter most: <c>DriveEnemy</c> assigns <c>CreMoveState</c>
+    /// (not ORs) every driven frame from the smoother's own "moving" bit, and
+    /// <c>ClearAllActionsFn</c> unconditionally invalidates both target fields every time its
+    /// full body runs — neither is something a creature normally recovers from on its own; both
+    /// are normally only ever written by the engine's own live, actively-updated combat/pathing
+    /// code, not something meant to sit frozen at a stale value. See
+    /// docs/research/shared-state-audit.md §2, round 46.
     /// </summary>
-    public readonly struct ClaimSnapshot(int commandable, int movePermitted, int runFlag, int moveState)
+    public readonly struct ClaimSnapshot(
+        int commandable, int movePermitted, int runFlag, int moveState,
+        uint lastAttackTarget, uint pathInfoLastEnemyId)
     {
         public readonly int Commandable = commandable;
         public readonly int MovePermitted = movePermitted;
         public readonly int RunFlag = runFlag;
         public readonly int MoveState = moveState;
+        public readonly uint LastAttackTarget = lastAttackTarget;
+        public readonly uint PathInfoLastEnemyId = pathInfoLastEnemyId;
     }
 
-    public static ClaimSnapshot CaptureClaimState(nint creature) => new(
-        *(int*)(creature + ObjCommandable),
-        *(int*)(creature + CreMovePermitted),
-        *(int*)(creature + CreRunFlag),
-        *(int*)(creature + CreMoveState));
+    public static ClaimSnapshot CaptureClaimState(nint creature)
+    {
+        nint pathInfo = *(nint*)(creature + CrePathInfo);
+        return new(
+            *(int*)(creature + ObjCommandable),
+            *(int*)(creature + CreMovePermitted),
+            *(int*)(creature + CreRunFlag),
+            *(int*)(creature + CreMoveState),
+            *(uint*)(creature + CreLastAttackTarget),
+            pathInfo != 0 ? *(uint*)(pathInfo + PathInfoLastEnemyId) : ObjectInvalid);
+    }
 
     /// <summary>Writes a snapshot back. Deliberately does NOT re-run <see cref="PermitAttacking"/>
     /// — the caller does that afterward, on purpose, so the attack-permitted bit this plugin has
@@ -558,6 +603,13 @@ internal static unsafe class Odyssey
         *(int*)(creature + CreMovePermitted) = snapshot.MovePermitted;
         *(int*)(creature + CreRunFlag) = snapshot.RunFlag;
         *(int*)(creature + CreMoveState) = snapshot.MoveState;
+        *(uint*)(creature + CreLastAttackTarget) = snapshot.LastAttackTarget;
+
+        nint pathInfo = *(nint*)(creature + CrePathInfo);
+        if (pathInfo != 0)
+        {
+            *(uint*)(pathInfo + PathInfoLastEnemyId) = snapshot.PathInfoLastEnemyId;
+        }
     }
 
     /// <summary>

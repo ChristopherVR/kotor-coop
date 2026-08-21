@@ -16,11 +16,16 @@ namespace KotorCoop.Plugin;
 /// Deliberately conservative:
 ///   - opt-out through <c>coop.ini</c> (<c>auto_start_agent = 0</c>), and skipped entirely
 ///     when no agent executable is found beside the game;
-///   - launched exactly once per game process, detached, so nothing here can block or
-///     outlive the frame loop;
-///   - a failure is logged and ignored — the game must start normally with or without the
-///     agent, and a player who prefers to run it by hand still can (an already-running
-///     agent simply takes the session and this one exits on the duplicate attach).
+///   - launched automatically at most once per game process, detached, so nothing here
+///     can block or outlive the frame loop — but if THAT launch's agent later dies
+///     (heartbeat gone stale; see <see cref="AgentLiveness"/>), <see cref="TryRelaunch"/>
+///     will bring it back, at most once a minute, and never touches an agent it did not
+///     start itself;
+///   - a failure is logged AND surfaced on screen (<see cref="StartupFailure"/>, read by
+///     <see cref="AgentLivenessController"/>) — the game must still start normally with or
+///     without the agent, and a player who prefers to run it by hand still can (an
+///     already-running agent simply takes the session and this one exits on the duplicate
+///     attach).
 /// </summary>
 internal static unsafe class AgentLauncher
 {
@@ -106,8 +111,31 @@ internal static unsafe class AgentLauncher
     private static bool _attempted;
 
     /// <summary>
+    /// Non-null only once this launcher has actually stood up a process (a real
+    /// CreateProcess success), and then it is the directory that succeeded — never merely
+    /// "attempted". This is both the relaunch target and the "did I start this agent, or is
+    /// the player running it by hand" flag <see cref="TryRelaunch"/> checks: an agent
+    /// started outside this launcher (or one whose auto-start is opted out in coop.ini) is
+    /// never taken over.
+    /// </summary>
+    private static string? _startedGameDirectory;
+
+    private static long _lastRelaunchAttemptMs;
+
+    /// <summary>
+    /// One line for <see cref="AgentLivenessController"/> to put on screen when the agent
+    /// never started at all — set by the two failure branches below, cleared the moment a
+    /// launch (first or relaunch) actually succeeds so a stale message cannot outlive the
+    /// problem it described.
+    /// </summary>
+    public static string? StartupFailure { get; private set; }
+
+    /// <summary>
     /// Launches the agent for this process, once. Safe to call from plugin startup on the
-    /// game thread: CreateProcess returns immediately and both handles are closed.
+    /// game thread: CreateProcess returns immediately and both handles are closed. A later
+    /// death (heartbeat gone stale past <see cref="AgentLiveness.DeadAfterMs"/>) is handled
+    /// separately by <see cref="TryRelaunch"/>, driven every frame from
+    /// <see cref="AgentLivenessController"/>.
     /// </summary>
     public static void EnsureRunning(string gameDirectory)
     {
@@ -118,18 +146,53 @@ internal static unsafe class AgentLauncher
 
         _attempted = true;
 
+        if (!WantsAutoStart(gameDirectory))
+        {
+            PluginHost.Log("agent: auto-start disabled in coop.ini");
+            return;
+        }
+
+        Launch(gameDirectory);
+    }
+
+    /// <summary>
+    /// Called every frame once <see cref="AgentLiveness"/> judges the agent Dead. Relaunches
+    /// at most once per <see cref="AgentLiveness.RelaunchCooldownMs"/>, and only when THIS
+    /// launcher was the one that started the process being watched — logs each attempt it
+    /// actually makes (silent on every other frame, which is most of them).
+    /// </summary>
+    public static void TryRelaunch(long lastHeartbeatMs, long nowMs)
+    {
+        if (_startedGameDirectory is not { } gameDirectory)
+        {
+            return;
+        }
+
+        if (!AgentLiveness.ShouldRelaunch(lastHeartbeatMs, nowMs, startedByLauncher: true, _lastRelaunchAttemptMs))
+        {
+            return;
+        }
+
+        _lastRelaunchAttemptMs = nowMs;
+        PluginHost.Log(
+            $"agent: heartbeat stale for {AgentLiveness.DeadAfterMs / 1000}s+; attempting a relaunch");
+        Launch(gameDirectory);
+    }
+
+    /// <summary>
+    /// Does the actual CreateProcess work — shared by the first automatic start and every
+    /// later relaunch attempt, so the two can never drift apart in behaviour.
+    /// </summary>
+    private static void Launch(string gameDirectory)
+    {
         try
         {
-            if (!WantsAutoStart(gameDirectory))
-            {
-                PluginHost.Log("agent: auto-start disabled in coop.ini");
-                return;
-            }
-
             string? agentPath = FindAgent(gameDirectory);
             if (agentPath is null)
             {
-                PluginHost.Log("agent: no KotorCoop.Agent.exe beside the game; start it yourself");
+                const string reason = "no KotorCoop.Agent.exe beside the game; start it yourself";
+                StartupFailure = reason;
+                PluginHost.Log($"agent: {reason}");
                 return;
             }
 
@@ -191,7 +254,9 @@ internal static unsafe class AgentLauncher
 
             if (!started)
             {
-                PluginHost.Log($"agent: could not start {agentPath} (error {Marshal.GetLastWin32Error()})");
+                string reason = $"could not start the co-op agent (error {Marshal.GetLastWin32Error()})";
+                StartupFailure = reason;
+                PluginHost.Log($"agent: {reason}: {agentPath}");
                 return;
             }
 
@@ -199,11 +264,14 @@ internal static unsafe class AgentLauncher
             // game. Close both handles so the plugin holds no references to it.
             CloseHandle(info.Thread);
             CloseHandle(info.Process);
+            _startedGameDirectory = gameDirectory;
+            StartupFailure = null;
             PluginHost.Log($"agent: started {Path.GetFileName(agentPath)} as pid {info.ProcessId}; log -> {Path.GetFileName(logPath)}");
         }
         catch (Exception ex)
         {
-            PluginHost.Log($"agent: auto-start failed: {ex.Message}");
+            StartupFailure = $"auto-start failed: {ex.Message}";
+            PluginHost.Log($"agent: {StartupFailure}");
         }
     }
 

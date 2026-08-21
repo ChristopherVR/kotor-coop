@@ -108,6 +108,22 @@ public sealed class CoopCommandDispatcher(
     /// indistinguishable from a bug.</summary>
     private readonly CompatibilityAnnouncer _compatibilityAnnouncer = new();
 
+    /// <summary>The persistent connection indicator (item 18) — see
+    /// <see cref="ConnectionStatusAnnouncer"/> for why the <c>status</c> console verb was not
+    /// enough on its own.</summary>
+    private readonly ConnectionStatusAnnouncer _connectionAnnouncer = new();
+
+    /// <summary>
+    /// coop.ini's <c>status_toasts</c>, read once and cached rather than reloaded off disk
+    /// every 150 ms tick. <c>null</c> means "not read yet"; the value itself is a plain bool
+    /// once resolved, so there is no third state to confuse with "file absent" — an absent or
+    /// unreadable coop.ini defaults the setting ON, the same default <see cref="CoopConfig"/>
+    /// itself uses.
+    /// </summary>
+    private bool? _statusToastsEnabled;
+
+    private bool StatusToastsEnabled => _statusToastsEnabled ??= loadConfig?.Invoke()?.StatusToasts ?? true;
+
     /// <summary>Polls the block for console/menu commands and reflects status until cancelled.</summary>
     public async Task RunAsync(CancellationToken cancellationToken)
     {
@@ -129,12 +145,19 @@ public sealed class CoopCommandDispatcher(
                 // say why, because the thing that reports problems is what died.
                 try
                 {
+                    // Written unconditionally, every tick, whether or not a session even
+                    // exists — this is "the agent is pumping at all", not "connected". The
+                    // plugin watches it stall to notice a hung or crashed agent and freeze
+                    // remote-peer writes rather than keep driving stale phantoms.
+                    _kotor?.PublishHeartbeat();
+
                     manager.Poll();
                     DrainInputs();
                     PublishBrowserList();
                     ReflectPhase();
                     AnnouncePeerChanges();
                     AnnounceCompatibilityChanges();
+                    AnnounceConnectionStatus();
                     DrainChat();
                     ReflectCheatAnswer();
                     DrainAutomaticLoot();
@@ -267,6 +290,12 @@ public sealed class CoopCommandDispatcher(
     /// Fires the menu auto-load at most once per menu-initiated connect, and only when the
     /// game is verifiably still at the main menu (no readable player state) — never
     /// mid-world, never again on a reconnect.
+    ///
+    /// A host fires this immediately after <see cref="Dispatch"/> returns, before anything
+    /// else gets a chance to look at the outcome — so it must check <c>manager.Current</c>
+    /// itself. A bind that failed (port already in use) now returns from Connect cleanly
+    /// instead of throwing, and without this guard a host session that never actually
+    /// started would still load a save into a game with nobody driving it.
     /// </summary>
     private void FireMenuAutoLoadIfArmed()
     {
@@ -277,7 +306,7 @@ public sealed class CoopCommandDispatcher(
 
         _menuAutoLoadArmed = false;
 
-        if (menuAutoLoad is not null && !bridge.TryReadLocalState(out _))
+        if (menuAutoLoad is not null && manager.Current is not null && !bridge.TryReadLocalState(out _))
         {
             menuAutoLoad();
         }
@@ -1364,6 +1393,51 @@ public sealed class CoopCommandDispatcher(
         _compatibilityAnnouncer.Observe(session.Compatibility, Reply);
     }
 
+    /// <summary>
+    /// The persistent connection indicator (item 18, roadmap-seamless.md): posts
+    /// "co-op: connected, N players" / "reconnecting..." / "connection failed" /
+    /// "disconnected" through the same queued-text path <see cref="AnnounceCompatibilityChanges"/>
+    /// uses, reposted only on change, so a player who is not actively typing <c>status</c> at
+    /// the console still finds out when their partner's link drops.
+    ///
+    /// The compact status byte + peer count also rides <c>SharedBlock.OffsetConnectStatus</c>
+    /// (<see cref="ConnectionSnapshot.Pack"/>) UNCONDITIONALLY, regardless of the
+    /// <c>status_toasts</c> gate below — that gate is about what appears on screen, not about
+    /// whether the block's own state is kept current.
+    /// </summary>
+    private void AnnounceConnectionStatus()
+    {
+        if (manager.Current is not { } session)
+        {
+            _connectionAnnouncer.Reset();
+            _kotor?.SetConnectStatus(new ConnectionSnapshot(ConnectionIndicatorState.Disconnected, 0).Pack());
+            return;
+        }
+
+        SessionStats stats = session.GetStats();
+
+        // manager.Phase distinguishes the FIRST handshake (Connecting) and a refused one
+        // (Failed) from an ordinary live session; within a live session, the live
+        // stats.Connected flag is what actually tells a mid-session drop-and-recover apart
+        // from steady state — manager.Phase stays Connected throughout a blackout, because
+        // that field describes the MANAGED lifecycle, not the tick-by-tick link.
+        ConnectionIndicatorState state = manager.Phase switch
+        {
+            SessionPhase.Connecting => ConnectionIndicatorState.Connecting,
+            SessionPhase.Failed => ConnectionIndicatorState.Failed,
+            SessionPhase.Disconnected => ConnectionIndicatorState.Disconnected,
+            _ => stats.Connected ? ConnectionIndicatorState.Connected : ConnectionIndicatorState.Reconnecting,
+        };
+
+        ConnectionSnapshot snapshot = new(state, stats.PeerCount);
+        _kotor?.SetConnectStatus(snapshot.Pack());
+
+        if (StatusToastsEnabled)
+        {
+            _connectionAnnouncer.Observe(snapshot, Reply);
+        }
+    }
+
     /// <summary>Posts the session roster: the local player first, then each remote peer with
     /// the module they were last seen in. Everything read here already exists per tick —
     /// <see cref="ICoopSession.GetRemotePeers"/> and the session stats.</summary>
@@ -1598,6 +1672,17 @@ public sealed class CoopCommandDispatcher(
 
             case SessionPhase.Disconnected:
                 Reply("disconnected");
+                break;
+
+            case SessionPhase.Idle:
+                // The only two things that move the phase back to Idle after it has left
+                // Idle once are a port-in-use bind failure and a connect timeout
+                // (SessionManager.Fail(..., SessionPhase.Idle)) — both already carry a
+                // complete, player-facing sentence in Detail. Deliberately its own case,
+                // not folded into Failed: a silent host and a wrong password are different
+                // situations, and the password-prompt retry above must never fire for either.
+                Reply(manager.Detail);
+                _menuAutoLoadArmed = false;
                 break;
         }
     }

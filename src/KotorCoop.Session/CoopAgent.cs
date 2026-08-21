@@ -42,6 +42,14 @@ public sealed record AgentSettings
     public bool FilterByModule { get; init; } = true;
 
     /// <summary>
+    /// While a peer's <c>PlayerState.FlagInMinigame</c> is set (a swoop race or a forced
+    /// turret sequence), park their phantom instead of mirroring it — the same "not
+    /// meaningfully in this world right now" treatment <see cref="FilterByModule"/> already
+    /// gives a peer standing somewhere else. coop.ini <c>minigame_hide_peer</c> (default on).
+    /// </summary>
+    public bool HidePeersInMinigame { get; init; } = true;
+
+    /// <summary>
     /// When true, a client automatically travels to whatever module the host is in, the
     /// way a summoned phantom follows the world's owner. The host never follows anyone —
     /// it owns enemies and encounters, so its module is where the shared world happens.
@@ -294,6 +302,16 @@ public sealed class CoopAgent(IGameBridge bridge, ICoopSession session, AgentSet
         IReadOnlyList<RemotePeer> visible = settings.FilterByModule && local.Module.Length > 0
             ? [.. peers.Where(p => p.State.Module.Length == 0 || p.IsInModule(local.Module))]
             : peers;
+
+        // A peer inside the engine's own minigame mode (swoop race, forced turret sequence)
+        // is not meaningfully standing in this module either, even though their published
+        // Module string still names it — same "park, do not mirror" treatment as the module
+        // filter above, and the same idiom: simply absent from what TryWriteRemotePeers
+        // writes, which is what already deactivates a slot for a peer elsewhere. See
+        // PlayerState.FlagInMinigame and docs/research/minigames.md.
+        visible = settings.HidePeersInMinigame
+            ? [.. visible.Where(p => !p.State.IsInMinigame)]
+            : visible;
 
         // Mask the per-avatar fields a mod mismatch makes unsafe BEFORE they reach the
         // game. A different appearance.2da means a replicated row index could paint the
@@ -713,8 +731,17 @@ public sealed class CoopAgent(IGameBridge bridge, ICoopSession session, AgentSet
 
         // Inbound: hand the plugin the running total. Level state, written every tick —
         // the plugin tracks what it has already applied, so this cannot double-count.
+        //
+        // Skipped entirely while THIS player is in a minigame: they cannot be hit in a
+        // turret, and there is no engine body standing in the shared world to apply it to.
+        // The total already owed is not cleared here — the session's ledger keeps it, and
+        // catching up once the write resumes is the same "no double-count, no drop" the
+        // level-state design already gives every other consumer of GetIncomingPhantomDamage.
+        // A hit taken elsewhere DURING a minigame therefore still lands once the player is
+        // back in the world; see docs/research/minigames.md for why forgiving it outright
+        // was left out of this pass.
         (uint owed, uint from) = session.GetIncomingPhantomDamage();
-        if (owed > 0)
+        if (owed > 0 && !bridge.IsInMinigame)
         {
             bridge.TryWriteIncomingDamage(owed, from);
         }
@@ -807,6 +834,14 @@ public sealed class CoopAgent(IGameBridge bridge, ICoopSession session, AgentSet
 
         if (session.IsEnemyAuthority)
         {
+            // Hold the last snapshot rather than publishing while the host itself is in a
+            // minigame — same reasoning as PumpEnemies: whatever the engine reports for the
+            // companions during a swoop/turret sequence is not the shared-world party.
+            if (bridge.IsInMinigame)
+            {
+                return;
+            }
+
             // The host: publish, do not freeze. Its companions follow through the game's
             // own AI exactly as in single-player.
             session.PublishParty(bridge.ReadPartyMembers());
@@ -1913,7 +1948,12 @@ public sealed class CoopAgent(IGameBridge bridge, ICoopSession session, AgentSet
             // dialogue system wipes every hostile's action queue in this instance on every
             // tick, so what we would send is a pacified fight — and the peer, who is not
             // talking, would have their own fight go quiet for the duration.
-            if (!bridge.IsInDialogue)
+            //
+            // The same holds for a minigame: whatever the engine's creature census reports
+            // during a swoop race or a turret sequence is not the shared-world fight, and
+            // publishing it would send every peer's mirror chasing a fight that is not
+            // happening. See PlayerState.FlagInMinigame and docs/research/minigames.md.
+            if (!bridge.IsInDialogue && !bridge.IsInMinigame)
             {
                 List<EnemyState> ownedEnemies = bridge.ReadEnemies(otherPlayers);
                 session.PublishEnemies(censusModule, ownedEnemies);

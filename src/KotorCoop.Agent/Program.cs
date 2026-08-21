@@ -797,6 +797,7 @@ internal static class Program
             SyncParty = options.SyncParty,
             SyncProgression = options.SyncProgression,
             SyncPause = config?.PauseSync ?? true,
+            HidePeersInMinigame = config?.HidePeersInMinigame ?? true,
         };
 
         // Surface why a cached player pointer stopped validating. Re-resolving costs a full
@@ -842,6 +843,9 @@ internal static class Program
             RequireIdenticalSave = options.RequireIdenticalSave,
             Password = sessionPassword.Length > 0 ? sessionPassword : fallbackPassword,
             PeerIdentity = peerIdentity,
+            ConnectTimeoutMs = config is { ConnectTimeoutMs: > 0 }
+                ? config.ConnectTimeoutMs
+                : ProtocolConstants.DefaultConnectTimeoutMs,
         };
 
         // The dispatcher owns every command surface and the one LAN listener. It re-reads

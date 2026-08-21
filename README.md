@@ -334,4 +334,12 @@ tools/                   RE helpers, demo scripts, the kotor1_0_3 symbol databas
   agreeing case. And note what the bullet above does *not* buy you here: an item now carries
   its own mutable state, but it is still named by resref, so two installs whose *same* resref
   names a differently-modded item are not detected at all.
+- **Minigames (swoop races, forced turret sequences) are detected and the peer is parked —
+  not yet live-verified.** A player inside `CSWCModule::GetMiniGame` is flagged on the wire
+  (`PlayerState.FlagInMinigame`); a peer's instance parks that player's phantom instead of
+  mirroring it, and the minigame player's own instance stops publishing enemy/party presence
+  and applying forwarded damage for the duration. Nobody has yet watched this run in a
+  two-instance session — see [docs/research/minigames.md](docs/research/minigames.md) §7 for
+  what a live pass needs to check, including whether damage taken during the sequence lands
+  as a lump the instant it ends. Pazaak is unrelated engine machinery and is not covered.
 - KOTOR 2 is untouched, and only GOG v1.0.3 addresses are known.

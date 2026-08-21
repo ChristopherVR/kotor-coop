@@ -14,6 +14,7 @@ public sealed class JournalStore
     private readonly Dictionary<string, int> _entries = new(StringComparer.OrdinalIgnoreCase);
     private readonly Lock _gate = new();
     private uint _version;
+    private ulong _digest = EntryDigest.Empty;
 
     public uint Version
     {
@@ -24,6 +25,31 @@ public sealed class JournalStore
                 return _version;
             }
         }
+    }
+
+    /// <summary>Order-independent content fingerprint, beside <see cref="Version"/> for the
+    /// same reason <see cref="EventFlagStore.Digest"/> exists — see <see cref="EntryDigest"/>.</summary>
+    public ulong Digest
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _digest;
+            }
+        }
+    }
+
+    /// <summary>Caller must hold <see cref="_gate"/>.</summary>
+    private void ReplaceEntry(string questTag, int state)
+    {
+        if (_entries.TryGetValue(questTag, out int existing))
+        {
+            _digest ^= EntryDigest.Journal(questTag, existing);
+        }
+
+        _entries[questTag] = state;
+        _digest ^= EntryDigest.Journal(questTag, state);
     }
 
     public int Count
@@ -56,7 +82,7 @@ public sealed class JournalStore
                 return false;
             }
 
-            _entries[questTag] = state;
+            ReplaceEntry(questTag, state);
             _version++;
             return true;
         }
@@ -78,7 +104,7 @@ public sealed class JournalStore
 
                 if (!_entries.TryGetValue(entry.Key, out int existing) || existing < entry.Value)
                 {
-                    _entries[entry.Key] = entry.Value;
+                    ReplaceEntry(entry.Key, entry.Value);
                 }
             }
 

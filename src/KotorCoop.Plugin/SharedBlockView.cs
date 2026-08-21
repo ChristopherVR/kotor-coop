@@ -9,9 +9,17 @@ internal readonly record struct RemoteView(
     public const uint FlagPaused = 2;
     public const uint FlagInCombat = 4;
 
+    /// <summary>Matches <c>PlayerState.FlagInMinigame</c> — the peer is in a swoop race or
+    /// turret sequence and not meaningfully in the shared world. Carried verbatim through
+    /// the existing <see cref="Flags"/> dword; no block layout change (see
+    /// docs/research/minigames.md).</summary>
+    public const uint FlagInMinigame = 32;
+
     public bool InCombat => (Flags & FlagInCombat) != 0;
 
     public bool Paused => (Flags & FlagPaused) != 0;
+
+    public bool InMinigame => (Flags & FlagInMinigame) != 0;
 }
 
 /// <summary>One enemy's authoritative state, as published by the owning peer.
@@ -116,6 +124,8 @@ internal sealed unsafe class SharedBlockView(byte* baseAddress)
     private int* I32(int offset) => (int*)(baseAddress + offset);
 
     private float* F32(int offset) => (float*)(baseAddress + offset);
+
+    private long* I64(int offset) => (long*)(baseAddress + offset);
 
     // ---- plugin -> agent ------------------------------------------------------
 
@@ -1064,6 +1074,10 @@ internal sealed unsafe class SharedBlockView(byte* baseAddress)
     /// <summary>Peers the session has admitted, written by the agent every tick regardless
     /// of player resolve — the seamless-arrival gate's signal (see SharedBlock).</summary>
     public uint SessionPeers => *U32(SharedBlock.OffsetSessionPeers);
+
+    /// <summary>Agent -&gt; plugin. Environment.TickCount64 at the agent's last dispatcher
+    /// tick; 0 = no agent has ever pumped this block. See AgentLiveness.</summary>
+    public long AgentHeartbeat => *I64(SharedBlock.OffsetAgentHeartbeat);
 
     /// <summary>Start of a server row's fixed-size record.</summary>
     public byte* BrowserEntry(int index) =>

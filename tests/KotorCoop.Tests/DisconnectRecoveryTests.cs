@@ -552,6 +552,87 @@ public class DisconnectRecoveryTests
         await cts.CancelAsync();
         await Task.WhenAll(hostTask, clientTask);
     }
+
+    /// <summary>
+    /// Container loot's own version+digest tripwire (this pass — see
+    /// docs/research/disconnect-reconnect.md §4.8), exercised across a real link failure.
+    ///
+    /// Deliberately a BLACKOUT rather than <see cref="NetworkSim.SetLoss"/>: §4.8 measured
+    /// <see cref="HeavyPacketLossStillConverges"/> as flaky under load — it fails on slow
+    /// suite runs and passes on fast ones, because a percentage-loss budget is wall-clock but
+    /// the attempts inside it are ticks, so a loaded machine buys fewer of them. A blackout's
+    /// deadline is absolute against <see cref="SessionClock"/>, so this proves the same
+    /// property — several container-loot removals made while the client cannot hear anything
+    /// at all still converge once the link returns — without depending on machine load.
+    ///
+    /// Before this pass <see cref="ContainerLootStore"/> had no <c>Version</c> at all, so
+    /// there was nothing on the store to assert convergence against beyond content equality;
+    /// this is the first test that checks the wire tripwire fields (<c>Loot.Version</c>,
+    /// <c>Loot.Digest</c>) themselves, the same way the flag and journal tests already could.
+    /// </summary>
+    [Fact]
+    public async Task ContainerLootConvergesByVersionAndDigestAcrossADeterministicBlackout()
+    {
+        using CoopHost host = new(new SessionSettings { PlayerName = "Revan", Port = 0, TickRate = 30 });
+        using CoopClient client = new(
+            new SessionSettings { PlayerName = "Malak", TickRate = 30 },
+            new IPEndPoint(IPAddress.Loopback, host.ListenEndPoint.Port));
+
+        using CancellationTokenSource cts = new(TimeSpan.FromSeconds(60));
+        Task hostTask = host.RunAsync(cts.Token);
+        Task clientTask = client.RunAsync(cts.Token);
+
+        void Publish()
+        {
+            host.PublishLocalState(Somewhere);
+            client.PublishLocalState(Somewhere);
+        }
+
+        Assert.True(await WaitForAsync(() => client.IsConnected, Timeout, Publish));
+
+        // Agree on one removal before the outage, so a lost resync shows up as a REGRESSION
+        // and not merely as a gap.
+        host.PublishContainerLoot(0x10, 0x11);
+        Assert.True(
+            await WaitForAsync(
+                () => client.Loot.Version == host.Loot.Version && client.Loot.Digest == host.Loot.Digest,
+                Timeout,
+                Publish),
+            "the client never converged on the removal made before the blackout");
+
+        client.Network.StartBlackout(8_000);
+        Assert.True(await WaitForAsync(() => !client.IsConnected, TimeSpan.FromSeconds(10), Publish));
+
+        // Three more removals while the client cannot hear anything at all — the shape §4.8
+        // describes: reliable ops with nobody, for a while, to retransmit to.
+        host.PublishContainerLoot(0x20, 0x21);
+        host.PublishContainerLoot(0x30, 0x31);
+        host.PublishContainerLoot(0x40, 0x41);
+
+        Assert.True(
+            await WaitForAsync(() => client.IsConnected, Timeout, Publish), "the client never rejoined");
+
+        Assert.True(
+            await WaitForAsync(
+                () => client.Loot.Version == host.Loot.Version && client.Loot.Digest == host.Loot.Digest,
+                Timeout,
+                Publish),
+            $"container loot never converged: host v{host.Loot.Version}/{host.Loot.Digest:x16} "
+            + $"client v{client.Loot.Version}/{client.Loot.Digest:x16}");
+
+        // Content, not just the tripwire fields: every removal the host made is on both sides.
+        ContainerLootRemoval[] expected =
+        [
+            new(0x10, 0x11), new(0x20, 0x21), new(0x30, 0x31), new(0x40, 0x41),
+        ];
+        foreach (ContainerLootRemoval removal in expected)
+        {
+            Assert.Contains(removal, client.ContainerLootRemovals);
+        }
+
+        await cts.CancelAsync();
+        await Task.WhenAll(hostTask, clientTask);
+    }
 }
 
 /// <summary>The fault injector itself: it must be inert until asked, and exact when asked.</summary>

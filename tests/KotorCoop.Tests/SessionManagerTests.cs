@@ -128,4 +128,101 @@ public class SessionManagerTests
         Assert.Equal(SessionPhase.Failed, manager.Phase);
         Assert.Null(manager.Current);
     }
+
+    /// <summary>
+    /// A second co-op agent (or a leftover one from a crashed previous session) already
+    /// holding the port used to throw a bare SocketException straight out of Connect,
+    /// leaving the manager in whatever phase it happened to be in — never reported, never
+    /// idle. Item 6c: this must fail cleanly to Idle with a specific, actionable line, and
+    /// distinctly from the ordinary "connect: no host address" Failed case above.
+    /// </summary>
+    [Fact]
+    public void HostingOnAPortAlreadyInUseFailsCleanlyToIdle()
+    {
+        using UdpChannel blocker = new(0);
+        int busyPort = blocker.LocalEndPoint.Port;
+
+        LifecycleBridge bridge = new();
+        using SessionManager manager = new(bridge, new AgentSettings { PollRate = 30 });
+
+        manager.Connect(
+            host: true, endpoint: null,
+            new SessionSettings { PlayerName = "Malak", Port = busyPort, TickRate = 30 });
+
+        Assert.Equal(SessionPhase.Idle, manager.Phase);
+        Assert.Contains("already in use", manager.Detail, StringComparison.OrdinalIgnoreCase);
+        Assert.Null(manager.Current);
+        Assert.Null(manager.Agent);
+    }
+
+    /// <summary>
+    /// Item 6d: a host that never answers at all (down, firewalled, or simply the wrong
+    /// address) used to leave the manager in Connecting forever — Poll kept re-deriving the
+    /// same "connecting to X..." status from a CoopClient that was, correctly, still trying.
+    /// A configurable deadline must give up and return to Idle with a message distinct from
+    /// the wrong-password Failed path (which the host DOES answer, immediately).
+    /// </summary>
+    [Fact]
+    public async Task JoiningAHostThatNeverAnswersTimesOutToIdle()
+    {
+        // A bound socket nothing ever reads from: Hello packets land and vanish, exactly
+        // like a firewalled or dead host, without needing a second process.
+        using UdpChannel deadEnd = new(0);
+        IPEndPoint endpoint = new(IPAddress.Loopback, deadEnd.LocalEndPoint.Port);
+
+        LifecycleBridge bridge = new();
+        using SessionManager manager = new(bridge, new AgentSettings { PollRate = 30 });
+
+        manager.Connect(host: false, endpoint, new SessionSettings
+        {
+            PlayerName = "Malak",
+            TickRate = 30,
+            ConnectTimeoutMs = 300,
+        });
+
+        Assert.Equal(SessionPhase.Connecting, manager.Phase);
+
+        Assert.True(
+            await WaitForPhase(manager, SessionPhase.Idle, TimeSpan.FromSeconds(5)),
+            "the manager never gave up and returned to idle");
+        Assert.Contains("no reply from", manager.Detail, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains(endpoint.Port.ToString(), manager.Detail);
+        Assert.Null(manager.Current);
+        Assert.Null(manager.Agent);
+    }
+
+    /// <summary>A host that answers within the deadline must reach Connected as normal —
+    /// the timeout must not fire on its way there.</summary>
+    [Fact]
+    public async Task AQuickConnectBeatsAShortTimeout()
+    {
+        using CoopHost host = new(new SessionSettings { PlayerName = "Revan", Port = 0, TickRate = 30 });
+        using CancellationTokenSource cts = new(TimeSpan.FromSeconds(15));
+        Task hostTask = host.RunAsync(cts.Token);
+
+        LifecycleBridge bridge = new();
+        using SessionManager manager = new(bridge, new AgentSettings { PollRate = 30 });
+
+        IPEndPoint endpoint = new(IPAddress.Loopback, host.ListenEndPoint.Port);
+        manager.Connect(host: false, endpoint, new SessionSettings
+        {
+            PlayerName = "Malak",
+            TickRate = 30,
+            ConnectTimeoutMs = 500, // short, but the loopback handshake is much faster
+        });
+
+        Assert.True(
+            await WaitForPhase(manager, SessionPhase.Connected, TimeSpan.FromSeconds(5)),
+            "the connect timeout fired before a real handshake could land");
+
+        manager.Disconnect();
+        await cts.CancelAsync();
+        try
+        {
+            await hostTask;
+        }
+        catch (OperationCanceledException)
+        {
+        }
+    }
 }

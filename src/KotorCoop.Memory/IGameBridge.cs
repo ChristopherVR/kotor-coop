@@ -376,6 +376,15 @@ public interface IGameBridge : IDisposable
     bool IsInDialogue => false;
 
     /// <summary>
+    /// True while the local player is inside the engine's own minigame mode (a swoop race
+    /// or a forced turret sequence — <c>CSWCModule::GetMiniGame</c>, see
+    /// docs/research/minigames.md). They are not meaningfully in the shared world for the
+    /// duration: enemy/party presence this instance would publish is not the real fight,
+    /// and damage forwarded from a peer should not land on someone who cannot be hit.
+    /// </summary>
+    bool IsInMinigame => false;
+
+    /// <summary>
     /// Reads what the local player is currently hearing in a conversation, for the
     /// dialogue-spectate payload. Empty when not in a conversation, or when the plugin could
     /// not resolve the live line. Default is "no dialogue read" for bridges without a plugin.

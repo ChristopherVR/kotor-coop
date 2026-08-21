@@ -82,8 +82,22 @@ public static class ProtocolConstants
     /// announced before it happens so a follower's own transition plays them too. The
     /// follower was never gated; its move-to-module queue was simply empty, so it loaded
     /// straight in while the owner's main thread was gone for 7,407 ms playing 01c. Packet
-    /// type 39 is deliberately skipped: network-topology.md reserves it on paper.</summary>
-    public const byte Version = 25;
+    /// type 39 is deliberately skipped: network-topology.md reserves it on paper.
+    /// Version 26: PlayerState carries FlagInMinigame — set while the engine's own
+    /// CSWCModule::GetMiniGame is non-null (a swoop race or a forced turret sequence). A
+    /// peer's instance parks that phantom instead of mirroring it, and the minigame
+    /// player's own instance stops applying forwarded damage for the duration; see
+    /// docs/research/minigames.md.</summary>
+    /// Version 27: the world snapshot carries a content DIGEST beside each of the flag, item
+    /// and journal version counters, plus a version and digest for container loot, which had
+    /// neither. A version counter alone counts local CHANGES, not content: two stores that
+    /// diverged by the same number of changes during an outage tie and never ask for a
+    /// resync (docs/research/disconnect-reconnect.md §4.1). The digest is an
+    /// order-independent fingerprint of what is actually held (KotorCoop.Session.EntryDigest),
+    /// so it catches that tie. LootSyncRequest (43) is new for the same reason §4.8 flags:
+    /// container loot was retransmit-only with no tripwire of its own, so a straggler under
+    /// sustained loss had nothing behind it but the retransmit.</summary>
+    public const byte Version = 27;
 
     /// <summary>Journal quest tags are resrefs plus a little slack.</summary>
     public const int MaxJournalTagLength = 32;
@@ -234,6 +248,16 @@ public static class ProtocolConstants
     public const int DefaultInterpolationDelayMs = 80;
 
     public const int PeerTimeoutMs = 5000;
+
+    /// <summary>
+    /// How long a client waits in Connecting before giving up on a host that never
+    /// answers Hello at all (as opposed to answering with a Reject, which is the
+    /// wrong-password path and resolves immediately, never through this timeout). A dead
+    /// host, a firewalled port or a mistyped address all look identical from here: total
+    /// silence. 15 s is long enough that a genuinely slow LAN handshake still lands, short
+    /// enough that a player is not left staring at "connecting..." for a full minute.
+    /// </summary>
+    public const int DefaultConnectTimeoutMs = 15000;
 
     public const int MaxPeers = 8;
 }

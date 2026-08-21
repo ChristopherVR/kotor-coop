@@ -379,6 +379,17 @@ internal sealed unsafe class PhantomController(SharedBlockView block)
             return;
         }
 
+        if (AgentLivenessController.RemoteWritesFrozen)
+        {
+            // The agent has stopped pumping this block (see AgentLiveness); everything
+            // below reads its remote slots, which are now a stale snapshot nobody is
+            // updating. Leave whatever phantoms already exist exactly where they stand
+            // rather than keep spawning, destroying or "driving" bodies off a picture that
+            // has stopped changing — AgentLivenessController's on-screen warning is what
+            // tells the player why. Recovers on its own the moment the heartbeat resumes.
+            return;
+        }
+
         // ⚠ RemoteCount is the OCCUPIED RANGE, not a population count. The agent keeps a
         // peer in the slot it joined in so nothing downstream is re-attributed when someone
         // leaves, which means slot 1 can be live while slot 0 is empty. Everything below

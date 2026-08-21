@@ -7,7 +7,7 @@ public class PacketCodecTests
 {
     private static readonly PlayerState SampleState =
         new(new Vector3f(12.5f, -3.25f, 0.75f), 1.75f, "end_m01aa", 87, 42,
-            Flags: PlayerState.FlagInDialogue | PlayerState.FlagInCombat);
+            Flags: PlayerState.FlagInDialogue | PlayerState.FlagInCombat | PlayerState.FlagInMinigame);
 
     [Fact]
     public void JournalPacketsRoundTrip()
@@ -188,6 +188,28 @@ public class PacketCodecTests
         Assert.Equal(SampleState.Module, decoded.State.Module);
         Assert.Equal(SampleState.Health, decoded.State.Health);
         Assert.Equal(SampleState.Animation, decoded.State.Animation);
+
+        // FlagInMinigame is the newest bit in the flags dword (roadmap item 8): a peer's
+        // instance parks their phantom on this, so it must survive the wire intact.
+        Assert.True(decoded.State.IsInMinigame);
+    }
+
+    [Fact]
+    public void MinigameFlagRoundTripsIndependentlyOfTheOtherPresenceFlags()
+    {
+        Span<byte> buffer = stackalloc byte[ProtocolConstants.MaxPacketSize];
+        PlayerState notInMinigame = SampleState with
+        {
+            Flags = PlayerState.FlagInDialogue | PlayerState.FlagInCombat,
+        };
+
+        int length = PacketCodec.Write(buffer, new StateUpdatePacket(1, 1, 1, notInMinigame));
+        StateUpdatePacket? decoded = PacketCodec.ReadStateUpdate(buffer[..length]);
+
+        Assert.NotNull(decoded);
+        Assert.False(decoded.State.IsInMinigame);
+        Assert.True(decoded.State.IsInDialogue);
+        Assert.True(decoded.State.IsInCombat);
     }
 
     [Fact]
@@ -202,7 +224,13 @@ public class PacketCodecTests
             new(3, "Bastila", SampleState with { Position = new Vector3f(1f, 2f, 3f) }),
         ];
 
-        WorldSnapshotPacket original = new(555L, 9, 4, 7, entries);
+        WorldSnapshotPacket original = new(
+            555L, 9, 4, 7, 2,
+            0x1122334455667788UL,
+            0x99AABBCCDDEEFF00UL,
+            0x0102030405060708UL,
+            0xFEDCBA9876543210UL,
+            entries);
         int length = PacketCodec.Write(buffer, original);
 
         WorldSnapshotPacket? decoded = PacketCodec.ReadWorldSnapshot(buffer[..length]);
@@ -212,6 +240,11 @@ public class PacketCodecTests
         Assert.Equal(9u, decoded.FlagVersion);
         Assert.Equal(4u, decoded.ItemVersion);
         Assert.Equal(7u, decoded.JournalVersion);
+        Assert.Equal(2u, decoded.LootVersion);
+        Assert.Equal(0x1122334455667788UL, decoded.FlagDigest);
+        Assert.Equal(0x99AABBCCDDEEFF00UL, decoded.ItemDigest);
+        Assert.Equal(0x0102030405060708UL, decoded.JournalDigest);
+        Assert.Equal(0xFEDCBA9876543210UL, decoded.LootDigest);
         Assert.Equal(3, decoded.Entries.Count);
         Assert.Equal("Malak", decoded.Entries[1].Name);
         Assert.Equal("tar_m02aa", decoded.Entries[1].State.Module);
@@ -249,7 +282,8 @@ public class PacketCodecTests
                 new string('n', ProtocolConstants.MaxNameLength),
                 worstCase))];
 
-        int length = PacketCodec.Write(buffer, new WorldSnapshotPacket(1, 1, 1, 1, entries));
+        int length = PacketCodec.Write(
+            buffer, new WorldSnapshotPacket(1, 1, 1, 1, 1, ulong.MaxValue, ulong.MaxValue, ulong.MaxValue, ulong.MaxValue, entries));
 
         // A snapshot that does not fit is dropped every tick, so nobody moves.
         Assert.True(length > 0, "worst-case snapshot must fit inside one packet");
@@ -381,6 +415,17 @@ public class PacketCodecTests
         ContainerLootAckPacket ack = new(3, 42);
         int ackLength = PacketCodec.Write(buffer, ack);
         Assert.Equal(ack, PacketCodec.ReadContainerLootAck(buffer[..ackLength]));
+    }
+
+    [Fact]
+    public void LootSyncRequestRoundTrips()
+    {
+        Span<byte> buffer = stackalloc byte[ProtocolConstants.MaxPacketSize];
+
+        LootSyncRequestPacket request = new(3, 12, 0xDEADBEEFCAFEBABEUL);
+        int length = PacketCodec.Write(buffer, request);
+
+        Assert.Equal(request, PacketCodec.ReadLootSyncRequest(buffer[..length]));
     }
 
     [Fact]
