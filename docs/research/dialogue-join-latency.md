@@ -235,3 +235,148 @@ fastest live check is `blockpoke.ps1`'s existing `dialogue` verb (reads the shar
 dialogue fields directly) sampled a few times in quick succession during a held conversation:
 under `=1` a changed node/line should show up on the very next sample; under `=0` it should lag
 by up to ~150 ms, matching the two passes' predicted difference.
+
+---
+
+## Live A/B (2026-08-21)
+
+Run for real, on the documented rig: two GOG installs
+(`C:\GOG Games\Star Wars KOTOR (GOG)`, `D:\Games\swkotor-gog-p2`), both plugin and agent
+rebuilt and deployed (`src\KotorCoop.Plugin\build.ps1 -Install` against both `-GameDir`s; block
+version 47 / protocol 33 confirmed on both), `tools\demo.ps1` cold-launched onto `END_M01AA`
+near `end_trask`. 12 `dlgjoinlatency.ps1` runs total (5 baseline + 2 failed-to-open baseline
+retries, 5 fast-join), plus manual `blockpoke.ps1`/`sendkey.ps1` probes for the rough edges and
+`shot.ps1` screenshots. Full row data in `tools\dlgjoinlatency.csv`.
+
+**Tooling bug found and fixed first**: `dlgjoinlatency.ps1`'s `ParseTimestamp` regex assumed
+log lines with no leading character (`^\s*(\d{2}):...`), but `kotorcoop-plugin.log` lines are
+bracketed (`[22:31:43.714] dialogue: ...`) — every run before the fix printed `NOT OBSERVED` for
+both millisecond metrics. Fixed by allowing an optional `\[` before the digits
+(`tools\dlgjoinlatency.ps1`). This is a pure test-tool fix; nothing under `src/` changed for it.
+
+### The numbers
+
+| Metric | Baseline (`=0`, n=5) | Fast-join (`=1`, n=5) |
+|---|---:|---:|
+| owner StartDialog → joiner StartDialog (GUI open) | 5033–5103 ms, avg ~5065 ms | 5030–5061 ms, avg ~5046 ms |
+| owner StartDialog → joiner's first driven node | 20179–21303 ms (4 of 5); 1 outlier at 5057 ms | 20023–20599 ms (4 of 5); 1 outlier at 5057 ms |
+| joiner content latency (self-reported, `ReportContentLatency`) | **0 ms after opening, 0 ms after the request — 5/5 runs** | **0 ms after opening, 0 ms after the request — 5/5 runs** |
+| `dlgprobe.ps1` node agreement | 7/7, 13/15, 15/15, 14/15, 14/15 | 7/7, 14/15, 15/15, 15/15, 14/15 |
+
+Every disagreement in the node-agreement column landed at the same two samples (`t=18`,
+`t=19`, the last two seconds of a 20 s window) under BOTH flag settings, and every one resolved
+itself (the two screens were never left apart at the end of a run) — the shape is identical
+between the two arms, not a regression introduced by either.
+
+### Why the two headline metrics move in lock-step with the flag, and what that means
+
+The **GUI-open** gap (~5.05 s both arms) is dominated by `dlgprobe.ps1`'s own `-JoinAfter 4`
+scripted wait before it pokes the joiner's test-open, plus ~1 s of PowerShell subprocess
+start-up on top — a harness constant, not a measurement of anything this mod controls. It
+cannot move between arms because nothing about `dialogue_fast_join` touches it.
+
+The **first driven node** gap (~20.1–20.6 s in 8 of 10 runs) is `dlgprobe.ps1`'s own
+`-PickAfter 10` reply key, sent via `sendkey.ps1`'s `SendInput`, racing the joiner's own
+just-opened dialogue window for OS foreground focus — both `swkotor` windows are on screen at
+once in this rig. A follow-up manual probe (no joiner window contending for focus) sent the
+same key directly: the host's own node advanced in **under 1 s** on one run and in **3.5 s**
+on another, under the SAME `dialogue_fast_join` value — i.e. this number's own variance,
+uncontended, is larger than anything separating the two arms' medians. This is the OWNER's own
+local reply-to-next-entry latency (vanilla engine pacing against the line's audio,
+`IsDialogDelay` in `dialogue-sync.md`'s own terms) — it has nothing to do with the
+follower's read path `dialogue_fast_join` changes, and both arms pay it identically. The 1-in-5
+outlier at 5057 ms in each arm (run where the engine happened to pick the owner's OWN starting
+entry past the joiner's local one, so the adopt's own catch-up jump WAS the first "followed the
+owner" line, with no reply-key wait in between) confirms the outlier is about which starting
+entry the `.dlg`'s own conditional logic picked, not the flag either.
+
+**The metric that actually isolates the fix — content latency, self-reported by the SAME
+instance off its own clock — read 0 ms after opening in every single run, both arms, 10/10.**
+That is because every join in this rig (players already standing next to Trask on both
+installs) resolves through the **adopt** path (`dialogue-sync.md`'s "the engine started the
+same conversation here; adopting it to follow") rather than a distance **follow**: the
+joiner's own local engine independently reaches `StartDialog` for the same NPC (the same thing
+a real click does), so the first line the joiner sees is rendered by their OWN local dialogue
+data, not replicated from the owner over the wire at all. The 150 ms × 2 cadence hops
+`dialogue_fast_join` closes (hops #3/#6 in this doc's own table) sit on the FOLLOW path — a
+joiner who is not yet standing at the NPC and has to be spectate-walked in before their own
+`StartDialog` fires — and this rig's design (both players placed next to the same NPC by the
+save, joined via the `talk`/test-open hook that behaves exactly like a click) never exercises
+that path. The static, code-read analysis earlier in this document remains the best evidence
+for the FOLLOW path's savings; it was not, and could not be, independently confirmed or refuted
+by this live pass, because reproducing a genuine distance-follow needs a joiner meaningfully far
+from the NPC when the owner starts, which this session's fixed two-PC-adjacent-to-Trask setup
+does not produce.
+
+### Screenshots (the user's literal symptom)
+
+Captured via `shot.ps1` on the joiner's window after firing the join. Actual elapsed time from
+the join-trigger to each shot was dominated by `shot.ps1`'s own ~1.5–2.5 s per-call overhead
+(window-activate wait + subprocess start), so the requested exact 0.5/1/2/3 s marks were not
+achievable with sequential PowerShell calls — the earliest capture landed at **~2.4 s**
+post-trigger, the second at **~17.2 s**. Saved under the session scratchpad
+(`join_p0.5s.png`, `join_p2.png`; not committed — screenshots are ephemeral evidence, not repo
+content). What they show:
+
+* **~2.4 s post-join**: the letterbox bars are already in their final, steady thin position —
+  not visibly "creeping" — and no subtitle text is on screen at that instant (a normal
+  between-lines gap, not a stuck blank box).
+* **~17.2 s post-join**: full subtitle text rendered normally (`"Look at the TARGET MENU and
+  find the SECURITY icon..."`), letterbox unchanged from the first shot.
+
+Combined with the 0 ms content-latency figure above, the user's reported symptom — subtitles
+staying blank for several seconds while the bars visibly animate in — **did not reproduce in
+this configuration** (adjacent players, adopt-path join), under either flag setting. This is
+consistent with the join path exercised here (adopt) never having been the slow path to begin
+with; it does not rule out the FOLLOW/distance-join path still showing the symptom, which this
+rig's fixed NPC-adjacent starting position cannot exercise.
+
+### Rough edges (`dialogue-sync.md`'s NEEDS-LIVE list)
+
+* **Both players clicking the same NPC simultaneously.** Fired `talk end_trask` on both
+  installs within ~50 ms of each other. No crash, no stuck state. The in-process arbiter
+  resolved the tie (the token went to whichever side's write landed first — observed both
+  ways across two attempts), the LOSING side logged `"the engine started the same conversation
+  here; adopting it to follow"` and immediately converged onto the winner's exact current line
+  (content latency 0 ms again). Both instances' `blockpoke dialogue` reads showed byte-identical
+  line text afterward.
+* **The joiner leaving mid-conversation (Esc).** Sent a literal `Esc` keypress
+  (`sendkey.ps1 -Keys esc`) to the follower's window mid-conversation. **No observable effect**
+  — the conversation continued unchanged on both instances and stayed in sync (both advanced to
+  the next line together immediately after). This appears to be vanilla KOTOR1 behaviour (this
+  engine build does not offer an Esc-to-leave affordance during dialogue at all), not a gap this
+  mod introduces or needs to close.
+* **The joiner explicitly leaving and rejoining** (`talk close`, which does exercise the real
+  `Odyssey.CloseDialogue` give-up path, unlike Esc above): the owner's OWN conversation
+  continued completely unaffected — identical line text read before and after the joiner's
+  close. The joiner then re-issued `talk end_trask` and was readmitted as a follower
+  (`remote: active 1` again), catching back up toward the owner's current node. Leave-then-
+  rejoin works.
+* **Owner ends the conversation — how fast does the joiner's UI close?** The joiner's
+  `"the owner ended the conversation; closing"` line appeared within a few seconds of the
+  close request in every observation, but this harness cannot isolate the true propagation
+  time from the ~1–3 s of PowerShell subprocess start-up each triggering call itself costs —
+  the same limitation as the node-advance metric above. Not independently measured to
+  millisecond precision; qualitatively prompt, no stuck joiner UI observed in any run.
+* **A conversation started by a trigger/cutscene on one side (END_M01AA's opening Trask
+  scene).** **Not independently re-verified live this session.** The save both installs load
+  already begins past that scripted opening, and reliably re-triggering a spent module-load
+  cutscene would need restarting from a much earlier save — out of this session's scope.
+  Structurally the code path is identical to the already-tested adopt mechanism
+  (`BeginConversation → StartDialog` is the same entry point in `dialogue-sync.md`'s own
+  verified chain regardless of whether a player click or a script action reached it), so no
+  separate risk is expected — but that is an inference from the code, not a live observation,
+  and is recorded honestly as a gap rather than dressed up as one.
+
+### Verdict: default NOT flipped
+
+`dialogue_fast_join` stays `0` by default. The task's own bar — flip only if the A/B shows it
+*strictly* better with no regressions — was not met: no regression appeared (identical node-
+agreement shape, identical 0 ms content latency, all rough edges clean in both arms), but no
+measurable improvement appeared either, for the reason explained above: this rig's fixed
+NPC-adjacent starting position only ever exercises the adopt path, which was never gated by the
+150 ms × 2 cadence this flag closes. The fix is not shown to be wrong — the static analysis
+behind it is untouched by this pass — it is shown to be **unverified for the path it targets**,
+which is a live-testing gap, not a design defect. `dialogue_fast_join=1` remains available and
+recommended for anyone who can reproduce a genuine distance follow (a joiner started well away
+from the NPC) to re-run this same A/B against.

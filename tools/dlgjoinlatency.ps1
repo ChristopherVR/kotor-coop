@@ -38,10 +38,11 @@ function NewLines($p, $since) {
     return $all[$since..($all.Count - 1)]
 }
 
-# Plugin log lines start "HH:mm:ss.fff  <message>". $null on anything else, so a caller can
-# tell "no timestamp found" apart from "found, but arithmetic underflowed".
+# Plugin log lines are "[HH:mm:ss.fff] <message>" (the leading "[" is part of the live format
+# - dlgprobe.ps1 and every doc quoting these lines already show it). $null on anything else, so
+# a caller can tell "no timestamp found" apart from "found, but arithmetic underflowed".
 function ParseTimestamp($line) {
-    if ($null -ne $line -and $line -match '^\s*(\d{2}):(\d{2}):(\d{2})\.(\d{3})') {
+    if ($null -ne $line -and $line -match '^\s*\[?(\d{2}):(\d{2}):(\d{2})\.(\d{3})') {
         return [TimeSpan]::new(0, [int]$Matches[1], [int]$Matches[2], [int]$Matches[3], [int]$Matches[4])
     }
     return $null

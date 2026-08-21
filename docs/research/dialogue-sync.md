@@ -899,3 +899,39 @@ similar symptom ever resurfaces — but nothing needed shipping today, since ext
 dialogue-subsystem hardening this session (`DialogueSpectateController`'s per-conversation-end
 reset, among other changes) already closed whatever window let it happen. No source changed for
 this; a guess-patch against a non-reproducing crash would only have added unverified risk.
+
+## Live A/B and rough-edge pass (2026-08-21) — see `dialogue-join-latency.md` for the full writeup
+
+Ran the `dialogue_fast_join` A/B (this doc's own hop #3/#6 analysis is what that flag closes)
+and the rough edges below live, on the two-GOG-install rig, `END_M01AA`, both players adjacent
+to `end_trask`. Full numbers, screenshots and method in `dialogue-join-latency.md`'s "Live A/B
+(2026-08-21)" section; summary here for anyone scanning this file's own NEEDS-LIVE trail:
+
+* **Content delivery, self-reported (`ReportContentLatency`)**: 0 ms after opening, both
+  `dialogue_fast_join=0` and `=1`, 10/10 runs. The user-reported symptom (blank subtitles under
+  a slowly-closing letterbox) did not reproduce in this configuration under either setting —
+  because every join in this rig resolves through **adopt**, not a distance **follow**, and
+  adopt was already fast before this session (see this file's own "adopted in ~880 ms" note
+  above). The flag's target path (a joiner not yet standing at the NPC) was not exercised.
+  `dialogue_fast_join` default was **left at 0** — no regression found, but no measurable win
+  found either, for the reason above; not a design defect, a live-testing gap.
+* **Both players clicking the same NPC simultaneously** (this file's existing "simultaneous
+  start" note, re-run): still clean. No crash, no stuck state, the losing side's `StartDialog`
+  adopted the winner's exact current line (content latency 0 ms), confirmed both directions
+  (tie went either way across two attempts).
+* **The joiner leaving mid-conversation via Esc**: no observable effect on either instance —
+  reads as vanilla KOTOR1 behaviour (no Esc-to-leave affordance in dialogue on this engine
+  build), not a gap this mod needs to close. Leaving via the real give-up path (`talk close`,
+  i.e. `Odyssey.CloseDialogue`) does work as expected: the owner's conversation is unaffected,
+  and the joiner can immediately re-open and be readmitted as a follower.
+* **Owner ends the conversation → joiner UI closes**: qualitatively prompt (the joiner's own
+  "the owner ended the conversation; closing" log line appeared within a few seconds of every
+  close request), but this session's PowerShell-subprocess-driven harness could not isolate true
+  propagation time from its own ~1–3 s of per-call start-up overhead — still NEEDS-LIVE for a
+  millisecond figure, with a different triggering method than blockpoke.
+* **A trigger/cutscene-started conversation (END_M01AA's opening Trask scene)**: **not
+  independently re-verified live** — the loaded save is already past that scripted opening on
+  both installs, and re-triggering it needs an earlier save this session did not use. Still
+  NEEDS-LIVE. `BeginConversation → StartDialog` is the same entry point regardless of trigger
+  vs. click (this file's own §1, verified by disasm), so no separate risk is expected, but that
+  is an inference from the code, not an observation.

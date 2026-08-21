@@ -132,7 +132,14 @@ Both players, each in their own full game:
   else can start a dialogue — enforced inside the engine, so clicking an NPC simply does
   nothing and tells you why. The other player spectates the owner's conversation live, with
   the real lines and reply picks, in the game's own dialogue UI, and a late joiner catches
-  up to the right line.
+  up to the right line — a single call jumps straight to the owner's current node, live-
+  measured at 0 ms of self-reported content latency after opening across every run of a
+  2026-08-21 A/B (`docs/research/dialogue-join-latency.md`'s "Live A/B" section), because a
+  joiner already standing near the NPC resolves through this mod's fast **adopt** path rather
+  than a slower cross-instance replay. `dialogue_fast_join` (off by default; targets a
+  *distance* join, where the joiner has to be walked in before their own dialogue opens) is
+  still unverified live for that specific path — the same doc's honest account of what this
+  rig's fixed player-adjacent-to-NPC setup could and couldn't exercise.
 - **Scripted scenes play out the same on both screens**: cutscene actors and story NPCs
   replicate their positions, stances and movements, while staying exempt from the combat
   channel — the module decides who is un-killable, not the session.
