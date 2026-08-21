@@ -228,6 +228,35 @@ public interface IGameBridge : IDisposable
     /// </summary>
     uint ModuleGitDigest(string module) => 0;
 
+    /// <summary>
+    /// Roadmap item 14 phase 2's load-detection edge: the plugin's own count of world
+    /// teardowns it judged UNANNOUNCED — a Load Game action, not an ordinary module
+    /// transition. See <c>KotorCoop.Plugin.WorldLoadRule</c> for the primitive and
+    /// <c>SharedBlock.OffsetWorldLoadSerial</c> for the wire field (block version 49). 0 for
+    /// bridges without an in-process plugin (the mock harness) — indistinguishable from "no
+    /// loads observed yet", which is the correct default for either case.
+    /// </summary>
+    uint WorldLoadSerial => 0;
+
+    /// <summary>
+    /// Roadmap item 14 phase 2's rejoin action: requests the plugin replay the same adopted-
+    /// world load <c>agent adopt</c> uses for the first join. False (with a reason) for
+    /// bridges that cannot drive the plugin at all (the mock harness).
+    /// </summary>
+    bool TryRequestAdoptedWorldLoad(out string diagnostic)
+    {
+        diagnostic = "no in-process plugin to request a load from";
+        return false;
+    }
+
+    /// <summary>Polls the outcome of the last <see cref="TryRequestAdoptedWorldLoad"/>.</summary>
+    bool TryGetAdoptedWorldLoadStatus(out uint applied, out int status)
+    {
+        applied = 0;
+        status = 0;
+        return false;
+    }
+
     /// <summary>Damage a peer's phantom has taken in this game, as a running total. Default
     /// "nothing recorded" for bridges without an in-process plugin (the mock harness).</summary>
     bool TryReadPhantomHit(int slot, out uint phantomId, out uint cumulative, out uint attacker)

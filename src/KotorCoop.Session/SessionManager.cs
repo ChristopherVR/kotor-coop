@@ -1,6 +1,8 @@
 using System.Net;
 using System.Net.Sockets;
 using KotorCoop.Memory;
+using KotorCoop.Memory.GameFiles;
+using KotorCoop.Protocol;
 
 namespace KotorCoop.Session;
 
@@ -284,6 +286,83 @@ public sealed class SessionManager(IGameBridge bridge, AgentSettings agentSettin
         TearDownSession();
         _connectDeadlineMs = 0;
         Fail($"no reply from {(endpoint is null ? "the host" : endpoint.ToString())}", SessionPhase.Idle);
+    }
+
+    /// <summary>
+    /// Roadmap item 14 phase 2 (docs/research/session-save.md's Phase 2 section): the rejoin
+    /// action a mid-session load edge triggers, for a CLIENT only. Tears the current session
+    /// down, re-runs world adoption against the SAME host this connection's last
+    /// <see cref="Connect"/> used, and requests the plugin replay the adopted-world load —
+    /// exactly the two pieces <c>agent adopt</c> (Program.cs's <c>AdoptAsync</c>) already
+    /// composes for the FIRST join, reused rather than re-derived. Does NOT itself reopen the
+    /// co-op socket: the local engine load this kicks off is asynchronous, so the caller polls
+    /// <paramref name="bridge"/>'s <c>TryGetAdoptedWorldLoadStatus</c> and calls
+    /// <see cref="Reconnect"/> once it settles (mirrors how <see cref="Poll"/>/<see cref="Connect"/>
+    /// are already split for exactly this "cannot block on the game" reason).
+    ///
+    /// ⚠ NEEDS-LIVE: see <c>KotorGameBridge.TryRequestAdoptedWorldLoad</c>'s own doc comment
+    /// for the one real gap this reuses rather than papers over — whether the local engine
+    /// load request lands while <c>Odyssey.HasServer</c> is still true from the player's own
+    /// just-completed Load Game action has never been measured.
+    ///
+    /// Only valid for a CLIENT — a host has nothing to "rejoin" (see the host mid-session-load
+    /// path in <c>SessionSaveWatch</c>/<c>CoopCommandDispatcher</c> instead, which reuses THIS
+    /// same method on every connected CLIENT once the host's own reload settles). Returns null
+    /// with nothing torn down when there is no prior client connection to rejoin from.
+    /// </summary>
+    public async Task<AdoptedWorld?> RejoinAfterLoadAsync(
+        IGameBridge bridge,
+        string gameDirectory,
+        (GffStruct Player, SidecarMetadata Metadata)? carriedCharacter,
+        CancellationToken cancellationToken)
+    {
+        bool host;
+        IPEndPoint? endpoint;
+        SessionSettings? settings;
+        lock (_gate)
+        {
+            host = _lastHost;
+            endpoint = _lastEndpoint;
+            settings = _lastSettings;
+        }
+
+        if (host || endpoint is null || settings is null)
+        {
+            Log?.Invoke("rejoin: nothing to rejoin (not a joined client, or never connected)");
+            return null;
+        }
+
+        Disconnect();
+
+        if (!PluginMenuLoader.TryResolveSaveDirectory(gameDirectory, slotIndex: 0, out string ownSave, out string which))
+        {
+            Log?.Invoke($"rejoin: {which}");
+            return null;
+        }
+
+        AdoptedWorld? adopted = await WorldAdoption.TryAdoptAsync(
+            gameDirectory,
+            ownSave,
+            carriedCharacter,
+            endpoint,
+            SessionPassword.Hash(settings.Password),
+            expectedSaveIdentity: 0,
+            Log,
+            cancellationToken).ConfigureAwait(false);
+
+        if (adopted is null)
+        {
+            return null;
+        }
+
+        if (!bridge.TryRequestAdoptedWorldLoad(out string diagnostic))
+        {
+            Log?.Invoke($"rejoin: {diagnostic}");
+            return null;
+        }
+
+        Log?.Invoke($"rejoin: {diagnostic}");
+        return adopted;
     }
 
     /// <summary>Reconnects with the parameters of the last <see cref="Connect"/>.</summary>

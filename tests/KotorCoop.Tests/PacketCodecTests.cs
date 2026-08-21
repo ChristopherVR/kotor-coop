@@ -63,6 +63,24 @@ public class PacketCodecTests
     }
 
     [Fact]
+    public void WorldDigestLoadSerialRoundTrips()
+    {
+        // Roadmap item 14 phase 2 (docs/research/session-save.md): LoadSerial rides the
+        // existing world-digest channel unmodified so a receiver can classify a peer's
+        // SaveIdentity change as a save or a load without a new packet.
+        Span<byte> buffer = stackalloc byte[ProtocolConstants.MaxPacketSize];
+        WorldDigestPacket original = new(
+            4, new WorldDigest(0xDEADBEEF, 0x1234_5678, "end_m01aa", 0x9ABC_DEF0, LoadSerial: 42));
+
+        int length = PacketCodec.Write(buffer, original);
+        WorldDigestPacket? decoded = PacketCodec.ReadWorldDigest(buffer[..length]);
+
+        Assert.NotNull(decoded);
+        Assert.Equal(42u, decoded.Digest.LoadSerial);
+        Assert.Equal(original, decoded);
+    }
+
+    [Fact]
     public void AnEmptyWorldDigestRoundTripsWithoutLosingItsEmptiness()
     {
         // A digest whose fields are all unresolved must arrive as exactly that — the

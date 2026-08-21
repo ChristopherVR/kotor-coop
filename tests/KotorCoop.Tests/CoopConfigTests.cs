@@ -228,4 +228,86 @@ public class CoopConfigTests
             File.Delete(path);
         }
     }
+
+    [Fact]
+    public void ClientLoadRejoinDefaultsOff()
+    {
+        // Roadmap item 14 phase 2 — see CoopConfig.ClientLoadRejoin's own doc comment for why:
+        // the classification is INFERRED, not live-verified, and the rejoin action reuses
+        // MenuLoadController's main-menu-only replay with no live confirmation it fires
+        // mid-session.
+        string path = WriteTemp("mode = join");
+
+        try
+        {
+            CoopConfig? c = CoopConfig.TryLoad(path);
+            Assert.NotNull(c);
+            Assert.False(c.ClientLoadRejoin);
+            Assert.False(new CoopConfig().ClientLoadRejoin);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void ClientLoadRejoinCanBeTurnedOn()
+    {
+        string path = WriteTemp("""
+            [coop]
+            mode = join
+            client_load_rejoin = 1
+            """);
+
+        try
+        {
+            CoopConfig? c = CoopConfig.TryLoad(path);
+            Assert.NotNull(c);
+            Assert.True(c.ClientLoadRejoin);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void HostLoadReadoptDefaultsOff()
+    {
+        string path = WriteTemp("mode = join");
+
+        try
+        {
+            CoopConfig? c = CoopConfig.TryLoad(path);
+            Assert.NotNull(c);
+            Assert.False(c.HostLoadReadopt);
+            Assert.False(new CoopConfig().HostLoadReadopt);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void HostLoadReadoptCanBeTurnedOn()
+    {
+        string path = WriteTemp("""
+            [coop]
+            mode = host
+            host_load_readopt = 1
+            """);
+
+        try
+        {
+            CoopConfig? c = CoopConfig.TryLoad(path);
+            Assert.NotNull(c);
+            Assert.True(c.HostLoadReadopt);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
 }

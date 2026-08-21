@@ -2826,6 +2826,17 @@ internal static unsafe class Odyssey
     /// with a hash of the module name string. Area object ids are deliberately not used:
     /// they come from a counter that resets on transition, so different modules routinely
     /// share one.
+    ///
+    /// ⚠ Roadmap item 14 phase 2 (docs/research/session-save.md) leans on one more fact about
+    /// this value: a plain SAVE does not change it. Nothing about writing the current world to
+    /// disk calls UnloadModule or replaces the object array — the epoch is a LIVE-WORLD
+    /// identity, not a save-file one — so a save-only edge and a genuine module reload (either
+    /// an ordinary transition or a Load Game action) are exactly the two cases this function
+    /// already distinguishes by construction: unchanged epoch versus a transition through
+    /// "false" and back. INFERRED from the disassembly this doc comment already cites
+    /// (UnloadModule/GetObjectArray), not measured against a real in-game save — see
+    /// WorldLoadRule.cs, which is where PluginHost turns this into the further distinction
+    /// between an ordinary transition and an unannounced load.
     /// </summary>
     public static bool TryGetWorldEpoch(out ulong epoch)
     {

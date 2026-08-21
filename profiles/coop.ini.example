@@ -221,8 +221,33 @@ dialogue_recruit_sync=0
 # module load, which rewrites the exact save file the digest watches, so the host gets
 # disconnected from its own session the moment it transitions anywhere, with no different save
 # ever chosen. The edge is still detected and logged either way; this only gates whether it
-# acts. Leave off until a real save-vs-load engine hook can tell the two apart.
+# acts. A real save-vs-load engine hook now exists (WorldLoadRule, below) and this flag's own
+# trigger has been rewired to use it - the false-positive round 53 measured should no longer
+# reproduce - but that rewiring itself has not had a live pass yet, so this stays off too.
 session_save_host_refusal=0
+
+# Roadmap item 14 phase 2 (docs/research/session-save.md's Phase 2 section). A CLIENT that
+# loads a save mid-session (the in-game pause menu, not just the main menu) tears its own
+# session down and re-runs world adoption against the host automatically, printing "you loaded
+# a save - rejoining <host>'s world". OFF by default: the save-vs-load classification itself
+# (WorldLoadRule: an unannounced world teardown, i.e. one trans_pending never saw coming, is a
+# load) is INFERRED from engine facts, not measured live, and the rejoin action reuses
+# MenuLoadController's main-menu-only replay with no live confirmation that it actually fires
+# while a session was already running (as opposed to silently no-op'ing). See
+# docs/research/session-save.md's Phase 2 NEEDS-LIVE list before turning this on.
+client_load_rejoin=0
+
+# The host-side half of the same feature: when the HOST's own load verdict fires, announce
+# "host loaded a save - everyone re-joins" and have every connected client run the SAME rejoin
+# client_load_rejoin gates - instead of the (still available, but now redundant when this is
+# on) session_save_host_refusal disconnect. Shares every one of client_load_rejoin's
+# unverified assumptions, plus its own: whether the host's WorldDigest.LoadSerial (riding the
+# existing 1 Hz world-digest channel) reaches a client fast enough to feel responsive, and
+# whether re-adoption survives a host load that changes which MODULE is loaded (not just the
+# save state within one) - transition-window-races.md's fixes were proven against ordinary
+# module-to-module travel, a similar but unmeasured-for-this-case discontinuity. OFF until a
+# live pass confirms both.
+host_load_readopt=0
 
 # Let the mod own the HUD pause button. The engine's own toggle reads server mask bit 0x02,
 # which is also the focus-loss reason FocusKeeper must keep clearing - so it can pause but

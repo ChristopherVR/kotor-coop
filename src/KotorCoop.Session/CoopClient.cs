@@ -123,6 +123,18 @@ public sealed class CoopClient : ICoopSession
 
     public CompatibilityVerdict? Compatibility => _compatibility;
 
+    /// <summary>
+    /// The host's most recently received <see cref="WorldDigest"/> — roadmap item 14 phase 2
+    /// (docs/research/session-save.md): unlike <see cref="Compatibility"/> (already a compared
+    /// VERDICT), this exposes the raw fields so the dispatcher can run its OWN
+    /// <see cref="SaveOrLoadClassifier"/> against the host's <see cref="WorldDigest.SaveIdentity"/>
+    /// and <see cref="WorldDigest.LoadSerial"/> — the signal <c>host_load_readopt</c> needs to
+    /// tell "the host saved" apart from "the host loaded a different save", which the already-
+    /// compared verdict cannot express (it only ever says "mismatched right now", not "changed
+    /// via a load"). <see cref="WorldDigest.Empty"/> before the host's first digest arrives.
+    /// </summary>
+    public WorldDigest RemoteWorldDigest => _hostWorld;
+
     public void PublishWorldDigest(in WorldDigest digest)
     {
         if (digest == _localWorld)

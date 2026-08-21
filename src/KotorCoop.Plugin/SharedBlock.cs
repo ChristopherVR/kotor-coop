@@ -1688,8 +1688,9 @@ internal struct SharedBlock
     //
     // Placed in the free gap OffsetClientDoorRefusalArmed leaves before the peer-effect region
     // (0x392C..0x3A00, 0xD4 bytes — the version-47 comment already establishes this gap is
-    // real). This region uses 0x40 of it (0x392C..0x396C), leaving 0x94 bytes still free. No
-    // TotalSize growth, no relayout of anything that already exists.
+    // real). This region uses 0x40 of it (0x392C..0x396C); version 49 below takes 4 more
+    // (0x396C..0x3970), leaving 0x90 bytes still free. No TotalSize growth, no relayout of
+    // anything that already exists.
     //
     // OUT (plugin -> agent, 0x392C..0x394C, 0x20 bytes): the resref this instance's own
     // MoviePlayHook most recently captured, already excluded against the engine's own
@@ -1728,6 +1729,35 @@ internal struct SharedBlock
     /// <c>MidModulePlayStatusCode</c>. 0 = nothing handled yet. Region ends here, at 0x3968;
     /// 0x3968..0x396C reserved.</summary>
     public const int OffsetMidModulePlayStatus = 0x3964;
+
+    // ---- world-load edge (version 49, region 0x396C..0x3970) ----------------------
+    //
+    // Roadmap item 14 phase 2 (docs/research/session-save.md's "Phase 2" section): a save
+    // and a load look identical from the save-identity DIGEST alone (both are "the watched
+    // file changed"), because KOTOR autosaves through every ordinary module transition too
+    // (shared-state-audit.md round 53's live false-positive). This field is the piece the
+    // digest cannot provide: PluginHost already tracks Odyssey.TryGetWorldEpoch every frame
+    // to invalidate world-scoped state, and separately tracks whether an area transition was
+    // ANNOUNCED first (Odyssey.IsAreaTransitionPending, the trans_pending byte a door/trigger
+    // sets roughly half a second before StoreCurrentModule runs). An ordinary transition is
+    // always preceded by that announcement; a Load Game action (main menu or the in-game
+    // pause menu) goes straight from CSWGuiSaveLoad's LOAD branch into ExecuteLoadModule with
+    // no such precursor — INFERRED from the engine facts both watches already rest on, not
+    // measured live (see WorldLoadRule.cs's own doc comment and session-save.md's Phase 2
+    // NEEDS-LIVE list). Placed in the free tail the mid-module movie region's own comment
+    // already measured (0x396C..0x3A00, 0x94 bytes free; this uses 4). No TotalSize growth.
+    //
+    // OUT (plugin -> agent) only — nothing reads this back the other way.
+
+    /// <summary>Plugin -&gt; agent. Bumped once per world teardown PluginHost judged
+    /// UNANNOUNCED (<c>WorldLoadRule.IsUnannouncedTeardown</c>) — an ordinary door/trigger
+    /// transition never bumps this, only a discontinuity trans_pending never saw coming. The
+    /// agent's own edge detector (<c>KotorCoop.Session.SerialEdgeWatch</c>) treats any change
+    /// as one load event; the exact count carries no meaning beyond "at least one more since
+    /// last observed". Rides to a peer too, unmodified, as <c>WorldDigest.LoadSerial</c> —
+    /// see that type's own doc comment for why a raw counter, not a bool, survives a lost
+    /// datagram on a 1 Hz channel without losing the edge.</summary>
+    public const int OffsetWorldLoadSerial = 0x396C;
 
     // ---- peer effect sync (version 44, region 0x3A00..0x3B88) ---------------------
     //

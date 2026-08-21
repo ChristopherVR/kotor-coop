@@ -203,6 +203,76 @@ public sealed class SessionSaveWatchTests : IDisposable
         Assert.Null(watch.CaptureOnDisconnect(null));
     }
 
+    // ---- roadmap item 14 phase 2: save-vs-load classification -----------------
+
+    [Fact]
+    public void ObserveOwnVerdictEstablishingBaselinesIsNeverAVerdict()
+    {
+        SessionSaveWatch watch = new(gameDirectory: Path.GetTempPath());
+
+        // Establishing the digest baseline and the load-serial baseline together, on the
+        // connection's first tick, must never read as either a save or a load — this is
+        // "the load that IS the adoption" case ClientLoadRejoinRule's own doc comment
+        // describes: nothing to see yet.
+        Assert.Equal(SaveOrLoadVerdict.None, watch.ObserveOwnVerdict(0x1234, loadSerialNow: 7, nowMs: 0));
+        Assert.Equal(SaveOrLoadVerdict.None, watch.ObserveOwnVerdict(0x1234, loadSerialNow: 7, nowMs: 100));
+    }
+
+    [Fact]
+    public void ObserveOwnVerdictClassifiesADigestChangeWithNoLoadEdgeAsASave()
+    {
+        SessionSaveWatch watch = new(gameDirectory: Path.GetTempPath());
+        watch.ObserveOwnVerdict(0x1234, loadSerialNow: 1, nowMs: 0); // baseline both
+
+        // The digest changed (an ordinary autosave-through-a-transition, or a real save) but
+        // the load-serial did not move — a save, not a load.
+        SaveOrLoadVerdict verdict = watch.ObserveOwnVerdict(0x5678, loadSerialNow: 1, nowMs: 100);
+
+        Assert.Equal(SaveOrLoadVerdict.Save, verdict);
+    }
+
+    [Fact]
+    public void ObserveOwnVerdictClassifiesACoincidingLoadEdgeAsALoad()
+    {
+        SessionSaveWatch watch = new(gameDirectory: Path.GetTempPath());
+        watch.ObserveOwnVerdict(0x1234, loadSerialNow: 1, nowMs: 0); // baseline both
+
+        SaveOrLoadVerdict verdict = watch.ObserveOwnVerdict(0x5678, loadSerialNow: 2, nowMs: 100);
+
+        Assert.Equal(SaveOrLoadVerdict.Load, verdict);
+    }
+
+    [Fact]
+    public void ObserveRemoteVerdictWatchesAnIndependentPeerStream()
+    {
+        SessionSaveWatch watch = new(gameDirectory: Path.GetTempPath());
+
+        // The local (own) watch and the remote (host) watch are independent: establishing
+        // one's baseline must not affect the other, and each classifies its own edges.
+        watch.ObserveOwnVerdict(0xAAAA, loadSerialNow: 1, nowMs: 0);
+        watch.ObserveRemoteVerdict(0xBBBB, remoteLoadSerialNow: 1, nowMs: 0);
+
+        Assert.Equal(SaveOrLoadVerdict.Save, watch.ObserveOwnVerdict(0xAAAB, loadSerialNow: 1, nowMs: 100));
+        Assert.Equal(
+            SaveOrLoadVerdict.Load, watch.ObserveRemoteVerdict(0xBBBC, remoteLoadSerialNow: 2, nowMs: 100));
+    }
+
+    [Fact]
+    public void ResetForgetsThePhase2WatchesToo()
+    {
+        SessionSaveWatch watch = new(gameDirectory: Path.GetTempPath());
+        watch.ObserveOwnVerdict(0x1234, loadSerialNow: 1, nowMs: 0);
+        watch.ObserveRemoteVerdict(0x5678, remoteLoadSerialNow: 1, nowMs: 0);
+
+        watch.Reset();
+
+        // Without the reset these would read as changes from the old baselines; with it, the
+        // next readings are a fresh connection's first — never a verdict.
+        Assert.Equal(SaveOrLoadVerdict.None, watch.ObserveOwnVerdict(0x9999, loadSerialNow: 9, nowMs: 200));
+        Assert.Equal(
+            SaveOrLoadVerdict.None, watch.ObserveRemoteVerdict(0x8888, remoteLoadSerialNow: 8, nowMs: 200));
+    }
+
     // ---- helpers --------------------------------------------------------------
 
     private string BuildSave(string name)

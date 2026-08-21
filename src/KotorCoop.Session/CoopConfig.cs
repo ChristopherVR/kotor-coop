@@ -175,6 +175,36 @@ public sealed record CoopConfig
     public bool SessionSaveHostRefusal { get; init; }
 
     /// <summary>
+    /// Roadmap item 14 phase 2 (docs/research/session-save.md's Phase 2 section): whether a
+    /// CLIENT's own <see cref="KotorCoop.Session.SaveOrLoadClassifier"/> verdict of
+    /// <see cref="KotorCoop.Session.SaveOrLoadVerdict.Load"/> actually tears the session down
+    /// and re-runs world adoption against the host, rather than merely being logged. OFF by
+    /// default, like every roadmap-14-phase-2 action gate: the classifier's own
+    /// trans_pending-based distinction (<c>KotorCoop.Plugin.WorldLoadRule</c>) is INFERRED, not
+    /// live-verified, and the rejoin action itself
+    /// (<c>SessionManager.RejoinAfterLoadAsync</c>/<c>KotorGameBridge.TryRequestAdoptedWorldLoad</c>)
+    /// reuses <c>MenuLoadController</c>'s main-menu-only replay with no measurement of whether
+    /// it actually fires while a live session was already running. <c>client_load_rejoin = 1</c>
+    /// turns it on.
+    /// </summary>
+    public bool ClientLoadRejoin { get; init; }
+
+    /// <summary>
+    /// Roadmap item 14 phase 2: whether a HOST's own load verdict, instead of the (already
+    /// flag-gated) <see cref="SessionSaveHostRefusal"/> disconnect, announces the reload and
+    /// has every connected CLIENT run the SAME rejoin <see cref="ClientLoadRejoin"/> gates —
+    /// design doc §3.2's "reuse the join path, do not build a new one", run from the host's
+    /// side. Takes priority over <see cref="SessionSaveHostRefusal"/> when both are on (a
+    /// working re-adoption is strictly better than a refusal; the refusal stays available as
+    /// the safe fallback if re-adoption itself is ever turned back off). OFF by default until
+    /// live — see <see cref="ClientLoadRejoin"/>'s own doc comment; this shares every one of
+    /// its unverified assumptions plus its own (whether <c>WorldDigest.LoadSerial</c>, riding
+    /// the 1 Hz world-digest channel, reaches a client fast enough to feel responsive).
+    /// <c>host_load_readopt = 1</c> turns it on.
+    /// </summary>
+    public bool HostLoadReadopt { get; init; }
+
+    /// <summary>
     /// Whether a follower acts on a host's announced transition destination immediately,
     /// instead of waiting for the host's published module to change and the module-settle
     /// debounce to elapse — docs/research/transition-smoothness.md. ON by default:
@@ -326,6 +356,8 @@ public sealed record CoopConfig
                 || IsTruthy(kv.GetValueOrDefault("dialogue_item_sync")),
             DialogueFastJoin = IsTruthy(kv.GetValueOrDefault("dialogue_fast_join")),
             SessionSaveHostRefusal = IsTruthy(kv.GetValueOrDefault("session_save_host_refusal")),
+            ClientLoadRejoin = IsTruthy(kv.GetValueOrDefault("client_load_rejoin")),
+            HostLoadReadopt = IsTruthy(kv.GetValueOrDefault("host_load_readopt")),
             TransitionAnnounceEnabled = !kv.ContainsKey("transition_announce")
                 || IsTruthy(kv.GetValueOrDefault("transition_announce")),
             ClientDoorRefusalEnabled = !kv.ContainsKey("client_door_refusal")

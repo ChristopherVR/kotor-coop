@@ -669,6 +669,10 @@ public sealed class KotorGameBridge : IGameBridge
     private const int BlockMidModulePlayRequestSerial = 0x394C;
     private const int BlockMidModulePlayRequestResRef = 0x3950;
     private const int BlockMidModulePlayApplied = 0x3960;
+
+    /// <summary>Plugin -&gt; agent. Roadmap item 14 phase 2's load-detection edge — see
+    /// <c>SharedBlock.OffsetWorldLoadSerial</c>'s own doc comment (block version 49).</summary>
+    private const int BlockWorldLoadSerial = 0x396C;
     private const int BlockMidModulePlayStatus = 0x3964;
 
     // Staging cheats, mirroring SharedBlock version 41 (region 0x3328..0x33C0).
@@ -822,10 +826,13 @@ public sealed class KotorGameBridge : IGameBridge
     /// leaves before the peer-effect region (0x392C..0x396C; 0x30 = 48). The DETECTION half
     /// docs/research/trigger-relay.md §6 shipped without a hook for — see
     /// docs/research/cinematics.md's 2026-08-22 section.
+    /// 49 = the world-load edge, roadmap item 14 phase 2's save-vs-load detection primitive,
+    /// in the same free gap's remaining tail (0x396C..0x3970; 0x31 = 49). See
+    /// docs/research/session-save.md's Phase 2 section.
     /// <b>ItemHarnessTests.TheBlockVersionIsTheSameNumberInBothHalves reads both files and
     /// fails the build if they disagree</b> — added with 42, because nothing had ever
     /// enforced the warning above.</summary>
-    public const string PluginSignature = "4B 4F 43 4F 4F 50 30 31 30 00 00 00 01 EE FF C0";
+    public const string PluginSignature = "4B 4F 43 4F 4F 50 30 31 31 00 00 00 01 EE FF C0";
 
     /// <summary>Agent's view of which coop item id occupies each plugin item slot.</summary>
     private readonly uint[] _itemSlotIds = new uint[BlockItemCapacity];
@@ -2212,6 +2219,59 @@ public sealed class KotorGameBridge : IGameBridge
 
     /// <summary>The named module's GIT-id digest for the world handshake; 0 when unknown.</summary>
     public uint ModuleGitDigest(string module) => SaveDigests?.ModuleGit(module) ?? 0;
+
+    /// <summary>
+    /// Roadmap item 14 phase 2's load-detection edge: the plugin's own count of world
+    /// teardowns it judged UNANNOUNCED (see <c>WorldLoadRule</c>/<c>SharedBlock.OffsetWorldLoadSerial</c>).
+    /// 0 while no plugin block is attached, exactly like every other block-backed reading here.
+    /// </summary>
+    public uint WorldLoadSerial =>
+        _pluginBlock != 0 && _memory.TryReadUInt32(_pluginBlock + BlockWorldLoadSerial, out uint serial)
+            ? serial
+            : 0;
+
+    /// <summary>The block address <see cref="TryRequestAdoptedWorldLoad"/> last requested a
+    /// load against, for <see cref="TryGetAdoptedWorldLoadStatus"/> to poll. 0 until a request
+    /// has been made this process.</summary>
+    private nint _menuLoadBlock;
+
+    /// <summary>
+    /// Roadmap item 14 phase 2's rejoin action: fires the SAME agent-side request
+    /// `agent adopt` (Program.cs's <c>AdoptAsync</c>) already uses for the first join —
+    /// <see cref="PluginMenuLoader.TryRequestLoad"/> with <c>adoptedWorld: true</c>, so the
+    /// login reads the carried character off <c>Temp\pifo.ifo</c> rather than the staged
+    /// world's own (the host's). No new engine RE: this is the exact call the first-join path
+    /// already makes, reused for a mid-session re-adopt.
+    ///
+    /// ⚠ NEEDS-LIVE, and this is the honest gap: <c>MenuLoadController</c>'s replay is a
+    /// MAIN-MENU-ONLY mechanism — it acks and no-ops the instant <c>Odyssey.HasServer</c> is
+    /// true (see its own header). Whether the game has returned all the way to "no server" by
+    /// the time this fires — after the PLAYER's own in-game Load Game action has already
+    /// finished standing up a fresh one — has never been measured. If it has not, this call
+    /// degrades to a harmless no-op ack rather than a crash; see
+    /// docs/research/session-save.md's Phase 2 NEEDS-LIVE list.
+    /// </summary>
+    public bool TryRequestAdoptedWorldLoad(out string diagnostic)
+    {
+        bool ok = PluginMenuLoader.TryRequestLoad(_memory, out nint block, out diagnostic, adoptedWorld: true);
+        if (ok)
+        {
+            _menuLoadBlock = block;
+        }
+
+        return ok;
+    }
+
+    /// <summary>Polls the outcome of the last <see cref="TryRequestAdoptedWorldLoad"/> — see
+    /// <see cref="PluginMenuLoader.TryReadStatus"/>. False while nothing has been requested
+    /// yet or the block cannot be read.</summary>
+    public bool TryGetAdoptedWorldLoadStatus(out uint applied, out int status)
+    {
+        applied = 0;
+        status = 0;
+        return _menuLoadBlock != 0
+            && PluginMenuLoader.TryReadStatus(_memory, _menuLoadBlock, out applied, out status);
+    }
 
     /// <summary>
     /// Locates the global variable table and takes the baseline snapshot. Called from
