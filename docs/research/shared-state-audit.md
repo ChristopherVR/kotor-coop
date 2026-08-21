@@ -46,6 +46,40 @@ MIRRORS — driven puppets, not creatures its own AI is fighting — so the clie
 genuinely never enters combat. Forcing `+0x4E0` on the client would be a lie the engine
 recomputes away, and combat state gates round timing and AI.
 
+### Status as of round 49 (2026-08-21) — read this before the round-27 summary below
+
+The summary immediately below is frozen as it was written, after round 27; it does not reflect
+rounds 28-49 and its own "Status after round 27" paragraph is stale. The honest current picture:
+
+**The freeze is real, reproduces on a genuinely verified hostile, and is still unsolved.**
+Rounds 9-47 chased a mirrored, previously-claimed, GIT-identical creature that gets pulled out
+of the census and script-fired (`+0x260`) but never moves, never swings, and times out — 47
+rounds' worth of candidate writes, all individually disassembled and ruled out (round 47's
+bisection: every DriveOne op off, every op on, identical failure). Round 48 found the specific
+creatures rounds 44-48 had been testing against (`end_soldier2`/`0x1A`, `0x17`) read FRIENDLY
+(rep=1) through the engine's own `GetAIStateReputation`, on the unmodified host too, and floated
+"maybe nothing since round 37 was ever really hostile" as the explanation for the whole 11-round
+stretch. **Round 49 checked that directly and it is not the general explanation.** The two
+creatures round 48 actually probed turn out, by their own GIT blueprint (`n_repsold002`,
+FactionID 4 = Friendly_2; `n_sithappren002`, FactionID 2 = Friendly_1 — read straight from the
+module's `.utc` files, not inferred), to be allied story NPCs by design, misidentified as Sith
+by an earlier round's guess at their name. A genuinely different, GIT-placed, `FactionID=1`
+(Hostile_1) creature — confirmed hostile both by `repute.2da` statically and by the engine's own
+`GetAIStateReputation` returning `2` live, in both directions — was engaged the same way and
+**froze identically**: zero movement, zero HP change, over a full 25s cycle, at both a moderate
+range (4.2 units) and point-blank (0.32 units), across three separate bisect-mask configurations
+(every DriveOne/CombatController op on, all thirteen off, health-pin/mirror off alone). See round
+49 at the end of this section for the full evidence. **The census-exclusion freeze from rounds
+9-47 is confirmed real and independent of hostility; round 48's specific finding was correct
+about those two creatures but was never a general explanation, and the underlying mechanism
+remains unsolved.** A hostility gate (`GetAIStateReputation(creature, player) == 2`, required
+before a candidate is ever excluded into `local_combat`) is now implemented regardless — a
+non-hostile census actor should never have been pulled out of the census for a "fight" it was
+never going to have, independent of whether that was ever the freeze's actual cause. `local_combat`
+stays on by default (unchanged this round); no hit has yet landed through its own exclusion
+mechanism on ANY creature, hostile or not — the standing forwarded-damage channel is still doing
+all the real work, exactly as it was before `local_combat` existed.
+
 ### Summary of the whole investigation (2026-08-11 through round 27, 2026-08-21) — read this first
 
 Everything below this point, through "Round 27," is the full dated trail — kept in full because
@@ -3589,6 +3623,148 @@ none. Likely explanation: this worktree's `HEAD` is the merge-base with
 `integration/honest-limitations`, over a hundred commits behind that branch's tip, and the
 diagnostic line was added on work not present here. Nothing was changed for this half of the
 item; see the session's final report for the fuller discrepancy note.
+
+### Round 49 (2026-08-21) — the reputation gate, a real GIT-placed hostile, and the freeze
+### confirmed genuine on it too: round 48's "friendly" finding was correct but never general
+
+Round 48 left two open items: gate `local_combat`'s candidate selection on hostility (a
+non-hostile census actor should never be excluded for a "fight" that can't happen), and find out
+whether the freeze rounds 9-47 chased is real or was always just a symptom of testing against
+non-hostile creatures. This round did both.
+
+**The gate.** `EnemyPresenceController.DriveOne`'s `triggeringLocalFight` condition — GIT-identical
+(`mapped == 0`), engaged (`IsEngaged`), a non-empty `+0x260` script slot — now also requires
+`Odyssey.GetAIStateReputation(creature, Odyssey.GetPlayerObjectId()) == 2`, checked only once the
+cheaper gates already pass (an engine call, not a field read). A rejected candidate logs once,
+edge-triggered per slot (`_repRejectedLogged[]`, reset in `Forget` and whenever the same slot
+later reads hostile again) — not once a frame, which the identical friendly reading every pass
+would otherwise spam for the creature's whole time in the census. `IncomingDamageController`'s
+own attribution was also audited this round: it can only ever license an absorb for
+`EnemyPresenceController.IsLocallyEngaged`'s member set, which `MaintainLocalFight` populates
+with exactly one id — `_locallyFightingId` — set exclusively inside `StartLocalFight`. With the
+gate in place, `StartLocalFight` itself can now only ever be called for a creature that already
+read `rep == 2`, so the absorb path is structurally protected transitively; no separate bug found
+there, and none was fixed (per the task's own instruction, left unrefactored this round).
+
+**What round 48's two creatures actually were.** `end_soldier2`/`0x1A` (round 47's own name for
+it, never verified against the GIT) sits at exactly `(47.0629, 21.0793)` — read directly from
+`end_m01aa_s.rim`'s `n_repsold002.utc` via `tools/kotorfiles.py gff "end_m01aa_s:n_repsold002.utc"
+--path FactionID` → **`FactionID = 4` (`Friendly_2`)**. `n_repsold` is the Republic-soldier
+blueprint family (`n_repsold001`-`006`) — an ally defending the bridge, not a Sith trooper; the
+"end_soldier2" name in rounds 39-48 was an unverified guess. Round 48's second creature, `0x17`
+(`FactionID=2`, "a DIFFERENT faction, 2 not 4"), matches `n_sithappren002.utc` → **`FactionID = 2`
+(`Friendly_1`)** — a Sith-appearance creature the module's own author coded as friendly by
+default (a common Odyssey pattern: an apparent enemy whose real hostility is set by an `OnSpawn`
+script keyed to plot state, not the blueprint's baseline). `repute.2da` confirms both: row 0
+(`Player`)'s `friendly_2` and `friendly_1` columns both read `100` — the player is never hostile
+to either faction. **Round 48's own reading was exactly right for these two creatures — they
+never were Sith — but the two-round mystery about WHY they read friendly is now closed by a
+blueprint lookup, not by the "battle-worn, fled, faction changed at some point across 40+ rounds"
+speculation round 48 offered.** That speculation is superseded, not merely unconfirmed.
+
+**Finding a real one.** `python tools/kotorfiles.py creatures end_m01aa` lists the full GIT
+Creature List (26 entries, Encounter List: 0 — nothing here is encounter-spawned, everything is
+GIT-placed). Cross-checked every blueprint's `FactionID` against `repute.2da`:
+
+| Blueprint | Position | FactionID | repute.2da row | Player's reputation |
+|---|---|---|---|---|
+| `n_repsold002` (round 47/48's `0x1A`) | (47.06, 21.08) | 4 | Friendly_2 | 100 (friendly) |
+| `n_sithappren001` | (28.99, 119.86) | 4 | Friendly_2 | 100 (friendly) |
+| `n_sithappren002` (round 48's `0x17`) | (30.55, 119.76) | 2 | Friendly_1 | 100 (friendly) |
+| **`n_sithsoldier003` ×2** | (29.74, 144.46), (31.86, 141.99) | **1** | **Hostile_1** | **0 (hostile)** |
+| **`n_sithsoldier004` ×2** | (43.96, 62.92), (47.56, 60.54) | **1** | **Hostile_1** | **0 (hostile)** |
+
+`n_sithsoldier003`/`004` are the only genuinely hostile GIT creatures in this module's census.
+Chose the `004` pair (its region was never named by object id in any prior round's log, unlike
+the `003` pair which round 39's original untraced "sithsoldier pair" fight may have already worn
+down).
+
+**Rig.** Cold start (`tools/demo.ps1`, save slot 1, both GOG installs — `C:\GOG Games\Star Wars
+KOTOR (GOG)` host, `D:\Games\swkotor-gog-p2` client/mirroring). Client teleported
+(`blockpoke.ps1 console 'tp 43.9 62.6 -1.275'`) from its spawn point directly to the `004` pair's
+position — no approach needed, matching this round's "point-blank, no pathing" preference.
+
+**The probe, live, on a real hostile — first time this investigation has ever measured this:**
+
+    local combat probe: 0x3B creatureFaction=1 playerFaction=0 rep(creature,player)=2
+    rep(player,creature)=2 (2=hostile,1=friendly,0=neutral) CreMovePermitted=0xFFFF plot=False
+    min1hp=True hp=12/12 bisectMask=0x0
+    local combat: 0x3B pulled out of the census to fight for real (timeout 25s)
+    local combat diag: t=0.0s 0x3B at (47.56,60.54) player at (43.90,62.60) dist=4.20
+    ... (identical dist=4.20 every second through t=24.0s) ...
+    local combat: 0x3B fight ended (timed out), rejoining the census
+    local combat probe: 0x38 creatureFaction=1 playerFaction=0 rep(creature,player)=2
+    rep(player,creature)=2 ... hp=12/12 bisectMask=0x0
+    local combat: 0x38 pulled out of the census to fight for real (timeout 25s)
+    local combat diag: t=0.0s 0x38 at (43.96,62.92) player at (43.90,62.60) dist=0.32
+    ... (identical dist=0.32 every second through t=24.0s, both engagements, across repeat
+    cycles) ...
+
+**Zero movement, zero HP change, on a confirmed `rep=2` hostile, at both 4.2 units and 0.32 units
+(point-blank, no approach possible) — the identical failure signature rounds 44 and 46 measured
+on the friendly creatures, now on a real one.** The pre-existing forwarded-damage channel kept
+working throughout and independently of this mechanism: `combat: absorbed 10 forwarded damage in
+total, attributed to mirrored enemies we are driving (last attacker 0x3B); this engine says
+in-combat=True`, and later, once `0x3B`'s exclusion window had expired and `IsLocallyEngaged`
+correctly stopped licensing the absorb, `combat: took 2 damage from a hit on our phantom
+(attacker 0x3B)` applied normally — evidence the HOST's own untouched engine copy of `0x3B` was
+fighting the client's phantom for real the whole time (this player's real position propagates to
+the host as a phantom, and a genuinely hostile creature aggroes it there independent of anything
+`local_combat` does) — a completely different, already-working channel from the one being tested.
+
+**The bisection, against a real hostile, budget 4 runs, three run (the fourth judged unnecessary
+— `0x1FFF` is `0x7FF | 0x1800`'s superset and already settles both open bits):**
+
+| Run | Mask | Ops disabled | Result |
+|---|---|---|---|
+| control | `0x0` | none (shipped default) | FAIL — `rep=2`, zero movement/HP change, both creatures, full 25s cycles |
+| all DriveOne ops off | `0x7FF` | bits 0-10 (round 47's `BisectAllOps`) | FAIL — identical signature, `rep=2` |
+| everything off | `0x1FFF` | bits 0-12 (adds health pin + health mirror) | FAIL — identical signature, `rep=2`, `min1hp=False` confirms the mask took effect |
+
+**Three independent configurations, spanning the full write surface this investigation has ever
+found (thirteen ops, rounds 47-48's complete table), all fail identically on a creature now known
+to be genuinely hostile.** This is the first real data point on a real hostile this investigation
+has ever produced, and it closes round 48's open question: the freeze is not, and never was,
+fully explained by "the test creature was never hostile." It happened to be true for the two
+specific creatures round 48 checked; it is not true in general. The actual mechanism — something
+about a creature that spent real time normally mirrored (claimed, driven, re-claimed every frame)
+before being excluded, as round 44 first isolated and round 47's bisection narrowed to "census
+membership itself, not any write" — is unchanged and still open. Round 47's own two remaining
+candidates (`MaterialisedEnemies.Seen`'s managed timestamp write; the unopened interior of
+`RunScript`'s real dispatcher past `0x005D45D0`, specifically `0x005D4270` onward) are still the
+concrete next steps.
+
+**Safety re-checks**, this session: no materialised stand-in ever selected (both `n_sithsoldier004`
+instances are GIT-identical); no permanent exclusion — both creatures cycled cleanly through
+repeated 25s timeouts and rejoined the census, re-engaging when the player was still in range,
+exactly as designed; no absorb/watchdog warnings; the client's own HP stayed `12/12` throughout
+every local_combat probe window (the one `took 2 damage`/`cannot be downed` line came from the
+unrelated, already-working forwarded-damage channel once this creature's local exclusion window
+had already ended, and the Endar Spire command deck's own min-1-hp scene pin — documented
+elsewhere in this file — is why it floored rather than applied for real).
+
+**Status, honestly.** The reputation gate is real, implemented, and correct regardless of what
+this round found — it stops a structurally-impossible "fight" before it starts, independent of
+whether hostility was ever the freeze's cause. It is not what was blocking rounds 44-48's specific
+test creatures (those were never going to pass it or fail it meaningfully, since a friendly
+creature excluded under the OLD code just froze the same way a rejected one now never gets
+excluded at all) — but it is a correctness fix regardless, and it removes "was the candidate even
+hostile" as a variable for whoever continues this. `local_combat` stays on by default, unchanged.
+No hit has yet landed through the exclusion-and-script-fire mechanism on any creature this
+investigation has ever tested, hostile or friendly — roadmap item 1 and the README combat bullet
+are unchanged this round because none did here either. The forwarded-damage channel this
+mechanism was meant to eventually retire continues to be the only thing actually making a fight
+dangerous in co-op, on both the friendly-then-excluded creatures of rounds 44-48 and the genuinely
+hostile one this round adds.
+
+Build clean (`dotnet build KotorCoop.slnx`; `src\KotorCoop.Plugin\build.ps1 -Install -GameDir
+"C:\GOG Games\Star Wars KOTOR (GOG)"` and again with `-GameDir "D:\Games\swkotor-gog-p2"` — the
+bare default `-Install` targets a Steam path neither GOG rig install uses, confirmed live this
+round; both explicit `-GameDir` installs succeeded, 0 warnings, 0 errors). Full suite 1173/1173
+(`HeavyPacketLossStillConverges` and the flagged `SaveDigestTests` case, this run, did not flake).
+Rig torn down and confirmed clean (`Get-Process swkotor,KotorCoop.Agent` returned none), the
+client's `coop.ini local_combat_bisect_mask` restored to `0x0`, `auto_start_agent` restored to `1`
+in both installs by `demo.ps1 -Stop`.
 
 ## 3. A client's XP is actively erased
 
