@@ -10,7 +10,17 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $projectDir = $PSScriptRoot
+
+# Locate VS2022 via vswhere rather than hardcoding the Community edition path: a dev box
+# normally has Community, but CI runners (GitHub's windows-latest included) ship Enterprise,
+# and the two editions live at different paths. Community is tried first only as a fallback
+# for a machine where vswhere itself is not installed yet.
+$vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
 $vsRoot = 'C:\Program Files\Microsoft Visual Studio\2022\Community'
+if (Test-Path $vswhere) {
+    $found = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+    if ($found) { $vsRoot = ($found | Select-Object -First 1).Trim() }
+}
 $vcvars = "$vsRoot\VC\Auxiliary\Build\vcvarsall.bat"
 
 function Import-MsvcEnvironment {

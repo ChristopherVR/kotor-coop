@@ -155,7 +155,8 @@ reverse-engineering behind each.
 
 ## Requirements
 
-- Windows, .NET 10 SDK; MSVC x86 toolset for the plugin (NativeAOT `win-x86`).
+- Windows. The packaged zip needs nothing else; building from source needs the .NET 10 SDK
+  and the MSVC x86 toolset for the plugin (NativeAOT `win-x86`).
 - **The DRM-free GOG build of KOTOR 1** (v1.0.3). The Steam copy's DRM wrapper refuses
   a second instance and its packed binary defeats static analysis; the GOG build has
   neither problem. Every engine address in the plugin is verified against this exact
@@ -166,6 +167,24 @@ reverse-engineering behind each.
 
 ## Quick start
 
+Grab `kotor-coop-<version>.zip` (built with `pwsh tools\package.ps1`, or from a release),
+extract it anywhere, and install it into your game directory:
+
+```powershell
+pwsh install.ps1 -GameDir 'C:\GOG Games\Star Wars KOTOR (GOG)'
+```
+
+That's the plugin, the agent and the co-op override files all in place in one step —
+`install.ps1 -Uninstall` takes them back out again. No .NET SDK or MSVC toolset needed;
+those are only for building from source (below).
+
+Then just play: launch KOTOR, click **Co-op** on the main menu, and one of you presses
+**Host** while the other picks that server and presses **Connect**. Optionally edit the
+`coop.ini` the package dropped beside the game to set your player name, a password, or a
+fixed host address.
+
+### Building from source
+
 ```powershell
 dotnet build KotorCoop.slnx
 pwsh src\KotorCoop.Plugin\build.ps1 -Install -GameDir 'C:\GOG Games\Star Wars KOTOR (GOG)'
@@ -174,9 +193,8 @@ pwsh src\KotorCoop.Plugin\build.ps1 -Install -GameDir 'C:\GOG Games\Star Wars KO
 Copy-Item src\KotorCoop.Agent\bin\Debug\net10.0-windows\* 'C:\GOG Games\Star Wars KOTOR (GOG)' -Recurse -Force
 ```
 
-Then just play: launch KOTOR, click **Co-op** on the main menu, and one of you presses
-**Host** while the other picks that server and presses **Connect**. Optionally drop a
-`coop.ini` beside the game to set your player name, a password, or a fixed host address.
+Or build the same zip `install.ps1` above unpacks: `pwsh tools\package.ps1` writes it to
+`dist\kotor-coop-<version>.zip`.
 
 For development — two instances driven unattended on one machine:
 

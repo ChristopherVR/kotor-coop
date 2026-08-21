@@ -6,6 +6,7 @@ obj/
 .idea/
 TestResults/
 artifacts/
+dist/
 *.log
 profiles/local.*.json
 __pycache__/
