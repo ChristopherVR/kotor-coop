@@ -122,6 +122,14 @@ public sealed record CoopConfig
     /// unset keeps <see cref="ProtocolConstants.DefaultConnectTimeoutMs"/>.
     /// </summary>
     public int ConnectTimeoutMs { get; init; }
+    /// Show the persistent connection indicator ("co-op: connected, 2 players" /
+    /// "co-op: reconnecting..." / "co-op: disconnected"), reposted only when it changes. On
+    /// by default. Before this the ~ console's <c>status</c> verb was the only way to see any
+    /// of it, so a player not actively typing had no idea their partner's link dropped until
+    /// something else went visibly wrong. Consumed by the agent's
+    /// <c>ConnectionStatusAnnouncer</c>.
+    /// </summary>
+    public bool StatusToasts { get; init; } = true;
 
     /// <summary>The anchor as the plugin's numeric code (0=TL, 1=TR, 2=BL, 3=BR).</summary>
     public uint ChatOverlayAnchorCode => ChatOverlayAnchor.Trim().ToLowerInvariant() switch
@@ -227,6 +235,7 @@ public sealed record CoopConfig
             ConnectTimeoutMs = int.TryParse(kv.GetValueOrDefault("connect_timeout_ms"), out int ct)
                 ? Math.Max(ct, 0)
                 : 0,
+            StatusToasts = !kv.ContainsKey("status_toasts") || IsTruthy(kv.GetValueOrDefault("status_toasts")),
         };
     }
 

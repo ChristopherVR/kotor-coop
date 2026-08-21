@@ -287,4 +287,20 @@ public enum PacketType : byte
     /// the acking peer id so the host, which broadcasts to several clients, can tell whose ack
     /// this is — exactly like <see cref="ContainerLootAck"/>.</summary>
     MaterialisedLootAck = 42,
+
+    /// <summary>
+    /// client -&gt; host: my container-loot version or digest disagrees with the one just
+    /// broadcast in <see cref="WorldSnapshot"/>, resync me.
+    ///
+    /// Unlike <see cref="FlagSyncRequest"/> / <see cref="ItemSyncRequest"/> /
+    /// <see cref="JournalSyncRequest"/>, this has no matching "Snapshot" reply type: loot's
+    /// full resync is already the reliable per-removal channel (<see cref="ContainerLoot"/>,
+    /// retransmitted until every current peer acks), so the host repairs a mismatch by
+    /// re-offering every removal it knows through that channel rather than by inventing a
+    /// second, unreliable one-shot snapshot for the same data. See
+    /// docs/research/disconnect-reconnect.md §4.1 and §4.8: before this, container loot was
+    /// the one world channel with no version tripwire at all, so a straggler under sustained
+    /// loss had nothing behind it but the retransmit itself.
+    /// </summary>
+    LootSyncRequest = 43,
 }

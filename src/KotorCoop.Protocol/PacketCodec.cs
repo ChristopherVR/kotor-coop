@@ -102,6 +102,11 @@ public static class PacketCodec
         w.WriteUInt32(packet.FlagVersion);
         w.WriteUInt32(packet.ItemVersion);
         w.WriteUInt32(packet.JournalVersion);
+        w.WriteUInt32(packet.LootVersion);
+        w.WriteUInt64(packet.FlagDigest);
+        w.WriteUInt64(packet.ItemDigest);
+        w.WriteUInt64(packet.JournalDigest);
+        w.WriteUInt64(packet.LootDigest);
 
         int count = Math.Min(packet.Entries.Count, ProtocolConstants.MaxPeers);
         w.WriteUInt8((byte)count);
@@ -257,6 +262,30 @@ public static class PacketCodec
         uint peerId = r.ReadUInt32();
         uint opSeq = r.ReadUInt32();
         return r.Failed ? null : new ContainerLootAckPacket(peerId, opSeq);
+    }
+
+    public static int Write(Span<byte> buffer, LootSyncRequestPacket packet)
+    {
+        PacketWriter w = new(buffer);
+        w.WriteHeader(PacketType.LootSyncRequest);
+        w.WriteUInt32(packet.PeerId);
+        w.WriteUInt32(packet.KnownVersion);
+        w.WriteUInt64(packet.KnownDigest);
+        return w.Failed ? 0 : w.Position;
+    }
+
+    public static LootSyncRequestPacket? ReadLootSyncRequest(ReadOnlySpan<byte> buffer)
+    {
+        PacketReader r = new(buffer);
+        if (r.ReadHeader() != PacketType.LootSyncRequest)
+        {
+            return null;
+        }
+
+        uint peerId = r.ReadUInt32();
+        uint version = r.ReadUInt32();
+        ulong digest = r.ReadUInt64();
+        return r.Failed ? null : new LootSyncRequestPacket(peerId, version, digest);
     }
 
     public static int Write(Span<byte> buffer, MaterialisedLootPacket packet)
@@ -1339,6 +1368,11 @@ public static class PacketCodec
         uint flagVersion = r.ReadUInt32();
         uint itemVersion = r.ReadUInt32();
         uint journalVersion = r.ReadUInt32();
+        uint lootVersion = r.ReadUInt32();
+        ulong flagDigest = r.ReadUInt64();
+        ulong itemDigest = r.ReadUInt64();
+        ulong journalDigest = r.ReadUInt64();
+        ulong lootDigest = r.ReadUInt64();
         byte count = r.ReadUInt8();
 
         if (r.Failed || count > ProtocolConstants.MaxPeers)
@@ -1360,7 +1394,9 @@ public static class PacketCodec
             entries.Add(new SnapshotEntry(peerId, name, state));
         }
 
-        return new WorldSnapshotPacket(serverTime, flagVersion, itemVersion, journalVersion, entries);
+        return new WorldSnapshotPacket(
+            serverTime, flagVersion, itemVersion, journalVersion, lootVersion,
+            flagDigest, itemDigest, journalDigest, lootDigest, entries);
     }
 
     public static FlagOpPacket? ReadFlagOp(ReadOnlySpan<byte> buffer)

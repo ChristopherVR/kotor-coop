@@ -88,7 +88,16 @@ public static class ProtocolConstants
     /// peer's instance parks that phantom instead of mirroring it, and the minigame
     /// player's own instance stops applying forwarded damage for the duration; see
     /// docs/research/minigames.md.</summary>
-    public const byte Version = 26;
+    /// Version 27: the world snapshot carries a content DIGEST beside each of the flag, item
+    /// and journal version counters, plus a version and digest for container loot, which had
+    /// neither. A version counter alone counts local CHANGES, not content: two stores that
+    /// diverged by the same number of changes during an outage tie and never ask for a
+    /// resync (docs/research/disconnect-reconnect.md §4.1). The digest is an
+    /// order-independent fingerprint of what is actually held (KotorCoop.Session.EntryDigest),
+    /// so it catches that tie. LootSyncRequest (43) is new for the same reason §4.8 flags:
+    /// container loot was retransmit-only with no tripwire of its own, so a straggler under
+    /// sustained loss had nothing behind it but the retransmit.</summary>
+    public const byte Version = 27;
 
     /// <summary>Journal quest tags are resrefs plus a little slack.</summary>
     public const int MaxJournalTagLength = 32;

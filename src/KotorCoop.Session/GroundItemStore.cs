@@ -18,8 +18,43 @@ public sealed class GroundItemStore
     private readonly HashSet<(uint Origin, uint Sequence)> _appliedOps = [];
     private readonly Queue<(uint Origin, uint Sequence)> _opHistory = new();
     private readonly Lock _gate = new();
+    private ulong _digest = EntryDigest.Empty;
 
     public uint Version { get; private set; }
+
+    /// <summary>Order-independent content fingerprint, beside <see cref="Version"/> for the
+    /// same reason <see cref="EventFlagStore.Digest"/> exists — see <see cref="EntryDigest"/>.</summary>
+    public ulong Digest
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _digest;
+            }
+        }
+    }
+
+    /// <summary>Caller must hold <see cref="_gate"/>.</summary>
+    private void ReplaceEntry(GroundItem item)
+    {
+        if (_items.TryGetValue(item.ItemId, out GroundItem? existing))
+        {
+            _digest ^= EntryDigest.GroundItem(existing.ItemId, existing.Resref, existing.Identity);
+        }
+
+        _items[item.ItemId] = item;
+        _digest ^= EntryDigest.GroundItem(item.ItemId, item.Resref, item.Identity);
+    }
+
+    /// <summary>Caller must hold <see cref="_gate"/>.</summary>
+    private void RemoveEntry(uint itemId)
+    {
+        if (_items.Remove(itemId, out GroundItem? removed))
+        {
+            _digest ^= EntryDigest.GroundItem(removed.ItemId, removed.Resref, removed.Identity);
+        }
+    }
 
     public int Count
     {
@@ -62,7 +97,7 @@ public sealed class GroundItemStore
                     return false;
                 }
 
-                _items[item.ItemId] = existing with { Identity = item.Identity };
+                ReplaceEntry(existing with { Identity = item.Identity });
                 Version++;
                 return true;
             }
@@ -72,7 +107,7 @@ public sealed class GroundItemStore
                 return false;
             }
 
-            _items[item.ItemId] = item;
+            ReplaceEntry(item);
             Version++;
             return true;
         }
@@ -83,11 +118,12 @@ public sealed class GroundItemStore
     {
         lock (_gate)
         {
-            if (!_items.Remove(itemId))
+            if (!_items.ContainsKey(itemId))
             {
                 return false;
             }
 
+            RemoveEntry(itemId);
             Version++;
             return true;
         }
@@ -133,14 +169,17 @@ public sealed class GroundItemStore
         {
             Dictionary<uint, GroundItem> previous = new(_items);
             _items.Clear();
+            _digest = EntryDigest.Empty;
 
             foreach (GroundItem item in items)
             {
-                _items[item.ItemId] = !item.Identity.IsKnown
+                GroundItem toStore = !item.Identity.IsKnown
                     && previous.TryGetValue(item.ItemId, out GroundItem? known)
                     && known.Identity.IsKnown
                         ? item with { Identity = known.Identity }
                         : item;
+
+                ReplaceEntry(toStore);
             }
 
             Version = version;

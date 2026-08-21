@@ -15,6 +15,7 @@ public sealed class CoopClient : ICoopSession
     private const int FlagResyncIntervalMs = 500;
     private const int ItemResyncIntervalMs = 500;
     private const int JournalResyncIntervalMs = 500;
+    private const int LootResyncIntervalMs = 500;
 
     private readonly SessionSettings _settings;
     private readonly IPEndPoint _hostEndPoint;
@@ -25,6 +26,11 @@ public sealed class CoopClient : ICoopSession
     private readonly ReliableJournalSender _journalSender = new();
     private readonly ContainerLootStore _lootStore = new();
     private readonly ReliableLootSender _lootSender = new();
+
+    /// <summary>The container-loot store, exposed the way <see cref="Flags"/>/<see cref="Items"/>
+    /// already are, so a caller (a test, the resync tripwire) can read its Version/Digest
+    /// without a separate accessor per field.</summary>
+    public ContainerLootStore Loot => _lootStore;
 
     /// <summary>
     /// The loot sender's one recipient: the host, which applies the removal, re-attributes
@@ -62,6 +68,7 @@ public sealed class CoopClient : ICoopSession
     private long _lastFlagRequestMs;
     private long _lastItemRequestMs;
     private long _lastJournalRequestMs;
+    private long _lastLootRequestMs;
     private uint _nextItemSequence = 1;
     private long _lastInboundMs;
     private double _roundTripMs;
@@ -69,7 +76,7 @@ public sealed class CoopClient : ICoopSession
     private bool _reconnecting;
 
     /// <summary>
-    /// Set on every Welcome, cleared once the three world stores have been re-requested.
+    /// Set on every Welcome, cleared once all four world stores have been re-requested.
     ///
     /// ⚠ THE VERSION TRIPWIRE ALONE CANNOT BE TRUSTED ACROSS AN OUTAGE. Each store's version
     /// is a count of local changes, not a fingerprint of its contents, so two sets that
@@ -77,8 +84,13 @@ public sealed class CoopClient : ICoopSession
     /// permanent silent divergence. Ordinarily the client's own ops bump the host and break
     /// the tie, but an outage is exactly the window in which both ends change independently,
     /// and a client change the host already holds at that value bumps nothing. So a
-    /// reconnection asks for all three snapshots unconditionally instead of waiting to be
-    /// told it needs them.
+    /// reconnection asks for everything unconditionally instead of waiting to be told it
+    /// needs it.
+    ///
+    /// The DIGEST each store now carries beside its version (<see cref="EntryDigest"/>) closes
+    /// the same hole for the case that matters more — a tie reached WHILE connected, not just
+    /// across an outage — but this forced flag stays: an outage is still the one window where
+    /// bumping-and-breaking-the-tie cannot be relied on at all, on either side.
     /// </summary>
     private bool _resyncOnConnect;
 
@@ -1494,6 +1506,7 @@ public sealed class CoopClient : ICoopSession
             _lastFlagRequestMs = 0;
             _lastItemRequestMs = 0;
             _lastJournalRequestMs = 0;
+            _lastLootRequestMs = 0;
 
             // Judge compatibility from our side too, from the host's digest in the Welcome.
             // The host already refused an incompatible client; this gives the client the
@@ -1661,14 +1674,15 @@ public sealed class CoopClient : ICoopSession
         _buffer.RetainOnly(present);
 
         // A reconnection asks for everything once, regardless of what the versions say. The
-        // request is only disarmed once all three senders are quiet, because a forced resync
+        // request is only disarmed once all four senders are quiet, because a forced resync
         // while our own ops are still in flight is exactly the overwrite the pending gates
         // below exist to prevent — so it waits its turn rather than being spent unused.
         bool forced = _resyncOnConnect;
         if (forced
             && _flagSender.PendingCount == 0
             && _itemSender.PendingCount == 0
-            && _journalSender.PendingCount == 0)
+            && _journalSender.PendingCount == 0
+            && _lootSender.PendingCount == 0)
         {
             _resyncOnConnect = false;
         }
@@ -1676,10 +1690,16 @@ public sealed class CoopClient : ICoopSession
         // The version tripwire: 4 bytes per tick tells us whether our world flags still
         // match the host's, and the full set only crosses the wire when they do not.
         //
+        // The DIGEST alongside it catches what the counter cannot: two stores that diverged
+        // by the same number of local changes tie on version and would never trigger a
+        // resync on that alone (docs/research/disconnect-reconnect.md §4.1). The digest
+        // depends on content, not change count, so it still disagrees when the counter does
+        // not.
+        //
         // Gated on our own ops being acked, exactly like items and journal below and for the
         // same reason: until they land, the two sides are SUPPOSED to differ, and asking for
         // a snapshot in that window used to be how a client's own change got overwritten.
-        if ((forced || snapshot.FlagVersion != Flags.Version)
+        if ((forced || snapshot.FlagVersion != Flags.Version || snapshot.FlagDigest != Flags.Digest)
             && _flagSender.PendingCount == 0
             && now - _lastFlagRequestMs >= FlagResyncIntervalMs)
         {
@@ -1691,10 +1711,10 @@ public sealed class CoopClient : ICoopSession
             }
         }
 
-        // Same tripwire for ground items, but only once our own ops have all been acked:
-        // resyncing while a drop is still in flight would erase it locally, respawn it on
-        // the next snapshot, and flicker the item in and out of the world.
-        if ((forced || snapshot.ItemVersion != Items.Version)
+        // Same tripwire (version + digest) for ground items, but only once our own ops have
+        // all been acked: resyncing while a drop is still in flight would erase it locally,
+        // respawn it on the next snapshot, and flicker the item in and out of the world.
+        if ((forced || snapshot.ItemVersion != Items.Version || snapshot.ItemDigest != Items.Digest)
             && _itemSender.PendingCount == 0
             && now - _lastItemRequestMs >= ItemResyncIntervalMs)
         {
@@ -1706,16 +1726,39 @@ public sealed class CoopClient : ICoopSession
             }
         }
 
-        // Journal tripwire, gated on our own ops being acked for the same reason as
-        // items: the merge itself is monotonic, but the version numbers only settle once
-        // in-flight ops have landed.
-        if ((forced || snapshot.JournalVersion != Journal.Version)
+        // Journal tripwire (version + digest), gated on our own ops being acked for the same
+        // reason as items: the merge itself is monotonic, but the version numbers only settle
+        // once in-flight ops have landed.
+        if ((forced
+                || snapshot.JournalVersion != Journal.Version
+                || snapshot.JournalDigest != Journal.Digest)
             && _journalSender.PendingCount == 0
             && now - _lastJournalRequestMs >= JournalResyncIntervalMs)
         {
             _lastJournalRequestMs = now;
             int length = PacketCodec.Write(
                 _replyBuffer, new JournalSyncRequestPacket(_localPeerId, Journal.Version));
+            if (length > 0)
+            {
+                _channel.Send(_hostEndPoint, _replyBuffer.AsSpan(0, length));
+            }
+        }
+
+        // Container loot's own tripwire — NEW. Before this the channel had no version at all
+        // (docs/research/disconnect-reconnect.md §4.8): a removal was announced once,
+        // reliably, and never mentioned again, so a straggler that missed it under sustained
+        // loss had nothing behind it but the retransmit itself. There is no LootSnapshotPacket
+        // to ask for in reply — the host's "full resync" for this channel already IS
+        // re-offering every removal through the reliable per-op sender
+        // (CoopHost.ResyncContainerLoot), so the request just has to reach it.
+        if ((forced || snapshot.LootVersion != _lootStore.Version || snapshot.LootDigest != _lootStore.Digest)
+            && _lootSender.PendingCount == 0
+            && now - _lastLootRequestMs >= LootResyncIntervalMs)
+        {
+            _lastLootRequestMs = now;
+            int length = PacketCodec.Write(
+                _replyBuffer,
+                new LootSyncRequestPacket(_localPeerId, _lootStore.Version, _lootStore.Digest));
             if (length > 0)
             {
                 _channel.Send(_hostEndPoint, _replyBuffer.AsSpan(0, length));

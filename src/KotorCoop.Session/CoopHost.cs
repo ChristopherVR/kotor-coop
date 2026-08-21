@@ -167,6 +167,11 @@ public sealed class CoopHost : ICoopSession
     private readonly ReliableLootSender _lootSender = new();
     private readonly ContainerLootStore _lootStore = new();
 
+    /// <summary>The container-loot store, exposed the way <see cref="Flags"/>/<see cref="Items"/>
+    /// already are, so a caller (a test, the resync tripwire) can read its Version/Digest
+    /// without a separate accessor per field.</summary>
+    public ContainerLootStore Loot => _lootStore;
+
     /// <summary>
     /// Someone looted an item out of a shared container here; broadcast the removal reliably so
     /// it vanishes from every client's copy too. Enqueue-only — the tick loop, which owns the
@@ -1172,7 +1177,9 @@ public sealed class CoopHost : ICoopSession
             }
         }
 
-        WorldSnapshotPacket snapshot = new(now, Flags.Version, Items.Version, Journal.Version, entries);
+        WorldSnapshotPacket snapshot = new(
+            now, Flags.Version, Items.Version, Journal.Version, _lootStore.Version,
+            Flags.Digest, Items.Digest, Journal.Digest, _lootStore.Digest, entries);
         int length = PacketCodec.Write(_sendBuffer, snapshot);
 
         if (length == 0)
@@ -1533,6 +1540,10 @@ public sealed class CoopHost : ICoopSession
                     _lootSender.Acknowledge(lootAck.PeerId, lootAck.OpSequence);
                 }
 
+                break;
+
+            case PacketType.LootSyncRequest:
+                HandleLootSyncRequest(datagram.From, span);
                 break;
 
             case PacketType.MaterialisedLootAck:
@@ -1896,6 +1907,28 @@ public sealed class CoopHost : ICoopSession
         }
     }
 
+    /// <summary>
+    /// A client's flag/item/journal version or digest disagrees, resync it. Unlike those
+    /// three, container loot has no separate snapshot packet to reply with — its "full
+    /// resync" IS the reliable per-removal channel, so repairing a mismatch is exactly what
+    /// <see cref="ResyncContainerLoot"/> already does on peer admission. Re-offering to
+    /// EVERY current recipient rather than just the requester is deliberate and free:
+    /// <see cref="ReliableLootSender.Enqueue"/> dedups by (container, item) against ops
+    /// already in flight, and every recipient dedups the same way on arrival, so a peer that
+    /// already agrees is not the one who ends up paying for this.
+    /// </summary>
+    private void HandleLootSyncRequest(IPEndPoint from, ReadOnlySpan<byte> span)
+    {
+        if (PacketCodec.ReadLootSyncRequest(span) is null)
+        {
+            _channel.NoteMalformed();
+            return;
+        }
+
+        ResyncContainerLoot(SessionClock.NowMs);
+        _lootSender.ResetBackoff();
+    }
+
     private void HandleJournalSyncRequest(IPEndPoint from, ReadOnlySpan<byte> span)
     {
         if (PacketCodec.ReadJournalSyncRequest(span) is null)
@@ -2053,9 +2086,12 @@ public sealed class CoopHost : ICoopSession
     }
 
     /// <summary>
-    /// Re-offers every container-loot removal this session knows about, so a peer that has
-    /// just been admitted (or re-admitted after an outage) learns about the chests it was not
-    /// there for. See the call site for why this channel needs it and the others do not.
+    /// Re-offers every container-loot removal this session knows about. Two callers:
+    /// <see cref="HandleHello"/> on (re-)admission, so a peer that was away learns about the
+    /// chests it was not there for, and <see cref="HandleLootSyncRequest"/> when a STILL
+    /// connected peer's version or digest disagrees with the host's — the tie a bare version
+    /// counter cannot always see (docs/research/disconnect-reconnect.md §4.1). See the call
+    /// sites for why this channel needs it and the flag/item/journal channels do not.
     /// </summary>
     private void ResyncContainerLoot(long nowMs)
     {

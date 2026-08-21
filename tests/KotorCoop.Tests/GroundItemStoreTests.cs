@@ -172,4 +172,86 @@ public class GroundItemStoreTests
         Assert.False(store.Drop(Item(1000)));
         Assert.Equal(ProtocolConstants.MaxGroundItems, store.Count);
     }
+
+    // ---- digest -----------------------------------------------------------------
+
+    [Fact]
+    public void DigestIsInvariantToInsertionOrder()
+    {
+        GroundItemStore forward = new();
+        forward.Drop(Item(1));
+        forward.Drop(KnownItem(2));
+        forward.Drop(Item(3));
+
+        GroundItemStore backward = new();
+        backward.Drop(Item(3));
+        backward.Drop(KnownItem(2));
+        backward.Drop(Item(1));
+
+        Assert.Equal(forward.Version, backward.Version);
+        Assert.Equal(forward.Digest, backward.Digest);
+    }
+
+    /// <summary>
+    /// The reason the digest exists at all: two stores that reached the same VERSION by
+    /// making the same number of changes, but different ones, must disagree on the digest —
+    /// the tie a bare counter cannot see (docs/research/disconnect-reconnect.md §4.1).
+    /// </summary>
+    [Fact]
+    public void EqualVersionWithDifferentContentProducesADifferentDigest()
+    {
+        GroundItemStore a = new();
+        a.Drop(Item(1));
+        a.Drop(Item(2));
+
+        GroundItemStore b = new();
+        b.Drop(Item(1));
+        b.Drop(Item(3));
+
+        Assert.Equal(a.Version, b.Version);
+        Assert.NotEqual(a.Digest, b.Digest);
+    }
+
+    [Fact]
+    public void LearningAnIdentityChangesTheDigest()
+    {
+        // The digest hashes the identity fields, not just the item id, so upgrading a stock
+        // item's identity (see AKnownIdentityUpgradesAnUnknownOneAndNeverTheReverse) is
+        // visible here too.
+        GroundItemStore store = new();
+        store.Drop(Item(1));
+        ulong beforeLearning = store.Digest;
+
+        store.Drop(KnownItem(1));
+
+        Assert.NotEqual(beforeLearning, store.Digest);
+    }
+
+    [Fact]
+    public void RemoveXorsTheDigestBackToWhatItWasBefore()
+    {
+        GroundItemStore store = new();
+        ulong empty = store.Digest;
+
+        store.Drop(Item(1));
+        Assert.NotEqual(empty, store.Digest);
+
+        store.Remove(1);
+        Assert.Equal(empty, store.Digest);
+    }
+
+    [Fact]
+    public void ReplaceAllRecomputesTheDigest()
+    {
+        GroundItemStore store = new();
+        store.Drop(Item(1));
+        store.Drop(Item(2));
+
+        store.ReplaceAll([Item(7)], version: 5);
+
+        GroundItemStore direct = new();
+        direct.Drop(Item(7));
+
+        Assert.Equal(direct.Digest, store.Digest);
+    }
 }

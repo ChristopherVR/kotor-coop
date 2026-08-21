@@ -56,6 +56,13 @@ minigame_hide_peer = 1
 ; player already spectates a living one. NOT YET WIRED — read and stored, but the camera
 ; handoff has no trigger yet (docs/research/minigames.md).
 minigame_spectate = 0
+; --- persistent connection indicator ------------------------------------------------
+; Before this the only way to see connection state in-game was typing `status` at the ~
+; console. This posts a short line ("co-op: connected, 2 players" / "reconnecting..." /
+; "disconnected") through the same overlay + console-reply path above, but only when the
+; state actually changes - not every tick.
+
+status_toasts = 1
 
 ; --- mirroring a world you do not own ---------------------------------------------
 

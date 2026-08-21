@@ -14,16 +14,31 @@ public sealed record StateUpdatePacket(uint PeerId, uint Sequence, long ClientTi
 public sealed record SnapshotEntry(uint PeerId, string Name, PlayerState State);
 
 /// <summary>
-/// The host's authoritative view, broadcast every tick. <paramref name="FlagVersion"/> and
-/// <paramref name="ItemVersion"/> are the cheap tripwires that tell a client its world
-/// flags or ground items are stale, so full state only crosses the wire when it has
-/// actually diverged.
+/// The host's authoritative view, broadcast every tick. <paramref name="FlagVersion"/>,
+/// <paramref name="ItemVersion"/>, <paramref name="JournalVersion"/> and
+/// <paramref name="LootVersion"/> are the cheap tripwires that tell a client one of its world
+/// stores is stale, so full state only crosses the wire when it has actually diverged.
+///
+/// Each version rides beside its store's <c>Digest</c> — <paramref name="FlagDigest"/>,
+/// <paramref name="ItemDigest"/>, <paramref name="JournalDigest"/>,
+/// <paramref name="LootDigest"/> — an order-independent content fingerprint (see
+/// <c>KotorCoop.Session.EntryDigest</c>). The version alone has a blind spot: it counts local
+/// CHANGES, not content, so two stores that diverged by the same count during an outage can
+/// tie and never ask for a resync (docs/research/disconnect-reconnect.md §4.1). The digest
+/// depends on what is actually held, so a mismatch there is caught even when the counters
+/// agree. Container loot did not carry a version at all before this — see §4.8 — so
+/// <paramref name="LootVersion"/> and <paramref name="LootDigest"/> are both new.
 /// </summary>
 public sealed record WorldSnapshotPacket(
     long ServerTimeMs,
     uint FlagVersion,
     uint ItemVersion,
     uint JournalVersion,
+    uint LootVersion,
+    ulong FlagDigest,
+    ulong ItemDigest,
+    ulong JournalDigest,
+    ulong LootDigest,
     IReadOnlyList<SnapshotEntry> Entries);
 
 /// <summary>
@@ -156,6 +171,15 @@ public sealed record ContainerLootPacket(
 /// peer id so the host, which broadcasts to several clients, can tell whose ack this is.
 /// </summary>
 public sealed record ContainerLootAckPacket(uint PeerId, uint OpSequence);
+
+/// <summary>
+/// client -&gt; host: my container-loot version or digest does not match the host's latest
+/// <see cref="WorldSnapshotPacket"/>, please resync. <paramref name="KnownVersion"/> and
+/// <paramref name="KnownDigest"/> are carried for the same reason the other three sync-request
+/// packets carry a known version — diagnostic, not consulted by the handler, which always
+/// re-offers everything it knows rather than trying to compute a partial diff.
+/// </summary>
+public sealed record LootSyncRequestPacket(uint PeerId, uint KnownVersion, ulong KnownDigest);
 
 /// <summary>One item off a materialised enemy's real corpse, by resref plus the same identity
 /// fields <see cref="GroundItem"/> carries. No object id: the receiving side spawns a fresh

@@ -108,6 +108,22 @@ public sealed class CoopCommandDispatcher(
     /// indistinguishable from a bug.</summary>
     private readonly CompatibilityAnnouncer _compatibilityAnnouncer = new();
 
+    /// <summary>The persistent connection indicator (item 18) — see
+    /// <see cref="ConnectionStatusAnnouncer"/> for why the <c>status</c> console verb was not
+    /// enough on its own.</summary>
+    private readonly ConnectionStatusAnnouncer _connectionAnnouncer = new();
+
+    /// <summary>
+    /// coop.ini's <c>status_toasts</c>, read once and cached rather than reloaded off disk
+    /// every 150 ms tick. <c>null</c> means "not read yet"; the value itself is a plain bool
+    /// once resolved, so there is no third state to confuse with "file absent" — an absent or
+    /// unreadable coop.ini defaults the setting ON, the same default <see cref="CoopConfig"/>
+    /// itself uses.
+    /// </summary>
+    private bool? _statusToastsEnabled;
+
+    private bool StatusToastsEnabled => _statusToastsEnabled ??= loadConfig?.Invoke()?.StatusToasts ?? true;
+
     /// <summary>Polls the block for console/menu commands and reflects status until cancelled.</summary>
     public async Task RunAsync(CancellationToken cancellationToken)
     {
@@ -141,6 +157,7 @@ public sealed class CoopCommandDispatcher(
                     ReflectPhase();
                     AnnouncePeerChanges();
                     AnnounceCompatibilityChanges();
+                    AnnounceConnectionStatus();
                     DrainChat();
                     ReflectCheatAnswer();
                     DrainAutomaticLoot();
@@ -1374,6 +1391,51 @@ public sealed class CoopCommandDispatcher(
         }
 
         _compatibilityAnnouncer.Observe(session.Compatibility, Reply);
+    }
+
+    /// <summary>
+    /// The persistent connection indicator (item 18, roadmap-seamless.md): posts
+    /// "co-op: connected, N players" / "reconnecting..." / "connection failed" /
+    /// "disconnected" through the same queued-text path <see cref="AnnounceCompatibilityChanges"/>
+    /// uses, reposted only on change, so a player who is not actively typing <c>status</c> at
+    /// the console still finds out when their partner's link drops.
+    ///
+    /// The compact status byte + peer count also rides <c>SharedBlock.OffsetConnectStatus</c>
+    /// (<see cref="ConnectionSnapshot.Pack"/>) UNCONDITIONALLY, regardless of the
+    /// <c>status_toasts</c> gate below — that gate is about what appears on screen, not about
+    /// whether the block's own state is kept current.
+    /// </summary>
+    private void AnnounceConnectionStatus()
+    {
+        if (manager.Current is not { } session)
+        {
+            _connectionAnnouncer.Reset();
+            _kotor?.SetConnectStatus(new ConnectionSnapshot(ConnectionIndicatorState.Disconnected, 0).Pack());
+            return;
+        }
+
+        SessionStats stats = session.GetStats();
+
+        // manager.Phase distinguishes the FIRST handshake (Connecting) and a refused one
+        // (Failed) from an ordinary live session; within a live session, the live
+        // stats.Connected flag is what actually tells a mid-session drop-and-recover apart
+        // from steady state — manager.Phase stays Connected throughout a blackout, because
+        // that field describes the MANAGED lifecycle, not the tick-by-tick link.
+        ConnectionIndicatorState state = manager.Phase switch
+        {
+            SessionPhase.Connecting => ConnectionIndicatorState.Connecting,
+            SessionPhase.Failed => ConnectionIndicatorState.Failed,
+            SessionPhase.Disconnected => ConnectionIndicatorState.Disconnected,
+            _ => stats.Connected ? ConnectionIndicatorState.Connected : ConnectionIndicatorState.Reconnecting,
+        };
+
+        ConnectionSnapshot snapshot = new(state, stats.PeerCount);
+        _kotor?.SetConnectStatus(snapshot.Pack());
+
+        if (StatusToastsEnabled)
+        {
+            _connectionAnnouncer.Observe(snapshot, Reply);
+        }
     }
 
     /// <summary>Posts the session roster: the local player first, then each remote peer with

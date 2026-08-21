@@ -33,6 +33,7 @@ public sealed class ContainerLootStore
     private readonly HashSet<(uint Origin, uint Sequence)> _appliedOps = [];
     private readonly Queue<(uint Origin, uint Sequence)> _opHistory = new();
     private readonly Lock _gate = new();
+    private ulong _digest = EntryDigest.Empty;
 
     public int Count
     {
@@ -41,6 +42,29 @@ public sealed class ContainerLootStore
             lock (_gate)
             {
                 return _removals.Count;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Local-change counter, exactly like the other three world stores — bumped once per
+    /// genuinely new removal. Before this pass this channel had NO version tripwire at all: a
+    /// removal was announced once, reliably, and never mentioned again, so a straggler that
+    /// missed it under sustained loss had nothing to repair it — see
+    /// docs/research/disconnect-reconnect.md §4.8.
+    /// </summary>
+    public uint Version { get; private set; }
+
+    /// <summary>Order-independent content fingerprint over the retained removal window, beside
+    /// <see cref="Version"/> for the same reason <see cref="EventFlagStore.Digest"/> exists —
+    /// see <see cref="EntryDigest"/>.</summary>
+    public ulong Digest
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _digest;
             }
         }
     }
@@ -102,12 +126,23 @@ public sealed class ContainerLootStore
         }
 
         _removals.Add(removal);
+        _digest ^= EntryDigest.ContainerLootRemoval(removal.ContainerId, removal.ItemId);
+
         if (_removals.Count > MaxRemovals)
         {
-            _set.Remove(_removals[0]);
+            ContainerLootRemoval evicted = _removals[0];
+            _set.Remove(evicted);
             _removals.RemoveAt(0);
+
+            // Eviction only trims the re-declare-to-the-game window (the entry was already
+            // applied, long ago), but the digest tracks the SAME window Contains()/Snapshot()
+            // do — the pair this instance would actually compare or dedup against — so its
+            // contribution has to leave too, or the digest would keep counting a removal the
+            // rest of the store has already forgotten.
+            _digest ^= EntryDigest.ContainerLootRemoval(evicted.ContainerId, evicted.ItemId);
         }
 
+        Version++;
         return true;
     }
 
@@ -128,6 +163,8 @@ public sealed class ContainerLootStore
             _set.Clear();
             _appliedOps.Clear();
             _opHistory.Clear();
+            _digest = EntryDigest.Empty;
+            Version = 0;
         }
     }
 }

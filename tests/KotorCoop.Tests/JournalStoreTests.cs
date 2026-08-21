@@ -72,4 +72,72 @@ public class JournalStoreTests
         Assert.False(store.Merge("", 10));
         Assert.Equal(0u, store.Version);
     }
+
+    // ---- digest -----------------------------------------------------------------
+
+    [Fact]
+    public void DigestIsInvariantToInsertionOrder()
+    {
+        JournalStore forward = new();
+        forward.Merge("k_swg_bastila", 10);
+        forward.Merge("k_swg_carth", 20);
+        forward.Merge("k_swg_juhani", 5);
+
+        JournalStore backward = new();
+        backward.Merge("k_swg_juhani", 5);
+        backward.Merge("k_swg_carth", 20);
+        backward.Merge("k_swg_bastila", 10);
+
+        Assert.Equal(forward.Version, backward.Version);
+        Assert.Equal(forward.Digest, backward.Digest);
+    }
+
+    [Fact]
+    public void DigestIsCaseInsensitiveLikeTheStoreItself()
+    {
+        JournalStore store = new();
+        store.Merge("K_SWG_Bastila", 10);
+
+        JournalStore lower = new();
+        lower.Merge("k_swg_bastila", 10);
+
+        Assert.Equal(store.Digest, lower.Digest);
+    }
+
+    /// <summary>
+    /// The reason the digest exists at all: two stores that reached the same VERSION by
+    /// making the same number of changes, but different ones, must disagree on the digest —
+    /// the tie a bare counter cannot see (docs/research/disconnect-reconnect.md §4.1).
+    /// </summary>
+    [Fact]
+    public void EqualVersionWithDifferentContentProducesADifferentDigest()
+    {
+        JournalStore a = new();
+        a.Merge("k_swg_bastila", 10);
+        a.Merge("k_swg_carth", 20);
+
+        JournalStore b = new();
+        b.Merge("k_swg_bastila", 10);
+        b.Merge("k_swg_carth", 30);
+
+        Assert.Equal(a.Version, b.Version);
+        Assert.NotEqual(a.Digest, b.Digest);
+    }
+
+    [Fact]
+    public void SnapshotMergeUpdatesTheDigestNotJustTheVersion()
+    {
+        JournalStore store = new();
+        store.Merge("ahead_locally", 50);
+        ulong beforeSnapshot = store.Digest;
+
+        store.MergeSnapshot([new("from_host", 10)], version: 7);
+
+        JournalStore direct = new();
+        direct.Merge("ahead_locally", 50);
+        direct.Merge("from_host", 10);
+
+        Assert.NotEqual(beforeSnapshot, store.Digest);
+        Assert.Equal(direct.Digest, store.Digest);
+    }
 }

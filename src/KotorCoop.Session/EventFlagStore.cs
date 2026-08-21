@@ -19,8 +19,39 @@ public sealed class EventFlagStore
     private readonly HashSet<(uint Origin, uint Sequence)> _appliedOps = [];
     private readonly Queue<(uint Origin, uint Sequence)> _opHistory = new();
     private readonly Lock _gate = new();
+    private ulong _digest = EntryDigest.Empty;
 
     public uint Version { get; private set; }
+
+    /// <summary>
+    /// An order-independent content fingerprint, maintained incrementally beside
+    /// <see cref="Version"/> so a resync tripwire can catch two stores that diverged by the
+    /// same change COUNT — a tie the counter alone cannot see. See <see cref="EntryDigest"/>.
+    /// </summary>
+    public ulong Digest
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _digest;
+            }
+        }
+    }
+
+    /// <summary>Caller must hold <see cref="_gate"/>. Replaces one entry's contribution to
+    /// <see cref="_digest"/>: XORs out the old value's hash (if the key was present) and XORs
+    /// in the new one.</summary>
+    private void ReplaceEntry(uint flagId, sbyte value)
+    {
+        if (_flags.TryGetValue(flagId, out sbyte existing))
+        {
+            _digest ^= EntryDigest.Flag(flagId, existing);
+        }
+
+        _flags[flagId] = value;
+        _digest ^= EntryDigest.Flag(flagId, value);
+    }
 
     public int Count
     {
@@ -51,7 +82,7 @@ public sealed class EventFlagStore
                 return false;
             }
 
-            _flags[flagId] = value;
+            ReplaceEntry(flagId, value);
             Version++;
             return true;
         }
@@ -76,7 +107,7 @@ public sealed class EventFlagStore
                 return false;
             }
 
-            _flags[flagId] = value;
+            ReplaceEntry(flagId, value);
             Version++;
             return true;
         }
@@ -86,6 +117,10 @@ public sealed class EventFlagStore
     /// Seeds the store without bumping the version once per entry. Populating a whole
     /// KOTOR catalogue through <see cref="Set"/> would raise the version a thousand times
     /// and make every client immediately demand a full resync.
+    ///
+    /// The digest is NOT exempted the same way: it is a content fingerprint, not a change
+    /// count, so it has to reflect whatever the store actually holds regardless of how that
+    /// content arrived.
     /// </summary>
     public void Seed(IEnumerable<KeyValuePair<uint, sbyte>> flags)
     {
@@ -93,7 +128,7 @@ public sealed class EventFlagStore
         {
             foreach (KeyValuePair<uint, sbyte> flag in flags)
             {
-                _flags[flag.Key] = flag.Value;
+                ReplaceEntry(flag.Key, flag.Value);
             }
         }
     }
@@ -126,7 +161,7 @@ public sealed class EventFlagStore
                 return false;
             }
 
-            _flags[op.FlagId] = op.Value;
+            ReplaceEntry(op.FlagId, op.Value);
             Version++;
             return true;
         }
@@ -156,7 +191,7 @@ public sealed class EventFlagStore
             {
                 if (!_flags.TryGetValue(flag.Key, out sbyte existing) || existing < flag.Value)
                 {
-                    _flags[flag.Key] = flag.Value;
+                    ReplaceEntry(flag.Key, flag.Value);
                 }
             }
 
@@ -175,9 +210,10 @@ public sealed class EventFlagStore
         lock (_gate)
         {
             _flags.Clear();
+            _digest = EntryDigest.Empty;
             foreach (KeyValuePair<uint, sbyte> flag in flags)
             {
-                _flags[flag.Key] = flag.Value;
+                ReplaceEntry(flag.Key, flag.Value);
             }
 
             Version = version;

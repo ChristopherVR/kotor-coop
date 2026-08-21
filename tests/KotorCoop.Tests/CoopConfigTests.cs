@@ -98,6 +98,10 @@ public class CoopConfigTests
             // Chat overlay defaults on when the file says nothing about it.
             Assert.True(c.ChatOverlay);
             Assert.Equal(2u, c.ChatOverlayAnchorCode); // bottom-left
+
+            // The persistent connection indicator (item 18) defaults on too, the same rule
+            // menu_button and chat_overlay already follow: absent key means ON.
+            Assert.True(c.StatusToasts);
         }
         finally
         {
@@ -155,6 +159,27 @@ public class CoopConfigTests
             Assert.Equal(1u, c.ChatOverlayAnchorCode); // top-right
             Assert.Equal(8, c.ChatOverlayLines);
             Assert.Equal(4000, c.ChatOverlayFadeMs);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void StatusToastsCanBeTurnedOff()
+    {
+        string path = WriteTemp("""
+            [coop]
+            mode = join
+            status_toasts = 0
+            """);
+
+        try
+        {
+            CoopConfig? c = CoopConfig.TryLoad(path);
+            Assert.NotNull(c);
+            Assert.False(c.StatusToasts);
         }
         finally
         {

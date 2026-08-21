@@ -492,3 +492,76 @@ unverified:
   state the player can immediately retry from (Co-op button / `connect`).
 - Whether 5 s / 15 s / 60 s are the right thresholds in practice — they are the task's
   specified defaults, not measured against a real network hiccup.
+## A persistent connection indicator (2026-08-21, NOT live-verified)
+
+Item 18, roadmap-seamless.md: before this pass the ONLY way to see connection state in-game
+was typing `status` at the `~` console. Nothing was ever shown unasked, so a player who is not
+actively typing has no idea their partner's link dropped until something else goes visibly
+wrong — a phantom freezes, a door stops responding. `PeerAnnouncer` (above) already narrates
+individual joins and leaves; nothing narrated the connection's own STATE — connected, how many
+players, mid-outage and recovering, or gone.
+
+**Surface chosen, and why not the others.** Read three candidates before picking: `PostTextLine`
+(the minimap arrow hook and the console-assist hint line both draw this way, per-frame, from
+inside the plugin), a new HUD widget, and the queued-text path `CompatibilityAnnouncer`
+already uses for content-mismatch warnings (`Reply`, which reaches both the `~` console reply
+line and the always-on chat overlay). The last one won on the same grounds
+`CompatibilityAnnouncer` already established: reposted only on CHANGE rather than drawn every
+frame, so an unobtrusive indicator costs nothing while the state is stable, and the surface
+(the chat overlay) is already persistent and already configurable (`chat_overlay_anchor`,
+`chat_overlay_opacity`) — nothing new to draw, position or theme.
+
+**`KotorCoop.Agent.ConnectionStatusAnnouncer`** is `CompatibilityAnnouncer`'s and
+`PeerAnnouncer`'s shape exactly: a pure static `Line(ConnectionSnapshot)` (state + peer count
+→ the exact string shown — "co-op: connected, 2 players" / "co-op: reconnecting..." /
+"co-op: connection failed" / "co-op: disconnected") separated from a thin stateful `Observe`
+that reposts only when the snapshot actually differs from the last one seen — including a
+peer-count change alone, with the state byte unmoved. Wired into
+`CoopCommandDispatcher.AnnounceConnectionStatus`, called every dispatcher tick (150 ms)
+alongside `AnnouncePeerChanges`/`AnnounceCompatibilityChanges`, gated by coop.ini's new
+`status_toasts` (default on).
+
+**The state that did not exist anywhere before this:** RECONNECTING mid-session. `ReflectPhase`
+(existing, untouched) already announces the coarse `SessionManager.Phase` transitions —
+Connecting → Connected, and Failed/Disconnected — but that phase is the MANAGED lifecycle and
+stays `Connected` for the whole of a link outage described in disconnect-reconnect.md (a
+blackout, a lossy link): nothing there ever told a player their partner's connection was
+degraded. `AnnounceConnectionStatus` reads the LIVE `SessionStats.Connected` flag underneath
+the phase instead, which is exactly what flips false the moment the client notices silence and
+true again the moment it rejoins — so "co-op: reconnecting..." now brackets precisely the
+window disconnect-reconnect.md's recovery-sequence table describes, and "co-op: connected, N
+players" returns the instant it closes.
+
+**The block field: widened, not added.** `SharedBlock.OffsetConnectStatus` (0x9EC) already
+existed — the agent wrote it once, to `ConnectStatusConnecting`, on a menu Connect press, and
+nothing on the plugin side ever read it back (confirmed: no consumer of
+`SharedBlockView.ConnectStatus`'s getter anywhere in the plugin). Per the instruction to add no
+new block field and not bump the block version (another agent was changing the block tail
+concurrently), this pass repurposes it rather than adding beside it:
+`ConnectionSnapshot.Pack()` puts the state in the LOW byte (reusing the four existing sentinels
+0-3 unchanged, plus a new value 4 = Reconnecting) and the peer count, clamped to a byte, in the
+next byte up. Every one of the four pre-existing sentinel values is entered with zero peers, so
+the packed uint reproduces the exact bare value a hypothetical old reader would have compared
+against — `PackReproducesTheOriginalFourSentinelsWhenAlone` pins this. The plugin does not
+currently read the field for anything (this pass does not add a reader); it is carried so the
+data is there, current, and correctly shaped for whichever surface reads it next, per the
+instruction that it ride an existing field rather than nothing at all.
+
+**Tests**, all pure — no session, no sockets, no clock:
+`tests/KotorCoop.Tests/ConnectionStatusAnnouncerTests.cs` covers the "what changed → which
+line" decision (`Line` for every state × peer count combination via `[Theory]`), the on-change
+diffing (`Observe`: a stable snapshot announces once, a peer joining while connected is a
+change even though the state byte does not move, a drop-and-recovery announces both edges,
+`Reset` lets a fresh session announce its own state again), and the wire packing (state in the
+low byte, peer count in the next, backward-reproduction of the four original sentinels, and
+clamping an out-of-range count to a byte). `CoopConfigTests` covers `status_toasts` parsing and
+its on-by-default rule, matching `menu_button` and `chat_overlay`.
+
+**NEEDS-LIVE.** Nothing here was run against the game. In particular: whether the chat overlay
+and `~` console reply line actually show the posted lines (the plugin-side rendering itself —
+`ChatOverlayController`, `ConsoleAssistController`'s reply path — is untouched by this pass and
+was already live-verified for other lines going through the exact same `Reply` call, but this
+specific content has not been watched on screen); whether `netsim blackout` on the live rig now
+shows "co-op: reconnecting..." during the outage and "co-op: connected, N players" the instant
+it heals; and whether a second player joining an already-connected session visibly updates the
+peer count on both screens without the player needing to type `who`.

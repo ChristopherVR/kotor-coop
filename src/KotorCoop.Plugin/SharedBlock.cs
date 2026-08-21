@@ -762,14 +762,31 @@ internal struct SharedBlock
 
     public const int ConnectHostLength = 40;
 
-    /// <summary>Agent -&gt; plugin. 0 idle, 1 connecting, 2 connected, 3 failed — for the
-    /// menu to show a status line.</summary>
+    /// <summary>
+    /// Agent -&gt; plugin. Low byte: 0 idle, 1 connecting, 2 connected, 3 failed, 4
+    /// reconnecting — for the menu to show a status line. Since item 18
+    /// (roadmap-seamless.md, 2026-08-21) the NEXT byte up also carries the current peer
+    /// count, for the persistent in-game connection indicator
+    /// (<c>KotorCoop.Agent.ConnectionStatusAnnouncer</c>). No new field: this is the same
+    /// word the connect-flow write always used, whose only prior value was a bare 0-3 and
+    /// whose only reader — the plugin's own getter below — had none, so the wider bytes were
+    /// free. A reader that only ever compared the whole field against one of the four
+    /// original sentinels is unaffected exactly when the peer count is 0 (the state each of
+    /// those four is entered in): idle/connecting/failed always have no peer to count, and
+    /// "just connected, alone" packs to the same bare 2 it always did.
+    /// </summary>
     public const int OffsetConnectStatus = 0x9EC;
 
     public const uint ConnectStatusIdle = 0;
     public const uint ConnectStatusConnecting = 1;
     public const uint ConnectStatusConnected = 2;
     public const uint ConnectStatusFailed = 3;
+
+    /// <summary>Live session, but the underlying link is currently down and recovering on its
+    /// own — see docs/research/disconnect-reconnect.md. Distinct from
+    /// <see cref="ConnectStatusFailed"/>, which is a REFUSED join (wrong password, incompatible
+    /// save) that never became a session at all.</summary>
+    public const uint ConnectStatusReconnecting = 4;
 
     /// <summary>Agent -&gt; plugin. Nonzero FORCES the main-menu Co-op button on. No longer a
     /// prerequisite: the plugin shows the button by itself (coop.ini <c>menu_button</c>, read

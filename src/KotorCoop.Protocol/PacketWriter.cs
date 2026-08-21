@@ -103,6 +103,15 @@ public ref struct PacketWriter
         }
     }
 
+    public void WriteUInt64(ulong value)
+    {
+        Span<byte> slice = Take(8);
+        if (!Failed)
+        {
+            BinaryPrimitives.WriteUInt64LittleEndian(slice, value);
+        }
+    }
+
     public void WriteSingle(float value)
     {
         Span<byte> slice = Take(4);
