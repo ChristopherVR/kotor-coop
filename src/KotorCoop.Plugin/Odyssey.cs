@@ -564,7 +564,20 @@ internal static unsafe class Odyssey
     /// <summary>The head-of-queue types that mean "already fighting" — <see cref="QueueAttackAction"/>
     /// must not stack a second attack behind one of these, per the RunActions dispatch table
     /// comment above: 0x0B PhysicalAttacks, 0x3E Combat, 0x0E CastSpell, 0x31 CounterSpell,
-    /// 0x0F WaitForEndOfRound.</summary>
+    /// 0x0F WaitForEndOfRound.
+    ///
+    /// ⚠ ROUND 51/52: NOT ground truth for "is a real fight in progress." Rounds 9-50 used
+    /// this as the sole signal for that question via the `firescript watch` diagnostic log
+    /// (Odyssey.TickFireScriptWatch); round 51 measured it read False on 0 of 6000 sampled
+    /// frames across three trials where the player's own HP independently, verifiably fell
+    /// (docs/research/shared-state-audit.md §2, round 51). This tests the action-QUEUE head
+    /// (RunActions' dispatch), which is a different state machine from the actual per-round
+    /// combat processing (StartCombatRound 0x005BB590 and its maneuver-selection dispatch),
+    /// so a creature can be genuinely landing hits with a head action outside this list the
+    /// whole time. Still correct for its ORIGINAL, narrower purpose — "don't stack a second
+    /// queued attack behind one already at the head" — which is why it stays here rather
+    /// than being deleted outright. Round 52 replaced it as a ground-truth signal with
+    /// PhantomHitHook's own damage-choke-point log ("combat ground-truth:").</summary>
     private static bool IsFightAction(int type) =>
         type is 0x0B or 0x3E or 0x0E or 0x31 or 0x0F;
 
@@ -7590,8 +7603,20 @@ internal static unsafe class Odyssey
             }
         }
 
-        log($"firescript watch: frame -{framesLeft}, creature=0x{creature:X}, head action=0x{headType:X} "
-            + $"(is fight action: {IsFightAction(headType)}), round+0x9CC target=0x{currentTarget:X}, "
+        // ROUND 51/52: the "(is fight action: {IsFightAction(headType)})" interpretation
+        // this line used to print here is DELETED, not fixed — round 51 measured it read
+        // False on 0 of 6000 sampled frames across three trials where the player's own HP
+        // demonstrably fell 12->1 (docs/research/shared-state-audit.md §2, round 51). The
+        // head action reflects the action-QUEUE dispatch (RunActions); the real combat-round
+        // processing round 51's own disassembly found (StartCombatRound 0x005BB590, the
+        // maneuver-selection dispatch at 0x005BAD8A) is a separate state machine this field
+        // does not observe, so no fix to the test itself was evident from the disassembly on
+        // hand. `headType` is still logged raw below for whoever continues the sub+0x5c lead;
+        // just do not read it as "is a fight happening." Ground truth is now
+        // PhantomHitHook.LogLocalHitGroundTruth's own "combat ground-truth:" log line
+        // instead (round 52), which reads the engine's own damage choke point directly.
+        log($"firescript watch: frame -{framesLeft}, creature=0x{creature:X}, head action=0x{headType:X}, "
+            + $"round+0x9CC target=0x{currentTarget:X}, "
             + $"round+0x958 timer={timerActive}, round+0x960 delay={delay}, "
             + $"round+0x96C sub-index={subIndex} sub+0xB0={subB0}, sub+0x5c={sub5c}, "
             + $"party-slot-0 resolves to=0x{partySlot0:X}, sub+0x40=0x{sub40:X}, sub+4=0x{sub4:X}, "

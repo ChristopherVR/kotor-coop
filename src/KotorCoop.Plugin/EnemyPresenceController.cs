@@ -300,6 +300,52 @@ internal sealed unsafe class EnemyPresenceController(SharedBlockView block)
     /// fighting and every forwarded point is this player's to take.</summary>
     private static readonly long EngagedFreshTicks = TimeSpan.FromSeconds(1).Ticks;
 
+    // ---- ROUND 52: ground-truth diagnostic support for PhantomHitHook.OnDamage. Nothing
+    // below this point changes what gets driven or absorbed — it only lets the damage hook
+    // (which cannot call DriveOne or read this controller's instance fields directly)
+    // classify an attacker id it sees land on the LOCAL PC. See
+    // docs/research/shared-state-audit.md §2, round 52.
+
+    /// <summary>Owner-space id of the ONE creature <see cref="StartLocalFight"/> most
+    /// recently armed, mirrored into a static field every frame right where
+    /// <c>block.LocalCombatExcludedId</c> already publishes the same value — see the
+    /// <c>OnFrame</c> call site. 0 when nothing is currently fighting locally.</summary>
+    private static uint _locallyFightingIdShared;
+
+    /// <summary>Owner-space ids this instance actually drove (placed, claimed, permitted to
+    /// attack) on the most recent pass — the general "driven/mirrored census creature" set,
+    /// broader than <see cref="IsLocallyEngaged"/> (which also requires proximity) and
+    /// broader than <see cref="_locallyFightingIdShared"/> (which is at most one id).
+    /// Populated only at DriveOne's genuine "driven this frame" exit, not its early-return
+    /// skips. Frame thread only.</summary>
+    private static readonly uint[] DrivenOwnerId = new uint[SharedBlock.EnemyCapacity];
+    private static int _drivenCount;
+
+    /// <summary>Whether <paramref name="ownerObjectId"/> is the exact creature currently
+    /// pulled out of the census to fight the local player for real.</summary>
+    public static bool IsLocallyFightingCreature(uint ownerObjectId) =>
+        ownerObjectId != 0 && ownerObjectId == _locallyFightingIdShared;
+
+    /// <summary>Whether <paramref name="ownerObjectId"/> was one of the enemies this
+    /// instance mirrored on the most recent pass, regardless of engagement/proximity.</summary>
+    public static bool IsDrivenCensusCreature(uint ownerObjectId)
+    {
+        if (ownerObjectId is 0 or Odyssey.ObjectInvalid)
+        {
+            return false;
+        }
+
+        for (int i = 0; i < _drivenCount; i++)
+        {
+            if (DrivenOwnerId[i] == ownerObjectId)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     // ---- ROUND 39: the actual local_combat mechanism, built from what rounds 9-38 proved
     // works (excluded from the census entirely, script-fired) rather than what the original
     // design guessed would work (QueueAttackAction, proven a permanent no-op — see
@@ -393,6 +439,10 @@ internal sealed unsafe class EnemyPresenceController(SharedBlockView block)
         // census by coincidence of numeric id reuse.
         _locallyFightingId = 0;
         block.LocalCombatExcludedId = 0;
+
+        // ROUND 52: same reason, for the ground-truth diagnostic's own static mirrors.
+        _locallyFightingIdShared = 0;
+        _drivenCount = 0;
     }
 
     public void OnFrame()
@@ -405,6 +455,11 @@ internal sealed unsafe class EnemyPresenceController(SharedBlockView block)
         // contribution (the excluded creature's id, re-added every frame it is still a real
         // fight) is not immediately wiped by a reset that used to run much later.
         _engagedCount = 0;
+
+        // ROUND 52: same reset shape for the ground-truth diagnostic's "driven this pass"
+        // set — rebuilt from scratch every frame so a creature that stops being mirrored
+        // stops being reported as one on the very next pass.
+        _drivenCount = 0;
 
         // ROUND 39: ahead of every early return below, on purpose. A conversation opening,
         // the session command changing, or this controller being disabled mid-fight must
@@ -420,6 +475,10 @@ internal sealed unsafe class EnemyPresenceController(SharedBlockView block)
         nint player = Odyssey.GetPlayerCreaturePointer();
         MaintainLocalFight(now, player);
         block.LocalCombatExcludedId = _locallyFightingId;
+
+        // ROUND 52: mirrored into the static field PhantomHitHook.OnDamage reads to
+        // recognise "the currently locally-fighting creature" for the ground-truth log.
+        _locallyFightingIdShared = _locallyFightingId;
 
         if (block.Command != SharedBlock.CommandSpawnAndDrive)
         {
@@ -803,6 +862,15 @@ internal sealed unsafe class EnemyPresenceController(SharedBlockView block)
                 Odyssey.PermitAttacking(creature);
                 StartLocalFight(enemy.ObjectId, creature, now, player);
             }
+        }
+
+        // ROUND 52: this is the genuine "driven this frame" exit — every early return above
+        // (still-excluded, dead, unresolvable, a phantom-id collision, the diag-undriven id)
+        // skips this line on purpose, so the ground-truth diagnostic's "driven/mirrored
+        // census creature" classification only ever names an id this pass actually placed.
+        if (_drivenCount < DrivenOwnerId.Length)
+        {
+            DrivenOwnerId[_drivenCount++] = enemy.ObjectId;
         }
 
         return true;

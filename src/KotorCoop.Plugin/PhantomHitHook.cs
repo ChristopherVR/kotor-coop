@@ -121,6 +121,26 @@ internal static unsafe class PhantomHitHook
 
     private static bool _installed;
 
+    // ---- ROUND 52: ground-truth diagnostic — every damage event landing on the LOCAL PC,
+    // named by attacker id, so no future round has to trust the "is fight action" proxy
+    // round 51 found does not detect success even when a real hit lands (0/6000 sampled
+    // frames across three trials where the player's own HP demonstrably fell). Logging
+    // only: never suppresses or redirects the engine's own damage application below. See
+    // docs/research/shared-state-audit.md §2, round 52.
+
+    /// <summary>Refreshed every frame from PluginHost's own player-pointer read (never
+    /// resolved inside this hook — see the "no engine calls" rule in the class doc above).
+    /// 0 when no world is up.</summary>
+    private static uint _localPlayerId;
+
+    private const int LocalHitLogSlots = 8;
+    private static readonly uint[] _localHitLoggedAttacker = new uint[LocalHitLogSlots];
+    private static readonly long[] _localHitLoggedAtMs = new long[LocalHitLogSlots];
+
+    /// <summary>Tells the hook which object id is the local PC, so <see cref="OnDamage"/>
+    /// can recognise a hit landing on it without an engine call. MAIN THREAD, once a frame.</summary>
+    public static void WatchLocalPlayer(uint playerId) => _localPlayerId = playerId;
+
     /// <summary>Starts (or stops, with id 0) watching the phantom in a slot. Counters are
     /// kept across a re-register of the same id so a respawned body does not replay damage
     /// the peer has already taken.</summary>
@@ -325,6 +345,15 @@ internal static unsafe class PhantomHitHook
 
             uint targetId = *(uint*)(target + ObjId);
 
+            // ROUND 52 GROUND-TRUTH DIAGNOSTIC. Independent of the phantom/dealt bookkeeping
+            // below — this is the direct answer to "did a hit land on the actual local PC",
+            // read off the engine's own damage choke point rather than the action-queue head
+            // type round 9-51 relied on.
+            if (_localPlayerId != 0 && targetId == _localPlayerId)
+            {
+                LogLocalHitGroundTruth(effect);
+            }
+
             int slot = -1;
             for (int i = 0; i < SharedBlock.SlotCapacity; i++)
             {
@@ -381,6 +410,83 @@ internal static unsafe class PhantomHitHook
         {
             // Never let a managed fault unwind into the engine's damage application.
         }
+    }
+
+    /// <summary>
+    /// ROUND 52. Logs one line per real hit landing on the local PC, naming the attacker and
+    /// classifying it — the ground-truth read this investigation has been missing since
+    /// round 9. Read-only: this never influences the engine's own damage application, which
+    /// the stub always resumes into regardless of anything this method does.
+    ///
+    /// The forwarded-damage applier is recognised through <see cref="SuppressDealt"/> rather
+    /// than the effect's own creator_id: <c>IncomingDamageController</c> dispatches its
+    /// forwarded apply through <c>Odyssey.ApplyDamageEffect</c>, which is a VM-level
+    /// EffectDamage/ApplyEffectToObject call scoped to the implementer's own script context,
+    /// not to the original remote attacker — so the resulting effect's creator_id would name
+    /// whatever that context is, not the id the network channel actually attributes the hit
+    /// to (<c>block.IncomingDamageAttacker</c>, logged separately by
+    /// <c>IncomingDamageController</c> itself). <see cref="SuppressDealt"/> is already set
+    /// around every call site of <c>Odyssey.ApplyDamageEffect</c> for an unrelated reason
+    /// (round 39's self-feeding-ledger fix); of those call sites, only
+    /// <c>IncomingDamageController</c>'s ever targets the LOCAL PLAYER, so seeing it set here
+    /// — where the target is already known to be the local PC — identifies the applier
+    /// unambiguously without adding a second flag.
+    /// </summary>
+    private static void LogLocalHitGroundTruth(nint effect)
+    {
+        uint attacker = *(uint*)(effect + EffectCreator);
+        int total = ReadTotal(effect, breakdown: false);
+        if (total <= 0 || !ShouldLogLocalHit(attacker))
+        {
+            return;
+        }
+
+        string kind = SuppressDealt
+            ? "forwarded-damage applier (IncomingDamageController's own EffectDamage apply)"
+            : EnemyPresenceController.IsLocallyFightingCreature(attacker)
+                ? "the currently locally-fighting creature (StartLocalFight's own id)"
+                : EnemyPresenceController.IsDrivenCensusCreature(attacker)
+                    ? "a driven/mirrored census creature, not the one currently fighting locally"
+                    : IsWatchedPhantom(attacker)
+                        ? "a watched phantom id (unexpected as an attacker on the local PC)"
+                        : "unrecognized attacker id (not driven, not a phantom, not our own apply)";
+
+        PluginHost.Log(
+            $"combat ground-truth: local PC took {total} damage, attacker=0x{attacker:X} ({kind})");
+    }
+
+    /// <summary>Per-attacker, per-second edge limiter for <see cref="LogLocalHitGroundTruth"/>
+    /// — a small fixed table (no allocation, no dictionary) rather than a per-frame log for
+    /// the duration of a fight. Evicts the least-recently-logged slot when full.</summary>
+    private static bool ShouldLogLocalHit(uint attacker)
+    {
+        long now = Environment.TickCount64;
+        int oldest = 0;
+        long oldestAt = long.MaxValue;
+
+        for (int i = 0; i < LocalHitLogSlots; i++)
+        {
+            if (_localHitLoggedAttacker[i] == attacker && _localHitLoggedAtMs[i] != 0)
+            {
+                if (now - _localHitLoggedAtMs[i] < 1000)
+                {
+                    return false;
+                }
+
+                _localHitLoggedAtMs[i] = now;
+                return true;
+            }
+
+            if (_localHitLoggedAtMs[i] < oldestAt)
+            {
+                oldestAt = _localHitLoggedAtMs[i];
+                oldest = i;
+            }
+        }
+
+        _localHitLoggedAttacker[oldest] = attacker;
+        _localHitLoggedAtMs[oldest] = now;
+        return true;
     }
 
     /// <summary>

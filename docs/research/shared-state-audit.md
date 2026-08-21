@@ -46,7 +46,106 @@ MIRRORS — driven puppets, not creatures its own AI is fighting — so the clie
 genuinely never enters combat. Forcing `+0x4E0` on the client would be a lie the engine
 recomputes away, and combat state gates round timing and AI.
 
-### Status as of round 51 (2026-08-21) — read this first; supersedes every status note below it
+### Status as of round 52 (2026-08-21) — read this first; supersedes every status note below it
+
+**PROVEN. `local_combat`'s own client-side mechanism lands real hits on the local player,
+in a live two-instance session, correctly distinguished from and never double-counted with
+the pre-existing forwarded-damage channel.** Round 51 left this genuinely open: a hit was
+observed with a session live, but the standing forwarded-damage channel (the host's own
+unmirrored copy fighting the client's phantom) was quantitatively sufficient to explain it
+alone, so round 51 could not say whether `local_combat` contributed anything once a session
+was up. Round 52 built a ground-truth instrument that answers this directly instead of
+inferring it from HP alone: a log line fires on EVERY damage event the engine's own damage
+choke point (`CSWSEffectListHandler::OnApplyDamage`, the same hook `PhantomHitHook` already
+had installed) sees land on the LOCAL PC, naming the attacker id and classifying it as the
+creature currently excluded to fight locally, a normally driven/mirrored census creature, or
+`IncomingDamageController`'s own forwarded-damage apply (recognised via the `SuppressDealt`
+flag already set around every `Odyssey.ApplyDamageEffect` call, not via the effect's own
+creator_id — see `PhantomHitHook.LogLocalHitGroundTruth`'s doc comment for why creator_id
+would have been misleading here).
+
+Live, on the automatic trigger, in a real session (`tools/demo.ps1`, END_M01AA, the same
+`n_sithsoldier004` pair rounds 49-51 used, `0x3B`/`0x38`), with the client's own player walked
+into `local_combat_range` and then ordered to engage (`blockpoke.ps1 attack 0x7FFFFFFF 0x3B`
+— clicking is not available; this is the engagement nudge, not a code change) rather than
+manually firing the creature's own script:
+
+    [19:45:14.933] combat: absorbed 2 forwarded damage in total, attributed to mirrored
+      enemies we are driving (last attacker 0x3B); this engine says in-combat=True
+    [19:45:18.811] combat ground-truth: local PC took 2 damage, attacker=0x3B (the currently
+      locally-fighting creature (StartLocalFight's own id))
+
+The absorbed line is the standing forwarded channel correctly standing down — no
+`ApplyDamageEffect` call happens for an absorb, so it can never trigger the ground-truth
+hook. The line 4 seconds later is a SEPARATE, genuinely-fired engine damage event: target is
+the local PC, attacker (the effect's own creator_id) is `0x3B`, and `SuppressDealt` was
+false — this player's own engine actually processed `0x3B`'s native combat round and applied
+real damage to the local PC, through the exact mechanism `local_combat` exists to prove. This
+repeated 21 times over the ~6-minute session (`grep -c "combat ground-truth.*0x3[B8]" ` on the
+attacker classifications "the currently locally-fighting creature" / "a driven/mirrored
+census creature" / the rare "unrecognized attacker id" transient at a rejoin boundary — see
+below), against BOTH creatures in the pair (`0x3B` and, once ordered to engage it too, `0x38`
+also landed real local hits), and the client's own HP fell exactly in step: `12/12` baseline,
+`8/12` after the first several hits (4 points, matching 2 ground-truth local hits of 2 each,
+zero applied-forwarded lines in between), then floored at the area's own min-1-hp pin,
+`1/12`, after roughly a dozen more (`combat: this player cannot be downed (took 4 on 1 hp and
+is on 1)` fired once the floor engaged, for a forwarded-and-applied hit — see below — and the
+same floor held the player at `1/12` through every subsequent hit of either kind for the rest
+of the session; the player never actually died despite dozens of real hits landing, because
+the Endar Spire command deck's own min-1-hp scene pin — not `local_combat`, not
+`IncomingDamageController` — is what stopped it).
+
+**Zero `combat: took` (forwarded-and-applied) lines occurred while `0x3B` was the actively
+excluded, locally-fighting creature** — every point of damage this player took from `0x3B`
+during its own exclusion window came from the ground-truth-confirmed local hit, and the
+forwarded stream for that same attacker was absorbed instead (`grep`-verified across the full
+session log: the only `combat: took` lines that exist are all tagged with `0x38` as attacker
+at moments `0x38`, not `0x3B`, held the local-fight slot — i.e. the OTHER creature's forwarded
+damage, which is not licensed to be absorbed while a DIFFERENT creature is the one being
+fought locally, exactly as `IsLocallyEngaged`'s single-id design intends). That is the
+reverse-safety check (task instruction 3) passing live: the host's copy does not double-hit,
+and the client's HP total matches exactly one stream per attacker per window, verified for
+both directions —
+
+    [19:50:00.233] combat ground-truth: local PC took 4 damage, attacker=0x2C
+      (forwarded-damage applier (IncomingDamageController's own EffectDamage apply))
+    [19:50:00.234] combat: took 4 damage from a hit on our phantom (attacker 0x38)
+    [19:50:00.893] combat ground-truth: local PC took 2 damage, attacker=0x3B (the currently
+      locally-fighting creature (StartLocalFight's own id))
+
+— in the same second, `0x38`'s forwarded hit correctly APPLIED (it was not the locally-fighting
+creature at that moment, so no absorb was licensed) while `0x3B`'s hit correctly landed as a
+genuine local hit, with neither stream touching the other's damage.
+
+**One honest gap, not a safety issue.** Around a fight's rejoin boundary (the frame
+`MaintainLocalFight` clears `_locallyFightingId` and the creature re-enters normal mirroring)
+the ground-truth classifier occasionally read "unrecognized attacker id (not driven, not a
+phantom, not our own apply))" for a few seconds instead of "a driven/mirrored census
+creature" — `SuppressDealt` was still reliably false every time (so it was never
+misclassified as the forwarded applier, which is the one distinction that actually matters
+for the proof), but `EnemyPresenceController.IsDrivenCensusCreature`'s per-frame set did not
+always contain the id during that window; root cause not chased (out of scope for this
+round — the classification's ONE safety-relevant bit, forwarded-vs-not, was never wrong in
+any of the ~26 real damage events this round observed). Noted here rather than hidden.
+
+**Verdict: PROVEN, live, unconfounded.** `local_combat`'s own exclusion-and-script-fire
+mechanism genuinely lands damage on the local player through the client's own engine, in a
+real session, with the pre-existing forwarded channel correctly standing down for exactly the
+attacker being fought locally and continuing to apply normally for everything else. Natural
+aggro did not occur in this test (consistent with round 51's own passive-wait control): the
+player had to be walked into `local_combat_range` and then ordered to engage
+(`attack 0x7FFFFFFF <id>`) rather than relying on the creature noticing the player on its
+own — this save's `n_sithsoldier004` pair simply does not have an aggro trigger that fires
+from proximity/heartbeat alone within the windows this investigation has tested. And this
+area's own min-1-hp scene pin means no fight run on END_M01AA's command deck can currently
+demonstrate real lethality — the player floors at 1 and stays there regardless of how much
+real damage keeps landing, which is correct area behaviour but means "can this actually kill
+someone" remains untested by every round run in this specific room, this one included. See
+round 52 at the end of this section for the instrumentation added
+(`PhantomHitHook.LogLocalHitGroundTruth`, `EnemyPresenceController.IsLocallyFightingCreature`/
+`IsDrivenCensusCreature`) and the full log excerpts.
+
+### Status as of round 51 (2026-08-21) — superseded by round 52 above; kept for the trail
 
 **The single biggest finding in 51 rounds: the ground-truth check was never being read.** Every
 round from 9 through 50 used `is fight action: True` (a specific head-action code sampled from
@@ -4191,6 +4290,158 @@ instrumentation the codebase already ships (`firescript`, `ArmFireScriptWatch`, 
 both succeeded, 0 warnings, 0 errors. Rig torn down (`demo.ps1 -Stop`) and confirmed clean
 (`Get-Process swkotor,KotorCoop.Agent` returned none), `auto_start_agent` restored to `1` in both
 installs.
+
+### Round 52 (2026-08-21) — the ground-truth instrument, live, in a real session: PROVEN
+
+Round 51 left one thing genuinely open: whether `local_combat`'s own client-side mechanism
+contributes a real hit once a live session's automatic exclusion and the standing
+forwarded-damage channel are BOTH running on the same creature — its own C3 trial showed a
+hit, but the forwarding channel alone was quantitatively sufficient to explain it, so C3
+could not distinguish the two. It also found the `is fight action` diagnostic every round
+1-51 leaned on cannot be trusted (0/6000 sampled frames even on a proven-successful hit).
+This round built the instrument round 51 asked for and ran the confound-controlled trial.
+
+**Part 1: the ground-truth instrument.** `PhantomHitHook.OnDamage` already hooks the
+engine's one damage choke point (`CSWSEffectListHandler::OnApplyDamage`) for every damage
+event in the game; it did not yet look at hits landing on the LOCAL PC specifically. Added
+(logging only — never suppresses or redirects the engine's own application):
+
+- `PhantomHitHook.WatchLocalPlayer(uint)` — called once a frame from `PluginHost.OnFrame`,
+  reusing the same fresh `Odyssey.GetPlayerCreaturePointer()`/id read that already feeds
+  `PublishEnginePlayer`, so the hook needs no engine call of its own (the class's own "no
+  engine calls inside the hook" rule stays intact).
+- `PhantomHitHook.LogLocalHitGroundTruth` — when the damage target is the watched local
+  player id, reads the attacker id and total off the effect (the same `ReadTotal` the
+  phantom path already uses) and classifies the attacker, then logs one line, edge-limited
+  to once per attacker per second (`ShouldLogLocalHit`, a small fixed 8-slot table, no
+  allocation, no dictionary — same style as the rest of the class).
+- Classification order: `PhantomHitHook.SuppressDealt` (already set around every
+  `Odyssey.ApplyDamageEffect` call, for an unrelated reason — round 39's self-feeding-ledger
+  fix) identifies "this player's own instance applied this, not the engine reacting to a
+  real local swing" — the ONLY one of `ApplyDamageEffect`'s four call sites that ever targets
+  the local player is `IncomingDamageController`'s forwarded-apply, so seeing the flag set
+  here is unambiguous without a second flag. Otherwise: `EnemyPresenceController.
+  IsLocallyFightingCreature` (a new static mirror of `_locallyFightingId`, published each
+  frame at the same point `block.LocalCombatExcludedId` already is), then
+  `IsDrivenCensusCreature` (a new static per-frame set of every id `DriveOne` actually drove
+  this pass, populated only at its genuine "driven" exit — none of the early-return skips),
+  then `PhantomHitHook.IsWatchedPhantom` (already existed), else "unrecognized". Effect
+  creator_id was deliberately NOT used to identify the forwarded applier — `ApplyDamageEffect`
+  dispatches through the VM's own script context, not scoped to the original remote attacker,
+  so its creator_id would have named the wrong thing (confirmed live this round: forwarded
+  applies logged creator_id `0x2C`, `0x20`, `0x7`, `0x109` — none of them `0x38`, the real
+  attacker `IncomingDamageController`'s own line names correctly from the wire).
+
+**Part 2: the misleading diagnostic.** `Odyssey.TickFireScriptWatch`'s
+`(is fight action: {IsFightAction(headType)})` log fragment — the one every round 9-51 used
+as its sole "did a fight happen" signal — is deleted, not fixed: round 51's own disassembly
+found no evident correction (the head action reflects the action-QUEUE dispatch, RunActions;
+the real combat-round processing is a separate state machine, `StartCombatRound` and its
+maneuver-selection dispatch, that this field does not observe). The raw `headType` is still
+logged for whoever continues the `sub+0x5c` lead; the misleading interpretation is not. A
+doc-comment warning was added to `IsFightAction` itself (still functionally correct and kept
+for its original, narrower purpose inside `QueueAttackAction` — "don't stack a second queued
+attack behind one already at the head") pointing future readers at this round and round 51.
+
+**Part 3: the rig and the confound-controlled trial.** `tools/demo.ps1` cold start (both GOG
+installs, save slot 1, `END_M01AA`), `n_sithsoldier004` pair confirmed at the same ids rounds
+49-51 used (`0x3B` at `(47.56,60.54)`, `0x38` at `(43.96,62.92)`). Baseline `console 'where'`:
+`hp 12/12`. The client's player was teleported to a staging point 9.4 units away (not
+point-blank — `console 'tp 40.0 55.0 -1.3'`) and then walked the ordinary way into
+`local_combat_range` (`blockpoke.ps1 walk 46.5 60.0`, the engine's own move action) rather
+than teleported point-blank. A 30s passive-wait control at this range produced zero natural
+aggro (consistent with round 51's own control) — no attempt was made to disguise this: the
+soldiers never noticed the player on their own within any window this investigation has ever
+tested. `local_combat`'s own AUTOMATIC proximity trigger fired the moment the player entered
+`local_combat_range` (20 units default — no manual firescript needed this round; the ordinary
+mechanism triggered itself). Later in the session, to test mutual combat and a second
+creature, the client's own player was ordered to engage with the engine's real `ActionAttack`
+(`blockpoke.ps1 attack 0x7FFFFFFF 0x3B` — clicking is not available, so this cheat path is
+the stand-in for a mouse click, not a script-firing shortcut; the player visibly walked from
+its staging point to melee range as a result, confirming a genuine `ActionAttack` was queued).
+
+The evidence (verbatim, client `kotorcoop-plugin.log`, this session only):
+
+    [19:44:59.155] local combat probe: 0x3B creatureFaction=1 playerFaction=0 rep(creature,player)=2
+      rep(player,creature)=2 (2=hostile,1=friendly,0=neutral) CreMovePermitted=0xFFFF plot=False
+      min1hp=True hp=12/12 bisectMask=0x0
+    [19:44:59.155] local combat: 0x3B pulled out of the census to fight for real (timeout 25s)
+    [19:45:14.933] combat: absorbed 2 forwarded damage in total, attributed to mirrored enemies
+      we are driving (last attacker 0x3B); this engine says in-combat=True
+    [19:45:18.811] combat ground-truth: local PC took 2 damage, attacker=0x3B (the currently
+      locally-fighting creature (StartLocalFight's own id))
+    [19:45:24.156] local combat: 0x3B fight ended (timed out), rejoining the census
+    ... (0x3B/0x38 continued cycling cleanly every 25s for the rest of the session — 8 more
+    clean "fight ended (timed out), rejoining the census" / "pulled out of the census to fight
+    for real" pairs, confirming re-inclusion works and the timeout safety net fires reliably) ...
+    [19:50:00.233] combat ground-truth: local PC took 4 damage, attacker=0x2C (forwarded-damage
+      applier (IncomingDamageController's own EffectDamage apply))
+    [19:50:00.234] combat: took 4 damage from a hit on our phantom (attacker 0x38)
+    [19:50:00.234] combat: this player cannot be downed (took 4 on 1 hp and is on 1) — the
+      player carries min-1-hp, so damage floors at 1 hit point and no death path runs.
+    [19:50:00.893] combat ground-truth: local PC took 2 damage, attacker=0x3B (the currently
+      locally-fighting creature (StartLocalFight's own id))
+
+The client's own `console 'where'` HP tracked exactly: `12/12` baseline, `8/12` after the
+first four points of GENUINE local damage (two ground-truth hits of 2 each, zero
+`combat: took` lines in that window), `1/12` (the area's min-1-hp floor) after roughly a
+dozen more real hits from both `0x3B` and `0x38` — the player never actually died despite
+dozens of confirmed real hits landing over the ~6-minute session, because the floor holds,
+not because the damage was not real. 21 of the ~26 total damage events this round logged were
+genuine local hits (`SuppressDealt` false, attacker matching the currently-fighting or
+driven-census classification); the remaining ~5 were forwarded-and-applied hits from `0x38`
+while `0x38` was NOT the currently-excluded creature, each correctly paired with
+`IncomingDamageController`'s own `combat: took ... (attacker 0x38)` line. **Not one damage
+event this round observed was misclassified between "genuinely local" and "the forwarded
+applier"** — the one distinction that actually matters for the double-counting question.
+
+**Reverse safety (task instruction 3), confirmed live in both directions.** While `0x3B` held
+the local-fight slot, its forwarded damage was absorbed, not applied (`combat: absorbed 2
+forwarded damage ... last attacker 0x3B`) — the host's own copy of `0x3B` genuinely dealt
+that same 2 damage to the client's phantom on the HOST's engine (host log, same timestamp
+window: `[19:45:14.726] hit breakdown: ... [12]=2 ... [14]=2`), and the client correctly
+declined to double-apply it. In the same second `0x38`'s forwarded damage — `0x38` was not
+the locally-fighting creature at that moment — correctly APPLIED instead of silently
+vanishing, confirming the absorb is attributable per-attacker, not a blanket standdown. Zero
+`combat: took` lines exist anywhere in this session's log for attacker `0x3B` while `0x3B`
+held the exclusion; every `combat: took` line in the whole session names `0x38`, and only
+during windows `0x38` itself was not the excluded one.
+
+**One honest gap.** Around a fight's rejoin boundary the "driven/mirrored census creature"
+classification occasionally read "unrecognized attacker id" instead for a few seconds
+(`EnemyPresenceController.IsDrivenCensusCreature`'s per-frame set did not always contain the
+id right at the handoff) — `SuppressDealt` was still correctly false every time, so the one
+safety-relevant bit was never wrong, only the finer sub-classification. Root cause not
+chased; noted rather than hidden, and does not affect the verdict below.
+
+**Verdict.** `local_combat`'s own exclusion-and-script-fire mechanism is now PROVEN, live, in
+a real two-instance session, with the automatic trigger, against a genuinely hostile
+GIT-placed creature, to land real, repeated, independently-verified damage on the local
+player through the client's own engine — correctly distinguished from, and never
+double-counted with, the pre-existing forwarded-damage channel. What remains unproven: (1)
+natural aggro — this save's `n_sithsoldier004` pair has never been observed to notice the
+player without either a manual script fire or an ordered `ActionAttack`, in any round's
+passive-wait control including this one; (2) real lethality — END_M01AA's command-deck
+min-1-hp scene pin means no test run in this specific room can show a player actually go
+down or die from either damage source, so "can this really kill someone" is still untested by
+every round to date, this one included; (3) the client killing an enemy outright — this round
+ran the fight to conclusion via the timeout/disengage/re-include cycle (repeated 9 times
+cleanly) rather than a kill, which the task's own instructions accept as an equally valid
+conclusion.
+
+**Safety.** No permanent exclusion in any cycle — both `0x3B` and `0x38` cycled cleanly
+through repeated timeouts and rejoined the census correctly throughout (9 clean cycles
+logged). No watchdog trips. No materialised stand-in ever created (`n_sithsoldier004` is
+GIT-identical throughout). Both creatures remained alive at session end. The client's HP
+floor behaved exactly as the area's own documented min-1-hp pin predicts, for both damage
+sources.
+
+Build clean (`dotnet build KotorCoop.slnx`: 0 warnings, 0 errors; `src\KotorCoop.Plugin\
+build.ps1 -Install -GameDir "C:\GOG Games\Star Wars KOTOR (GOG)"` and again with `-GameDir
+"D:\Games\swkotor-gog-p2"`: both succeeded, 0 warnings, 0 errors). Full suite
+`dotnet test tests/KotorCoop.Tests`: **1192/1192**, no flakes. Rig torn down (`demo.ps1
+-Stop`) and confirmed clean (`Get-Process swkotor,KotorCoop.Agent` returned none),
+`auto_start_agent` restored to `1` in both installs.
 
 ## 3. A client's XP is actively erased
 

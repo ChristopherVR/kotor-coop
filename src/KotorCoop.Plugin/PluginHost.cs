@@ -557,6 +557,7 @@ internal static unsafe class PluginHost
 
             // The agent must not adopt a pointer into a world that no longer exists.
             _view?.PublishEnginePlayer(0, 0);
+            PhantomHitHook.WatchLocalPlayer(0);
             return;
         }
 
@@ -565,9 +566,13 @@ internal static unsafe class PluginHost
         if (_view is { } playerView)
         {
             nint enginePlayer = Odyssey.GetPlayerCreaturePointer();
-            playerView.PublishEnginePlayer(
-                enginePlayer,
-                enginePlayer != 0 ? *(uint*)(enginePlayer + 0x04) : 0);
+            uint enginePlayerId = enginePlayer != 0 ? *(uint*)(enginePlayer + 0x04) : 0;
+            playerView.PublishEnginePlayer(enginePlayer, enginePlayerId);
+
+            // ROUND 52: same fresh read, handed to the damage hook so it can recognise a hit
+            // landing on the LOCAL PC without an engine call inside the hook itself. See
+            // PhantomHitHook.WatchLocalPlayer's own doc comment.
+            PhantomHitHook.WatchLocalPlayer(enginePlayerId);
         }
 
         if (epoch != _epoch)
