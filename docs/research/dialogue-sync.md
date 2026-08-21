@@ -961,3 +961,64 @@ to resolve the loop within one cycle every time it was tried, where the UI-only 
 See `dialogue-join-latency.md` for the full disassembly, the before/after numbers in both
 ownership directions, and what remains unverified (a genuine mouse-driven click's own walk, and
 the no-LOS case).
+
+## Live pass (2026-08-22): the trigger/arrival-started conversation, closed
+
+The 2026-08-21 pass above explicitly left this open ("the loaded save is already past that
+scripted opening... still NEEDS-LIVE"). This pass reached it a different way: `warp end_m01ab`
+on both instances (`dialogue_join_teleport=1`, `trigger_relay=1`, `liveness_sync=1`, `effect_sync=1`
+— the full flag set this session's four-check task asked for), arriving both players together at
+the module's own `from_01a` waypoint, which is what `trigger-relay.md`'s 2026-08-21 live pass
+already identified as sitting almost exactly on `end_trig_carth02`'s polygon.
+
+**What actually started the conversation was NOT `end_trig_carth02` — it was the module's own
+built-in arrival cutscene, and the trigger fired separately, afterward.** Both plugin logs:
+
+```
+HOST    [02:27:37.845] dialogue: engine reached StartDialog (1 so far)
+CLIENT  [02:27:39.294] dialogue: engine reached StartDialog (1 so far)
+CLIENT  [02:27:40.754] dialogue: the engine started the same conversation here; adopting it to follow
+CLIENT  [02:27:40.757] dialogue: followed conversation delivered content 0 ms after opening (0 ms after the request)
+CLIENT  [02:27:40.757] dialogue: followed the owner 3 -> 6
+CLIENT  [02:27:44.546] dialogue: followed the owner 6 -> 7
+CLIENT  [02:27:52.865] triggers: standing in 1 generic trigger(s), first 0x26 - asking the enemy owner to run its OnEnter too
+HOST    [02:27:53.892] triggers: fired OnEnter of 0x26 for peer 2 (phantom 0x6F)
+CLIENT  [02:27:54.358] dialogue: the owner ended the conversation; closing
+```
+
+**This is a genuine double-fire** — both engines independently reached `StartDialog` on the same
+arrival cutscene, 1.449 s apart, exactly the risk `trigger-relay.md` §3 and §7 item 5 name (a
+trigger/cutscene that both players' own real presence can reach natively). **The one-conversation
+lock and adopt path caught it cleanly**: rather than running its own independent copy, the client's
+engine recognised its own `StartDialog` as the SAME conversation the owner already had open and
+switched to following it (`"the engine started the same conversation here; adopting it to
+follow"`) — the explicit log line this file's §"adopt" section describes, now confirmed live for
+an ARRIVAL-triggered double-start, not just the simultaneous-click case §"Live A/B" above already
+covered. **Node agreement: exact.** The follower's own node column tracked the owner's in real
+time — 0 ms content latency on adoption, then `3 -> 6` and `6 -> 7` each landing the same pump the
+owner's own advance did (no drift, no lag beyond the ordinary per-tick propagation this file's
+other passes already measured). **The owner ending the conversation closed the spectator's UI**:
+confirmed working end to end (`"the owner ended the conversation; closing"`), but — same gap the
+2026-08-21 pass already flagged — a precise millisecond figure remains unmeasured; the log gives
+no independent HOST-side "ended" timestamp to diff against (the client infers the close from the
+owner's published state going idle, not from a discrete host log line), and this pass did not
+build a tighter polling harness to isolate it. **Still NEEDS-LIVE for the ms figure specifically**,
+carried forward from the prior pass, now for a second scenario shape.
+
+**`dialogue_join_teleport` correctly did not fire.** No `teleport` line in either plugin log —
+both players were already standing together at the shared arrival waypoint, so the far-joiner
+snap this flag exists for was never needed. This is a useful negative control: the flag is
+conditional on actual distance, not a blanket snap on every join/adopt.
+
+**`end_trig_carth02` itself, once the relay fired it ~16 s later, produced no new observable
+dialogue** — the SAME finding `trigger-relay.md`'s own 2026-08-21 pass already recorded for this
+exact trigger ("no visible consequence was found... consistent with `k_pend_carth_t02` being one
+of the scripts whose own idempotence absorbs a duplicate call for free"). Reproduced, not new.
+
+**Net effect on the 2026-08-21 pass's own open item**: "a trigger/cutscene-started conversation"
+is no longer purely inferred from `BeginConversation`/`StartDialog` sharing one entry point — it
+has now been observed live, including the double-fire case the static reasoning could only
+gesture at. What remains open is narrower: the owner-ends-to-spectator-closes latency in
+milliseconds, and a case where the trigger's OWN script (rather than a coincident arrival
+cutscene) is unambiguously what starts a NEW conversation nobody's engine would have started
+natively.

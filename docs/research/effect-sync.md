@@ -420,3 +420,19 @@ parsing every `mov dword [table+offset], handler` instruction `InitializeEffects
   needed before Knockdown can get a client-side apply constructor (§4); the whole live-fire
   checklist this implies is carried into the plugin/agent code as `NEEDS-LIVE` comments at the
   exact call sites they gate.
+
+## Live pass (2026-08-22): not reached this session
+
+`effect_sync=1` was set on both GOG installs as part of a four-check live-testing task (this
+channel's smoke test was explicitly marked optional — "if time allows" — behind three other
+checks with a harder bar). No hostile with a captured allowlist effect (Knockdown, Slow, Force
+push, Whirlwind, Frightened, Choke, the droid-scoped "Stun") was engaged this session: the modules
+actually visited (`END_M01AA`, `END_M01AB`, `tat_m20aa`'s Sand People, all melee/blaster
+combatants) do not use Force powers, and no console verb exists to inject an effect synthetically
+(`PeerEffectController` has no test hook analogous to `dlgprobe.ps1`'s `OffTestTag`/`OffTestSerial`
+pair). Time ran out before a Force-using module could be reached. `effect_sync` stays OFF by
+default, unchanged — this pass neither confirms nor regresses anything in this document; it is
+simply an attempt that did not get far enough to produce evidence either way. A future pass
+should either build a test hook (mirroring the dialogue one) or specifically route through a
+module with an early Force-using hostile (a Dark Jedi encounter, not reached in this game's
+opening hours) before spending rig time on this again.

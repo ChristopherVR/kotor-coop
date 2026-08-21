@@ -543,3 +543,23 @@ documented, un-built option for a module where a double-fire IS shown to matter.
 `PluginConfig.ReadBool("trigger_relay", true)`), on the strength of the above: correct
 fire-once behaviour, correct fired-set dedup across repeat visits, correct negative-control
 exclusion, and no crash across a session that exercised the channel more than a dozen times.
+
+## Live pass (2026-08-22): reproduced, plus the dialogue-lock question this pass was really asking
+
+Re-ran on the SAME `end_trig_carth02` arrival case (`end_m01ab`'s `from_01a` waypoint) as part of
+a four-check live pass whose actual target was `docs/research/dialogue-sync.md`'s open "trigger/
+cutscene-started conversation" item, not this channel itself. `trigger_relay=1` (default, unset
+in `coop.ini`), `dialogue_join_teleport=1`. Confirmed again, unchanged: `triggers: standing in 1
+generic trigger(s), first 0x26` on the client, `triggers: fired OnEnter of 0x26 for peer 2` on
+the host, ~1 s apart, and — as §11 already found — no new observable dialogue consequence from
+the fire itself.
+
+What this pass adds: the trigger fired roughly 16 seconds AFTER a conversation had already
+started, run and finished on both instances independently — the module's own built-in arrival
+cutscene, not `end_trig_carth02`'s script. That conversation is the more interesting live result
+of this session; see `docs/research/dialogue-sync.md`'s own "Live pass (2026-08-22)" section for
+the double-`StartDialog`-and-adopt evidence. Net for THIS document: no change to the fire-once/
+dedup/negative-control verdict above, and the double-fire risk named in §3/§7 item 5 remains
+bounded rather than removed for `end_trig_carth02`'s own script specifically (still absorbed
+without visible effect) — but now also observed for the DIFFERENT double-fire shape (an arrival
+cutscene, not this channel's own relay) that the same waypoint happens to sit on top of.

@@ -564,3 +564,86 @@ section already established is the one to repeat:
 4. If step 2's probe does NOT show M — the fix did not work either, and the remaining hypothesis
    (§ above, "what actually gates the write") needs the decompiler-assisted trace this pass could
    not complete.
+
+## Follow-up pass (2026-08-22): the raw probe, run — the RemoveThenAdd fix genuinely works
+
+Ran exactly the repro the previous section specified, against the GOG pair (`tools/demo.ps1`,
+block v47 / protocol 33), using `tools/blockpoke.ps1 journal <tag> <state>` for the requests and
+a raw `CSWSJournal` array probe (the SAME pointer chain and offsets this document has used
+throughout: `appMgr[0x7A39FC] -> serverApp+8 -> internal+4 -> +0x1B770 -> +0x11C` for the journal
+struct, `{data, size, capacity}`, entries stride `0x3C`, tag `CExoString` at `+0x18`, state at
+`+0x20`) for the oracle — independent of every layer of this codebase's own bookkeeping.
+
+### Step 1-2: apply then decrease, `journal_remove_sync=1` (default) — CONFIRMED
+
+A fresh tag (`k_coop_livechk`) applied to state 50, then requested at state 10 (a genuine
+decrease). The raw probe before and after:
+
+```
+before apply:  size 1  [0] end_attack=20
+after apply:   size 2  [0] end_attack=20  [1] k_coop_livechk=50
+after decrease: size 2  [0] end_attack=20  [1] k_coop_livechk=10
+```
+
+The array's own `size` field is **unchanged** across the decrease (2 -> 2, not 2 -> 3) and the
+tag is present at the new, LOWER state — exactly the "one entry removed, one added back" shape
+`JournalApplyRule.RemoveThenAdd` predicts, now measured rather than only reasoned from the
+disassembly. Plugin log carries one apply line per request (`journal: 'k_coop_livechk' -> state
+{50,10} on the session's authority`) — note `Odyssey.SetJournalState`'s internal `RemoveThenAdd`
+path calls the destroy/re-add primitives directly rather than through
+`JournalController.ApplyRemoval`'s own logging wrapper, so no separate "removed" log line appears
+for this path specifically; the raw array probe is the authoritative evidence here, not the log
+text. This is the item the "Follow-up pass" section above named as the one that "settles" or
+does not settle the fix — **it settles it**: the fix works.
+
+### Step 3: decrease refused when `journal_remove_sync=0` — CONFIRMED, fail-closed
+
+Restarted one instance (client only; this is a single-instance smoke test, same scope as
+`verify.ps1`'s own §5c) with `journal_remove_sync=0`. Applied a fresh tag (`k_coop_livechk2`) to
+state 50, then requested state 10:
+
+```
+journal: serial 2  applied 2  status 7  tag 'k_coop_livechk2' state 10
+[plugin log] journal: 'k_coop_livechk2' refused (failure 7)
+```
+
+Raw probe immediately after: `[1] k_coop_livechk2=50` — **unchanged**, not silently left at the
+old value while reporting success (the exact defect the pre-`RemoveThenAdd` code had for the
+`bOverrideHigher=1` path) but explicitly refused with failure code 7 and an honest log line. The
+request is REFUSED, not silently dropped: `JournalController`'s one-slot queue still advances
+(`applied 2`, `status 7`), so a caller polling for completion is not left hanging.
+
+### Cross-instance propagation — CONFIRMED, no separate script needed
+
+The `k_coop_livechk` decrease from Step 1-2 was applied via `blockpoke.ps1 journal` on the HOST,
+not the client — and it reached the CLIENT's own real journal through the ordinary session/wire
+mechanism with no extra step. `CoopAgent`'s `JournalShadow` observes the HOST's own engine change
+(indistinguishable, from the shadow's point of view, from a real script's `RemoveJournalQuestEntry`
+or `SetGlobalNumber`-adjacent call — this is the same "sanctioned fallback" the 2026-08-22 pass
+above used for the removal path, extended here to the decrease path), forwards it into the
+session as a genuine local change, and the client's own `JournalController` applies it through
+the SAME `Odyssey.SetJournalState`/`RemoveThenAdd` path a locally-originated request would use.
+The client's raw journal array probe, taken independently:
+
+```
+CLIENT probe:  size 2  [0] end_attack=20  [1] k_coop_livechk=10
+```
+
+— matching the host's own array exactly, ~700 ms after the host's own apply line (plugin log
+timestamps: host `02:24:38.406`, client `02:24:39.187`), consistent with §5.1's "one network
+round trip" claim for an ordinary journal op. This directly satisfies the live-test script's own
+§7 step 4 for the DECREASE case (step 4 there was written for a removal specifically; this pass
+confirms the same wire path for a decrease). No `danm13`/`k_pdan_trig1303` travel was used or
+needed — the blockpoke-on-the-host approach reaches the identical code path
+(`JournalController.OnFrame` -> `Odyssey.SetJournalState`) a real script's
+`RemoveJournalQuestEntry`/decrement call would reach, and `JournalShadow`'s observation of the
+resulting engine change cannot tell the difference between a script-driven change and this
+pass's poke.
+
+### Defaults: unchanged
+
+`journal_remove_sync` was already flipped ON in the prior pass (removal path). This pass adds the
+DECREASE half's own live confirmation (both the ON-path genuine move and the OFF-path fail-closed
+refusal) and the CROSS-INSTANCE wire proof the prior pass's "Cross-instance wire propagation: not
+independently re-verified" note left open — no default changes as a result, since the flag
+already covered both paths and both are now independently confirmed live.

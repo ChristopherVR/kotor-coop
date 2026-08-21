@@ -430,3 +430,93 @@ mechanism — reconciling a creature the ordinary 32-slot census channel does NO
 was never actually exercised, because this module is too small to need it. That is a real,
 specific gap, not a vague "needs more testing"; the fix is a bigger module or a script-driven
 `DestroyObject`, both concrete next steps. Left OFF by default pending that.
+
+## Live pass (2026-08-22): tat_m20aa measured directly — same gap, now with hard numbers
+
+Task: re-run the three §7 scenarios specifically on Tatooine's Sand People territory
+(`tat_m20aa`), on the strength of `README.md`'s own note that an EARLIER, unrelated pass saw
+"the census ran at its full 32-creature cap" there. `liveness_sync=1` on both GOG installs,
+`warp tat_m20aa` on both. This pass adds direct memory evidence the earlier passes did not have.
+
+### The population, measured, not inferred
+
+`tools/creatures.ps1` (a raw `CSWSCreature` vtable scan, independent of every layer this
+codebase's own census/ghost-gate logic sits on top of) against the host: **53 raw hits, 32
+UNIQUE object ids** — the excess 53-32=21 are stale/duplicate memory copies left over from the
+module load, not real creatures (confirmed by cross-reference: the host's own agent log the same
+moment reads `census: gate: array 0x1C7E6DA8 confirmed 32 of 53, dropped 21` — the SAME 32-of-53
+split, independently reached by the ghost-gate's own engine-array confirmation, not just this
+raw scan). Of the 32 unique ids, one is the local PC (`0x7FFFFFFF`), leaving **31 actual
+NPCs/creatures** total in the loaded area — matching the `census` console command's own report
+of `OWNER 29 id(s)` (29 hostiles once `end_trask` and the peer's `coop_phantom` are excluded, per
+`ReadEnemies`'s own filters).
+
+**31 hostiles is still under the 32-slot cap.** Repositioning the host (`tp 60 120`, well outside
+the area the initial 31 were clustered in) and re-scanning produced the identical 32 unique ids —
+this module's population is a fixed placement, not a proximity-triggered spawn table with
+reinforcement waves; walking away does not grow it. `README.md`'s own "32-creature cap" line,
+re-read against this evidence, is now understood differently: it recorded population reaching
+exactly the cap (all 32 mirrored, nothing shed) in a PAST session's exploration/combat state, not
+a claim that this module reliably exceeds 32 concurrently. In THIS save, at this point in the
+module, it does not.
+
+### Why this closes off both the distance test AND changes what "disconnect + reconnect" proves
+
+With population ≤ cap, the ordinary 32-slot combat census (`ReadEnemies`, `CombatController`'s own
+channel) never sheds anyone by distance regardless of where either player stands — so a `slay` on
+any of the 31 is, by construction, never "out of census." Six more fresh kills were staged
+anyway (`0x1B`, `0x1D` connected; `0x20`, `0x23` while the client was disconnected) specifically
+to re-check whether the disconnect+reconnect path could isolate the channel a different way (the
+reasoning that a DEAD creature might be excluded from a fresh `EnemySnapshotPacket`, starving
+`CombatController` of anything to compare against on reconnect, independent of the 32-cap). It
+does not: `ReadEnemies` publishes dead creatures too (current hit points ≤ 0 is a valid, INCLUDED
+entry — this is how ordinary real-time death mirroring already worked before the liveness channel
+existed), so a fresh post-reconnect `EnemySnapshotPacket` still carries every one of the ≤31
+hostiles, dead or alive, and `CombatController` reaches the client with (or before) the liveness
+packet every time, exactly as it did while connected. Confirmed live: `combat: killed 0x1D on the
+owner's authority` (the CombatController mirror line) appears in the client's log for the
+in-session kill; **zero** `liveness: 0x... is a corpse on the owner and was still alive here -
+killing to match` or `liveness: 0x... no longer exists on the owner` lines appear anywhere in
+either plugin log across the whole session (`grep -c "killing to match" == 0`) — the Kill/Destroy
+dispatch this channel exists for remains completely unexercised, connected OR disconnected, in
+this environment.
+
+### What DID reconfirm cleanly, again
+
+- **Anomaly path, repeatedly**: `0x1B` and `0x1D`, killed by the host while the client's own
+  `local_combat` fight had (or was about to have) independently killed the same bodies for real,
+  produced a burst of `liveness ANOMALY: owner says 0x... is alive, this instance already has it
+  dead - not resurrecting` lines (dozens, at the controller's own throttled cadence) until the
+  owner's next 2 s scan caught up — `status` climbed from a fresh count to 31 across the session,
+  and no body was ever observed to un-die. Same guarantee, same clean result as the prior pass.
+- **No false kill of a plot creature**: `end_trask` (`0xB6`, plot-flagged) still `resolve`s
+  normally on the host after the whole session's kill/anomaly activity — never touched.
+- **Transition-window suppression, clean THIS time**: the earlier END_M01AA pass saw one spurious
+  "25 creature(s) newly gone this pass" burst immediately after an unrelated transition, noted as
+  a transient artifact and not investigated further. The `tat_m20aa` warp in this pass produced
+  no such burst — the host's agent log has no `liveness:` line at all in the several seconds
+  around or after the warp settling, only the expected per-kill lines once real slays started
+  minutes later. Consistent with the earlier burst being a one-off rather than systemic, though
+  a sample of two transitions is not a proof either way.
+- **Reconnect mechanics**: disconnect and reconnect both completed cleanly (`disconnected` ->
+  `reconnecting...` -> `connected`), and the host's own owner-side scan correctly derived both
+  `0x20` and `0x23` as `newly gone` WHILE the client was disconnected (`02:21:15`/`02:21:17`,
+  client reconnected at `02:21:24`) — the scan itself does not need a connected peer to do its
+  job, only the delivery does. What could not be shown, again, is the delivery reaching the
+  client through the CHANNEL THIS FEATURE OWNS rather than through the ordinary census race it
+  loses.
+
+### Verdict: `liveness_sync` stays OFF — same call, better evidence for why
+
+Not a new finding so much as the OLD finding pinned down with a number: this codebase's own
+32-slot cap is not exceeded by any currently-reachable module's placed population, tat_m20aa
+included, so `LivenessReconcileController`'s Kill/Destroy dispatch — the mechanism the whole
+channel exists to ship — has now been tried against two different modules and genuinely cannot
+be independently exercised by killing ordinary placed creatures in either. The two concrete next
+steps from the prior pass stand, sharpened: (1) a module with a real proximity-triggered
+reinforcement wave that pushes population past 32 (not just a large static placement — tat_m20aa
+IS large, and still tops out at 31), or (2) a real scripted `DestroyObject` (which `ReadEnemies`
+cannot represent at all — a destroyed object simply stops resolving, with no "Gone" concept on
+that channel — making it the one case genuinely orthogonal to population size). Neither was
+reachable this pass; no console verb exists to force either one synthetically (`slay` only ever
+calls `Odyssey.KillCreature`, never a destroy). Left OFF by default.

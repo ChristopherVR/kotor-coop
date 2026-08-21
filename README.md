@@ -154,6 +154,16 @@ Both players, each in their own full game:
   last-resort recovery for a conversation shell that will not close could loop, unattended, for
   minutes with no effect — is fixed unconditionally (not gated on the flag above): see
   `docs/research/dialogue-join-latency.md`'s "Far-join live pass".
+- **A trigger/cutscene-started conversation (both players' own engines starting it on arrival,
+  not a click) is now live-verified — live pass 2026-08-22.** Warping both instances to
+  `end_m01ab`'s shared arrival waypoint produced a genuine double-fire: both engines reached
+  `StartDialog` independently, 1.449 s apart. The one-conversation lock caught it cleanly — the
+  second instance recognised it as the same conversation and adopted it to follow rather than
+  running its own copy, with 0 ms content latency on adoption and exact node agreement through
+  to the end. The owner ending the conversation closed the follower's UI as expected, though a
+  precise millisecond figure for that specific hop is still unmeasured (no independent host-side
+  timestamp to diff against). See
+  [docs/research/dialogue-sync.md](docs/research/dialogue-sync.md)'s dated live-pass section.
 - **Scripted scenes play out the same on both screens**: cutscene actors and story NPCs
   replicate their positions, stances and movements, while staying exempt from the combat
   channel — the module decides who is un-killable, not the session.
@@ -439,7 +449,10 @@ tools/                   RE helpers, demo scripts, the kotor1_0_3 symbol databas
   the other two because static analysis alone could not match their engine sub-code to an
   English name (no `nwscript.nss` in this repository to check against). `coop.ini`
   `effect_sync=0` keeps the whole channel — capture, forward and apply — off until a live pass
-  confirms it. See [docs/research/effect-sync.md](docs/research/effect-sync.md).
+  confirms it. A 2026-08-22 attempt did not reach one: the modules visited that session had no
+  Force-using hostiles to trigger the allowlist, and no console verb exists yet to inject an
+  effect synthetically for testing. See
+  [docs/research/effect-sync.md](docs/research/effect-sync.md).
 - **A joiner's progress now survives to the next session — mid-session save/load does not,
   yet.** "Resume tomorrow" works: when a client saves in-game (or disconnects) while playing
   in the adopted world, their progressed character — inventory, equipment, alignment, feats —
@@ -481,20 +494,31 @@ tools/                   RE helpers, demo scripts, the kotor1_0_3 symbol databas
   never-resurrect anomaly path are both confirmed clean and repeatable, but every test module
   small enough to reach in the time available never exceeds the ordinary 32-slot census, so
   the channel's own distinguishing case (a creature the ordinary census does NOT already
-  cover) was never independently exercised. `coop.ini liveness_sync=0` stays the default
-  until that specific gap closes — see
+  cover) was never independently exercised. A second, dated 2026-08-22 pass re-ran this
+  specifically on Tatooine's Sand People territory (`tat_m20aa`) with a direct memory
+  enumeration of every placed creature: 31 hostiles total, still under the 32-slot cap, so
+  the ordinary census channel wins the race every time regardless of distance or of whether
+  the peer was disconnected when the kill happened (a dead creature is still published in the
+  ordinary census, so reconnecting does not starve it of something to compare against either).
+  `coop.ini liveness_sync=0` stays the default until a module with a genuine >32 population or
+  a scripted `DestroyObject` closes the gap — see
   [docs/research/creature-liveness.md](docs/research/creature-liveness.md)'s dated live-pass
-  section, which also carries the live-test script (`tools/live-liveness.ps1`).
+  sections, which also carry the live-test script (`tools/live-liveness.ps1`).
 - **A quest journal entry removed on one screen (`RemoveJournalQuestEntry`, a real operation
   12 scripts across 8 modules use) now removes on the other too — live-verified 2026-08-22.**
   A raw read of the engine's own journal array confirmed the entry genuinely vanishes (the
   array shrinks by one), not merely gets hidden — settling the one open question against the
   disassembly-only read that shipped it. `coop.ini journal_remove_sync=1` is now the default.
-  A separate, newly-found gap from the same pass: a genuine DECREASE to an existing journal
-  entry's state (a kill counter ticking down, a deliberate stage push-back) logs success but
-  does not visibly change the engine's own journal array — recorded as an open defect in
-  [docs/research/quest-sync.md](docs/research/quest-sync.md)'s dated live-pass section, since
-  there is no flag to gate it behind.
+  A separate gap found the same day — a genuine DECREASE to an existing journal entry's state
+  (a kill counter ticking down, a deliberate stage push-back) logged success but did not
+  visibly move the engine's own journal array — is now fixed and live-confirmed: a decrease is
+  realised as remove-then-add (the same removal primitive this bullet's own flag already
+  gates), and a follow-up live pass the same day proved it with a raw array probe (the tag
+  lands at the lower state, array size unchanged), proved the fail-closed refusal
+  (`journal_remove_sync=0` refuses a decrease with failure 7 rather than silently no-opping),
+  and proved a decrease made on the HOST reaches the CLIENT's own real journal over the
+  ordinary session wire, no script needed to trigger it. See
+  [docs/research/quest-sync.md](docs/research/quest-sync.md)'s dated live-pass sections.
 - **Alignment (light/dark) is per-player on purpose.** Each character stores its own
   alignment, read by that character's own dialogue gates, dark-side powers and ending —
   two players making different choices in one story is a feature of playing together, not a
