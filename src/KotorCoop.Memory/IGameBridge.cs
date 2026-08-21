@@ -217,6 +217,17 @@ public interface IGameBridge : IDisposable
     /// phantom elsewhere. No-op without a plugin.</summary>
     bool TryWriteIncomingDamage(uint cumulative, uint attacker) => false;
 
+    /// <summary>Non-damage effects (stun, paralyze, knockdown, slow, frightened, sleep, choke,
+    /// Force push/whirlwind) captured landing on this instance's phantoms since the plugin
+    /// last published them. Empty for bridges without an in-process plugin. See
+    /// docs/research/effect-sync.md.</summary>
+    List<PeerEffectRecord> ReadPeerEffectsOut() => [];
+
+    /// <summary>Hands the plugin one effect a peer's hook captured landing on this player's
+    /// phantom over there, for it to replay on the real character here. No-op without a
+    /// plugin.</summary>
+    bool TryWritePeerEffectIn(uint originPeerId, uint kind, uint durationMs, uint magnitude, uint serial) => false;
+
     /// <summary>How many remote-player slots this bridge publishes into.</summary>
     int RemoteSlotCapacity => 0;
 

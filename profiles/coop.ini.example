@@ -135,3 +135,14 @@ pause_button_hook=1
 # How close a driven mirrored enemy's body must be to this player (world units) before
 # its owner's damage report may be absorbed. Only read when local_combat=1.
 local_combat_range=20
+
+# Forward non-damage combat effects (stun, paralyze, knockdown, slow, frightened, sleep,
+# choke, Force push/whirlwind) that land on a peer's phantom, so their real character feels
+# them too - the gap plain damage (always forwarded) leaves open: today a Force-Stun on a
+# peer's phantom leaves them free to act on their own screen, and a client's Stasis on an
+# enemy only affects their private mirror, which the host drives anyway. OFF until live-
+# verified: capture, forward AND apply all gate on this, not just the apply half. Knockdown,
+# Paralyze and Sleep are captured but never replayed regardless of this flag - see
+# docs/research/effect-sync.md for why (an unverified engine-call signature for Knockdown, and
+# two OnApplySetState sub-codes this pass could not match to an English name at all).
+effect_sync=0

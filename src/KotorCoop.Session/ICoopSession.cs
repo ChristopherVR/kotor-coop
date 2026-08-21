@@ -105,6 +105,24 @@ public interface ICoopSession : IDisposable
     (uint CumulativeDamage, uint AttackerId) GetIncomingPhantomDamage() => (0, 0);
 
     /// <summary>
+    /// Tells the peer that owns <paramref name="targetPeerId"/> that a non-damage effect
+    /// (stun, paralyze, knockdown, slow, frightened, sleep, choke, Force push/whirlwind)
+    /// landed on their phantom here, so it can be replayed on their real character. The
+    /// non-damage sibling of <see cref="PublishPhantomDamage"/> — see
+    /// docs/research/effect-sync.md.
+    ///
+    /// Unlike phantom damage this is a discrete EVENT, not a running total: queued for the
+    /// next tick's send and gone once sent, exactly like <see cref="PublishBark"/>.
+    /// </summary>
+    void PublishPeerEffect(uint targetPeerId, PeerEffectKind kind, uint durationMs, uint magnitude) { }
+
+    /// <summary>Effects a peer's hook captured landing on THIS player's phantom, since the
+    /// last call, oldest first. Draining, so each is handed out exactly once — the same
+    /// discipline <see cref="DrainBarks"/> uses, and for the same reason: these are discrete
+    /// events, not a level to be sampled.</summary>
+    IReadOnlyList<PeerEffectPacket> DrainPeerEffects() => [];
+
+    /// <summary>
     /// Client only: "my player is standing inside these encounters." A client's own
     /// encounters are disarmed (they would drift the object-id counter), so this is how a
     /// client walking into an ambush gets one — the host runs the engine's eligibility test

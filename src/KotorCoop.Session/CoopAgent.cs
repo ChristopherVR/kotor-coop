@@ -365,6 +365,7 @@ public sealed class CoopAgent(IGameBridge bridge, ICoopSession session, AgentSet
             _lastCombatPumpMs = combatNowMs;
             PumpEnemies(local, visible, caps);
             PumpPhantomDamage(caps);
+            PumpPeerEffects(caps);
             PumpMaterialisedLoot(local.Module);
             PumpParty(caps);
             PumpPartyRoster(caps);
@@ -716,6 +717,77 @@ public sealed class CoopAgent(IGameBridge bridge, ICoopSession session, AgentSet
         if (owed > 0)
         {
             bridge.TryWriteIncomingDamage(owed, from);
+        }
+    }
+
+    /// <summary>
+    /// The non-damage sibling of <see cref="PumpPhantomDamage"/>: stun, paralyze, knockdown,
+    /// slow, frightened, sleep, choke, Force push/whirlwind landing on a peer's phantom here,
+    /// forwarded to the player it stands for. See docs/research/effect-sync.md.
+    ///
+    /// Unlike phantom damage this is a small EVENT ring, not a running total — a single global
+    /// high-water mark on the outbound side is enough dedup: the hook's serial only ever
+    /// increases, and a burst larger than the ring's 8 entries between two pumps is exactly
+    /// the "one crowd-control tick lost" cost the channel accepts by design (unreliable, like
+    /// barks).
+    /// </summary>
+    private uint _publishedPeerEffectSerial;
+
+    private void PumpPeerEffects(SessionCapabilities caps)
+    {
+        if ((caps & SessionCapabilities.Enemies) == 0)
+        {
+            return;
+        }
+
+        // Outbound: PeerEffectRules.SelectNew is the pure "what changed" decision (unit-tested
+        // in isolation); everything below it is just resolving WHO to send it to, the same
+        // linkage PumpPhantomDamage relies on — TryReadPhantomHit publishes every watched
+        // slot's phantom id each frame, hit or not.
+        List<PeerEffectRecord> captured = bridge.ReadPeerEffectsOut();
+        if (captured.Count > 0)
+        {
+            uint[] serials = new uint[captured.Count];
+            for (int i = 0; i < captured.Count; i++)
+            {
+                serials[i] = captured[i].Serial;
+            }
+
+            (IReadOnlyList<uint> newIndices, uint newWatermark) =
+                PeerEffectRules.SelectNew(serials, _publishedPeerEffectSerial);
+            _publishedPeerEffectSerial = newWatermark;
+
+            if (newIndices.Count > 0)
+            {
+                Dictionary<uint, uint> phantomToPeer = [];
+                for (int slot = 0; slot < bridge.RemoteSlotCapacity; slot++)
+                {
+                    uint peerId = bridge.PeerInSlot(slot);
+                    if (peerId != 0 && bridge.TryReadPhantomHit(slot, out uint phantomId, out _, out _)
+                        && phantomId != 0)
+                    {
+                        phantomToPeer[phantomId] = peerId;
+                    }
+                }
+
+                foreach (uint index in newIndices)
+                {
+                    PeerEffectRecord effect = captured[(int)index];
+                    if (phantomToPeer.TryGetValue(effect.PhantomId, out uint peerId))
+                    {
+                        session.PublishPeerEffect(
+                            peerId, (PeerEffectKind)effect.Kind, effect.DurationMs, effect.Magnitude);
+                    }
+                }
+            }
+        }
+
+        // Inbound: hand the plugin whatever a peer's hook captured landing on OUR phantom
+        // over there, oldest first, so it can replay them on the real character here.
+        foreach (PeerEffectPacket effect in session.DrainPeerEffects())
+        {
+            bridge.TryWritePeerEffectIn(
+                effect.FromPeerId, (uint)effect.Kind, effect.DurationMs, effect.Magnitude, effect.Sequence);
         }
     }
 

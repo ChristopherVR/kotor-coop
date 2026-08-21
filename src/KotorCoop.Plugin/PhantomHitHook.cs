@@ -140,6 +140,30 @@ internal static unsafe class PhantomHitHook
         }
     }
 
+    /// <summary>
+    /// The same "is this id one of our watched phantoms" test <see cref="OnDamage"/> uses,
+    /// exposed so a sibling hook on a different engine choke point (<c>PhantomEffectHook</c>,
+    /// for non-damage effects — docs/research/effect-sync.md) can reuse the one phantom-target
+    /// test rather than keeping a second copy of the watch list in sync with this one.
+    /// </summary>
+    public static bool IsWatchedPhantom(uint objectId)
+    {
+        if (objectId == 0)
+        {
+            return false;
+        }
+
+        for (int i = 0; i < SharedBlock.SlotCapacity; i++)
+        {
+            if (_watchedId[i] != 0 && _watchedId[i] == objectId)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     public static void ReadSlot(int slot, out uint phantomId, out uint cumulative, out uint attacker, out uint serial)
     {
         if (slot is < 0 or >= SharedBlock.SlotCapacity)

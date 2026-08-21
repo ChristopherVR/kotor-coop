@@ -66,7 +66,15 @@ internal struct SharedBlock
     /// <summary>Grown from 0x3800 for the transition-cinematic channel (version 42): the
     /// browser details array runs to 0x3780 and the cheat region's tail to 0x33C0, so neither
     /// gap could hold two six-name movie lists. Same reasoning as the growth to 0x3800.</summary>
-    public const int TotalSize = 0x3A00;
+    /// <summary>
+    /// Grown from 0x3A00 for the peer-effect channel (version 44): the tail past
+    /// <see cref="OffsetTravelMovieNames"/> (0x3884..0x38E4) only has 0x11C free bytes before
+    /// 0x3A00, and version 43 is ALREADY SPOKEN FOR by a concurrently-landing agent-heartbeat
+    /// field at the old tail — placing this region at 0x3A00 instead of squeezing into the
+    /// leftover 0x11C avoids a silent collision with that change. See
+    /// docs/research/effect-sync.md.
+    /// </summary>
+    public const int TotalSize = 0x3C00;
 
     public const int ProfileVisibleSize = 0x250;
 
@@ -1535,6 +1543,52 @@ internal struct SharedBlock
     /// <summary>The engine's own ceiling: NWScript <c>StartNewModule</c> takes exactly six
     /// movie arguments, so six is the longest queue the game can ever build.</summary>
     public const int CinematicCapacity = 6;
+
+    // ---- peer effect sync (version 44, region 0x3A00..0x3B88) ---------------------
+    //
+    // Non-damage effects that land on a peer's phantom (stun, paralyze, knockdown, slow,
+    // frightened, sleep, choke, Force push/whirlwind), mirrored to that peer's real character
+    // — the gap PhantomHitHook's plain-damage channel deliberately does not cover. See
+    // docs/research/effect-sync.md.
+    //
+    // Two independent rings, not a level: unlike phantom damage (a cumulative running total,
+    // where "what changed since last time" is the only question that matters), an effect
+    // application is a distinct EVENT with its own duration — two Stuns two seconds apart are
+    // two things that happened, not one bigger stun. Each slot carries its own serial, written
+    // last, exactly like the bark rings.
+    //
+    // OUT (plugin -> agent): what PhantomEffectHook captured landing on one of THIS instance's
+    // phantoms, for the agent to address to the peer that phantom stands for.
+    //
+    // IN (agent -> plugin): an effect a peer's hook captured landing on THIS player's phantom
+    // over there, for the plugin to replay on the real character here through OdysseyEffects.
+
+    /// <summary>Plugin -&gt; agent. Bumped whenever the hook captures something new. Diagnostic
+    /// only — the agent tells "new" from "already sent" by each slot's own serial, the same as
+    /// the bark rings.</summary>
+    public const int OffsetPeerEffectSerial = 0x3A00;
+
+    /// <summary>Plugin -&gt; agent. What landed on our phantoms, captured by
+    /// <c>PhantomEffectHook</c>. Slot layout: phantomId u32 @0, kind u32 @4 (a
+    /// <c>PeerEffectKind</c>), durationMs u32 @8, magnitude u32 @0xC, reserved u32 @0x10,
+    /// serial u32 @0x14 (written last). Occupies 0x3A08..0x3AC8.</summary>
+    public const int OffsetPeerEffectOutSlots = 0x3A08;
+
+    /// <summary>Agent -&gt; plugin. An effect a peer captured landing on THIS player's phantom,
+    /// for the plugin to replay here. Same slot layout, +0x00 is the originating peer id
+    /// instead of a phantom id. Occupies 0x3AC8..0x3B88.</summary>
+    public const int OffsetPeerEffectInSlots = 0x3AC8;
+
+    public const int PeerEffectStride = 0x18;
+
+    public const int PeerEffectCapacity = 8;
+
+    // Field offsets within a peer-effect slot (both directions share the shape).
+    public const int PeerEffectId = 0x00;
+    public const int PeerEffectKindOffset = 0x04;
+    public const int PeerEffectDurationMsOffset = 0x08;
+    public const int PeerEffectMagnitudeOffset = 0x0C;
+    public const int PeerEffectSerialOffset = 0x14;
 
     // ---- co-op death handling (version 14, region 0x1020..0x1080) -----------------
     //

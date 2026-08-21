@@ -378,6 +378,42 @@ internal sealed unsafe class SharedBlockView(byte* baseAddress)
         *(uint*)(slot + 0x00) = phantomId;
     }
 
+    // ---- peer effects (non-damage combat effects) ---------------------------------
+    //
+    // Non-damage sibling of SetPhantomHit above: stun, paralyze, knockdown, slow, frightened,
+    // sleep, choke, Force push/whirlwind. See docs/research/effect-sync.md.
+
+    /// <summary>Publishes one effect <c>PhantomEffectHook</c> captured landing on one of our
+    /// phantoms, into the OUT ring. Round-robin write by the caller (like
+    /// <see cref="SetLocalBark"/>'s slots), phantom id written LAST so the agent never pairs
+    /// an id with another capture's fields.</summary>
+    public void SetPeerEffectOut(int index, uint phantomId, uint kind, uint durationMs, uint magnitude, uint serial)
+    {
+        byte* slot = baseAddress + SharedBlock.OffsetPeerEffectOutSlots
+            + (Clamp(index, SharedBlock.PeerEffectCapacity) * SharedBlock.PeerEffectStride);
+
+        *(uint*)(slot + SharedBlock.PeerEffectKindOffset) = kind;
+        *(uint*)(slot + SharedBlock.PeerEffectDurationMsOffset) = durationMs;
+        *(uint*)(slot + SharedBlock.PeerEffectMagnitudeOffset) = magnitude;
+        *(uint*)(slot + SharedBlock.PeerEffectSerialOffset) = serial;
+        *(uint*)(slot + SharedBlock.PeerEffectId) = phantomId;
+    }
+
+    /// <summary>Agent-written: an effect a peer captured landing on THIS player's phantom
+    /// over there, for the plugin to replay here through <c>OdysseyEffects</c>.</summary>
+    public (uint OriginPeerId, uint Kind, uint DurationMs, uint Magnitude, uint Serial) GetPeerEffectIn(int index)
+    {
+        byte* slot = baseAddress + SharedBlock.OffsetPeerEffectInSlots
+            + (Clamp(index, SharedBlock.PeerEffectCapacity) * SharedBlock.PeerEffectStride);
+
+        return (
+            *(uint*)(slot + SharedBlock.PeerEffectId),
+            *(uint*)(slot + SharedBlock.PeerEffectKindOffset),
+            *(uint*)(slot + SharedBlock.PeerEffectDurationMsOffset),
+            *(uint*)(slot + SharedBlock.PeerEffectMagnitudeOffset),
+            *(uint*)(slot + SharedBlock.PeerEffectSerialOffset));
+    }
+
     /// <summary>Test hooks: drive the local player's own conversation and movement.</summary>
     public uint TestTalkSerial => *U32(SharedBlock.OffsetTestTalkSerial);
 

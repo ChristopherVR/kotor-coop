@@ -388,6 +388,85 @@ public sealed class KotorGameBridge : IGameBridge
         return _memory.TryWrite(_pluginBlock + BlockIncomingDamage, cumulative) && ok;
     }
 
+    // Peer effects (non-damage combat effects, shared block version 44, region
+    // 0x3A00..0x3B88). Mirrors SharedBlock.OffsetPeerEffect*. See
+    // docs/research/effect-sync.md.
+    private const int BlockPeerEffectOutSlots = 0x3A08;
+    private const int BlockPeerEffectInSlots = 0x3AC8;
+    private const int BlockPeerEffectStride = 0x18;
+    private const int BlockPeerEffectCapacity = 8;
+    private const int BlockPeerEffectId = 0x00;
+    private const int BlockPeerEffectKind = 0x04;
+    private const int BlockPeerEffectDurationMs = 0x08;
+    private const int BlockPeerEffectMagnitude = 0x0C;
+    private const int BlockPeerEffectSerial = 0x14;
+
+    /// <summary>
+    /// Reads the effects <c>PhantomEffectHook</c> captured landing on this instance's
+    /// phantoms since the plugin last wrote them. Returns every slot with a nonzero serial;
+    /// the caller (<c>CoopAgent.PumpPeerEffects</c>) decides what is new by remembering the
+    /// highest serial it has already sent per slot — the same discipline <see cref="ReadBarks"/>
+    /// leaves to its caller.
+    /// </summary>
+    public List<PeerEffectRecord> ReadPeerEffectsOut()
+    {
+        List<PeerEffectRecord> effects = [];
+        if (_pluginBlock == 0)
+        {
+            return effects;
+        }
+
+        for (int i = 0; i < BlockPeerEffectCapacity; i++)
+        {
+            nint slot = _pluginBlock + BlockPeerEffectOutSlots + (i * BlockPeerEffectStride);
+
+            if (!_memory.TryReadUInt32(slot + BlockPeerEffectSerial, out uint serial) || serial == 0)
+            {
+                continue;
+            }
+
+            _memory.TryReadUInt32(slot + BlockPeerEffectId, out uint phantomId);
+            _memory.TryReadUInt32(slot + BlockPeerEffectKind, out uint kind);
+            _memory.TryReadUInt32(slot + BlockPeerEffectDurationMs, out uint durationMs);
+            _memory.TryReadUInt32(slot + BlockPeerEffectMagnitude, out uint magnitude);
+
+            if (phantomId == 0)
+            {
+                continue;
+            }
+
+            effects.Add(new PeerEffectRecord(phantomId, kind, durationMs, magnitude, serial));
+        }
+
+        return effects;
+    }
+
+    private int _peerEffectInWriteSlot;
+
+    /// <summary>Hands the plugin one effect a peer's hook captured landing on this player's
+    /// phantom over there, for it to replay here. Round-robins the ring, same reasoning as
+    /// <see cref="TryWriteBark"/>: a burst must not overwrite one entry before the plugin's
+    /// pass has seen it.</summary>
+    public bool TryWritePeerEffectIn(uint originPeerId, uint kind, uint durationMs, uint magnitude, uint serial)
+    {
+        if (_pluginBlock == 0)
+        {
+            return false;
+        }
+
+        nint slot = _pluginBlock + BlockPeerEffectInSlots + (_peerEffectInWriteSlot * BlockPeerEffectStride);
+        _peerEffectInWriteSlot = (_peerEffectInWriteSlot + 1) % BlockPeerEffectCapacity;
+
+        bool ok = _memory.TryWrite(slot + BlockPeerEffectKind, kind);
+        ok &= _memory.TryWrite(slot + BlockPeerEffectDurationMs, durationMs);
+        ok &= _memory.TryWrite(slot + BlockPeerEffectMagnitude, magnitude);
+        ok &= _memory.TryWrite(slot + BlockPeerEffectId, originPeerId);
+
+        // Serial last, so the plugin never applies a half-written entry.
+        ok &= _memory.TryWrite(slot + BlockPeerEffectSerial, serial);
+        return ok;
+    }
+
     // Enemy one-shot capture (plugin -> agent, block version 20): fire-and-forget
     // animations per creature from the plugin's hook. id u32 @0, animation u32 @4,
     // serial u32 @8. The owner matches ids against its census when publishing.
@@ -549,9 +628,12 @@ public sealed class KotorGameBridge : IGameBridge
     /// 39 = per-instance item identity in the item slot's tail (SharedBlock, version 39).
     /// 41 = the four `setitem` identity fields at the cheat region's tail (0x29 = 41).
     /// 42 = the transition-cinematic channel, block grown to 0x3A00 (0x2A = 42).
+    /// 43 = SKIPPED — taken by a concurrently-landing agent-heartbeat field; see PluginHost.cs.
+    /// 44 = the peer-effect channel, block grown to 0x3C00 (0x2C = 44) — see
+    /// docs/research/effect-sync.md.
     /// <b>BlockVersionSyncTests reads both files and fails the build if they disagree</b> —
     /// added with 42, because nothing had ever enforced the warning above.</summary>
-    public const string PluginSignature = "4B 4F 43 4F 4F 50 30 31 2A 00 00 00 01 EE FF C0";
+    public const string PluginSignature = "4B 4F 43 4F 4F 50 30 31 2C 00 00 00 01 EE FF C0";
 
     /// <summary>Agent's view of which coop item id occupies each plugin item slot.</summary>
     private readonly uint[] _itemSlotIds = new uint[BlockItemCapacity];
