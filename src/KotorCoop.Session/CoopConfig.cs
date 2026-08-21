@@ -19,6 +19,8 @@ namespace KotorCoop.Session;
 ///   password = swordfish
 ///   name = Malak
 ///   menu_button = 1    ; the in-game Co-op menu button (default on; 0 hides it)
+///   minigame_hide_peer = 1   ; park a peer's phantom while they swoop-race/man a turret
+///   minigame_spectate = 0    ; watch a racing/turret peer instead (not yet wired)
 /// </code>
 /// </summary>
 public sealed record CoopConfig
@@ -78,6 +80,25 @@ public sealed record CoopConfig
     /// co-op but can never wedge.
     /// </summary>
     public bool PauseSync { get; init; } = true;
+
+    /// <summary>
+    /// While a peer is inside the engine's own minigame mode (a swoop race or a forced
+    /// turret sequence — <c>PlayerState.FlagInMinigame</c>, docs/research/minigames.md),
+    /// park that peer's phantom instead of mirroring it — the same treatment a peer in a
+    /// different module already gets. On by default: a phantom standing frozen through an
+    /// entire swoop track is worse than one that briefly disappears. <c>minigame_hide_peer =
+    /// 0</c> keeps mirroring it anyway.
+    /// </summary>
+    public bool HidePeersInMinigame { get; init; } = true;
+
+    /// <summary>
+    /// Hand this instance's camera to a peer while they race or man a turret, the way
+    /// <c>SpectateController</c> already does for a downed player. NOT YET WIRED — the
+    /// camera handoff needs a trigger distinct from "downed" and is left as the documented
+    /// next step (docs/research/minigames.md, item 8c). Read and stored now so the key
+    /// exists in coop.ini ahead of that work landing. Off by default.
+    /// </summary>
+    public bool SpectateMinigame { get; init; }
 
     /// <summary>Show the always-on in-game chat overlay.</summary>
     public bool ChatOverlay { get; init; } = true;
@@ -189,6 +210,9 @@ public sealed record CoopConfig
                 ? Math.Clamp(interp, 0, 500)
                 : -1,
             PauseSync = !kv.ContainsKey("pause_sync") || IsTruthy(kv.GetValueOrDefault("pause_sync")),
+            HidePeersInMinigame = !kv.ContainsKey("minigame_hide_peer")
+                || IsTruthy(kv.GetValueOrDefault("minigame_hide_peer")),
+            SpectateMinigame = IsTruthy(kv.GetValueOrDefault("minigame_spectate")),
             ChatOverlay = !kv.ContainsKey("chat_overlay") || IsTruthy(kv.GetValueOrDefault("chat_overlay")),
             ChatOverlayOpacity = int.TryParse(kv.GetValueOrDefault("chat_overlay_opacity"), out int op)
                 ? Math.Clamp(op, 0, 100)

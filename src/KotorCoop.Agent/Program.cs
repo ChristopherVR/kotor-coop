@@ -797,6 +797,7 @@ internal static class Program
             SyncParty = options.SyncParty,
             SyncProgression = options.SyncProgression,
             SyncPause = config?.PauseSync ?? true,
+            HidePeersInMinigame = config?.HidePeersInMinigame ?? true,
         };
 
         // Surface why a cached player pointer stopped validating. Re-resolving costs a full

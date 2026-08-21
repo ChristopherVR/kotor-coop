@@ -82,8 +82,13 @@ public static class ProtocolConstants
     /// announced before it happens so a follower's own transition plays them too. The
     /// follower was never gated; its move-to-module queue was simply empty, so it loaded
     /// straight in while the owner's main thread was gone for 7,407 ms playing 01c. Packet
-    /// type 39 is deliberately skipped: network-topology.md reserves it on paper.</summary>
-    public const byte Version = 25;
+    /// type 39 is deliberately skipped: network-topology.md reserves it on paper.
+    /// Version 26: PlayerState carries FlagInMinigame — set while the engine's own
+    /// CSWCModule::GetMiniGame is non-null (a swoop race or a forced turret sequence). A
+    /// peer's instance parks that phantom instead of mirroring it, and the minigame
+    /// player's own instance stops applying forwarded damage for the duration; see
+    /// docs/research/minigames.md.</summary>
+    public const byte Version = 26;
 
     /// <summary>Journal quest tags are resrefs plus a little slack.</summary>
     public const int MaxJournalTagLength = 32;

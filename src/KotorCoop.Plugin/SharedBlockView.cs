@@ -9,9 +9,17 @@ internal readonly record struct RemoteView(
     public const uint FlagPaused = 2;
     public const uint FlagInCombat = 4;
 
+    /// <summary>Matches <c>PlayerState.FlagInMinigame</c> — the peer is in a swoop race or
+    /// turret sequence and not meaningfully in the shared world. Carried verbatim through
+    /// the existing <see cref="Flags"/> dword; no block layout change (see
+    /// docs/research/minigames.md).</summary>
+    public const uint FlagInMinigame = 32;
+
     public bool InCombat => (Flags & FlagInCombat) != 0;
 
     public bool Paused => (Flags & FlagPaused) != 0;
+
+    public bool InMinigame => (Flags & FlagInMinigame) != 0;
 }
 
 /// <summary>One enemy's authoritative state, as published by the owning peer.

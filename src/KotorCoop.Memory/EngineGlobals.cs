@@ -311,6 +311,66 @@ public static class EngineGlobals
         return any;
     }
 
+    // ---- minigames: swoop races and turret sequences ---------------------------------
+
+    /// <summary>CClientExoAppInternal + this = CSWCModule* (symbol database:
+    /// CClientExoApp::GetModule / 0x005ED530 is exactly <c>[ecx+4]</c> then this offset —
+    /// the same chain <c>CClientExoApp::GetMiniGame</c> 0x005EDB00 walks before handing off
+    /// to <c>CSWCModule::GetMiniGame</c> 0x00641980).</summary>
+    private const int ClientModuleOffset = 0x18;
+
+    /// <summary>CSWCModule + this = CSWCArea* (symbol database: <c>area</c>).</summary>
+    private const int ModuleAreaOffset = 0x48;
+
+    /// <summary>CSWCArea + this = CSWMiniGame* (symbol database: <c>mini_game</c>), or 0
+    /// when no swoop/turret sequence is running. See docs/research/minigames.md.</summary>
+    private const int AreaMiniGameOffset = 0x264;
+
+    /// <summary>Resolves the client's CSWCModule (docs/research/travel-map-init-crash.md
+    /// calls this "the client's CSWCModule" at <c>[clientInternal+0x18]</c>). Null before a
+    /// client world exists.</summary>
+    public static bool TryGetClientModule(ProcessMemory memory, out nint module)
+    {
+        module = 0;
+        return TryGetClientInternal(memory, out nint clientInternal)
+            && TryDeref(memory, clientInternal + ClientModuleOffset, out module);
+    }
+
+    /// <summary>
+    /// A transcription of <c>CSWCModule::GetMiniGame</c> 0x00641980: <c>[module+0x48]</c>
+    /// (area) then <c>[area+0x264]</c> (mini_game), each step tolerating a null. Nonzero
+    /// means the engine is running a swoop race or a forced turret sequence — MainLoop
+    /// routes those through <c>SetInputClass(1,1)</c> instead of the normal HUD bring-up
+    /// (docs/research/cinematics.md §1, correcting ingame-gui-transition.md's old reading
+    /// of the same call as a cutscene flag). False only means "could not be read" (no
+    /// client, no module yet); a successful read with no minigame reports true with
+    /// <paramref name="inMiniGame"/> false.
+    /// </summary>
+    public static bool TryIsInMiniGame(ProcessMemory memory, out bool inMiniGame)
+    {
+        inMiniGame = false;
+
+        if (!TryGetClientModule(memory, out nint module))
+        {
+            return false;
+        }
+
+        if (!memory.TryReadPointer(module + ModuleAreaOffset, out nint area) || area == 0)
+        {
+            // A module with no area yet (mid-load) is honestly "not in a minigame", not a
+            // read failure — the caller should not treat this as unknown.
+            return true;
+        }
+
+        if (!memory.TryReadPointer(area + AreaMiniGameOffset, out nint miniGame))
+        {
+            return false;
+        }
+
+        inMiniGame = miniGame != 0;
+        return true;
+    }
+
     private static bool TryStep(ProcessMemory memory, nint root, int offset, out nint result)
     {
         result = 0;

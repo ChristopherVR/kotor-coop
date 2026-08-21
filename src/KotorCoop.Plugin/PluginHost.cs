@@ -675,6 +675,11 @@ internal static unsafe class PluginHost
         // pending revive applied) before the phantom/combat passes read the same creature.
         _death?.OnFrame();
 
+        // Read-only, no ordering dependency on anything else here: the local per-frame
+        // minigame read (swoop/turret), logged on its own edges. The agent reads the same
+        // pointer chain independently for the wire flag (see MinigameController's remarks).
+        MinigameController.OnFrame();
+
         // Right after death, on the state it just published: a downed player's camera
         // follows a living peer instead of their own corpse.
         _spectate?.OnFrame();

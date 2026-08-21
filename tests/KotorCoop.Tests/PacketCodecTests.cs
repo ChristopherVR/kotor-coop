@@ -7,7 +7,7 @@ public class PacketCodecTests
 {
     private static readonly PlayerState SampleState =
         new(new Vector3f(12.5f, -3.25f, 0.75f), 1.75f, "end_m01aa", 87, 42,
-            Flags: PlayerState.FlagInDialogue | PlayerState.FlagInCombat);
+            Flags: PlayerState.FlagInDialogue | PlayerState.FlagInCombat | PlayerState.FlagInMinigame);
 
     [Fact]
     public void JournalPacketsRoundTrip()
@@ -188,6 +188,28 @@ public class PacketCodecTests
         Assert.Equal(SampleState.Module, decoded.State.Module);
         Assert.Equal(SampleState.Health, decoded.State.Health);
         Assert.Equal(SampleState.Animation, decoded.State.Animation);
+
+        // FlagInMinigame is the newest bit in the flags dword (roadmap item 8): a peer's
+        // instance parks their phantom on this, so it must survive the wire intact.
+        Assert.True(decoded.State.IsInMinigame);
+    }
+
+    [Fact]
+    public void MinigameFlagRoundTripsIndependentlyOfTheOtherPresenceFlags()
+    {
+        Span<byte> buffer = stackalloc byte[ProtocolConstants.MaxPacketSize];
+        PlayerState notInMinigame = SampleState with
+        {
+            Flags = PlayerState.FlagInDialogue | PlayerState.FlagInCombat,
+        };
+
+        int length = PacketCodec.Write(buffer, new StateUpdatePacket(1, 1, 1, notInMinigame));
+        StateUpdatePacket? decoded = PacketCodec.ReadStateUpdate(buffer[..length]);
+
+        Assert.NotNull(decoded);
+        Assert.False(decoded.State.IsInMinigame);
+        Assert.True(decoded.State.IsInDialogue);
+        Assert.True(decoded.State.IsInCombat);
     }
 
     [Fact]

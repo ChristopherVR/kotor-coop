@@ -1378,6 +1378,11 @@ public sealed class KotorGameBridge : IGameBridge
             flags |= PlayerState.FlagInCombat;
         }
 
+        if (IsInMinigame)
+        {
+            flags |= PlayerState.FlagInMinigame;
+        }
+
         // Downed comes from the plugin, which asks the engine directly (GetDeadTemp): a
         // party member at zero hit points is temp-dead, not dead, and hit points alone
         // cannot distinguish "downed" from "the read failed".
@@ -3699,6 +3704,16 @@ public sealed class KotorGameBridge : IGameBridge
         EngineGlobals.TryGetClientInternal(_memory, out nint clientInternal)
         && _memory.TryReadInt32(clientInternal + ClientInputClass, out int inputClass)
         && inputClass == InputClassDialog;
+
+    /// <summary>
+    /// True while the local player is in the engine's own minigame mode (swoop race or
+    /// turret sequence). See <see cref="EngineGlobals.TryIsInMiniGame"/> for the pointer
+    /// chain and docs/research/minigames.md for the RE behind it. A read failure (no client
+    /// world yet) reports false — the same "not in a minigame" default every other
+    /// presence-style flag in <see cref="ReadLocalFlags"/> uses.
+    /// </summary>
+    public bool IsInMinigame =>
+        EngineGlobals.TryIsInMiniGame(_memory, out bool inMiniGame) && inMiniGame;
 
     /// <summary>
     /// Reads the speaker + line the plugin has published for the local player's current

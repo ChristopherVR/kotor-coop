@@ -46,6 +46,17 @@ chat_overlay_lines = 5
 ; Milliseconds a line stays before it fades. 0 = never fade.
 chat_overlay_fade_ms = 9000
 
+; --- minigames (swoop races, forced turret sequences) ------------------------------
+
+; While a peer is racing or manning a turret, park their phantom instead of mirroring it
+; (same treatment as a peer in a different module). 0 keeps mirroring it anyway.
+minigame_hide_peer = 1
+
+; Hand this instance's camera to a peer while they are in a minigame, the way a downed
+; player already spectates a living one. NOT YET WIRED — read and stored, but the camera
+; handoff has no trigger yet (docs/research/minigames.md).
+minigame_spectate = 0
+
 ; --- mirroring a world you do not own ---------------------------------------------
 
 ; Build a local stand-in for an enemy that exists only in the enemy owner's instance
