@@ -118,6 +118,19 @@ public static class CheatKinds
     /// ⚠ 14, because 7-13 are taken. Take the next FREE number.
     /// </summary>
     public const uint ApplyEffect = 14;
+
+    /// <summary>
+    /// TEST HOOK: plays <c>Text</c> (a bare resref) right now on this instance, through the
+    /// same engine entry a mid-module <c>PlayMovie</c> call and the movie relay's own
+    /// <c>PlayNow</c> path use. See SharedBlock.CheatKindMoviePlay and
+    /// docs/research/cinematics.md §10.
+    ///
+    /// ⚠⚠ Live-verified (2026-08-22) to HANG the target instance indefinitely for real movies —
+    /// see cinematics.md §10.8. Sending this cheat can require killing the game process.
+    ///
+    /// ⚠ 15, because 7-14 are taken. Take the next FREE number.
+    /// </summary>
+    public const uint MoviePlay = 15;
 }
 
 /// <summary>The plugin's verdicts, mirroring <c>SharedBlock.CheatStatus*</c>.</summary>

@@ -402,13 +402,22 @@ tools/                   RE helpers, demo scripts, the kotor1_0_3 symbol databas
   (`k_trg_stealth`) — confirmed geometrically inside the client's own position — never entered
   the watch's report at all. `coop.ini` `trigger_relay=0` opts out. See
   [docs/research/trigger-relay.md](docs/research/trigger-relay.md) §11.
-- **Mid-module movies (a script's own `PlayMovie`, not a transition) are captured and relayed
-  now, gated off pending a live pass.** `MoviePlayHook` detours
-  `CClientExoAppInternal::PlayMovie 0x00602CF0` (VERIFIED disassembled; never the transition
-  path, by the call graph) to capture WHICH resref a mid-module call played, and
-  `MovieRelayQueue.Decide` (pure, tested) picks play-now / defer-to-next-transition / ignore for
-  the receiving peer. `coop.ini` `movie_relay=0` by default until live-verified. See
-  [docs/research/cinematics.md](docs/research/cinematics.md)'s 2026-08-22 section and
+- **Mid-module movies (a script's own `PlayMovie`, not a transition) are captured, but the
+  PLAY half hangs the game — a live pass found a real bug, not just an unverified one.**
+  `MoviePlayHook` detours `CClientExoAppInternal::PlayMovie 0x00602CF0` (VERIFIED disassembled;
+  never the transition path, by the call graph) to capture WHICH resref a mid-module call
+  played, and `MovieRelayQueue.Decide` (pure, tested) picks play-now / defer-to-next-transition
+  / ignore for the receiving peer. A 2026-08-22 live pass built the `movieplay <resref>` test
+  hook the design doc asked for and used it to call `OdysseyMovies.PlayMovieNow` — the exact
+  function `MidModuleMovieController`'s own `PlayNow` branch calls — directly on the host, twice,
+  with two different real `.bik` files present on disk (`biologo`, `0a`). **Both calls hung the
+  main thread indefinitely** (over 4 minutes and over 60 seconds respectively, ~100% single-core
+  CPU the whole time, process still responding at the OS level, never returning) rather than
+  playing and completing in the few seconds either file's size implies. The rig had to be killed
+  and relaunched both times. `coop.ini` `movie_relay=0` by default, and **stays that way** — this
+  is not "unverified," it is "verified broken" until the hang is root-caused. See
+  [docs/research/cinematics.md](docs/research/cinematics.md)'s 2026-08-22 "Live pass" section for
+  the full evidence and a reentrancy hypothesis, and
   [docs/research/trigger-relay.md](docs/research/trigger-relay.md) §6.
 - ~~**Item identity is a blueprint resref**~~ — no longer, on the wire: an item that crosses
   between players now carries **what makes it that item** — its stack size, its charges, its
@@ -442,26 +451,26 @@ tools/                   RE helpers, demo scripts, the kotor1_0_3 symbol databas
   two-instance session — see [docs/research/minigames.md](docs/research/minigames.md) §7 for
   what a live pass needs to check, including whether damage taken during the sequence lands
   as a lump the instant it ends. Pazaak is unrelated engine machinery and is not covered.
-- **Non-damage combat effects (stun, paralyze, knockdown, slow, frightened, sleep, choke,
-  Force push/whirlwind) do not cross the wire yet, and the mechanism that will is OFF by
-  default.** Plain damage already forwards through `PhantomHitHook`, but today an enemy that
-  Force-Stuns a peer's phantom in your game leaves them free to act on their own screen, and a
-  client's Stasis on an enemy only affects their private mirror, which the host drives anyway.
-  A hook on the engine's generic effect dispatcher (`PhantomEffectHook`) now captures and
-  forwards the whole allowlist, and Slow/Choke/Whirlwind/Frightened/Stun (the droid-scoped
-  variant) have a real apply-side engine call; Knockdown, Paralyze and Sleep are captured but
-  never replayed — one because the VM routine that builds it has an unverified argument count,
-  the other two because static analysis alone could not match their engine sub-code to an
-  English name (no `nwscript.nss` in this repository to check against). `coop.ini`
-  `effect_sync=0` keeps the whole channel — capture, forward and apply — off until a live pass
-  confirms it. A 2026-08-22 attempt did not reach one: the modules visited that session had no
-  Force-using hostiles to trigger the allowlist, and no console verb existed yet to inject an
-  effect synthetically for testing. That gap is closed as of this same day: `applyeffect
-  <kind> [target] [durationMs] [magnitude]` (staging only, local apply — what the hook
-  forwards from a peer's phantom is the actual test) and the read-only `effects` no longer need
-  a hostile at all, so the next live pass can exercise this without finding a Dark Jedi. See
-  [docs/research/console-cheats.md](docs/research/console-cheats.md) §3 and
-  [docs/research/effect-sync.md](docs/research/effect-sync.md).
+- **Non-damage combat effects (stun, slow, frightened, choke, Force push/whirlwind) now cross
+  the wire, live-verified 2026-08-22, ON by default.** Plain damage already forwards through
+  `PhantomHitHook`; a hook on the engine's generic effect dispatcher (`PhantomEffectHook`)
+  captures and forwards the rest. The gap this bullet used to describe — no Force-using hostile
+  in the modules visited, no way to inject an effect synthetically — is closed: the `applyeffect
+  <kind> [target] [durationMs] [magnitude]` staging verb calls the same apply-side constructor
+  the wire's receiving half calls, aimed at a peer's phantom, which lands it in the exact path
+  `PhantomEffectHook` watches. A live pass fired all six constructed kinds
+  (stun/slow/frightened/choke/forcepush/whirlwind) in BOTH directions — host phantom and client
+  phantom — plus local smoke tests: every one captured, forwarded, and applied on the receiving
+  player's REAL character with the requested duration and magnitude (Slow's percent-clamp
+  default of 50% included), a non-default duration (3000ms) round-tripped exactly rather than
+  falling back to the hook's 6000ms default, and a `PhantomHitHook` damage hit still forwarded
+  cleanly with the effect hook installed alongside it — no crash, no regression, in either
+  process. Knockdown, Paralyze and Sleep are still captured but never replayed (their apply-side
+  constructor is still unverified or unnamed) and correctly refuse with "no apply-side
+  constructor for this kind yet" rather than guessing. `coop.ini` `effect_sync=1` by default now;
+  set `=0` to go back off. See [docs/research/console-cheats.md](docs/research/console-cheats.md)
+  §3 and [docs/research/effect-sync.md](docs/research/effect-sync.md)'s 2026-08-22 "Live pass"
+  section.
 - **A joiner's progress now survives to the next session — mid-session save/load does not,
   yet.** "Resume tomorrow" works: when a client saves in-game (or disconnects) while playing
   in the adopted world, their progressed character — inventory, equipment, alignment, feats —

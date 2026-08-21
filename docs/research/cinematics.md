@@ -1902,6 +1902,92 @@ on the capturing instance's own screen means the hook did not fire — re-run
 `python tools/callaudit.py --bad` before suspecting anything else, the same first move
 §7.8/§8's own crash-triage sections already recommend.
 
+### 10.8 Live pass (2026-08-22): the test hook was built, and it found a real hang — `movie_relay` stays OFF
+
+Option 3 of §10.7 — the "fastest, most isolated" path — was built: `movieplay <resref>` is a new
+staging verb (`CoopCommandKind.MoviePlay` / `SharedBlock.CheatKindMoviePlay = 15` /
+`CheatKinds.MoviePlay = 15`, following `applyeffect`'s exact shape end to end — `ConsoleCommand`
+parse case, `CoopCommandDispatcher.MoviePlay`, `CheatController.MoviePlay`) that calls
+`OdysseyMovies.PlayMovieNow` directly on the typist's own instance, gated by the SAME
+`MovieStaging.DecidePlayNow` check `MidModuleMovieController.PlayNow` uses before calling the
+identical function. It compiles clean in both the plugin (win-x86 NativeAOT) and the 64-bit test
+project, and `CheatKindSyncTests` confirms the two hand-written copies of the kind number agree.
+
+**What happened when it actually ran.** Fresh `demo.ps1` pair, both instances in `END_M01AA`,
+`movie_relay=1` on both. On the HOST: `console 'movieplay biologo'` (a startup-logo asset,
+3.37 MB on disk, confirmed present) via `tools/blockpoke.ps1`. The plugin logged
+`movieplay: playing 'biologo' now - the main thread stalls for its length`, then — nothing else,
+ever. `blockpoke ... cheat` polled every few seconds for over **4 minutes**: `CheatApplied`
+never advanced past the previous serial, meaning `OdysseyMovies.PlayMovieNow` never returned.
+`Get-Process` showed the process still `Responding: True` throughout, with ~33-100% single-core
+CPU continuously consumed (not a deadlock in the OS-blocked sense — something is actively
+spinning), and a screenshot of both game windows showed solid black — no logo frame ever
+rendered. The rig was killed and relaunched (`demo.ps1 -Stop` then a fresh `demo.ps1`).
+
+**Repeated with a different, unrelated movie to rule out a `biologo`-specific cause.** Fresh
+pair, `console 'movieplay 0a'` (the Taris Star Map hologram reveal, 3.73 MB, one of the doc's own
+"proven in-place `PlayMovie`" candidates per §4.4's inventory — unlike `biologo`, `0a` genuinely
+is fired via `ExecuteCommandPlayMovie` in the retail game, from `k_hbas_playtat`). **Same
+result**: no completion after 60+ seconds of polling (this time on the very first cheat of a
+fresh session — `serial 1, applied 0` — so it is not a state left over from the first attempt),
+CPU pinned near 100% on that core. Recovered the same way.
+
+**Two different real `.bik` files, both present on disk at plausible sizes for a
+several-second clip, both hung the identical call indefinitely.** This rules out "the file is
+missing" and "this one specific asset is special-cased" as the explanation, and makes it very
+unlikely this is a coincidence of movie choice. What it does NOT rule out:
+
+* **A genuine hang bug in `OdysseyMovies.PlayMovieNow` or the `0x00602CF0` call itself**, unverified
+  before this pass (§10.6 explicitly deferred all live testing) — the CExoString construction
+  it uses (`CStrConstructor 0x005E5A90`) is the SAME address already exercised successfully
+  elsewhere in this codebase (`Odyssey.cs`, `MenuLoadController.cs`, `NativeBrowserController.cs`,
+  `PasswordEntryModal.cs`), so that half is unlikely to be the fault; the untested half is the
+  `PlayMovieFn` call onto `0x005EDB30`/`0x00602CF0` itself — nothing in this codebase had called
+  it before this pass.
+* **Reentrancy.** `CheatController.OnFrame()` (and `MidModuleMovieController.OnFrame()`, which
+  calls the identical `PlayMovieNow` from its own `PlayNow` branch) both run from inside
+  `PluginHost.OnFrame`, which is itself the body of the `FrameHook` detour on `SwapBuffers`.
+  Calling back into engine code that pumps Windows messages (`WaitForMovie`'s own
+  `Global::messagepump` call, §1.3) from inside a hook ON THE FUNCTION THAT NORMALLY SIGNALS "a
+  frame is done" is untested territory this codebase has not exercised before — every other
+  blocking engine call this plugin makes runs either outside a hook (the console/menu paths) or
+  is a bounded, non-message-pumping call. **Hypothesis, not proof**: no debugger was attached to
+  confirm what the spinning thread is actually doing.
+* **An environment-specific Bink/rendering limitation.** This session's very first pair-up
+  produced completely normal, BOUNDED main-thread stalls during module load (563 ms, 5359 ms,
+  5079 ms, all followed by more log and a working session) — but those stalls' own log lines
+  read `0 transition movie(s) were queued going in`, meaning no actual `.bik` decode was
+  necessarily involved. **This pass produced no confirmed case of a real movie file completing
+  playback in this environment at all**, by any path, so a Bink-specific rendering/decode issue
+  in this VM cannot be excluded either. `PlayLoadModuleMovies`/the transition-queue path (the
+  one the earlier `01c`/`01f` escape-pod pass exercised, `b0841bf`) was NOT re-tried this
+  session to distinguish these — a genuinely valuable next step, and cheaper than it sounds
+  (`moviewarp <module> 01g` from a safe module, or the escape-pod conversation itself).
+
+**Because the underlying function is untested in production and now has two independent,
+reproducible hangs against it, `movie_relay` stays OFF** (`coop.ini movie_relay=0` on both rig
+installs, reverted from the `=1` set for this pass; the code default,
+`PluginConfig.ReadBool("movie_relay", false)`, was already `false` and is unchanged). This is
+not "unverified, so left off out of caution" — it is "actively tested and found broken." The
+`movieplay` verb itself ships (it is useful, self-contained diagnostic infrastructure, and its
+CAPTURE half — `MoviePlayHook`'s detour on `0x00602CF0` — is a separate, cheap, synchronous
+instruction-level read that this pass has no reason to distrust), but its own doc comment and
+`SharedBlock.CheatKindMoviePlay`'s doc now say plainly that calling it can hang the game, so
+nobody reaches for it expecting a quick answer.
+
+**What a future pass should do, in order of cost:** (1) re-run this exact repro with a debugger
+attached (WinDbg/x86, `!analyze` or a manual break during the spin) to see what the thread is
+actually doing — this is the single highest-value next step and was not available this pass;
+(2) test whether `PlayLoadModuleMovies` (the transition-queue path) still completes normally for
+a real `.bik` in THIS environment, to separate "this call site is broken" from "movie playback
+is broken here" — cheapest test: `moviewarp <any nearby module> 01g` and watch for the SAME
+`cinematic: the main thread was gone for N ms` shape the `01c`/`01f` pass already validated,
+this time actually reading a queue count > 0; (3) if (2) shows the transition path is fine, the
+bug is narrowed to `0x00602CF0` specifically (or the reentrancy hypothesis above), and the fix
+is either to defer the call to a non-hooked context (e.g. arm a one-shot flag `MainLoopHook`
+reads, since that hook fires OUTSIDE `SwapBuffers`) or to find the actual root cause with a
+debugger before trying again live.
+
 ---
 
 ## Key addresses

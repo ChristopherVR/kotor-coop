@@ -1387,6 +1387,33 @@ internal struct SharedBlock
     /// </summary>
     public const uint CheatKindApplyEffect = 14;
 
+    /// <summary>
+    /// TEST HOOK (2026-08-22): plays <see cref="OffsetCheatText"/> (a bare resref, e.g.
+    /// <c>01c</c> or <c>biologo</c>) RIGHT NOW on the local instance, through
+    /// <c>OdysseyMovies.PlayMovieNow</c> — the exact engine entry (<c>CClientExoApp::PlayMovie
+    /// 0x005EDB30</c>) both a script's mid-module <c>PlayMovie</c> AND
+    /// <see cref="MidModuleMovieController"/>'s own <c>PlayNow</c> path call, and the one
+    /// <c>MoviePlayHook</c> watches. Exists because docs/research/cinematics.md §10.7 named no
+    /// isolated way to fire that hook on the host without waiting for a story trigger
+    /// (`moviewarp` only ever writes the TRANSITION queue, a different path entirely). Follows
+    /// <see cref="CheatKindApplyEffect"/>'s pattern exactly: no new fields, the existing 32-byte
+    /// <see cref="OffsetCheatText"/> slot, gated by the SAME <c>MovieStaging.DecidePlayNow</c>
+    /// check the relay's own receiver uses before calling the same function, so a refusal here
+    /// reads identically to a refusal there.
+    ///
+    /// ⚠⚠ LIVE-VERIFIED HANG (2026-08-22): calling this with `biologo` AND separately with `0a`
+    /// — two different real `.bik` files, both present on disk — both hung the main thread
+    /// INDEFINITELY (4+ minutes and 60+ seconds respectively, ~100% single-core CPU the whole
+    /// time, never returned). Because <see cref="MidModuleMovieController"/>'s own `PlayNow`
+    /// calls the IDENTICAL underlying function, `movie_relay` stays OFF pending a root cause —
+    /// see docs/research/cinematics.md §10.8 for the full repro and the reentrancy/environment
+    /// hypotheses. This verb still ships (its capture-side plumbing is not implicated), but
+    /// expect it to hang the game rather than answer quickly.
+    ///
+    /// ⚠ 15, because 7-14 are taken. Take the next FREE number.
+    /// </summary>
+    public const uint CheatKindMoviePlay = 15;
+
     /// <summary>The request was carried out here.</summary>
     public const int CheatStatusApplied = 1;
 

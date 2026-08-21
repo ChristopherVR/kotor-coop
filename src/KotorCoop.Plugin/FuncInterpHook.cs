@@ -58,6 +58,14 @@ internal static unsafe class FuncInterpHook
         // The item-identity harness. "item"/"items"/"setitem" are ours: the engine registers
         // giveitem and nothing else beginning with "item".
         "items", "item", "setitem", "giveloot",
+
+        // The peer-effect staging pair (docs/research/effect-sync.md).
+        "applyeffect", "effects",
+
+        // The mid-module movie relay's test hook (docs/research/cinematics.md §10.7):
+        // fires MoviePlayHook directly, so a live pass does not need to wait for a story
+        // trigger. `moviewarp` above only ever writes the TRANSITION queue, a different path.
+        "movieplay",
     ];
 
     /// <summary>

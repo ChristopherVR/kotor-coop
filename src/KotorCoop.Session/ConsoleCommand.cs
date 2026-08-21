@@ -217,6 +217,20 @@ public enum CoopCommandKind
     /// the whole non-damage effect pipeline without grepping either log. Takes no arguments.
     /// </summary>
     Effects,
+
+    /// <summary>
+    /// TEST HOOK (2026-08-22): plays <see cref="CoopCommand.Address"/> (a bare resref) RIGHT
+    /// NOW on the local instance, through the same engine entry a mid-module <c>PlayMovie</c>
+    /// call and the movie relay's own <c>PlayNow</c> path use
+    /// (<c>OdysseyMovies.PlayMovieNow</c>) — built because docs/research/cinematics.md §10.7
+    /// found no isolated way to fire <c>MoviePlayHook</c> on the host without a story trigger:
+    /// <c>moviewarp</c> only ever writes the TRANSITION queue, a different path entirely.
+    /// Follows <c>ApplyEffect</c>'s pattern exactly: staging only, local apply — this never
+    /// crosses the network by itself, but the capturing hook and the movie-relay controller run
+    /// exactly as they would for a peer's real script call, so the OTHER instance seeing
+    /// <c>movie-relay: playing '...' now</c> is the actual test.
+    /// </summary>
+    MoviePlay,
 }
 
 /// <summary>
@@ -696,6 +710,18 @@ public static class ConsoleCommand
                 return rest.Length > 0
                     ? new CoopCommand(CoopCommandKind.Invalid, Error: "effects takes no arguments")
                     : new CoopCommand(CoopCommandKind.Effects);
+
+            // TEST HOOK: fires MoviePlayHook on demand, on the HOST, without waiting for a
+            // story trigger to reach a mid-module PlayMovie call. See CoopCommandKind.MoviePlay.
+            case "movieplay":
+                if (rest.Length != 1 || !IsResRef(rest[0], maxLength: 16))
+                {
+                    return new CoopCommand(
+                        CoopCommandKind.Invalid,
+                        Error: "movieplay <resref>  (e.g. movieplay 01c, or movieplay biologo)");
+                }
+
+                return new CoopCommand(CoopCommandKind.MoviePlay, Address: rest[0]);
 
             case "cheats":
                 return new CoopCommand(CoopCommandKind.Cheats);
@@ -1302,6 +1328,10 @@ public static class ConsoleCommand
         // the co-op plugin is unreachable rather than idle.
         "  moviewarp <module> <movie...>   warp WITH a cinematic (the plugin stops for it)",
         "  moviewarp queue <movie...> | clear | show",
+        // moviewarp only ever writes the TRANSITION queue - a different engine path entirely.
+        // This is the one that fires MoviePlayHook / the mid-module movie relay on demand.
+        "  movieplay <resref>              play a movie mid-module RIGHT NOW (blocks main",
+        "                      thread); fires the mid-module movie relay for a connected peer",
         // The pair: queue the movie, then make the ENGINE start the transition. Only this
         // order opens the pre-store flush window a movie might swallow.
         "  usedoor [tag|id]                walk through a transition door (nearest by default)",

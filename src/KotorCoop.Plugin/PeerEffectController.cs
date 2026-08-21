@@ -7,16 +7,20 @@ namespace KotorCoop.Plugin;
 /// <see cref="OdysseyEffects"/>. The non-damage sibling of <see cref="IncomingDamageController"/>.
 /// See docs/research/effect-sync.md.
 ///
-/// Gated OFF by default (<c>coop.ini</c> <c>effect_sync=0</c>) — the whole channel is
-/// unverified live: capture, forward AND apply all stop when the flag is off, not just the
-/// apply half, because publishing captures nobody on the far end will use is wasted work for a
-/// feature that has not been proven safe yet. See the README's Honest limitations bullet.
+/// Gated ON by default (<c>coop.ini</c> <c>effect_sync=1</c>) since the 2026-08-22 live pass:
+/// stun, slow, frightened, choke, forcepush and whirlwind all round-tripped cleanly in BOTH
+/// directions (host phantom and client phantom), plus local smoke tests, with no crash and no
+/// regression in <see cref="PhantomHitHook"/>'s damage forwarding. See
+/// docs/research/effect-sync.md's "Live pass (2026-08-22)" section for the full evidence —
+/// including the three still-capture-only kinds (knockdown, paralyze, sleep), which correctly
+/// refuse rather than guess at an unverified constructor signature. Set <c>effect_sync=0</c> to
+/// go back to off if a regression turns up.
 /// </summary>
 internal sealed unsafe class PeerEffectController(SharedBlockView block)
 {
     private const int IntervalFrames = 5;
 
-    private readonly bool _enabled = PluginConfig.ReadBool("effect_sync", false);
+    private readonly bool _enabled = PluginConfig.ReadBool("effect_sync", true);
 
     private int _countdown;
 

@@ -558,6 +558,10 @@ public sealed class CoopCommandDispatcher(
                 ReportEffects();
                 break;
 
+            case CoopCommandKind.MoviePlay:
+                MoviePlay(command.Address ?? string.Empty);
+                break;
+
             case CoopCommandKind.Cheats:
                 foreach (string line in ConsoleCommand.CheatsText)
                 {
@@ -847,6 +851,28 @@ public sealed class CoopCommandDispatcher(
             Amount: command.Amount,
             Charges: command.EffectDurationMs,
             MaxCharges: command.EffectMagnitude));
+    }
+
+    /// <summary>
+    /// TEST HOOK (2026-08-22): plays <paramref name="resref"/> RIGHT NOW on this instance,
+    /// through <c>OdysseyMovies.PlayMovieNow</c> — the same engine entry
+    /// <c>CClientExoApp::PlayMovie 0x005EDB30</c> a mid-module script's own <c>PlayMovie</c>
+    /// call reaches, and the one <c>MoviePlayHook</c> watches. Built because
+    /// docs/research/cinematics.md §10.7 found no isolated way to fire that hook on the host
+    /// without reaching a story trigger: <c>moviewarp</c> only ever writes the TRANSITION
+    /// queue, a different engine path entirely. Follows <see cref="ApplyEffect"/>'s pattern:
+    /// staging only, no network send here — the capturing hook and
+    /// <c>MidModuleMovieController</c> do the actual relay once the movie plays.
+    /// </summary>
+    private void MoviePlay(string resref)
+    {
+        if (resref.Length == 0)
+        {
+            Reply("movieplay: needs a resref, e.g. movieplay 01c");
+            return;
+        }
+
+        SendCheat(new CheatRequest(CheatKinds.MoviePlay, Text: resref));
     }
 
     /// <summary>Folds the shared block's peer-effect rings into <see cref="_effectLog"/> every

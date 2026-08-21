@@ -502,3 +502,77 @@ exercise.
 7. Record which of the six constructed kinds visibly landed and which the peer's screen agreed
    with — that is what finally moves this document's per-kind rows from **VERIFIED
    (mechanism)** to **VERIFIED (live)**.
+
+## Live pass (2026-08-22): all six constructed kinds VERIFIED (live), both directions
+
+Ran on a fresh `demo.ps1` pair (block version 48, protocol 34), both instances in `END_M01AA`,
+`effect_sync=1` on both, using the `applyeffect`/`effects` staging verbs against each other's
+phantom via `tools/blockpoke.ps1 <pid> console '...'` (the same agent<->plugin channel a human's
+`~` console line writes — no keyboard injection needed, per `console-cheats.md` §4).
+
+**Per-constructor result table** (host = pid with name `Lanik`, client = pid with name `Malak`;
+"forward" = host applies to client's phantom, "reverse" = client applies to host's phantom):
+
+| Kind | Forward (host→client) | Reverse (client→host) | Local (`me`) | Notes |
+| --- | --- | --- | --- | --- |
+| Stun | **APPLIED** — `effect: applied kind 1 from peer 0x1 (duration 6000ms, magnitude 0)` | **APPLIED** — `... from peer 0x2 ...` | **APPLIED** on both | Also round-tripped at an explicit non-default duration: `applyeffect stun 0x12D 3000` → client logged `duration 3000ms` exactly, not the hook's 6000ms fallback (see below) |
+| Slow | **APPLIED**, magnitude 50 | **APPLIED**, magnitude 50 | **APPLIED** | Requested magnitude 0 (blank) correctly fell back to the documented 50% default (`OdysseyEffects.MinSlowPercent`/`MaxSlowPercent` clamp) — confirmed in the APPLIED log line, not just the request |
+| Frightened | **APPLIED** | **APPLIED** | **APPLIED** | |
+| Choke | **APPLIED** | **APPLIED** | **APPLIED** | |
+| ForcePush | **APPLIED** | **APPLIED** | **APPLIED** | |
+| Whirlwind | **APPLIED** | **APPLIED** | **APPLIED** | |
+| Knockdown | refused: `no apply-side constructor for this kind yet` | not tried (symmetric) | refused (same) | Expected, correct refusal — confirms routing works even where the apply half deliberately does not exist |
+| Paralyze | refused (same wording) | not tried | refused (same) | ditto |
+| Sleep | refused (same wording) | not tried | refused (same) | ditto |
+
+All 6 constructed kinds: **12/12 forward+reverse applications succeeded**, 6/6 local smoke
+tests succeeded, all 3 capture-only kinds refused correctly on both the phantom and local
+target. Every application was read back from the **plugin log on the receiving instance**
+(`effect: applied kind N from peer 0x{id} (duration Nms, magnitude N)`), not just the sender's
+own "applied" acknowledgement — i.e. this confirms the packet actually crossed the network and
+`PeerEffectController.ApplyIncoming` ran `OdysseyEffects.ApplyEffect` against the receiver's own
+`GetPlayerObjectId()`, not merely that the phantom-side capture worked.
+
+**NEEDS-LIVE item 3 (the hook's prologue byte-check) — CONFIRMED.** Every plugin startup this
+session logged `combat: phantom-effect watch at 0x4D8320 (stub 0x...)` with no `prologue
+mismatch` line anywhere in either log — `PhantomEffectHook.Install`'s byte-check passed cleanly
+against the live binary every time.
+
+**§2.3's `effect+0xC` duration sanity — CONFIRMED, and distinguished from the fallback.** The
+hook's `FallbackDurationMs` and the console verb's own `DefaultApplyEffectDurationMs` are both
+6000ms, so the default-duration tests alone couldn't tell a real field read from a lucky
+fallback. Sending an explicit non-default duration settled it: `applyeffect stun 0x12D 3000`
+came back on the receiving side as `duration 3000ms` — not 6000. `effect+0xC` is genuinely being
+read, non-zero and sane, not silently substituted.
+
+**Damage regression — CONFIRMED clean.** With `PhantomEffectHook` installed and having just
+processed a dozen non-damage applications, `blockpoke <hostpid> hitphantom 0 7` still forwarded
+7 damage through `PhantomHitHook` exactly as before: `combat: taken 7` on the host's ledger, and
+the client's real health dropped `12/12 -> 5/12`. No interaction between the two hooks.
+
+**Stability — clean.** Both instances stayed up through the whole pass (frame counters at
+157,576 and 186,040 by the end), `grep -c "FIRST-CHANCE access violation"` was 0 in both logs.
+
+**Sub-code naming (§3.3) — not advanced this pass.** The three unidentified `EffectComplex`
+sub-codes (candidates for Paralyze/Sleep) have no apply-side constructor in `OdysseyEffects`, so
+`applyeffect` cannot trigger them — by design, the same safety argument §4 already makes. Naming
+them still requires either a Force-using hostile or a synthetic `EffectComplex` call this pass
+did not attempt. No new evidence either way.
+
+**Movement-block probe — not independently verified.** The task asked whether the client's real
+character visibly could not act during Stun's duration. The one movement primitive available
+unattended, `blockpoke walk`, is documented dead code (`docs/research/cinematics.md`'s own key-
+address table: `HandlePlayerToServerInputWalkToWaypoint 0x005235B0` has zero callers — "the
+reason `blockpoke walk` cannot move the PC"), so a `walk` issued during Stun and never landing
+proves nothing (it wouldn't land unstunned either — confirmed separately: the position never
+moved over 5 polled seconds regardless of stun state). No other unattended movement/action-
+block reader exists yet. The **apply-side evidence is still strong** — the engine's own
+zero-parameter `EffectDroidStun` constructor ran without refusal, on the receiver's real player
+object — but "the target could not act" specifically was not independently instrumented this
+pass.
+
+**Verdict: `effect_sync` flips to ON by default** (`PeerEffectController.cs`,
+`PluginConfig.ReadBool("effect_sync", true)`). The bar the task set — "stun+slow in both
+directions, no crash, no regression" — was cleared with margin: all six constructed kinds, both
+directions, local smoke tests, explicit-duration fidelity, and a clean damage-forwarding
+regression check.

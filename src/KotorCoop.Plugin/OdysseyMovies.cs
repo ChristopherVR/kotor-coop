@@ -72,6 +72,15 @@ internal static unsafe class OdysseyMovies
     /// own "no such <c>.bik</c>" refusal is silent here exactly as it is in
     /// <c>Odyssey.QueueTransitionMovie</c>, because <c>PlayMovieFn</c> does not hand its return
     /// value back through the thunk in any form this binding could read (§ see the doc above).
+    ///
+    /// ⚠⚠ LIVE-VERIFIED HANG (2026-08-22): calling this with `biologo` and separately with `0a`
+    /// — real, present-on-disk <c>.bik</c> files a few MB each — both hung the caller's thread
+    /// INDEFINITELY (4+ minutes / 60+ seconds observed, ~100% single-core CPU, never returned;
+    /// the process had to be killed both times). See docs/research/cinematics.md §10.8 for the
+    /// repro, both callers this method has (<c>CheatController.MoviePlay</c>,
+    /// <c>MidModuleMovieController.PlayNow</c>), and the reentrancy/environment hypotheses. Do
+    /// NOT call this from production code until root-caused — both callers are gated behind
+    /// <c>coop.ini movie_relay</c>, which is OFF by default specifically because of this.
     /// </summary>
     public static bool PlayMovieNow(byte* asciiResRef, int length)
     {

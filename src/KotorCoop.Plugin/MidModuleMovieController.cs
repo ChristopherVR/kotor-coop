@@ -38,10 +38,12 @@ internal enum MidModulePlayStatusCode : uint
 /// to resolve "which module is the announcer in" itself; see
 /// <c>CoopAgent.PumpMidModuleMovies</c>.
 ///
-/// Kill switch: coop.ini <c>movie_relay=0</c> (default OFF until live-verified — the same
-/// posture <c>PeerEffect</c> and <c>CreatureLiveness</c> shipped with; this is the SAME flag
-/// name docs/research/trigger-relay.md §6 already reserved, which changed nothing before this
-/// pass wired the detection half up).
+/// Kill switch: coop.ini <c>movie_relay=0</c> — default OFF, and as of 2026-08-22 that is no
+/// longer "unverified," it is "verified broken": a live pass calling this controller's own
+/// <c>PlayNow</c> function directly (through the <c>movieplay</c> test verb) hung the main
+/// thread INDEFINITELY for two different real movies (4+ minutes and 60+ seconds, never
+/// returned). See <see cref="OdysseyMovies.PlayMovieNow"/>'s own doc and
+/// docs/research/cinematics.md §10.8 before flipping this on.
 /// </summary>
 internal sealed unsafe class MidModuleMovieController(SharedBlockView block)
 {

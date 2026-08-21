@@ -83,6 +83,14 @@ internal static class ConsoleVerbCatalog
         ("setitem", "setitem <0x131> [stack=N] [charges=N] [max=N] [upgrades=0xN] [identified=0|1]"),
         ("giveloot", "giveloot <owner id> <resref> [stack]"),
 
+        // The peer-effect staging pair. Neither shadows a retail verb.
+        ("applyeffect", "applyeffect <kind> [target] [durationMs] [magnitude]"),
+        ("effects", "effects"),
+
+        // The mid-module movie relay's test hook: fires MoviePlayHook directly, without a
+        // story trigger. `moviewarp` only ever writes the TRANSITION queue, a different path.
+        ("movieplay", "movieplay <resref>  (plays it NOW; blocks the main thread)"),
+
         // Completable, but NEVER recorded: ConsoleHistoryRing drops password/pw lines, so
         // completion may offer the verb while recall can never replay the secret.
         ("password", "password <pw>"),

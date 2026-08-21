@@ -154,6 +154,10 @@ internal sealed unsafe class CheatController(SharedBlockView block)
                 ApplyEffect(player);
                 break;
 
+            case SharedBlock.CheatKindMoviePlay:
+                MoviePlay();
+                break;
+
             default:
                 Answer(SharedBlock.CheatStatusRefused, $"unknown cheat kind {kind}");
                 break;
@@ -572,6 +576,73 @@ internal sealed unsafe class CheatController(SharedBlockView block)
         Answer(
             SharedBlock.CheatStatusApplied,
             $"applied kind {kind} to {what} (0x{targetId:X}), {durationMs}ms, mag {magnitude}");
+    }
+
+    /// <summary>
+    /// TEST HOOK (2026-08-22): plays <see cref="SharedBlock.OffsetCheatText"/> (a bare resref)
+    /// RIGHT NOW, through <see cref="OdysseyMovies.PlayMovieNow"/> — the SAME engine entry
+    /// (<c>CClientExoApp::PlayMovie 0x005EDB30</c>) a mid-module script's own <c>PlayMovie</c>
+    /// reaches, and the one <see cref="MoviePlayHook"/> watches. Exists because
+    /// docs/research/cinematics.md §10.7 found no isolated way to fire that hook on the host
+    /// without waiting for a story trigger: <c>moviewarp</c> (<see cref="StageMovie"/>) only
+    /// ever writes the engine's TRANSITION queue, a different path entirely that
+    /// <see cref="MoviePlayHook"/> does not watch (§10.1's call-graph argument).
+    ///
+    /// Gated by the SAME <see cref="MovieStaging.DecidePlayNow"/> check
+    /// <see cref="MidModuleMovieController"/>'s own <c>PlayNow</c> uses before calling the
+    /// identical function, so a refusal here reads exactly like a refusal there. BLOCKS THE
+    /// MAIN THREAD for the length of the film — that stall, and the OTHER instance's
+    /// <c>movie-relay:</c> log lines once <c>movie_relay=1</c>, are the actual test.
+    ///
+    /// ⚠⚠ LIVE-VERIFIED HANG (2026-08-22): this call did not return for either of two different
+    /// real movies tried (`biologo`, `0a`) — 4+ minutes and 60+ seconds of ~100% single-core CPU
+    /// with no completion, both times, requiring the process to be killed. See
+    /// docs/research/cinematics.md §10.8. `movie_relay` is OFF pending a root cause; this verb
+    /// still ships as diagnostic infrastructure, but expect it to hang the game.
+    /// </summary>
+    private void MoviePlay()
+    {
+        string resref = ReadCheatText();
+        if (!MovieStaging.IsMovieName(resref))
+        {
+            Answer(
+                SharedBlock.CheatStatusRefused,
+                resref.Length == 0
+                    ? "movieplay needs a resref, e.g. movieplay 01c"
+                    : $"'{resref}' is not a movie name (letters, digits, _; max {MovieStaging.MaxNameLength})");
+            return;
+        }
+
+        int queued = Odyssey.QueuedTransitionMovieCount();
+        MovieStagingVerdict verdict = MovieStaging.DecidePlayNow(
+            Odyssey.HasClient, Odyssey.IsAreaTransitionPending(), Odyssey.IsMoviePlaying(), queued);
+
+        if (verdict != MovieStagingVerdict.Stage)
+        {
+            string reason = MovieStaging.Explain(verdict, queued);
+            PluginHost.Log($"movieplay: refused '{resref}' - {reason}");
+            Answer(SharedBlock.CheatStatusRefused, $"'{resref}' refused - {reason}");
+            return;
+        }
+
+        byte* buffer = stackalloc byte[MovieStaging.MaxNameLength];
+        int length = Math.Min(resref.Length, MovieStaging.MaxNameLength);
+        for (int i = 0; i < length; i++)
+        {
+            buffer[i] = (byte)resref[i];
+        }
+
+        PluginHost.Log($"movieplay: playing '{resref}' now - the main thread stalls for its length");
+
+        // BLOCKS. Everything the plugin does resumes on the far side of this call, exactly as
+        // it does for a real mid-module PlayMovie (docs/research/cinematics.md §1.3).
+        bool started = OdysseyMovies.PlayMovieNow(buffer, length);
+
+        Answer(
+            started ? SharedBlock.CheatStatusApplied : SharedBlock.CheatStatusEngineRefused,
+            started
+                ? $"played '{resref}' (returned from the block)"
+                : $"'{resref}' did not start (no client, or name too long)");
     }
 
     /// <summary>
