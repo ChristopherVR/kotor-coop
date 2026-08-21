@@ -904,9 +904,20 @@ internal sealed unsafe class SharedBlockView(byte* baseAddress)
         }
     }
 
-    /// <summary>Agent -&gt; plugin. Nonzero while the client-door-refusal watch should refuse a
-    /// CLIENT-initiated real door transition.</summary>
-    public bool ClientDoorRefusalArmed => *U32(SharedBlock.OffsetClientDoorRefusalArmed) != 0;
+    /// <summary>
+    /// Agent -&gt; plugin. Nonzero while the client-door-refusal watch should refuse a
+    /// CLIENT-initiated real door transition — the value is WHY (mirrors
+    /// <c>KotorCoop.Protocol.ClientDoorRefusalReason</c> by value: the plugin has no assembly
+    /// reference to that project, so the two sides agree on the number, not the type. 1 =
+    /// "the host must lead the way" (<c>follow_lead=host</c>), 2 = "the host cannot follow
+    /// right now" (<c>follow_lead=any</c>, host busy). 0 = not armed.
+    /// </summary>
+    public uint ClientDoorRefusalReason => *U32(SharedBlock.OffsetClientDoorRefusalArmed);
+
+    /// <summary>Agent -&gt; plugin. True while the client-door-refusal watch should refuse a
+    /// CLIENT-initiated real door transition, for whatever reason — see
+    /// <see cref="ClientDoorRefusalReason"/> for which.</summary>
+    public bool ClientDoorRefusalArmed => ClientDoorRefusalReason != 0;
 
     /// <summary>
     /// Posts one line to the always-on chat overlay WITHOUT going through the agent —

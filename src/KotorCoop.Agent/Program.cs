@@ -827,6 +827,10 @@ internal static class Program
             TransitionAnnounceEnabled = config?.TransitionAnnounceEnabled ?? false,
             ClientDoorRefusalEnabled = config?.ClientDoorRefusalEnabled ?? false,
 
+            // No coop.ini => the most conservative choice, matching the pattern above: today's
+            // exact host-leads/client-follows behaviour, not the new lead-swap default.
+            FollowLeadMode = config?.FollowLead ?? FollowLeadMode.Host,
+
             // CoopAgent is deliberately game-agnostic and has no reader of its own for a
             // module's display name; this is the one place that both has the game directory
             // and already imports KotorCoop.Memory.GameFiles. A failed lookup falls back to

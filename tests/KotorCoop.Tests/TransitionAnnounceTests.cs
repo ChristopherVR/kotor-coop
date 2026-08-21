@@ -167,4 +167,192 @@ public class TransitionAnnounceTests
         Assert.False(ClientDoorRefusalRule.ShouldArm(
             isClient: true, followHostModule: true, refusalEnabled: true, hostRecentlyTransitioning: true));
     }
+
+    // ---- lead-swap (2026-08-22): the refusal's REASON ------------------------------------
+
+    /// <summary>follow_lead=host: today's exact wording and behaviour, unaffected by whether
+    /// the host happens to be busy.</summary>
+    [Fact]
+    public void HostOnlyModeAlwaysRefusesWithHostMustLead()
+    {
+        Assert.Equal(
+            ClientDoorRefusalReason.HostMustLead,
+            ClientDoorRefusalRule.Decide(
+                isClient: true, followHostModule: true, refusalEnabled: true,
+                hostRecentlyTransitioning: false, mode: FollowLeadMode.Host, hostBusy: false));
+
+        Assert.Equal(
+            ClientDoorRefusalReason.HostMustLead,
+            ClientDoorRefusalRule.Decide(
+                isClient: true, followHostModule: true, refusalEnabled: true,
+                hostRecentlyTransitioning: false, mode: FollowLeadMode.Host, hostBusy: true));
+    }
+
+    /// <summary>follow_lead=any with the host free: the client MAY lead - no refusal at all,
+    /// which is what lets the crossing become an announce the host follows.</summary>
+    [Fact]
+    public void AnyModeWithAFreeHostDoesNotRefuse()
+    {
+        Assert.Equal(
+            ClientDoorRefusalReason.None,
+            ClientDoorRefusalRule.Decide(
+                isClient: true, followHostModule: true, refusalEnabled: true,
+                hostRecentlyTransitioning: false, mode: FollowLeadMode.Any, hostBusy: false));
+    }
+
+    /// <summary>follow_lead=any with the host busy (mid its own transition, in dialogue, or in
+    /// real combat): refused, but for the DIFFERENT, transient reason.</summary>
+    [Fact]
+    public void AnyModeWithABusyHostRefusesWithHostBusy()
+    {
+        Assert.Equal(
+            ClientDoorRefusalReason.HostBusy,
+            ClientDoorRefusalRule.Decide(
+                isClient: true, followHostModule: true, refusalEnabled: true,
+                hostRecentlyTransitioning: false, mode: FollowLeadMode.Any, hostBusy: true));
+    }
+
+    /// <summary>The master switch still wins over everything, including a busy host under
+    /// follow_lead=any.</summary>
+    [Fact]
+    public void TheIniFlagOffNeverArmsEvenWithABusyHostUnderAnyMode()
+    {
+        Assert.Equal(
+            ClientDoorRefusalReason.None,
+            ClientDoorRefusalRule.Decide(
+                isClient: true, followHostModule: true, refusalEnabled: false,
+                hostRecentlyTransitioning: false, mode: FollowLeadMode.Any, hostBusy: true));
+    }
+
+    /// <summary>Calling <c>ShouldArm</c> with no mode/hostBusy arguments (every pre-existing
+    /// call site) must keep meaning exactly what it meant before this feature existed.</summary>
+    [Fact]
+    public void OmittingTheNewParametersDefaultsToTodaysBehaviour()
+    {
+        Assert.True(ClientDoorRefusalRule.ShouldArm(
+            isClient: true, followHostModule: true, refusalEnabled: true, hostRecentlyTransitioning: false));
+        Assert.Equal(
+            ClientDoorRefusalReason.HostMustLead,
+            ClientDoorRefusalRule.Decide(
+                isClient: true, followHostModule: true, refusalEnabled: true, hostRecentlyTransitioning: false));
+    }
+
+    // ---- LeadFollowRule: the host-side half of lead-swap ---------------------------------
+
+    /// <summary>A host announce is always eligible, under either mode — unaffected by
+    /// lead-swap, exactly like every peer's pre-existing follow-the-host behaviour.</summary>
+    [Fact]
+    public void AHostAnnounceIsAlwaysEligible()
+    {
+        Assert.True(LeadFollowRule.IsEligibleLeader(weAreHost: false, announcerIsHost: true, FollowLeadMode.Any));
+        Assert.True(LeadFollowRule.IsEligibleLeader(weAreHost: false, announcerIsHost: true, FollowLeadMode.Host));
+        Assert.True(LeadFollowRule.IsEligibleLeader(weAreHost: true, announcerIsHost: true, FollowLeadMode.Any));
+    }
+
+    /// <summary>A client never follows another client, regardless of mode — there is exactly
+    /// one shared world, and it is wherever the host is or is about to be.</summary>
+    [Fact]
+    public void AClientNeverFollowsAnotherClient()
+    {
+        Assert.False(LeadFollowRule.IsEligibleLeader(weAreHost: false, announcerIsHost: false, FollowLeadMode.Any));
+    }
+
+    [Fact]
+    public void TheHostFollowsAClientOnlyUnderAnyMode()
+    {
+        Assert.True(LeadFollowRule.IsEligibleLeader(weAreHost: true, announcerIsHost: false, FollowLeadMode.Any));
+        Assert.False(LeadFollowRule.IsEligibleLeader(weAreHost: true, announcerIsHost: false, FollowLeadMode.Host));
+    }
+
+    [Fact]
+    public void TheHostMaySafelyFollowOnlyWhenAllThreeGatesAreClear()
+    {
+        Assert.True(LeadFollowRule.HostMaySafelyFollow(
+            hostMidTransition: false, hostInDialogue: false, hostInCombat: false));
+
+        Assert.False(LeadFollowRule.HostMaySafelyFollow(
+            hostMidTransition: true, hostInDialogue: false, hostInCombat: false));
+        Assert.False(LeadFollowRule.HostMaySafelyFollow(
+            hostMidTransition: false, hostInDialogue: true, hostInCombat: false));
+        Assert.False(LeadFollowRule.HostMaySafelyFollow(
+            hostMidTransition: false, hostInDialogue: false, hostInCombat: true));
+    }
+
+    /// <summary>"announce lost -&gt; fallback": no pending announce is Fallback regardless of
+    /// mode or how safe the host is right now — there is nothing to follow.</summary>
+    [Fact]
+    public void DecideHostFollowFallsBackWithNoPendingAnnounce()
+    {
+        Assert.Equal(
+            TransitionFollowPath.Fallback,
+            LeadFollowRule.DecideHostFollow(
+                hasPendingAnnounce: false, announceModule: "tar_m03aa", localModule: "end_m01aa",
+                announcerIsHost: false, FollowLeadMode.Any,
+                hostMidTransition: false, hostInDialogue: false, hostInCombat: false));
+    }
+
+    /// <summary>The everyday case: a client's announce, mode=any, host free — followed.</summary>
+    [Fact]
+    public void DecideHostFollowFollowsAnEligibleSafeClientAnnounce()
+    {
+        Assert.Equal(
+            TransitionFollowPath.Announced,
+            LeadFollowRule.DecideHostFollow(
+                hasPendingAnnounce: true, announceModule: "tar_m03aa", localModule: "end_m01aa",
+                announcerIsHost: false, FollowLeadMode.Any,
+                hostMidTransition: false, hostInDialogue: false, hostInCombat: false));
+    }
+
+    /// <summary>follow_lead=host: a client's announce is never followed, however safe the
+    /// host is — this is "the host never follows anyone", restored exactly.</summary>
+    [Fact]
+    public void DecideHostFollowIgnoresAClientAnnounceUnderHostOnlyMode()
+    {
+        Assert.Equal(
+            TransitionFollowPath.Fallback,
+            LeadFollowRule.DecideHostFollow(
+                hasPendingAnnounce: true, announceModule: "tar_m03aa", localModule: "end_m01aa",
+                announcerIsHost: false, FollowLeadMode.Host,
+                hostMidTransition: false, hostInDialogue: false, hostInCombat: false));
+    }
+
+    /// <summary>"both announce simultaneously -&gt; host wins": the host's own transition
+    /// having just begun (hostMidTransition) means a client's announce arriving in the same
+    /// window is never acted on - the host's own crossing proceeds untouched.</summary>
+    [Fact]
+    public void BothAnnouncingSimultaneouslyTheHostsOwnTransitionWins()
+    {
+        Assert.Equal(
+            TransitionFollowPath.Fallback,
+            LeadFollowRule.DecideHostFollow(
+                hasPendingAnnounce: true, announceModule: "tar_m03aa", localModule: "end_m01aa",
+                announcerIsHost: false, FollowLeadMode.Any,
+                hostMidTransition: true, hostInDialogue: false, hostInCombat: false));
+    }
+
+    [Theory]
+    [InlineData(false, true, false)]
+    [InlineData(false, false, true)]
+    public void DecideHostFollowFallsBackWhenTheHostIsBusy(
+        bool hostMidTransition, bool hostInDialogue, bool hostInCombat)
+    {
+        Assert.Equal(
+            TransitionFollowPath.Fallback,
+            LeadFollowRule.DecideHostFollow(
+                hasPendingAnnounce: true, announceModule: "tar_m03aa", localModule: "end_m01aa",
+                announcerIsHost: false, FollowLeadMode.Any,
+                hostMidTransition, hostInDialogue, hostInCombat));
+    }
+
+    /// <summary>Already there: nothing to race ahead of, exactly like the client-side rule.</summary>
+    [Fact]
+    public void DecideHostFollowFallsBackWhenAlreadyThere()
+    {
+        Assert.Equal(
+            TransitionFollowPath.Fallback,
+            LeadFollowRule.DecideHostFollow(
+                hasPendingAnnounce: true, announceModule: "end_m01aa", localModule: "end_m01aa",
+                announcerIsHost: false, FollowLeadMode.Any,
+                hostMidTransition: false, hostInDialogue: false, hostInCombat: false));
+    }
 }

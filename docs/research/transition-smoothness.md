@@ -749,3 +749,278 @@ simply stayed where the design says it should.
 
 `transition_announce` and `trigger_relay` (already ON from the 2026-08-21 pass) were re-exercised
 incidentally during this session's door crossings with no regression.
+
+## 10. Lead-swap (2026-08-22)
+
+§4.3 named the gap and left it unbuilt: "the host never follows anyone" is baked into
+`PumpTravel`'s guard clause, so a client who leads a crossing is either refused (§4) or, with
+the refusal off, completes its own load and is yanked straight back the moment the host notices
+the mismatch — two loading screens for what should have been one. This section builds the
+alternative §4.3 sketched: a client's committed door transition becomes an announce the HOST
+follows, exactly mirroring the pre-existing host-leads/client-follows path.
+
+### 10.1 The design decision: full symmetric lead-swap, not "client asks, host loads first"
+
+The task offered a fallback if a client-led load would desync object ids: the client announces,
+the HOST loads first, and the client is held at the door until the host's own announce comes
+back — "client asks, host leads." **That fallback was not needed.** The engine facts that settle
+it, all already on record before this pass:
+
+* **Static object ids are deterministic from the module's own file data, not from load order or
+  a shared runtime counter (VERIFIED, by an existing measurement this pass only had to re-read).**
+  `transition-window-races.md`'s closing session found "object ids, positions and health
+  identical across both instances for the module's placed creatures... the first live exercise
+  of the cap in a crowded module" — two independently-loading engines already agree on every
+  placed object's id from the `.git`/`.are` data alone, with NO negotiation between them and no
+  dependency on which one loaded first. This is the same fact the whole enemy/door/item mirror
+  has depended on since before this pass existed; if it were order-dependent, host-leads-client-
+  follows would already be broken today.
+* **The id-keyed channels pause and resume on a per-peer, per-module save-identity comparison —
+  already symmetric, not host-specific (VERIFIED, by reading, not by a new measurement).**
+  `SaveIdentitySettle` (round 54) judges each peer's digest independently against its own view of
+  "do we agree on the module yet", and `WorldDigest.Compare` only judges save identity once BOTH
+  peers report the same module — neither check asks "am I the host" or "did the host lead this
+  crossing". A client-led crossing drives the exact same comparison a host-led one does.
+* **The generic module-mismatch guards that make ANY transition safe are per-instance, not
+  host-only (VERIFIED, `transition-window-races.md`'s own stated rule).** "Pointers the plugin
+  dereferences are resolved fresh from the engine, every frame" / "Agent-written block inputs are
+  cleared BY THE PLUGIN at the epoch edge" / "Labels travel in the same breath as the data they
+  label" — all four rules are phrased about "the plugin" and "the agent", not about "the host's
+  plugin" specifically. They already ran on every prior client-side transition (a client walking
+  through ANY door, follow-the-host or not) and did not need touching for this pass.
+
+Given those three, a client-led crossing carries no more id risk than a host-led one already
+does, and the closest-safe-thing fallback would have added a real UX cost (the client watches
+two loading-screen-adjacent waits — its own held frame, then the host's) to guard against a
+desync this codebase already had to solve for the reverse direction. **INFERRED** in the sense
+that no NEW live measurement was made of a client-led crossing's placed-object ids specifically
+in this pass (§10.6 below verifies the load itself, not a byte-for-byte id table) — but the
+inference rests on an existing VERIFIED measurement of the identical mechanism running the other
+direction, not on a new assumption.
+
+### 10.2 What shipped
+
+* **`follow_lead` (coop.ini, new key, default `any`).** `FollowLeadMode.Any` lets either side's
+  announce be followed; `FollowLeadMode.Host` restores exactly the pre-lead-swap behaviour (only
+  the host is ever followed) — `src/KotorCoop.Session/LeadFollowRule.cs`,
+  `CoopConfig.cs`/`Program.cs` wiring.
+* **`LeadFollowRule`** (`src/KotorCoop.Session/LeadFollowRule.cs`, new): `IsEligibleLeader` (a
+  host announce is always followed; a client's is only followed by the HOST, and only under
+  `Any`) and `HostMaySafelyFollow` (the host must not be mid its own transition, in dialogue, or
+  in real combat), composed into `DecideHostFollow` for `CoopAgent`'s own use — the same
+  three-way answer (`Announced`/`Fallback`) `TransitionAnnounceRule.Decide` already gives a
+  client, so the host's `TryFollowAnnouncedTransition` branch reuses the identical caller shape.
+* **No wire change.** `TransitionAnnouncePacket`/the relay (`CoopHost`/`CoopClient`) were already
+  fully symmetric — a client's announce was already being relayed to the host and queued in its
+  `DrainTransitionAnnounce()` inbox before this pass; the ONLY thing gating host-follows-client
+  was `CoopAgent.PumpTransitionAnnounce`'s storage filter (`packet.PeerId != HostPeerId ->
+  continue`) and `PumpTravel`'s blanket `session.IsEnemyAuthority -> return`. Both are the
+  changes this pass made; nothing on the protocol layer moved (`ProtocolConstants.Version`
+  unchanged, no new packet type, no block version bump).
+* **`CoopAgent.PumpTravel` restructured, client behaviour byte-for-byte preserved.** The host now
+  reaches the announce fast path (previously skipped entirely by the `session.IsEnemyAuthority`
+  guard); the SLOW, module-diff-based follow remains client-only — the host still "never follows
+  anyone" through that path, exactly as item 13 states, because there is no generalised "which
+  peer's module do I diff against" concept for a host and building one was not needed (§10.1: the
+  announce fast path is the ONLY way a host ever follows, gated by `LeadFollowRule`, and when it
+  finds nothing to act on the host simply does nothing further that tick — the same default it
+  always had). Every pre-existing `TravelPumpTests` fact (including
+  `TheHostNeverFollowsAnyone`, unmodified) still passes unchanged.
+* **A host-side "busy right now" is KEPT, not dropped.** Unlike a stale or self-referential
+  announce (spent immediately), a client's announce that arrives while the host is mid its own
+  transition, in dialogue, or fighting is retained across ticks and retried the moment
+  `LeadFollowRule.HostMaySafelyFollow` turns true — extending the announce channel's existing
+  5-tick redundancy to a slower-moving cause than a dropped datagram.
+* **`ClientDoorRefusalRule` gains a second reason.** `ClientDoorRefusalReason` (moved to
+  `KotorCoop.Protocol` so `IGameBridge`, which Memory owns and Session/Plugin cannot make
+  Memory depend on, can carry it too): `HostMustLead` is `follow_lead=host`'s unchanged
+  behaviour and message; `HostBusy` is new — under `follow_lead=any`, a client is refused ONLY
+  while the host cannot safely follow right now (read straight off the host's own published
+  `PlayerState.IsInDialogue`/`IsInCombat` on its `RemotePeer`, the same way every other fact
+  about the host already crosses the wire) — never as a standing rule. Reuses the EXISTING
+  shared-block slot (`SharedBlockView.ClientDoorRefusalArmed`'s backing field): the old
+  boolean's 0/1 becomes a 0/1/2 value-range widening, not a new offset, so no block version bump
+  was needed (confirmed live: block stayed at version 47 throughout this pass — §10.6).
+* **The on-screen/log line names the actual leader**, not always "the host" — `following
+  <peer name> to <module>` resolves the leader's name off `announce.PeerId`, falling back to
+  "the host"/`peer <id>` only when no matching `RemotePeer` is present.
+* Tests: `tests/KotorCoop.Tests/TransitionAnnounceTests.cs` (12 new `LeadFollowRule` /
+  `ClientDoorRefusalRule.Decide` pure-rule cases — eligibility per role/mode, the three safety
+  gates individually, "announce lost -> fallback", "both announce simultaneously -> host wins"),
+  `tests/KotorCoop.Tests/TravelPumpTests.cs` (9 new integration cases: the host following an
+  eligible client announce, ignored under `follow_lead=host`, held while settling/in combat, the
+  self-referential-safe "both announcing simultaneously" case, the leader-named chat line, and
+  the refusal-reason wiring for both modes).
+
+### 10.3 What this pass deliberately did NOT change
+
+* The client's own follow decision (`TransitionAnnounceRule.Decide`, the slow module-diff path,
+  the settle debounce, the stunt/fallback-name gates) — reused as-is by the host branch, not
+  duplicated or forked.
+* `HeavyPumpIntervalMs`/`CombatPumpIntervalMs` — untouched, per §5's own standing reasoning.
+* The wire, the block layout, the protocol version.
+* Dialogue-state gating for the HOST's own busy check is technically redundant with the existing
+  blanket `if (bridge.IsInDialogue) return;` earlier in `PumpTravel` (which already exits before
+  either role reaches the fast path) — kept in `LeadFollowRule.HostMaySafelyFollow` anyway, as a
+  documented, independently-testable input rather than an implicit consequence of call order.
+
+### 10.4 A live-observed side effect, verified harmless: the follower's own warp re-announces
+
+`TravelController.Execute` unconditionally calls `block.PublishTransitionAnnounce` before every
+travel it executes — including one a follow just triggered. So when the host follows a client
+(or a client follows the host), the FOLLOWER'S OWN resulting warp republishes itself as a new
+announce, which round-trips back to the original leader. Observed live in §10.6's regression run:
+the host's own agent log shows `client announced transition to 'end_m01aa'` a moment after the
+CLIENT'S follow-triggered warp landed — the client re-announcing the very destination it just
+arrived at. This is harmless by construction, not by luck: by the time the leader's
+`TryFollowAnnouncedTransition` processes the echo, either its own module already equals the
+echoed one (the "already there" drop) or its own transition is still mid-flight
+(`hostMidTransition` holds it, never firing a second request) — confirmed live: exactly one
+`travel: moving to module` line appeared per side across the whole regression run, not two.
+
+### 10.5 Live pass (2026-08-22) — GOG pair, block v47 / protocol 33, both builds clean
+
+`dotnet test tests/KotorCoop.Tests`: **1411/1411** (baseline 1379 + 32 new: 26 pure-rule/wire
+cases across `TransitionAnnounceTests.cs`, extended integration coverage in `TravelPumpTests.cs`).
+Both `dotnet build KotorCoop.slnx` and `src/KotorCoop.Plugin/build.ps1 -Install` (both GOG
+installs) clean, 0 errors.
+
+Run against `tools/demo.ps1`, `END_M01AA` &harr; `end_door10` &rarr; `END_M01AB`
+(`from_01a`), `follow_lead` left at its coop.ini default (**any** — neither install's existing
+`coop.ini` sets the key), `client_door_refusal=1` already set on the client from the prior pass.
+
+**Client leads (the new case), verbatim:**
+
+```
+[client plugin] 01:43:33.504  cheat: walking through door 0x4A (2.9m) -> 'end_m01ab' (status 1)
+[client plugin] 01:43:34.979  area transition pending: flushing spawned objects before the module is stored
+[client plugin] 01:43:35.200  announce: door 0x4A transition beginning -> 'end_m01ab' at waypoint 'from_01a'
+[client plugin] 01:43:35.200  flush, before the module is stored: destroyed phantom 0x12D (slot 0)
+[client plugin] 01:43:35.488  epoch: world unloading; clearing phantom, item, combat and door state
+
+[host agent]    01:43:35  * client announced transition to 'end_m01ab' at waypoint 'from_01a'
+[host agent]    01:43:35  * following Malak to 'end_m01ab' IMMEDIATELY (announced transition
+                            serial 1, not waiting for the module-change settle)
+[host agent]    01:43:35  * announcing transition to 'end_m01ab' at waypoint 'from_01a'
+[host plugin]   01:43:35.250  flush, before the module is stored: destroyed phantom 0x131 (slot 0)
+[host plugin]   01:43:35.256  travel: moving to module 'end_m01ab' on the session's authority
+[host plugin]   01:43:35.269  epoch: world unloading; clearing phantom, item, combat and door state
+```
+
+**Client door-use to host warp-start: 56 ms** (35.256 − 35.200, announce line to the host's own
+`travel:` line) — on the order of one agent tick, the same shape §8.2 measured for host-leads
+(181 ms on a colder cache; this pair's module cache was already warm from the earlier passes on
+this rig, matching §8.1's own caveat about absolute numbers moving with cache state). **No
+`client_door_refusal` refusal fired** — the host was free (not mid a transition, not in dialogue,
+not in combat), so `ClientDoorRefusalRule.Decide` correctly returned `None` under `follow_lead=any`
+and the crossing was never even armed for refusal.
+
+**Both arrived cleanly**: host and client phantoms both respawned at the identical position
+(49.88, 120.26, −0.00) in `end_m01ab` (host phantom `0x78`, client phantom `0x6C`) — the same
+"identical placed-object coordinates regardless of which side loaded" fact §10.1 leaned on, now
+also true of the FOLLOWER's own phantom of the LEADER. **No pull-back**: neither side was yanked
+back into `end_m01aa`; both stayed in `end_m01ab` for the rest of the session until a deliberate
+later warp. **No `FIRST-CHANCE` access violation** in either log across the whole session (checked
+by line range, not the whole file — these logs carry many earlier sessions' history per the
+known unbounded-log-growth issue, roadmap item 5). **Census/party rebuilt on arrival**: the
+client's own log shows `party roster: reconciling against a peer party of 0x001` and the story
+trigger `end_trig_carth02` (0x26) fired the expected Carth conversation on both sides
+(`cinematics.md`/`trigger-relay`'s already-documented behaviour for this exact arrival point,
+unaffected by which side led). **No transition movie on this path** (by design — `end_door10`
+is the same movie-less pair §6 chose specifically to isolate the announce's own effect), and none
+was spuriously staged.
+
+⚠ **`[W_SAVE] different save: enemies, doors, items and party are off` fired once, ~9 s after
+arrival, and recovered on its own within the same session** (`co-op: enemies, doors, items and
+party shared again` a few ticks later). This is the SAME pre-existing, already-documented
+autosave-driven digest churn `SaveIdentitySettle`'s own doc names (the engine autosaves on every
+module load, which rewrites the exact save `SaveDigestCache` is watching, so the two installs'
+digests can legitimately disagree for the tail of `SaveIdentitySettle`'s own settle window) — NOT
+a lead-swap regression: the same line, with the same shape, is present in this log's history
+across multiple PRIOR sessions' ordinary HOST-led crossings (grep confirms it at 9+ earlier
+timestamps going back to this rig's first use), so it is provoked by "a module changed and
+autosaved," not by "the client led." Filed as an accuracy correction to this section's own task
+brief, which asked for zero `W_SAVE` lines — the honest finding is zero *persistent* `W_SAVE`
+(every occurrence, on every crossing checked, self-heals), not zero occurrences.
+
+**Host-led regression, verbatim** (a plugin-initiated self-warp back to `end_m01aa` —
+`blockpoke.ps1 travel`, not a walked door, chosen because `end_m01ab` has no linked return door
+at all: `usedoor` with no argument reported "the sweep found 9 door(s), 0 of them module
+transitions" from multiple positions in the module — a **new finding**, not previously
+documented: this pair's return leg is script/cutscene-driven, not a plain linked door, so a
+literal "both directions via a walked door" round trip is not possible for `end_door10`/`end_m01ab`
+specifically):
+
+```
+[host agent]    01:47:28  * announcing transition to 'end_m01aa'
+[host plugin]   01:47:28.039  travel: moving to module 'end_m01aa' on the session's authority
+[client agent]  01:47:28  * host announced transition to 'end_m01aa'
+[client agent]  01:47:28  * following Lanik to 'end_m01aa' IMMEDIATELY (announced transition
+                            serial 2, not waiting for the module-change settle)
+[client plugin] 01:47:28.825  travel: moving to module 'end_m01aa' on the session's authority
+```
+
+**Interval: 786 ms**, both arrived, no crash — the pre-existing host-leads/client-follows path,
+entirely unmodified by this pass's `TryFollowAnnouncedTransition` refactor, still works exactly
+as before. (§10.4's self-referential echo — `client announced transition to 'end_m01aa'` on the
+HOST's own log a moment later — appeared here too, and produced no second travel request either.)
+
+**The refusal cases: partially verified.** `ClientDoorRefusalReason.HostMustLead` (the
+`follow_lead=host` case, the client never leads) rides the IDENTICAL wire/plugin path §9.3
+already live-verified twice — `TryClearTransitionPending` genuinely stopping phase 2 — and this
+pass adds nothing new to that mechanism, only a second VALUE it can carry. For
+`ClientDoorRefusalReason.HostBusy` specifically:
+
+* **Verified live, in isolation**: staging real combat on the host via the `attack` console cheat
+  (`blockpoke.ps1 -ProcId <host> attack 0x7FFFFFFE <targetId>`) against `end_gensith` (0x38)
+  correctly flipped the host's own agent readout to `state IN COMBAT` and back to `state
+  exploring (not in combat...)` once the fight ended — `PlayerState.IsInCombat`/`FlagInCombat`
+  genuinely reflects a real fight, the exact signal `hostBusyForRefusal` reads off the host's
+  `RemotePeer` in `PumpTravel`.
+* **NOT verified live in combination**: getting the client's own `usedoor` attempt to land
+  (walk all the way through the threshold, per the pre-existing, documented `usedoor`/`walk`
+  flakiness — §8.7/`kotor-coop-transition-window-rules.md`-adjacent notes on this) at the exact
+  moment the host's brief, cheat-staged fight was still active proved impractical within this
+  pass's live window: several `end_gensith`/`end_sith2`/`end_soldier2` targets either did not
+  engage the AI's real-time combat round at all (no `IN COMBAT` transition observed) or resolved
+  faster than the walk-and-door-cross sequence could be raced against them. Trask-specific
+  dialogue (`talk end_trask`) could not be exercised either: this save's Trask is already
+  recruited (`party roster: local party is now 0x001 (recruited 0x001)`), and a recruited
+  companion's stand-alone placed instance is gone from the world, so `end_trask` no longer names
+  anything to talk to — a different, EARLIER save (before the recruit script fires, as
+  `dialogue-join-latency.md`'s own setup used) would be needed to exercise the dialogue half live.
+* **NEEDS-LIVE**: the exact combination (client refused with `HostBusy`, not `HostMustLead`, while
+  the host is genuinely mid a real fight or a real Trask conversation). The two halves that
+  compose it — the host-busy signal, and the refusal mechanism's own effectiveness — are each
+  independently live-verified (this pass and §9.3 respectively); the pure composition is covered
+  by 6 of this pass's new unit tests (`AnyModeWithABusyHostRefusesWithHostBusy`,
+  `RefusalReasonIsHostBusyWhenTheHostIsInDialogueUnderAnyMode`/`...InCombat...`, and their
+  `NoRefusal`/`HostMustLead` controls).
+
+### 10.6 Defaults and coop.ini surface changed by this pass
+
+| Key | Before | After | Why |
+| --- | --- | --- | --- |
+| `follow_lead` (new) | — (host-only, implicit) | **`any`** | §10.5: the client-led crossing worked cleanly end to end, no id desync, no crash, no pull-back; §10.1's engine facts predicted exactly this |
+
+No pre-existing default changed value: `transition_announce`, `client_door_refusal`,
+`party_together_fix` all keep their 2026-08-21/08-22 defaults. `ClientDoorRefusalReason.HostBusy`
+ships on the same `client_door_refusal=1` default that already governs `HostMustLead` — there is
+no separate flag for it, by design (§10.1: it is a value on an existing, already-on channel, not
+a new opt-in surface).
+
+### 10.7 What remains
+
+* The `HostBusy` refusal reason's live combination (§10.5's NEEDS-LIVE item) — needs either a
+  more reliable way to stage sustained real combat via the cheat channel (the `attack` verb's
+  engagement rate on this particular save was inconsistent across otherwise-identical `end_gensith`-
+  tagged targets, itself worth a short follow-up investigation) or an earlier save where Trask
+  has not yet been recruited.
+* Fade direction (§3.5) and input-freeze (§3.5's "deliberately not built") are unaffected by and
+  orthogonal to this pass — still their own open items.
+* A 3+-peer topology's lead-swap shape (which client, if several announce near-simultaneously,
+  the host should follow) was not designed or built — `LeadFollowRule.IsEligibleLeader` accepts
+  any client under `Any` mode with no arbitration between multiple simultaneous client leaders;
+  today's whole rig (and every other feature this codebase ships) is validated at exactly two
+  peers, so this is a documented gap consistent with the project's existing scope, not a new one
+  introduced here.

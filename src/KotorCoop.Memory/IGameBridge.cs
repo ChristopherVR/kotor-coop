@@ -390,12 +390,16 @@ public interface IGameBridge : IDisposable
     /// coop.ini <c>client_door_refusal</c>. While armed, this instance's own engine-native
     /// door crossing (as opposed to a session-commanded warp, which never touches this path)
     /// is refused early, before the load: the walk-through is cancelled and a line is posted
-    /// naming the door and its destination. A LEVEL, computed and re-sent by the agent every
-    /// tick from role, settings and whether the host has been seen transitioning recently — the
-    /// plugin has no notion of "host" or "client" on its own. Default false when this bridge
-    /// has no plugin to arm.
+    /// naming the door, its destination, and (2026-08-22) WHY —
+    /// <see cref="ClientDoorRefusalReason.HostMustLead"/> under <c>follow_lead=host</c> (today's
+    /// exact behaviour) or <see cref="ClientDoorRefusalReason.HostBusy"/> under
+    /// <c>follow_lead=any</c> when the host cannot safely follow right now. A LEVEL, computed
+    /// and re-sent by the agent every tick from role, settings and whether the host has been
+    /// seen transitioning recently — the plugin has no notion of "host" or "client" on its own.
+    /// <see cref="ClientDoorRefusalReason.None"/> means not armed. Default false when this
+    /// bridge has no plugin to arm.
     /// </summary>
-    bool TryArmClientDoorRefusal(bool armed) => false;
+    bool TryArmClientDoorRefusal(ClientDoorRefusalReason reason) => false;
 
     /// <summary>False when this bridge cannot see or drive enemy health.</summary>
     bool SupportsEnemySync => false;

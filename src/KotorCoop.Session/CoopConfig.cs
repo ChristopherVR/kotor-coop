@@ -196,6 +196,18 @@ public sealed record CoopConfig
     /// </summary>
     public bool ClientDoorRefusalEnabled { get; init; }
 
+    /// <summary>
+    /// Who may lead an area transition that the OTHER side follows immediately via the announce
+    /// channel — docs/research/transition-smoothness.md's 2026-08-22 "Lead-swap" entry. coop.ini
+    /// <c>follow_lead</c>: <c>any</c> (the default) lets either player's committed door crossing
+    /// become an announce the other follows, mirroring the pre-existing host-leads path
+    /// symmetrically, gated by <see cref="KotorCoop.Session.LeadFollowRule"/> so the host is
+    /// never pulled out of its own transition, a conversation, or a real fight. <c>host</c>
+    /// restores exactly today's behaviour: only the host is ever followed, and
+    /// <see cref="ClientDoorRefusalEnabled"/> refuses every premature client crossing as before.
+    /// </summary>
+    public FollowLeadMode FollowLead { get; init; } = FollowLeadMode.Any;
+
     /// <summary>The anchor as the plugin's numeric code (0=TL, 1=TR, 2=BL, 3=BR).</summary>
     public uint ChatOverlayAnchorCode => ChatOverlayAnchor.Trim().ToLowerInvariant() switch
     {
@@ -309,6 +321,10 @@ public sealed record CoopConfig
                 || IsTruthy(kv.GetValueOrDefault("transition_announce")),
             ClientDoorRefusalEnabled = !kv.ContainsKey("client_door_refusal")
                 || IsTruthy(kv.GetValueOrDefault("client_door_refusal")),
+            FollowLead = kv.GetValueOrDefault("follow_lead", "any")
+                .Trim().Equals("host", StringComparison.OrdinalIgnoreCase)
+                ? FollowLeadMode.Host
+                : FollowLeadMode.Any,
         };
     }
 

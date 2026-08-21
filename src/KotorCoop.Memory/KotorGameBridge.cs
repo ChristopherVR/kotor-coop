@@ -4000,14 +4000,16 @@ public sealed class KotorGameBridge : IGameBridge
     }
 
     /// <inheritdoc />
-    public bool TryArmClientDoorRefusal(bool armed)
+    public bool TryArmClientDoorRefusal(ClientDoorRefusalReason reason)
     {
         if (_pluginBlock == 0)
         {
             return false;
         }
 
-        return _memory.TryWrite(_pluginBlock + BlockClientDoorRefusalArmed, armed ? 1u : 0u);
+        // The same slot the old boolean "armed" flag used - nonzero still means armed, so this
+        // is a value-range widening (None/HostMustLead/HostBusy), not a new field.
+        return _memory.TryWrite(_pluginBlock + BlockClientDoorRefusalArmed, (uint)reason);
     }
 
     // ---- staging cheats --------------------------------------------------------

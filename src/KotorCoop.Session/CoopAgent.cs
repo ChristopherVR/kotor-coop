@@ -132,6 +132,19 @@ public sealed record AgentSettings
     public bool ClientDoorRefusalEnabled { get; init; }
 
     /// <summary>
+    /// coop.ini <c>follow_lead</c> — docs/research/transition-smoothness.md's 2026-08-22
+    /// "Lead-swap" entry. <see cref="FollowLeadMode.Any"/> (the default) lets EITHER player's
+    /// committed door crossing become an announce the other follows: a client's crossing is now
+    /// eligible to be followed by the host too, mirrored through the same announce channel and
+    /// the same <see cref="TryFollowAnnouncedTransition"/> fast path, gated by
+    /// <see cref="LeadFollowRule.HostMaySafelyFollow"/> so the host is never pulled out of its
+    /// own transition, a conversation, or a real fight. <see cref="FollowLeadMode.Host"/>
+    /// restores exactly today's behaviour — the host never follows anyone, and
+    /// <see cref="ClientDoorRefusalEnabled"/> refuses every premature client crossing as before.
+    /// </summary>
+    public FollowLeadMode FollowLeadMode { get; init; } = FollowLeadMode.Any;
+
+    /// <summary>
     /// Turns a module resref into the name shown on screen ("Taris - Lower City" rather than
     /// "tar_m03aa"), for the "following &lt;host&gt; to &lt;module&gt;" line
     /// <see cref="TransitionAnnounceEnabled"/>'s fast path posts. Null (the default) leaves the
@@ -639,12 +652,41 @@ public sealed class CoopAgent(IGameBridge bridge, ICoopSession session, AgentSet
 
     // ---- transition announce (the destination, sent before transition-movies' film) --
 
-    /// <summary>One pending host announce, or null when none is outstanding — replaced
+    /// <summary>One pending leader announce, or null when none is outstanding — replaced
     /// wholesale by a fresher one, never merged (unlike the movie accumulation, there is only
-    /// ever one live destination).</summary>
-    private readonly record struct PendingHostAnnounce(string Module, string Waypoint, uint Serial);
+    /// ever one live destination). <see cref="PeerId"/> is who announced it: the host (always
+    /// eligible) or, under <see cref="AgentSettings.FollowLeadMode.Any"/>, a client — see
+    /// <see cref="LeadFollowRule"/>.</summary>
+    private readonly record struct PendingHostAnnounce(string Module, string Waypoint, uint Serial, uint PeerId);
 
     private PendingHostAnnounce? _pendingAnnounce;
+
+    /// <summary>
+    /// The most recent moment THIS instance's own engine committed to (or is still playing) a
+    /// transition of its own — set whenever our own outbound <see cref="TransitionAnnouncePacket"/>
+    /// or <see cref="TransitionMoviePacket"/> serial changes, the same rising-edge moment
+    /// <see cref="PumpTransitionAnnounce"/>/<see cref="PumpTransitionMovies"/> already log
+    /// "announcing ..." for. Feeds the host-side lead-swap safety gate
+    /// (<see cref="LeadFollowRule.HostMaySafelyFollow"/>, design point 2 of
+    /// transition-smoothness.md's 2026-08-22 entry): a client's announce must never be acted on
+    /// while the HOST's own crossing is already under way — including the ~0.5 s fade window
+    /// BEFORE the module name blanks, which <see cref="IsFallbackModuleName"/> alone cannot see.
+    /// </summary>
+    private long _lastOwnTransitionSignalAtMs = -1_000_000_000L;
+
+    /// <summary>
+    /// How long <see cref="_lastOwnTransitionSignalAtMs"/> keeps the host-side safety gate
+    /// closed after OUR OWN transition begins. Deliberately much shorter than
+    /// <see cref="HostTransitionSignalWindowMs"/> (45 s): that constant guards a DIFFERENT
+    /// concern (disarming a client's door refusal for a transition that can run tens of seconds
+    /// once it starts, where <see cref="IsFallbackModuleName"/> already covers the load itself).
+    /// This one only needs to bridge the short window between "announced" and "the module name
+    /// actually blanks" — the door's own fade is 0.5 s (cinematics.md §8.2) — after which
+    /// <see cref="IsFallbackModuleName"/> and the post-arrival settle window
+    /// (<see cref="AgentSettings.ModuleSettleMs"/>) take over. Left open for tens of seconds
+    /// past that would block a legitimate later client lead for no reason.
+    /// </summary>
+    private const int OwnTransitionSignalWindowMs = 3_000;
 
     /// <summary>The transition-announce serial this agent has already published, so a
     /// standing destination is not re-announced every tick.</summary>
@@ -677,6 +719,7 @@ public sealed class CoopAgent(IGameBridge bridge, ICoopSession session, AgentSet
             {
                 _announcedTransitionSerial = serial;
                 _announceRepeatsLeftForTransition = AnnounceRepeats;
+                _lastOwnTransitionSignalAtMs = SessionClock.NowMs;
                 Log?.Invoke($"announcing transition to '{module}'"
                     + (waypoint.Length > 0 ? $" at waypoint '{waypoint}'" : string.Empty));
             }
@@ -688,9 +731,12 @@ public sealed class CoopAgent(IGameBridge bridge, ICoopSession session, AgentSet
             }
         }
 
+        bool weAreHost = session.IsEnemyAuthority;
+
         foreach (TransitionAnnouncePacket packet in session.DrainTransitionAnnounce())
         {
-            if (packet.PeerId == CoopHost.HostPeerId)
+            bool announcerIsHost = packet.PeerId == CoopHost.HostPeerId;
+            if (announcerIsHost)
             {
                 _lastHostTransitionSignalAtMs = SessionClock.NowMs;
             }
@@ -702,15 +748,23 @@ public sealed class CoopAgent(IGameBridge bridge, ICoopSession session, AgentSet
 
             _seenTransitionAnnounceSerials[packet.PeerId] = packet.Serial;
 
-            // Only the HOST is ever followed (PumpTravel's own rule) — an announce from
-            // another client names a destination nobody here is meant to chase.
-            if (packet.PeerId != CoopHost.HostPeerId || packet.Module.Length == 0)
+            if (packet.Module.Length == 0)
             {
                 continue;
             }
 
-            _pendingAnnounce = new PendingHostAnnounce(packet.Module, packet.Waypoint, packet.Serial);
-            Log?.Invoke($"host announced transition to '{packet.Module}'"
+            // Lead-swap (docs/research/transition-smoothness.md, 2026-08-22): a client always
+            // follows the host (unaffected); the HOST follows a client's announce only when
+            // FollowLeadMode allows it — LeadFollowRule.IsEligibleLeader is the single place
+            // that decision is made, so PumpTravel's later safety gate and this storage gate
+            // can never disagree about who is a candidate leader.
+            if (!LeadFollowRule.IsEligibleLeader(weAreHost, announcerIsHost, settings.FollowLeadMode))
+            {
+                continue;
+            }
+
+            _pendingAnnounce = new PendingHostAnnounce(packet.Module, packet.Waypoint, packet.Serial, packet.PeerId);
+            Log?.Invoke($"{(announcerIsHost ? "host" : "client")} announced transition to '{packet.Module}'"
                 + (packet.Waypoint.Length > 0 ? $" at waypoint '{packet.Waypoint}'" : string.Empty));
         }
     }
@@ -726,6 +780,7 @@ public sealed class CoopAgent(IGameBridge bridge, ICoopSession session, AgentSet
             {
                 _announcedCinematicSerial = serial;
                 _announceRepeatsLeft = AnnounceRepeats;
+                _lastOwnTransitionSignalAtMs = SessionClock.NowMs;
                 Log?.Invoke($"announcing {movies.Length} transition movie(s): {string.Join(", ", movies)}");
             }
 
@@ -1956,13 +2011,25 @@ public sealed class CoopAgent(IGameBridge bridge, ICoopSession session, AgentSet
         // no notion of host/client and simply trusts whatever this says right now, so a stale
         // "armed" left behind by an early return here would outlive whatever justified it.
         bool isClient = !session.IsEnemyAuthority;
+        bool isHost = !isClient;
         bool hostRecentlyTransitioning =
             SessionClock.NowMs - _lastHostTransitionSignalAtMs < HostTransitionSignalWindowMs;
-        bridge.TryArmClientDoorRefusal(ClientDoorRefusalRule.ShouldArm(
-            isClient, settings.FollowHostModule, settings.ClientDoorRefusalEnabled, hostRecentlyTransitioning));
+
+        // Lead-swap (docs/research/transition-smoothness.md, 2026-08-22): under
+        // follow_lead=any the client's own crossing is only refused while the HOST could not
+        // safely follow it right now - read straight off the host's own published PlayerState
+        // flags on its RemotePeer, the same way this method already reads everything else
+        // about the host. Only ever consulted on a client (FindHostPeer(peers) is meaningless
+        // called as the host, since the host is never in its own remote-peer list).
+        RemotePeer? hostPeerForRefusal = isClient ? FindHostPeer(peers) : null;
+        bool hostBusyForRefusal = hostPeerForRefusal is { } refusalHost
+            && (refusalHost.State.IsInDialogue || refusalHost.State.IsInCombat);
+
+        bridge.TryArmClientDoorRefusal(ClientDoorRefusalRule.Decide(
+            isClient, settings.FollowHostModule, settings.ClientDoorRefusalEnabled,
+            hostRecentlyTransitioning, settings.FollowLeadMode, hostBusyForRefusal));
 
         if (!settings.FollowHostModule
-            || session.IsEnemyAuthority
             || !bridge.SupportsTravel
             || local.Module.Length == 0)
         {
@@ -2006,7 +2073,23 @@ public sealed class CoopAgent(IGameBridge bridge, ICoopSession session, AgentSet
         // Gated on the coop.ini flag: when off, _pendingAnnounce is never populated at all
         // (PumpTransitionAnnounce's own gate), so this is always a no-op and every following
         // module change is decided purely by the pre-existing path below, unchanged.
-        if (settings.TransitionAnnounceEnabled && TryFollowAnnouncedTransition(local, peers))
+        //
+        // isHost matters here too, and only here: under lead-swap (FollowLeadMode.Any) this is
+        // now the ONLY way the host ever travels on a peer's behalf — see TryFollowAnnouncedTransition's
+        // host branch and LeadFollowRule for the eligibility/safety gates that apply to it.
+        if (settings.TransitionAnnounceEnabled && TryFollowAnnouncedTransition(local, peers, isHost))
+        {
+            return;
+        }
+
+        // The host has no SLOW path. Unlike a client, it never compares a peer's published
+        // module against its own to decide whether to leave — item 13's "the host never
+        // follows anyone" holds for everything below this line, exactly as it always has. The
+        // fast path above is the ONLY way the host ever travels on a peer's behalf, and only
+        // when FollowLeadMode allows it and LeadFollowRule judges it safe; when the fast path
+        // found nothing to do (no pending announce, an ineligible one, or the host currently
+        // unsafe to interrupt), the host simply does nothing further this tick.
+        if (isHost)
         {
             return;
         }
@@ -2138,15 +2221,54 @@ public sealed class CoopAgent(IGameBridge bridge, ICoopSession session, AgentSet
     /// handled this tick's travel decision (consumed the announce, whether or not that meant
     /// actually warping) so the slow path below is skipped; false hands the tick to it
     /// unchanged.
+    ///
+    /// <paramref name="isHost"/> selects which rule judges the pending announce: a client
+    /// always uses <see cref="TransitionAnnounceRule.Decide"/> unchanged (it only ever follows
+    /// the host, exactly as before lead-swap). A host uses <see cref="LeadFollowRule"/> instead,
+    /// which additionally gates on eligibility (<see cref="AgentSettings.FollowLeadMode"/>) and
+    /// safety (the host must not be mid its own transition, in dialogue, or in real combat) —
+    /// see that class's own doc for why a client's decision does not need either.
+    ///
+    /// A host-side "not safe right now" is deliberately NOT the same as "stale": the announce is
+    /// KEPT (not cleared) so a client's lead is retried once the host frees up, rather than lost
+    /// to a moment's bad timing — the announce channel already repeats the underlying packet
+    /// five ticks for exactly this kind of transient miss, and this extends the same idea to a
+    /// slower-moving cause.
     /// </summary>
-    private bool TryFollowAnnouncedTransition(in PlayerState local, IReadOnlyList<RemotePeer> peers)
+    private bool TryFollowAnnouncedTransition(in PlayerState local, IReadOnlyList<RemotePeer> peers, bool isHost)
     {
         if (_pendingAnnounce is not { } announce)
         {
             return false;
         }
 
-        if (TransitionAnnounceRule.Decide(true, announce.Module, local.Module) != TransitionFollowPath.Announced)
+        if (isHost)
+        {
+            if (announce.Module.Length == 0
+                || string.Equals(announce.Module, local.Module, StringComparison.OrdinalIgnoreCase))
+            {
+                // Nothing to do (or decoded to nothing): spent, not kept — the same rule the
+                // client-side path below applies to its own reunion.
+                _pendingAnnounce = null;
+                return false;
+            }
+
+            // "Mid our own transition" needs more than IsFallbackModuleName: that only catches
+            // the LOAD itself, not the ~0.5 s fade window before the module name blanks, during
+            // which our own outbound announce/movie may already be under way — see
+            // _lastOwnTransitionSignalAtMs's own doc.
+            bool hostMidTransition = IsFallbackModuleName(local.Module)
+                || SessionClock.NowMs - _lastOwnTransitionSignalAtMs < OwnTransitionSignalWindowMs
+                || (_changedModule && SessionClock.NowMs - _moduleSettledAtMs < settings.ModuleSettleMs);
+
+            if (!LeadFollowRule.HostMaySafelyFollow(hostMidTransition, bridge.IsInDialogue, local.IsInCombat))
+            {
+                // Merely busy right now - KEEP the announce (see this method's own doc) and
+                // retry next tick rather than dropping a lead that is still worth taking.
+                return false;
+            }
+        }
+        else if (TransitionAnnounceRule.Decide(true, announce.Module, local.Module) != TransitionFollowPath.Announced)
         {
             // Named our own module (or decoded to nothing): spent, not kept — the same rule
             // that clears the movie accumulation on a genuine reunion.
@@ -2190,8 +2312,15 @@ public sealed class CoopAgent(IGameBridge bridge, ICoopSession session, AgentSet
         _pendingFollowMoviesSawHostAway = false;
         _pendingAnnounce = null;
 
+        // Who we just followed — "the host" for a host-led announce (unaffected by lead-swap),
+        // or the leading client's own name/peer id when the HOST followed a client's lead.
+        bool announcerIsHost = announce.PeerId == CoopHost.HostPeerId;
+        string leaderLabel = peers.FirstOrDefault(p => p.PeerId == announce.PeerId)?.Name is { Length: > 0 } peerName
+            ? peerName
+            : announcerIsHost ? "the host" : $"peer {announce.PeerId}";
+
         Log?.Invoke(
-            $"following the host to '{announce.Module}' IMMEDIATELY (announced transition "
+            $"following {leaderLabel} to '{announce.Module}' IMMEDIATELY (announced transition "
             + $"serial {announce.Serial}, not waiting for the module-change settle)"
             + (movies.Length > 0
                 ? $" with {movies.Length} transition movie(s): " + string.Join(", ", movies)
@@ -2199,9 +2328,8 @@ public sealed class CoopAgent(IGameBridge bridge, ICoopSession session, AgentSet
 
         // The on-screen line (task 2a). Best-effort: PostChatLine returns false, harmlessly,
         // on a bridge with no overlay — the warp itself does not depend on it.
-        string hostName = FindHostPeer(peers)?.Name is { Length: > 0 } name ? name : "the host";
         string display = settings.ModuleDisplayName?.Invoke(announce.Module) ?? announce.Module;
-        bridge.PostChatLine($"following {hostName} to {display}");
+        bridge.PostChatLine($"following {leaderLabel} to {display}");
 
         return true;
     }

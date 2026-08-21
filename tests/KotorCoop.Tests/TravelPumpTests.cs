@@ -42,6 +42,25 @@ public class TravelPumpTests
 
         public bool TryWriteRemotePeers(IReadOnlyList<RemotePeer> peers) => true;
 
+        /// <summary>Set to simulate THIS instance's own engine having committed to a
+        /// transition — the lead-swap "both announce simultaneously" tests use this to arm
+        /// the host-side safety gate without needing a real plugin.</summary>
+        public (uint Serial, string Module, string Waypoint)? OwnAnnounce { get; set; }
+
+        public bool TryReadTransitionAnnounce(out uint serial, out string module, out string waypoint)
+        {
+            if (OwnAnnounce is { } announce)
+            {
+                (serial, module, waypoint) = announce;
+                return true;
+            }
+
+            serial = 0;
+            module = string.Empty;
+            waypoint = string.Empty;
+            return false;
+        }
+
         /// <summary>The movies attached to each travel request, so the cinematic parity
         /// channel can be asserted on the thing that actually reaches the plugin.</summary>
         public List<string[]> RequestMovies { get; } = [];
@@ -59,9 +78,14 @@ public class TravelPumpTests
         /// carried.</summary>
         public List<bool> DoorRefusalArmedCalls { get; } = [];
 
-        public bool TryArmClientDoorRefusal(bool armed)
+        /// <summary>Every REASON <c>PumpTravel</c> wrote alongside the armed bit above, in
+        /// order — the same shape, for tests that care WHY (host-must-lead vs. host-busy).</summary>
+        public List<ClientDoorRefusalReason> DoorRefusalReasonCalls { get; } = [];
+
+        public bool TryArmClientDoorRefusal(ClientDoorRefusalReason reason)
         {
-            DoorRefusalArmedCalls.Add(armed);
+            DoorRefusalArmedCalls.Add(reason != ClientDoorRefusalReason.None);
+            DoorRefusalReasonCalls.Add(reason);
             return true;
         }
 
@@ -188,7 +212,8 @@ public class TravelPumpTests
 
     private static (CoopAgent Agent, TravelBridge Bridge, StubSession Session) Build(
         bool follow = true, int retryMs = 15_000, int settleMs = 0, int combatPumpMs = 150,
-        bool transitionAnnounce = false, bool clientDoorRefusal = false)
+        bool transitionAnnounce = false, bool clientDoorRefusal = false,
+        FollowLeadMode followLeadMode = FollowLeadMode.Host)
     {
         TravelBridge bridge = new();
         StubSession session = new();
@@ -209,6 +234,13 @@ public class TravelPumpTests
             TransitionAnnounceEnabled = transitionAnnounce,
             ClientDoorRefusalEnabled = clientDoorRefusal,
 
+            // Host-only by default here so every pre-existing test in this file (all written
+            // before lead-swap existed) keeps meaning exactly what it meant before. The
+            // lead-swap section below opts each of ITS OWN tests into FollowLeadMode.Any
+            // explicitly — coop.ini's own real-world default is the opposite (Any), set in
+            // CoopConfig/Program.cs, not here.
+            FollowLeadMode = followLeadMode,
+
             // Deterministic and distinguishable from the raw resref in the fast-path tests,
             // without needing a real game directory.
             ModuleDisplayName = m => $"Pretty({m})",
@@ -219,6 +251,9 @@ public class TravelPumpTests
 
     private static RemotePeer HostPeer(string module) =>
         new(CoopHost.HostPeerId, "host", new PlayerState(Vector3f.Zero, 0f, module, 20, 0));
+
+    private static RemotePeer ClientPeer(uint peerId, string name, string module, uint flags = 0) =>
+        new(peerId, name, new PlayerState(Vector3f.Zero, 0f, module, 20, 0, Flags: flags));
 
     [Fact]
     public void ClientFollowsTheHostIntoAnotherModule()
@@ -784,5 +819,187 @@ public class TravelPumpTests
         agent.PumpOnce();
 
         Assert.Equal([false], bridge.DoorRefusalArmedCalls);
+    }
+
+    // ---- lead-swap (2026-08-22): the host follows a client's announce ------------------
+
+    private const uint ClientPeerId = 2;
+
+    private static TransitionAnnouncePacket ClientAnnounce(uint serial, string module, string waypoint = "") =>
+        new(ClientPeerId, module, waypoint, serial);
+
+    /// <summary>The everyday case: running AS THE HOST, follow_lead=any, a client's announce
+    /// with nothing in the way. The fast path fires exactly like it does for a client following
+    /// the host, just in the other direction.</summary>
+    [Fact]
+    public void HostFollowsAnEligibleClientAnnounceUnderAnyMode()
+    {
+        (CoopAgent agent, TravelBridge bridge, StubSession session) =
+            Build(transitionAnnounce: true, followLeadMode: FollowLeadMode.Any, combatPumpMs: 0);
+        session.EnemyAuthority = true; // this instance IS the host
+
+        session.IncomingAnnounces.Add(ClientAnnounce(1, "tar_m03aa", "from_door"));
+        agent.PumpOnce();
+
+        (string module, string waypoint) = Assert.Single(bridge.Requests);
+        Assert.Equal("tar_m03aa", module);
+        Assert.Equal("from_door", waypoint);
+    }
+
+    /// <summary>follow_lead=host (the default in this file's own <c>Build</c>): "the host
+    /// never follows anyone" restored exactly, even with a perfectly usable client announce
+    /// sitting right there.</summary>
+    [Fact]
+    public void HostIgnoresAClientAnnounceUnderHostOnlyMode()
+    {
+        (CoopAgent agent, TravelBridge bridge, StubSession session) =
+            Build(transitionAnnounce: true, followLeadMode: FollowLeadMode.Host, combatPumpMs: 0);
+        session.EnemyAuthority = true;
+
+        session.IncomingAnnounces.Add(ClientAnnounce(1, "tar_m03aa"));
+        agent.PumpOnce();
+
+        Assert.Empty(bridge.Requests);
+    }
+
+    /// <summary>The safety gate: the host's own module is still settling (it just arrived
+    /// somewhere), so a client's announce is held rather than acted on — and NOT dropped: once
+    /// the settle window elapses, the SAME pending announce still fires.</summary>
+    [Fact]
+    public void HostHoldsAClientAnnounceWhileItsOwnModuleIsSettling()
+    {
+        (CoopAgent agent, TravelBridge bridge, StubSession session) =
+            Build(transitionAnnounce: true, followLeadMode: FollowLeadMode.Any, settleMs: 60_000, combatPumpMs: 0);
+        session.EnemyAuthority = true;
+
+        // The host arrives somewhere of its own first - a real transition, so the settle
+        // clock starts.
+        session.Peers.Add(ClientPeer(ClientPeerId, "client", "end_m01aa"));
+        agent.PumpOnce();
+        bridge.Local = new PlayerState(Vector3f.Zero, 0f, "dan_m13aa", 20, 0);
+        agent.PumpOnce();
+
+        // A client announces while the host is still settling.
+        session.IncomingAnnounces.Add(ClientAnnounce(1, "tar_m03aa"));
+        agent.PumpOnce();
+        Assert.Empty(bridge.Requests); // held, not acted on - the same shape
+                                        // ArrivingSomewhereHoldsTheNextFollowUntilTheWorldHasSettled
+                                        // already uses for the client-side settle window. Whether
+                                        // a held announce is KEPT (retried once free) rather than
+                                        // dropped is pinned at the pure-rule level -
+                                        // LeadFollowRuleTests has no wall-clock seam to advance
+                                        // SessionClock and prove the later retry end-to-end here.
+    }
+
+    /// <summary>The safety gate again, for real combat: the host's own PlayerState carries
+    /// FlagInCombat, and the client's announce is held rather than acted on.</summary>
+    [Fact]
+    public void HostDoesNotFollowAClientAnnounceWhileInRealCombat()
+    {
+        (CoopAgent agent, TravelBridge bridge, StubSession session) =
+            Build(transitionAnnounce: true, followLeadMode: FollowLeadMode.Any, combatPumpMs: 0);
+        session.EnemyAuthority = true;
+        bridge.Local = new PlayerState(
+            Vector3f.Zero, 0f, ClientModule, 20, 0, Flags: PlayerState.FlagInCombat);
+
+        session.IncomingAnnounces.Add(ClientAnnounce(1, "tar_m03aa"));
+        agent.PumpOnce();
+
+        Assert.Empty(bridge.Requests);
+    }
+
+    /// <summary>Both announce simultaneously -&gt; host wins: the host's own outbound
+    /// transition-announce serial changing THIS tick (its own engine just committed to a
+    /// crossing) closes the safety gate, so a client's announce arriving in the same window is
+    /// never acted on and the host's own crossing proceeds untouched.</summary>
+    [Fact]
+    public void BothAnnouncingSimultaneouslyTheHostsOwnTransitionWins()
+    {
+        (CoopAgent agent, TravelBridge bridge, StubSession session) =
+            Build(transitionAnnounce: true, followLeadMode: FollowLeadMode.Any, combatPumpMs: 0);
+        session.EnemyAuthority = true;
+        bridge.OwnAnnounce = (1, "korr_m34aa", "from_door");
+
+        session.IncomingAnnounces.Add(ClientAnnounce(1, "tar_m03aa"));
+        agent.PumpOnce();
+
+        // The host's OWN transition (its outbound announce read this tick) wins: it never
+        // requests travel to the client's destination.
+        Assert.Empty(bridge.Requests);
+    }
+
+    /// <summary>The on-screen line names the LEADING CLIENT, not "the host", when the host is
+    /// the one following.</summary>
+    [Fact]
+    public void TheOnScreenLineNamesTheLeadingClientWhenTheHostFollows()
+    {
+        (CoopAgent agent, TravelBridge bridge, StubSession session) =
+            Build(transitionAnnounce: true, followLeadMode: FollowLeadMode.Any, combatPumpMs: 0);
+        session.EnemyAuthority = true;
+        session.Peers.Add(ClientPeer(ClientPeerId, "partner", ClientModule));
+
+        session.IncomingAnnounces.Add(ClientAnnounce(1, "tar_m03aa"));
+        agent.PumpOnce();
+
+        Assert.Equal("following partner to Pretty(tar_m03aa)", Assert.Single(bridge.ChatLines));
+    }
+
+    // ---- lead-swap: the refusal reason ---------------------------------------------------
+
+    /// <summary>follow_lead=any with a free host: no refusal at all, which is what lets the
+    /// client's crossing become an announce the host follows.</summary>
+    [Fact]
+    public void NoRefusalUnderAnyModeWithAFreeHost()
+    {
+        (CoopAgent agent, TravelBridge bridge, StubSession session) =
+            Build(clientDoorRefusal: true, followLeadMode: FollowLeadMode.Any, combatPumpMs: 0);
+
+        session.Peers.Add(HostPeer(HostModule));
+        agent.PumpOnce();
+
+        Assert.Equal([ClientDoorRefusalReason.None], bridge.DoorRefusalReasonCalls);
+    }
+
+    /// <summary>follow_lead=any with the host in dialogue (read off the host's own RemotePeer):
+    /// refused with the transient HostBusy reason, not HostMustLead.</summary>
+    [Fact]
+    public void RefusalReasonIsHostBusyWhenTheHostIsInDialogueUnderAnyMode()
+    {
+        (CoopAgent agent, TravelBridge bridge, StubSession session) =
+            Build(clientDoorRefusal: true, followLeadMode: FollowLeadMode.Any, combatPumpMs: 0);
+
+        session.Peers.Add(new RemotePeer(CoopHost.HostPeerId, "host",
+            new PlayerState(Vector3f.Zero, 0f, HostModule, 20, 0, Flags: PlayerState.FlagInDialogue)));
+        agent.PumpOnce();
+
+        Assert.Equal([ClientDoorRefusalReason.HostBusy], bridge.DoorRefusalReasonCalls);
+    }
+
+    /// <summary>follow_lead=any with the host in real combat: same transient reason.</summary>
+    [Fact]
+    public void RefusalReasonIsHostBusyWhenTheHostIsInCombatUnderAnyMode()
+    {
+        (CoopAgent agent, TravelBridge bridge, StubSession session) =
+            Build(clientDoorRefusal: true, followLeadMode: FollowLeadMode.Any, combatPumpMs: 0);
+
+        session.Peers.Add(new RemotePeer(CoopHost.HostPeerId, "host",
+            new PlayerState(Vector3f.Zero, 0f, HostModule, 20, 0, Flags: PlayerState.FlagInCombat)));
+        agent.PumpOnce();
+
+        Assert.Equal([ClientDoorRefusalReason.HostBusy], bridge.DoorRefusalReasonCalls);
+    }
+
+    /// <summary>follow_lead=host (today's restored behaviour): always HostMustLead, even with
+    /// a perfectly free host — the client never leads under this mode at all.</summary>
+    [Fact]
+    public void RefusalReasonIsHostMustLeadUnderHostOnlyModeEvenWithAFreeHost()
+    {
+        (CoopAgent agent, TravelBridge bridge, StubSession session) =
+            Build(clientDoorRefusal: true, followLeadMode: FollowLeadMode.Host, combatPumpMs: 0);
+
+        session.Peers.Add(HostPeer(HostModule));
+        agent.PumpOnce();
+
+        Assert.Equal([ClientDoorRefusalReason.HostMustLead], bridge.DoorRefusalReasonCalls);
     }
 }

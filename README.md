@@ -15,9 +15,12 @@ Both players, each in their own full game:
 - **See each other** as a real engine creature ("phantom") wearing the other player's
   actual appearance, armor and weapons, with their name in the selection band, walking
   and running at true speed on the real walkmesh.
-- **Travel together**: when the host crosses into another area, the client follows
-  through the engine's own module-transition path (the same machinery the built-in
-  `warp` cheat uses). `--no-follow` opts out.
+- **Travel together, either player leading**: whoever crosses into another area first,
+  the other follows immediately through the engine's own module-transition path (the same
+  machinery the built-in `warp` cheat uses) — an announce fires the instant the leader's
+  engine commits to the crossing, so both loading screens overlap instead of running back
+  to back. `follow_lead=host` in coop.ini restores host-only leading; `--no-follow` opts
+  out of following entirely.
 - **Fight the same fight — and see the same fight**: enemy health and death are
   host-authoritative and mirrored live; clients stream their local damage back and the
   host merges it in, so both players' hits count. And the fight *looks* the same on both

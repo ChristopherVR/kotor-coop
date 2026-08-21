@@ -96,7 +96,7 @@ internal static unsafe class TransitionAnnounceWatch
 
         if (view.ClientDoorRefusalArmed)
         {
-            Refuse(view, doorId, module);
+            Refuse(view, doorId, module, view.ClientDoorRefusalReason);
             return;
         }
 
@@ -106,12 +106,23 @@ internal static unsafe class TransitionAnnounceWatch
             + (waypoint.Length > 0 ? $" at waypoint '{waypoint}'" : string.Empty));
     }
 
+    /// <summary>Mirrors <c>KotorCoop.Protocol.ClientDoorRefusalReason.HostBusy</c> by value —
+    /// see <see cref="SharedBlockView.ClientDoorRefusalReason"/> for why this cannot be a shared
+    /// enum type.</summary>
+    private const uint ReasonHostBusy = 2;
+
     /// <summary>
-    /// The client-door-refusal path (task 3): logs the required line, posts it to the local
-    /// chat overlay immediately (no agent round trip fits inside a 0.5 s fade window), and
-    /// attempts the best-effort engine cancellation. Does NOT publish a
-    /// <c>TransitionAnnounce</c> — a refused transition has no destination worth relaying, and
-    /// publishing one would tell peers this instance is headed somewhere it just refused to go.
+    /// The client-door-refusal path (task 3, extended 2026-08-22 for lead-swap): logs the
+    /// required line, posts it to the local chat overlay immediately (no agent round trip fits
+    /// inside a 0.5 s fade window), and attempts the best-effort engine cancellation. Does NOT
+    /// publish a <c>TransitionAnnounce</c> — a refused transition has no destination worth
+    /// relaying, and publishing one would tell peers this instance is headed somewhere it just
+    /// refused to go.
+    ///
+    /// <paramref name="reason"/> picks the wording: under <c>follow_lead=host</c> the client
+    /// never leads at all ("the host must lead the way"); under <c>follow_lead=any</c> it COULD
+    /// lead, but the host cannot safely follow this exact moment ("the host cannot follow right
+    /// now") — a transient state worth trying again in a few seconds, not a standing rule.
     ///
     /// The module names by its RESREF, not a pretty display name: the plugin has no assembly
     /// dependency on <c>KotorCoop.Memory.GameFiles.ModuleNames</c> (a NativeAOT x86 DLL loaded
@@ -119,9 +130,11 @@ internal static unsafe class TransitionAnnounceWatch
     /// AGENT-side "following X to Y" line (task 2a) is the one that pretty-prints, because the
     /// agent process already has the game directory and the reader.
     /// </summary>
-    private static void Refuse(SharedBlockView view, uint doorId, string module)
+    private static void Refuse(SharedBlockView view, uint doorId, string module, uint reason)
     {
-        string line = $"the host must lead the way - door 0x{doorId:X} leads to {module}";
+        string line = reason == ReasonHostBusy
+            ? $"the host cannot follow right now (busy) - door 0x{doorId:X} leads to {module} - try again shortly"
+            : $"the host must lead the way - door 0x{doorId:X} leads to {module}";
 
         view.PostLocalChatLine(line);
         PluginHost.Log($"door-refusal: {line}");
