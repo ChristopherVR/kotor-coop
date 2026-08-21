@@ -2626,6 +2626,67 @@ before the flip, not after. Full suite 953/953 (one known-flaky, pre-existing, u
 test with no seed — failed once in the full run and passed in isolation immediately after; not a
 regression), both builds clean, rig torn down and confirmed clean (`Get-Process`).
 
+### First real ambush, and a real destructive bug found and fixed (2026-08-21)
+
+Round 39 shipped `local_combat` on by default having only ever staged a single isolated
+enemy. A real `tar_m03aa` ambush (walked into organically, multiple materialised stand-ins
+active alongside genuine GIT-placed hostiles) found `local_combat` was never actually tested
+against either of two conditions it now has to survive in real play: several creatures
+cycling through exclusion at once, and a MATERIALISED stand-in specifically (every prior
+round's proof used real, GIT-placed creatures only).
+
+**Found: excluding a materialised stand-in destroys it, mid-fight, silently.** A real,
+already-materialised enemy (`0xCE`, local stand-in `0xB5`) got pulled into `local_combat` and
+its "fight ended (dead or gone)" / "pulled out... to fight" lines alternated every ~4ms,
+hundreds of times a second — a same-frame infinite churn, not a slow cycle. Root cause:
+`MaintainLocalFight` resolves `_locallyFightingId` (the OWNER's id, per `StartLocalFight`'s
+own doc comment) directly through `Odyssey.ResolveServerObject`, with no translation through
+`MaterialisedEnemies.ToLocal` first — the exact translation `DriveOne` already does before
+ever touching a creature. For a GIT-identical creature (owner id == local id) this
+accidentally worked; for a materialised stand-in it resolves nothing every single tick
+(`Odyssey.IsCreatureDead(0)` is `true` by design), instantly ending and instantly restarting
+the same fight forever. Fixed: translate through `MaterialisedEnemies.ToLocal` first, exactly
+like `Resolve`'s own fallback.
+
+That fix alone did not stop the churn on `0xCE` specifically — live evidence showed something
+worse: the stand-in's local body (`0xB5`) was **already gone** (`resolve 0xB5` → `0x0`) within
+5ms of being selected, while the OWNER's real `0xCE` was still alive and dealing forwarded
+damage to the phantom the whole time. `StartLocalFight` fires the creature's `+0x260` event
+script — proven safe and correct on a real, GIT-placed creature (round 27), which carries its
+own genuine combat AI script in that slot. A materialised stand-in's local body is a
+`k_coop_phantom`-blueprint spawn repainted with the owner's appearance; it does **not** carry
+that enemy's real script set, and firing whatever (if anything) actually occupies a co-op
+phantom blueprint's own `+0x260` slot is unproven and, measured live, destructive to the body.
+**Fixed conservatively: `local_combat` now only selects GIT-identical creatures
+(`MaterialisedEnemies.ToLocal(enemy.ObjectId) == 0`) for local engagement** — a materialised
+stand-in is left to ordinary forwarded-damage mirroring, same as before this feature existed,
+until firing a script on a phantom-blueprint body gets its own investigation. Also kept the
+`MaintainLocalFight` lease fix regardless — it is correct on its own terms (an excluded
+creature's `MaterialisedEnemies` entry must not go stale mid-fight) and is a real, separate
+safety net for whenever materialised stand-ins are re-enabled for this.
+
+**Confirmed live, same session, on the fixed build:** the `0xCE`-style same-frame churn is
+gone — none of the materialised stand-ins present in this ambush (several) were selected for
+local combat at all, exactly as designed.
+
+**Still open — a GIT-identical creature can stay "engaged" for the full 25s timeout and never
+land a hit.** `tar03_bekcs2` (`0x2D`, a real placed NPC, not an encounter spawn) cycled
+through `local_combat` repeatedly across two full sessions (before and after the fixes above)
+without ever landing a hit — always "timed out," never "dead" or "player disengaged." Measured
+directly: player at `(380.7, 153.0)`, `0x2D` at `(366.43, 157.33)` — **~15 units apart**, and
+not meaningfully closing that distance across a whole engagement window. `IsEngaged`'s trigger
+radius (shared with the damage-absorb licence) is evidently far larger than actual melee
+range, so a creature gets pulled into an exclusive local fight from well outside striking
+distance and either cannot or does not path the rest of the way in 25 real seconds. This is
+now a precisely-characterised, different problem from anything the 39-round mechanism
+investigation solved — an engine pathing/navmesh question, not a round-arming one — and needs
+its own live investigation rather than a guess against unverified pathfinding internals.
+
+**Also confirmed the same session:** the materialised-loot positive case (docs/research/
+enemy-materialisation.md §6, "Live pass... CONFIRMED") and the Host button
+(`docs/research/native-browser-panel.md` — real `SendInput` clicks, real log evidence) both
+work. Full suite 966/966, both builds clean, rig torn down and confirmed clean.
+
 ## 3. A client's XP is actively erased
 
 `ProgressionSnapshotPacket` is host→client only and absolute (CoopAgent.cs, `PumpProgression`):

@@ -250,3 +250,37 @@ write lands") — what remained unconfirmed was only the automatic wire feeding 
 now confirmed working. Closing an actual ambush's death through this exact automatic path,
 rather than the manual `giveloot` cheat, is the one item left for a future pass with a save
 that reaches a real encounter.
+
+### The positive case — CONFIRMED (2026-08-21, later same day)
+
+A real ambush, walked into organically (a genuine `blockpoke walk`, not `tp` — see
+`docs/research/client-encounters.md` §7 for why teleporting never fires the movement-based
+trigger). With the fight underway and multiple materialised stand-ins active, a real
+encounter-spawned Vulkar (owner `0xB5`) died for real and the automatic wire closed the loop
+end to end, host log:
+
+```
+combat: killed 0xB5 on the owner's authority
+materialise: gave loot 'g_a_class4001' (0xB9) to stand-in 0xB1 for owner 0xB5 - stack 1, charges 0/0, upgrades 0x0
+cheat: gave 'g_a_class4001' to 0xB1 (status 1)
+materialise: gave loot 'ptar_shockstick' (0xBA) to stand-in 0xB1 for owner 0xB5 - stack 1, charges 0/0, upgrades 0x0
+cheat: gave 'ptar_shockstick' to 0xB1 (status 1)
+materialise: gave loot 'g_w_blstrpstl001' (0xBB) to stand-in 0xB1 for owner 0xB5 - stack 1, charges 0/0, upgrades 0x0
+cheat: gave 'g_w_blstrpstl001' to 0xB1 (status 1)
+```
+
+Three real items, correctly translated from owner `0xB5` to its local stand-in `0xB1`,
+correctly applied (`status 1` on every give). The loot-sync feature is now confirmed working
+end to end on the actual positive case, closing the one item the earlier pass this same day
+left open.
+
+⚠ **A confusing log line, NOT a bug — checked and cleared.** `"combat: killed 0xB5 on the
+owner's authority"` reads as if the LOCAL id `0xB5` were killed, and in this same session a
+DIFFERENT creature (owner `0xCE`) also happened to be materialised as local `0xB5` — a
+numeric coincidence between two different id spaces that looked, at first read, like an id
+collision bug in the kill-mirroring path. It is not: `CombatController.KillOnce` (the code,
+not the log text) already translates through `MaterialisedEnemies.ToLocal` before calling
+`Odyssey.KillCreature`, so the kill in this trace correctly landed on `0xB1` (owner `0xB5`'s
+real stand-in), not on `0xB5` the number. The log line prints the OWNER id it was told to
+kill, not the local id it actually acted on — worth a clearer log line for whoever reads this
+next, but not a functional defect.

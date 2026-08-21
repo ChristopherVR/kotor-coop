@@ -231,7 +231,14 @@ internal sealed class CombatController(SharedBlockView block)
             if (_logged < 10)
             {
                 _logged++;
-                PluginHost.Log($"combat: killed 0x{objectId:X} on the owner's authority");
+                // Owner id and local id are different number spaces that can coincide by
+                // pure chance (a materialised stand-in for one owner can land on the same
+                // numeric local id as a totally unrelated owner's real id) - print both, or
+                // a reader chasing a suspicious-looking number has no way to tell "this
+                // owner id was killed" from "this local id was killed" apart.
+                PluginHost.Log(mapped != 0
+                    ? $"combat: killed 0x{objectId:X} (owner id, local stand-in 0x{effectiveId:X}) on the owner's authority"
+                    : $"combat: killed 0x{objectId:X} on the owner's authority");
             }
         }
         else if (_logged < 10)

@@ -548,7 +548,18 @@ internal sealed unsafe class EnemyPresenceController(SharedBlockView block)
             // take over, script-fired the same way round 27 first proved live. One fight at
             // a time (see _locallyFightingId's own doc comment); a second engaged creature
             // waits for the first to finish rather than starting a concurrent exclusion.
-            if (player != 0 && _locallyFightingId == 0 && IsEngaged(creature, player))
+            //
+            // ⚠ GIT-IDENTICAL CREATURES ONLY (mapped == 0). Round 27's proof — and every
+            // round since — only ever fired +0x260 on a creature's OWN assigned combat
+            // script. A materialised stand-in's local body is a k_coop_phantom-blueprint
+            // spawn wearing the owner's appearance; it does not carry the real enemy's
+            // script set at all, and firing whatever (if anything) actually sits in that
+            // phantom's own +0x260 slot is unproven and, measured live, destructive: a real
+            // ambush stand-in's body was gone — ResolveServerObject returning 0 — within 5ms
+            // of being pulled out to fight, while the owner's real creature was still alive
+            // and dealing forwarded damage the whole time. Restrict to what is actually
+            // proven safe until materialised stand-ins get their own investigation.
+            if (player != 0 && _locallyFightingId == 0 && mapped == 0 && IsEngaged(creature, player))
             {
                 StartLocalFight(enemy.ObjectId, creature, now);
             }
@@ -603,7 +614,19 @@ internal sealed unsafe class EnemyPresenceController(SharedBlockView block)
             return;
         }
 
-        nint creature = Odyssey.ResolveServerObject(_locallyFightingId);
+        // ⚠ _locallyFightingId is the OWNER's id (StartLocalFight stores enemy.ObjectId, not
+        // the resolved local pointer's own id — see its doc comment). For a materialised
+        // stand-in that id is NOT locally resolvable at all; resolving it raw always returns
+        // 0, and IsCreatureDead(0) is true by design, so every tick read "dead or gone"
+        // immediately after the fight started, cleared _locallyFightingId, and the very next
+        // DriveOne pass picked the SAME still-alive, still-engaged owner id right back up —
+        // an infinite same-frame churn (measured live: "fight ended (dead or gone)" /
+        // "pulled out of the census" alternating every ~4ms, hundreds of times a second).
+        // Translate through the same map DriveOne already uses before resolving, exactly like
+        // Resolve's own fallback (mapped local id if this is a stand-in, the raw id itself if
+        // it is GIT-identical).
+        uint mappedId = MaterialisedEnemies.ToLocal(_locallyFightingId);
+        nint creature = Odyssey.ResolveServerObject(mappedId != 0 ? mappedId : _locallyFightingId);
         bool dead = Odyssey.IsCreatureDead(creature);
         bool disengaged = !dead && (player == 0 || !IsEngaged(creature, player));
         bool timedOut = now - _locallyFightingSince > LocalCombatTimeoutSeconds;
@@ -615,6 +638,16 @@ internal sealed unsafe class EnemyPresenceController(SharedBlockView block)
             _locallyFightingId = 0;
             return;
         }
+
+        // ⚠ The excluded id is missing from block.EnemyPresenceCount for the whole fight (the
+        // entire point of the exclusion), so DriveOne's own MaterialisedEnemies.Seen call
+        // never runs for it here — and MaterialisedEnemies.Sweep destroys anything unseen for
+        // 5 seconds, well inside a fight that can legitimately run up to
+        // LocalCombatTimeoutSeconds. Measured live: a real materialised stand-in got swept out
+        // from under an active local fight, forcing a full re-materialisation mid-round (and
+        // burning the one-spawn-per-30-frames budget genuinely NEW encounter spawns were
+        // waiting on). A GIT-identical creature (not in the table at all) is a no-op here.
+        MaterialisedEnemies.Seen(_locallyFightingId, now);
 
         // Same licence RecordEngagement grants a normally-driven creature — this one just
         // earns it here instead, since DriveOne no longer runs for an id the census does not
