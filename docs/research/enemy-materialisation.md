@@ -195,5 +195,58 @@ body-bag placeable at all.
 
 Tests: `PacketCodecTests.MaterialisedLootPacketsRoundTrip`,
 `.MaterialisedLootFitsInOneDatagramAtMaxItems`; `MaterialisedLootPumpTests` (death vs.
-census-drop, empty corpse, one-sweep-for-several-deaths, module-change reseeding). None of this
-has run against a live game — same caveat as the rest of this section.
+census-drop, empty corpse, one-sweep-for-several-deaths, module-change reseeding),
+`MaterialisedLootQueueTests` (the client-side FIFO, drained one per tick, bounded).
+
+### Live pass (2026-08-21) — the pipeline is real, end to end, on a non-materialised target
+
+The whole capture → publish → receive → queue → automatic-submit chain was completely silent —
+neither `DetectMaterialisedDeaths` nor the client's queue/drain logged a single line either
+side of a success or a failure, making the feature untestable as landed. Added one log line
+per stage (`CoopAgent.DetectMaterialisedDeaths`, `CoopAgent.PumpMaterialisedLoot`,
+`CoopCommandDispatcher.DrainAutomaticLoot`) — these write to the AGENT's own log
+(`agent1.log`/`agent2.log`), not the plugin's `kotorcoop-general.log`, since the whole pipeline
+up to the final `SendCheat` call runs in the external agent process, not the plugin.
+
+Killed a real, undamaged `blackvulka034` (id `0x4`, holding `g_a_class4001` +
+`g_w_qtrstaff01`, confirmed via `items` beforehand) on a connected host in `tar_m03aa`, with
+both players standing close together (killing a target far from the OTHER peer's position
+does not work — the census that feeds death-detection sheds by distance to peers, not to the
+killer, so a death outside that radius is silently never noticed; this cost the first attempt).
+Host agent log:
+
+```
+materialised loot: 1 enemy death(s) noticed this pass: 0x4
+materialised loot: captured 2 item(s) off 0x4's corpse, publishing
+```
+
+Client agent log, immediately after:
+
+```
+materialised loot: received 2 item(s) for owner 0x4, queueing
+materialised loot: submitting 'g_a_class4001' for owner 0x4 through the giveloot channel
+materialised loot: submitting 'g_w_qtrstaff01' for owner 0x4 through the giveloot channel
+```
+
+Client plugin log, one line per submitted item: `cheat: 0x4 is not a materialised stand-in
+here - nothing to give (status -3)` — CORRECT: `blackvulka034` is a base-GIT creature, not an
+encounter spawn, so the client holds the real object under the same id and has already rolled
+its own equivalent loot; applying this too would double it, exactly the refuse case §6's
+design section describes. The manual `giveloot` console verb was checked immediately after and
+still refuses/behaves normally (`giveloot 0x99 <resref>` → the same "not a materialised
+stand-in" message) — the automatic and human paths correctly share the single-slot channel
+without interfering.
+
+**What this confirms:** every stage up to and including the plugin's own translation/refusal
+logic works correctly with real captured data matching ground truth exactly (2 items, correct
+resrefs, correct owner id). **What it does NOT confirm:** the positive case — an item actually
+landing in a materialised stand-in's inventory — since that needs a genuinely encounter-spawned
+enemy (`end_m01aa`, the standard demo save, has no encounters at all; `tar_m03aa`'s ambushes
+need either real player movement to trigger, which is not injectable headlessly in this build,
+or the client-triggered-encounter wire this document's §5/§7 already verified separately). The
+positive apply path (`Odyssey.GiveItemToInventory` writing into a real stand-in) was already
+proven directly by the `giveloot` staging cheat itself (§6, "spawns one item... and confirm the
+write lands") — what remained unconfirmed was only the automatic wire feeding it, and that is
+now confirmed working. Closing an actual ambush's death through this exact automatic path,
+rather than the manual `giveloot` cheat, is the one item left for a future pass with a save
+that reaches a real encounter.

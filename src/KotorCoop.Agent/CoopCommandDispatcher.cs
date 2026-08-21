@@ -780,6 +780,7 @@ public sealed class CoopCommandDispatcher(
         }
 
         ItemIdentity identity = give.Item.Identity;
+        Log?.Invoke($"materialised loot: submitting '{give.Item.Resref}' for owner 0x{give.OwnerEnemyId:X} through the giveloot channel");
         SendCheat(new CheatRequest(
             CheatKinds.GiveLoot,
             Target: give.OwnerEnemyId,

@@ -611,6 +611,8 @@ public sealed class CoopAgent(IGameBridge bridge, ICoopSession session, AgentSet
     {
         foreach (MaterialisedLootPacket packet in session.DrainMaterialisedLoot())
         {
+            Log?.Invoke($"materialised loot: received {packet.Items.Count} item(s) for owner 0x{packet.OwnerEnemyId:X}, queueing");
+
             foreach (MaterialisedLootItem item in packet.Items)
             {
                 if (_pendingLoot.Count >= MaxPendingLoot)
@@ -1951,6 +1953,9 @@ public sealed class CoopAgent(IGameBridge bridge, ICoopSession session, AgentSet
             return;
         }
 
+        Log?.Invoke($"materialised loot: {newlyDead.Count} enemy death(s) noticed this pass: "
+            + string.Join(", ", newlyDead.Select(id => $"0x{id:X}")));
+
         Dictionary<uint, List<MaterialisedLootItem>> byOwner = [];
         foreach ((uint possessor, string resref, ItemIdentity identity) in
             bridge.ReadPossessedItems(newlyDead))
@@ -1974,6 +1979,11 @@ public sealed class CoopAgent(IGameBridge bridge, ICoopSession session, AgentSet
             if (byOwner.TryGetValue(deadId, out List<MaterialisedLootItem>? items) && items.Count > 0)
             {
                 session.PublishMaterialisedLoot(deadId, items);
+                Log?.Invoke($"materialised loot: captured {items.Count} item(s) off 0x{deadId:X}'s corpse, publishing");
+            }
+            else
+            {
+                Log?.Invoke($"materialised loot: 0x{deadId:X} died with nothing to capture");
             }
         }
     }
