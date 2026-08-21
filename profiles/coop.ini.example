@@ -153,6 +153,16 @@ force_dialogue_party=0
 # GetItemPossessedBy(GetFirstPC()) on the OTHER instance silently fail three areas later.
 dialogue_item_sync=1
 
+# Moves the dialogue channel (who is talking to whom, which line, which node) off the agent's
+# ~150 ms combat cadence onto its real-time per-poll-tick path, event-driven on change rather
+# than resent only on that cadence - see docs/research/dialogue-join-latency.md for the
+# measured before/after. This is the fix for "the other player joins a conversation and the
+# subtitles/reply options take a few seconds to appear while the letterbox creeps in": most of
+# that gap was two hops of up to 150 ms each (the owner's publish, the follower's read) that had
+# nothing to do with the network or the engine. OFF by default so a live pass can A/B it against
+# the existing cadence before it becomes the only path.
+dialogue_fast_join=0
+
 # The recruitment half of the same gap: when a conversation recruits a companion, only the
 # OWNER's party table gains the availability bit (party_roster_sync above reconciles the SEAT,
 # not availability itself - see its own comment). Because K1's nine companion slots are a

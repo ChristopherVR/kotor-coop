@@ -822,6 +822,7 @@ internal static class Program
             SyncPause = config?.PauseSync ?? true,
             HidePeersInMinigame = config?.HidePeersInMinigame ?? true,
             DialogueItemSync = config?.DialogueItemSync ?? true,
+            DialogueFastJoin = config?.DialogueFastJoin ?? false,
         };
 
         // Surface why a cached player pointer stopped validating. Re-resolving costs a full
