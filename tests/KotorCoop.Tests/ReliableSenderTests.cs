@@ -108,13 +108,14 @@ public class ReliableSenderTests
 
         // No sender in this codebase caps how many ops CollectDue returns in one call, so a
         // burst this size still all comes back the moment it is due, and it comes back again
-        // on every following retransmit tick — the property under test is that nothing is
-        // silently dropped, not that it is spread out.
+        // on a later retransmit tick (the interval backs off after each attempt, so later
+        // passes are sampled well past any backoff) — the property under test is that
+        // nothing is silently dropped, not that it is spread out.
         List<FlagOpPacket> firstRetransmit = sender.CollectDue(nowMs: 1_250);
         Assert.Equal(count, firstRetransmit.Count);
         Assert.Equal(enqueued, firstRetransmit.Select(op => op.OpSequence).ToHashSet());
 
-        List<FlagOpPacket> secondRetransmit = sender.CollectDue(nowMs: 1_500);
+        List<FlagOpPacket> secondRetransmit = sender.CollectDue(nowMs: 600_000);
         Assert.Equal(count, secondRetransmit.Count);
         Assert.Equal(enqueued, secondRetransmit.Select(op => op.OpSequence).ToHashSet());
 
@@ -126,7 +127,7 @@ public class ReliableSenderTests
         }
 
         Assert.Equal(count / 2, sender.PendingCount);
-        List<FlagOpPacket> thirdRetransmit = sender.CollectDue(nowMs: 1_750);
+        List<FlagOpPacket> thirdRetransmit = sender.CollectDue(nowMs: 1_200_000);
         Assert.Equal(count / 2, thirdRetransmit.Count);
         Assert.All(thirdRetransmit, op => Assert.True(op.OpSequence % 2 != 0));
     }
@@ -398,18 +399,22 @@ public class ReliableSenderTests
     }
 
     [Fact]
-    public void Loot_EmptyRecipientSetRetiresPendingOpsImmediately()
+    public void Loot_EmptyRecipientSetHoldsPendingOpsForWhoeverComesBack()
     {
-        // Every peer left (or none ever joined): nothing to ack, so the op is retired rather
-        // than retransmitted forever into a void.
+        // The sender's own header: an empty recipient list is NOT "everyone has acked". A
+        // client whose link dropped leaves the peer table after a few seconds; retiring the
+        // unacked removals at that moment let the returning client loot the same chest twice.
+        // The op must be held, unsent, and go out the moment somebody is there to receive it.
         ReliableLootSender sender = new(retransmitIntervalMs: 250);
         sender.Enqueue(originPeerId: 1, containerId: 100, itemId: 200, nowMs: 1_000);
         sender.CollectDue(recipients: [2], nowMs: 1_000);
 
-        List<ContainerLootPacket> due = sender.CollectDue(recipients: [], nowMs: 1_250);
+        List<ContainerLootPacket> whileAlone = sender.CollectDue(recipients: [], nowMs: 1_250);
+        Assert.Empty(whileAlone);
+        Assert.Equal(1, sender.PendingCount);
 
-        Assert.Empty(due);
-        Assert.Equal(0, sender.PendingCount);
+        List<ContainerLootPacket> onReturn = sender.CollectDue(recipients: [2], nowMs: 60_000);
+        Assert.Single(onReturn);
     }
 
     [Fact]
