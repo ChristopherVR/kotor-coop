@@ -296,20 +296,40 @@ Tests: `MaterialisedLootQueueTests.ModuleChangeTellsTheSessionToForgetItsDedupSe
 arrival, none on repeat pumps in the same module, one more on a genuine change),
 `.AFallbackModuleLabelDoesNotTriggerAReset`.
 
-**Item 11(b) — resync for a peer that reconnects after an op retired — deferred, not built.**
-The roadmap allowed building this only if it stayed small; it does not. `MaterialisedLootSender`
-only tracks ops still in flight (unlike `ContainerLootStore`, which keeps every removal it has
-ever seen so a resync can always re-offer the full history to a rejoining peer). Giving
-materialised loot the same guarantee needs a real historical store — every death's loot,
-keyed by owner enemy id, retained for some window and re-offered to a peer whose connection
-comes back — which is new plumbing on the sender, not a tweak to the pump. The existing wire
-doc already accepts this as "the same class of gap this document already accepts elsewhere, not
-new to this pass" for the in-flight case; a peer that disconnects for long enough to miss an
-op's full retirement window (every OTHER connected peer acking first) losing that one enemy's
-loot is narrow (one enemy, one peer, one loot drop — nothing desyncs or crashes) and left as a
-known limitation for the same reason. NOT live-verified — this whole entry is a code-level fix
-reasoned from the store and packet-handling code, not exercised against a running two-instance
-rig.
+**Item 11(b) — resync for a peer that reconnects after an op retired — CLOSED (2026-08-21).**
+`MaterialisedLootHistory` (`src/KotorCoop.Session/MaterialisedLootHistory.cs`) is the historical
+store this entry originally said was missing: a bounded (256 entries), per-module dictionary
+keyed by owner enemy id, exactly the `ContainerLootStore` pattern applied to this channel.
+`CoopHost.PublishMaterialisedLoot` records into it alongside the ordinary
+`MaterialisedLootSender.Enqueue` call; `CoopHost.PublishEnemies` clears it on a genuine module
+change (owner enemy ids are per-module, so an entry from the last one names a different creature
+now, or nothing); a new `CoopHost.ResyncMaterialisedLoot`, called from `HandleHello` on
+(re-)admission exactly where `ResyncContainerLoot` already runs, re-`Enqueue`s every remembered
+death under a fresh sequence. A re-offer to a peer that already applied the op is a no-op there
+(the client's `_materialisedLootSeen` dedup-by-owner-id is not reset by a reconnect, only by a
+module change — confirmed still true and now regression-tested), so the replay only ever adds
+loot for a peer that was genuinely missing it. No protocol change: `MaterialisedLoot`/
+`MaterialisedLootAck` (41/42) and the client-side handling are unchanged: the store, PublishEnemies
+comparison, and HandleHello call are the whole diff.
+
+Tests (`MaterialisedLootHistoryTests`, `MaterialisedLootResyncTests`): the history caps at 256
+and evicts oldest; overwriting an already-known owner id neither grows the history nor evicts;
+a genuine `PublishEnemies` module change clears it and a same-module re-publish does not; a
+peer disconnected BEFORE an op retires (so it was never a recipient of the retirement itself —
+the empty-recipients-hold rule means retirement needs at least one other peer still connected)
+receives that death's loot through the resync once it reconnects; a peer that already applied an
+op does not receive it a second time after its own reconnect (dedup survives); and a peer joining
+fresh, after every op already retired against an earlier peer, receives the WHOLE remembered
+history, with the earlier, already-caught-up peer seeing no duplicate as a side effect.
+
+⚠ **NOT live-verified.** This whole entry — the history store, its wiring into
+`PublishMaterialisedLoot`/`PublishEnemies`, and the `HandleHello` resync call — is reasoned from
+the store and packet-handling code and exercised only by the loopback-socket unit tests listed
+above, never against the running two-instance rig. In particular the exact scenario the tests
+simulate (a real ambush death, one peer genuinely absent for the whole retirement window, a real
+reconnect through `SessionManager`/the plugin rather than a raw `CoopClient`) has not been walked
+through live. The previous version of this note (superseded by the paragraph above) is preserved
+in git history for anyone who wants the original "deferred, not built" framing this replaced.
 
 ⚠ **A confusing log line, NOT a bug — checked and cleared.** `"combat: killed 0xB5 on the
 owner's authority"` reads as if the LOCAL id `0xB5` were killed, and in this same session a
