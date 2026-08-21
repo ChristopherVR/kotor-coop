@@ -19,6 +19,12 @@ namespace KotorCoop.Plugin;
 ///
 /// Kill switch: <c>party_drive=0</c> in coop.ini (the agent then keeps only solo mode and
 /// nothing moves the local copies — visibly worse, but safe).
+///
+/// Roadmap item 4, OFF by default: <c>companion_local_combat=1</c> lets ONE companion — the one
+/// standing close enough to both this instance's own player and the enemy <c>local_combat</c> is
+/// already fighting locally — be handed to its own engine AI instead of mirrored, via
+/// <see cref="CompanionLocalFightRule"/>. See docs/research/party-reconciliation.md, dated entry
+/// 2026-08-21, for why the gate is this tight.
 /// </summary>
 internal sealed unsafe class PartyPresenceController(SharedBlockView block)
 {
@@ -44,6 +50,26 @@ internal sealed unsafe class PartyPresenceController(SharedBlockView block)
     private readonly nint[] _creature = new nint[SharedBlock.PartyPresenceCapacity];
     private readonly uint[] _appliedOneShot = new uint[SharedBlock.PartyPresenceCapacity];
     private readonly bool[] _oneShotPrimed = new bool[SharedBlock.PartyPresenceCapacity];
+
+    // ---- roadmap item 4: companion local combat (CompanionLocalFightRule). OFF by default —
+    // see docs/research/party-reconciliation.md, dated entry 2026-08-21, for the full design
+    // question and the reasoning behind the triple-proximity gate below.
+
+    private readonly bool _companionLocalCombatEnabled = PluginConfig.ReadBool("companion_local_combat", false);
+
+    /// <summary>How close a companion's host-driven position must be to BOTH the locally-fighting
+    /// enemy and this instance's own player before it may be released to its own engine AI —
+    /// "the players are actually fighting side by side," not merely both individually near
+    /// something hostile. coop.ini <c>companion_local_combat_range</c>.</summary>
+    private static readonly float CompanionLocalCombatRangeSquared =
+        Squared(Math.Clamp(PluginConfig.ReadFloat("companion_local_combat_range", 10f), 1f, 100f));
+
+    private static float Squared(float value) => value * value;
+
+    /// <summary>Per slot: is this companion currently released to its own engine AI. Edge state
+    /// for <see cref="CompanionLocalFightRule"/> — <see cref="Forget"/> clears it, the same as
+    /// every other per-slot cache here.</summary>
+    private readonly bool[] _released = new bool[SharedBlock.PartyPresenceCapacity];
 
     /// <summary>Per slot: is the body currently held Neutral. Tri-state via
     /// <see cref="_factionKnown"/> so the first pass always writes.</summary>
@@ -223,9 +249,28 @@ internal sealed unsafe class PartyPresenceController(SharedBlockView block)
         nint player = Odyssey.GetPlayerCreaturePointer();
         int driven = 0;
 
+        // Resolved ONCE per pass, not per companion: local_combat runs at most one fight at a
+        // time (its own design), so every companion this pass shares the same answer to "is
+        // there a fight to join, and where is it." block.LocalCombatExcludedId is the exact
+        // value EnemyPresenceController publishes right where it arms StartLocalFight — see
+        // that field's own doc comment.
+        bool localFightActive = false;
+        Vec3 localEnemyPosition = default;
+        uint locallyFightingOwnerId = block.LocalCombatExcludedId;
+        if (_companionLocalCombatEnabled && locallyFightingOwnerId != 0)
+        {
+            uint mappedEnemyId = MaterialisedEnemies.ToLocal(locallyFightingOwnerId);
+            nint enemyCreature = Odyssey.ResolveServerObject(mappedEnemyId != 0 ? mappedEnemyId : locallyFightingOwnerId);
+            if (enemyCreature != 0)
+            {
+                localEnemyPosition = Odyssey.GetPosition(enemyCreature);
+                localFightActive = true;
+            }
+        }
+
         for (int i = 0; i < count; i++)
         {
-            if (DriveOne(i, block.GetPartyPresence(i), now, player))
+            if (DriveOne(i, block.GetPartyPresence(i), now, player, localFightActive, localEnemyPosition))
             {
                 driven++;
             }
@@ -238,7 +283,9 @@ internal sealed unsafe class PartyPresenceController(SharedBlockView block)
         }
     }
 
-    private bool DriveOne(int slot, PartyPresenceView member, double now, nint player)
+    private bool DriveOne(
+        int slot, PartyPresenceView member, double now, nint player,
+        bool localFightActive, Vec3 localEnemyPosition)
     {
         if (member.RosterSlotPlusOne is 0 or > PartyNpcSlots)
         {
@@ -265,6 +312,49 @@ internal sealed unsafe class PartyPresenceController(SharedBlockView block)
             return false;
         }
 
+        // ---- roadmap item 4: companion local combat release gate. See
+        // docs/research/party-reconciliation.md, dated entry 2026-08-21, for the full design.
+        // Decided BEFORE the claim below, same reasoning as EnemyPresenceController's own
+        // ROUND 46 note: a companion about to be handed its own engine AI must not be claimed
+        // or have its queue touched this same frame, or the hand-off disarms the very AI it is
+        // being released to.
+        bool nearEnemy = localFightActive
+            && PlanarDistanceSquared(member.Position, localEnemyPosition) <= CompanionLocalCombatRangeSquared;
+        bool nearPlayer = player != 0
+            && PlanarDistanceSquared(member.Position, Odyssey.GetPosition(player)) <= CompanionLocalCombatRangeSquared;
+
+        CompanionLocalFightAction fightAction = CompanionLocalFightRule.Decide(
+            _companionLocalCombatEnabled, _rosterFrozen, localFightActive, nearEnemy, nearPlayer, _released[slot]);
+
+        switch (fightAction)
+        {
+            case CompanionLocalFightAction.ReleaseAndLog:
+                _released[slot] = true;
+                // Put it back in the player faction, off the min-1-hp pin — the opposite of the
+                // blanket local_combat hold just below, because THIS companion can now genuinely
+                // fight back.
+                ApplyCompanionFaction(slot, creature, objectId, neutral: false);
+                PluginHost.Log(
+                    $"party drive: companion 0x{objectId:X} released to fight locally — "
+                    + "within range of both you and the enemy you are fighting");
+                return false;
+
+            case CompanionLocalFightAction.StayReleased:
+                // Hands off entirely, the same handoff EnemyPresenceController's own excluded
+                // enemy gets from DriveOne: no claim, no position/health write, nothing. The
+                // companion's own engine AI is what fights from here.
+                return false;
+
+            case CompanionLocalFightAction.ReclaimAndLog:
+                _released[slot] = false;
+                PluginHost.Log(
+                    $"party drive: companion 0x{objectId:X} reclaimed — resuming the host mirror");
+                break;
+
+            case CompanionLocalFightAction.Mirror:
+                break;
+        }
+
         // Same reasoning as the enemy drive: the local AI (and any leftover follow
         // action) must never contest the writes, so re-claim every pass.
         Odyssey.ClaimCreature(creature);
@@ -283,6 +373,10 @@ internal sealed unsafe class PartyPresenceController(SharedBlockView block)
         // player faction on the next pass. CEASING TO MIRROR DOES NOT COME BACK THROUGH HERE —
         // this whole method is behind OnFrame's command gate and roster-freeze guard — which is
         // what ReleaseSession and the freeze guard's own ReleaseAllHeld call are for.
+        //
+        // The one companion CompanionLocalFightRule has released (above) never reaches this
+        // line at all this pass — it returned before the switch fell through — so the blanket
+        // hold below only ever applies to a companion that genuinely cannot fight back yet.
         ApplyCompanionFaction(
             slot, creature, objectId,
             neutral: EnemyPresenceController.LocalCombat && block.DamageDealtEnabled);
@@ -402,7 +496,19 @@ internal sealed unsafe class PartyPresenceController(SharedBlockView block)
         _appliedOneShot[slot] = 0;
         _oneShotPrimed[slot] = false;
         _factionKnown[slot] = false;
+        _released[slot] = false;
         _smoother.Reset(slot);
+    }
+
+    /// <summary>Planar (X/Y) distance squared — the same test <c>EnemyPresenceController
+    /// .IsEngaged</c> uses for the identical reason: the Z of a driven body is the OWNER's, and a
+    /// ramp between two players standing in the same fight is a metre of height, not a different
+    /// floor.</summary>
+    private static float PlanarDistanceSquared(Vec3 a, Vec3 b)
+    {
+        float dx = a.X - b.X;
+        float dy = a.Y - b.Y;
+        return (dx * dx) + (dy * dy);
     }
 
     /// <summary>
