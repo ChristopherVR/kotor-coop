@@ -53,6 +53,28 @@ public class TravelPumpTests
             return true;
         }
 
+        /// <summary>Every value <c>PumpTravel</c> wrote through
+        /// <see cref="TryArmClientDoorRefusal"/>, in order — asserts both that it is written
+        /// EVERY tick (a stale "armed" must not outlive whatever justified it) and what it
+        /// carried.</summary>
+        public List<bool> DoorRefusalArmedCalls { get; } = [];
+
+        public bool TryArmClientDoorRefusal(bool armed)
+        {
+            DoorRefusalArmedCalls.Add(armed);
+            return true;
+        }
+
+        /// <summary>Every on-screen line posted through the fast path's
+        /// <see cref="IGameBridge.PostChatLine"/> call.</summary>
+        public List<string> ChatLines { get; } = [];
+
+        public bool PostChatLine(string line)
+        {
+            ChatLines.Add(line);
+            return true;
+        }
+
         public void Dispose()
         {
         }
@@ -68,6 +90,17 @@ public class TravelPumpTests
         {
             List<TransitionMoviePacket> ready = [.. IncomingMovies];
             IncomingMovies.Clear();
+            return ready;
+        }
+
+        /// <summary>Transition-announce packets waiting to be handed to the agent, as if they
+        /// had just arrived off the wire.</summary>
+        public List<TransitionAnnouncePacket> IncomingAnnounces { get; } = [];
+
+        public IReadOnlyList<TransitionAnnouncePacket> DrainTransitionAnnounce()
+        {
+            List<TransitionAnnouncePacket> ready = [.. IncomingAnnounces];
+            IncomingAnnounces.Clear();
             return ready;
         }
 
@@ -154,7 +187,8 @@ public class TravelPumpTests
     }
 
     private static (CoopAgent Agent, TravelBridge Bridge, StubSession Session) Build(
-        bool follow = true, int retryMs = 15_000, int settleMs = 0, int combatPumpMs = 150)
+        bool follow = true, int retryMs = 15_000, int settleMs = 0, int combatPumpMs = 150,
+        bool transitionAnnounce = false, bool clientDoorRefusal = false)
     {
         TravelBridge bridge = new();
         StubSession session = new();
@@ -171,6 +205,13 @@ public class TravelPumpTests
             // separate rule with its own test below, and leaving it on here would mean
             // every case had to wait out a wall clock nothing else in the suite depends on.
             ModuleSettleMs = settleMs,
+
+            TransitionAnnounceEnabled = transitionAnnounce,
+            ClientDoorRefusalEnabled = clientDoorRefusal,
+
+            // Deterministic and distinguishable from the raw resref in the fast-path tests,
+            // without needing a real game directory.
+            ModuleDisplayName = m => $"Pretty({m})",
         });
 
         return (agent, bridge, session);
@@ -556,5 +597,192 @@ public class TravelPumpTests
         string[] carried = Assert.Single(bridge.RequestMovies);
         Assert.Equal(TransitionMoviePacket.MaxMovies, carried.Length);
         Assert.Equal(["mov1", "mov2", "mov3", "mov4", "mov5", "mov6"], carried);
+    }
+
+    // ---- announced transitions: the fast path ---------------------------------------
+
+    private static TransitionAnnouncePacket Announce(uint serial, string module, string waypoint = "") =>
+        new(CoopHost.HostPeerId, module, waypoint, serial);
+
+    /// <summary>
+    /// The whole point of the feature: an announce fires the follow immediately, even though
+    /// the settle window (still open from this player's own last transition) would otherwise
+    /// hold it — and even with NO host peer entry at all, simulating the exact window the
+    /// design targets: the host's main thread is blocked inside a movie and has published
+    /// nothing new yet.
+    /// </summary>
+    [Fact]
+    public void AnAnnouncedTransitionBypassesTheSettleDebounceAndNeedsNoHostPeerEntry()
+    {
+        (CoopAgent agent, TravelBridge bridge, StubSession session) =
+            Build(settleMs: 60_000, transitionAnnounce: true, combatPumpMs: 0);
+
+        // The FIRST follow, unrelated to what this test is about.
+        session.Peers.Add(HostPeer(HostModule));
+        agent.PumpOnce();
+        Assert.Single(bridge.Requests);
+
+        // We arrive at the host's module — a real transition just completed, so the settle
+        // clock starts (ModuleSettleMs guards the world that was JUST loaded, exactly here).
+        bridge.Local = new PlayerState(Vector3f.Zero, 0f, HostModule, 20, 0);
+        agent.PumpOnce();
+
+        // The host is already moving on again — but its main thread is blocked inside a
+        // movie, its published module has not caught up, and it is absent from the peer list
+        // entirely here on purpose (nothing to compare "together" against). Only the announce
+        // says where it is actually headed.
+        session.IncomingAnnounces.Add(Announce(2, "korr_m34aa", "from_door"));
+        agent.PumpOnce();
+
+        Assert.Equal(2, bridge.Requests.Count);
+        Assert.Equal("korr_m34aa", bridge.Requests[1].Module);
+        Assert.Equal("from_door", bridge.Requests[1].Waypoint);
+    }
+
+    /// <summary>The gate itself: with the feature OFF (the default), a queued announce is
+    /// simply never consumed, and behaviour matches every pre-existing test in this file.</summary>
+    [Fact]
+    public void WithTheFeatureDisabledAnAnnouncementIsIgnored()
+    {
+        (CoopAgent agent, TravelBridge bridge, StubSession session) =
+            Build(settleMs: 60_000, transitionAnnounce: false, combatPumpMs: 0);
+
+        session.IncomingAnnounces.Add(Announce(1, HostModule));
+        agent.PumpOnce();
+
+        Assert.Empty(bridge.Requests);
+    }
+
+    /// <summary>The stunt gate applies to an announced destination exactly like it does to the
+    /// host's published module — an announcement is earlier information, not different rules.</summary>
+    [Fact]
+    public void AStuntModuleAnnouncementIsNeverFollowedEvenViaTheFastPath()
+    {
+        (CoopAgent agent, TravelBridge bridge, StubSession session) =
+            Build(transitionAnnounce: true, combatPumpMs: 0);
+
+        session.IncomingAnnounces.Add(Announce(1, "STUNT_00"));
+        agent.PumpOnce();
+
+        Assert.Empty(bridge.Requests);
+    }
+
+    /// <summary>An announce naming our own current module is spent without ever warping —
+    /// there is nothing to race ahead of.</summary>
+    [Fact]
+    public void AnAnnouncementNamingOurOwnModuleWarpsNowhere()
+    {
+        (CoopAgent agent, TravelBridge bridge, StubSession session) =
+            Build(transitionAnnounce: true, combatPumpMs: 0);
+
+        session.IncomingAnnounces.Add(Announce(1, ClientModule));
+        agent.PumpOnce();
+
+        Assert.Empty(bridge.Requests);
+    }
+
+    /// <summary>The movies accumulated from a declined stunt-module follow ride the fast-path
+    /// warp exactly like they ride the slow one.</summary>
+    [Fact]
+    public void MoviesAccumulatedSoFarRideTheAnnouncedFastPathToo()
+    {
+        (CoopAgent agent, TravelBridge bridge, StubSession session) =
+            Build(transitionAnnounce: true, combatPumpMs: 0);
+
+        session.IncomingMovies.Add(new TransitionMoviePacket(CoopHost.HostPeerId, "end_m01ab", 1, ["01c"]));
+        session.Peers.Add(HostPeer("STUNT_00"));
+        agent.PumpOnce();
+        Assert.Empty(bridge.Requests); // correctly refused to follow into the stunt module
+
+        session.Peers.Clear();
+        session.IncomingAnnounces.Add(Announce(2, "tar_m02af"));
+        agent.PumpOnce();
+
+        Assert.Equal("tar_m02af", Assert.Single(bridge.Requests).Module);
+        Assert.Equal(["01c"], Assert.Single(bridge.RequestMovies));
+    }
+
+    /// <summary>The on-screen line (task 2a): posted through the bridge's chat overlay,
+    /// pretty-printed via the injected display-name hook, naming the host by its peer name.</summary>
+    [Fact]
+    public void TheFastPathPostsAnOnScreenLine()
+    {
+        (CoopAgent agent, TravelBridge bridge, StubSession session) =
+            Build(transitionAnnounce: true, combatPumpMs: 0);
+
+        session.Peers.Add(HostPeer(HostModule)); // supplies the display name, "host"
+        session.IncomingAnnounces.Add(Announce(1, "tar_m03aa"));
+        agent.PumpOnce();
+
+        Assert.Equal("following host to Pretty(tar_m03aa)", Assert.Single(bridge.ChatLines));
+    }
+
+    /// <summary>A repeated announce (the sender's own redundancy against a dropped datagram)
+    /// must not fire the warp twice.</summary>
+    [Fact]
+    public void ARepeatedAnnouncementDoesNotRepeatTheFastPathWarp()
+    {
+        (CoopAgent agent, TravelBridge bridge, StubSession session) =
+            Build(transitionAnnounce: true, combatPumpMs: 0, retryMs: 60_000);
+
+        session.IncomingAnnounces.Add(Announce(1, "tar_m03aa"));
+        agent.PumpOnce();
+        Assert.Single(bridge.Requests);
+
+        session.IncomingAnnounces.Add(Announce(1, "tar_m03aa"));
+        agent.PumpOnce();
+        Assert.Single(bridge.Requests);
+    }
+
+    // ---- the client-door-refusal arm ---------------------------------------------------
+
+    [Fact]
+    public void TheRefusalArmIsWrittenEveryTickWhenEligible()
+    {
+        (CoopAgent agent, TravelBridge bridge, StubSession session) =
+            Build(clientDoorRefusal: true, combatPumpMs: 0);
+
+        session.Peers.Add(HostPeer(HostModule));
+        agent.PumpOnce();
+
+        Assert.Equal([true], bridge.DoorRefusalArmedCalls);
+    }
+
+    [Fact]
+    public void TheHostNeverArmsItsOwnDoorRefusal()
+    {
+        (CoopAgent agent, TravelBridge bridge, StubSession session) =
+            Build(clientDoorRefusal: true, combatPumpMs: 0);
+
+        session.EnemyAuthority = true;
+        agent.PumpOnce();
+
+        Assert.Equal([false], bridge.DoorRefusalArmedCalls);
+    }
+
+    [Fact]
+    public void TheRefusalArmIsOffByDefault()
+    {
+        (CoopAgent agent, TravelBridge bridge, StubSession session) = Build(combatPumpMs: 0);
+
+        session.Peers.Add(HostPeer(HostModule));
+        agent.PumpOnce();
+
+        Assert.Equal([false], bridge.DoorRefusalArmedCalls);
+    }
+
+    /// <summary>The accidental-success case: the host announcing (or queuing movies for) a
+    /// transition of its own this same tick disarms the refusal for whatever door it just used.</summary>
+    [Fact]
+    public void ARecentHostTransitionSignalDisarmsTheRefusalTheSameTick()
+    {
+        (CoopAgent agent, TravelBridge bridge, StubSession session) =
+            Build(clientDoorRefusal: true, combatPumpMs: 0);
+
+        session.IncomingMovies.Add(new TransitionMoviePacket(CoopHost.HostPeerId, "end_m01ab", 1, ["01c"]));
+        session.Peers.Add(HostPeer("STUNT_00")); // declined follow; irrelevant to the arm
+        agent.PumpOnce();
+
+        Assert.Equal([false], bridge.DoorRefusalArmedCalls);
     }
 }

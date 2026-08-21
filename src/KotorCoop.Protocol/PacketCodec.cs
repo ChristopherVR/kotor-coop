@@ -784,6 +784,33 @@ public static class PacketCodec
         return r.Failed ? null : new TransitionMoviePacket(peerId, module, serial, movies);
     }
 
+    public static int Write(Span<byte> buffer, TransitionAnnouncePacket packet)
+    {
+        PacketWriter w = new(buffer);
+        w.WriteHeader(PacketType.TransitionAnnounce);
+        w.WriteUInt32(packet.PeerId);
+        w.WriteString(packet.Module, ProtocolConstants.MaxModuleLength);
+        w.WriteString(packet.Waypoint, ProtocolConstants.MaxModuleLength);
+        w.WriteUInt32(packet.Serial);
+        return w.Failed ? 0 : w.Position;
+    }
+
+    public static TransitionAnnouncePacket? ReadTransitionAnnounce(ReadOnlySpan<byte> buffer)
+    {
+        PacketReader r = new(buffer);
+        if (r.ReadHeader() != PacketType.TransitionAnnounce)
+        {
+            return null;
+        }
+
+        uint peerId = r.ReadUInt32();
+        string module = r.ReadString();
+        string waypoint = r.ReadString();
+        uint serial = r.ReadUInt32();
+
+        return r.Failed ? null : new TransitionAnnouncePacket(peerId, module, waypoint, serial);
+    }
+
     public static int Write(Span<byte> buffer, EncounterTriggerPacket packet)
     {
         PacketWriter w = new(buffer);

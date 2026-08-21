@@ -1134,6 +1134,98 @@ public sealed class CoopHost : ICoopSession
         }
     }
 
+    // ---- transition announce -----------------------------------------------------------
+    //
+    // The faster, earlier sibling of the cinematic channel above: not the film, but where a
+    // follower should go, sent the instant this instance's engine has committed to a
+    // transition, before the load starts. Same shape, same reliability, same reason: any
+    // instance can be the one whose engine reached the door, everyone else should be able to
+    // start following immediately, and a lost announcement costs a smoother handoff, never
+    // consistency — the pre-existing host-module-based follow is the fallback.
+
+    private readonly Queue<TransitionAnnouncePacket> _announceInbox = new();
+    private readonly Queue<(TransitionAnnouncePacket Packet, uint ExceptPeer)> _announceOutbox = new();
+
+    public void PublishTransitionAnnounce(string module, string waypoint, uint serial)
+    {
+        TransitionAnnouncePacket packet = new(LocalPeerId, module, waypoint, serial);
+        lock (_gate)
+        {
+            _announceOutbox.Enqueue((packet, LocalPeerId));
+        }
+    }
+
+    public IReadOnlyList<TransitionAnnouncePacket> DrainTransitionAnnounce()
+    {
+        lock (_gate)
+        {
+            if (_announceInbox.Count == 0)
+            {
+                return [];
+            }
+
+            List<TransitionAnnouncePacket> ready = [];
+            while (_announceInbox.Count > 0)
+            {
+                ready.Add(_announceInbox.Dequeue());
+            }
+
+            return ready;
+        }
+    }
+
+    private void HandleTransitionAnnounce(ReadOnlySpan<byte> span)
+    {
+        if (PacketCodec.ReadTransitionAnnounce(span) is not { } announce)
+        {
+            _channel.NoteMalformed();
+            return;
+        }
+
+        lock (_gate)
+        {
+            if (!_peers.ContainsKey(announce.PeerId))
+            {
+                return; // only a known peer, and it cannot announce for another
+            }
+
+            _announceInbox.Enqueue(announce);
+            _announceOutbox.Enqueue((announce, announce.PeerId)); // everyone but the sender
+        }
+    }
+
+    private void BroadcastTransitionAnnounce(List<PeerConnection> recipients)
+    {
+        List<(TransitionAnnouncePacket Packet, uint ExceptPeer)> pending;
+        lock (_gate)
+        {
+            if (_announceOutbox.Count == 0)
+            {
+                return;
+            }
+
+            pending = [.. _announceOutbox];
+            _announceOutbox.Clear();
+        }
+
+        foreach ((TransitionAnnouncePacket packet, uint except) in pending)
+        {
+            int length = PacketCodec.Write(_sendBuffer, packet);
+            if (length <= 0)
+            {
+                continue;
+            }
+
+            foreach (PeerConnection peer in recipients)
+            {
+                if (peer.Id != except)
+                {
+                    _channel.Send(peer.EndPoint, _sendBuffer.AsSpan(0, length));
+                }
+            }
+        }
+    }
+
     private void BroadcastPhantomDamage(List<PeerConnection> recipients)
     {
         List<KeyValuePair<(uint Target, uint Source), (uint Damage, uint Attacker)>> owed;
@@ -1399,6 +1491,7 @@ public sealed class CoopHost : ICoopSession
         BroadcastPeerEffects(recipients);
         BroadcastBarks(recipients);
         BroadcastTransitionMovies(recipients);
+        BroadcastTransitionAnnounce(recipients);
         BroadcastInteractionLocks(recipients);
         BroadcastWorldDigest(now, recipients);
         FlushChat(recipients);
@@ -1846,6 +1939,10 @@ public sealed class CoopHost : ICoopSession
 
             case PacketType.TransitionMovies:
                 HandleTransitionMovies(span);
+                break;
+
+            case PacketType.TransitionAnnounce:
+                HandleTransitionAnnounce(span);
                 break;
 
             case PacketType.InteractionClaim:

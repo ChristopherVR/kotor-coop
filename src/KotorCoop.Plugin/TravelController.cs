@@ -39,6 +39,52 @@ internal sealed unsafe class TravelController(SharedBlockView block)
     public bool HasPendingRequest => block.TravelSerial != block.TravelApplied;
 
     /// <summary>
+    /// Task 2b (docs/research/transition-smoothness.md): the serial <see cref="MaybeStartFade"/>
+    /// has already faded for, so a pending request that spans several frames of flush is faded
+    /// exactly once rather than restarted every frame.
+    /// </summary>
+    private uint _fadedForSerial;
+
+    /// <summary>
+    /// Gated OFF by default (coop.ini <c>transition_announce_fade</c>) — see
+    /// <c>EngineHandles.TryFadeToBlack</c>'s own doc for why: the fade DIRECTION is INFERRED,
+    /// not read off the binary, so this ships opt-in pending live verification. Getting it
+    /// wrong cannot crash and is self-timed (no input lock to undo either way), which is why
+    /// it is safe to leave callable even while off — the flag alone decides whether it fires.
+    /// </summary>
+    private static readonly bool FadeEnabled = PluginConfig.ReadBool("transition_announce_fade", false);
+
+    /// <summary>How long the best-effort fade runs. Roughly the door's own 0.5 s fade
+    /// convention (docs/research/cinematics.md §8.2), long enough to read as deliberate,
+    /// short enough that a false start (an aborted travel request) does not linger.</summary>
+    private const float FadeLengthSeconds = 0.5f;
+
+    /// <summary>
+    /// Called every frame a travel request is pending, BEFORE the flush loop — so the fade
+    /// covers the whole wait, not just the warp itself — but only actually fades once per
+    /// serial. See the type doc and <see cref="FadeEnabled"/> for what is and is not proven.
+    /// </summary>
+    public void MaybeStartFade()
+    {
+        if (!FadeEnabled)
+        {
+            return;
+        }
+
+        uint serial = block.TravelSerial;
+        if (serial == _fadedForSerial)
+        {
+            return;
+        }
+
+        _fadedForSerial = serial;
+        if (EngineHandles.TryFadeToBlack(FadeLengthSeconds))
+        {
+            PluginHost.Log("travel: fading to black for the incoming transition (INFERRED direction - NEEDS-LIVE)");
+        }
+    }
+
+    /// <summary>
     /// The travel REQUEST is deliberately not forgotten on a module change: one that raced a
     /// transition stays pending (its serial is still ahead), and the next stable frame either
     /// executes it or acknowledges it as already satisfied.
@@ -105,11 +151,22 @@ internal sealed unsafe class TravelController(SharedBlockView block)
         // ours fires at all.
         QueueStagedMovies();
 
+        string name = Encoding.ASCII.GetString(module, length);
+        string waypointName = waypointLength > 0 ? Encoding.ASCII.GetString(waypoint, waypointLength) : string.Empty;
+
+        // "Announced transitions" (docs/research/transition-smoothness.md): this instance's
+        // OWN plugin-initiated warp is the OTHER place the destination is known before the
+        // load starts — no door sweep needed here, the module/waypoint bytes are already in
+        // hand. Covers a host being pulled along by a peer, or the `moviewarp` debug verb;
+        // the far more common case (a real door, a human walking) is announced from
+        // PluginHost's trans_pending edge instead, because a co-op warp like this one never
+        // raises trans_pending at all (docs/research/cinematics.md §8.2).
+        block.PublishTransitionAnnounce(name, waypointName);
+
         bool ok = Odyssey.TravelToModule(module, length, waypoint, waypointLength, out int failure);
         block.TravelStatus = ok ? 0 : failure;
         block.TravelApplied = serial;
 
-        string name = Encoding.ASCII.GetString(module, length);
         PluginHost.Log(ok
             ? $"travel: moving to module '{name}' on the session's authority"
             : $"travel: move to '{name}' refused (failure {failure})");

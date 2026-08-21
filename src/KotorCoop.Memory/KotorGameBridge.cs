@@ -491,6 +491,21 @@ public sealed class KotorGameBridge : IGameBridge
     private const int BlockCinematicNameLength = 16;
     private const int BlockCinematicCapacity = 6;
 
+    /// <summary>Transition-announce channel (shared block version 47, region
+    /// 0x38E4..0x3928 — the gap left below the cinematic region and above the peer-effect
+    /// one). Plugin -&gt; agent: the destination of THIS instance's own imminent transition,
+    /// with a serial bumped on the frame it was resolved. Mirrors
+    /// <c>SharedBlock.OffsetTransitionAnnounce*</c>.</summary>
+    private const int BlockTransitionAnnounceSerial = 0x38E4;
+    private const int BlockTransitionAnnounceModule = 0x38E8;
+    private const int BlockTransitionAnnounceWaypoint = 0x3908;
+    private const int BlockTransitionAnnounceNameLength = 32;
+
+    /// <summary>Agent -&gt; plugin. Nonzero arms the client-door-refusal watch (shared block
+    /// version 47). A LEVEL, re-sent every tick; the plugin has no notion of host/client on
+    /// its own.</summary>
+    private const int BlockClientDoorRefusalArmed = 0x3928;
+
     // Staging cheats, mirroring SharedBlock version 41 (region 0x3328..0x33C0).
     private const int BlockCheatSerial = 0x3328;
     private const int BlockCheatKind = 0x332C;
@@ -631,10 +646,15 @@ public sealed class KotorGameBridge : IGameBridge
     /// 43 = the agent-written liveness heartbeat (SharedBlock.OffsetAgentHeartbeat, 0x2B = 43).
     /// 44 = the peer-effect channel, block grown to 0x3C00 (0x2C = 44) — see
     /// docs/research/effect-sync.md.
+    /// 45 and 46 are RESERVED by other agents working this tree concurrently, on branches
+    /// this worktree cannot see.
+    /// 47 = the transition-announce channel + the client-door-refusal arm, in the free gap
+    /// between the cinematic and peer-effect regions (0x38E4..0x3928; 0x2F = 47) — no growth
+    /// of TotalSize needed. See docs/research/transition-smoothness.md.
     /// <b>ItemHarnessTests.TheBlockVersionIsTheSameNumberInBothHalves reads both files and
     /// fails the build if they disagree</b> — added with 42, because nothing had ever
     /// enforced the warning above.</summary>
-    public const string PluginSignature = "4B 4F 43 4F 4F 50 30 31 2C 00 00 00 01 EE FF C0";
+    public const string PluginSignature = "4B 4F 43 4F 4F 50 30 31 2F 00 00 00 01 EE FF C0";
 
     /// <summary>Agent's view of which coop item id occupies each plugin item slot.</summary>
     private readonly uint[] _itemSlotIds = new uint[BlockItemCapacity];
@@ -3694,6 +3714,43 @@ public sealed class KotorGameBridge : IGameBridge
 
         movies = [.. names];
         return movies.Length > 0;
+    }
+
+    /// <inheritdoc />
+    public bool TryReadTransitionAnnounce(out uint serial, out string module, out string waypoint)
+    {
+        serial = 0;
+        module = string.Empty;
+        waypoint = string.Empty;
+
+        if (_pluginBlock == 0
+            || !_memory.TryReadUInt32(_pluginBlock + BlockTransitionAnnounceSerial, out serial)
+            || serial == 0)
+        {
+            return false;
+        }
+
+        if (!_memory.TryReadAsciiString(
+                _pluginBlock + BlockTransitionAnnounceModule, BlockTransitionAnnounceNameLength, out module)
+            || module.Length == 0)
+        {
+            return false;
+        }
+
+        _memory.TryReadAsciiString(
+            _pluginBlock + BlockTransitionAnnounceWaypoint, BlockTransitionAnnounceNameLength, out waypoint);
+        return true;
+    }
+
+    /// <inheritdoc />
+    public bool TryArmClientDoorRefusal(bool armed)
+    {
+        if (_pluginBlock == 0)
+        {
+            return false;
+        }
+
+        return _memory.TryWrite(_pluginBlock + BlockClientDoorRefusalArmed, armed ? 1u : 0u);
     }
 
     // ---- staging cheats --------------------------------------------------------

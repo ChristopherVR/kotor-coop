@@ -444,6 +444,28 @@ public sealed record TransitionMoviePacket(uint PeerId, string Module, uint Seri
     public const int MaxMovieLength = 16;
 }
 
+/// <summary>
+/// any -&gt; all: "the transition I am about to make goes to THIS module, entering at THIS
+/// waypoint" — sent the instant this instance's own engine has committed to the destination,
+/// which is BEFORE the load starts.
+///
+/// Unlike <see cref="TransitionMoviePacket"/>, whose <c>Module</c> is what the announcer is
+/// LEAVING, <paramref name="Module"/> here is the DESTINATION — the whole point of this
+/// channel is to let a follower start its own warp toward the right place immediately,
+/// instead of waiting for the mover's published <see cref="PlayerState.Module"/> to catch up
+/// (which can lag by the length of a movie: the mover's main thread is inside
+/// <c>WaitForMovie</c> and publishes nothing for the duration) plus the follow logic's own
+/// settle debounce.
+///
+/// <paramref name="Waypoint"/> is the entry point the engine's own move-to-module fields
+/// carry (<c>door-&gt;linked_to</c> for a real door transition), so the follower's warp lands
+/// where the mover is actually headed rather than the destination module's default entry.
+/// Empty when the source could not resolve one (a plugin-initiated warp with no waypoint) —
+/// the engine's own move-to-module path already treats an empty waypoint as "use the
+/// default", so this degrades exactly like an ordinary warp.
+/// </summary>
+public sealed record TransitionAnnouncePacket(uint PeerId, string Module, string Waypoint, uint Serial);
+
 /// <summary>host -> all: the authoritative conversation token (see <see cref="DialogueState"/>).</summary>
 public sealed record DialogueSnapshotPacket(long ServerTimeMs, DialogueState State);
 

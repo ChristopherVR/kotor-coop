@@ -501,6 +501,64 @@ public sealed class CoopClient : ICoopSession
         }
     }
 
+    // ---- transition announce -----------------------------------------------------------
+    //
+    // Same shape as the cinematic channel above, faster: not the film, but where a follower
+    // should go, sent the instant this instance's own engine has committed to a transition.
+
+    private readonly Queue<TransitionAnnouncePacket> _announceOutbox = new();
+    private readonly Queue<TransitionAnnouncePacket> _announceInbox = new();
+
+    public void PublishTransitionAnnounce(string module, string waypoint, uint serial)
+    {
+        lock (_gate)
+        {
+            _announceOutbox.Enqueue(new TransitionAnnouncePacket(_localPeerId, module, waypoint, serial));
+        }
+    }
+
+    public IReadOnlyList<TransitionAnnouncePacket> DrainTransitionAnnounce()
+    {
+        lock (_gate)
+        {
+            if (_announceInbox.Count == 0)
+            {
+                return [];
+            }
+
+            List<TransitionAnnouncePacket> ready = [];
+            while (_announceInbox.Count > 0)
+            {
+                ready.Add(_announceInbox.Dequeue());
+            }
+
+            return ready;
+        }
+    }
+
+    private void FlushTransitionAnnounce()
+    {
+        while (true)
+        {
+            TransitionAnnouncePacket announce;
+            lock (_gate)
+            {
+                if (_announceOutbox.Count == 0)
+                {
+                    return;
+                }
+
+                announce = _announceOutbox.Dequeue();
+            }
+
+            int length = PacketCodec.Write(_sendBuffer, announce);
+            if (length > 0)
+            {
+                _channel.Send(_hostEndPoint, _sendBuffer.AsSpan(0, length));
+            }
+        }
+    }
+
     private void FlushChat()
     {
         while (true)
@@ -1037,6 +1095,7 @@ public sealed class CoopClient : ICoopSession
         FlushChat();
         FlushBarks();
         FlushTransitionMovies();
+        FlushTransitionAnnounce();
 
         if (now - _lastPingMs >= PingIntervalMs)
         {
@@ -1552,6 +1611,17 @@ public sealed class CoopClient : ICoopSession
                     lock (_gate)
                     {
                         _movieInbox.Enqueue(movies);
+                    }
+                }
+
+                break;
+
+            case PacketType.TransitionAnnounce:
+                if (PacketCodec.ReadTransitionAnnounce(span) is { } announce)
+                {
+                    lock (_gate)
+                    {
+                        _announceInbox.Enqueue(announce);
                     }
                 }
 

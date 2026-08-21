@@ -110,8 +110,23 @@ public static class ProtocolConstants
     /// screen only. Reliable and symmetric like ContainerLoot: whichever peer owns the
     /// conversation reports the net-new items, the host relays to everyone else under the
     /// SAME (origin, sequence) identity, and a receiver gives them through the existing
-    /// giveloot cheat channel.</summary>
-    public const byte Version = 29;
+    /// giveloot cheat channel.
+    /// Versions 30, 31 and 32 are RESERVED by other agents working this tree concurrently, on
+    /// branches this worktree cannot see — their own "Version N:" comments land here once
+    /// merged. Taking the next number nobody here has claimed costs nothing.
+    /// Version 33: TransitionAnnounce (49) — the destination module and entry waypoint of a
+    /// transition this instance's engine has just COMMITTED to, sent before the load starts
+    /// rather than after the mover's published module changes. Before this, a follower only
+    /// learned a transition had happened once the mover's PlayerState.Module actually updated
+    /// — which, for a movie-carrying transition, can lag by the whole length of the film (the
+    /// mover's main thread is inside WaitForMovie and publishes nothing) — plus the follow
+    /// logic's own multi-second settle debounce. The announce lets a follower start its own
+    /// warp the instant the mover's load begins, so both loading screens overlap instead of
+    /// running back to back. Unreliable like TransitionMovies (39, 47 and 48 stay reserved for
+    /// the same reason 39 already was): a lost announcement costs the smoother handoff, never
+    /// consistency, because the pre-existing host-module-based follow is the fallback whenever
+    /// no announcement arrives at all. See docs/research/transition-smoothness.md.</summary>
+    public const byte Version = 33;
 
     /// <summary>Journal quest tags are resrefs plus a little slack.</summary>
     public const int MaxJournalTagLength = 32;

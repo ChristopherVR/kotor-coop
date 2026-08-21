@@ -21,6 +21,8 @@ namespace KotorCoop.Session;
 ///   menu_button = 1    ; the in-game Co-op menu button (default on; 0 hides it)
 ///   minigame_hide_peer = 1   ; park a peer's phantom while they swoop-race/man a turret
 ///   minigame_spectate = 0    ; watch a racing/turret peer instead (not yet wired)
+///   transition_announce = 0    ; race a follow ahead of the settle debounce (default off)
+///   client_door_refusal = 0    ; refuse a client's own premature door crossing (default off)
 /// </code>
 /// </summary>
 public sealed record CoopConfig
@@ -156,6 +158,22 @@ public sealed record CoopConfig
     /// </summary>
     public bool SessionSaveHostRefusal { get; init; }
 
+    /// <summary>
+    /// Whether a follower acts on a host's announced transition destination immediately,
+    /// instead of waiting for the host's published module to change and the module-settle
+    /// debounce to elapse — docs/research/transition-smoothness.md. OFF by default pending
+    /// the live-test script's before/after run: <c>transition_announce = 1</c>.
+    /// </summary>
+    public bool TransitionAnnounceEnabled { get; init; }
+
+    /// <summary>
+    /// Whether a client's own engine-native door crossing is refused early (before the load
+    /// starts) while following the host — docs/research/transition-smoothness.md's client-
+    /// first-door case. OFF by default pending live verification of the cancellation itself:
+    /// <c>client_door_refusal = 1</c>.
+    /// </summary>
+    public bool ClientDoorRefusalEnabled { get; init; }
+
     /// <summary>The anchor as the plugin's numeric code (0=TL, 1=TR, 2=BL, 3=BR).</summary>
     public uint ChatOverlayAnchorCode => ChatOverlayAnchor.Trim().ToLowerInvariant() switch
     {
@@ -264,6 +282,8 @@ public sealed record CoopConfig
             DialogueItemSync = !kv.ContainsKey("dialogue_item_sync")
                 || IsTruthy(kv.GetValueOrDefault("dialogue_item_sync")),
             SessionSaveHostRefusal = IsTruthy(kv.GetValueOrDefault("session_save_host_refusal")),
+            TransitionAnnounceEnabled = IsTruthy(kv.GetValueOrDefault("transition_announce")),
+            ClientDoorRefusalEnabled = IsTruthy(kv.GetValueOrDefault("client_door_refusal")),
         };
     }
 

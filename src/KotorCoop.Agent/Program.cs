@@ -778,7 +778,8 @@ internal static class Program
         // `reconnect`, which builds a fresh session object) reclaims its existing peer slot
         // instead of joining as a stranger while the old slot ages out. Keyed on the game
         // directory, which is what already separates two instances on one machine.
-        uint peerIdentity = PeerIdentity.ForDirectory(TryResolveInstallDirectory(memory.ProcessId));
+        string? installDirectory = TryResolveInstallDirectory(memory.ProcessId);
+        uint peerIdentity = PeerIdentity.ForDirectory(installDirectory);
 
         // The player name: coop.ini's wins for menu-driven connects, the command line's for
         // scripted ones. A password typed with an in-game command (connect <ip> <password>,
@@ -822,6 +823,16 @@ internal static class Program
             SyncPause = config?.PauseSync ?? true,
             HidePeersInMinigame = config?.HidePeersInMinigame ?? true,
             DialogueItemSync = config?.DialogueItemSync ?? true,
+            TransitionAnnounceEnabled = config?.TransitionAnnounceEnabled ?? false,
+            ClientDoorRefusalEnabled = config?.ClientDoorRefusalEnabled ?? false,
+
+            // CoopAgent is deliberately game-agnostic and has no reader of its own for a
+            // module's display name; this is the one place that both has the game directory
+            // and already imports KotorCoop.Memory.GameFiles. A failed lookup falls back to
+            // the resref, exactly like every other consumer of ModuleNames.TryRead.
+            ModuleDisplayName = installDirectory is { Length: > 0 } dir
+                ? module => ModuleNames.TryRead(dir, module, out string name) ? name : module
+                : null,
         };
 
         // Surface why a cached player pointer stopped validating. Re-resolving costs a full

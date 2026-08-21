@@ -418,4 +418,14 @@ tools/                   RE helpers, demo scripts, the kotor1_0_3 symbol databas
   dialogue option reflects the conversation OWNER's alignment, since only the owner runs the
   conversation — a spectating partner sees the options the owner qualifies for, not their
   own. See [docs/research/dialogue-consequences.md](docs/research/dialogue-consequences.md).
+- **Announced transitions (smoother follow) are built and not yet live-verified.** A host's
+  plugin now announces a transition's destination the instant its engine commits to it — a
+  door's 0.5 s fade window, not the several-to-tens-of-seconds wait for its published module
+  to actually change — so a follower can start its own warp immediately and both loading
+  screens overlap instead of running back to back. A client's own premature door crossing can
+  also be refused instead of completing and being yanked back. Both are OFF by default
+  (`coop.ini transition_announce=0`, `client_door_refusal=0`): the fade-to-black's direction
+  argument is a best guess (cannot crash, may simply fade the wrong way), and whether the
+  door-refusal's engine call actually stops the load rather than just showing the warning is
+  unverified. See [docs/research/transition-smoothness.md](docs/research/transition-smoothness.md).
 - KOTOR 2 is untouched, and only GOG v1.0.3 addresses are known.
