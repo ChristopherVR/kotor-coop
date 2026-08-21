@@ -429,7 +429,10 @@ internal static unsafe class PluginHost
         //      with its own 96-entry array at 0x3C00 — see docs/research/creature-liveness.md.
         // ItemHarnessTests.TheBlockVersionIsTheSameNumberInBothHalves now fails the build on
         // a half-bump; it did not exist for 41.
-        _block->Version = 46;
+        // 46 = the generic trigger relay region at 0x3B88 — see docs/research/trigger-relay.md.
+        // 47 = the transition-announce channel + client-door-refusal arm at 0x38E4..0x3928 —
+        //      see docs/research/transition-smoothness.md.
+        _block->Version = 47;
 
         // A guard dword after the version. Magic plus version alone was not selective
         // enough: a scan once matched something else at a lower address and the agent
@@ -616,6 +619,17 @@ internal static unsafe class PluginHost
             {
                 _transitionPending = true;
                 Log("area transition pending: flushing spawned objects before the module is stored");
+
+                // "Announced transitions" (docs/research/transition-smoothness.md): this is
+                // the earliest point ANY instance can see a real, engine-native door
+                // transition beginning — before the load starts, before the fade finishes.
+                // Resolve where it is headed (or refuse it, if this is a client with the
+                // door-refusal watch armed) while the door that fired is still the nearest
+                // linked one, which is only true on this exact edge.
+                if (_view is { } announceView)
+                {
+                    TransitionAnnounceWatch.OnTransitionBegan(announceView);
+                }
             }
 
             if (_controller is { } phantoms && phantoms.FlushOneBody())
@@ -648,6 +662,12 @@ internal static unsafe class PluginHost
 
         if (_travel is { HasPendingRequest: true } travel)
         {
+            // Task 2b (docs/research/transition-smoothness.md): a best-effort fade to black,
+            // the instant a travel request is FIRST seen — before the flush below even starts,
+            // so it masks the whole wait rather than just the warp. Self-latched inside
+            // MaybeStartFade (one call per serial); a no-op every other frame this branch runs.
+            travel.MaybeStartFade();
+
             // A session-commanded module move. Same rule as a door transition: everything
             // this plugin spawned must be gone before the outgoing area is stored, or it
             // becomes a permanent resident of the saved module. One destroy per frame

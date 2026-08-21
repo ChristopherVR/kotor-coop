@@ -365,6 +365,38 @@ public interface IGameBridge : IDisposable
         return false;
     }
 
+    /// <summary>
+    /// The destination of this instance's own imminent module transition — module and entry
+    /// waypoint — with the serial the plugin stamped it with when its engine committed to it,
+    /// or false when it has announced none.
+    ///
+    /// The faster, earlier sibling of <see cref="TryReadTransitionMovies"/>: this is knowable
+    /// before the load starts (a door's fade window, or the frame immediately before a
+    /// plugin-initiated warp), while the movie queue only fills once the destination is
+    /// already committed. A LEVEL plus a serial, same shape as the movie channel and for the
+    /// same reason: the plugin gets one frame to write this before the load — or the movie —
+    /// takes over, so the agent must be able to read it late and still be right.
+    /// </summary>
+    bool TryReadTransitionAnnounce(out uint serial, out string module, out string waypoint)
+    {
+        serial = 0;
+        module = string.Empty;
+        waypoint = string.Empty;
+        return false;
+    }
+
+    /// <summary>
+    /// Arms (or disarms) the plugin's refusal of a CLIENT-initiated real door transition —
+    /// coop.ini <c>client_door_refusal</c>. While armed, this instance's own engine-native
+    /// door crossing (as opposed to a session-commanded warp, which never touches this path)
+    /// is refused early, before the load: the walk-through is cancelled and a line is posted
+    /// naming the door and its destination. A LEVEL, computed and re-sent by the agent every
+    /// tick from role, settings and whether the host has been seen transitioning recently — the
+    /// plugin has no notion of "host" or "client" on its own. Default false when this bridge
+    /// has no plugin to arm.
+    /// </summary>
+    bool TryArmClientDoorRefusal(bool armed) => false;
+
     /// <summary>False when this bridge cannot see or drive enemy health.</summary>
     bool SupportsEnemySync => false;
 

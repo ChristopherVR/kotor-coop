@@ -219,6 +219,25 @@ public interface ICoopSession : IDisposable
     IReadOnlyList<TransitionMoviePacket> DrainTransitionMovies() => [];
 
     /// <summary>
+    /// Announces the DESTINATION of this instance's imminent module transition — module and
+    /// entry waypoint — the instant the engine has committed to it, before the load starts.
+    ///
+    /// The earlier, faster sibling of <see cref="PublishTransitionMovies"/>: that channel
+    /// carries the film, this one carries where a follower should go, early enough that the
+    /// follower's own warp can start immediately rather than waiting for this instance's
+    /// published module to actually change (which a movie can delay by its whole length) plus
+    /// the settle debounce. Repeat calls with the same <paramref name="serial"/> are the
+    /// sender's own redundancy against a dropped datagram, de-duplicated by the receiver.
+    /// </summary>
+    void PublishTransitionAnnounce(string module, string waypoint, uint serial) { }
+
+    /// <summary>Transition-announce packets from other peers since the last call, oldest
+    /// first. Not module-filtered, for the same reason <see cref="DrainTransitionMovies"/>
+    /// is not: the announcer is by definition about to leave whatever module it is standing
+    /// in, so there is no local module to filter against.</summary>
+    IReadOnlyList<TransitionAnnouncePacket> DrainTransitionAnnounce() => [];
+
+    /// <summary>
     /// Host only: the encounters clients are asking for right now, in
     /// <paramref name="module"/>, deduplicated. Empty on a client.
     /// </summary>

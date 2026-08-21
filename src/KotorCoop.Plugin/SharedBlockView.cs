@@ -872,6 +872,56 @@ internal sealed unsafe class SharedBlockView(byte* baseAddress)
         *U32(SharedBlock.OffsetCinematicSerial) = *U32(SharedBlock.OffsetCinematicSerial) + 1;
     }
 
+    // ---- transition announce ------------------------------------------------------
+
+    /// <summary>
+    /// Plugin -&gt; agent. Publishes the destination this instance's own transition has just
+    /// committed to, and bumps the serial LAST so the agent can never read a half-written
+    /// destination. Called once, on the frame the destination is resolved — the rising edge
+    /// of a real door's <c>trans_pending</c>, or the frame immediately before a
+    /// plugin-initiated <c>Odyssey.TravelToModule</c>.
+    /// </summary>
+    public void PublishTransitionAnnounce(string module, string waypoint)
+    {
+        WriteFixedAscii(SharedBlock.OffsetTransitionAnnounceModule, module, SharedBlock.TravelNameLength);
+        WriteFixedAscii(SharedBlock.OffsetTransitionAnnounceWaypoint, waypoint, SharedBlock.TravelNameLength);
+        *U32(SharedBlock.OffsetTransitionAnnounceSerial) = *U32(SharedBlock.OffsetTransitionAnnounceSerial) + 1;
+    }
+
+    private void WriteFixedAscii(int offset, string value, int capacity)
+    {
+        byte* slot = baseAddress + offset;
+        int length = Math.Min(value.Length, capacity - 1);
+
+        for (int i = 0; i < length; i++)
+        {
+            slot[i] = (byte)value[i];
+        }
+
+        for (int i = length; i < capacity; i++)
+        {
+            slot[i] = 0;
+        }
+    }
+
+    /// <summary>Agent -&gt; plugin. Nonzero while the client-door-refusal watch should refuse a
+    /// CLIENT-initiated real door transition.</summary>
+    public bool ClientDoorRefusalArmed => *U32(SharedBlock.OffsetClientDoorRefusalArmed) != 0;
+
+    /// <summary>
+    /// Posts one line to the always-on chat overlay WITHOUT going through the agent —
+    /// <see cref="ChatOverlayController"/> reads <see cref="ChatLine"/>/<see cref="ChatSerial"/>
+    /// from this same block, so a plugin-side write is visible to it exactly like an
+    /// agent-side one. Exists for messages the plugin needs to show IMMEDIATELY, from code
+    /// that has no round trip to spare — the client-door refusal fires and expires inside a
+    /// single 0.5 s fade window, far too little time to wait for the agent's own tick.
+    /// </summary>
+    public void PostLocalChatLine(string text)
+    {
+        WriteFixedAscii(SharedBlock.OffsetChatLine, text, SharedBlock.ChatLineLength);
+        *U32(SharedBlock.OffsetChatSerial) = *U32(SharedBlock.OffsetChatSerial) + 1;
+    }
+
     /// <summary>Agent -&gt; plugin. How many movies the pending travel should queue.</summary>
     public int TravelMovieCount
     {

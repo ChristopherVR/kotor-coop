@@ -1588,6 +1588,43 @@ internal struct SharedBlock
     /// movie arguments, so six is the longest queue the game can ever build.</summary>
     public const int CinematicCapacity = 6;
 
+    // ---- transition announce (version 47, region 0x38E4..0x3928) ------------------
+    //
+    // The faster, earlier sibling of the cinematic channel above: not the film, but where a
+    // follower should go, resolved the instant this instance's own engine has COMMITTED to a
+    // transition — the rising edge of Odyssey.IsAreaTransitionPending() for a real door, or
+    // the frame immediately before TravelController calls Odyssey.TravelToModule for a
+    // plugin-initiated warp. Both are frames on which the destination module and entry
+    // waypoint are already known, and the movie queue is not always filled (a plain door with
+    // no cinematic queues nothing at all), so this cannot ride the cinematic channel's own
+    // serial. See docs/research/transition-smoothness.md.
+    //
+    // Placed in the gap TravelMovieNames leaves before the peer-effect region (0x38E4..0x3A00,
+    // 0x11C bytes; the version-44 comment above already establishes it as free and too small
+    // for an 8-entry ring in each direction — this uses 0x44 of it, leaving 0xB0 still free).
+    //
+    // OUT (plugin -> agent): the destination this instance's own transition is heading to.
+    // IN (agent -> plugin): whether the client-door-refusal watch is armed right now.
+
+    /// <summary>Plugin -&gt; agent. Bumped when this instance's engine commits to a
+    /// transition's destination. Written LAST, after the module and waypoint, so a
+    /// half-written destination is never visible.</summary>
+    public const int OffsetTransitionAnnounceSerial = 0x38E4;
+
+    /// <summary>Plugin -&gt; agent. Null-terminated destination module name, 32 bytes.
+    /// Occupies 0x38E8..0x3908.</summary>
+    public const int OffsetTransitionAnnounceModule = 0x38E8;
+
+    /// <summary>Plugin -&gt; agent. Null-terminated entry waypoint tag, 32 bytes (empty when
+    /// the source resolved none). Occupies 0x3908..0x3928.</summary>
+    public const int OffsetTransitionAnnounceWaypoint = 0x3908;
+
+    /// <summary>Agent -&gt; plugin. Nonzero arms the refusal of a CLIENT-initiated real door
+    /// transition (coop.ini <c>client_door_refusal</c>). A LEVEL, re-sent every agent tick —
+    /// the plugin has no notion of "host" or "client" on its own, so it trusts whatever this
+    /// says right now.</summary>
+    public const int OffsetClientDoorRefusalArmed = 0x3928;
+
     // ---- peer effect sync (version 44, region 0x3A00..0x3B88) ---------------------
     //
     // Non-damage effects that land on a peer's phantom (stun, paralyze, knockdown, slow,

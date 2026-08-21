@@ -142,8 +142,20 @@ public static class ProtocolConstants
     /// re-reporting ones the host has already handled. See docs/research/trigger-relay.md.
     /// Gated OFF by default (coop.ini trigger_relay) until live-verified, like PeerEffect
     /// before it — this channel has no engine-level one-shot flag to lean on the way
-    /// encounters do, so its idempotence is entirely this pass's own bookkeeping.</summary>
-    public const byte Version = 32;
+    /// encounters do, so its idempotence is entirely this pass's own bookkeeping.
+    /// Version 33: TransitionAnnounce (49) — the destination module and entry waypoint of a
+    /// transition this instance's engine has just COMMITTED to, sent before the load starts
+    /// rather than after the mover's published module changes. Before this, a follower only
+    /// learned a transition had happened once the mover's PlayerState.Module actually updated
+    /// — which, for a movie-carrying transition, can lag by the whole length of the film (the
+    /// mover's main thread is inside WaitForMovie and publishes nothing) — plus the follow
+    /// logic's own multi-second settle debounce. The announce lets a follower start its own
+    /// warp the instant the mover's load begins, so both loading screens overlap instead of
+    /// running back to back. Unreliable like TransitionMovies (39, 47 and 48 stay reserved for
+    /// the same reason 39 already was): a lost announcement costs the smoother handoff, never
+    /// consistency, because the pre-existing host-module-based follow is the fallback whenever
+    /// no announcement arrives at all. See docs/research/transition-smoothness.md.</summary>
+    public const byte Version = 33;
 
     /// <summary>Journal quest tags are resrefs plus a little slack.</summary>
     public const int MaxJournalTagLength = 32;

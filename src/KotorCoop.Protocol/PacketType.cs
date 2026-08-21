@@ -390,4 +390,29 @@ public enum PacketType : byte
     /// lost datagram costs one tick, never a permanently missed fire.
     /// </summary>
     TriggerRelay = 48,
+    // 47 and 48 are DELIBERATELY SKIPPED: reserved by other agents working this tree
+    // concurrently, on branches this worktree cannot see. Same rule as the 39 skip above —
+    // taking the next value nobody here has claimed costs nothing, and
+    // PacketTypeTests-style duplicate checks (see TransitionMovieTests.NoTwoPacketTypesShareANumber)
+    // fail the build on any collision anyway.
+
+    /// <summary>
+    /// any -&gt; all, relayed by the host: "the module transition I am about to make goes to
+    /// THIS module, entering at THIS waypoint" — sent the instant this instance's own engine
+    /// commits to a transition, before the load starts.
+    ///
+    /// WHY IT EXISTS, and how it differs from <see cref="TransitionMovies"/>. That channel
+    /// carries the film; this one carries the DESTINATION, early enough that a follower can
+    /// start its OWN warp immediately instead of waiting for the mover's published
+    /// <c>PlayerState.Module</c> to actually change (which, for a movie-carrying transition,
+    /// can lag by the whole length of the film — the mover's main thread is blocked inside
+    /// <c>WaitForMovie</c> and publishes nothing) plus the follow logic's own settle debounce.
+    /// See docs/research/transition-smoothness.md.
+    ///
+    /// The serial is the ack-free redundancy: unreliable, like <see cref="TransitionMovies"/>,
+    /// because a lost announcement costs a smoother transition, never consistency — the
+    /// existing host-module-based follow (<c>CoopAgent.PumpTravel</c>'s settle-debounced path)
+    /// remains the fallback whenever no announcement arrives, or arrives too late to matter.
+    /// </summary>
+    TransitionAnnounce = 49,
 }
