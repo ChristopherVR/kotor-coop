@@ -208,6 +208,26 @@ public class EffectVerbsTests
         }
     }
 
+    /// <summary>Knockdown/Paralyze/Sleep now have real apply-side constructors
+    /// (effect-sync.md §7) — pinned as an explicit dispatcher-routing check for the three
+    /// kinds this pass added, not just the generic parser theory above.</summary>
+    [Theory]
+    [InlineData("applyeffect knockdown", PeerEffectKind.Knockdown)]
+    [InlineData("applyeffect paralyze", PeerEffectKind.Paralyze)]
+    [InlineData("applyeffect sleep", PeerEffectKind.Sleep)]
+    public void KnockdownParalyzeAndSleepReachThePluginWithTheRightKind(string line, PeerEffectKind expected)
+    {
+        (CoopCommandDispatcher dispatcher, EffectBridge bridge, SessionManager manager) = NewDispatcher();
+        using (manager)
+        {
+            Type(dispatcher, line);
+
+            CheatRequest request = Assert.Single(bridge.Requests);
+            Assert.Equal(CheatKinds.ApplyEffect, request.Kind);
+            Assert.Equal((int)expected, request.Amount);
+        }
+    }
+
     [Fact]
     public void MeResolvesToThePlayerObjectIdAtTheDispatcher()
     {
