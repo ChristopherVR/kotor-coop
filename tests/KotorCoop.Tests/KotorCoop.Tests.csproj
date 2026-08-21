@@ -43,6 +43,7 @@
     <Compile Include="..\..\src\KotorCoop.Plugin\PartyFreezeRule.cs" Link="Plugin\PartyFreezeRule.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\AgentLiveness.cs" Link="Plugin\AgentLiveness.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\MinigameRule.cs" Link="Plugin\MinigameRule.cs" />
+    <Compile Include="..\..\src\KotorCoop.Plugin\MapRevealRule.cs" Link="Plugin\MapRevealRule.cs" />
   </ItemGroup>
 
   <ItemGroup>

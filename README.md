@@ -383,4 +383,11 @@ tools/                   RE helpers, demo scripts, the kotor1_0_3 symbol databas
   checked against the running game. See
   [docs/research/dialogue-consequences.md](docs/research/dialogue-consequences.md)'s "Shipped"
   section for the full list of what a live pass still needs to confirm.
+- **Alignment (light/dark) is per-player on purpose.** Each character stores its own
+  alignment, read by that character's own dialogue gates, dark-side powers and ending —
+  two players making different choices in one story is a feature of playing together, not a
+  bug, and needs no sync channel. The one consequence worth knowing: an alignment-gated
+  dialogue option reflects the conversation OWNER's alignment, since only the owner runs the
+  conversation — a spectating partner sees the options the owner qualifies for, not their
+  own. See [docs/research/dialogue-consequences.md](docs/research/dialogue-consequences.md).
 - KOTOR 2 is untouched, and only GOG v1.0.3 addresses are known.

@@ -43,6 +43,7 @@ internal static unsafe class PluginHost
     private static PauseKeyController? _pauseKey;
     private static JournalController? _journal;
     private static MapMarkerController? _mapMarkers;
+    private static MapRevealController? _mapReveal;
     private static PortraitController? _portraits;
     private static BarkController? _barks;
     private static InteractionLockController? _interactionLocks;
@@ -153,6 +154,7 @@ internal static unsafe class PluginHost
             _pauseKey = new PauseKeyController();
             _journal = new JournalController(_view);
             _mapMarkers = new MapMarkerController(_view);
+            _mapReveal = new MapRevealController(_view);
             _portraits = new PortraitController(_view);
             _barks = new BarkController(_view);
             _interactionLocks = new InteractionLockController(_view);
@@ -742,6 +744,7 @@ internal static unsafe class PluginHost
         _pauseKey?.OnFrame();
         _journal?.OnFrame();
         _mapMarkers?.OnFrame();
+        _mapReveal?.OnFrame();
         _portraits?.OnFrame();
         _barks?.OnFrame();
         _interactionLocks?.OnFrame();
@@ -944,6 +947,7 @@ internal static unsafe class PluginHost
         _combatState?.Invalidate();
         _journal?.Invalidate();
         _mapMarkers?.Invalidate();
+        _mapReveal?.Invalidate();
         _connectMenu?.Invalidate();
         _death?.Invalidate();
         _spectate?.Invalidate();

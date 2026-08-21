@@ -184,3 +184,14 @@ local_combat_range=20
 # docs/research/effect-sync.md for why (an unverified engine-call signature for Knockdown, and
 # two OnApplySetState sub-codes this pass could not match to an English name at all).
 effect_sync=0
+
+# Reveal fog-of-war on this instance's map around each remote peer's position (roadmap item
+# 19) - so ground your partner already walked does not stay black just because you never
+# stood on it. No new wire: it reuses the peer position MapMarkerController/MinimapPeerHook
+# already read, throttled to a few times a second and only when the peer has actually moved
+# (see MapRevealRule). The engine call (CSWSAreaMap::SetWorldPointExplored) is pinned
+# VERIFIED by static RE - symbol database, disassembly and two real engine callers agreeing
+# on the exact signature - but has never run against the live game, so it is OFF by default
+# until a live pass confirms it clears fog on the M-screen with no cost. See
+# docs/research/map-reveal.md.
+map_reveal_sync=0
