@@ -380,8 +380,22 @@ internal sealed unsafe class EnemyPresenceController(SharedBlockView block)
     /// distance-closing question is settled.</summary>
     private double _lastPositionLogAt;
 
-    /// <summary>ROUND 41 DIAGNOSTIC: throttle for the "STILL SEEING" check in DriveOne, same
-    /// reasoning as _lastPositionLogAt. Remove once this question is settled.</summary>
+    /// <summary>ROUND 41 DIAGNOSTIC, made edge-triggered in the 2026-08-22 player-style pass:
+    /// the id this leak was last reported for, so a genuinely NEW race (a different excluded
+    /// id, or the same id after a gap) logs immediately while an ONGOING one does not repeat
+    /// every throttled second for a fight's whole duration. 0 when nothing is currently being
+    /// reported. See <see cref="_stillSeeingLoggedAt"/> for the coarse keep-alive that still
+    /// covers a leak stuck open for the whole fight.</summary>
+    private uint _stillSeeingReportedId;
+
+    /// <summary>Once a leak is already being reported (<see cref="_stillSeeingReportedId"/> !=
+    /// 0), a 5s keep-alive so a leak that genuinely never closes for an entire fight still
+    /// shows up in the log instead of going silent after its one edge — round 55's own live
+    /// pass measured this resolving within 1-2 agent pumps almost always, but round 55's
+    /// player-style pass (2026-08-22) found stretches where it did not, and those are exactly
+    /// the case worth keeping visible. 5s, not 1s: an edge-triggered diagnostic's whole point
+    /// is fewer lines, and DriveOne's own skip already makes every one of these frames safe
+    /// regardless of how long the upstream leak persists.</summary>
     private double _stillSeeingLoggedAt;
 
     /// <summary>Hard ceiling on how long one creature may sit excluded from the census. A
@@ -499,6 +513,11 @@ internal sealed unsafe class EnemyPresenceController(SharedBlockView block)
         // census by coincidence of numeric id reuse.
         _locallyFightingId = 0;
         block.LocalCombatExcludedId = 0;
+
+        // 2026-08-22: an id from the module just left behind must not suppress the "STILL
+        // SEEING" diagnostic's fresh edge for a same-numbered id that turns up genuinely new
+        // in this one.
+        _stillSeeingReportedId = 0;
 
         // ROUND 52: same reason, for the ground-truth diagnostic's own static mirrors.
         _locallyFightingIdShared = 0;
@@ -798,15 +817,30 @@ internal sealed unsafe class EnemyPresenceController(SharedBlockView block)
         // single point of failure.
         if (_locallyFightingId != 0 && enemy.ObjectId == _locallyFightingId)
         {
-            if (now - _stillSeeingLoggedAt >= 1.0)
+            // EDGE-TRIGGERED (2026-08-22 player-style pass). The 2026-08-21 version logged on
+            // a flat 1s throttle, which was fine for the race window round 41 built this guard
+            // for (measured live, round 55: usually 1-2 lines, the agent catching up within a
+            // pump or two) but turned into genuine spam — thousands of lines an hour — on the
+            // stretches where the same excluded id kept leaking for a whole 7-25s fight, one
+            // line every single second of it. Log once on the EDGE (a leak this method has not
+            // already reported for this id since the fight armed), then only a 5s keep-alive
+            // for as long as the SAME id keeps leaking, so a genuinely stuck leak is still
+            // visible without flooding. _stillSeeingReportedId resets to 0 in Invalidate() and
+            // in MaintainLocalFight's own fight-end path, so the NEXT fight's excluded id — a
+            // different id by construction, see StartLocalFight — always logs its own fresh
+            // edge rather than inheriting this one's keep-alive countdown.
+            bool freshEdge = _stillSeeingReportedId != _locallyFightingId;
+            if (freshEdge || now - _stillSeeingLoggedAt >= 5.0)
             {
+                _stillSeeingReportedId = _locallyFightingId;
                 _stillSeeingLoggedAt = now;
                 PluginHost.Log(
                     $"local combat diag: STILL SEEING excluded id 0x{_locallyFightingId:X} "
                     + $"at slot {slot} in the upstream feed - skipped here instead of driven, "
                     + $"block.EnemyPresenceCount={block.EnemyPresenceCount}, "
                     + $"block.LocalCombatExcludedId=0x{block.LocalCombatExcludedId:X}, "
-                    + $"blockAddress=0x{block.Address:X}");
+                    + $"blockAddress=0x{block.Address:X}"
+                    + (freshEdge ? string.Empty : " (still leaking, 5s keep-alive)"));
             }
 
             return true;
@@ -1175,6 +1209,11 @@ internal sealed unsafe class EnemyPresenceController(SharedBlockView block)
             string reason = dead ? "dead or gone" : disengaged ? "player disengaged" : "timed out";
             PluginHost.Log($"local combat: 0x{_locallyFightingId:X} fight ended ({reason}), rejoining the census");
             _locallyFightingId = 0;
+
+            // So the NEXT fight's excluded id — always a different id, StartLocalFight only
+            // ever arms a fresh one — gets its own fresh "STILL SEEING" edge in DriveOne
+            // rather than silently inheriting this one's 5s keep-alive countdown.
+            _stillSeeingReportedId = 0;
             return;
         }
 

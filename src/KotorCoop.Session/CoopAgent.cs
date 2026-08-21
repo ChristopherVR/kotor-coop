@@ -1328,13 +1328,37 @@ public sealed class CoopAgent(IGameBridge bridge, ICoopSession session, AgentSet
     /// </summary>
     private void PumpPartyRoster(SessionCapabilities caps)
     {
-        if (!settings.SyncParty || !bridge.SupportsPartySync || (caps & SessionCapabilities.Party) == 0)
+        // ⚠ SPLIT 2026-08-22 (player-style pass): these three used to share one clear-on-exit
+        // branch, and that conflated two very different lifetimes. `settings.SyncParty` and the
+        // `Party` capability bit are session-lifetime facts — once either says "off", it stays
+        // off until something re-negotiates the session, so clearing the block immediately is
+        // correct (see the comment below). `bridge.SupportsPartySync` (`_player is not null`) is
+        // NOT session-lifetime — it reads false for roughly a second on EVERY module transition,
+        // while this instance's own player object is torn down and rebuilt (the same window
+        // `PublishWorldLoadObserved`/"unannounced teardown" logging covers). Clearing the block
+        // for that alone was live-reproduced: a cold two-instance session, one ordinary
+        // `end_door10` crossing, and the CLIENT's own log showed "party roster: reconciling
+        // against a peer party of 0x001" immediately followed (same transition, ~8s later) by
+        // "party roster: no peer roster to reconcile against" — the exact clear this branch was
+        // writing, for a host that never stopped publishing anything. A held-stale value is
+        // exactly what `CoopClient.TryGetPartyRoster`'s own doc comment already says the reader
+        // wants ("deliberately NOT aged out... a stale one is still the last thing the host
+        // said") — this branch was the one place still fighting that design.
+        if (!settings.SyncParty || (caps & SessionCapabilities.Party) == 0)
         {
             // ⚠ CLEAR ON THE WAY OUT, do not just stop writing. A level the plugin is still
             // holding from before the channel was disabled would keep being reconciled against
             // forever — the exact "a stale authority outlives the thing that authorised it"
             // failure the lease channels are shaped to avoid.
             bridge.WriteHostPartyRoster(false, PartyRoster.Empty);
+            return;
+        }
+
+        if (!bridge.SupportsPartySync)
+        {
+            // Transient: hold whatever is already in the block (host roster, local roster,
+            // both) rather than clearing either — the very next pump, once the player object
+            // resolves again, picks back up exactly where the last real read left off.
             return;
         }
 

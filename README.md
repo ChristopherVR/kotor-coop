@@ -587,4 +587,21 @@ tools/                   RE helpers, demo scripts, the kotor1_0_3 symbol databas
   fixed, the decisive check ran: `client_door_refusal` genuinely stops the transition rather
   than merely logging a refusal, confirmed twice live. See
   [docs/research/transition-smoothness.md](docs/research/transition-smoothness.md) §9.
+- **A player-style verification pass (2026-08-22, cold, no staging cheats) found and fixed two
+  regressions, and left two things genuinely open.** The round-41 "STILL SEEING excluded id"
+  local-combat diagnostic was never a functional bug (the creature was always correctly skipped)
+  but had turned into real log spam — thousands of lines an hour — once local_combat started
+  chaining fights back to back; it is now edge-triggered instead of once-a-second, live-verified.
+  `party roster: no peer roster to reconcile against` was a real one: `CoopAgent.PumpPartyRoster`
+  cleared the client's whole view of the host's roster for the ~1s a module transition's own
+  player-object teardown makes `bridge.SupportsPartySync` read false, instead of holding the
+  stale-but-correct value the way `CoopClient.TryGetPartyRoster` is documented to want — fixed by
+  only clearing on a genuine, session-lifetime disable (`SyncParty` off, the `Party` capability
+  gone), never on that transient window. Left open: whether a companion genuinely gets left
+  behind by an ordinary door transition, or whether that was purely an artifact of using `tp`
+  (which does not carry a companion the way a real walk does) to reach the door in a rig with no
+  working click or `walk` primitive; and whether a client's own local-combat swing reliably lands
+  on the host's real creature (armed correctly, but no hit was measured in this pass's ~40s
+  window). See [docs/research/shared-state-audit.md](docs/research/shared-state-audit.md) §2,
+  round 56, for the full evidence and the honest per-check table.
 - KOTOR 2 is untouched, and only GOG v1.0.3 addresses are known.

@@ -459,14 +459,15 @@ internal sealed unsafe class PartyPresenceController(SharedBlockView block)
         return *(uint*)(serverInternal + PartyTableOffset + PartyObjectIds + (rosterSlot * 4));
     }
 
-    /// <summary>Same cache-and-revalidate as the enemy drive: id and object type must
-    /// still match every frame, or the pointer is stale reused memory.</summary>
+    /// <summary>Same cache-and-revalidate as the enemy drive: id and VTABLE must still match
+    /// every frame, or the pointer is stale reused memory. Identity is the vtable, never the
+    /// <c>+0x08</c> type field — see <see cref="PartyCreatureIdentity"/> for why an exact-5
+    /// comparison there used to freeze a live companion.</summary>
     private nint Resolve(int slot, uint objectId)
     {
         nint cached = _creature[slot];
         if (cached != 0 && _trackedId[slot] == objectId
-            && *(uint*)(cached + 0x04) == objectId
-            && *(int*)(cached + 0x08) == 5)
+            && PartyCreatureIdentity.IsLiveMatch(*(nint*)cached, *(uint*)(cached + 0x04), objectId))
         {
             return cached;
         }
@@ -474,7 +475,8 @@ internal sealed unsafe class PartyPresenceController(SharedBlockView block)
         Forget(slot);
 
         nint creature = Odyssey.ResolveServerObject(objectId);
-        if (creature == 0 || *(int*)(creature + 0x08) != 5)
+        if (creature == 0
+            || !PartyCreatureIdentity.IsLiveMatch(*(nint*)creature, *(uint*)(creature + 0x04), objectId))
         {
             return 0;
         }

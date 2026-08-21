@@ -5149,6 +5149,220 @@ local_combat should ever run more than one fight at a time, now that the mechani
 solid under a seven-creature swarm, is deliberately left as the next step, not expanded this
 round.
 
+### Round 56 (2026-08-22) — Player-style verification pass: two live regressions root-caused and fixed, three findings confirmed live, one left genuinely open
+
+Prompted by a user watching the previous (staged) session and reporting three things: doors not
+opening on both sides, Trask's icon staying at the arrival point after a transition, and attacks
+not synced at all. The prior session used teleports, an excluded Vulkar diagnostic id, and
+`client_door_refusal` refusing doors while the host was mid-fight — all legitimate staging, but
+none of it isolates "is this real." This round re-ran the same shapes cold, with `demo.ps1`, no
+`firescript`, no bisect masks, no `applyeffect`, `usedoor`/`attack`/`tp`/`warp` only (the
+console-command harness stand-ins for a click and a walk, per this doc's own convention), and
+also chased the two regressions the LAST captured log (`kotorcoop-general.log`, 07:50–08:02)
+already showed before any of that: the round-41 "STILL SEEING excluded id" diagnostic firing on a
+roughly 1s cadence for most of an hour, and `party roster: no peer roster to reconcile against`
+seconds after a successful reconcile.
+
+**Regression 1 — the excluded-id diagnostic, root-caused as a genuine log-spam bug (not a
+functional one) and fixed.** `EnemyPresenceController.DriveOne`'s round-41 guard — skip the
+locally-excluded creature completely, before any claim, log if seen — was still doing its job
+correctly: nothing downstream of the early `return true` at line 813 was ever reached, so no
+double-claim or corrupted round-processing was ever possible. What round 55's rewrite did not
+change was the log's own throttle (`now - _stillSeeingLoggedAt >= 1.0`, unconditional once armed),
+and round 55's own new mechanism — `SelectImmediateCandidate` re-arming a fresh fight in the SAME
+frame a previous one's timeout closes — turned local_combat from "rare, short exclusions" into
+"back-to-back fights for as long as anything stays hostile," so the SAME frame-safe, functionally
+harmless guard now logged once a second for the fight's ENTIRE duration instead of the brief
+race-window blip it was built for. A full-log grep for `STILL SEEING excluded` in the captured
+window returned 3615 lines; per-fight, individual runs ranged from 1–2 lines (the agent's own
+150ms `CombatPumpIntervalMs` catching up almost immediately — confirmed via
+`$TEMP\kotorcoop-demo\agent2.log`'s own `local combat diag (agent): excludedId=... filtered.Count=...
+(removed 1)` lines running every pump) up to 15+ consecutive one-second lines for a single fight —
+the exclusion mechanism itself (`CoopAgent.PumpEnemies`'s `excludedId` filter before
+`TryWriteEnemies`) is correct and was filtering every single pump throughout; DriveOne's own
+guard was simply carrying 100% of a defence that is supposed to be rare.
+
+Fix: `EnemyPresenceController.cs` — the diagnostic is now edge-triggered. It logs once when a NEW
+excluded id starts leaking (`_stillSeeingReportedId != _locallyFightingId`), then only a 5s
+keep-alive for as long as the SAME id keeps leaking, instead of once a second unconditionally.
+`_stillSeeingReportedId` resets in `MaintainLocalFight`'s own fight-end path and in `Invalidate()`
+(module change), so the next fight's (necessarily different) excluded id always gets its own fresh
+edge. **Live-verified after the fix, same rig, same room** (`tar_m10aa`, the same Vulkar pool):
+a fight that previously would have logged ~20 lines over 20 seconds logged exactly two —
+
+    [08:53:39.084] local combat diag: STILL SEEING excluded id 0x36 ... (still leaking, 5s keep-alive)
+    [08:54:39.09x] ... (further keep-alives, still one per 5s, not one per 1s)
+
+No functional change — DriveOne's skip behavior is identical before and after; only the log
+volume changed.
+
+**Regression 2 — `party roster: no peer roster to reconcile against`, root-caused and fixed.**
+Live-reproduced on the very first ordinary `end_door10` crossing of this pass, on the CLIENT:
+
+    [08:51:57.163] party roster: reconciling against a peer party of 0x001
+    [08:51:57.865] party together: CSWParty's own member count read 1 against CSWPartyTable's 0 - clamping ...
+    [08:52:05.362] party roster: no peer roster to reconcile against
+
+`CoopClient.TryGetPartyRoster` is deliberately never aged out (its own doc comment: "a stale one
+is still the last thing the host said") and `_hasPartyRoster` is set true once and never reset —
+so the ONLY way the client's own `block.HostPartyRoster` reads invalid is an explicit
+`bridge.WriteHostPartyRoster(false, PartyRoster.Empty)` write. `CoopAgent.PumpPartyRoster` had
+exactly one such write, guarding three conditions in one branch:
+`!settings.SyncParty || !bridge.SupportsPartySync || (caps & SessionCapabilities.Party) == 0`.
+The first two are session-lifetime facts (correct to clear immediately — a level the plugin kept
+reconciling against after the channel died is the stale-authority failure the comment already
+names). The third, `bridge.SupportsPartySync` (`KotorGameBridge`: `_player is not null`), is NOT
+session-lifetime: it reads false for roughly a second on every module transition, while this
+instance's own player object is torn down and rebuilt — the identical window
+`WorldLoadRule`/"unannounced teardown" logging already covers (`flush, before the module is
+stored: destroyed phantom...` → `0 phantom(s) alive` → `spawned phantom...`). Zero
+`CompatibilityAnnouncer` lines (`co-op [W_...]`) appear anywhere in this session's logs, so this
+was never a content-compatibility capability drop (`ObjectIdKeyed`/`SessionCapabilities.Party`
+never actually left `All`) — it was this one transient-vs-permanent conflation clearing a channel
+that a still-connected host never stopped publishing.
+
+Fix: `CoopAgent.PumpPartyRoster` (`src/KotorCoop.Session/CoopAgent.cs`) now splits the three
+conditions. `!settings.SyncParty || (caps & SessionCapabilities.Party) == 0` still clears
+immediately (unchanged behavior). `!bridge.SupportsPartySync` now just `return`s — holds whatever
+is already in the block (host roster, local roster, both) instead of clearing either, so the very
+next pump, once the player object resolves again, picks back up exactly where the last real read
+left off. Full solution build clean; full suite still 1520/1520. **Not yet re-verified live**
+after the fix (time-boxed out of this pass) — a dedicated `PumpPartyRoster` regression test (this
+codebase's usual `IGameBridge`-double pattern, `EncounterPumpTests.cs` et al.) is also not yet
+written; both are the natural next step.
+
+**Player-style pass — the three original reports, checked cold.**
+
+1. **DOORS.** `end_door10` (the one module-transition door in `END_M01AA`/`END_M01AB`) opens and
+   mirrors correctly: `usedoor end_door10` on the host logged `door: opened 0x4A (state 0 -> 2)`
+   and the CLIENT's own log showed `door 0x4A: swinging 0 -> 2 on the session's authority` within
+   ~1.8s (`DoorController`, unchanged this round). **Genuinely untested this pass: an ORDINARY
+   (non-transition) door.** `end_m01aa`'s own GIT (`end_door01`, `end_door02`, `end_door05`...,
+   read directly out of `modules\end_m01aa.rim` for this pass, since no console verb lists them)
+   has fifteen; `usedoor <tag>` refuses every one of them by design
+   (`CheatController.FindNearestTransitionDoor`'s own doc comment: "a bare `usedoor` has to be
+   incapable of doing anything except starting a transition... an ordinary door two metres away
+   would otherwise win the distance comparison and merely open — which looks exactly like the
+   command working"). Mouse-click injection (`tools/click.ps1`, the real per-object interact a
+   player uses) and `tools/shot.ps1` screenshots both came back solid black in this rig — the
+   same class of limitation `blockpoke.ps1`'s own header names for keystrokes ("injected
+   keystrokes never reach this game"). `DoorController`'s own mirror mechanism is generic (any
+   door's open-state write goes through the same `SetOpenState`/`LogFew` path the transition door
+   just exercised), so nothing here suggests a door-type-specific gap — but it is genuinely
+   unverified, not confirmed, for the non-transition case. Worth a dedicated console verb (an
+   `opendoor <tag>`, deliberately not gated to `LinkedToModule`, mirroring `usedoor`'s own
+   structure) the next time this needs checking without a working click.
+
+2. **TRASK / PARTY ICON.** Live-reproduced: `party drive: mirroring 1 of the host's companions`
+   at cold start dropped to `party drive: mirroring 0 of the host's companions` immediately after
+   the `end_door10` crossing above, and the client's own `Odyssey.TryReadPartyRoster` read
+   `0x000` (recruited 0x000) where it had read `0x001` a moment before — on BOTH host and client,
+   independently. **This needs a real caveat, not a clean verdict.** Every crossing in this pass
+   used `tp` to reach the door (the documented `walk` harness primitive — `TestDriveController.
+   HandleWalk` — moved the player 0m in two separate attempts this session, confirming the
+   existing "unreliable" finding again), and `tp` does not carry Trask along the way a real walk
+   does — `tools/creatures.ps1` confirmed Trask's body stayed exactly at spawn through three
+   successive `tp` hops toward the door. `GatherPartyIfScattered` (the `usedoor` verb's own
+   pre-transition "gather scattered companions" step, `party_together_fix`'s companion feature,
+   added THIS SAME DAY per this doc's round history) exists specifically for this; its own gate
+   is `Odyssey.IsPartyTogether()` (`CSWParty::IsPartyTogether`, a live engine call, not a cached
+   read) — and it read TRUE (no gathering attempted, confirmed by the total absence of the
+   `door: the engine says the party is NOT together...` log line this pass ever expects) even
+   with Trask a hundred-plus metres back. Whether that stale-true reading is a genuine gap in
+   `IsPartyTogether` specific to a `tp`-class instant reposition (which a real walking player,
+   whose engine-native follow-AI updates this continuously, would never produce) or a real,
+   walk-reachable bug was NOT settled this pass — reproducing it without `tp` needs either a
+   working `walk` primitive or real mouse/keyboard input, neither available in this rig. The
+   roster DID self-recover once, unprompted, about thirteen minutes later
+   (`party drive: mirroring 1 of the host's companions` at 08:49:25); a second drop coincided
+   with the `warp tar_m10aa` in item 4 below, which is expected — see there.
+
+3. **COMBAT.** END_M01AB's placed hostiles (`end_sith01`/`end_sith04`/`end_sithsol01`, GIT-dumped
+   this pass the same way as the doors) took zero damage after 20+ seconds standing on top of one
+   at point-blank range and did not aggro naturally, and an ordered `attack` against one also
+   never landed a hit in the same window — most likely a scripted, not-yet-hostile room (this is
+   the Endar-Spire corridor a vanilla playthrough gates behind Trask's own assault script, not a
+   free-roam encounter; earlier rounds' `n_sithsoldier004` engagements were never actually in this
+   specific room). Per this task's own item 4, pivoted to `tar_m10aa` (round 53–55's own proven
+   hostile Vulkar pool) to get a real read on sync rather than leave this unchecked. There,
+   natural aggro fired immediately and FORWARDED damage confirmed working exactly as round 55
+   found it — `combat ground-truth: local PC took 16 damage, attacker=0x22` /
+   `... took 11 damage, attacker=0x17` on the client, landing within a second of the host's own
+   `hit breakdown` lines — strongly enough that, without `cheat god 1` running yet, the client
+   dropped from 12 hp to a large negative value in under two seconds and the CLIENT'S GAME
+   PROCESS EXITED (`[resolve] player ...: vtable unreadable` / `TryFindPlugin: scan found 0
+   candidate(s)` in `agent2.log`, then a clean `session-saved character` sidecar and disconnect —
+   the agent degraded gracefully, but the game itself did not survive the hit). This matches the
+   documented death-test staging discipline (separate players first, stage god mode before a
+   swarm) this pass skipped in the interest of a "no staging" read — logged here as a genuine,
+   reproducible finding (overkill simultaneous damage against an un-godded client can crash the
+   client process) rather than chased further, since fixing it was not this round's brief.
+   Redone with `cheat god 1` on both sides: local_combat correctly excluded and armed a real fight
+   for the client's own nearest hostile (`0x24`, `0x36`, proximity-triggered, matching round 55's
+   mechanism exactly, and exercising the regression-1 fix live in the process — see above) and
+   FORWARDED damage kept working. **Not confirmed this pass: the CLIENT'S OWN outgoing damage
+   landing on the host's real creature.** Two separate `attack 0x7FFFFFFF <id>` orders — the
+   second one specifically against the SAME id `local_combat` had just armed, matching round 55's
+   own successful `attack 0x7FFFFFFF 0x33` precedent exactly — produced an armed round
+   (`attacktarget diag: round+0x958 0->1`) but no HP change on either instance's own copy of the
+   target and no `combat: applied`/`combat: killed` line, over roughly 40 seconds of observation.
+   Round 55's own kills took real time too, so this is not proof of a regression — but it is not
+   a confirmed pass either, and this round ran out of time to isolate whether god mode, the
+   specific creature, or something else explains the difference. Left open, honestly, rather than
+   guessed at.
+
+4. **WARP.** `warp tar_m10aa` (a player-available cheat) landed both instances at the identical
+   point (`103.3, 115.9, 2.2`) within a few seconds of each other, confirmed via `where` on both.
+   Trask was not carried — expected: KOTOR does not bring companions through a warp in vanilla
+   single-player either (there is no module to walk them out of), and this project has never
+   claimed otherwise; the roster drop this produced (`party roster: local party is now 0x000`
+   immediately after `world: unannounced teardown - treating as a load, not a transition`) is the
+   same-shaped read as item 2's, for the same underlying reason (no gather is attempted or
+   expected across a warp), not a new finding.
+
+**One more real thing found, not consumed: `WorldLoadRule.IsUnannouncedTeardown` misclassifies
+every client-follow transition.** `world: unannounced teardown - treating as a load, not a
+transition` fired on the CLIENT for both the ordinary door crossing (item 1/2) and the warp
+(item 4) — every single client-side world teardown this pass produced, cold-started save
+included. `IsUnannouncedTeardown`'s own rule is `!transitionWasPending`
+(`Odyssey.IsAreaTransitionPending`, `CSWSArea`'s own scripted-transition bookkeeping) — a flag
+that belongs to a NATIVE, player-clicked door/trigger transition, which a client's own
+peer-follow-travel move never goes through (it drives the engine's module-load path directly, not
+via a scripted door). This looks structurally guaranteed to misfire for every client follow, host
+included when it uses `usedoor`/`warp` rather than a native walk-in. **Currently harmless**: its
+only consumers, `client_load_rejoin`/`host_load_readopt` (`docs/research/session-save.md` phase
+2), are both off by default in both installs' `coop.ini` and were not turned on this pass, so the
+misclassification is logged but nothing downstream acts on it destructively. Noted here rather
+than fixed, since acting on it (deciding what "announced" should mean for a follow-travel move,
+not just a native transition) is session-save phase 2's own scope, not this round's.
+
+**Safety.** No coop.ini edits shipped from this pass — both installs already matched
+`profiles/coop.ini.example`'s defaults (`client_door_refusal=1`, `local_combat_bisect_mask=0x0`,
+`companion_local_combat=0`) going in. `local_combat_bypass_id`/`DiagUndrivenObjectId` unset
+throughout. Rig torn down clean both times (`Get-Process swkotor,KotorCoop.Agent` returned none
+after each `demo.ps1 -Stop`), `auto_start_agent` restored to `1` in both installs.
+
+| Check | Synced? | Fixed this round? |
+|---|---|---|
+| Excluded-id diagnostic spam (regression 1) | N/A (log-only; the underlying skip was always safe) | **Yes** — edge-triggered, live-verified |
+| Party roster "no peer roster" (regression 2) | — | **Yes** — root-caused live, fix applied, build+suite clean; **not yet re-verified live** |
+| Doors — `end_door10` (transition) open+mirror | **Yes**, confirmed live (~1.8s) | — (already worked) |
+| Doors — an ordinary (non-transition) door | **Untested** — no click/keystroke path in this rig | — |
+| Trask body/roster following an ordinary transition | **Not synced** in this pass, but confounded by `tp`'s own lack of native follow — not distinguished from a real bug | Not this round |
+| Combat — forwarded (host→client phantom) damage | **Yes**, confirmed live twice | — (already worked) |
+| Combat — client's own local swing landing on the host's real creature | **Not confirmed** this pass (armed but no measured hit in ~40s) | Not this round |
+| Combat — an un-godded client surviving a multi-attacker swarm | **No** — client's game process exited | Not this round (staging discipline this pass deliberately skipped) |
+| Warp — arrival sync | **Yes** | — (already worked) |
+| Warp — companions carried | **No**, matches documented vanilla behavior | N/A (not a bug) |
+
+**What remains.** A dedicated `PumpPartyRoster` regression test and a live re-verification of fix
+2. A non-cheat way to open an ordinary door and to move the player (a working `walk`, or a real
+click) for the next pass that needs one. Whether client-dealt local_combat damage genuinely lands
+on the host's creature under the exact conditions this pass used. Whether `IsPartyTogether`'s
+stale-true reading after a `tp`-class reposition is a real, walk-reachable bug or purely a
+`tp` testing artifact. Death-test staging (god mode, or player separation) before any future pass
+that puts an un-godded client near more than one live hostile.
+
 ## 3. A client's XP is actively erased
 
 `ProgressionSnapshotPacket` is host→client only and absolute (CoopAgent.cs, `PumpProgression`):
