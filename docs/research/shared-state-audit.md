@@ -2978,6 +2978,75 @@ bug.
 
 Full suite: 966/966, both builds clean. Rig torn down and confirmed clean.
 
+### Round 44 (2026-08-21) — a fresh cold restart gets a clean save pair; the sustained-combat
+### pass still does not land a hit, and a real defensive gap was found and fixed along the way
+
+A full process restart (both `swkotor.exe` and both agents killed, `demo.ps1` relaunched fresh
+against save slot 1 on both sides) reached `korr_m34aa` — a module NEITHER install had
+independently touched this session — with **no `W_SAVE` warning at all** and `TryWriteEnemies
+returned True, wrote 3 enemies` on the client. This confirms round 43's own diagnosis exactly:
+the drift was accumulated IN-PROCESS state across one very long-running session, not a permanent
+mismatch baked into the save files themselves. A cold restart with a fresh load is the practical
+fix for this rig going forward — no code change was needed for that part either.
+
+**With a genuinely clean pair, the sustained-combat symptom this whole chain has been chasing
+reproduced immediately and unambiguously.** A real, GIT-placed hostile (`0x6`, then `0x9` after
+it cycled) engaged under `local_combat`, was confirmed to have a real `k_def_combend01` script
+(the empty-script gate correctly did not exclude it), and simply never moved: `local combat
+diag: t=24.0s 0x6 at (110.61,98.77) player at (98.51,108.55) dist=15.56` — the identical
+coordinate on every sample for the full 25s cycle. The player was then teleported to point-blank
+range (`dist=2.45`, later `dist=1.68` on the next creature) and held there for 20+ seconds each
+time: **still zero movement, zero HP change, zero swing.** This rules out pathing/distance
+entirely — the creature does not attack even when melee range requires no approach at all.
+
+**A real, independently-valuable defect was found and fixed while investigating this.** The
+existing round-41 diagnostic ("STILL SEEING excluded id") fired repeatedly during this session's
+capture — proof that `DriveOne` (`EnemyPresenceController.cs`) had no guard of its own for the
+currently-excluded/locally-fighting creature and relied ENTIRELY on the agent-side upstream
+filter (`CoopAgent.cs`) to keep it out of the plugin's own enemy list. That filter has a
+confirmed gap: the excluded creature still reached `ClaimCreatureForFight`/`PermitAttacking`
+every frame it leaked through, exactly the re-claim/re-assert cycle the class's own header says
+"the local AI must not fight" while a creature is meant to be fighting on its own. Added a direct
+skip in `DriveOne` (mirroring the existing `DiagUndrivenObjectId` pattern) so this instance never
+touches the excluded creature regardless of whether the upstream filter's read is stale — defence
+in depth, not a single point of failure. **Rebuilt and reverified: the "STILL SEEING" line no
+longer fires at all.** This is kept as a real fix.
+
+**It was not the root cause of the hit-landing symptom.** With the leak closed, the identical
+test (fresh creature, melee range, 20+ seconds held) still produced zero movement and zero
+damage. Also ruled out this round: re-firing the script manually (`firescript 0x9 fire`) while
+the player was ALREADY at point-blank range produced no change either — so it is not that the
+original `StartLocalFight` fired while the player was still far away and the creature's one-shot
+decision went stale; a fresh fire at genuine melee range does nothing new.
+
+**What is left, precisely.** Round 27's host-local success and round 37's "outside the census
+entirely" success share one property this creature does not: neither was ever claimed
+(`Odyssey.ClaimCreature`/`ClaimCreatureForFight`) even once before its script was fired. This
+creature spent real time normally mirrored (claimed and re-claimed every frame) before engaging
+and being excluded. Read `ClaimCreature`/`ClaimCreatureForFight`/`PermitAttacking`'s full bodies
+this round specifically checking whether they touch anything in the round struct
+(`+0x934`..`+0x9CC`, the sub-structure at `+4+(+0x96C)*0x14C`) that the 27-round Strategy-1
+investigation mapped — they do not; they only touch `ObjCommandable`, `CreMovePermitted`,
+`CreRunFlag`, and conditionally call `ClearAllActionsFn` (`0x004CCD80`,
+`CSWSObject::ClearAllActions`). **`ClearAllActionsFn` itself was never checked for a side effect
+on the round sub-structure** — it runs every single frame on every normally-mirrored creature
+before it is ever excluded, and if it (or repeated calls to it over the creature's whole time in
+normal mirroring) leaves the sub-structure in a state a post-hoc `StartCombatRound` sequence
+cannot repair — unlike a creature that was NEVER put through that loop at all — that would
+explain both successes and this failure with one mechanism. This is the concrete next candidate,
+not yet disassembled.
+
+**Status: `local_combat` is still not confirmed working end to end against a real, previously-
+mirrored, organically-engaged enemy.** It works for a creature that was never claimed at all
+(round 37) and for a creature tested in complete isolation from any co-op session (round 27) —
+it has never yet been observed landing a hit on a creature that spent real time in normal
+mirroring first, which is the actual, ordinary case every real ambush produces. The defensive fix
+in this round is real and stays; it did not close the gap.
+
+Full suite: 965/966 this run (the one failure, `DisconnectRecoveryTests.HeavyPacketLossStillConverges`,
+is the same known-flaky probabilistic test flagged throughout this session — confirmed passing
+in isolation immediately after). Both builds clean. Rig torn down and confirmed clean.
+
 ## 3. A client's XP is actively erased
 
 `ProgressionSnapshotPacket` is host→client only and absolute (CoopAgent.cs, `PumpProgression`):

@@ -396,19 +396,35 @@ internal sealed unsafe class EnemyPresenceController(SharedBlockView block)
 
     private bool DriveOne(int slot, EnemyPresenceView enemy, double now, nint player)
     {
-        // ROUND 41 DIAGNOSTIC: does the currently-excluded id still show up in THIS
-        // instance's own read of the shared block's enemy list at all? If the agent-side
-        // filter (CoopAgent.cs, bridge.ReadLocalCombatExcludedId) is working, it never
-        // should. Temporary, removed once this question is settled.
-        if (_locallyFightingId != 0 && enemy.ObjectId == _locallyFightingId
-            && now - _stillSeeingLoggedAt >= 1.0)
+        // ROUND 41 DIAGNOSTIC confirmed the gap this guard now closes: the agent-side filter
+        // (CoopAgent.cs, bridge.ReadLocalCombatExcludedId) is the ONLY thing that was ever
+        // supposed to keep the currently-excluded creature out of this instance's own enemy
+        // list, and a live capture caught it failing — "STILL SEEING excluded id 0x6 at slot
+        // 0" fired repeatedly while the creature sat frozen at melee range under
+        // StartLocalFight, never landing a hit. Relying on a single upstream filter with no
+        // defence here meant every pass this creature's own script-driven fight was fighting
+        // ClaimCreatureForFight's re-claim and PermitAttacking's re-assert for it at the same
+        // time — round 14 proved that pairing structurally cannot corrupt round-processing
+        // FIELDS on this single-threaded engine, but it never checked whether re-claiming a
+        // creature's action queue every frame while ITS OWN script is trying to queue an
+        // attack on it starves the attack before it can ever land. Skip it here too, so a
+        // stale or racy upstream read can never reach the claim/permit/drive calls below —
+        // this instance leaves it alone exactly as intended, defence in depth rather than a
+        // single point of failure.
+        if (_locallyFightingId != 0 && enemy.ObjectId == _locallyFightingId)
         {
-            _stillSeeingLoggedAt = now;
-            PluginHost.Log(
-                $"local combat diag: STILL SEEING excluded id 0x{_locallyFightingId:X} "
-                + $"at slot {slot}, block.EnemyPresenceCount={block.EnemyPresenceCount}, "
-                + $"block.LocalCombatExcludedId=0x{block.LocalCombatExcludedId:X}, "
-                + $"blockAddress=0x{block.Address:X}");
+            if (now - _stillSeeingLoggedAt >= 1.0)
+            {
+                _stillSeeingLoggedAt = now;
+                PluginHost.Log(
+                    $"local combat diag: STILL SEEING excluded id 0x{_locallyFightingId:X} "
+                    + $"at slot {slot} in the upstream feed - skipped here instead of driven, "
+                    + $"block.EnemyPresenceCount={block.EnemyPresenceCount}, "
+                    + $"block.LocalCombatExcludedId=0x{block.LocalCombatExcludedId:X}, "
+                    + $"blockAddress=0x{block.Address:X}");
+            }
+
+            return true;
         }
 
         if (enemy.ObjectId == 0 || enemy.ObjectId == Odyssey.ObjectInvalid || enemy.Dead)
