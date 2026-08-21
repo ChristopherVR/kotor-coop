@@ -186,4 +186,46 @@ public class CoopConfigTests
             File.Delete(path);
         }
     }
+
+    [Fact]
+    public void SessionSaveHostRefusalDefaultsOff()
+    {
+        // Round 53's live-verified false positive: an ordinary module transition (not just a
+        // genuine different-save load) rewrites the watched autosave and would otherwise
+        // disconnect the host. Absent key must default to NOT refusing.
+        string path = WriteTemp("mode = join");
+
+        try
+        {
+            CoopConfig? c = CoopConfig.TryLoad(path);
+            Assert.NotNull(c);
+            Assert.False(c.SessionSaveHostRefusal);
+            Assert.False(new CoopConfig().SessionSaveHostRefusal);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void SessionSaveHostRefusalCanBeTurnedOn()
+    {
+        string path = WriteTemp("""
+            [coop]
+            mode = join
+            session_save_host_refusal = 1
+            """);
+
+        try
+        {
+            CoopConfig? c = CoopConfig.TryLoad(path);
+            Assert.NotNull(c);
+            Assert.True(c.SessionSaveHostRefusal);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
 }

@@ -164,6 +164,16 @@ dialogue_item_sync=1
 # AddAvailableNPCByTemplate also records a second association this raw poke does not touch.
 dialogue_recruit_sync=0
 
+# Whether a host's own SessionSaveWatch edge (roadmap item 14 phase 1) actually disconnects
+# the session when it fires. OFF by default - live-verified 2026-08-21 (shared-state-audit.md
+# SS2 round 53) to false-positive on an ORDINARY module transition (warp cheat or a real door),
+# not only on an actual "Load Game to a different save": KOTOR's own engine autosaves on every
+# module load, which rewrites the exact save file the digest watches, so the host gets
+# disconnected from its own session the moment it transitions anywhere, with no different save
+# ever chosen. The edge is still detected and logged either way; this only gates whether it
+# acts. Leave off until a real save-vs-load engine hook can tell the two apart.
+session_save_host_refusal=0
+
 # Let the mod own the HUD pause button. The engine's own toggle reads server mask bit 0x02,
 # which is also the focus-loss reason FocusKeeper must keep clearing - so it can pause but
 # never unpause. OFF until the hook is confirmed by hand: it swallows the click, so if the

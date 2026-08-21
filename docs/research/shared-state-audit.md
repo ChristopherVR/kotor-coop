@@ -46,7 +46,51 @@ MIRRORS — driven puppets, not creatures its own AI is fighting — so the clie
 genuinely never enters combat. Forcing `+0x4E0` on the client would be a lie the engine
 recomputes away, and combat state gates round timing and AI.
 
-### Status as of round 52 (2026-08-21) — read this first; supersedes every status note below it
+### Status as of round 53 (2026-08-21) — read this first; supersedes every status note below it
+
+**Real lethality PROVEN, on a module without a min-1-hp pin.** Round 52 left three things
+open: natural aggro, real lethality, and a client killing an enemy outright. This round ran a
+full ordinary fight on `tar_m10aa` (Taris, Black Vulkar Base) against a GIT-placed, non-plot
+`FactionID=1` hostile (`tar10_vulkpoo002`, id `0x33`, "Black Vulkar," 22 hp) with no scripted
+min-1-hp pin of its own. 26 real, ground-truth-confirmed local hits landed on the player over
+~2 minutes (summing to 178 raw damage), entirely through `local_combat`'s own mechanism —
+zero forwarded-channel activity anywhere in the window, the cleanest isolation yet. The player's
+HP floored at 1 mid-fight not from this area (which has no pin) but from a STALE min-1-hp
+status effect carried over from the Endar Spire's `END_M01AA` (a persistent effect, only ever
+cleared by walking through `end_m01ab` — this round's warp skipped that). Clearing it live
+(`cheat god 0`) revealed the true total was already deeply negative (`hp -11/12`), and the
+engine's own death path fired one frame later: `death: the local player is down`. Cross-player
+sync of the down state was confirmed too — the host's `console 'peers'` correctly read
+`Malak  tar_m10aa  [down]`. Natural aggro: still zero, the third distinct creature/module pair
+to show it (after two rounds of `n_sithsoldier004` on `END_M01AA`).
+
+**Two real bugs found and one fixed before the arc could run at all.** (1) **Fixed:** the
+just-shipped roadmap item 14 host mid-session-load refusal false-positived on an ORDINARY
+module transition (KOTOR's own engine autosaves on every transition, which the refusal's own
+digest watches — confirmed live: warping a connected host produced
+`co-op: loading a save mid-session is not supported yet` and a real disconnect). New
+`CoopConfig.SessionSaveHostRefusal` / coop.ini `session_save_host_refusal` (default OFF) gates
+the ACTION while leaving the edge detection and its log line intact; re-verified live with the
+fix in place — the identical warp no longer disconnects. (2) **Not fixed, self-resolves:** a
+separate, transient `[W_SAVE]` compatibility false-positive fired for a few minutes right at
+the crossing (both original saves had never visited `tar_m10aa`, so this was a timing race in
+the lazy compat computation, not real content drift — round 43/44's own "save-drift false
+alarm" pattern, a new instance of it); `console 'reconnect'` forced a fresh, correct
+re-judgment and cleared it.
+
+**What remains: the client killing an enemy outright — narrowed to a specific point of
+failure.** The client's own damage-dealt ledger populated correctly (`DamageDealtEnabled=1`,
+`id 0x33 cumulative 163`, read directly out of the shared block), but the host's `DamageOwed*`
+fields never moved (`DamageOwedCount=0` the whole fight; no `combat: applied` line; not even
+the documented `does not resolve here` fallback fired) — the report never reached
+`PeerDamageController.ApplyOwed` at all. Malformed packets, netsim, peer registration and the
+module label were all ruled out live. This is new information narrowing (not re-confirming)
+`peer-damage-ledger.md`'s own NEEDS-LIVE checklist: the break sits somewhere between
+`CoopClient.ReportEnemyDamage`'s send and `CoopHost.GetEnemyDamage`'s merge, not in the
+plugin's own capture or apply code. See round 53 at the end of this section for the full
+evidence, the fix, and the exact offsets read.
+
+### Status as of round 52 (2026-08-21) — superseded by round 53 above; kept for the trail
 
 **PROVEN. `local_combat`'s own client-side mechanism lands real hits on the local player,
 in a live two-instance session, correctly distinguished from and never double-counted with
@@ -4442,6 +4486,198 @@ build.ps1 -Install -GameDir "C:\GOG Games\Star Wars KOTOR (GOG)"` and again with
 `dotnet test tests/KotorCoop.Tests`: **1192/1192**, no flakes. Rig torn down (`demo.ps1
 -Stop`) and confirmed clean (`Get-Process swkotor,KotorCoop.Agent` returned none),
 `auto_start_agent` restored to `1` in both installs.
+
+### Round 53 (2026-08-21) — one ordinary fight, on a module WITHOUT a min-1-hp pin: the full
+### arc to a genuine DOWN, real lethality proven, and a new blocker isolated for the KILL half
+
+Round 52 proved `local_combat` lands real hits, but left three things open: natural aggro,
+real lethality (END_M01AA's command-deck pin floors every hit at 1, so no test there can show
+a down/death), and the client killing an enemy outright. This round picked a module without a
+scripted pin and ran the fight to a real conclusion.
+
+**Module and target — GIT evidence.** `tar_m10aa` (Taris, Black Vulkar Base) was read with
+`tools/kotorfiles.py`: 25 GIT-placed `FactionID=1` hostiles in the module (`tar10_vulkarpt01`,
+`tar10_vulkpoo001..005`, `tar10_ptdrd0xx`, `tar10_bouncer`, `tar10_thermturre` x3, etc.), none
+plot-flagged, none min-1-hp-pinned in their own blueprint. The one actually engaged this
+round — GIT `Creature List` index 17, `TemplateResRef=tar10_vulkpoo002`, `FactionID=1`,
+`Plot=0`, name strref 26410 = **"Black Vulkar"**, `CurrentHitPoints=MaxHitPoints=22`,
+`ChallengeRating=3`, `Appearance_Type=264` (the same Vulkar row client-encounters.md §7's
+Taris ambush used) — predicted object id `0x33` (`kotorfiles.py objectids tar_m10aa`), at
+GIT position `(103.70, 101.37)`, 14.6 units from the module's own `Mod_Entry_X/Y`
+`(103.293, 115.924)`. Confirmed live at the SAME id and position on both instances
+(`console 'resolve 0x33'` → `0x1A9FD5A8` client / `0x1AC43E80` host; `census 0x33` on both).
+This was chosen over the module's originally-picked `tar10_vulkpoo002` at id `0x38` (also a
+valid GIT hostile in the same cluster) only because the engine's own automatic proximity
+trigger picked `0x33` first — see below.
+
+**Blocker found and fixed before the arc could even start: a false-positive session
+disconnect on the warp itself.** `console 'warp tar_m10aa'` on a live, connected host
+produced `co-op: loading a save mid-session is not supported yet - clients must rejoin` and a
+real `SessionManager.Disconnect()` — roadmap item 14 phase 1's brand-new host mid-session-load
+refusal (shipped the same day, commit `c23d4e4`), firing on an ORDINARY module transition, not
+a genuine different-save load. Root-caused live: KOTOR's own engine autosaves on every module
+transition, and `demo.ps1`'s own staged autosave slot (`saves\000001 - AUTOSAVE`) is exactly
+the file `SaveIdentityWatch`'s digest polls — confirmed by inspecting the save on disk before
+and after the warp (`savenfo.res` `LASTMODULE` flipped from `END_M01AA` to `tar_m10aa`,
+`SAVEGAME.sav`'s mtime updated to the warp's own timestamp). The digest changing because THIS
+session's own world moved forward is indistinguishable, from a content digest alone, from a
+host loading a genuinely different save — exactly the gap `session-save.md`'s own NEEDS-LIVE
+item 1 flagged as unmeasured ("whether an in-game Load Game action changes
+`SaveIdentityDigest` at all, as opposed to only a subsequent save") and NEEDS-LIVE item 2
+flagged as never run ("whether the host-refusal path is disruptive... never run against two
+real GOG installs"). Both are now answered: yes, and yes — an ordinary transition trips the
+exact same edge a real different-save load would, so shipped as-is this would disconnect every
+host the first time they walked through a door.
+
+**Fix (minimal, matches this codebase's own convention for an unverified detector — ship the
+edge detection, gate the action):** `CoopConfig.SessionSaveHostRefusal` (new bool, default
+`false`), parsed from a new `session_save_host_refusal` coop.ini key, documented in
+`profiles/coop.ini.example`. `CoopCommandDispatcher.MaintainSessionSave` still calls
+`_sessionSaveWatch.ObserveHost(digest)` every tick unconditionally (the edge is still detected
+and logged — `session-save: host-side save-identity edge detected - NOT refusing
+(session_save_host_refusal=0)`), but only calls `Reply(...)`/`manager.Disconnect()` when the
+flag is explicitly turned on. Two new tests in `CoopConfigTests.cs`
+(`SessionSaveHostRefusalDefaultsOff`, `SessionSaveHostRefusalCanBeTurnedOn`). Re-run with the
+fix live: the identical `warp tar_m10aa` on a connected host produced the same edge-detected
+log line but did NOT disconnect — `peers 1` held throughout, and the client followed cleanly
+(`following the host to 'tar_m10aa'`, both `console 'where'` replies landed in `tar_m10aa`
+within the same few seconds). Distinguishing a genuine different-save load from an ordinary
+transition for real needs a save/load engine hook (`session-save.md`'s own deferred item 3 —
+out of scope here); until that lands the flag stays off and item 14's status is downgraded
+from "Partial (phase 1, unit-tested only)" to note this specific live-verified false positive.
+
+**A second, separate, transient false positive — self-resolving, not fixed.** Right after the
+warp landed, `co-op [W_SAVE] different save: enemies, doors, items and party are off` fired on
+both instances (`console 'census'` on the client read `MIRROR 0 id(s)` for several minutes
+after — the id-keyed channels genuinely were suspended, not just logged). This is round 43/44's
+own documented "save-drift false alarm" pattern, but a NEW instance of it: neither original
+save (`000002 - Game1`, unmodified since 2026-08-13/07-30) had ever visited `tar_m10aa` — only
+one nested `.sav` (`END_M01AA`) exists in either — so both installs' pristine `tar_m10aa.rim`
+GIT digests are identical and the mismatch this compat check saw was transient, computed once
+against a not-yet-settled on-disk state right at the crossing, not genuine content drift.
+`console 'reconnect'` on the client forced a fresh re-judgment against the now-settled state
+and cleared it immediately (`census` went from `MIRROR 0 id(s)` to `MIRROR 26 id(s) 'tar_m10aa':
+26 resolve here, 0 do not`). No code change made for this half — the existing "rejoin to
+adopt the host's world" guidance the warning itself gives is the correct, already-designed
+recovery, and this round used it rather than inventing a second gate on top of the first fix.
+
+**Natural aggro test — still no.** With the census healthy, the client's own player sat
+passively within `local_combat_range` of `0x33` (`dist=9.43`, non-point-blank, `tp`'d there
+rather than melee-adjacent) for two full 25-second exclusion cycles
+(`local combat: 0x33 pulled out of the census to fight for real` / `0x33 fight ended (timed
+out), rejoining the census`, twice). Zero `combat ground-truth` or `combat: absorbed` lines in
+either window; `console 'where'` read `hp 12/12` throughout. This is the THIRD distinct
+creature/module pair (after `n_sithsoldier004` x2 on `END_M01AA` in rounds 51-52) to show zero
+proximity-only aggro in every test this investigation has run — the pattern generalises past
+one save.
+
+**⚠ A discrepancy from round 52's own methodology, found live.** `blockpoke.ps1 walk` did NOT
+move the player this round — two separate requests (`walk 103.6 106.0` from a staging point 25
+units away, and implicitly via the `attack` order's own approach-to-melee step from 9.4 units
+away) both left `console 'where'` reporting the exact same, unmoved coordinates for 15+ seconds
+each, cross-checked against the plugin's own independent per-second position log
+(`local combat diag: t=... player at (95.00,105.00)`, static across 24+ samples). This matches
+`TestDriveController.HandleWalk`'s own doc comment verbatim ("THIS DOES NOT MOVE THE PLAYER
+CHARACTER... the PC is drive-controlled") — a caveat that predates round 52's write-up, which
+nonetheless reported `blockpoke.ps1 walk 46.5 60.0` moving the player successfully. Not
+resolved this round (out of scope of the caveat's own guidance, which names `tp` as the
+reliable alternative); flagged rather than silently worked around. **Workaround used
+throughout this round:** `console 'tp <x> <y>'` to the desired staging/engage distance instead
+of `walk`, which is reliable (confirmed instant, exact-coordinate placement every time).
+
+**The engagement — real fight, real hits, only once the player was near-melee.** `attack
+0x7FFFFFFF 0x33` issued from the 9.4-unit staging point produced the identical
+`attacktarget diag: 0x7FFFFFFF round+0x958 0->1, round+0x960 0->5DC` arming signature round
+52's own successful case logged, and the plugin's own log confirmed the order was accepted
+(`test: 0x7FFFFFFF ordered to attack 0x33`) — but zero movement and zero damage followed for
+40+ seconds. `tp`'d to `(103.7, 103.4)` (1.97-2.03 units from `0x33`) and re-ordered: real
+combat started within seconds. Verbatim, client `kotorcoop-plugin.log`:
+
+    [20:33:23.288] combat ground-truth: local PC took 3 damage, attacker=0x33 (the currently
+      locally-fighting creature (StartLocalFight's own id))
+    [20:33:29.962] combat ground-truth: local PC took 4 damage, attacker=0x33 (...)
+    [20:33:35.695] combat ground-truth: local PC took 8 damage, attacker=0x33 (...)
+    ... (26 such lines total over the next ~2 minutes, every one attributed to 0x33 as "the
+    currently locally-fighting creature", raw hits ranging 2-20 damage, summing to 178) ...
+    [20:35:15.155] combat ground-truth: local PC took 2 damage, attacker=0x33 (...)
+    [20:35:15.156] death: the local player is down
+
+Every one of the 26 ground-truth lines this fight produced named `0x33` as "the currently
+locally-fighting creature" — zero were classified as the forwarded applier or unrecognized,
+and (reverse safety) **zero `combat: absorbed`/`combat: took` lines appear anywhere in this
+window** — the host's own PC never left the module entry point 14+ units away, so this fight
+ran through `local_combat`'s own mechanism in complete isolation from the forwarded-damage
+channel, a cleaner separation than round 52's own concurrent-channel test.
+
+**Real lethality — PROVEN.** `console 'where'` mid-fight read `hp 1/12` despite the ground-truth
+sum already exceeding 12 several hits earlier — a min-1-hp floor was masking it, but NOT
+`tar_m10aa`'s own (the module has none — `min-one-hitpoint.md`'s sweep already confirms this).
+Root cause: `SetMinOneHP` is a **persistent status effect**, not an area-scoped one — `END_M01AA`'s
+`k_pend_area01` sets it on the PC once, and only `end_m01ab`'s `k_pend_1b_area` clears it; this
+round's save started on the Endar Spire and warped directly to `tar_m10aa`, skipping the
+clearing area entirely, so the stale pin rode along. Cleared live with `cheat god 0`
+(`cheat: god OFF - a module may still pin you (status 1)`) — the exact lever `CheatController.God`
+already exposes for precisely this situation. The moment the floor came off:
+
+    [20:35:14.208] cheat: god OFF - a module may still pin you (status 1)
+    [20:35:15.155] combat ground-truth: local PC took 2 damage, attacker=0x33 (the currently
+      locally-fighting creature (StartLocalFight's own id))
+    [20:35:15.156] death: the local player is down
+    [20:35:15.221] spectate: watching 0x133 - Tab cycles (2 to watch)
+
+`console 'where'` immediately after read `hp -11/12` — the true, already-deeply-negative total
+the floor had been hiding, not a fresh kill. **This settles round 52's own open question
+outright: a real fight through `local_combat`, with no min-1-hp pin standing in the way, really
+can bring a player down from genuine engine damage** — not a scripted floor, not a health poke,
+the engine's own death path (`death: the local player is down`, `blockpoke.ps1 death` reading
+`downed 1` immediately after). **Cross-player sync of the down state confirmed too:** the HOST's
+own `console 'peers'` read `Malak  tar_m10aa  [down]` — the other player's screen correctly knew
+the client was down, matching README's "Go down together" bullet. Revived cleanly afterward
+(`cheat standup 12` → `hp 12/12`, `death` → `downed 0`) and combat broken off
+(`attack 0x7FFFFFFF 0` → `test: 0x7FFFFFFF ordered to break off combat`).
+
+**What did NOT close: the client killing an enemy outright, and a new, more precise reason
+why.** `0x33` took real, substantial local damage on the client's own engine (raw ground-truth
+sum 178; the client's own damage-DEALT ledger, read directly out of the shared block
+(`PhantomHitHook.Dealt`/`SharedBlock` offsets `0x1E60`/`0x2000`/`0x2118`), confirmed
+`DamageDealtEnabled=1` and one live entry, `id 0x33 cumulative 163`). But the HOST's own copy
+of `0x33` never moved: `console 'census 0x33'` on the host read `listed hp 22/22` throughout
+and after the fight, and the host's own `DamageOwed*` fields
+(`SharedBlock` offsets `0x200C`/`0x2010`/`0x2018`, read the same direct way) showed
+`DamageOwedCount=0` for the entire session — no `combat: applied N of a peer's damage to 0x33`
+line, and not even `peer-damage-ledger.md`'s own documented fallback diagnostic,
+`combat: a peer owes N damage to 0x33, which does not resolve here` (which DOES fire correctly
+for an unresolvable id, per two OLDER sessions' log entries found in the same file) — meaning
+the report never reached `PeerDamageController.ApplyOwed` at all, not even as a debt held
+against an unresolvable id. Ruled out live: malformed packets (`status`'s own `malformed 0`
+throughout), netsim (`netsim status` → `off (clean link)`), peer registration (host's `peers`
+correctly named `Malak` in `tar_m10aa` the whole time, and OTHER peer-keyed channels — presence,
+HP, the downed flag — all synced correctly over the same connection), and module-label
+mismatch (`moduleClean` held true on the client throughout, per the existing per-tick
+diagnostic). This narrows round 52's own open item 3 ("the client killing an enemy outright")
+to a concrete, previously-unisolated point of failure: somewhere between
+`CoopClient.ReportEnemyDamage`'s send and `CoopHost.GetEnemyDamage`'s merge, not in the
+plugin's own ledger (confirmed populated) and not in the plugin's own apply step (never
+reached). Not root-caused further this round — `peer-damage-ledger.md`'s own NEEDS-LIVE
+checklist (items 1, 2, 8) predates this finding and is the first live measurement of any of it;
+this is new information, not a re-confirmation of something already known to fail.
+
+**Safety.** No permanent exclusion — `0x33` cycled cleanly through repeated timeouts (5+ clean
+`fight ended (timed out)` / `pulled out of the census` pairs after the engagement, continuing
+even after combat was broken off, since the player never left `local_combat_range` until the
+final `tp` back to the entry). No watchdog trips. No materialised stand-in (`tar10_vulkpoo002`
+is GIT-identical throughout on both installs). The host's own player was never at risk (stayed
+at the module entry, `hp 12/12` throughout, 14+ units from the fight). `0x33` remained alive on
+the host (`22/22`) at session end — the client's own near-death local copy (would have read
+`~1/22`) never persisted past its next `local_combat` re-inclusion, since re-inclusion re-syncs
+the mirrored creature back to the host's still-full authoritative health, another visible
+symptom of the same unresolved item above.
+
+Build clean (`dotnet build KotorCoop.slnx`: 0 warnings, 0 errors; `build.ps1 -Install` for both
+GOG installs: both succeeded, 0 warnings, 0 errors). Full suite `dotnet test
+tests/KotorCoop.Tests`: **1194/1194** (1192 baseline + 2 new `CoopConfigTests` cases), no
+flakes. Rig torn down (`demo.ps1 -Stop`) and confirmed clean (`Get-Process
+swkotor,KotorCoop.Agent` returned none), `auto_start_agent` restored to `1` in both installs.
 
 ## 3. A client's XP is actively erased
 

@@ -139,6 +139,23 @@ public sealed record CoopConfig
     /// </summary>
     public bool DialogueItemSync { get; init; } = true;
 
+    /// <summary>
+    /// Whether the agent's <c>SessionSaveWatch</c>'s host-side edge (roadmap item
+    /// 14 phase 1, design §3.2 item 5) actually tears the session down when it fires. OFF by
+    /// default — live-verified 2026-08-21 (shared-state-audit.md §2 round 53) to false-positive
+    /// on an ORDINARY module transition, not only on a genuine "Load Game to a different save"
+    /// action: KOTOR's own engine autosaves on every module load, which rewrites the exact save
+    /// directory <see cref="KotorCoop.Memory.SaveDigest.FindSessionSave"/> is watching, so
+    /// <c>SaveIdentityDigest</c> changes — and the host gets disconnected from its own session —
+    /// the moment it walks (or warps) through a transition, with no different save ever chosen.
+    /// The detector cannot currently tell "this session's own autosave, because play continued"
+    /// apart from "a genuinely different save was loaded"; distinguishing them needs a real
+    /// save/load engine hook (session-save.md §"Phase 1 shipped", item 3's own deferred note),
+    /// which is out of scope here. Until that lands, the edge is still detected and logged
+    /// (harmless) but does not disconnect anyone unless explicitly turned back on.
+    /// </summary>
+    public bool SessionSaveHostRefusal { get; init; }
+
     /// <summary>The anchor as the plugin's numeric code (0=TL, 1=TR, 2=BL, 3=BR).</summary>
     public uint ChatOverlayAnchorCode => ChatOverlayAnchor.Trim().ToLowerInvariant() switch
     {
@@ -246,6 +263,7 @@ public sealed record CoopConfig
             StatusToasts = !kv.ContainsKey("status_toasts") || IsTruthy(kv.GetValueOrDefault("status_toasts")),
             DialogueItemSync = !kv.ContainsKey("dialogue_item_sync")
                 || IsTruthy(kv.GetValueOrDefault("dialogue_item_sync")),
+            SessionSaveHostRefusal = IsTruthy(kv.GetValueOrDefault("session_save_host_refusal")),
         };
     }
 

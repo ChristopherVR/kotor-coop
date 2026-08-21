@@ -132,6 +132,19 @@ public sealed class CoopCommandDispatcher(
 
     private bool StatusToastsEnabled => _statusToastsEnabled ??= loadConfig?.Invoke()?.StatusToasts ?? true;
 
+    /// <summary>
+    /// coop.ini's <c>session_save_host_refusal</c>, cached the same way
+    /// <see cref="StatusToastsEnabled"/> is. OFF by default — see
+    /// <see cref="CoopConfig.SessionSaveHostRefusal"/>'s own doc comment for the live-verified
+    /// false-positive (shared-state-audit.md §2 round 53) this gate exists to prevent: an
+    /// ordinary module transition, not just an actual different-save load, rewrites the watched
+    /// autosave file and would otherwise disconnect the host from its own session.
+    /// </summary>
+    private bool? _sessionSaveHostRefusalEnabled;
+
+    private bool SessionSaveHostRefusalEnabled =>
+        _sessionSaveHostRefusalEnabled ??= loadConfig?.Invoke()?.SessionSaveHostRefusal ?? false;
+
     /// <summary>Polls the block for console/menu commands and reflects status until cancelled.</summary>
     public async Task RunAsync(CancellationToken cancellationToken)
     {
@@ -1427,10 +1440,19 @@ public sealed class CoopCommandDispatcher(
 
         if (session is CoopHost)
         {
+            // The edge is still detected (and logged) unconditionally — see
+            // SessionSaveHostRefusalEnabled's own doc comment for why acting on it is gated
+            // off by default: an ordinary module transition trips this same edge.
             if (_sessionSaveWatch.ObserveHost(digest))
             {
-                Reply(SessionSaveWatch.HostRefusalMessage);
-                manager.Disconnect();
+                Log?.Invoke("session-save: host-side save-identity edge detected"
+                    + (SessionSaveHostRefusalEnabled ? " - refusing" : " - NOT refusing (session_save_host_refusal=0)"));
+
+                if (SessionSaveHostRefusalEnabled)
+                {
+                    Reply(SessionSaveWatch.HostRefusalMessage);
+                    manager.Disconnect();
+                }
             }
         }
         else if (session is CoopClient)

@@ -33,12 +33,17 @@ Both players, each in their own full game:
   points to 5. A mirrored enemy can also fight a client's own player directly, through that
   client's own engine rather than only through the forwarded channel — verified live in a
   real session, correctly distinguished from and never double-counted with the forwarded
-  path (`docs/research/shared-state-audit.md` §2, round 52). Two things this has not shown
-  yet: this demo save's enemies do not notice a player on their own (proximity/heartbeat
-  aggro was never observed without an explicit engagement nudge, in any test run so far),
-  and the area used for testing (the Endar Spire command deck) pins a player's health at a
-  minimum of 1 for the length of the scene, so no test there can show a real down or death
-  from either damage source.
+  path (`docs/research/shared-state-audit.md` §2, round 52). And it is genuinely lethal: on
+  a module with no min-1-hp pin, a real fight through that same client-side mechanism (26
+  ground-truth-confirmed hits, zero forwarded-channel activity in the window at all) brought
+  a player down for real — the engine's own death path fired, and the other player's screen
+  correctly showed them down too (round 53). Two things this has not shown yet: this
+  investigation's enemies do not notice a player on their own (proximity/heartbeat aggro was
+  never observed without an explicit engagement nudge, across three different creature/module
+  pairs tested so far), and a client's own damage against an enemy does not yet reach the
+  host — the client's local ledger tracks it correctly, but the host's copy of that enemy
+  never takes the damage, so a client cannot yet land the killing blow on a shared, one-world
+  enemy (round 53 narrowed this to the report between the client's send and the host's merge).
 - **Share the world**: dropped items materialise on the other side as real, clickable
   objects and vanish when picked up; doors open and unlock for both; the story globals
   and the quest journal merge upward, so one quest line advances for everyone — verified
