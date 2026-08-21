@@ -2176,6 +2176,8 @@ public sealed class CoopAgent(IGameBridge bridge, ICoopSession session, AgentSet
             // theirs disarmed need the watch.
             bridge.SetEncounterWatch(false);
             PumpEncounterRequests(local);
+            bridge.SetTriggerWatch(false);
+            PumpTriggerRequests(local);
 
             // Census and damage carry the module label; a dirty label skips them (see the
             // same-breath note above).
@@ -2240,6 +2242,32 @@ public sealed class CoopAgent(IGameBridge bridge, ICoopSession session, AgentSet
             // reporting nothing, so a set published a moment ago is superseded rather than
             // left to age out on the host.
             IsFallbackModuleName(local.Module) ? [] : bridge.ReadEnteredEncounters());
+
+        // Generic triggers, same shape, same fallback-module guard. The plugin's own watch
+        // already excludes traps, area transitions and anything failing the coop.ini
+        // allowlist pattern, so everything the bridge hands back here is a candidate story
+        // trigger. One more filter happens here, purely to save bandwidth: a trigger id the
+        // host has already told us it fired (GetFiredTriggerIds) is dropped before it is
+        // even reported again — the host's own store would no-op it anyway, but there is no
+        // reason to keep asking.
+        bridge.SetTriggerWatch(true);
+        if (IsFallbackModuleName(local.Module))
+        {
+            session.PublishTriggerEntries(local.Module, []);
+        }
+        else
+        {
+            IReadOnlyList<uint> entered = bridge.ReadEnteredTriggers();
+            if (entered.Count > 0)
+            {
+                IReadOnlyList<uint> alreadyFired = session.GetFiredTriggerIds(local.Module);
+                entered = alreadyFired.Count == 0
+                    ? entered
+                    : [.. entered.Where(id => !alreadyFired.Contains(id))];
+            }
+
+            session.PublishTriggerEntries(local.Module, entered);
+        }
 
         // ROUND 41 DIAGNOSTIC: settling whether the moduleClean gate is what's silently
         // skipping the exclusion filter downstream. Temporary.
@@ -2643,6 +2671,45 @@ public sealed class CoopAgent(IGameBridge bridge, ICoopSession session, AgentSet
     }
 
     private bool _encounterRequestsOutstanding;
+
+    /// <summary>
+    /// Owner side of TriggerRelay: hand the plugin whatever GENERIC triggers clients say they
+    /// are standing in, so this instance's engine runs the same OnEnter script against that
+    /// peer's phantom that the client's own engine already ran against its real character.
+    /// Same shape as <see cref="PumpEncounterRequests"/>, with one difference: idempotence is
+    /// NOT free here (a trigger's OnEnter carries no engine one-shot flag the way an
+    /// encounter's <c>started</c> field does), so <see cref="TriggerRelayStore.Collect"/>
+    /// already removed anything this host has fired before — every request handed to the
+    /// bridge here is genuinely new.
+    /// </summary>
+    private void PumpTriggerRequests(in PlayerState local)
+    {
+        IReadOnlyList<TriggerFireRequest> requests = IsFallbackModuleName(local.Module)
+            ? []
+            : session.GetTriggerFireRequests(local.Module);
+        if (requests.Count == 0 && !_triggerRequestsOutstanding)
+        {
+            return;
+        }
+
+        _triggerRequestsOutstanding = requests.Count > 0;
+
+        bridge.TryRequestTriggerFire([.. requests.Select(r => (r.TriggerId, r.PeerId))]);
+
+        if (requests.Count > 0 && _triggerRequestsLogged != requests.Count)
+        {
+            _triggerRequestsLogged = requests.Count;
+            Log?.Invoke($"firing {requests.Count} generic trigger(s) a peer walked into");
+        }
+        else if (requests.Count == 0)
+        {
+            _triggerRequestsLogged = 0;
+        }
+    }
+
+    private bool _triggerRequestsOutstanding;
+
+    private int _triggerRequestsLogged;
     private int _encounterRequestsLogged;
 
     /// <summary>

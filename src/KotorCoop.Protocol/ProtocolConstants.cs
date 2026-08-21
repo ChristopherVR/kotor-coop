@@ -132,8 +132,18 @@ public static class ProtocolConstants
     /// guaranteed to out-rank anything already observed. This keeps every safety property
     /// the old max-merge had (order-independent, idempotent, a stale replay can never
     /// regress a newer value) while finally letting the state go DOWN when that is what
-    /// really happened.</summary>
-    public const byte Version = 31;
+    /// really happened.
+    /// Version 32: TriggerRelay (48) — a client reports which GENERIC triggers (a
+    /// CSWSTrigger whose OnEnter starts a cutscene/dialogue/scripted event) it is standing
+    /// inside, the same shape as EncounterTrigger, and the host fires the same OnEnter script
+    /// against that peer's phantom so the host's own object-id counter stays in lockstep with
+    /// whatever the client's OnEnter script created or destroyed. The host also broadcasts
+    /// which trigger ids it has already fired per module, so a client's watch stops
+    /// re-reporting ones the host has already handled. See docs/research/trigger-relay.md.
+    /// Gated OFF by default (coop.ini trigger_relay) until live-verified, like PeerEffect
+    /// before it — this channel has no engine-level one-shot flag to lean on the way
+    /// encounters do, so its idempotence is entirely this pass's own bookkeeping.</summary>
+    public const byte Version = 32;
 
     /// <summary>Journal quest tags are resrefs plus a little slack.</summary>
     public const int MaxJournalTagLength = 32;
@@ -208,6 +218,24 @@ public static class ProtocolConstants
     /// packet, not because a fifth is expected.
     /// </summary>
     public const int MaxEncounterTriggers = 4;
+
+    /// <summary>
+    /// Generic triggers a client can report standing inside at once, and the host's own
+    /// per-module fired-set it broadcasts back. Matches <see cref="MaxEncounterTriggers"/>'s
+    /// reasoning: activate polygons are authored disjoint, so overlapping a handful is
+    /// already generous headroom rather than an observed need.
+    /// </summary>
+    public const int MaxTriggerRelayEntries = 4;
+
+    /// <summary>
+    /// Trigger ids the host reports as already-fired for one module, per
+    /// <see cref="PacketType.TriggerRelay"/> broadcast. The early-game inventory in
+    /// docs/research/trigger-relay.md finds at most 14 generic triggers in any one of the
+    /// nine surveyed modules (end_m01aa) and the allowlist pattern narrows that further; 8 is
+    /// headroom, not a measured ceiling — a module with more just has its fired-set catch up
+    /// over a couple of extra ticks.
+    /// </summary>
+    public const int MaxTriggerFiredIds = 8;
 
     /// <summary>
     /// Objects locked at once across the whole session. One conversation at a time is already

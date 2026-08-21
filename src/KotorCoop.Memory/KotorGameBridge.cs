@@ -1,4 +1,4 @@
-﻿using System.Runtime.InteropServices;
+using System.Runtime.InteropServices;
 using KotorCoop.Protocol;
 
 namespace KotorCoop.Memory;
@@ -744,10 +744,12 @@ public sealed class KotorGameBridge : IGameBridge
     /// docs/research/effect-sync.md.
     /// 45 = the creature-liveness reconciliation channel, block grown to 0x4000 (0x2D = 45)
     /// — see docs/research/creature-liveness.md.
+    /// 46 = the generic trigger relay region at 0x3B88..0x3BD8 (0x2E = 46) — see
+    /// docs/research/trigger-relay.md.
     /// <b>ItemHarnessTests.TheBlockVersionIsTheSameNumberInBothHalves reads both files and
     /// fails the build if they disagree</b> — added with 42, because nothing had ever
     /// enforced the warning above.</summary>
-    public const string PluginSignature = "4B 4F 43 4F 4F 50 30 31 2D 00 00 00 01 EE FF C0";
+    public const string PluginSignature = "4B 4F 43 4F 4F 50 30 31 2E 00 00 00 01 EE FF C0";
 
     /// <summary>Agent's view of which coop item id occupies each plugin item slot.</summary>
     private readonly uint[] _itemSlotIds = new uint[BlockItemCapacity];
@@ -1659,6 +1661,12 @@ public sealed class KotorGameBridge : IGameBridge
         // longer in the session.
         ("encounter requests", BlockEncounterRequestCount),
         ("encounter watch", BlockEncounterWatch),
+
+        // Same leak class: a leftover trigger request would keep asking the engine to fire a
+        // generic trigger on behalf of a peer no longer in the session, and a stuck watch flag
+        // would keep publishing polygon membership nobody is collecting.
+        ("trigger requests", BlockTriggerRequestCount),
+        ("trigger watch", BlockTriggerWatch),
 
         // ⚠ THE UNCLICKABLE-COMPANION BUG. Both of these drive byte patches in the plugin that
         // stay armed as long as the word reads non-zero: the swap guard makes Tab and every
@@ -2982,6 +2990,90 @@ public sealed class KotorGameBridge : IGameBridge
         // encounter that has already started), so re-offering costs nothing and covers a
         // request that arrived while the plugin was mid-transition.
         ok &= _memory.TryWrite(_pluginBlock + BlockEncounterRequestSerial, ++_encounterRequestSerial);
+        return ok;
+    }
+
+    // TriggerRelay, mirroring SharedBlock's 0x3B88..0x3BD8 tail-slack region (added post
+    // block-version-44 without growing TotalSize — see SharedBlock.cs). The plugin owns both
+    // halves (docs/research/trigger-relay.md); the bridge only carries them, exactly like the
+    // encounter region above.
+    private const int BlockTriggerWatch = 0x3B88;
+    private const int BlockTriggerInsideCount = 0x3B8C;
+    private const int BlockTriggerInside = 0x3B94;
+    private const int BlockTriggerInsideCapacity = 4;
+    private const int BlockTriggerRequestCount = 0x3BA4;
+    private const int BlockTriggerRequestSerial = 0x3BA8;
+    private const int BlockTriggerRequests = 0x3BAC;
+    private const int BlockTriggerRequestStride = 0x08;
+    private const int BlockTriggerRequestCapacity = 4;
+
+    private uint _triggerRequestSerial;
+
+    private bool _triggerWatchWritten;
+    private bool _triggerWatchState;
+
+    public void SetTriggerWatch(bool enabled)
+    {
+        if (_pluginBlock == 0 || (_triggerWatchWritten && _triggerWatchState == enabled))
+        {
+            return;
+        }
+
+        if (_memory.TryWrite(_pluginBlock + BlockTriggerWatch, enabled ? 1u : 0u))
+        {
+            _triggerWatchWritten = true;
+            _triggerWatchState = enabled;
+        }
+    }
+
+    public IReadOnlyList<uint> ReadEnteredTriggers()
+    {
+        if (_pluginBlock == 0
+            || !_memory.TryReadUInt32(_pluginBlock + BlockTriggerInsideCount, out uint count)
+            || count == 0)
+        {
+            return [];
+        }
+
+        count = Math.Min(count, BlockTriggerInsideCapacity);
+
+        List<uint> ids = new((int)count);
+        for (int i = 0; i < count; i++)
+        {
+            if (_memory.TryReadUInt32(_pluginBlock + BlockTriggerInside + (i * 4), out uint id)
+                && id != 0)
+            {
+                ids.Add(id);
+            }
+        }
+
+        return ids;
+    }
+
+    public bool TryRequestTriggerFire(IReadOnlyList<(uint TriggerId, uint PeerId)> requests)
+    {
+        if (_pluginBlock == 0)
+        {
+            return false;
+        }
+
+        int count = Math.Min(requests.Count, BlockTriggerRequestCapacity);
+
+        bool ok = true;
+        for (int i = 0; i < count; i++)
+        {
+            nint slot = _pluginBlock + BlockTriggerRequests + (i * BlockTriggerRequestStride);
+            ok &= _memory.TryWrite(slot + 0x00, requests[i].TriggerId);
+            ok &= _memory.TryWrite(slot + 0x04, requests[i].PeerId);
+        }
+
+        ok &= _memory.TryWrite(_pluginBlock + BlockTriggerRequestCount, (uint)count);
+
+        // Serial last, always advancing even for an unchanged list — same reasoning as
+        // TryRequestEncounterFire: the plugin only acts when the serial moves, and every id
+        // handed here already passed TriggerRelayStore's own idempotence check, so a repeat
+        // list (there should never be one) would still cost nothing.
+        ok &= _memory.TryWrite(_pluginBlock + BlockTriggerRequestSerial, ++_triggerRequestSerial);
         return ok;
     }
 

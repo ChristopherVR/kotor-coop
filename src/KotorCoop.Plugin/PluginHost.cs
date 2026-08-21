@@ -1,4 +1,4 @@
-﻿using System.Runtime.CompilerServices;
+using System.Runtime.CompilerServices;
 using System.Text;
 
 namespace KotorCoop.Plugin;
@@ -62,6 +62,7 @@ internal static unsafe class PluginHost
     private static ConsoleAssistController? _consoleAssist;
     private static DialogueSpectateController? _dialogueSpectate;
     private static EncounterController? _encounters;
+    private static TriggerRelayController? _triggerRelay;
     private static AgentLivenessController? _agentLiveness;
     private static Thread? _worker;
     private static volatile bool _running = true;
@@ -151,6 +152,7 @@ internal static unsafe class PluginHost
                 Path.Combine(directory, "kotorcoop-console-history.txt"));
             _dialogueSpectate = new DialogueSpectateController(_view);
             _encounters = new EncounterController(_view);
+            _triggerRelay = new TriggerRelayController(_view);
             _pause = new PauseController(_view);
             _combatState = new CombatStateController(_view);
             _pauseKey = new PauseKeyController();
@@ -427,7 +429,7 @@ internal static unsafe class PluginHost
         //      with its own 96-entry array at 0x3C00 — see docs/research/creature-liveness.md.
         // ItemHarnessTests.TheBlockVersionIsTheSameNumberInBothHalves now fails the build on
         // a half-bump; it did not exist for 41.
-        _block->Version = 45;
+        _block->Version = 46;
 
         // A guard dword after the version. Magic plus version alone was not selective
         // enough: a scan once matched something else at a lower address and the agent
@@ -741,6 +743,7 @@ internal static unsafe class PluginHost
         // standing at this frame, and so a fired encounter's spawns are already in the
         // owner's census by the next pump.
         _encounters?.OnFrame();
+        _triggerRelay?.OnFrame();
 
         // After the combat pass, so the enemy the owner has just killed is already off the
         // dealt ledger before this publishes it — and so a peer's damage lands on a copy
@@ -963,6 +966,7 @@ internal static unsafe class PluginHost
         _death?.Invalidate();
         _spectate?.Invalidate();
         _encounters?.Invalidate();
+        _triggerRelay?.Invalidate();
         _barks?.Invalidate();
         _interactionLocks?.Invalidate();
         _partyRoster?.Invalidate();

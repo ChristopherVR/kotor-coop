@@ -852,6 +852,72 @@ public class PacketCodecTests
     }
 
     [Fact]
+    public void TheTriggerRelayChannelIsWhereTheChangelogSaysItIsAnd47IsReserved()
+    {
+        // 47 is skipped on purpose (PacketType.cs's own comment) so this pass does not
+        // collide with a concurrent worktree agent's block-version-45 liveness work; the
+        // NoTwoPacketTypesShareANumber test in TransitionMovieTests.cs already covers
+        // duplicates in general, this pins the one value this pass actually claims.
+        Assert.Equal(48, (byte)PacketType.TriggerRelay);
+    }
+
+    [Fact]
+    public void TriggerRelayClientReportRoundTrips()
+    {
+        Span<byte> buffer = stackalloc byte[ProtocolConstants.MaxPacketSize];
+        TriggerRelayPacket original = new(PeerId: 5, "end_m01aa", [0x50, 0x51], []);
+
+        int length = PacketCodec.Write(buffer, original);
+        Assert.True(length > 0);
+
+        TriggerRelayPacket? decoded = PacketCodec.ReadTriggerRelay(buffer[..length]);
+
+        Assert.NotNull(decoded);
+        Assert.Equal(5u, decoded.PeerId);
+        Assert.Equal("end_m01aa", decoded.Module);
+        Assert.Equal<uint[]>([0x50, 0x51], [.. decoded.TriggerIds]);
+        Assert.Empty(decoded.FiredIds);
+    }
+
+    [Fact]
+    public void TriggerRelayHostBroadcastRoundTrips()
+    {
+        // PeerId 0 is the host's own broadcast sentinel — no real peer ever holds it (see
+        // the packet's own doc comment) — carrying the fired-set instead of a report.
+        Span<byte> buffer = stackalloc byte[ProtocolConstants.MaxPacketSize];
+        TriggerRelayPacket original = new(PeerId: 0, "end_m01aa", [], [0x50, 0x51, 0x52]);
+
+        int length = PacketCodec.Write(buffer, original);
+        Assert.True(length > 0);
+
+        TriggerRelayPacket? decoded = PacketCodec.ReadTriggerRelay(buffer[..length]);
+
+        Assert.NotNull(decoded);
+        Assert.Equal(0u, decoded.PeerId);
+        Assert.Empty(decoded.TriggerIds);
+        Assert.Equal<uint[]>([0x50, 0x51, 0x52], [.. decoded.FiredIds]);
+    }
+
+    [Fact]
+    public void TriggerRelayTruncatesBothListsBeyondTheirCaps()
+    {
+        Span<byte> buffer = stackalloc byte[ProtocolConstants.MaxPacketSize];
+
+        uint[] tooManyTriggers =
+            [.. Enumerable.Range(1, ProtocolConstants.MaxTriggerRelayEntries + 3).Select(i => (uint)i)];
+        uint[] tooManyFired =
+            [.. Enumerable.Range(1, ProtocolConstants.MaxTriggerFiredIds + 3).Select(i => (uint)(i + 100))];
+
+        int length = PacketCodec.Write(
+            buffer, new TriggerRelayPacket(1, "end_m01aa", tooManyTriggers, tooManyFired));
+        TriggerRelayPacket? decoded = PacketCodec.ReadTriggerRelay(buffer[..length]);
+
+        Assert.NotNull(decoded);
+        Assert.Equal(ProtocolConstants.MaxTriggerRelayEntries, decoded.TriggerIds.Count);
+        Assert.Equal(ProtocolConstants.MaxTriggerFiredIds, decoded.FiredIds.Count);
+    }
+
+    [Fact]
     public void TheEnemyDamageDirectionCarriesNeitherHealthNorPresence()
     {
         Span<byte> buffer = stackalloc byte[ProtocolConstants.MaxPacketSize];

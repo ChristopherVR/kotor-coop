@@ -914,6 +914,61 @@ public sealed class CoopClient : ICoopSession
         }
     }
 
+    // ---- generic trigger relay -----------------------------------------------------
+
+    private string _triggerModule = string.Empty;
+    private uint[] _triggerIds = [];
+    private readonly Dictionary<string, uint[]> _firedTriggersByModule =
+        new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>The set the agent last read out of the plugin's watch. Held rather than
+    /// queued, exactly like <see cref="PublishEncounterTriggers"/>: this is a level, so only
+    /// the newest set is worth sending.</summary>
+    public void PublishTriggerEntries(string module, IReadOnlyList<uint> triggerIds)
+    {
+        lock (_gate)
+        {
+            _triggerModule = module ?? string.Empty;
+            _triggerIds = [.. triggerIds.Take(ProtocolConstants.MaxTriggerRelayEntries)];
+        }
+    }
+
+    private void SendTriggerEntries()
+    {
+        string module;
+        uint[] ids;
+
+        lock (_gate)
+        {
+            if (_triggerIds.Length == 0 || _localPeerId == 0)
+            {
+                // Nothing to say, same silence PublishEncounterTriggers's sender keeps: the
+                // host ages a peer's last report out on its own.
+                return;
+            }
+
+            module = _triggerModule;
+            ids = _triggerIds;
+        }
+
+        int length = PacketCodec.Write(
+            _sendBuffer, new TriggerRelayPacket(_localPeerId, module, ids, []));
+        if (length > 0)
+        {
+            _channel.Send(_hostEndPoint, _sendBuffer.AsSpan(0, length));
+        }
+    }
+
+    public IReadOnlyList<uint> GetFiredTriggerIds(string module)
+    {
+        lock (_gate)
+        {
+            return _firedTriggersByModule.TryGetValue(module ?? string.Empty, out uint[]? fired)
+                ? fired
+                : [];
+        }
+    }
+
     /// <summary>The container-loot removals received from the host, for the agent to apply.</summary>
     public IReadOnlyList<ContainerLootRemoval> ContainerLootRemovals => _lootStore.Snapshot();
 
@@ -1113,6 +1168,7 @@ public sealed class CoopClient : ICoopSession
         SendPhantomDamage();
         SendPeerEffects();
         SendEncounterTriggers();
+        SendTriggerEntries();
         FlushChat();
         FlushBarks();
         FlushTransitionMovies();
@@ -1604,6 +1660,20 @@ public sealed class CoopClient : ICoopSession
                     lock (_gate)
                     {
                         _dialogue = dialogue.State;
+                    }
+                }
+
+                break;
+
+            case PacketType.TriggerRelay:
+                if (PacketCodec.ReadTriggerRelay(span) is { } triggerRelay && triggerRelay.PeerId == 0)
+                {
+                    lock (_gate)
+                    {
+                        // A LEVEL, replaced wholesale per module — the host sends its complete
+                        // fired-set every tick, so there is no "unfired" edge to miss.
+                        _firedTriggersByModule[triggerRelay.Module ?? string.Empty] =
+                            [.. triggerRelay.FiredIds];
                     }
                 }
 

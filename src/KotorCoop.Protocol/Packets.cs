@@ -403,6 +403,31 @@ public sealed record EncounterTriggerPacket(
     uint PeerId, string Module, IReadOnlyList<uint> EncounterIds);
 
 /// <summary>
+/// Two directions sharing one shape, distinguished by <paramref name="PeerId"/> exactly like
+/// <see cref="WorldDigest"/>'s "both ways" packets:
+///
+/// - client -&gt; host (<paramref name="PeerId"/> is the sender's real, non-zero peer id):
+///   the GENERIC triggers (a <c>CSWSTrigger</c> whose OnEnter starts a cutscene, dialogue or
+///   scripted event — never a trap, never an area transition) this peer's player is standing
+///   inside RIGHT NOW, in <paramref name="TriggerIds"/>. <paramref name="FiredIds"/> is empty.
+///
+/// - host -&gt; all (<paramref name="PeerId"/> == 0, which no real peer ever holds): the
+///   trigger ids this host has already fired in <paramref name="Module"/>, in
+///   <paramref name="FiredIds"/>, so a client's watch stops re-reporting ones the host has
+///   already handled. <paramref name="TriggerIds"/> is empty.
+///
+/// <paramref name="Module"/> rides along for the same reason it does on every module-scoped
+/// channel here: trigger object ids reset on a transition, so a report or a fired-set from a
+/// different module names nothing the receiver should act on.
+///
+/// A LEVEL in both directions, like <see cref="EncounterTriggerPacket"/>: both sides resend
+/// their current truth every tick rather than an edge, so one lost datagram costs a tick, not
+/// a permanently missed relay. See docs/research/trigger-relay.md.
+/// </summary>
+public sealed record TriggerRelayPacket(
+    uint PeerId, string Module, IReadOnlyList<uint> TriggerIds, IReadOnlyList<uint> FiredIds);
+
+/// <summary>
 /// One NPC bark: the line an NPC throws into a bubble without opening a conversation.
 ///
 /// <paramref name="Speaker"/> is the engine SERVER object id, which names the same creature

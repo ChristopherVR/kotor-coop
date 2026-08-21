@@ -158,6 +158,35 @@ public interface ICoopSession : IDisposable
     void PublishEncounterTriggers(string module, IReadOnlyList<uint> encounterIds) { }
 
     /// <summary>
+    /// Client only: "my player is standing inside these GENERIC triggers" — a
+    /// <c>CSWSTrigger</c> whose OnEnter starts a cutscene/dialogue/scripted event, never a
+    /// trap or an area transition (the plugin's own watch already excludes those). Unlike
+    /// <see cref="PublishEncounterTriggers"/>'s triggers, the client's OWN engine already
+    /// fires these correctly for the client's own real character — this is purely so the
+    /// HOST'S engine can run the same OnEnter script against that peer's phantom, keeping the
+    /// host's object-id counter in lockstep with whatever the script created or destroyed.
+    /// Sent every tick as the current SET. A host is a no-op: it fires its own, and does not
+    /// need to be told what its own real player is standing in. See
+    /// docs/research/trigger-relay.md.
+    /// </summary>
+    void PublishTriggerEntries(string module, IReadOnlyList<uint> triggerIds) { }
+
+    /// <summary>
+    /// Host only: the generic triggers clients are asking for right now, in
+    /// <paramref name="module"/>, deduplicated and with anything already fired in that module
+    /// removed. Empty on a client. See <see cref="TriggerRelayStore.Collect"/>.
+    /// </summary>
+    IReadOnlyList<TriggerFireRequest> GetTriggerFireRequests(string module) => [];
+
+    /// <summary>
+    /// The trigger ids known fired in <paramref name="module"/>: on the HOST, its own
+    /// authoritative fired-set (<see cref="TriggerRelayStore.GetFiredIds"/>); on a CLIENT,
+    /// the most recent such set the host has broadcast, so the client's watch can stop
+    /// re-reporting ones already handled. Empty until the channel has said anything.
+    /// </summary>
+    IReadOnlyList<uint> GetFiredTriggerIds(string module) => [];
+
+    /// <summary>
     /// Announces one NPC bark — the line an NPC throws into a bubble without ever opening a
     /// conversation, which the whole dialogue channel is blind to.
     ///
