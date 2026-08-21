@@ -552,6 +552,46 @@ public sealed class KotorGameBridge : IGameBridge
         return effects;
     }
 
+    /// <summary>
+    /// Reads the IN ring back — what a peer's hook captured landing on THIS player's phantom
+    /// over there, handed to the plugin by <see cref="TryWritePeerEffectIn"/> for it to replay
+    /// here. Mirrors <see cref="ReadPeerEffectsOut"/> exactly, one ring over; built for the
+    /// <c>effects</c> console verb (docs/research/effect-sync.md), which needs to show both
+    /// halves of the pipeline — nothing before it ever read this ring back out.
+    /// </summary>
+    public List<PeerEffectRecord> ReadPeerEffectsIn()
+    {
+        List<PeerEffectRecord> effects = [];
+        if (_pluginBlock == 0)
+        {
+            return effects;
+        }
+
+        for (int i = 0; i < BlockPeerEffectCapacity; i++)
+        {
+            nint slot = _pluginBlock + BlockPeerEffectInSlots + (i * BlockPeerEffectStride);
+
+            if (!_memory.TryReadUInt32(slot + BlockPeerEffectSerial, out uint serial) || serial == 0)
+            {
+                continue;
+            }
+
+            _memory.TryReadUInt32(slot + BlockPeerEffectId, out uint originPeerId);
+            _memory.TryReadUInt32(slot + BlockPeerEffectKind, out uint kind);
+            _memory.TryReadUInt32(slot + BlockPeerEffectDurationMs, out uint durationMs);
+            _memory.TryReadUInt32(slot + BlockPeerEffectMagnitude, out uint magnitude);
+
+            if (originPeerId == 0)
+            {
+                continue;
+            }
+
+            effects.Add(new PeerEffectRecord(originPeerId, kind, durationMs, magnitude, serial));
+        }
+
+        return effects;
+    }
+
     private int _peerEffectInWriteSlot;
 
     /// <summary>Hands the plugin one effect a peer's hook captured landing on this player's

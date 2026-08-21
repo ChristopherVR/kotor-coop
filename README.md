@@ -126,6 +126,9 @@ Both players, each in their own full game:
   | `items [n]` | list live items here with their object ids and state | read-only; how you find an item worth sending |
   | `item <0x131>` | what one item's per-instance state actually reads | read-only; the far side's copy is checked with this |
   | `setitem <0x131> …` | poke one item's stack / charges / upgrades / identified bit | staging only, local. KOTOR gives a script no way to spend a charge or install an upgrade, so this is how an identity test gets something worth testing |
+  | `giveloot <owner id> <resref> [stack]` | give a materialised enemy stand-in one item of its real loot | staging only, local |
+  | `applyeffect <kind> [target] [durationMs] [magnitude]` | run a peer-effect constructor (stun/paralyze/knockdown/slow/frightened/sleep/choke/forcepush/whirlwind); blank target = nearest phantom | staging only, local apply; what the hook forwards is the test |
+  | `effects` | last 8 captured/forwarded/applied peer effects, with ages | read-only |
   | `cheats` | lists these and the retail ones | — |
 
   `docs/research/console-cheats.md` has the full reference and what each one pokes.
@@ -452,8 +455,12 @@ tools/                   RE helpers, demo scripts, the kotor1_0_3 symbol databas
   English name (no `nwscript.nss` in this repository to check against). `coop.ini`
   `effect_sync=0` keeps the whole channel — capture, forward and apply — off until a live pass
   confirms it. A 2026-08-22 attempt did not reach one: the modules visited that session had no
-  Force-using hostiles to trigger the allowlist, and no console verb exists yet to inject an
-  effect synthetically for testing. See
+  Force-using hostiles to trigger the allowlist, and no console verb existed yet to inject an
+  effect synthetically for testing. That gap is closed as of this same day: `applyeffect
+  <kind> [target] [durationMs] [magnitude]` (staging only, local apply — what the hook
+  forwards from a peer's phantom is the actual test) and the read-only `effects` no longer need
+  a hostile at all, so the next live pass can exercise this without finding a Dark Jedi. See
+  [docs/research/console-cheats.md](docs/research/console-cheats.md) §3 and
   [docs/research/effect-sync.md](docs/research/effect-sync.md).
 - **A joiner's progress now survives to the next session — mid-session save/load does not,
   yet.** "Resume tomorrow" works: when a client saves in-game (or disconnects) while playing

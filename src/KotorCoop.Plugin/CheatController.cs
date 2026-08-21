@@ -150,6 +150,10 @@ internal sealed unsafe class CheatController(SharedBlockView block)
                 MoveNear();
                 break;
 
+            case SharedBlock.CheatKindApplyEffect:
+                ApplyEffect(player);
+                break;
+
             default:
                 Answer(SharedBlock.CheatStatusRefused, $"unknown cheat kind {kind}");
                 break;
@@ -489,6 +493,135 @@ internal sealed unsafe class CheatController(SharedBlockView block)
             $"movenear: snapped 0x{objectId:X} to ({destination.X:F1}, {destination.Y:F1}, {destination.Z:F1}), "
             + $"read back ({readBack.X:F1}, {readBack.Y:F1}, {readBack.Z:F1})");
         Answer(SharedBlock.CheatStatusApplied, $"0x{objectId:X} snapped near 0xE");
+    }
+
+    /// <summary>
+    /// STAGING VERB (2026-08-22), STAGING ONLY / LOCAL APPLY: runs one of the peer-effect
+    /// channel's non-damage constructors through <see cref="OdysseyEffects.ApplyEffect"/> — the
+    /// EXACT apply-side path a peer's forwarded effect calls when it lands for real
+    /// (<see cref="PeerEffectController.ApplyIncoming"/>). Aimed at a peer's phantom (the
+    /// default, when <see cref="SharedBlock.OffsetCheatTarget"/> is 0) this IS the live test
+    /// docs/research/effect-sync.md's list has never run: <see cref="PhantomEffectHook"/>
+    /// captures the effect landing there just like it would for a real enemy attack, and the
+    /// ordinary channel forwards it exactly as if it had come from combat. Aimed at an explicit
+    /// id it is a constructor smoke test only — including the local player's own id
+    /// (<c>0x7FFFFFFF</c>), which the `applyeffect ... me` console form resolves to, so the
+    /// applying half of a constructor can be checked without touching the network at all.
+    /// </summary>
+    private void ApplyEffect(nint player)
+    {
+        uint kind = (uint)block.CheatAmount;
+        if (kind is PeerEffectKindValues.None || kind > PeerEffectKindValues.Whirlwind)
+        {
+            Answer(
+                SharedBlock.CheatStatusRefused,
+                $"unknown effect kind {kind} (1..9 - stun, paralyze, knockdown, slow, "
+                + "frightened, sleep, choke, forcepush, whirlwind)");
+            return;
+        }
+
+        uint targetId = block.CheatTarget;
+        nint target;
+        string what;
+
+        if (targetId != 0)
+        {
+            target = Odyssey.ResolveServerObject(targetId);
+            what = $"0x{targetId:X}";
+
+            if (target == 0)
+            {
+                Answer(SharedBlock.CheatStatusNoTarget, $"no object 0x{targetId:X} in this module");
+                return;
+            }
+        }
+        else
+        {
+            target = FindNearestPhantom(player, out targetId, out int phantomsHeld, out int phantomsResolved);
+            what = "the nearest phantom";
+
+            if (target == 0)
+            {
+                Answer(
+                    SharedBlock.CheatStatusNoTarget,
+                    $"no phantom resolves here ({phantomsHeld} slot(s) held, {phantomsResolved} resolved) "
+                    + "- name an object id instead, or 'me' to test locally");
+                return;
+            }
+        }
+
+        uint durationMs = block.CheatItemCharges;
+        uint magnitude = block.CheatItemMaxCharges;
+
+        bool applied = OdysseyEffects.ApplyEffect(targetId, kind, durationMs, magnitude, out int failure);
+
+        if (!applied)
+        {
+            string reason = failure == -1
+                ? "no apply-side constructor for this kind yet (see effect-sync.md §4)"
+                : $"engine call refused (failure {failure})";
+
+            PluginHost.Log($"applyeffect: kind {kind} on {what} (0x{targetId:X}) refused - {reason}");
+            Answer(SharedBlock.CheatStatusEngineRefused, $"kind {kind} on {what} (0x{targetId:X}) refused - {reason}");
+            return;
+        }
+
+        PluginHost.Log(
+            $"applyeffect: kind {kind} applied to {what} (0x{targetId:X}), duration {durationMs}ms, "
+            + $"magnitude {magnitude}");
+        Answer(
+            SharedBlock.CheatStatusApplied,
+            $"applied kind {kind} to {what} (0x{targetId:X}), {durationMs}ms, mag {magnitude}");
+    }
+
+    /// <summary>
+    /// The closest phantom this instance renders for a peer — the default target for
+    /// <see cref="ApplyEffect"/>, because landing the effect ON a phantom is the whole point:
+    /// <see cref="PhantomEffectHook"/> only watches ids in the phantom table
+    /// (<c>PhantomHitHook.IsWatchedPhantom</c>), so an effect applied to anything else is never
+    /// captured or forwarded at all.
+    /// </summary>
+    private nint FindNearestPhantom(nint player, out uint objectId, out int held, out int resolved)
+    {
+        Vec3 here = Odyssey.GetPosition(player);
+
+        nint best = 0;
+        uint bestId = 0;
+        float bestDistance = float.MaxValue;
+        held = 0;
+        resolved = 0;
+
+        for (int i = 0; i < SharedBlock.SlotCapacity; i++)
+        {
+            uint phantomId = block.GetPhantomId(i);
+            if (phantomId == 0)
+            {
+                continue;
+            }
+
+            held++;
+
+            nint candidate = Odyssey.ResolveServerObject(phantomId);
+            if (candidate == 0)
+            {
+                continue;
+            }
+
+            resolved++;
+
+            float distance = Distance(here, Odyssey.GetPosition(candidate));
+            if (distance >= bestDistance)
+            {
+                continue;
+            }
+
+            best = candidate;
+            bestId = phantomId;
+            bestDistance = distance;
+        }
+
+        objectId = bestId;
+        return best;
     }
 
     /// <summary>

@@ -106,6 +106,18 @@ public static class CheatKinds
     /// ⚠ 13, because 7-12 are taken. Take the next FREE number.
     /// </summary>
     public const uint MoveNear = 13;
+
+    /// <summary>
+    /// Runs one of the peer-effect channel's non-damage constructors directly. <c>Target</c>
+    /// is the id to aim at (0 = the nearest phantom), <c>Amount</c> the effect kind (the
+    /// <c>PeerEffectKind</c> numeric value, 1..9), <c>Charges</c> the duration in milliseconds
+    /// and <c>MaxCharges</c> the magnitude — reused from the item-identity fields rather than
+    /// new ones, exactly like <see cref="GiveLoot"/> reuses them for stack/charges/upgrades.
+    /// See SharedBlock.CheatKindApplyEffect and docs/research/effect-sync.md.
+    ///
+    /// ⚠ 14, because 7-13 are taken. Take the next FREE number.
+    /// </summary>
+    public const uint ApplyEffect = 14;
 }
 
 /// <summary>The plugin's verdicts, mirroring <c>SharedBlock.CheatStatus*</c>.</summary>
