@@ -46,10 +46,32 @@ MIRRORS — driven puppets, not creatures its own AI is fighting — so the clie
 genuinely never enters combat. Forcing `+0x4E0` on the client would be a lie the engine
 recomputes away, and combat state gates round timing and AI.
 
-### Status as of round 49 (2026-08-21) — read this before the round-27 summary below
+### Status as of round 50 (2026-08-21) — read this before the round-27 summary below
 
 The summary immediately below is frozen as it was written, after round 27; it does not reflect
-rounds 28-49 and its own "Status after round 27" paragraph is stale. The honest current picture:
+rounds 28-50 and its own "Status after round 27" paragraph is stale. The honest current picture:
+
+**Round 50 is the decisive control this document has been missing since round 9: a census-listed
+creature that literally NO plugin consumer touches — not `Resolve()`, not `MaterialisedEnemies.Seen`,
+not `CombatController`'s health pin/mirror, not `PeerDamageController`'s owed-damage apply, nothing
+— still freezes, byte for byte identically to every write-bisected trial before it (0 of 6000
+sampled frames ever read a genuine fight action, both with the bypass on and off). **This proves
+the plugin is not the cause**, full stop — there is no remaining plugin-side consumer left to
+blame; round 50's own audit table accounts for every controller that can see a census id, and Run
+B removed every one of them at once. The same round also re-ran round 37's own historic
+construction (the census-cap exclusion that WAS observed to arm a real fight, twice, rounds 37-38)
+as a same-session sanity check, and **it did not reproduce either** — same freeze, same zero fight
+actions, on the same save and creature pair. That means round 37/38's own "it works when genuinely
+unlisted" claim — the one every round since has treated as the sole confirmed-positive result in
+this whole investigation — does not currently hold, and round 50 could not determine from this
+round alone whether that is a real regression across the 100+ commits since round 37, or whether
+round 37/38 were themselves an early, unchecked instance of the phantom-forwarding confound round
+49 only started explicitly ruling out. Either way, the freeze is now known to be independent of
+census membership status, independent of every write and read this plugin's controllers can
+perform, and the investigation's one remaining concrete lead is engine-internal: `sub+0x5c` reads
+`4`, outside round 27's own documented `-1`/`0..3` "continue toward arming" range, consistently
+across all three of round 50's trials — see round 50 at the end of this section for the full
+audit table, evidence and the precise next experiment.
 
 **The freeze is real, reproduces on a genuinely verified hostile, and is still unsolved.**
 Rounds 9-47 chased a mirrored, previously-claimed, GIT-identical creature that gets pulled out
@@ -3765,6 +3787,210 @@ round; both explicit `-GameDir` installs succeeded, 0 warnings, 0 errors). Full 
 Rig torn down and confirmed clean (`Get-Process swkotor,KotorCoop.Agent` returned none), the
 client's `coop.ini local_combat_bisect_mask` restored to `0x0`, `auto_start_agent` restored to `1`
 in both installs by `demo.ps1 -Stop`.
+
+### Round 50 (2026-08-21) — the decisive control: a census-listed creature NO plugin code
+### touches, still freezes; AND round 37's own historic success does not reproduce today
+
+Forty-nine rounds bisected every WRITE this plugin makes to a mirrored creature (round 47's
+eleven `DriveOne` ops, round 48's two `CombatController` ops) and found none of them explains
+the freeze. But every one of those tests still let the OTHER consumers of census membership run:
+`Resolve()`'s pointer cache and its call into the engine's own `GetGameObject`,
+`MaterialisedEnemies.Seen`'s per-frame timestamp write, `CombatController`'s own resolve-and-pin
+pass, `PeerDamageController`'s owed-damage apply. Round 29's diagnostic came closest but still
+ran `Resolve()`/`Seen()`; round 37/38's census-cap exclusion removed the creature from the list
+entirely, which is "never listed," not "listed but untouched." Nobody had run a census-listed
+creature that literally nothing in this plugin ever touches.
+
+**Part 1: the consumer audit.** Every controller that can receive a census enemy's object id,
+read in full this round, with what it does and whether that touch can reach the creature's own
+AI/combat:
+
+| Consumer | What it does to/with a census creature | Can it affect the creature's own AI/combat? |
+|---|---|---|
+| `EnemyPresenceController.OnFrame`'s per-slot loop | `MaterialisedEnemies.Seen(id, now)` before `DriveOne` even runs | Indirectly (feeds the sweep/lease system) |
+| `EnemyPresenceController.DriveOne` → `Resolve()` | Caches an engine pointer; calls `Odyssey.ResolveServerObject` → the engine's own `CServerExoApp::GetGameObject` (round 38: disassembled in full, provably read-only, writes only the CALLER's own out-parameter) | No (proven read-only at the instruction level) |
+| `DriveOne` → `ClaimCreature`/`ClaimCreatureForFight` | `ObjCommandable=1`, targeted `ClearAllActionsFn`, `CreMovePermitted\|=2`, `CreRunFlag=0` (round 47's bits 0-2) | Yes — already exhaustively bisected off (round 47) with no change |
+| `DriveOne` → `PermitAttacking` | `CreMovePermitted \|= CreAttackPermittedBit` (bit 3) | Yes — bisected off (round 47), no change |
+| `DriveOne` → `Drive`/`DriveBody` | Position/facing/animation writes, `ClearPositionDirty` (bits 4-10) | Yes — bisected off (round 47), no change |
+| `DriveOne`'s trigger check | `Odyssey.GetAIStateReputation` engine call (round 49's gate), `IsEngaged` (position read only) | No (read-only engine query) |
+| `StartLocalFight`/`MaintainLocalFight` | `FireCreatureScriptSlot0x260`, `RestoreClaimState`, engagement bookkeeping | Yes, but only ever reached for a creature `DriveOne` already resolved — unreachable once the id is skipped at the top of the loop |
+| `CombatController.Apply` | `SetMinOneHitPoint` (health pin, bit 11), `SetCurrentHitPoints` (health mirror, bit 12), `KillOnce`→`Odyssey.KillCreature` on `enemy.Dead` | Yes — pin/mirror bisected off (round 48), no change; `KillOnce` never reached (creature stays alive throughout every run below) |
+| `IncomingDamageController` | Reads `EnemyPresenceController.IsLocallyEngaged(attacker)` to decide absorb-vs-apply | Structurally guaranteed false for a never-`DriveOne`'d id — `IsLocallyEngaged`'s member set is populated ONLY inside `MaintainLocalFight`, which is unreachable per the row above. No code change needed; verified by reading the call graph, not assumed |
+| `PeerDamageController.ApplyOwed` (owner end) | `Odyssey.ApplyDamageEffect(objectId, amount)` — a real engine damage effect, which could plausibly wake AI on a hit | Yes in principle — now explicitly gated (this round) |
+| `PhantomHitHook.OnDamage` | Pure observer — the detour stub unconditionally resumes into the original `OnApplyDamage`; a credited "dealt" total is a managed-array write only | No (never suppresses/replaces the engine's own damage application — verified from the stub's own machine code, which always ends in the relocated prologue + `jmp` back in) |
+| `AnimationHook.OnFireForget`/`RecordCreatureOneShot` | Records a captured swing/animation id into a managed table; never suppresses or replaces the engine's own `InsertFireForgetAnimation` call (same always-resumes stub shape as `PhantomHitHook`) | No. Its only downstream consumer is `DriveOne`'s one-shot replay block, which is unreachable once the id is skipped at the loop's top |
+| `MaterialisedEnemies` (`Seen`/`TryMaterialise`/etc.) | Keyed by a MATERIALISED stand-in's owner id in a separate table; a GIT-identical creature (`mapped == 0`, our test creatures) never gets an entry at all | No, structurally, for the creature class this round tested (verified: the table lookup loop can never match an id it was never `Add`ed under) |
+| `CheatController` | `Slay`/`GiveLoot`/`MoveNear`/`FireScript` — all operator-invoked, once, only when a console command explicitly names the id | Yes, but only when WE type a command naming it — not an automatic per-frame toucher. `FireScript` targeting the bypassed id is our own test instrument, deliberately never gated |
+| `PhantomController.ApplyTargetable` | Holds a faction on THIS instance's OWN phantom bodies (representing remote peers) | Not applicable — never touches a mirrored enemy at all (confirmed by round 48's own audit and re-confirmed by grep this round: the only per-creature id space it reads is `LocalCombat`/`DamageDealtEnabled`, both global flags) |
+| `InteractionLockController`/`Odyssey.HoldCreatureStill` | Holds an NPC by TAG for a dialogue partner | Not applicable — resolved by tag, not census object id; never sees an enemy census entry |
+| Agent: `CoopAgent.PumpEnemies` → `TryWriteEnemies` | Marshals `EnemyState` into the shared-memory block via raw `WriteProcessMemory`-style calls into OUR OWN process's mapped memory | No — this is the "listed" half by design; it must NOT be gated, or the creature would no longer be listed at all (round 37/38's condition, not this round's) |
+| Agent: `KotorGameBridge.TryWriteEnemies` | Same as above, confirmed this round by re-reading the function in full (`KotorGameBridge.cs:4382-4422`): every field goes through `_memory.TryWrite` into the plugin's shared block, never into the game engine's own object memory | No |
+| Agent: `DetectMaterialisedDeaths` | Owner-authority side (host only), keyed off materialised-loot capture, not the client's own touch of a mirrored creature | Not applicable to the client instance under test |
+
+**Part 2: the bypass.** `EnemyPresenceController.LocalCombatBypassId` (dev-only `coop.ini
+local_combat_bypass_id`, hex, default 0) added, logged once at load. One check —
+`if (LocalCombatBypassId != 0 && enemy.ObjectId == LocalCombatBypassId) continue;` — placed at
+the very top of `OnFrame`'s per-slot loop, BEFORE `MaterialisedEnemies.Seen` and before
+`DriveOne` is ever called (`EnemyPresenceController.cs`). This is stronger than round 29's own
+`DiagUndrivenObjectId`, which bailed out only inside `DriveOne`, after `Resolve()`/`Seen()` had
+already run. Additional explicit early-returns added in `CombatController.Apply`,
+`PeerDamageController.ApplyOwed`, and `PhantomHitHook.OnDamage`'s dealt-credit path — the three
+consumers whose reach was NOT already structurally blocked by the `OnFrame` skip. The agent's own
+`TryWriteEnemies` is deliberately never touched: the creature is still published in the census
+exactly as before, which is the whole point of the control.
+
+**Rig.** `tools/demo.ps1` cold start, save slot 1, `END_M01AA`, `n_sithsoldier004`
+(`n_repsold`/`n_sithappren` blueprints round 48/49 already ruled out as friendly), GIT
+`FactionID=1` (Hostile_1), the exact same pair round 49 used — re-read fresh from
+`tools/creatures.ps1` after every cold load per this round's own instructions, and the ids held
+stable across all three cold loads below: `0x3B` at `(47.56,60.54)`, `0x38` at `(43.96,62.92)`.
+Builds: `dotnet build KotorCoop.slnx` clean; `src\KotorCoop.Plugin\build.ps1 -Install -GameDir
+"C:\GOG Games\Star Wars KOTOR (GOG)"` and again with `-GameDir "D:\Games\swkotor-gog-p2"` (the
+bare default targets a Steam path neither install uses). Client teleported
+(`blockpoke.ps1 console 'tp 43.90 62.60 -1.3'`) to `dist=4.20` from `0x3B` — the same ~4-unit
+range round 49 used. Fired via `blockpoke.ps1 console 'firescript 0x3B fire'` (`CheatController`,
+which auto-arms `Odyssey.ArmFireScriptWatch` — the round-28/39 per-frame native-state probe,
+unthrottled, logging `round+0x958`/`+0x960`/`+0x96C`→`sub+0xB0`/head-action for 6000 frames after
+every fire).
+
+**Run A — control, bypass off.** `local_combat_bypass_id` unset (default 0), cold start. Fired
+`firescript 0x3B fire` at `dist=4.20`; the automatic `local_combat` trigger was ALSO cycling on
+this pair independently throughout (`local_combat=1` is the shipped default, and both `0x3B` and
+`0x38` are within `local_combat_range`, so this is the SAME condition every prior round's manual
+fire has always run under — not a new confound). Full 6000-frame watch:
+
+    [18:31:06.176] firescript: fired 0x3B +0x260 = 'k_def_combend01'
+    [18:31:54.816] firescript watch: frame -133 ... round+0x958 timer=1, round+0x960 delay=544,
+      round+0x96C sub-index=0 sub+0xB0=1, ... head action=0x3F (is fight action: False)
+    (sub+0xB0 nonzero on 1351 of 6000 sampled frames; "is fight action: True" on 0 of 6000)
+
+Player HP fell during the window (`vtbl+0x9C(0)`, which resolves `round+0x9CC`'s own target —
+`0x7FFFFFFF`, the LOCAL PLAYER, every single sample), but the plugin's own log shows exactly why:
+`combat: took 2 damage from a hit on our phantom (attacker 0x3B)`, the pre-existing, unrelated
+forwarded-damage channel round 49 already documented as running independently. **Zero fight
+actions across the full window — the established freeze, reproduced.**
+
+**Run B — bypass on, the decisive control.** `local_combat_bypass_id = 0x3B` set in the client's
+`coop.ini`, cold restart (`demo.ps1 -Stop` then a fresh `-Save 1` launch — a genuinely clean
+process, not a hot ini edit). Confirmed at load:
+
+    [18:34:56.773] local_combat_bypass_id=0x3B - this creature will be published in the census
+      as normal but touched by NO plugin consumer (round 50 decisive control)
+
+Waited 90s post-world-up with the player away from the pair — no automatic exclusion cycle ran on
+`0x3B` in that window (confirmed by grep: no `local combat: 0x3B` lines at all this session, vs.
+`0x38`'s normal 25s cycling continuing exactly as designed). `census 0x3B` after teleporting back
+into range still read as part of the owner's published set (25 ids, `0x3B` among them) — genuinely
+listed. Fired `firescript 0x3B fire` at the same `dist=4.20`. Full 6000-frame watch:
+
+    [18:36:55.307] firescript watch: armed on 0x3B for 6000 frames
+    [18:37:13.565] firescript watch: frame -1122 ... sub+0xB0=2 ... head action=0x3F
+      (is fight action: False)
+    (sub+0xB0 nonzero on 2274 of 6000 sampled frames; "is fight action: True" on 0 of 6000)
+
+`tools/creatures.ps1` before and after: `0x3B` at `(47.56,60.54)`, hp `12/10`, unchanged to the
+decimal, both times. **Identical failure signature to the control — zero movement, zero fight
+action, across the full window — with LITERALLY NOTHING in this plugin ever having touched the
+creature.** This settles instruction 3's first branch: **the plugin is NOT the cause.** There is
+no consumer left to bisect, because Run B already removed every one of them at once and the
+freeze did not move.
+
+**Part 3: the round-37 cross-check (task-mandated, since B froze).** Per the task's own branch,
+this reruns round 37's exact construction — `KotorGameBridge.BlockEnemyCapacity` temporarily
+32→1 — as a same-session sanity check that the historic "outside the census entirely" success
+still reproduces at all on today's build. Torn down, edited, rebuilt (`dotnet build
+KotorCoop.slnx`), redeployed to both installs, cold-started fresh (bypass id cleared first, so
+this test is not conflated with Part 2's mechanism). `census 0x38` read `1 resolve here, 0 do
+not`; `census 0x3B` read `not listed in this census` — the exact round-37 split, confirmed live.
+Fired `firescript 0x3B fire` at the same `dist=4.20`. Full 6000-frame watch:
+
+    [18:42:15.592] firescript watch: armed on 0x3B for 6000 frames
+    [18:42:17.074] firescript watch: frame -5626 ... round+0x958 timer=1, round+0x960 delay=1500,
+      sub+0xB0=3, sub+0x5c=4, ... head action=0x3F (is fight action: False)
+    (0 of 6000 samples read "is fight action: True")
+
+Same HP-fell-via-forwarded-channel confound checked and ruled out the same way (`combat: took 2
+damage from a hit on our phantom (attacker 0x3B)`, repeating every ~3s throughout — the standing
+channel, not this creature's own round). `0x3B`'s own position/HP via `creatures.ps1`: unchanged
+before and after.
+
+⚠ Transparency note: three unrelated commits landed on this branch from a concurrent session
+between Part 2's build and Part 3's rebuild (`cd8f7c6`/`f6f7411`/`120e580` — map-reveal fog and a
+materialised-loot reconnect resync). Checked this round: their entire diff against `PluginHost.cs`
+is two lines wiring a new `MapRevealController` into the existing controller list (construct,
+`OnFrame`, `Invalidate`) — no combat, round-arming, or census code touched at all, and none of the
+other changed files (`MapRevealController.cs`, `MapRevealRule.cs`, `CoopHost.cs`,
+`MaterialisedLootHistory.cs`) touch `EnemyPresenceController`, `CombatController`, or `Odyssey.cs`
+either. Not a plausible explanation for the round-37 non-reproduction, but named here rather than
+left for a reader to wonder whether Part 2 and Part 3 ran identical binaries — they did not, by
+three files' worth of unrelated diff, verified harmless.
+
+**Round 37's own historic result — `sub+0xB0=1` sustained, real HP movement attributed to "the
+target" — does NOT reproduce on this build, under round 37's own exact construction, on the same
+save, same module, same creature pair.** Say this loudly, per the task's own instruction: **the
+round-37/38 baseline itself does not hold today.** Two honest readings, neither provable from this
+round's evidence alone: (a) something in the 100+ commits this branch has taken since round 37
+(rounds 39-49's own fixes among them — the reputation gate, the `_locallyFightingId`
+one-fight-at-a-time serialization, the health-pin/mirror gating) changed engine-visible behaviour
+for a census-excluded creature even though none of them touch `DriveOne`'s write surface directly;
+or (b) round 37/38's own "armed, real fight" reading was ITSELF the phantom-forwarding confound
+round 28 first identified and round 49 had to explicitly rule out for the FIRST time in this
+document's history — round 37/38 pre-date that check, their "target" resolved to a creature with
+`16` max hp (never matching this save's player, which has always read `12` max in every round of
+this document), and neither round's own writeup shows an explicit rule-out of the standing
+forwarded-damage channel the way round 49 (and this round) does. This round cannot distinguish (a)
+from (b); it only establishes that whichever it is, round 37's specific claim is not reproducible
+today and nothing that has cited it since (including round 47/49's own framing of it as "the one
+proven-working case") should be trusted without re-verifying it fresh.
+
+**A concrete, precise next experiment**, grounded in this round's own logs, not speculation: in
+every one of this round's three trials — bypass off, bypass on, and the round-37 cap-exclusion —
+`sub+0x5c` reads `4` (once observed at all; earlier samples read other small values before
+settling). Round 30 disassembled `sub+0x5c`'s own role and measured it at `0` on ITS test
+creature (round 29's untouched `0x10`) — INSIDE the "`-1` or `0..3`" range round 27 documented as
+required for the loop that reaches the arming call to continue at all. `4` is OUTSIDE that range.
+Round 30 already showed `sub+0x5c=0` alone is not sufficient (that creature still never armed,
+for a still-unidentified downstream reason) — but this round's creature reading `4`, consistently,
+across three different exclusion mechanisms, on a pair that (unlike round 29/30's test subject)
+DOES have a genuine, ongoing fight against it from the HOST's own unmirrored engine via the
+phantom channel, is the single most concrete, unexplained, reproducible state difference this
+document has on hand. **Next step: disassemble what sets `sub+0x5c`, starting from the arming
+call site `0x005BBA15` round 27 already located, and specifically test whether a creature's
+`sub+0x5c` value depends on whether ITS OWN process's engine (not the peer's) has ever run a
+combat round against it at all this session** — the phantom-forwarding fight is happening on the
+HOST's copy of `0x3B`, in a completely separate process, so it should have no way to reach the
+CLIENT's own `sub+0x5c` for the CLIENT's own copy of the same creature; if it turns out to
+correlate anyway, that is itself a new finding about what `sub+0x5c` actually tracks.
+
+**Safety.** No materialised stand-in ever selected (both test creatures are GIT-identical); no
+permanent exclusion in any run — `0x38`'s ordinary automatic cycle kept alternating cleanly
+throughout Run B's window, untouched by the bypass on `0x3B`; no absorb/watchdog warnings; the
+bypass and the capacity change are both dev-only and were both reverted before teardown (capacity
+back to `32`, rebuilt, redeployed to both installs; the client's `coop.ini local_combat_bypass_id`
+line removed entirely, restoring the file to its pre-round state).
+
+Build clean (`dotnet build KotorCoop.slnx`; both `-GameDir` installs, 0 warnings, 0 errors). Full
+suite 1191/1192 (`HeavyPacketLossStillConverges` flaked this run, confirmed passing in isolation
+immediately after — the same known-flaky test flagged throughout this document; baseline moved
+1173→1192 during this round from unrelated, concurrent work on the same branch, the same pattern
+rounds 47-49 already flagged). Rig torn down and confirmed clean (`Get-Process
+swkotor,KotorCoop.Agent` returned none), `auto_start_agent` restored to `1` in both installs by
+`demo.ps1 -Stop`.
+
+**Status.** `local_combat` stays on by default, unchanged. `local_combat_bypass_id` is a real,
+tested, dev-only diagnostic left in the tree (default `0`, off) for whoever opens the `sub+0x5c`
+lead next. No hit has yet landed through the exclusion-and-script-fire mechanism on ANY creature
+this investigation has ever tested, hostile or friendly, touched or genuinely untouched — the
+forwarded-damage channel remains the only thing making a fight dangerous in co-op. Roadmap item 1
+and the README combat bullet are unchanged this round for the same reason every round since 39 has
+left them unchanged: no hit landed through the mechanism the roadmap item is actually asking
+about. **The freeze is now proven independent of every write AND every read this plugin's
+EnemyPresenceController, CombatController, IncomingDamageController, PeerDamageController,
+PhantomHitHook, AnimationHook, MaterialisedEnemies, CheatController, PhantomController and the
+agent's own census-writing path can perform on the creature — the cause, whatever it is, lives
+entirely inside the engine's own per-creature combat-round state, is not affected by census
+membership status alone (round 37/38's own claim to the contrary does not reproduce today), and
+the most concrete lead on hand is the `sub+0x5c=4` anomaly named above.**
 
 ## 3. A client's XP is actively erased
 

@@ -97,6 +97,15 @@ internal sealed class CombatController(SharedBlockView block)
             return;
         }
 
+        // ROUND 50: the decisive-control bypass — see EnemyPresenceController.LocalCombatBypassId's
+        // own doc comment. No health pin, no health mirror, no KillOnce; this id is listed in
+        // the census but genuinely untouched by this controller.
+        if (EnemyPresenceController.LocalCombatBypassId != 0
+            && enemy.ObjectId == EnemyPresenceController.LocalCombatBypassId)
+        {
+            return;
+        }
+
         // A plot creature rides the census for its PRESENCE only (a cutscene actor whose
         // scene must look the same on both screens). Un-killable is the module's rule:
         // no pin, no health mirror, and never a death — whatever the flags say.

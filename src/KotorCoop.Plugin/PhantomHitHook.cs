@@ -354,7 +354,20 @@ internal static unsafe class PhantomHitHook
                 // owner's id space: a hit on a materialised stand-in is recorded under
                 // the owner id the body stands in for, not its local spawn id.
                 uint ownerId = MaterialisedEnemies.ToOwner(targetId);
-                _dealt.Add(ownerId != 0 ? ownerId : targetId, (uint)total);
+                uint creditId = ownerId != 0 ? ownerId : targetId;
+
+                // ROUND 50: the decisive-control bypass — see
+                // EnemyPresenceController.LocalCombatBypassId's own doc comment. This hook is
+                // otherwise pure observation (it never suppresses or replaces the engine's own
+                // damage application — the stub always resumes into it), but a credited debt
+                // here is itself a write into the peer-damage ledger, so the bypassed id must
+                // not accrue one either.
+                if (creditId == EnemyPresenceController.LocalCombatBypassId && creditId != 0)
+                {
+                    return;
+                }
+
+                _dealt.Add(creditId, (uint)total);
                 return;
             }
 

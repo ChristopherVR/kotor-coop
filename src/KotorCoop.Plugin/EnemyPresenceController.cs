@@ -193,6 +193,46 @@ internal sealed unsafe class EnemyPresenceController(SharedBlockView block)
     /// </summary>
     internal static readonly uint LocalCombatBisectMask = LoadBisectMask();
 
+    /// <summary>
+    /// ROUND 50 DIAGNOSTIC (2026-08-21), dev-only. `coop.ini local_combat_bypass_id` (hex,
+    /// default 0). Forty-nine rounds of write-level bisection (round 47's
+    /// <see cref="LocalCombatBisectMask"/>, round 48's health-pin/mirror extension) proved the
+    /// freeze is not caused by any single engine WRITE this plugin makes, but every one of
+    /// those tests still left the OTHER consumers of census membership running normally: this
+    /// controller's own <see cref="Resolve"/> (which caches an engine pointer and calls the
+    /// engine's own <c>GetGameObject</c>), <see cref="MaterialisedEnemies.Seen"/> (a managed
+    /// timestamp write, called for every published slot before <see cref="DriveOne"/> ever
+    /// runs), <see cref="CombatController"/>'s own resolve-and-pin pass, and
+    /// <see cref="PeerDamageController"/>'s owed-damage apply. Round 29's diagnostic
+    /// (<see cref="DiagUndrivenObjectId"/>) came close but still let Resolve()/Seen() run;
+    /// round 37/38's census-cap exclusion removed the creature from the list entirely, which
+    /// is not "listed but untouched" either. This id, when set, is skipped completely by
+    /// every one of those consumers while the owning agent keeps publishing it in the census
+    /// exactly as before (CoopAgent.cs's own <c>TryWriteEnemies</c> call is never gated by
+    /// this key) — genuinely "listed, but touched by nothing this plugin runs, automatically,
+    /// every frame." See docs/research/shared-state-audit.md §2, round 50, for the full
+    /// consumer table and what each early-return actually skips; several consumers this
+    /// round's audit found (PhantomController.ApplyTargetable, InteractionLockController's
+    /// HoldCreatureStill, AnimationHook, PhantomHitHook, CheatController) are read-only,
+    /// operator-driven, or keyed to a completely different id space (phantom bodies, NPC
+    /// tags) and are documented rather than gated, because there is nothing on a census enemy
+    /// for them to touch. 0 (default, unset) leaves every consumer exactly as it runs today.
+    /// </summary>
+    internal static readonly uint LocalCombatBypassId = LoadBypassId();
+
+    private static uint LoadBypassId()
+    {
+        uint id = ParseHexOrZero(PluginConfig.Read("local_combat_bypass_id"));
+        if (id != 0)
+        {
+            PluginHost.Log(
+                $"local_combat_bypass_id=0x{id:X} - this creature will be published in the "
+                + "census as normal but touched by NO plugin consumer (round 50 decisive control)");
+        }
+
+        return id;
+    }
+
     private static uint LoadBisectMask()
     {
         uint mask = ParseHexOrZero(PluginConfig.Read("local_combat_bisect_mask"));
@@ -422,6 +462,17 @@ internal sealed unsafe class EnemyPresenceController(SharedBlockView block)
         for (int i = 0; i < count; i++)
         {
             EnemyPresenceView enemy = block.GetEnemyPresence(i);
+
+            // ROUND 50: the decisive control. Skip this id COMPLETELY — no Seen (so no
+            // materialised-body lease refresh either, if it ever were one), no Resolve, no
+            // ClaimCreature, no PermitAttacking, no Drive, no engagement recording, no trigger
+            // check. Still counted in `count` above (still published by the owner, still
+            // "listed") — just never reached by anything below this line. See
+            // LocalCombatBypassId's own doc comment.
+            if (LocalCombatBypassId != 0 && enemy.ObjectId == LocalCombatBypassId)
+            {
+                continue;
+            }
 
             // Every listed id — dead or alive — keeps its materialised body's lease
             // fresh; a corpse the owner still publishes must keep lying there.

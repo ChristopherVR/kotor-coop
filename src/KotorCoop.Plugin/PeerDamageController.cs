@@ -312,6 +312,16 @@ internal sealed unsafe class PeerDamageController(SharedBlockView block)
                 continue;
             }
 
+            // ROUND 50: the decisive-control bypass — see
+            // EnemyPresenceController.LocalCombatBypassId's own doc comment. A peer's reported
+            // damage against this id is never applied; the debt simply sits unspent, same as
+            // an id this instance cannot resolve at all.
+            if (EnemyPresenceController.LocalCombatBypassId != 0
+                && objectId == EnemyPresenceController.LocalCombatBypassId)
+            {
+                continue;
+            }
+
             int amount = _owed.Pending(objectId, owed);
             if (amount <= 0)
             {
