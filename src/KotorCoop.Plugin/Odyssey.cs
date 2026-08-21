@@ -4767,7 +4767,7 @@ internal static unsafe class Odyssey
             return false;
         }
 
-        // dialogue_join_teleport (default off — see docs/research/dialogue-join-latency.md
+        // dialogue_join_teleport (default ON since 2026-08-21 — see docs/research/dialogue-join-latency.md
         // "Far-join live pass"). This is what an automatic join (force_dialogue_party, or the
         // test hook) has that a real mouse click does not: nobody is driving the PC toward the
         // NPC. Measured live: a joiner left standing 14m away never reaches StartDialog at
@@ -4788,7 +4788,7 @@ internal static unsafe class Odyssey
     /// <summary>CSWSObject + this = the object's id.</summary>
     private const int ObjIdOffset = 0x04;
 
-    /// <summary><c>coop.ini dialogue_join_teleport</c> (default off). Set once from
+    /// <summary><c>coop.ini dialogue_join_teleport</c> (default on). Set once from
     /// <c>PluginConfig</c> at startup, the same way <see cref="DialogueGateHook.Enabled"/> is.</summary>
     public static bool DialogueJoinTeleportEnabled;
 

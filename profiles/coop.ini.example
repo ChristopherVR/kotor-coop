@@ -172,9 +172,11 @@ dialogue_fast_join=0
 # left 14 m away never opened; PLACING them within the engine's own 10-unit start range, verified
 # live at [0x747450], resolved it immediately every time it was tried). When on, the joiner is
 # snapped next to the NPC for an automatic join and put back where they stood once the followed
-# conversation ends. OFF by default: it does not yet have a live pass on what it does to a real
-# mouse click on a distant NPC, which must keep its ordinary walk.
-dialogue_join_teleport=0
+# conversation ends. ON by default since 2026-08-21: the alternative, measured live, is a joiner stuck
+# under an empty letterbox for minutes. What it does to a real mouse click on a distant NPC has
+# not had a live pass - at worst that click snaps you over instead of walking you over. 0 restores
+# the walk.
+dialogue_join_teleport=1
 
 # The recruitment half of the same gap: when a conversation recruits a companion, only the
 # OWNER's party table gains the availability bit (party_roster_sync above reconciles the SEAT,

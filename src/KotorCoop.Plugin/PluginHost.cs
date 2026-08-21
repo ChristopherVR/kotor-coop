@@ -292,7 +292,7 @@ internal static unsafe class PluginHost
             // (force_dialogue_party, or the test hook) and restores their spot afterward.
             // Default off pending a live pass on a real click's own walk, which this must not
             // visibly disturb.
-            Odyssey.DialogueJoinTeleportEnabled = PluginConfig.ReadBool("dialogue_join_teleport", false);
+            Odyssey.DialogueJoinTeleportEnabled = PluginConfig.ReadBool("dialogue_join_teleport", true);
 
             DialogueGateHook.Enabled = PluginConfig.ReadBool("dialogue_exclusive", true);
             if (DialogueGateHook.Install(out string gateDiagnostic))
