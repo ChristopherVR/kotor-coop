@@ -137,7 +137,15 @@ internal sealed class CombatController(SharedBlockView block)
         // owner as a SUM, the owner's own engine spends it and kills its copy, and the death
         // comes back down the ordinary channel — so there is no longer any need for a
         // mirrored enemy to be killable here, and every reason for it not to be.
-        Odyssey.SetMinOneHitPoint(creature, true);
+        //
+        // ROUND 48: gated by the SAME dev-only local_combat_bisect_mask round 47 introduced
+        // for EnemyPresenceController's ops — this is one of the two this plugin performs on
+        // a census enemy that round 47 never masked (see Odyssey.cs's "ROUND 48 EXTENSION").
+        // 0 (default) is unconditional, exactly as before this round.
+        if ((EnemyPresenceController.LocalCombatBisectMask & Odyssey.BisectBitHealthPin) == 0)
+        {
+            Odyssey.SetMinOneHitPoint(creature, true);
+        }
 
         // Never write 0: the owner has not said it is dead, and an enemy at 0 health reads
         // as dead to targeting and AI while no death path has run for it.
@@ -163,7 +171,9 @@ internal sealed class CombatController(SharedBlockView block)
             _lastOwnerHealth[history] = ownerHealth;
         }
 
-        if (target != current)
+        // ROUND 48: same mask, second bit — the health-mirror write itself, gated
+        // independently of the pin above so a bisection run can silence either one alone.
+        if (target != current && (EnemyPresenceController.LocalCombatBisectMask & Odyssey.BisectBitHealthMirror) == 0)
         {
             Odyssey.SetCurrentHitPoints(creature, target);
         }

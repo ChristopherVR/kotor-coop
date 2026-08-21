@@ -177,8 +177,16 @@ internal sealed unsafe class EnemyPresenceController(SharedBlockView block)
     /// <see cref="DriveOne"/> — only the ONGOING per-frame drive that runs on a creature
     /// before it is ever handed to local_combat, which is exactly the half of round 46's fact
     /// pattern this bisection targets. See docs/research/shared-state-audit.md §2, round 47.
+    ///
+    /// ROUND 48 EXTENSION: two more bits (11, 12 — <see cref="Odyssey.BisectBitHealthPin"/>,
+    /// <see cref="Odyssey.BisectBitHealthMirror"/>) gate <see cref="CombatController"/>'s own
+    /// per-40-frame writes to a census enemy, which neither round 47 nor any round before it
+    /// ever masked — see Odyssey.cs's own "ROUND 48 EXTENSION" comment for why those two,
+    /// specifically, were the real gap. Read directly by <see cref="CombatController"/>
+    /// (internal, same assembly) rather than threaded through as a constructor argument,
+    /// matching how every other consumer of this mask already reads it as a static.
     /// </summary>
-    private static readonly uint LocalCombatBisectMask = LoadBisectMask();
+    internal static readonly uint LocalCombatBisectMask = LoadBisectMask();
 
     private static uint LoadBisectMask()
     {
@@ -196,7 +204,9 @@ internal sealed unsafe class EnemyPresenceController(SharedBlockView block)
               + $"animation={(mask & Odyssey.BisectBitDriveAnimation) != 0}, "
               + $"position={(mask & Odyssey.BisectBitDrivePosition) != 0}, "
               + $"twin={(mask & Odyssey.BisectBitDriveTwin) != 0}, "
-              + $"clearPositionDirty={(mask & Odyssey.BisectBitClearPositionDirty) != 0})");
+              + $"clearPositionDirty={(mask & Odyssey.BisectBitClearPositionDirty) != 0}, "
+              + $"healthPin={(mask & Odyssey.BisectBitHealthPin) != 0}, "
+              + $"healthMirror={(mask & Odyssey.BisectBitHealthMirror) != 0})");
         return mask;
     }
 
@@ -703,7 +713,7 @@ internal sealed unsafe class EnemyPresenceController(SharedBlockView block)
                 }
 
                 Odyssey.PermitAttacking(creature);
-                StartLocalFight(enemy.ObjectId, creature, now);
+                StartLocalFight(enemy.ObjectId, creature, now, player);
             }
         }
 
@@ -719,10 +729,36 @@ internal sealed unsafe class EnemyPresenceController(SharedBlockView block)
     /// (kept, not deleted — its own doc now says why it never worked) is the thing this
     /// replaces.
     /// </summary>
-    private void StartLocalFight(uint ownerId, nint creature, double now)
+    private void StartLocalFight(uint ownerId, nint creature, double now, nint player)
     {
         _locallyFightingId = ownerId;
         _locallyFightingSince = now;
+
+        // ROUND 48 PROBE, one-shot, at the exact moment this creature is armed for local
+        // combat — before the +0x260 script fires. This is the evidence for the round's own
+        // prime hypothesis: if hostility already reads wrong here (a bad faction, a reputation
+        // answer that is not hostile, or a move-permitted/plot/min1hp bit that would gate
+        // GN_DetermineCombatRound before it ever gets to arming a round), that IS the
+        // explanation and no per-op mask matters. If it reads clean, the mask bisection below
+        // is what settles it instead.
+        uint playerId = player != 0 ? Odyssey.GetPlayerObjectId() : 0;
+        int creatureFaction = Odyssey.GetCreatureFaction(creature);
+        int playerFaction = player != 0 ? Odyssey.GetCreatureFaction(player) : -1;
+        int repCreatureVsPlayer = player != 0 ? Odyssey.GetAIStateReputation(creature, playerId) : -1;
+        int repPlayerVsCreature = player != 0 ? Odyssey.GetAIStateReputation(player, ownerId) : -1;
+        int movePermitted = *(int*)(creature + Odyssey.CreMovePermitted);
+        bool plot = Odyssey.IsPlot(creature);
+        bool min1hp = Odyssey.GetMinOneHitPoint(creature);
+        short hp = Odyssey.GetCurrentHitPoints(creature);
+        ushort maxHp = Odyssey.GetMaxHitPoints(creature);
+
+        PluginHost.Log(
+            $"local combat probe: 0x{ownerId:X} creatureFaction={creatureFaction} "
+            + $"playerFaction={playerFaction} rep(creature,player)={repCreatureVsPlayer} "
+            + $"rep(player,creature)={repPlayerVsCreature} (2=hostile,1=friendly,0=neutral) "
+            + $"CreMovePermitted=0x{movePermitted:X} plot={plot} min1hp={min1hp} hp={hp}/{maxHp} "
+            + $"bisectMask=0x{LocalCombatBisectMask:X}");
+
         Odyssey.FireCreatureScriptSlot0x260(creature);
         PluginHost.Log(
             $"local combat: 0x{ownerId:X} pulled out of the census to fight for real "

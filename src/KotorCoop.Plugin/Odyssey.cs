@@ -397,6 +397,42 @@ internal static unsafe class Odyssey
         | BisectBitDriveRunMoveState | BisectBitDriveAnimation | BisectBitDrivePosition
         | BisectBitDriveTwin | BisectBitClearPositionDirty;
 
+    // ---- ROUND 48 EXTENSION ------------------------------------------------------------
+    //
+    // Round 47's own write-up flagged two ops the task brief expected inside the eleven
+    // above and did not find there: the health pin and "any faction hold." Reading
+    // CombatController.cs in full this round found there is in fact NO faction write
+    // anywhere on a mirrored, GIT-identical enemy — round 47's phrasing was imprecise, not
+    // a gap in that round's own table. (PhantomController.ApplyTargetable does hold a
+    // faction, but only on THIS instance's own phantom bodies representing remote peers,
+    // never on a mirrored enemy — irrelevant to a GIT creature like the one this bisection
+    // targets.) What CombatController.Apply genuinely does, every 40 frames, completely
+    // unmasked by round 47 or any round before it: <see cref="SetMinOneHitPoint"/> (the
+    // health pin) and the health-mirror write itself
+    // (<see cref="SetCurrentHitPoints"/>) — both of which DID run, unmasked, in every one
+    // of round 47's trials, including mask=0x7FF ("every DriveOne op off"). That is the
+    // one real difference between round 37's success (never enumerated in the census AT
+    // ALL, so CombatController never touched it even once — <c>BlockEnemyPresenceCount</c>
+    // and <c>BlockEnemyCount</c> are written from the identical truncated list, confirmed
+    // in <c>KotorGameBridge.TryWriteEnemies</c>) and round 47's failure (enumerated, so
+    // both ClaimCreature/DriveOne AND CombatController.Apply were touching it — the
+    // bisection only ever silenced the first). These two bits close that gap.
+    //
+    // Bit  Op                                                        Where
+    // 11   SetMinOneHitPoint(creature, true) (the health pin)        CombatController.Apply
+    // 12   SetCurrentHitPoints (the health-mirror write itself)      CombatController.Apply
+    //
+    // Gated the same way as the eleven above: read once via
+    // EnemyPresenceController.LocalCombatBisectMask (the only writer of the ini key), never
+    // gates StartLocalFight/MaintainLocalFight, and 0 (unset) reproduces today's shipped
+    // behaviour bit for bit. CombatController mirrors EVERY census enemy the same way
+    // regardless of whether local_combat is about to engage any particular one of them, so
+    // — like the eleven DriveOne bits — these two are a blunt, global "is the pin/mirror
+    // active at all this session" switch, not a per-creature one; sound for a single-target
+    // bisection rig, which is what this ini key has only ever been used for.
+    public const uint BisectBitHealthPin = 1u << 11;
+    public const uint BisectBitHealthMirror = 1u << 12;
+
     /// <summary>
     /// Takes a creature out of AI control so its own behaviour does not fight us.
     ///
@@ -6707,6 +6743,16 @@ internal static unsafe class Odyssey
     /// </summary>
     private static readonly delegate* unmanaged[Thiscall]<nint, uint, int> GetAIStateReputationFn =
         (delegate* unmanaged[Thiscall]<nint, uint, int>)0x0057CD90;
+
+    /// <summary>
+    /// ROUND 48 PUBLIC WRAPPER. The same engine call <see cref="GetAIStateReputationFn"/>
+    /// makes, exposed so a caller outside this file (the round-48 probe in
+    /// <c>EnemyPresenceController.StartLocalFight</c>) can ask the engine's own hostility
+    /// question directly instead of hand-rolling a second copy of the pointer chain: 1
+    /// friendly / 2 hostile / 0 neutral, or -1 if <paramref name="candidate"/> is null.
+    /// </summary>
+    public static int GetAIStateReputation(nint candidate, uint vsId) =>
+        candidate == 0 ? -1 : GetAIStateReputationFn(candidate, vsId);
 
     /// <summary>
     /// ROUND 18 DIAGNOSTIC. <c>CSWSCreature::GetVisibleListElement</c> (<c>0x00517A20</c>,

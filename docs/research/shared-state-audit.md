@@ -3393,6 +3393,155 @@ flagged as the known-flaky one throughout this document). Rig torn down and conf
 (`Get-Process swkotor,KotorCoop.Agent` returned none), `auto_start_agent` restored to `1` in
 both installs by `demo.ps1 -Stop`.
 
+### Round 48 (2026-08-21) — the probe finds real, engine-measured hostility failure, but it is
+### not this plugin's doing: the same reading holds on the host's own unmirrored engine copy
+
+Round 47 closed the DriveOne write space and flagged two ops it had never masked: the health
+pin and "any faction hold," both said to live in `CombatController.Apply`. Reading
+`CombatController.cs` in full this round found that claim is half wrong: there is NO faction
+write anywhere in `CombatController` (confirmed by grep across the whole file — the only
+writes `Apply` makes are `Odyssey.SetMinOneHitPoint` and, conditionally, `Odyssey.SetCurrentHitPoints`).
+A full audit of every controller besides `EnemyPresenceController` that can touch a mirrored
+enemy or the local player's own reputation-relevant state — `CombatController`,
+`PhantomController.ApplyTargetable`, `PartyPresenceController.ApplyCompanionFaction`,
+`MaterialisedEnemies.MarkAsMirroredEnemy` — found exactly ONE faction write in the whole
+plugin that a GIT-identical, census-tracked enemy like `0x1A` could ever be touched by: none.
+`PhantomController.ApplyTargetable` does hold a faction, but only on THIS instance's own
+phantom body (the one representing the REMOTE peer), never on a mirrored enemy — irrelevant to
+a GIT creature. `MaterialisedEnemies.MarkAsMirroredEnemy` (which DOES touch faction indirectly
+via the attack-permitted bit, and would clear `ObjPlot`) is never called for a GIT-identical
+enemy at all — only for a locally-materialised stand-in (`mapped != 0`), which `0x1A` is not.
+So round 47's "faction hold" was imprecise, not a gap in that round's own table — but its
+instinct (something CombatController does, unmasked, might matter) pointed at the two writes
+that genuinely were never gated: the health pin and the health-mirror write itself.
+
+**Op table (the round-48 addition).**
+
+| Bit | Op | Where | Function/field |
+|---|---|---|---|
+| 11 | `SetMinOneHitPoint(creature, true)` (the health pin) | `CombatController.Apply` | `creature+0x200` |
+| 12 | `SetCurrentHitPoints` (the health-mirror write itself) | `CombatController.Apply` | engine setter |
+
+Both gated behind the SAME `local_combat_bisect_mask` ini key round 47 introduced (`Odyssey.BisectBitHealthPin`,
+`Odyssey.BisectBitHealthMirror`; `EnemyPresenceController.LocalCombatBisectMask` made `internal`
+so `CombatController` — a separate class, same assembly — can read the one static instance of
+the mask directly, the same way every other consumer already does). 0 (default) is
+unconditional, byte for bit identical to before this round. `Odyssey.GetAIStateReputation` was
+also added this round: a public wrapper around the same `GetAIStateReputationFn` (0x0057CD90)
+round 18 used as a private diagnostic, so a caller outside `Odyssey.cs` (the probe below) can
+ask the engine's own hostility question without a second hand-rolled pointer chain.
+
+**The probe**, added at the top of `StartLocalFight` (`EnemyPresenceController.cs`), fires once
+per arming, before the `+0x260` script — creature and player faction, the engine's own
+reputation answer both directions, `CreMovePermitted`, plot/min1hp, and HP/maxHP:
+
+    local combat probe: 0x1A creatureFaction=4 playerFaction=0 rep(creature,player)=1
+    rep(player,creature)=1 (2=hostile,1=friendly,0=neutral) CreMovePermitted=0xFFFF plot=False
+    min1hp=True hp=1/1 bisectMask=0x0
+
+**This is the answer to the task's own first branch, and it is decisive: hostility reads
+FRIENDLY (1), not hostile (2), symmetric in both directions, measured through the exact engine
+call `GetNearestEnemy`'s own hostility gate uses.** `GetNearestEnemy`/`GN_DetermineCombatRound`
+requires `==2`; this pair never clears that gate, so the round was never going to arm no matter
+what any DriveOne or CombatController write did — a plain, structural explanation that fits
+every failure this investigation has ever measured. A second creature engaged in the same
+session, `0x17` (a DIFFERENT faction, `2` not `4`), read the identical friendly-both-directions
+answer, so this is not a one-creature fluke.
+
+**The critical follow-up, before accepting "this plugin corrupted hostility" as the story: is
+this reading something the plugin did, or something already true of the creature?** Tested
+directly on the HOST's own completely unmirrored, unmodified engine copy of the identical
+creature — the host process never runs `EnemyPresenceController`'s claim/drive machinery or
+`CombatController`'s pin/mirror on its OWN local enemies the way a mirroring instance does; a
+host-local Sith soldier is governed purely by native, unpatched engine AI. Teleported the
+host's real player (`blockpoke.ps1 tp`) to point-blank range of `0x1A` (`dist` effectively 0,
+same coordinates the client used) and held 18+ seconds: **zero damage, zero movement, exactly
+the client's failure signature.** Repeated on a second, unrelated census enemy (`0x9`, a
+different position entirely, `(30.5,119.8)`): same result, 15+ seconds, zero damage. **The
+non-hostile reading is not a co-op artifact — it reproduces on the host's own authoritative,
+completely unmirrored engine, for two different creatures.** Every candidate write this
+investigation has ever found (round 47's eleven DriveOne ops, this round's two CombatController
+ops, sixteen total) has now been read in full, and NONE of them touches faction or the
+reputation matrix — consistent with the host showing the identical symptom with none of them
+ever running on its own local creatures at all.
+
+**Bisection run, for completeness and to rule out an indirect effect** (`local_combat_bisect_mask
+= 0x1800`, health pin + health-mirror both off, fresh cold restart, save slot 1, `END_M01AA`,
+same rig as round 47):
+
+| Run | Mask | Result | Evidence |
+|---|---|---|---|
+| control | `0x0` | FAIL, friendly reading | `local combat probe: 0x1A ... rep(creature,player)=1 rep(player,creature)=1 ... min1hp=True hp=1/1 bisectMask=0x0` |
+| health-pin+mirror off | `0x1800` | FAIL, IDENTICAL friendly reading | `local combat probe: 0x1A ... rep(creature,player)=1 rep(player,creature)=1 ... min1hp=False hp=1/1 bisectMask=0x1800` |
+
+The mask correctly took effect (`min1hp` flips `True`→`False`, confirming the new bit gates the
+real write, and the loaded-mask log line decodes `healthPin=True, healthMirror=True` as
+disabled) — and the reputation reading, the thing that actually matters, does not move at all.
+**Health pin and health-mirror write are REFUTED as the cause**, empirically, not just by
+static reasoning. One more fact fell out of this run for free: with the health-mirror write
+disabled, `0x1A` still reads `hp=1/1` — meaning `1` is this creature's genuine, intrinsic
+current AND max hit points in its own stats block, not a value CombatController's mirror ever
+set. `0x9` reads `hp 1/8` the same way (a real max of 8, not the mirror's floor). Both are
+census enemies that look battle-worn almost to death, baked into the save itself, present
+identically after a genuinely fresh cold restart (checked twice, two separate reloads of save
+slot 1) — not something accumulated by this session's own testing.
+
+**The most likely explanation, honestly speculative but consistent with everything measured
+this round:** save slot 1 has been the SAME save, reloaded fresh dozens of times, across every
+round of this investigation since round 9. Several of its Sith troops (`0x1A` max 1 hp, `0x9`
+max 8 current 1, `0x17` reading `1/1` the same way) show real, low, persisted stat damage —
+consistent with having actually been fought for real at some point across 40+ prior rounds
+(round 27 and 39's own genuine fights, in particular, both landed real hits on host-local
+creatures) — and KOTOR's own stock AI has a well-known "flee/surrender when critically
+wounded" behaviour in several combat scripts that can include a faction change away from
+hostile as part of standing down. If that fired for real, on the host's own engine, at some
+point during 40+ rounds of prior live-fire testing, and the module was later saved, every
+"fresh cold restart" since has been reloading an ALREADY-DEFEATED, ALREADY-NEUTRALISED Sith
+soldier — never mind mirrored or driven, this specific creature may never have been hostile to
+the player at all in the state this save currently holds. This is speculation about WHY, not
+a new claim of fact beyond what the probe and the host-side test actually measured; the measured
+fact stands on its own regardless of the mechanism behind it.
+
+**What this means for the standing question.** 46 rounds (9-47) measured "the round never
+arms" for a mirrored, previously-claimed GIT enemy and treated it as proof of a mirroring
+defect. This round's probe is the first to actually check whether the test target was hostile
+at all at the moment of arming, and the honest answer — confirmed two independent ways, on two
+different creatures, with and without every write this plugin makes — is that it was not.
+Every prior round's negative result is fully consistent with "the creature was never going to
+fight regardless of the mechanism," which this investigation had no way to distinguish from "the
+mechanism is broken" until this round's probe existed. That does NOT retroactively prove the
+underlying arming mechanism (fire `+0x260` on a mirrored, previously-claimed creature) actually
+works — round 44/46's specific finding (something about having gone through `DriveOne`'s
+claim/drive pipeline, as opposed to round 27/37's never-claimed creatures) is still an open,
+unresolved question. It means the question cannot be answered further on THIS save, because
+none of its remaining reused test creatures currently read as hostile to the player, so no
+input to `+0x260` from a previously-mirrored creature on this save could ever produce a
+positive result no matter what this plugin does.
+
+**Recommended next step for whoever picks this up:** before any further live bisection,
+confirm the target creature is genuinely hostile — either read this round's probe line, or run
+the same host-side unmirrored melee check this round used — BEFORE spending a round chasing a
+write-side explanation. If the whole remaining census reads non-hostile the same way, the
+right move is a genuinely fresh save (one that has not been fought over by 40+ rounds of prior
+live testing on save slot 1), not another bisection of this plugin's own write surface, which
+this round and round 47 together have now exhausted (sixteen ops, all sixteen individually
+gate-able, all sixteen ruled out).
+
+**Safety re-checks**, on both the mask=`0x0` and mask=`0x1800` runs: no materialised stand-in
+ever selected; no permanent exclusion — `0x1A`/`0x17` cycled cleanly through repeated 25s
+timeouts in both runs (`local combat: 0x1A fight ended (timed out), rejoining the census` /
+`local combat: 0x17 pulled out of the census to fight for real`, alternating cleanly, no stuck
+state); no absorb/watchdog warnings in either run's log; the local player's own HP stayed
+`12/12` throughout every trial. `local_combat` and its default (`on`) are unchanged by this
+round.
+
+Build clean (`dotnet build KotorCoop.slnx`, `src\KotorCoop.Plugin\build.ps1 -Install` against
+both GOG installs). Full suite 1144/1144 (baseline moved from 1080 during this round, same
+concurrent-work drift round 47 already flagged for this branch). Rig torn down and confirmed
+clean (`Get-Process swkotor,KotorCoop.Agent` returned none), `auto_start_agent` restored to `1`
+in both installs by `demo.ps1 -Stop`, and the client's `coop.ini local_combat_bisect_mask`
+returned to `0x0`.
+
 ### Log rotation and diagnostic throttling (2026-08-21)
 
 Adjacent to this section only because it is the same class of "runs forever, never checked
