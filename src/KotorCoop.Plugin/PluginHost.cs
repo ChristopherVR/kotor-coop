@@ -285,6 +285,15 @@ internal static unsafe class PluginHost
                 Log($"phantom-effect watch NOT installed: {effectDiagnostic}");
             }
 
+            // See docs/research/dialogue-join-latency.md "Far-join live pass": a joiner left
+            // more than the engine's own 10-unit start-range away never reaches StartDialog at
+            // all in this build (the player character is drive-controlled, not walked by the
+            // action queue), so this teleports them into range for an automatic join
+            // (force_dialogue_party, or the test hook) and restores their spot afterward.
+            // Default off pending a live pass on a real click's own walk, which this must not
+            // visibly disturb.
+            Odyssey.DialogueJoinTeleportEnabled = PluginConfig.ReadBool("dialogue_join_teleport", false);
+
             DialogueGateHook.Enabled = PluginConfig.ReadBool("dialogue_exclusive", true);
             if (DialogueGateHook.Install(out string gateDiagnostic))
             {

@@ -140,6 +140,17 @@ Both players, each in their own full game:
   *distance* join, where the joiner has to be walked in before their own dialogue opens) is
   still unverified live for that specific path — the same doc's honest account of what this
   rig's fixed player-adjacent-to-NPC setup could and couldn't exercise.
+- **A joiner who is genuinely far from the NPC** does not just lag — measured live, they never
+  open the conversation at all, because the engine's own 10-unit conversation-start range
+  (disassembled and confirmed by reading it live out of the process) never resolves for a
+  player character this build drive-controls rather than walks via the action queue. `coop.ini
+  dialogue_join_teleport=1` (off by default) closes that gap by placing the joiner next to the
+  NPC for an automatic join and putting them back once the conversation ends — measured live in
+  both ownership directions at 4-5 ms to open and 0-15 ms of content latency, matching an
+  adjacent join exactly. A second, independent defect found alongside it — the existing
+  last-resort recovery for a conversation shell that will not close could loop, unattended, for
+  minutes with no effect — is fixed unconditionally (not gated on the flag above): see
+  `docs/research/dialogue-join-latency.md`'s "Far-join live pass".
 - **Scripted scenes play out the same on both screens**: cutscene actors and story NPCs
   replicate their positions, stances and movements, while staying exempt from the combat
   channel — the module decides who is un-killable, not the session.

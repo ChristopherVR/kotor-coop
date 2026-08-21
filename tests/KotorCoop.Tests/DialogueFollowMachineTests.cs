@@ -316,6 +316,53 @@ public sealed class DialogueFollowMachineTests
         Assert.Equal(DialogueFollowNote.ForcingUiShut, forced.Note);
     }
 
+    /// <summary>
+    /// ⚠ LIVE-VERIFIED, not a hypothetical escalation. A joiner left farther than the engine's
+    /// own conversation-start range never reaches StartDialog, and the still-queued dialogue
+    /// action re-arms <c>gui+0xB4</c> every tick — which <c>ForceCloseUi</c> alone cannot touch:
+    /// measured on the actual rig, the UI-only close repeated every
+    /// <see cref="DialogueFollowTimings.YieldCloseRetryMs"/> for over two minutes straight with
+    /// no effect. See docs/research/dialogue-join-latency.md "Far-join live pass".
+    /// </summary>
+    [Fact]
+    public void AShellTheUiCloseCannotBudgeEscalatesToClearingTheStuckAction()
+    {
+        DialogueFollowMachine machine = new(Timings);
+        long t = 0;
+
+        for (int i = 0; i < Timings.YieldClearActionsAttempts; i++)
+        {
+            Assert.NotEqual(
+                DialogueFollowAction.ForceCloseUiAndClearActions,
+                machine.Step(CompetingConversation(t)).Action);
+            t += Timings.YieldCloseRetryMs;
+        }
+
+        DialogueFollowDecision escalated = machine.Step(CompetingConversation(t));
+        Assert.Equal(DialogueFollowAction.ForceCloseUiAndClearActions, escalated.Action);
+        Assert.Equal(DialogueFollowNote.ClearingStuckAction, escalated.Note);
+    }
+
+    /// <summary>Once escalated, it keeps escalating rather than falling back to the UI-only
+    /// close that had already failed — a shell that is still here after the first clear gets
+    /// another one, not a step backwards to the action that measured as useless.</summary>
+    [Fact]
+    public void TheClearedActionEscalationDoesNotStepBackDown()
+    {
+        DialogueFollowMachine machine = new(Timings);
+        long t = 0;
+
+        for (int i = 0; i <= Timings.YieldClearActionsAttempts; i++)
+        {
+            machine.Step(CompetingConversation(t));
+            t += Timings.YieldCloseRetryMs;
+        }
+
+        Assert.Equal(
+            DialogueFollowAction.ForceCloseUiAndClearActions,
+            machine.Step(CompetingConversation(t)).Action);
+    }
+
     /// <summary>The yield ledger belongs to one conversation. A new one must not inherit an
     /// exhausted attempt count and be forced shut on its first frame.</summary>
     [Fact]

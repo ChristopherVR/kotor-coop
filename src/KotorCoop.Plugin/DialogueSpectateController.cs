@@ -476,6 +476,11 @@ internal sealed unsafe class DialogueSpectateController(SharedBlockView block)
                 Odyssey.ForceCloseDialogueUi();
                 return;
 
+            case DialogueFollowAction.ForceCloseUiAndClearActions:
+                Odyssey.ForceCloseDialogueUi();
+                Odyssey.ClearLocalPlayerStuckDialogueAction();
+                return;
+
             case DialogueFollowAction.DriveToPeerNode:
                 ReportContentLatency(now);
                 DriveToPeerNode(hasContent);
@@ -580,6 +585,7 @@ internal sealed unsafe class DialogueSpectateController(SharedBlockView block)
         {
             case DialogueFollowNote.OwnerEnded:
                 LogFew("dialogue: the owner ended the conversation; closing");
+                Odyssey.RestoreJoinTeleportIfPending();
                 break;
             case DialogueFollowNote.Adopted:
                 LogFew("dialogue: the engine started the same conversation here; adopting it to follow");
@@ -590,15 +596,24 @@ internal sealed unsafe class DialogueSpectateController(SharedBlockView block)
             case DialogueFollowNote.ForcingUiShut:
                 LogFew("dialogue: our conversation would not close after the server's turns; forcing the UI shut");
                 break;
+            case DialogueFollowNote.ClearingStuckAction:
+                // See ForceCloseUiAndClearActions' and ClearLocalPlayerStuckDialogueAction's own
+                // docs: forcing the UI shut alone measured as an infinite loop for a joiner left
+                // too far from the NPC, because the engine keeps re-arming the conversation flag
+                // from a still-queued action the UI close cannot reach.
+                LogFew("dialogue: the UI-only close did not stick; clearing the stuck action too");
+                break;
             case DialogueFollowNote.UnstickingShell:
                 LogFew("dialogue: an empty conversation shell is blocking new ones here; ending it "
                     + "so a click can join the peer's");
                 break;
             case DialogueFollowNote.GaveUpNoContent:
                 LogFew("dialogue: the followed conversation never delivered a line; backing out");
+                Odyssey.RestoreJoinTeleportIfPending();
                 break;
             case DialogueFollowNote.GaveUpNeverOpened:
                 LogFew("dialogue: the peer's conversation never opened locally; backing out");
+                Odyssey.RestoreJoinTeleportIfPending();
                 break;
         }
     }

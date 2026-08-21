@@ -935,3 +935,29 @@ to `end_trask`. Full numbers, screenshots and method in `dialogue-join-latency.m
   NEEDS-LIVE. `BeginConversation → StartDialog` is the same entry point regardless of trigger
   vs. click (this file's own §1, verified by disasm), so no separate risk is expected, but that
   is an inference from the code, not an observation.
+
+## The FAR join, and the fix — see `dialogue-join-latency.md`'s "Far-join live pass" (2026-08-21)
+
+The gap the two passes above left open — a joiner who is not already standing near the NPC —
+reproduces, live-verified, and it is a hard failure rather than a slow one: `CSWSObject::StartDialog`
+is never reached at all (the engine's own conversation-active flag lights up immediately from the
+request, which is the letterbox-eligible state the user's report calls "the bars creep in", but
+no content ever follows), because `CSWSObject::AIActionDialogObject 0x0057A470`'s own range gate
+(disassembled and VERIFIED LIVE at a flat **10.0-unit** threshold, `[0x747450]`) never resolves
+for a player character that is drive-controlled rather than action-queue-walked in this build.
+Worse: the existing last-resort recovery (`ForceCloseUi`) does not stop the resulting stuck
+shell either — measured running for over two minutes unattended with zero effect, because it
+only closes the client GUI panel and never touches the still-queued action re-arming the flag
+every tick.
+
+Both are fixed from already-verified primitives, no new native detour: `dialogue_join_teleport`
+(default off) snaps a joiner who is farther than the verified 10-unit range next to the NPC
+before the request goes out (`Odyssey.SnapTo`, the same call `CheatController`'s own `tp` uses),
+and restores their position once the follow concludes; and the stuck-shell loop is fixed
+unconditionally by escalating `DialogueFollowMachine`'s `Yielding` path, past a bounded number of
+failed `ForceCloseUi` cycles, to also clear the local player's action queue
+(`ForceCloseUiAndClearActions` / `Odyssey.ClearLocalPlayerStuckDialogueAction`) — live-verified
+to resolve the loop within one cycle every time it was tried, where the UI-only close never did.
+See `dialogue-join-latency.md` for the full disassembly, the before/after numbers in both
+ownership directions, and what remains unverified (a genuine mouse-driven click's own walk, and
+the no-LOS case).

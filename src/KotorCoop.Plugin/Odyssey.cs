@@ -4767,12 +4767,138 @@ internal static unsafe class Odyssey
             return false;
         }
 
+        // dialogue_join_teleport (default off — see docs/research/dialogue-join-latency.md
+        // "Far-join live pass"). This is what an automatic join (force_dialogue_party, or the
+        // test hook) has that a real mouse click does not: nobody is driving the PC toward the
+        // NPC. Measured live: a joiner left standing 14m away never reaches StartDialog at
+        // all — CSWSObject::AIActionDialogObject's own range gate (VERIFIED live at 10.0
+        // units, `[0x747450]`, disasm 0x0057A7B2-0x0057A7AC) re-queues itself forever because
+        // this build's player character is drive-controlled, not action-queue-walked (see
+        // TestDriveController.HandleWalk's own finding). So without help the join just sits,
+        // silently, until this instance's own 15 s local-open grace gives up on it.
+        if (DialogueJoinTeleportEnabled)
+        {
+            TryTeleportForJoin(creature);
+        }
+
         SendDialogInputFn(message, objectId);
         return true;
     }
 
     /// <summary>CSWSObject + this = the object's id.</summary>
     private const int ObjIdOffset = 0x04;
+
+    /// <summary><c>coop.ini dialogue_join_teleport</c> (default off). Set once from
+    /// <c>PluginConfig</c> at startup, the same way <see cref="DialogueGateHook.Enabled"/> is.</summary>
+    public static bool DialogueJoinTeleportEnabled;
+
+    /// <summary>
+    /// The conversation-start range check's own threshold, VERIFIED LIVE by reading
+    /// <c>[0x747450]</c> out of a running instance (read 10.0f) — the same float
+    /// <c>CSWSObject::AIActionDialogObject</c> squares and compares a candidate's distance
+    /// against at 0x0057A799-0x0057A7A5 before it will queue the conversation for real. A
+    /// player standing farther than this from the NPC never reaches
+    /// <c>CSWSObject::StartDialog</c> without either walking there or being placed there.
+    /// </summary>
+    private const float DialogueStartRange = 10.0f;
+
+    /// <summary>Where <see cref="TryTeleportForJoin"/> found the local player before it moved
+    /// them, so the conversation's end can put them back. <see cref="_joinTeleportPending"/>
+    /// is false whenever there is nothing to restore — including the ordinary case where the
+    /// player was already close enough that no teleport happened.</summary>
+    private static Vec3 _joinTeleportOrigin;
+    private static bool _joinTeleportPending;
+
+    /// <summary>
+    /// Places the local player next to <paramref name="creature"/> when they are farther than
+    /// the engine's own start-range check allows, so the join resolves immediately instead of
+    /// waiting on a walk nothing in this build will actually perform for a player character.
+    /// Remembers the original spot; <see cref="RestoreJoinTeleportIfPending"/> puts it back
+    /// once the followed conversation concludes.
+    ///
+    /// A no-op (and nothing is remembered) when the player is already in range — the ordinary
+    /// case for a real mouse click, which this flag must not visibly disturb.
+    ///
+    /// MAIN THREAD ONLY.
+    /// </summary>
+    private static void TryTeleportForJoin(nint creature)
+    {
+        nint player = GetPlayerCreaturePointer();
+        if (player == 0)
+        {
+            return;
+        }
+
+        Vec3 origin = GetPosition(player);
+        Vec3 target = GetPosition(creature);
+
+        float dx = target.X - origin.X;
+        float dy = target.Y - origin.Y;
+        float dz = target.Z - origin.Z;
+        if (dx * dx + dy * dy + dz * dz <= DialogueStartRange * DialogueStartRange)
+        {
+            return; // already close enough; the engine's own check will pass unaided
+        }
+
+        // A couple of units short of the NPC, not on top of it — SnapTo's own action clear is
+        // what actually matters here (see its doc: setting position alone does not stick while
+        // a move action still owns it), the exact offset just keeps the player out of the
+        // NPC's collision.
+        Vec3 destination = new() { X = target.X + 1.5f, Y = target.Y, Z = target.Z };
+
+        _joinTeleportOrigin = origin;
+        _joinTeleportPending = true;
+        SnapTo(player, destination);
+    }
+
+    /// <summary>
+    /// Puts the local player back where <see cref="TryTeleportForJoin"/> found them, once the
+    /// followed conversation is over. Idempotent: does nothing when nothing is pending, which
+    /// covers every join that never needed to move the player at all.
+    ///
+    /// MAIN THREAD ONLY.
+    /// </summary>
+    public static void RestoreJoinTeleportIfPending()
+    {
+        if (!_joinTeleportPending)
+        {
+            return;
+        }
+
+        _joinTeleportPending = false;
+
+        nint player = GetPlayerCreaturePointer();
+        if (player != 0)
+        {
+            SnapTo(player, _joinTeleportOrigin);
+        }
+    }
+
+    /// <summary>
+    /// Breaks a conversation shell that <see cref="ForceCloseDialogueUi"/> alone cannot close.
+    ///
+    /// ⚠ LIVE-VERIFIED, and it is why this exists rather than another retry of the UI close.
+    /// A joiner left too far from the NPC (see <see cref="TryTeleportForJoin"/>'s own note)
+    /// gets stuck with the engine's own conversation-active flag (<c>gui+0xB4</c>) re-armed
+    /// every tick by the still-queued <c>AIActionDialogObject</c>, and <c>ForceCloseDialogueUi</c>
+    /// — which only closes the client GUI panel — cannot touch that: measured live, it repeated
+    /// every <c>YieldCloseRetryMs</c> for over two minutes straight with no effect.
+    /// <c>CheatController</c>'s own <c>tp</c> (via <see cref="SnapTo"/>, which clears the
+    /// object's action queue before moving it) stopped the loop within one cycle, every time it
+    /// was tried; plain position writes and plain UI closes did not. Snaps the player back to
+    /// their OWN current position — nothing about where they stand should change, only that
+    /// the stuck action is gone.
+    ///
+    /// MAIN THREAD ONLY.
+    /// </summary>
+    public static void ClearLocalPlayerStuckDialogueAction()
+    {
+        nint player = GetPlayerCreaturePointer();
+        if (player != 0)
+        {
+            SnapTo(player, GetPosition(player));
+        }
+    }
 
     /// <summary>
     /// CGuiInGame holds FOUR dialogue panels, one per class, at their own members (symbol

@@ -65,6 +65,14 @@ public enum DialogueFollowAction
     /// has nothing left to stop and which therefore ignores the polite close forever.</summary>
     ForceCloseUi,
 
+    /// <summary>Beyond last resort: the UI close alone has been retried and is still not
+    /// sticking — this shell's <c>gui+0xB4</c> is being re-armed by something the UI close
+    /// cannot touch (a joiner left too far from the NPC leaves a still-queued dialogue action
+    /// doing exactly this — see docs/research/dialogue-join-latency.md "Far-join live pass",
+    /// live-verified: the UI-only close repeated for over two minutes with no effect). Shut
+    /// the UI AND clear the local player's own stuck action.</summary>
+    ForceCloseUiAndClearActions,
+
     /// <summary>Ask the engine to move to the owner's node.</summary>
     DriveToPeerNode,
 }
@@ -78,6 +86,7 @@ public enum DialogueFollowNote
     Adopted,
     Yielding,
     ForcingUiShut,
+    ClearingStuckAction,
     UnstickingShell,
     GaveUpNeverOpened,
     GaveUpNoContent,
@@ -135,6 +144,15 @@ public readonly record struct DialogueFollowInputs(
 /// close runs the END SCRIPT, and an NPC whose end script re-initiates (the tutorial deck's
 /// Trask) turns a per-frame close into a conversation that opens and closes forever.</param>
 /// <param name="YieldCloseServerAttempts">Polite closes before forcing the UI shut.</param>
+/// <param name="YieldClearActionsAttempts">Cycles of the UI-only force-close before also
+/// clearing the local player's action queue. ⚠ LIVE-VERIFIED NECESSARY, not a precaution: a
+/// joiner left too far from the NPC leaves the engine's own conversation-active flag re-armed
+/// every tick by a still-queued dialogue action, which <c>ForceCloseUi</c> alone cannot touch —
+/// measured running for over two minutes straight with no effect, where the action-clearing
+/// escalation stopped it within one cycle every time it was tried. See
+/// docs/research/dialogue-join-latency.md "Far-join live pass". Set higher than
+/// <see cref="YieldCloseServerAttempts"/> so the cheaper, non-destructive close still gets its
+/// own chances first.</param>
 /// <param name="UnstickRetryMs">Pause between attempts to end an empty conversation shell.</param>
 /// <param name="ReopenCooldownMs">Stand-off after a follow gives up, before the same
 /// conversation may be adopted again.</param>
@@ -144,6 +162,7 @@ public readonly record struct DialogueFollowTimings(
     long LocalOpenGraceMs,
     long YieldCloseRetryMs,
     int YieldCloseServerAttempts,
+    int YieldClearActionsAttempts,
     long UnstickRetryMs,
     long ReopenCooldownMs)
 {
@@ -155,6 +174,7 @@ public readonly record struct DialogueFollowTimings(
         LocalOpenGraceMs: 15000,
         YieldCloseRetryMs: 2000,
         YieldCloseServerAttempts: 2,
+        YieldClearActionsAttempts: 5,
         UnstickRetryMs: 3000,
         ReopenCooldownMs: 4000);
 }
@@ -436,15 +456,26 @@ public sealed class DialogueFollowMachine(DialogueFollowTimings timings)
         // The server route has had its turns and the conversation is still here, which means
         // there is nothing server-side left to end — a client-only shell. Shut the UI directly,
         // or this instance sits out the whole conversation retrying forever.
-        return _yieldCloseAttempts <= _t.YieldCloseServerAttempts
-            ? new DialogueFollowDecision(
+        if (_yieldCloseAttempts <= _t.YieldCloseServerAttempts)
+        {
+            return new DialogueFollowDecision(
                 DialogueFollowState.Yielding,
                 DialogueFollowAction.CloseConversation,
-                DialogueFollowNote.Yielding)
-            : new DialogueFollowDecision(
+                DialogueFollowNote.Yielding);
+        }
+
+        // The UI-only close has ALSO had its turns and the shell is still here — see
+        // YieldClearActionsAttempts' own doc: this is not a hypothetical escalation, it is the
+        // fix for a loop that measured as genuinely infinite otherwise.
+        return _yieldCloseAttempts <= _t.YieldClearActionsAttempts
+            ? new DialogueFollowDecision(
                 DialogueFollowState.Yielding,
                 DialogueFollowAction.ForceCloseUi,
-                DialogueFollowNote.ForcingUiShut);
+                DialogueFollowNote.ForcingUiShut)
+            : new DialogueFollowDecision(
+                DialogueFollowState.Yielding,
+                DialogueFollowAction.ForceCloseUiAndClearActions,
+                DialogueFollowNote.ClearingStuckAction);
     }
 
     /// <summary>Adopting / Opening / Following: we are committed, and the two deadlines run.</summary>

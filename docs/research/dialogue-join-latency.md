@@ -380,3 +380,253 @@ behind it is untouched by this pass — it is shown to be **unverified for the p
 which is a live-testing gap, not a design defect. `dialogue_fast_join=1` remains available and
 recommended for anyone who can reproduce a genuine distance follow (a joiner started well away
 from the NPC) to re-run this same A/B against.
+
+---
+
+## Far-join live pass (2026-08-21)
+
+The gap the previous pass left honest: its rig placed both players next to Trask, so every join
+resolved through **adopt** and the **follow/distance** path — the one the user's report is
+actually about — was never exercised. This pass placed the joiner 14 m from the NPC and drove
+both directions for real. It reproduces, and it is worse than the reported symptom: a joiner
+left far enough away does not just lag, they never open the conversation at all, and the
+mechanism that leaves them stuck does not resolve on its own.
+
+### Disassembly: where the distance check lives, and its exact threshold
+
+Read `docs/research/dialogue-sync.md` first for the address database and verification
+conventions this section follows.
+
+`CSWSObject::StartDialog 0x004CF490` (`dialogue-sync.md`'s own headline function) itself takes
+no distance-related parameter — disassembly of its body (`tools/disasm.py 0x004CF490 0x180`)
+shows it only reads fields off `this` and constructs the `CSWSDialog`. **VERIFIED.** The walk
+happens one level up, in the AI action that reaches `StartDialog`:
+`CSWSObject::AIActionDialogObject 0x0057A470`, already named in this doc's own "the joiner
+CAN start conversations — they THRASH" section as the function that re-arms
+`gui+0xB4` "before its range test... re-queueing itself for every tick the server spends walking
+the player into range." This pass disassembled that range test
+(`tools/disasm.py 0x0057A470 0x500`):
+
+```
+0x0057A799  fld   dword ptr [0x747450]      ; the threshold, loaded twice and squared
+0x0057A79F  fmul  dword ptr [0x747450]
+0x0057A7A5  fcompp                          ; compare against dx²+dy²+dz² computed just above
+0x0057A7A7  fnstsw ax
+0x0057A7A9  test  ah, 5
+0x0057A7AC  jp    0x57a9d7                  ; NaN guard, not the range branch
+```
+
+`[0x747450]` **VERIFIED LIVE** by reading it directly out of a running instance
+(`ReadProcessMemory` at the fixed address — no ASLR, verified elsewhere in this repo): **10.0**.
+So `ActionStartConversation`'s own engine-side range gate is a flat **10-unit** radius: a player
+farther than that from the NPC does not reach `StartDialog` until something closes the gap.
+
+Two flags gate this whole distance block, read a few lines earlier from the AI action struct
+(`ebx = [esp+0xb4]`, the action parameter block; offsets below are relative to it):
+
+```
+0x0057A74A  mov  eax, [esp+0x24]     ; = [ebx+0x48]
+0x0057A750  test eax, eax
+0x0057A756... jne  0x57a9d7          ; skips the ENTIRE distance block, straight to dispatch
+0x0057A756  mov  eax, [esp+0x28]     ; = [ebx+0x44]
+0x0057A75C  test eax, eax
+0x0057A75C... jne  0x57a8ff          ; a different, "close-range" dispatch (pushes 1.0f)
+```
+
+`ebx+0x48` is the fifth field the action struct carries after the object/resref pair — the
+same position NWScript's own `ActionStartConversation(object, string, int bPrivateConversation,
+int bPlayerDialog, int bIgnoreStartRange, ...)` puts `bIgnoreStartRange` in. **INFERRED** (the
+field ordering matches the NWScript signature and the branch's own effect — skip the whole
+range/walk block — matches the parameter's own documented name in every other NWN-heritage
+engine), not independently named in the symbol DB. Following the jump at `0x57a74a` lands at
+`0x57a9d7`, which falls straight into the SAME dispatch code the "already close enough" fast
+path uses (`jmp 0x57a85c`, into the block that ends in the real `StartDialog`-reaching call) —
+**VERIFIED** by disasm, confirming the flag really does bypass the walk entirely, not just relax
+its threshold.
+
+**This was not shipped as a native patch.** Setting `bIgnoreStartRange` would need either (a)
+marshalling a full NWScript VM call to `ExecuteCommandActionStartConversation 0x0052D5B0` — an
+unverified ABI, flagged HIGH risk by this doc's own house rules — or (b) a mid-function detour
+inside `AIActionDialogObject` itself, after several vtable calls and floating-point setup have
+already run, which is a much longer and riskier trampoline than the whole-function prologue
+hooks this codebase ships elsewhere (`DialogueGateHook`'s own doc: refuse BEFORE the SEH
+prologue runs, never mid-body). A third path was found instead: the server's own dialog-input
+message handler (`CSWSMessage::HandlePlayerToServerInputMessage`'s dialog branch,
+`0x00525F2E`) builds this SAME action from a batch of hardcoded, mostly-zeroed pushes at
+`0x00525F99-0x00525FE3` through a generic type-tagged param-marshaling call
+(`0x004CEA20`) — patching ONE of those pushes to source `bIgnoreStartRange` from a flag this
+mod controls is possible in principle but was judged not safe to ship blind in this session: a
+wrong type tag in that marshaling call is exactly the class of bug this codebase's own
+"verify-bytes-or-refuse" discipline exists to keep out, and nothing here independently confirmed
+the full 24-value push list's typing. Left as a follow-up, not attempted.
+
+### Reproduction: the joiner never opens, and the failure does not resolve itself
+
+Live rig: `C:\GOG Games\Star Wars KOTOR (GOG)` (host) and `D:\Games\swkotor-gog-p2` (client),
+both plugin and agent rebuilt and deployed, block version 47 / protocol 33 confirmed on both,
+`tools\demo.ps1` cold-launched onto `END_M01AA`. The joiner was placed 14 m from `end_trask`
+(`console 'tp 20.0 8.0 -1.3'` against a save that starts both players at `20.0 22.2 -1.3`) before
+the owner started the conversation and the joiner "clicked" it (`talk end_trask`, which sends the
+same player-to-server dialogue request a click does — see `TestDriveController`'s own doc for why
+this, not injected mouse input, is how this rig exercises a join).
+
+Before this session's fix, on current HEAD (`38be4ba8`), with `dialogue_join_teleport` not yet
+existing:
+
+```
+[23:18:15.283] dialogue: engine reached StartDialog (2 so far)      <- HOST, 4 ms after its own request
+...
+[23:18:19.200] test: opened a conversation with 'end_trask'          <- CLIENT (joiner), request sent
+                                                                          NO "engine reached StartDialog" for
+                                                                          the client anywhere in the log
+[23:18:34.199] dialogue: a peer won the conversation token; closing our own to follow
+[23:18:38.197] dialogue: our conversation would not close after the server's turns; forcing the UI shut
+[23:18:48.199] ...forcing the UI shut          <- repeats every 2 s (LogFew's own dedupe window makes
+[23:18:58.200] ...forcing the UI shut             it print every ~10 s; the underlying retry is 2 s)
+[23:19:08.199] ...forcing the UI shut
+   ... continues, unattended, past two minutes straight, with ZERO effect ...
+```
+
+The joiner's own `CSWSObject::StartDialog` is **never reached** — the engine's own
+"conversation active" flag (`gui+0xB4`) goes up immediately (this is the letterbox-eligible
+signal the user's report calls "the cinematic bars creep in"), but no real `CSWSDialog` exists
+behind it, so no content ever arrives. Structurally this is the correction this doc already made
+once ("A JOINER CANNOT START A CONVERSATION AT ALL" → "they THRASH"), reproduced from the ONE
+angle that prior pass never tried: **too far**, not **too close together**. The player's own
+position was polled throughout and never moved (`20.0, 8.0` at every sample) — this build's
+player character is drive-controlled, not action-queue-walked (`TestDriveController.HandleWalk`'s
+own established finding, now confirmed to apply here too), so the automatic-join path this rig
+exercises (`force_dialogue_party`, or the `talk` test hook) has no way to close the gap on its
+own the way a real mouse-driven walk would.
+
+**A second, worse defect was found underneath the first**: the "forcing the UI shut" retry —
+already the LAST resort in the state machine — does not stop the loop. `Odyssey.ForceCloseDialogueUi`
+only closes the client's GUI panel; it does not touch the still-queued `AIActionDialogObject`
+action, which re-arms `gui+0xB4` on the very next tick regardless. Measured: the loop ran for
+**over two minutes straight**, unattended, with no change. `talk close`
+(`Odyssey.CloseDialogue`) does not help either — it needs resolved participant ids, which never
+exist for a half-started shell like this one. What DID stop it, every time it was tried: a
+`CheatController`-style teleport (`Odyssey.SnapTo`, which clears the object's action queue
+*before* writing its position — its own doc already explains why the clear is required, not
+decoration). This is a real, live-verified defect independent of the join-latency feature this
+session was asked to investigate, and it is fixed below.
+
+### The fix
+
+Two changes, both built entirely from already-verified, already-used engine primitives — no new
+native detour, no mid-function patch:
+
+**1. `dialogue_join_teleport` (default OFF, `coop.ini`).** `Odyssey.StartDialogueWith` — the one
+chokepoint both the automatic `force_dialogue_party` join and the test hook use, per its own
+existing doc comment about why it bypasses `ActionInitiateDialog` — now checks the target's
+distance against the VERIFIED 10-unit start range before sending the request. Farther than that,
+it snaps the local player 1.5 units short of the NPC (`Odyssey.SnapTo`, the same call
+`CheatController`'s own `tp` uses) and remembers the origin; closer, it is a complete no-op.
+`Odyssey.RestoreJoinTeleportIfPending()` puts the player back once the followed conversation
+concludes (owner ended it, or the follow gave up) — wired into
+`DialogueSpectateController.Say`'s existing `OwnerEnded` / `GaveUpNoContent` / `GaveUpNeverOpened`
+handling, so nothing new decides WHEN to restore; the same three events that already end a follow
+now also end the teleport.
+
+This is deliberately scoped to the automatic-join chokepoint, not a real mouse click: a genuine
+click on a distant NPC already walks the player there via local input (drive control), which this
+change does not touch and did not need to — see "What was NOT re-verified" below.
+
+**2. The stuck-loop fix (unconditional, not gated on the flag above).** The pure state machine
+(`DialogueFollowMachine.StepUnjoined`'s `Yielding` branch, `KotorCoop.Protocol`) now escalates
+past `ForceCloseUi` when it keeps failing: after `YieldClearActionsAttempts` cycles (5, i.e. 10 s
+of retrying at the existing 2 s cadence) with the shell still open, the decision becomes the new
+`ForceCloseUiAndClearActions` action, which the controller answers by calling BOTH
+`Odyssey.ForceCloseDialogueUi()` and the new `Odyssey.ClearLocalPlayerStuckDialogueAction()` (a
+`SnapTo` to the player's OWN current position — nothing about where they stand changes, only
+that the stuck action is gone). This fixes the two-minutes-and-counting loop found above
+regardless of whether `dialogue_join_teleport` is on; it is a correctness fix for an already-
+shipped last-resort path that measured as not actually resorting to anything.
+
+### Live verification of both fixes
+
+Same rig, rebuilt plugin and agent, block version 47 / protocol 33 confirmed. All times from the
+plugin logs, same machine so cross-process timestamps share a wall clock.
+
+**Stuck-loop fix, `dialogue_join_teleport=0`** (so the underlying failure still happens, and only
+the escalation is under test): joiner 14 m away, `talk end_trask`.
+
+```
+[23:33:45.173] test: opened a conversation with 'end_trask'
+[23:34:00.166] dialogue: a peer won the conversation token; closing our own to follow      (+15.0 s: LocalOpenGraceMs)
+[23:34:04.166] dialogue: our conversation would not close after the server's turns; forcing the UI shut
+[23:34:10.168] dialogue: the UI-only close did not stick; clearing the stuck action too    (+25.0 s total)
+                                                                                              NO further lines after this
+```
+
+Position after the clear: unchanged (`20.0, 8.0`, exactly where it was) — the clear does not
+displace the player, only unsticks the action. Watched with two separate 30-40 s monitors after
+the clear fired: zero further "forcing the UI shut" or "clearing the stuck action" lines. The
+loop that ran unattended for over two minutes before this fix now self-resolves, unattended, in
+25 seconds — one join attempt's worth of retries, not an indefinite one.
+
+**`dialogue_join_teleport=1`, both directions, before/after:**
+
+| Scenario | `engine reached StartDialog` after the request | content latency (self-reported) | position after conversation ends |
+|---|---:|---:|---|
+| Adjacent join (control, unaffected by the flag) | 4 ms | 0 ms after opening | unchanged (no teleport needed) |
+| Far join (14 m), **before** the fix | never (2+ min observed) | never | never advanced |
+| Far join (14 m), host owns / **client** joins, **after** | 4 ms | 15 ms after opening | restored to the pre-join spot exactly |
+| Far join (14 m), **client** owns / host joins, **after** (roles swapped) | 5 ms | 0 ms after opening | restored to the pre-join spot exactly |
+| Far join (14 m) **with `dialogue_fast_join=1` too** | 4 ms | 0 ms after opening | restored to the pre-join spot exactly |
+
+Every "after" row matches the adjacent-join control to within measurement noise — a far join now
+costs nothing beyond the request round-trip, in both ownership directions, and composes cleanly
+with `dialogue_fast_join`. Logs, one representative run (client joins host 14 m away):
+
+```
+[23:37:17.602] client (14m away): talk end_trask                                   <- request issued
+[23:37:18.519] test: opened a conversation with 'end_trask'                        <- +0.9 s (PowerShell/serial-poll overhead)
+[23:37:18.523] dialogue: engine reached StartDialog (1 so far)                     <- +4 ms
+[23:37:18.523] dialogue: the engine started the same conversation here; adopting it to follow
+[23:37:18.526] dialogue: followed conversation delivered content 15 ms after opening (15 ms after the request)
+...
+[23:37:57.210] host: talk close                                                    <- owner ends it
+[23:38:00.103] dialogue: the owner ended the conversation; closing
+                                                                                     client position: 20.0, 8.0, 0.0
+                                                                                     (exactly the pre-join spot)
+```
+
+### Screenshots: not usable in this environment, and why block/log telemetry replaced them
+
+The task asked for `shot.ps1` captures at fixed offsets. Both game windows rendered solid black
+in every capture attempted (including a full-desktop capture confirming it was not a
+capture-tool artifact — the windows themselves show black on screen), regardless of
+refocus/retry. The two console windows and the desktop icons behind them captured cleanly, so
+this is specific to the D3D9 swap chain not presenting in this session's display environment, not
+a general screenshot failure — the PREVIOUS pass's own screenshots (real subtitle text, real
+letterbox bars) prove this rig CAN produce them under different conditions. Rather than spend
+further budget chasing a display issue, this pass leaned on the block reads and log timestamps
+already used throughout — `blockpoke.ps1 dialogue`, `console 'where'`, and the plugin's own
+timestamped log lines — which are more precise than a screenshot could be anyway (millisecond
+timestamps vs. a ~2 s per-capture floor) and were the actual evidence base for every claim above.
+
+### What remains
+
+* **A real mouse-driven click on a distant NPC** was NOT re-verified this session — this rig has
+  no reliable way to inject one (`docs/live-verification.md`'s own "traps 22 and 25"), so
+  everything above exercises the automatic-join chokepoint (`force_dialogue_party` / the test
+  hook), not a literal click. Vanilla KOTOR's own click-and-walk behaviour for a distant NPC is
+  untouched by `dialogue_join_teleport` (it is not in the call path at all), so it is expected to
+  behave exactly as it always has — but that expectation is an inference from the code, not an
+  observation, same honesty bar the rest of this doc holds itself to.
+* **Adjacent room / no line-of-sight** was not separately tested. `dialogue_join_teleport`'s own
+  mechanism (`SetPosition`, not a walk) does not consult the walkmesh or line of sight at all —
+  the same `NEEDS-LIVE` caveat `CheatController.Teleport`'s own doc already carries for hand-typed
+  coordinates — so a joiner on the far side of a wall teleports exactly as cleanly as one across
+  an open room. Not independently measured, but not expected to differ, for a documented reason
+  rather than an assumption.
+* **A trigger/cutscene-started conversation** (END_M01AA's opening Trask scene) remains
+  NEEDS-LIVE from the previous pass — this session's save is also already past that scripted
+  opening. Unchanged from before: `BeginConversation → StartDialog` is the same entry point
+  regardless of trigger vs. click, so no separate risk is expected from either fix here, but it
+  is still an inference.
+* **The `bIgnoreStartRange` native patch** (see disassembly above) remains unshipped. The
+  teleport fallback fully covers the automatic-join case this session could reproduce and measure
+  live; the flag would additionally help a genuine walked click reach the NPC faster, which
+  nothing here could exercise to confirm is even worth the added native-patch risk.
