@@ -1364,6 +1364,29 @@ internal struct SharedBlock
     /// </summary>
     public const uint CheatKindMoveNear = 13;
 
+    /// <summary>
+    /// STAGING VERB (2026-08-22): run one of the peer-effect channel's non-damage constructors
+    /// directly, through the SAME <c>OdysseyEffects.ApplyEffect</c> path a peer's forwarded
+    /// effect calls on arrival — so this doubles as a live constructor test AND, aimed at a
+    /// peer's phantom (the default when <see cref="OffsetCheatTarget"/> is 0), as the trigger
+    /// for docs/research/effect-sync.md's live list, which had never run because no reachable
+    /// test module has a Force-using hostile and nothing before this could apply a non-damage
+    /// effect on demand at all. <see cref="OffsetCheatAmount"/> carries the effect kind (the
+    /// <c>PeerEffectKindValues</c>/<c>PeerEffectKind</c> numeric identity, 1..9);
+    /// <see cref="OffsetCheatCharges"/> and <see cref="OffsetCheatMaxCharges"/> are reused for
+    /// duration (ms) and magnitude — no new fields, no version bump, same discipline
+    /// <see cref="CheatKindFireScript"/> and <see cref="CheatKindMoveNear"/> already established
+    /// for a kind that fits inside the existing slot.
+    ///
+    /// STAGING ONLY, LOCAL APPLY: this never crosses the network by itself. What
+    /// <c>PhantomEffectHook</c> does with it after it lands on a peer's phantom — capture,
+    /// publish to the OUT ring, and the ordinary channel forwarding it for real — is the actual
+    /// test; see docs/research/console-cheats.md's co-op rule for this whole verb family.
+    ///
+    /// ⚠ 14, because 7-13 are taken. Take the next FREE number.
+    /// </summary>
+    public const uint CheatKindApplyEffect = 14;
+
     /// <summary>The request was carried out here.</summary>
     public const int CheatStatusApplied = 1;
 

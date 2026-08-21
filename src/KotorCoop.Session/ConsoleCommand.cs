@@ -1,4 +1,5 @@
 using System.Net;
+using KotorCoop.Protocol;
 
 namespace KotorCoop.Session;
 
@@ -188,6 +189,34 @@ public enum CoopCommandKind
     /// in <see cref="CoopCommand.Password"/>, and the stack count in
     /// <see cref="CoopCommand.Amount"/>.</summary>
     GiveLoot,
+
+    /// <summary>
+    /// STAGING VERB (2026-08-22): run one of the peer-effect channel's non-damage
+    /// constructors directly, through <c>OdysseyEffects.ApplyEffect</c> — the SAME apply-side
+    /// path a peer's forwarded effect calls on arrival. Built because
+    /// docs/research/effect-sync.md's live list had never run: no reachable test module has a
+    /// Force-using hostile, and until this verb there was no way to apply a non-damage effect
+    /// on demand at all.
+    ///
+    /// <see cref="CoopCommand.Amount"/> is the <c>PeerEffectKind</c> numeric value (1..9);
+    /// <see cref="CoopCommand.Address"/> is the target's object id, or null for "the nearest
+    /// phantom"; <see cref="CoopCommand.EffectDurationMs"/>/<see cref="CoopCommand.EffectMagnitude"/>
+    /// carry the effect's duration and (Slow only) its percent.
+    ///
+    /// Staging only, local apply: this never crosses the network by itself. Aimed at a peer's
+    /// PHANTOM it IS the live test — <c>PhantomEffectHook</c> captures it landing there and the
+    /// ordinary channel forwards it for real, so what the hook does with it afterward is what
+    /// is actually being measured. Aimed at a local creature (including your own player, via
+    /// <c>me</c>) it is a constructor smoke test only. See docs/research/console-cheats.md.
+    /// </summary>
+    ApplyEffect,
+
+    /// <summary>
+    /// Read-only. Lists the last few peer-effect records this agent has captured, forwarded
+    /// or applied, read straight out of the shared block's rings — so a live pass can read
+    /// the whole non-damage effect pipeline without grepping either log. Takes no arguments.
+    /// </summary>
+    Effects,
 }
 
 /// <summary>
@@ -243,7 +272,9 @@ public readonly record struct CoopCommand(
     float X = 0f,
     float Y = 0f,
     float Z = 0f,
-    ItemFields Item = default)
+    ItemFields Item = default,
+    uint EffectDurationMs = 0,
+    uint EffectMagnitude = 0)
 {
     /// <summary>
     /// Resolves <see cref="Address"/> to an endpoint, applying <paramref name="defaultPort"/>
@@ -657,6 +688,14 @@ public static class ConsoleCommand
 
             case "giveloot":
                 return ParseGiveLoot(rest);
+
+            case "applyeffect":
+                return ParseApplyEffect(rest);
+
+            case "effects":
+                return rest.Length > 0
+                    ? new CoopCommand(CoopCommandKind.Invalid, Error: "effects takes no arguments")
+                    : new CoopCommand(CoopCommandKind.Effects);
 
             case "cheats":
                 return new CoopCommand(CoopCommandKind.Cheats);
@@ -1125,6 +1164,80 @@ public static class ConsoleCommand
             CoopCommandKind.GiveLoot, Address: $"#{ownerId:x}", Password: rest[1], Amount: stack);
     }
 
+    /// <summary>The local player's own object id on every instance (docs/re/object-model.md:
+    /// "Player object id is exactly 0x7FFFFFFF") — what <c>me</c>/<c>self</c> resolves to for
+    /// <c>applyeffect</c>, so a player can smoke-test a constructor against their own
+    /// character without knowing their own id.</summary>
+    private const string LocalPlayerObjectIdToken = "0x7FFFFFFF";
+
+    /// <summary>Duration an <c>applyeffect</c> line gets when it names none — long enough to
+    /// actually be felt (a few seconds), not a measured figure. Mirrors the same fallback
+    /// <c>PhantomEffectHook.FallbackDurationMs</c> uses on the capture side, for the same
+    /// reason: most of these effects are meant to be felt, not applied as a permanent flag
+    /// flip.</summary>
+    private const uint DefaultApplyEffectDurationMs = 6000;
+
+    /// <summary>
+    /// Parses <c>applyeffect &lt;kind&gt; [target] [durationMs] [magnitude]</c> — the staging
+    /// verb that runs a peer-effect constructor directly, through the same
+    /// <c>OdysseyEffects.ApplyEffect</c> path the receiving side calls. Aimed at a peer's
+    /// phantom (the default — a blank target) this IS the live test docs/research/effect-sync.md
+    /// has never been able to run; aimed at an explicit id it is a constructor smoke test.
+    /// </summary>
+    private static CoopCommand ParseApplyEffect(string[] rest)
+    {
+        const string usage =
+            "applyeffect <kind> [target] [durationMs] [magnitude]  (kind: stun, paralyze, "
+            + "knockdown, slow, frightened, sleep, choke, forcepush, whirlwind; target: object "
+            + "id, 'me', or blank for the nearest phantom)";
+
+        if (rest.Length == 0 || rest.Length > 4)
+        {
+            return new CoopCommand(CoopCommandKind.Invalid, Error: usage);
+        }
+
+        if (!Enum.TryParse(rest[0], ignoreCase: true, out PeerEffectKind kind) || kind == PeerEffectKind.None)
+        {
+            return new CoopCommand(
+                CoopCommandKind.Invalid, Error: $"'{rest[0]}' is not an effect kind - {usage}");
+        }
+
+        string? target = null;
+        if (rest.Length > 1 && rest[1].Length > 0)
+        {
+            string raw = IsSelfWord(rest[1]) ? LocalPlayerObjectIdToken : rest[1];
+
+            if (!TryParseObjectId(raw, out _))
+            {
+                return new CoopCommand(
+                    CoopCommandKind.Invalid,
+                    Error: $"'{rest[1]}' is not an object id (try 0x35, or 'me' for yourself)");
+            }
+
+            target = raw;
+        }
+
+        uint durationMs = DefaultApplyEffectDurationMs;
+        if (rest.Length > 2 && !uint.TryParse(rest[2], out durationMs))
+        {
+            return new CoopCommand(
+                CoopCommandKind.Invalid, Error: $"'{rest[2]}' is not a duration in milliseconds");
+        }
+
+        uint magnitude = 0;
+        if (rest.Length > 3 && !uint.TryParse(rest[3], out magnitude))
+        {
+            return new CoopCommand(CoopCommandKind.Invalid, Error: $"'{rest[3]}' is not a magnitude");
+        }
+
+        return new CoopCommand(
+            CoopCommandKind.ApplyEffect,
+            Address: target,
+            Amount: (int)kind,
+            EffectDurationMs: durationMs,
+            EffectMagnitude: magnitude);
+    }
+
     /// <summary>A field value: decimal, or hex with an explicit 0x. Unlike an object id a
     /// bare number here is unambiguous — a stack of 20 is 20 — so decimal is the default.</summary>
     private static bool TryParseFieldValue(string value, out uint number)
@@ -1149,7 +1262,7 @@ public static class ConsoleCommand
 
     /// <summary>One-line help listing the commands, for the overlay and dashboard.</summary>
     public const string HelpText =
-        "commands: servers | connect <ip|#n> [password] | password <pw> | host | disconnect | reconnect | say <msg> | clear | status | warp <module> | who | where | census | resolve <id> | cheats | netsim <off|status|loss|latency|blackout> | help";
+        "commands: servers | connect <ip|#n> [password] | password <pw> | host | disconnect | reconnect | say <msg> | clear | status | warp <module> | who | where | census | resolve <id> | cheats | netsim <off|status|loss|latency|blackout> | help (see `cheats` for applyeffect/effects and the rest of the staging verbs)";
 
     /// <summary>
     /// The staging-cheat listing. Two halves on purpose: what co-op adds, and what the
@@ -1172,6 +1285,12 @@ public static class ConsoleCommand
         "  setitem 0x131 stack=20 charges=3 upgrades=0x5 identified=0",
         "                      poke those fields, so there is something worth sending",
         "  giveloot <owner id> <resref> [stack]   give a materialised stand-in its real loot",
+        "  applyeffect <kind> [target] [durationMs] [magnitude]",
+        "                      run a peer-effect constructor (stun/paralyze/knockdown/slow/",
+        "                      frightened/sleep/choke/forcepush/whirlwind); blank target =",
+        "                      nearest phantom. STAGING ONLY, LOCAL APPLY - what the hook",
+        "                      forwards from a peer's phantom is the actual test",
+        "  effects             last 8 captured/forwarded/applied peer effects, with ages",
         // Listed here because it is the same family — a verb that exists to stage a test —
         // and discoverability is the point of this listing. It is owned by the network
         // fault-injection work, which registers its own catalog entry and parser case; this

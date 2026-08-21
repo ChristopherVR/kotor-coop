@@ -436,3 +436,69 @@ simply an attempt that did not get far enough to produce evidence either way. A 
 should either build a test hook (mirroring the dialogue one) or specifically route through a
 module with an early Force-using hostile (a Dark Jedi encounter, not reached in this game's
 opening hours) before spending rig time on this again.
+
+## The test hook now exists (2026-08-22): `applyeffect` / `effects`
+
+The gap named directly above — "no console verb exists to inject an effect synthetically" — is
+closed. Two staging verbs (`ConsoleCommand`/`CoopCommandDispatcher`/`CheatController`, following
+the exact pattern `giveloot`/`setitem`/`slay` already use; see docs/research/console-cheats.md §3
+for the full table) mean this list no longer needs a Force-using hostile at all — an effect can
+be applied on demand, without engaging anything:
+
+- **`applyeffect <kind> [target] [durationMs] [magnitude]`** runs the kind's constructor
+  through `OdysseyEffects.ApplyEffect` — the SAME apply-side call the receiving half of this
+  channel makes on an arriving effect (`PeerEffectController.ApplyIncoming`). `kind` is any of
+  the nine allowlist names (`stun, paralyze, knockdown, slow, frightened, sleep, choke,
+  forcepush, whirlwind`); the six with a real constructor (§4) apply, the other three
+  (knockdown, paralyze, sleep) answer `no apply-side constructor for this kind yet` — the
+  correct, expected refusal, not a bug to chase.
+- **`effects`** reads the shared block's OUT/IN peer-effect rings straight back and lists the
+  last 8 with kind name, subject id, duration/magnitude, ring serial and how long ago this
+  agent observed each one — the read-only half, so a run can confirm what happened without
+  grepping either log.
+
+**STAGING ONLY, LOCAL APPLY — what the hook forwards is the test.** `applyeffect` never crosses
+the network by itself. Aimed at an explicit id (including your own player, via `me`/`self`) it
+only proves the VM constructor call itself is well-formed — useful, but not what this document's
+list has been missing. Aimed at **the nearest phantom** (the default — leave `target` blank) it
+IS the live test: `PhantomEffectHook` watches phantom ids specifically
+(`PhantomHitHook.IsWatchedPhantom`), so the effect lands there exactly as a real enemy attack
+would, gets captured, published to the OUT ring, and forwarded by `PeerEffectController` to
+whichever peer that phantom renders — precisely the path this document has never been able to
+exercise.
+
+### Exact staging steps for the next live pass
+
+1. Both instances: `effect_sync=1` in `coop.ini` (unchanged from the prior attempt — the
+   channel is still gated off by default).
+2. Connect the pair in any module; each side renders a phantom for the other.
+3. On instance A, aim at instance B's phantom (the default target) for each of the six
+   constructed kinds in turn, spacing them out so `effects` can tell the rows apart:
+   ```
+   applyeffect stun
+   applyeffect slow      (blank target, blank duration, blank magnitude -> 6000ms, 50%)
+   applyeffect frightened
+   applyeffect choke
+   applyeffect forcepush
+   applyeffect whirlwind
+   ```
+   `slow` can also be aimed explicitly with a magnitude, e.g. `applyeffect slow "" 8000 70` for
+   an 8-second, 70% slow (percent is clamped to 1..90 and falls back to 50 outside that range —
+   §4, `OdysseyEffects.MinSlowPercent`/`MaxSlowPercent`).
+4. On instance A, `effects` — confirm each kind shows a `captured/forwarded` row with instance
+   B's phantom id.
+5. On instance B, `effects` — confirm the same kinds show an `applied` row (what
+   `PeerEffectController.ApplyIncoming` received and replayed on B's own player), and watch B's
+   own character for the visible effect (staggered gait for Slow, the choke pose, etc.) — the
+   `#3` item in §3.3's own checklist ("what animation/pose the target visibly plays") is
+   answerable this way even without a hostile.
+6. For the three capture-only kinds (`knockdown`, `paralyze`, `sleep`), `applyeffect <kind>`
+   against the phantom should answer `no apply-side constructor for this kind yet` on the
+   TYPING side — that refusal is itself confirmation the routing (kind name -> numeric ->
+   `CheatController.ApplyEffect`) works even where the apply half deliberately does not exist
+   yet. This does NOT exercise capture/forward for those three; the earlier plan (§3.3 —
+   provoke the matching enemy Force power, or stage a synthetic `EffectComplex` call) is still
+   the only way to name their sub-codes.
+7. Record which of the six constructed kinds visibly landed and which the peer's screen agreed
+   with — that is what finally moves this document's per-kind rows from **VERIFIED
+   (mechanism)** to **VERIFIED (live)**.
