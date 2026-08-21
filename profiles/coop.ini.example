@@ -332,8 +332,11 @@ trigger_relay_patterns=k_p*_*
 # Relay a MID-MODULE movie (a script's own PlayMovie, not a module-transition movie - those
 # already replicate via TransitionMovies) so a peer whose own screen never ran that PlayMovie
 # call sees it too - played immediately if idle, or queued onto that peer's own next transition
-# if mid-dialogue or mid-fight. Both halves are wired up now: MoviePlayHook captures which movie
+# if mid-dialogue or mid-fight. Both halves are wired up: MoviePlayHook captures which movie
 # played (docs/research/cinematics.md's 2026-08-22 section) and MovieRelayQueue.Decide (already
-# tested) picks play-now/defer/ignore. Default OFF pending a live pass - see that section's own
-# live-test note.
-movie_relay=0
+# tested) picks play-now/defer/ignore. A 2026-08-22 live pass (§10.8) found the play-now path
+# hung the game indefinitely; a same-day follow-up (§10.9) root-caused and fixed it (the engine
+# call was moved off the SwapBuffers-nested frame hook onto the pre-MainLoop one) and fixed a
+# second bug it uncovered (an unbounded relay replay loop). Both the play-now and defer paths
+# are now live-verified end to end - default ON.
+movie_relay=1

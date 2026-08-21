@@ -28,6 +28,13 @@ internal sealed unsafe class CheatController(SharedBlockView block)
 
     private uint _appliedSerial;
 
+    /// <summary>Set by <see cref="MoviePlay"/> when it defers the actual engine call to
+    /// <see cref="PendingMoviePlay"/> (docs/research/cinematics.md §10.9): the serial this
+    /// deferred call belongs to, so <see cref="OnFrame"/>'s own <c>finally</c> does not mark it
+    /// <see cref="SharedBlockView.CheatApplied"/> before the call has actually run — that would
+    /// tell a poller "done" a frame before the movie even started.</summary>
+    private uint _deferredMovieSerial;
+
     /// <summary>
     /// A top-up owed to a creature revived on an EARLIER tick. The Resurrection effect can
     /// run deferred, and hit points written while the target still reads dead are dropped by
@@ -46,6 +53,10 @@ internal sealed unsafe class CheatController(SharedBlockView block)
     {
         _pendingHitPoints = 0;
         _pendingHitPointTarget = 0;
+
+        // PendingMoviePlay itself is cancelled centrally (PluginHost.InvalidateAll); this just
+        // stops OnFrame's finally from waiting on a serial that will never complete now.
+        _deferredMovieSerial = 0;
 
         // A walk armed in the world we just left names a door that no longer exists — and if
         // the module changed BECAUSE the walk worked, the watch has nothing left to report.
@@ -81,7 +92,10 @@ internal sealed unsafe class CheatController(SharedBlockView block)
         }
         finally
         {
-            block.CheatApplied = serial;
+            if (_deferredMovieSerial != serial)
+            {
+                block.CheatApplied = serial;
+            }
         }
     }
 
@@ -579,8 +593,9 @@ internal sealed unsafe class CheatController(SharedBlockView block)
     }
 
     /// <summary>
-    /// TEST HOOK (2026-08-22): plays <see cref="SharedBlock.OffsetCheatText"/> (a bare resref)
-    /// RIGHT NOW, through <see cref="OdysseyMovies.PlayMovieNow"/> — the SAME engine entry
+    /// TEST HOOK (2026-08-22, fixed 2026-08-22 per §10.9): plays
+    /// <see cref="SharedBlock.OffsetCheatText"/> (a bare resref) through
+    /// <see cref="OdysseyMovies.PlayMovieNow"/> — the SAME engine entry
     /// (<c>CClientExoApp::PlayMovie 0x005EDB30</c>) a mid-module script's own <c>PlayMovie</c>
     /// reaches, and the one <see cref="MoviePlayHook"/> watches. Exists because
     /// docs/research/cinematics.md §10.7 found no isolated way to fire that hook on the host
@@ -590,15 +605,22 @@ internal sealed unsafe class CheatController(SharedBlockView block)
     ///
     /// Gated by the SAME <see cref="MovieStaging.DecidePlayNow"/> check
     /// <see cref="MidModuleMovieController"/>'s own <c>PlayNow</c> uses before calling the
-    /// identical function, so a refusal here reads exactly like a refusal there. BLOCKS THE
-    /// MAIN THREAD for the length of the film — that stall, and the OTHER instance's
-    /// <c>movie-relay:</c> log lines once <c>movie_relay=1</c>, are the actual test.
+    /// identical function, so a refusal here reads exactly like a refusal there.
     ///
-    /// ⚠⚠ LIVE-VERIFIED HANG (2026-08-22): this call did not return for either of two different
-    /// real movies tried (`biologo`, `0a`) — 4+ minutes and 60+ seconds of ~100% single-core CPU
-    /// with no completion, both times, requiring the process to be killed. See
-    /// docs/research/cinematics.md §10.8. `movie_relay` is OFF pending a root cause; this verb
-    /// still ships as diagnostic infrastructure, but expect it to hang the game.
+    /// ⚠⚠ §10.8 found calling <see cref="OdysseyMovies.PlayMovieNow"/> RIGHT HERE — inside
+    /// <see cref="CheatController.OnFrame"/>, which runs on the <see cref="FrameHook"/> callback,
+    /// itself nested inside the hooked <c>GDI32!SwapBuffers</c> call — hangs the engine
+    /// indefinitely (two different real movies, both killed after 60+ seconds / 4+ minutes with
+    /// no completion). §10.9 root-caused it: neither retail caller of <c>PlayMovie</c> ever runs
+    /// from inside <c>SwapBuffers</c> (one is mid-<c>MainLoop</c> script execution, the other a
+    /// GUI callback off the message pump), so this verb now only DECIDES and ARMS here — the
+    /// actual engine call is deferred to <see cref="PendingMoviePlay"/>, which runs from
+    /// <see cref="MainLoopHook"/>'s callback, immediately BEFORE <c>MainLoop</c> for the next
+    /// frame: outside render, outside <c>SwapBuffers</c>, the same territory the retail call
+    /// sites already stand in. That call still BLOCKS THE MAIN THREAD for the length of the film
+    /// — that stall, and the OTHER instance's <c>movie-relay:</c> log lines once
+    /// <c>movie_relay=1</c>, are the actual test — it just does so one frame later and from a
+    /// different call site than before.
     /// </summary>
     private void MoviePlay()
     {
@@ -625,24 +647,60 @@ internal sealed unsafe class CheatController(SharedBlockView block)
             return;
         }
 
-        byte* buffer = stackalloc byte[MovieStaging.MaxNameLength];
+        // Heap, not stackalloc: this buffer has to survive into NEXT frame's MainLoopHook
+        // callback, well past this method's own return - a stackalloc'd span does not.
+        byte[] buffer = new byte[MovieStaging.MaxNameLength];
         int length = Math.Min(resref.Length, MovieStaging.MaxNameLength);
         for (int i = 0; i < length; i++)
         {
             buffer[i] = (byte)resref[i];
         }
 
-        PluginHost.Log($"movieplay: playing '{resref}' now - the main thread stalls for its length");
+        uint serial = block.CheatSerial;
+        _deferredMovieSerial = serial;
 
-        // BLOCKS. Everything the plugin does resumes on the far side of this call, exactly as
-        // it does for a real mid-module PlayMovie (docs/research/cinematics.md §1.3).
-        bool started = OdysseyMovies.PlayMovieNow(buffer, length);
+        PluginHost.Log(
+            $"movieplay: '{resref}' staged - deferred to the pre-MainLoop callback "
+            + "(docs/research/cinematics.md §10.9), plays next frame");
 
-        Answer(
-            started ? SharedBlock.CheatStatusApplied : SharedBlock.CheatStatusEngineRefused,
-            started
-                ? $"played '{resref}' (returned from the block)"
-                : $"'{resref}' did not start (no client, or name too long)");
+        PendingMoviePlay.Arm(() =>
+        {
+            // Re-checked, not reused: one frame separates the decision above from the engine
+            // call here, and MovieStaging.DecidePlayNow is cheap - the same "distrust a stale
+            // decision" posture §10.7 already documents for this exact check.
+            int recheckQueued = Odyssey.QueuedTransitionMovieCount();
+            MovieStagingVerdict recheck = MovieStaging.DecidePlayNow(
+                Odyssey.HasClient, Odyssey.IsAreaTransitionPending(), Odyssey.IsMoviePlaying(), recheckQueued);
+
+            if (recheck != MovieStagingVerdict.Stage)
+            {
+                string reason = MovieStaging.Explain(recheck, recheckQueued);
+                PluginHost.Log($"movieplay: '{resref}' no longer safe by the time it was due - {reason}");
+                Answer(SharedBlock.CheatStatusRefused, $"'{resref}' refused - {reason}");
+                _deferredMovieSerial = 0;
+                block.CheatApplied = serial;
+                return;
+            }
+
+            PluginHost.Log($"movieplay: playing '{resref}' now - the main thread stalls for its length");
+
+            // BLOCKS. Everything the plugin does resumes on the far side of this call, exactly
+            // as it does for a real mid-module PlayMovie (docs/research/cinematics.md §1.3) -
+            // just from MainLoopHook's callback rather than FrameHook's (§10.9).
+            fixed (byte* p = buffer)
+            {
+                bool started = OdysseyMovies.PlayMovieNow(p, length);
+
+                Answer(
+                    started ? SharedBlock.CheatStatusApplied : SharedBlock.CheatStatusEngineRefused,
+                    started
+                        ? $"played '{resref}' (returned from the block)"
+                        : $"'{resref}' did not start (no client, or name too long)");
+            }
+
+            _deferredMovieSerial = 0;
+            block.CheatApplied = serial;
+        });
     }
 
     /// <summary>

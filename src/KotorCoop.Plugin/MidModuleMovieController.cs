@@ -38,16 +38,25 @@ internal enum MidModulePlayStatusCode : uint
 /// to resolve "which module is the announcer in" itself; see
 /// <c>CoopAgent.PumpMidModuleMovies</c>.
 ///
-/// Kill switch: coop.ini <c>movie_relay=0</c> — default OFF, and as of 2026-08-22 that is no
-/// longer "unverified," it is "verified broken": a live pass calling this controller's own
-/// <c>PlayNow</c> function directly (through the <c>movieplay</c> test verb) hung the main
-/// thread INDEFINITELY for two different real movies (4+ minutes and 60+ seconds, never
-/// returned). See <see cref="OdysseyMovies.PlayMovieNow"/>'s own doc and
-/// docs/research/cinematics.md §10.8 before flipping this on.
+/// Kill switch: coop.ini <c>movie_relay=0</c>. A live pass on 2026-08-22 (§10.8) found calling
+/// <see cref="OdysseyMovies.PlayMovieNow"/> from THIS controller's own <c>PlayNow</c> — which
+/// runs on <see cref="PluginHost.OnFrame"/>, the <see cref="FrameHook"/> callback nested inside
+/// the hooked <c>GDI32!SwapBuffers</c> — hung the main thread INDEFINITELY for two different
+/// real movies (4+ minutes and 60+ seconds, never returned). A same-day follow-up (§10.9)
+/// root-caused it (neither retail caller of <c>PlayMovie</c> ever runs from inside
+/// <c>SwapBuffers</c>) and fixed it: the engine call is now deferred to
+/// <see cref="PendingMoviePlay"/>, which runs from <see cref="MainLoopHook"/>'s callback instead
+/// — outside render, outside <c>SwapBuffers</c>, live-verified to return normally for both
+/// movies. A second bug the fix uncovered (an unbounded host↔peer replay loop, because
+/// <c>PlayNow</c>'s own engine call was itself captured and republished by
+/// <see cref="MoviePlayHook"/>) is also fixed, in the same pass — see <c>PlayNow</c>'s own doc
+/// comment. Default is now ON (<c>movie_relay=1</c>) after both the idle PlayNow path and the
+/// mid-dialogue Defer path were live-verified end to end with no hang and no loop. See
+/// docs/research/cinematics.md §10.9 for the evidence.
 /// </summary>
 internal sealed unsafe class MidModuleMovieController(SharedBlockView block)
 {
-    private readonly bool _enabled = PluginConfig.ReadBool("movie_relay", false);
+    private readonly bool _enabled = PluginConfig.ReadBool("movie_relay", true);
 
     /// <summary>The last <see cref="MoviePlayHook.Sequence"/> value this controller has already
     /// turned into a publish attempt (successful or excluded).</summary>
@@ -55,6 +64,13 @@ internal sealed unsafe class MidModuleMovieController(SharedBlockView block)
 
     private uint _appliedRequestSerial;
     private bool _offLogged;
+
+    /// <summary>Set by <see cref="PlayNow"/> while its deferred <see cref="PendingMoviePlay"/>
+    /// call is armed and not yet run (docs/research/cinematics.md §10.9) — purely a diagnostic
+    /// breadcrumb; nothing currently reads it, unlike <see cref="CheatController"/>'s equivalent
+    /// field, because <see cref="HandleRequest"/> already returns before its own unconditional
+    /// <see cref="SharedBlockView.MidModulePlayApplied"/> write for this case.</summary>
+    private uint _deferredRequestSerial;
 
     /// <summary>Module change: every resref this controller might still be holding named
     /// something in the OLD world's transition queue, and a stale request would either replay
@@ -67,6 +83,9 @@ internal sealed unsafe class MidModuleMovieController(SharedBlockView block)
         // may not even be the one the request named itself for.
         _appliedRequestSerial = block.MidModulePlayRequestSerial;
 
+        // A deferred PlayNow (docs/research/cinematics.md §10.9) armed on PendingMoviePlay is
+        // cancelled centrally (PluginHost.InvalidateAll) - if that race window is hit, the
+        // request is simply never acked, same as every other pending write this method drops.
         MoviePlayHook.Invalidate();
     }
 
@@ -203,8 +222,8 @@ internal sealed unsafe class MidModuleMovieController(SharedBlockView block)
         switch (action)
         {
             case MovieRelayAction.PlayNow:
-                PlayNow(resRef, alreadyQueued);
-                break;
+                PlayNow(resRef, alreadyQueued, serial);
+                return; // PlayNow owns MidModulePlayApplied itself - see its own doc comment.
 
             case MovieRelayAction.DeferToNextTransition:
                 DeferToNextTransition(resRef, alreadyQueued);
@@ -219,7 +238,18 @@ internal sealed unsafe class MidModuleMovieController(SharedBlockView block)
         block.MidModulePlayApplied = serial;
     }
 
-    private void PlayNow(string resRef, int alreadyQueued)
+    /// <summary>
+    /// docs/research/cinematics.md §10.9: the actual <see cref="OdysseyMovies.PlayMovieNow"/>
+    /// call is deferred to <see cref="PendingMoviePlay"/>, which runs from
+    /// <see cref="MainLoopHook"/>'s callback rather than from here (the <see cref="FrameHook"/>
+    /// callback, nested inside the hooked <c>GDI32!SwapBuffers</c>) — calling it from THIS call
+    /// site hung the engine indefinitely (§10.8's <c>movieplay</c> repro exercises the identical
+    /// function). Owns writing <see cref="SharedBlockView.MidModulePlayApplied"/> /
+    /// <see cref="SharedBlockView.MidModulePlayStatus"/> itself, one frame later than every
+    /// other request outcome, rather than letting <see cref="HandleRequest"/> mark it applied
+    /// before the engine call has actually run.
+    /// </summary>
+    private void PlayNow(string resRef, int alreadyQueued, uint serial)
     {
         MovieStagingVerdict verdict = MovieStaging.DecidePlayNow(
             Odyssey.HasClient, Odyssey.IsAreaTransitionPending(), Odyssey.IsMoviePlaying(), alreadyQueued);
@@ -229,19 +259,65 @@ internal sealed unsafe class MidModuleMovieController(SharedBlockView block)
             block.MidModulePlayStatus = (uint)MidModulePlayStatusCode.RefusedUnsafe;
             PluginHost.Log(
                 $"movie-relay: not playing '{resRef}' now - {MovieStaging.Explain(verdict, alreadyQueued)}");
+            block.MidModulePlayApplied = serial;
             return;
         }
 
-        byte* buffer = stackalloc byte[MovieStaging.MaxNameLength];
+        // Heap, not stackalloc: this buffer has to survive into NEXT frame's MainLoopHook
+        // callback, well past this method's own return - a stackalloc'd span does not.
+        byte[] buffer = new byte[MovieStaging.MaxNameLength];
         int length = Math.Min(resRef.Length, MovieStaging.MaxNameLength);
         for (int i = 0; i < length; i++)
         {
             buffer[i] = (byte)resRef[i];
         }
 
-        PluginHost.Log($"movie-relay: playing '{resRef}' now - a peer's mid-module movie");
-        bool ok = OdysseyMovies.PlayMovieNow(buffer, length);
-        block.MidModulePlayStatus = (uint)(ok ? MidModulePlayStatusCode.Played : MidModulePlayStatusCode.EngineRefused);
+        _deferredRequestSerial = serial;
+        PluginHost.Log($"movie-relay: '{resRef}' staged - deferred to the pre-MainLoop callback, plays next frame");
+
+        PendingMoviePlay.Arm(() =>
+        {
+            // Re-checked, not reused: one frame separates the decision above from the engine
+            // call here (§10.7's "distrust a stale decision" posture, same reasoning as
+            // CheatController.MoviePlay's own re-check).
+            int recheckQueued = Odyssey.QueuedTransitionMovieCount();
+            MovieStagingVerdict recheck = MovieStaging.DecidePlayNow(
+                Odyssey.HasClient, Odyssey.IsAreaTransitionPending(), Odyssey.IsMoviePlaying(), recheckQueued);
+
+            if (recheck != MovieStagingVerdict.Stage)
+            {
+                PluginHost.Log(
+                    $"movie-relay: '{resRef}' no longer safe by the time it was due - "
+                    + MovieStaging.Explain(recheck, recheckQueued));
+                block.MidModulePlayStatus = (uint)MidModulePlayStatusCode.RefusedUnsafe;
+                _deferredRequestSerial = 0;
+                block.MidModulePlayApplied = serial;
+                return;
+            }
+
+            PluginHost.Log($"movie-relay: playing '{resRef}' now - a peer's mid-module movie");
+
+            bool ok;
+            fixed (byte* p = buffer)
+            {
+                ok = OdysseyMovies.PlayMovieNow(p, length);
+
+                // LIVE-VERIFIED PING-PONG (2026-08-22, §10.9): PlayMovieNow calls the SAME
+                // 0x00602CF0 MoviePlayHook watches, so serving a peer's request here also
+                // CAPTURES it, and HandleCapture would republish it right back at them -
+                // measured live as an unbounded host<->client replay loop of the same movie
+                // every ~9s until the rig was torn down. Consuming the hook's serial HERE,
+                // before HandleCapture's next poll can see it, is what tells this instance's
+                // own detection half "nothing new happened" for a play WE only did because a
+                // peer asked - the same movie played because a SCRIPT or the movieplay verb
+                // fired it here is still captured and republished, exactly as designed.
+                _lastHookSerial = MoviePlayHook.Sequence;
+            }
+
+            block.MidModulePlayStatus = (uint)(ok ? MidModulePlayStatusCode.Played : MidModulePlayStatusCode.EngineRefused);
+            _deferredRequestSerial = 0;
+            block.MidModulePlayApplied = serial;
+        });
     }
 
     private void DeferToNextTransition(string resRef, int alreadyQueued)

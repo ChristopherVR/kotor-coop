@@ -73,14 +73,21 @@ internal static unsafe class OdysseyMovies
     /// <c>Odyssey.QueueTransitionMovie</c>, because <c>PlayMovieFn</c> does not hand its return
     /// value back through the thunk in any form this binding could read (§ see the doc above).
     ///
-    /// ⚠⚠ LIVE-VERIFIED HANG (2026-08-22): calling this with `biologo` and separately with `0a`
-    /// — real, present-on-disk <c>.bik</c> files a few MB each — both hung the caller's thread
-    /// INDEFINITELY (4+ minutes / 60+ seconds observed, ~100% single-core CPU, never returned;
-    /// the process had to be killed both times). See docs/research/cinematics.md §10.8 for the
-    /// repro, both callers this method has (<c>CheatController.MoviePlay</c>,
-    /// <c>MidModuleMovieController.PlayNow</c>), and the reentrancy/environment hypotheses. Do
-    /// NOT call this from production code until root-caused — both callers are gated behind
-    /// <c>coop.ini movie_relay</c>, which is OFF by default specifically because of this.
+    /// ⚠⚠ CALL-SITE SENSITIVE (root-caused 2026-08-22, docs/research/cinematics.md §10.8–§10.9).
+    /// Calling this from <see cref="PluginHost.OnFrame"/> — the <see cref="FrameHook"/> callback,
+    /// nested inside the hooked <c>GDI32!SwapBuffers</c> IAT slot, itself called AFTER both
+    /// <c>CClientExoApp::MainLoop</c> and <c>CServerExoApp::MainLoop</c> have already run for the
+    /// frame — hung the caller's thread INDEFINITELY for two different real <c>.bik</c> files
+    /// (`biologo`, `0a`; 4+ minutes / 60+ seconds observed, ~100% single-core CPU, never
+    /// returned; the process had to be killed both times). §10.1's own call-graph shows why:
+    /// neither retail caller of <c>PlayMovie</c> (a script's own call, mid-<c>MainLoop</c> script
+    /// execution; the main-menu gallery's replay, a GUI input callback) ever runs from inside
+    /// <c>SwapBuffers</c>. Both current callers (<c>CheatController.MoviePlay</c>,
+    /// <c>MidModuleMovieController.PlayNow</c>) now call this ONLY from
+    /// <see cref="PendingMoviePlay"/>'s deferred action, which runs from
+    /// <see cref="MainLoopHook"/>'s callback — before <c>MainLoop</c>, outside render, outside
+    /// <c>SwapBuffers</c> — where both movies were live-verified to return normally. Do not add a
+    /// THIRD caller without routing it through <see cref="PendingMoviePlay"/> the same way.
     /// </summary>
     public static bool PlayMovieNow(byte* asciiResRef, int length)
     {

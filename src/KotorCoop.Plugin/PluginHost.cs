@@ -505,6 +505,14 @@ internal static unsafe class PluginHost
     /// </summary>
     private static void MenuFrame()
     {
+        // FIRST, before anything else here: this is the pre-MainLoop point §10.9 verified is
+        // safe to call CClientExoApp::PlayMovie from (docs/research/cinematics.md) — outside
+        // the script VM's own call, but also outside render and outside SwapBuffers, unlike the
+        // SwapBuffers-nested OnFrame below where §10.8 found the indefinite hang. Blocks for the
+        // length of the film when something is armed; everything below simply runs a frame late
+        // on that (rare) occasion, same as it already does across a real transition's own stall.
+        PendingMoviePlay.RunIfArmed();
+
         // First of all, and on THIS hook rather than OnFrame: a pre-rendered movie blocks the
         // main thread inside WaitForMovie, so the SwapBuffers callback cannot fire during one
         // and the only evidence a cinematic played is the gap it leaves between two of these
@@ -1018,6 +1026,7 @@ internal static unsafe class PluginHost
         _encounters?.Invalidate();
         _triggerRelay?.Invalidate();
         _movieRelay?.Invalidate();
+        PendingMoviePlay.Cancel();
         _barks?.Invalidate();
         _interactionLocks?.Invalidate();
         _partyRoster?.Invalidate();

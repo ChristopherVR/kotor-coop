@@ -402,22 +402,23 @@ tools/                   RE helpers, demo scripts, the kotor1_0_3 symbol databas
   (`k_trg_stealth`) — confirmed geometrically inside the client's own position — never entered
   the watch's report at all. `coop.ini` `trigger_relay=0` opts out. See
   [docs/research/trigger-relay.md](docs/research/trigger-relay.md) §11.
-- **Mid-module movies (a script's own `PlayMovie`, not a transition) are captured, but the
-  PLAY half hangs the game — a live pass found a real bug, not just an unverified one.**
-  `MoviePlayHook` detours `CClientExoAppInternal::PlayMovie 0x00602CF0` (VERIFIED disassembled;
-  never the transition path, by the call graph) to capture WHICH resref a mid-module call
-  played, and `MovieRelayQueue.Decide` (pure, tested) picks play-now / defer-to-next-transition
-  / ignore for the receiving peer. A 2026-08-22 live pass built the `movieplay <resref>` test
-  hook the design doc asked for and used it to call `OdysseyMovies.PlayMovieNow` — the exact
-  function `MidModuleMovieController`'s own `PlayNow` branch calls — directly on the host, twice,
-  with two different real `.bik` files present on disk (`biologo`, `0a`). **Both calls hung the
-  main thread indefinitely** (over 4 minutes and over 60 seconds respectively, ~100% single-core
-  CPU the whole time, process still responding at the OS level, never returning) rather than
-  playing and completing in the few seconds either file's size implies. The rig had to be killed
-  and relaunched both times. `coop.ini` `movie_relay=0` by default, and **stays that way** — this
-  is not "unverified," it is "verified broken" until the hang is root-caused. See
-  [docs/research/cinematics.md](docs/research/cinematics.md)'s 2026-08-22 "Live pass" section for
-  the full evidence and a reentrancy hypothesis, and
+- **Mid-module movies (a script's own `PlayMovie`, not a transition) relay to the other player —
+  found broken by a live pass, then root-caused and fixed the same day.** `MoviePlayHook`
+  detours `CClientExoAppInternal::PlayMovie 0x00602CF0` (VERIFIED disassembled; never the
+  transition path, by the call graph) to capture WHICH resref a mid-module call played, and
+  `MovieRelayQueue.Decide` (pure, tested) picks play-now / defer-to-next-transition / ignore for
+  the receiving peer. A 2026-08-22 live pass found that calling the actual player,
+  `OdysseyMovies.PlayMovieNow`, from either of its two callers **hung the main thread
+  indefinitely** for two different real `.bik` files (`biologo`, `0a`) — 4+ minutes and 60+
+  seconds, ~100% single-core CPU, never returning. A same-day follow-up root-caused it: both
+  callers ran from the `SwapBuffers`-nested frame hook, a call site neither retail caller of
+  `PlayMovie` ever uses (one runs mid-`MainLoop` script execution, the other from a GUI
+  callback) — so the engine call now fires from the pre-`MainLoop` frame hook instead, one frame
+  later, outside render entirely. That fix also surfaced a second bug — a peer's relayed play
+  was itself captured and republished, producing an unbounded host↔peer replay loop — fixed in
+  the same pass. Both the play-now and the mid-dialogue defer path are now live-verified end to
+  end with no hang and no loop; `coop.ini` `movie_relay=1` by default. See
+  [docs/research/cinematics.md](docs/research/cinematics.md) §10.9 for the full evidence, and
   [docs/research/trigger-relay.md](docs/research/trigger-relay.md) §6.
 - ~~**Item identity is a blueprint resref**~~ — no longer, on the wire: an item that crosses
   between players now carries **what makes it that item** — its stack size, its charges, its

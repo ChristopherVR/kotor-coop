@@ -1988,6 +1988,200 @@ is either to defer the call to a non-hooked context (e.g. arm a one-shot flag `M
 reads, since that hook fires OUTSIDE `SwapBuffers`) or to find the actual root cause with a
 debugger before trying again live.
 
+### 10.9 Root-caused and fixed (2026-08-22): the call site, not the function — `movie_relay` is now ON
+
+No debugger was available this pass either (no `cdb`/`windbg`/`procdump` on the rig), so this
+went straight to §10.8's own ranked list, item (3): move the call to the call site §10.8's own
+reentrancy hypothesis named as untested — H1 in the task that drove this pass. It held on the
+first try, empirically, with no ambiguity.
+
+**The mechanism, read off the code rather than guessed.** `CheatController.MoviePlay` and
+`MidModuleMovieController.PlayNow` (both callers `OdysseyMovies.PlayMovieNow` has) run from
+`CheatController.OnFrame`/`MidModuleMovieController.OnFrame`, which `PluginHost.OnFrame` calls
+directly (`src/KotorCoop.Plugin/PluginHost.cs:796,830`). `PluginHost.OnFrame` is registered as
+`FrameHook`'s callback (`PluginHost.cs:178`) — `FrameHook` detours the IAT slot for
+`GDI32!SwapBuffers` (its own header comment: "the swap is the last thing in the frame, after
+both `CClientExoApp::MainLoop` and `CServerExoApp::MainLoop`"). So both callers ran from INSIDE
+the hooked `SwapBuffers` call, at the very end of the frame. §10.1's own call-graph shows neither
+retail caller of `PlayMovie` ever stands there: `ExecuteCommandPlayMovie` runs from
+`CVirtualMachine` execution, itself inside `MainLoop`'s script/AI update — before render, before
+`SwapBuffers`; `CSWGuiTitleMovies::OnMoviePicked` runs from a GUI input callback, off the message
+pump, never nested inside `SwapBuffers` either. `MainLoopHook` (`MainLoopHook.cs`) already reaches
+that same "outside render, outside `SwapBuffers`" territory on purpose — it rewrites WinMain's own
+call site for `CClientExoApp::MainLoop` so its callback runs immediately BEFORE `MainLoop`, every
+frame, at the menu and in-world alike. That is exactly the deferral target §10.8's own item (3)
+named.
+
+**The fix.** `src/KotorCoop.Plugin/PendingMoviePlay.cs` (new): a one-shot `Arm(Action)` /
+`RunIfArmed()` / `Cancel()`. `PluginHost.MenuFrame` (`MainLoopHook`'s callback) calls
+`PendingMoviePlay.RunIfArmed()` first thing, before anything else that callback already does.
+`CheatController.MoviePlay` and `MidModuleMovieController.PlayNow` no longer call
+`OdysseyMovies.PlayMovieNow` themselves — each still runs its own `MovieStaging.DecidePlayNow`
+check immediately (so a refusal is reported exactly as it always was, same frame), then, only on
+`Stage`, copies the resref into a **heap** `byte[]` (not `stackalloc` — the buffer has to survive
+into next frame's `MainLoopHook` callback, a full call-stack away, which a stack-allocated span
+does not) and arms a closure that re-checks `MovieStaging.DecidePlayNow` (one frame of staleness
+is real, however small — the same "distrust a stale decision" posture §10.7 already documents
+for this exact check) and then calls `OdysseyMovies.PlayMovieNow` for real. Both callers own
+writing their own completion field (`SharedBlockView.CheatApplied` /
+`SharedBlockView.MidModulePlayApplied`) from inside the deferred action now, guarded by a
+`_deferredMovieSerial`/`_deferredRequestSerial` field so `OnFrame`'s own unconditional write
+doesn't mark the request "applied" a frame before the engine call has actually run.
+`PluginHost.InvalidateAll` calls `PendingMoviePlay.Cancel()` on a module change, alongside the
+two controllers' own `Invalidate()`, for the same reason every other cross-frame pending write in
+this codebase gets dropped there.
+
+**Live result: the hang is gone.** Fresh `demo.ps1` pair, `movie_relay=0` (isolating the fix from
+the relay), both in `END_M01AA`. Host: `console 'movieplay biologo'` — plugin log:
+
+```
+[05:21:09.241] movieplay: 'biologo' staged - deferred to the pre-MainLoop callback (...), plays next frame
+[05:21:09.242] movieplay: playing 'biologo' now - the main thread stalls for its length
+[05:21:12.972] WARNING: frame hook installed but has not fired for ~2s (normal while a movie or a module load holds the main thread)
+[05:21:18.006] cheat: played 'biologo' (returned from the block) (status 1)
+[05:21:18.007] cinematic: the main thread was gone for 8765 ms (in a world; 0 transition movie(s) were queued going in) ...
+```
+
+`CheatApplied` advanced, the `cheat` verb read back `status 1` / `'played 'biologo' (returned
+from the block)'`, and the stall (8765 ms) is the length a 3.37 MB `.bik` actually implies — not
+the 4+ minutes of spinning §10.8 measured for the exact same file from the exact same function.
+`console 'movieplay 0a'` immediately after, same instance: staged 05:21:39.996, `CheatApplied`
+advanced with `status 1` at 05:21:49.574, stall 9593 ms. **Two different real movies, two clean
+returns**, both `Get-Process` `Responding: True` throughout with CPU that settled back to normal
+afterward (the busy-spin CPU reading in §10.8 was never diagnostic on its own — `WaitForMovie`'s
+own disassembly, §1.3, is a tight loop with no `Sleep`, so pinned CPU is what a WORKING wait looks
+like too; what was diagnostic is that `IsMoviePlaying()` now actually returns false). A
+post-movie `state` read showed the frame counter still climbing and the phantom/remote counts
+intact — the session kept running normally, not just the one call. A screenshot taken right after
+came back solid black for both windows, same as the (inconclusive) screenshots §10.8 flagged as
+suspicious — but the plugin's own log, the block's own completion fields and the world's own
+continued tick all agree the movie played and finished, so this is a pre-existing screen-capture
+limitation in this rig's environment (H3-shaped, but about the TOOLING, not the engine's Bink
+path), not evidence against the fix.
+
+**Hypotheses, resolved:**
+
+* **H1 (call-site/re-entrancy) — CONFIRMED, this is the bug.** Moving the identical call three
+  frames earlier in the same process, same build, same `.bik` files, turned an unconditional
+  4+-minute/60+-second hang into an 8.7s/9.6s return that matched the files' real lengths, with
+  no other change. That is as close to a controlled experiment as this rig can run without a
+  debugger, and it is unambiguous.
+* **H2 (bad trampoline in `MoviePlayHook`) — REFUTED.** `MoviePlayHook`'s detour never moved and
+  is unrelated to `PlayMovieNow`'s call site — it watches `0x00602CF0`'s ENTRY, `PlayMovieNow`
+  calls it via the THUNK at `0x005EDB30` (a completely different address, §10.1). Every capture
+  in this pass read the correct resref (`'biologo'`, `'0a'`) with the correct length every time,
+  across a dozen-plus calls including the relay round below — a bad jump-back would either crash
+  or corrupt the capture, not simply relocate the hang to a different call site while leaving the
+  capture perfectly accurate.
+* **H3 (Bink/environment cannot play movies here) — REFUTED.** Both files decoded and played to
+  completion, for a duration matching their real length, with the main thread returning normally
+  afterward. The solid-black screenshot is real and still unexplained, but it is now clearly a
+  SEPARATE, narrower issue (screen capture of this window in this environment) rather than "Bink
+  cannot render here."
+
+**A second bug the fix surfaced: an unbounded relay replay loop.** With the hang gone, the next
+test was the actual relay (`movie_relay=1` on both, fresh session). Host `console 'movieplay
+biologo'` played and returned as above, and 8.8s later — the delay is `HandleCapture` only
+running on the NEXT `SwapBuffers`-nested `OnFrame` after the blocking call itself returns —
+captured and published:
+
+```
+host:   [05:24:03.775] movie-relay: captured mid-module PlayMovie('biologo') - published for the session
+client: [05:24:03.938] movie-relay: 'biologo' staged - deferred to the pre-MainLoop callback, plays next frame
+client: [05:24:03.939] movie-relay: playing 'biologo' now - a peer's mid-module movie
+```
+
+The relay itself worked — but the client's own `PlayMovieNow` call, made to SERVE the host's
+request, goes through the SAME `0x00602CF0` `MoviePlayHook` watches, so it was captured too, and
+republished right back:
+
+```
+client: [05:24:12.706] movie-relay: captured mid-module PlayMovie('biologo') - published for the session
+host:   [05:24:12.760] movie-relay: 'biologo' staged - deferred to the pre-MainLoop callback, plays next frame
+host:   [05:24:12.761] movie-relay: playing 'biologo' now - a peer's mid-module movie
+host:   [05:24:21.526] movie-relay: captured mid-module PlayMovie('biologo') - published for the session
+```
+
+— and so on, both instances replaying `biologo` back and forth every ~8.7–9s, unbounded, until
+the rig was torn down and relaunched. §10.2's existing exclusion (`IsAlreadyQueuedByTransition`)
+does not catch this: it only excludes a resref already sitting in the engine's TRANSITION queue,
+and a relayed `PlayNow` never touches that queue at all. **Fix**, in
+`MidModuleMovieController.PlayNow`'s deferred action, right after `OdysseyMovies.PlayMovieNow`
+returns: `_lastHookSerial = MoviePlayHook.Sequence;` — consumes the capture this instance's OWN
+relay-driven call just produced before `HandleCapture`'s next poll can see it as "new," so it is
+never republished. A movie played because a SCRIPT or the `movieplay` verb fired it (the intended,
+still-captured case §10.7's own design asks for) is untouched — only a play made to serve a peer's
+request is suppressed, and only that one call's single capture. `CheatController.MoviePlay`
+needed no equivalent change: `DeferToNextTransition`'s write goes through
+`Odyssey.QueueTransitionMovie`, a completely different path `0x00602CF0` never touches (§10.1),
+so it was never at risk of this loop.
+
+**Live result after the loop fix: one clean round trip, then silence.** Same rig, rebuilt,
+reinstalled, fresh pair. Host `console 'movieplay biologo'`:
+
+```
+host:   [05:27:24.061] movieplay: 'biologo' staged - deferred to the pre-MainLoop callback (...), plays next frame
+host:   [05:27:24.061] movieplay: playing 'biologo' now - the main thread stalls for its length
+host:   [05:27:32.831] cheat: played 'biologo' (returned from the block) (status 1)
+host:   [05:27:32.837] movie-relay: captured mid-module PlayMovie('biologo') - published for the session
+client: [05:27:33.030] movie-relay: 'biologo' staged - deferred to the pre-MainLoop callback, plays next frame
+client: [05:27:33.030] movie-relay: playing 'biologo' now - a peer's mid-module movie
+```
+
+— and nothing further from either side. Both `movie-relay:` line counts (8 and 8 at that point)
+held steady across a further 10+ seconds of idle polling and a further 15 seconds after the defer
+test below; the client's log tail through that window is ordinary gameplay (`gait:` sync lines),
+not another replay.
+
+**The Defer case, live.** Same session: `talk end_trask` on the client via `blockpoke.ps1` opened
+a real conversation (`dialogue` readback: `speaker 'Trask'`, `partner 'end_trask'`). With the
+client mid-dialogue, host `console 'movieplay 0a'` (a different movie, to keep the evidence
+unambiguous) played and returned normally (9578 ms), captured and published as before. The
+client, busy, deferred instead of playing:
+
+```
+client: [05:29:03.921] movie-relay: deferred '0a' onto this instance's own next transition
+client: [05:29:03.921] cinematic: the module transition has queued 1 movie(s): .\movies\0a.bik
+client: [05:29:03.921] cinematic: published 1 movie resref(s) for the session: 0a
+```
+
+The second and third lines are the SAME transition-queue confirmation §7/§8/§9 already
+live-validated for a real transition actually playing a queued movie — the new part this pass
+exercised is only the RELAY writing into that queue (`Odyssey.QueueTransitionMovie`, gated by
+`MovieStaging.Decide`), not the queue's own playback, which earlier passes already settled. No
+`movie-relay: captured` line followed on the client for `'0a'` (confirming `DeferToNextTransition`
+never touches `0x00602CF0`, as the design argued) — so no ping-pong risk on this path either.
+
+**Both processes stayed healthy throughout** (`Get-Process` `Responding: True`, CPU in the normal
+range once each blocking call returned) and a final `demo.ps1 -Stop` tore the rig down cleanly.
+
+**Both builds clean, full suite green.** `dotnet build` on `KotorCoop.Plugin.csproj` (win-x86):
+0 errors, 1 pre-existing unrelated warning (`PortraitController.cs` CA2014, not touched this
+pass). `build.ps1 -Install` against both GOG installs (`C:\GOG Games\Star Wars KOTOR (GOG)`,
+`D:\Games\swkotor-gog-p2`): both clean. `dotnet test tests/KotorCoop.Tests`: **1467/1467**,
+matching the baseline — `PendingMoviePlay.cs` is pure managed code with no engine addresses, but
+was not added to the test project's own compile list this pass (no behaviour in it is testable
+without a real frame-hook callback sequence; its `Arm`/`RunIfArmed`/`Cancel` shape is exercised
+live above instead, the same way `MoviePlayHook`'s own detour is).
+
+**`movie_relay` default flips to ON** (`coop.ini movie_relay=1`,
+`PluginConfig.ReadBool("movie_relay", true)` in `MidModuleMovieController.cs`,
+`profiles/coop.ini.example` updated to match) — per this pass's own instruction to flip it only
+if both the play-now and defer paths passed live, and both did, cleanly, with the loop bug fixed
+in the same pass rather than left for later.
+
+**What remains.** No debugger ever attached this pass (still not available on the rig) — the
+empirical A/B (same call, two call sites, one hangs and one doesn't) is strong enough that this
+pass did not chase one down, but a future session with `cdb`/WinDbg could still say PRECISELY
+what the spinning thread was doing at the SwapBuffers-nested call site, which remains inferred
+(re-entrancy into a message-pump-adjacent engine state) rather than directly observed. The Defer
+case's own eventual playback (the client's NEXT transition actually running `0a.bik`) was not
+walked to completion this pass — only the relay's WRITE into the transition queue was new and
+needed verifying; the queue's own playback was already settled by the `01c`/`01f` escape-pod pass
+(`b0841bf`). Combat-case relay (`inCombat` → `Ignore`, per `MovieRelayQueue.Decide`) and a
+second, DIFFERENT movie racing a genuine story-triggered mid-module `PlayMovie` (Taris
+bombardment `05`, per §10.7's own inventory) remain untested live, same as before this pass.
+
 ---
 
 ## Key addresses
