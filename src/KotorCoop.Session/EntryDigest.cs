@@ -100,4 +100,14 @@ public static class EntryDigest
         ulong h = MixUInt32(Offset, containerId);
         return MixUInt32(h, itemId);
     }
+
+    /// <summary>One creature-liveness entry: id plus its reported state. XOR-summed over the
+    /// WHOLE publish cycle's entries (every page, before pagination splits them across
+    /// datagrams) by <c>CreatureLivenessPaging.Paginate</c>, so every page of one cycle
+    /// carries the same digest.</summary>
+    public static ulong CreatureLiveness(uint objectId, CreatureLivenessState state)
+    {
+        ulong h = MixUInt32(Offset, objectId);
+        return MixByte(h, (byte)state);
+    }
 }

@@ -1141,4 +1141,112 @@ public class SessionIntegrationTests
         await cts.CancelAsync();
         await Task.WhenAll(hostTask, clientTask);
     }
+
+    /// <summary>
+    /// docs/research/creature-liveness.md: a body dead on the host must converge to dead on a
+    /// mirroring client — the wire half of the reconciliation channel. The plugin-side
+    /// dispatch (kill through CombatController's ordinary path) cannot run outside the game,
+    /// but the state that DRIVES exactly one such dispatch is this accumulated view, keyed by
+    /// object id — so "exactly once" is asserted here as "exactly one entry for this id, no
+    /// matter how many broadcast cycles or pages it rode".
+    /// </summary>
+    [Fact]
+    public async Task ADeadIdOnTheHostConvergesToDeadOnTheClientExactlyOnce()
+    {
+        using CoopHost host = new(new SessionSettings { PlayerName = "Revan", Port = 0, TickRate = 30 });
+        using CoopClient client = new(
+            new SessionSettings { PlayerName = "Malak", TickRate = 30 },
+            new IPEndPoint(IPAddress.Loopback, host.ListenEndPoint.Port));
+
+        using CancellationTokenSource cts = new(Timeout + TimeSpan.FromSeconds(10));
+        Task hostTask = host.RunAsync(cts.Token);
+        Task clientTask = client.RunAsync(cts.Token);
+
+        const string Module = "tar_m03aa";
+        PlayerState hostState = new(new Vector3f(10f, 20f, 0f), 1f, Module, 100, 0);
+        PlayerState clientState = new(new Vector3f(12f, 22f, 0f), 2f, Module, 90, 0);
+
+        CreatureLivenessEntry[] entries =
+        [
+            new CreatureLivenessEntry(0x14, CreatureLivenessState.Alive),
+            new CreatureLivenessEntry(0x35, CreatureLivenessState.Dead),
+        ];
+
+        void Publish()
+        {
+            host.PublishLocalState(hostState);
+            client.PublishLocalState(clientState);
+            host.PublishCreatureLiveness(Module, entries);
+        }
+
+        bool converged = await WaitForAsync(
+            () => client.GetCreatureLiveness(Module)
+                .Any(e => e.ObjectId == 0x35 && e.State == CreatureLivenessState.Dead),
+            Timeout,
+            Publish);
+        Assert.True(converged, "the client never learned 0x35 was dead");
+
+        Assert.Single(client.GetCreatureLiveness(Module), e => e.ObjectId == 0x35);
+        Assert.Contains(
+            client.GetCreatureLiveness(Module),
+            e => e.ObjectId == 0x14 && e.State == CreatureLivenessState.Alive);
+
+        // A second identical cycle must not duplicate the entry — the dictionary is keyed by
+        // object id, so re-publishing the same state converges to the same single entry.
+        host.PublishCreatureLiveness(Module, entries);
+        await Task.Delay(500);
+        Publish();
+        await Task.Delay(500);
+        Assert.Single(client.GetCreatureLiveness(Module), e => e.ObjectId == 0x35);
+
+        await cts.CancelAsync();
+        await Task.WhenAll(hostTask, clientTask);
+    }
+
+    /// <summary>
+    /// The transition-window rule (docs/research/transition-window-races.md): a snapshot
+    /// taken in one module is not stale in another, it is WRONG — the same object ids name
+    /// different creatures there. Proves the packet genuinely reaches the client (so an empty
+    /// result cannot be mistaken for "never arrived") AND that querying under the client's own,
+    /// different module correctly withholds it.
+    /// </summary>
+    [Fact]
+    public async Task LivenessIsWithheldWhenQueriedUnderADifferentModuleFromTheOnesPublished()
+    {
+        using CoopHost host = new(new SessionSettings { PlayerName = "Revan", Port = 0, TickRate = 30 });
+        using CoopClient client = new(
+            new SessionSettings { PlayerName = "Malak", TickRate = 30 },
+            new IPEndPoint(IPAddress.Loopback, host.ListenEndPoint.Port));
+
+        using CancellationTokenSource cts = new(Timeout + TimeSpan.FromSeconds(10));
+        Task hostTask = host.RunAsync(cts.Token);
+        Task clientTask = client.RunAsync(cts.Token);
+
+        const string HostModule = "tar_m03aa";
+        const string ClientModule = "end_m01aa";
+        PlayerState hostState = new(new Vector3f(300f, 200f, 8f), 1f, HostModule, 100, 0);
+        PlayerState clientState = new(new Vector3f(20f, 22f, -1f), 2f, ClientModule, 90, 0);
+
+        CreatureLivenessEntry[] entries = [new CreatureLivenessEntry(0x35, CreatureLivenessState.Dead)];
+
+        void Publish()
+        {
+            host.PublishLocalState(hostState);
+            client.PublishLocalState(clientState);
+            host.PublishCreatureLiveness(HostModule, entries);
+        }
+
+        bool arrived = await WaitForAsync(
+            () => client.GetCreatureLiveness(HostModule).Any(e => e.ObjectId == 0x35),
+            Timeout,
+            Publish);
+        Assert.True(arrived, "the packet never reached the client at the transport layer");
+
+        // The client's own agent queries under ITS OWN module. The ids in a snapshot taken
+        // somewhere else are not stale here, they are wrong — the gate must withhold them.
+        Assert.Empty(client.GetCreatureLiveness(ClientModule));
+
+        await cts.CancelAsync();
+        await Task.WhenAll(hostTask, clientTask);
+    }
 }

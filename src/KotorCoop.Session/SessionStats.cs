@@ -27,5 +27,15 @@ public sealed record SessionStats
 
     public int PendingFlagOps { get; init; }
 
+    /// <summary>
+    /// How many "the enemy owner says this creature is alive, but this instance's own engine
+    /// already had it dead or gone" anomalies the plugin's liveness reconciliation has counted
+    /// since it started — pushed in from <c>CoopAgent</c> via
+    /// <see cref="ICoopSession.ReportLivenessAnomalyCount"/>, never computed by the session
+    /// itself. 0 when the channel is off, unsupported, or has found nothing to complain about.
+    /// See docs/research/creature-liveness.md.
+    /// </summary>
+    public uint LivenessAnomalies { get; init; }
+
     public string Status { get; init; } = "idle";
 }

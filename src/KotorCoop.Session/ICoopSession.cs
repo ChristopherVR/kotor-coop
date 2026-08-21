@@ -67,6 +67,32 @@ public interface ICoopSession : IDisposable
     IReadOnlyList<EnemyState> GetEnemies(string module);
 
     /// <summary>
+    /// Host only: publish every creature this instance's engine currently knows about in
+    /// <paramref name="module"/> — not just the 32-slot combat census <see cref="PublishEnemies"/>
+    /// carries — so a mirroring peer can notice a body left alive on one side and dead or
+    /// destroyed on the other and reconcile it. Ignored on a client. See
+    /// docs/research/creature-liveness.md.
+    /// </summary>
+    void PublishCreatureLiveness(string module, IReadOnlyList<CreatureLivenessEntry> entries) { }
+
+    /// <summary>
+    /// Client only: the host's latest liveness view for <paramref name="module"/>, accumulated
+    /// across however many pages the current publish cycle needed. Empty on the host (never a
+    /// receiver of its own channel) and empty whenever the two are apart — same module gate as
+    /// <see cref="GetEnemies"/>.
+    /// </summary>
+    IReadOnlyList<CreatureLivenessEntry> GetCreatureLiveness(string module) => [];
+
+    /// <summary>
+    /// Pushes the plugin's cumulative liveness-anomaly count (see
+    /// <c>KotorGameBridge.ReadLivenessAnomalyCount</c>) into <see cref="GetStats"/>'s
+    /// <c>LivenessAnomalies</c> field, so <c>status</c> can show it. The session never
+    /// computes this itself — it is purely a local diagnostic the agent reads out of the
+    /// shared block and reports here every pump.
+    /// </summary>
+    void ReportLivenessAnomalyCount(uint count) { }
+
+    /// <summary>
     /// Client only: report how much damage this instance has DEALT to each enemy, as a
     /// running cumulative total. Without this a client's fighting is cosmetic — its copies
     /// are pinned at 1 hp and only the owner's engine can actually hurt anything.

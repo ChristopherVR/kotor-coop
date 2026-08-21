@@ -211,6 +211,20 @@ internal sealed class CombatController(SharedBlockView block)
         return free;
     }
 
+    /// <summary>
+    /// Thin public entry for <c>LivenessReconcileController</c> (docs/research/creature-liveness.md):
+    /// the enemy owner says <paramref name="ownerObjectId"/> is dead (a corpse, not merely
+    /// unresolvable) and this instance's own copy still reads alive. Reuses the exact
+    /// <see cref="KillOnce"/> path the ordinary census-driven death uses — id-space
+    /// translation, unpin-before-kill, once-per-module dedup via <see cref="_killed"/> — so a
+    /// liveness-triggered kill runs the same corpse/loot/XP/OnDeath pipeline as any other
+    /// mirrored death. The caller has already applied every gate this method itself does not
+    /// re-check (plot exemption in particular — <see cref="KillOnce"/> has none of its own;
+    /// the ordinary caller, <see cref="Apply"/>, applies it before ever reaching here, and
+    /// <c>LivenessReconcileController</c> must do the same via <c>Odyssey.IsPlot</c>).
+    /// </summary>
+    public void KillForLivenessReconcile(uint ownerObjectId) => KillOnce(ownerObjectId);
+
     private void KillOnce(uint objectId)
     {
         for (int i = 0; i < _killedCount; i++)

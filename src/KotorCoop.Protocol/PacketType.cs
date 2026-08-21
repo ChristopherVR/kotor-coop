@@ -339,4 +339,20 @@ public enum PacketType : byte
     /// the TRUE origin on relay and two different origins can reuse the same sequence number
     /// independently.</summary>
     DialogueGrantAck = 46,
+
+    /// <summary>
+    /// host -&gt; clients: every creature the host's engine currently knows about in the loaded
+    /// area — not just the 32-slot combat census <see cref="EnemySnapshot"/> carries — so a
+    /// mirroring peer can notice a body left alive on one side and dead or destroyed on the
+    /// other. See docs/research/creature-liveness.md.
+    ///
+    /// A LEVEL, published periodically (coop.ini <c>liveness_sync</c>, default off until
+    /// live-verified) and possibly split across several datagrams when the area holds more
+    /// than one packet's worth — each page carries the SAME digest over the whole cycle's
+    /// entries, so a receiver that has gathered every page can tell its accumulated set is
+    /// complete. No ack and no retransmit-until-acked sender: a lost page is simply resent
+    /// whole on the next publish cycle, the same "a lost packet costs one tick of staleness"
+    /// tolerance <see cref="EnemySnapshot"/> already accepts.
+    /// </summary>
+    CreatureLiveness = 47,
 }

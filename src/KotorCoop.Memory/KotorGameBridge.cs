@@ -401,6 +401,117 @@ public sealed class KotorGameBridge : IGameBridge
     private const int BlockPeerEffectMagnitude = 0x0C;
     private const int BlockPeerEffectSerial = 0x14;
 
+    // Creature liveness (shared block version 45, region 0x3C00..0x3F08). Mirrors
+    // SharedBlock.OffsetLiveness*. See docs/research/creature-liveness.md.
+    //
+    // Agent -> plugin: the host's latest liveness view (translated for THIS process's own
+    // consumption — a client writes what it received over the wire; the host never writes
+    // this region at all, it has nothing to reconcile against itself).
+    private const int BlockLivenessCount = 0x3C00;
+    private const int BlockLivenessSlots = 0x3C04;
+    private const int BlockLivenessStride = 0x08;
+    private const int BlockLivenessCapacity = 96;
+
+    // Plugin -> agent: cumulative "host says alive, local already dead/gone" anomaly count.
+    private const int BlockLivenessAnomalyCount = 0x3F04;
+
+    /// <summary>
+    /// Every creature this engine currently knows about in the loaded area — id, whether its
+    /// hit points read at or below zero, and whether the module marks it plot. Reuses the
+    /// SAME confirmed enumeration <see cref="ReadEnemies"/> builds from (the ghost gate in
+    /// docs/research/enemy-presence-sync.md already runs underneath <see cref="EnumerateCreatures"/>),
+    /// so an id published here is exactly as trustworthy as one published in the ordinary
+    /// census — and, unlike that census, NOT capped or distance-sorted: this is every
+    /// creature the object array still resolves, which is the whole point of a liveness
+    /// channel meant to catch a body the 32-slot combat census sheds. "Gone" (destroyed) is
+    /// never reported here — it is not something a single snapshot can say, only something
+    /// derived by comparing this against an earlier one, which is the caller's job (see
+    /// docs/research/creature-liveness.md's host-side pump).
+    /// </summary>
+    public List<CreatureLivenessEntry> ReadCreatureLiveness()
+    {
+        List<CreatureLivenessEntry> entries = [];
+
+        HashSet<uint>? phantomIds = ReadPhantomObjectIds();
+
+        foreach (CreatureRef creature in EnumerateCreatures())
+        {
+            if (creature.IsPlayer || creature.IsPartyMember)
+            {
+                continue;
+            }
+
+            if (phantomIds is not null && phantomIds.Contains(creature.ObjectId))
+            {
+                continue;
+            }
+
+            // Never anyone's NPC to report on: the co-op blueprint's tag names every body we
+            // (or a mirroring peer) spawned ourselves, phantoms and materialised stand-ins
+            // alike — see the identical exclusion in ReadEnemies.
+            if (creature.Tag == GameFiles.PhantomBlueprint.Tag)
+            {
+                continue;
+            }
+
+            // Signed, same reason ReadEnemies reads it signed: an overkilled body parks at a
+            // negative hit-point count, and an unsigned read would call it healthy. A failed
+            // read is skipped for this pass rather than guessed at — the next pass, seconds
+            // away, tries again.
+            if (!_memory.TryRead(creature.Address + OffCurrentHitPoints, out short current))
+            {
+                continue;
+            }
+
+            entries.Add(new CreatureLivenessEntry(
+                creature.ObjectId, current <= 0 ? CreatureLivenessState.Dead : CreatureLivenessState.Alive));
+        }
+
+        return entries;
+    }
+
+    /// <summary>
+    /// Non-owner side: hands the host's latest creature-liveness view to the plugin's
+    /// reconciliation controller. <paramref name="entries"/> is already capacity-ordered by
+    /// the caller (dead/gone first — see docs/research/creature-liveness.md); this simply
+    /// truncates and writes, id-last per slot like every other agent-written array.
+    /// </summary>
+    public bool TryWriteCreatureLiveness(IReadOnlyList<CreatureLivenessEntry> entries)
+    {
+        if (_pluginBlock == 0)
+        {
+            return false;
+        }
+
+        bool ok = true;
+        int count = Math.Min(entries.Count, BlockLivenessCapacity);
+
+        for (int i = 0; i < count; i++)
+        {
+            CreatureLivenessEntry entry = entries[i];
+            nint slot = _pluginBlock + BlockLivenessSlots + (i * BlockLivenessStride);
+            ok &= _memory.TryWrite(slot + 0x04, (uint)entry.State);
+
+            // Id last: a half-written slot must never be read as naming the wrong creature.
+            ok &= _memory.TryWrite(slot + 0x00, entry.ObjectId);
+        }
+
+        ok &= _memory.TryWrite(_pluginBlock + BlockLivenessCount, (uint)count);
+        return ok;
+    }
+
+    /// <summary>Non-owner side: the plugin's cumulative "host says alive, local already
+    /// dead/gone" anomaly count. 0 (and a false-returning read) when no plugin is attached.</summary>
+    public uint ReadLivenessAnomalyCount()
+    {
+        if (_pluginBlock == 0)
+        {
+            return 0;
+        }
+
+        return _memory.TryReadUInt32(_pluginBlock + BlockLivenessAnomalyCount, out uint count) ? count : 0;
+    }
+
     /// <summary>
     /// Reads the effects <c>PhantomEffectHook</c> captured landing on this instance's
     /// phantoms since the plugin last wrote them. Returns every slot with a nonzero serial;
@@ -631,10 +742,12 @@ public sealed class KotorGameBridge : IGameBridge
     /// 43 = the agent-written liveness heartbeat (SharedBlock.OffsetAgentHeartbeat, 0x2B = 43).
     /// 44 = the peer-effect channel, block grown to 0x3C00 (0x2C = 44) — see
     /// docs/research/effect-sync.md.
+    /// 45 = the creature-liveness reconciliation channel, block grown to 0x4000 (0x2D = 45)
+    /// — see docs/research/creature-liveness.md.
     /// <b>ItemHarnessTests.TheBlockVersionIsTheSameNumberInBothHalves reads both files and
     /// fails the build if they disagree</b> — added with 42, because nothing had ever
     /// enforced the warning above.</summary>
-    public const string PluginSignature = "4B 4F 43 4F 4F 50 30 31 2C 00 00 00 01 EE FF C0";
+    public const string PluginSignature = "4B 4F 43 4F 4F 50 30 31 2D 00 00 00 01 EE FF C0";
 
     /// <summary>Agent's view of which coop item id occupies each plugin item slot.</summary>
     private readonly uint[] _itemSlotIds = new uint[BlockItemCapacity];
