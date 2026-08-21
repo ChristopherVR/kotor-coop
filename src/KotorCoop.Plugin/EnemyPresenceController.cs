@@ -220,6 +220,12 @@ internal sealed unsafe class EnemyPresenceController(SharedBlockView block)
     /// <see cref="OnFrame"/> already uses), for the timeout safety net.</summary>
     private double _locallyFightingSince;
 
+    /// <summary>TEMPORARY DIAGNOSTIC (2026-08-21, "does it close distance") — last time the
+    /// excluded creature's own position was logged against the player's, so a full fight cycle
+    /// produces a position-over-time curve instead of one measurement. Remove once the
+    /// distance-closing question is settled.</summary>
+    private double _lastPositionLogAt;
+
     /// <summary>Hard ceiling on how long one creature may sit excluded from the census. A
     /// fight that never ends any other way (the player walks off without the engine's own
     /// disengage logic catching it, a stuck state this investigation has not observed but has
@@ -559,7 +565,19 @@ internal sealed unsafe class EnemyPresenceController(SharedBlockView block)
             // of being pulled out to fight, while the owner's real creature was still alive
             // and dealing forwarded damage the whole time. Restrict to what is actually
             // proven safe until materialised stand-ins get their own investigation.
-            if (player != 0 && _locallyFightingId == 0 && mapped == 0 && IsEngaged(creature, player))
+            //
+            // ⚠ ALSO REQUIRES A NON-EMPTY +0x260 SLOT. Round 27's proof was never universal
+            // across every GIT-placed creature — measured live (2026-08-21, tar_m03aa),
+            // `tar03_bekcs2` carries no script there at all, so firing it is a silent no-op:
+            // the creature sits frozen forever, even at true melee range, and — worse —
+            // without this check it would be re-excluded from the census on every 25s
+            // timeout indefinitely, licensing permanent forwarded-damage immunity against an
+            // enemy that can never actually resolve the fight. See
+            // Odyssey.HasCreatureScriptSlot0x260's own doc for the full account. A creature
+            // that fails this check is simply left on ordinary mirrored/forwarded-damage
+            // combat, same as before local_combat existed.
+            if (player != 0 && _locallyFightingId == 0 && mapped == 0 && IsEngaged(creature, player)
+                && Odyssey.HasCreatureScriptSlot0x260(creature))
             {
                 StartLocalFight(enemy.ObjectId, creature, now);
             }
@@ -630,6 +648,20 @@ internal sealed unsafe class EnemyPresenceController(SharedBlockView block)
         bool dead = Odyssey.IsCreatureDead(creature);
         bool disengaged = !dead && (player == 0 || !IsEngaged(creature, player));
         bool timedOut = now - _locallyFightingSince > LocalCombatTimeoutSeconds;
+
+        // TEMPORARY DIAGNOSTIC: once a second, log the excluded creature's real position
+        // against the player's, so a full fight cycle produces a position-over-time curve
+        // (frozen vs. slow-pathing vs. close-but-not-hitting) instead of one snapshot.
+        if (!dead && creature != 0 && player != 0 && now - _lastPositionLogAt >= 1.0)
+        {
+            _lastPositionLogAt = now;
+            Vec3 body = Odyssey.GetPosition(creature);
+            Vec3 them = Odyssey.GetPosition(player);
+            float dist = MathF.Sqrt(((body.X - them.X) * (body.X - them.X)) + ((body.Y - them.Y) * (body.Y - them.Y)));
+            PluginHost.Log(
+                $"local combat diag: t={now - _locallyFightingSince:F1}s 0x{_locallyFightingId:X} "
+                + $"at ({body.X:F2},{body.Y:F2}) player at ({them.X:F2},{them.Y:F2}) dist={dist:F2}");
+        }
 
         if (dead || disengaged || timedOut)
         {

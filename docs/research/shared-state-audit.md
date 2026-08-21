@@ -2687,6 +2687,64 @@ enemy-materialisation.md §6, "Live pass... CONFIRMED") and the Host button
 (`docs/research/native-browser-panel.md` — real `SendInput` clicks, real log evidence) both
 work. Full suite 966/966, both builds clean, rig torn down and confirmed clean.
 
+### `tar03_bekcs2` never lands a hit because it has no combat script at all — FOUND AND FIXED (2026-08-21)
+
+The "15 units, not closing distance" reading above turned out to be an artifact of where the
+player happened to be standing, not the actual cause. Re-measured with a per-second
+position-over-time watch (`local combat diag`, temporary, kept for the next round) across the
+SAME creature (`0x2D`) at three distances in one continuous session — 4.78, 2.94, and finally
+**1.25 world units, genuine point-blank melee range** — and it stayed frozen at the exact same
+coordinate through all of them, for 20+ seconds at the closest distance, HP never moving off
+12/12. Range was never the blocker; something else was.
+
+`firescript 0x2D fire` (the manual diagnostic verb) answered it directly: `fired 0x2D +0x260 =
+'(no readable string here: ptr=0x0 length=0'`. **This creature's `+0x260` slot is empty.**
+Every round-27-onward proof that firing `+0x260` makes a creature fight was measured on
+creatures that happen to carry `k_def_combend01` there; nobody had checked whether that's
+universal across every GIT-placed hostile. It is not. `FireCreatureScriptSlot0x260` on an
+empty slot is `RunScript` on a null resref — a silent no-op, which is indistinguishable from
+"fired and did nothing" without the diagnostic read. `PeekCreatureScriptSlot0x260`'s own doc
+comment already carried the field layout needed to check this defensively; nobody had wired a
+check into the actual trigger gate.
+
+**This was worse than inert.** Without a check, an empty-slot creature gets re-excluded from
+the census on every 25s timeout for as long as the player stays in range — the "fight" can
+never end any other way, since nothing is happening for the engine's own dead/disengage checks
+to catch. Each exclusion cycle re-licenses `IncomingDamageController`'s absorb-standdown for
+that one creature, so the player becomes **permanently immune to that enemy's forwarded
+damage** — precisely the invulnerability failure mode this feature's own safety design exists
+to prevent, just reached by a route nobody had tested (a real creature with no script, not a
+materialised stand-in).
+
+**Fix:** `Odyssey.HasCreatureScriptSlot0x260` (a proper boolean read of the same `{ptr,
+length}` pair `PeekCreatureScriptSlot0x260` already decodes) gates
+`EnemyPresenceController`'s local-combat trigger alongside the existing GIT-identity check —
+a creature with nothing to fire is simply left on ordinary mirrored/forwarded-damage combat,
+same as before this feature existed, rather than being pulled into a fight that can never
+resolve. `FireCreatureScriptSlot0x260` itself is left ungated on purpose, so the manual
+`firescript` diagnostic can still prove an empty slot the way it just did here.
+
+**Confirmed live, same session, on the fixed build:** relaunched fresh, warped back to
+`tar_m03aa`, positioned the player at the identical point-blank distance from `0x2D`
+(`(365.50,156.50)`, dist 1.25) and held there for 2+ minutes. No `local combat: 0x2D pulled
+out` line appears anywhere after the rebuild — confirmed by timestamp against the exact moment
+of relaunch — versus the old build's `0x2D pulled out of the census` firing on every single
+25s cycle beforehand. The creature is no longer trapped in a dead-end exclusion loop.
+
+**Still open, and now correctly narrowed:** a DIFFERENT creature (`0x4`) in the same session
+got excluded from ~14 units away and, like the original `0x2D` reading, did not close that
+distance before the player moved on and it disengaged. `0x4` was not checked for a real
+`+0x260` script, so whether this is the same missing-script class or a genuine pathing/range
+question remains open — the fix above only rules out the specific "no script at all" failure
+mode, not every possible reason a real-scripted creature might not close distance from far
+away. Next step: repeat this round's exact methodology (position-over-time watch, incrementally
+closing distance, confirm `+0x260` is real via `firescript` first) on a creature confirmed to
+carry `k_def_combend01`, to isolate whether distance-closing is a genuine remaining gap or
+whether every prior "frozen" reading in this document was actually this same missing-script
+issue in disguise.
+
+Full suite 966/966, both builds clean, rig torn down and confirmed clean.
+
 ## 3. A client's XP is actively erased
 
 `ProgressionSnapshotPacket` is host→client only and absolute (CoopAgent.cs, `PumpProgression`):

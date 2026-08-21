@@ -7119,11 +7119,44 @@ internal static unsafe class Odyssey
     }
 
     /// <summary>
+    /// Whether <paramref name="creature"/> actually carries a real script at +0x260 —
+    /// VERIFIED LIVE (2026-08-21) to matter, not a hypothetical: `tar03_bekcs2`, a genuine
+    /// GIT-placed hostile, has an EMPTY slot here (`ptr=0x0 length=0`). Firing an empty slot
+    /// through <see cref="RunScriptFn"/> is a silent no-op — no script runs, so
+    /// `DetermineCombatRound()` (what `k_def_combend01` normally calls, the routine that
+    /// actually decides to attack) never fires. Measured live: the creature sat frozen and
+    /// never landed a hit across a full engagement window at genuine melee range (down to
+    /// 1.25 world units, well inside striking distance) — this was mistaken for a
+    /// pathing/range problem before the empty slot was found. Worse than inert: without this
+    /// gate, `local_combat` re-excludes a script-less creature from the census forever (each
+    /// 25s timeout immediately re-triggers, since the player is still in range and the
+    /// "fight" never resolves any other way), which keeps `IncomingDamageController`'s
+    /// absorb-standdown licensed for it continuously — i.e. the player becomes permanently
+    /// immune to that one enemy's forwarded damage. See <see cref="PeekCreatureScriptSlot0x260"/>
+    /// for the exact field layout this reads.
+    /// </summary>
+    public static bool HasCreatureScriptSlot0x260(nint creature)
+    {
+        if (creature == 0)
+        {
+            return false;
+        }
+
+        nint* p = (nint*)(creature + CreScriptSlot0x260);
+        nint dataPtr = p[0];
+        int length = (int)p[1];
+        return dataPtr != 0 && length is > 0 and <= 64;
+    }
+
+    /// <summary>
     /// Fires the creature's own +0x260 event script through the SAME dispatcher the engine
     /// uses for every other object's scripted events (proven live-working for a door's
     /// OnOpen). This does not touch any round/combat-round state directly — if it works, it
     /// works by letting the creature's OWN NWScript AI decide to fight, the way it already
-    /// does for every non-mirrored creature in the game. MAIN THREAD ONLY.
+    /// does for every non-mirrored creature in the game. Callers driving real `local_combat`
+    /// engagement MUST check <see cref="HasCreatureScriptSlot0x260"/> first — this function
+    /// itself does not, since the manual `firescript` diagnostic verb needs to be able to
+    /// fire (and thereby prove) an empty slot on purpose. MAIN THREAD ONLY.
     /// </summary>
     public static void FireCreatureScriptSlot0x260(nint creature)
     {
