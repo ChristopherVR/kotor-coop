@@ -100,6 +100,16 @@ public sealed record AgentSettings
     /// <c>dialogue_item_sync</c> (default on).
     /// </summary>
     public bool DialogueItemSync { get; init; } = true;
+
+    /// <summary>
+    /// When true, the dialogue channel (<see cref="CoopAgent.PumpDialogue"/>) runs on the
+    /// real-time (every-poll-tick) path instead of the <see cref="CombatPumpIntervalMs"/>
+    /// cadence, and an unchanged read is deduped against a resend rather than republished on
+    /// a fixed timer — see <see cref="KotorCoop.Protocol.DialogueTickGate"/> and
+    /// docs/research/dialogue-join-latency.md. coop.ini <c>dialogue_fast_join</c> (default off,
+    /// so a live pass can A/B it against the existing cadence).
+    /// </summary>
+    public bool DialogueFastJoin { get; init; }
 }
 
 /// <summary>
@@ -396,15 +406,34 @@ public sealed class CoopAgent(IGameBridge bridge, ICoopSession session, AgentSet
             PumpParty(caps);
             PumpPartyRoster(caps);
 
-            // Dialogue rides here too. It is the same kind of traffic — small block reads,
-            // no world scan — and it was the reason a followed conversation felt second-hand:
-            // the owner's partner tag, line and pick log crossed agent→wire at 1 Hz and
-            // wire→block at 1 Hz on the far side, so a line the owner had already heard could
-            // take ~2 s to reach the follower's screen. At this cadence it is a few hundred
-            // milliseconds, which is the difference between "following" and "lagging".
-            PumpDialogue(local, caps);
+            // ⚠ DIALOGUE RODE HERE TOO, ONCE. It is the same kind of traffic — small block
+            // reads, no world scan — and sharing this 150 ms gate with the enemy census (which
+            // genuinely needs it) was the reason a followed conversation felt second-hand: the
+            // owner's partner tag, line and node crossed agent→wire at this cadence and
+            // wire→block at this SAME cadence again on the far side, so a line the owner had
+            // already heard could take up to two gates' worth to reach the follower's screen —
+            // see docs/research/dialogue-join-latency.md for the measured numbers. Left as the
+            // fallback here (settings.DialogueFastJoin off) so turning the flag off is a true
+            // rollback to exactly this cadence; the fast path below is where it moves to when
+            // the flag is on.
+            if (!settings.DialogueFastJoin)
+            {
+                PumpDialogue(local, caps);
+            }
+
             PumpInteractionLocks(local);
             PumpBarks(local);
+        }
+
+        // Dialogue, on the fast path: every poll tick (as fast as the position write above),
+        // gated internally by DialogueTickGate rather than by this method's own cadence — a
+        // genuine change is acted on the very next tick, and an unchanged read costs nothing
+        // beyond the block read itself. coop.ini dialogue_fast_join=1. See
+        // docs/research/dialogue-join-latency.md for why this is the biggest single latency
+        // win available in the join path, and DialogueTickGate for the dedup rule.
+        if (settings.DialogueFastJoin)
+        {
+            PumpDialogue(local, caps);
         }
 
         // --- heavy world-state path ------------------------------------------------------
@@ -1230,6 +1259,17 @@ public sealed class CoopAgent(IGameBridge bridge, ICoopSession session, AgentSet
 
     private uint _dialogueHeldNodeSerial;
 
+    /// <summary>
+    /// Governs PumpDialogue's work on the <see cref="AgentSettings.DialogueFastJoin"/> path:
+    /// a genuine change (a new line, a new node, the conversation starting/ending, the peer's
+    /// token moving) is acted on the very next poll tick, and an unchanged read is not
+    /// re-published every tick just because the tick loop ran — see
+    /// <see cref="KotorCoop.Protocol.DialogueTickGate"/>. The heartbeat matches the legacy
+    /// cadence this replaces, so a late joiner or a lost packet still converges no slower than
+    /// it always did.
+    /// </summary>
+    private readonly DialogueTickGate _dialogueTickGate = new(heartbeatIntervalMs: 150);
+
     /// <summary>How long a conversation may read inactive before it is reported over.
     /// Longer than any between-entries gap, shorter than feels laggy on a real close.</summary>
     private const long DialogueLingerMs = 1500;
@@ -1343,6 +1383,31 @@ public sealed class CoopAgent(IGameBridge bridge, ICoopSession session, AgentSet
             _dialogueHeldPartnerTag = string.Empty;
             _dialogueHeldNode = DialogueState.NoNode;
             _dialogueHeldNodeSerial = 0;
+        }
+
+        // ⚠ THE DEBOUNCE ABOVE ALWAYS RUNS, EVEN WHEN THE GATE BELOW SAYS "NOTHING TO DO".
+        // _dialogueLastActiveMs/_dialogueHeldPartnerTag/_dialogueHeldNode are this instance's
+        // own bookkeeping and must track the engine every tick regardless of whether anything
+        // is published this tick, or the linger window would be measured against a stale
+        // sample instead of the clock it is supposed to run on.
+        //
+        // On the fast path, an UNCHANGED fingerprint before the heartbeat is due costs nothing
+        // beyond the reads already taken above — see DialogueTickGate. Off the fast path this
+        // is a no-op (the flag guards it), so the legacy cadence in PumpOnce is the only gate
+        // and turning dialogue_fast_join off is a true rollback.
+        if (settings.DialogueFastJoin)
+        {
+            long fingerprint = HashCode.Combine(
+                active, speaker, line, active ? _dialogueHeldPartnerTag : string.Empty,
+                replySerial, replyIndex, active ? _dialogueHeldNode : DialogueState.NoNode);
+            fingerprint = HashCode.Combine(
+                fingerprint, active ? _dialogueHeldNodeSerial : 0u, followingPeer,
+                token.Serial, token.NodeSerial, token.ReplySerial);
+
+            if (!_dialogueTickGate.ShouldPump(nowMs, fingerprint))
+            {
+                return;
+            }
         }
 
         session.PublishDialogue(

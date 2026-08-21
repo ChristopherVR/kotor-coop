@@ -140,6 +140,18 @@ public sealed record CoopConfig
     public bool DialogueItemSync { get; init; } = true;
 
     /// <summary>
+    /// Whether the dialogue channel is pumped on the agent's real-time (per-poll-tick) path
+    /// instead of the ~150 ms combat cadence, and whether an unchanged read is deduped against
+    /// a resend rather than republished on a fixed timer — docs/research/dialogue-join-latency.md
+    /// has the measured before/after. OFF by default: it changes the timing of a channel that
+    /// the "second player joins a conversation and the subtitles take a few seconds to appear"
+    /// report is about, so it ships behind a flag specifically so a live A/B pass can compare it
+    /// against the existing cadence rather than trusting the change on the strength of the static
+    /// analysis alone. <c>dialogue_fast_join = 1</c> turns it on.
+    /// </summary>
+    public bool DialogueFastJoin { get; init; }
+
+    /// <summary>
     /// Whether the agent's <c>SessionSaveWatch</c>'s host-side edge (roadmap item
     /// 14 phase 1, design §3.2 item 5) actually tears the session down when it fires. OFF by
     /// default — live-verified 2026-08-21 (shared-state-audit.md §2 round 53) to false-positive
@@ -263,6 +275,7 @@ public sealed record CoopConfig
             StatusToasts = !kv.ContainsKey("status_toasts") || IsTruthy(kv.GetValueOrDefault("status_toasts")),
             DialogueItemSync = !kv.ContainsKey("dialogue_item_sync")
                 || IsTruthy(kv.GetValueOrDefault("dialogue_item_sync")),
+            DialogueFastJoin = IsTruthy(kv.GetValueOrDefault("dialogue_fast_join")),
             SessionSaveHostRefusal = IsTruthy(kv.GetValueOrDefault("session_save_host_refusal")),
         };
     }

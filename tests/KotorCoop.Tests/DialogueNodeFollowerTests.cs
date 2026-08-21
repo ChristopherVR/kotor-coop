@@ -120,6 +120,40 @@ public sealed class DialogueNodeFollowerTests
         Assert.True(follower.NeedsNode(peerNode: 29, peerSerial: 7, hasContent: true));
     }
 
+    /// <summary>
+    /// ⚠ THE "CATCH-UP WALK" THAT NEVER EXISTED. A joiner arriving after the owner has already
+    /// advanced through dozens of entries does not replay each one in turn: node sync publishes
+    /// only the owner's CURRENT position (not a history), and <c>Odyssey.DriveDialogueToNode</c>
+    /// calls <c>CSWSDialog::SendDialogEntry</c> directly with the TARGET entry index — there is
+    /// no intermediate node the engine or this class ever visits on the way. This is the
+    /// pure-logic half of that claim: <see cref="DialogueNodeFollower.Arrived"/> only ever
+    /// compares the CURRENT wanted node against wherever the engine reports landing NOW, so a
+    /// follower forty entries behind confirms arrival with the exact same single call a
+    /// follower one entry behind does — see docs/research/dialogue-join-latency.md, which found
+    /// no per-node walk to remove and documents this test as the proof.
+    /// </summary>
+    [Fact]
+    public void ALargeCatchUpJumpLandsInOneCallJustLikeASmallOne()
+    {
+        DialogueNodeFollower nearFollower = new();
+        DialogueNodeFollower farFollower = new();
+
+        // A fresh follow wants wherever the owner is, however far that is from node 0.
+        Assert.True(nearFollower.NeedsNode(peerNode: 2, peerSerial: 1, hasContent: true));
+        Assert.True(farFollower.NeedsNode(peerNode: 40, peerSerial: 1, hasContent: true));
+
+        // One confirming read each — not one per entry skipped — lands both.
+        Assert.True(nearFollower.Arrived(peerSerial: 1, localNode: 2, wantedNode: 2));
+        Assert.True(farFollower.Arrived(peerSerial: 1, localNode: 40, wantedNode: 40));
+
+        Assert.Equal(1u, nearFollower.AppliedSerial);
+        Assert.Equal(1u, farFollower.AppliedSerial);
+        Assert.Equal(0, nearFollower.Deferrals);
+        Assert.Equal(0, farFollower.Deferrals);
+        Assert.False(nearFollower.NeedsNode(peerNode: 2, peerSerial: 1, hasContent: true));
+        Assert.False(farFollower.NeedsNode(peerNode: 40, peerSerial: 1, hasContent: true));
+    }
+
     /// <summary>A serial of zero is "no position published yet" on the wire. It must not be
     /// treated as one this follower has already applied — the applied serial starts at zero
     /// too, and the guard that keeps those apart is the node check, not the serial.</summary>
