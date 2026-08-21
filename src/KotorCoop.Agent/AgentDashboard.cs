@@ -32,6 +32,47 @@ public sealed class AgentDashboard(
         "g_i_medeqpmnt01",  // medpac
     ];
 
+    /// <summary>
+    /// Rotates <paramref name="logFile"/> once, at construction, before the first line is
+    /// ever appended to it — the same "<name>.1.log" scheme PluginHost.RotateLogsIfNeeded
+    /// uses for kotorcoop-plugin.log, applied here because <see cref="Note"/> and
+    /// <see cref="WriteLogLine"/> below use the same never-truncating File.AppendAllText, and
+    /// tools/demo.ps1 launches the agent with <c>--log</c> pointed at the same
+    /// $env:TEMP\kotorcoop-demo\agent1.log / agent2.log every run without ever clearing them
+    /// — the identical unbounded-growth shape the plugin log had, just for the dashboard's
+    /// event and status lines instead.
+    ///
+    /// No coop.ini to read a cap from here (the --log path is a scratch file, not
+    /// necessarily beside a game install), so this always uses
+    /// <see cref="KotorCoop.Plugin.LogRotation.DefaultCapMb"/>.
+    /// </summary>
+    private readonly bool _logRotated = RotateLogIfNeeded(logFile);
+
+    private static bool RotateLogIfNeeded(string? path)
+    {
+        if (path is not null)
+        {
+            try
+            {
+                if (File.Exists(path))
+                {
+                    long cap = KotorCoop.Plugin.LogRotation.CapBytes(KotorCoop.Plugin.LogRotation.DefaultCapMb);
+                    FileInfo info = new(path);
+                    if (KotorCoop.Plugin.LogRotation.ShouldRotate(info.Length, cap))
+                    {
+                        File.Move(path, KotorCoop.Plugin.LogRotation.RotatedPath(path), overwrite: true);
+                    }
+                }
+            }
+            catch
+            {
+                // Best-effort: a failed rotation must not stop the dashboard from starting.
+            }
+        }
+
+        return true;
+    }
+
     private int _dropIndex;
     private string _lastDropNoteValue = string.Empty;
 

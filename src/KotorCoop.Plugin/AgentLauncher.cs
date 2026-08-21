@@ -146,6 +146,8 @@ internal static unsafe class AgentLauncher
             // queries the console width nor polls for keys — both of which would throw
             // without a console.
             string logPath = Path.Combine(gameDirectory, "kotorcoop-agent.log");
+            RotateAgentLogIfNeeded(gameDirectory, logPath);
+
             SecurityAttributes inheritable = new()
             {
                 Length = Marshal.SizeOf<SecurityAttributes>(),
@@ -202,6 +204,47 @@ internal static unsafe class AgentLauncher
         catch (Exception ex)
         {
             PluginHost.Log($"agent: auto-start failed: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// Rotates the agent's log the same way PluginHost rotates its own (see
+    /// PluginHost.RotateLogsIfNeeded and LogRotation): if the previous session's file is over
+    /// coop.ini's <c>log_max_mb</c>, it becomes "kotorcoop-agent.1.log" so that one prior
+    /// session's tail survives instead of being silently discarded.
+    ///
+    /// CreateFileW below always opens with CREATE_ALWAYS, so without this a launch that
+    /// follows a very long agent session (the dashboard runs for hours, logging the whole
+    /// time) would simply overwrite it and lose it; this is the same cap applied before that
+    /// overwrite happens rather than after. It cannot help a single session that grows past
+    /// the cap while still running — the agent holds this handle open for its whole life, the
+    /// same "never rotate mid-session" rule PluginHost follows for its own log.
+    /// </summary>
+    private static void RotateAgentLogIfNeeded(string gameDirectory, string logPath)
+    {
+        try
+        {
+            if (!File.Exists(logPath))
+            {
+                return;
+            }
+
+            string? capSetting = ReadSetting(gameDirectory, "log_max_mb");
+            int capMb = capSetting is not null && int.TryParse(capSetting,
+                System.Globalization.NumberStyles.Integer,
+                System.Globalization.CultureInfo.InvariantCulture, out int parsed)
+                ? parsed
+                : LogRotation.DefaultCapMb;
+
+            FileInfo info = new(logPath);
+            if (LogRotation.ShouldRotate(info.Length, LogRotation.CapBytes(capMb)))
+            {
+                File.Move(logPath, LogRotation.RotatedPath(logPath), overwrite: true);
+            }
+        }
+        catch
+        {
+            // Best-effort: a failed rotation here must not stop the agent from launching.
         }
     }
 

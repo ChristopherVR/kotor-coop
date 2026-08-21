@@ -9,4 +9,13 @@
     <ProjectReference Include="..\KotorCoop.Session\KotorCoop.Session.csproj" />
   </ItemGroup>
 
+  <!--
+    Pure arithmetic, no plugin dependency, shared by source so the dashboard's "log" file
+    (the run command's log option) rotates the same way the plugin's own logs do. See
+    src/KotorCoop.Plugin/LogRotation.cs.
+  -->
+  <ItemGroup>
+    <Compile Include="..\KotorCoop.Plugin\LogRotation.cs" Link="Plugin\LogRotation.cs" />
+  </ItemGroup>
+
 </Project>

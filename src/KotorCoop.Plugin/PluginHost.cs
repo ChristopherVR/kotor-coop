@@ -92,6 +92,12 @@ internal static unsafe class PluginHost
             // in their field initialisers.
             PluginConfig.UseDirectory(directory);
 
+            // Before the first Log() call, so a session that rotates does not write its own
+            // banner and then immediately move it. See LogRotation for why: AppendAllText
+            // never truncates, and a live test rig's combined log reached 170 MB across 158
+            // sessions before this existed.
+            RotateLogsIfNeeded(directory);
+
             Log($"=== KotorCoop plugin loaded into pid {NativeMethods.GetCurrentProcessId()} ===");
 
             // FIRST, before a single hook or controller exists. A fault during startup is
@@ -1140,6 +1146,52 @@ internal static unsafe class PluginHost
         catch
         {
             // Logging must never throw into the game's call stack.
+        }
+    }
+
+    /// <summary>
+    /// Rotates every "kotorcoop-*.log" this process writes (the combined file and every
+    /// channel split) that has grown past coop.ini's <c>log_max_mb</c> (default
+    /// <see cref="LogRotation.DefaultCapMb"/>): the existing file becomes "*.1.log",
+    /// overwriting whatever was there, so exactly one prior session's tail survives and the
+    /// fresh session starts a clean file. A file at or under the cap is left alone —
+    /// sessions keep concatenating into it until it next crosses the line.
+    ///
+    /// Runs once, here, before <see cref="Log"/> is ever called: rotating mid-session would
+    /// pull the file out from under a live tail (tools/verify.ps1 and friends).
+    ///
+    /// Skips "kotorcoop-agent.log" on purpose — that file belongs to the agent process
+    /// AgentLauncher spawns, and it rotates it itself right before opening it (see
+    /// AgentLauncher.RotateAgentLogIfNeeded), not as part of this directory-wide sweep.
+    /// </summary>
+    private static void RotateLogsIfNeeded(string directory)
+    {
+        try
+        {
+            long cap = LogRotation.CapBytes(PluginConfig.ReadInt("log_max_mb", LogRotation.DefaultCapMb));
+
+            foreach (string path in Directory.EnumerateFiles(directory, "kotorcoop-*.log"))
+            {
+                string name = Path.GetFileName(path);
+                if (name.EndsWith(".1.log", StringComparison.OrdinalIgnoreCase)
+                    || name.Equals("kotorcoop-agent.log", StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                FileInfo info = new(path);
+                if (!info.Exists || !LogRotation.ShouldRotate(info.Length, cap))
+                {
+                    continue;
+                }
+
+                File.Move(path, LogRotation.RotatedPath(path), overwrite: true);
+            }
+        }
+        catch
+        {
+            // Best-effort, same as Log() itself: a rotation failure must not stop the
+            // plugin from starting, it just means this session's log grows a bit more.
         }
     }
 }

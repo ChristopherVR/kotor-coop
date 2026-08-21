@@ -70,4 +70,10 @@ internal static class PluginConfig
             System.Globalization.CultureInfo.InvariantCulture, out float value)
             ? value
             : fallback;
+
+    public static int ReadInt(string key, int fallback) =>
+        int.TryParse(Read(key), System.Globalization.NumberStyles.Integer,
+            System.Globalization.CultureInfo.InvariantCulture, out int value)
+            ? value
+            : fallback;
 }

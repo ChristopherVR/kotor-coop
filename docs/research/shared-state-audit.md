@@ -3090,6 +3090,53 @@ concrete step, not yet run.
 
 No live testing or code changes this round — pure static disassembly, in the main repo
 checkout. Full suite unaffected (no source touched).
+### Log rotation and diagnostic throttling (2026-08-21)
+
+Adjacent to this section only because it is the same class of "runs forever, never checked
+for size" bug, this time in the logging plumbing rather than in a shared field. A live test
+rig's `kotorcoop-plugin.log` reached 170 MB — 158 concatenated `=== KotorCoop plugin loaded
+===` sessions — because `PluginHost.Log` has always used `File.AppendAllText` with no cap.
+
+**Rotation**, added in `LogRotation.cs` (a pure `internal static class`, shared by source into
+`KotorCoop.Plugin`, `KotorCoop.Agent`, and the test project the same way `MotionSmoother.cs`
+and friends already are): `ShouldRotate(existingSizeBytes, capBytes)` and `RotatedPath(path)`
+decide whether a file is over `coop.ini`'s `log_max_mb` (default 8) and what its `.1.log`
+sibling is named. Three call sites apply it, all **once, at startup, never mid-session** (a
+tool like `tools/verify.ps1` tails the live file, and rotating out from under a tail would
+lose it):
+
+- `PluginHost.RotateLogsIfNeeded` — sweeps every `kotorcoop-*.log` in the game directory
+  (the combined file and every channel split from `ChannelFor`) before the first `Log()` call
+  of a session. Skips `kotorcoop-agent.log`, which the next point handles.
+- `AgentLauncher.RotateAgentLogIfNeeded` — checks `kotorcoop-agent.log` right before
+  `AgentLauncher` opens it with `CREATE_ALWAYS` for the auto-started agent's redirected
+  stdout. `CREATE_ALWAYS` already truncates on every launch, so this process alone never
+  accumulated across sessions the way the plugin log did; the rotation here only means a
+  previous session that ran long enough to cross the cap leaves a `.1.log` tail instead of
+  being silently discarded.
+- `AgentDashboard`'s `--log` option (used directly by `tools/demo.ps1`, bypassing
+  `AgentLauncher` entirely) turned out to have the *same* unbounded-growth bug as the plugin
+  log, for a different reason: `demo.ps1`'s `agent1.log` / `agent2.log` live in
+  `$env:TEMP\kotorcoop-demo`, a directory the script creates with `-Force` but never clears,
+  and `AgentDashboard.Note` / `WriteLogLine` both append with no truncation. Fixed the same
+  way, at construction, using the default cap (no `coop.ini` to read here — the `--log` path
+  is a scratch file, not necessarily beside a game install).
+
+`docs/research/*.md` and `tools/*.ps1` were checked for filename assumptions
+(`kotorcoop-plugin.log`, `kotorcoop-<channel>.log`, `kotorcoop-agent.log`); none delete or
+expect an unbroken single file across the whole run, so the new `.1.log` siblings are purely
+additive.
+
+**Throttling.** The roadmap item asking for this named a `local combat diag: t=...` line in
+`EnemyPresenceController.cs` firing once a second per locally-fighting enemy. That line does
+not exist in this checkout — this worktree's `EnemyPresenceController.cs` and
+`IncomingDamageController.cs` are both already edge-triggered throughout (a `driven !=
+_drivenLogged` guard, budgeted `_logged < N` counters, and similar), and a repo-wide search
+for `Log($"..."` calls carrying per-frame numerics (`hp=`, `dist=`, `pos=`, timestamps) found
+none. Likely explanation: this worktree's `HEAD` is the merge-base with
+`integration/honest-limitations`, over a hundred commits behind that branch's tip, and the
+diagnostic line was added on work not present here. Nothing was changed for this half of the
+item; see the session's final report for the fuller discrepancy note.
 
 ## 3. A client's XP is actively erased
 
