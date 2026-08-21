@@ -34,7 +34,7 @@
 param(
     [string]$ProcessName = 'swkotor',
     [int]$ProcId = 0,
-    [Parameter(Position = 0)][ValidateSet('state', 'travel', 'journal', 'pause', 'browser', 'death', 'hitphantom', 'combat', 'talk', 'walk', 'dialogue', 'attack', 'encounters', 'cheat', 'console', 'item')]
+    [Parameter(Position = 0)][ValidateSet('state', 'travel', 'journal', 'pause', 'browser', 'death', 'hitphantom', 'combat', 'talk', 'walk', 'dialogue', 'attack', 'encounters', 'triggers', 'cheat', 'console', 'item')]
     [string]$Command = 'state',
     [Parameter(Position = 1)][string]$Arg1 = '',
     [Parameter(Position = 2)][int]$Arg2 = 0
@@ -321,6 +321,32 @@ switch ($Command) {
             "    request[{0}] encounter 0x{1:X}  peer {2}" -f $i, (U32 (0x1E04 + ($i * 8))), (U32 (0x1E08 + ($i * 8)))
         }
         "  result:   fired {0}  refused {1}  lastStatus {2}" -f (U32 0x1E44), (U32 0x1E48), (U32 0x1E4C)
+    }
+    'triggers' {
+        # Generic-trigger relay (TriggerRelay), both halves, mirroring 'encounters' exactly
+        # but at the tail-slack region 0x3B88..0x3BD8. On a CLIENT: watch + inside says which
+        # relay-eligible polygons the player is standing in. On the HOST: requests says what
+        # clients have asked for and fired/refused says what its engine did with them.
+        # `triggers <id> <peer>` writes a request by hand, which is how the fire path can be
+        # exercised without a second player walking anywhere — see docs/research/trigger-relay.md.
+        if ($Arg1 -match '^(0x)?[0-9A-Fa-f]+$' -and $Arg1 -ne '') {
+            $id = [Convert]::ToUInt32($Arg1.Replace('0x', ''), 16)
+            $peer = if ($Arg2 -gt 0) { [uint32]$Arg2 } else { 1 }
+            WU32 0x3BAC $id
+            WU32 0x3BB0 $peer
+            WU32 0x3BA4 1
+            WU32 0x3BA8 ((U32 0x3BA8) + 1)
+            "fire request queued: trigger 0x{0:X} on behalf of peer {1} (serial {2})" -f $id, $peer, (U32 0x3BA8)
+        }
+        "  watch:    enabled {0}  inside {1} (serial {2})" -f (U32 0x3B88), (U32 0x3B8C), (U32 0x3B90)
+        $inside = [Math]::Min([int](U32 0x3B8C), 4)
+        for ($i = 0; $i -lt $inside; $i++) { "    inside[{0}] 0x{1:X}" -f $i, (U32 (0x3B94 + ($i * 4))) }
+        "  requests: count {0} (serial {1})" -f (U32 0x3BA4), (U32 0x3BA8)
+        $reqs = [Math]::Min([int](U32 0x3BA4), 4)
+        for ($i = 0; $i -lt $reqs; $i++) {
+            "    request[{0}] trigger 0x{1:X}  peer {2}" -f $i, (U32 (0x3BAC + ($i * 8))), (U32 (0x3BB0 + ($i * 8)))
+        }
+        "  result:   fired {0}  refused {1}  lastStatus {2}" -f (U32 0x3BCC), (U32 0x3BD0), (U32 0x3BD4)
     }
     'browser' {
         # `browser` prints the panel state; `browser 1` / `browser 0` opens / closes the

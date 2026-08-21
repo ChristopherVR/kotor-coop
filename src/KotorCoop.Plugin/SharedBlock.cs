@@ -1626,6 +1626,74 @@ internal struct SharedBlock
     public const int PeerEffectMagnitudeOffset = 0x0C;
     public const int PeerEffectSerialOffset = 0x14;
 
+    // ---- generic trigger relay (0x3B88..0x3BD8, no TotalSize growth) --------------
+    //
+    // A GENERIC trigger's OnEnter (a CSWSTrigger whose script starts a cutscene, dialogue or
+    // scripted event — not a trap, not an area transition) already fires correctly on
+    // whichever engine the real player is standing in; the gap is that firing there never
+    // touches THIS instance's object-id counter, so a script that CreateObject/DestroyObject
+    // (a plot actor, most commonly) drifts the two instances' ids apart for the rest of the
+    // module. This region is the same shape as the encounter region above for the same
+    // reason: a client REPORTS where it stands, and the host's engine re-runs the OnEnter
+    // script against that peer's phantom. See docs/research/trigger-relay.md.
+    //
+    // Placed in the 0x78 bytes of genuine padding OffsetPeerEffectInSlots leaves before
+    // TotalSize (0x3AC8 + 0x18*8 = 0x3B88, TotalSize = 0x3C00) — the tail-slack the version-44
+    // comment above already measures and does not use. This region ends at 0x3BD8, so 40
+    // bytes of that slack are still free after it. No TotalSize growth, no relayout of
+    // anything that already existed: existing fields keep their offsets untouched.
+
+    /// <summary>Agent -&gt; plugin. 1 on a peer that is not enemy-authority (mirrors
+    /// <see cref="OffsetEncounterWatch"/>'s reasoning exactly): that instance's watch reports
+    /// which generic triggers the local player stands in, for the host to fire on its
+    /// phantom's behalf. Dead weight on the host, which fires its own.</summary>
+    public const int OffsetTriggerWatch = 0x3B88;
+
+    /// <summary>Plugin -&gt; agent. How many entries of <see cref="OffsetTriggerInside"/> are
+    /// valid.</summary>
+    public const int OffsetTriggerInsideCount = 0x3B8C;
+
+    /// <summary>Plugin -&gt; agent. Bumped whenever the set changes.</summary>
+    public const int OffsetTriggerInsideSerial = 0x3B90;
+
+    /// <summary>Plugin -&gt; agent. Object ids of the generic triggers whose polygon contains
+    /// the local player AND whose OnEnter script matched the coop.ini allowlist pattern (the
+    /// plugin's watch excludes everything else before it ever reaches this array). Occupies
+    /// 0x3B94..0x3BA4.</summary>
+    public const int OffsetTriggerInside = 0x3B94;
+
+    public const int TriggerInsideCapacity = 4;
+
+    /// <summary>Agent -&gt; plugin. How many request slots are valid.</summary>
+    public const int OffsetTriggerRequestCount = 0x3BA4;
+
+    /// <summary>Agent -&gt; plugin. Bumped after the slots are written; the plugin only acts
+    /// when this moves.</summary>
+    public const int OffsetTriggerRequestSerial = 0x3BA8;
+
+    /// <summary>Agent -&gt; plugin. trigger object id u32 @0, requesting peer id u32 @4.
+    /// Occupies 0x3BAC..0x3BCC. Capacity 4, not the encounter region's 8: unlike an
+    /// encounter fire, a trigger fire is NOT free to repeat (no engine one-shot flag), so
+    /// TriggerRelayStore hands out only genuinely-new requests and 4 is already the wire
+    /// packet's own per-tick cap (<see cref="ProtocolConstants.MaxTriggerRelayEntries"/> in
+    /// KotorCoop.Protocol).</summary>
+    public const int OffsetTriggerRequests = 0x3BAC;
+
+    public const int TriggerRequestStride = 0x08;
+
+    public const int TriggerRequestCapacity = 4;
+
+    /// <summary>Plugin -&gt; agent. How many triggers this instance has actually fired on a
+    /// peer's behalf, and how many requests it turned down, for the log.</summary>
+    public const int OffsetTriggerFired = 0x3BCC;
+
+    public const int OffsetTriggerRefused = 0x3BD0;
+
+    /// <summary>Plugin -&gt; agent. Why the last refusal happened
+    /// (<c>OdysseyTriggers.TriggerFireResult</c>'s status codes). 0 = nothing refused yet.
+    /// Region ends here, at 0x3BD8.</summary>
+    public const int OffsetTriggerStatus = 0x3BD4;
+
     // ---- co-op death handling (version 14, region 0x1020..0x1080) -----------------
     //
     // KOTOR party members never truly die: at 0 HP they go "temp dead" and the engine

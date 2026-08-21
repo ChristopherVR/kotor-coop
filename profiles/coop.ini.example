@@ -233,3 +233,29 @@ effect_sync=0
 # until a live pass confirms it clears fog on the M-screen with no cost. See
 # docs/research/map-reveal.md.
 map_reveal_sync=0
+
+# Relay a GENERIC trigger's OnEnter (a CSWSTrigger whose script starts a cutscene, dialogue or
+# scripted event - the classic "walk into the room, the scene starts") so the enemy owner's
+# engine also runs it, keeping its object-id counter in lockstep with whatever the script
+# creates or destroys. Parallel to client_encounters, and OFF for a different reason: an
+# encounter's engine field (started) gives firing free idempotence, while a generic trigger's
+# OnEnter has none - this pass's own TriggerRelayStore does the bookkeeping instead, and it has
+# not been run against the live game yet. See docs/research/trigger-relay.md.
+trigger_relay=0
+
+# Comma-separated globs (only * is special) matched against a trigger's OnEnter script resref
+# before its id is ever reported - traps and area transitions are excluded by the engine field
+# check regardless of this pattern. The default matches every story-cutscene script the early
+# Endar Spire and Taris modules use (k_pend_*, k_ptar_*) and none of the non-story generic
+# triggers (k_trg_partyinit, k_bant_trig) - see the inventory table in
+# docs/research/trigger-relay.md.
+trigger_relay_patterns=k_p*_*
+
+# Relay a MID-MODULE movie (a script's own PlayMovie, not a module-transition movie - those
+# already replicate via TransitionMovies) so a peer whose own screen never ran that PlayMovie
+# call sees it too, queued at the peer's own next safe point rather than forced mid-dialogue or
+# mid-fight. NOT WIRED UP END TO END in this pass: the decision half (MovieRelayQueue) is
+# implemented and tested, but the detection half - CinematicWatch capturing WHICH movie a
+# mid-module PlayMovie call played - needs a new engine hook this pass did not locate. Setting
+# this to 1 today changes nothing until that hook lands. See docs/research/trigger-relay.md §6.
+movie_relay=0

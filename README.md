@@ -338,6 +338,24 @@ tools/                   RE helpers, demo scripts, the kotor1_0_3 symbol databas
   three encounters fired host-side, all nine spawned Vulkars appeared on the client, and
   damage flowed both ways — the spawns hurt the client through its phantom, and the
   client's own hits were spent by the host on the real bodies.
+- **A generic trigger's OnEnter (the classic "walk into the room, the scene starts") now
+  relays from a client to the host — not yet live-verified.** A client's own story triggers
+  already fired correctly on the client's own engine; the gap was the HOST never running the
+  same script, so a plot `CreateObject`/`DestroyObject` in it drifted the two instances' ids
+  apart. `TriggerRelay` reports which generic triggers a client is standing in (excluding
+  traps and area transitions, and filtered by a `coop.ini` allowlist pattern) and the host
+  runs the trigger's own `ScriptOnEnter` against that peer's phantom, the same `RunScript`
+  call the engine's own `EventHandler` makes. `coop.ini` `trigger_relay=0` by default: unlike
+  encounters, a generic trigger carries no engine one-shot flag, so this channel's own
+  bookkeeping is the only thing standing between one fire and a duplicate, and it has never
+  run against the live game. See
+  [docs/research/trigger-relay.md](docs/research/trigger-relay.md).
+- **Mid-module movies (a script's own `PlayMovie`, not a transition) have a queue DECISION
+  but no detection wired up yet.** `MovieRelayQueue` decides whether a peer should play an
+  announced movie immediately or defer it to the next module transition — pure, tested — but
+  nothing yet captures WHICH movie a mid-module `PlayMovie` call played, so `coop.ini`
+  `movie_relay=1` changes nothing today. See
+  [docs/research/trigger-relay.md](docs/research/trigger-relay.md) §6.
 - ~~**Item identity is a blueprint resref**~~ — no longer, on the wire: an item that crosses
   between players now carries **what makes it that item** — its stack size, its charges, its
   installed upgrades, and whether it is identified (plus the stolen and non-equippable bits) —

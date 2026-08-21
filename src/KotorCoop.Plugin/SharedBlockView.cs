@@ -626,6 +626,59 @@ internal sealed unsafe class SharedBlockView(byte* baseAddress)
         set => *U32(SharedBlock.OffsetEncounterStatus) = value;
     }
 
+    // ---- generic trigger relay --------------------------------------------------------
+
+    /// <summary>Agent -&gt; plugin: run the watch (only on a peer that is not enemy-authority).
+    /// Mirrors <see cref="EncounterWatchEnabled"/>.</summary>
+    public bool TriggerWatchEnabled => *U32(SharedBlock.OffsetTriggerWatch) != 0;
+
+    /// <summary>
+    /// Publishes the generic triggers the local player is standing inside AND whose OnEnter
+    /// script matched the coop.ini allowlist pattern. Count written last, mirroring
+    /// <see cref="SetEncountersInside"/>'s payload-then-key ordering.
+    /// </summary>
+    public void SetTriggersInside(ReadOnlySpan<uint> ids, uint serial)
+    {
+        int count = Math.Min(ids.Length, SharedBlock.TriggerInsideCapacity);
+        for (int i = 0; i < count; i++)
+        {
+            *U32(SharedBlock.OffsetTriggerInside + (i * 4)) = ids[i];
+        }
+
+        *U32(SharedBlock.OffsetTriggerInsideSerial) = serial;
+        *U32(SharedBlock.OffsetTriggerInsideCount) = (uint)count;
+    }
+
+    public uint TriggerRequestSerial => *U32(SharedBlock.OffsetTriggerRequestSerial);
+
+    public uint TriggerRequestCount =>
+        Math.Min(*U32(SharedBlock.OffsetTriggerRequestCount), (uint)SharedBlock.TriggerRequestCapacity);
+
+    public (uint TriggerId, uint PeerId) GetTriggerRequest(int index)
+    {
+        byte* slot = baseAddress + SharedBlock.OffsetTriggerRequests
+            + (index * SharedBlock.TriggerRequestStride);
+
+        return (*(uint*)(slot + 0x00), *(uint*)(slot + 0x04));
+    }
+
+    public uint TriggersFired
+    {
+        get => *U32(SharedBlock.OffsetTriggerFired);
+        set => *U32(SharedBlock.OffsetTriggerFired) = value;
+    }
+
+    public uint TriggersRefused
+    {
+        get => *U32(SharedBlock.OffsetTriggerRefused);
+        set => *U32(SharedBlock.OffsetTriggerRefused) = value;
+    }
+
+    public uint TriggerStatus
+    {
+        set => *U32(SharedBlock.OffsetTriggerStatus) = value;
+    }
+
     /// <summary>Cumulative damage this player owes for hits their phantom took elsewhere.</summary>
     public uint IncomingDamage => *U32(SharedBlock.OffsetIncomingDamage);
 

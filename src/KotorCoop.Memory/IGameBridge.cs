@@ -528,6 +528,32 @@ public interface IGameBridge : IDisposable
     bool TryRequestEncounterFire(IReadOnlyList<(uint EncounterId, uint PeerId)> requests) => false;
 
     /// <summary>
+    /// Non-owner side of TriggerRelay, mirroring <see cref="SetEncounterWatch"/>: run the
+    /// generic-trigger watch only on a peer that is not enemy-authority. The owner's own
+    /// engine already fires generic triggers for its own real character correctly and has
+    /// nothing to ask anyone for.
+    /// </summary>
+    void SetTriggerWatch(bool enabled) { }
+
+    /// <summary>
+    /// Non-owner side: the object ids of the GENERIC triggers the local player is standing
+    /// inside right now AND whose OnEnter script matched the coop.ini allowlist pattern, as
+    /// the plugin's watch reports them. Empty when the plugin is absent, the player is
+    /// outside every relay-eligible polygon, or the channel is disabled.
+    /// </summary>
+    IReadOnlyList<uint> ReadEnteredTriggers() => [];
+
+    /// <summary>
+    /// Owner side: asks the plugin to run the SAME OnEnter script the requesting peer's own
+    /// engine already ran, against that peer's phantom standing in as the entering object.
+    /// Unlike <see cref="TryRequestEncounterFire"/>, a repeat is NOT free here — a generic
+    /// trigger carries no engine one-shot flag — so callers are expected to only ever pass
+    /// requests <c>KotorCoop.Session.TriggerRelayStore.Collect</c> has not already marked
+    /// fired. Returns false when there is no plugin.
+    /// </summary>
+    bool TryRequestTriggerFire(IReadOnlyList<(uint TriggerId, uint PeerId)> requests) => false;
+
+    /// <summary>
     /// Applies the owning peer's enemy state to this instance: mirror their health, and
     /// stop local fighting from killing anything the owner still considers alive.
     /// </summary>

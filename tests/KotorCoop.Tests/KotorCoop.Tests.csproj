@@ -36,6 +36,7 @@
     <Compile Include="..\..\src\KotorCoop.Plugin\SpectateCycle.cs" Link="Plugin\SpectateCycle.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\CheatAuthority.cs" Link="Plugin\CheatAuthority.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\MovieStaging.cs" Link="Plugin\MovieStaging.cs" />
+    <Compile Include="..\..\src\KotorCoop.Plugin\MovieRelayQueue.cs" Link="Plugin\MovieRelayQueue.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\ControlReturnRule.cs" Link="Plugin\ControlReturnRule.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\DoorUse.cs" Link="Plugin\DoorUse.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\SpawnDrainRule.cs" Link="Plugin\SpawnDrainRule.cs" />

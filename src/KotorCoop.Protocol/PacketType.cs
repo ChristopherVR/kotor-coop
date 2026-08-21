@@ -339,4 +339,40 @@ public enum PacketType : byte
     /// the TRUE origin on relay and two different origins can reuse the same sequence number
     /// independently.</summary>
     DialogueGrantAck = 46,
+
+    // 47 is DELIBERATELY SKIPPED, the same discipline PacketType 39 already established: a
+    // concurrent worktree agent's block-version-45 liveness work claims the number-space
+    // right after this one is likely to collide with, so this pass takes 48 instead of the
+    // next free value. PacketTypeTests fails the build on any duplicate regardless.
+
+    /// <summary>
+    /// client -&gt; host: "my player is standing inside these GENERIC triggers right now"
+    /// (a <c>CSWSTrigger</c> whose <c>OnEnter</c> script starts a cutscene/dialogue/scripted
+    /// event — the classic "walk into the room, the scene starts" — as opposed to a trap or
+    /// an area-transition trigger, which this channel never carries).
+    ///
+    /// host -&gt; all: the trigger ids this host has ALREADY fired in the named module, so a
+    /// client's watch stops re-reporting ones the host has already handled. Distinguished
+    /// from the client direction by <c>PeerId == 0</c> — no real peer ever holds that id
+    /// (see <see cref="EncounterTrigger"/>'s identical zero-guard).
+    ///
+    /// WHY THIS EXISTS, separately from <see cref="EncounterTrigger"/>: an encounter spawn
+    /// consumes object ids, so a client's encounters are disarmed outright and the host is
+    /// the ONLY engine that ever fires one. A generic trigger's OnEnter script is not
+    /// disarmed — the client's own engine already runs it correctly for the client's own
+    /// real character. The gap is narrower: a story trigger's script commonly calls
+    /// <c>GetEnteringObject() == GetFirstPC()</c> (so it fires for the client's real PC and
+    /// never for the client's PHANTOM on the host's screen, which is not that instance's
+    /// GetFirstPC() either way — the phantom is placed by a direct SetPosition write, so it
+    /// never generates the subarea-entered event the real engine needs regardless) and
+    /// commonly calls <c>CreateObject</c>/<c>DestroyObject</c> to spawn or remove a plot
+    /// actor — an object-id-consuming operation the HOST's own instance must also perform, in
+    /// the same order, or the two instances' id counters drift apart for the rest of the
+    /// module. See docs/research/trigger-relay.md.
+    ///
+    /// A LEVEL in both directions, exactly like <see cref="EncounterTrigger"/>: the client
+    /// resends its current set every tick and the host resends its fired set every tick, so a
+    /// lost datagram costs one tick, never a permanently missed fire.
+    /// </summary>
+    TriggerRelay = 48,
 }

@@ -853,6 +853,68 @@ public sealed class CoopHost : ICoopSession
     public IReadOnlyList<EncounterFireRequest> GetEncounterFireRequests(string module) =>
         _encounterTriggers.Collect(module, SessionClock.NowMs);
 
+    // ---- generic trigger relay -----------------------------------------------------
+    //
+    // A generic trigger's OnEnter already fires correctly on whichever engine the real
+    // player stands in — the gap is that a client's engine running it never touches this
+    // host's object-id counter, so a plot CreateObject/DestroyObject in that script drifts
+    // the two instances apart. Reports are fresh-only, module-scoped, and de-duplicated by
+    // trigger with the host's own fired-set never re-offering the same id twice — see
+    // TriggerRelayStore.
+
+    private readonly TriggerRelayStore _triggerRelay = new();
+
+    private void HandleTriggerRelay(ReadOnlySpan<byte> span)
+    {
+        if (PacketCodec.ReadTriggerRelay(span) is { } packet)
+        {
+            _triggerRelay.Report(packet, SessionClock.NowMs);
+        }
+    }
+
+    public IReadOnlyList<TriggerFireRequest> GetTriggerFireRequests(string module) =>
+        _triggerRelay.Collect(module, SessionClock.NowMs);
+
+    public IReadOnlyList<uint> GetFiredTriggerIds(string module) =>
+        _triggerRelay.GetFiredIds(module);
+
+    /// <summary>
+    /// Announces this host's fired-set for every module it currently has one for. Unreliable
+    /// and re-sent every tick, like <see cref="BroadcastEnemies"/>: a lost datagram costs a
+    /// client re-reporting an already-fired trigger for one more tick, never a stuck state —
+    /// the host's own <see cref="TriggerRelayStore.Collect"/> silently no-ops a repeat
+    /// request regardless, so a client's watch not yet caught up is a bandwidth cost, not a
+    /// correctness one.
+    /// </summary>
+    private void BroadcastTriggerRelay(List<PeerConnection> recipients)
+    {
+        if (recipients.Count == 0)
+        {
+            return;
+        }
+
+        foreach (string module in _triggerRelay.ModulesWithFired)
+        {
+            IReadOnlyList<uint> fired = _triggerRelay.GetFiredIds(module);
+            if (fired.Count == 0)
+            {
+                continue;
+            }
+
+            int length = PacketCodec.Write(
+                _sendBuffer, new TriggerRelayPacket(0, module, [], fired));
+            if (length == 0)
+            {
+                continue;
+            }
+
+            foreach (PeerConnection peer in recipients)
+            {
+                _channel.Send(peer.EndPoint, _sendBuffer.AsSpan(0, length));
+            }
+        }
+    }
+
     // ---- NPC barks ----------------------------------------------------------------
     //
     // Any instance can produce one and everybody else should hear it, so the host both
@@ -1323,6 +1385,7 @@ public sealed class CoopHost : ICoopSession
                     ReleaseDialogueIfOwnedBy(id);
                     ForgetPhantomDamageFor(id);
                     _encounterTriggers.Forget(id);
+                    _triggerRelay.Forget(id);
                     _interactionLocks.Forget(id);
                 }
             }
@@ -1388,6 +1451,7 @@ public sealed class CoopHost : ICoopSession
         }
 
         BroadcastEnemies(now, recipients);
+        BroadcastTriggerRelay(recipients);
         BroadcastParty(now, recipients);
         BroadcastPartyRoster(now, recipients);
         BroadcastDialogue(now, recipients);
@@ -1830,6 +1894,10 @@ public sealed class CoopHost : ICoopSession
 
             case PacketType.EncounterTrigger:
                 HandleEncounterTrigger(span);
+                break;
+
+            case PacketType.TriggerRelay:
+                HandleTriggerRelay(span);
                 break;
 
             case PacketType.DialogueRequest:
@@ -2460,6 +2528,7 @@ public sealed class CoopHost : ICoopSession
 
         _buffer.Remove(bye.PeerId);
         _encounterTriggers.Forget(bye.PeerId);
+        _triggerRelay.Forget(bye.PeerId);
     }
 
     public void Dispose() => _channel.Dispose();
