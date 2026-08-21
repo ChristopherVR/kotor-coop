@@ -1671,6 +1671,239 @@ the follower agent for `transition movies pending`.
 
 ---
 
+## 10. Mid-module movies: the detection half, and the receiver (2026-08-22)
+
+docs/research/trigger-relay.md §6 shipped `MovieRelayQueue` — the pure PlayNow /
+DeferToNextTransition / Ignore decision for a mid-module `PlayMovie` call (no transition
+involved: the Leviathan capture, the Star Forge arrival, the Taris bombardment, the Dantooine
+vision) — and `coop.ini movie_relay=1`, which changed nothing, because nothing captured WHICH
+movie such a call played. §9 above is the transition-queue channel; this is its mid-module
+sibling, closing the gap that section's own §6 named and left open.
+
+### 10.1 Finding the hook — VERIFIED, disassembled this pass
+
+The task was to trace NWScript `PlayMovie` (action 733) down to the function that takes the
+resref and blocks. §1.4 already has `ExecuteCommandPlayMovie 0x00540ED0` calling
+`CClientExoApp::PlayMovie 0x005EDB30(&name, &local, 0, 0)` — a thunk (`mov ecx,[ecx+4]; jmp`)
+onto `CClientExoAppInternal::PlayMovie 0x00602CF0`. Disassembled fresh this pass
+(`tools/disasm.py 0x602CF0`, `tools/xrefs.py 0x602CF0` and `0x5EDB30`, against the same
+sha256-matched `tools/kotor1_0_3.db`):
+
+```
+0x00602CF0  56                   push esi
+0x00602CF1  8bf1                 mov esi, ecx           ; esi = CClientExoAppInternal*
+0x00602CF3  8b86f8010000         mov eax, [esi+0x1F8]    ; the movie-suppression latch
+0x00602CF9  85c0                 test eax, eax
+0x00602CFB  7406                 je 0x602d03
+0x00602CFD  33c0                 xor eax, eax
+0x00602CFF  5e                   pop esi
+0x00602D00  c21000               ret 0x10                ; FOUR stack arguments
+0x00602D03  8b442408             mov eax, [esp+8]        ; arg1 = the CExoString* name
+...
+0x00602D2E  e8bdfdffff           call 0x602af0           ; PlayMoviesInExoArrayList — blocks
+```
+
+`xrefs 0x00602CF0` finds exactly **one** caller: the `jmp` thunk at `0x005EDB30`. `xrefs
+0x005EDB30` finds exactly **two** callers in the whole binary: `0x00540F87` inside
+`ExecuteCommandPlayMovie` (the NWScript command), and `0x006DCF5E` inside a function the DB's
+own `functions` table resolves to `CSWGuiTitleMovies::OnMoviePicked 0x006DCF50` — the main-menu
+"movies shown" gallery's replay-on-click handler. **Neither is the transition path.** A
+transition's movies are played by `CServerExoAppInternal::StartNewModule 0x004BA920` →
+`PlayLoadModuleMovies 0x005EDB20` → `PlayMoviesInExoArrayList 0x00602AF0` **directly** — §1.5's
+own table already lists this as one of exactly two entry points into that function, the other
+being `0x00602B92` inside `0x00602CF0` itself. So `0x00602CF0` is hookable at its very first
+instruction and, by construction of the call graph (not an assumption about behaviour), fires
+**only** for a mid-module `PlayMovie` or a menu-gallery replay — never for a transition. That
+is what makes hooking it safe: no risk of double-announcing a movie the transition-queue channel
+(§9) already covers, and no need to distinguish the two cases by watching a flag.
+
+**The argument.** `ExecuteCommandPlayMovie`'s own call site pushes `(&name, &local, 0, 0)` before
+the thunk. Because the thunk is a `jmp` (not a `call`), the stack is untouched when
+`0x00602CF0` starts running: `arg1` — a pointer to the `CExoString` `StackPopString 0x005D1080`
+just filled two instructions earlier — sits at `[esp+4]` at function entry. That is the SAME
+two-field `CExoString` layout (`+0x00 char*`, `+0x04 length INCLUDING the null`) every other
+hook in this codebase reads, and it is what `MoviePlayHook` captures.
+
+**Prologue chosen for the detour:** `push esi; mov esi,ecx; mov eax,[esi+0x1F8]` — 9 bytes,
+none position-dependent, verify-bytes-or-refuse exactly like `PhantomHitHook`/`PhantomEffectHook`.
+
+`arg2` (a fresh local the caller allocates and never reads back) is **INFERRED** to be a pure
+out-parameter of `PlayMoviesInExoArrayList` — not traced past `0x00602CF0` itself, and
+irrelevant to the READ side (`MoviePlayHook` never touches it) though relevant to the WRITE side
+(`OdysseyMovies.PlayMovieNow`, §10.3, passes a fresh scratch buffer rather than null, matching
+both real callers).
+
+### 10.2 What ships: `MoviePlayHook.cs`
+
+`src/KotorCoop.Plugin/MoviePlayHook.cs` — the SAME jmp-detour/pushad/relocate-and-resume shape
+as `PhantomHitHook`/`PhantomEffectHook`. On every call to `0x00602CF0` it copies the resref
+(cutting at the first null, the CExoString length trap) into a 4-slot ring and bumps a serial.
+Deliberately read-only: it never touches `arg2`, never suppresses the call, never delays it.
+
+`src/KotorCoop.Plugin/MidModuleMovieController.cs` is the controller both halves live behind
+(coop.ini `movie_relay`, default OFF until live-verified — same posture `PeerEffect` and
+`CreatureLiveness` shipped with):
+
+* **Detection.** Polls `MoviePlayHook.Sequence`; on a new capture, excludes a resref that is
+  ALSO sitting in the engine's own transition queue right now
+  (`MovieRelayQueue.IsAlreadyQueued`, pure, tested — defence in depth against a coincidence,
+  not a case the hook can actually produce given §10.1's call-graph argument) and publishes
+  what is left into the new block region.
+* **Receiver.** Reads a peer's announcement the agent has already filtered to the local module,
+  asks `MovieRelayQueue.Decide` using engine state only the plugin can read (`Odyssey.HasServer`
+  / `IsAreaTransitionPending` / `IsMoviePlaying` for idle, `Odyssey.IsConversationActive` for
+  dialogue, `Odyssey.IsPlayerInCombat` for combat, `Odyssey.QueuedTransitionMovieCount()` for
+  "the game already has one queued"), and acts: `PlayNow` calls `OdysseyMovies.PlayMovieNow`
+  directly (guarded by the new `MovieStaging.DecidePlayNow`, reusing the SAME refusal
+  vocabulary staging already has); `DeferToNextTransition` calls the SAME guarded
+  `Odyssey.QueueTransitionMovie` write `moviewarp queue` already uses
+  (`MovieStaging.Decide`, `nameCount: 1`); `Ignore` does nothing.
+
+### 10.3 The immediate-play path: `OdysseyMovies.cs`
+
+`MovieStaging`'s existing verbs (`ModeWarpWithMovies`/`ModeQueueOnly`/`ModeClear`/`ModeShow`)
+all write into the transition queue; none of them calls the engine's movie player directly. So
+this pass adds the smallest such call, in a new file rather than an `Odyssey.cs` addition (the
+same reason `OdysseyTriggers.cs`/`OdysseyEffects.cs` are standalone — several concurrent
+worktree agents already touch that file, and `Odyssey` is not `partial`):
+`OdysseyMovies.PlayMovieNow` calls `CClientExoApp::PlayMovie 0x005EDB30` — the SAME engine
+entry `MoviePlayHook` watches — reproducing `ExecuteCommandPlayMovie`'s own argument shape
+(`&name, &scratch, 0, 0`, matching the NWScript semantics rather than the menu-gallery's
+`(..., 0, 1)`). It performs no engine-state checks of its own; every call site gates it behind
+`MovieStaging.DecidePlayNow` first, the same division of labour `Odyssey.QueueTransitionMovie`
+already has with `MovieStaging.Decide`.
+
+### 10.4 Block and protocol changes
+
+| What | Old | New | Guard |
+| --- | --- | --- | --- |
+| `PluginHost._block->Version` | 47 | **48** | `TransitionMovieTests.TheBlockVersionMovedInBothHalves` |
+| `KotorGameBridge.PluginSignature` byte 8 | `0x2F` | **`0x30`** | same test — it reads both files |
+| `SharedBlock.TotalSize` | `0x4000` | **`0x4000` (unchanged)** | the region fits the free gap `OffsetClientDoorRefusalArmed` leaves before the peer-effect region (`0x392C..0x3A00`, 0xD4 bytes) |
+| `ProtocolConstants.Version` | 33 | **34** | `PacketReader` rejects a mismatch; a stale peer gets a typed `Reject` |
+| `PacketType.MidModuleMovie` | — | **50** | `PacketType`'s own duplicate-number test |
+
+New shared-block region, `0x392C..0x396C` (0x40 bytes, no `TotalSize` growth):
+
+| Offset | Direction | Field |
+| --- | --- | --- |
+| `0x392C` | plugin → agent | serial (bumped last) |
+| `0x3930` | plugin → agent | resref, 16 bytes null-padded ASCII (0x3940..0x394C reserved) |
+| `0x394C` | agent → plugin | request serial |
+| `0x3950` | agent → plugin | request resref, 16 bytes |
+| `0x3960` | plugin → agent | applied (echoes the request serial) |
+| `0x3964` | plugin → agent | status code (0x3968..0x396C reserved) |
+
+`MidModuleMoviePacket(PeerId, Module, Serial, Movie)` — a single resref, unlike
+`TransitionMoviePacket`'s list of up to six: a mid-module movie is one independent event with no
+transition queue to ride, so the receiver decides per-movie whether to interrupt what it is
+doing (§10.2), which a shared "queue everything for the next load" shape cannot express. `Module`
+is where the announcer IS (not "leaving", since nothing is transitioning), and a receiver filters
+on it — cheaply, in `CoopAgent.PumpMidModuleMovies` — before ever writing a request into the
+plugin block, so `MovieRelayQueue.Decide`'s `sameModule`/`hasMovieName` inputs are always true
+by the time the plugin sees them.
+
+### 10.5 Tests
+
+`tests/KotorCoop.Tests/MidModuleMovieRelayTests.cs`:
+
+* the "already staged by transition" exclusion (`MovieRelayQueue.IsAlreadyQueued`, pure);
+* the wire codec round-trip and the wrong-packet-type refusal;
+* the block record, over a real `SharedBlockView` on a pinned scratch buffer (added to the test
+  project's Compile list alongside `MovieStaging.cs`/`MovieRelayQueue.cs` — confirmed to compile
+  in the 64-bit test host despite the project's own long-standing "SharedBlockView will not
+  compile here" caution, which turned out not to apply to this class specifically: it touches no
+  `Odyssey` call, no P/Invoke, nothing but `byte*` arithmetic over whatever address the caller
+  supplies): the serial-bump-on-publish, the 16-byte field not overrunning its 12 bytes of
+  reserved padding on an oversized name, the agent-facing request region round-tripping through
+  the plugin's own accessor, and the offset math against its neighbours;
+* dedup by `(peer, serial)` and the same-module filter, through a real `CoopAgent.PumpOnce()`
+  against a minimal fake bridge/session (the same shape `TravelPumpTests` already uses for
+  `PumpTransitionMovies`).
+
+`MovieRelayQueueTests.cs` (already existing, from the decision-only pass) needed no changes —
+its inputs did not change.
+
+### 10.6 What this pass deliberately did not do
+
+**No live test.** The task's own instruction was explicit: do not run the game this pass — the
+rig is in use. Everything above is static RE plus unit tests. The live-test note below is what a
+session with the rig should run next.
+
+**No change to the transition-queue channel (§9).** Mid-module and transition movies remain two
+separate packet types, two separate block regions, two separate controllers — a coincidence in
+naming is not a reason to conflate two channels with different receiver semantics (§10.4).
+
+**No skip mirroring**, for the same reason §3.2.3 and §9.5 already give: a skip is consumed
+inside `WaitForMovie`, unobservable from outside it.
+
+### 10.7 The live-test note
+
+Preconditions as §5.0/§7.5: `build.ps1 -Install` on **both** installs (`demo.ps1` does not
+deploy the plugin), `movie_relay=1` in both `coop.ini`s, restart the session (the gate is read
+once at plugin load).
+
+**On `END_M01AA` there is no mid-module movie to fire naturally** — its own `01a.bik` plays on
+`OnEnter` before a co-op session would even be connected, and the demo save typically starts
+past that point. Two ways to get a real one without walking a long way in:
+
+1. **The Taris bombardment.** Reach `tar_m02ab`/`ac` (`console 'warp tar_m02ab'` is faster than
+   walking the storyline there) and progress to the point the module fires `05` — a mid-module
+   `PlayMovie` in a live save, per §4.4's inventory. Host side should log
+   `movie-relay: captured mid-module PlayMovie('05') - published for the session`, and the
+   OTHER instance — provided it is idle, not in dialogue, not in combat, and the engine's own
+   transition queue is empty — should log `movie-relay: playing '05' now - a peer's mid-module
+   movie` followed by the SAME multi-second main-thread stall `cinematic:` already knows how to
+   measure (§1.3).
+2. **The Dantooine vision landing**, `05_2a`/`05_2c` per §4.4 — same shape, further into the
+   game.
+3. **Fake one with `moviewarp`'s own verbs**, the fastest path and the one that isolates THIS
+   channel from "did the story trigger even fire": `moviewarp` stages a movie onto the
+   TRANSITION queue, not the mid-module path this pass built, so it cannot exercise
+   `MoviePlayHook` directly — but the console's own generic script-call surface can. Play a
+   movie by resref on the host through the console
+   (`ConsoleCommandTable`/`FuncInterpHook`'s existing NWScript passthrough, if one reaches
+   `PlayMovie`; if not, this is the one gap worth a small dedicated debug verb before the next
+   live pass — `movieplay <resref>` calling `OdysseyMovies.PlayMovieNow` directly on the HOST,
+   which would ALSO exercise the hook since it goes through `0x00602CF0` too) and watch whether
+   the CLIENT plays it.
+
+**Pass signal, in order, on the CAPTURING side:**
+
+```
+movie-relay: captured mid-module PlayMovie('<resref>') - published for the session
+```
+
+**Pass signal on the RECEIVING side, if idle:**
+
+```
+movie-relay: playing '<resref>' now - a peer's mid-module movie
+cinematic: the main thread was gone for NNNNN ms (in a world; 0 transition movie(s) were queued going in) ...
+```
+
+**Pass signal on the RECEIVING side, if mid-dialogue or mid-combat:**
+
+```
+movie-relay: deferred '<resref>' onto this instance's own next transition
+```
+
+— followed, on that peer's NEXT transition of any kind, by the SAME `cinematic: the module
+transition has queued 1 movie(s): ...` line §7/§8/§9 already validate, naming the deferred movie.
+
+**Distrust list:** a `movie-relay: not playing ... - {reason}` line where the reason names a
+transition already pending or a movie already playing is a genuine race, not a bug — the whole
+point of `MovieStaging.DecidePlayNow`'s re-check is that the engine state read at DECISION time
+(inside `MovieRelayQueue.Decide`) can be stale by the time `PlayNow`'s OWN re-check runs a few
+instructions later; confirm which one fired using the specific reason text. A capture with no
+matching publish means the exclusion (§10.1's "defence in depth") triggered — check whether the
+engine's transition queue genuinely held that name at that moment (`cinematic:` channel's own
+queue lines are the independent confirmation). No capture at all despite a movie visibly playing
+on the capturing instance's own screen means the hook did not fire — re-run
+`python tools/callaudit.py --bad` before suspecting anything else, the same first move
+§7.8/§8's own crash-triage sections already recommend.
+
+---
+
 ## Key addresses
 
 | Address | Symbol / meaning |
@@ -1680,7 +1913,8 @@ the follower agent for `transition movies pending`.
 | **`0x005F6F20`** | **`CClientExoAppInternal::WaitForMovie`** — the blocking spin loop `0x005F7063`–`0x005F70B5`; runs only `Global::messagepump 0x00401510`; skip flag `[clientInternal+0x254]`; cleanup `RemoveMoveToModuleMovies` + `SetGlobalUnpauseableState(0)` |
 | `0x00603003` / `0x0060300F` | MainLoop's own `IsMoviePlaying` test and `WaitForMovie(1)` — inside the in-world block, which is why the MENU movie never blocks |
 | `0x00602AF0` | `CClientExoAppInternal::PlayMoviesInExoArrayList` — takes the pause lock (`SetGlobalUnpauseableState(1)` at `0x00602B09`), calls `WaitForMovie` at `0x00602BA6` |
-| `0x005EDB30` / `0x00602CF0` | `CClientExoApp::PlayMovie` (`ret 0x10`, four args) → internal, which appends to `+0x2D8` and plays it |
+| `0x005EDB30` / `0x00602CF0` | `CClientExoApp::PlayMovie` (`ret 0x10`, four args) → internal, which appends to `+0x2D8` and plays it. **§10: `MoviePlayHook`'s detour point, `0x00602CF0`'s prologue (`push esi; mov esi,ecx; mov eax,[esi+0x1F8]`, 9 bytes)** |
+| `0x006DCF50` | `CSWGuiTitleMovies::OnMoviePicked` — the main-menu gallery's replay-on-click; the OTHER (harmless) caller of `0x005EDB30`, per `xrefs 0x005EDB30`. **§10.1** |
 | `0x00540ED0` | `CSWVirtualMachineCommands::ExecuteCommandPlayMovie` — NWScript `PlayMovie`; pops the name, `HideLoadScreen(0,1)`, then `PlayMovie` |
 | `0x005481E0` / `0x00548210` / `0x005482D0` | script `IsMoviePlaying` / `QueueMovie` / `PlayMovieQueue`; `movie_queue` at `CClientExoAppInternal+0x2E4` |
 | **`CClientExoAppInternal+0x2D8`** | **`move_to_module_movies : CExoArrayList<CExoString>`** — the transition queue |

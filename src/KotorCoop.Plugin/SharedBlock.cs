@@ -1625,6 +1625,60 @@ internal struct SharedBlock
     /// says right now.</summary>
     public const int OffsetClientDoorRefusalArmed = 0x3928;
 
+    // ---- mid-module movie relay (version 48, region 0x392C..0x396C) ---------------
+    //
+    // A script's own PlayMovie call with NO transition involved (the Leviathan capture, the
+    // Star Forge arrival, the Taris bombardment, the Dantooine vision) — the DETECTION half
+    // docs/research/trigger-relay.md §6 shipped MovieRelayQueue (the pure decision) without:
+    // "nothing yet captures WHICH movie a mid-module PlayMovie call played". MoviePlayHook is
+    // that capture, on CClientExoAppInternal::PlayMovie 0x00602CF0 — a DIFFERENT engine
+    // function from the transition queue's own CClientExoAppInternal+0x2D8 the cinematic
+    // region above already reads, so this needs its own record rather than reusing that one.
+    // See docs/research/cinematics.md's 2026-08-22 section.
+    //
+    // Placed in the free gap OffsetClientDoorRefusalArmed leaves before the peer-effect region
+    // (0x392C..0x3A00, 0xD4 bytes — the version-47 comment already establishes this gap is
+    // real). This region uses 0x40 of it (0x392C..0x396C), leaving 0x94 bytes still free. No
+    // TotalSize growth, no relayout of anything that already exists.
+    //
+    // OUT (plugin -> agent, 0x392C..0x394C, 0x20 bytes): the resref this instance's own
+    // MoviePlayHook most recently captured, already excluded against the engine's own
+    // transition queue.
+    //
+    // IN (agent -> plugin, 0x394C..0x396C): a peer's mid-module movie, relayed by the session,
+    // for THIS instance to act on — play now, or defer to this instance's own next transition
+    // — per MovieRelayQueue.Decide.
+
+    /// <summary>Plugin -&gt; agent. Bumped when <c>MoviePlayHook</c> captures a new mid-module
+    /// PlayMovie call. Written LAST, after the resref, so a half-written name is never
+    /// visible.</summary>
+    public const int OffsetMidModuleMovieSerial = 0x392C;
+
+    /// <summary>Plugin -&gt; agent. Null-terminated resref, 16 bytes. Occupies
+    /// 0x3930..0x3940. 12 bytes (0x3940..0x394C) reserved.</summary>
+    public const int OffsetMidModuleMovieResRef = 0x3930;
+
+    public const int MidModuleMovieNameLength = 16;
+
+    /// <summary>Agent -&gt; plugin. Bumped when a peer's mid-module movie is ready to act on.
+    /// A request is pending while this is ahead of <see cref="OffsetMidModulePlayApplied"/>.
+    /// </summary>
+    public const int OffsetMidModulePlayRequestSerial = 0x394C;
+
+    /// <summary>Agent -&gt; plugin. Null-terminated resref, 16 bytes. Occupies
+    /// 0x3950..0x3960.</summary>
+    public const int OffsetMidModulePlayRequestResRef = 0x3950;
+
+    /// <summary>Plugin -&gt; agent. Echoes <see cref="OffsetMidModulePlayRequestSerial"/> once
+    /// this instance has decided what to do with the request (whatever it decided — this is
+    /// "handled", not "played").</summary>
+    public const int OffsetMidModulePlayApplied = 0x3960;
+
+    /// <summary>Plugin -&gt; agent. The verdict for the log — see
+    /// <c>MidModulePlayStatusCode</c>. 0 = nothing handled yet. Region ends here, at 0x3968;
+    /// 0x3968..0x396C reserved.</summary>
+    public const int OffsetMidModulePlayStatus = 0x3964;
+
     // ---- peer effect sync (version 44, region 0x3A00..0x3B88) ---------------------
     //
     // Non-damage effects that land on a peer's phantom (stun, paralyze, knockdown, slow,

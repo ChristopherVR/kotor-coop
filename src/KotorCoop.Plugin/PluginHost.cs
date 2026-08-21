@@ -63,6 +63,7 @@ internal static unsafe class PluginHost
     private static DialogueSpectateController? _dialogueSpectate;
     private static EncounterController? _encounters;
     private static TriggerRelayController? _triggerRelay;
+    private static MidModuleMovieController? _movieRelay;
     private static AgentLivenessController? _agentLiveness;
     private static Thread? _worker;
     private static volatile bool _running = true;
@@ -153,6 +154,7 @@ internal static unsafe class PluginHost
             _dialogueSpectate = new DialogueSpectateController(_view);
             _encounters = new EncounterController(_view);
             _triggerRelay = new TriggerRelayController(_view);
+            _movieRelay = new MidModuleMovieController(_view);
             _pause = new PauseController(_view);
             _combatState = new CombatStateController(_view);
             _pauseKey = new PauseKeyController();
@@ -283,6 +285,21 @@ internal static unsafe class PluginHost
             else
             {
                 Log($"phantom-effect watch NOT installed: {effectDiagnostic}");
+            }
+
+            // The DETECTION half docs/research/trigger-relay.md §6 shipped without: which
+            // movie a mid-module PlayMovie call (no transition involved) actually played.
+            // Installed unconditionally, like the two hooks above — verify-bytes-or-refuse and
+            // inert unless something is actually captured — but MidModuleMovieController gates
+            // the PUBLISH and ACT halves behind coop.ini movie_relay (default off) until
+            // live-verified. See docs/research/cinematics.md's 2026-08-22 section.
+            if (MoviePlayHook.Install(out string moviePlayDiagnostic))
+            {
+                Log($"cinematic: {moviePlayDiagnostic}");
+            }
+            else
+            {
+                Log($"mid-module movie watch NOT installed: {moviePlayDiagnostic}");
             }
 
             // See docs/research/dialogue-join-latency.md "Far-join live pass": a joiner left
@@ -441,7 +458,10 @@ internal static unsafe class PluginHost
         // 46 = the generic trigger relay region at 0x3B88 — see docs/research/trigger-relay.md.
         // 47 = the transition-announce channel + client-door-refusal arm at 0x38E4..0x3928 —
         //      see docs/research/transition-smoothness.md.
-        _block->Version = 47;
+        // 48 = the mid-module movie relay region at 0x392C..0x396C (the DETECTION half
+        //      docs/research/trigger-relay.md §6 shipped without a hook for) — see
+        //      docs/research/cinematics.md's 2026-08-22 section.
+        _block->Version = 48;
 
         // A guard dword after the version. Magic plus version alone was not selective
         // enough: a scan once matched something else at a lower address and the agent
@@ -773,6 +793,7 @@ internal static unsafe class PluginHost
         // owner's census by the next pump.
         _encounters?.OnFrame();
         _triggerRelay?.OnFrame();
+        _movieRelay?.OnFrame();
 
         // After the combat pass, so the enemy the owner has just killed is already off the
         // dealt ledger before this publishes it — and so a peer's damage lands on a copy
@@ -996,6 +1017,7 @@ internal static unsafe class PluginHost
         _spectate?.Invalidate();
         _encounters?.Invalidate();
         _triggerRelay?.Invalidate();
+        _movieRelay?.Invalidate();
         _barks?.Invalidate();
         _interactionLocks?.Invalidate();
         _partyRoster?.Invalidate();

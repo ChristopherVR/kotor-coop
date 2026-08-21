@@ -49,6 +49,8 @@
     <Compile Include="..\..\src\KotorCoop.Plugin\LocalFightCandidateRule.cs" Link="Plugin\LocalFightCandidateRule.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\LivenessRule.cs" Link="Plugin\LivenessRule.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\JournalApplyRule.cs" Link="Plugin\JournalApplyRule.cs" />
+    <Compile Include="..\..\src\KotorCoop.Plugin\SharedBlock.cs" Link="Plugin\SharedBlock.cs" />
+    <Compile Include="..\..\src\KotorCoop.Plugin\SharedBlockView.cs" Link="Plugin\SharedBlockView.cs" />
   </ItemGroup>
 
   <ItemGroup>

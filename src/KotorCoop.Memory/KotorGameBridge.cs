@@ -617,6 +617,20 @@ public sealed class KotorGameBridge : IGameBridge
     /// its own.</summary>
     private const int BlockClientDoorRefusalArmed = 0x3928;
 
+    /// <summary>Mid-module movie relay (shared block version 48, region 0x392C..0x396C — the
+    /// gap left below the transition-announce region and above the peer-effect one). Plugin
+    /// -&gt; agent: the resref <c>MoviePlayHook</c> most recently captured, already excluded
+    /// against the transition queue. Agent -&gt; plugin: a peer's mid-module movie to act on.
+    /// Mirrors <c>SharedBlock.OffsetMidModule*</c>. See docs/research/cinematics.md's
+    /// 2026-08-22 section.</summary>
+    private const int BlockMidModuleMovieSerial = 0x392C;
+    private const int BlockMidModuleMovieResRef = 0x3930;
+    private const int BlockMidModuleMovieNameLength = 16;
+    private const int BlockMidModulePlayRequestSerial = 0x394C;
+    private const int BlockMidModulePlayRequestResRef = 0x3950;
+    private const int BlockMidModulePlayApplied = 0x3960;
+    private const int BlockMidModulePlayStatus = 0x3964;
+
     // Staging cheats, mirroring SharedBlock version 41 (region 0x3328..0x33C0).
     private const int BlockCheatSerial = 0x3328;
     private const int BlockCheatKind = 0x332C;
@@ -764,10 +778,14 @@ public sealed class KotorGameBridge : IGameBridge
     /// 47 = the transition-announce channel + the client-door-refusal arm, in the free gap
     /// between the cinematic and peer-effect regions (0x38E4..0x3928; 0x2F = 47). See
     /// docs/research/transition-smoothness.md.
+    /// 48 = the mid-module movie relay region, in the free gap the transition-announce channel
+    /// leaves before the peer-effect region (0x392C..0x396C; 0x30 = 48). The DETECTION half
+    /// docs/research/trigger-relay.md §6 shipped without a hook for — see
+    /// docs/research/cinematics.md's 2026-08-22 section.
     /// <b>ItemHarnessTests.TheBlockVersionIsTheSameNumberInBothHalves reads both files and
     /// fails the build if they disagree</b> — added with 42, because nothing had ever
     /// enforced the warning above.</summary>
-    public const string PluginSignature = "4B 4F 43 4F 4F 50 30 31 2F 00 00 00 01 EE FF C0";
+    public const string PluginSignature = "4B 4F 43 4F 4F 50 30 31 30 00 00 00 01 EE FF C0";
 
     /// <summary>Agent's view of which coop item id occupies each plugin item slot.</summary>
     private readonly uint[] _itemSlotIds = new uint[BlockItemCapacity];
@@ -4010,6 +4028,55 @@ public sealed class KotorGameBridge : IGameBridge
         // The same slot the old boolean "armed" flag used - nonzero still means armed, so this
         // is a value-range widening (None/HostMustLead/HostBusy), not a new field.
         return _memory.TryWrite(_pluginBlock + BlockClientDoorRefusalArmed, (uint)reason);
+    }
+
+    // ---- mid-module movie relay -------------------------------------------------
+
+    /// <inheritdoc />
+    public bool TryReadMidModuleMovie(out uint serial, out string resRef)
+    {
+        serial = 0;
+        resRef = string.Empty;
+
+        if (_pluginBlock == 0
+            || !_memory.TryReadUInt32(_pluginBlock + BlockMidModuleMovieSerial, out serial)
+            || serial == 0)
+        {
+            return false;
+        }
+
+        return _memory.TryReadAsciiString(
+                _pluginBlock + BlockMidModuleMovieResRef, BlockMidModuleMovieNameLength, out resRef)
+            && resRef.Length > 0;
+    }
+
+    /// <inheritdoc />
+    public bool TryRequestMidModulePlay(string resRef)
+    {
+        if (_pluginBlock == 0 || string.IsNullOrEmpty(resRef) || resRef.Length >= BlockMidModuleMovieNameLength)
+        {
+            return false;
+        }
+
+        bool ok = _memory.TryWriteAsciiString(
+            _pluginBlock + BlockMidModulePlayRequestResRef, resRef, BlockMidModuleMovieNameLength);
+
+        // Serial last, so the plugin never observes a half-written request. Continue from
+        // whatever the block already holds, the same convention TryRequestTravel uses.
+        ok &= _memory.TryReadUInt32(_pluginBlock + BlockMidModulePlayRequestSerial, out uint serial);
+        ok &= _memory.TryWrite(_pluginBlock + BlockMidModulePlayRequestSerial, serial + 1);
+        return ok;
+    }
+
+    /// <inheritdoc />
+    public bool TryReadMidModulePlayStatus(out uint applied, out uint status)
+    {
+        applied = 0;
+        status = 0;
+
+        return _pluginBlock != 0
+            && _memory.TryReadUInt32(_pluginBlock + BlockMidModulePlayApplied, out applied)
+            && _memory.TryReadUInt32(_pluginBlock + BlockMidModulePlayStatus, out status);
     }
 
     // ---- staging cheats --------------------------------------------------------

@@ -238,6 +238,21 @@ public interface ICoopSession : IDisposable
     IReadOnlyList<TransitionAnnouncePacket> DrainTransitionAnnounce() => [];
 
     /// <summary>
+    /// Announces a mid-module movie this instance's own script just played — no transition
+    /// involved, unlike <see cref="PublishTransitionMovies"/>. Sent the instant
+    /// <c>MoviePlayHook</c> captures the resref; repeat calls with the same
+    /// <paramref name="serial"/> are the sender's own redundancy, de-duplicated by the
+    /// receiver.
+    /// </summary>
+    void PublishMidModuleMovie(string module, uint serial, string movie) { }
+
+    /// <summary>Mid-module movie announcements from other peers since the last call, oldest
+    /// first. UNLIKE <see cref="DrainTransitionMovies"/>, this one names a module the announcer
+    /// is still IN (there is no transition to make it ambiguous), so the caller filters by
+    /// module before acting — see <c>CoopAgent.PumpMidModuleMovies</c>.</summary>
+    IReadOnlyList<MidModuleMoviePacket> DrainMidModuleMovies() => [];
+
+    /// <summary>
     /// Host only: the encounters clients are asking for right now, in
     /// <paramref name="module"/>, deduplicated. Empty on a client.
     /// </summary>

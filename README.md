@@ -399,11 +399,13 @@ tools/                   RE helpers, demo scripts, the kotor1_0_3 symbol databas
   (`k_trg_stealth`) — confirmed geometrically inside the client's own position — never entered
   the watch's report at all. `coop.ini` `trigger_relay=0` opts out. See
   [docs/research/trigger-relay.md](docs/research/trigger-relay.md) §11.
-- **Mid-module movies (a script's own `PlayMovie`, not a transition) have a queue DECISION
-  but no detection wired up yet.** `MovieRelayQueue` decides whether a peer should play an
-  announced movie immediately or defer it to the next module transition — pure, tested — but
-  nothing yet captures WHICH movie a mid-module `PlayMovie` call played, so `coop.ini`
-  `movie_relay=1` changes nothing today. See
+- **Mid-module movies (a script's own `PlayMovie`, not a transition) are captured and relayed
+  now, gated off pending a live pass.** `MoviePlayHook` detours
+  `CClientExoAppInternal::PlayMovie 0x00602CF0` (VERIFIED disassembled; never the transition
+  path, by the call graph) to capture WHICH resref a mid-module call played, and
+  `MovieRelayQueue.Decide` (pure, tested) picks play-now / defer-to-next-transition / ignore for
+  the receiving peer. `coop.ini` `movie_relay=0` by default until live-verified. See
+  [docs/research/cinematics.md](docs/research/cinematics.md)'s 2026-08-22 section and
   [docs/research/trigger-relay.md](docs/research/trigger-relay.md) §6.
 - ~~**Item identity is a blueprint resref**~~ — no longer, on the wire: an item that crosses
   between players now carries **what makes it that item** — its stack size, its charges, its

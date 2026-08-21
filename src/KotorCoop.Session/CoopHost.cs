@@ -1345,6 +1345,97 @@ public sealed class CoopHost : ICoopSession
         }
     }
 
+    // ---- mid-module movie relay ---------------------------------------------------------
+    //
+    // A script's own PlayMovie call with no transition involved — the DETECTION half
+    // docs/research/trigger-relay.md §6 shipped without a hook for. Same shape and reliability
+    // as the cinematic channel above, and the same reason: any instance's engine can be the
+    // one that ran the script, everyone else should see the same film, and a lost announcement
+    // costs a cinematic rather than consistency.
+
+    private readonly Queue<MidModuleMoviePacket> _midModuleMovieInbox = new();
+    private readonly Queue<(MidModuleMoviePacket Packet, uint ExceptPeer)> _midModuleMovieOutbox = new();
+
+    public void PublishMidModuleMovie(string module, uint serial, string movie)
+    {
+        MidModuleMoviePacket packet = new(LocalPeerId, module, serial, movie);
+        lock (_gate)
+        {
+            _midModuleMovieOutbox.Enqueue((packet, LocalPeerId));
+        }
+    }
+
+    public IReadOnlyList<MidModuleMoviePacket> DrainMidModuleMovies()
+    {
+        lock (_gate)
+        {
+            if (_midModuleMovieInbox.Count == 0)
+            {
+                return [];
+            }
+
+            List<MidModuleMoviePacket> ready = [];
+            while (_midModuleMovieInbox.Count > 0)
+            {
+                ready.Add(_midModuleMovieInbox.Dequeue());
+            }
+
+            return ready;
+        }
+    }
+
+    private void HandleMidModuleMovie(ReadOnlySpan<byte> span)
+    {
+        if (PacketCodec.ReadMidModuleMovie(span) is not { } movie)
+        {
+            _channel.NoteMalformed();
+            return;
+        }
+
+        lock (_gate)
+        {
+            if (!_peers.ContainsKey(movie.PeerId))
+            {
+                return; // only a known peer, and it cannot announce for another
+            }
+
+            _midModuleMovieInbox.Enqueue(movie);
+            _midModuleMovieOutbox.Enqueue((movie, movie.PeerId)); // everyone but the sender
+        }
+    }
+
+    private void BroadcastMidModuleMovies(List<PeerConnection> recipients)
+    {
+        List<(MidModuleMoviePacket Packet, uint ExceptPeer)> pending;
+        lock (_gate)
+        {
+            if (_midModuleMovieOutbox.Count == 0)
+            {
+                return;
+            }
+
+            pending = [.. _midModuleMovieOutbox];
+            _midModuleMovieOutbox.Clear();
+        }
+
+        foreach ((MidModuleMoviePacket packet, uint except) in pending)
+        {
+            int length = PacketCodec.Write(_sendBuffer, packet);
+            if (length <= 0)
+            {
+                continue;
+            }
+
+            foreach (PeerConnection peer in recipients)
+            {
+                if (peer.Id != except)
+                {
+                    _channel.Send(peer.EndPoint, _sendBuffer.AsSpan(0, length));
+                }
+            }
+        }
+    }
+
     private void BroadcastPhantomDamage(List<PeerConnection> recipients)
     {
         List<KeyValuePair<(uint Target, uint Source), (uint Damage, uint Attacker)>> owed;
@@ -1623,6 +1714,7 @@ public sealed class CoopHost : ICoopSession
         BroadcastBarks(recipients);
         BroadcastTransitionMovies(recipients);
         BroadcastTransitionAnnounce(recipients);
+        BroadcastMidModuleMovies(recipients);
         BroadcastInteractionLocks(recipients);
         BroadcastWorldDigest(now, recipients);
         FlushChat(recipients);
@@ -2108,6 +2200,10 @@ public sealed class CoopHost : ICoopSession
 
             case PacketType.TriggerRelay:
                 HandleTriggerRelay(span);
+                break;
+
+            case PacketType.MidModuleMovie:
+                HandleMidModuleMovie(span);
                 break;
 
             case PacketType.DialogueRequest:
