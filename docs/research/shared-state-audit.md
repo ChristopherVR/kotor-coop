@@ -2745,6 +2745,70 @@ issue in disguise.
 
 Full suite 966/966, both builds clean, rig torn down and confirmed clean.
 
+### `0x4` is not the empty-script bug — it's a genuinely different, bigger problem: the agent's own census publish stalls (2026-08-21, round 41)
+
+Checked `0x4` (`blackvulka034`) first, per the standing next step: `firescript 0x4 fire` answered
+`fired 0x4 +0x260 = 'k_def_combend01'` — a real, non-empty script, same as every creature that
+already fights correctly. The empty-script class is ruled out for this one.
+
+Reproduced the same frozen-at-point-blank-range symptom live (`0x4`, then `0xA`, both cycling
+through repeated 25s timeouts, plugin log: `local combat: 0x… pulled out of the census to fight
+for real` / `fight ended (timed out), rejoining the census`, over and over). Added two temporary
+diagnostics to settle *where* the freeze actually comes from, rather than guessing:
+
+1. **In the plugin** (`EnemyPresenceController.DriveOne`): does the excluded id still show up in
+   THIS instance's own read of the shared block's enemy list at all, and what does
+   `block.EnemyPresenceCount` read as when it does?
+2. **In the agent** (`CoopAgent.cs`, the `PumpEnemies` mirror branch): does the exclusion filter
+   (`bridge.ReadLocalCombatExcludedId()` → filter → `TryWriteEnemies`) actually run, with what
+   values, and does the write actually succeed?
+
+**Both sides are individually correct.** The agent's filter genuinely excludes the right id
+(`excludedId=0x4 enemies.Count=19 filtered.Count=18`) and `TryWriteEnemies` genuinely returns
+`true`. The plugin's read offsets exactly match what the agent writes to (`0x1400`/`0x1410`,
+cross-checked line by line). Neither side has a logic bug.
+
+**The actual finding: the agent's `PumpEnemies` mirror branch simply stops running.** Across two
+independent clean sessions (one that hit an unrelated `[W_SAVE]` compatibility stall and
+recovered via a manual `reconnect`, one with no reconnect involved at all), the agent's own
+diagnostic logging — including the `moduleClean` line, which fires unconditionally on every call
+with no gating — fired normally for the first ~60-90 seconds after the module transition, then
+stopped completely and never resumed for the rest of the session (checked up to several minutes
+later). The plugin's `enemy drive: mirroring N of M` line (which only logs on a COUNT CHANGE)
+shows its last update at the exact same timestamp the agent's diagnostic stops — `13:13:55.966`
+plugin, `13:13:56` agent, same session. Meanwhile the plugin's OWN `local_combat` state machine —
+entirely in-process, no agent involvement — keeps cycling forever on schedule, and `DriveOne`
+keeps reading the shared block every frame, faithfully rendering whatever the agent last wrote
+before it stalled.
+
+**This is not a `local_combat` bug, and not a per-creature bug.** It happens to SHOW UP as
+"the fighting creature never lands a hit" because `local_combat`'s exclusion depends on the
+agent's census staying fresh (so it can genuinely omit whichever creature is currently excluded,
+one that constantly changes) — but the underlying stall freezes ALL enemy presence data, not
+just the excluded entry. Every mirrored enemy's position should be equally stale after the
+stall, which the position-over-time watches from earlier rounds are consistent with (frozen
+solid, not slow-pathing) but were never tested against this specific hypothesis until now.
+
+**Not root-caused further this round** — deliberately. Finding WHY `PumpEnemies` (or whatever
+calls it) stops being invoked needs its own focused investigation (a silently-swallowed
+exception in the agent's main loop, a dead task, a stuck throttle clock, or something else
+entirely) rather than a guess grafted onto an already-long session. Both temporary diagnostics
+(`EnemyPresenceController`'s "STILL SEEING" log, `CoopAgent`'s `moduleClean`/`excludedId`/
+`TryWriteEnemies` logs) are left in place, since they are exactly what the next round needs and
+were expensive to build correctly.
+
+**Concrete next step:** instrument the agent's OWN main pump loop (not `PumpEnemies`
+specifically) to log a heartbeat every tick, and find the exact point — an unhandled exception,
+a `Task` that faulted and was never awaited again, a throttle field with a corrupted value —
+where it stops advancing. Given the timing (a stall roughly a minute after a module transition,
+in every reproduction so far), the transition itself is a strong first place to look, not a
+red herring to rule out.
+
+Full suite: 966/966 (one confirmed pre-existing flaky test —
+`DisconnectRecoveryTests.HeavyPacketLossStillConverges`, unrelated). Both builds clean, rig torn
+down and confirmed clean. Host button and materialised-loot-sync live confirmation from earlier
+this session both hold, unaffected by this finding.
+
 ## 3. A client's XP is actively erased
 
 `ProgressionSnapshotPacket` is host→client only and absolute (CoopAgent.cs, `PumpProgression`):

@@ -1835,6 +1835,12 @@ public sealed class CoopAgent(IGameBridge bridge, ICoopSession session, AgentSet
             // left to age out on the host.
             IsFallbackModuleName(local.Module) ? [] : bridge.ReadEnteredEncounters());
 
+        // ROUND 41 DIAGNOSTIC: settling whether the moduleClean gate is what's silently
+        // skipping the exclusion filter downstream. Temporary.
+        Log?.Invoke(
+            $"local combat diag (agent): moduleClean={moduleClean} censusModule='{censusModule}' "
+            + $"local.Module='{local.Module}'");
+
         // The enemy apply and the damage report are world-labelled; a dirty label skips
         // them (see the same-breath note above).
         if (!moduleClean)
@@ -1872,10 +1878,21 @@ public sealed class CoopAgent(IGameBridge bridge, ICoopSession session, AgentSet
                 }
             }
 
+            // ROUND 41 DIAGNOSTIC: the plugin still sees the excluded id in its own driven
+            // list despite this filter existing. Confirm whether this branch even runs, and
+            // with what values, before assuming the bug is somewhere else. Temporary.
+            Log?.Invoke(
+                $"local combat diag (agent): excludedId=0x{excludedId:X} enemies.Count={enemies.Count} "
+                + $"filtered.Count={filtered.Count} (removed {enemies.Count - filtered.Count})");
+
             enemies = filtered;
         }
 
-        bridge.TryWriteEnemies(enemies);
+        bool wrote = bridge.TryWriteEnemies(enemies);
+        if (excludedId != 0)
+        {
+            Log?.Invoke($"local combat diag (agent): TryWriteEnemies returned {wrote}, wrote {enemies.Count} enemies");
+        }
 
         // Report what we have DEALT, so our fight counts.
         //

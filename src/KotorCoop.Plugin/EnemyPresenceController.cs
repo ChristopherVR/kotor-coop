@@ -226,6 +226,10 @@ internal sealed unsafe class EnemyPresenceController(SharedBlockView block)
     /// distance-closing question is settled.</summary>
     private double _lastPositionLogAt;
 
+    /// <summary>ROUND 41 DIAGNOSTIC: throttle for the "STILL SEEING" check in DriveOne, same
+    /// reasoning as _lastPositionLogAt. Remove once this question is settled.</summary>
+    private double _stillSeeingLoggedAt;
+
     /// <summary>Hard ceiling on how long one creature may sit excluded from the census. A
     /// fight that never ends any other way (the player walks off without the engine's own
     /// disengage logic catching it, a stuck state this investigation has not observed but has
@@ -392,6 +396,21 @@ internal sealed unsafe class EnemyPresenceController(SharedBlockView block)
 
     private bool DriveOne(int slot, EnemyPresenceView enemy, double now, nint player)
     {
+        // ROUND 41 DIAGNOSTIC: does the currently-excluded id still show up in THIS
+        // instance's own read of the shared block's enemy list at all? If the agent-side
+        // filter (CoopAgent.cs, bridge.ReadLocalCombatExcludedId) is working, it never
+        // should. Temporary, removed once this question is settled.
+        if (_locallyFightingId != 0 && enemy.ObjectId == _locallyFightingId
+            && now - _stillSeeingLoggedAt >= 1.0)
+        {
+            _stillSeeingLoggedAt = now;
+            PluginHost.Log(
+                $"local combat diag: STILL SEEING excluded id 0x{_locallyFightingId:X} "
+                + $"at slot {slot}, block.EnemyPresenceCount={block.EnemyPresenceCount}, "
+                + $"block.LocalCombatExcludedId=0x{block.LocalCombatExcludedId:X}, "
+                + $"blockAddress=0x{block.Address:X}");
+        }
+
         if (enemy.ObjectId == 0 || enemy.ObjectId == Odyssey.ObjectInvalid || enemy.Dead)
         {
             // A dead enemy's body belongs to the engine's death path (CombatController
