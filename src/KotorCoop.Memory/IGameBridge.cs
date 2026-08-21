@@ -474,6 +474,18 @@ public interface IGameBridge : IDisposable
     List<EnemyState> ReadEnemies(IReadOnlyList<Vector3f> otherPlayers) => [];
 
     /// <summary>
+    /// Every creature this engine currently knows about in the loaded area — not just the
+    /// 32-slot combat census <see cref="ReadEnemies"/> caps to. Reuses the SAME confirmed
+    /// enumeration <see cref="ReadEnemies"/> builds from (the ghost gate documented in
+    /// docs/research/enemy-presence-sync.md), so an id published here is exactly as
+    /// trustworthy as one published in the ordinary census. Excludes the player, party
+    /// members (owned by other channels already) and any co-op phantom/materialised-stand-in
+    /// body — never anyone's NPC to report on. Used by whichever peer owns enemies, for the
+    /// liveness-reconciliation channel — see docs/research/creature-liveness.md.
+    /// </summary>
+    List<CreatureLivenessEntry> ReadCreatureLiveness() => [];
+
+    /// <summary>
     /// Every item any of <paramref name="possessorIds"/> is carrying, by possessor plus resref
     /// plus full per-instance identity — the same sweep the <c>items</c>/<c>setitem</c> staging
     /// cheats use (<see cref="KotorGameBridge.ListItems"/>). Used at the moment one or more
@@ -538,6 +550,25 @@ public interface IGameBridge : IDisposable
     /// caller must keep this id out of what it writes back via <see cref="TryWriteEnemies"/> —
     /// see <c>KotorGameBridge.ReadLocalCombatExcludedId</c> for why.</summary>
     uint ReadLocalCombatExcludedId() => 0;
+
+    /// <summary>
+    /// Non-owner side: hands the host's latest creature-liveness view to the plugin's
+    /// reconciliation controller, so a body left alive here that the host says is dead or
+    /// destroyed can be corrected through the ordinary kill/destroy paths. Capacity-limited
+    /// (<c>SharedBlock.LivenessCapacity</c>); the caller should order the entries that need
+    /// ACTING ON (dead/gone) first, since those are what a truncation must never drop. See
+    /// docs/research/creature-liveness.md.
+    /// </summary>
+    bool TryWriteCreatureLiveness(IReadOnlyList<CreatureLivenessEntry> entries) => false;
+
+    /// <summary>
+    /// Non-owner side: how many "host says alive, but this instance's own engine already had
+    /// it dead or gone" anomalies the plugin's reconciliation controller has noticed since it
+    /// started — a cumulative counter, never reset by a module change. Never acted on beyond
+    /// logging/counting (the right fix for a genuine anomaly is upstream, not a forced
+    /// resurrection) — see docs/research/creature-liveness.md.
+    /// </summary>
+    uint ReadLivenessAnomalyCount() => 0;
 
     /// <summary>False when this bridge cannot see or drive party companions.</summary>
     bool SupportsPartySync => false;

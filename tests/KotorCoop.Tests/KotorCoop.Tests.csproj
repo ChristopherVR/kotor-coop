@@ -46,6 +46,7 @@
     <Compile Include="..\..\src\KotorCoop.Plugin\MinigameRule.cs" Link="Plugin\MinigameRule.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\MapRevealRule.cs" Link="Plugin\MapRevealRule.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\LocalFightCandidateRule.cs" Link="Plugin\LocalFightCandidateRule.cs" />
+    <Compile Include="..\..\src\KotorCoop.Plugin\LivenessRule.cs" Link="Plugin\LivenessRule.cs" />
   </ItemGroup>
 
   <ItemGroup>

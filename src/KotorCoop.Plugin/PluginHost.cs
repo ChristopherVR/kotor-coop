@@ -26,6 +26,7 @@ internal static unsafe class PluginHost
     private static ItemController? _items;
     private static FocusKeeper? _focus;
     private static CombatController? _combat;
+    private static LivenessReconcileController? _liveness;
     private static EnemyPresenceController? _enemyPresence;
     private static PartyPresenceController? _partyPresence;
     private static IncomingDamageController? _incomingDamage;
@@ -123,6 +124,7 @@ internal static unsafe class PluginHost
             _items = new ItemController(_view);
             _focus = new FocusKeeper(_view);
             _combat = new CombatController(_view);
+            _liveness = new LivenessReconcileController(_view, _combat);
             _enemyPresence = new EnemyPresenceController(_view);
             _partyPresence = new PartyPresenceController(_view);
             _incomingDamage = new IncomingDamageController(_view);
@@ -420,9 +422,12 @@ internal static unsafe class PluginHost
         // 44 = the peer-effect channel (stun/paralyze/knockdown/slow/frightened/sleep/choke/
         //      Force push/whirlwind forwarded to a peer's phantom), block grown to 0x3C00 with
         //      its own ring at 0x3A00 — see docs/research/effect-sync.md.
+        // 45 = the creature-liveness reconciliation channel (every creature the enemy owner's
+        //      engine knows about, not just the 32-slot combat census), block grown to 0x4000
+        //      with its own 96-entry array at 0x3C00 — see docs/research/creature-liveness.md.
         // ItemHarnessTests.TheBlockVersionIsTheSameNumberInBothHalves now fails the build on
         // a half-bump; it did not exist for 41.
-        _block->Version = 44;
+        _block->Version = 45;
 
         // A guard dword after the version. Magic plus version alone was not selective
         // enough: a scan once matched something else at a lower address and the agent
@@ -714,6 +719,7 @@ internal static unsafe class PluginHost
         _controller?.OnFrame();
         _items?.OnFrame();
         _combat?.OnFrame();
+        _liveness?.OnFrame();
 
         // After the combat pass so a death applied this frame is respected (the presence
         // slot's dead flag and the kill both come from the same owner tick).

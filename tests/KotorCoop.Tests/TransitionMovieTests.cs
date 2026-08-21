@@ -221,9 +221,10 @@ public class TransitionMovieTests
         // happen to agree on), so a future edit that moves one half and not the other
         // cannot pass by moving both to the wrong place. This pass's own bump was 42 (the
         // transition-cinematic channel); it has moved again since (43 the agent-heartbeat
-        // field, 44 the peer-effect channel) — see the changelog comments beside
-        // `_block->Version` and `PluginSignature` for the full history.
-        Assert.Equal(44, int.Parse(version.Groups[1].Value));
+        // field, 44 the peer-effect channel, 45 the creature-liveness reconciliation channel)
+        // — see the changelog comments beside `_block->Version` and `PluginSignature` for the
+        // full history.
+        Assert.Equal(45, int.Parse(version.Groups[1].Value));
     }
 
     private static string RepositoryRoot()

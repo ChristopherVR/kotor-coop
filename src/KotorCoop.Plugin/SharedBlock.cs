@@ -74,7 +74,15 @@ internal struct SharedBlock
     /// tail's own leftover gap). This region starts cleanly at 0x3A00, past both. See
     /// docs/research/effect-sync.md.
     /// </summary>
-    public const int TotalSize = 0x3C00;
+    /// <summary>
+    /// Grown from 0x3C00 for the creature-liveness reconciliation channel (version 45): the
+    /// peer-effect region's own tail (0x3B88) leaves only 0x78 free bytes before 0x3C00 — not
+    /// enough for a 96-entry array — so this region starts cleanly at the old boundary
+    /// instead, the same choice version 42 and 44 both made. Rounded up from the region's
+    /// actual end (0x3F08) to the next clean 0x100 boundary, matching every previous growth
+    /// here landing on a round number. See docs/research/creature-liveness.md.
+    /// </summary>
+    public const int TotalSize = 0x4000;
 
     public const int ProfileVisibleSize = 0x250;
 
@@ -1625,6 +1633,47 @@ internal struct SharedBlock
     public const int PeerEffectDurationMsOffset = 0x08;
     public const int PeerEffectMagnitudeOffset = 0x0C;
     public const int PeerEffectSerialOffset = 0x14;
+
+    // ---- creature liveness reconciliation (version 45, region 0x3C00..0x3F08) -----
+    //
+    // The host publishes every creature its engine currently knows about in the loaded area
+    // — not just the 32-slot combat census above — so a mirroring peer can notice a body left
+    // alive on one side and dead or destroyed on the other (beyond the census cap, killed by
+    // script, killed while the peers were apart) and correct it. See
+    // docs/research/creature-liveness.md. This region starts cleanly at the old TotalSize
+    // (0x3C00), past the peer-effect region's own tail (0x3B88) — same "start at the old
+    // boundary rather than hunt for a sliver" reasoning version 42 and 44 both used.
+    //
+    // Agent -> plugin only: the host never reconciles against itself, so only a mirroring
+    // instance's agent ever writes this region (translated, from what it received over the
+    // wire, into this process's own consumption).
+
+    /// <summary>Agent -&gt; plugin. How many of <see cref="OffsetLivenessSlots"/> are valid
+    /// this pump. Zeroed by the plugin on a module transition like the enemy regions.</summary>
+    public const int OffsetLivenessCount = 0x3C00;
+
+    /// <summary>Agent -&gt; plugin. id u32 @0 (written last), state u32 @4 (0 alive, 1 dead —
+    /// corpse present, 2 gone — destroyed, matching <c>Protocol.CreatureLivenessState</c> by
+    /// value; Protocol is not referenced from the plugin, see that type's own doc). Capacity
+    /// <see cref="LivenessCapacity"/>; when the peer's accumulated set is larger the caller
+    /// orders dead/gone entries first and rotates the alive tail across pumps — see
+    /// docs/research/creature-liveness.md. Occupies 0x3C04..0x3F04.</summary>
+    public const int OffsetLivenessSlots = 0x3C04;
+
+    public const int LivenessSlotStride = 0x08;
+
+    public const int LivenessCapacity = 96;
+
+    public const uint LivenessStateAlive = 0;
+    public const uint LivenessStateDead = 1;
+    public const uint LivenessStateGone = 2;
+
+    /// <summary>Plugin -&gt; agent. Cumulative count of "host says alive, but this instance's
+    /// own engine already had it dead or gone" anomalies <c>LivenessReconcileController</c> has
+    /// noticed since it started. Never reset by a module change; never acted on beyond
+    /// counting — the right fix for a genuine anomaly is upstream, never a forced
+    /// resurrection.</summary>
+    public const int OffsetLivenessAnomalyCount = 0x3F04;
 
     // ---- co-op death handling (version 14, region 0x1020..0x1080) -----------------
     //

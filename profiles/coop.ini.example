@@ -243,3 +243,15 @@ effect_sync=0
 # until a live pass confirms it clears fog on the M-screen with no cost. See
 # docs/research/map-reveal.md.
 map_reveal_sync=0
+
+# Reconcile a body left alive on one instance and dead or destroyed on another - a creature
+# beyond the 32-slot combat census, killed by a script (DestroyObject, a cutscene death,
+# SetPlotFlag then a kill), killed while the peers were in different modules or disconnected,
+# or killed by the client's own engine under local_combat before the host's engine confirmed.
+# The enemy owner publishes every creature its engine knows about in the loaded area (not just
+# the combat census) every couple of seconds; a mirroring instance kills or destroys its own
+# copy to match, or - if the owner says alive and this instance already has it dead - logs an
+# ANOMALY and counts it (status shows "liveness anomalies: N") without ever resurrecting
+# anything. OFF by default: reasoned from the code and exercised only by loopback-socket unit
+# tests, never against the running two-instance rig. See docs/research/creature-liveness.md.
+liveness_sync=0

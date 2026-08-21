@@ -530,6 +530,71 @@ public class PacketCodecTests
     }
 
     [Fact]
+    public void CreatureLivenessPacketsRoundTrip()
+    {
+        Span<byte> buffer = stackalloc byte[ProtocolConstants.MaxPacketSize];
+
+        CreatureLivenessEntry[] entries =
+        [
+            new CreatureLivenessEntry(0x14, CreatureLivenessState.Alive),
+            new CreatureLivenessEntry(0x35, CreatureLivenessState.Dead),
+            new CreatureLivenessEntry(0x99, CreatureLivenessState.Gone),
+        ];
+
+        CreatureLivenessPacket packet = new(12345, "tar_m03aa", 0xC0FFEEUL, 7, 1, 3, entries);
+        int length = PacketCodec.Write(buffer, packet);
+        CreatureLivenessPacket? read = PacketCodec.ReadCreatureLiveness(buffer[..length]);
+
+        Assert.NotNull(read);
+        Assert.Equal(packet.ServerTimeMs, read.ServerTimeMs);
+        Assert.Equal(packet.Module, read.Module);
+        Assert.Equal(packet.Digest, read.Digest);
+        Assert.Equal(packet.Generation, read.Generation);
+        Assert.Equal(packet.PageIndex, read.PageIndex);
+        Assert.Equal(packet.PageCount, read.PageCount);
+        Assert.Equal(entries, read.Entries);
+    }
+
+    [Fact]
+    public void CreatureLivenessFitsInOneDatagramAtMaxEntries()
+    {
+        Span<byte> buffer = stackalloc byte[ProtocolConstants.MaxPacketSize];
+
+        CreatureLivenessEntry[] entries = [.. Enumerable.Range(0, CreatureLivenessPacket.MaxEntriesPerPacket)
+            .Select(i => new CreatureLivenessEntry((uint)i, (CreatureLivenessState)(i % 3)))];
+
+        CreatureLivenessPacket packet = new(
+            long.MaxValue, new string('a', ProtocolConstants.MaxModuleLength), ulong.MaxValue,
+            uint.MaxValue, 254, 255, entries);
+        int length = PacketCodec.Write(buffer, packet);
+
+        Assert.True(length > 0);
+        CreatureLivenessPacket? read = PacketCodec.ReadCreatureLiveness(buffer[..length]);
+        Assert.NotNull(read);
+        Assert.Equal(CreatureLivenessPacket.MaxEntriesPerPacket, read.Entries.Count);
+    }
+
+    [Fact]
+    public void CreatureLivenessRejectsAnOversizedEntryCount()
+    {
+        // A count this side never writes: PacketWriter caps at MaxEntriesPerPacket, so the
+        // only way to see a bigger one is a corrupt or hostile datagram, and it must fail
+        // closed rather than allocate on a number a peer chose.
+        Span<byte> buffer = stackalloc byte[ProtocolConstants.MaxPacketSize];
+        PacketWriter w = new(buffer);
+        w.WriteHeader(PacketType.CreatureLiveness);
+        w.WriteInt64(0);
+        w.WriteString("mod", ProtocolConstants.MaxModuleLength);
+        w.WriteUInt64(0);
+        w.WriteUInt32(0);
+        w.WriteUInt8(0);
+        w.WriteUInt8(1);
+        w.WriteUInt8((byte)(CreatureLivenessPacket.MaxEntriesPerPacket + 1));
+
+        Assert.Null(PacketCodec.ReadCreatureLiveness(buffer[..w.Position]));
+    }
+
+    [Fact]
     public void DialogueGrantWithTooManyItemsIsRejectedRatherThanAllocatingOnAPeersNumber()
     {
         Span<byte> buffer = stackalloc byte[ProtocolConstants.MaxPacketSize];

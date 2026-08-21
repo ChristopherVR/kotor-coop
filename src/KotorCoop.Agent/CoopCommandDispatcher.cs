@@ -401,7 +401,13 @@ public sealed class CoopCommandDispatcher(
                 break;
 
             case CoopCommandKind.Status:
-                Reply($"{manager.Phase.ToString().ToLowerInvariant()} - {manager.Detail}");
+                {
+                    string livenessSuffix = manager.Current is { } statusSession
+                        ? $" - liveness anomalies: {statusSession.GetStats().LivenessAnomalies}"
+                        : string.Empty;
+                    Reply($"{manager.Phase.ToString().ToLowerInvariant()} - {manager.Detail}{livenessSuffix}");
+                }
+
                 break;
 
             case CoopCommandKind.Help:

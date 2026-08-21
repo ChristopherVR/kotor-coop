@@ -42,6 +42,12 @@ internal readonly record struct PartyPresenceView(
     uint RosterSlotPlusOne, Vec3 Position, float Facing, uint Animation, int Health,
     uint OneShotSerial, uint OneShotAnimation);
 
+/// <summary>One creature-liveness entry as the agent last wrote it: an id (GIT-identical —
+/// translated by the reconcile controller through <c>MaterialisedEnemies.ToLocal</c> before
+/// it is resolved) and the host's reported state (<see cref="SharedBlock.LivenessStateAlive"/>
+/// / <c>Dead</c> / <c>Gone</c>). See docs/research/creature-liveness.md.</summary>
+internal readonly record struct LivenessView(uint ObjectId, uint State);
+
 /// <summary>One NPC bark: who said it and the three engine arguments that shaped it,
 /// carried verbatim. <see cref="Serial"/> makes a repeat of the same line visible.</summary>
 /// <summary>The scalar half of a bark slot; text and resref are copied into caller buffers
@@ -245,6 +251,7 @@ internal sealed unsafe class SharedBlockView(byte* baseAddress)
 
         EnemyPresenceCount = 0;
         PartyPresenceCount = 0;
+        LivenessCount = 0;
         *U32(SharedBlock.OffsetPlayerCreature) = 0;
     }
 
@@ -370,6 +377,32 @@ internal sealed unsafe class SharedBlockView(byte* baseAddress)
             *(int*)(slot + 0x18),
             *(uint*)(slot + 0x1C),
             *(uint*)(slot + 0x20));
+    }
+
+    // ---- creature liveness reconciliation -----------------------------------------
+
+    /// <summary>Agent-written; zeroed by the plugin on a module transition like the enemy
+    /// regions, and for the same reason. See SharedBlock.OffsetLivenessCount.</summary>
+    public uint LivenessCount
+    {
+        get => *U32(SharedBlock.OffsetLivenessCount);
+        set => *U32(SharedBlock.OffsetLivenessCount) = value;
+    }
+
+    public LivenessView GetLiveness(int index)
+    {
+        byte* slot = baseAddress + SharedBlock.OffsetLivenessSlots
+            + (Clamp(index, SharedBlock.LivenessCapacity) * SharedBlock.LivenessSlotStride);
+
+        return new LivenessView(*(uint*)(slot + 0x00), *(uint*)(slot + 0x04));
+    }
+
+    /// <summary>Plugin-written cumulative anomaly count. See
+    /// SharedBlock.OffsetLivenessAnomalyCount.</summary>
+    public uint LivenessAnomalyCount
+    {
+        get => *U32(SharedBlock.OffsetLivenessAnomalyCount);
+        set => *U32(SharedBlock.OffsetLivenessAnomalyCount) = value;
     }
 
     // ---- combat participation ----------------------------------------------------

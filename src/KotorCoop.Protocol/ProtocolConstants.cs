@@ -111,8 +111,12 @@ public static class ProtocolConstants
     /// conversation reports the net-new items, the host relays to everyone else under the
     /// SAME (origin, sequence) identity, and a receiver gives them through the existing
     /// giveloot cheat channel.
-    /// Version 30: reserved by a concurrent agent working the same integration branch
-    /// (a liveness/round-trip fix); not detailed here.
+    /// Version 30: CreatureLiveness (47) — every creature the host's engine currently knows
+    /// about in the loaded area, not just the 32-slot combat census EnemySnapshot carries, so
+    /// a mirroring peer can notice a body left alive on one side and dead or destroyed on the
+    /// other (a creature beyond the census cap, killed by a script, or killed while the peers
+    /// were apart) and reconcile it. See docs/research/creature-liveness.md. Gated off by
+    /// default (coop.ini liveness_sync) until live-verified.
     /// Version 31: FlagOpPacket/FlagSnapshotPacket and JournalOpPacket/JournalSnapshotPacket
     /// each carry a Serial (and the journal op/entry a Removed bit) alongside the existing
     /// OriginPeerId. Both EventFlagStore and JournalStore stop merging by "existing value
@@ -171,6 +175,16 @@ public static class ProtocolConstants
     /// and not yet seen die.
     /// </summary>
     public const int MaxEnemyDamageEntries = 32;
+
+    /// <summary>
+    /// Creature-liveness entries per <see cref="CreatureLivenessPacket"/> datagram.
+    /// 5 bytes each (object id + a one-byte state), so a full 96 plus the header, module
+    /// string and digest stays comfortably inside <see cref="MaxPacketSize"/> — asserted by
+    /// a test. A module's full creature list can exceed this in one publish cycle; the extra
+    /// entries ride a second (third, ...) page carrying the same digest and generation — see
+    /// <see cref="CreatureLivenessPacket.PageIndex"/>.
+    /// </summary>
+    public const int MaxCreatureLivenessEntries = 96;
 
     /// <summary>Party companions the host replicates. KOTOR allows two active at once; a
     /// little headroom costs nothing.</summary>

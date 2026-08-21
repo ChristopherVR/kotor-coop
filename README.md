@@ -428,6 +428,19 @@ tools/                   RE helpers, demo scripts, the kotor1_0_3 symbol databas
   checked against the running game. See
   [docs/research/dialogue-consequences.md](docs/research/dialogue-consequences.md)'s "Shipped"
   section for the full list of what a live pass still needs to confirm.
+- **A body left alive on one screen and dead on the other can now be corrected — built and
+  not yet live-verified.** Ordinary enemy death only ever reaches the 32-slot combat census;
+  a creature beyond that cap, killed by a script (`DestroyObject`, a cutscene, `SetPlotFlag`
+  then a kill), killed while the two players were apart, or killed by a client's own engine
+  under `local_combat` before the host confirmed, could stay alive on one screen forever. The
+  enemy owner now publishes every creature its engine knows about in the loaded area — not
+  just the fought-over 32 — every couple of seconds, and a mirroring instance kills or
+  destroys its own copy to match; if the owner is the one that disagrees (alive there, dead
+  here), it only logs an anomaly and counts it (`status` shows "liveness anomalies: N") —
+  never a forced resurrection. `coop.ini liveness_sync=0` is the default until a live pass
+  runs the checklist in
+  [docs/research/creature-liveness.md](docs/research/creature-liveness.md), which also carries
+  the live-test script (`tools/live-liveness.ps1`).
 - **Alignment (light/dark) is per-player on purpose.** Each character stores its own
   alignment, read by that character's own dialogue gates, dark-side powers and ending —
   two players making different choices in one story is a feature of playing together, not a
