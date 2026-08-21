@@ -172,6 +172,10 @@ internal sealed unsafe class CheatController(SharedBlockView block)
                 MoviePlay();
                 break;
 
+            case SharedBlock.CheatKindDestroyObject:
+                DestroyObject(playerId);
+                break;
+
             default:
                 Answer(SharedBlock.CheatStatusRefused, $"unknown cheat kind {kind}");
                 break;
@@ -590,6 +594,62 @@ internal sealed unsafe class CheatController(SharedBlockView block)
         Answer(
             SharedBlock.CheatStatusApplied,
             $"applied kind {kind} to {what} (0x{targetId:X}), {durationMs}ms, mag {magnitude}");
+    }
+
+    /// <summary>
+    /// STAGING VERB (2026-08-22): destroys a creature outright through
+    /// <see cref="Odyssey.DestroyObjectById"/> — the SAME engine call
+    /// <see cref="LivenessReconcileController"/>'s own Destroy action already wraps (see
+    /// docs/research/creature-liveness.md §5). Built to unstick that channel's live passes:
+    /// twice (END_M01AA and tat_m20aa, 2026-08-22) the Destroy dispatch could not be exercised
+    /// live because <c>slay</c> only ever calls <see cref="Odyssey.KillCreature"/>, and no other
+    /// verb could put a creature into the "Gone" state.
+    ///
+    /// Follows <see cref="ApplyEffect"/>'s wiring and <see cref="Slay"/>'s authority rules
+    /// (person/companion/plot, same order, same reasons — see <see cref="CheatAuthority.ForDestroy"/>)
+    /// but is HOST-ONLY where <see cref="Slay"/> forwards: a mirroring instance is refused
+    /// outright (<see cref="DestroyVerdict.RefuseNotOwner"/>), not handed off, because there is
+    /// no destroy-ledger to spend a forwarded destroy through.
+    /// </summary>
+    private void DestroyObject(uint playerId)
+    {
+        uint targetId = block.CheatTarget;
+        if (targetId == 0)
+        {
+            Answer(SharedBlock.CheatStatusNoTarget, "destroyobject needs an object id");
+            return;
+        }
+
+        nint target = Odyssey.ResolveServerObject(targetId);
+
+        DestroyVerdict verdict = CheatAuthority.ForDestroy(
+            targetResolved: target != 0,
+            targetIsLocalPlayer: targetId == playerId,
+            targetIsPhantom: IsPhantom(targetId),
+            targetIsCompanion: IsCompanion(targetId),
+            targetIsPlot: target != 0 && Odyssey.IsPlot(target),
+            mirrorsEnemies: block.DamageDealtEnabled);
+
+        string explanation = CheatAuthority.Explain(verdict, targetId);
+
+        if (verdict == DestroyVerdict.DestroyHere)
+        {
+            if (Odyssey.DestroyObjectById(targetId, out int failure))
+            {
+                PluginHost.Log($"destroyobject: destroyed 0x{targetId:X}");
+                Answer(SharedBlock.CheatStatusApplied, explanation);
+            }
+            else
+            {
+                Answer(SharedBlock.CheatStatusEngineRefused, $"0x{targetId:X}: destroy refused (failure {failure})");
+            }
+
+            return;
+        }
+
+        Answer(
+            verdict == DestroyVerdict.RefuseMissing ? SharedBlock.CheatStatusNoTarget : SharedBlock.CheatStatusRefused,
+            explanation);
     }
 
     /// <summary>

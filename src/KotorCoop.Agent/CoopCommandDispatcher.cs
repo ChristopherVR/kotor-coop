@@ -562,6 +562,10 @@ public sealed class CoopCommandDispatcher(
                 MoviePlay(command.Address ?? string.Empty);
                 break;
 
+            case CoopCommandKind.DestroyObject:
+                DestroyObject(command.Address ?? string.Empty);
+                break;
+
             case CoopCommandKind.Cheats:
                 foreach (string line in ConsoleCommand.CheatsText)
                 {
@@ -873,6 +877,32 @@ public sealed class CoopCommandDispatcher(
         }
 
         SendCheat(new CheatRequest(CheatKinds.MoviePlay, Text: resref));
+    }
+
+    /// <summary>
+    /// STAGING VERB (2026-08-22): destroys a creature outright, through the SAME engine call
+    /// <c>LivenessReconcileController</c>'s own Destroy action already wraps
+    /// (docs/research/creature-liveness.md §5). Built to unstick that channel's own live
+    /// passes, which twice found the Destroy dispatch unexercisable: <c>slay</c> only ever
+    /// calls <c>Odyssey.KillCreature</c>, and nothing else could put a creature into the
+    /// "Gone" state.
+    ///
+    /// The parser already refused anything that is not a real object id (no tag form, no
+    /// "nearest" fallback — see <see cref="ConsoleCommand"/>'s <c>destroyobject</c> case), so
+    /// this is a straight hand-off; the authority decision (host-only, refuses a player,
+    /// phantom, companion or plot creature) lives in the plugin, the same split
+    /// <see cref="Slay"/> uses and for the same reason — only the plugin can see the phantom
+    /// table, the party roster and whether this instance owns the fight.
+    /// </summary>
+    private void DestroyObject(string token)
+    {
+        if (!ConsoleCommand.TryParseObjectId(token, out uint objectId))
+        {
+            Reply($"destroyobject: '{token}' is not an object id");
+            return;
+        }
+
+        SendCheat(new CheatRequest(CheatKinds.DestroyObject, Target: objectId));
     }
 
     /// <summary>Folds the shared block's peer-effect rings into <see cref="_effectLog"/> every

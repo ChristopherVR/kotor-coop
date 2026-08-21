@@ -1414,6 +1414,29 @@ internal struct SharedBlock
     /// </summary>
     public const uint CheatKindMoviePlay = 15;
 
+    /// <summary>
+    /// STAGING VERB (2026-08-22): destroys a creature outright through
+    /// <c>Odyssey.DestroyObjectById</c> — the SAME engine call
+    /// <c>LivenessReconcileController</c>'s own Destroy action already wraps
+    /// (docs/research/creature-liveness.md §5). Built because that channel's live passes
+    /// (2026-08-22, both END_M01AA and tat_m20aa) found no console verb that could force a
+    /// creature into the "Gone" state — <c>slay</c> only ever calls
+    /// <c>Odyssey.KillCreature</c> — leaving the Destroy dispatch, the mechanism the whole
+    /// channel exists to ship, completely unexercised. <see cref="OffsetCheatTarget"/> is the
+    /// object id; no tag form and no "nearest" fallback, on purpose — this stages a SPECIFIC
+    /// id a `census` read already named as out-of-census.
+    ///
+    /// Follows <see cref="CheatKindApplyEffect"/>'s wiring exactly and <see cref="CheatKindSlay"/>'s
+    /// authority rules exactly (refuses a player, a phantom, a companion, a plot creature — see
+    /// <c>CheatAuthority.ForDestroy</c>) but is HOST-ONLY where slay forwards: a mirroring
+    /// instance (this engine does not own the fight) is refused outright rather than forwarded,
+    /// because there is no destroy-ledger to spend through — carrying a destroy TO a mirroring
+    /// instance is the creature-liveness channel's own job, not this verb's.
+    ///
+    /// ⚠ 16, because 7-15 are taken. Take the next FREE number.
+    /// </summary>
+    public const uint CheatKindDestroyObject = 16;
+
     /// <summary>The request was carried out here.</summary>
     public const int CheatStatusApplied = 1;
 

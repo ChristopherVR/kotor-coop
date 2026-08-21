@@ -27,6 +27,37 @@ internal enum SlayVerdict
     ForwardToOwner,
 }
 
+/// <summary>What the staging layer is allowed to do about a requested destroy. Mirrors
+/// <see cref="SlayVerdict"/>'s person/companion/plot checks exactly, but is smaller on the
+/// authority question: <see cref="RefuseNotOwner"/> replaces <c>ForwardToOwner</c> because
+/// there is no destroy-ledger to spend a forwarded destroy through — the creature-liveness
+/// channel (docs/research/creature-liveness.md) is what carries a destroy TO a mirroring
+/// instance, not this verb.</summary>
+internal enum DestroyVerdict
+{
+    /// <summary>Nothing here answers to that id.</summary>
+    RefuseMissing,
+
+    /// <summary>A player's own character.</summary>
+    RefusePlayer,
+
+    /// <summary>A peer's phantom — a body this instance renders on their behalf.</summary>
+    RefusePhantom,
+
+    /// <summary>A party companion.</summary>
+    RefuseCompanion,
+
+    /// <summary>The module flagged it plot.</summary>
+    RefusePlot,
+
+    /// <summary>This instance mirrors the target's owner rather than owning it — no
+    /// destroy-ledger exists to forward through, so this is a hard refusal, not a hand-off.</summary>
+    RefuseNotOwner,
+
+    /// <summary>Ours to destroy: run the engine's own DestroyObject right here.</summary>
+    DestroyHere,
+}
+
 /// <summary>
 /// The co-op authority rules for the staging cheats, as pure arithmetic over facts the
 /// caller has already measured — no engine pointers, no block, so it compiles into the
@@ -146,6 +177,69 @@ internal static class CheatAuthority
         SlayVerdict.RefusePlot => $"0x{objectId:X} is plot-flagged by the module",
         SlayVerdict.KillHere => $"killed 0x{objectId:X}",
         SlayVerdict.ForwardToOwner => $"0x{objectId:X} is the host's; sent the kill to them",
+        _ => "unhandled verdict",
+    };
+
+    /// <summary>
+    /// Decides what a <c>destroyobject</c> against this target means on this instance. Same
+    /// person/companion/plot rules as <see cref="ForSlay"/>, checked in the same order for the
+    /// same reason (a body belonging to a person is never a legitimate target whatever else is
+    /// true of it) — but where <see cref="ForSlay"/> hands a mirroring instance off to the
+    /// owner, this refuses outright: destroying a creature this instance does not own would
+    /// remove a body the owner's engine still has, and the owner's next mirror pass has no way
+    /// to know it should un-destroy anything (this whole channel family never resurrects — see
+    /// docs/research/creature-liveness.md §1).
+    /// </summary>
+    public static DestroyVerdict ForDestroy(
+        bool targetResolved,
+        bool targetIsLocalPlayer,
+        bool targetIsPhantom,
+        bool targetIsCompanion,
+        bool targetIsPlot,
+        bool mirrorsEnemies)
+    {
+        if (!targetResolved)
+        {
+            return DestroyVerdict.RefuseMissing;
+        }
+
+        if (targetIsLocalPlayer)
+        {
+            return DestroyVerdict.RefusePlayer;
+        }
+
+        if (targetIsPhantom)
+        {
+            return DestroyVerdict.RefusePhantom;
+        }
+
+        if (targetIsCompanion)
+        {
+            return DestroyVerdict.RefuseCompanion;
+        }
+
+        if (targetIsPlot)
+        {
+            return DestroyVerdict.RefusePlot;
+        }
+
+        return mirrorsEnemies ? DestroyVerdict.RefuseNotOwner : DestroyVerdict.DestroyHere;
+    }
+
+    /// <summary>The sentence that goes back to the player and into the log for a
+    /// <c>destroyobject</c> refusal or success — the same "name what you saw" rule
+    /// <see cref="Explain(SlayVerdict, uint)"/> follows.</summary>
+    public static string Explain(DestroyVerdict verdict, uint objectId) => verdict switch
+    {
+        DestroyVerdict.RefuseMissing => "no creature here answers to that",
+        DestroyVerdict.RefusePlayer => $"0x{objectId:X} is your own character",
+        DestroyVerdict.RefusePhantom => $"0x{objectId:X} is a peer's phantom, not an enemy",
+        DestroyVerdict.RefuseCompanion => $"0x{objectId:X} is a party companion",
+        DestroyVerdict.RefusePlot => $"0x{objectId:X} is plot-flagged by the module",
+        DestroyVerdict.RefuseNotOwner =>
+            $"0x{objectId:X} is the owner's; destroyobject has no forward path - run it on the "
+            + "instance that owns this creature's fight",
+        DestroyVerdict.DestroyHere => $"destroyed 0x{objectId:X}",
         _ => "unhandled verdict",
     };
 }

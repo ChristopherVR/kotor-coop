@@ -630,3 +630,85 @@ timestamps vs. a ~2 s per-capture floor) and were the actual evidence base for e
   teleport fallback fully covers the automatic-join case this session could reproduce and measure
   live; the flag would additionally help a genuine walked click reach the NPC faster, which
   nothing here could exercise to confirm is even worth the added native-patch risk.
+
+---
+
+## Live pass (2026-08-22): the proper `dlgjoinlatency.ps1` N-run A/B on the far-join setup, and why it settles nothing new
+
+The 2026-08-21 far-join pass above measured `dialogue_join_teleport`'s own fix with single,
+manual runs (one far join per direction, per before/after row) — it never ran the repeated,
+`dlgjoinlatency.ps1`-driven N=5 methodology the ADJACENT-join A/B used. This pass runs that
+methodology for real, on the far-join setup, with `dialogue_join_teleport=1` (the now-shipped
+default) held constant throughout.
+
+### Setup
+
+`tools\demo.ps1` cold start (save 1, `END_M01AA`), both installs rebuilt/deployed, block v48 /
+protocol 34 confirmed. Before every run, the client is snapped 14 m from `end_trask`
+(`console 'tp 20.0 8.0 -1.3'` against the same `20.0 22.2 -1.3` spawn `dialogue-sync.md`'s own
+far-join pass used), and `tools\dlgjoinlatency.ps1 -Tag end_trask -Seconds 18-20` drives the
+host-starts/client-joins direction.
+
+### The numbers
+
+| Arm | Runs attempted | Runs with a clean observation | Content latency (self-reported) |
+|---|---:|---:|---|
+| `dialogue_fast_join=0` (baseline) | 5 | 4 | 15, 0, 0, 0 ms |
+| `dialogue_fast_join=1` | 5 | 4 | 0, 16, 0, 0 ms |
+
+The one failed attempt in each arm was a harness timing collision, not a feature symptom: the
+`dlgjoinlatency.ps1` invocation fired again before the PREVIOUS run's conversation had fully
+settled (visible in the plugin log as the host's own re-open attempt logging `could not open a
+conversation with 'end_trask' (not here, already talking, or refused)`), which starved that run's
+own log-line window of anything to observe. Spacing successive runs by 8-15 s (rather than back
+to back) avoided it on every other attempt. Full row data appended to
+`tools\dlgjoinlatency.csv`.
+
+### Why the two arms read identically — confirmed, not just inferred this time
+
+Every clean run in BOTH arms shows `dialogue: the engine started the same conversation here;
+adopting it to follow` on the client, exactly the **adopt** path the 2026-08-21 far-join pass's
+own analysis predicted: `dialogue_join_teleport=1` snaps the joiner to within the engine's
+10-unit `ActionStartConversation` range BEFORE the join request is ever sent, so the joiner's own
+local engine reaches `StartDialog` independently, on its own local dialogue data — never waiting
+on the FOLLOW/spectate path (`DialogueSpectateController.FollowRemote`) at all. `dialogue_fast_join`'s
+two closed hops (`CoopAgent.PumpDialogue`'s 150 ms → 33 ms cadence tightening) sit ONLY on that
+follow path, hop #3/#6 in this document's own table above — a joiner who reaches adopt never
+touches either hop, so there is, structurally, nothing for the flag to speed up here. This is the
+SAME conclusion the 2026-08-21 pass drew from a single manual run per arm; this pass reproduces it
+with the project's own standard N-run methodology and finds no different answer: 8 clean
+data points, four per arm, content latency 0-16 ms in every one, no separation between the arms
+outside measurement noise.
+
+**The practical implication, stated plainly:** `dialogue_join_teleport` and `dialogue_fast_join`
+answer two different questions that do not compose the way the task brief assumed they would —
+turning teleport on to fix the far-join REPRODUCTION also removes the far-join MEASUREMENT
+`dialogue_fast_join` was built to move the needle on. To actually A/B the follow-path hops this
+flag closes, a future pass would need `dialogue_join_teleport=0` (reproducing the original
+never-opens defect from the 2026-08-21 pass, which is not itself a regression — see "What remains"
+there) so the joiner's own engine is genuinely spectate-walked in before its local `StartDialog`
+fires, rather than snapped there first. That combination was not attempted this pass; scope here
+was the exact test the task specified (teleport ON, both flag values, N runs), and it produced a
+clean, if structurally unsurprising, null result.
+
+### Scope note
+
+Only the host-starts/client-joins direction was run this pass (the FOLLOW path the far-join setup
+specifically targets). The reverse direction (`-FromClient`) was not re-run: the mechanism
+argument above (adopt vs. follow) is symmetric in both directions — `dialogue_join_teleport`
+teleports whichever side is the joiner, regardless of who started — so a second N-run set was
+judged unlikely to produce a different structural finding, and time was spent on the other two
+live checks this session instead. Recorded as a real reduction from "5 runs each, both
+directions," not silently.
+
+### Verdict: `dialogue_fast_join` stays `0` — same call, now backed by the project's own N-run bar
+
+No regression in either arm (identical adopt-path behaviour, identical near-zero content latency,
+no node disagreement observed in any clean run) and no measurable improvement either — the task's
+own bar for flipping ("strictly better, no regression") is not met, for the same reason the
+2026-08-21 pass already gave and this pass now confirms with proper statistics rather than a
+single sample: this rig's `dialogue_join_teleport=1` default removes the follow path
+`dialogue_fast_join` targets before the flag ever gets a chance to matter. The static analysis
+behind the flag is untouched by this finding — a genuine distance FOLLOW (teleport off, or a real
+walked click) remains the only configuration that could confirm or refute it live, and remains
+unexercised.

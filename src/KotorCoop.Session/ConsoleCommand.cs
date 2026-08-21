@@ -231,6 +231,21 @@ public enum CoopCommandKind
     /// <c>movie-relay: playing '...' now</c> is the actual test.
     /// </summary>
     MoviePlay,
+
+    /// <summary>
+    /// STAGING VERB (2026-08-22): destroys a creature outright, through
+    /// <c>Odyssey.DestroyObjectById</c> — the SAME engine call
+    /// <c>LivenessReconcileController</c>'s own Destroy action already wraps. Built because
+    /// docs/research/creature-liveness.md's live passes (2026-08-22) found no console verb that
+    /// could put a creature into the "Gone" state: <c>slay</c> only ever calls
+    /// <c>Odyssey.KillCreature</c>. <see cref="CoopCommand.Address"/> is the target's object id —
+    /// no tag form, no "nearest" fallback; this stages a SPECIFIC id, typically one `census`
+    /// already named as out-of-census. Follows <c>ApplyEffect</c>'s wiring and <c>Slay</c>'s
+    /// authority rules exactly (refuses a player, phantom, companion, or plot creature), but is
+    /// HOST-ONLY where <c>Slay</c> forwards — a mirroring instance is refused, not handed off,
+    /// because there is no destroy-ledger to spend a forwarded destroy through.
+    /// </summary>
+    DestroyObject,
 }
 
 /// <summary>
@@ -722,6 +737,33 @@ public static class ConsoleCommand
                 }
 
                 return new CoopCommand(CoopCommandKind.MoviePlay, Address: rest[0]);
+
+            // destroyobject <id>  - STAGING VERB (2026-08-22), see CoopCommandKind.DestroyObject.
+            // Object id only, deliberately: this stages a SPECIFIC creature `census` already
+            // named, not a sweep.
+            case "destroyobject" or "destroy":
+                if (rest.Length != 1)
+                {
+                    return new CoopCommand(
+                        CoopCommandKind.Invalid,
+                        Error: "destroyobject needs exactly one object id, e.g. destroyobject 0x35");
+                }
+
+                if (IsSelfWord(rest[0]))
+                {
+                    return new CoopCommand(
+                        CoopCommandKind.Invalid,
+                        Error: "destroyobject is for enemies - your own character is not a target");
+                }
+
+                if (!TryParseObjectId(rest[0], out _))
+                {
+                    return new CoopCommand(
+                        CoopCommandKind.Invalid,
+                        Error: $"'{rest[0]}' is not an object id (try 0x35, or '#35')");
+                }
+
+                return new CoopCommand(CoopCommandKind.DestroyObject, Address: rest[0]);
 
             case "cheats":
                 return new CoopCommand(CoopCommandKind.Cheats);
@@ -1302,6 +1344,8 @@ public static class ConsoleCommand
         "  topup [n]           your hit points to n, or to full",
         "  standup [n]         stand yourself up out of the downed state",
         "  slay [tag|id]       kill an enemy; a client routes it to the host",
+        "  destroyobject <id>  destroy a creature outright (Odyssey.DestroyObjectById);",
+        "                      HOST-ONLY, no forward path - refused on a mirroring instance",
         "  tp <x> <y> [z]      move yourself inside this area",
         "  goto <player>       move yourself to a peer (same module)",
         "  dropitem <resref>   drop a blueprint; the item channel shares it",

@@ -520,3 +520,129 @@ cannot represent at all — a destroyed object simply stops resolving, with no "
 that channel — making it the one case genuinely orthogonal to population size). Neither was
 reachable this pass; no console verb exists to force either one synthetically (`slay` only ever
 calls `Odyssey.KillCreature`, never a destroy). Left OFF by default.
+
+## Live pass (2026-08-22): the `destroyobject` verb built, and the real blocker found underneath it
+
+Task: build the smallest console verb that can force case (2) above — a real `DestroyObject`,
+independent of population size — and use it to try, a third time, to isolate
+`LivenessReconcileController`'s Destroy dispatch live. Built `destroyobject <id>`, following
+`applyeffect`'s wiring exactly (`ConsoleCommand` → `CoopCommandDispatcher` → `CheatController` →
+`Odyssey.DestroyObjectById`, the SAME engine call this channel's own Destroy action already
+wraps) and `slay`'s authority rules exactly, via a new `CheatAuthority.ForDestroy` /
+`DestroyVerdict` pair that mirrors `SlayVerdict`'s person/companion/plot checks but — deliberately
+narrower than `slay` — refuses a mirroring instance outright (`RefuseNotOwner`) rather than
+forwarding: there is no destroy-ledger to spend a forwarded destroy through, and carrying a
+destroy TO a mirroring instance is this channel's own job, not a console verb's. `CheatKinds
+.DestroyObject = 16` / `SharedBlock.CheatKindDestroyObject = 16` (next free number after
+`MoviePlay = 15`); no shared-block version bump (reuses the existing `CheatTarget` field, same
+discipline `ApplyEffect`/`FireScript`/`MoveNear` already established). See
+`docs/research/console-cheats.md` §3 for the verb table entry and the authority rule.
+
+### The verb itself: fully proven live, first try
+
+Rig: `tools\demo.ps1` cold start, both GOG installs rebuilt and deployed
+(`src\KotorCoop.Plugin\build.ps1 -Install` against both `-GameDir`s), block v48 / protocol 34
+confirmed on both, `liveness_sync=1` on both, warped to `tar_m10aa`. Five separate live checks,
+all clean on the first attempt:
+
+```
+HOST:   destroyobject 0x3B          -> "destroyed 0x3B"
+HOST:   resolve 0x3B                -> "0x3B resolves to 0x0 here"           (confirms it is really gone)
+HOST:   destroyobject 0x7FFFFFFF    -> "refused: 0x7FFFFFFF is your own character"
+HOST:   destroyobject 0x11D         -> "refused: 0x11D is a party companion" (Trask, this session's id)
+HOST:   destroyobject 0x130         -> "refused: 0x130 is a peer's phantom, not an enemy"
+CLIENT: destroyobject 0x33          -> "refused: 0x33 is the owner's; destroyobject has no
+                                         forward path - run it on the instance that owns this
+                                         creature's fight"
+```
+
+Every refusal names the rule and the id, matching `CheatAuthority.Explain` verbatim — the same
+"a guard that fails safe must say what it saw" bar every other staging verb in this codebase
+holds itself to. The verb, its authority split, and its wiring are DONE; nothing about the
+verb itself needs more live time.
+
+### The reconcile dispatch: still not independently exercised — and now a *sharper* reason why
+
+The `destroyobject 0x3B` above should have produced, within `LivenessScanIntervalMs` (2 s) on the
+HOST's agent log, `liveness: 1 creature(s) newly gone this pass: 0x3B`, and shortly after that on
+the CLIENT's plugin log, `liveness: 0x3B no longer exists on the owner - destroying to match` (or
+equivalent). **Neither line appeared, across more than three minutes of observation** — a
+materially longer wait than either of the two prior passes' own windows (§ above, both settled
+within the ordinary 2 s scan cadence for every OTHER case they tried). This is not the same gap
+those two passes recorded (population never exceeding the 32-slot cap); it is new, and it points
+somewhere more specific.
+
+**Isolated with a same-session control.** Immediately after the silent `destroyobject`, `slay
+0x38` (an ordinary kill — `Odyssey.KillCreature`, HP → 0, corpse remains and still resolves) was
+run against a different, equally fresh creature in the same census. The `census` verb's own
+count dropped from 25 to 24 within the next 3-second check — the AGENT's external scan reacted to
+the KILL correctly and promptly, the same freshness every other channel in this codebase has
+always shown. A repeated `census` read taken **more than three minutes after** the
+`destroyobject`, by contrast, still read **25** (not 24, as it would if 0x3B had genuinely dropped
+out of the scan) even with 0x38 *also* now gone (which would have made it 23) — i.e. the census
+arithmetic is consistent with 0x3B still being counted as present, the whole time. The engine's
+own in-process view (the plugin's `resolve` verb, `CGameObjectArray::GetGameObject`-based) said
+gone within the same second the destroy landed; the AGENT's external view (`EnumerateCreatures`'s
+scan + `LiveObjectGate.Confirm`'s array-based re-check, `src/KotorCoop.Memory/KotorGameBridge.cs`
+and `LiveObjectGate.cs`) did not update to agree with it inside the observed window, for THIS
+specific object, while correctly and promptly updating for an ordinary kill on a sibling object
+one command later.
+
+**Reading of what this means, not yet independently confirmed further:** `Odyssey
+.DestroyObjectById` is the NWScript `DestroyObject(object, fDelay=0, bNoFade=1,
+fDelayUntilFade=0)` command — a real engine call, immediately effective for the PLUGIN's own
+in-process resolution (`resolve` proves this) — but the object's underlying memory, or the
+engine's own external-facing id→address table `EngineGlobals.TryResolveServerObject` walks, may
+not be updated on the same timescale, or at all within a session, for a `DestroyObject`ed body the
+way it is for one whose hit points merely dropped to zero. Both `ReadEnemies` and `ReadCreatureLiveness`
+share the exact same `EnumerateCreatures()` → `Confirm()` pipeline (§1.1 above: "no new plugin-side
+scan... reuses this directly"), so this is not a defect the new verb introduced or a gap specific
+to the liveness channel — it is a property of the AGENT's own external creature enumeration that
+neither `ReadEnemies` nor `ReadCreatureLiveness` had previously been tested against, because
+nothing before `destroyobject` could put a `DestroyObject`ed body in front of either of them live.
+
+This reframes the channel's own headline blocker. The two prior passes read the gap as "no
+reachable module's population exceeds 32, so the shed-by-distance case never fires." This pass
+finds a gap that would block the SAME dispatch even in a module that DID exceed 32, or even for a
+population-independent script `DestroyObject` exactly like item 2 of §7's own checklist
+anticipated — except the checklist expected the BLOCKER to be "no way to stage one," and it turns
+out staging one (which this verb now does, cleanly) surfaces a SEPARATE, deeper blocker in the
+scan that would have to be fixed first regardless of which staging path reaches it. Not chased
+further this pass — diagnosing `EngineGlobals.TryResolveServerObject`/`LiveObjectGate.Confirm`'s
+own behaviour against a `DestroyObject`ed id (rather than a freed/reused one) needs its own
+focused session, and is out of scope for "build the verb and test the existing channel."
+
+### The reconnect catch-up case
+
+Not independently re-run this pass: since the root cause identified above sits in the OWNER's own
+scan (the HOST never derives "gone" for a `DestroyObject`ed id within the observed window), the
+CLIENT side of the reconnect case — whether a forced catch-up cycle delivers the picture promptly
+once reconnected — cannot produce a different answer than "nothing to deliver," and re-running it
+would not add information beyond what is already recorded above. Left open for whoever picks up
+the scan-freshness question this pass surfaces.
+
+### A related, same-session finding: party-presence positions can also go stale for minutes
+
+Not this channel, but found while staging the roadmap-item-4 live check the same session (see
+`docs/research/party-reconciliation.md`'s 2026-08-22 entry for the full writeup): the
+`PartyPresenceSnapshot` a mirroring client's `SharedBlock` holds for a companion can freeze for
+several minutes at a time during an otherwise-healthy, non-`[W_SAVE]` connected session, self-
+resolving only via a full `disconnect`/`reconnect`. Recorded here too because it is the same
+SHAPE of bug as this section's own finding — an external, agent-side read going stale relative to
+the live game state while the in-process plugin view stays correct — even though the two are
+different code paths (`ReadPartyMembers` vs. `EnumerateCreatures`/`Confirm`) and this document
+does not claim they share a root cause.
+
+### Verdict: `liveness_sync` stays OFF — a third pass, a different and more specific reason why
+
+Per this project's own bar (flip on if clean): `destroyobject` itself, and the authority rules
+gating it, are clean and live-verified without qualification — ship-ready as a diagnostic
+instrument regardless of what happens to the flag below. `liveness_sync` stays OFF because the
+dispatch it exists to run has now failed to fire live on its THIRD attempt, and for the first time
+this pass narrows the reason to something concrete and independently checkable rather than "no
+reachable module is big enough": the agent's own external scan appears not to notice a
+`DestroyObject`ed body promptly, if at all, within a session, which would block the Destroy
+dispatch regardless of population or module choice. The next concrete step is narrower than
+either prior pass's own: instrument or directly test `LiveObjectGate.Confirm`
+(`EngineGlobals.TryResolveServerObject`) against a `DestroyObject`ed id specifically, to confirm
+or refute that reading before touching the reconcile controller itself.

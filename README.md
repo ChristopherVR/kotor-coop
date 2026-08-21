@@ -120,6 +120,7 @@ Both players, each in their own full game:
   | `topup [n]` | your hit points to n, or full | yours alone |
   | `standup [n]` | stand yourself up out of the downed state | yours alone; retail `heal` doesn't do this |
   | `slay [tag\|id]` | kill an enemy (blank = nearest) | the enemies' owner kills it for real; a client sends the kill through the damage ledger so the host's engine produces the death for both. Refuses a player, a phantom, a companion or a plot creature — out loud |
+  | `destroyobject <id>` | destroy a creature outright (`Odyssey.DestroyObjectById`) | host-only, no forward path — refuses a player, a phantom, a companion, or a mirroring instance, out loud. Live-verified 2026-08-22 |
   | `tp <x> <y> [z]` | move yourself in this area | yours alone; your position already replicates |
   | `goto <player>` | move yourself to a peer | same module only |
   | `dropitem <resref\|0x131>` | drop a blueprint, or a copy of a live item, at your feet | goes through the item channel, so every instance materialises it and it vanishes for all of them when any one takes it. The `0x131` form carries the item's real stack size, charges and upgrades |
@@ -145,7 +146,12 @@ Both players, each in their own full game:
   than a slower cross-instance replay. `dialogue_fast_join` (off by default; targets a
   *distance* join, where the joiner has to be walked in before their own dialogue opens) is
   still unverified live for that specific path — the same doc's honest account of what this
-  rig's fixed player-adjacent-to-NPC setup could and couldn't exercise.
+  rig's fixed player-adjacent-to-NPC setup could and couldn't exercise. A 2026-08-22 pass ran
+  the proper repeated A/B (`tools\dlgjoinlatency.ps1`, several runs per arm) on a genuine
+  14 m far join with `dialogue_join_teleport=1` active, and found the same null result with
+  real statistics behind it this time: teleport snaps the joiner into adopt range before the
+  join request is even sent, so every far join still resolves through adopt and the flag's
+  targeted hops never get exercised — see that doc's own 2026-08-22 section.
 - **A joiner who is genuinely far from the NPC** does not just lag — measured live, they never
   open the conversation at all, because the engine's own 10-unit conversation-start range
   (disassembled and confirmed by reading it live out of the process) never resolves for a
@@ -363,9 +369,13 @@ tools/                   RE helpers, demo scripts, the kotor1_0_3 symbol databas
   already has a credit path with no code changes needed — `PeerDamageController` already treats
   every party roster id as "ours to credit" — but its own health is not forwarded uphill (no
   such channel exists), so it is simply left alone while released and snapped back to the
-  host's figure the moment it is reclaimed. Built and unit-tested, **not yet run against the
-  live game**: see [docs/research/party-reconciliation.md](docs/research/party-reconciliation.md)'s
-  dated 2026-08-21 entry for the design question and why the gate is this tight.
+  host's figure the moment it is reclaimed. **Live-tested 2026-08-22: the release/reclaim gate
+  itself is clean** — three full cycles observed live, edge-triggered correctly, no stranding,
+  matching `local_combat`'s own fight timing exactly — but a companion actually landing a
+  credited swing was not independently confirmed, blocked by a newly-found staleness bug in the
+  party-presence channel rather than by anything wrong with the gate; see
+  [docs/research/party-reconciliation.md](docs/research/party-reconciliation.md)'s dated
+  2026-08-22 entry. Still off by default pending that.
 - **One conversation at a time.** While a player is talking, nobody else can start a
   dialogue; the other player spectates rather than getting their own copy. That is the
   design (it keeps one plot line advancing), not a limitation to be lifted. While a player
@@ -522,7 +532,16 @@ tools/                   RE helpers, demo scripts, the kotor1_0_3 symbol databas
   `coop.ini liveness_sync=0` stays the default until a module with a genuine >32 population or
   a scripted `DestroyObject` closes the gap — see
   [docs/research/creature-liveness.md](docs/research/creature-liveness.md)'s dated live-pass
-  sections, which also carry the live-test script (`tools/live-liveness.ps1`).
+  sections, which also carry the live-test script (`tools/live-liveness.ps1`). A new console
+  verb, **`destroyobject <id>`** (host-only, same authority rules as `slay`), was built
+  2026-08-22 specifically to force a real scripted-style `DestroyObject` on demand — it is
+  live-verified end to end (applies, and every refusal: own player, phantom, companion, and a
+  mirroring instance's own hard "no forward path" refusal) — but using it surfaced a sharper,
+  more specific reason the reconcile dispatch still cannot be observed live: the agent's own
+  external creature scan does not appear to notice a `DestroyObject`ed body within a session
+  (an ordinary kill on a sibling creature updated the census within seconds in the same test),
+  which would block this channel's headline case regardless of module population. See that
+  doc's own 2026-08-22 entry for the isolating control and the exact numbers.
 - **A quest journal entry removed on one screen (`RemoveJournalQuestEntry`, a real operation
   12 scripts across 8 modules use) now removes on the other too — live-verified 2026-08-22.**
   A raw read of the engine's own journal array confirmed the entry genuinely vanishes (the

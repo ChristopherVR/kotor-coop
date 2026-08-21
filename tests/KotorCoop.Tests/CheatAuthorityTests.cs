@@ -212,4 +212,95 @@ public class CheatAuthorityTests
         Assert.Equal(0x200u, local);
         Assert.Equal(0x40u, owner);
     }
+
+    // ---- destroyobject: ForDestroy mirrors ForSlay's person/companion/plot rules, but with
+    // a hard refusal instead of a forward (docs/research/creature-liveness.md's own "never
+    // resurrects" rule means there is no destroy-ledger to forward through). ----------------
+
+    [Fact]
+    public void TheOwnerDestroysLocally()
+    {
+        Assert.Equal(
+            DestroyVerdict.DestroyHere,
+            CheatAuthority.ForDestroy(
+                targetResolved: true, targetIsLocalPlayer: false, targetIsPhantom: false,
+                targetIsCompanion: false, targetIsPlot: false, mirrorsEnemies: false));
+    }
+
+    /// <summary>Unlike <c>slay</c>, a mirroring instance is refused outright — there is no
+    /// destroy-ledger, so nothing here can be forwarded to the owner.</summary>
+    [Fact]
+    public void AMirroringInstanceIsRefusedOutrightNotForwarded()
+    {
+        Assert.Equal(
+            DestroyVerdict.RefuseNotOwner,
+            CheatAuthority.ForDestroy(
+                targetResolved: true, targetIsLocalPlayer: false, targetIsPhantom: false,
+                targetIsCompanion: false, targetIsPlot: false, mirrorsEnemies: true));
+    }
+
+    [Fact]
+    public void AnUnresolvedDestroyTargetIsRefusedBeforeAnythingElseIsAsked()
+    {
+        Assert.Equal(
+            DestroyVerdict.RefuseMissing,
+            CheatAuthority.ForDestroy(
+                targetResolved: false, targetIsLocalPlayer: true, targetIsPhantom: true,
+                targetIsCompanion: true, targetIsPlot: true, mirrorsEnemies: true));
+    }
+
+    [Fact]
+    public void YourOwnCharacterIsNeverADestroyTarget()
+    {
+        Assert.Equal(
+            DestroyVerdict.RefusePlayer,
+            CheatAuthority.ForDestroy(
+                targetResolved: true, targetIsLocalPlayer: true, targetIsPhantom: false,
+                targetIsCompanion: false, targetIsPlot: false, mirrorsEnemies: false));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void APeersPhantomIsNeverADestroyTargetOnEitherSide(bool mirrorsEnemies)
+    {
+        Assert.Equal(
+            DestroyVerdict.RefusePhantom,
+            CheatAuthority.ForDestroy(
+                targetResolved: true, targetIsLocalPlayer: false, targetIsPhantom: true,
+                targetIsCompanion: false, targetIsPlot: false, mirrorsEnemies: mirrorsEnemies));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void ACompanionIsNeverADestroyTargetOnEitherSide(bool mirrorsEnemies)
+    {
+        Assert.Equal(
+            DestroyVerdict.RefuseCompanion,
+            CheatAuthority.ForDestroy(
+                targetResolved: true, targetIsLocalPlayer: false, targetIsPhantom: false,
+                targetIsCompanion: true, targetIsPlot: false, mirrorsEnemies: mirrorsEnemies));
+    }
+
+    [Fact]
+    public void APlotCreatureIsRefusedFromDestroyToo()
+    {
+        Assert.Equal(
+            DestroyVerdict.RefusePlot,
+            CheatAuthority.ForDestroy(
+                targetResolved: true, targetIsLocalPlayer: false, targetIsPhantom: false,
+                targetIsCompanion: false, targetIsPlot: true, mirrorsEnemies: false));
+    }
+
+    [Fact]
+    public void EveryDestroyVerdictHasAnExplanation()
+    {
+        foreach (DestroyVerdict verdict in Enum.GetValues<DestroyVerdict>())
+        {
+            string explanation = CheatAuthority.Explain(verdict, Target);
+            Assert.False(string.IsNullOrWhiteSpace(explanation), $"{verdict} has no explanation");
+            Assert.NotEqual("unhandled verdict", explanation);
+        }
+    }
 }

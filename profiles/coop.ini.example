@@ -185,7 +185,12 @@ dialogue_item_sync=1
 # subtitles/reply options take a few seconds to appear while the letterbox creeps in": most of
 # that gap was two hops of up to 150 ms each (the owner's publish, the follower's read) that had
 # nothing to do with the network or the engine. OFF by default so a live pass can A/B it against
-# the existing cadence before it becomes the only path.
+# the existing cadence before it becomes the only path. Re-run 2026-08-22 with the proper
+# repeated tools\dlgjoinlatency.ps1 A/B (several runs per arm) against a genuine 14 m far join:
+# still a null result, now with real statistics behind it - dialogue_join_teleport=1 (below)
+# snaps a far joiner into adopt range before the join request is even sent, so every far join
+# still resolves through the fast adopt path this flag's own hops never sit on. See
+# docs/research/dialogue-join-latency.md's dated 2026-08-22 entry.
 dialogue_fast_join=0
 
 # The DISTANCE half of the join-latency report, not the cadence half above: a joiner who is not
@@ -252,9 +257,13 @@ local_combat_range=20
 # to the host's authoritative figure the instant it is reclaimed - the same trade
 # local_combat's own excluded enemy already makes with its health.
 #
-# OFF by default: the logic is sound on paper (CompanionLocalFightRule is unit-tested) but
-# has never been run against the live game. Needs the same kind of live pass local_combat
-# itself needed before this can default on.
+# OFF by default. Live-tested 2026-08-22: the release/reclaim gate itself (CompanionLocalFightRule
+# + PartyPresenceController.DriveOne) is clean - three full cycles observed live, edge-triggered
+# correctly, no stranding, matching local_combat's own fight timing exactly - but a companion
+# actually landing a credited swing was not independently confirmed, blocked by a newly-found
+# staleness bug in the party-presence channel (a mirroring client's reported companion position
+# can freeze for minutes at a time) rather than by anything wrong with this gate. See
+# docs/research/party-reconciliation.md's dated 2026-08-22 entry before flipping this on.
 companion_local_combat=0
 
 # How close a companion's host-driven position must be to BOTH the locally-fighting enemy
@@ -298,9 +307,14 @@ map_reveal_sync=0
 # cleanly with no crash. NOT independently isolated this pass: the module used (END_M01AA, ~20
 # creatures) never exceeds the ordinary 32-slot combat census, so CombatController's own Dead-flag
 # mirroring always reached every test creature before LivenessReconcileController's own kill/
-# destroy dispatch was needed - that specific engine-call path remains unconfirmed live. Stays OFF
-# by default pending a busier module or a real script DestroyObject. See
-# docs/research/creature-liveness.md's dated live-pass section.
+# destroy dispatch was needed - that specific engine-call path remains unconfirmed live. A new
+# `destroyobject <id>` console verb (2026-08-22) was built specifically to force a real
+# DestroyObject on demand and is itself live-verified end to end, but using it found a sharper,
+# more specific reason the dispatch still cannot be observed: the agent's own external creature
+# scan does not appear to notice a DestroyObject'd body within a session (an ordinary kill on a
+# sibling creature updated the census within seconds in the same test) - which would block this
+# channel's headline case regardless of module population. Stays OFF by default. See
+# docs/research/creature-liveness.md's dated live-pass sections.
 liveness_sync=0
 
 # Replicate RemoveJournalQuestEntry (a real, common NWScript operation - 12 scripts across 8

@@ -309,6 +309,25 @@ public class CoopCheatDispatchTests
         }
     }
 
+    /// <summary>
+    /// STAGING VERB (2026-08-22): the object id reaches the plugin as-is - no census sweep, no
+    /// tag lookup, unlike <c>slay</c>. Built to unstick docs/research/creature-liveness.md's
+    /// live passes, which found no way to force a creature into the "Gone" state.
+    /// </summary>
+    [Fact]
+    public void DestroyObjectCarriesTheIdVerbatim()
+    {
+        (CoopCommandDispatcher dispatcher, CheatBridge bridge, SessionManager manager) = NewDispatcher();
+        using (manager)
+        {
+            Type(dispatcher, "destroyobject 0x2A");
+
+            CheatRequest request = Assert.Single(bridge.Requests);
+            Assert.Equal(CheatKinds.DestroyObject, request.Kind);
+            Assert.Equal(0x2Au, request.Target);
+        }
+    }
+
     /// <summary>The rejection the whole channel is judged on: a cheat aimed at something the
     /// caller does not own must not become an engine call.</summary>
     [Theory]
@@ -318,6 +337,9 @@ public class CoopCheatDispatchTests
     [InlineData("tp over there")]
     [InlineData("dropitem not-a-resref")]
     [InlineData("goto")]
+    [InlineData("destroyobject me")]
+    [InlineData("destroyobject not-an-id")]
+    [InlineData("destroyobject")]
     public void ARefusedLineNeverReachesThePlugin(string line)
     {
         (CoopCommandDispatcher dispatcher, CheatBridge bridge, SessionManager manager) = NewDispatcher();

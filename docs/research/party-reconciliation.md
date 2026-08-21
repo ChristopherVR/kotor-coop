@@ -419,3 +419,123 @@ party_together_fix`, **default ON**.
 
 See `transition-smoothness.md`'s own 2026-08-22 section for the live door-crossing tests this
 fix unblocked, including the `client_door_refusal` decisive check §8.5 could not reach.
+
+## Live pass (2026-08-22): `companion_local_combat`'s release/reclaim gate proven clean; the swing itself not independently confirmed, and a real party-presence staleness bug found along the way
+
+Roadmap item 4's own live-pass task: `companion_local_combat=1` on the client,
+`companion_local_combat_range=10`, a companion in the host's party (Trask, recruited), the client
+engaging a Vulkar under `local_combat` (`tar_m10aa`'s point-blank pool, `shared-state-audit.md`
+round 55's own recipe) with the host standing beside the client so the mirrored companion is
+within range of both.
+
+### Rig and staging
+
+`tools\demo.ps1` cold start (save 1), `console 'warp tar_m10aa'` on the HOST ONLY — the client
+follows through the co-op travel-follow channel rather than independently warping, which matters:
+an early attempt where BOTH instances issued their own `warp tar_m10aa` produced a persistent
+`[W_SAVE]` compatibility mismatch (see below) that never self-cleared, because each instance's own
+autosave-on-transition genuinely diverged. Host-only warp, client-follows reproduces the identical
+save lineage on both sides and avoided it on the clean rerun.
+
+No engine mechanism moves a companion to a staged position under co-op session play — solo mode
+(`partyTable+0x190`) is asserted by `KotorGameBridge.TryWritePartyMembers` for the whole
+session and this document's own earlier finding ("party following is SCRIPT-DRIVEN... only ONE
+site enqueues it") is not, in the current shipped code, actually driven for a companion by
+anything this project runs; `CoopAgent.PumpParty`'s own comment ("the host: publish, do not
+freeze — its companions follow through the game's own AI exactly as in single-player") describes
+the HOST side's intended freedom, but nothing here found the host's own native follow-AI
+repositioning a stationary companion during an active connected session, live. Because of this,
+Trask was staged by writing her `+0x090` position directly on the HOST (the same raw-poke
+technique `tools/teleport.ps1` already uses for the player, extended to an arbitrary resolved
+creature address — this is test staging only, not a shipped mechanism), confirmed against the
+address the plugin's own `resolve` verb names as authoritative before every poke.
+
+### The release/reclaim mechanism: proven clean, three live cycles
+
+With the client teleported point-blank to a Black Vulkar (`0x33`, the same pool round 55 used) and
+`local_combat` engaged, and Trask's host-side position staged within `companion_local_combat_range`
+(10) of both the client and the currently-excluded enemy:
+
+```
+[06:52:15.297] party drive: companion 0x11C released to fight locally — within range of both you and the enemy you are fighting
+[06:52:34.786] party drive: companion 0x11C reclaimed — resuming the host mirror
+[06:52:34.787] party drive: companion 0x11C held neutral and pinned — the host owns its health
+[06:52:34.790] party drive: companion 0x11C released to fight locally — within range of both you and the enemy you are fighting
+[06:52:59.787] party drive: companion 0x11C reclaimed — resuming the host mirror
+[06:52:59.787] party drive: companion 0x11C held neutral and pinned — the host owns its health
+[06:52:59.790] party drive: companion 0x11C released to fight locally — within range of both you and the enemy you are fighting
+```
+
+Three clean release→reclaim cycles, each landing exactly on `local_combat`'s own 25 s fight
+timeout (`0x33`'s fight ending and a fresh one arming), each edge-triggered exactly once per
+transition (no repeated logging while a state holds, matching `CompanionLocalFightRule`'s own
+design), and each reclaim correctly re-asserting the neutral/min-1-hp hold in the same log burst.
+This is `CompanionLocalFightRule.Decide` and `PartyPresenceController.DriveOne`'s gate working
+exactly as designed and exactly as the unit tests already proved in isolation — now confirmed live,
+against a real `local_combat` fight cycling through real census exclusions, with real faction
+flips (`party drive: companion 0x11C back in the player faction` on every release) and no stranding
+observed at any point across the whole session.
+
+### The swing: not independently confirmed — blocked by a genuine party-presence staleness bug, not by the gate
+
+The remaining claim (`docs/research/creature-liveness.md`'s own sibling finding calls this "the
+same SHAPE of bug", see there) is a companion's own engine AI landing a real hit
+(`PeerDamageController.RefreshAttackers` crediting a roster-slot id, `combat ground-truth:...
+attacker=0x11C`, or the host's `combat: applied N of a peer's damage to 0x33` line). This did NOT
+appear in any window this pass staged, for a reason unrelated to the gate above: **the
+`SharedBlock.PartyPresenceSlots` position a mirroring client holds for a companion can freeze for
+multiple minutes at a time during an otherwise-healthy, connected (non-`[W_SAVE]`) session**,
+self-resolving only after a full `disconnect`/`reconnect` cycle — confirmed by three independent
+observations:
+
+1. A companion staged near a fight (host-side position genuinely changed, `resolve` confirmed
+   the write landed on the correct, engine-authoritative address) never reached the CLIENT's own
+   block — `PartyPresenceCount=1, pos=(104.79,115.22,...)` (the spawn point) held steady across
+   THREE separate re-pokes to progressively closer positions, each checked minutes apart, with no
+   change at all.
+2. A `disconnect`/`reconnect` on the client immediately unstuck it — the very next read showed the
+   block correctly reflecting the host's latest reported position — and the release/reclaim cycles
+   quoted above all happened in the SHORT window right after that reconnect, before the channel
+   froze again.
+3. Because a companion RELEASED (from a state the block already reported as "in range") never
+   gets mirrored to a new position at all (`CompanionLocalFightAction.StayReleased`/
+   `ReleaseAndLog` both return before the `_smoother.Step`/`DriveEnemy` call — "hands off entirely...
+   the companion's own engine AI is what fights from here"), a companion whose FIRST in-range
+   report coincides with an already-active `local_combat` fight is released from wherever her
+   CLIENT-side body was already standing, not from the position that made her eligible — and if
+   that position was never smoothly mirrored there in the first place (staleness, or a raw-poke
+   jump too large for `MotionSmoother` to catch up on before the very next pass releases her), her
+   real body starts the fight from far away, with nothing in range to swing at. This is a real
+   interaction between the staleness bug and the release timing, not a flaw in the release logic
+   itself — in ordinary gameplay a companion's position updates continuously in small increments
+   (the host's own real walking, mirrored every ~150 ms), so this specific race would not arise;
+   it surfaced here because this pass's own staging method (a instantaneous position write) is not
+   continuous the way real movement is.
+
+This is NOT the `[W_SAVE]` transient `shared-state-audit.md` already documents and fixed (that one
+is edge-detected and self-clears within seconds in the large majority of observations there, and
+this session reproduced that same fast self-clear too, separately) — the party-presence freeze
+observed here persisted for MINUTES while the session's own compatibility state read "shared" (no
+`[W_SAVE]` active) the whole time, and while the adjacent enemy-census channel kept updating
+normally within its own ~1 s cadence throughout. Not root-caused this pass (out of scope — the
+task was to test `companion_local_combat`, not debug `CoopAgent.PumpParty`/`ReadPartyMembers`);
+recorded here as a concrete, reproducible defect for whoever picks it up next, with the exact
+symptom (`PartyPresenceCount`/position frozen for minutes, `disconnect`/`reconnect` clears it) and
+the two code paths most likely to hold the answer (`CoopAgent.PumpParty` → `bridge
+.ReadPartyMembers()` → `CoopHost.PublishParty`/`BroadcastParty`, all in `KotorCoop.Session
+/CoopAgent.cs` and `CoopHost.cs`).
+
+### Verdict: `companion_local_combat` stays OFF — the new gate is clean, the channel under it is not proven clean yet
+
+Per this project's own bar (flip on if clean): `CompanionLocalFightRule`'s release/reclaim
+decision — the actual new logic this item adds — is proven clean and live, three full cycles,
+edge-triggered correctly, no stranding, faction/pin handling correct on every transition. But the
+task's own evidence list also asks for the companion's own engine AI actually landing a credited
+hit, and this pass could not produce that, not because the release logic failed, but because a
+newly-found staleness bug in the party-presence channel it depends on prevented a companion's
+CLIENT-side body from ever being mirrored close enough to the fight to swing. Given the honesty
+bar every other flag in this document has been held to (`liveness_sync` stayed off twice for a
+comparable "the mechanism looks right but I could not observe the headline case" reason), the
+conservative call is to leave `companion_local_combat` off pending either a fix for the staleness
+bug above, or a live pass staged through genuine incremental host movement (walking, not a raw
+position poke) patient enough to let real mirroring keep the client's copy caught up throughout.

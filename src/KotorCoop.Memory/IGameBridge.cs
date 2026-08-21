@@ -131,6 +131,28 @@ public static class CheatKinds
     /// ⚠ 15, because 7-14 are taken. Take the next FREE number.
     /// </summary>
     public const uint MoviePlay = 15;
+
+    /// <summary>
+    /// Destroys a creature outright through <c>Odyssey.DestroyObjectById</c> — the SAME engine
+    /// call <c>LivenessReconcileController</c>'s own Destroy action already wraps
+    /// (docs/research/creature-liveness.md §5), so this stages the one reconcile action that
+    /// channel's live passes could never isolate: <c>slay</c> only ever calls
+    /// <c>Odyssey.KillCreature</c>, never a destroy, so nothing before this verb could put a
+    /// creature into the "Gone" state the liveness channel exists to catch on its own. Follows
+    /// <see cref="ApplyEffect"/>'s wiring exactly (ConsoleCommand → dispatcher →
+    /// CheatController → the engine call) and <c>slay</c>'s authority rules exactly (refuses a
+    /// player, a phantom, a companion, a plot creature — see <c>CheatAuthority.ForDestroy</c>).
+    /// <c>Target</c> is the object id; no tag form, no "nearest" fallback — the whole point is
+    /// staging a SPECIFIC out-of-census id a `census` read already named.
+    ///
+    /// HOST-ONLY, deliberately smaller than <see cref="Slay"/>: a mirroring instance (this
+    /// engine does not own the fight) is refused rather than forwarded — there is no
+    /// destroy-ledger, and the creature-liveness channel's own job is to carry a destroy TO a
+    /// mirroring instance, not to originate one from it.
+    ///
+    /// ⚠ 16, because 7-15 are taken. Take the next FREE number.
+    /// </summary>
+    public const uint DestroyObject = 16;
 }
 
 /// <summary>The plugin's verdicts, mirroring <c>SharedBlock.CheatStatus*</c>.</summary>
