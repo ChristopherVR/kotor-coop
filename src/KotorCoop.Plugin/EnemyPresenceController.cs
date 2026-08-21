@@ -520,10 +520,9 @@ internal sealed unsafe class EnemyPresenceController(SharedBlockView block)
         }
 
         // ROUND 46: decided BEFORE the claim below runs, not after — see that claim's own
-        // ROUND 46 note for why. Same gate StartLocalFight's own call site used to test
-        // after Drive(); duplicated here (not refactored into one shared flag site) because
-        // the state it reads (creature, player, mapped) is unchanged across the calls in
-        // between and re-testing it post-Drive as well costs nothing.
+        // ROUND 46 note for why. This is the same trigger condition StartLocalFight's own
+        // call site tested after Drive() before this round; computed once here and reused
+        // below (nothing between here and there changes creature, player, or mapped).
         bool triggeringLocalFight = LocalCombat && player != 0 && _locallyFightingId == 0
             && mapped == 0 && IsEngaged(creature, player) && Odyssey.HasCreatureScriptSlot0x260(creature);
 
