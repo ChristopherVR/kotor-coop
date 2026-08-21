@@ -444,3 +444,123 @@ clock tests (§4), not by a live two-instance convergence across a real network 
 | Flag | Before | After | Why |
 | --- | --- | --- | --- |
 | `journal_remove_sync` | OFF | **ON** | The removal engine call is confirmed genuine and safe, twice, no crash |
+
+## Follow-up pass (2026-08-22): the decrease root-cause, static-only (rig in use, do not run the game)
+
+Picks up the previous section's own open item — "why doesn't `bOverrideHigher=1` visibly move the
+state field" — with static disassembly of `CSWSJournal::SetState` (0x005C5A40) itself
+(`python tools/disasm.py 0x005C5A40 <len>`), since the rig was unavailable this pass and nothing
+here could be re-run live. Tag key is the same as the rest of this document; the finding below is
+**VERIFIED** where it quotes the actual bytes, **INFERRED**/**NEEDS-LIVE** where the trace ran out
+of time before reaching a decompiled answer.
+
+### VERIFIED: the entry-array state write is not conditioned on `bOverrideHigher` at all
+
+`SetState` walks its own entry list matching tags (0x5C5AF1-0x5C5B1A, the same loop
+`Odyssey.SetJournalState`'s own guard mirrors), then — for both the "found" and "not found" cases —
+falls through a large shared block that builds the localized "quest updated" message and, near the
+end of it, performs the actual persisted write:
+
+```
+0x005C5E1E  8b13        mov edx, dword ptr [ebx]          ; edx = journal->data
+0x005C5E20  8b4d0c      mov ecx, dword ptr [ebp + 0xc]     ; ecx = state arg (target)
+0x005C5E23  8d441620    lea eax, [esi + edx + 0x20]        ; eax = &entry.state (+0x20, VERIFIED offset)
+0x005C5E27  3908        cmp dword ptr [eax], ecx            ; current vs target
+0x005C5E29  7407        je 0x5c5e32                          ; equal -> skip (nothing to do)
+0x005C5E2B  834c241010  or dword ptr [esp + 0x10], 0x10     ; "changed" flag bit
+0x005C5E30  8908        mov dword ptr [eax], ecx             ; WRITE — unconditional on direction
+```
+
+There is no `jg`/`jl`/sign check anywhere near this write — `cmp`+`je` only ever skips a write that
+would be a no-op (current already equals target); any difference, higher or lower, falls straight
+through to the `mov`. The two actual uses of the `bOverrideHigher` argument ([ebp+0x10]) in the
+whole function are:
+
+- 0x5C5AC4-0x5C5ADF: `test eax,eax; je ...; mov [esp+0x10],0x100` — ORs a bit into a local
+  "changed flags" word used later to pick message wording. Does not gate anything.
+- 0x5C60C5-0x5C60E3: sets/clears bit `0x4` of `entry+0x2C` to `(bOverrideHigher==0)` — a per-entry
+  flag (unidentified name), written AFTER the state field is already committed. Does not gate
+  anything either.
+- 0x5C629D-0x5C62C1: `mov eax,[ebp+0x10]; test eax,eax; jne 0x5c62c1` — skips the "JournalUpdated"
+  notification send (`call 0x56a4e0` at 0x5C62BC) when `bOverrideHigher!=0`. This is the ONE
+  behavioural difference the argument produces, and it is a notification suppression, not a value
+  gate — it matches (and confirms) the pre-existing doc comment this project already had on
+  `SetJournalState` ("the JournalUpdated send is gated only on bOverrideHigher == 0").
+
+**This VERIFIES that `bOverrideHigher` does not mean "allow the state field to move lower"** — it
+means "suppress this one notification." The original design (§4/§6 above) had the argument's role
+backwards.
+
+### INFERRED / NEEDS-LIVE: what actually gates the write, and why it doesn't fire for a decrease
+
+The write at 0x5C5E1E is only *reached* through a branch at 0x5C5D3C (`jne 0x5c5d50`, jumping into
+the block containing the write) inside a loop over the server's player list (0x5C5C94-0x5C5D45,
+matching `RemoveJournalEntry`'s own doc comment about `SetState`'s caller chain walking players).
+If the loop finishes without any player taking that branch, execution jumps straight to `0x5c62c1`
+— past the write, past the notification sends, entirely. The branch's own condition
+(0x5C5D1B-0x5C5D3A) compares a per-player, per-language message object (built via `call 0x5e5390`
+and `call 0x411990`, format-string constant `0x73d71c`) against the requested tag via the SAME
+tag-compare helper (`0x5e6450`) the entry-search loop uses. Those two helper functions' own data
+structures were not decompiled this pass — a full answer needs either a decompiler or another
+several hours of manual tracing, and the rig being unavailable means any patch built on a guess here
+could not be live-verified anyway, which the project's own engine-write rule treats as
+disqualifying for shipping.
+
+What IS established without needing that answer: ordinary quest progression calls `SetState` on an
+*existing* entry with `bOverrideHigher=0` constantly (any multi-stage quest advancing past its first
+entry) and it is uncontroversially known to work — the base game's entire quest system depends on
+it. The live pass's own decrease attempts were the first time this codebase called `SetState` on an
+existing entry with `bOverrideHigher=1`, and both calls failed to move the array. Combined with the
+disassembly showing the write itself is direction-blind, the most consistent explanation is that the
+per-player gate's condition depends on `bOverrideHigher` (or something correlated with it, such as
+the entry's own `+0x2C` bit `0x4` flag from a PRIOR call) in a way that happens to route a decrease
+around the write — but the exact instruction that does so remains **NEEDS-LIVE / undecompiled**,
+not pinned to one address the way the rest of this document's VERIFIED findings are.
+
+### The fix: stop trusting the disproven direct path, compose two primitives that already work
+
+`Odyssey.SetJournalState` no longer passes `bOverrideHigher=1` for a decrease. It now asks a new
+pure function, `JournalApplyRule.Decide(hasExisting, existingState, targetState)`
+(`src/KotorCoop.Plugin/JournalApplyRule.cs`), which returns one of `Skip` / `Add` /
+`RemoveThenAdd`:
+
+- no existing entry, or existing == target → `Skip`/`Add` exactly as before (unchanged, and not in
+  question — this is the path proven by ordinary gameplay).
+- existing < target (a genuine advance) → `Add`, `bOverrideHigher=0`, unchanged.
+- existing > target (a genuine decrease) → `RemoveThenAdd`: call the ALREADY-LIVE-VERIFIED
+  `CSWSJournal::Destroy` (0x005C68B0, confirmed this document's previous section to genuinely
+  shrink the array) on the existing entry, then a plain `SetState` add (`bOverrideHigher=0`) at the
+  target — the `Add` path, which is not in question.
+
+This trades one unverifiable, already-disproven direct call for two calls that are each
+independently confirmed to do what they say. `Odyssey.SetJournalState` gained a new
+`allowDecreaseViaRemove` parameter (fed `JournalController`'s existing `journal_remove_sync`, now
+default ON) — a decrease fundamentally needs the removal primitive that flag already gates, so with
+it off a decrease request now fails closed with a distinct failure code (7) and an honest log line,
+rather than silently reusing the disproven override call. **What is lost**: the engine's own
+"entry added" date/order metadata for the decreased tag is reset to "just now" by the re-add — the
+disassembly did not show an accessible way to carry the ORIGINAL add date through a `Destroy`+
+`SetState` pair without touching more unverified offsets, and this project's own rule against
+shipping an unverified write applies here too. Party members' journal UI typically sorts by tag/
+category rather than raw add order, so the practical impact is expected to be small, but it is not
+zero and is not live-confirmed either way.
+
+### NEEDS-LIVE: raw journal array probe after a decrease, with the new fix in place
+
+Not run this pass (rig unavailable, per this task's own instruction). The exact repro the previous
+section already established is the one to repeat:
+
+1. Apply a fresh tag to some state N (`journal: '<tag>' -> state N ...`), confirm the raw array
+   probe (`internalServer+0x1B770+0x11C` → `{data,size,capacity}`, stride `0x3C`, tag at `+0x18`,
+   state at `+0x20` — the same offsets this document has used throughout) shows it at N.
+2. Request the SAME tag at a state M &lt; N. Expected under the fix: the plugin log shows a removal
+   line (`journal: '<tag>' removed on the session's authority (journal_remove_sync)` — reused from
+   the removal path, since `RemoveThenAdd` calls the same `Destroy` primitive) followed by an apply
+   line at M. The raw probe afterward must show the tag present at state M, with the array's `size`
+   unchanged overall (one entry removed, one added back) rather than growing or the tag vanishing.
+3. Repeat with `journal_remove_sync=0`: expect the decrease to be REFUSED (failure 7, logged), and
+   the raw probe to show the entry unchanged at N — confirming the new fail-closed behaviour rather
+   than a silent no-op that logs success (the exact defect this pass fixes).
+4. If step 2's probe does NOT show M — the fix did not work either, and the remaining hypothesis
+   (§ above, "what actually gates the write") needs the decompiler-assisted trace this pass could
+   not complete.

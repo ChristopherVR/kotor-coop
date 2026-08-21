@@ -3822,31 +3822,42 @@ internal static unsafe class Odyssey
     /// <summary>
     /// Sets a quest journal entry to the given state through the engine's own path. The
     /// CALLER never has to say which direction: this walks the journal's own entry list (it
-    /// already has to, to find the tag) and decides bOverrideHigher from what it sees there.
+    /// already has to, to find the tag) and decides how to reach the target via <see
+    /// cref="JournalApplyRule"/>.
     ///
-    /// ⚠ PROTOCOL 31: bOverrideHigher used to be hardcoded 0, so the engine's own refusal to
-    /// lower a quest state held even when the SESSION's authoritative value (after
-    /// JournalStore's per-key Lamport clock decided a peer's decrease genuinely was newer)
-    /// was BELOW what this game's engine already had — a legitimate session-authorised
-    /// decrease was silently dropped forever. Now: existing state &gt; target -&gt; a genuine
-    /// decrease, override=1; existing state &lt; target -&gt; a genuine advance, override=0
-    /// (unchanged); existing state == target, or the tag does not exist yet -&gt; unaffected.
+    /// ⚠ PROTOCOL 31 / live pass 2026-08-22 (docs/research/quest-sync.md): this used to pass
+    /// bOverrideHigher=1 to <c>CSWSJournal::SetState</c> itself for a genuine decrease. Live
+    /// testing found that call reports success and logs the lower number, but a raw probe of
+    /// the journal array's own <c>+0x20</c> state field showed it never actually moved —
+    /// twice, on two independent tags. Disassembly shows the entry-array write inside
+    /// <c>SetState</c> is not conditioned on bOverrideHigher at all (see <see
+    /// cref="JournalApplyRule.RemoveThenAdd"/>'s remarks for the exact instructions read);
+    /// the argument only suppresses a notification send. Exactly which branch inside
+    /// <c>SetState</c> refuses the write for a decrease was not pinned down to one
+    /// instruction — the write is gated behind a per-player loop whose own comparison was not
+    /// fully decompiled. So a decrease is no longer attempted through SetState's override bit
+    /// at all: it composes two ALREADY-LIVE-VERIFIED primitives instead — <see
+    /// cref="RemoveJournalEntry"/>'s <c>CSWSJournal::Destroy</c> (confirmed live 2026-08-22 to
+    /// genuinely shrink the array), followed by a plain add (override=0), which is the same
+    /// path ordinary quest advancement has always used.
+    ///
+    /// <paramref name="allowDecreaseViaRemove"/> mirrors <c>JournalController</c>'s
+    /// <c>journal_remove_sync</c> gate: a decrease fundamentally needs the removal primitive,
+    /// so when that flag is off, a decrease is refused (failure 7) rather than silently
+    /// reusing the disproven override path — the SESSION side still tracks the value either
+    /// way (see <c>JournalStore</c>).
     ///
     /// ⚠ SetState is NEVER called when the journal already has the tag at EXACTLY the target
     /// (<paramref name="alreadyCurrent"/> comes back true instead) — this used to be "at or
     /// past" the target, which was correct only because a lower target used to be impossible
     /// to ask for. This is not an optimisation: SetState sends the server→player journal
-    /// message — the "Journal Entry Added" feedback box — even when nothing changed. In the
-    /// 1.0.3 disassembly the AddQuest send at 0x5C616D is reached without ever consulting the
-    /// change flags the function accumulates, and the JournalUpdated send at 0x5C62BC is
-    /// gated only on bOverrideHigher == 0 — so a genuine decrease must go through WITH the
-    /// override bit set, and does still show the popup, which is correct feedback: the quest
-    /// really moved (down, this time).
+    /// message — the "Journal Entry Added" feedback box — even when nothing changed.
     ///
     /// MAIN THREAD ONLY.
     /// </summary>
     public static bool SetJournalState(
-        byte* tagAscii, int tagLength, int state, out int failure, out bool alreadyCurrent)
+        byte* tagAscii, int tagLength, int state, bool allowDecreaseViaRemove,
+        out int failure, out bool alreadyCurrent)
     {
         failure = 0;
         alreadyCurrent = false;
@@ -3907,10 +3918,9 @@ internal static unsafe class Odyssey
         }
 
         // Every entry the engine will walk must have a readable tag, or the walk faults
-        // before it ever reaches our string. Cheap: journals hold tens of entries. The
-        // same walk answers "does the journal already have this tag at or past the
-        // state?" — the idempotence check that keeps a redundant apply from reaching
-        // SetState at all (see the method remarks for why that must never happen).
+        // before it ever reaches our string. Cheap: journals hold tens of entries. The same
+        // walk also answers "does the journal already have this tag, and at what state?" —
+        // <see cref="JournalApplyRule.Decide"/>'s own inputs.
         ReadOnlySpan<byte> requestTag = new(tagAscii, tagLength);
 
         for (int i = 0; i < size; i++)
@@ -3941,23 +3951,42 @@ internal static unsafe class Odyssey
             }
 
             int currentState = *(int*)(entry + JournalEntryState);
-            if (currentState == state)
+            JournalApplyAction action = JournalApplyRule.Decide(hasExisting: true, currentState, state);
+
+            if (action == JournalApplyAction.Skip)
             {
                 alreadyCurrent = true;
                 return true;
             }
 
-            // A genuine decrease needs the override bit — see the method remarks — an
-            // advance does not.
-            bool overrideHigher = currentState > state;
-
             // Length is capacity (strlen + 1), the engine's own CExoString convention.
             ExoString foundTag = new() { CString = (nint)tagAscii, Length = (uint)(tagLength + 1) };
-            JournalSetStateFn(journal, &foundTag, state, overrideHigher ? 1 : 0);
+
+            if (action == JournalApplyAction.RemoveThenAdd)
+            {
+                if (!allowDecreaseViaRemove)
+                {
+                    failure = 7;
+                    return false;
+                }
+
+                // The disproven direct path (see the method remarks): a genuine decrease is
+                // realised as remove-then-add, composing two primitives that ARE each
+                // live-verified, instead of SetState's own bOverrideHigher=1 argument, which
+                // reports success without visibly moving the array's own state field.
+                JournalDestroyEntryFn(journal, &foundTag);
+                JournalSetStateFn(journal, &foundTag, state, 0);
+                return true;
+            }
+
+            // A plain advance on an existing entry — the path ordinary quest progression has
+            // always used; not in question.
+            JournalSetStateFn(journal, &foundTag, state, 0);
             return true;
         }
 
-        // Tag not found at all: a fresh entry, always a plain advance from nothing.
+        // Tag not found at all: a fresh entry, always a plain advance from nothing
+        // (JournalApplyRule.Decide(hasExisting: false, ...) is always Add).
         ExoString newTag = new() { CString = (nint)tagAscii, Length = (uint)(tagLength + 1) };
         JournalSetStateFn(journal, &newTag, state, 0);
         return true;
