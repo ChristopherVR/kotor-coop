@@ -10,7 +10,15 @@ namespace KotorCoop.Session;
 /// <param name="SaveIdentity">The staged world's save-identity digest — the number the
 /// whole object-id-keyed half of the session rests on. Compare it against the host's.</param>
 /// <param name="Bytes">How much world crossed the wire.</param>
-public readonly record struct AdoptedWorld(string Module, uint SaveIdentity, long Bytes);
+/// <param name="CarriedPlayer">The character that was actually staged into
+/// <c>Temp\pifo.ifo</c> — the client's own save, or a roadmap-item-14 session-saved sidecar,
+/// whichever <see cref="WorldAdoption.TryAdoptAsync"/> picked. Callers that re-assert the
+/// pifo later (a truncation the loader caused) write THIS back, never re-derive it from
+/// disk — re-deriving would silently lose a sidecar preference on every re-assert.</param>
+/// <param name="CharacterSource">A one-line description of where <see cref="CarriedPlayer"/>
+/// came from, for the on-screen line and the log.</param>
+public readonly record struct AdoptedWorld(
+    string Module, uint SaveIdentity, long Bytes, GffStruct CarriedPlayer, string CharacterSource);
 
 /// <summary>
 /// A joining player adopts the host's world and carries their own character into it.
@@ -53,23 +61,54 @@ public static class WorldAdoption
     /// Non-zero makes the adoption self-checking: a staged world that does not fingerprint
     /// identical to the host's is reported as a failure rather than silently played on. 0
     /// skips the check.</param>
-    public static async Task<AdoptedWorld?> TryAdoptAsync(
+    public static Task<AdoptedWorld?> TryAdoptAsync(
         string gameDirectory,
         string ownSaveDirectory,
         IPEndPoint host,
         uint passwordHash,
         uint expectedSaveIdentity,
         Action<string>? log,
+        CancellationToken cancellationToken) =>
+        TryAdoptAsync(
+            gameDirectory, ownSaveDirectory, sidecar: null, host, passwordHash, expectedSaveIdentity, log,
+            cancellationToken);
+
+    /// <summary>
+    /// Roadmap item 14 phase 1 overload: also considers a "resume tomorrow" sidecar
+    /// (<c>KotorCoop.Session.ClientCharacterPersistence</c>) captured at the end of a
+    /// PREVIOUS session, and prefers it over <paramref name="ownSaveDirectory"/> when
+    /// <see cref="ClientCharacterPersistence.ShouldPreferSidecar"/> says so — decided AFTER
+    /// the host's world is fetched, because that is the earliest point the host's real save
+    /// identity is known and the preference rule can compare against it. The own-save
+    /// character is still extracted first and kept as the fallback: reading it is cheap and
+    /// non-destructive, so the fail-fast behaviour ("do not touch the autosave slot for a
+    /// joiner with no character to carry") is unchanged whichever source ends up used.
+    /// </summary>
+    /// <param name="sidecar">A previously captured character to consider preferring, or null
+    /// to behave exactly as the simpler overload (no sidecar in play at all).</param>
+    public static async Task<AdoptedWorld?> TryAdoptAsync(
+        string gameDirectory,
+        string ownSaveDirectory,
+        (GffStruct Player, SidecarMetadata Metadata)? sidecar,
+        IPEndPoint host,
+        uint passwordHash,
+        uint expectedSaveIdentity,
+        Action<string>? log,
         CancellationToken cancellationToken)
     {
-        // 1. Our character, before anything is touched.
-        if (!PlayerIfo.TryExtractPlayer(ownSaveDirectory, out GffStruct player, out string diagnostic))
+        // 1. Our own character, before anything is touched. Always extracted, whether or not
+        //    a sidecar is in play: it is the fallback the moment the sidecar turns out not to
+        //    apply, and reading it costs nothing destructive.
+        if (!PlayerIfo.TryExtractPlayer(ownSaveDirectory, out GffStruct ownPlayer, out string diagnostic))
         {
             log?.Invoke($"world adoption: {diagnostic}");
             return null;
         }
 
         log?.Invoke($"world adoption: {diagnostic}");
+
+        GffStruct player = ownPlayer;
+        string characterSource = $"'{Path.GetFileName(ownSaveDirectory)}' (own save)";
 
         // 2. The host's world.
         FetchedWorld fetched;
@@ -96,6 +135,36 @@ public static class WorldAdoption
         foreach (WorldFile file in world)
         {
             bytes += file.Data.Length;
+        }
+
+        // 2b. NOW that the host's real save identity is known, decide whether a "resume
+        //     tomorrow" sidecar beats the own save — deliberately after the fetch, not
+        //     before: the preference rule's host-identity check needs the value we just
+        //     learned, and reading a sidecar (like reading the own save) is non-destructive,
+        //     so nothing about the fail-fast order in step 1 is weakened by deciding late.
+        if (sidecar is { } carried)
+        {
+            DateTime ownSaveLastWriteUtc = Directory.Exists(ownSaveDirectory)
+                ? Directory.GetLastWriteTimeUtc(ownSaveDirectory)
+                : DateTime.MinValue;
+
+            bool prefer = ClientCharacterPersistence.ShouldPreferSidecar(
+                sidecarValid: true,
+                carried.Metadata.CapturedAtUtc,
+                ownSaveLastWriteUtc,
+                carried.Metadata.HostSaveIdentity,
+                expected,
+                out string reason);
+
+            if (prefer)
+            {
+                player = carried.Player;
+                characterSource = $"the session-saved character (captured {carried.Metadata.CapturedAtUtc:u}) — {reason}";
+            }
+            else
+            {
+                log?.Invoke($"world adoption: session-saved character not used — {reason}");
+            }
         }
 
         // 3. Stage it, and carry the character in. Both writes, then the verification.
@@ -144,9 +213,10 @@ public static class WorldAdoption
         PluginMenuLoader.TryReadSaveModuleName(slot, out string module);
 
         log?.Invoke(
-            $"world adoption: adopted '{module}' ({bytes:N0} bytes, identity 0x{identity:X8})");
+            $"world adoption: adopted '{module}' ({bytes:N0} bytes, identity 0x{identity:X8}), "
+                + $"carrying the character from {characterSource}");
 
-        return new AdoptedWorld(module, identity, bytes);
+        return new AdoptedWorld(module, identity, bytes, player, characterSource);
     }
 
     /// <summary>

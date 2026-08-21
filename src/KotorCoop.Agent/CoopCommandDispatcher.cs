@@ -20,9 +20,17 @@ public sealed class CoopCommandDispatcher(
     int defaultPort,
     Func<string, SessionSettings> settingsForPassword,
     Func<CoopConfig?>? loadConfig = null,
-    Action? menuAutoLoad = null)
+    Action? menuAutoLoad = null,
+    string gameDirectory = "")
 {
     private readonly KotorGameBridge? _kotor = bridge as KotorGameBridge;
+
+    /// <summary>Roadmap item 14 phase 1's live wiring (see <see cref="SessionSaveWatch"/>) —
+    /// null when no game directory was supplied, which every existing caller/test that omits
+    /// the new trailing parameter falls back to: <see cref="MaintainSessionSave"/> and
+    /// <see cref="CaptureCharacterOnDisconnect"/> are then no-ops rather than throwing.</summary>
+    private readonly SessionSaveWatch? _sessionSaveWatch =
+        string.IsNullOrEmpty(gameDirectory) ? null : new SessionSaveWatch(gameDirectory);
 
     /// <summary>Listens for co-op servers on the LAN so `servers` can list them and
     /// `connect #n` can dial one without an IP. Started on the first RunAsync tick.</summary>
@@ -158,6 +166,7 @@ public sealed class CoopCommandDispatcher(
                     AnnouncePeerChanges();
                     AnnounceCompatibilityChanges();
                     AnnounceConnectionStatus();
+                    MaintainSessionSave();
                     DrainChat();
                     ReflectCheatAnswer();
                     DrainAutomaticLoot();
@@ -1391,6 +1400,68 @@ public sealed class CoopCommandDispatcher(
         }
 
         _compatibilityAnnouncer.Observe(session.Compatibility, Reply);
+    }
+
+    /// <summary>
+    /// Roadmap item 14 phase 1: watches this instance's own save-identity digest once per
+    /// tick and reacts per role. A CLIENT saving mid-session gets its progressed character
+    /// captured into the "resume tomorrow" sidecar; a HOST loading a different save
+    /// mid-session gets refused on screen and the session dropped, so every client falls
+    /// back to the reconnect path it already has. See <see cref="SessionSaveWatch"/>.
+    /// </summary>
+    private void MaintainSessionSave()
+    {
+        if (_sessionSaveWatch is null)
+        {
+            return;
+        }
+
+        if (manager.Current is not { } session)
+        {
+            _sessionSaveWatch.Reset();
+            return;
+        }
+
+        uint digest = bridge.SaveIdentityDigest;
+
+        if (session is CoopHost)
+        {
+            if (_sessionSaveWatch.ObserveHost(digest))
+            {
+                Reply(SessionSaveWatch.HostRefusalMessage);
+                manager.Disconnect();
+            }
+        }
+        else if (session is CoopClient)
+        {
+            string? currentSave = SaveDigest.FindSessionSave(gameDirectory);
+            string? outcome = _sessionSaveWatch.ObserveClient(digest, currentSave);
+            if (outcome is not null)
+            {
+                Reply(outcome);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Roadmap item 14 phase 1's "OR on clean disconnect" trigger — wire this onto
+    /// <see cref="SessionManager.OnDisconnecting"/> so it fires while the session is still
+    /// alive (<see cref="SessionManager.Current"/> not yet cleared), with time to read the
+    /// client's current save directory before the teardown makes that moot.
+    /// </summary>
+    public void CaptureCharacterOnDisconnect()
+    {
+        if (_sessionSaveWatch is null || manager.Current is not CoopClient)
+        {
+            return;
+        }
+
+        string? currentSave = SaveDigest.FindSessionSave(gameDirectory);
+        string? outcome = _sessionSaveWatch.CaptureOnDisconnect(currentSave);
+        if (outcome is not null)
+        {
+            Reply(outcome);
+        }
     }
 
     /// <summary>

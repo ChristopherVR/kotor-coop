@@ -265,11 +265,29 @@ internal static class Program
             return 1;
         }
 
-        Console.WriteLine($"carrying the character from '{which}'");
+        // Roadmap item 14 phase 1, "resume tomorrow": a character captured at the end of a
+        // PREVIOUS session (ClientCharacterPersistence, written on a save-identity change or
+        // a clean disconnect) beats this install's own save when it is present, valid, and
+        // newer — see docs/research/session-save.md §2 and WorldAdoption.TryAdoptAsync's
+        // sidecar overload for the exact preference rule.
+        string savesDirectory = Path.Combine(gameDirectory, "saves");
+        (GffStruct Player, SidecarMetadata Metadata)? sidecar = null;
+        if (ClientCharacterPersistence.TryReadSidecar(
+            savesDirectory, out GffStruct sidecarPlayer, out SidecarMetadata sidecarMeta, out string sidecarDiag))
+        {
+            sidecar = (sidecarPlayer, sidecarMeta);
+        }
+        else
+        {
+            Console.WriteLine($"session-saved character: {sidecarDiag}");
+        }
+
+        Console.WriteLine($"carrying the character from '{which}' unless a newer session-saved one applies");
 
         AdoptedWorld? adopted = await WorldAdoption.TryAdoptAsync(
             gameDirectory,
             ownSave,
+            sidecar,
             options.HostEndPoint,
             SessionPassword.Hash(options.Password),
             expectedSaveIdentity: 0,
@@ -312,7 +330,12 @@ internal static class Program
                 FileInfo pifo = new(pifoPath);
                 if (!pifo.Exists || pifo.Length == 0)
                 {
-                    if (WorldAdoption.TryReassertCharacter(gameDirectory, ownSave, out string reassert))
+                    // ⚠ Re-writes THE PLAYER THIS ADOPTION ACTUALLY CHOSE
+                    // (adopted.Value.CarriedPlayer), never re-derived from ownSave. Re-deriving
+                    // here would silently discard a session-saved-character preference on
+                    // every truncation the loader causes — the exact bug a naive re-read of
+                    // ownSave would reintroduce.
+                    if (PlayerIfo.TryWritePifo(gameDirectory, adopted.Value.CarriedPlayer, out string reassert))
                     {
                         reasserted++;
                         Console.WriteLine($"re-wrote the carried character after the loader cleared it ({reassert})");
@@ -860,7 +883,13 @@ internal static class Program
             options.Port,
             SettingsFor,
             loadConfig: () => TryLoadCoopConfig(memory.ProcessId),
-            menuAutoLoad: () => _ = Task.Run(() => LoadIntoTheWorld(memory), cts.Token));
+            menuAutoLoad: () => _ = Task.Run(() => LoadIntoTheWorld(memory), cts.Token),
+            gameDirectory: TryResolveInstallDirectory(memory.ProcessId) ?? string.Empty);
+
+        // Roadmap item 14 phase 1's "OR on clean disconnect" trigger: the dispatcher's own
+        // save-identity watch gets one more chance to capture a client's progressed
+        // character the moment ANY teardown starts, while the session is still readable.
+        manager.OnDisconnecting = dispatcher.CaptureCharacterOnDisconnect;
 
         // Push the coop.ini chat-overlay settings to the plugin (best-effort; defaults when
         // there is no coop.ini). Independent of connection mode — the overlay is useful the

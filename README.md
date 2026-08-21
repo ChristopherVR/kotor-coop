@@ -355,4 +355,16 @@ tools/                   RE helpers, demo scripts, the kotor1_0_3 symbol databas
   English name (no `nwscript.nss` in this repository to check against). `coop.ini`
   `effect_sync=0` keeps the whole channel — capture, forward and apply — off until a live pass
   confirms it. See [docs/research/effect-sync.md](docs/research/effect-sync.md).
+- **A joiner's progress now survives to the next session — mid-session save/load does not,
+  yet.** "Resume tomorrow" works: when a client saves in-game (or disconnects) while playing
+  in the adopted world, their progressed character — inventory, equipment, alignment, feats —
+  is captured to a sidecar (`saves\kotorcoop-character.pifo` + `.json`) the next join prefers
+  automatically over their stale own save, with an on-screen line saying which character was
+  used. **Still open:** a HOST loading a different save mid-session is detected and refused
+  on screen (clients are dropped to the reconnect path they already have) rather than served a
+  stale world — but whether an in-game "Load Game" menu action reliably trips the detection at
+  all (as opposed to only a subsequent save) is unverified; a client loading mid-session is
+  detected but NOT auto-rejoined (a save and a load look identical on this signal, so
+  distinguishing them is deferred). None of this has run on the live rig yet — see
+  [docs/research/session-save.md](docs/research/session-save.md)'s "Phase 1 shipped" section.
 - KOTOR 2 is untouched, and only GOG v1.0.3 addresses are known.
