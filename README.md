@@ -300,6 +300,21 @@ tools/                   RE helpers, demo scripts, the kotor1_0_3 symbol databas
   its health pin — and if you were playing *as* a companion when you connected, control and
   the camera come back to your own character rather than leaving you stuck watching a body
   the host now drives. (`control_return=0` opts out of the camera half.)
+- **A mirrored companion cannot swing on a client — except, now, for one, in one narrow
+  case, and it is OFF by default.** The presence mirror re-claims and wipes every companion's
+  action queue every pass, so only the host's own companions ever really fight; a client sees
+  their swings replayed as animation, not damage. `companion_local_combat=1` releases the ONE
+  companion standing close enough to both this player and the enemy `local_combat` (item 1,
+  proven live) is already fighting locally to its own engine AI instead — the same "let the
+  engine's own AI run it" trick `local_combat` uses for an enemy, gated by
+  `CompanionLocalFightRule` on a triple-proximity check so a released companion can never end
+  up fighting something anchored to wherever the host actually is. A released companion's hit
+  already has a credit path with no code changes needed — `PeerDamageController` already treats
+  every party roster id as "ours to credit" — but its own health is not forwarded uphill (no
+  such channel exists), so it is simply left alone while released and snapped back to the
+  host's figure the moment it is reclaimed. Built and unit-tested, **not yet run against the
+  live game**: see [docs/research/party-reconciliation.md](docs/research/party-reconciliation.md)'s
+  dated 2026-08-21 entry for the design question and why the gate is this tight.
 - **One conversation at a time.** While a player is talking, nobody else can start a
   dialogue; the other player spectates rather than getting their own copy. That is the
   design (it keeps one plot line advancing), not a limitation to be lifted. While a player

@@ -41,6 +41,7 @@
     <Compile Include="..\..\src\KotorCoop.Plugin\SpawnDrainRule.cs" Link="Plugin\SpawnDrainRule.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\LogRotation.cs" Link="Plugin\LogRotation.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\PartyFreezeRule.cs" Link="Plugin\PartyFreezeRule.cs" />
+    <Compile Include="..\..\src\KotorCoop.Plugin\CompanionLocalFightRule.cs" Link="Plugin\CompanionLocalFightRule.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\AgentLiveness.cs" Link="Plugin\AgentLiveness.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\MinigameRule.cs" Link="Plugin\MinigameRule.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\MapRevealRule.cs" Link="Plugin\MapRevealRule.cs" />

@@ -184,6 +184,34 @@ pause_button_hook=1
 # its owner's damage report may be absorbed. Only read when local_combat=1.
 local_combat_range=20
 
+# Let ONE mirrored companion fight for real on a client, instead of being frame-by-frame
+# mirrored with its action queue wiped every pass (which is why only the host's own
+# companions could ever swing). Roadmap item 4 - see
+# docs/research/party-reconciliation.md's dated 2026-08-21 entry for the full design
+# question and why the gate below is this tight.
+#
+# Only ever releases a companion when local_combat=1's own exclusion is actively fighting
+# this player (item 1, proven live) AND the companion's host-driven position is within
+# companion_local_combat_range of BOTH that enemy and this player - i.e., the two players
+# are genuinely fighting side by side, not merely both individually near something hostile.
+# Everywhere else, the companion stays a mirror, exactly as today. A released companion's
+# hit already has a credit path with no changes needed: PeerDamageController.RefreshAttackers
+# already includes every roster slot in the "ours to credit" set, so its damage forwards to
+# the fight's owner like a PC hit. Its OWN health is not forwarded uphill (no such channel
+# exists yet), so it is simply not overwritten by this instance while released and snaps back
+# to the host's authoritative figure the instant it is reclaimed - the same trade
+# local_combat's own excluded enemy already makes with its health.
+#
+# OFF by default: the logic is sound on paper (CompanionLocalFightRule is unit-tested) but
+# has never been run against the live game. Needs the same kind of live pass local_combat
+# itself needed before this can default on.
+companion_local_combat=0
+
+# How close a companion's host-driven position must be to BOTH the locally-fighting enemy
+# and this instance's own player (world units) before it may be released. Only read when
+# companion_local_combat=1.
+companion_local_combat_range=10
+
 # Forward non-damage combat effects (stun, paralyze, knockdown, slow, frightened, sleep,
 # choke, Force push/whirlwind) that land on a peer's phantom, so their real character feels
 # them too - the gap plain damage (always forwarded) leaves open: today a Force-Stun on a

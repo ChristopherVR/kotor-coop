@@ -223,3 +223,135 @@ how much they matter:
 If a future NEEDS-LIVE pass ever measures the controlled companion's AI fighting solo mode during
 a real forced-solo sequence, the fix belongs in `KotorGameBridge` (the field's owner) gated on
 `IsPartyRosterFrozen`, not in this guard.
+
+## Whose companions fight on a client, and against what (2026-08-21, roadmap item 4)
+
+Roadmap item 1 (`local_combat`) is now proven live: a client's own engine can genuinely fight
+ONE census enemy at a time, excluded from presence sync for the fight's duration and fired
+through its own `+0x260` script. Roadmap item 4 asks the question that unlocks next: on a
+CLIENT, `PartyPresenceController.DriveOne` re-claims every mirrored companion and wipes its
+action queue every single pass — unconditionally, before this document's change below — so a
+mirrored companion can never win the engine's own targeting/round machinery even when
+`local_combat` hands the *player* a real fight next to it. Only the HOST's companions — the real
+bodies, on the instance where the host's own AI runs them — ever swing for real.
+
+**The question is not "can a mirrored companion be made to fight" — `local_combat` already
+answers that generically for any driven body with a `+0x260` slot.** The question is whether
+doing it for companions is worth what it costs, and against what.
+
+### The sane model
+
+A client's game world is a puppet show: its enemies are driven bodies, and (before this item)
+its companions are too. The one thing in that world that is NOT a puppet is the client's own
+player character — everything else is downstream of what the host's engine actually decided.
+That asymmetry has to survive whatever this item builds, because it is the reason `local_combat`
+itself works safely (§2 above, round 52): only ONE creature is ever released to fight for real,
+gated tightly on proximity and hostility, with a timeout and three independent release levers.
+
+Given that, whose companions fight on a client, and against what, has one answer that keeps the
+asymmetry intact:
+
+- **The HOST's companions keep fighting the HOST's fight, on the host.** Nothing here changes
+  that. Their swings are already visible on a client's screen — `PartyPresenceController.DriveOne`
+  replays the host's `OneShotAnimation` serial on the mirrored body every time it changes
+  (`_appliedOneShot`/`_oneShotPrimed`, same mechanism `EnemyPresenceController` uses for enemies)
+  — so "the host's companion swings and the client sees it swing" is already shipped and is not
+  part of this gap.
+- **What a client's mirrored companion COULD gain by fighting locally is narrow, not general.**
+  It is not "let companions fight companions' own fights" — a companion has no fight of its own
+  on a client; every enemy in a client's world is either mirrored (someone else's fight) or, for
+  the one `local_combat` has excluded, the CLIENT PLAYER's fight. So the only two things a
+  released companion can contribute are (a) landing extra hits on the ONE enemy the client's own
+  player is already fighting locally, and (b) standing between that enemy and the client's player
+  as a body that can take a hit. Both are real, but both only make sense while the companion is
+  physically part of that exact fight — not fighting some other mirrored enemy 40 units away that
+  happens to also be hostile.
+- **The credit path for (a) already exists and needs no new plumbing.** `PeerDamageController
+  .RefreshAttackers` already builds its "ours to credit" id set from the PC *and every roster
+  slot* (`src/KotorCoop.Plugin/PeerDamageController.cs`, `RefreshAttackers`) — a companion's
+  object id is already in `PhantomHitHook`'s `_ourAttacker` list on every pass, gated only on
+  `block.DamageDealtEnabled`. `PhantomHitHook.IsOursToCredit` already treats a hit landing on
+  someone else's creature, dealt by an id in that set, as a contribution to forward to the fight's
+  owner — indistinguishable in that code path from a PC hit. Nothing in `PeerDamageController` or
+  `PhantomHitHook` needs to change for a released companion's hit to be counted; it already would
+  be, the moment the companion's own engine AI lands one. This is exactly what `PhantomHitHook`'s
+  own class comment anticipates: "a companion's hit has to count the day that changes."
+- **The risk is spatial, and it is real.** A mirrored companion's position is the HOST's position
+  for that body — that is the entire point of mirroring it. If the two players are apart (the
+  measured "apart" case for `local_combat_range` is ~120 units, `docs/research/combat-when-apart
+  .md` §1b), releasing that companion to its own AI puts a body fighting whatever is near the
+  HOST, on the CLIENT's screen, at a location that may have nothing to do with the client's own
+  fight. That is not a desync in the "numbers disagree" sense — the numbers stay internally
+  consistent on each side — it is a coherence break: a companion appears to fight something the
+  client player cannot see, or stands next to the client's player while visually anchored to
+  wherever the host's mirror last placed it and then stops being repositioned (because releasing
+  it means this controller stops writing its position, exactly like `local_combat`'s own
+  excluded-enemy handoff). The client's screen would show a companion frozen mid-fight in the
+  wrong place the moment the host's player moves on without it.
+
+### Decision: enable it, gated tightly enough that the risk case cannot occur
+
+The benefit (an extra attacker on the client's own local fight, and a body that can eat a hit
+meant for the client's player) is worth taking **only** in the one case where the risk is
+structurally impossible: the companion, the client's player, and the one enemy `local_combat` has
+already excluded are all within the same small radius. In that case the companion is not being
+"released to fight somewhere else" — it is being released to fight the exact thing the client
+player is already fighting, at the exact place the client player is standing. That is "the players
+are actually fighting side by side," and it is the only configuration where handing the companion
+its own AI cannot produce the coherence break above, because there is nowhere else for it to go
+that would look wrong from here.
+
+Concretely: a companion is only ever released when
+
+1. `companion_local_combat=1` (OFF by default — this document's analysis is sound but nothing
+   here has been run against the live game, and the project's own rule is a live pass before
+   shipping a write, not before writing the code);
+2. `local_combat`'s own exclusion is active (`block.LocalCombatExcludedId != 0` — a real
+   census enemy is currently fighting the client's own player, per item 1's proven mechanism);
+3. the companion's current (host-driven) position is within `companion_local_combat_range` world
+   units of BOTH the locally-fighting enemy's position and the client's own player's position —
+   i.e., companion, player and enemy are all clustered together, not merely all individually
+   hostile/nearby by coincidence;
+4. the roster is not frozen (`PartyFreezeRule`'s own guard — a script has not taken this
+   companion under direct control); and
+5. — implicitly — there is at most one `local_combat` fight running at a time (item 1's own
+   one-fight-at-a-time design), so at most the companions clustered around that one fight are ever
+   candidates.
+
+Outside that window, the companion goes right back to being mirrored — position, animation and
+health all forced back to the host's authoritative report, exactly as today. This is deliberately
+narrower than "release a companion whenever local_combat is active anywhere nearby": the local
+enemy could be excluded while the client's player is 15 units away and the companion is mirrored
+30 units further out near where the host actually is — clustered around neither. The triple
+gate (enemy AND player AND companion all mutually close) is what makes "side by side" true rather
+than assumed.
+
+**What deliberately stays owner-side.** The companion's HIT POINTS remain the host's to say, the
+same way `IncomingDamageController` never becomes authoritative for the client PC's own HP by
+existing. While released, this controller simply stops overwriting the companion's health (the
+same handoff `local_combat`'s own excluded enemy gets from `EnemyPresenceController` — driving
+stops entirely, not partially) rather than trying to keep pinning a host figure onto a body that
+may now be taking real, local damage; there is still no companion-health-uphill channel (party-
+reconciliation's own risk #3, still open), so any HP the companion loses while released is
+invisible to the host and gets overwritten by the host's next authoritative figure the moment
+mirroring resumes. This is the same trade `local_combat` already accepted for the phantom's own
+HP (`combat-participation.md` §5.3, "the phantom's health is not authoritative for anything") —
+harmless because nothing downstream reads a mirrored companion's HP as ground truth except this
+controller itself, and it is about to overwrite it anyway on the very next un-release.
+
+### What this does not attempt
+
+- No new detection of "the client's PC is directly attacked" as a second trigger. The only
+  proven-live local-fight signal is `local_combat`'s own census exclusion; a companion defending
+  against an attacker the client's PC is taking hits from but that was never excluded (a stray
+  hit from a driven-but-not-excluded mirrored enemy, or a forwarded hit with no local body at all)
+  has no signal this item can gate on without inventing an unverified one. Deferred.
+- No change to how many companions can be released at once beyond "however many satisfy the
+  gate for the one active `local_combat` fight" — with the roster capped at two companions and
+  one fight at a time, this is at most both companions, and in practice usually zero or one given
+  how tight the triple-proximity gate is.
+- No write to solo mode (`partyTable+0x190`) or to anything `PartyFreezeRule`'s own reasoning
+  above already ruled out touching. Releasing a companion here means this controller stops
+  claiming and driving it, the same "hands off" state `local_combat`'s own excluded enemy gets —
+  it does not mean re-enabling the engine's own follow-AI, which stays suppressed exactly as it
+  is today.
