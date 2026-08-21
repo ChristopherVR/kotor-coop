@@ -29,11 +29,11 @@ everything else builds and unit-tests in parallel.
 | 7 | 🎮 HUD hourglass pauses but cannot unpause (second click no-ops, even locally). | Bug | `PauseKeyController.cs`; audit §6 |
 | 8 | 🎮 Minigames (swoop, turret, Pazaak) have zero handling; `CSWCModule::GetMiniGame` (0x00641980) is never read. Other player's experience unmeasured. | Missing | new `MinigameController`, reuse `SpectateController` |
 | 9 | `PartyPresenceController` has no `IsPartyRosterFrozen` guard (roster controller does) — presence mirroring chases companions the engine scripted away. | Partial | `PartyPresenceController.cs` |
-| 10 | Dialogue consequences (item/alignment grants on a reward node) reach only the owner. XP and journal already merge; items and alignment do not. | Missing | `DialogueSpectateController.cs` |
+| 10 | Dialogue consequences (item/alignment grants on a reward node) reach only the owner. XP and journal already merge; items and alignment do not. Design: [dialogue-consequences.md](research/dialogue-consequences.md). | Missing | `DialogueSpectateController.cs` |
 | 11 | Materialised-loot: dedup set not reset on module change; no resync for a peer that reconnects after an op retired. | Partial | `enemy-materialisation.md` §6 |
 | 12 | 🎮 Progression never live-verified against a real shop (gold ledger) or cross-side kill (XP max). | Implemented-untested | `CoopAgent.cs:815-909` |
 | 13 | 🎮 Client-walks-through-door-first pull-back path has no live pass. | Implemented-untested | `CoopAgent.cs:1434-1494` |
-| 14 | Mid-session save/load has no design at all (host loading a save = stale world served). | Missing | `world-adoption.md` §8 |
+| 14 | Mid-session save/load has no design at all (host loading a save = stale world served). Design: [session-save.md](research/session-save.md). | Missing | `world-adoption.md` §8 |
 | 15 | Container loot has no version tripwire (retransmit only); tripwires are counters not digests. | Partial | `ReliableLootSender.cs`, `disconnect-reconnect.md` §4 |
 
 ## Tier 3 — polish and confidence
