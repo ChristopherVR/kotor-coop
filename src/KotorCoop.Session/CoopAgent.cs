@@ -365,7 +365,7 @@ public sealed class CoopAgent(IGameBridge bridge, ICoopSession session, AgentSet
             _lastCombatPumpMs = combatNowMs;
             PumpEnemies(local, visible, caps);
             PumpPhantomDamage(caps);
-            PumpMaterialisedLoot();
+            PumpMaterialisedLoot(local.Module);
             PumpParty(caps);
             PumpPartyRoster(caps);
 
@@ -608,6 +608,16 @@ public sealed class CoopAgent(IGameBridge bridge, ICoopSession session, AgentSet
 
     private readonly Queue<PendingMaterialisedLootGive> _pendingLoot = new();
 
+    /// <summary>The local module <see cref="PumpMaterialisedLoot"/> last issued
+    /// <see cref="ICoopSession.ResetMaterialisedLootDedup"/> for. Owner enemy ids are
+    /// reassigned per module load — the client-side dedup set that keys on them
+    /// (<c>CoopClient._materialisedLootSeen</c>) would otherwise remember an id from the last
+    /// module forever and silently swallow a same-numbered enemy's real loot here. Tracked
+    /// separately from <see cref="_deathCensusModule"/>: that one is the OWNER-authority side's
+    /// own census bookkeeping, seeded from a live census; this side has no census to seed from,
+    /// it only needs to know when to tell the session to forget.</summary>
+    private string _materialisedLootDedupModule = string.Empty;
+
     /// <summary>
     /// Takes the materialised-loot packets a connected host has published since the last
     /// pump and queues one give-request per item. This is deliberately the ONLY writer of
@@ -619,9 +629,22 @@ public sealed class CoopAgent(IGameBridge bridge, ICoopSession session, AgentSet
     /// entirely — by whatever already arbitrates that single channel (the console command
     /// dispatcher's own pending-cheat-serial check) — one request per its own tick, so an
     /// automatic give can never collide with, or be silently overwritten by, a human's.
+    ///
+    /// Also resets the client's dedup set on a module change (see
+    /// <see cref="_materialisedLootDedupModule"/>). Gated on a clean, non-fallback module read
+    /// so a brief transition-window fallback label never fires a spurious reset; a no-op on the
+    /// host, which never receives this channel (<see cref="ICoopSession.ResetMaterialisedLootDedup"/>
+    /// defaults to nothing there).
     /// </summary>
-    private void PumpMaterialisedLoot()
+    private void PumpMaterialisedLoot(string module)
     {
+        if (module.Length > 0 && !IsFallbackModuleName(module)
+            && !string.Equals(module, _materialisedLootDedupModule, StringComparison.OrdinalIgnoreCase))
+        {
+            _materialisedLootDedupModule = module;
+            session.ResetMaterialisedLootDedup();
+        }
+
         foreach (MaterialisedLootPacket packet in session.DrainMaterialisedLoot())
         {
             Log?.Invoke($"materialised loot: received {packet.Items.Count} item(s) for owner 0x{packet.OwnerEnemyId:X}, queueing");
@@ -1656,12 +1679,34 @@ public sealed class CoopAgent(IGameBridge bridge, ICoopSession session, AgentSet
     }
 
     /// <summary>
-    /// Keeps shared containers (chests, corpses) from duplicating loot. The host detects an
-    /// item leaving a container and publishes the (container, item) removal reliably; the
-    /// client applies it to its own copy so the item cannot be taken a second time. One
-    /// direction only — loot is host-authoritative, exactly like enemies — and it shares the
-    /// Doors capability gate because it rests on the same object-id-across-the-same-save
-    /// assumption doors do.
+    /// Keeps shared containers (chests, corpses) from duplicating loot. SYMMETRIC on both
+    /// sides — a client taking an item from a chest is exactly as real as the host taking one,
+    /// so both detect their own removals and publish them, and both re-declare the FULL merged
+    /// set (own plus every peer's) to their own game.
+    ///
+    /// This used to be host-only: only the host ever called
+    /// <see cref="ICoopSession.PublishContainerLoot"/>, so a client emptying a container told
+    /// nobody and the host's copy stayed full — a straightforward duplication bug. The wire and
+    /// the session-side store (<c>ContainerLootStore</c>) were already fully symmetric on both
+    /// <c>CoopHost</c> and <c>CoopClient</c> — client→host was never missing, only this pump
+    /// was one-sided.
+    ///
+    /// The apply-back half matters just as much as the publish half: before this fix the host
+    /// branch returned immediately after publishing and never called
+    /// <see cref="IGameBridge.TryWriteContainerLoot"/> at all, so a removal a CLIENT reported
+    /// was recorded in the host's session store (ready to relay to other clients) but never
+    /// actually deleted from the host's own copy of the container — the host could loot the
+    /// same item again.
+    ///
+    /// Nothing here can echo. <c>ContainerLootStore.Add</c> (both host and client) reports a
+    /// pair already in its set as not-new, so: (1) applying a peer's removal via
+    /// <see cref="IGameBridge.TryWriteContainerLoot"/> deletes the item from this instance's
+    /// container, which this instance's OWN <see cref="IGameBridge.CollectContainerLootRemovals"/>
+    /// scan would otherwise rediscover as a fresh local removal a moment later — but the store
+    /// already holds the pair, so the re-publish is silently swallowed; and (2) a client's own
+    /// removal that the host relays back down (see <c>CoopHost.HandleContainerLoot</c>) is
+    /// recognised the same way and never re-broadcast. Shares the Doors capability gate because
+    /// it rests on the same object-id-across-the-same-save assumption doors do.
     /// </summary>
     private void PumpContainerLoot(SessionCapabilities caps)
     {
@@ -1670,20 +1715,16 @@ public sealed class CoopAgent(IGameBridge bridge, ICoopSession session, AgentSet
             return;
         }
 
-        if (session.IsEnemyAuthority)
+        // Detect whatever THIS instance's player removed locally and announce it — the host's
+        // own scan and a client's own scan are treated identically now.
+        foreach (ContainerLootRemoval removal in bridge.CollectContainerLootRemovals())
         {
-            // The host: detect items that left a container and announce their removal.
-            foreach (ContainerLootRemoval removal in bridge.CollectContainerLootRemovals())
-            {
-                session.PublishContainerLoot(removal.ContainerId, removal.ItemId);
-            }
-
-            return;
+            session.PublishContainerLoot(removal.ContainerId, removal.ItemId);
         }
 
-        // A client: re-declare the host's known removals to the game so each looted item is
-        // deleted from this instance's copy of the container. Idempotent — an already-removed
-        // item resolves to a no-op.
+        // Re-declare the merged set — everyone's removals, this instance's own plus every peer
+        // reported through the session — so each side's copy of every shared container
+        // converges. Idempotent: an already-removed item resolves to a no-op.
         bridge.TryWriteContainerLoot(session.ContainerLootRemovals);
     }
 

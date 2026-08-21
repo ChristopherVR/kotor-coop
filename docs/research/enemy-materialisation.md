@@ -171,10 +171,9 @@ matching `DrainTransitionMovies`'s shape exactly.
   death's loot. `ResetBackoff()` is called on peer readmission for consistency with the
   container-loot pattern, but it only speeds up ops still pending; it cannot resurrect a retired
   one. Same class of gap this document already accepts elsewhere, not new to this pass.
-- **The client-side dedup set (`_materialisedLootSeen`) is not reset on module change.** An id
-  space is per-module; a reused id after a transition would be silently ignored. Narrow and
-  cosmetic (one enemy's loot stays unsynced, nothing desyncs or crashes) — left as a known
-  limitation rather than adding epoch-tracking plumbing this pass did not otherwise need.
+- ~~**The client-side dedup set (`_materialisedLootSeen`) is not reset on module change.**~~
+  FIXED 2026-08-21 — see "Item 11(a) closed, 11(b) deferred" further down. An id space is
+  per-module; a reused id after a transition would have been silently ignored.
 
 **⚠ Unconfirmed, needs a live look before trusting this end to end:**
 `docs/research/placeables-containers.md` documents a SEPARATE loot mechanism —
@@ -273,6 +272,44 @@ Three real items, correctly translated from owner `0xB5` to its local stand-in `
 correctly applied (`status 1` on every give). The loot-sync feature is now confirmed working
 end to end on the actual positive case, closing the one item the earlier pass this same day
 left open.
+
+### Item 11(a) closed, 11(b) deferred (2026-08-21) — the client's dedup set now resets on module change
+
+Closes roadmap item 11's first half exactly as flagged in the "known gaps" list above: the
+client-side dedup set (`CoopClient._materialisedLootSeen`) was never told a module had changed,
+so an owner enemy id reused in the next module would have been silently swallowed as
+"already seen" forever, dropping that enemy's real loot with no log line and no symptom other
+than a missing item.
+
+**What changed.** `ICoopSession` gained `ResetMaterialisedLootDedup()` — a no-op default,
+implemented on `CoopClient` as `_materialisedLootSeen.Clear()` under the same `_gate` lock the
+inbox queue already uses (this set was previously mutated unlocked from the receive loop; it is
+now also cleared from the agent's thread via the session interface, so it needed the lock it
+had been missing). `CoopAgent.PumpMaterialisedLoot` now takes the local module name, tracks the
+last module it reset for (`_materialisedLootDedupModule`, mirroring `_deathCensusModule`'s
+existing pattern on the owner-authority side), and calls the reset exactly once per genuine
+module change — gated on `IsFallbackModuleName` so a transition-window fallback label
+(`areaXXXXXXXX`) never fires a spurious reset. A no-op on the host, which is never the
+receiving side of this channel.
+
+Tests: `MaterialisedLootQueueTests.ModuleChangeTellsTheSessionToForgetItsDedupSet` (one reset on
+arrival, none on repeat pumps in the same module, one more on a genuine change),
+`.AFallbackModuleLabelDoesNotTriggerAReset`.
+
+**Item 11(b) — resync for a peer that reconnects after an op retired — deferred, not built.**
+The roadmap allowed building this only if it stayed small; it does not. `MaterialisedLootSender`
+only tracks ops still in flight (unlike `ContainerLootStore`, which keeps every removal it has
+ever seen so a resync can always re-offer the full history to a rejoining peer). Giving
+materialised loot the same guarantee needs a real historical store — every death's loot,
+keyed by owner enemy id, retained for some window and re-offered to a peer whose connection
+comes back — which is new plumbing on the sender, not a tweak to the pump. The existing wire
+doc already accepts this as "the same class of gap this document already accepts elsewhere, not
+new to this pass" for the in-flight case; a peer that disconnects for long enough to miss an
+op's full retirement window (every OTHER connected peer acking first) losing that one enemy's
+loot is narrow (one enemy, one peer, one loot drop — nothing desyncs or crashes) and left as a
+known limitation for the same reason. NOT live-verified — this whole entry is a code-level fix
+reasoned from the store and packet-handling code, not exercised against a running two-instance
+rig.
 
 ⚠ **A confusing log line, NOT a bug — checked and cleared.** `"combat: killed 0xB5 on the
 owner's authority"` reads as if the LOCAL id `0xB5` were killed, and in this same session a

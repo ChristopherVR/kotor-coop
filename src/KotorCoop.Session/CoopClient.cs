@@ -1535,10 +1535,12 @@ public sealed class CoopClient : ICoopSession
     /// (<c>GiveItemToInventory</c> mints a fresh item every call), so a retransmit that slips
     /// in before our ack lands must never reach the drain queue a second time.
     ///
-    /// ⚠ NOT reset on module change. An id space is per-module, so a reused id after a
-    /// transition would be silently ignored here — narrow and cosmetic (one enemy's loot stays
-    /// unsynced rather than the game desyncing or crashing), left as a known limitation rather
-    /// than adding epoch-tracking plumbing this pass does not otherwise need.</summary>
+    /// Reset on module change via <see cref="ResetMaterialisedLootDedup"/> — an id space is
+    /// per-module, so without the reset a reused id after a transition would be silently
+    /// ignored here forever (docs/research/enemy-materialisation.md §6). Guarded by
+    /// <see cref="_gate"/>, the same lock <see cref="_materialisedLootInbox"/> uses: this set is
+    /// mutated from the receive loop and now also cleared from the agent's thread via the
+    /// session interface, so an unsynchronised HashSet is no longer safe.</summary>
     private readonly HashSet<uint> _materialisedLootSeen = [];
 
     private readonly Queue<MaterialisedLootPacket> _materialisedLootInbox = new();
@@ -1557,9 +1559,9 @@ public sealed class CoopClient : ICoopSession
             return;
         }
 
-        if (_materialisedLootSeen.Add(loot.OwnerEnemyId))
+        lock (_gate)
         {
-            lock (_gate)
+            if (_materialisedLootSeen.Add(loot.OwnerEnemyId))
             {
                 _materialisedLootInbox.Enqueue(loot);
             }
@@ -1570,6 +1572,20 @@ public sealed class CoopClient : ICoopSession
         if (length > 0)
         {
             _channel.Send(_hostEndPoint, _replyBuffer.AsSpan(0, length));
+        }
+    }
+
+    /// <summary>
+    /// Forgets every owner-enemy id deduped so far — called once by the agent right after it
+    /// notices the local module changed (<see cref="ICoopSession.ResetMaterialisedLootDedup"/>),
+    /// since ids are reassigned per module load and a reused id here would otherwise be
+    /// silently swallowed forever as "already seen" (docs/research/enemy-materialisation.md §6).
+    /// </summary>
+    public void ResetMaterialisedLootDedup()
+    {
+        lock (_gate)
+        {
+            _materialisedLootSeen.Clear();
         }
     }
 

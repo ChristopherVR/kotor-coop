@@ -210,3 +210,54 @@ Verdict: **feasible, defer** — note only.
   (`locked`, `trap_flag`) and the VERIFIED `RemoveItem` call. Same-save assumption is the
   standing failure mode: divergent saves/mods break id keying, so gate every channel on the
   existing save/GIT capability bit.
+
+## Container loot: the client→host direction was built but never wired up (fixed 2026-08-21)
+
+roadmap-seamless.md item 2 flagged a straightforward duplication bug: a client taking an item
+out of a shared chest or corpse never told the host, so the host's own copy of that container
+stayed full and could be looted a second time. This was NOT a gap in the design above or in the
+wire — `CoopHost` and `CoopClient` both already had a complete, symmetric `PublishContainerLoot`
+/ `ContainerLootRemovals` implementation over `ContainerLootStore` and `ReliableLootSender`
+(`CoopHost.HandleContainerLoot` already relays a client's reported removal to every other peer,
+including translating it to the host's own peer id and sequence space, and already reflects it
+back down to the reporting client, which the store's dedup-by-pair recognises and drops rather
+than re-announcing). The bug was entirely in `CoopAgent.PumpContainerLoot`
+(`src/KotorCoop.Session/CoopAgent.cs`), the orchestration between the bridge and the session:
+
+- It only called `bridge.CollectContainerLootRemovals()` /
+  `session.PublishContainerLoot(...)` when `session.IsEnemyAuthority` — so a client's own local
+  detection was never published at all.
+- The host branch `return`ed immediately after publishing its own removals and never called
+  `bridge.TryWriteContainerLoot(...)` — so a removal a CLIENT successfully reported over the
+  (already-working) wire sat in the host's session store, ready to relay onward, but was never
+  actually applied back to the host's own copy of the container. The host could loot the same
+  item a second time even though the client's report had arrived correctly.
+
+**Fix:** `PumpContainerLoot` is now unconditional on both roles — every side detects its own
+local removals and publishes them, then every side re-declares the FULL merged set (own plus
+every peer's, via `session.ContainerLootRemovals`) back to its own game. No new anti-echo logic
+was needed: `ContainerLootStore.Add` (used by both `CoopHost.PublishContainerLoot` and
+`CoopClient.PublishContainerLoot`) already reports a pair already in its set as not-new, which is
+what stops a removal just applied locally (via `TryWriteContainerLoot`) from being rediscovered
+by this instance's own next `CollectContainerLootRemovals()` scan and re-announced as if it were
+fresh — that guard already existed and this fix now relies on it symmetrically instead of only
+on the client side.
+
+`ICoopSession.PublishContainerLoot` / `.ContainerLootRemovals` and `IGameBridge
+.CollectContainerLootRemovals` / `.TryWriteContainerLoot` doc comments were updated to say
+"symmetric on both host and client" rather than the old (now-inaccurate) "host only" / "client
+only" language.
+
+Tests: `tests/KotorCoop.Tests/ContainerLootPumpTests.cs` (new) exercises the `CoopAgent`
+orchestration directly with a stub session standing in for either role — a host publishing its
+own local removal, a client publishing its own (the duplication bug itself), a host applying a
+removal a peer reported (the other half of the bug), a client applying the merged set, and the
+anti-echo property that a removal already known is not re-published on the next pump. The
+wire-level machinery this fix leans on (relay, dedup-by-pair, per-peer ack/retransmit) was
+already covered by `ContainerLootTests.cs` and `DisconnectRecoveryTests.cs` and needed no
+changes.
+
+**NOT live-verified.** This is a code-level fix reasoned from the store/sender/handler code on
+both `CoopHost.cs` and `CoopClient.cs`, backed by orchestration-level unit tests against a stub
+session — it has not been exercised on the two-instance rig (a client actually looting a shared
+chest and confirming the host's copy also empties).

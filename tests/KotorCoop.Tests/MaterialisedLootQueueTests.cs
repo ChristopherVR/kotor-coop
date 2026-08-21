@@ -53,6 +53,12 @@ public class MaterialisedLootQueueTests
             return ready;
         }
 
+        /// <summary>How many times the agent has told this session to forget its dedup set -
+        /// should be exactly once per genuine module change, never once per pump.</summary>
+        public int ResetDedupCallCount { get; private set; }
+
+        public void ResetMaterialisedLootDedup() => ResetDedupCallCount++;
+
         public uint LocalPeerId => 2;
 
         public bool IsConnected => true;
@@ -257,5 +263,46 @@ public class MaterialisedLootQueueTests
         Assert.Equal(50, give.Item.Identity.MaxCharges);
         Assert.Equal(0x5u, give.Item.Identity.Upgrades);
         Assert.Equal(0x3, give.Item.Identity.Flags);
+    }
+
+    // ---- item 11(a): the client's dedup set must be reset on a module change ------------
+
+    /// <summary>docs/research/enemy-materialisation.md §6: owner enemy ids are reassigned per
+    /// module load, so the client's dedup set (keyed on owner enemy id) has to be told to
+    /// forget whenever the local module changes - otherwise an id reused in the next module is
+    /// silently treated as "already seen" and that enemy's real loot never reaches the
+    /// queue.</summary>
+    [Fact]
+    public void ModuleChangeTellsTheSessionToForgetItsDedupSet()
+    {
+        (CoopAgent agent, StubSession session) = Build();
+
+        agent.PumpOnce(); // arriving at ClientModule for the first time - one reset to seed it
+        Assert.Equal(1, session.ResetDedupCallCount);
+
+        agent.PumpOnce(); // still ClientModule - no further reset
+        agent.PumpOnce();
+        Assert.Equal(1, session.ResetDedupCallCount);
+
+        MinimalBridge bridge = new() { Local = new PlayerState(Vector3f.Zero, 0f, "tar_m03aa", 20, 0) };
+        CoopAgent movedAgent = new(bridge, session, new AgentSettings { CombatPumpIntervalMs = 0 });
+        movedAgent.PumpOnce(); // a genuine module change - reset again
+
+        Assert.Equal(2, session.ResetDedupCallCount);
+    }
+
+    /// <summary>A transition-window fallback label ("areaXXXXXXXX") must never fire a reset -
+    /// it is not a real module, and resetting on every flicker through it would be pure churn,
+    /// same reasoning as every other IsFallbackModuleName gate in CoopAgent.</summary>
+    [Fact]
+    public void AFallbackModuleLabelDoesNotTriggerAReset()
+    {
+        MinimalBridge bridge = new() { Local = new PlayerState(Vector3f.Zero, 0f, "area1234", 20, 0) };
+        StubSession session = new();
+        CoopAgent agent = new(bridge, session, new AgentSettings { CombatPumpIntervalMs = 0 });
+
+        agent.PumpOnce();
+
+        Assert.Equal(0, session.ResetDedupCallCount);
     }
 }
