@@ -59,6 +59,7 @@ internal static unsafe class PluginHost
     private static ConsoleAssistController? _consoleAssist;
     private static DialogueSpectateController? _dialogueSpectate;
     private static EncounterController? _encounters;
+    private static AgentLivenessController? _agentLiveness;
     private static Thread? _worker;
     private static volatile bool _running = true;
 
@@ -155,6 +156,7 @@ internal static unsafe class PluginHost
             _interactionLocks = new InteractionLockController(_view);
             _partyRoster = new PartyRosterController(_view);
             _controlReturn = new ControlReturnController(_view);
+            _agentLiveness = new AgentLivenessController(_view);
 
             // The minimap draw runs on the render path and has no other route to peer
             // positions, so it reads the block directly.
@@ -390,12 +392,15 @@ internal static unsafe class PluginHost
         // pattern the agent scans for, so bumping only one end reads as "plugin shared block
         // not found" — which looks like a broken install rather than a version skew.
         // 37 = the load-screen texture in the browser details array (SharedBlock, version 37).
+        // 38 = the engine-resolved player pointer.
         // 39 = per-instance item identity in the item slot's tail (SharedBlock, version 39).
         // 41 = the four `setitem` identity fields at the cheat region's tail (version 41).
         // 42 = the transition-cinematic channel, and the block grown to 0x3A00 to hold it
         //      (SharedBlock, version 42) — so both players can see the same movie.
-        // BlockVersionSyncTests now fails the build on a half-bump; it did not exist for 41.
-        _block->Version = 42;
+        // 43 = the agent-written liveness heartbeat (SharedBlock.OffsetAgentHeartbeat).
+        // ItemHarnessTests.TheBlockVersionIsTheSameNumberInBothHalves now fails the build on
+        // a half-bump; it did not exist for 41.
+        _block->Version = 43;
 
         // A guard dword after the version. Magic plus version alone was not selective
         // enough: a scan once matched something else at a lower address and the agent
@@ -445,6 +450,13 @@ internal static unsafe class PluginHost
         // callbacks. Measuring it here brackets exactly the client tick, the server tick and
         // the present. See docs/research/cinematics.md.
         CinematicWatch.OnFrame(_view);
+
+        // Next, and unconditionally: whether the agent is even still talking to us has
+        // nothing to do with menu/world state, and both failure modes it reports can happen
+        // before the player has picked anything (a dead auto-start, a hung agent while still
+        // sitting at the menu). This hook is the one guaranteed to run there — the
+        // SwapBuffers hook (OnFrame below) is dormant behind the main-menu movie.
+        _agentLiveness?.OnFrame();
 
         // The native browser first: its IsOpen gate tells the others the main-menu object
         // is currently freed (a shown child panel reclaims the menu until close rebuilds it).

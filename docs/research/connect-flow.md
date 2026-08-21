@@ -352,3 +352,143 @@ and all, exactly as the process-model review predicted. The agent now watches it
 and cancels itself on exit, so the Bye goes out and the host announces the leave within a
 tick. (The live "left" proof above was produced by stopping the zombie by hand; the watch
 ships with this change.)
+
+## Liveness: no silent failures (implemented 2026-08-21, NEEDS-LIVE)
+
+Four gaps shared one root cause: a co-op failure with nothing on screen to say so. A hung
+or crashed agent left phantoms frozen with no explanation; a failed auto-start was a log
+line nobody reads; a busy port threw an unlabelled exception; a dead host left the client
+in "connecting..." forever. All four now report through the SAME existing surfaces —
+`Odyssey.PostTextLine` (the queued-text path every overlay already uses, see
+docs/research/text-render-queued.md) on the plugin side, and the dispatcher's `Reply()`
+trio (stdout, console line, chat overlay) on the agent side. No new render surface.
+
+### (a) Agent heartbeat
+
+`SharedBlock.OffsetAgentHeartbeat` (0x3780, 8 bytes) — **agent → plugin**, new field,
+**block version bumped 38 → 39** (`PluginHost._block->Version` and
+`KotorGameBridge.PluginSignature` together, as the existing discipline requires). It sits
+in the free tail after the browser-details array (`0x3400 + 8*0x70 = 0x3780`;
+`TotalSize` is `0x3800`, so this is the last 8 bytes in the block) — nothing before this
+change ever read or wrote it, but a genuinely new cross-process contract (not previously
+padding either side silently ignored) earned the bump rather than reusing the
+`BrowserEntryPasswordHeld`/`OffsetSessionPeers` "verified-dead-padding" exception.
+
+The value is `Environment.TickCount64` (Windows' system-uptime counter), not a sequence
+number: both processes read the *same* OS clock independently, so the plugin computes
+staleness as a plain `now - lastBeat` with no handshake and no risk of two Stopwatches
+drifting apart. 0 means "no agent has ever pumped this block" and doubles as the sentinel
+for "nothing to warn about yet" — a real `TickCount64` stamp essentially never collides
+with it. `CoopCommandDispatcher.RunAsync` writes it every tick (~150 ms), unconditionally,
+whether or not a session exists — "the agent is pumping at all", not "connected".
+
+`AgentLiveness.Evaluate(lastBeat, now)` (dependency-free, unit-tested,
+`tests/KotorCoop.Tests/AgentLivenessTests.cs`, compiled into the test project the same way
+`DownBlock`/`PasswordAnswer` are) classifies NeverLive / Live / Stale (≥5 s,
+`StaleAfterMs`) / Dead (≥15 s, `DeadAfterMs`). `AgentLivenessController`, run every frame
+from `PluginHost.MenuFrame` (menu **and** in-world — the SwapBuffers hook is dormant at
+the menu, same reason `ConsoleAssistController` lives there):
+
+- Stale or Dead → posts *"co-op agent stopped responding - phantoms frozen; type
+  reconnect"* every frame (re-posted per the queued-text discipline, not a one-shot toast)
+  at grid cell (3, 5) — clear of the console rows (0-2), `ConsoleAssistController`'s hint
+  row (3), and `ChatOverlayController`'s shallowest anchor row (11) — and sets
+  `AgentLivenessController.RemoteWritesFrozen = true`.
+- `PhantomController.OnFrame` checks that flag right after its existing player/command
+  gates and returns before touching a single remote slot: no spawn, no destroy, no drive.
+  Existing phantoms simply stand where they last were — genuinely frozen, not "driven off
+  stale data every frame".
+- Live → clears the flag and stops drawing; recovery is automatic the moment a re-attached
+  (or relaunched) agent's heartbeat starts advancing again, no separate "reconnect" logic
+  needed on the plugin side.
+- Every *transition* (not every frame) is logged once via `PluginHost.Log`.
+
+### AgentLauncher: startup failure, and one relaunch
+
+`AgentLauncher.Launch` (the two prior failure branches — no exe found, `CreateProcessW`
+failed — refactored out of `EnsureRunning` so a relaunch runs the identical logic) now
+also sets `AgentLauncher.StartupFailure`, a static string `AgentLivenessController` reads
+and shows as *"co-op agent did not start: &lt;reason&gt;"* whenever the block is still
+`NeverLive` — cleared the instant any launch (first or relaunch) actually succeeds, so a
+stale banner cannot outlive the problem it described. An opted-out auto-start
+(`auto_start_agent = 0`) is deliberately NOT a failure and never sets this.
+
+`AgentLauncher.TryRelaunch(lastHeartbeatMs, nowMs)`, called every frame from
+`AgentLivenessController` once the state reads Dead: relaunches through `Launch` at most
+once a minute (`AgentLiveness.RelaunchCooldownMs`), and only for a process this launcher
+itself started (`_startedGameDirectory`, set only on a real `CreateProcessW` success) — an
+agent the player started by hand, or one whose auto-start coop.ini opted out, is never
+touched. Logs only the ticks it actually attempts something on.
+
+### (c) Port already in use
+
+`UdpChannel`'s constructor now catches `SocketException` with
+`SocketErrorCode == AddressAlreadyInUse` around its one `Bind` call and rethrows the typed
+`KotorCoop.Session.PortInUseException(port, inner)` (disposing the half-built socket
+first). `SessionManager.Connect` wraps `new CoopHost`/`new CoopClient` in a
+try/catch: `PortInUseException` → *"port &lt;n&gt; is already in use - is another co-op
+agent already running?"*; any other `SocketException` → a generic-but-labelled line. Both
+land on **`SessionPhase.Idle`**, not `Failed` — nothing here ever half-started (the socket
+that would have backed the session never came up), so there is nothing for `Disconnect` to
+unwind, and Idle keeps this out of the same bucket as a wrong-password refusal.
+
+**Regression caught while wiring this up, fixed in the same change:**
+`CoopCommandDispatcher.FireMenuAutoLoadIfArmed` — called unconditionally right after
+`Dispatch(Host)` returns — used to rely on the OLD behaviour where a bind failure threw
+all the way out of `Dispatch` and never reached it. Now that `Connect` fails gracefully,
+that call site would have auto-loaded a save into a game with **no session at all**. Fixed
+by gating it on `manager.Current is not null` in addition to the existing
+"not already in a world" check. Pinned by
+`CoopCommandDispatcherTests.BareButtonPressHostingOnABusyPortNeverAutoLoads`.
+
+### (d) Host unreachable (connect timeout)
+
+`SessionSettings.ConnectTimeoutMs` (new, default `ProtocolConstants.DefaultConnectTimeoutMs`
+= 15000; coop.ini `connect_timeout_ms`, threaded through `Program.cs`'s `SettingsFor`).
+`SessionManager.Connect` arms a deadline (`SessionClock.NowMs + ConnectTimeoutMs`) only for
+a **client** attempt — a host has nobody to be admitted by, so it never sets one.
+`SessionManager.Poll` checks the deadline *before* reading `GetStats()` (a host that never
+answers Hello produces no status change at all for the existing logic to notice) and, on
+expiry, tears the session down through the same path `Disconnect()` uses (factored out as
+`TearDownSession()`) and lands on `SessionPhase.Idle` with *"no reply from
+&lt;endpoint&gt;"* — deliberately **not** `Failed`: the wrong-password path
+(`CoopCommandDispatcher.ReflectPhase`'s existing `Failed` case, `manager.Detail` containing
+"password") is a rejection the host DID answer, immediately; this is total silence. Both
+now report through a dedicated `case SessionPhase.Idle:` in `ReflectPhase` — its own
+branch, not folded into `Failed`, so the password-prompt retry logic there can never
+mis-fire for either.
+
+### Unit tests
+
+`AgentLivenessTests` (pure `Evaluate`/`ShouldRelaunch` — thresholds, boundary values,
+recovery, the cooldown, the "0 = never attempted" sentinel). `UdpChannelTests` (bind
+collision throws the typed exception with the right port; an ephemeral bind still works).
+`SessionManagerTests` (+3: port-in-use → Idle with the right message; a silent host times
+out to Idle; a real handshake beats a short timeout). `CoopCommandDispatcherTests` (+1: the
+auto-load regression above). All of `PasswordPromptTests`/`PasswordReconnectTests` (the
+wrong-password path this must not disturb) still pass unchanged.
+
+### NEEDS-LIVE
+
+None of this has been run against the real game yet — everything above is unit-tested and
+both builds are clean, but nobody has watched the on-screen line actually appear, watched a
+frozen phantom actually stay put, or watched a relaunch actually happen. Specifically
+unverified:
+
+- The warning line's placement (grid cell 3,5) doesn't overlap the console/hint/chat rows
+  **in code**, but the exact text-grid geometry is viewport-derived (per
+  docs/research/text-render-queued.md's own NEEDS-LIVE) and has not been calibrated live
+  for this new row.
+- That killing (or suspending) a live agent process actually leaves phantoms visibly frozen
+  in place rather than despawned or misbehaving, and that the warning appears within ~5 s.
+- That `AgentLauncher.TryRelaunch` actually relaunches a killed agent after 15 s and that
+  the new process re-attaches to the SAME plugin block and resumes driving the same
+  phantoms cleanly.
+- That a real port-in-use collision (two game instances against one `coop.ini` port, or a
+  zombie agent from a crashed session) produces the "already in use" line in-game rather
+  than only in the agent's own log.
+- That a genuinely unreachable host (firewalled port, wrong LAN address) produces the
+  15 s timeout and the "no reply from" line in-game, and that the main menu is left in a
+  state the player can immediately retry from (Co-op button / `connect`).
+- Whether 5 s / 15 s / 60 s are the right thresholds in practice — they are the task's
+  specified defaults, not measured against a real network hiccup.

@@ -540,7 +540,7 @@ public sealed class KotorGameBridge : IGameBridge
     private const uint BlockPartyRosterSlotMask = 0x1FF;
     private const uint BlockPartyRosterValid = 0x8000_0000;
 
-    /// <summary>16-byte signature: "KOCOOP01" + version 41 + guard 0xC0FFEE01. The version is
+    /// <summary>16-byte signature: "KOCOOP01" + version 43 + guard 0xC0FFEE01. The version is
     /// part of the pattern deliberately: an agent must not attach to a plugin whose block
     /// layout it does not know, and a stale pair fails to find each other rather than reading
     /// the wrong offsets. ⚠ Bump this WITH PluginHost's `_block->Version` — they are one
@@ -549,9 +549,11 @@ public sealed class KotorGameBridge : IGameBridge
     /// 39 = per-instance item identity in the item slot's tail (SharedBlock, version 39).
     /// 41 = the four `setitem` identity fields at the cheat region's tail (0x29 = 41).
     /// 42 = the transition-cinematic channel, block grown to 0x3A00 (0x2A = 42).
-    /// <b>BlockVersionSyncTests reads both files and fails the build if they disagree</b> —
-    /// added with 42, because nothing had ever enforced the warning above.</summary>
-    public const string PluginSignature = "4B 4F 43 4F 4F 50 30 31 2A 00 00 00 01 EE FF C0";
+    /// 43 = the agent-written liveness heartbeat (SharedBlock.OffsetAgentHeartbeat, 0x2B = 43).
+    /// <b>ItemHarnessTests.TheBlockVersionIsTheSameNumberInBothHalves reads both files and
+    /// fails the build if they disagree</b> — added with 42, because nothing had ever
+    /// enforced the warning above.</summary>
+    public const string PluginSignature = "4B 4F 43 4F 4F 50 30 31 2B 00 00 00 01 EE FF C0";
 
     /// <summary>Agent's view of which coop item id occupies each plugin item slot.</summary>
     private readonly uint[] _itemSlotIds = new uint[BlockItemCapacity];
@@ -3424,6 +3426,21 @@ public sealed class KotorGameBridge : IGameBridge
     /// player-resolve that RemoteCount depends on.</summary>
     public bool PublishSessionPeerCount(int count) =>
         _pluginBlock != 0 && _memory.TryWrite(_pluginBlock + BlockSessionPeers, (uint)Math.Max(0, count));
+
+    /// <summary>Agent -&gt; plugin: this agent's own clock, stamped every dispatcher tick, so
+    /// the plugin can tell "an agent is pumping" from "an agent stopped responding" — the
+    /// plugin's own Heartbeat only proves the block itself is live. See
+    /// SharedBlock.OffsetAgentHeartbeat and AgentLiveness.</summary>
+    private const int BlockAgentHeartbeat = 0x3780;
+
+    /// <summary>
+    /// Stamps <see cref="BlockAgentHeartbeat"/> with this process's own clock
+    /// (Environment.TickCount64 — the OS uptime counter both processes read independently,
+    /// so the plugin needs no handshake to judge staleness). Call once per dispatcher tick;
+    /// a no-op with no plugin attached.
+    /// </summary>
+    public bool PublishHeartbeat() =>
+        _pluginBlock != 0 && _memory.TryWrite(_pluginBlock + BlockAgentHeartbeat, Environment.TickCount64);
 
     /// <summary>
     /// Asks the game to prompt the player for a password: the plugin force-opens the developer

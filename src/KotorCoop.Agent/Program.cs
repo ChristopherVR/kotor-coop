@@ -842,6 +842,9 @@ internal static class Program
             RequireIdenticalSave = options.RequireIdenticalSave,
             Password = sessionPassword.Length > 0 ? sessionPassword : fallbackPassword,
             PeerIdentity = peerIdentity,
+            ConnectTimeoutMs = config is { ConnectTimeoutMs: > 0 }
+                ? config.ConnectTimeoutMs
+                : ProtocolConstants.DefaultConnectTimeoutMs,
         };
 
         // The dispatcher owns every command surface and the one LAN listener. It re-reads

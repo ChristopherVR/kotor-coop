@@ -95,6 +95,13 @@ public sealed record CoopConfig
     /// <summary>Milliseconds a line stays before it fades; 0 keeps it forever.</summary>
     public int ChatOverlayFadeMs { get; init; } = 9000;
 
+    /// <summary>
+    /// How long a client's connect attempt waits for ANY reply before giving up and
+    /// reporting "no reply from &lt;host&gt;" (coop.ini <c>connect_timeout_ms</c>). 0 or
+    /// unset keeps <see cref="ProtocolConstants.DefaultConnectTimeoutMs"/>.
+    /// </summary>
+    public int ConnectTimeoutMs { get; init; }
+
     /// <summary>The anchor as the plugin's numeric code (0=TL, 1=TR, 2=BL, 3=BR).</summary>
     public uint ChatOverlayAnchorCode => ChatOverlayAnchor.Trim().ToLowerInvariant() switch
     {
@@ -193,6 +200,9 @@ public sealed record CoopConfig
             ChatOverlayFadeMs = int.TryParse(kv.GetValueOrDefault("chat_overlay_fade_ms"), out int fm)
                 ? Math.Max(fm, 0)
                 : 9000,
+            ConnectTimeoutMs = int.TryParse(kv.GetValueOrDefault("connect_timeout_ms"), out int ct)
+                ? Math.Max(ct, 0)
+                : 0,
         };
     }
 

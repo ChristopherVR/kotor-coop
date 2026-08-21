@@ -129,6 +129,12 @@ public sealed class CoopCommandDispatcher(
                 // say why, because the thing that reports problems is what died.
                 try
                 {
+                    // Written unconditionally, every tick, whether or not a session even
+                    // exists — this is "the agent is pumping at all", not "connected". The
+                    // plugin watches it stall to notice a hung or crashed agent and freeze
+                    // remote-peer writes rather than keep driving stale phantoms.
+                    _kotor?.PublishHeartbeat();
+
                     manager.Poll();
                     DrainInputs();
                     PublishBrowserList();
@@ -267,6 +273,12 @@ public sealed class CoopCommandDispatcher(
     /// Fires the menu auto-load at most once per menu-initiated connect, and only when the
     /// game is verifiably still at the main menu (no readable player state) — never
     /// mid-world, never again on a reconnect.
+    ///
+    /// A host fires this immediately after <see cref="Dispatch"/> returns, before anything
+    /// else gets a chance to look at the outcome — so it must check <c>manager.Current</c>
+    /// itself. A bind that failed (port already in use) now returns from Connect cleanly
+    /// instead of throwing, and without this guard a host session that never actually
+    /// started would still load a save into a game with nobody driving it.
     /// </summary>
     private void FireMenuAutoLoadIfArmed()
     {
@@ -277,7 +289,7 @@ public sealed class CoopCommandDispatcher(
 
         _menuAutoLoadArmed = false;
 
-        if (menuAutoLoad is not null && !bridge.TryReadLocalState(out _))
+        if (menuAutoLoad is not null && manager.Current is not null && !bridge.TryReadLocalState(out _))
         {
             menuAutoLoad();
         }
@@ -1598,6 +1610,17 @@ public sealed class CoopCommandDispatcher(
 
             case SessionPhase.Disconnected:
                 Reply("disconnected");
+                break;
+
+            case SessionPhase.Idle:
+                // The only two things that move the phase back to Idle after it has left
+                // Idle once are a port-in-use bind failure and a connect timeout
+                // (SessionManager.Fail(..., SessionPhase.Idle)) — both already carry a
+                // complete, player-facing sentence in Detail. Deliberately its own case,
+                // not folded into Failed: a silent host and a wrong password are different
+                // situations, and the password-prompt retry above must never fire for either.
+                Reply(manager.Detail);
+                _menuAutoLoadArmed = false;
                 break;
         }
     }

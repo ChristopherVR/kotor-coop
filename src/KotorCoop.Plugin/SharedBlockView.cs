@@ -117,6 +117,8 @@ internal sealed unsafe class SharedBlockView(byte* baseAddress)
 
     private float* F32(int offset) => (float*)(baseAddress + offset);
 
+    private long* I64(int offset) => (long*)(baseAddress + offset);
+
     // ---- plugin -> agent ------------------------------------------------------
 
     public uint Heartbeat
@@ -1028,6 +1030,10 @@ internal sealed unsafe class SharedBlockView(byte* baseAddress)
     /// <summary>Peers the session has admitted, written by the agent every tick regardless
     /// of player resolve — the seamless-arrival gate's signal (see SharedBlock).</summary>
     public uint SessionPeers => *U32(SharedBlock.OffsetSessionPeers);
+
+    /// <summary>Agent -&gt; plugin. Environment.TickCount64 at the agent's last dispatcher
+    /// tick; 0 = no agent has ever pumped this block. See AgentLiveness.</summary>
+    public long AgentHeartbeat => *I64(SharedBlock.OffsetAgentHeartbeat);
 
     /// <summary>Start of a server row's fixed-size record.</summary>
     public byte* BrowserEntry(int index) =>

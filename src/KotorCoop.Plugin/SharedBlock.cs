@@ -1598,6 +1598,35 @@ internal struct SharedBlock
     public const int RemoteOneShotAnim = 0x00;
     public const int RemoteOneShotSerial = 0x04;
 
+    // ---- agent liveness heartbeat (version 43, region 0x3780..0x3788) -------------
+    //
+    // The plugin's own Heartbeat field at 0x4C (below) proves the BLOCK is live — the
+    // worker thread bumps it every ~16ms whether or not any agent is attached, so it can
+    // never tell "an agent is pumping" from "an agent stopped responding an hour ago".
+    // This is the other half: the AGENT'S OWN clock, stamped every dispatcher tick, so the
+    // plugin can watch it stall and say so instead of quietly driving phantoms off a
+    // picture nobody is updating any more. See AgentLiveness and AgentLivenessController.
+    //
+    // The value is Environment.TickCount64 (Windows' system-uptime counter), not a
+    // sequence number: both this process and the plugin's read the SAME OS clock
+    // independently, so the plugin computes staleness directly (now - lastBeat) with no
+    // handshake and no risk of two processes' Stopwatches drifting apart. 0 means "no
+    // agent has ever pumped this block" — TickCount64 is essentially never exactly zero
+    // once written, so it doubles as the "ever live" sentinel with no separate flag.
+    //
+    // Placed in the gap the browser-details array leaves between itself and the OLD block
+    // end (0x3400 + 8*0x70 = 0x3780, TotalSize was 0x3800 before version 42): the version
+    // 42 comment above already establishes that gap is real and was deliberately left
+    // alone rather than reused ("the browser details array runs to 0x3780 ... so neither
+    // gap could hold two six-name movie lists" — the OTHER new region in that pass,
+    // OffsetCinematicSerial, starts exactly at the old 0x3800 boundary instead). Confirmed
+    // free by grepping every Offset* constant in this file for the range: nothing else
+    // claims 0x3780..0x3800.
+
+    /// <summary>Agent -&gt; plugin. Environment.TickCount64 at the agent's last dispatcher
+    /// tick. 0 = no agent has ever pumped this block.</summary>
+    public const int OffsetAgentHeartbeat = 0x3780;
+
     public const int ItemSlotCapacity = 8;
 
     public const int ItemResrefLength = 16;

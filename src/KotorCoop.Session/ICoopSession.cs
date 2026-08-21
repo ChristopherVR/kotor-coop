@@ -389,4 +389,11 @@ public sealed record SessionSettings
     /// Ignored by a host, which is peer 1 by definition and never dials anyone.
     /// </summary>
     public uint PeerIdentity { get; init; }
+
+    /// <summary>
+    /// How long a CLIENT'S connect attempt may sit silent before <see cref="SessionManager"/>
+    /// gives up and reports "no reply from &lt;endpoint&gt;". Never applies to a host — a host
+    /// has nobody to be admitted by, so there is nothing to time out waiting for.
+    /// </summary>
+    public int ConnectTimeoutMs { get; init; } = ProtocolConstants.DefaultConnectTimeoutMs;
 }

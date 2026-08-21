@@ -106,6 +106,35 @@ public class CoopCommandDispatcherTests
         manager.Disconnect();
     }
 
+    /// <summary>
+    /// A host's menu auto-load fires immediately after Dispatch returns, before anything
+    /// else looks at whether the connect actually succeeded. A busy port (item 6c) now
+    /// fails Connect cleanly instead of throwing, and FireMenuAutoLoadIfArmed must notice
+    /// there is no live session rather than load a save into a game nobody is driving.
+    /// </summary>
+    [Fact]
+    public void BareButtonPressHostingOnABusyPortNeverAutoLoads()
+    {
+        using UdpChannel blocker = new(0);
+        int busyPort = blocker.LocalEndPoint.Port;
+
+        MenuBridge bridge = new();
+        using SessionManager manager = new(bridge, new AgentSettings { PollRate = 30 });
+        int loads = 0;
+        CoopConfig config = new() { Host = true };
+        CoopCommandDispatcher dispatcher = new(
+            manager, bridge, ProtocolConstants.DefaultPort,
+            p => new SessionSettings { PlayerName = "MenuPlayer", Port = busyPort, TickRate = 30, Password = p },
+            () => config,
+            () => loads++);
+
+        dispatcher.OnConnectRequest(string.Empty);
+
+        Assert.Equal(SessionPhase.Idle, manager.Phase);
+        Assert.Null(manager.Current);
+        Assert.Equal(0, loads);
+    }
+
     [Fact]
     public void BareButtonPressMidWorldHostsButNeverLoadsASave()
     {

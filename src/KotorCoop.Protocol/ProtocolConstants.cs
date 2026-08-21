@@ -235,5 +235,15 @@ public static class ProtocolConstants
 
     public const int PeerTimeoutMs = 5000;
 
+    /// <summary>
+    /// How long a client waits in Connecting before giving up on a host that never
+    /// answers Hello at all (as opposed to answering with a Reject, which is the
+    /// wrong-password path and resolves immediately, never through this timeout). A dead
+    /// host, a firewalled port or a mistyped address all look identical from here: total
+    /// silence. 15 s is long enough that a genuinely slow LAN handshake still lands, short
+    /// enough that a player is not left staring at "connecting..." for a full minute.
+    /// </summary>
+    public const int DefaultConnectTimeoutMs = 15000;
+
     public const int MaxPeers = 8;
 }
