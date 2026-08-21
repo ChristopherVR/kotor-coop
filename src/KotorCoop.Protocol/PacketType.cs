@@ -303,4 +303,17 @@ public enum PacketType : byte
     /// loss had nothing behind it but the retransmit itself.
     /// </summary>
     LootSyncRequest = 43,
+
+    /// <summary>
+    /// A non-damage effect (stun, paralyze, knockdown, slow, frightened, sleep, choke, or Force
+    /// push/whirlwind) that landed on a peer's phantom, addressed to the player that phantom
+    /// stands for — the non-damage sibling of <see cref="PhantomDamage"/>. See
+    /// docs/research/effect-sync.md.
+    ///
+    /// UNRELIABLE, like <see cref="Bark"/>: this is a transient, cosmetic-adjacent event, not
+    /// state that has to converge. A lost datagram costs one crowd-control tick, never a
+    /// desync — the phantom's HEALTH, which is what actually matters for the fight, still
+    /// crosses on <see cref="PhantomDamage"/> regardless of whether this arrives.
+    /// </summary>
+    PeerEffect = 44,
 }

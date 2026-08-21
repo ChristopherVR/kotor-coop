@@ -29,6 +29,7 @@ internal static unsafe class PluginHost
     private static EnemyPresenceController? _enemyPresence;
     private static PartyPresenceController? _partyPresence;
     private static IncomingDamageController? _incomingDamage;
+    private static PeerEffectController? _peerEffects;
 
     private static PeerDamageController? _peerDamage;
     private static TestDriveController? _testDrive;
@@ -124,6 +125,7 @@ internal static unsafe class PluginHost
             _enemyPresence = new EnemyPresenceController(_view);
             _partyPresence = new PartyPresenceController(_view);
             _incomingDamage = new IncomingDamageController(_view);
+            _peerEffects = new PeerEffectController(_view);
             _peerDamage = new PeerDamageController(_view);
             _testDrive = new TestDriveController(_view);
             _cheats = new CheatController(_view);
@@ -262,6 +264,21 @@ internal static unsafe class PluginHost
                 Log($"phantom-hit watch NOT installed: {hitDiagnostic}");
             }
 
+            // Non-damage effects (stun, paralyze, knockdown, slow, frightened, sleep, choke,
+            // Force push/whirlwind) landing on a peer's phantom. Installed unconditionally,
+            // like PhantomHitHook above — it is verify-bytes-or-refuse and inert unless a
+            // phantom is actually watched — but PeerEffectController gates the PUBLISH and
+            // APPLY halves behind coop.ini effect_sync (default off) until live-verified.
+            // See docs/research/effect-sync.md.
+            if (PhantomEffectHook.Install(out string effectDiagnostic))
+            {
+                Log($"combat: {effectDiagnostic}");
+            }
+            else
+            {
+                Log($"phantom-effect watch NOT installed: {effectDiagnostic}");
+            }
+
             DialogueGateHook.Enabled = PluginConfig.ReadBool("dialogue_exclusive", true);
             if (DialogueGateHook.Install(out string gateDiagnostic))
             {
@@ -398,9 +415,12 @@ internal static unsafe class PluginHost
         // 42 = the transition-cinematic channel, and the block grown to 0x3A00 to hold it
         //      (SharedBlock, version 42) — so both players can see the same movie.
         // 43 = the agent-written liveness heartbeat (SharedBlock.OffsetAgentHeartbeat).
+        // 44 = the peer-effect channel (stun/paralyze/knockdown/slow/frightened/sleep/choke/
+        //      Force push/whirlwind forwarded to a peer's phantom), block grown to 0x3C00 with
+        //      its own ring at 0x3A00 — see docs/research/effect-sync.md.
         // ItemHarnessTests.TheBlockVersionIsTheSameNumberInBothHalves now fails the build on
         // a half-bump; it did not exist for 41.
-        _block->Version = 43;
+        _block->Version = 44;
 
         // A guard dword after the version. Magic plus version alone was not selective
         // enough: a scan once matched something else at a lower address and the agent
@@ -702,6 +722,7 @@ internal static unsafe class PluginHost
         // After death handling has published whether we are down, so damage that would
         // arrive on an already-downed player is skipped rather than fighting the revive.
         _incomingDamage?.OnFrame();
+        _peerEffects?.OnFrame();
 
         // After the presence passes, so the watch tests the position the player is actually
         // standing at this frame, and so a fired encounter's spawns are already in the
@@ -909,6 +930,7 @@ internal static unsafe class PluginHost
         MaterialisedEnemies.Invalidate();
         _partyPresence?.Invalidate();
         _incomingDamage?.Invalidate();
+        _peerEffects?.Invalidate();
         _peerDamage?.Invalidate();
         _testDrive?.Invalidate();
         _cheats?.Invalidate();

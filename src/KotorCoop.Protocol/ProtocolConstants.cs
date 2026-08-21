@@ -96,8 +96,14 @@ public static class ProtocolConstants
     /// order-independent fingerprint of what is actually held (KotorCoop.Session.EntryDigest),
     /// so it catches that tie. LootSyncRequest (43) is new for the same reason §4.8 flags:
     /// container loot was retransmit-only with no tripwire of its own, so a straggler under
-    /// sustained loss had nothing behind it but the retransmit.</summary>
-    public const byte Version = 27;
+    /// sustained loss had nothing behind it but the retransmit.
+    /// Version 28: PeerEffect (44) — non-damage combat effects (stun, paralyze, knockdown,
+    /// slow, frightened, sleep, choke, Force push/whirlwind) landing on a peer's phantom,
+    /// forwarded to that peer's real character. The non-damage sibling of PhantomDamage, which
+    /// only ever carried plain damage; before this a Force-Stun on a peer's phantom left them
+    /// free to act on their own screen. Gated OFF by default (coop.ini effect_sync) until
+    /// live-verified — see docs/research/effect-sync.md.</summary>
+    public const byte Version = 28;
 
     /// <summary>Journal quest tags are resrefs plus a little slack.</summary>
     public const int MaxJournalTagLength = 32;

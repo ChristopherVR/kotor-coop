@@ -342,4 +342,17 @@ tools/                   RE helpers, demo scripts, the kotor1_0_3 symbol databas
   two-instance session — see [docs/research/minigames.md](docs/research/minigames.md) §7 for
   what a live pass needs to check, including whether damage taken during the sequence lands
   as a lump the instant it ends. Pazaak is unrelated engine machinery and is not covered.
+- **Non-damage combat effects (stun, paralyze, knockdown, slow, frightened, sleep, choke,
+  Force push/whirlwind) do not cross the wire yet, and the mechanism that will is OFF by
+  default.** Plain damage already forwards through `PhantomHitHook`, but today an enemy that
+  Force-Stuns a peer's phantom in your game leaves them free to act on their own screen, and a
+  client's Stasis on an enemy only affects their private mirror, which the host drives anyway.
+  A hook on the engine's generic effect dispatcher (`PhantomEffectHook`) now captures and
+  forwards the whole allowlist, and Slow/Choke/Whirlwind/Frightened/Stun (the droid-scoped
+  variant) have a real apply-side engine call; Knockdown, Paralyze and Sleep are captured but
+  never replayed — one because the VM routine that builds it has an unverified argument count,
+  the other two because static analysis alone could not match their engine sub-code to an
+  English name (no `nwscript.nss` in this repository to check against). `coop.ini`
+  `effect_sync=0` keeps the whole channel — capture, forward and apply — off until a live pass
+  confirms it. See [docs/research/effect-sync.md](docs/research/effect-sync.md).
 - KOTOR 2 is untouched, and only GOG v1.0.3 addresses are known.

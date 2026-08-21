@@ -544,6 +544,33 @@ public class PacketCodecTests
     }
 
     [Fact]
+    public void PeerEffectRoundTrips()
+    {
+        Span<byte> buffer = stackalloc byte[ProtocolConstants.MaxPacketSize];
+        PeerEffectPacket original = new(
+            FromPeerId: 3, TargetPeerId: 7, Kind: PeerEffectKind.Stun, DurationMs: 4500, Magnitude: 0, Sequence: 9);
+
+        int length = PacketCodec.Write(buffer, original);
+        Assert.True(length > 0);
+        Assert.Equal(original, PacketCodec.ReadPeerEffect(buffer[..length]));
+    }
+
+    [Fact]
+    public void PeerEffectRoundTripsWithMagnitude()
+    {
+        // Slow is the one allowlist member that actually carries a nonzero magnitude
+        // (percent speed decrease) — worth its own case so a codec bug that only shows up
+        // with a nonzero value cannot hide behind PeerEffectRoundTrips' zero.
+        Span<byte> buffer = stackalloc byte[ProtocolConstants.MaxPacketSize];
+        PeerEffectPacket original = new(
+            FromPeerId: 1, TargetPeerId: 2, Kind: PeerEffectKind.Slow, DurationMs: 8000, Magnitude: 50, Sequence: 1);
+
+        int length = PacketCodec.Write(buffer, original);
+        Assert.True(length > 0);
+        Assert.Equal(original, PacketCodec.ReadPeerEffect(buffer[..length]));
+    }
+
+    [Fact]
     public void BarkRoundTrips()
     {
         // The bark's CONTENTS travel, not the engine's pointers to them — so the codec has to
