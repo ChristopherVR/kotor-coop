@@ -21,8 +21,11 @@ namespace KotorCoop.Session;
 ///   menu_button = 1    ; the in-game Co-op menu button (default on; 0 hides it)
 ///   minigame_hide_peer = 1   ; park a peer's phantom while they swoop-race/man a turret
 ///   minigame_spectate = 0    ; watch a racing/turret peer instead (not yet wired)
-///   transition_announce = 0    ; race a follow ahead of the settle debounce (default off)
-///   client_door_refusal = 0    ; refuse a client's own premature door crossing (default off)
+///   transition_announce = 1    ; race a follow ahead of the settle debounce (default ON,
+///                               ; live-verified 2026-08-21 - docs/research/transition-smoothness.md)
+///   client_door_refusal = 0    ; refuse a client's own premature door crossing (default off -
+///                               ; the decisive live check is blocked by an unrelated party-gate
+///                               ; defect, see the same doc's live-pass section)
 /// </code>
 /// </summary>
 public sealed record CoopConfig
@@ -173,16 +176,22 @@ public sealed record CoopConfig
     /// <summary>
     /// Whether a follower acts on a host's announced transition destination immediately,
     /// instead of waiting for the host's published module to change and the module-settle
-    /// debounce to elapse — docs/research/transition-smoothness.md. OFF by default pending
-    /// the live-test script's before/after run: <c>transition_announce = 1</c>.
+    /// debounce to elapse — docs/research/transition-smoothness.md. ON by default:
+    /// live-verified 2026-08-21 (Interval A dropped from ~1.6 s to ~180 ms on a bare
+    /// end_m01aa -> end_m01ab door crossing, and the movie-carrying case was also exercised
+    /// with no regression). Set <c>transition_announce = 0</c> to opt out.
     /// </summary>
     public bool TransitionAnnounceEnabled { get; init; }
 
     /// <summary>
     /// Whether a client's own engine-native door crossing is refused early (before the load
     /// starts) while following the host — docs/research/transition-smoothness.md's client-
-    /// first-door case. OFF by default pending live verification of the cancellation itself:
-    /// <c>client_door_refusal = 1</c>.
+    /// first-door case. OFF by default: the 2026-08-21 live pass could not exercise the
+    /// decisive check (§6.3) at all, because the client instance's own <c>CSWParty</c> hits a
+    /// pre-existing, unrelated party-together gate that refuses every door crossing on a
+    /// client, native or otherwise — see the doc's live-pass section. Set
+    /// <c>client_door_refusal = 1</c> once that blocker is understood and the decisive check
+    /// can actually run.
     /// </summary>
     public bool ClientDoorRefusalEnabled { get; init; }
 
@@ -295,7 +304,8 @@ public sealed record CoopConfig
                 || IsTruthy(kv.GetValueOrDefault("dialogue_item_sync")),
             DialogueFastJoin = IsTruthy(kv.GetValueOrDefault("dialogue_fast_join")),
             SessionSaveHostRefusal = IsTruthy(kv.GetValueOrDefault("session_save_host_refusal")),
-            TransitionAnnounceEnabled = IsTruthy(kv.GetValueOrDefault("transition_announce")),
+            TransitionAnnounceEnabled = !kv.ContainsKey("transition_announce")
+                || IsTruthy(kv.GetValueOrDefault("transition_announce")),
             ClientDoorRefusalEnabled = IsTruthy(kv.GetValueOrDefault("client_door_refusal")),
         };
     }

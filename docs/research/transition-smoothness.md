@@ -443,3 +443,213 @@ door-refusal: cleared trans_pending (INFERRED whether this stops the load - NEED
 **Deliberately not shipped**: input freeze (§3.5); the lead-swap alternative (§4.3); tightened
 heavy/combat pump intervals (§5). Each has its own reasoning above, and each is a smaller,
 separable next step rather than a gap in this one.
+
+## 8. Live pass (2026-08-21)
+
+Run against the GOG pair (`tools/demo.ps1`, block v47 / protocol 33, both builds clean, baseline
+`dotnet test` 1379/1379). `end_m01aa` → `end_m01ab` via `end_door10`, exactly as §6 prescribes.
+
+### 8.1 Baseline — `transition_announce = 0`
+
+```
+[23:58:24.896] area transition pending: flushing spawned objects before the module is stored
+[23:58:26.544] travel: moving to module 'end_m01ab' on the session's authority   (follower)
+```
+
+**Interval A: 1648 ms.** Lower than §1's predicted 5.6–5.8 s floor — this pair's module cache
+was already warm from earlier passes on this rig, so the host's own bare load ran well under
+the documented 5.1–5.3 s figure this run. The absolute number moves with disk/OS cache state;
+the point of this measurement is the BEFORE/AFTER ratio, not the absolute floor.
+
+⚠ **§6.1 step 7 is wrong as written.** The plugin's own `announce:` log line
+(`TransitionAnnounceWatch.OnTransitionBegan`, called unconditionally on every `trans_pending`
+rising edge per §3.2) appeared in the host's plugin log on this baseline run — gate OFF,
+`announce: door 0x4A transition beginning -> 'end_m01ab' at waypoint 'from_01a'` printed anyway.
+This matches the design text exactly ("the plugin still writes the shared-block fields... but
+`PumpTransitionAnnounce` never reads or relays them") — the PLUGIN log line was never gated,
+only the AGENT's read/relay is. §6.1's own pass/fail line ("no `announce:`-prefixed line
+appears... its absence IS the control") describes a control that does not exist; the real
+control is the AGENT-side `announcing transition to '...'` console line, which correctly did
+NOT appear in either agent log on this baseline run. §6.1's wording is left as originally
+written rather than silently rewritten, since the mismeasurement itself is useful evidence of
+what the channel actually does; this section is the correction.
+
+### 8.2 Announced, no movie — `transition_announce = 1`
+
+```
+[00:02:57.521] area transition pending: flushing spawned objects before the module is stored
+[00:02:57.661] announce: door 0x4A transition beginning -> 'end_m01ab' at waypoint 'from_01a'
+[00:02:57.697] travel: fading to black for the incoming transition (INFERRED direction - NEEDS-LIVE)   (follower)
+[00:02:57.702] travel: moving to module 'end_m01ab' on the session's authority                          (follower)
+```
+
+Agent consoles, in order:
+```
+[00:02:57] * announcing transition to 'end_m01ab' at waypoint 'from_01a'                 (host)
+[00:02:57] * host announced transition to 'end_m01ab' at waypoint 'from_01a'             (follower)
+[00:02:57] * following the host to 'end_m01ab' IMMEDIATELY (announced transition serial 1,
+            not waiting for the module-change settle)                                     (follower)
+```
+
+**Interval A: 181 ms** (57.702 − 57.521), against the SAME host/follower pair and door,
+same-session cache state as §8.1 — **~9× smaller**, on the order of the fade window plus one
+agent tick, exactly as predicted. Both arrived in `end_m01ab`, phantom re-spawned on both sides,
+no `FIRST-CHANCE` access violation in either log (the one `0x406D1388` line per launch is the
+benign `SetThreadName` exception every session shows, unrelated to this feature). Run twice
+(this run, and the movie-carrying run below); both pass.
+
+### 8.3 Announced, with a movie — `transition_announce = 1`, `moviewarp queue 01c`
+
+Synthesized via the same mechanism `cinematics.md` §8.4 uses (no live Endar-Spire stunt trigger
+was reachable from the demo save's position without a long scripted sequence; `moviewarp queue`
+exercises the identical `TransitionMovies` channel a real stunt-module escape would), specifically
+to answer the task's "confirm the movie flush still works with the early warp":
+
+```
+[00:05:08.777] area transition pending: flushing spawned objects before the module is stored
+[00:05:08.918] announce: door 0x4A transition beginning -> 'end_m01ab' at waypoint 'from_01a'
+[00:05:11.835] cinematic: staged 1 of 1 movie(s) from the session onto this transition: 01c   (follower)
+[00:05:11.836] travel: moving to module 'end_m01ab' on the session's authority                 (follower)
+...
+[00:05:26.092] cinematic: the main thread was gone for 16047 ms (host)
+[00:05:28.656] cinematic: the main thread was gone for 16015 ms (follower)
+```
+
+**Pass.** The follower's `cinematic: staged...` line landed BEFORE its `travel:` line (the
+accumulation rule in `cinematics.md` §9.4 riding the fast path exactly as designed), both
+stalls overlap in wall-clock range (16.0–16.1 s, essentially simultaneous — the early warp let
+the follower's own movie start almost immediately after the host's, rather than 1.6+ s later),
+both arrived in `end_m01ab` with phantoms re-spawned, no crash. The announce path does not
+break the movie-flush channel.
+
+### 8.4 `transition_announce_fade = 1`
+
+Fired on every transition above (`travel: fading to black for the incoming transition`), on
+both the follower's fast-path warp and a host self-warp (the plugin-initiated path also calls
+the same `TravelController` fade trigger). **No stuck-black, no hang**: every transition it
+rode completed normally, the game kept responding to console commands seconds later, across
+three separate transitions in this session. That rules out the worst failure mode named in the
+task (a soft-lock). **The one thing it could not verify: fade DIRECTION.** No screenshot
+capture was available in this environment to confirm the screen actually went to black rather
+than staying lit or flashing white; the `FadeDirectionOut = 0` guess (§3.5) remains unconfirmed
+either way. Given the specific uncertainty this flag exists to resolve was not resolved, it
+stays OFF by default — "didn't misbehave" is not the same as "confirmed correct," and the task's
+own bar for flipping a default is proof, not absence of a symptom.
+
+### 8.5 Client-first-door (`client_door_refusal`) — BLOCKED, not a feature defect
+
+**The decisive check (§6.3) could not be run.** The CLIENT install's own `usedoor` attempt on
+`end_door10` reported:
+
+```
+door: the engine says the party is NOT together, and a door transition is gated on that
+(0x0058C228) - gathering it first
+door: gathered 0 party member(s) and the engine STILL says the party is not together - this
+use will run k_trg_transfail and move nobody
+```
+
+`GatherParty`'s own member count (`CSWPartyTable`, server-side) read **0** — correct, since
+`PartyRosterController.RemovePartyMemberBySlot` removes the mirrored companion locally on a
+non-owning instance by design (companions are host-authoritative). But
+`CSWParty::IsPartyTogether` (client-side, `CClientExoApp::GetSWParty`) still returned false with
+nothing to gather, meaning **`CSWSDoor::EventHandler`'s party gate refuses every real door
+transition on a client instance, before `trans_pending` ever rises and before
+`TransitionAnnounceWatch` gets a chance to run at all** — independent of this pass's own code,
+and independent of how the door is approached (raw walk hits the identical gate, per
+`cinematics.md` §8.3a; a `usedoor`-style gather cannot fix it because there is nothing IN the
+local party to gather). This is a **NEW finding**, not previously documented: the client-side
+`CSWParty` struct apparently retains stale "together" state after `RemovePartyMemberBySlot`
+clears the server-side `CSWPartyTable` count, and the two disagree. It blocks any future
+client-side door test, not just this one.
+
+Two workarounds were considered and rejected: swapping which physical install plays host/client
+(the defect follows the CLIENT ROLE, not the install — confirmed by reasoning, not worth a
+second restart to also confirm empirically); and hand-writing `trans_pending` directly to
+exercise `TransitionAnnounceWatch` without a real door (would test the refusal logic in
+isolation but not the actual engine interaction the decisive check exists to answer, and adding
+a new debug poke for it was judged out of scope for a verification pass).
+
+**`client_door_refusal` stays OFF by default.** Not because it misbehaved — it was never
+reached. The pure decision (`ClientDoorRefusalRule.ShouldArm`) remains unit-tested only; the
+one thing §4.1 flagged NEEDS-LIVE (whether `TryClearTransitionPending` actually stops phase 2)
+is still NEEDS-LIVE. Filed as a follow-up: the party-gate defect above needs its own
+investigation (and likely its own fix — extending `RemovePartyMemberBySlot` to also clear
+whatever `CSWParty`-side state `IsPartyTogether` reads) before this feature's own decisive
+check can ever run live.
+
+### 8.6 Trigger relay (`trigger_relay = 1`) — end_m01ab
+
+No deliberate walk was needed for the positive path: `end_trig_carth02` (id `0x26`, a STORY
+trigger, `k_pend_carth_t02`) sits almost exactly on the `from_01a` waypoint every transition in
+§8.2/§8.3 arrives at, so the client's real presence there on arrival was enough to exercise the
+whole channel naturally.
+
+```
+[00:03:14.142] triggers: standing in 1 generic trigger(s), first 0x26 - asking the enemy         (client)
+                owner to run its OnEnter too
+[00:03:14.412] triggers: fired OnEnter of 0x26 for peer 2 (phantom 0x73)                          (host)
+```
+
+**Fired-set dedup: PASS.** The client re-reported "standing in" the same trigger on THREE more
+separate arrivals in this module across the session (00:05:28, 00:11:01, 00:16:25 — each a
+fresh module load after leaving and returning), and the host's fire count never moved:
+`pwsh tools\blockpoke.ps1 -ProcId <host> triggers` read `fired 1 refused 0` at the end of the
+session, matching the single `fired OnEnter of 0x26` log line. The store's per-module fired-set
+persists across repeat VISITS to the same module name within one session, not just within a
+single continuous stay — a stronger guarantee than the doc's own §7 item 6 asked for.
+
+**Negative control: PASS.** The client was placed at world coordinates (78, 69) — confirmed
+geometrically inside `k_stlthawrd`'s trigger polygon by hand (all four edge cross-products
+positive against the polygon read from `m01ab.git`'s `TriggerList`) — and
+`pwsh tools\blockpoke.ps1 -ProcId <client> triggers` read `inside 0`. Reading
+`TriggerRelayController.HandleWatch`'s own order confirms why: it checks `IsRelayEligible`, THEN
+geometric containment, THEN the allowlist pattern, and only publishes ids that pass all three —
+`k_trg_stealth` fails the pattern check, so it is filtered out of the "inside" set before ever
+being geometrically reported, exactly as designed. Standing inside it produced no watch report,
+no relay request, no fire.
+
+**Host double-fire (§3's named gap): observed, harmless in this module.** The host's own real
+PC transitioned into `end_m01ab` at that same `from_01a` waypoint at least twice for real in
+this session (§8.2's and §8.3's own arrivals) — a STORY trigger positioned on the arrival point
+is exactly the shape of thing a vanilla player's own engine-managed module entry would cross
+natively, so the host's engine almost certainly ran `k_pend_carth_t02` on its own account, in
+addition to the ONE time this channel fired it via the client's relayed request. This channel
+has no way to observe the host's own native fire directly (§3's own limitation, confirmed
+rather than newly discovered), so this is inferred from the trigger's position, not read off a
+log line naming it. **No visible consequence was found**: no duplicate dialogue window, no
+extra spawn, no error, across the whole session in either log. Consistent with `k_pend_carth_t02`
+being one of the "many `k_p*_en` scripts [that] destroy themselves or check a global on the way
+in, which absorbs a duplicate call for free" (§3). Per the task's own conditional — implement the
+native-fire tracking only if a double-fire is shown to be harmful here — **no tracking was
+added**: nothing observed in this module needed it, and the `+0x29C`/hook approach named in the
+task remains a documented, un-built option for a module where it does matter.
+
+### 8.7 Tooling notes found along the way
+
+* `tools/transition-announce-measure.ps1`'s `-Since` filter is a bare `TimeSpan` comparison with
+  no date component — it cannot exclude an earlier run's lines once local midnight has passed
+  between the two runs being compared (confirmed live: the baseline ran at 23:58, the announce
+  run at 00:02, and `-Since 00:02:00` still matched the earlier 23:58 line because `23:58:24 >
+  00:02:00` numerically). Not fixed this pass; measure across a midnight boundary by line-number
+  offset instead, as this pass did.
+* The same script's Interval B pattern (`epoch: module changed`) is real text, but not the ONLY
+  epoch reason on an arrival — the bare door-crossing runs in §8.1/§8.2 logged
+  `epoch: world unloading` instead, so Interval B was only measurable on the movie-carrying run
+  (§8.3). Not a bug, just a narrower match than the script's own comment implies.
+* `blockpoke.ps1 walk`'s queued `ActionMoveToLocation` move remains as unreliable for the real
+  player character as `TestDriveController.HandleWalk`'s own doc comment already says it might
+  be — it worked once from a fresh `tp`'d position, then repeatedly did nothing from further
+  `tp`'d positions in the same session, with no error reported either time. `tp` itself was
+  reliable throughout. Prefer `tp` immediately adjacent to (or just outside) a target polygon
+  and accept that a `walk` request may need several retries or may not land at all; `usedoor`'s
+  own internal walk (retried up to 120 frames) remains the reliable mechanism for doors
+  specifically, with no generic equivalent exposed for arbitrary polygons.
+
+### 8.8 Defaults changed by this pass
+
+| Flag | Before | After | Why |
+| --- | --- | --- | --- |
+| `transition_announce` | OFF | **ON** | §8.2/§8.3: ~9× latency drop, no regression, movie-carrying case also clean |
+| `trigger_relay` | OFF | **ON** | §8.6: correct fire-once, correct dedup across repeat visits, correct negative-control exclusion, no crash |
+| `client_door_refusal` | OFF | OFF (unchanged) | §8.5: decisive check blocked by an unrelated pre-existing party-gate defect, never reached |
+| `transition_announce_fade` | OFF | OFF (unchanged) | §8.4: no soft-lock observed, but the one uncertain claim (fade direction) could not be visually confirmed |

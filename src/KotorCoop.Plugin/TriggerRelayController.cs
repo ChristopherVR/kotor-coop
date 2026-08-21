@@ -26,10 +26,14 @@ namespace KotorCoop.Plugin;
 ///   RunScript call the engine's own EventHandler makes, with that peer's PHANTOM standing in
 ///   as OBJECT_SELF's entering-object cache.
 ///
-/// Kill switch: <c>trigger_relay=0</c> in coop.ini (default OFF — this channel has no
-/// engine-level one-shot flag to lean on the way encounters do, so it is not live-verified
-/// yet; see docs/research/trigger-relay.md). Allowlist: <c>trigger_relay_patterns</c>
-/// (default <c>k_p*_*</c>), comma-separated globs matched against the OnEnter script resref.
+/// Kill switch: <c>trigger_relay=0</c> in coop.ini (default ON — live-verified 2026-08-21 on
+/// end_m01ab: the story trigger `end_trig_carth02`'s relay fired correctly with the fired-set
+/// dedup holding across four separate re-visits, and the negative control (`k_trg_stealth`)
+/// was confirmed geometrically inside the local player's position yet never entered the watch's
+/// "inside" set at all, exactly as the allowlist ordering (relay-eligible, then geometry, then
+/// pattern) predicts; see docs/research/trigger-relay.md's live-pass section). Allowlist:
+/// <c>trigger_relay_patterns</c> (default <c>k_p*_*</c>), comma-separated globs matched
+/// against the OnEnter script resref.
 /// </summary>
 internal sealed unsafe class TriggerRelayController(SharedBlockView block)
 {
@@ -45,7 +49,7 @@ internal sealed unsafe class TriggerRelayController(SharedBlockView block)
 
     private const string DefaultPatterns = "k_p*_*";
 
-    private readonly bool _enabled = PluginConfig.ReadBool("trigger_relay", false);
+    private readonly bool _enabled = PluginConfig.ReadBool("trigger_relay", true);
     private readonly string[] _patterns = ParsePatterns(PluginConfig.Read("trigger_relay_patterns"));
 
     private readonly uint[] _inside = new uint[SharedBlock.TriggerInsideCapacity];

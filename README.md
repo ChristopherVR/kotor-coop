@@ -374,17 +374,18 @@ tools/                   RE helpers, demo scripts, the kotor1_0_3 symbol databas
   damage flowed both ways — the spawns hurt the client through its phantom, and the
   client's own hits were spent by the host on the real bodies.
 - **A generic trigger's OnEnter (the classic "walk into the room, the scene starts") now
-  relays from a client to the host — not yet live-verified.** A client's own story triggers
-  already fired correctly on the client's own engine; the gap was the HOST never running the
-  same script, so a plot `CreateObject`/`DestroyObject` in it drifted the two instances' ids
-  apart. `TriggerRelay` reports which generic triggers a client is standing in (excluding
-  traps and area transitions, and filtered by a `coop.ini` allowlist pattern) and the host
-  runs the trigger's own `ScriptOnEnter` against that peer's phantom, the same `RunScript`
-  call the engine's own `EventHandler` makes. `coop.ini` `trigger_relay=0` by default: unlike
-  encounters, a generic trigger carries no engine one-shot flag, so this channel's own
-  bookkeeping is the only thing standing between one fire and a duplicate, and it has never
-  run against the live game. See
-  [docs/research/trigger-relay.md](docs/research/trigger-relay.md).
+  relays from a client to the host — live-verified 2026-08-21, ON by default.** A client's own
+  story triggers already fired correctly on the client's own engine; the gap was the HOST never
+  running the same script, so a plot `CreateObject`/`DestroyObject` in it drifted the two
+  instances' ids apart. `TriggerRelay` reports which generic triggers a client is standing in
+  (excluding traps and area transitions, and filtered by a `coop.ini` allowlist pattern) and the
+  host runs the trigger's own `ScriptOnEnter` against that peer's phantom, the same `RunScript`
+  call the engine's own `EventHandler` makes. Live pass on `end_m01ab`: the story trigger
+  `end_trig_carth02` fired once against the client's phantom, stayed at "fired 1" across four
+  separate re-visits (the per-module fired-set dedup held), and the negative control
+  (`k_trg_stealth`) — confirmed geometrically inside the client's own position — never entered
+  the watch's report at all. `coop.ini` `trigger_relay=0` opts out. See
+  [docs/research/trigger-relay.md](docs/research/trigger-relay.md) §11.
 - **Mid-module movies (a script's own `PlayMovie`, not a transition) have a queue DECISION
   but no detection wired up yet.** `MovieRelayQueue` decides whether a peer should play an
   announced movie immediately or defer it to the next module transition — pure, tested — but
@@ -484,14 +485,22 @@ tools/                   RE helpers, demo scripts, the kotor1_0_3 symbol databas
   dialogue option reflects the conversation OWNER's alignment, since only the owner runs the
   conversation — a spectating partner sees the options the owner qualifies for, not their
   own. See [docs/research/dialogue-consequences.md](docs/research/dialogue-consequences.md).
-- **Announced transitions (smoother follow) are built and not yet live-verified.** A host's
-  plugin now announces a transition's destination the instant its engine commits to it — a
-  door's 0.5 s fade window, not the several-to-tens-of-seconds wait for its published module
-  to actually change — so a follower can start its own warp immediately and both loading
-  screens overlap instead of running back to back. A client's own premature door crossing can
-  also be refused instead of completing and being yanked back. Both are OFF by default
-  (`coop.ini transition_announce=0`, `client_door_refusal=0`): the fade-to-black's direction
-  argument is a best guess (cannot crash, may simply fade the wrong way), and whether the
-  door-refusal's engine call actually stops the load rather than just showing the warning is
-  unverified. See [docs/research/transition-smoothness.md](docs/research/transition-smoothness.md).
+- **Announced transitions (smoother follow) are live-verified and ON by default.** A host's
+  plugin announces a transition's destination the instant its engine commits to it — a door's
+  0.5 s fade window, not the several-to-tens-of-seconds wait for its published module to
+  actually change — so a follower can start its own warp immediately and both loading screens
+  overlap instead of running back to back. Live pass on `end_m01aa` → `end_m01ab`: the
+  host-door-use-to-follower-warp interval dropped from 1648 ms to 181 ms (~9x), and a
+  movie-carrying transition (the Endar-Spire-escape shape) showed both instances' stalls
+  overlapping within 32 ms of each other instead of running back to back, with no crash either
+  time. `coop.ini transition_announce=0` opts out. The optional fade-to-black
+  (`transition_announce_fade=1`, still OFF by default) never hung or stuck black across three
+  transitions, but its direction argument is still an unconfirmed best guess — no screenshot
+  capture was available to check it visually. A client's own premature door crossing can also be
+  refused instead of completing and being yanked back (`client_door_refusal=1`, OFF by
+  default) — this pass could not reach the decisive check at all: a client's own real door
+  crossings are refused by the vanilla single-player party-together gate before this feature's
+  own code ever runs, a newly-found defect unrelated to this feature (the client-side `CSWParty`
+  struct apparently keeps stale "together" state after a companion is removed locally). See
+  [docs/research/transition-smoothness.md](docs/research/transition-smoothness.md) §8.
 - KOTOR 2 is untouched, and only GOG v1.0.3 addresses are known.

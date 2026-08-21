@@ -8,8 +8,9 @@ movement does) applied to a different object type with a different failure mode.
 
 Everything below was read out of `swkotor.exe` (GOG 1.0.3, MD5
 `06B34D1B8A1ECEFBAAD0BF5E26556C71`) with `tools/disasm.py`, `tools/xrefs.py` and `tools/q.py`,
-or out of the shipped game data with `tools/kotorfiles.py`. **Nothing here has been checked on
-a running game** — see §7 for exactly what to test.
+or out of the shipped game data with `tools/kotorfiles.py`. §7 lists what a live pass needed to
+check; §11 is that pass (2026-08-21) — most of §7 is now confirmed, one item stayed
+inconclusive (decompiled-script terms only), and the channel is ON by default as a result.
 
 Tag key: **VERIFIED** = read out of the binary or the game data · **INFERRED** = a reasonable
 reading not independently confirmed a second way · **DESIGN** = a choice made here ·
@@ -203,7 +204,7 @@ Guards, all in `TriggerRelayController` and `OdysseyTriggers`:
 | Watch pass skipped during a local conversation | the dialogue system moves the participants; mirrors the encounter watch |
 | Requests and the watch flag cleared by `SessionScopedBlockLevels` (`KotorGameBridge.cs`) | the 0m lesson: a level nothing refreshes is state that never goes away — this pass adds `trigger requests`/`trigger watch` to that list explicitly |
 | Everything dropped on a module change, request serial re-latched | `TriggerRelayController.Invalidate`, mirrors the encounter controller |
-| `trigger_relay=0` in coop.ini | kill switch, **default OFF** — unlike `client_encounters` (default ON, live-verified), this channel has no engine-level one-shot flag to lean on and has never run against the live game |
+| `trigger_relay=0` in coop.ini | kill switch, **default ON** — live-verified 2026-08-21, §11 below (fire-once, correct dedup across repeat visits, correct negative-control exclusion, no crash) |
 
 ## 6. Mid-module movies — what is and is not wired up
 
@@ -235,7 +236,7 @@ This is stated in full here, in the profile comment, and in the README, rather t
 discovered: a gate that exists but does nothing is a worse trap than no gate at all if it is not
 said out loud.
 
-## 7. NEEDS-LIVE — nothing here has run against the game yet
+## 7. NEEDS-LIVE — the pre-live-pass task list (see §11 for the results)
 
 Unlike client-encounters.md, this document was written entirely from static RE and offline game
 data; there has been no live pass. `trigger_relay=0` by default reflects that. In order of what
@@ -458,3 +459,87 @@ list `+0x1A0`/`+0x1A4` (same list `CSWSEncounter::AddToArea` fills — client-en
 - `src/KotorCoop.Protocol` — `TriggerRelayPacket`, `PacketType.TriggerRelay` (48), protocol
   `Version` 32.
 - `tools/blockpoke.ps1 triggers` — read both halves; write a fire request by hand.
+
+## 11. Live pass (2026-08-21)
+
+Run against the GOG pair on `end_m01ab` (`trigger_relay=1` on both, alongside
+`transition_announce=1` — see docs/research/transition-smoothness.md §8, whose door/warp
+transitions repeatedly delivered the client's real presence to this module's arrival waypoint,
+which turned out to be all the positioning this test needed).
+
+⚠ **The target substituted `end_trig_carth02` for the originally-planned `end_killsith`.**
+`blockpoke.ps1 walk` — the tool named for reaching `end_killsith` — proved as unreliable for
+the real player character as `TestDriveController`'s own doc comment already warns it might be
+(§8.7 of the transition-smoothness live pass has the detail): it moved the PC once from a
+freshly-`tp`'d position, then repeatedly did nothing on later attempts in the same session, with
+no error either time. `end_killsith`'s own polygon also sits near a hostile Sith (`0x0D`/`0x1E`
+in this session, engaging through `local_combat`), which made repeated walk retries there
+riskier than useful. `end_trig_carth02` — reached for free by ordinary arrival, no walk needed
+— is the SAME shape of allowlisted STORY trigger `end_killsith` is (both `k_p*_*`), so it
+exercises the identical code path; `end_killsith` itself was not reached this pass.
+
+**§7 item 1 (ids match across instances) and item 2 (watch sees the polygon, applies the
+allowlist): PASS, via natural arrival rather than a deliberate walk.** `end_trig_carth02`
+(id `0x26`, `k_pend_carth_t02`, STORY) sits almost exactly on the `from_01a` waypoint every
+`end_m01aa → end_m01ab` transition arrives at, so the client's real presence there on arrival
+alone exercised the watch:
+
+```
+[00:03:14.142] triggers: standing in 1 generic trigger(s), first 0x26 - asking the enemy
+                owner to run its OnEnter too
+```
+
+**§7 item 3 (the host fires it): PASS.**
+
+```
+[00:03:14.412] triggers: fired OnEnter of 0x26 for peer 2 (phantom 0x73)
+```
+
+**§7 item 6 (the fired-set broadcast suppresses re-reporting): PASS, and stronger than asked.**
+The client re-reported "standing in" the same trigger on three further SEPARATE arrivals in
+this module across the session (00:05:28, 00:11:01, 00:16:25 — each after leaving and
+returning, a fresh module load each time), and the host's fire count never moved past 1:
+`pwsh tools\blockpoke.ps1 -ProcId <host> triggers` read `fired 1 refused 0` at session end,
+matching the single `fired OnEnter` log line. The store's per-module fired-set persists across
+repeat VISITS to the same module name within one session, not merely within one continuous
+stay in the polygon.
+
+**Negative control (`k_trg_stealth`, `k_stlthawrd`'s trigger in `end_m01ab`): PASS.** The
+client was positioned at world coordinates (78, 69) — confirmed geometrically inside the
+polygon by hand (`m01ab.git`'s `TriggerList` base `(73.0823, 70.9827)` plus its four geometry
+offsets; all four edge cross-products against the point are positive, consistently signed,
+confirming interior) — and `pwsh tools\blockpoke.ps1 -ProcId <client> triggers` read
+`inside 0`. `TriggerRelayController.HandleWatch` checks `IsRelayEligible`, THEN geometric
+containment, THEN the allowlist pattern, publishing only ids that clear all three;
+`k_trg_stealth` fails the pattern check and so never enters the "inside" set even while the
+player stands inside its polygon — exactly the ordering §5 describes, now confirmed live rather
+than only read off the source.
+
+**§7 item 4 (`GetEnteringObject()` reads `CSWSTrigger+0x29C` for a trigger specifically) and
+item 5 (the double-fire risk): inconclusive on item 4's own decompiled-script terms, but item 5
+answered.** `k_pend_carth_t02`'s actual NWScript body was not available to decompile, so
+whether the visible/invisible effect it produced (if any) genuinely came from
+`GetEnteringObject()` reading the phantom's cached id could not be independently confirmed —
+the RunScript call itself is proven (§4, and the encounter channel's identical call shape is
+independently live-verified elsewhere per client-encounters.md §7). For the double-fire risk:
+the host's own real PC transitioned into `end_m01ab` at the SAME `from_01a` waypoint for real
+at least twice in this session (the transition-smoothness.md §8.2/§8.3 runs) — a STORY trigger
+sitting on the arrival point is exactly what a vanilla player's own engine-managed module entry
+crosses natively, so the host's engine almost certainly ran `k_pend_carth_t02` on its own
+account at least twice, IN ADDITION to the one time this channel fired it via the client's
+relayed request. This channel has no way to observe that native fire directly (§3's own
+documented limitation, confirmed rather than newly discovered by this pass). **No visible
+consequence was found**: no duplicate dialogue window, no extra spawn, no error, in either log,
+across the whole session. Consistent with `k_pend_carth_t02` being one of the scripts whose own
+idempotence "absorbs a duplicate call for free" (§3). Per the task's own conditional — build the
+native-fire tracking only if a double-fire proves harmful — **no tracking was added**: nothing
+observed in this module needed it. The `+0x29C`-poll or hook approach named in §3/§7 remains a
+documented, un-built option for a module where a double-fire IS shown to matter.
+
+**Mid-module movies (§6): unchanged, still not live-tested** — nothing calls
+`MovieRelayQueue.Decide` yet, so there was nothing new to exercise this pass.
+
+**Default flipped: `trigger_relay` is now ON by default** (`TriggerRelayController.cs`,
+`PluginConfig.ReadBool("trigger_relay", true)`), on the strength of the above: correct
+fire-once behaviour, correct fired-set dedup across repeat visits, correct negative-control
+exclusion, and no crash across a session that exercised the channel more than a dozen times.
