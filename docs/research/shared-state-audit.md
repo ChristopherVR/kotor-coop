@@ -2809,6 +2809,64 @@ Full suite: 966/966 (one confirmed pre-existing flaky test —
 down and confirmed clean. Host button and materialised-loot-sync live confirmation from earlier
 this session both hold, unaffected by this finding.
 
+### The stall root-caused: a lost plugin block never retries once the player resolves on its own (2026-08-21, round 42)
+
+Not an exception, not a deadlock — a clean early return with nothing wrong with it in isolation.
+`CoopAgent.PumpOnce()` reads the local player's own state FIRST (line 240), then checks
+`bridge.CanWriteRemotes` (line 264) and returns early if it's false — *before* the entire
+combat-pump block (`PumpEnemies`/`PumpPhantomDamage`/`PumpMaterialisedLoot`/`PumpParty`, all
+gated together on one 150ms cadence check). This exactly explains the observed symptom: local
+HP/module readouts (read before the check) kept updating fine, while everything after the check
+froze solid, with nothing thrown and nothing logged as a failure — because nothing failed; the
+method just legitimately stopped reaching that code.
+
+`CanWriteRemotes => _pluginBlock != 0 || _phantoms.Count > 0`
+(`KotorGameBridge.cs:583`). The only place `_pluginBlock` is ever reset to 0 and re-scanned for
+is `TryFindPlugin()` (`KotorGameBridge.cs:997`), and the only caller of `TryFindPlugin()` is
+`TryResolve()`, which is itself only ever invoked from inside `TryReadLocalState()`'s
+`if (_player is null)` branch (`KotorGameBridge.cs:1164`). A module transition destroys and
+rebuilds every engine object, which is exactly what invalidates `_player` and triggers this
+branch — but `TryFindPlugin()` does a real pattern scan with a 60ms heartbeat double-read to
+confirm the block is genuinely live, not stale freed memory, and a transition's own main-thread
+stall (a movie can hold it for several seconds, measured elsewhere in this document) is long
+enough for that heartbeat check to read the identical value twice and conclude — wrongly — that
+the block is dead. `TryResolve()` can still recover the PLAYER on that same pass via its
+scan-based fallback path, which needs no plugin block at all. Once `_player` is non-null again,
+`if (_player is null)` never evaluates true again for the rest of the session, and nothing else
+ever calls `TryFindPlugin()` a second time. `_pluginBlock` sits at 0 forever: `CanWriteRemotes`
+silently falls back to `_phantoms.Count > 0` alone, which is *also* commonly 0 right after a
+transition (phantoms are destroyed and re-claimed across one too) — and the whole combat-pump
+block goes dark for the rest of the session, with no exception, no failed read, and no log line
+anywhere saying so.
+
+**Fixed:** `TryReadLocalState()` now retries a lost plugin block independently of the player
+path — a `_pluginBlock == 0` check right after the existing player-resolve block, rate-limited
+on its own dedicated timestamp (`_lastPluginRetryMs`, same 1000ms `ResolveRetryMs` cadence the
+player retry already uses, but tracked separately so neither retry has to wait on the other's
+clock). `KotorGameBridge.cs`, `TryReadLocalState()` (the new block right before
+`nint creature = _player!.Address;`) and the new `_lastPluginRetryMs` field.
+
+**Live-tested, partially.** Rebuilt (agent-side only — this fix is entirely in
+`KotorCoop.Memory`, no plugin/native change, no reinstall needed), relaunched both agents against
+the same live pair, forced a fresh transition (`warp end_m01aa` then back), and confirmed the
+`moduleClean` diagnostic kept firing immediately after the new transition landed — consistent
+with the fix, not contradicting it. **What this pass did NOT get to: a full, sustained
+multi-minute post-transition soak proving the stall genuinely cannot recur with the fix in
+place** — the original bug's own reproductions needed 60-90+ seconds AND, per the two-session
+comparison above, isn't perfectly deterministic (whether the race is lost at all likely depends
+on how long a given transition's main-thread stall happens to run). A clean pass here is
+encouraging but not the same standard of proof this document holds everywhere else. **The
+concrete next step is exactly that:** repeat the transition-and-wait test for several full
+minutes, ideally across several different transitions (some movie-carrying, some not, to vary
+the stall duration the race depends on), watching for the `moduleClean` line's cadence rather
+than assuming a few seconds of continued logging is sufficient.
+
+Full suite: 966/966, both builds clean (`dotnet build` and `build.ps1`). Rig torn down and
+confirmed clean (`Get-Process` returned none for either process name), `auto_start_agent`
+restored to `1` in both `coop.ini` files (this round used a manual agent relaunch instead of
+`demo.ps1 -Stop`, which is the only thing that normally restores it — flagging this explicitly
+since it is exactly the kind of silent leftover this document has warned about before).
+
 ## 3. A client's XP is actively erased
 
 `ProgressionSnapshotPacket` is host→client only and absolute (CoopAgent.cs, `PumpProgression`):

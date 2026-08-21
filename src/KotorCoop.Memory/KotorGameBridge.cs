@@ -1182,6 +1182,30 @@ public sealed class KotorGameBridge : IGameBridge
             }
         }
 
+        // A lost plugin block does not retry itself once the player resolves independently of
+        // it (the scan-based path above needs no block at all). Measured live: a module
+        // transition's main-thread stall (a movie can hold it for seconds) is long enough for
+        // TryFindPlugin's heartbeat check to read the SAME value twice and conclude the block
+        // is stale, right as TryResolve is mid-call from the branch above. The player then
+        // keeps resolving fine on every later tick — the scan path does not need the block at
+        // all — so `_player is null` never goes true again and nothing ever calls
+        // TryFindPlugin a second time. That silently downgrades PLUGIN mode to external mode
+        // for the rest of the session: CanWriteRemotes falls back to phantom count alone, and
+        // every plugin-block-gated write (enemies, phantom damage, materialised loot, party)
+        // stops with no failed read and no thrown exception to explain why. Same rate limit as
+        // the player retry above and the same reason (a full pattern scan is expensive), but a
+        // separate timestamp so a lost block does not have to wait on player-retry cadence, and
+        // a lost player does not have to wait on this one.
+        if (_pluginBlock == 0)
+        {
+            long nowMs = Environment.TickCount64;
+            if (nowMs - _lastPluginRetryMs >= ResolveRetryMs)
+            {
+                _lastPluginRetryMs = nowMs;
+                TryFindPlugin();
+            }
+        }
+
         nint creature = _player!.Address;
 
         if (!TryReadVector(creature + OffPosition, out Vector3f position))
@@ -4752,6 +4776,11 @@ public sealed class KotorGameBridge : IGameBridge
     private const int ResolveRetryMs = 1000;
 
     private long _lastResolveAttemptMs;
+
+    /// <summary>Separate from <see cref="_lastResolveAttemptMs"/> on purpose — a lost plugin
+    /// block and a lost player are independent failures with independent retry cadences; see
+    /// <see cref="TryReadLocalState"/>'s post-resolve check.</summary>
+    private long _lastPluginRetryMs;
     private int _playerLostLogged;
 
     /// <summary>Optional sink for "why did the cached player stop validating" — the answer
