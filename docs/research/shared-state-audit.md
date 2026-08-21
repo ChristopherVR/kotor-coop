@@ -3047,6 +3047,50 @@ Full suite: 965/966 this run (the one failure, `DisconnectRecoveryTests.HeavyPac
 is the same known-flaky probabilistic test flagged throughout this session — confirmed passing
 in isolation immediately after). Both builds clean. Rig torn down and confirmed clean.
 
+### Round 45 (2026-08-21) — `ClearAllActionsFn` is REFUTED as the mechanism; the commandable-flag
+concern is already correctly handled
+
+Round 44 left `ClearAllActionsFn` (`0x004CCD80`) as the concrete next candidate — never
+disassembled for a side effect on the round sub-structure. It has now been read in full,
+instruction by instruction (`python tools\disasm.py 0x004CCD80 0x100`):
+
+- Its early guard (`0x4CCD88`-`0x4CCDA9`) reads a global at `0x83281c`, a vtable call at
+  `[ecx]+0x30`, then `[eax+0xa88]` and a conditional call to `0x5e5670` — none of this is
+  `creature+0x9C8` (the round base) or anything in its offset range.
+- The body it exists for (`0x4CCDB1` onward) walks `CSWSObject+0xFC` — the ACTION QUEUE list,
+  exactly as `Odyssey.cs`'s own existing doc comments say (`CExoLinkedList` at `+0xFC`,
+  `CExoLinkedList::GetAt 0x5e9b60`, `CExoLinkedList::RemoveAt 0x5e9c10`, the free at
+  `0x6fa390`) — a completely different structure from the round base at `creature+0x9C8`.
+- The one write outside that list (`0x4CCE69`, `mov dword ptr [eax+0xa8c],1`) lands on
+  whatever the repeated `[reg]->[+0x30]()` vtable call returns — not the creature pointer
+  itself, and not anywhere near `+0x958`..`+0x9CC` even if it were.
+
+**`ClearAllActionsFn` never touches the round struct, directly or through this call. That
+hypothesis is dead.**
+
+Also checked, since round 44 flagged it as one of only three things `ClaimCreature` touches:
+`ObjCommandable` (`creature+0xE8`). Only one write to it exists in the whole plugin
+(`Odyssey.cs:375`, inside `ClaimCreature`) — and it sets the flag to **1**, with a comment
+explaining an EARLIER version of this code set it to 0 and that was "self-defeating: the
+action queue is executed by the AI master, so a non-commandable creature ignores the move
+actions we queue and never walks anywhere." This was already found and fixed in an earlier
+session; nothing here explains the current failure either.
+
+**Status, honestly: round 44's "claimed vs. never-claimed" distinction is still the sharpest
+lead on record, but neither of its two obvious mechanisms panned out.** What's left
+unexplored on that axis: not a single corrupting WRITE (ruled out for the two functions that
+run during normal claim), but a longer-duration, harder-to-instrument possibility — whether
+being position/facing-driven every frame for real wall-clock minutes (the ordinary case for
+any enemy in an active ambush before the player gets close enough to engage it) leaves the
+ENGINE'S OWN pathfinding/movement state confused in a way a later `StartCombatRound` does not
+reset, as distinct from any single field this investigation's static reading can find. That
+needs a live before/after comparison (a creature engaged almost immediately after spawning vs.
+one left mirrored for several real minutes first) rather than more disassembly — the next
+concrete step, not yet run.
+
+No live testing or code changes this round — pure static disassembly, in the main repo
+checkout. Full suite unaffected (no source touched).
+
 ## 3. A client's XP is actively erased
 
 `ProgressionSnapshotPacket` is host→client only and absolute (CoopAgent.cs, `PumpProgression`):
