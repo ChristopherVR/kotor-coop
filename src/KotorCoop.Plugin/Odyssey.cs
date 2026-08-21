@@ -519,6 +519,48 @@ internal static unsafe class Odyssey
         ClaimCreature(creature, clearActions: IsMoveAction(GetHeadActionType(creature)));
 
     /// <summary>
+    /// ROUND 46: the four fields a creature's own AI needs back in the engine's own hands
+    /// when it is handed a real fight — <see cref="ObjCommandable"/>, the full
+    /// <see cref="CreMovePermitted"/> dword (not just the two bits <see cref="ClaimCreature"/>
+    /// ORs on), <see cref="CreRunFlag"/>, and <see cref="CreMoveState"/>.
+    ///
+    /// Captured once per creature, the first time it is resolved into a slot — BEFORE this
+    /// plugin's own claim has ever touched it — so a creature that spent real minutes being
+    /// mirrored can be handed back to its own AI in the state the ENGINE actually had it in,
+    /// not "whatever the last claim/drive pass happened to leave." <see cref="CreMoveState"/>
+    /// matters most: <c>DriveEnemy</c> assigns it (not ORs) every driven frame from the
+    /// smoother's own "moving" bit, so a creature excluded mid-step is left holding
+    /// <c>-1</c> ("walking") forever — a value normally only ever set by the engine's OWN
+    /// pathing code as a live, actively-updated claim on the movement system, not something
+    /// meant to sit frozen. See docs/research/shared-state-audit.md §2, round 46.
+    /// </summary>
+    public readonly struct ClaimSnapshot(int commandable, int movePermitted, int runFlag, int moveState)
+    {
+        public readonly int Commandable = commandable;
+        public readonly int MovePermitted = movePermitted;
+        public readonly int RunFlag = runFlag;
+        public readonly int MoveState = moveState;
+    }
+
+    public static ClaimSnapshot CaptureClaimState(nint creature) => new(
+        *(int*)(creature + ObjCommandable),
+        *(int*)(creature + CreMovePermitted),
+        *(int*)(creature + CreRunFlag),
+        *(int*)(creature + CreMoveState));
+
+    /// <summary>Writes a snapshot back. Deliberately does NOT re-run <see cref="PermitAttacking"/>
+    /// — the caller does that afterward, on purpose, so the attack-permitted bit this plugin has
+    /// always asserted for a fighting creature cannot be silently lost if the ORIGINAL, pre-claim
+    /// snapshot happened not to have it set.</summary>
+    public static void RestoreClaimState(nint creature, ClaimSnapshot snapshot)
+    {
+        *(int*)(creature + ObjCommandable) = snapshot.Commandable;
+        *(int*)(creature + CreMovePermitted) = snapshot.MovePermitted;
+        *(int*)(creature + CreRunFlag) = snapshot.RunFlag;
+        *(int*)(creature + CreMoveState) = snapshot.MoveState;
+    }
+
+    /// <summary>
     /// CSWSObject::ClearDirtyFlag(int nFlag) — the flags are a bit array based at this+0x1FC:
     /// <c>[this + 0x1FC + (nFlag&gt;&gt;5)*4] &amp;= ~(1 &lt;&lt; (nFlag &amp; 31))</c>.
     /// </summary>

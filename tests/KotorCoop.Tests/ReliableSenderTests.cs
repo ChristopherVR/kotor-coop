@@ -73,17 +73,22 @@ public class ReliableSenderTests
     }
 
     [Fact]
-    public void Flag_GivesUpAfterMaxAttempts()
+    public void Flag_NeverGivesUpOnAnUnackedOp()
     {
-        ReliableFlagSender sender = new(retransmitIntervalMs: 100, maxAttempts: 3);
+        // The sender's own header: an unacked op is never abandoned (a link drop long enough
+        // to exhaust a fixed attempt cap used to lose the flag for good). Retries back off
+        // but never stop — only an ack retires the op.
+        ReliableFlagSender sender = new(retransmitIntervalMs: 100);
         sender.Enqueue(originPeerId: 1, flagId: 10, value: 1, nowMs: 0);
 
-        // Enqueue = attempt 1. Two more CollectDue calls at the interval reach attempt 3
-        // (the cap); a further call must not retransmit a fourth time and must drop it.
-        Assert.Single(sender.CollectDue(nowMs: 100));  // attempt 2
-        Assert.Single(sender.CollectDue(nowMs: 200));  // attempt 3 (== maxAttempts)
-        Assert.Empty(sender.CollectDue(nowMs: 300));
-        Assert.Equal(0, sender.PendingCount);
+        int sent = 0;
+        for (long now = 100; now <= 600_000; now += 100)
+        {
+            sent += sender.CollectDue(nowMs: now).Count;
+        }
+
+        Assert.True(sent >= 10, $"expected sustained retries, saw {sent}");
+        Assert.Equal(1, sender.PendingCount);
     }
 
     [Fact]

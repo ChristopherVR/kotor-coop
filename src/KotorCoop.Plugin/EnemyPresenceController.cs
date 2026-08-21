@@ -77,6 +77,13 @@ internal sealed unsafe class EnemyPresenceController(SharedBlockView block)
     private readonly uint[] _trackedId = new uint[SharedBlock.EnemyCapacity];
     private readonly nint[] _creature = new nint[SharedBlock.EnemyCapacity];
 
+    // ROUND 46: the engine's own pre-claim state for each slot's creature, captured once on
+    // first resolve (see Resolve()) so a creature handed to local_combat can be restored to
+    // what the engine actually had rather than whatever the last claim/drive pass left. See
+    // Odyssey.ClaimSnapshot's own doc comment and StartLocalFight's call site below.
+    private readonly Odyssey.ClaimSnapshot[] _originalState = new Odyssey.ClaimSnapshot[SharedBlock.EnemyCapacity];
+    private readonly bool[] _originalCaptured = new bool[SharedBlock.EnemyCapacity];
+
     // One-shot replay dedupe: the serial applied last, primed on first sight of a slot so
     // a swing from before tracking began (a join, a module entry) is never replayed late.
     private readonly uint[] _appliedOneShot = new uint[SharedBlock.EnemyCapacity];
@@ -512,6 +519,14 @@ internal sealed unsafe class EnemyPresenceController(SharedBlockView block)
             return true;
         }
 
+        // ROUND 46: decided BEFORE the claim below runs, not after — see that claim's own
+        // ROUND 46 note for why. Same gate StartLocalFight's own call site used to test
+        // after Drive(); duplicated here (not refactored into one shared flag site) because
+        // the state it reads (creature, player, mapped) is unchanged across the calls in
+        // between and re-testing it post-Drive as well costs nothing.
+        bool triggeringLocalFight = LocalCombat && player != 0 && _locallyFightingId == 0
+            && mapped == 0 && IsEngaged(creature, player) && Odyssey.HasCreatureScriptSlot0x260(creature);
+
         // Re-claim every pass, not once: the local AI re-queues combat and movement
         // actions between frames, and an armed MoveToPoint at the queue head is the
         // contended writer that made direct placement look broken for a month.
@@ -527,7 +542,27 @@ internal sealed unsafe class EnemyPresenceController(SharedBlockView block)
         // combat, only now the body also fights our placement. Odyssey reads the head node's
         // action type (node+0x00, dispatched by RunActions 0x0057F4A0) and wipes only when it
         // is a move-class action.
-        if (LocalCombat)
+        //
+        // ⚠ ROUND 46: SKIPPED ENTIRELY on the exact frame this creature is about to be
+        // started into local combat. ClaimCreatureForFight's conditional wipe calls the
+        // engine's own ClearAllActions(creature, 1) whenever the head action is move-class —
+        // ordinary for a body whose position this controller force-overwrites every frame —
+        // and ClearAllActions's own bIsCurrentOnly=1 branch (confirmed live in the
+        // disassembly, 0x004CCEC9 -> 0x004CCEDE call 0x004D37E0) walks the creature's own
+        // CSWSCombatRound sub-object (`creature+0x9C8`) 5 times, once per round sub-structure,
+        // and fully resets each one via 0x004D3010 -- which frees any queued action nodes at
+        // sub+0x88 and zeroes sub+0xB0, the exact field rounds 9-37 of this investigation
+        // spent 27+ rounds proving is THE write that arms a round to process a queued attack.
+        // Doing that on the SAME frame StartLocalFight fires the creature's own +0x260 script
+        // would disarm the very mechanism the script is about to rely on, one frame before it
+        // needs it. Every OTHER frame this creature is normally mirrored still gets the
+        // targeted wipe exactly as before -- this is a one-frame exception at the handoff,
+        // not a change to ongoing mirroring.
+        if (triggeringLocalFight)
+        {
+            *(int*)(creature + Odyssey.ObjCommandable) = 1;
+        }
+        else if (LocalCombat)
         {
             Odyssey.ClaimCreatureForFight(creature);
         }
@@ -539,7 +574,12 @@ internal sealed unsafe class EnemyPresenceController(SharedBlockView block)
         // Re-assert every pass, not once at spawn: a materialised body is marked as a
         // mirrored enemy when it is created and lives for the rest of the module, so a
         // spawn-time decision about whether it may swing cannot be trusted to still hold.
-        if (LocalCombat)
+        //
+        // ROUND 46: NOT called here on the triggering frame -- it runs once more, after the
+        // pre-claim state restore below, so the restore cannot silently drop the
+        // attack-permitted bit this plugin has always guaranteed for a creature it starts
+        // fighting.
+        if (LocalCombat && !triggeringLocalFight)
         {
             Odyssey.PermitAttacking(creature);
         }
@@ -611,9 +651,21 @@ internal sealed unsafe class EnemyPresenceController(SharedBlockView block)
             // Odyssey.HasCreatureScriptSlot0x260's own doc for the full account. A creature
             // that fails this check is simply left on ordinary mirrored/forwarded-damage
             // combat, same as before local_combat existed.
-            if (player != 0 && _locallyFightingId == 0 && mapped == 0 && IsEngaged(creature, player)
-                && Odyssey.HasCreatureScriptSlot0x260(creature))
+            if (triggeringLocalFight)
             {
+                // ROUND 46: hand the creature back to the engine in the state it actually
+                // had before this plugin ever claimed it, rather than whatever the last
+                // claim/drive pass happened to leave — see Odyssey.ClaimSnapshot's own doc
+                // comment for why CreMoveState in particular matters (DriveEnemy assigns it,
+                // not ORs it, every driven frame). PermitAttacking runs AFTER the restore on
+                // purpose, so the attack-permitted bit cannot be lost if the pre-claim
+                // snapshot happened not to have it.
+                if (_originalCaptured[slot])
+                {
+                    Odyssey.RestoreClaimState(creature, _originalState[slot]);
+                }
+
+                Odyssey.PermitAttacking(creature);
                 StartLocalFight(enemy.ObjectId, creature, now);
             }
         }
@@ -768,6 +820,13 @@ internal sealed unsafe class EnemyPresenceController(SharedBlockView block)
 
         _creature[slot] = creature;
         _trackedId[slot] = objectId;
+
+        // ROUND 46: capture the engine's own state for this creature BEFORE this plugin's
+        // claim ever runs on it — the only point in DriveOne's pipeline where that is still
+        // true. See Odyssey.ClaimSnapshot's own doc comment.
+        _originalState[slot] = Odyssey.CaptureClaimState(creature);
+        _originalCaptured[slot] = true;
+
         return creature;
     }
 
@@ -790,6 +849,7 @@ internal sealed unsafe class EnemyPresenceController(SharedBlockView block)
         _trackedId[slot] = 0;
         _appliedOneShot[slot] = 0;
         _oneShotPrimed[slot] = false;
+        _originalCaptured[slot] = false;
         _smoother.Reset(slot);
     }
 
