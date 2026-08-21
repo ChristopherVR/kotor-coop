@@ -198,16 +198,36 @@ public sealed class CoopHost : ICoopSession
     private readonly MaterialisedLootSender _materialisedLootSender = new();
 
     /// <summary>
+    /// The permanent record <see cref="MaterialisedLootSender"/> deliberately does not keep —
+    /// item 11(b), docs/research/enemy-materialisation.md §6: that sender forgets an op the
+    /// moment every then-connected peer has acked it, so a peer that reconnects AFTER an op
+    /// fully retired never receives it. This is <see cref="ContainerLootStore"/>'s pattern
+    /// applied to a channel keyed by owner enemy id — see <see cref="ResyncMaterialisedLoot"/>.
+    /// </summary>
+    private readonly MaterialisedLootHistory _materialisedLootHistory = new();
+
+    /// <summary>Ops still awaiting an ack from someone, for tests to observe retirement without
+    /// depending on wall-clock timing.</summary>
+    public int MaterialisedLootPendingCount => _materialisedLootSender.PendingCount;
+
+    /// <summary>How many owner enemy ids the bounded resync history currently remembers.</summary>
+    public int MaterialisedLootHistoryCount => _materialisedLootHistory.Count;
+
+    /// <summary>
     /// One of our own enemies just died holding this real loot; broadcast it reliably so every
     /// mirroring peer's stand-in (if it has one — see
     /// docs/research/enemy-materialisation.md §6) can receive the same items. Enqueue-only —
     /// the tick loop, which owns the send buffer, does the actual broadcasting and retransmits.
-    /// A duplicate call for an id already in flight is a no-op (dedup lives in
+    /// A duplicate call for an id already in flight is a no-op on the sender (dedup lives in
     /// <see cref="MaterialisedLootSender.Enqueue"/>), so a death-detection loop that fires
-    /// twice for the same creature never double-sends.
+    /// twice for the same creature never double-sends — but it is always recorded into the
+    /// resync history, so a peer that reconnects long after this op retired can still catch up.
     /// </summary>
-    public void PublishMaterialisedLoot(uint ownerEnemyId, IReadOnlyList<MaterialisedLootItem> items) =>
+    public void PublishMaterialisedLoot(uint ownerEnemyId, IReadOnlyList<MaterialisedLootItem> items)
+    {
+        _materialisedLootHistory.Record(ownerEnemyId, items);
         _materialisedLootSender.Enqueue(HostPeerId, ownerEnemyId, items, SessionClock.NowMs);
+    }
 
     private readonly DialogueGrantSender _dialogueGrantSender = new();
 
@@ -253,6 +273,17 @@ public sealed class CoopHost : ICoopSession
     {
         lock (_gate)
         {
+            if (module.Length > 0
+                && !string.Equals(module, _enemyModule, StringComparison.OrdinalIgnoreCase))
+            {
+                // Owner enemy ids are reassigned per module load
+                // (docs/research/enemy-materialisation.md §6): a resync history keyed on them
+                // from the last module names a different creature now, or nothing, so it must
+                // not survive into the next one. `_enemyModule` starts empty, so the very
+                // first legitimate publish also clears an already-empty history — harmless.
+                _materialisedLootHistory.Clear();
+            }
+
             _enemyModule = module;
             _enemies = enemies;
         }
@@ -1974,13 +2005,11 @@ public sealed class CoopHost : ICoopSession
             // arriving is the moment to try again rather than 4 seconds later.
             _lootSender.ResetBackoff();
 
-            // Same reasoning, for materialised-enemy death loot. ⚠ UNLIKE container loot,
-            // there is no permanent store to re-offer from here — MaterialisedLootSender only
-            // tracks ops still in flight, and an op already retired (every THEN-connected peer
-            // acked it while this one was away) is gone for good. A death this peer missed
-            // entirely during an outage will not be resent; only a death still pending when it
-            // reconnects gets this speed-up. Narrow, and the same class of gap
-            // enemy-materialisation.md §6 already flags as open, not new to this pass.
+            // Same reasoning, for materialised-enemy death loot. Item 11(b) closed this pass:
+            // ResyncMaterialisedLoot re-offers the bounded history alongside the ordinary
+            // in-flight resend, so an op that had already fully retired before this peer
+            // reconnected is not lost the way it used to be — see that method's own doc.
+            ResyncMaterialisedLoot(now);
             _materialisedLootSender.ResetBackoff();
 
             // Same speed-up, same narrow gap: a dialogue grant still in flight when this peer
@@ -2334,6 +2363,34 @@ public sealed class CoopHost : ICoopSession
         foreach (ContainerLootRemoval removal in _lootStore.Snapshot())
         {
             _lootSender.Enqueue(HostPeerId, removal.ContainerId, removal.ItemId, nowMs);
+        }
+    }
+
+    /// <summary>
+    /// Re-offers every materialised-loot death this session's bounded history still remembers —
+    /// item 11(b), docs/research/enemy-materialisation.md §6. Mirrors
+    /// <see cref="ResyncContainerLoot"/>: called from <see cref="HandleHello"/> on
+    /// (re-)admission, so a peer that reconnects after an op already fully retired (every
+    /// then-connected peer had acked it, and <see cref="MaterialisedLootSender"/> forgot it) is
+    /// not left with an empty stand-in. There is no separate loot-sync-request packet for this
+    /// channel the way container loot has, so this is the only call site.
+    ///
+    /// Re-enqueues through <see cref="MaterialisedLootSender.Enqueue"/> — a fresh sequence each
+    /// time, same payload — which is a no-op for an owner id already in flight (that op already
+    /// reaches every current recipient, including a fresh joiner, through the ordinary
+    /// per-recipient ack check in <see cref="MaterialisedLootSender.CollectDue"/>) and a genuine
+    /// new broadcast for one that had fully retired. Re-offering costs nothing to a peer who
+    /// already has it: the client's dedup-by-owner-id (<c>CoopClient._materialisedLootSeen</c>,
+    /// NOT reset on reconnect — only on a genuine module change, via
+    /// <see cref="ICoopSession.ResetMaterialisedLootDedup"/>) turns a re-arrival into a no-op
+    /// ack rather than a duplicate give.
+    /// </summary>
+    private void ResyncMaterialisedLoot(long nowMs)
+    {
+        foreach ((uint ownerEnemyId, IReadOnlyList<MaterialisedLootItem> items)
+            in _materialisedLootHistory.Snapshot())
+        {
+            _materialisedLootSender.Enqueue(HostPeerId, ownerEnemyId, items, nowMs);
         }
     }
 
