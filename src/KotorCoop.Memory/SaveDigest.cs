@@ -640,26 +640,50 @@ public sealed class SaveDigestCache(string gameDirectory)
         });
     }
 
-    /// <summary>Runs one digest job off the caller's thread and clears its pending mark
-    /// whatever happens — a job that threw must not wedge the slot forever.</summary>
-    private void Run(string job, Action work) => Task.Run(() =>
+    /// <summary>
+    /// Runs one digest job off the caller's thread and clears its pending mark whatever
+    /// happens — a job that threw must not wedge the slot forever.
+    ///
+    /// ⚠ A DEDICATED THREAD, NOT <c>Task.Run</c>. This work is synchronous file I/O
+    /// (<c>TryComputeModuleGit</c> opens and parses a module's archives), and every module
+    /// a transition passes through — a stunt module, then the real destination — invalidates
+    /// the whole cache (<see cref="RefreshSaveIfStale"/> clears <c>_moduleGit</c> on every
+    /// save-stamp change) and re-queues one job per module. `Task.Run` schedules onto the
+    /// SHARED thread pool, which this same process also uses for every other async
+    /// continuation — including the agent's own per-tick loop. The pool's thread-injection
+    /// rate is throttled (new threads are added roughly one at a time, seconds apart, under
+    /// sustained demand), so a burst of these synchronous jobs landing together after a
+    /// transition can starve unrelated pool work for tens of seconds with no exception, no
+    /// deadlock, and no CPU idle time to suggest anything is wrong — a plausible match for a
+    /// pump that silently stops for 60-90s and later resumes on its own. A dedicated
+    /// background thread per job never competes with the pool at all.
+    /// </summary>
+    private void Run(string job, Action work)
     {
-        try
+        Thread thread = new(() =>
         {
-            work();
-        }
-        catch (Exception)
-        {
-            // Best effort by design: the digest stays 0 = unknown, which only warns.
-        }
-        finally
-        {
-            lock (_gate)
+            try
             {
-                _pending.Remove(job);
+                work();
             }
-        }
-    });
+            catch (Exception)
+            {
+                // Best effort by design: the digest stays 0 = unknown, which only warns.
+            }
+            finally
+            {
+                lock (_gate)
+                {
+                    _pending.Remove(job);
+                }
+            }
+        })
+        {
+            IsBackground = true,
+            Name = $"SaveDigest:{job}",
+        };
+        thread.Start();
+    }
 
     private static (string, long, long) StampOf(string? saveDirectory)
     {
