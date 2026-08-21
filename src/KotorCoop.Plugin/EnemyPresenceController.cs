@@ -89,6 +89,11 @@ internal sealed unsafe class EnemyPresenceController(SharedBlockView block)
     private readonly uint[] _appliedOneShot = new uint[SharedBlock.EnemyCapacity];
     private readonly bool[] _oneShotPrimed = new bool[SharedBlock.EnemyCapacity];
 
+    // ROUND 49: edge-triggered per creature id, not per frame — a friendly census actor sits
+    // in the same slot every pass, and without this the reputation-gate rejection line above
+    // would spam once per frame for the entire time it stays engaged-but-non-hostile.
+    private readonly bool[] _repRejectedLogged = new bool[SharedBlock.EnemyCapacity];
+
     // The measure-smooth-decide half, shared with the party controller.
     //
     // Its own knob, not the phantom's smooth_ms: phantoms arrive at the 30 Hz tick, where
@@ -571,6 +576,38 @@ internal sealed unsafe class EnemyPresenceController(SharedBlockView block)
         bool triggeringLocalFight = LocalCombat && player != 0 && _locallyFightingId == 0
             && mapped == 0 && IsEngaged(creature, player) && Odyssey.HasCreatureScriptSlot0x260(creature);
 
+        // ROUND 49 GATE. Round 48 found the freeze rounds 9-47 chased was never a mechanism
+        // bug: the census-tracked creature every round since 44 tested against read FRIENDLY
+        // (rep=1) toward the player through the engine's own GetAIStateReputation — measured
+        // on the unmodified HOST too. The co-op census deliberately carries non-hostile story
+        // actors (presence replication is not "this thing wants to fight"), so without this
+        // gate a candidate that can never win GN_DetermineCombatRound's own hostility check
+        // gets pulled out of the census anyway, sits there for the full timeout, and rejoins —
+        // a wasted exclusion, not a real fight. Reuses the exact engine call StartLocalFight's
+        // own probe already reads, so this decision and that probe's reading can never
+        // disagree. Checked ONLY once the cheaper gates above already passed — GetAIStateReputation
+        // is an engine call, not a field read.
+        if (triggeringLocalFight)
+        {
+            int repForGate = Odyssey.GetAIStateReputation(creature, Odyssey.GetPlayerObjectId());
+            if (repForGate != 2)
+            {
+                triggeringLocalFight = false;
+                if (!_repRejectedLogged[slot])
+                {
+                    _repRejectedLogged[slot] = true;
+                    PluginHost.Log(
+                        $"local combat: 0x{enemy.ObjectId:X} rejected as a local_combat "
+                        + $"candidate - rep(creature,player)={repForGate} "
+                        + "(2=hostile required, this is a friendly/neutral census actor)");
+                }
+            }
+            else
+            {
+                _repRejectedLogged[slot] = false;
+            }
+        }
+
         // Re-claim every pass, not once: the local AI re-queues combat and movement
         // actions between frames, and an armed MoveToPoint at the queue head is the
         // contended writer that made direct placement look broken for a month.
@@ -923,6 +960,7 @@ internal sealed unsafe class EnemyPresenceController(SharedBlockView block)
         _appliedOneShot[slot] = 0;
         _oneShotPrimed[slot] = false;
         _originalCaptured[slot] = false;
+        _repRejectedLogged[slot] = false;
         _smoother.Reset(slot);
     }
 
