@@ -401,6 +401,46 @@ public interface IGameBridge : IDisposable
     /// </summary>
     bool TryArmClientDoorRefusal(ClientDoorRefusalReason reason) => false;
 
+    /// <summary>
+    /// The resref this instance's own <c>MoviePlayHook</c> most recently captured from a
+    /// mid-module <c>PlayMovie</c> call (no transition involved), with the serial the plugin
+    /// stamped it with — already excluded, on the plugin side, against a name the engine's own
+    /// transition queue already carries. False when nothing has been captured yet.
+    ///
+    /// The DETECTION half docs/research/trigger-relay.md §6 shipped without a hook for; see
+    /// docs/research/cinematics.md's 2026-08-22 section. De-duplicate on the serial, the same
+    /// convention every other plugin -&gt; agent announcement in this file uses.
+    /// </summary>
+    bool TryReadMidModuleMovie(out uint serial, out string resRef)
+    {
+        serial = 0;
+        resRef = string.Empty;
+        return false;
+    }
+
+    /// <summary>
+    /// Asks the plugin to act on a PEER's mid-module movie: play it right now, or defer it
+    /// onto this instance's own next transition, per <c>MovieRelayQueue.Decide</c> — the
+    /// plugin makes the final call using engine state only it can read (idle / in dialogue /
+    /// in combat / the transition queue). The caller is expected to have already filtered to
+    /// the local module and a name that survived parsing; the plugin does not re-check either.
+    /// Default false when this bridge has no plugin to ask.
+    /// </summary>
+    bool TryRequestMidModulePlay(string resRef) => false;
+
+    /// <summary>
+    /// What the plugin decided about the last <see cref="TryRequestMidModulePlay"/> request:
+    /// <paramref name="applied"/> echoes the request's own serial once handled, and
+    /// <paramref name="status"/> is the plugin's <c>MidModulePlayStatusCode</c> verdict. False
+    /// when this bridge has no plugin to ask.
+    /// </summary>
+    bool TryReadMidModulePlayStatus(out uint applied, out uint status)
+    {
+        applied = 0;
+        status = 0;
+        return false;
+    }
+
     /// <summary>False when this bridge cannot see or drive enemy health.</summary>
     bool SupportsEnemySync => false;
 

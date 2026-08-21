@@ -331,9 +331,9 @@ trigger_relay_patterns=k_p*_*
 
 # Relay a MID-MODULE movie (a script's own PlayMovie, not a module-transition movie - those
 # already replicate via TransitionMovies) so a peer whose own screen never ran that PlayMovie
-# call sees it too, queued at the peer's own next safe point rather than forced mid-dialogue or
-# mid-fight. NOT WIRED UP END TO END in this pass: the decision half (MovieRelayQueue) is
-# implemented and tested, but the detection half - CinematicWatch capturing WHICH movie a
-# mid-module PlayMovie call played - needs a new engine hook this pass did not locate. Setting
-# this to 1 today changes nothing until that hook lands. See docs/research/trigger-relay.md §6.
+# call sees it too - played immediately if idle, or queued onto that peer's own next transition
+# if mid-dialogue or mid-fight. Both halves are wired up now: MoviePlayHook captures which movie
+# played (docs/research/cinematics.md's 2026-08-22 section) and MovieRelayQueue.Decide (already
+# tested) picks play-now/defer/ignore. Default OFF pending a live pass - see that section's own
+# live-test note.
 movie_relay=0

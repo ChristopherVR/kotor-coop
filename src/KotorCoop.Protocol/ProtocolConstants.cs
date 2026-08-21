@@ -154,8 +154,16 @@ public static class ProtocolConstants
     /// running back to back. Unreliable like TransitionMovies (39, 47 and 48 stay reserved for
     /// the same reason 39 already was): a lost announcement costs the smoother handoff, never
     /// consistency, because the pre-existing host-module-based follow is the fallback whenever
-    /// no announcement arrives at all. See docs/research/transition-smoothness.md.</summary>
-    public const byte Version = 33;
+    /// no announcement arrives at all. See docs/research/transition-smoothness.md.
+    /// Version 34: MidModuleMovie (50) — a script's own <c>PlayMovie</c> call with NO
+    /// transition involved (the Leviathan capture, the Star Forge arrival, the Taris
+    /// bombardment, the Dantooine vision), captured by the plugin's new <c>MoviePlayHook</c>
+    /// and relayed the same way TransitionMovies is. Before this, MovieRelayQueue's pure
+    /// PlayNow/Defer/Ignore decision existed and changed nothing: nothing captured WHICH movie
+    /// a mid-module PlayMovie call played (docs/research/trigger-relay.md §6). Gated OFF by
+    /// default (coop.ini <c>movie_relay</c>) until live-verified, like PeerEffect and
+    /// CreatureLiveness before it. See docs/research/cinematics.md's 2026-08-22 section.</summary>
+    public const byte Version = 34;
 
     /// <summary>Journal quest tags are resrefs plus a little slack.</summary>
     public const int MaxJournalTagLength = 32;

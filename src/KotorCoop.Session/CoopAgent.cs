@@ -145,6 +145,16 @@ public sealed record AgentSettings
     public FollowLeadMode FollowLeadMode { get; init; } = FollowLeadMode.Any;
 
     /// <summary>
+    /// When true, a mid-module <c>PlayMovie</c> call (no transition involved) captured by this
+    /// instance's own <c>MoviePlayHook</c> is announced to peers, and an announcement received
+    /// from a peer is forwarded into the plugin for it to act on. Off by default,
+    /// live-verification pending — the same posture <c>PeerEffect</c> and
+    /// <c>CreatureLiveness</c> shipped with. coop.ini <c>movie_relay</c>. See
+    /// docs/research/trigger-relay.md §6 and docs/research/cinematics.md's 2026-08-22 section.
+    /// </summary>
+    public bool MovieRelayEnabled { get; init; }
+
+    /// <summary>
     /// Turns a module resref into the name shown on screen ("Taris - Lower City" rather than
     /// "tar_m03aa"), for the "following &lt;host&gt; to &lt;module&gt;" line
     /// <see cref="TransitionAnnounceEnabled"/>'s fast path posts. Null (the default) leaves the
@@ -472,6 +482,7 @@ public sealed class CoopAgent(IGameBridge bridge, ICoopSession session, AgentSet
 
             PumpInteractionLocks(local);
             PumpBarks(local);
+            PumpMidModuleMovies(local);
         }
 
         // Dialogue, on the fast path: every poll tick (as fast as the position write above),
@@ -560,6 +571,69 @@ public sealed class CoopAgent(IGameBridge bridge, ICoopSession session, AgentSet
         foreach (BarkPacket bark in session.DrainBarks(local.Module))
         {
             bridge.TryWriteBark(bark.Speaker, bark.Text, bark.SoundResRef, bark.Flags, bark.Serial);
+        }
+    }
+
+    // ---- mid-module movie relay ------------------------------------------------------
+    //
+    // A script's own PlayMovie call with NO transition involved — the Leviathan capture, the
+    // Star Forge arrival, the Taris bombardment, the Dantooine vision. Distinct from the
+    // transition-cinematics section below: no travel command to ride on, so this stands
+    // entirely on its own (no accumulation, no follow logic, no interaction with
+    // TravelController). See docs/research/trigger-relay.md §6 and
+    // docs/research/cinematics.md's 2026-08-22 section.
+
+    /// <summary>The mid-module movie serial this agent has already announced, so a standing
+    /// capture is not re-announced every tick.</summary>
+    private uint _announcedMidModuleMovieSerial;
+
+    /// <summary>The last mid-module movie serial taken from each peer, so a repeated
+    /// announcement is not re-requested every tick.</summary>
+    private readonly Dictionary<uint, uint> _seenMidModuleMovieSerials = [];
+
+    private void PumpMidModuleMovies(in PlayerState local)
+    {
+        if (!settings.MovieRelayEnabled)
+        {
+            return;
+        }
+
+        // Announce our own. Cheap block reads either way (nothing new most ticks), gated the
+        // same as every other block-read pump here.
+        if (bridge.TryReadMidModuleMovie(out uint serial, out string movie)
+            && serial != _announcedMidModuleMovieSerial)
+        {
+            _announcedMidModuleMovieSerial = serial;
+            Log?.Invoke($"announcing mid-module movie '{movie}'");
+            session.PublishMidModuleMovie(local.Module, serial, movie);
+        }
+
+        // Take everyone else's. Filtered to the local module HERE, cheaply, before ever
+        // writing a request into the plugin block — the plugin's own decision
+        // (MovieRelayQueue.Decide) trusts sameModule/hasMovieName are already true.
+        foreach (MidModuleMoviePacket packet in session.DrainMidModuleMovies())
+        {
+            if (_seenMidModuleMovieSerials.TryGetValue(packet.PeerId, out uint seen) && seen == packet.Serial)
+            {
+                continue;
+            }
+
+            _seenMidModuleMovieSerials[packet.PeerId] = packet.Serial;
+
+            if (packet.Movie.Length == 0)
+            {
+                continue;
+            }
+
+            if (!string.Equals(packet.Module, local.Module, StringComparison.OrdinalIgnoreCase))
+            {
+                continue; // not our module - nothing here to act on
+            }
+
+            if (bridge.TryRequestMidModulePlay(packet.Movie))
+            {
+                Log?.Invoke($"peer's mid-module movie '{packet.Movie}' handed to the plugin");
+            }
         }
     }
 

@@ -602,6 +602,65 @@ public sealed class CoopClient : ICoopSession
         }
     }
 
+    // ---- mid-module movie relay ---------------------------------------------------------
+    //
+    // Same shape as the cinematic channel above, same reliability, and the same reason: a
+    // script's own PlayMovie call with no transition involved. A lost announcement costs a
+    // cinematic, never consistency.
+
+    private readonly Queue<MidModuleMoviePacket> _midModuleMovieOutbox = new();
+    private readonly Queue<MidModuleMoviePacket> _midModuleMovieInbox = new();
+
+    public void PublishMidModuleMovie(string module, uint serial, string movie)
+    {
+        lock (_gate)
+        {
+            _midModuleMovieOutbox.Enqueue(new MidModuleMoviePacket(_localPeerId, module, serial, movie));
+        }
+    }
+
+    public IReadOnlyList<MidModuleMoviePacket> DrainMidModuleMovies()
+    {
+        lock (_gate)
+        {
+            if (_midModuleMovieInbox.Count == 0)
+            {
+                return [];
+            }
+
+            List<MidModuleMoviePacket> ready = [];
+            while (_midModuleMovieInbox.Count > 0)
+            {
+                ready.Add(_midModuleMovieInbox.Dequeue());
+            }
+
+            return ready;
+        }
+    }
+
+    private void FlushMidModuleMovies()
+    {
+        while (true)
+        {
+            MidModuleMoviePacket movie;
+            lock (_gate)
+            {
+                if (_midModuleMovieOutbox.Count == 0)
+                {
+                    return;
+                }
+
+                movie = _midModuleMovieOutbox.Dequeue();
+            }
+
+            int length = PacketCodec.Write(_sendBuffer, movie);
+            if (length > 0)
+            {
+                _channel.Send(_hostEndPoint, _sendBuffer.AsSpan(0, length));
+            }
+        }
+    }
+
     private void FlushChat()
     {
         while (true)
@@ -1231,6 +1290,7 @@ public sealed class CoopClient : ICoopSession
         FlushBarks();
         FlushTransitionMovies();
         FlushTransitionAnnounce();
+        FlushMidModuleMovies();
 
         if (now - _lastPingMs >= PingIntervalMs)
         {
@@ -1774,6 +1834,17 @@ public sealed class CoopClient : ICoopSession
                     lock (_gate)
                     {
                         _announceInbox.Enqueue(announce);
+                    }
+                }
+
+                break;
+
+            case PacketType.MidModuleMovie:
+                if (PacketCodec.ReadMidModuleMovie(span) is { } midModuleMovie)
+                {
+                    lock (_gate)
+                    {
+                        _midModuleMovieInbox.Enqueue(midModuleMovie);
                     }
                 }
 

@@ -275,6 +275,42 @@ internal static class MovieStaging
         return MovieStagingVerdict.Stage;
     }
 
+    /// <summary>
+    /// Decides whether it is safe to call the engine's PlayMovie entry point DIRECTLY, right
+    /// now — the mid-module movie relay's <c>PlayNow</c> path (docs/research/trigger-relay.md
+    /// §6, docs/research/cinematics.md's 2026-08-22 section), where the movie is a PEER's
+    /// script's, not this instance's own transition. Same refusal categories as
+    /// <see cref="Decide"/> minus the name-count checks (a play-now request always names
+    /// exactly one movie, already validated by <see cref="IsMovieName"/> before this is
+    /// called) — reusing the SAME <see cref="MovieStagingVerdict"/> type so a caller logs both
+    /// through the SAME <see cref="Explain"/> table.
+    /// </summary>
+    public static MovieStagingVerdict DecidePlayNow(
+        bool hasClient, bool transitionPending, bool moviePlaying, int alreadyQueued)
+    {
+        if (!hasClient)
+        {
+            return MovieStagingVerdict.RefuseNoWorld;
+        }
+
+        if (transitionPending)
+        {
+            return MovieStagingVerdict.RefuseTransitionPending;
+        }
+
+        if (moviePlaying)
+        {
+            return MovieStagingVerdict.RefuseMoviePlaying;
+        }
+
+        if (alreadyQueued > 0)
+        {
+            return MovieStagingVerdict.RefuseQueueBusy;
+        }
+
+        return MovieStagingVerdict.Stage;
+    }
+
     /// <summary>The sentence a refusal answers with — what was SEEN, not "refused".</summary>
     public static string Explain(MovieStagingVerdict verdict, int alreadyQueued) => verdict switch
     {

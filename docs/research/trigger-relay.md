@@ -210,7 +210,8 @@ Guards, all in `TriggerRelayController` and `OdysseyTriggers`:
 
 The task that produced this pass asked for the minimal safe version of relaying a mid-module
 `PlayMovie` (a script's own cinematic call, not a transition — those already replicate via
-`TransitionMovies`, docs/research/cinematics.md). What shipped is the DECISION half only:
+`TransitionMovies`, docs/research/cinematics.md). What shipped THIS pass was the DECISION half
+only:
 
 - `MovieRelayQueue.Decide` (`src/KotorCoop.Plugin/MovieRelayQueue.cs`) — pure, tested — answers
   `PlayNow` / `DeferToNextTransition` / `Ignore` for a receiving peer, given whether the
@@ -218,23 +219,24 @@ The task that produced this pass asked for the minimal safe version of relaying 
   in dialogue, in combat, and whether the engine's own transition queue is already busy. `Defer`
   means queuing through the SAME `MovieStaging`/`ModeQueueOnly` path transition movies already
   ride — no new engine call.
-- The DETECTION half — `CinematicWatch` capturing WHICH resref a mid-module `PlayMovie` call
-  played — is **not implemented**. `CinematicWatch` today reads the move-to-module transition
-  queue (`CClientExoAppInternal+0x2D8`) and the coarse `IsMoviePlaying`/stall signals; neither
-  tells you the name of a movie played by a bare `PlayMovie(...)` NWScript call with no
-  transition involved, because nothing persists that name anywhere `CinematicWatch` already
-  reads. The likely target for a follow-up pass is the NWScript command dispatch entry for
+- The DETECTION half — capturing WHICH resref a mid-module `PlayMovie` call played — was **not
+  implemented**. The likely target named here was the NWScript command dispatch entry for
   `ExecuteCommandPlayMovie` — findable the same way `CSWSTrigger::EventHandler` was found for
-  this pass, via `tools/xrefs.py` on a string literal or a known caller — but locating and
-  verify-byte-gating a NEW engine hook was judged out of scope for this pass's time budget
-  against the risk of shipping an unverified hook into a codebase whose stated rule is "always
-  verify a researched offset live before shipping the write."
-- `movie_relay=0` in `coop.ini` is defined and documented as reserved: setting it to 1 today
-  changes nothing, because nothing yet calls `MovieRelayQueue.Decide` from a live detection.
+  this pass, via `tools/xrefs.py` on a string literal or a known caller.
+- `movie_relay=0` in `coop.ini` was defined and documented as reserved: setting it to 1 changed
+  nothing, because nothing yet called `MovieRelayQueue.Decide` from a live detection.
 
-This is stated in full here, in the profile comment, and in the README, rather than left to be
-discovered: a gate that exists but does nothing is a worse trap than no gate at all if it is not
-said out loud.
+⚠ **SUPERSEDED (2026-08-22).** The detection half is now built —
+`src/KotorCoop.Plugin/MoviePlayHook.cs`, a detour on
+`CClientExoAppInternal::PlayMovie 0x00602CF0` (VERIFIED disassembled, `tools/disasm.py`/
+`tools/xrefs.py` against `tools/kotor1_0_3.db`), not `ExecuteCommandPlayMovie` itself — the
+xrefs on `ExecuteCommandPlayMovie`'s own call into `CClientExoApp::PlayMovie 0x005EDB30` land
+here, and this function's own xrefs are exactly the NWScript command and the main-menu movie
+gallery, never the transition path. `MovieRelayQueue.Decide` now runs against a live capture,
+and `movie_relay=1` (still default OFF pending a live pass) stages or plays the announced movie
+for real. Full derivation, the receiver (`MidModuleMovieController.cs`, `OdysseyMovies.cs`), the
+block/protocol changes and the live-test note are in docs/research/cinematics.md's 2026-08-22
+section (§10) — this section is kept for the history of why it was not done sooner.
 
 ## 7. NEEDS-LIVE — the pre-live-pass task list (see §11 for the results)
 

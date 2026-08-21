@@ -504,6 +504,23 @@ public sealed record TransitionMoviePacket(uint PeerId, string Module, uint Seri
 /// </summary>
 public sealed record TransitionAnnouncePacket(uint PeerId, string Module, string Waypoint, uint Serial);
 
+/// <summary>
+/// any -&gt; all: "my engine just played this mid-module movie" — a script's own
+/// <c>PlayMovie</c> call with no transition involved. See <see cref="PacketType.MidModuleMovie"/>
+/// for why this is a separate shape from <see cref="TransitionMoviePacket"/>.
+///
+/// <paramref name="Module"/> is where the announcer is standing (there is no transition in
+/// progress to make it ambiguous, unlike <see cref="TransitionMoviePacket.Module"/>'s "leaving"
+/// sense) — a receiver compares it against its own current module before ever asking the
+/// plugin to act. <paramref name="Movie"/> is a single resref, stripped of any path/extension
+/// exactly like <see cref="TransitionMoviePacket.Movies"/>'s entries.
+/// </summary>
+public sealed record MidModuleMoviePacket(uint PeerId, string Module, uint Serial, string Movie)
+{
+    /// <summary>An Odyssey resref is 16 characters.</summary>
+    public const int MaxMovieLength = 16;
+}
+
 /// <summary>host -> all: the authoritative conversation token (see <see cref="DialogueState"/>).</summary>
 public sealed record DialogueSnapshotPacket(long ServerTimeMs, DialogueState State);
 

@@ -208,6 +208,15 @@ public sealed record CoopConfig
     /// </summary>
     public FollowLeadMode FollowLead { get; init; } = FollowLeadMode.Any;
 
+    /// <summary>
+    /// Relays a mid-module <c>PlayMovie</c> call (no transition involved) to peers, and acts
+    /// on one a peer announces. Off by default, live-verification pending — the same posture
+    /// <c>PeerEffect</c> and <c>CreatureLiveness</c> shipped with. coop.ini <c>movie_relay</c>.
+    /// See docs/research/trigger-relay.md §6 and docs/research/cinematics.md's 2026-08-22
+    /// section.
+    /// </summary>
+    public bool MovieRelayEnabled { get; init; }
+
     /// <summary>The anchor as the plugin's numeric code (0=TL, 1=TR, 2=BL, 3=BR).</summary>
     public uint ChatOverlayAnchorCode => ChatOverlayAnchor.Trim().ToLowerInvariant() switch
     {
@@ -325,6 +334,7 @@ public sealed record CoopConfig
                 .Trim().Equals("host", StringComparison.OrdinalIgnoreCase)
                 ? FollowLeadMode.Host
                 : FollowLeadMode.Any,
+            MovieRelayEnabled = IsTruthy(kv.GetValueOrDefault("movie_relay")),
         };
     }
 

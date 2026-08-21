@@ -914,6 +914,42 @@ internal sealed unsafe class SharedBlockView(byte* baseAddress)
     /// </summary>
     public uint ClientDoorRefusalReason => *U32(SharedBlock.OffsetClientDoorRefusalArmed);
 
+    // ---- mid-module movie relay ----------------------------------------------------
+
+    /// <summary>
+    /// Plugin -&gt; agent. Publishes the resref <c>MoviePlayHook</c> most recently captured
+    /// (already excluded against the engine's own transition queue by the caller), bumping the
+    /// serial LAST so the agent never reads a half-written name.
+    /// </summary>
+    public void PublishMidModuleMovie(string resRef)
+    {
+        WriteFixedAscii(SharedBlock.OffsetMidModuleMovieResRef, resRef, SharedBlock.MidModuleMovieNameLength);
+        *U32(SharedBlock.OffsetMidModuleMovieSerial) = *U32(SharedBlock.OffsetMidModuleMovieSerial) + 1;
+    }
+
+    /// <summary>Agent -&gt; plugin. The request serial; a request is pending while it is ahead
+    /// of <see cref="MidModulePlayApplied"/>.</summary>
+    public uint MidModulePlayRequestSerial => *U32(SharedBlock.OffsetMidModulePlayRequestSerial);
+
+    /// <summary>Agent -&gt; plugin. Pointer to the null-terminated resref (16 bytes) the
+    /// pending request names.</summary>
+    public byte* MidModulePlayRequestResRef => baseAddress + SharedBlock.OffsetMidModulePlayRequestResRef;
+
+    /// <summary>Plugin -&gt; agent. Echoes <see cref="MidModulePlayRequestSerial"/> once this
+    /// instance has decided what to do with the request.</summary>
+    public uint MidModulePlayApplied
+    {
+        get => *U32(SharedBlock.OffsetMidModulePlayApplied);
+        set => *U32(SharedBlock.OffsetMidModulePlayApplied) = value;
+    }
+
+    /// <summary>Plugin -&gt; agent. The verdict for the log (<c>MidModulePlayStatusCode</c>).
+    /// </summary>
+    public uint MidModulePlayStatus
+    {
+        set => *U32(SharedBlock.OffsetMidModulePlayStatus) = value;
+    }
+
     /// <summary>Agent -&gt; plugin. True while the client-door-refusal watch should refuse a
     /// CLIENT-initiated real door transition, for whatever reason — see
     /// <see cref="ClientDoorRefusalReason"/> for which.</summary>

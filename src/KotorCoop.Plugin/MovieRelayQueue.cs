@@ -106,4 +106,29 @@ internal static class MovieRelayQueue
             ? MovieRelayAction.DeferToNextTransition
             : MovieRelayAction.PlayNow;
     }
+
+    /// <summary>
+    /// Whether a resref this instance's own <c>MoviePlayHook</c> just captured is one the
+    /// engine's own transition queue already carries — defence in depth against a coincidence
+    /// (a script's mid-module movie happening to share a name with one already queued for the
+    /// NEXT transition), pulled out as pure arithmetic so it can be asserted without an engine
+    /// underneath it, same as <see cref="Decide"/> itself.
+    ///
+    /// Case-insensitive: <see cref="MovieStaging.IsMovieName"/> already restricts a resref to
+    /// ASCII letters/digits/underscore, and the engine's own filesystem lookup
+    /// (<c>AddMovieToExoArrayList</c>, docs/research/cinematics.md §1.5) is not
+    /// case-sensitive either.
+    /// </summary>
+    public static bool IsAlreadyQueued(string capturedResRef, ReadOnlySpan<string> queuedResRefs)
+    {
+        foreach (string queued in queuedResRefs)
+        {
+            if (string.Equals(queued, capturedResRef, StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
 }

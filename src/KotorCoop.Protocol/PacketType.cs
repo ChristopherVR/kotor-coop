@@ -415,4 +415,34 @@ public enum PacketType : byte
     /// remains the fallback whenever no announcement arrives, or arrives too late to matter.
     /// </summary>
     TransitionAnnounce = 49,
+
+    /// <summary>
+    /// any -&gt; all, relayed by the host: "my engine just played this mid-module movie" — a
+    /// script's own <c>PlayMovie</c> call with NO transition involved (the Leviathan capture,
+    /// the Star Forge arrival, the Taris bombardment, the Dantooine vision), as opposed to
+    /// <see cref="TransitionMovies"/>, which carries a module transition's queue.
+    ///
+    /// WHY A SEPARATE PACKET TYPE rather than reusing <see cref="TransitionMovies"/>'s shape:
+    /// that record carries <c>Module</c> as "what the announcer is LEAVING" and a LIST of up
+    /// to six movies (the engine's own <c>StartNewModule</c> ceiling), because a transition's
+    /// queue is drained wholesale by the next module load. A mid-module movie is a single,
+    /// independent event with no transition to ride — the receiving peer has to decide,
+    /// per-movie, whether to interrupt what it is doing right now
+    /// (<c>KotorCoop.Plugin.MovieRelayQueue.Decide</c>) or defer it, which
+    /// <see cref="TransitionMovies"/>'s "queue everything for the next load" semantics cannot
+    /// express. Carrying a flag on the existing record would still leave the receiver unable
+    /// to tell "defer THIS one movie" from "these movies ride the NEXT transition wholesale".
+    ///
+    /// <paramref name="Module"/> here is the module the ANNOUNCER is standing in when the
+    /// movie played — unlike <see cref="TransitionMovies"/>'s "leaving" module, there is no
+    /// transition in progress, so this is simply "where", and it is how a receiver decides
+    /// <c>sameModule</c> before ever asking the plugin to act (see
+    /// <c>CoopAgent.PumpMidModuleMovies</c>).
+    ///
+    /// UNRELIABLE, like <see cref="TransitionMovies"/>, for the identical reason: a lost
+    /// announcement costs one player a cinematic, never a desync — nothing about this channel
+    /// is state that has to converge. See docs/research/trigger-relay.md §6 and
+    /// docs/research/cinematics.md's 2026-08-22 section.
+    /// </summary>
+    MidModuleMovie = 50,
 }
