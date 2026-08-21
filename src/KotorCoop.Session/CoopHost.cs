@@ -209,6 +209,43 @@ public sealed class CoopHost : ICoopSession
     public void PublishMaterialisedLoot(uint ownerEnemyId, IReadOnlyList<MaterialisedLootItem> items) =>
         _materialisedLootSender.Enqueue(HostPeerId, ownerEnemyId, items, SessionClock.NowMs);
 
+    private readonly DialogueGrantSender _dialogueGrantSender = new();
+
+    /// <summary>Client-originated grants this instance's OWN player still owes a give-loot
+    /// request for — see <see cref="HandleDialogueGrant"/>. The host is never told about its
+    /// own local grants here (its own engine already ran the reward script), only a peer's.
+    /// </summary>
+    private readonly Queue<DialogueGrantPacket> _dialogueGrantInbox = new();
+
+    /// <summary>The host's own conversation just granted something; broadcast it reliably to
+    /// every client. Enqueue-only — the tick loop, which owns the send buffer, does the actual
+    /// broadcasting and retransmits.</summary>
+    public void PublishDialogueGrant(string partnerTag, IReadOnlyList<MaterialisedLootItem> items) =>
+        _dialogueGrantSender.EnqueueLocal(HostPeerId, partnerTag, items, SessionClock.NowMs);
+
+    /// <summary>Every dialogue-grant a CLIENT'S conversation reported, still owed a give to this
+    /// instance's own player (docs/research/dialogue-consequences.md §3.4) — the host's half of
+    /// the symmetric channel; a client drains the same shape from <see cref="CoopClient"/>.
+    /// </summary>
+    public IReadOnlyList<DialogueGrantPacket> DrainDialogueGrants()
+    {
+        lock (_gate)
+        {
+            if (_dialogueGrantInbox.Count == 0)
+            {
+                return [];
+            }
+
+            List<DialogueGrantPacket> ready = [];
+            while (_dialogueGrantInbox.Count > 0)
+            {
+                ready.Add(_dialogueGrantInbox.Dequeue());
+            }
+
+            return ready;
+        }
+    }
+
     /// <summary>The host is the enemy authority: its fights are the ones that count.</summary>
     public bool IsEnemyAuthority => true;
 
@@ -1326,6 +1363,7 @@ public sealed class CoopHost : ICoopSession
         BroadcastProgression(now, recipients);
         BroadcastContainerLoot(now, recipients);
         BroadcastMaterialisedLoot(now, recipients);
+        BroadcastDialogueGrant(now, recipients);
         BroadcastPhantomDamage(recipients);
         BroadcastPeerEffects(recipients);
         BroadcastBarks(recipients);
@@ -1384,6 +1422,70 @@ public sealed class CoopHost : ICoopSession
                 _channel.Send(peer.EndPoint, _sendBuffer.AsSpan(0, length));
             }
         }
+    }
+
+    /// <summary>
+    /// Retransmits dialogue grants — this instance's own and every client's relayed report —
+    /// to every client until each has acked. Reliable rather than snapshot-broadcast, for the
+    /// same reason as <see cref="BroadcastMaterialisedLoot"/>: a reward node fires once, so a
+    /// dropped packet must not silently mean the item or recruit never reaches the other screen.
+    /// </summary>
+    private void BroadcastDialogueGrant(long now, List<PeerConnection> recipients)
+    {
+        List<uint> recipientIds = [.. recipients.Select(p => p.Id)];
+
+        foreach (DialogueGrantPacket op in _dialogueGrantSender.CollectDue(recipientIds, now))
+        {
+            int length = PacketCodec.Write(_sendBuffer, op);
+            if (length == 0)
+            {
+                continue;
+            }
+
+            foreach (PeerConnection peer in recipients)
+            {
+                _channel.Send(peer.EndPoint, _sendBuffer.AsSpan(0, length));
+            }
+        }
+    }
+
+    /// <summary>
+    /// A client's conversation just granted item(s) (and/or made a companion available) — echo
+    /// an ack immediately, queue the grant for THIS instance's own player to receive (the host
+    /// is a peer like any other here: it never ran the client's HandleReply either), and relay
+    /// it to every other connected client under the client's TRUE (origin, sequence) identity
+    /// (see <see cref="DialogueGrantSender.EnqueueRelay"/>) rather than re-numbering it the way
+    /// <see cref="HandleContainerLoot"/> does — a re-attributed relay would look, to a receiver
+    /// filtering by "is this my own echo", identical to a genuinely new host-originated grant.
+    /// </summary>
+    private void HandleDialogueGrant(IPEndPoint from, ReadOnlySpan<byte> span)
+    {
+        if (PacketCodec.ReadDialogueGrant(span) is not { } grant)
+        {
+            _channel.NoteMalformed();
+            return;
+        }
+
+        int length = PacketCodec.Write(
+            _replyBuffer, new DialogueGrantAckPacket(HostPeerId, grant.OriginPeerId, grant.OpSequence));
+        if (length > 0)
+        {
+            _channel.Send(from, _replyBuffer.AsSpan(0, length));
+        }
+
+        if (grant.OriginPeerId == HostPeerId)
+        {
+            // Should never happen — the host does not send itself packets — but a malformed or
+            // spoofed origin must not be queued as if a peer had granted the host something.
+            return;
+        }
+
+        lock (_gate)
+        {
+            _dialogueGrantInbox.Enqueue(grant);
+        }
+
+        _dialogueGrantSender.EnqueueRelay(grant, SessionClock.NowMs);
     }
 
     /// <summary>
@@ -1719,6 +1821,19 @@ public sealed class CoopHost : ICoopSession
                 HandleInteractionClaim(span);
                 break;
 
+            case PacketType.DialogueGrant:
+                HandleDialogueGrant(datagram.From, span);
+                break;
+
+            case PacketType.DialogueGrantAck:
+                if (PacketCodec.ReadDialogueGrantAck(span) is { } dialogueGrantAck)
+                {
+                    _dialogueGrantSender.Acknowledge(
+                        dialogueGrantAck.OriginPeerId, dialogueGrantAck.OpSequence, dialogueGrantAck.PeerId);
+                }
+
+                break;
+
             case PacketType.Ping:
                 HandlePing(datagram.From, span, now);
                 break;
@@ -1867,6 +1982,11 @@ public sealed class CoopHost : ICoopSession
             // reconnects gets this speed-up. Narrow, and the same class of gap
             // enemy-materialisation.md §6 already flags as open, not new to this pass.
             _materialisedLootSender.ResetBackoff();
+
+            // Same speed-up, same narrow gap: a dialogue grant still in flight when this peer
+            // reconnects goes out again immediately rather than waiting out a backoff, but one
+            // already fully retired before it came back is not resent.
+            _dialogueGrantSender.ResetBackoff();
         }
 
         WelcomePacket welcome = new(

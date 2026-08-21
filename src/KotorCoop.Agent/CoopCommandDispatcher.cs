@@ -788,9 +788,10 @@ public sealed class CoopCommandDispatcher(
 
     /// <summary>
     /// The automatic half of <see cref="GiveLoot"/>: drains one queued give per tick from
-    /// the connected <see cref="CoopAgent"/> (materialised loot received over the wire,
-    /// docs/research/enemy-materialisation.md §6) through the EXACT same
-    /// <see cref="SendCheat"/> call a typed <c>giveloot</c> console command uses — but,
+    /// the connected <see cref="CoopAgent"/> — materialised loot received over the wire
+    /// (docs/research/enemy-materialisation.md §6) OR a peer's dialogue-conversation grant
+    /// (docs/research/dialogue-consequences.md §3), sharing the one pending-give queue — through
+    /// the EXACT same <see cref="SendCheat"/> call a typed <c>giveloot</c> console command uses — but,
     /// unlike the console verb's stack-only argument, carries the FULL identity
     /// (<see cref="CheatKinds.GiveLoot"/>'s handler already accepts it, the same four
     /// fields <c>setitem</c> writes) since this is exactly the path that identity was
@@ -818,10 +819,10 @@ public sealed class CoopCommandDispatcher(
         }
 
         ItemIdentity identity = give.Item.Identity;
-        Log?.Invoke($"materialised loot: submitting '{give.Item.Resref}' for owner 0x{give.OwnerEnemyId:X} through the giveloot channel");
+        Log?.Invoke($"materialised loot: submitting '{give.Item.Resref}' for target 0x{give.TargetObjectId:X} through the giveloot channel");
         SendCheat(new CheatRequest(
             CheatKinds.GiveLoot,
-            Target: give.OwnerEnemyId,
+            Target: give.TargetObjectId,
             Text: give.Item.Resref,
             Amount: identity.StackSize,
             Charges: identity.Charges,

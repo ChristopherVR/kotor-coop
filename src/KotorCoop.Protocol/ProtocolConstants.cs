@@ -102,8 +102,16 @@ public static class ProtocolConstants
     /// forwarded to that peer's real character. The non-damage sibling of PhantomDamage, which
     /// only ever carried plain damage; before this a Force-Stun on a peer's phantom left them
     /// free to act on their own screen. Gated OFF by default (coop.ini effect_sync) until
-    /// live-verified — see docs/research/effect-sync.md.</summary>
-    public const byte Version = 28;
+    /// live-verified — see docs/research/effect-sync.md.
+    /// Version 29: DialogueGrant (45) / DialogueGrantAck (46) — a reward node's SCRIPT only
+    /// ever ran on the conversation OWNER's instance (docs/research/dialogue-sync.md's Layer
+    /// 1/2 gets conversations to look the same on both screens, but never runs HandleReply on
+    /// the spectating side), so an item placed into the speaker's inventory landed on one
+    /// screen only. Reliable and symmetric like ContainerLoot: whichever peer owns the
+    /// conversation reports the net-new items, the host relays to everyone else under the
+    /// SAME (origin, sequence) identity, and a receiver gives them through the existing
+    /// giveloot cheat channel.</summary>
+    public const byte Version = 29;
 
     /// <summary>Journal quest tags are resrefs plus a little slack.</summary>
     public const int MaxJournalTagLength = 32;

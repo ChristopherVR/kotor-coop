@@ -375,6 +375,92 @@ public static class PacketCodec
         return r.Failed ? null : new MaterialisedLootAckPacket(peerId, opSeq);
     }
 
+    public static int Write(Span<byte> buffer, DialogueGrantPacket packet)
+    {
+        PacketWriter w = new(buffer);
+        w.WriteHeader(PacketType.DialogueGrant);
+        w.WriteUInt32(packet.OriginPeerId);
+        w.WriteUInt32(packet.OpSequence);
+        w.WriteString(packet.PartnerTag, ProtocolConstants.MaxTagLength);
+
+        IReadOnlyList<MaterialisedLootItem> items = packet.Items;
+        int count = Math.Min(items.Count, DialogueGrantPacket.MaxItems);
+        w.WriteUInt8((byte)count);
+
+        for (int i = 0; i < count; i++)
+        {
+            MaterialisedLootItem item = items[i];
+            w.WriteString(item.Resref, ProtocolConstants.MaxResrefLength);
+            w.WriteUInt16(item.Identity.StackSize);
+            w.WriteUInt8(item.Identity.Charges);
+            w.WriteUInt8(item.Identity.MaxCharges);
+            w.WriteUInt32(item.Identity.Upgrades);
+            w.WriteUInt8(item.Identity.Flags);
+        }
+
+        return w.Failed ? 0 : w.Position;
+    }
+
+    public static DialogueGrantPacket? ReadDialogueGrant(ReadOnlySpan<byte> buffer)
+    {
+        PacketReader r = new(buffer);
+        if (r.ReadHeader() != PacketType.DialogueGrant)
+        {
+            return null;
+        }
+
+        uint origin = r.ReadUInt32();
+        uint opSeq = r.ReadUInt32();
+        string partnerTag = r.ReadString();
+
+        int count = r.ReadUInt8();
+        if (count > DialogueGrantPacket.MaxItems)
+        {
+            // A count this side never writes: treat the datagram as malformed rather than
+            // allocating on a number a peer chose.
+            return null;
+        }
+
+        MaterialisedLootItem[] items = new MaterialisedLootItem[count];
+        for (int i = 0; i < count; i++)
+        {
+            string resref = r.ReadString();
+            ushort stack = r.ReadUInt16();
+            byte charges = r.ReadUInt8();
+            byte maxCharges = r.ReadUInt8();
+            uint upgrades = r.ReadUInt32();
+            byte flags = r.ReadUInt8();
+            items[i] = new MaterialisedLootItem(
+                resref, new ItemIdentity(stack, charges, maxCharges, upgrades, flags));
+        }
+
+        return r.Failed ? null : new DialogueGrantPacket(origin, opSeq, partnerTag, items);
+    }
+
+    public static int Write(Span<byte> buffer, DialogueGrantAckPacket packet)
+    {
+        PacketWriter w = new(buffer);
+        w.WriteHeader(PacketType.DialogueGrantAck);
+        w.WriteUInt32(packet.PeerId);
+        w.WriteUInt32(packet.OriginPeerId);
+        w.WriteUInt32(packet.OpSequence);
+        return w.Failed ? 0 : w.Position;
+    }
+
+    public static DialogueGrantAckPacket? ReadDialogueGrantAck(ReadOnlySpan<byte> buffer)
+    {
+        PacketReader r = new(buffer);
+        if (r.ReadHeader() != PacketType.DialogueGrantAck)
+        {
+            return null;
+        }
+
+        uint peerId = r.ReadUInt32();
+        uint origin = r.ReadUInt32();
+        uint opSeq = r.ReadUInt32();
+        return r.Failed ? null : new DialogueGrantAckPacket(peerId, origin, opSeq);
+    }
+
     public static int Write(Span<byte> buffer, ItemSyncRequestPacket packet)
     {
         PacketWriter w = new(buffer);

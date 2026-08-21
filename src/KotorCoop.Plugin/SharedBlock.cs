@@ -1212,6 +1212,22 @@ internal struct SharedBlock
     /// 32 slots at once, which no item has.</summary>
     public const uint CheatFieldUnchanged = 0xFFFF_FFFF;
 
+    /// <summary>
+    /// <see cref="OffsetCheatTarget"/> sentinel meaning "the LOCAL player, not a materialised
+    /// stand-in" for <see cref="CheatKindGiveLoot"/> — the dialogue item-grant channel's give
+    /// (docs/research/dialogue-consequences.md §3.4) targets the speaker directly rather than
+    /// a corpse's stand-in, so it must never be resolved through
+    /// <c>MaterialisedEnemies.ToLocal</c>. Distinct from <see cref="CheatFieldUnchanged"/>
+    /// (0xFFFF_FFFF) so the two "not a real value" sentinels can never be confused with each
+    /// other on a field that could plausibly carry either. Equal by VALUE (not by reference —
+    /// <c>KotorCoop.Session</c> cannot reference this NativeAOT-only project) to
+    /// <c>CoopAgent.LocalPlayerObjectId</c>, which is itself the engine's own verified player
+    /// id (docs/re/object-model.md: "Player object id is exactly 0x7FFFFFFF") — chosen
+    /// deliberately rather than an arbitrary sentinel, so the "local player" target never needs
+    /// translation at all: it already names the same creature on every instance.
+    /// </summary>
+    public const uint CheatTargetLocalPlayer = 0x7FFFFFFF;
+
     /// <summary>Toggle the local player's min-1-hit-point pin. Amount 1 on, 0 off, -1 report.</summary>
     public const uint CheatKindGod = 1;
 
@@ -1296,7 +1312,10 @@ internal struct SharedBlock
     /// ("its container id exists only locally"). <see cref="OffsetCheatTarget"/> is the
     /// OWNER's enemy object id, not a local one: only this instance's own
     /// <c>MaterialisedEnemies.ToLocal</c> can translate it, so the caller (an external agent,
-    /// or eventually the network path) cannot resolve it itself and must not try.
+    /// or eventually the network path) cannot resolve it itself and must not try. The one
+    /// exception is <see cref="CheatTargetLocalPlayer"/>, which names THIS instance's own
+    /// player directly — the dialogue item-grant channel's reuse of this same give path
+    /// (docs/research/dialogue-consequences.md §3.4).
     /// <see cref="OffsetCheatText"/> carries the item resref, and
     /// Amount/Charges/MaxCharges/Upgrades/ItemFlags its identity — exactly the same four
     /// fields <see cref="CheatKindSetItem"/> already carries for an existing item.

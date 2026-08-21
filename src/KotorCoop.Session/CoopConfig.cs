@@ -131,6 +131,14 @@ public sealed record CoopConfig
     /// </summary>
     public bool StatusToasts { get; init; } = true;
 
+    /// <summary>
+    /// Whether an item a reward node places into the local conversation owner's inventory is
+    /// diffed and given to the other player too — docs/research/dialogue-consequences.md §3.
+    /// On by default: without it, `GetItemPossessedBy(GetFirstPC())` gates elsewhere in the
+    /// story silently fail on the peer who did not own the conversation.
+    /// </summary>
+    public bool DialogueItemSync { get; init; } = true;
+
     /// <summary>The anchor as the plugin's numeric code (0=TL, 1=TR, 2=BL, 3=BR).</summary>
     public uint ChatOverlayAnchorCode => ChatOverlayAnchor.Trim().ToLowerInvariant() switch
     {
@@ -236,6 +244,8 @@ public sealed record CoopConfig
                 ? Math.Max(ct, 0)
                 : 0,
             StatusToasts = !kv.ContainsKey("status_toasts") || IsTruthy(kv.GetValueOrDefault("status_toasts")),
+            DialogueItemSync = !kv.ContainsKey("dialogue_item_sync")
+                || IsTruthy(kv.GetValueOrDefault("dialogue_item_sync")),
         };
     }
 

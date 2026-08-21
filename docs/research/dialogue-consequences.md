@@ -292,3 +292,115 @@ Ordered by what would invalidate the most of this design if wrong:
 - Whether `k_swg_alignape`-style bark scripts (alignment shifts outside dialogue nodes) are in
   scope for a future pass — flagged in §1.2 but this document is scoped to dialogue-node
   consequences specifically, matching the task's own framing.
+
+## Shipped (2026-08-21) — implementation against this design
+
+Roadmap item 10 is now built following the recommended build order in §"Recommended build
+order", with one deliberate deviation from the original task steer (recruitment, noted below).
+**Nothing in this section has been run against the real game.** Every item is marked
+NEEDS-LIVE unless stated otherwise; treat all of it as Implemented-untested until a live pass
+says differently.
+
+### Item grants (§3)
+
+Built as designed: `IGameBridge.ReadPossessedItems` (unchanged signature — it already took a
+generic possessor-id set, not an enemy-specific one, so no extension was needed) is swept by
+`CoopAgent.PumpDialogueItemGrants`, gated on the token OWNER via the same debounced `active`
+flag `PumpDialogue` already computes, at conversation start, every ~1 s while it continues
+(`DialogueGrantSampleIntervalMs`), and once more at conversation end. The diff itself
+(`KotorCoop.Protocol.DialogueItemDiff`) is a pure resref-ROW-COUNT comparison rather than an
+identity comparison — `ReadPossessedItems` returns one row per item object with no object id to
+track across two sweeps, so a stack growing (five spikes becoming eight) is recognised as the
+SAME row and correctly never reported, while a genuinely new row raises the resref's count and
+is reported once, carrying its own full identity.
+
+New wire: `DialogueGrantPacket` (**PacketType 45**) / `DialogueGrantAckPacket` (**PacketType
+46**, not pre-assigned by the task but needed — the existing Ack packets all pair 1:1 with an op
+packet and PacketType 44 stays reserved for a concurrent agent's PeerEffect work). Protocol
+**Version 29** (28 left for that same concurrent agent). Unlike `MaterialisedLootPacket` (host-
+only, since only the host's engine ever holds a dying enemy's corpse), a dialogue grant can
+originate from EITHER peer, so `DialogueGrantSender` is used symmetrically by `CoopHost` and
+`CoopClient` — modelled on `MaterialisedLootSender` per the task's own steer, but keyed on
+`(origin, sequence)` rather than a bare sequence, and relaying (`EnqueueRelay`) preserves the
+REPORTING peer's true origin rather than re-attributing to the host the way `ContainerLoot`'s
+relay does — re-attribution would make a receiver's "is this my own echo" self-filter
+indistinguishable from a genuinely new host-originated grant. Receivers dedup the wire op by
+`(origin, sequence)` (a bounded seen-set on the client, `DialogueGrantSender`'s own bounded
+`_everQueued` on the relay leg) and additionally drop any grant whose origin is their own local
+peer id before it ever reaches the give queue — a container-loot echo is harmless because
+removing an already-removed item is a no-op, but `GiveItemToInventory` mints a fresh item every
+call, so the echo cannot be allowed to reach the drain path at all.
+
+The give itself reuses `CheatKindGiveLoot`/`CheatController.GiveLoot` exactly as the design
+called for, with one small, deliberate extension: `SharedBlock.CheatTargetLocalPlayer`
+(`0x7FFFFFFF`, the engine's own verified player object id, `docs/re/object-model.md`) is a new
+sentinel `CheatTarget` value that `GiveLoot()` resolves straight to `Odyssey.GetPlayerObjectId()`
+instead of through `MaterialisedEnemies.ToLocal` — no new `CheatKind`, no `SharedBlock` layout
+change, no version bump for the plugin-local block. `CoopAgent.PendingMaterialisedLootGive`'s
+`OwnerEnemyId` field was renamed to `TargetObjectId` (two call sites, one test file) to carry
+both id spaces honestly.
+
+**NEEDS-LIVE** (per §5's own risk list, none of it closed by this pass):
+- §5 item 2: whether the inventory diff produces false positives against a real conversation
+  (a concurrent unrelated pickup, a script that removes-then-re-adds a resref).
+- §5 item 3: a reward node granting two items in the same frame — the dedup key should
+  generalise fine (unverified), untested against a real burst.
+- §5 item 4: the simultaneous-trigger / adopt-timing race between the owner's grant and the
+  spectator's adoption of the same conversation.
+- §5 item 5: the `GiveItem`-vs-`CreateItemOnObject` distinction — the diff should not care, but
+  the four dlg files that use `GiveItem` are all late-game and unreached by any test so far.
+- §3.2's own NEEDS-LIVE: that `ReadPossessedItems` resolves correctly mid-conversation at all.
+- The full wire path end to end: no two live instances have exchanged a `DialogueGrant` packet.
+
+### Recruitment availability (§4) — DEVIATION from the task's literal wire steer
+
+The task instruction said to fold an `availableSlotsMask` field into `DialogueGrantPacket`.
+**This was NOT done.** Re-reading §4.2 while implementing found that folding it would duplicate
+information already on a wire channel that exists and runs continuously: `PartyRosterController`
+already publishes this instance's `available` mask every frame via the existing `PartyRoster`
+packet (37), and the peer's mask (`hostAvailable`) is already read by `Reconcile()` every pass —
+§4.2 says this outright: "the recruitment signal needs no resref, no template name, and no
+payload at all... the only missing step is acting on a bit the peer has that we do not." Adding
+a second, conversation-scoped field carrying the same bit would need its own plumbing for no
+behavioural gain over acting on the level that is already there — and a level, unlike a
+dropped-packet-scoped edge, keeps saying "you're missing this" every tick rather than only once
+around a conversation's end, which is a strictly better fit for the "a level, not edges"
+reasoning that shaped every other already-shipped channel this codebase's own docs argue for
+(see `PartyRosterController.cs`'s own header, and item 2's item-grant channel above, which IS
+an edge because a give is one-shot and idempotency is the wrong property to want there).
+
+Built instead: `Odyssey.TrySetSlotAvailable(slot)` raw-pokes `partyTable+0x30+slot*4 = 1` (the
+exact literal store `AddAvailableNPCByTemplate` performs at `0x00564350` — VERIFIED, the same
+evidence `PartyRosterController`'s own `PartyAvailable` offset comment already cites).
+`PartyRosterController.Reconcile()`'s existing "not recruited here" branch calls it, behind
+**`dialogue_recruit_sync=0` (OFF by default)**, before falling through to the ordinary
+spawn+add flow on a later pass. No new packet type, no protocol version bump specific to this
+half, no `SharedBlock` change.
+
+**NEEDS-LIVE, unresolved, and the reason this stays off by default**: §4.2 item 1's own
+headline risk — recruit a companion on instance A only, confirm the flag poke on instance B is
+sufficient for B's `SpawnAvailableNpc` to resolve a real body, not just pass the availability
+read while the spawn silently fails. Nothing in this pass observed a live engine at all;
+§4.2 item 2 (the `AddAvailableNPCByTemplate` VM-routine fallback) remains unbuilt and its
+routine number untraced, exactly as the design doc left it.
+
+### Tests
+
+Added, all passing against the pre-existing 1102-test baseline (now 1109 after this pass, plus
+the queue-hand-off suite below): `DialogueItemDiffTests` (pure diff logic, 8 cases —
+no-change, new-resref, stack-growth-is-not-a-grant, stack-shrink-is-not-a-grant, extra-copy-is-
+a-grant, multiple-distinct-grants, empty-resref-rows-ignored, empty-both-sides);
+`ReliableSenderTests`'s new `Grant_*` block (10 cases covering first-send, retransmit timing,
+per-recipient ack retirement, unknown-op acks ignored, two origins reusing sequence 1 without
+colliding, relay preserving true origin, a relayed op's retransmit not being re-queued after
+retirement, empty-recipient holding, `Clear`); `PacketCodecTests`'s `DialogueGrant*` block
+(round trip, max-items-fits-one-datagram, malformed over-cap count refused);
+`DialogueGrantQueueTests` (modelled directly on `MaterialisedLootQueueTests` — the queue hand-
+off item 3 asked for by name — 7 cases proving a drained grant lands in the same
+`_pendingLoot` queue under the local-player sentinel, FIFO, across ticks, with full identity,
+and bounded); and one real-socket integration test in `SessionIntegrationTests`
+(`ADialogueGrantFromAClientReachesTheOtherClientButNotItself`) proving the full client→host→
+other-client relay and the self-echo filter over actual loopback UDP. No test exercises the
+plugin's native code (`CheatController.GiveLoot`'s new branch, `Odyssey.TrySetSlotAvailable`,
+`PartyRosterController`'s poke) — that class of code has never had unit coverage in this
+codebase and needs the live rig, per every `NEEDS-LIVE` line above.

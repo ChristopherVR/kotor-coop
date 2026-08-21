@@ -175,7 +175,7 @@ public class MaterialisedLootQueueTests
         agent.PumpOnce();
 
         Assert.True(agent.TryDequeuePendingLoot(out CoopAgent.PendingMaterialisedLootGive first));
-        Assert.Equal(0xEu, first.OwnerEnemyId);
+        Assert.Equal(0xEu, first.TargetObjectId);
         Assert.Equal("g_w_blstrpstl001", first.Item.Resref);
 
         Assert.True(agent.TryDequeuePendingLoot(out CoopAgent.PendingMaterialisedLootGive second));
@@ -258,7 +258,7 @@ public class MaterialisedLootQueueTests
         agent.PumpOnce();
 
         Assert.True(agent.TryDequeuePendingLoot(out CoopAgent.PendingMaterialisedLootGive give));
-        Assert.Equal(0x35u, give.OwnerEnemyId);
+        Assert.Equal(0x35u, give.TargetObjectId);
         Assert.Equal(3, give.Item.Identity.Charges);
         Assert.Equal(50, give.Item.Identity.MaxCharges);
         Assert.Equal(0x5u, give.Item.Identity.Upgrades);

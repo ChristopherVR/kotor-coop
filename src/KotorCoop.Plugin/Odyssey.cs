@@ -8949,6 +8949,32 @@ internal static unsafe class Odyssey
         return true;
     }
 
+    /// <summary>
+    /// Raw-pokes this instance's own availability flag for one NPC slot — the write half of
+    /// <see cref="TryReadPartyRoster"/>'s read, used only by the dialogue recruitment-sync path
+    /// (docs/research/dialogue-consequences.md §4.2, coop.ini <c>dialogue_recruit_sync</c>).
+    ///
+    /// Mirrors the literal store <c>AddAvailableNPCByTemplate</c> performs at the same offset
+    /// (<c>*(int*)(table + PartyAvailable + slot*4) = 1</c> at <c>0x00564350</c> — VERIFIED, the
+    /// same evidence <see cref="PartyAvailable"/>'s own doc comment already cites:
+    /// <c>AddMember</c>/<c>RemoveMember</c> testing this exact array for a zero entry). What is
+    /// **NEEDS-LIVE**, per the design doc's own biggest open risk, is whether the flag ALONE is
+    /// enough for <see cref="SpawnAvailableNpc"/> to resolve a template afterward, or whether
+    /// <c>AddAvailableNPCByTemplate</c> also records a second association elsewhere in the
+    /// table that this raw poke does not touch.
+    /// </summary>
+    public static bool TrySetSlotAvailable(int slot)
+    {
+        nint table = GetPartyTable();
+        if (table == 0 || slot is < 0 or >= PartyRosterSlots)
+        {
+            return false;
+        }
+
+        *(int*)(table + PartyAvailable + (slot * 4)) = 1;
+        return true;
+    }
+
     /// <summary>This instance's spawned object id for an NPC slot, or 0 / OBJECT_INVALID when
     /// that companion has no body in the world right now.</summary>
     public static uint GetPartyRosterObjectId(int slot)

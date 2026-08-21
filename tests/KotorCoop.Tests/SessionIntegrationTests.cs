@@ -692,6 +692,94 @@ public class SessionIntegrationTests
         await Task.WhenAll(hostTask, malakTask, bastilaTask);
     }
 
+    /// <summary>
+    /// docs/research/dialogue-consequences.md §3: a CLIENT's conversation grants an item, the
+    /// host relays it to every OTHER client, and — the case that would double-give the item if
+    /// it went wrong — the reporting client never sees its own report echoed back as something
+    /// to apply.
+    /// </summary>
+    [Fact]
+    public async Task ADialogueGrantFromAClientReachesTheOtherClientButNotItself()
+    {
+        using CoopHost host = new(new SessionSettings { PlayerName = "Revan", Port = 0, TickRate = 30 });
+        using CoopClient malak = new(
+            new SessionSettings { PlayerName = "Malak", TickRate = 30 },
+            new IPEndPoint(IPAddress.Loopback, host.ListenEndPoint.Port));
+        using CoopClient bastila = new(
+            new SessionSettings { PlayerName = "Bastila", TickRate = 30 },
+            new IPEndPoint(IPAddress.Loopback, host.ListenEndPoint.Port));
+
+        using CancellationTokenSource cts = new(Timeout + TimeSpan.FromSeconds(10));
+        Task hostTask = host.RunAsync(cts.Token);
+        Task malakTask = malak.RunAsync(cts.Token);
+        Task bastilaTask = bastila.RunAsync(cts.Token);
+
+        PlayerState state = new(Vector3f.Zero, 0f, "end_m01aa", 100, 0);
+        void Publish()
+        {
+            host.PublishLocalState(state);
+            malak.PublishLocalState(state);
+            bastila.PublishLocalState(state);
+        }
+
+        Assert.True(await WaitForAsync(() => malak.IsConnected && bastila.IsConnected, Timeout, Publish));
+
+        MaterialisedLootItem[] items = [new MaterialisedLootItem(
+            "g_w_blstrpstl001", new ItemIdentity(1, 0, 0, 0, ItemIdentity.FlagKnown))];
+        malak.PublishDialogueGrant("carth", items);
+
+        // The host's own player needs it too - it never ran malak's HandleReply either.
+        List<DialogueGrantPacket> atHost = [];
+        Assert.True(
+            await WaitForAsync(
+                () =>
+                {
+                    if (atHost.Count == 0)
+                    {
+                        atHost.AddRange(host.DrainDialogueGrants());
+                    }
+
+                    return atHost.Count > 0;
+                },
+                Timeout,
+                Publish),
+            "the host never received the relay/local-apply queue entry");
+
+        Assert.All(atHost, grant => Assert.Equal(malak.LocalPeerId, grant.OriginPeerId));
+        Assert.Contains(atHost, grant => grant.Items.Any(i => i.Resref == "g_w_blstrpstl001"));
+
+        // Bastila is the other real peer and must receive it through the relay too.
+        List<DialogueGrantPacket> atBastila = [];
+        Assert.True(
+            await WaitForAsync(
+                () =>
+                {
+                    if (atBastila.Count == 0)
+                    {
+                        atBastila.AddRange(bastila.DrainDialogueGrants());
+                    }
+
+                    return atBastila.Count > 0;
+                },
+                Timeout,
+                Publish),
+            "bastila never received the relayed grant");
+
+        Assert.All(atBastila, grant => Assert.Equal(malak.LocalPeerId, grant.OriginPeerId));
+        Assert.Contains(atBastila, grant => grant.Items.Any(i => i.Resref == "g_w_blstrpstl001"));
+
+        // Malak reported this himself; it must never come back to him as something to apply.
+        for (int i = 0; i < 5; i++)
+        {
+            Publish();
+            await Task.Delay(50);
+            Assert.Empty(malak.DrainDialogueGrants());
+        }
+
+        await cts.CancelAsync();
+        await Task.WhenAll(hostTask, malakTask, bastilaTask);
+    }
+
     [Fact]
     public async Task TheDialogueTokenIsHeldByOneOwnerAtATime()
     {

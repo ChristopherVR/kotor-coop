@@ -469,4 +469,154 @@ public class ReliableSenderTests
         Assert.Equal(0, sender.PendingCount);
         Assert.Empty(sender.CollectDue(recipients: [2], nowMs: 10_000));
     }
+
+    // ---- DialogueGrantSender (used both host->clients AND client->host, tuple-keyed) ------
+
+    private static MaterialisedLootItem[] OneItem(string resref = "g_w_blstrpstl001") =>
+        [new MaterialisedLootItem(resref, new ItemIdentity(1, 0, 0, 0, 0))];
+
+    [Fact]
+    public void Grant_FirstSendGoesOutOnTheVeryNextTickNotOnEnqueue()
+    {
+        DialogueGrantSender sender = new(retransmitIntervalMs: 250);
+        DialogueGrantPacket? op = sender.EnqueueLocal(originPeerId: 1, "carth", OneItem(), nowMs: 1_000);
+
+        Assert.NotNull(op);
+        Assert.Equal(1u, op!.OriginPeerId);
+        Assert.Equal(1u, op.OpSequence);
+
+        List<DialogueGrantPacket> due = sender.CollectDue(recipients: [2, 3], nowMs: 1_000);
+        Assert.Single(due);
+        Assert.Equal(op, due[0]);
+    }
+
+    [Fact]
+    public void Grant_EnqueueLocalWithNoItemsIsRefused()
+    {
+        DialogueGrantSender sender = new(retransmitIntervalMs: 250);
+        Assert.Null(sender.EnqueueLocal(originPeerId: 1, "carth", [], nowMs: 1_000));
+        Assert.Equal(0, sender.PendingCount);
+    }
+
+    [Fact]
+    public void Grant_RetransmitsAfterIntervalNotBefore()
+    {
+        DialogueGrantSender sender = new(retransmitIntervalMs: 250);
+        sender.EnqueueLocal(originPeerId: 1, "carth", OneItem(), nowMs: 1_000);
+        sender.CollectDue(recipients: [2, 3], nowMs: 1_000);
+
+        Assert.Empty(sender.CollectDue(recipients: [2, 3], nowMs: 1_249));
+        Assert.Single(sender.CollectDue(recipients: [2, 3], nowMs: 1_250));
+    }
+
+    [Fact]
+    public void Grant_RetiresOnlyOnceEveryRecipientHasAcked()
+    {
+        DialogueGrantSender sender = new(retransmitIntervalMs: 250);
+        sender.EnqueueLocal(originPeerId: 1, "carth", OneItem(), nowMs: 1_000);
+        sender.CollectDue(recipients: [2, 3], nowMs: 1_000);
+
+        sender.Acknowledge(origin: 1, sequence: 1, ackingPeerId: 2);
+        Assert.Single(sender.CollectDue(recipients: [2, 3], nowMs: 1_250)); // 3 still hasn't acked
+        Assert.Equal(1, sender.PendingCount);
+
+        sender.Acknowledge(origin: 1, sequence: 1, ackingPeerId: 3);
+        Assert.Empty(sender.CollectDue(recipients: [2, 3], nowMs: 1_500));
+        Assert.Equal(0, sender.PendingCount);
+    }
+
+    [Fact]
+    public void Grant_AckForUnknownOriginOrSequenceIsIgnored()
+    {
+        DialogueGrantSender sender = new(retransmitIntervalMs: 250);
+        sender.EnqueueLocal(originPeerId: 1, "carth", OneItem(), nowMs: 1_000);
+        sender.CollectDue(recipients: [2], nowMs: 1_000);
+
+        sender.Acknowledge(origin: 1, sequence: 999, ackingPeerId: 2); // wrong sequence
+        sender.Acknowledge(origin: 99, sequence: 1, ackingPeerId: 2); // wrong origin
+
+        Assert.Equal(1, sender.PendingCount);
+        Assert.Single(sender.CollectDue(recipients: [2], nowMs: 1_250));
+    }
+
+    /// <summary>Two different origins independently numbering their own ops from 1 must not
+    /// collide — the whole reason the pending dict is keyed on (origin, sequence) rather than
+    /// a bare sequence, unlike the single-origin <see cref="MaterialisedLootSender"/>.</summary>
+    [Fact]
+    public void Grant_TwoOriginsReusingTheSameSequenceNumberDoNotCollide()
+    {
+        DialogueGrantSender sender = new(retransmitIntervalMs: 250);
+        sender.EnqueueLocal(originPeerId: 1, "carth", OneItem("a"), nowMs: 1_000); // host, sequence 1
+        DialogueGrantPacket relayed = new(2, 1, "bastila", OneItem("b")); // client 2, ALSO sequence 1
+        sender.EnqueueRelay(relayed, nowMs: 1_000);
+
+        Assert.Equal(2, sender.PendingCount);
+
+        sender.Acknowledge(origin: 1, sequence: 1, ackingPeerId: 5);
+        List<DialogueGrantPacket> due = sender.CollectDue(recipients: [5], nowMs: 1_250);
+
+        // Only the client's op (origin 2) is still owed a resend; the host's own (origin 1) is
+        // fully acked and retired.
+        Assert.Single(due);
+        Assert.Equal(2u, due[0].OriginPeerId);
+        Assert.Equal(1, sender.PendingCount);
+    }
+
+    [Fact]
+    public void Grant_RelayPreservesTheReportingPeersTrueOriginAndSequence()
+    {
+        DialogueGrantSender sender = new(retransmitIntervalMs: 250);
+        DialogueGrantPacket fromClient = new(OriginPeerId: 7, OpSequence: 3, "carth", OneItem());
+
+        Assert.True(sender.EnqueueRelay(fromClient, nowMs: 1_000));
+
+        List<DialogueGrantPacket> due = sender.CollectDue(recipients: [1, 2], nowMs: 1_000);
+        Assert.Single(due);
+        Assert.Equal(7u, due[0].OriginPeerId);
+        Assert.Equal(3u, due[0].OpSequence);
+    }
+
+    /// <summary>A client's own retransmit of a report it already sent must not be relayed (and
+    /// therefore given) twice, even after the FIRST relay has been fully acked and retired —
+    /// unlike container loot, giving an item is not idempotent.</summary>
+    [Fact]
+    public void Grant_RelayOfAnAlreadyQueuedOriginSequenceIsRefused()
+    {
+        DialogueGrantSender sender = new(retransmitIntervalMs: 250);
+        DialogueGrantPacket fromClient = new(OriginPeerId: 7, OpSequence: 3, "carth", OneItem());
+
+        Assert.True(sender.EnqueueRelay(fromClient, nowMs: 1_000));
+        sender.CollectDue(recipients: [1], nowMs: 1_000);
+        sender.Acknowledge(origin: 7, sequence: 3, ackingPeerId: 1);
+        sender.CollectDue(recipients: [1], nowMs: 1_000); // retires it, PendingCount back to 0
+
+        Assert.Equal(0, sender.PendingCount);
+        Assert.False(sender.EnqueueRelay(fromClient, nowMs: 2_000)); // the client's retransmit
+        Assert.Equal(0, sender.PendingCount);
+    }
+
+    [Fact]
+    public void Grant_EmptyRecipientSetHoldsPendingOpsForWhoeverComesBack()
+    {
+        DialogueGrantSender sender = new(retransmitIntervalMs: 250);
+        sender.EnqueueLocal(originPeerId: 1, "carth", OneItem(), nowMs: 1_000);
+        sender.CollectDue(recipients: [2], nowMs: 1_000);
+
+        Assert.Empty(sender.CollectDue(recipients: [], nowMs: 1_250));
+        Assert.Equal(1, sender.PendingCount);
+
+        Assert.Single(sender.CollectDue(recipients: [2], nowMs: 60_000));
+    }
+
+    [Fact]
+    public void Grant_ClearDropsAllPending()
+    {
+        DialogueGrantSender sender = new(retransmitIntervalMs: 250);
+        sender.EnqueueLocal(originPeerId: 1, "carth", OneItem(), nowMs: 1_000);
+
+        sender.Clear();
+
+        Assert.Equal(0, sender.PendingCount);
+        Assert.Empty(sender.CollectDue(recipients: [2], nowMs: 10_000));
+    }
 }
