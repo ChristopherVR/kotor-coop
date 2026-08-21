@@ -465,19 +465,33 @@ tools/                   RE helpers, demo scripts, the kotor1_0_3 symbol databas
   checked against the running game. See
   [docs/research/dialogue-consequences.md](docs/research/dialogue-consequences.md)'s "Shipped"
   section for the full list of what a live pass still needs to confirm.
-- **A body left alive on one screen and dead on the other can now be corrected — built and
-  not yet live-verified.** Ordinary enemy death only ever reaches the 32-slot combat census;
-  a creature beyond that cap, killed by a script (`DestroyObject`, a cutscene, `SetPlotFlag`
+- **A body left alive on one screen and dead on the other can now be corrected — partially
+  live-verified.** Ordinary enemy death only ever reaches the 32-slot combat census; a
+  creature beyond that cap, killed by a script (`DestroyObject`, a cutscene, `SetPlotFlag`
   then a kill), killed while the two players were apart, or killed by a client's own engine
   under `local_combat` before the host confirmed, could stay alive on one screen forever. The
   enemy owner now publishes every creature its engine knows about in the loaded area — not
   just the fought-over 32 — every couple of seconds, and a mirroring instance kills or
   destroys its own copy to match; if the owner is the one that disagrees (alive there, dead
   here), it only logs an anomaly and counts it (`status` shows "liveness anomalies: N") —
-  never a forced resurrection. `coop.ini liveness_sync=0` is the default until a live pass
-  runs the checklist in
-  [docs/research/creature-liveness.md](docs/research/creature-liveness.md), which also carries
-  the live-test script (`tools/live-liveness.ps1`).
+  never a forced resurrection. Live pass 2026-08-22: the owner's scan/derive and the
+  never-resurrect anomaly path are both confirmed clean and repeatable, but every test module
+  small enough to reach in the time available never exceeds the ordinary 32-slot census, so
+  the channel's own distinguishing case (a creature the ordinary census does NOT already
+  cover) was never independently exercised. `coop.ini liveness_sync=0` stays the default
+  until that specific gap closes — see
+  [docs/research/creature-liveness.md](docs/research/creature-liveness.md)'s dated live-pass
+  section, which also carries the live-test script (`tools/live-liveness.ps1`).
+- **A quest journal entry removed on one screen (`RemoveJournalQuestEntry`, a real operation
+  12 scripts across 8 modules use) now removes on the other too — live-verified 2026-08-22.**
+  A raw read of the engine's own journal array confirmed the entry genuinely vanishes (the
+  array shrinks by one), not merely gets hidden — settling the one open question against the
+  disassembly-only read that shipped it. `coop.ini journal_remove_sync=1` is now the default.
+  A separate, newly-found gap from the same pass: a genuine DECREASE to an existing journal
+  entry's state (a kill counter ticking down, a deliberate stage push-back) logs success but
+  does not visibly change the engine's own journal array — recorded as an open defect in
+  [docs/research/quest-sync.md](docs/research/quest-sync.md)'s dated live-pass section, since
+  there is no flag to gate it behind.
 - **Alignment (light/dark) is per-player on purpose.** Each character stores its own
   alignment, read by that character's own dialogue gates, dark-side powers and ending —
   two players making different choices in one story is a feature of playing together, not a
@@ -497,10 +511,15 @@ tools/                   RE helpers, demo scripts, the kotor1_0_3 symbol databas
   (`transition_announce_fade=1`, still OFF by default) never hung or stuck black across three
   transitions, but its direction argument is still an unconfirmed best guess — no screenshot
   capture was available to check it visually. A client's own premature door crossing can also be
-  refused instead of completing and being yanked back (`client_door_refusal=1`, OFF by
-  default) — this pass could not reach the decisive check at all: a client's own real door
-  crossings are refused by the vanilla single-player party-together gate before this feature's
-  own code ever runs, a newly-found defect unrelated to this feature (the client-side `CSWParty`
-  struct apparently keeps stale "together" state after a companion is removed locally). See
-  [docs/research/transition-smoothness.md](docs/research/transition-smoothness.md) §8.
+  refused instead of completing and being yanked back — live-verified 2026-08-22 and now ON by
+  default (`client_door_refusal=0` opts out). The blocker that stopped this feature's own
+  decisive check from running at all (a client's real door crossings were refused by the
+  vanilla single-player party-together gate before this feature's code ever ran — the
+  client-side `CSWParty` struct keeps a stale, higher member count than the real party table
+  after a companion is removed locally) is root-caused and fixed
+  (`coop.ini party_together_fix=1`, new, default ON — see
+  [docs/research/party-reconciliation.md](docs/research/party-reconciliation.md)). With that
+  fixed, the decisive check ran: `client_door_refusal` genuinely stops the transition rather
+  than merely logging a refusal, confirmed twice live. See
+  [docs/research/transition-smoothness.md](docs/research/transition-smoothness.md) §9.
 - KOTOR 2 is untouched, and only GOG v1.0.3 addresses are known.

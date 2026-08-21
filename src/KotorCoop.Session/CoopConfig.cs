@@ -23,9 +23,10 @@ namespace KotorCoop.Session;
 ///   minigame_spectate = 0    ; watch a racing/turret peer instead (not yet wired)
 ///   transition_announce = 1    ; race a follow ahead of the settle debounce (default ON,
 ///                               ; live-verified 2026-08-21 - docs/research/transition-smoothness.md)
-///   client_door_refusal = 0    ; refuse a client's own premature door crossing (default off -
-///                               ; the decisive live check is blocked by an unrelated party-gate
-///                               ; defect, see the same doc's live-pass section)
+///   client_door_refusal = 1    ; refuse a client's own premature door crossing (default ON,
+///                               ; live-verified 2026-08-22 once the party-gate defect that had
+///                               ; blocked the decisive check was root-caused and fixed - see
+///                               ; the same doc's 2026-08-22 live-pass section)
 /// </code>
 /// </summary>
 public sealed record CoopConfig
@@ -306,7 +307,8 @@ public sealed record CoopConfig
             SessionSaveHostRefusal = IsTruthy(kv.GetValueOrDefault("session_save_host_refusal")),
             TransitionAnnounceEnabled = !kv.ContainsKey("transition_announce")
                 || IsTruthy(kv.GetValueOrDefault("transition_announce")),
-            ClientDoorRefusalEnabled = IsTruthy(kv.GetValueOrDefault("client_door_refusal")),
+            ClientDoorRefusalEnabled = !kv.ContainsKey("client_door_refusal")
+                || IsTruthy(kv.GetValueOrDefault("client_door_refusal")),
         };
     }
 

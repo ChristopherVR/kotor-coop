@@ -131,6 +131,31 @@ interaction_locks=1
 # fixes the party seat, which is what a partial or aborted conversation gets wrong.
 party_roster_sync=1
 
+# The client-door root cause fix (docs/research/party-reconciliation.md, transition-smoothness.md
+# SS8.5): CSWParty - the CLIENT-SIDE struct CSWParty::IsPartyTogether actually reads, a different
+# structure from CSWPartyTable above - can hold a stale, higher member count after a roster
+# reconciliation remove, which makes the engine refuse EVERY door transition on a client, even one
+# with zero real companions. This clamps CSWParty's count down to match CSWPartyTable's own
+# whenever it reads higher; it never raises it, so it cannot invent a companion. Live-verified
+# 2026-08-22: fired on load and every roster reconcile through an extended two-instance session,
+# and the client crossed a real door cleanly once it applied. ON by default.
+party_together_fix=1
+
+# Refuse a CLIENT's own premature door crossing (the host must lead the way) rather than let it
+# complete and get yanked back by the pre-existing follow logic. Needs party_together_fix above -
+# the party-gate defect it fixes was the reason this feature's own decisive check could not run at
+# all until 2026-08-22. Live-verified that day: SetTransitionPending(area,0,0) called early
+# genuinely stops the transition (module load never completes on the refusing client), not merely
+# cosmetic. ON by default; per-instance and only meaningful on a client - see
+# docs/research/transition-smoothness.md SS4 and SS8.
+client_door_refusal=1
+
+# Race a follower ahead of the settle debounce the moment the host's own door-transition fade
+# begins, instead of waiting for the host's published module to change. Live-verified 2026-08-21
+# (docs/research/transition-smoothness.md SS8): ~9x latency drop, no regression, movie-carrying
+# case also clean. ON by default.
+transition_announce=1
+
 # Be pulled into a conversation another player starts, instead of clicking the same NPC to
 # join. OFF, and read both reasons before turning it on.
 #   * It is the behaviour that was removed once already: players were yanked out of whatever
@@ -267,9 +292,26 @@ map_reveal_sync=0
 # the combat census) every couple of seconds; a mirroring instance kills or destroys its own
 # copy to match, or - if the owner says alive and this instance already has it dead - logs an
 # ANOMALY and counts it (status shows "liveness anomalies: N") without ever resurrecting
-# anything. OFF by default: reasoned from the code and exercised only by loopback-socket unit
-# tests, never against the running two-instance rig. See docs/research/creature-liveness.md.
+# anything. Live-verified 2026-08-22, partially: the owner-side scan/derive is correct (every
+# slain out-of-census creature was correctly named "newly gone"), the anomaly path is correct
+# (repeatedly exercised, never resurrected, counter climbs and settles), and reconnect resumes
+# cleanly with no crash. NOT independently isolated this pass: the module used (END_M01AA, ~20
+# creatures) never exceeds the ordinary 32-slot combat census, so CombatController's own Dead-flag
+# mirroring always reached every test creature before LivenessReconcileController's own kill/
+# destroy dispatch was needed - that specific engine-call path remains unconfirmed live. Stays OFF
+# by default pending a busier module or a real script DestroyObject. See
+# docs/research/creature-liveness.md's dated live-pass section.
 liveness_sync=0
+
+# Replicate RemoveJournalQuestEntry (a real, common NWScript operation - 12 scripts across 8
+# modules in the retail game) so a peer's journal entry that vanishes on one instance vanishes on
+# the other too, not just in the session's own bookkeeping. Live-verified 2026-08-22
+# (docs/research/quest-sync.md): a removal request against a real live journal entry dropped the
+# engine's own journal array size by one and the tag was genuinely gone from a raw read - not
+# merely hidden - with no crash. ON by default. With this off, a removal request is still
+# acknowledged (the session-level tracking is correct either way) but the LOCAL engine's own
+# journal UI keeps showing an entry a peer no longer has.
+journal_remove_sync=1
 # Relay a GENERIC trigger's OnEnter (a CSWSTrigger whose script starts a cutscene, dialogue or
 # scripted event - the classic "walk into the room, the scene starts") so the enemy owner's
 # engine also runs it, keeping its object-id counter in lockstep with whatever the script

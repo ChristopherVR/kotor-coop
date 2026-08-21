@@ -357,3 +357,90 @@ test — the cross-instance proof is §7's own script above.
   "usually monotonic" — this pass's fix benefits them incidentally (they ride the same
   `EventFlagStore`) but no equivalent module-content enumeration was done for door/placeable
   state specifically; §2's scan was scoped to the task's own named operations.
+
+## Live pass (2026-08-22)
+
+Run against the GOG pair (`tools/demo.ps1`, block v47 / protocol 33, both builds clean, baseline
+`dotnet test` 1379/1379), `journal_remove_sync=1` on both installs. `danm13`/`k_pdan_trig1303`
+was not reached this pass (no scripted travel budget in the time available); per this task's own
+sanctioned fallback, the shared-block journal request slot was poked directly on the CLIENT
+instance — the same mechanism `tools/verify.ps1` §5/§5b/§5c already use, and the entry point a
+real script's `RemoveJournalQuestEntry`/`SetGlobalNumber` call reaches too, just without needing
+the module travel to trigger it. A new raw memory probe (reading `CSWSJournal`'s own array —
+`internalServer+0x1B770+0x11C` → `{data, size, capacity}`, entries stride `0x3C`, tag `CExoString`
+at `+0x18`, state at `+0x20` — exactly the offsets `Odyssey.SetJournalState`/`RemoveJournalEntry`
+already use) confirmed each result against the engine's OWN state, not just the plugin's log line.
+
+### The removal path: CONFIRMED — `CSWSJournal::Destroy` genuinely removes the entry
+
+A fresh tag (`k_coop_test1`, never touched before this test) was applied, then a removal request
+was staged (`JournalState = int.MinValue`, the `RemoveSentinel`):
+
+```
+journal: 'k_coop_test1' removed on the session's authority (journal_remove_sync)
+```
+
+The raw journal-array probe, run immediately after, confirms the removal is real, not cosmetic —
+the array's own `size` dropped from 3 to 2 and `k_coop_test1` no longer appears in a walk of the
+entries at all (not merely marked with a sentinel state):
+
+```
+before:  size 3   [0] end_attack=30  [1] k_swg_bastila=20  [2] k_coop_test1=50
+after:   size 2   [0] end_attack=30  [1] k_swg_bastila=20
+```
+
+**This settles §6's own open question**: the disassembly-only read of `CSWSJournal::Destroy`
+(0x005C68B0) was correct — it walks the array the way its name implies, not merely marking an
+entry "ended." No crash, across two separate removal requests in the same session (one on a tag
+first raised then lowered, one on a fresh tag). `journal_remove_sync` flips to **default ON**.
+
+### A separate, NEW finding: the genuine-decrease (`bOverrideHigher=1`) path does NOT visibly take
+
+While staging the removal test, the DECREASE half of §6/§4's design (`Odyssey.SetJournalState`
+deciding `bOverrideHigher=1` when the target is below the entry's current state) was also
+exercised twice, independently, on two different tags:
+
+```
+journal: 'k_swg_bastila' -> state 20 on the session's authority     (apply)
+journal: 'k_swg_bastila' -> state 10 on the session's authority     (decrease - LOGGED AS SUCCESS)
+```
+
+The raw array probe immediately after shows `k_swg_bastila` still at **state 20**, not 10. Repeated
+on a completely fresh tag to rule out any confusion with prior state:
+
+```
+journal: 'k_coop_test1' -> state 50 on the session's authority      (apply)
+journal: 'k_coop_test1' -> state 5 on the session's authority       (decrease - LOGGED AS SUCCESS)
+```
+
+— and the array still read **state 50** afterward, confirmed twice. **The engine call reports
+success and the plugin logs the lower number, but the journal array's own `+0x20` state field
+does not change.** This directly contradicts §4/§6's design assumption ("current > target →
+override=1... a decrease has never been exercised" — now exercised, and it does not do what was
+assumed). Possible causes not chased down this pass: the `bOverrideHigher` argument may not mean
+"allow a lower value" the way the disassembly's naming suggested; `SetState`'s decrease path may
+write to a different field (a "highest-ever-reached" value distinct from a "currently displayed"
+one); or the argument order/value convention may differ from what `Odyssey.SetJournalState`
+assumes. This is **unconditional, already-shipped code with no ini gate** — nothing in this pass
+turns it off, since there is no flag to turn off — it is recorded here as an open, load-bearing
+defect for a future pass to root-cause, the same way the removal path was root-caused today. The
+practical impact: a script that genuinely lowers a quest state (a kill counter ticking down, a
+deliberate stage push-back) will NOT visibly do so in the engine's own journal after this fix,
+even though the SESSION-level store (`JournalStore`, §4's Lamport-clock design) correctly tracks
+and propagates the lower value — the gap is specifically the LOCAL engine write, same shape as
+the pre-existing, documented removal gap this pass just closed.
+
+### Cross-instance wire propagation: not independently re-verified
+
+This pass's live checks targeted the ENGINE-WRITE questions specifically (§6's own framing: "the
+NEEDS-LIVE item that decides whether §6's disassembly read is correct"), using a single-instance
+poke exactly as `verify.ps1`'s own §5c already does. The host→client WIRE propagation of a
+removal (§5's own live-test script, steps 3-4, via a real `danm13` trigger) was not run this pass;
+it remains covered only by `SessionIntegrationTests`' loopback proof and the unit-level Lamport-
+clock tests (§4), not by a live two-instance convergence across a real network hop.
+
+### Defaults changed by this pass
+
+| Flag | Before | After | Why |
+| --- | --- | --- | --- |
+| `journal_remove_sync` | OFF | **ON** | The removal engine call is confirmed genuine and safe, twice, no crash |

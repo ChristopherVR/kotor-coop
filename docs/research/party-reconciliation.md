@@ -355,3 +355,67 @@ controller itself, and it is about to overwrite it anyway on the very next un-re
   claiming and driving it, the same "hands off" state `local_combat`'s own excluded enemy gets —
   it does not mean re-enabling the engine's own follow-AI, which stays suppressed exactly as it
   is today.
+
+## Root cause of the client door-gate defect, and the fix (2026-08-22)
+
+`transition-smoothness.md` §8.5 (2026-08-21) found that a co-op CLIENT's own door crossings are
+refused by the vanilla party-together gate — `CSWSDoor::EventHandler` tests
+`CSWParty::IsPartyTogether` at 0x0058C228 and, when false, silently runs `k_trg_transfail`
+instead of transitioning — **even with `CSWPartyTable`'s own member count at 0**. That pass could
+not go further: no rig access. This entry root-causes it, live.
+
+### The disassembly
+
+`CSWParty::IsPartyTogether` (0x00635350, `__thiscall`, no arguments beyond `this`) does two
+things, in order:
+
+1. **Resolves the PLAYER's own object** — `GetPlayerCreatureId` (0x5ED550) → an id-resolve call
+   (0x4AEA30) → `GetGameObject` (0x4AE770). If that fails to resolve (0x00635386 `jne`/fallthrough
+   at 0x635388), it returns **false** immediately — this path never reads a party member at all.
+2. Otherwise, it walks **its OWN member array** — count at `this+0x00`, entries at `this+0x24`,
+   stride **0x88** — resolving each entry's raw id through the same id-resolve/`GetGameObject`
+   pair. An entry that fails to resolve is *skipped* (treated as harmless, not a failure). An
+   entry that DOES resolve has its position (`+0x90` on the resolved object) diffed against the
+   player's own position; past a threshold constant at `0x7455BC`, the function returns false.
+   Count `<= 0` skips the loop entirely and returns true.
+
+**This is a different structure from `CSWPartyTable`.** `CSWPartyTable` (server-side, embedded at
+`CServerExoAppInternal+0x1B770`, documented above) has count at `+0x00` and a 9-slot object-id
+array at `+0x0C`. `CSWParty` (client-side, reached via `CClientExoApp::GetSWParty` 0x005ED8B0 —
+`[client+4]` then `+0x270`) has ITS OWN count at `+0x00` and its own 0x88-strided array at
+`+0x24`. Nothing here shares memory with the party table.
+
+### Why they diverge
+
+`CSWPartyTable::RemoveMember` (0x00565560, server-side removal) touches only its own count/array
+— confirmed by full disassembly, no write anywhere near `CSWParty`'s own offsets.
+`ExecuteCommandRemovePartyMember` (0x00541C00, the VM wrapper `Odyssey.RemovePartyMemberBySlot`
+calls) DOES additionally reach into the client-side struct after a successful table remove —
+`0x00541C64`/`0x00541C6C` look up the removed object in `CSWParty`'s own list and
+`0x00541C85` calls a cleanup routine on it IF that lookup found something — but that lookup can
+come back empty (a companion this instance mirrored in without going through the exact path that
+originally populated `CSWParty`, or simply engine-internal bookkeeping this pass did not chase
+further), leaving `CSWParty`'s own count stale and higher than reality. **Confirmed live, not just
+by reasoning**: on a fresh load into END_M01AA, BOTH the host and the client logged `CSWParty`'s
+own count reading 2 against `CSWPartyTable`'s 1 — a real, reproducible divergence present from the
+very first frame the roster controller runs, not a rare edge case.
+
+### The fix: `party_together_fix` (`PartyRosterController.SyncClientPartyTogetherState`)
+
+New Odyssey.cs accessors — `TryGetPartyTableMemberCount` (the table's own count, distinguishing
+"legitimately 0" from "unreadable" so nothing clamps toward an unknown value) and
+`GetClientPartyMemberCount`/`TryClampClientPartyCount` (read/write `CSWParty`'s own count) — feed
+a new per-frame check in `PartyRosterController.OnFrame`: whenever `CSWParty`'s count reads higher
+than `CSWPartyTable`'s, it is clamped down to match. **Never grows the count** — this can only
+remove staleness the engine's own remove path was supposed to clear, never invent a companion.
+Since `CSWParty`'s own loop returns true unconditionally when its count is `<= 0`, driving the
+count down to 0 companions is sufficient to make `IsPartyTogether` stop checking positions
+entirely — exactly the "even with zero companions" case reported.
+
+Live-verified 2026-08-22: fired on every module load and every roster reconcile pass across an
+extended two-instance session (`transition-smoothness.md`'s dated live-pass section has the exact
+log lines), always shrinking, never growing, no adverse effect observed. `coop.ini
+party_together_fix`, **default ON**.
+
+See `transition-smoothness.md`'s own 2026-08-22 section for the live door-crossing tests this
+fix unblocked, including the `client_door_refusal` decisive check §8.5 could not reach.

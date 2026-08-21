@@ -29,18 +29,26 @@ internal sealed unsafe class JournalController(SharedBlockView block)
 
     /// <summary>
     /// Gates <see cref="Odyssey.RemoveJournalEntry"/>, whose native call
-    /// (<c>CSWSJournal::Destroy</c>) was found by static disassembly and has never been
-    /// exercised on a live game — see that method's remarks and
-    /// docs/research/quest-sync.md. OFF by default, matching
-    /// <c>PartyRosterController</c>'s <c>dialogue_recruit_sync</c> precedent for exactly
-    /// this situation: a plausible, self-consistent offset that still needs a live pass
-    /// before it ships enabled. With the flag off, a removal request is acknowledged
-    /// (so the agent's request queue does not stall) but left unapplied to the engine —
-    /// the SESSION side still tracks the removal correctly either way (see
+    /// (<c>CSWSJournal::Destroy</c>) was found by static disassembly. Live-verified
+    /// 2026-08-22 (docs/research/quest-sync.md's dated live-pass section): a removal
+    /// request against a real live journal entry dropped the array's own size by one and
+    /// the tag genuinely vanished from a raw read of the engine's own journal array — not
+    /// merely marked, actually removed, exactly as the disassembly implied — with no crash
+    /// across an extended session. Default ON. With the flag off, a removal request is
+    /// still acknowledged (so the agent's request queue does not stall) but left unapplied
+    /// to the engine — the SESSION side still tracks the removal correctly either way (see
     /// <c>JournalStore</c>), so the only thing missing while this is off is the LOCAL
     /// engine's own journal UI still showing an entry the peer's has taken out.
+    ///
+    /// ⚠ A SEPARATE, STILL-OPEN FINDING from the same live pass: <see
+    /// cref="Odyssey.SetJournalState"/>'s GENUINE DECREASE path (<c>bOverrideHigher=1</c>)
+    /// reported success and logged the lower state, but a raw read of the journal array
+    /// afterward showed the entry's state UNCHANGED — the override call did not visibly
+    /// take. This is unconditional, existing code with no ini gate, so nothing here flips
+    /// it off; it is recorded as a live-verification failure pending its own investigation
+    /// (docs/research/quest-sync.md's live-pass section has the exact repro).
     /// </summary>
-    private readonly bool _removeSync = PluginConfig.ReadBool("journal_remove_sync", false);
+    private readonly bool _removeSync = PluginConfig.ReadBool("journal_remove_sync", true);
 
     /// <summary>
     /// Requests survive a module change on purpose: the journal is party state, not area

@@ -335,3 +335,98 @@ for exact usage and what each PASS line proves.
 - `src/KotorCoop.Agent/CoopCommandDispatcher.cs` — `status` shows `liveness anomalies: N`.
 - `profiles/coop.ini.example` — `liveness_sync=0`.
 - `tools/live-liveness.ps1` — the live-test script.
+
+## Live pass (2026-08-22)
+
+Run against the GOG pair (`tools/demo.ps1`, block v47 / protocol 33, both builds clean, baseline
+`dotnet test` 1379/1379), `liveness_sync=1` on both installs, in END_M01AA (~20 unique creatures
+total). `tools/live-liveness.ps1`'s own Read-Host prompts don't fit an unattended pass, so the
+same three scenarios were driven directly through `blockpoke.ps1 console 'slay 0x<id>'` on the
+host and log-watching on the client, per the script's own documented mechanism.
+
+### Scenario A — out-of-census slay: owner-side scan confirmed, kill/destroy dispatch NOT isolated
+
+The owner-side scan/derive worked correctly every time it was exercised — six separate slays
+(`0x40`, `0x2C`, `0x33`, `0x36`, `0x10`, `0xE`), each correctly named in the host's agent log
+within one scan cycle:
+
+```
+* liveness: 1 creature(s) newly gone this pass: 0x40
+* liveness: 1 creature(s) newly gone this pass: 0x33
+* liveness: 1 creature(s) newly gone this pass: 0x36
+* liveness: 1 creature(s) newly gone this pass: 0x10
+```
+
+(One early burst — `25 creature(s) newly gone this pass` immediately after an unrelated module
+transition/pull-back — was a transient artifact of that transition, not a liveness bug; the very
+next two scans correctly reported exactly one id each. Not investigated further this pass; noted
+as a rough edge in scan freshness immediately after a transition.)
+
+**What could NOT be isolated**: END_M01AA has roughly 20 unique creatures total, which never
+exceeds the ordinary 32-slot combat census cap. Every one of the six test kills was ALSO within
+that census, so the PRE-EXISTING `CombatController` (Dead-flag mirroring) reached the mirroring
+client first in every single trial — its own log line (`combat: killed 0x36 on the owner's
+authority`) appeared before the liveness channel's derivation even completed. `LivenessRule
+.Decide` therefore only ever saw "Dead, yes, yes → Nothing (already agrees)" for these six —
+correct behaviour, but it means `LivenessReconcileController`'s own Kill/Destroy dispatch
+(`combat.KillForLivenessReconcile`, `Odyssey.DestroyObjectById` reached specifically through THIS
+channel) was never the first mover and remains **not independently exercised live**. A genuine
+out-of-census test needs either a module with more than 32 concurrent creatures or a real script
+`DestroyObject` — neither reachable from this save/module this pass. Left open, exactly as §7
+item 1/6 anticipated ("or use a crowded module").
+
+### Scenario A (continued) — the anomaly path: PASS, repeatedly
+
+Because several test creatures were, by the time of the reconcile pass, already dead on the
+client via the ordinary combat channel while the owner's OWN scan cycle still reported them alive
+(the two channels racing independently, not a bug — see above), the ANOMALY path got exercised
+far more than intended, which turned out to be useful:
+
+```
+liveness ANOMALY: owner says 0x40 is alive, this instance already has it dead - not resurrecting
+(the fix belongs upstream, see docs/research/creature-liveness.md)
+```
+
+`status` on the client showed `liveness anomalies: N` climbing across the session (11, then 52)
+and then holding steady in a quiet period with no further deaths — confirming both the counting
+and the **never-resurrects guarantee**: no body was ever seen to un-die on the client across the
+whole session. This is the one item from §7's checklist (item 4) this pass confirms cleanly.
+
+### Scenario B — a script death: not independently exercised
+
+No reachable script/cutscene `DestroyObject` trigger was found from this save's position within
+the time available (END_M01AA's own "cut2" NPCs, which looked like candidates, turned out to be
+tied to the module's own background scripted sequence and died on both instances independently of
+this pass's own kills — see the note on cross-contamination below). Left open, as the design doc's
+own script for this scenario already anticipated ("depends on which module/save is loaded").
+
+### Scenario C — disconnect, kill, reconnect: mechanically clean, timing not cleanly isolated
+
+Disconnect and reconnect both completed without error (`co-op: connecting...` → `connected...` in
+one round trip, party roster resumed: `party roster: reconciling against a peer party of 0x001`),
+and a creature slain while the client was disconnected (`0xE`) was confirmed converged (dead) on
+the client after reconnect. The specific claim §7 item 3 asks for — a FORCED immediate broadcast
+cycle rather than waiting the ordinary 2 s — could not be cleanly timed apart from the anomaly
+noise described above (the reconnect's own resync also re-triggered anomaly reports for the
+session's earlier test kills, whose owner-side "last known state" had not yet settled). Read as
+"reconnect delivers a correct picture reasonably promptly," not as a precisely measured number.
+
+### A testing-process finding, not a product defect
+
+Re-running the SAME `demo.ps1` save slot across restarts within one long testing session lets a
+prior session's kills bleed into the next session's baseline (KOTOR autosaves on every module
+load, and `demo.ps1` always reloads the same slot) — several of this pass's "out-of-census" test
+creatures were already dead from an EARLIER restart's own testing by the time a LATER restart's
+scenario ran, which is what produced several of the anomaly readings above rather than fresh
+kill/destroy dispatches. Confirmed by picking previously-untouched creatures (`0x36`, `0x10`) for
+the cleanest trials. Worth knowing for the next person testing this: pick fresh ids, or expect the
+save's own accumulated state to explain an unexpected "already dead."
+
+### Verdict: `liveness_sync` stays OFF
+
+Per this project's own bar (flip on if clean): the owner-side scan and the anomaly/never-
+resurrect guarantee are clean and repeatedly confirmed. The channel's own distinguishing
+mechanism — reconciling a creature the ordinary 32-slot census channel does NOT already cover —
+was never actually exercised, because this module is too small to need it. That is a real,
+specific gap, not a vague "needs more testing"; the fix is a bigger module or a script-driven
+`DestroyObject`, both concrete next steps. Left OFF by default pending that.

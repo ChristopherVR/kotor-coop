@@ -653,3 +653,99 @@ task remains a documented, un-built option for a module where it does matter.
 | `trigger_relay` | OFF | **ON** | §8.6: correct fire-once, correct dedup across repeat visits, correct negative-control exclusion, no crash |
 | `client_door_refusal` | OFF | OFF (unchanged) | §8.5: decisive check blocked by an unrelated pre-existing party-gate defect, never reached |
 | `transition_announce_fade` | OFF | OFF (unchanged) | §8.4: no soft-lock observed, but the one uncertain claim (fade direction) could not be visually confirmed |
+
+## 9. Live pass (2026-08-22) — the client door-gate root cause, and the decisive check
+
+§8.5's blocker is fixed. Root-cause analysis and the fix itself are documented in
+`party-reconciliation.md`'s dated 2026-08-22 entry (`CSWParty::IsPartyTogether`'s own disassembly,
+why it diverges from `CSWPartyTable`, and `party_together_fix`) — this section is the live
+door-crossing evidence that fix unblocks, run against the GOG pair per §6.0, block v47 / protocol
+33, both builds clean, baseline `dotnet test` 1379/1379.
+
+### 9.1 `party_together_fix` confirmed live, before any door was touched
+
+On the very first frame `PartyRosterController` ran after loading into END_M01AA — on BOTH the
+host and the client, with no manual reconciliation triggered yet:
+
+```
+party roster: local party is now 0x001 (recruited 0x001)
+party together: CSWParty's own member count read 2 against CSWPartyTable's 1 - clamping the
+client-side struct down to match (this is the field CSWParty::IsPartyTogether actually checks,
+and the one a real door transition gates on)
+```
+
+Confirms the divergence is real and present from the first frame, on both roles, not something
+introduced only by a client-specific remove. The fix re-fired identically on every later module
+load and roster reconcile pass across the whole session (multiple door crossings, multiple
+reconnects), always shrinking the count, never growing it — no case observed where it clamped
+toward a value that was later wrong.
+
+### 9.2 `client_door_refusal=0` — the client crosses a real door first, cleanly
+
+With `party_together_fix=1` and `client_door_refusal=0`, the CLIENT walked into `end_door10`
+(END_M01AA → END_M01AB, waypoint `from_01a`) BEFORE the host moved at all:
+
+```
+door: 0x4A at 0.0m links to module 'end_m01ab' at waypoint 'from_01a'; open state 0
+door: opened 0x4A (state 0 -> 2) so the walk has somewhere to go
+cheat: walking through door 0x4A (0.0m) -> 'end_m01ab' (status 1)
+area transition pending: flushing spawned objects before the module is stored
+announce: door 0x4A transition beginning -> 'end_m01ab' at waypoint 'from_01a'
+flush, before the module is stored: destroyed phantom 0x12D (slot 0)
+epoch: world unloading; clearing phantom, item, combat and door state
+```
+
+**No party-gate refusal anywhere in this sequence.** The transition ran to completion — the
+client genuinely loaded into END_M01AB (the host's own log shows its phantom of the client
+destroyed at the same moment, `peer left: destroyed phantom 0x12D (slot 0)`, and the client's log
+shows a full module load, not a stall).
+
+**What happened next is the PRE-EXISTING, already-documented "host does not follow" behaviour**
+(roadmap item 13's own subject, `CoopAgent.cs:1434-1494`), not a new defect: ~17 seconds later,
+with the host still in END_M01AA, the client's own agent pulled it back:
+
+```
+travel: moving to module 'END_M01AA' on the session's authority
+```
+
+The client ended the sequence back beside the host in END_M01AA — the SAME outcome the client-
+first-door problem has always produced when nobody builds a lead-swap (§4.3, not built) — but for
+a genuinely different reason than before: this time the door crossing itself succeeded and
+completed; it was the FOLLOW-BACK that returned it, not a refused transition. This item's own
+"note what the client sees" ask: the client experiences two real loading screens in quick
+succession (into END_M01AB, then back into END_M01AA) and no on-screen explanation of why it was
+pulled back — a rough edge, but a pre-existing and already-documented one (roadmap item 13),
+outside this pass's scope to also fix.
+
+### 9.3 `client_door_refusal=1` — the decisive check finally runs
+
+§4.1 named ONE unresolved question: does `TryClearTransitionPending` (`SetTransitionPending`
+`(area, 0, 0)`, called on the refusal edge) actually stop phase 2, or is phase 2 already
+unconditionally scheduled by the time phase 1's fade starts? With `party_together_fix=1` and
+`client_door_refusal=1` on the CLIENT, the client attempted `end_door10` first again:
+
+```
+area transition pending: flushing spawned objects before the module is stored
+door-refusal: the host must lead the way - door 0x4A leads to end_m01ab
+door-refusal: cleared trans_pending (INFERRED whether this stops the load - NEEDS-LIVE)
+epoch: transition flushed but not taken; clearing phantom, item, combat and door state
+```
+
+**`epoch: transition flushed but not taken` is the answer: the transition genuinely did NOT
+complete.** The client's world stayed END_M01AA (its own log kept receiving the host's full
+enemy census immediately afterward — `enemy drive: mirroring 20 of the owner's 20 enemies`, which
+only happens when both peers share a module) rather than loading END_M01AB. Repeated a second
+time in the same session (the client retried the walk once more) with the identical outcome.
+**`TryClearTransitionPending` stops phase 2.** The refusal is not cosmetic — it is a real,
+working cancellation, exactly as designed. No crash, no stuck load screen, no desync; the client
+simply stayed where the design says it should.
+
+### 9.4 Defaults changed by this pass
+
+| Flag | Before | After | Why |
+| --- | --- | --- | --- |
+| `party_together_fix` (new) | — | **ON** | §9.1: fires correctly, never over-clamps, unblocks every door crossing on a client |
+| `client_door_refusal` | OFF | **ON** | §9.3: the one previously-unresolved question (does the refusal actually stop the load) is now answered yes, live, twice |
+
+`transition_announce` and `trigger_relay` (already ON from the 2026-08-21 pass) were re-exercised
+incidentally during this session's door crossings with no regression.

@@ -58,6 +58,20 @@ internal sealed unsafe class PartyRosterController(SharedBlockView block)
     private readonly bool _pokeAvailability = PluginConfig.ReadBool("dialogue_recruit_sync", false);
 
     /// <summary>
+    /// docs/research/party-reconciliation.md's client-door root cause, and
+    /// <c>Odyssey.TryClampClientPartyCount</c>'s own doc comment for the mechanism: CSWParty
+    /// (the struct <c>CSWParty::IsPartyTogether</c> actually reads) can hold a stale, higher
+    /// member count than CSWPartyTable's own after a roster reconciliation remove, which makes
+    /// the engine refuse every door transition on a client — even one with zero real
+    /// companions. coop.ini <c>party_together_fix</c>, default ON — live-verified 2026-08-22
+    /// (transition-smoothness.md §8.5's follow-up, and this doc's own dated live-pass
+    /// section): fired naturally on load and on every roster reconcile across an extended
+    /// two-instance session, always shrinking toward CSWPartyTable's real count and never
+    /// growing it, and the client crossed a real door cleanly once it applied.
+    /// </summary>
+    private readonly bool _togetherFixEnabled = PluginConfig.ReadBool("party_together_fix", true);
+
+    /// <summary>
     /// Frames between reconciliation passes. Deliberately slow: a roster changes a handful of
     /// times in a playthrough, and each pass that finds work to do enters the script VM. The
     /// PUBLISH half runs every frame regardless — it is three array reads and a dword store,
@@ -111,6 +125,7 @@ internal sealed unsafe class PartyRosterController(SharedBlockView block)
         }
 
         PublishLocalRoster();
+        SyncClientPartyTogetherState();
 
         if (_countdown > 0)
         {
@@ -120,6 +135,46 @@ internal sealed unsafe class PartyRosterController(SharedBlockView block)
 
         _countdown = IntervalFrames;
         Reconcile();
+    }
+
+    /// <summary>
+    /// The client-door root cause fix. Runs every frame the roster channel itself is enabled
+    /// (cheap: a table-count read, a client-count read, and a compare; the write only fires on a
+    /// real divergence) so CSWParty is already correct well before a human walks into a real
+    /// door — this plugin never sees that crossing coming, so waiting for the slower roster
+    /// reconcile pass (<see cref="IntervalFrames"/>, 30 frames) would leave a window where a door
+    /// still refuses.
+    ///
+    /// Skips entirely when the table count itself is unknown (main menu, mid-transition) rather
+    /// than treating "unreadable" as "0 companions" and clamping toward a value that might be
+    /// wrong the moment the server settles back in.
+    /// </summary>
+    private void SyncClientPartyTogetherState()
+    {
+        if (!_togetherFixEnabled)
+        {
+            return;
+        }
+
+        if (!Odyssey.TryGetPartyTableMemberCount(out int tableCount))
+        {
+            return;
+        }
+
+        int clientCount = Odyssey.GetClientPartyMemberCount();
+        if (clientCount < 0 || clientCount <= tableCount)
+        {
+            return;
+        }
+
+        if (Odyssey.TryClampClientPartyCount(tableCount, out int before))
+        {
+            PluginHost.Log(
+                $"party together: CSWParty's own member count read {before} against "
+                + $"CSWPartyTable's {tableCount} - clamping the client-side struct down to "
+                + "match (this is the field CSWParty::IsPartyTogether actually checks, and the "
+                + "one a real door transition gates on)");
+        }
     }
 
     /// <summary>
