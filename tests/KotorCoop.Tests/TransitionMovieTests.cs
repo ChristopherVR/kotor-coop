@@ -217,9 +217,12 @@ public class TransitionMovieTests
             int.Parse(version.Groups[1].Value),
             Convert.ToInt32(signature.Groups[1].Value, 16));
 
-        // And it really is the version this pass shipped, so a future edit that moves one
-        // half and not the other cannot pass by moving both to the wrong place.
-        Assert.Equal(42, int.Parse(version.Groups[1].Value));
+        // And it really is the LATEST version shipped (not just some number both halves
+        // happen to agree on), so a future edit that moves one half and not the other
+        // cannot pass by moving both to the wrong place. This pass's own bump was 42 (the
+        // transition-cinematic channel); it has moved again since — see the changelog
+        // comments beside `_block->Version` and `PluginSignature` for the full history.
+        Assert.Equal(43, int.Parse(version.Groups[1].Value));
     }
 
     private static string RepositoryRoot()
