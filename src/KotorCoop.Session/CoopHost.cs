@@ -152,7 +152,7 @@ public sealed class CoopHost : ICoopSession
     {
         // The host is authoritative, so its own changes apply immediately. Clients pick
         // them up through the version tripwire in the next world snapshot.
-        Flags.Set(flagId, value);
+        Flags.Set(flagId, value, HostPeerId);
     }
 
     public uint DropItem(
@@ -1181,7 +1181,14 @@ public sealed class CoopHost : ICoopSession
     {
         // Host-authoritative, like flags: merge locally, clients pick it up through the
         // journal version in the next world snapshot.
-        Journal.Merge(questTag, state);
+        Journal.Merge(questTag, state, HostPeerId);
+    }
+
+    public void RemoveJournalEntry(string questTag)
+    {
+        // Host-authoritative, like SetJournalEntry: remove locally, clients pick up the
+        // tombstone through the journal version/digest tripwire in the next world snapshot.
+        Journal.Remove(questTag, HostPeerId);
     }
 
     private CompatibilityVerdict? _compatibility;
@@ -2088,7 +2095,7 @@ public sealed class CoopHost : ICoopSession
             return;
         }
 
-        FlagSnapshotPacket snapshot = new(Flags.Version, Flags.Snapshot());
+        FlagSnapshotPacket snapshot = new(Flags.Version, Flags.SnapshotEntries());
         int length = PacketCodec.Write(_replyBuffer, snapshot);
         if (length > 0)
         {
@@ -2170,7 +2177,7 @@ public sealed class CoopHost : ICoopSession
             return;
         }
 
-        Journal.Merge(op.QuestTag, op.State);
+        Journal.ApplyRemote(op.QuestTag, op.State, op.Serial, op.OriginPeerId, op.Removed);
 
         // Ack unconditionally: a duplicate op means the previous ack was lost.
         int length = PacketCodec.Write(_replyBuffer, new JournalAckPacket(op.OpSequence));
@@ -2215,12 +2222,12 @@ public sealed class CoopHost : ICoopSession
         // gap survives until the next journal change bumps the version — the same
         // truncation trade the flag snapshot already makes, acceptable because ops are
         // the primary path and snapshots only repair.
-        List<KeyValuePair<string, int>> entries = Journal.Snapshot();
+        List<JournalSnapshotEntry> entries = Journal.SnapshotEntries();
         uint version = Journal.Version;
 
         for (int start = 0; ; start += ProtocolConstants.MaxJournalEntriesPerPacket)
         {
-            List<KeyValuePair<string, int>> part =
+            List<JournalSnapshotEntry> part =
                 [.. entries.Skip(start).Take(ProtocolConstants.MaxJournalEntriesPerPacket)];
 
             int length = PacketCodec.Write(_replyBuffer, new JournalSnapshotPacket(version, part));

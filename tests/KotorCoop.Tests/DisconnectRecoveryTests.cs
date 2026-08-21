@@ -234,6 +234,25 @@ public class DisconnectRecoveryTests
         // the same scripts) and the one a destructive resync loses.
         host.SetFlag(4242, 1);
         host.SetJournalEntry("k_swg_endar", 10);
+
+        // Since protocol 31 the merge is last-writer-wins by a per-store Lamport clock, not a
+        // bare max: both stores are fresh, so the host's changes just above and a client
+        // change made at the same "logical instant" would mint the SAME serial and collide as
+        // a genuine tie — which "ties favour the host" (deliberately) resolves in the host's
+        // favour regardless of which value is numerically higher. That coincidence is not
+        // what this test is about (it is about a client's advance surviving a resync), so a
+        // few disconnected dummy changes give the client's clock a running start — cheap and
+        // legitimate here because the client is disconnected, so none of this reaches the
+        // host and advances ITS clock to match.
+        for (uint i = 0; i < 5; i++)
+        {
+            client.SetFlag(9000 + i, 1);
+            client.SetJournalEntry($"warmup_{i}", 1);
+        }
+
+        // The client's real changes are now UNAMBIGUOUSLY the newer ones (strictly higher
+        // serial than the host's, not merely a tie broken in its favour) — see the class
+        // remarks for why "newer", not "higher", is what protocol 31 actually promises.
         client.SetFlag(4242, 3);
         client.SetJournalEntry("k_swg_endar", 40);
 

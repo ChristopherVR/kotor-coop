@@ -18,7 +18,7 @@ public class JournalPumpTests
     {
         public List<string> Calls { get; } = [];
 
-        public List<KeyValuePair<string, int>> LocalAdvances { get; set; } = [];
+        public List<JournalChange> LocalAdvances { get; set; } = [];
 
         public List<(string Tag, int State)> OfferedApplies { get; } = [];
 
@@ -38,18 +38,27 @@ public class JournalPumpTests
 
         public bool TryWriteRemotePeers(IReadOnlyList<RemotePeer> peers) => true;
 
-        public List<KeyValuePair<string, int>> CollectChangedJournal()
+        public List<JournalChange> CollectChangedJournal()
         {
             Calls.Add("collect");
-            List<KeyValuePair<string, int>> advances = LocalAdvances;
+            List<JournalChange> advances = LocalAdvances;
             LocalAdvances = [];
             return advances;
         }
+
+        public List<string> OfferedRemovals { get; } = [];
 
         public bool TryApplyJournalEntry(string questTag, int state)
         {
             Calls.Add("apply");
             OfferedApplies.Add((questTag, state));
+            return true;
+        }
+
+        public bool TryRemoveJournalEntry(string questTag)
+        {
+            Calls.Add("remove");
+            OfferedRemovals.Add(questTag);
             return true;
         }
 
@@ -127,10 +136,18 @@ public class JournalPumpTests
 
         public IReadOnlyList<EnemyState> GetEnemies(string module) => [];
 
+        public List<string> Removed { get; } = [];
+
         public void SetJournalEntry(string questTag, int state)
         {
             Announced.Add((questTag, state));
             Journal.Merge(questTag, state);
+        }
+
+        public void RemoveJournalEntry(string questTag)
+        {
+            Removed.Add(questTag);
+            Journal.Remove(questTag);
         }
 
         public SessionCapabilities Capabilities => SessionCapabilities.All;
@@ -169,7 +186,7 @@ public class JournalPumpTests
     {
         JournalBridge bridge = new();
         JournalSession session = new();
-        bridge.LocalAdvances = [new("k_swg_bastila", 10)];
+        bridge.LocalAdvances = [new("k_swg_bastila", 10, Removed: false)];
 
         CoopAgent agent = new(bridge, session, new AgentSettings());
         agent.PumpOnce();
@@ -194,5 +211,41 @@ public class JournalPumpTests
 
         Assert.Contains(("quest_a", 10), bridge.OfferedApplies);
         Assert.Contains(("quest_b", 20), bridge.OfferedApplies);
+    }
+
+    [Fact]
+    public void ALocalRemovalIsAnnouncedAsARemovalNotAnAdvance()
+    {
+        // The removal twin of LocalAdvancesAreAnnouncedToTheSession: a JournalChange with
+        // Removed=true must reach session.RemoveJournalEntry, not SetJournalEntry — a peer's
+        // RemoveJournalQuestEntry must not be mistaken for "set this tag to state 0".
+        JournalBridge bridge = new();
+        JournalSession session = new();
+        session.Journal.Merge("k_swg_bastila", 10);
+        bridge.LocalAdvances = [new JournalChange("k_swg_bastila", 0, Removed: true)];
+
+        CoopAgent agent = new(bridge, session, new AgentSettings());
+        agent.PumpOnce();
+
+        Assert.Contains("k_swg_bastila", session.Removed);
+        Assert.DoesNotContain(session.Announced, a => a.Tag == "k_swg_bastila");
+        Assert.Empty(session.Journal.Snapshot());
+    }
+
+    [Fact]
+    public void ARemovedTagTheSessionKnowsAboutIsOfferedToTheBridgeForRemoval()
+    {
+        // The apply-back twin: a tag the session's own JournalStore holds as a tombstone
+        // (e.g. adopted from a peer) must be offered to the bridge so the LOCAL engine takes
+        // it out too, exactly like a live entry is offered through TryApplyJournalEntry.
+        JournalBridge bridge = new();
+        JournalSession session = new();
+        session.Journal.Merge("quest_a", 10);
+        session.Journal.Remove("quest_a");
+
+        CoopAgent agent = new(bridge, session, new AgentSettings());
+        agent.PumpOnce();
+
+        Assert.Contains("quest_a", bridge.OfferedRemovals);
     }
 }

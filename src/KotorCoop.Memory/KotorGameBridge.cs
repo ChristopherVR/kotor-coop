@@ -2896,7 +2896,17 @@ public sealed class KotorGameBridge : IGameBridge
     /// on the game's thread, and it is also what refreshes the journal GUI).</summary>
     public bool SupportsJournalSync => _pluginBlock != 0;
 
-    public List<KeyValuePair<string, int>> CollectChangedJournal()
+    /// <summary>
+    /// The sentinel written into <see cref="BlockJournalState"/> to mean "remove this tag"
+    /// rather than "set this tag to this state" — a real quest state is never negative, so
+    /// this cannot collide with one. Reusing the existing int field this way needs no
+    /// SharedBlock layout change (that struct is owned elsewhere in this pass — see the
+    /// task's own file-ownership list — so adding a field to it was not an option anyway).
+    /// The plugin's JournalController interprets it; see docs/research/quest-sync.md.
+    /// </summary>
+    private const int JournalRemoveSentinel = int.MinValue;
+
+    public List<JournalChange> CollectChangedJournal()
     {
         // A failed read (loading screen, chain not yet resolvable) must return empty
         // WITHOUT priming the shadow — an empty read result and "could not read" are
@@ -2910,15 +2920,19 @@ public sealed class KotorGameBridge : IGameBridge
     }
 
     /// <summary>
-    /// Asks the plugin to advance a quest entry. One request in flight at a time —
+    /// Asks the plugin to set a quest entry's state. One request in flight at a time —
     /// journal changes are rare, and the pump retries every tick until the plugin has
-    /// caught up. Returns false when the game is already at or past the state.
+    /// caught up. Direction-neutral since protocol 31: the session is the authority,
+    /// including on a legitimate decrease (the plugin decides whether the engine call needs
+    /// its override flag — see <c>JournalController</c>). Returns false when the game
+    /// already holds exactly this state.
     /// </summary>
     public bool TryApplyJournalEntry(string questTag, int state)
     {
         if (_pluginBlock == 0
             || string.IsNullOrEmpty(questTag)
-            || questTag.Length >= BlockJournalTagLength)
+            || questTag.Length >= BlockJournalTagLength
+            || state == JournalRemoveSentinel)
         {
             return false;
         }
@@ -2948,9 +2962,49 @@ public sealed class KotorGameBridge : IGameBridge
 
         if (ok)
         {
-            // Optimistic: quest states only rise, so even a failed apply cannot make the
-            // shadow wrong in a way that loses progress.
+            // The session is the authority on the target value in either direction, so this
+            // always adopts it rather than only when it is higher.
             _journalShadow.MarkApplied(questTag, state);
+        }
+
+        return ok;
+    }
+
+    /// <summary>
+    /// Asks the plugin to remove a quest entry entirely — the removal twin of
+    /// <see cref="TryApplyJournalEntry"/>, using the same one-request-slot protocol via the
+    /// <see cref="JournalRemoveSentinel"/> value in <see cref="BlockJournalState"/>. Returns
+    /// false when the game does not currently hold the tag (nothing to remove) or the
+    /// previous request has not been acknowledged yet.
+    /// </summary>
+    public bool TryRemoveJournalEntry(string questTag)
+    {
+        if (_pluginBlock == 0
+            || string.IsNullOrEmpty(questTag)
+            || questTag.Length >= BlockJournalTagLength)
+        {
+            return false;
+        }
+
+        if (!_journalShadow.ShouldRemove(questTag))
+        {
+            return false;
+        }
+
+        if (!_memory.TryReadUInt32(_pluginBlock + BlockJournalSerial, out uint serial)
+            || !_memory.TryReadUInt32(_pluginBlock + BlockJournalApplied, out uint appliedSerial)
+            || serial != appliedSerial)
+        {
+            return false;
+        }
+
+        bool ok = _memory.TryWriteAsciiString(_pluginBlock + BlockJournalTag, questTag, BlockJournalTagLength);
+        ok &= _memory.TryWrite(_pluginBlock + BlockJournalState, JournalRemoveSentinel);
+        ok &= _memory.TryWrite(_pluginBlock + BlockJournalSerial, serial + 1);
+
+        if (ok)
+        {
+            _journalShadow.MarkRemoved(questTag);
         }
 
         return ok;

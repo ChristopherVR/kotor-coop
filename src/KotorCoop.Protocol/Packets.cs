@@ -42,23 +42,36 @@ public sealed record WorldSnapshotPacket(
     IReadOnlyList<SnapshotEntry> Entries);
 
 /// <summary>
-/// A world progression change (door opened, boss dead, quest advanced). This is the
+/// A world progression change (door opened, boss dead, quest advanced, or — just as
+/// legitimately — a counter decremented or a boolean cleared back to false). This is the
 /// channel that separates "two players see each other" from actual co-op, and in a real
 /// seamless mod it is where nearly all the difficulty lives: deciding which of the game's
 /// thousands of booleans are global truth and which must stay per-player.
+///
+/// <paramref name="Serial"/> is this ORIGIN's own Lamport clock reading at the moment the
+/// change was made — see <c>EventFlagStore</c>'s remarks for why a per-key value comparison
+/// alone cannot tell a real advance from a stale replay once decreases are legal. Carried
+/// alongside <paramref name="OriginPeerId"/> (already on the wire) so the receiver's
+/// (Serial, OriginPeerId) tie-break is deterministic without a second round trip.
 /// </summary>
-public sealed record FlagOpPacket(uint OriginPeerId, uint OpSequence, uint FlagId, sbyte Value);
+public sealed record FlagOpPacket(
+    uint OriginPeerId, uint OpSequence, uint FlagId, sbyte Value, uint Serial);
 
 public sealed record FlagAckPacket(uint OpSequence);
 
 public sealed record FlagSyncRequestPacket(uint PeerId, uint KnownVersion);
 
+/// <summary>One entry inside a <see cref="FlagSnapshotPacket"/>: a flag's current value plus
+/// the (Serial, OriginPeerId) pair that won it, so a resyncing peer can apply the SAME
+/// last-writer-wins comparison a live op would have used rather than blindly overwriting.</summary>
+public readonly record struct FlagSnapshotEntry(uint FlagId, sbyte Value, uint Serial, uint OriginPeerId);
+
 /// <summary>
 /// Values are <c>sbyte</c>, not <c>bool</c>: KOTOR's world state is a mix of booleans and
 /// signed-byte numbers (quest stages, counters), and splitting a number across derived
-/// boolean ids would break the merge-upwards rule that keeps the two worlds convergent.
+/// boolean ids would break the last-writer-wins rule that keeps the two worlds convergent.
 /// </summary>
-public sealed record FlagSnapshotPacket(uint Version, IReadOnlyList<KeyValuePair<uint, sbyte>> Flags);
+public sealed record FlagSnapshotPacket(uint Version, IReadOnlyList<FlagSnapshotEntry> Flags);
 
 public sealed record PingPacket(uint PeerId, long SentTimeMs);
 
@@ -512,21 +525,37 @@ public sealed record DialogueRequestPacket(
 public sealed record WorldDigestPacket(uint PeerId, WorldDigest Digest);
 
 /// <summary>
-/// A quest journal advance: entry <paramref name="QuestTag"/> reached
-/// <paramref name="State"/>. States only rise (the engine itself refuses to lower one),
-/// so the merge is a max and replays are harmless.
+/// A quest journal change: entry <paramref name="QuestTag"/> reached <paramref name="State"/>
+/// — or, when <paramref name="Removed"/> is set, the tag was taken out of the journal
+/// entirely (KOTOR's own <c>RemoveJournalQuestEntry</c>; <paramref name="State"/> is unused
+/// and sent as 0). Real quest content does both: a stage number can be pushed back down by a
+/// script that re-offers an earlier step, and a handful of scripts (12 found by the module
+/// scan behind docs/research/quest-sync.md's enumeration — <c>danm13/k_pdan_trig1303</c>,
+/// <c>ebo_m41aa/k_pebn_remove</c> among them) call <c>RemoveJournalQuestEntry</c> outright.
+/// <paramref name="Serial"/> is the origin's own Lamport clock reading, exactly like
+/// <see cref="FlagOpPacket.Serial"/> — see <c>JournalStore</c>'s remarks for the comparison
+/// this makes possible once the merge is no longer a bare max.
 /// </summary>
-public sealed record JournalOpPacket(uint OriginPeerId, uint OpSequence, string QuestTag, int State);
+public sealed record JournalOpPacket(
+    uint OriginPeerId, uint OpSequence, string QuestTag, int State, uint Serial, bool Removed = false);
 
 public sealed record JournalAckPacket(uint OpSequence);
 
 public sealed record JournalSyncRequestPacket(uint PeerId, uint KnownVersion);
 
+/// <summary>One entry inside a <see cref="JournalSnapshotPacket"/> — see
+/// <see cref="FlagSnapshotEntry"/> for why Serial/OriginPeerId ride along, and
+/// <see cref="JournalOpPacket.Removed"/> for what a tombstone means here: a resyncing peer
+/// must be TOLD a tag was removed, not merely find it absent, or its own stale copy (from an
+/// earlier op or an already-applied engine write) never learns to retract it.</summary>
+public readonly record struct JournalSnapshotEntry(
+    string QuestTag, int State, uint Serial, uint OriginPeerId, bool Removed);
+
 /// <summary>
-/// The authoritative journal. A journal longer than one datagram is sent as several of
-/// these in one burst, each carrying the same version.
+/// The authoritative journal, tombstones included. A journal longer than one datagram is sent
+/// as several of these in one burst, each carrying the same version.
 /// </summary>
-public sealed record JournalSnapshotPacket(uint Version, IReadOnlyList<KeyValuePair<string, int>> Entries);
+public sealed record JournalSnapshotPacket(uint Version, IReadOnlyList<JournalSnapshotEntry> Entries);
 
 /// <summary>What a lock is for. Only conversations exist today; the field is on the wire
 /// because the release rules differ per kind, and adding one later must not renumber.</summary>

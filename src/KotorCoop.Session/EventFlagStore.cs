@@ -10,18 +10,55 @@ namespace KotorCoop.Session;
 /// Every change bumps <see cref="Version"/>. The host stamps that version into each
 /// world snapshot, so a client detects divergence from a 4-byte field rather than by
 /// shipping the whole flag set every tick.
+///
+/// ⚠ PROTOCOL 31: this used to merge by VALUE — "the higher number wins, ties keep what is
+/// already here" — which is what a KOTOR global usually does (a `*_DONE` latch, a stage
+/// counter) but is not what one ALWAYS does: a kill counter can legitimately tick down, a
+/// `*_DONE` boolean can be cleared back to false by a script, and the game data has real
+/// examples (docs/research/quest-sync.md's enumeration). Under the old policy a genuine
+/// decrease was silently refused forever — worse, on the apply-back path
+/// (<c>CoopAgent.PumpWorldState</c>) the STALE higher value the store still held was written
+/// straight back into the local engine every tick, fighting the player's own game.
+///
+/// The fix is a per-key Lamport clock. <see cref="Version"/> now doubles as this store's own
+/// logical clock: a local change (<see cref="Set"/>) stamps the entry with the NEXT clock
+/// value, guaranteed higher than anything this instance has originated OR observed, because
+/// observing ANY serial — via <see cref="ApplyOp"/> or <see cref="MergeSnapshot"/>, win or
+/// lose — advances the clock past it first. A remote entry is adopted only when its
+/// (Serial, OriginPeerId) is strictly newer than what is already held; ties favour the lower
+/// peer id, i.e. the host (<c>CoopHost.HostPeerId == 1</c>). This keeps every property the
+/// old max-merge had — order-independent, idempotent, a stale replay can never regress a
+/// newer value (proven by <c>ReplayedOpCannotUndoABeat</c> and its serial-aware siblings) —
+/// while finally letting a value go down when that is what genuinely happened.
 /// </summary>
 public sealed class EventFlagStore
 {
     private const int MaxRememberedOps = 4096;
 
-    private readonly Dictionary<uint, sbyte> _flags = [];
+    /// <summary>One flag's current value plus the (Serial, OriginPeerId) that won it.</summary>
+    private readonly record struct Entry(sbyte Value, uint Serial, uint OriginPeerId);
+
+    private readonly Dictionary<uint, Entry> _flags = [];
     private readonly HashSet<(uint Origin, uint Sequence)> _appliedOps = [];
     private readonly Queue<(uint Origin, uint Sequence)> _opHistory = new();
     private readonly Lock _gate = new();
     private ulong _digest = EntryDigest.Empty;
 
-    public uint Version { get; private set; }
+    /// <summary>Caller must hold <see cref="_gate"/>. This store's Lamport clock: the serial
+    /// stamped on the NEXT local change, and the high-water mark of every serial this
+    /// instance has ever observed (locally minted or received).</summary>
+    private uint _clock;
+
+    public uint Version
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _clock;
+            }
+        }
+    }
 
     /// <summary>
     /// An order-independent content fingerprint, maintained incrementally beside
@@ -41,17 +78,27 @@ public sealed class EventFlagStore
 
     /// <summary>Caller must hold <see cref="_gate"/>. Replaces one entry's contribution to
     /// <see cref="_digest"/>: XORs out the old value's hash (if the key was present) and XORs
-    /// in the new one.</summary>
-    private void ReplaceEntry(uint flagId, sbyte value)
+    /// in the new one. The digest depends only on VALUE, not on Serial/OriginPeerId — two
+    /// stores that reached the same content by different local/remote paths still agree on
+    /// what they hold, which is the only thing the digest needs to answer.</summary>
+    private void ReplaceEntry(uint flagId, Entry entry)
     {
-        if (_flags.TryGetValue(flagId, out sbyte existing))
+        if (_flags.TryGetValue(flagId, out Entry existing))
         {
-            _digest ^= EntryDigest.Flag(flagId, existing);
+            _digest ^= EntryDigest.Flag(flagId, existing.Value);
         }
 
-        _flags[flagId] = value;
-        _digest ^= EntryDigest.Flag(flagId, value);
+        _flags[flagId] = entry;
+        _digest ^= EntryDigest.Flag(flagId, entry.Value);
     }
+
+    /// <summary>True when <paramref name="challenger"/> should replace <paramref name="incumbent"/>:
+    /// a strictly higher serial wins outright; an equal serial (two instances minting their
+    /// Nth local change independently, before either heard of the other) is broken by peer id,
+    /// lower wins — the host is always peer 1, so a genuine tie favours the host.</summary>
+    private static bool IsNewer(uint challengerSerial, uint challengerOrigin, Entry incumbent) =>
+        challengerSerial > incumbent.Serial
+        || (challengerSerial == incumbent.Serial && challengerOrigin < incumbent.OriginPeerId);
 
     public int Count
     {
@@ -68,55 +115,66 @@ public sealed class EventFlagStore
     {
         lock (_gate)
         {
-            return _flags.TryGetValue(flagId, out value);
+            if (_flags.TryGetValue(flagId, out Entry entry))
+            {
+                value = entry.Value;
+                return true;
+            }
+
+            value = 0;
+            return false;
         }
     }
 
-    /// <summary>Applies a change. Returns true only when the value actually moved.</summary>
-    public bool Set(uint flagId, sbyte value)
+    /// <summary>The (Serial, OriginPeerId) currently stamped on <paramref name="flagId"/>, for
+    /// a caller (<c>CoopClient.SetFlag</c>) that just wrote the entry via <see cref="Set"/> and
+    /// needs its freshly-minted serial to build the outbound <see cref="FlagOpPacket"/>.</summary>
+    public bool TryGetStamp(uint flagId, out uint serial, out uint originPeerId)
     {
         lock (_gate)
         {
-            if (_flags.TryGetValue(flagId, out sbyte existing) && existing == value)
+            if (_flags.TryGetValue(flagId, out Entry entry))
             {
-                return false;
+                serial = entry.Serial;
+                originPeerId = entry.OriginPeerId;
+                return true;
             }
 
-            ReplaceEntry(flagId, value);
-            Version++;
-            return true;
+            serial = 0;
+            originPeerId = 0;
+            return false;
         }
     }
 
     /// <summary>
-    /// Merges a value the way KOTOR's own world state behaves: upwards only.
-    ///
-    /// The game's globals are overwhelmingly monotonic — booleans are latches
-    /// (<c>*_DONE</c>, <c>*_DEAD</c>) and numbers are stage counters — and the engine
-    /// itself refuses to lower a journal quest state. Taking the maximum makes the merge a
-    /// join: order-independent and idempotent, so a reordered or replayed packet can never
-    /// walk a quest backwards, and a script part-way through a sequence locally cannot be
-    /// dragged back by a peer that is behind.
+    /// Applies a LOCAL, deliberate change — this instance's own player, or its own engine,
+    /// just made this so. Always wins: it mints the next Lamport serial, which by
+    /// construction outranks anything this store has originated or observed so far, so a
+    /// genuine local advance OR decrease always overrides whatever a peer announced earlier.
+    /// Returns true only when the value actually moved (nothing to mint or announce
+    /// otherwise).
     /// </summary>
-    public bool Merge(uint flagId, sbyte value)
+    public bool Set(uint flagId, sbyte value, uint originPeerId = 0)
     {
         lock (_gate)
         {
-            if (_flags.TryGetValue(flagId, out sbyte existing) && existing >= value)
+            if (_flags.TryGetValue(flagId, out Entry existing) && existing.Value == value)
             {
                 return false;
             }
 
-            ReplaceEntry(flagId, value);
-            Version++;
+            _clock++;
+            ReplaceEntry(flagId, new Entry(value, _clock, originPeerId));
             return true;
         }
     }
 
     /// <summary>
-    /// Seeds the store without bumping the version once per entry. Populating a whole
+    /// Seeds the store without bumping the clock once per entry. Populating a whole
     /// KOTOR catalogue through <see cref="Set"/> would raise the version a thousand times
-    /// and make every client immediately demand a full resync.
+    /// and make every client immediately demand a full resync. Seeded entries carry
+    /// Serial 0 / OriginPeerId 0 — nobody's — so ANY genuine local or remote change (which
+    /// always mints Serial &gt;= 1) trivially outranks the baseline.
     ///
     /// The digest is NOT exempted the same way: it is a content fingerprint, not a change
     /// count, so it has to reflect whatever the store actually holds regardless of how that
@@ -128,14 +186,19 @@ public sealed class EventFlagStore
         {
             foreach (KeyValuePair<uint, sbyte> flag in flags)
             {
-                ReplaceEntry(flag.Key, flag.Value);
+                ReplaceEntry(flag.Key, new Entry(flag.Value, 0, 0));
             }
         }
     }
 
     /// <summary>
-    /// Applies a remote op exactly once. UDP means the same op can arrive several times
-    /// through retransmission, and a flag toggle applied twice is a flag toggle undone.
+    /// Applies a remote op. UDP means the same op can arrive several times through
+    /// retransmission; the (OriginPeerId, OpSequence) set catches an EXACT duplicate
+    /// cheaply, but it is not the correctness guarantee — a stale value replayed under a
+    /// FRESH sequence (a reconnecting peer re-announcing what it knew before it dropped)
+    /// must also be refused, and that is what the (Serial, OriginPeerId) comparison
+    /// guarantees regardless of sequence numbers. Observing the op's serial — win or lose —
+    /// always advances this store's own clock past it, per the class remarks.
     /// </summary>
     public bool ApplyOp(FlagOpPacket op)
     {
@@ -154,57 +217,68 @@ public sealed class EventFlagStore
                 _appliedOps.Remove(_opHistory.Dequeue());
             }
 
-            // Merge upwards rather than overwrite, for the reason in Merge: world state
-            // only ever advances, and a replayed or reordered op must not undo a beat.
-            if (_flags.TryGetValue(op.FlagId, out sbyte existing) && existing >= op.Value)
+            if (op.Serial > _clock)
+            {
+                _clock = op.Serial;
+            }
+
+            if (_flags.TryGetValue(op.FlagId, out Entry existing)
+                && !IsNewer(op.Serial, op.OriginPeerId, existing))
             {
                 return false;
             }
 
-            ReplaceEntry(op.FlagId, op.Value);
-            Version++;
+            ReplaceEntry(op.FlagId, new Entry(op.Value, op.Serial, op.OriginPeerId));
             return true;
         }
     }
 
     /// <summary>
-    /// Applies an authoritative host snapshot the way <see cref="Merge"/> applies a single
-    /// value: upwards only, never removing.
-    ///
-    /// ⚠ THIS REPLACED <see cref="ReplaceAll"/> ON THE RESYNC PATH, and the difference is a
-    /// data-loss bug. A resync fires when the versions disagree, which is exactly the state a
-    /// client is in when it holds a change the host has not applied yet — so wiping the set and
-    /// adopting the host's put the client's own world BACKWARDS. Nothing recovered it: the
-    /// bridge reports only globals that CHANGED, so a flag erased from the store was never
-    /// re-observed and never re-announced. The snapshot is also capped at what fits one
-    /// datagram (~277 flags), which under ReplaceAll meant a large set silently deleted
-    /// everything past the cap.
-    ///
-    /// Upward merge makes all three harmless: the host's flag set only ever grows, so nothing
-    /// it omits is a deletion, and nothing it sends can lower a local advance.
+    /// Merges a host snapshot (or snapshot part) the same way a live op applies: per entry,
+    /// last-writer-wins by (Serial, OriginPeerId). A resync fires when the versions
+    /// disagree, which is exactly the state a client can be in while holding a LOCAL change
+    /// the host has not applied yet — the old value-only "upward merge" got this right by
+    /// accident (a lower host value could never beat a higher local one); the serial
+    /// comparison gets it right on purpose, including the case the old policy could not: the
+    /// host's snapshot carries a genuine DECREASE that is newer than this client's own stale
+    /// copy, and that must win too.
     /// </summary>
-    public void MergeSnapshot(IReadOnlyList<KeyValuePair<uint, sbyte>> flags, uint version)
+    public void MergeSnapshot(IReadOnlyList<FlagSnapshotEntry> flags, uint version)
     {
         lock (_gate)
         {
-            foreach (KeyValuePair<uint, sbyte> flag in flags)
+            foreach (FlagSnapshotEntry flag in flags)
             {
-                if (!_flags.TryGetValue(flag.Key, out sbyte existing) || existing < flag.Value)
+                if (flag.Serial > _clock)
                 {
-                    ReplaceEntry(flag.Key, flag.Value);
+                    _clock = flag.Serial;
+                }
+
+                if (!_flags.TryGetValue(flag.FlagId, out Entry existing)
+                    || IsNewer(flag.Serial, flag.OriginPeerId, existing))
+                {
+                    ReplaceEntry(flag.FlagId, new Entry(flag.Value, flag.Serial, flag.OriginPeerId));
                 }
             }
 
-            // Adopt the host's version so the tripwire stops firing. Anything this client
-            // still holds that the host does not is, by construction, an op the reliable
-            // sender is still carrying — and it is never abandoned, so it lands, the host's
-            // version moves, and the next snapshot disagrees again until the two really agree.
-            Version = version;
+            // Adopt the host's version as a floor so the tripwire stops firing even for a
+            // flag this snapshot did not need to touch. Anything this client still holds
+            // that disagrees with the host is, by construction, an op the reliable sender
+            // is still carrying — and it is never abandoned, so it lands, the host's clock
+            // moves, and the next snapshot disagrees again until the two really agree.
+            if (version > _clock)
+            {
+                _clock = version;
+            }
         }
     }
 
-    /// <summary>Replaces the whole set from an authoritative host snapshot. Destructive —
-    /// see <see cref="MergeSnapshot"/> for why the resync path must not use this.</summary>
+    /// <summary>Replaces the whole set from an authoritative source. Destructive — nothing in
+    /// this codebase calls it (the resync path uses <see cref="MergeSnapshot"/> instead,
+    /// deliberately, per its own remarks); kept for callers (tests, a future admin tool) that
+    /// genuinely want a hard reset. Every entry is stamped with the given version as its
+    /// serial and origin 0, so any subsequent real change (local or remote, serial &gt;= 1
+    /// over its own clock) still outranks it correctly.</summary>
     public void ReplaceAll(IReadOnlyList<KeyValuePair<uint, sbyte>> flags, uint version)
     {
         lock (_gate)
@@ -213,10 +287,10 @@ public sealed class EventFlagStore
             _digest = EntryDigest.Empty;
             foreach (KeyValuePair<uint, sbyte> flag in flags)
             {
-                ReplaceEntry(flag.Key, flag.Value);
+                ReplaceEntry(flag.Key, new Entry(flag.Value, version, 0));
             }
 
-            Version = version;
+            _clock = version;
         }
     }
 
@@ -224,7 +298,29 @@ public sealed class EventFlagStore
     {
         lock (_gate)
         {
-            return [.. _flags];
+            List<KeyValuePair<uint, sbyte>> list = new(_flags.Count);
+            foreach (KeyValuePair<uint, Entry> kv in _flags)
+            {
+                list.Add(new KeyValuePair<uint, sbyte>(kv.Key, kv.Value.Value));
+            }
+
+            return list;
+        }
+    }
+
+    /// <summary>The wire shape of <see cref="Snapshot"/>: every entry with the
+    /// (Serial, OriginPeerId) that won it, for <see cref="FlagSnapshotPacket"/>.</summary>
+    public List<FlagSnapshotEntry> SnapshotEntries()
+    {
+        lock (_gate)
+        {
+            List<FlagSnapshotEntry> list = new(_flags.Count);
+            foreach (KeyValuePair<uint, Entry> kv in _flags)
+            {
+                list.Add(new FlagSnapshotEntry(kv.Key, kv.Value.Value, kv.Value.Serial, kv.Value.OriginPeerId));
+            }
+
+            return list;
         }
     }
 
@@ -232,7 +328,13 @@ public sealed class EventFlagStore
     {
         lock (_gate)
         {
-            return new Dictionary<uint, sbyte>(_flags);
+            Dictionary<uint, sbyte> result = new(_flags.Count);
+            foreach (KeyValuePair<uint, Entry> kv in _flags)
+            {
+                result[kv.Key] = kv.Value.Value;
+            }
+
+            return result;
         }
     }
 }

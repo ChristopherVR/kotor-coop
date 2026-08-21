@@ -32,7 +32,7 @@ public class EventFlagStoreTests
     public void DuplicateOpsAreAppliedOnce()
     {
         EventFlagStore store = new();
-        FlagOpPacket op = new(OriginPeerId: 2, OpSequence: 7, FlagId: 1001, Value: 1);
+        FlagOpPacket op = new(OriginPeerId: 2, OpSequence: 7, FlagId: 1001, Value: 1, Serial: 1);
 
         Assert.True(store.ApplyOp(op));
         uint version = store.Version;
@@ -47,8 +47,8 @@ public class EventFlagStoreTests
     {
         EventFlagStore store = new();
 
-        Assert.True(store.ApplyOp(new FlagOpPacket(2, 1, 100, 1)));
-        Assert.True(store.ApplyOp(new FlagOpPacket(3, 1, 200, 1)));
+        Assert.True(store.ApplyOp(new FlagOpPacket(2, 1, 100, 1, 1)));
+        Assert.True(store.ApplyOp(new FlagOpPacket(3, 1, 200, 1, 1)));
 
         Assert.True(store.TryGet(100, out sbyte a) && a == 1);
         Assert.True(store.TryGet(200, out sbyte b) && b == 1);
@@ -70,35 +70,118 @@ public class EventFlagStoreTests
     }
 
     [Fact]
-    public void SetCanLowerAValueButMergeCannot()
+    public void SetAlwaysWinsLocallyEvenAgainstAHigherRemoteValue()
     {
+        // Set is the local, deliberate path: this instance's own engine (or player) just
+        // made this so, and it must win regardless of what a peer announced earlier —
+        // including lowering a value, which protocol 31 makes legal (a kill counter ticking
+        // down, a boolean cleared back to false).
         EventFlagStore store = new();
         store.Set(1001, 1);
-
-        // Set is the local, deliberate path and stays unconstrained.
         Assert.True(store.Set(1001, 0));
         Assert.True(store.TryGet(1001, out sbyte lowered) && lowered == 0);
 
-        // Merge is the network path: world state only advances, so a peer that is behind
-        // cannot walk this instance backwards through a quest.
-        store.Set(2002, 5);
-        Assert.False(store.Merge(2002, 3));
-        Assert.True(store.TryGet(2002, out sbyte kept) && kept == 5);
-
-        Assert.True(store.Merge(2002, 9));
-        Assert.True(store.TryGet(2002, out sbyte raised) && raised == 9);
+        // Even against a value this store already holds via a REMOTE op with a serial that
+        // would otherwise look "ahead": a genuine local change always mints a fresh serial
+        // that outranks anything already observed (see EventFlagStore's remarks).
+        store.ApplyOp(new FlagOpPacket(OriginPeerId: 9, OpSequence: 1, FlagId: 2002, Value: 99, Serial: 500));
+        Assert.True(store.Set(2002, 3));
+        Assert.True(store.TryGet(2002, out sbyte local) && local == 3);
     }
 
     [Fact]
-    public void ReplayedOpCannotUndoABeat()
+    public void ANonMonotonicRemoteDecreaseIsAcceptedWhenItIsGenuinelyNewer()
     {
+        // The core fix: a peer's remote op carrying a LOWER value must still win when its
+        // serial is newer — the old value-only merge refused this forever.
+        EventFlagStore store = new();
+        Assert.True(store.ApplyOp(new FlagOpPacket(2, 1, 2002, 5, Serial: 1)));
+        Assert.True(store.ApplyOp(new FlagOpPacket(2, 2, 2002, 2, Serial: 2)));
+
+        Assert.True(store.TryGet(2002, out sbyte value) && value == 2);
+    }
+
+    [Fact]
+    public void AStaleReplayWithAFreshSequenceNumberNeverRegressesANewerValue()
+    {
+        // The safety property the old scheme leaned on the value-only max for: a
+        // reconnecting peer re-announcing a value it knew before it dropped must not be able
+        // to undo a change that happened while it was gone — even when the replay arrives
+        // under a BRAND NEW op sequence number, which the (origin, sequence) dedup set alone
+        // cannot catch (it has never seen this sequence before).
         EventFlagStore store = new();
 
-        // A quest advances to stage 3, then a stale packet carrying stage 1 arrives late.
-        Assert.True(store.ApplyOp(new FlagOpPacket(2, 1, 500, 3)));
-        Assert.False(store.ApplyOp(new FlagOpPacket(2, 2, 500, 1)));
+        // The quest advances to 3 (serial 1), and while the peer was disconnected it drops
+        // further to 1 (serial 2) — both genuine, in order.
+        Assert.True(store.ApplyOp(new FlagOpPacket(2, 1, 500, 3, Serial: 1)));
+        Assert.True(store.ApplyOp(new FlagOpPacket(2, 2, 500, 1, Serial: 2)));
 
-        Assert.True(store.TryGet(500, out sbyte value) && value == 3);
+        // The peer reconnects and replays its OWN old belief (value 3) — a fresh sequence
+        // number (10), stale serial (1). Must be refused.
+        Assert.False(store.ApplyOp(new FlagOpPacket(2, 10, 500, 3, Serial: 1)));
+
+        Assert.True(store.TryGet(500, out sbyte value) && value == 1);
+    }
+
+    [Fact]
+    public void ATieIsBrokenByTheLowerPeerIdIeTheHost()
+    {
+        // Two instances mint the same serial independently for their Nth change, before
+        // either has heard from the other — a genuine tie. The host (peer 1) wins
+        // deterministically on both sides, so two stores that each apply both ops in
+        // whichever order they arrive still converge on the same value.
+        EventFlagStore fromHostFirst = new();
+        Assert.True(fromHostFirst.ApplyOp(new FlagOpPacket(OriginPeerId: 1, OpSequence: 1, FlagId: 9, Value: 10, Serial: 5)));
+        Assert.False(fromHostFirst.ApplyOp(new FlagOpPacket(OriginPeerId: 2, OpSequence: 1, FlagId: 9, Value: 20, Serial: 5)));
+
+        EventFlagStore fromClientFirst = new();
+        Assert.True(fromClientFirst.ApplyOp(new FlagOpPacket(OriginPeerId: 2, OpSequence: 1, FlagId: 9, Value: 20, Serial: 5)));
+        Assert.True(fromClientFirst.ApplyOp(new FlagOpPacket(OriginPeerId: 1, OpSequence: 1, FlagId: 9, Value: 10, Serial: 5)));
+
+        Assert.True(fromHostFirst.TryGet(9, out sbyte a) && a == 10);
+        Assert.True(fromClientFirst.TryGet(9, out sbyte b) && b == 10);
+    }
+
+    [Fact]
+    public void ObservingARemoteSerialAdvancesTheClockEvenWhenTheValueLoses()
+    {
+        // Causality: a rejected remote op must still push this store's own clock forward, so
+        // a SUBSEQUENT genuine local change (on an unrelated key) is guaranteed to outrank
+        // everything this instance has seen so far, not just everything it has originated.
+        EventFlagStore store = new();
+        store.ApplyOp(new FlagOpPacket(2, 1, 1, 1, Serial: 1));
+
+        // A stale op for the SAME key, refused — but its serial (100) still moves the clock.
+        store.ApplyOp(new FlagOpPacket(2, 1, 1, 1, Serial: 1)); // no-op, dedup
+        store.ApplyOp(new FlagOpPacket(2, 2, 1, 1, Serial: 100));
+        Assert.Equal(100u, store.Version);
+
+        // A fresh local change on a different key mints clock+1 = 101, which the next
+        // MergeSnapshot/ApplyOp comparison can only ever be beaten by something newer still.
+        Assert.True(store.Set(2, 1));
+        Assert.True(store.TryGetStamp(2, out uint serial, out _));
+        Assert.Equal(101u, serial);
+    }
+
+    [Fact]
+    public void MergeSnapshotAppliesPerEntryLastWriterWinsAndNeverRegressesALocalChange()
+    {
+        EventFlagStore client = new();
+
+        // The client made its own local advance (mints serial 1) before the host's snapshot
+        // — a resync must not stomp it if the host has not heard of it yet.
+        client.Set(42, 7, originPeerId: 2);
+
+        FlagSnapshotEntry stale = new(FlagId: 42, Value: 3, Serial: 0, OriginPeerId: 1);
+        client.MergeSnapshot([stale], version: 5);
+
+        Assert.True(client.TryGet(42, out sbyte kept) && kept == 7);
+
+        // A genuinely newer host entry (higher serial) DOES win, including a decrease.
+        FlagSnapshotEntry newer = new(FlagId: 42, Value: 1, Serial: 99, OriginPeerId: 1);
+        client.MergeSnapshot([newer], version: 99);
+
+        Assert.True(client.TryGet(42, out sbyte overridden) && overridden == 1);
     }
 
     [Fact]
@@ -107,7 +190,7 @@ public class EventFlagStoreTests
         EventFlagStore store = new();
 
         // A KOTOR catalogue is well over a thousand entries; seeding through Set would
-        // bump the version once each and make every client demand an immediate resync.
+        // bump the version once each and make every client immediately demand a resync.
         store.Seed(Enumerable.Range(1, 1000).Select(i => new KeyValuePair<uint, sbyte>((uint)i, 1)));
 
         Assert.Equal(0u, store.Version);
@@ -150,7 +233,9 @@ public class EventFlagStoreTests
     /// <summary>
     /// The reason the digest exists at all: two stores that reached the same VERSION by
     /// making the same number of changes, but different ones, must disagree on the digest —
-    /// the tie a bare counter cannot see (docs/research/disconnect-reconnect.md §4.1).
+    /// the tie a bare counter cannot see (docs/research/disconnect-reconnect.md §4.1). Still
+    /// true under the Lamport-clock scheme: the digest depends only on VALUE, never on
+    /// Serial/OriginPeerId, so this property survives the redesign unchanged.
     /// </summary>
     [Fact]
     public void EqualVersionWithDifferentContentProducesADifferentDigest()
@@ -186,6 +271,21 @@ public class EventFlagStoreTests
     }
 
     [Fact]
+    public void DigestAgreesForTwoStoresThatDivergedByDifferentPathsToTheSameContent()
+    {
+        // One store reached (flag=5) locally; the other reached it by adopting a remote op.
+        // The digest depends only on content, so two peers that genuinely agree must digest
+        // identically regardless of which path got them there.
+        EventFlagStore local = new();
+        local.Set(7, 5, originPeerId: 1);
+
+        EventFlagStore remote = new();
+        remote.ApplyOp(new FlagOpPacket(OriginPeerId: 1, OpSequence: 1, FlagId: 7, Value: 5, Serial: 1));
+
+        Assert.Equal(local.Digest, remote.Digest);
+    }
+
+    [Fact]
     public void ReplaceAllRecomputesTheDigestRatherThanCarryingStaleContributions()
     {
         EventFlagStore store = new();
@@ -206,7 +306,7 @@ public class EventFlagStoreTests
     public void SeedUpdatesTheDigestEvenThoughItDoesNotBumpTheVersion()
     {
         // The digest is a content fingerprint, not a change count, so it has to reflect
-        // whatever the store actually holds regardless of how the content arrived.
+        // whatever the store actually holds regardless of how that content arrived.
         EventFlagStore store = new();
         ulong empty = store.Digest;
 
@@ -309,5 +409,15 @@ public class ReliableFlagSenderTests
         uint second = sender.Enqueue(2, 2, 1, 0).OpSequence;
 
         Assert.NotEqual(first, second);
+    }
+
+    [Fact]
+    public void TheEnqueuedPacketCarriesItsSerial()
+    {
+        ReliableFlagSender sender = new();
+
+        FlagOpPacket op = sender.Enqueue(2, 1001, 1, nowMs: 0, serial: 77);
+
+        Assert.Equal(77u, op.Serial);
     }
 }
