@@ -2921,6 +2921,63 @@ process's cumulative total across the whole session.
 Full suite: 966/966, both builds clean. Rig torn down and confirmed clean, `auto_start_agent`
 restored to `1` in both `coop.ini` files.
 
+### Solved — it was never a pump bug. `session.Capabilities` correctly dropped a channel (2026-08-21, round 43)
+
+The previous round's own third candidate — "`session.Capabilities`, the module-list filtering,
+the mod-compatibility masking" — was the answer. A temporary throttled diagnostic at
+`PumpEnemies`'s own entry (`SupportsEnemySync`, `caps`, logged every 3s) settled it cleanly, no
+guessing:
+
+- **First transition, watched clean for 6+ minutes:** `SupportsEnemySync=True hasEnemyCap=True
+  caps=All` on every sample. No stall at all.
+- **A second, rapid transition back into the same module (`tar_m03aa`) reproduced it
+  immediately:** `SupportsEnemySync=True hasEnemyCap=False caps=Phantoms, WorldState, Journal,
+  Appearance, Equipment, Dialogue, Progression`. `Enemies` is missing — and so are `Doors`,
+  `GroundItems` and `Party`, silently, together. That is `ContentCompatibility.ObjectIdKeyed`
+  exactly (`Enemies | Doors | GroundItems | Party`, `ContentCompatibility.cs:274-276`) — the mask
+  this codebase already documents dropping together on a detected module-GIT mismatch. `caps`
+  still contained `WorldState`, ruling out the separate, unrelated `WorldState | Doors` branch at
+  `ContentCompatibility.cs:337` — this was specifically the id-keyed group, specifically a GIT
+  mismatch.
+
+**So the pump was never stuck.** `PumpEnemies` reached its very first line every single tick,
+read `bridge.SupportsEnemySync` and `caps` correctly, and correctly, deliberately returned early
+— because the mod-compatibility system had genuinely detected that the two installs' `tar_m03aa`
+GIT state disagreed, and correctly degraded the id-keyed channels rather than risk driving one
+side's object ids onto the other's (mismatched) creatures. Every earlier round's static audit of
+`CoopAgent.cs`, `KotorGameBridge.cs`, `PatternScanner.cs` and `CoopClient.cs`'s `_gate` lock sites
+being clean was accurate — none of that layer was ever broken.
+
+**Why it looked like a bug for four rounds:** no compatibility-mismatch announcement fired
+(`CompatibilityAnnouncer` only announces on a re-evaluation EDGE, and this session's rig has run
+this exact `tar_m03aa` scenario dozens of times across the whole `local_combat` investigation, on
+the SAME two long-lived GOG installs — enemies killed, items moved, differently each round — so
+by this point the two installs' `tar_m03aa` GIT state has genuinely, quietly drifted apart over
+many hours of real testing). A silent, correct degradation with no on-screen signal is
+indistinguishable from a hang until someone reads the actual gate value.
+
+**No code fix needed for the stall itself** — it was correct behaviour. One real, independent
+improvement was made and kept regardless: `SaveDigestCache.Run()` (the module-GIT background
+compute this same trail suspected earlier) now runs on a dedicated background thread instead of
+`Task.Run`, since queuing synchronous archive I/O onto the SAME shared thread pool this process's
+other async continuations depend on is a real anti-pattern worth closing even though it was not,
+in the end, this bug's cause.
+
+**Practical note for this repo's own test rig, not a code change:** the two GOG installs at
+`C:\GOG Games\Star Wars KOTOR (GOG)` and `D:\Games\swkotor-gog-p2` have accumulated genuine
+divergent save state after this many hours of live testing. A fresh, matched save pair would stop
+tripping this for future rounds; alternatively, seeing `caps` silently drop `Enemies`/`Doors`/
+`GroundItems`/`Party` on this specific pair from here on is the compatibility system correctly
+doing its job, not a regression to chase.
+
+**`local_combat` itself:** every fix from rounds 9 through the empty-script-slot safety gate
+remains real and correct. The one thing genuinely still unconfirmed is the full sustained-combat
+pass on a CLEAN save pair (no accumulated GIT drift) — the last several rounds kept getting
+diverted by this exact stall before reaching it. That is the actual remaining item, not a pump
+bug.
+
+Full suite: 966/966, both builds clean. Rig torn down and confirmed clean.
+
 ## 3. A client's XP is actively erased
 
 `ProgressionSnapshotPacket` is host→client only and absolute (CoopAgent.cs, `PumpProgression`):
