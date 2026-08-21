@@ -1001,18 +1001,28 @@ public sealed class KotorGameBridge : IGameBridge
         PatternScanner scanner = new(_memory);
         List<nint> hits = scanner.ScanAll(BytePattern.Parse(PluginSignature), ScanScope.PrivateCommitted, limit: 4);
 
+        // TEMPORARY DIAGNOSTIC (live stall investigation) - settling whether the scan finds
+        // the block at all versus finding it but failing the heartbeat check.
+        ResolveDiagnostic?.Invoke($"TryFindPlugin: scan found {hits.Count} candidate(s): {string.Join(", ", hits.Select(h => $"0x{h:X}"))}");
+
         foreach (nint candidate in hits)
         {
             // A heartbeat that advances distinguishes a live plugin from a stale block left
             // behind in freed memory, which the signature alone cannot do.
             if (!_memory.TryReadUInt32(candidate + BlockHeartbeat, out uint first))
             {
+                ResolveDiagnostic?.Invoke($"TryFindPlugin: 0x{candidate:X} first heartbeat read FAILED");
                 continue;
             }
 
             Thread.Sleep(60);
 
-            if (_memory.TryReadUInt32(candidate + BlockHeartbeat, out uint second) && second != first)
+            bool secondOk = _memory.TryReadUInt32(candidate + BlockHeartbeat, out uint second);
+            ResolveDiagnostic?.Invoke(
+                $"TryFindPlugin: 0x{candidate:X} heartbeat {first} -> {(secondOk ? second.ToString() : "READ-FAILED")} "
+                + $"(second read ok={secondOk}, advanced={secondOk && second != first})");
+
+            if (secondOk && second != first)
             {
                 _pluginBlock = candidate;
                 ResetItemSlots();

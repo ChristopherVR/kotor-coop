@@ -101,6 +101,10 @@ public sealed class CoopAgent(IGameBridge bridge, ICoopSession session, AgentSet
     private IReadOnlyList<RemotePeer> _lastPeers = [];
     private string _lastTravelRequest = string.Empty;
 
+    /// <summary>TEMPORARY (live stall investigation): throttles the CanWriteRemotes=false
+    /// diagnostic to once/sec.</summary>
+    private long _lastCanWriteRemotesDiagMs;
+
     private long _lastHeavyPumpMs;
     private long _lastCombatPumpMs;
     private long _travelRetryAtMs;
@@ -263,6 +267,15 @@ public sealed class CoopAgent(IGameBridge bridge, ICoopSession session, AgentSet
 
         if (!bridge.CanWriteRemotes)
         {
+            // TEMPORARY DIAGNOSTIC (live stall investigation) - throttled to once/sec so it
+            // doesn't flood the log while stuck here every tick.
+            long diagNowMs = Environment.TickCount64;
+            if (diagNowMs - _lastCanWriteRemotesDiagMs >= 1000)
+            {
+                _lastCanWriteRemotesDiagMs = diagNowMs;
+                Log?.Invoke("stall diag: CanWriteRemotes=false, blocked before the combat pump - retrying plugin block lookup on the bridge's own cadence");
+            }
+
             LastWriteSucceeded = false;
             return;
         }

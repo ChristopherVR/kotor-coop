@@ -803,7 +803,24 @@ internal static class Program
         // memory scan, so if this fires repeatedly the validation is wrong, not the pointer.
         if (bridge is KotorGameBridge resolveDiag)
         {
-            resolveDiag.ResolveDiagnostic = message => Console.WriteLine($"[resolve] {message}");
+            resolveDiag.ResolveDiagnostic = message =>
+            {
+                Console.WriteLine($"[resolve] {message}");
+
+                // TEMPORARY (live stall investigation): options.LogFile is known before the
+                // dashboard exists, and this diagnostic needs to survive in the log file, not
+                // just the console window demo.ps1 never captures.
+                if (!string.IsNullOrEmpty(options.LogFile))
+                {
+                    try
+                    {
+                        File.AppendAllText(options.LogFile, $"[{DateTime.Now:HH:mm:ss.fff}] [resolve] {message}{Environment.NewLine}");
+                    }
+                    catch
+                    {
+                    }
+                }
+            };
 
             // And why the enemy census is smaller than the scan. A creature-shaped object the
             // engine's own array does not hold is an id nobody can key work by — the peer

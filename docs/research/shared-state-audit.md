@@ -2867,6 +2867,60 @@ restored to `1` in both `coop.ini` files (this round used a manual agent relaunc
 `demo.ps1 -Stop`, which is the only thing that normally restores it — flagging this explicitly
 since it is exactly the kind of silent leftover this document has warned about before).
 
+### The multi-minute soak found the stall reproduces again — and it is a DIFFERENT bug this time
+
+Ran the soak the previous entry called for: fresh session, warp to `tar_m03aa`, `moduleClean`
+diagnostic watched continuously (a live `Monitor` tailing the agent log, not a fixed sleep-then-
+check). **First run:** the diagnostic went dark at `14:12:44` and never returned for the rest of
+a 6-minute observation — while the PLUGIN side stayed fully alive the whole time (its own
+`local combat` cycle kept excluding/timing-out a creature on schedule, one line per second,
+proving the game's main thread was never stalled). This ruled out a frozen game and pointed
+back at the agent's own pump.
+
+Added instruction-level diagnostics to settle it rather than guess: a throttled log line right
+at the `CanWriteRemotes` gate in `CoopAgent.PumpOnce` (`stall diag: CanWriteRemotes=false...`),
+and inside `TryFindPlugin` itself (`TryFindPlugin: scan found N candidate(s): ...`, plus a
+per-candidate heartbeat-check result) — the latter routed through `KotorGameBridge`'s existing
+`ResolveDiagnostic` delegate, which this pass discovered only ever reached `Console.WriteLine`
+on the agent's own visible window, NOT the log file `demo.ps1` captures — `Program.cs` now also
+appends it to the log file directly, since a diagnostic nobody can read is not a diagnostic.
+
+Directly verified, independent of the agent, that the block itself was healthy the whole time:
+`blockpoke.ps1 state` found it at the same address (`0x17020000`) the entire session, and a
+standalone `ReadProcessMemory` probe against the exact `Heartbeat` field (`+0x4C`) showed it
+advancing normally (16567 → 16574 → 16582 across 400ms) while the stall was ongoing. The
+region backing it is a trivial 16KB private-committed allocation, far under every size/scope
+filter `PatternScanner`/`ProcessMemory.EnumerateRegions` apply. None of that is the problem.
+
+**Second run, with the new diagnostics in place, reproduced the stall again — and disproved the
+leading hypothesis.** A `[resolve]` line fired right at the transition
+(`player: adopted the engine's own creature 0x19085480 (id 0x7FFFFFFF)...`) — that branch is
+gated on `_pluginBlock != 0`, so the plugin block was demonstrably NOT lost this time. The
+`CanWriteRemotes=false` diagnostic never fired once in 4+ minutes, and `TryFindPlugin`'s own
+diagnostic never fired either — meaning that retry path was never even entered. **This is a
+different stall than the one `39d555a` fixed, reproducing under the identical external symptom
+(the `moduleClean` diagnostic goes dark) but with a different, still-unknown internal cause** —
+something between the `CanWriteRemotes` check (confirmed passing) and the `moduleClean` log
+line (never reached) is now blocking without throwing (no `pump tick failed` anywhere in either
+run) and without the OS considering the process hung (`Get-Process` reported `Responding: True`
+throughout, with heavy accumulated CPU time — 304s — consistent with something looping hard
+rather than a true deadlock, though this was not confirmed further before this pass ran out of
+budget).
+
+**Status: NOT fixed. The `39d555a` fix is real and closes the specific race it targeted, but it
+is not sufficient — there is at least one more, distinct cause of the same external symptom.**
+The next round should: (1) trust the two new diagnostics already in the tree (`CoopAgent.cs`'s
+`CanWriteRemotes` gate log and `KotorGameBridge.cs`'s `TryFindPlugin` scan log, both temporary
+and clearly marked) rather than re-adding them; (2) since both stayed silent this time, narrow
+the search to the code between `CanWriteRemotes`'s check and the `moduleClean` line specifically
+— `session.Capabilities`, the module-list filtering, the mod-compatibility masking, or anything
+else in that stretch that could hang or loop without throwing; (3) consider whether the high
+accumulated CPU time is a genuine clue (a hot loop somewhere in that stretch) versus just this
+process's cumulative total across the whole session.
+
+Full suite: 966/966, both builds clean. Rig torn down and confirmed clean, `auto_start_agent`
+restored to `1` in both `coop.ini` files.
+
 ## 3. A client's XP is actively erased
 
 `ProgressionSnapshotPacket` is host→client only and absolute (CoopAgent.cs, `PumpProgression`):
