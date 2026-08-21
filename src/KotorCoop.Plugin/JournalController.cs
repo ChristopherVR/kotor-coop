@@ -10,11 +10,14 @@ namespace KotorCoop.Plugin;
 /// and the agent holds the queue.
 ///
 /// ⚠ PROTOCOL 31: "differs from", not "is ahead of". The session is now the authority in
-/// EITHER direction — a genuine decrease with override, or a removal — and
-/// <see cref="Odyssey.SetJournalState"/> decides the engine's own override bit for a
-/// decrease by comparing against what it finds live in the journal. A removal is signalled
-/// through the SAME <c>JournalState</c> field via <see cref="RemoveSentinel"/> rather than a
-/// new <c>SharedBlock</c> field, since that struct's layout is owned by another pass — see
+/// EITHER direction — a genuine decrease, or a removal — and <see
+/// cref="Odyssey.SetJournalState"/> decides how to reach the target by comparing against what
+/// it finds live in the journal (<see cref="JournalApplyRule"/>). Live pass 2026-08-22 found
+/// <c>SetState</c>'s own <c>bOverrideHigher=1</c> argument does not visibly move the array's
+/// state field, so a decrease is now realised as remove-then-add instead — see <see
+/// cref="_removeSync"/>'s remarks. A removal is signalled through the SAME
+/// <c>JournalState</c> field via <see cref="RemoveSentinel"/> rather than a new
+/// <c>SharedBlock</c> field, since that struct's layout is owned by another pass — see
 /// docs/research/quest-sync.md.
 /// </summary>
 internal sealed unsafe class JournalController(SharedBlockView block)
@@ -40,13 +43,17 @@ internal sealed unsafe class JournalController(SharedBlockView block)
     /// <c>JournalStore</c>), so the only thing missing while this is off is the LOCAL
     /// engine's own journal UI still showing an entry the peer's has taken out.
     ///
-    /// ⚠ A SEPARATE, STILL-OPEN FINDING from the same live pass: <see
-    /// cref="Odyssey.SetJournalState"/>'s GENUINE DECREASE path (<c>bOverrideHigher=1</c>)
-    /// reported success and logged the lower state, but a raw read of the journal array
-    /// afterward showed the entry's state UNCHANGED — the override call did not visibly
-    /// take. This is unconditional, existing code with no ini gate, so nothing here flips
-    /// it off; it is recorded as a live-verification failure pending its own investigation
-    /// (docs/research/quest-sync.md's live-pass section has the exact repro).
+    /// ⚠ ALSO GATES a genuine decrease. The same live pass found <see
+    /// cref="Odyssey.SetJournalState"/>'s <c>bOverrideHigher=1</c> path reports success and
+    /// logs the lower state, but a raw read of the journal array afterward showed the entry's
+    /// state UNCHANGED — the override call did not visibly take (see <see
+    /// cref="JournalApplyRule.RemoveThenAdd"/>'s remarks for the disassembly). Since a
+    /// decrease is now realised as remove-then-add (<see cref="Odyssey.SetJournalState"/>'s
+    /// own <c>allowDecreaseViaRemove</c> parameter, fed this same flag), it fundamentally
+    /// needs the removal primitive this flag already gates — a decrease request
+    /// with the flag off is refused (failure 7) rather than falling back to the disproven
+    /// override path, exactly the same "session still tracks it, local engine write is
+    /// skipped" gap the removal path already documents.
     /// </summary>
     private readonly bool _removeSync = PluginConfig.ReadBool("journal_remove_sync", true);
 
@@ -93,7 +100,8 @@ internal sealed unsafe class JournalController(SharedBlockView block)
 
     private void ApplySet(byte* tag, int length, int state, uint serial)
     {
-        bool ok = Odyssey.SetJournalState(tag, length, state, out int failure, out bool alreadyCurrent);
+        bool ok = Odyssey.SetJournalState(
+            tag, length, state, _removeSync, out int failure, out bool alreadyCurrent);
         block.JournalStatus = ok ? 0 : failure;
         block.JournalApplied = serial;
 
