@@ -343,6 +343,60 @@ internal static unsafe class Odyssey
         return objectId;
     }
 
+    // ---- ROUND 47 BISECTION MASK ------------------------------------------------------
+    //
+    // docs/research/shared-state-audit.md §2 rounds 9-46 spent 46 rounds proving WHICH
+    // fields a mirrored-then-excluded creature's round sub-structures stay disarmed despite,
+    // one static-disassembly candidate at a time, and never found the actual cause. Round 47
+    // is the empirical alternative: a dev-only coop.ini bitmask (`local_combat_bisect_mask`,
+    // hex, default 0 = every op below active — today's shipped behaviour) where each bit
+    // DISABLES exactly one distinct engine write/call this plugin performs on a MIRRORED
+    // (not-yet-fighting) creature, so a live A/B pass can narrow which one actually matters
+    // instead of reasoning about it from the disassembly alone. Strictly additive: every call
+    // site below runs its normal op when the corresponding bit is 0, so `local_combat_bisect_mask`
+    // unset reproduces exactly today's behaviour bit for bit. The exclusion/trigger machinery
+    // itself (StartLocalFight's script fire, MaintainLocalFight's dead/disengage/timeout
+    // checks, RestoreClaimState on the handoff frame) is deliberately NOT gated by any bit —
+    // this mask only ever touches the ONGOING per-frame mirror-drive ops that run on a
+    // creature BEFORE it is ever handed to local_combat, which is precisely the "went through
+    // DriveOne even briefly" half of round 46's fact pattern.
+    //
+    // Bit  Op                                                        Where
+    // 0    ObjCommandable = 1                                        ClaimCreature
+    // 1    ClearAllActionsFn (targeted move-class wipe)               ClaimCreature
+    // 2    CreMovePermitted |= 2 ; CreRunFlag = 0                     ClaimCreature
+    // 3    CreMovePermitted |= CreAttackPermittedBit (0x04)           PermitAttacking
+    // 4    PlayOneShotAnimation replay                                EnemyPresenceController.DriveOne
+    // 5    SetOrientationFn (facing write)                            DriveBody
+    // 6    CreRunFlag / CreMoveState destructive assignment           DriveBody
+    // 7    SetAnimation vtable call (server animation field)          DriveBody
+    // 8    SetPositionFn (engine's own SetPosition, suppress-dirty)   DriveBody
+    // 9    Client twin desired-position + animation-sync writes       DriveBody
+    // 10   ClearPositionDirty (ClearDirtyFlagFn)                      EnemyPresenceController.DriveOne
+    //
+    // Other callers of these same functions (MaterialisedEnemies, PartyPresenceController,
+    // PhantomController) never pass a mask, so they default to 0 — unaffected, always full
+    // behaviour, exactly as before this round.
+    public const uint BisectBitClaimCommandable = 1u << 0;
+    public const uint BisectBitClaimActionWipe = 1u << 1;
+    public const uint BisectBitClaimMovePermit = 1u << 2;
+    public const uint BisectBitPermitAttack = 1u << 3;
+    public const uint BisectBitOneShotAnim = 1u << 4;
+    public const uint BisectBitDriveFacing = 1u << 5;
+    public const uint BisectBitDriveRunMoveState = 1u << 6;
+    public const uint BisectBitDriveAnimation = 1u << 7;
+    public const uint BisectBitDrivePosition = 1u << 8;
+    public const uint BisectBitDriveTwin = 1u << 9;
+    public const uint BisectBitClearPositionDirty = 1u << 10;
+
+    /// <summary>All eleven round-47 bisection bits, for "disable everything but census
+    /// membership" (run 0 of the bisection protocol).</summary>
+    public const uint BisectAllOps =
+        BisectBitClaimCommandable | BisectBitClaimActionWipe | BisectBitClaimMovePermit
+        | BisectBitPermitAttack | BisectBitOneShotAnim | BisectBitDriveFacing
+        | BisectBitDriveRunMoveState | BisectBitDriveAnimation | BisectBitDrivePosition
+        | BisectBitDriveTwin | BisectBitClearPositionDirty;
+
     /// <summary>
     /// Takes a creature out of AI control so its own behaviour does not fight us.
     ///
@@ -366,22 +420,31 @@ internal static unsafe class Odyssey
     /// position is still driven from the owner every pass, so it stays where the owner says;
     /// what it gains is the ability to finish a combat round.
     /// </summary>
-    public static void ClaimCreature(nint creature, bool clearActions)
+    /// <param name="bisectMask">ROUND 47: 0 (default) is today's unconditional behaviour,
+    /// unaffected. Any other caller than <c>EnemyPresenceController.DriveOne</c> should never
+    /// pass anything else. See the bit table above.</param>
+    public static void ClaimCreature(nint creature, bool clearActions, uint bisectMask = 0)
     {
         // Deliberately LEAVES the creature commandable. An earlier version set the
         // commandable flag to 0 to stop the AI interfering, which was self-defeating: the
         // action queue is executed by the AI master, so a non-commandable creature ignores
         // the move actions we queue and never walks anywhere.
-        *(int*)(creature + ObjCommandable) = 1;
+        if ((bisectMask & BisectBitClaimCommandable) == 0)
+        {
+            *(int*)(creature + ObjCommandable) = 1;
+        }
 
-        if (clearActions)
+        if (clearActions && (bisectMask & BisectBitClaimActionWipe) == 0)
         {
             ClearAllActionsFn(creature, 1);
         }
 
         // Movement must be permitted or the walk animation is skipped entirely.
-        *(int*)(creature + CreMovePermitted) |= 2;
-        *(int*)(creature + CreRunFlag) = 0;
+        if ((bisectMask & BisectBitClaimMovePermit) == 0)
+        {
+            *(int*)(creature + CreMovePermitted) |= 2;
+            *(int*)(creature + CreRunFlag) = 0;
+        }
     }
 
     // ---- the action queue, read as a queue rather than wiped blind ------------------
@@ -515,8 +578,8 @@ internal static unsafe class Odyssey
     /// go with it; the AI re-queues at the next combat-round boundary, tens of milliseconds.
     /// The wedge is forever.
     /// </summary>
-    public static void ClaimCreatureForFight(nint creature) =>
-        ClaimCreature(creature, clearActions: IsMoveAction(GetHeadActionType(creature)));
+    public static void ClaimCreatureForFight(nint creature, uint bisectMask = 0) =>
+        ClaimCreature(creature, clearActions: IsMoveAction(GetHeadActionType(creature)), bisectMask);
 
     /// <summary>CSWSCreature + this = a per-creature "path info" sub-object — VERIFIED
     /// elsewhere in this file (the range-diagnostic reading creature+0x90 vs. this+0x08 as
@@ -6417,8 +6480,15 @@ internal static unsafe class Odyssey
     /// local_combat, because a body can be marked once at spawn and live for the rest of the
     /// module — a spawn-time decision cannot be trusted to still hold.
     /// </summary>
-    public static void PermitAttacking(nint creature) =>
-        *(int*)(creature + CreMovePermitted) |= CreAttackPermittedBit;
+    /// <param name="bisectMask">ROUND 47: 0 (default) is today's unconditional behaviour. See
+    /// the bit table on <see cref="ClaimCreature(nint, bool, uint)"/>.</param>
+    public static void PermitAttacking(nint creature, uint bisectMask = 0)
+    {
+        if ((bisectMask & BisectBitPermitAttack) == 0)
+        {
+            *(int*)(creature + CreMovePermitted) |= CreAttackPermittedBit;
+        }
+    }
 
     /// <summary>CSWSCreature + this = its CSWSCombatRound sub-object. VERIFIED: the field
     /// AddAttackAction below is called through (<c>mov ecx, dword ptr [esi + 0x9c8]</c> at
@@ -8360,7 +8430,10 @@ internal static unsafe class Odyssey
     /// While moving, the gait still comes from the measured stream speed — the owner's
     /// field lags it, and a wrong gait reads worse than a wrong stance.
     /// </summary>
-    public static void DriveEnemy(nint creature, Vec3 position, float facing, float speed, bool moving, uint ownerAnimation)
+    /// <param name="bisectMask">ROUND 47: 0 (default) is today's unconditional behaviour,
+    /// unaffected — <see cref="PartyPresenceController"/>'s call never passes anything else.
+    /// See the bit table on <see cref="ClaimCreature(nint, bool, uint)"/>.</param>
+    public static void DriveEnemy(nint creature, Vec3 position, float facing, float speed, bool moving, uint ownerAnimation, uint bisectMask = 0)
     {
         bool run = speed > 2.0f;
 
@@ -8371,17 +8444,24 @@ internal static unsafe class Odyssey
             ? (run ? AnimRun : AnimWalk)
             : (ownerAnimation is >= 0x2710 and < 0x2800 ? (int)ownerAnimation : AnimIdle);
 
-        DriveBody(creature, position, facing, speed, moving, want, run);
+        DriveBody(creature, position, facing, speed, moving, want, run, bisectMask);
     }
 
-    private static void DriveBody(nint creature, Vec3 position, float facing, float speed, bool moving, int want, bool run)
+    private static void DriveBody(nint creature, Vec3 position, float facing, float speed, bool moving, int want, bool run, uint bisectMask = 0)
     {
-        Vec3 direction = new() { X = MathF.Cos(facing), Y = MathF.Sin(facing), Z = 0f };
-        SetOrientationFn(creature, &direction);
-        *(int*)(creature + CreRunFlag) = run ? 1 : 0;
-        *(int*)(creature + CreMoveState) = moving ? -1 : 1;
+        if ((bisectMask & BisectBitDriveFacing) == 0)
+        {
+            Vec3 direction = new() { X = MathF.Cos(facing), Y = MathF.Sin(facing), Z = 0f };
+            SetOrientationFn(creature, &direction);
+        }
 
-        if (*(int*)(creature + ObjAnimationField) != want)
+        if ((bisectMask & BisectBitDriveRunMoveState) == 0)
+        {
+            *(int*)(creature + CreRunFlag) = run ? 1 : 0;
+            *(int*)(creature + CreMoveState) = moving ? -1 : 1;
+        }
+
+        if ((bisectMask & BisectBitDriveAnimation) == 0 && *(int*)(creature + ObjAnimationField) != want)
         {
             var setAnimation =
                 (delegate* unmanaged[Thiscall]<nint, int, void>)(*(nint*)(*(nint*)creature + VtableSetAnimation));
@@ -8395,11 +8475,14 @@ internal static unsafe class Odyssey
         // waypoint list, which a phantom never has. Rate 0.0 is a run cycle that never
         // advances: the legs freeze mid-pose while the body slides — the "flying" look.
         // We drive the twin ourselves below, so the engine's push is pure interference.
-        SetPositionFn(creature, &position, 1, 0, 1);
+        if ((bisectMask & BisectBitDrivePosition) == 0)
+        {
+            SetPositionFn(creature, &position, 1, 0, 1);
+        }
 
         // The half that actually renders. Re-read the twin every frame — it is created and
         // destroyed by the engine and a cached pointer would eventually be stale.
-        nint twin = *(nint*)(creature + CreClientTwin);
+        nint twin = (bisectMask & BisectBitDriveTwin) == 0 ? *(nint*)(creature + CreClientTwin) : 0;
         if (twin != 0)
         {
             *(Vec3*)(twin + TwinDesiredPosition) = position;

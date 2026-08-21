@@ -3224,6 +3224,175 @@ verification briefly touched `tests/KotorCoop.Tests/ReliableSenderTests.cs`, whi
 does not own and left untouched). Both builds clean, rig torn down and confirmed clean
 (`Get-Process` returned none for either process name).
 
+### Round 47 (2026-08-21) — the empirical bisection: NOT a single DriveOne write, at all;
+### both ends of the write space fail identically, which narrows and hardens round 38's own
+### "read-only" conclusion instead of reopening it
+
+Forty-six rounds tried the disassembly-first method — find a candidate field, prove what
+writes it, restore or avoid the write, test live. Every candidate that method could name has
+now been checked (rounds 9-46) and none explained the freeze. This round tried the other
+half of the standing rule this document holds itself to: stop guessing which write matters
+and let the rig answer it directly. A dev-only `coop.ini` key,
+`local_combat_bisect_mask` (hex bitmask, default `0` = every op active — today's shipped
+behaviour, bit for bit), was added so a live A/B pass could disable ANY subset of DriveOne's
+own per-frame writes to a mirrored creature without touching the census-exclusion/trigger
+machinery at all, and the census-membership question rounds 37-38 already isolated could
+finally be re-run through the REAL automatic `StartLocalFight`/`MaintainLocalFight` path
+instead of round 29's manual `firescript` diagnostic.
+
+**Op table.** Every distinct engine write/call `DriveOne` (and its callees) performs on a
+mirrored, not-yet-fighting creature, each now gated behind its own bit
+(`Odyssey.BisectBitClaimCommandable` … `BisectBitClearPositionDirty`, `Odyssey.cs`, right
+before `ClaimCreature`; `Odyssey.BisectAllOps` is all eleven at once):
+
+| Bit | Op | Where | Function/field |
+|---|---|---|---|
+| 0 | `ObjCommandable = 1` | `ClaimCreature` | `creature+0xE8` |
+| 1 | `ClearAllActionsFn` (targeted move-class wipe) | `ClaimCreature` | `0x004CCD80`, gated on `IsMoveAction(head)` |
+| 2 | `CreMovePermitted \|= 2 ; CreRunFlag = 0` | `ClaimCreature` | `creature+0x9F0`, `creature+0xA98` |
+| 3 | `CreMovePermitted \|= CreAttackPermittedBit (0x04)` | `PermitAttacking` | `creature+0x9F0` |
+| 4 | `PlayOneShotAnimation` replay (on serial change) | `DriveOne` | vtable animation call |
+| 5 | `SetOrientationFn` (facing write) | `DriveBody` | `0x004xxxxx` engine call, facing vector |
+| 6 | `CreRunFlag` / `CreMoveState` destructive assignment | `DriveBody` | `creature+0xA98`, `creature+0xA8C` |
+| 7 | `SetAnimation` vtable call (server animation field, on change) | `DriveBody` | vtable+`VtableSetAnimation` |
+| 8 | `SetPositionFn` (engine's own SetPosition, suppress-dirty) | `DriveBody` | engine call, `creature+0x090` |
+| 9 | Client-twin desired-position + animation-sync writes | `DriveBody` | `twin+…`, rendering only, never touches the server creature |
+| 10 | `ClearPositionDirty` (`ClearDirtyFlagFn`) | `DriveOne` | `creature+0x1FC` dirty-flag bit array |
+
+Two ops the task brief expected to find inside `DriveOne` are **not there** — a real
+correction, not a gap in the table: the health pin (`Odyssey.SetMinOneHitPoint`,
+`MirrorHealthRule.Target`) and any faction hold live entirely in `CombatController.Apply`
+(`CombatController.cs:140,157-168`), a separate controller with its own 40-frame cadence and
+its own `block.EnemyCount`/`GetEnemy` feed — `EnemyPresenceController.DriveOne` never calls
+either. `local_combat_bisect_mask` therefore cannot and does not gate them; they keep running
+at their normal cadence throughout every run below, exactly as they do in production today.
+This is flagged rather than silently "fixed" because it is itself informative: whatever is
+freezing a mirrored-then-excluded creature's round sub-structures is not something the health
+pin or a faction write could explain either, since both ran identically, at their own
+cadence, unaffected by the mask, in every trial below including the ones where nothing else
+touched the creature at all.
+
+Other callers of `ClaimCreature`/`ClaimCreatureForFight`/`PermitAttacking`/`DriveEnemy`
+(`MaterialisedEnemies.cs`, `PartyPresenceController.cs`, `PhantomController.cs`) never pass a
+mask, so they default to `0` — unaffected by this round, always full behaviour. The
+handoff-frame ops (`ObjCommandable = 1` set directly, `RestoreClaimState`,
+the post-restore `PermitAttacking`, `StartLocalFight`'s `FireCreatureScriptSlot0x260`) and all
+of `MaintainLocalFight` are deliberately **never** gated by any bit — this mask only ever
+touches the ONGOING per-frame drive that runs on a creature before it is ever handed to
+local_combat, per the task's own framing of "went through DriveOne even briefly."
+
+**Rig.** `tools/demo.ps1` cold start, save slot 1, `END_M01AA`, GOG installs at
+`C:\GOG Games\Star Wars KOTOR (GOG)` (host, instance 1) and `D:\Games\swkotor-gog-p2` (client,
+instance 2 — the mirroring side, where `EnemyPresenceController` actually drives anything).
+`local_combat_bisect_mask` set in the CLIENT's `coop.ini` only (the host never mirrors its own
+enemies). Target: `0x1A` (`end_soldier2`), confirmed live each run via `firescript 0x1A`
+(peek) to carry `k_def_combend01` — the same creature round 46 used. Engaged via
+`blockpoke.ps1 -ProcId <client pid> console 'tp <x> <y> <z>'` to `(45.80, 21.10, -1.3)`,
+measured live at `dist=1.26` from `0x1A`'s own `(47.06, 21.08)` — genuine melee range, no
+approach needed. Teardown via `demo.ps1 -Stop` between the two cold-start runs; a same-session
+re-engagement was used for a second trial within run 0 (see below) since the rig was already
+warm and uncorrupted, before the scheduled teardown.
+
+**Bisection table.**
+
+| Run | Mask | Ops active | Result | Evidence |
+|---|---|---|---|---|
+| 0, trial 1 | `0x7FF` (`Odyssey.BisectAllOps`) | none — creature only resolved/tracked/census-published | **FAIL** | `[17:12:59.337] local combat: 0x1A pulled out…` → `local combat diag: t=0.0s…t=16.1s 0x1A at (47.06,21.08) player at (45.80,21.10) dist=1.26` (constant, sampled every 1s) → `[17:13:24.339] local combat: 0x1A fight ended (timed out)…` → `where` → `hp 12/12` |
+| 0, trial 2 (same session, re-engaged) | `0x7FF` | none | **FAIL** | `[17:15:29.349] local combat: 0x1A pulled out…` → `dist=1.26` constant `t=3.5s…t=21.5s` → `[17:15:54.350] local combat: 0x1A fight ended (timed out)…` → `where` mid-cycle → `hp 12/12` |
+| control | `0x0` (default, fresh cold restart) | all eleven | **FAIL** | `[17:19:06.771] local combat: 0x1A pulled out…` → `dist=1.26` constant `t=0.0s…t=24.0s` → `[17:19:31.773] local combat: 0x1A fight ended (timed out)…` → `where` → `hp 12/12` |
+
+Zero movement, zero HP change, zero swing in all three trials — byte-for-byte the same
+signature rounds 44 and 46 already measured under the unmodified, mask-less code. The `where`
+reply's own accounting is exact enough to rule out anything subtler than "no hit landed":
+`hp 12/12` before, during and after every trial, and `0x1A`'s own position never moved off
+its spawn coordinate to one decimal place across a full 25s cycle at melee range, three times.
+
+**Per the task's own explicit branch: run 0 does NOT reproduce round 37's success, so the
+cause is not inside `DriveOne` at all.** Disabling every one of the eleven ops this
+controller performs — the full, exhaustive write surface `DriveOne` has on a mirrored
+creature — changes nothing observable. A creature this plugin has genuinely never written a
+single field of, never called `SetPosition`/`SetOrientation`/`SetAnimation`/`ClearAllActions`
+on, still fails to arm through the exact same automatic `StartLocalFight` path that armed
+round 37's cap-excluded creature successfully. There is no bit to find in this space, because
+both endpoints of it — nothing active, and everything active — already agree on failure.
+
+**What this adds beyond round 38, which already reached "no write-based mechanism" by
+disassembly.** Round 38 exhaustively disassembled the READ-side call chain
+(`Resolve()`→`ResolveServerObject`→`GetGameObject`→`CGameObjectArray::GetGameObject`) between
+"published but untouched" (round 29's diagnostic) and "never published" (round 37's cap
+exclusion) and found every touch provably read-only. But round 29's "untouched" creature
+never went through the real `StartLocalFight`/`RestoreClaimState`/`MaintainLocalFight`
+lifecycle at all — `DiagUndrivenObjectId`'s early `return true` in `DriveOne` bails out before
+the trigger check even runs (`EnemyPresenceController.cs:517-520`), so round 29 could only
+ever be fired by hand (`firescript … fire`). This round's mask=`0x7FF` creature, by contrast,
+DOES go through the genuine automatic trigger — `IsEngaged`/`HasCreatureScriptSlot0x260` gate
+it in, the handoff-frame `ObjCommandable` write and `RestoreClaimState`/`PermitAttacking` run
+on it, and `StartLocalFight` fires its `+0x260` script exactly as production does for a real
+ambush. That it fails identically closes the one gap round 29 and round 38 left open: it was
+conceivable the manual-fire path differed from the real one in some load-bearing way. It does
+not. Census membership — being enumerated in this instance's own published
+`EnemyPresenceCount` and driven through `Resolve()`/`MaterialisedEnemies.Seen()`/the trigger
+check at all, regardless of whether a single field is ever written — is confirmed, now via
+the real production path, to be the entire variable rounds 9-46 have been chasing through
+individual fields.
+
+**Where that leaves the remaining candidates**, now that every write DriveOne makes is ruled
+out and every read on the plugin's own side is proven read-only at the instruction level
+(round 38): either (a) `MaterialisedEnemies.Seen(enemy.ObjectId, now)` — a bare managed-array
+timestamp write with no engine touch at all, called once per frame for every published id in
+`OnFrame` before `DriveOne` ever runs, which no round including this one has found a
+mechanism for turning into an engine-visible effect; or (b) something inside the engine's own
+script dispatch path that this investigation's method (disassembling a WRITE site) cannot
+see because the relevant state is read and consumed somewhere this plugin never writes to at
+all — a per-object throttle, generation counter, or "externally touched" flag consulted by
+`RunScript`'s real dispatcher, `0x005D45D0`, exactly the concrete next step round 46 named and
+never opened.
+
+**Partial disassembly of `0x005D45D0` this round** (`python tools\disasm.py 0x005D45D0
+0x200`, 79 instructions, the full prologue through both early-return tails): confirms round
+34's characterisation at the instruction level — this is a QUEUE-based dispatcher operating on
+its OWN object (`esi`, the VM/dispatcher instance, not the creature), not a direct synchronous
+call. It maintains a pending-script list at `esi+0x1AC` (enqueue via `0x005D21F0`, a
+capacity/reset helper at `0x005D2140`), a depth/count field at `esi+0x28`, a per-slot
+caller-object pair at `esi+eax*4+0x16C`/`+0x18C` (written from the two stack args at
+`[esp+0x1C]`/`[esp+0x18]` — plausibly the script's OBJECT_SELF and a secondary caller id,
+unconfirmed), a "currently running" pointer at `esi+0x3D4`, and calls out to `0x005D4270`
+(entered with the pending-list head, likely the actual dequeue-and-execute step),
+`0x005D44F0`, `0x005D2260`, and `0x005E5670`/`0x005E58A0` on its failure/short-circuit paths.
+No per-CREATURE field (an offset in the `0x0-0xB00` range any `CSWSCreature` accessor in this
+file would recognise) appears anywhere in this function — everything it touches is offset
+from `esi`, the dispatcher's own state, not from `edi`/`edx` (the creature/script-owner
+arguments). **This does not rule out (b)** — a throttle keyed on the CALLER's id could live
+inside `0x005D4270`, `0x005D44F0`, `0x005D21F0`, `0x005D2140`, or `0x005D2260`, none of which
+were opened this round — but it does mean the dispatcher's own top-level frame is not where
+such a check would sit, so the next round should start at `0x005D4270` (the actual
+dequeue/execute step, called with the pending-list head at `0x005D4695`) rather than
+re-reading `0x005D45D0` itself.
+
+**Status, honestly.** The bisection answered its own first branch point decisively and with
+three independent live confirmations (two same-mask trials plus a mask=`0` control,
+byte-for-byte identical failure signature every time): **the cause of the freeze is not any
+DriveOne write operation.** `local_combat_bisect_mask` and its op-level gating are real,
+tested (full suite unaffected — see below), and kept in the tree as a diagnostic instrument
+for whoever picks this up next, exactly as intended; they did not, and structurally cannot,
+close the gap, because the gap was never in the write space they cover. The mystery is
+narrower than round 46 left it (every DriveOne write is now excluded, not just the four
+fields rounds 44-46 tried restoring) but still open: the boundary is census membership
+itself, and the two remaining candidates for WHY are `MaterialisedEnemies.Seen`'s managed
+timestamp write (never yet connected to any engine-visible effect) and the unopened interior
+of `RunScript`'s real dispatcher, specifically `0x005D4270` onward. `local_combat` itself is
+unchanged by this round — still on by default, still safe (no materialised stand-in ever
+selected, no permanent exclusion, the 25s cycle still resolves cleanly in every trial above)
+— and the one thing it still cannot do, on a previously-mirrored creature, is land a hit.
+
+Build clean (`dotnet build KotorCoop.slnx`, `src\KotorCoop.Plugin\build.ps1 -Install` against
+both GOG installs). Full suite 1080/1080 (baseline moved from 1017 during this round due to
+unrelated, concurrent work landing on the same branch — see this session's own commit log
+around this round's own commit; `HeavyPacketLossStillConverges` passed this run, still
+flagged as the known-flaky one throughout this document). Rig torn down and confirmed clean
+(`Get-Process swkotor,KotorCoop.Agent` returned none), `auto_start_agent` restored to `1` in
+both installs by `demo.ps1 -Stop`.
+
 ### Log rotation and diagnostic throttling (2026-08-21)
 
 Adjacent to this section only because it is the same class of "runs forever, never checked

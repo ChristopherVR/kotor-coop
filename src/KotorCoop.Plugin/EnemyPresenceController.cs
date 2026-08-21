@@ -165,6 +165,41 @@ internal sealed unsafe class EnemyPresenceController(SharedBlockView block)
     /// </summary>
     private static readonly uint DiagUndrivenObjectId = ParseHexOrZero(PluginConfig.Read("local_combat_diag_undriven_id"));
 
+    /// <summary>
+    /// ROUND 47 DIAGNOSTIC (2026-08-21), dev-only. `coop.ini local_combat_bisect_mask`, hex,
+    /// default 0. Each bit DISABLES exactly one distinct per-frame engine write/call this
+    /// controller performs on a mirrored (not-yet-fighting) creature — see the bit table on
+    /// <see cref="Odyssey.ClaimCreature(nint, bool, uint)"/> for the full list and
+    /// <see cref="Odyssey.BisectAllOps"/> for "every op off, creature still counted in the
+    /// census" (round 47's own "run 0"). Strictly additive: 0 (unset) reproduces today's
+    /// shipped behaviour bit for bit. Never gates <see cref="StartLocalFight"/>,
+    /// <see cref="MaintainLocalFight"/>, or the handoff-frame restore in
+    /// <see cref="DriveOne"/> — only the ONGOING per-frame drive that runs on a creature
+    /// before it is ever handed to local_combat, which is exactly the half of round 46's fact
+    /// pattern this bisection targets. See docs/research/shared-state-audit.md §2, round 47.
+    /// </summary>
+    private static readonly uint LocalCombatBisectMask = LoadBisectMask();
+
+    private static uint LoadBisectMask()
+    {
+        uint mask = ParseHexOrZero(PluginConfig.Read("local_combat_bisect_mask"));
+        PluginHost.Log(mask == 0
+            ? "local_combat_bisect_mask=0x0 (all ops active, default)"
+            : $"local_combat_bisect_mask=0x{mask:X} (bits disabled: "
+              + $"commandable={(mask & Odyssey.BisectBitClaimCommandable) != 0}, "
+              + $"actionWipe={(mask & Odyssey.BisectBitClaimActionWipe) != 0}, "
+              + $"movePermit={(mask & Odyssey.BisectBitClaimMovePermit) != 0}, "
+              + $"permitAttack={(mask & Odyssey.BisectBitPermitAttack) != 0}, "
+              + $"oneShotAnim={(mask & Odyssey.BisectBitOneShotAnim) != 0}, "
+              + $"facing={(mask & Odyssey.BisectBitDriveFacing) != 0}, "
+              + $"runMoveState={(mask & Odyssey.BisectBitDriveRunMoveState) != 0}, "
+              + $"animation={(mask & Odyssey.BisectBitDriveAnimation) != 0}, "
+              + $"position={(mask & Odyssey.BisectBitDrivePosition) != 0}, "
+              + $"twin={(mask & Odyssey.BisectBitDriveTwin) != 0}, "
+              + $"clearPositionDirty={(mask & Odyssey.BisectBitClearPositionDirty) != 0})");
+        return mask;
+    }
+
     private static uint ParseHexOrZero(string? value)
     {
         if (string.IsNullOrWhiteSpace(value))
@@ -563,11 +598,11 @@ internal sealed unsafe class EnemyPresenceController(SharedBlockView block)
         }
         else if (LocalCombat)
         {
-            Odyssey.ClaimCreatureForFight(creature);
+            Odyssey.ClaimCreatureForFight(creature, LocalCombatBisectMask);
         }
         else
         {
-            Odyssey.ClaimCreature(creature, clearActions: true);
+            Odyssey.ClaimCreature(creature, clearActions: true, LocalCombatBisectMask);
         }
 
         // Re-assert every pass, not once at spawn: a materialised body is marked as a
@@ -580,7 +615,7 @@ internal sealed unsafe class EnemyPresenceController(SharedBlockView block)
         // fighting.
         if (LocalCombat && !triggeringLocalFight)
         {
-            Odyssey.PermitAttacking(creature);
+            Odyssey.PermitAttacking(creature, LocalCombatBisectMask);
         }
 
         // Replay any NEW fire-and-forget the owner's copy played — the swings and parries
@@ -593,7 +628,7 @@ internal sealed unsafe class EnemyPresenceController(SharedBlockView block)
         else if (enemy.OneShotSerial != _appliedOneShot[slot])
         {
             _appliedOneShot[slot] = enemy.OneShotSerial;
-            if (enemy.OneShotAnimation != 0)
+            if (enemy.OneShotAnimation != 0 && (LocalCombatBisectMask & Odyssey.BisectBitOneShotAnim) == 0)
             {
                 Odyssey.PlayOneShotAnimation(creature, (ushort)enemy.OneShotAnimation);
             }
@@ -605,7 +640,10 @@ internal sealed unsafe class EnemyPresenceController(SharedBlockView block)
         {
             // The other half of the position fight: our own SetPosition suppresses the dirty
             // bit, the local AI does not. See Odyssey.ClearPositionDirty.
-            Odyssey.ClearPositionDirty(creature);
+            if ((LocalCombatBisectMask & Odyssey.BisectBitClearPositionDirty) == 0)
+            {
+                Odyssey.ClearPositionDirty(creature);
+            }
 
             // ⚠ ROUND 39: RecordEngagement for EVERY nearby driven enemy USED TO run here
             // unconditionally, licensing the absorb-standdown for all of them. That was
@@ -834,7 +872,7 @@ internal sealed unsafe class EnemyPresenceController(SharedBlockView block)
     private void Drive(int slot, nint creature, EnemyPresenceView enemy, double now)
     {
         (Vec3 shown, float speed, bool moving) = _smoother.Step(slot, enemy.Position, now);
-        Odyssey.DriveEnemy(creature, shown, enemy.Facing, speed, moving, enemy.Animation);
+        Odyssey.DriveEnemy(creature, shown, enemy.Facing, speed, moving, enemy.Animation, LocalCombatBisectMask);
     }
 
     private void Forget(int slot)
