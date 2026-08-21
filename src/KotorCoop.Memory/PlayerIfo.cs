@@ -267,6 +267,44 @@ public static class PlayerIfo
         return false;
     }
 
+    /// <summary>
+    /// Reads the one player entry back out of pifo-shaped bytes — the same shape
+    /// <see cref="BuildPifo"/> writes. This is what lets a captured character round-trip
+    /// through a sidecar file (roadmap item 14 phase 1,
+    /// <c>KotorCoop.Session.ClientCharacterPersistence</c>) without re-reading a save
+    /// directory at all: the sidecar IS the pifo, byte for byte, so writing it is
+    /// <see cref="BuildPifo"/> and reading it back is this.
+    /// </summary>
+    public static bool TryExtractPlayerFromPifoBytes(byte[] pifoBytes, out GffStruct player, out string diagnostic)
+    {
+        ArgumentNullException.ThrowIfNull(pifoBytes);
+
+        player = null!;
+
+        try
+        {
+            IReadOnlyList<GffStruct> players = Gff.Parse(pifoBytes).Root.GetList("Mod_PlayerList");
+
+            if (players.Count == 0)
+            {
+                diagnostic = "the pifo's Mod_PlayerList is empty (no character to carry)";
+                return false;
+            }
+
+            player = players[0];
+            diagnostic = $"read the carried character from pifo bytes ({player.Count} fields)";
+            return true;
+        }
+        catch (Exception ex) when (ex is IndexOutOfRangeException or ArgumentException
+            or FormatException or OverflowException or InvalidDataException)
+        {
+            // A half-written or otherwise corrupt sidecar must never crash the join flow —
+            // it is just one more "no character to carry from there", same as a missing file.
+            diagnostic = $"could not parse the pifo bytes: {ex.Message}";
+            return false;
+        }
+    }
+
     /// <summary>The entry <c>GetPrimaryPlayerIndex</c> would pick: the is-PC mark first,
     /// <c>IsPC</c> as its on-disk twin, index 0 as the last resort.</summary>
     private static GffStruct SelectPrimary(IReadOnlyList<GffStruct> players)

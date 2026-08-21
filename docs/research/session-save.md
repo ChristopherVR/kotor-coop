@@ -380,3 +380,116 @@ whether a session was already established, exactly the same distinction
 - Live timing for `SaveDigestCache`'s recompute latency, needed to judge whether §3.2/§4.1's
   digest-based mid-session trigger is fast enough to feel responsive versus needing a dedicated
   save/load hook instead.
+
+## Phase 1 shipped (2026-08-21)
+
+Roadmap item 14 phase 1: item 1 (client character persistence) and item 2 (host mid-session
+load refusal) in full; item 3 (client mid-session load auto-rejoin) deliberately NOT
+implemented — see "What phase 1 does not do" below. **No engine RE was done for this pass**
+— everything below is orchestration over what §1-§6 above already established exists:
+`PlayerIfo.TryExtractPlayer`/`BuildPifo`, `WorldAdoption.TryAdoptAsync`'s existing fetch/stage
+order, and — the one piece this pass leaned on hardest — `IGameBridge.SaveIdentityDigest`
+(backed by `SaveDigestCache`, already polled every heavy pump and already carried on the wire
+in `WorldDigest` for the join-time compatibility gate). Tag key as elsewhere in this tree:
+**VERIFIED** · **INFERRED** · **NEEDS-LIVE**.
+
+### What shipped
+
+**Item 1, session save (design §2).** `src/KotorCoop.Session/ClientCharacterPersistence.cs`:
+a sidecar pair, `saves\kotorcoop-character.pifo` (exactly `PlayerIfo.BuildPifo`'s bytes —
+no new serialization format) plus `saves\kotorcoop-character.json` (host save identity +
+UTC capture time). Both writes are temp-file-then-rename (a single filesystem rename is
+atomic on both Windows and POSIX); every read tolerates the sidecar being absent, half-written
+or corrupt — a bad sidecar is "nothing to prefer," never an exception. The preference rule
+(`ShouldPreferSidecar`) is pure: a valid sidecar strictly newer than the client's own save
+wins; a missing/invalid one, one no newer than the own save, or one whose recorded host
+identity is KNOWN to differ from the current one all fall back to the own save (0 = unknown
+never blocks, the same convention every other compatibility check in this tree already
+follows). `WorldAdoption.TryAdoptAsync` gained an overload taking an optional
+`(GffStruct Player, SidecarMetadata Metadata)?` — the own-save character is still extracted
+first (the existing fail-fast order is unchanged), the sidecar decision runs AFTER the host's
+world is fetched (that is the earliest point the real host identity is known), and
+`AdoptedWorld` now carries `CarriedPlayer`/`CharacterSource` so a later pifo re-assert (the
+`LoadPCAutoSave` truncation `world-adoption.md` §7 found) re-writes THE CHARACTER THIS
+ADOPTION ACTUALLY CHOSE rather than silently re-deriving from the own save and undoing a
+sidecar preference on every truncation recovery. `agent adopt` prints which character was
+used, on screen.
+
+**Live trigger.** `src/KotorCoop.Agent/SessionSaveWatch.cs` watches
+`bridge.SaveIdentityDigest` once per dispatcher tick (150 ms) with `SaveIdentityWatch` — a
+pure edge detector with NO peer comparison: the first real (nonzero) reading each connection
+becomes the baseline, not a change; a later DIFFERENT nonzero reading is the one edge. On a
+CLIENT, that edge captures the character out of whatever `SaveDigest.FindSessionSave` reports
+right now into the sidecar (item 1's "client saves normally in-game" trigger). The "OR on
+clean disconnect" trigger is `SessionManager.OnDisconnecting`, a new hook invoked immediately
+before ANY session teardown (a clean disconnect, a reconnect's implicit teardown, or a fresh
+`Connect` replacing one already running) while `Current` is still readable — wired to
+`dispatcher.CaptureCharacterOnDisconnect()`.
+
+**Item 2, host mid-session load refusal (design §3.2 item 5).** Reuses the SAME
+`SaveIdentityWatch` primitive on the HOST side of `SessionSaveWatch`: the digest changing
+AFTER it had already resolved once this connection is treated as "the host loaded a different
+save" and `ObserveHost` returns true exactly once for that edge. The dispatcher reacts by
+printing `"co-op: loading a save mid-session is not supported yet - clients must rejoin"` on
+the host's own screen and calling `SessionManager.Disconnect()` — which tears the host's
+session down, so every client's socket goes silent and each one's own existing
+disconnect-then-reconnect machinery (`docs/research/disconnect-reconnect.md`, ten real defects
+already fixed and live-verified there) is what "clients must rejoin" actually runs on. No new
+wire packet, no new shared-block field, no block version bump: this is the design doc's
+recommended safe default (refuse first; full re-adoption is phase 2) built entirely from
+signals that already cross the wire.
+
+**What phase 1 does NOT do — item 3, client mid-session load auto-rejoin.** The task
+authorizing this pass allowed skipping item 3 "ONLY if the detection falls out of the same
+fingerprint poll for free; otherwise document it as phase 2." Detection does fall out for
+free — a CLIENT's own `SaveIdentityWatch` edge fires for a load exactly the same way it fires
+for a save, since both are "my own save-identity digest changed." That is precisely the
+problem: **a save and a load are not distinguishable from a content digest alone.** Wiring
+auto-rejoin to this signal would fire on every ordinary in-game save a client makes while
+playing (item 1's own trigger), forcing an unwanted reconnect on completely normal play. Doing
+this correctly needs a way to tell the two apart — a dedicated save/load hook (design §2.2
+item 4's `SaveController`, itself flagged as new RE with no existing trace in this tree) or
+some other live-verified signal — which is exactly the kind of engine work this phase's scope
+excluded. Deferred to phase 2, not shipped as a half-working guess.
+
+### NEEDS-LIVE (nothing in this section has run against the game)
+
+1. **Whether an in-game "Load Game" menu action changes `SaveIdentityDigest` at all**, as
+   opposed to only a SUBSEQUENT save. `SaveDigestCache`/`SaveDigest.FindSessionSave` fingerprint
+   the save DIRECTORY ON DISK (the autosave slot if staged, else the most-recently-WRITTEN
+   directory) by `SAVEGAME.sav`'s length and mtime — a genuine LOAD only READS a chosen save,
+   so nothing on disk changes at the moment of loading unless the engine's own load path
+   happens to write something too (an autosave-on-load behaviour, if any, is unmeasured here).
+   If loading alone does not touch the watched file, item 2's host-refusal detection will miss
+   a load until the host's NEXT save — an honest gap, not silently assumed away. §5's INFERRED
+   list in the design doc above already flagged the doc's own assumption on this point as
+   unmeasured; this pass did not resolve it, by design (no engine RE).
+2. **Whether the host-refusal path is disruptive in a way that surprises a real host** — tearing
+   down the WHOLE session (not just notifying) means the host has to re-host manually afterward.
+   Never run against two real GOG installs.
+3. **The end-to-end "resume tomorrow" loop**: play a session as a client, save or disconnect,
+   confirm the sidecar lands (`saves\kotorcoop-character.pifo`/`.json`), quit, `agent adopt`
+   again against a NEW instance of the same (or a continued) host session, and confirm the
+   on-screen line names the session-saved character and the character that actually loads
+   matches it (hit points/experience/inventory, not position — `world-adoption.md` §7's own
+   warning that a healthy adoption always lands at the module entry point applies here too).
+4. **The atomic sidecar write under real disk conditions** (antivirus lock contention, a
+   crash between the two files' writes) — unit-tested with synthetic corruption/truncation,
+   never with a real interrupted process.
+5. **`SessionManager.OnDisconnecting` firing at the right moment relative to the game's own
+   state** — unit-tested against the manager alone; never confirmed the client's save directory
+   is still valid/complete to read from at the instant a real `disconnect` console command or
+   window close reaches it.
+
+### Tests
+
+`tests/KotorCoop.Tests/ClientCharacterPersistenceTests.cs` (the preference rule — newer
+sidecar wins, missing/corrupt sidecar falls back, host-identity mismatch falls back, unknown
+identity never blocks — plus atomic write/tolerant read, including synthetic half-written and
+corrupt-json cases), `tests/KotorCoop.Tests/SessionSaveWatchTests.cs` (`SaveIdentityWatch`'s
+edge detection in isolation, then `SessionSaveWatch`'s host-refusal-as-a-pure-rule and
+client-capture wiring), and two new cases in `tests/KotorCoop.Tests/WorldAdoptionTests.cs`
+(a newer sidecar riding into a real adoption; a host-identity-mismatched one falling back) —
+all against real temp save directories and the real `PlayerIfo`/`WorldAdoption` code, no
+mocking of the GFF layer. 1106 total in the merged suite (was ~1080 before this pass), 0
+failing.

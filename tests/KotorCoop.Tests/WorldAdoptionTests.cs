@@ -128,6 +128,70 @@ public sealed class WorldAdoptionTests : IDisposable
     }
 
     [Fact]
+    public async Task ANewerSessionSavedCharacterBeatsTheOwnSaveAtAdoption()
+    {
+        // Roadmap item 14 phase 1: a character captured at the end of a PREVIOUS session
+        // (ClientCharacterPersistence) is what actually gets carried into the world when it
+        // is present, valid and newer than the joiner's own save.
+        string hostSave = BuildSave("tar_m02aa", 0x341, "Bastila Shan", [(2u, "n_sith")]);
+        string joinerSave = BuildSave("end_m01aa", 0x127, "Old Character", [(2u, "n_trask")]);
+        string joinerGame = BuildGameDirectory();
+
+        Assert.True(SaveDigest.TryComputeSaveIdentity(hostSave, out uint hostIdentity));
+
+        // Give the sidecar a distinguishable name so the test can tell WHICH character rode.
+        string sessionSavedPath = BuildSave("end_m01aa", 0x999, "New Character", [(2u, "n_trask")]);
+        Assert.True(PlayerIfo.TryExtractPlayer(sessionSavedPath, out GffStruct newerPlayer, out _));
+
+        SidecarMetadata metadata = new(hostIdentity, DateTime.UtcNow);
+
+        int port = await ServeAsync(WorldTransfer.ReadSaveDirectory(hostSave), hostIdentity);
+
+        List<string> log = [];
+        AdoptedWorld? adopted = await WorldAdoption.TryAdoptAsync(
+            joinerGame, joinerSave, (newerPlayer, metadata), Local(port), SessionPassword.None,
+            expectedSaveIdentity: 0, log.Add, _cts.Token);
+
+        Assert.NotNull(adopted);
+        Assert.Contains("session-saved character", adopted!.Value.CharacterSource, StringComparison.OrdinalIgnoreCase);
+
+        GffStruct carried = Gff
+            .Parse(File.ReadAllBytes(Path.Combine(joinerGame, "Temp", "pifo.ifo")))
+            .Root.GetList("Mod_PlayerList")[0];
+        Assert.Equal("New Character", carried.GetLocString("FirstName")!.Text());
+    }
+
+    [Fact]
+    public async Task AHostIdentityMismatchedSidecarFallsBackToTheOwnSaveAtAdoption()
+    {
+        // The sidecar was captured against a DIFFERENT host save than the one being adopted
+        // now — the preference rule must not carry it in, even though it is newer.
+        string hostSave = BuildSave("tar_m02aa", 0x341, "Bastila Shan", [(2u, "n_sith")]);
+        string joinerSave = BuildSave("end_m01aa", 0x127, "Own Character", [(2u, "n_trask")]);
+        string joinerGame = BuildGameDirectory();
+
+        string otherHostSave = BuildSave("tat_m17aa", 0x555, "Different World", [(2u, "n_gamorrean")]);
+        Assert.True(SaveDigest.TryComputeSaveIdentity(otherHostSave, out uint otherHostIdentity));
+        Assert.True(PlayerIfo.TryExtractPlayer(joinerSave, out GffStruct sidecarPlayer, out _));
+
+        SidecarMetadata metadata = new(otherHostIdentity, DateTime.UtcNow);
+
+        int port = await ServeAsync(WorldTransfer.ReadSaveDirectory(hostSave));
+
+        AdoptedWorld? adopted = await WorldAdoption.TryAdoptAsync(
+            joinerGame, joinerSave, (sidecarPlayer, metadata), Local(port), SessionPassword.None,
+            expectedSaveIdentity: 0, log: null, _cts.Token);
+
+        Assert.NotNull(adopted);
+        Assert.Contains("own save", adopted!.Value.CharacterSource, StringComparison.OrdinalIgnoreCase);
+
+        GffStruct carried = Gff
+            .Parse(File.ReadAllBytes(Path.Combine(joinerGame, "Temp", "pifo.ifo")))
+            .Root.GetList("Mod_PlayerList")[0];
+        Assert.Equal("Own Character", carried.GetLocString("FirstName")!.Text());
+    }
+
+    [Fact]
     public async Task TheJoinersOwnSaveIsNeverTouched()
     {
         // Adoption writes the autosave slot and Temp\ only. Leaving the session and loading

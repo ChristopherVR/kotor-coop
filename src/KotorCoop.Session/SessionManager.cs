@@ -98,6 +98,16 @@ public sealed class SessionManager(IGameBridge bridge, AgentSettings agentSettin
     public Action<string>? Log { get; set; }
 
     /// <summary>
+    /// Fires immediately before a live session is torn down — a clean disconnect, a
+    /// reconnect's implicit teardown, or a fresh <see cref="Connect"/> replacing one already
+    /// running. The last chance to read anything off <see cref="Current"/>/<see cref="Agent"/>
+    /// while it is still alive. Consumer: roadmap item 14 phase 1's "resume tomorrow" —
+    /// capturing a client's progressed character before the session object (and the world it
+    /// was standing in) goes away. Never invoked when there was nothing to tear down.
+    /// </summary>
+    public Action? OnDisconnecting { get; set; }
+
+    /// <summary>
     /// Tears down any current session and starts a new one. Host binds and waits; a client
     /// begins the join handshake to <paramref name="endpoint"/>.
     /// </summary>
@@ -239,6 +249,11 @@ public sealed class SessionManager(IGameBridge bridge, AgentSettings agentSettin
     /// </summary>
     public void Disconnect()
     {
+        if (Current is not null)
+        {
+            OnDisconnecting?.Invoke();
+        }
+
         if (!TearDownSession())
         {
             return;
