@@ -110,8 +110,26 @@ public static class ProtocolConstants
     /// screen only. Reliable and symmetric like ContainerLoot: whichever peer owns the
     /// conversation reports the net-new items, the host relays to everyone else under the
     /// SAME (origin, sequence) identity, and a receiver gives them through the existing
-    /// giveloot cheat channel.</summary>
-    public const byte Version = 29;
+    /// giveloot cheat channel.
+    /// Version 30: reserved by a concurrent agent working the same integration branch
+    /// (a liveness/round-trip fix); not detailed here.
+    /// Version 31: FlagOpPacket/FlagSnapshotPacket and JournalOpPacket/JournalSnapshotPacket
+    /// each carry a Serial (and the journal op/entry a Removed bit) alongside the existing
+    /// OriginPeerId. Both EventFlagStore and JournalStore stop merging by "existing value
+    /// wins ties, higher value wins otherwise" — a policy that silently refuses any
+    /// legitimate DECREASE (a kill counter ticking down, a boolean cleared back to false,
+    /// `RemoveJournalQuestEntry`, a journal stage explicitly pushed back down) forever, and
+    /// on the apply-back path actively fights the local engine's own write every tick (see
+    /// docs/research/quest-sync.md). The new policy is a per-key Lamport clock: each
+    /// instance stamps its own local changes with its own ever-increasing serial, a
+    /// receiver adopts an incoming entry only when its (Serial, OriginPeerId) is strictly
+    /// newer (ties favour the lower peer id, i.e. the host), and receiving ANY serial —
+    /// win or lose — advances the local clock past it, so a later genuine local change is
+    /// guaranteed to out-rank anything already observed. This keeps every safety property
+    /// the old max-merge had (order-independent, idempotent, a stale replay can never
+    /// regress a newer value) while finally letting the state go DOWN when that is what
+    /// really happened.</summary>
+    public const byte Version = 31;
 
     /// <summary>Journal quest tags are resrefs plus a little slack.</summary>
     public const int MaxJournalTagLength = 32;

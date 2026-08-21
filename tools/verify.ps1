@@ -209,6 +209,42 @@ Check 'journal request serviced' (($after -ne $before) -and ($status -eq 0)) `
 Check 'journal logged by the plugin' (LogHasSince $Log2 'journal:' $journalMark) `
     ((Select-String -Path $Log2 -Pattern 'journal:' | Select-Object -Last 1).Line ?? 'no journal line')
 
+# --- 5b. journal DECREASE applies (protocol 31) --------------------------------------
+# The whole point of the fix in docs/research/quest-sync.md: a target BELOW what the
+# engine already holds used to be silently refused forever (bOverrideHigher hardcoded 0).
+# Same tag, same slot, now asking for 10 after the check above left it at 20.
+$decreaseMark = LogLines $Log2
+$beforeDecrease = [VF]::U32($h2, $b2 + 0x99C)
+[VF]::W32($h2, $b2 + 0x998, 10) | Out-Null
+[VF]::W32($h2, $b2 + 0x974, [int]([VF]::U32($h2, $b2 + 0x974) + 1)) | Out-Null
+Start-Sleep -Seconds 3
+$afterDecrease = [VF]::U32($h2, $b2 + 0x99C)
+$statusDecrease = [VF]::U32($h2, $b2 + 0x9A0)
+Check 'journal DECREASE request serviced' (($afterDecrease -ne $beforeDecrease) -and ($statusDecrease -eq 0)) `
+    "applied serial $beforeDecrease -> $afterDecrease, status $statusDecrease"
+Check 'journal DECREASE logged by the plugin' (LogHasSince $Log2 'journal:' $decreaseMark) `
+    ((Select-String -Path $Log2 -Pattern 'journal:' | Select-Object -Last 1).Line ?? 'no journal line')
+
+# --- 5c. journal removal defaults to acknowledge-only (journal_remove_sync=0) --------
+# The RemoveJournalQuestEntry native call was found by static disassembly only (see
+# Odyssey.RemoveJournalEntry's remarks) and ships OFF by default. This proves the DEFAULT
+# path — the request is serviced (so the agent's one-slot queue never stalls) without
+# reaching the unverified engine call. Flip journal_remove_sync=1 in coop.ini and re-run
+# this check to exercise the live call once it has been through its own separate
+# live-verification pass.
+$removeMark = LogLines $Log2
+$beforeRemove = [VF]::U32($h2, $b2 + 0x99C)
+[VF]::W32($h2, $b2 + 0x998, [int]::MinValue) | Out-Null
+[VF]::W32($h2, $b2 + 0x974, [int]([VF]::U32($h2, $b2 + 0x974) + 1)) | Out-Null
+Start-Sleep -Seconds 3
+$afterRemove = [VF]::U32($h2, $b2 + 0x99C)
+$statusRemove = [VF]::U32($h2, $b2 + 0x9A0)
+Check 'journal removal request serviced (default: acknowledge-only)' `
+    (($afterRemove -ne $beforeRemove) -and ($statusRemove -eq 0)) `
+    "applied serial $beforeRemove -> $afterRemove, status $statusRemove"
+Check 'journal removal logged as gated off by default' (LogHasSince $Log2 'journal_remove_sync is off' $removeMark) `
+    ((Select-String -Path $Log2 -Pattern 'journal_remove_sync' | Select-Object -Last 1).Line ?? 'no removal line')
+
 # --- 6. hooks installed --------------------------------------------------------------
 # Every one of these is a verify-bytes-or-refuse detour: if the installed binary ever
 # stops matching, the plugin declines to hook and says so, and this is where that shows.

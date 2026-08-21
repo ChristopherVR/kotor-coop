@@ -130,6 +130,7 @@ public static class PacketCodec
         w.WriteUInt32(packet.OpSequence);
         w.WriteUInt32(packet.FlagId);
         w.WriteUInt8((byte)packet.Value);
+        w.WriteUInt32(packet.Serial);
         return w.Failed ? 0 : w.Position;
     }
 
@@ -156,16 +157,19 @@ public static class PacketCodec
         w.WriteHeader(PacketType.FlagSnapshot);
         w.WriteUInt32(packet.Version);
 
-        // 5 bytes per flag; stay inside one datagram.
-        int max = (ProtocolConstants.MaxPacketSize - 12) / 5;
+        // 13 bytes per flag (FlagId 4 + Value 1 + Serial 4 + OriginPeerId 4, protocol 31 adds
+        // the last two); stay inside one datagram.
+        int max = (ProtocolConstants.MaxPacketSize - 12) / 13;
         int count = Math.Min(packet.Flags.Count, max);
         w.WriteUInt16((ushort)count);
 
         for (int i = 0; i < count; i++)
         {
-            KeyValuePair<uint, sbyte> flag = packet.Flags[i];
-            w.WriteUInt32(flag.Key);
+            FlagSnapshotEntry flag = packet.Flags[i];
+            w.WriteUInt32(flag.FlagId);
             w.WriteUInt8((byte)flag.Value);
+            w.WriteUInt32(flag.Serial);
+            w.WriteUInt32(flag.OriginPeerId);
         }
 
         return w.Failed ? 0 : w.Position;
@@ -1254,6 +1258,8 @@ public static class PacketCodec
         w.WriteUInt32(packet.OpSequence);
         w.WriteString(packet.QuestTag, ProtocolConstants.MaxJournalTagLength);
         w.WriteInt32(packet.State);
+        w.WriteUInt32(packet.Serial);
+        w.WriteUInt8((byte)(packet.Removed ? 1 : 0));
         return w.Failed ? 0 : w.Position;
     }
 
@@ -1269,7 +1275,11 @@ public static class PacketCodec
         uint opSeq = r.ReadUInt32();
         string tag = r.ReadString();
         int state = r.ReadInt32();
-        return r.Failed || tag.Length == 0 ? null : new JournalOpPacket(origin, opSeq, tag, state);
+        uint serial = r.ReadUInt32();
+        bool removed = r.ReadUInt8() != 0;
+        return r.Failed || tag.Length == 0
+            ? null
+            : new JournalOpPacket(origin, opSeq, tag, state, serial, removed);
     }
 
     public static int Write(Span<byte> buffer, JournalAckPacket packet)
@@ -1325,9 +1335,12 @@ public static class PacketCodec
 
         for (int i = 0; i < count; i++)
         {
-            KeyValuePair<string, int> entry = packet.Entries[i];
-            w.WriteString(entry.Key, ProtocolConstants.MaxJournalTagLength);
-            w.WriteInt32(entry.Value);
+            JournalSnapshotEntry entry = packet.Entries[i];
+            w.WriteString(entry.QuestTag, ProtocolConstants.MaxJournalTagLength);
+            w.WriteInt32(entry.State);
+            w.WriteUInt32(entry.Serial);
+            w.WriteUInt32(entry.OriginPeerId);
+            w.WriteUInt8((byte)(entry.Removed ? 1 : 0));
         }
 
         return w.Failed ? 0 : w.Position;
@@ -1348,17 +1361,20 @@ public static class PacketCodec
             return null;
         }
 
-        List<KeyValuePair<string, int>> entries = new(count);
+        List<JournalSnapshotEntry> entries = new(count);
         for (int i = 0; i < count; i++)
         {
             string tag = r.ReadString();
             int state = r.ReadInt32();
+            uint serial = r.ReadUInt32();
+            uint origin = r.ReadUInt32();
+            bool removed = r.ReadUInt8() != 0;
             if (r.Failed || tag.Length == 0)
             {
                 return null;
             }
 
-            entries.Add(new KeyValuePair<string, int>(tag, state));
+            entries.Add(new JournalSnapshotEntry(tag, state, serial, origin, removed));
         }
 
         return new JournalSnapshotPacket(version, entries);
@@ -1529,7 +1545,8 @@ public static class PacketCodec
         uint opSeq = r.ReadUInt32();
         uint flagId = r.ReadUInt32();
         sbyte value = (sbyte)r.ReadUInt8();
-        return r.Failed ? null : new FlagOpPacket(origin, opSeq, flagId, value);
+        uint serial = r.ReadUInt32();
+        return r.Failed ? null : new FlagOpPacket(origin, opSeq, flagId, value, serial);
     }
 
     public static FlagAckPacket? ReadFlagAck(ReadOnlySpan<byte> buffer)
@@ -1572,17 +1589,19 @@ public static class PacketCodec
             return null;
         }
 
-        List<KeyValuePair<uint, sbyte>> flags = new(count);
+        List<FlagSnapshotEntry> flags = new(count);
         for (int i = 0; i < count; i++)
         {
             uint id = r.ReadUInt32();
             sbyte value = (sbyte)r.ReadUInt8();
+            uint serial = r.ReadUInt32();
+            uint origin = r.ReadUInt32();
             if (r.Failed)
             {
                 return null;
             }
 
-            flags.Add(new KeyValuePair<uint, sbyte>(id, value));
+            flags.Add(new FlagSnapshotEntry(id, value, serial, origin));
         }
 
         return new FlagSnapshotPacket(version, flags);

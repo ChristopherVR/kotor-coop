@@ -3710,20 +3710,28 @@ internal static unsafe class Odyssey
         (delegate* unmanaged[Thiscall]<nint, ExoString*, int, int, void>)0x005C5A40;
 
     /// <summary>
-    /// Advances a quest journal entry to the given state through the engine's own path.
-    /// bOverrideHigher stays 0, so the engine's refusal to lower a quest state holds and
-    /// the cross-instance merge stays monotonic even against a replayed packet.
+    /// Sets a quest journal entry to the given state through the engine's own path. The
+    /// CALLER never has to say which direction: this walks the journal's own entry list (it
+    /// already has to, to find the tag) and decides bOverrideHigher from what it sees there.
     ///
-    /// ⚠ SetState is NEVER called when the journal already has the tag at or past the
-    /// state (<paramref name="alreadyCurrent"/> comes back true instead). This is not an
-    /// optimisation: SetState sends the server→player journal message — the "Journal
-    /// Entry Added" feedback box — even when nothing changed. In the 1.0.3 disassembly
-    /// the AddQuest send at 0x5C616D is reached without ever consulting the change flags
-    /// the function accumulates, and the JournalUpdated send at 0x5C62BC is gated only on
-    /// bOverrideHigher == 0. There is no bNoFeedback parameter (args are tag, state,
-    /// bOverrideHigher), so the only way to apply idempotently is to not call it. A
-    /// genuine advance still goes through and still shows the popup, which is correct
-    /// feedback — the quest really moved.
+    /// ⚠ PROTOCOL 31: bOverrideHigher used to be hardcoded 0, so the engine's own refusal to
+    /// lower a quest state held even when the SESSION's authoritative value (after
+    /// JournalStore's per-key Lamport clock decided a peer's decrease genuinely was newer)
+    /// was BELOW what this game's engine already had — a legitimate session-authorised
+    /// decrease was silently dropped forever. Now: existing state &gt; target -&gt; a genuine
+    /// decrease, override=1; existing state &lt; target -&gt; a genuine advance, override=0
+    /// (unchanged); existing state == target, or the tag does not exist yet -&gt; unaffected.
+    ///
+    /// ⚠ SetState is NEVER called when the journal already has the tag at EXACTLY the target
+    /// (<paramref name="alreadyCurrent"/> comes back true instead) — this used to be "at or
+    /// past" the target, which was correct only because a lower target used to be impossible
+    /// to ask for. This is not an optimisation: SetState sends the server→player journal
+    /// message — the "Journal Entry Added" feedback box — even when nothing changed. In the
+    /// 1.0.3 disassembly the AddQuest send at 0x5C616D is reached without ever consulting the
+    /// change flags the function accumulates, and the JournalUpdated send at 0x5C62BC is
+    /// gated only on bOverrideHigher == 0 — so a genuine decrease must go through WITH the
+    /// override bit set, and does still show the popup, which is correct feedback: the quest
+    /// really moved (down, this time).
     ///
     /// MAIN THREAD ONLY.
     /// </summary>
@@ -3822,16 +3830,26 @@ internal static unsafe class Odyssey
                 continue;
             }
 
-            if (*(int*)(entry + JournalEntryState) >= state)
+            int currentState = *(int*)(entry + JournalEntryState);
+            if (currentState == state)
             {
                 alreadyCurrent = true;
                 return true;
             }
+
+            // A genuine decrease needs the override bit — see the method remarks — an
+            // advance does not.
+            bool overrideHigher = currentState > state;
+
+            // Length is capacity (strlen + 1), the engine's own CExoString convention.
+            ExoString foundTag = new() { CString = (nint)tagAscii, Length = (uint)(tagLength + 1) };
+            JournalSetStateFn(journal, &foundTag, state, overrideHigher ? 1 : 0);
+            return true;
         }
 
-        // Length is capacity (strlen + 1), the engine's own CExoString convention.
-        ExoString tag = new() { CString = (nint)tagAscii, Length = (uint)(tagLength + 1) };
-        JournalSetStateFn(journal, &tag, state, 0);
+        // Tag not found at all: a fresh entry, always a plain advance from nothing.
+        ExoString newTag = new() { CString = (nint)tagAscii, Length = (uint)(tagLength + 1) };
+        JournalSetStateFn(journal, &newTag, state, 0);
         return true;
     }
 
@@ -3846,6 +3864,126 @@ internal static unsafe class Odyssey
     /// 0x5C5E23–0x5C5E30), and the agent's read path walked the same layout live —
     /// 'end_attack' state 20. Read-only here.</summary>
     private const int JournalEntryState = 0x20;
+
+    // CSWSJournal + this, CExoString* tag (thiscall, one stack arg — VERIFIED against the
+    // binary's own `ret 8` at 0x5C68CA, param_size_bytes=4 in the symbol DB). NOT verified
+    // live — see RemoveJournalEntry's remarks for how this was found and why it ships
+    // behind an opt-in flag instead of a live-tested offset.
+    private static readonly delegate* unmanaged[Thiscall]<nint, ExoString*, void> JournalDestroyEntryFn =
+        (delegate* unmanaged[Thiscall]<nint, ExoString*, void>)0x005C68B0;
+
+    /// <summary>
+    /// Takes a quest entry out of the journal entirely — KOTOR's own
+    /// <c>RemoveJournalQuestEntry</c>, reached here the way <see cref="SetJournalState"/>
+    /// reaches <c>AddJournalQuestEntry</c>.
+    ///
+    /// ⚠ NEEDS-LIVE, UNVERIFIED, OFF BY DEFAULT (see <c>JournalController</c>'s
+    /// <c>journal_remove_sync</c> gate). The call site is <c>CSWSJournal::Destroy</c> at
+    /// 0x005C68B0 — found by static disassembly of
+    /// <c>ExecuteCommandRemoveJournalQuestEntry</c> (0x0054AF60, the VM wrapper the symbol DB
+    /// names for NWScript routine 368; see docs/research/quest-sync.md's enumeration for how
+    /// the routine number was computed), not by any live probe. The disassembly is
+    /// self-consistent (it walks the server's player list exactly the way
+    /// <see cref="SetJournalState"/>'s own caller chain does, fetches each player's journal
+    /// via <c>CSWSCreature::GetJournal</c> — the same 0x004EDB00 already VERIFIED elsewhere
+    /// in this file — and calls a function whose own `ret 8` matches a one-argument
+    /// thiscall, immediately after pushing the address of a local CExoString tag buffer) but
+    /// the engine's own live crash history around this exact journal pointer chain
+    /// (2026-08-06, see <see cref="SetJournalState"/>'s remarks) is reason enough not to
+    /// ship an unverified call unguarded. The same array-walk validation
+    /// <see cref="SetJournalState"/> uses is applied here for the same reason: a readable
+    /// but non-journal pointer must fail closed, not fault the process.
+    ///
+    /// MAIN THREAD ONLY.
+    /// </summary>
+    public static bool RemoveJournalEntry(byte* tagAscii, int tagLength, out int failure)
+    {
+        failure = 0;
+
+        if (tagLength <= 0)
+        {
+            failure = 1;
+            return false;
+        }
+
+        nint server = GetServer();
+        if (server == 0)
+        {
+            failure = 2;
+            return false;
+        }
+
+        nint internalServer = Deref(server + AppServerOffsetInternal);
+        if (internalServer == 0)
+        {
+            failure = 3;
+            return false;
+        }
+
+        nint journal = Deref(internalServer + PartyTableOffset + PartyTableJournal);
+        if (journal == 0)
+        {
+            failure = 6;
+            return false;
+        }
+
+        if (!NativeMethods.IsReadable(journal))
+        {
+            failure = 4;
+            return false;
+        }
+
+        nint data = *(nint*)journal;
+        int size = *(int*)(journal + 4);
+        int capacity = *(int*)(journal + 8);
+
+        if (size < 0 || capacity < size || capacity > 4096
+            || (size > 0 && (data == 0 || !NativeMethods.IsReadable(data))))
+        {
+            failure = 4;
+            return false;
+        }
+
+        ReadOnlySpan<byte> requestTag = new(tagAscii, tagLength);
+        bool found = false;
+
+        for (int i = 0; i < size; i++)
+        {
+            nint entry = data + (i * JournalEntryStride);
+            nint entryTag = *(nint*)(entry + JournalEntryTag);
+            if (entryTag != 0 && !NativeMethods.IsReadable(entryTag))
+            {
+                failure = 5;
+                return false;
+            }
+
+            if (entryTag == 0)
+            {
+                continue;
+            }
+
+            uint entryTagLength = *(uint*)(entry + JournalEntryTag + 4);
+            int bounded = (int)Math.Min(entryTagLength, 64);
+
+            if (bounded > 0
+                && JournalTags.EqualsNoCase(new ReadOnlySpan<byte>((void*)entryTag, bounded), requestTag))
+            {
+                found = true;
+                break;
+            }
+        }
+
+        if (!found)
+        {
+            // Nothing to remove — not a failure, just idempotent (the caller's own shadow
+            // should already have refused this, but a defensive no-op costs nothing).
+            return true;
+        }
+
+        ExoString tag = new() { CString = (nint)tagAscii, Length = (uint)(tagLength + 1) };
+        JournalDestroyEntryFn(journal, &tag);
+        return true;
+    }
 
     // ---- creature naming ---------------------------------------------------------
 

@@ -42,12 +42,12 @@ public sealed class ReliableFlagSender(
         }
     }
 
-    public FlagOpPacket Enqueue(uint originPeerId, uint flagId, sbyte value, long nowMs)
+    public FlagOpPacket Enqueue(uint originPeerId, uint flagId, sbyte value, long nowMs, uint serial = 0)
     {
         lock (_gate)
         {
             uint sequence = _nextSequence++;
-            FlagOpPacket packet = new(originPeerId, sequence, flagId, value);
+            FlagOpPacket packet = new(originPeerId, sequence, flagId, value, serial);
 
             // The cap is the only thing that discards world truth, and it takes thousands of
             // unacked changes to reach — a session that far gone is not coming back.

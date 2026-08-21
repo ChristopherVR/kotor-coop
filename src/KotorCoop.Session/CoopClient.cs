@@ -879,19 +879,48 @@ public sealed class CoopClient : ICoopSession
     public void SetJournalEntry(string questTag, int state)
     {
         // Applied locally straight away — the local player just watched the quest
-        // advance; the host's version confirms and redistributes it.
-        if (!Journal.Merge(questTag, state))
+        // advance (or, since protocol 31, genuinely retreat — a decrease with override, or
+        // a re-add after a removal); the host's version confirms and redistributes it.
+        if (!Journal.Merge(questTag, state, _sessionPeerId))
         {
             return;
         }
 
         // Queued while disconnected too — see SetFlag.
-        if (_sessionPeerId == 0)
+        if (_sessionPeerId == 0 || !Journal.TryGetStamp(questTag, out uint serial, out _))
         {
             return;
         }
 
-        JournalOpPacket op = _journalSender.Enqueue(_sessionPeerId, questTag, state, SessionClock.NowMs);
+        JournalOpPacket op = _journalSender.Enqueue(_sessionPeerId, questTag, state, SessionClock.NowMs, serial);
+
+        if (IsConnected)
+        {
+            SendJournalOp(op);
+        }
+    }
+
+    /// <summary>
+    /// The removal twin of <see cref="SetJournalEntry"/>: this instance's engine ran
+    /// `RemoveJournalQuestEntry` for <paramref name="questTag"/>. Tombstones locally straight
+    /// away and, once connected, announces the removal reliably so the host (and, through it,
+    /// every other peer) takes the tag out too — see JournalStore's remarks for why a
+    /// tombstone, not a deletion.
+    /// </summary>
+    public void RemoveJournalEntry(string questTag)
+    {
+        if (!Journal.Remove(questTag, _sessionPeerId))
+        {
+            return;
+        }
+
+        if (_sessionPeerId == 0 || !Journal.TryGetStamp(questTag, out uint serial, out _))
+        {
+            return;
+        }
+
+        JournalOpPacket op = _journalSender.Enqueue(
+            _sessionPeerId, questTag, 0, SessionClock.NowMs, serial, removed: true);
 
         if (IsConnected)
         {
@@ -928,19 +957,25 @@ public sealed class CoopClient : ICoopSession
     public void SetFlag(uint flagId, sbyte value)
     {
         // Applied locally straight away so the local player is not waiting on a round
-        // trip; the host's authoritative version will confirm or correct it.
-        Flags.Set(flagId, value);
+        // trip; the host's authoritative version will confirm or correct it. Always mints a
+        // fresh, outranking serial (see EventFlagStore.Set), so this local write is
+        // guaranteed to win over whatever this store already held — including a genuine
+        // decrease.
+        if (!Flags.Set(flagId, value, _sessionPeerId))
+        {
+            return;
+        }
 
         // ⚠ QUEUED EVEN WHILE THE LINK IS DOWN. The gate used to be _localPeerId, which is
         // zeroed the moment the host goes quiet — so every world change the player made
         // during an outage was applied locally and never queued at all, and the reliable
         // channel that exists to survive exactly this had nothing in it to deliver.
-        if (_sessionPeerId == 0)
+        if (_sessionPeerId == 0 || !Flags.TryGetStamp(flagId, out uint serial, out _))
         {
             return;
         }
 
-        FlagOpPacket op = _flagSender.Enqueue(_sessionPeerId, flagId, value, SessionClock.NowMs);
+        FlagOpPacket op = _flagSender.Enqueue(_sessionPeerId, flagId, value, SessionClock.NowMs, serial);
 
         if (IsConnected)
         {
@@ -1412,10 +1447,12 @@ public sealed class CoopClient : ICoopSession
             case PacketType.FlagSnapshot:
                 if (PacketCodec.ReadFlagSnapshot(span) is { } flagSnapshot)
                 {
-                    // Merge, never replace: world flags are monotonic, and a snapshot must
-                    // not lower (or delete) one a local advance has just raised. The journal
-                    // has always done it this way; flags used to overwrite, which is how a
-                    // change made during an outage disappeared on reconnect.
+                    // Merge, never replace: each entry applies last-writer-wins by its own
+                    // (Serial, OriginPeerId), so a snapshot can neither erase nor blindly
+                    // stomp a local advance (or decrease) this instance made that the host
+                    // has not heard of yet — see EventFlagStore's remarks. Flags used to
+                    // overwrite outright, which is how a change made during an outage
+                    // disappeared on reconnect.
                     Flags.MergeSnapshot(flagSnapshot.Flags, flagSnapshot.Version);
                 }
 
@@ -1463,8 +1500,9 @@ public sealed class CoopClient : ICoopSession
             case PacketType.JournalSnapshot:
                 if (PacketCodec.ReadJournalSnapshot(span) is { } journalSnapshot)
                 {
-                    // Merge, never replace: journal states are monotonic, and a snapshot
-                    // must not lower an entry a local advance just raised.
+                    // Merge, never replace: each entry (including a removal tombstone)
+                    // applies last-writer-wins by its own (Serial, OriginPeerId) — see
+                    // JournalStore's remarks.
                     Journal.MergeSnapshot(journalSnapshot.Entries, journalSnapshot.Version);
                 }
 

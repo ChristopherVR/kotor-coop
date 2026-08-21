@@ -33,12 +33,13 @@ public sealed class ReliableJournalSender(
         }
     }
 
-    public JournalOpPacket Enqueue(uint originPeerId, string questTag, int state, long nowMs)
+    public JournalOpPacket Enqueue(
+        uint originPeerId, string questTag, int state, long nowMs, uint serial = 0, bool removed = false)
     {
         lock (_gate)
         {
             uint sequence = _nextSequence++;
-            JournalOpPacket packet = new(originPeerId, sequence, questTag, state);
+            JournalOpPacket packet = new(originPeerId, sequence, questTag, state, serial, removed);
 
             if (_pending.Count < maxPending)
             {

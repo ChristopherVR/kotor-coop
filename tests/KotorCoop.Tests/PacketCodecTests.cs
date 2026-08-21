@@ -14,9 +14,13 @@ public class PacketCodecTests
     {
         Span<byte> buffer = stackalloc byte[ProtocolConstants.MaxPacketSize];
 
-        JournalOpPacket op = new(2, 17, "k_swg_bastila", 30);
+        JournalOpPacket op = new(2, 17, "k_swg_bastila", 30, Serial: 4);
         int opLength = PacketCodec.Write(buffer, op);
         Assert.Equal(op, PacketCodec.ReadJournalOp(buffer[..opLength]));
+
+        JournalOpPacket removeOp = new(2, 18, "k_swg_bastila", 0, Serial: 5, Removed: true);
+        int removeLength = PacketCodec.Write(buffer, removeOp);
+        Assert.Equal(removeOp, PacketCodec.ReadJournalOp(buffer[..removeLength]));
 
         JournalAckPacket ack = new(17);
         int ackLength = PacketCodec.Write(buffer, ack);
@@ -32,10 +36,11 @@ public class PacketCodecTests
     {
         Span<byte> buffer = stackalloc byte[ProtocolConstants.MaxPacketSize];
 
-        List<KeyValuePair<string, int>> entries = [.. Enumerable
+        List<JournalSnapshotEntry> entries = [.. Enumerable
             .Range(0, ProtocolConstants.MaxJournalEntriesPerPacket)
-            .Select(i => new KeyValuePair<string, int>(
-                new string('q', ProtocolConstants.MaxJournalTagLength) + i, i * 10))];
+            .Select(i => new JournalSnapshotEntry(
+                new string('q', ProtocolConstants.MaxJournalTagLength) + i, i * 10,
+                Serial: (uint)i, OriginPeerId: 2, Removed: i % 2 == 0))];
 
         int length = PacketCodec.Write(buffer, new JournalSnapshotPacket(9, entries));
         Assert.True(length > 0, "worst-case journal snapshot part must fit inside one packet");
@@ -302,16 +307,17 @@ public class PacketCodecTests
     {
         Span<byte> buffer = stackalloc byte[ProtocolConstants.MaxPacketSize];
 
-        FlagOpPacket op = new(4, 99, 1001, 1);
+        FlagOpPacket op = new(4, 99, 1001, 1, Serial: 6);
         int opLength = PacketCodec.Write(buffer, op);
         Assert.Equal(op, PacketCodec.ReadFlagOp(buffer[..opLength]));
 
         // Negative values must survive: KOTOR's global numbers are signed bytes.
-        FlagOpPacket negative = new(4, 100, 1002, -7);
+        FlagOpPacket negative = new(4, 100, 1002, -7, Serial: 7);
         int negativeLength = PacketCodec.Write(buffer, negative);
         Assert.Equal(negative, PacketCodec.ReadFlagOp(buffer[..negativeLength]));
 
-        List<KeyValuePair<uint, sbyte>> flags = [new(1, 1), new(2, 0), new(9999, 42)];
+        List<FlagSnapshotEntry> flags =
+            [new(1, 1, 1, 4), new(2, 0, 2, 4), new(9999, 42, 3, 1)];
         int snapshotLength = PacketCodec.Write(buffer, new FlagSnapshotPacket(17, flags));
         FlagSnapshotPacket? decoded = PacketCodec.ReadFlagSnapshot(buffer[..snapshotLength]);
 

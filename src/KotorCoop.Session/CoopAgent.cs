@@ -1411,10 +1411,11 @@ public sealed class CoopAgent(IGameBridge bridge, ICoopSession session, AgentSet
     }
 
     /// <summary>
-    /// Carries the quest journal both ways: local advances are announced to the session
-    /// (reliably, merge-up), and anything the session knows that this game does not is
-    /// applied through the engine's own SetState, which refreshes the journal GUI. This
-    /// plus the globals channel is what makes a quest one quest instead of two parallel
+    /// Carries the quest journal both ways: local changes (advances, legitimate decreases,
+    /// and removals — see docs/research/quest-sync.md) are announced to the session, and
+    /// anything the session knows that this game does not is applied through the engine's
+    /// own SetState (or, for a removal, the removal path), which refreshes the journal GUI.
+    /// This plus the globals channel is what makes a quest one quest instead of two parallel
     /// ones.
     /// </summary>
     private void PumpJournal(SessionCapabilities caps)
@@ -1431,12 +1432,19 @@ public sealed class CoopAgent(IGameBridge bridge, ICoopSession session, AgentSet
         // journal through the engine, and the engine's SetState shows the "Journal Entry
         // Added" box even for a no-op — the popup every player saw on load-in. The bridge
         // refuses applies until it has read the journal once, and skips any entry the
-        // game already has; a GENUINE advance from a peer still applies and still shows
+        // game already has; a GENUINE change from a peer still applies and still shows
         // the popup, deliberately — the quest really moved, and the engine offers no way
         // to apply it silently (SetState has no feedback flag).
-        foreach (KeyValuePair<string, int> change in bridge.CollectChangedJournal())
+        foreach (JournalChange change in bridge.CollectChangedJournal())
         {
-            session.SetJournalEntry(change.Key, change.Value);
+            if (change.Removed)
+            {
+                session.RemoveJournalEntry(change.QuestTag);
+            }
+            else
+            {
+                session.SetJournalEntry(change.QuestTag, change.State);
+            }
         }
 
         foreach (KeyValuePair<string, int> entry in session.Journal.Snapshot())
@@ -1444,6 +1452,15 @@ public sealed class CoopAgent(IGameBridge bridge, ICoopSession session, AgentSet
             // The bridge keeps its own shadow and skips entries the game already has, so
             // this is a cheap no-op almost every tick.
             bridge.TryApplyJournalEntry(entry.Key, entry.Value);
+        }
+
+        // The removal twin: any tag the session knows as gone that this game has not been
+        // told about yet. Small and rare (a handful of tombstones for a whole playthrough),
+        // so re-offering the full list every tick is cheap — same shape as the live-entry
+        // loop above.
+        foreach (string tag in session.Journal.RemovedTags())
+        {
+            bridge.TryRemoveJournalEntry(tag);
         }
     }
 
@@ -1889,10 +1906,14 @@ public sealed class CoopAgent(IGameBridge bridge, ICoopSession session, AgentSet
     }
 
     /// <summary>
-    /// Carries door state both ways on the same reliable, max-merged flag channel the
-    /// quest globals use. A door open for one player and shut for the other is the most
-    /// visible desync co-op can produce; door values are monotonic (closed to open,
-    /// locked to unlocked, anything to destroyed), so the merge semantics fit exactly.
+    /// Carries door state both ways on the same reliable flag channel the quest globals use.
+    /// A door open for one player and shut for the other is the most visible desync co-op can
+    /// produce. Door values are USUALLY monotonic (closed to open, locked to unlocked,
+    /// anything to destroyed), but not always — a script can swing one shut again — so this
+    /// announces every genuine local change unconditionally rather than gating on an
+    /// "advanced" check: <see cref="ICoopSession.SetFlag"/> mints a fresh, outranking serial
+    /// per change (see <c>EventFlagStore</c>), so it already no-ops correctly on a value the
+    /// store already agrees with, and never refuses a real local change in either direction.
     /// </summary>
     private void PumpDoors(SessionCapabilities caps)
     {
@@ -1903,11 +1924,9 @@ public sealed class CoopAgent(IGameBridge bridge, ICoopSession session, AgentSet
 
         foreach (KeyValuePair<uint, sbyte> change in bridge.CollectChangedDoorState())
         {
-            // Same echo guard as the globals: only announce what advanced our own view.
-            if (session.Flags.Merge(change.Key, change.Value))
-            {
-                session.SetFlag(change.Key, change.Value);
-            }
+            // CollectChangedDoorState already only reports a genuine local transition (its
+            // own shadow-diff), so every entry here is worth announcing — no separate gate.
+            session.SetFlag(change.Key, change.Value);
         }
 
         bridge.TryWriteDoorStates(session.Flags.Snapshot());
@@ -1928,10 +1947,7 @@ public sealed class CoopAgent(IGameBridge bridge, ICoopSession session, AgentSet
 
         foreach (KeyValuePair<uint, sbyte> change in bridge.CollectChangedPlaceableState())
         {
-            if (session.Flags.Merge(change.Key, change.Value))
-            {
-                session.SetFlag(change.Key, change.Value);
-            }
+            session.SetFlag(change.Key, change.Value);
         }
 
         bridge.TryWritePlaceableStates(session.Flags.Snapshot());
@@ -1992,9 +2008,20 @@ public sealed class CoopAgent(IGameBridge bridge, ICoopSession session, AgentSet
     /// on — in both directions. This is what separates two players sharing a map from two
     /// players sharing a game.
     ///
-    /// Both directions merge upwards rather than overwrite (see EventFlagStore.Merge), so
-    /// the two instances converge regardless of packet order and neither can drag the other
-    /// backwards through a quest.
+    /// Both directions converge by per-key Lamport clock (see <c>EventFlagStore</c>), not a
+    /// bare value comparison: a global can legitimately go DOWN (a kill counter decremented,
+    /// a boolean cleared back to false — docs/research/quest-sync.md's module scan found
+    /// 1,457 `SetGlobalNumber` call sites; direction is not recoverable from the bytecode
+    /// alone, but the game data proves the operation is common), and a value-only "higher
+    /// wins" policy refused those forever while also fighting the local engine's own write
+    /// every tick (this loop used to gate the announce on an "advanced" check — see git
+    /// history — which meant a genuine local decrease was never even applied back to
+    /// <see cref="session"/>'s own store, so the very next apply-back write below pushed the
+    /// STALE higher value back into the game). <see cref="ICoopSession.SetFlag"/> now mints a
+    /// fresh serial per genuine local change and always wins locally, so it is called
+    /// unconditionally for every entry <see cref="IGameBridge.CollectChangedWorldState"/>
+    /// reports — that method's own shadow-diff already guarantees each one is a real local
+    /// transition, not an echo.
     /// </summary>
     private void PumpWorldState(SessionCapabilities caps)
     {
@@ -2010,12 +2037,7 @@ public sealed class CoopAgent(IGameBridge bridge, ICoopSession session, AgentSet
 
         foreach (KeyValuePair<uint, sbyte> change in bridge.CollectChangedWorldState())
         {
-            // Only announce it if it actually advanced our own view; a value the session
-            // already knows needs no op, and re-announcing is how echo storms start.
-            if (session.Flags.Merge(change.Key, change.Value))
-            {
-                session.SetFlag(change.Key, change.Value);
-            }
+            session.SetFlag(change.Key, change.Value);
         }
 
         // Apply anything the session knows that the game does not. The bridge updates its
