@@ -84,6 +84,8 @@ internal static unsafe class PhantomEffectHook
                 switch (subCode)
                 {
                     case 3: kind = PeerEffectKindValues.Stun; return true;        // EffectDroidStun
+                    case 5: kind = PeerEffectKindValues.Paralyze; return true;    // EffectParalyze (routine 148)
+                    case 6: kind = PeerEffectKindValues.Sleep; return true;       // EffectSleep (routine 154)
                     case 7: kind = PeerEffectKindValues.Choke; return true;       // EffectChoke
                     case 8: kind = PeerEffectKindValues.Frightened; return true;  // EffectHorrified
                     case 10: kind = PeerEffectKindValues.Whirlwind; return true;  // EffectWhirlWind
