@@ -335,6 +335,21 @@ internal static unsafe class PluginHost
                 Log($"container-use gate NOT installed: {containerGateDiagnostic}");
             }
 
+            // LIVE-PASS ADDITION: watches every REAL CloseInventory so PlaceableController's
+            // durable "ever opened" mirror does not clobber a fresh close — see
+            // ContainerCloseHook's own remarks and docs/research/container-sync.md's live-pass
+            // section. Shares container_locks with ContainerUseHook (same feature, same flag).
+            ContainerCloseHook.Enabled = ContainerUseHook.Enabled;
+            if (ContainerCloseHook.Install(out string containerCloseDiagnostic))
+            {
+                Log($"container: {containerCloseDiagnostic}"
+                    + (ContainerCloseHook.Enabled ? string.Empty : " (disabled by coop.ini)"));
+            }
+            else
+            {
+                Log($"container-close watch NOT installed: {containerCloseDiagnostic}");
+            }
+
             // Opt-in diagnostic: records who writes CGuiInGame+0xB4, which is the one thing
             // that would settle why a wedged instance's conversation flag comes straight back.
             DialogStateWatchHook.Enabled = PluginConfig.ReadBool("dialog_state_watch", false);
@@ -1058,6 +1073,7 @@ internal static unsafe class PluginHost
         _barks?.Invalidate();
         _interactionLocks?.Invalidate();
         ContainerUseHook.Invalidate();
+        ContainerCloseHook.Invalidate();
         _partyRoster?.Invalidate();
 
         // ⚠ THIS LINE WAS MISSING, so the spectate controller's ENTIRE teardown had never run

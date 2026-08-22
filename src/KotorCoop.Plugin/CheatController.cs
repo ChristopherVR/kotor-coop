@@ -184,6 +184,10 @@ internal sealed unsafe class CheatController(SharedBlockView block)
                 UsePlaceable(player);
                 break;
 
+            case SharedBlock.CheatKindClosePlaceable:
+                ClosePlaceable(player);
+                break;
+
             default:
                 Answer(SharedBlock.CheatStatusRefused, $"unknown cheat kind {kind}");
                 break;
@@ -1847,6 +1851,81 @@ internal sealed unsafe class CheatController(SharedBlockView block)
                 ? $"placeable 0x{placeableId:X}: use sent (the container/interaction-lock "
                     + "machinery reacts to it like a real click)"
                 : $"placeable 0x{placeableId:X}: UseObject failed (no client or no message object)");
+    }
+
+    /// <summary>
+    /// LIVE-PASS ADDITION (2026-08-22): the close-side counterpart to <see cref="UsePlaceable"/>.
+    /// <c>useplaceable</c> only replicates the network half of a real click, so the engine's own
+    /// container GUI never actually shows on this instance — leaving no panel for an Escape
+    /// keystroke, or a real player, to close, which is exactly what the container-sync
+    /// live-verify pass needed and did not have. This calls the real
+    /// <c>CSWSPlaceable::CloseInventory</c> directly
+    /// (<see cref="OdysseyPlaceables.CloseInventoryReal"/> — VERIFIED disasm, both stack args 0
+    /// is the safe player-agnostic path, see that method's own remarks), so the mirror on every
+    /// OTHER instance reacts exactly as it would to a real close: the peer-held container drops
+    /// out of <see cref="InteractionLockController"/>'s set, and <see cref="ContainerUseHook"/>
+    /// stops refusing it. See docs/research/container-sync.md.
+    /// </summary>
+    private void ClosePlaceable(nint player)
+    {
+        uint requestedId = block.CheatTarget;
+        string text = ReadCheatText();
+
+        nint placeable;
+        string what;
+        int seen = 0;
+
+        if (requestedId != 0)
+        {
+            placeable = Odyssey.ResolvePlaceable(requestedId);
+            what = $"0x{requestedId:X}";
+
+            if (placeable == 0 && Odyssey.ResolveServerObject(requestedId) != 0)
+            {
+                Answer(SharedBlock.CheatStatusNoTarget, $"{what} exists but is not a placeable");
+                return;
+            }
+        }
+        else if (text.Length > 0)
+        {
+            byte* tag = block.CheatText;
+            int length = 0;
+            while (length < SharedBlock.CheatTextLength - 1 && tag[length] != 0)
+            {
+                length++;
+            }
+
+            placeable = OdysseyPlaceables.FindPlaceableByTag(tag, length);
+            what = $"'{text}'";
+        }
+        else
+        {
+            placeable = OdysseyPlaceables.FindNearestOpenContainer(player, out seen);
+            what = "the nearest open container";
+        }
+
+        if (placeable == 0)
+        {
+            Answer(SharedBlock.CheatStatusRefused, seen == 0
+                ? "the sweep found no placeables at all in this module"
+                : $"the sweep found {seen} placeable(s) but none of them are open");
+            return;
+        }
+
+        uint placeableId = OdysseyPlaceables.GetPlaceableObjectId(placeable);
+
+        if (!Odyssey.IsPlaceableOpen(placeable))
+        {
+            Answer(SharedBlock.CheatStatusRefused, $"placeable 0x{placeableId:X} ({what}) is not open");
+            return;
+        }
+
+        OdysseyPlaceables.CloseInventoryReal(placeable, player);
+        PluginHost.Log($"placeable: close-inventory called for 0x{placeableId:X}");
+
+        Answer(
+            SharedBlock.CheatStatusApplied,
+            $"placeable 0x{placeableId:X}: closed (close animation played, +0x338 cleared)");
     }
 
     /// <summary>How close the player has to be for <c>useplaceable</c> to send the use — the

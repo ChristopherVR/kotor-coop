@@ -72,7 +72,18 @@ internal sealed class PlaceableController(SharedBlockView block)
             LogFew($"placeable 0x{desired.ObjectId:X}: trap disarmed on the session's authority");
         }
 
-        if (desired.Open && !Odyssey.IsPlaceableOpen(placeable))
+        // LIVE-PASS ADDITION (2026-08-22): the WasEverClosed latch. This channel is
+        // deliberately monotonic (PlaceableFlags.cs: "a placeable only ever advances ... never
+        // the reverse") and the agent polls every placeable's own +0x338 about once a second
+        // (KotorGameBridge.CollectChangedPlaceableState) — so once ANY player has ever really
+        // opened a container, this Apply pass would otherwise re-assert it open forever. Live-
+        // confirmed to clobber a fresh real close within ~100ms of it happening, on every
+        // instance, permanently — and confirmed AGAIN that a time-boxed defence is not enough
+        // (the reassertion pressure is continuous, so any timeout eventually loses the race; see
+        // ContainerCloseHook's own remarks for that measurement). Deferring here — rather than
+        // making the channel itself expressly "closed" (a wire/merge change out of scope for
+        // this pass) — is the smallest fix that lets a real close actually stick.
+        if (desired.Open && !Odyssey.IsPlaceableOpen(placeable) && !ContainerCloseHook.WasEverClosed(desired.ObjectId))
         {
             Odyssey.SetPlaceableOpen(placeable);
             LogFew($"placeable 0x{desired.ObjectId:X}: marked opened on the session's authority");

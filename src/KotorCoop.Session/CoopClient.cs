@@ -1432,9 +1432,24 @@ public sealed class CoopClient : ICoopSession
         // "remote: active 1". The explicit-disconnect path was already covered; this
         // is the same hole on the timeout path. The host re-publishes a fresh token
         // on reconnect, so clearing costs nothing.
+        //
+        // ⚠ SAME HOLE, THE CONTAINER-SYNC LIVE-PASS FOUND IT AGAIN (2026-08-22).
+        // `GetInteractionLocks()` is "the locks the host last broadcast" — a client-side
+        // CACHE, not something with its own expiry, on the theory that the host's own
+        // InteractionLockStore lease (see that class's remarks) prunes it and the next
+        // broadcast carries the drop. That theory only holds while the HOST is still alive
+        // to compute and send that next broadcast; killing the host itself (not just the
+        // claimant) leaves nobody left to ever publish the empty list, so this client's
+        // cache — exactly like the dialogue token above — was measured live to stay frozen
+        // holding a peer that no longer exists, forever: a container the dead host had open
+        // stayed "held by a peer" and visually open on this client indefinitely, well past
+        // any lease timeout, with `Stop-Process` on the host's agent and 30+ s of waiting.
+        // Dropped here for the same reason and the same way.
         lock (_gate)
         {
             _dialogue = DialogueState.Idle;
+            _interactionLocks = [];
+            _interactionLockModule = string.Empty;
         }
     }
 

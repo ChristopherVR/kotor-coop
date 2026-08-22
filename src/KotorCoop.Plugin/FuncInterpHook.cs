@@ -60,6 +60,9 @@ internal static unsafe class FuncInterpHook
         // retail verb (checked against docs/research/console-cheats.md's table the same way
         // every other staging verb above was).
         "useplaceable",
+        // The close-side counterpart, added when the live-verify pass found no way to close
+        // what useplaceable opened — see docs/research/container-sync.md.
+        "closeplaceable",
         // The item-identity harness. "item"/"items"/"setitem" are ours: the engine registers
         // giveitem and nothing else beginning with "item".
         "items", "item", "setitem", "giveloot",

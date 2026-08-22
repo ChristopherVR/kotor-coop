@@ -267,6 +267,16 @@ public enum CoopCommandKind
     /// docs/research/container-sync.md.
     /// </summary>
     UsePlaceable,
+
+    /// <summary>
+    /// CONTAINER-SYNC LIVE-PASS ADDITION (2026-08-22): closes a placeable's loot panel through
+    /// the engine's real <c>CloseInventory</c> call — the close-side counterpart to
+    /// <see cref="UsePlaceable"/>, needed because that verb only replicates the network half of
+    /// a real click and leaves no panel for a keystroke to close. <see cref="CoopCommand.Address"/>
+    /// carries the placeable's tag or object id, same three spellings as <see cref="UsePlaceable"/>;
+    /// empty means "the nearest container placeable". See docs/research/container-sync.md.
+    /// </summary>
+    ClosePlaceable,
 }
 
 /// <summary>
@@ -763,6 +773,31 @@ public static class ConsoleCommand
                 }
 
                 return new CoopCommand(CoopCommandKind.UsePlaceable, Address: rest[0]);
+
+            // CONTAINER-SYNC LIVE-PASS ADDITION: the close-side counterpart, same shape —
+            // see CoopCommandKind.ClosePlaceable.
+            case "closeplaceable":
+                if (rest.Length > 1)
+                {
+                    return new CoopCommand(
+                        CoopCommandKind.Invalid,
+                        Error: "closeplaceable takes one placeable, e.g. closeplaceable end_chest01 "
+                            + "(or bare, for the nearest container)");
+                }
+
+                if (rest.Length == 0)
+                {
+                    return new CoopCommand(CoopCommandKind.ClosePlaceable);
+                }
+
+                if (!TryParseObjectId(rest[0], out _) && !IsResRef(rest[0], maxLength: 31))
+                {
+                    return new CoopCommand(
+                        CoopCommandKind.Invalid,
+                        Error: $"'{rest[0]}' is not a placeable tag or object id");
+                }
+
+                return new CoopCommand(CoopCommandKind.ClosePlaceable, Address: rest[0]);
 
             case "items":
                 // A cap rather than a page: the listing goes to the agent's log, where a
@@ -1452,6 +1487,7 @@ public static class ConsoleCommand
         "  usedoor [tag|id]                walk through a transition door (nearest by default)",
         "  opendoor [tag|id]               open an ORDINARY door (no transition; nearest by default)",
         "  useplaceable [tag|id]           use a container/corpse/switch (nearest container by default)",
+        "  closeplaceable [tag|id]         close a container's loot panel (nearest by default)",
         "  census [id]         what my enemy census holds, and what my own engine says of each id",
         "  resolve <id>        what the ENGINE knows about one id, in one frame (plugin log has the chain)",
         "retail console cheats, already co-op-safe (they touch only your game):",

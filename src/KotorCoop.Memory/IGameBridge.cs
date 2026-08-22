@@ -175,6 +175,20 @@ public static class CheatKinds
     /// ⚠ 18, because 7-17 are taken. Take the next FREE number.
     /// </summary>
     public const uint UsePlaceable = 18;
+
+    /// <summary>
+    /// Closes a placeable's loot panel through the engine's real <c>CloseInventory</c> call —
+    /// the close-side counterpart to <see cref="UsePlaceable"/>, added when the container-sync
+    /// live-verify pass found <c>useplaceable</c> alone gave no way to close what it opened
+    /// (that verb only sends the network half of a real click; the client-side GUI-show code
+    /// is deliberately not replicated, so there is no panel for a keystroke to close). <c>Text</c>
+    /// is the placeable's tag, <c>Target</c> its object id; both empty means "the nearest
+    /// container placeable". See SharedBlock.CheatKindClosePlaceable and
+    /// docs/research/container-sync.md.
+    ///
+    /// ⚠ 19, because 7-18 are taken. Take the next FREE number.
+    /// </summary>
+    public const uint ClosePlaceable = 19;
 }
 
 /// <summary>The plugin's verdicts, mirroring <c>SharedBlock.CheatStatus*</c>.</summary>

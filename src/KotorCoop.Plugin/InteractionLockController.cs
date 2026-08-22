@@ -525,8 +525,16 @@ internal sealed unsafe class InteractionLockController(SharedBlockView block)
 
         _seenBlockedCount = blocked;
         _containerNoticeUntilMs = Environment.TickCount64 + FarNoticeDurationMs;
-        (_, uint holderPeerId) = ContainerUseHook.LastBlocked;
+        (uint containerId, uint holderPeerId) = ContainerUseHook.LastBlocked;
         _containerNoticeLength = BuildContainerNoticeText(holderPeerId);
+
+        // ⚠ Every other refusal path in this plugin logs (CombatController, ItemController,
+        // TransitionAnnounceWatch's door-refusal, ...); ContainerUseHook's own callback stayed
+        // silent (the hot-path OpenInventory call is no place to add a managed I/O call on
+        // every ALLOWED attempt too), so this — the one place a refusal is already singled out
+        // from the noise, once per edge — is where the live-test/verify.ps1 evidence trail
+        // needs a line to grep for.
+        PluginHost.Log($"container: refused open of 0x{containerId:X} (held by peer {holderPeerId})");
     }
 
     private int BuildContainerNoticeText(uint holderPeerId)

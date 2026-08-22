@@ -80,6 +80,9 @@ internal static class ConsoleVerbCatalog
         // engine's own use-object input, exactly like a real click. See
         // docs/research/container-sync.md.
         ("useplaceable", "useplaceable [tag|id]  (blank = nearest container placeable)"),
+        // The close-side counterpart, added when the live-verify pass found no way to close
+        // what useplaceable opened — see docs/research/container-sync.md.
+        ("closeplaceable", "closeplaceable [tag|id]  (blank = nearest container placeable)"),
         // The item-identity harness. `items` finds a target, `setitem` makes it worth
         // sending, `dropitem 0x..` sends it, `item` reads back what arrived — the whole loop
         // is these four, and none of them shadows a retail verb (the engine's list has

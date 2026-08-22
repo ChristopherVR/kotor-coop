@@ -350,4 +350,246 @@ nothing and every check above needs re-reading as "gate absent"), and
 | The `OpenInventory` entry-point refusal needs no synthesised failure value | VERIFIED by stack-effect analysis (jmp-splice entry, balanced pushad/popad, unread return value) |
 | `CGuiInGame::ShowContainerGui`/`HideContainerGui`/`CSWGuiContainer::SetContainer` shape | INFERRED (disassembled, not exercised — superseded by the `+0x338` approach) |
 | The gate, the mirror, the lock store, the pure rules, the console verb | Implemented, unit-tested |
-| Any of this actually working against the live game | **NOT VERIFIED — no live pass has run.** See §3.
+| Open/close sync + the use-lock, both directions, against a real footlocker | **LIVE-VERIFIED (2026-08-22).** See §5. |
+| `closeplaceable` calling real `CloseInventory` with arg1=0 | LIVE-DISPROVEN (silently no-ops); FIXED with arg1 = the closing player's own object id, LIVE-CONFIRMED |
+| `PlaceableController`'s durable "ever opened" mirror vs. this pass's transient close | LIVE-CONFIRMED to conflict (permanent reopen); FIXED with `ContainerCloseHook`'s per-module closed-latch |
+| A dead host's stale interaction-lock/dialogue-token cache on a client | LIVE-CONFIRMED never expires on its own; FIXED (`CoopClient.ForgetSession` now drops it, matching the existing dialogue-token fix) |
+| `OdysseyPlaceables.HasInventory` (`+0x334`) as a container discriminator | LIVE-DISPROVEN — see §5's gap note |
+
+---
+
+## 5. Live pass (2026-08-22)
+
+Two GOG v1.0.3 instances, `tools/demo.ps1`'s default save (END_M01AA, both instances start
+together in the Endar Spire's first crew-quarters corridor). Host pid varied per relaunch below;
+placeable **0x C6**, ~9m from the start position, confirmed live as a real, working container
+(engine gate `+0x324` reads 1, and it actually opens — several nearby ids that also passed the
+sweep never opened at all, see the gap note below). Driven entirely through the plugin's
+in-game console channel (the same `0x9F8`/`0x9F4`/`0xA58` poke `verify.ps1`'s own `SendConsole`
+uses), read back with the same `VirtualQueryEx`/vtable-scan technique `verify.ps1` uses for doors
+and creatures, applied here to `CSWSPlaceable` (vtable `0x007494D0`).
+
+### 5.1 The core sequence — open, mirror, refuse, close, mirror-close, reverse roles
+
+Teleported both players onto the container (`tp 10.8 21.87`, its own `+0x90` position) so every
+step is 0.0m and immune to AI-pathing latency, which the FIRST live attempt (real ~9m walk) did
+not control for and which cost real time chasing a red herring (§5.3).
+
+```
+=== STEP 1: HOST opens 0xC6 ===
+host open flips to 1: True
+host local claim: kind=2 active=1 targetId=0xC6
+client mirrors open: True
+client lock: count=1 [peer=1 kind=2 targetId=0xC6]
+[18:42:01.556] interaction: 1 object(s) held by a peer; stopped 0 of them walking
+
+=== STEP 2: CLIENT attempts the SAME container (should be refused) ===
+client local claim after attempt (should stay inactive): kind=0 active=0 targetId=0x0
+[18:42:02.394] placeable: use-object sent for 0xC6 at 0.0m (ok)
+
+=== STEP 3: HOST closes 0xC6 (closeplaceable, corrected arg1) ===
+host open flips to 0: True  (final=0)
+[18:42:07.000] placeable: close-inventory called for 0xC6
+[18:42:07.001] cheat: placeable 0xC6: closed (close animation played, +0x338 cleared) (status 1)
+host local claim after close: kind=0 active=0 targetId=0x0
+
+--- waiting for client mirror close (up to 10s) ---
+client mirrors close: True  (final=0)
+client lock after host closes: count=0 []
+[18:42:12.492] interaction: no peer holds anything here
+
+=== STEP 5: CLIENT opens 0xC6 now that it is free ===
+client open flips to 1: True
+client local claim: kind=2 active=1 targetId=0xC6
+
+=== STEP 6: HOST attempts the SAME container while CLIENT holds it (reversed refusal) ===
+host local claim after attempt (should stay inactive): kind=0 active=0 targetId=0x0
+host own placeable open field (mirror of the client's hold, not a real local open): 1
+```
+
+**Verdict: PASS, both directions.** The lease, the mirror-open animation/flag, and the refusal
+(functionally — the second player never gets a local claim and never sees the panel) all work,
+symmetrically, with no host/client branch. What could NOT be confirmed: an explicit
+`ContainerUseHook` refusal LOG LINE or `BlockedCount` increment on either side's attempt in
+steps 2/6 — see §5.4.
+
+### 5.2 The close-side gap: no way to close what `useplaceable` opens — FIXED, `closeplaceable`
+
+`useplaceable` sends `Odyssey.UseObject` — the network HALF of a real click
+(`CSWCMessage::SendPlayerToServerInput_UseObject`). The client-side menu wrapper that actually
+SHOWS the loot panel (`CSWCPlaceable::UsePlaceable`'s own code, never replicated — see Odyssey.cs's
+remarks on `SendUseObjectInputFn`) is not: a screenshot of the host mid-"open" showed normal
+gameplay, no panel, even though `+0x338` had genuinely flipped to 1 engine-side. This is a real,
+usable engine state (the mirror/lock machinery reacts to it correctly, §5.1) but it left the
+live-test script with no Escape key to press and no button to click, exactly the gap the task
+briefing anticipated ("find how the container GUI is closed... the engine's own `CloseInventory`
+path via a verb if one exists"). It did not exist, so it was added: `closeplaceable [tag|id]`
+(mirrors `useplaceable`'s shape) calls `CSWSPlaceable::CloseInventory 0x00587560` directly —
+protocol/`SharedBlock`/`CheatKinds` all gained `ClosePlaceable = 19`, `CheatKindSyncTests` still
+passes.
+
+**First attempt, arg1=0, LIVE-DISPROVEN.** `CloseInventory` is `ret 8` (thiscall, two stack
+args, same shape as `OpenInventory`); a first cut called it `(placeable, 0, 0)` on the theory
+that arg2=0's `je 0x58762f` branch skips every read of arg1 (the "requesting player", resolved
+via the same `call 0x4ae910` `OpenInventory` uses). That branch does exist, but 0x58762f is NOT
+a shortcut to the close animation — it is the SAME unconditional tail every path through the
+function falls into (a real close crosses it too), and that tail pushes arg1 RAW into a SECOND
+message dispatch (`push ebx /* = raw arg1 */; ...; call 0x4aed80; call 0x4b08d0`) before the
+close animation and the `+0x338 = 0` clear that come after it. Live-observed: the console command
+replied (no crash), but `+0x338` never cleared —
+
+```
+closeplaceable replied: True
+t=+0s open=0
+t=+1s open=0
+t=+2s open=0
+t=+3s open=1
+...
+```
+
+(that reopen is a SEPARATE bug, §5.3 — but at this stage of the pass it was mistaken for the
+close never having worked at all). Fresh disasm of the real call site
+(`AIActionUseObject`'s open call at `0x0057EEA3`, `tools/disasm.py 0x57EE80 0x50`) shows what a
+real click actually passes for this argument: `mov eax,[edi+4]; push eax` — the ACTING
+CREATURE'S OWN OBJECT ID, the standard `object+4` convention this whole plugin already uses.
+`OdysseyPlaceables.CloseInventoryReal` now takes the closing player's creature pointer and passes
+its own object id; **live-confirmed** this clears `+0x338` reliably (§5.1's step 3).
+
+### 5.3 The durable "ever opened" mirror permanently defeats a close — FIXED, `ContainerCloseHook`
+
+The single most significant finding of this pass. After a genuinely successful close (§5.2's
+fix, `+0x338` verified 0), the container was watched for 30s straight and it silently reopened —
+first observed at t=+3-4s, sticking open forever after:
+
+```
+[18:29:10.177] placeable: close-inventory called for 0xC6
+[18:29:10.178] cheat: placeable 0xC6: closed (close animation played, +0x338 cleared) (status 1)
+[18:29:10.287] placeable 0xC6: marked opened on the session's authority
+```
+
+That third line is `PlaceableController`'s own log — a channel that PREDATES this pass (shared
+block version 11), unrelated to the container-sync feature except that it happens to write the
+same `+0x338` field. It exists to give a late joiner a cosmetic "already looted, lid up" chest,
+via a wire flag (`PlaceableFlags.cs`) that is explicitly, deliberately monotonic: *"a placeable
+only ever advances — closed to open, locked to unlocked — never the reverse."* Its agent-side
+half (`KotorGameBridge.CollectChangedPlaceableState`) polls every placeable's own `+0x338`
+independently on EVERY instance about once a second; once it has EVER read 1 for an id, it keeps
+re-broadcasting "open" and every instance's `PlaceableController.Apply` keeps re-asserting
+`Odyssey.SetPlaceableOpen` (the same field) forever. A container this pass's new transient system
+had genuinely closed got clobbered by this pre-existing channel within ~100ms, on both instances,
+permanently, with no interaction lock held by anyone — i.e. **the close-sync feature, as first
+shipped, worked for a single frame and then silently failed for the rest of the session, every
+time.**
+
+Fix: `ContainerCloseHook`, a second detour (same jmp-splice technique and prologue-verification
+discipline as `ContainerUseHook`, on `CloseInventory` instead of `OpenInventory`, never refusing
+— closing must never be blocked). Every real `CloseInventory` call, PLUS every call to
+`OdysseyPlaceables.ClearPlaceableOpenFlag` (the mirror's own close, which never calls the real
+function so the hook alone cannot see it), latches the id as closed for the rest of the module
+load; `PlaceableController.Apply` checks the latch before writing. **A time-boxed suppression
+(4000ms) was tried first and LIVE-DISPROVEN** — the reassertion pressure is continuous (the
+agent's poll and `PlaceableController`'s own pass both run forever), so the container reopened
+again at t=+3-4s against that window too. The latch (permanent within a module, cleared only by
+`Invalidate()` on a module change) is what actually holds:
+
+```
+closeplaceable (client, the current holder) replied: True
+t=+0s  host open=1  client open=0
+t=+1s  host open=1  client open=0
+t=+2s  host open=1  client open=0
+t=+3s  host open=1  client open=0
+t=+4s  host open=0  client open=0     <- host's own mirror catches up
+t=+5s .. t=+29s  host open=0  client open=0     (25 more seconds, stable)
+```
+
+Re-tested in the OTHER direction (host closes what it holds) with the same 15-16s stability
+window — also held. **This is the load-bearing fix of the whole pass**: without it, "closes for
+everyone" was true for about a tenth of a second.
+
+### 5.4 Lease expiry on a dead host — a SECOND stale-cache bug found and fixed the same way
+
+Host holds the container (confirmed: `client lock: count=1 [peer=1 kind=2 targetId=0xC6]`), then
+`Stop-Process` on the HOST's own `KotorCoop.Agent`. Expected (task briefing): the client's lock
+releases and the container closes within the lease timeout (`ProtocolConstants.PeerTimeoutMs`,
+5000ms). **First attempt: FAILED, LIVE-CONFIRMED** — 12 straight seconds of polling showed the
+client's copy of the lock and the mirrored-open state completely unchanged, even though the
+client's own agent correctly logged the disconnect (`agent reports 0 remote peer(s)`,
+`peer left: destroyed phantom ...`) within the expected 5s window.
+
+Root cause: `CoopClient.GetInteractionLocks()` is explicitly "the locks the host last
+broadcast" — a CACHE, not a lease with its own clock. The design assumption (stated in
+`SendInteractionClaim`'s own remarks) is that the HOST's `InteractionLockStore` prunes an expired
+entry and the NEXT broadcast carries the drop — which only holds while the host is alive to
+compute and send that next broadcast. Killing the host itself (not just the claimant) leaves
+nobody left to ever publish the empty list, so the client's cache froze holding a peer that no
+longer existed, indefinitely. **This is the identical shape of a bug already fixed once in this
+exact function**, for the dialogue token (`CoopClient.ForgetSession`'s own comment: *"a host that
+CRASHES mid-conversation... left this client spectating forever... measured live: the host was
+killed mid-conversation and 20s later the client still read 'remote: active 1'"*) — the container
+lock cache had the same hole, just never previously exercised by a live pass. Fixed the same way:
+`ForgetSession()` (called on link-loss timeout) now also clears `_interactionLocks` and
+`_interactionLockModule`. Re-tested: the client's lock and mirrored-open state both cleared
+within the first second after the kill —
+
+```
+t=+1s  host open=1  client open=0  lockCount=0
+t=+2s .. t=+10s  (unchanged, stable)
+```
+
+Session was then restarted (`demo.ps1 -Stop` / relaunch) per the briefing's own "restart via
+reconnect/relaunch" — a host whose own agent was killed does not recover on its own; that part
+was never expected to.
+
+### 5.5 A corpse — NOT exercised this pass (honest gap)
+
+`slay` (bare, nearest enemy) killed object id `0x35`. Immediately after, `resolve 0x35` reported
+the object no longer resolves through ANY of the engine's own lookup paths
+(`engine 0x0 walk 0x0 resolve 0x0`) — the id was fully invalidated, not converted to a lootable
+body-bag placeable (`useplaceable` bare's own sweep count stayed at exactly 64 placeables,
+unchanged from before the kill). Whether this is specific to the `slay` cheat's own
+implementation (possibly destroying the body outright rather than leaving a corpse) or a genuine
+property of this save/module was not root-caused — pursuing it further (a real combat kill
+instead of the cheat) was not attempted this pass for time. **Not claimed working, not claimed
+broken — genuinely not tested.** A future pass should either use a real combat kill or trace
+`CombatController`'s own `slay` path to see whether it destroys the body.
+
+### 5.6 Regression checks
+
+- **An ordinary door** (`opendoor` bare): opened normally — `door: opened 0x47 (state 2 -> 1) at
+  1.8m` — unaffected, as expected (doors are a separate `CSWSDoor` vtable/hook entirely).
+- **A plot placeable / switch** (has_inventory-false objects encountered throughout this pass,
+  e.g. while probing for a working container): never refused, never gated — by construction,
+  `ContainerUseHook` only refuses an id present in the CURRENT peer-held set, and nothing in this
+  pass ever claimed a lock on a switch. Not independently exercised against a NAMED computer
+  panel/plot device this pass; the structural argument stands but is not a live click on a
+  specific plot object.
+- **Dialogue lock unaffected by a held container**: NOT independently live-exercised — no
+  console primitive exists to start a real dialogue the way `useplaceable` starts a container use
+  (an actual click is the only path). Argued instead from the code and the test suite: the
+  lock's key is kind-discriminated (`InteractionLockStore.TryKey`: `"tag:..."` for
+  `InteractionKind.Conversation` vs. `"id:XXXXXXXX"` for `InteractionKind.Container`, in the SAME
+  dictionary but never colliding), and the full 1591-test suite (including the pre-existing
+  conversation-lock tests, untouched by this pass) passed throughout.
+
+### 5.7 A live-confirmed gap in `HasInventory` (`+0x334`) — not fixed, documented
+
+Discovering 0xC6 required trial and error: `useplaceable` bare's own sweep tags a placeable
+`[container]` only when `+0x334` (`has_inventory`) is nonzero, and every placeable probed this
+pass — including 0xC6 itself, and including one with a genuine item sitting in its repository
+(`repo+0x10` item count = 1) — read `+0x334` as 0. A container that demonstrably opens for real
+and demonstrably holds a real item is not distinguishable from a switch by this field, live. The
+field itself is VERIFIED at the struct level (state-field table, `placeables-containers.md`,
+against the symbol DB) but was never itself live-verified as the right CONTAINER discriminator,
+and this pass's own live probing disproves that reading. Left undiagnosed and unfixed (the
+correct discriminator was not identified) — `useplaceable` bare and the `[container]` sweep tag
+both under-report real containers as a result. `closeplaceable`'s own bare form sidesteps this
+entirely by filtering on `Odyssey.IsPlaceableOpen` instead (unambiguous — the exact field
+`OpenInventory`/`CloseInventory` themselves set/clear).
+
+### 5.8 Test suite and build
+
+`dotnet test tests/KotorCoop.Tests`: **1590/1591 passed** — the one failure is
+`DisconnectRecoveryTests.HeavyPacketLossStillConverges`, the pre-existing documented flake, not a
+regression from this pass. Both plugin builds (`build.ps1 -Install`, both GOG installs) clean,
+0 warnings 0 errors, across five rebuild/redeploy/relaunch cycles this pass needed as each live
+finding above required a code fix.

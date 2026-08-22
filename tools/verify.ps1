@@ -74,6 +74,21 @@ public class VF {
             return (long)m.BaseAddress+i; }
       long next=(long)m.BaseAddress+size; if(next<=addr) break; addr=next; }
     return 0; }
+  // Same technique again, CSWSPlaceable vtable (0x007494D0 —
+  // src/KotorCoop.Plugin/CreatureFinder.cs's own PlaceableVtable). The container-sync
+  // live-detector field is an int-wide "GUI open now" flag at placeable+0x338
+  // (docs/research/container-sync.md §1.2, VERIFIED live 2026-08-22).
+  public static long FindPlaceable(IntPtr h, uint objId){
+    long addr=0; int sz=Marshal.SizeOf(typeof(MBI));
+    while(addr<0x7FFFFFFF){ MBI m; if(VirtualQueryEx(h,new IntPtr(addr),out m,sz)==0) break;
+      long size=(long)m.RegionSize; if(size<=0) break;
+      if(m.State==0x1000&&m.Type==0x20000&&(m.Protect&0x101)==0&&size<=64L*1024*1024){
+        var buf=R(h,(long)m.BaseAddress,(int)size);
+        if(buf!=null) for(int i=0;i+8<=buf.Length;i+=4)
+          if(BitConverter.ToUInt32(buf,i)==0x007494D0 && BitConverter.ToUInt32(buf,i+4)==objId)
+            return (long)m.BaseAddress+i; }
+      long next=(long)m.BaseAddress+size; if(next<=addr) break; addr=next; }
+    return 0; }
   public static long FindBlock(IntPtr h){
     byte[] sig = { 0x4B,0x4F,0x43,0x4F,0x4F,0x50,0x30,0x31, 0,0,0,0, 0x01,0xEE,0xFF,0xC0 };
     long addr=0; int sz=Marshal.SizeOf(typeof(MBI));
@@ -1148,6 +1163,100 @@ Check 'a door opened on the client opens on the host' `
       elseif ($hostDoorAddr -eq 0) { "door 0x{0:X} not found in the host's engine" -f $doorId }
       elseif ($hostDoorState -eq 0) { "door 0x{0:X}: client opened it, host STILL reads open-state 0 after 20s (host is {1:F0} units from the door — see this check's own comment on the deferred-commit/distance gap)" -f $doorId, $hostDoorDist }
       else { "door 0x{0:X}: client opened it, host reads open-state {1} ({2:F0} units from the door)" -f $doorId, $hostDoorState, $hostDoorDist })
+
+# --- 20b. a container opened on the client is held and shown open on the host ---------------
+# docs/research/container-sync.md §5 (live-verified 2026-08-22, protocol 37): the same
+# 'useplaceable' staging verb the door check above already relies on, for a placeable instead.
+# The oracle is engine state on BOTH sides, not either instance's own bookkeeping — the CLIENT's
+# own placeable+0x338 (Odyssey.IsPlaceableOpen's field) confirms a REAL local open happened, and
+# the HOST's mirrored copy of the SAME field plus its own interaction-lock slot (kind=2,
+# Container) confirm the mirror/lock reached the other side, exactly the way check 20 confirms a
+# door's open-state crossed rather than trusting a log line alone.
+#
+# Deliberately the CLIENT opening and the HOST observing, the opposite direction from check 20's
+# door (client opens, host observes) — this pass's own live testing found the mechanism
+# symmetric, but the two checks together cover both roles across the whole battery.
+#
+# Placed here (20b), not after the later checks: check 21 below self-warps the client to another
+# module and back, which repositions the player somewhere inside END_M01AA on reload — measured
+# live to land 116 units from 0xC6, well past PlaceableUseRange (15). Running before that warp is
+# what lets this check use the save's own natural starting proximity rather than needing its own
+# `tp`.
+#
+# ⚠ NAMES THE PLACEABLE EXPLICITLY (0xC6), the same way check 11 hardcodes 'end_trask' —
+# demo.ps1's own starting save, not a general module. NOT the bare 'useplaceable' (nearest
+# container): this pass's own live testing found the bare form's has_inventory (+0x334) filter
+# reads 0 for every real container it tried, 0xC6 included — a live-confirmed gap, documented
+# in container-sync.md §5.7, not fixed there. Naming the id directly bypasses that filter
+# entirely (CheatController.UsePlaceable resolves an explicit id without consulting
+# HasInventory), which is why this check can pass reliably while that gap stands.
+#
+# ⚠ TELEPORTS THE CLIENT ONTO 0xC6 FIRST, unlike the door check above. A door's state toggles
+# through a non-walking primitive, so that check's own proximity only affects how fast the
+# MIRROR is observed (its own documented distance/latency gap). A container's real
+# `AIActionUseObject`/`OpenInventory` path has no such shortcut — `PlaceableUseRange` (15 units)
+# hard-refuses a distant attempt before it ever reaches the engine, and by this point in the
+# battery real combat earlier in the run (checks 9/13) has already dragged the party well away
+# from the spawn point (measured live: 116-142 units from 0xC6 with no `tp`, comfortably outside
+# range) — so without this, the check would fail on distance almost every time, not on anything
+# this pass is meant to verify. 0xC6's own position (10.8, 21.87) was read live off the placeable
+# itself (+0x90 Vec3) and does not move.
+SendConsole $h2 $b2 'tp 10.8 21.87' | Out-Null
+Start-Sleep -Seconds 1
+$cUseMark = LogLines $Log2
+$cUseReplied = SendConsole $h2 $b2 'useplaceable 0xC6'
+Start-Sleep -Seconds 1
+$cUseLine = @(NewLogLines $Log2 $cUseMark | Where-Object { $_ -match 'placeable: use-object sent for 0x([0-9A-Fa-f]+)' } | Select-Object -First 1)
+$containerId = 0
+if ($cUseLine.Count -gt 0 -and $cUseLine[0] -match 'placeable: use-object sent for 0x([0-9A-Fa-f]+)') {
+    $containerId = [Convert]::ToUInt32($matches[1], 16)
+}
+
+$clientPlaceableAddr = 0
+$clientOpened = $false
+if ($containerId -ne 0) {
+    # A real open queues an AI walk-and-use action first (check 20's own door-distance comment
+    # notes the same kind of delay for doors); this pass's own live testing measured up to ~15s
+    # for a ~9m walk, so this is generous over that, not arbitrary.
+    $clientOpened = WaitFor2 {
+        if ($script:clientPlaceableAddr -eq 0) { $script:clientPlaceableAddr = [VF]::FindPlaceable($h2, $containerId) }
+        ($script:clientPlaceableAddr -ne 0) -and (([VF]::U32($h2, $script:clientPlaceableAddr + 0x338)) -ne 0)
+    } 20
+    $clientPlaceableAddr = $script:clientPlaceableAddr
+}
+
+$hostPlaceableAddr = 0
+$hostMirroredOpen = $false
+$hostLockCount = 0
+$hostHoldsIt = $false
+if ($clientOpened) {
+    $hostMirroredOpen = WaitFor2 {
+        if ($script:hostPlaceableAddr -eq 0) { $script:hostPlaceableAddr = [VF]::FindPlaceable($h1, $containerId) }
+        ($script:hostPlaceableAddr -ne 0) -and (([VF]::U32($h1, $script:hostPlaceableAddr + 0x338)) -ne 0)
+    } 10
+    $hostPlaceableAddr = $script:hostPlaceableAddr
+    $hostLockCount = [VF]::U32($h1, $b1 + 0x1358)
+    for ($i = 0; $i -lt $hostLockCount -and $i -lt 4; $i++) {
+        $lockKind = [VF]::U32($h1, $b1 + 0x1360 + ($i * 0x28) + 4)
+        $lockTargetId = [VF]::U32($h1, $b1 + 0x3F0C + ($i * 0x04))
+        if ($lockKind -eq 2 -and $lockTargetId -eq $containerId) { $hostHoldsIt = $true }
+    }
+}
+
+Check 'a container opened on the client is held and shown open on the host' `
+    ($clientOpened -and $hostMirroredOpen -and $hostHoldsIt) `
+    $(if (-not $cUseReplied) { "the useplaceable console command got no reply within 10s" }
+      elseif ($containerId -eq 0) { "no 'placeable: use-object sent' line seen on the client for 0xC6 (wrong save/module, or too far — 0xC6 is demo.ps1's own starting footlocker, END_M01AA)" }
+      elseif (-not $clientOpened) { "container 0x{0:X}: client's own +0x338 never flipped to 1 within 20s (too far to walk to, or not a real container)" -f $containerId }
+      elseif (-not $hostMirroredOpen) { "container 0x{0:X}: client opened it, host's own copy +0x338 never mirrored to 1 within 10s" -f $containerId }
+      elseif (-not $hostHoldsIt) { "container 0x{0:X}: host's copy mirrored open but its interaction-lock list (count={1}) has no Container-kind entry naming it" -f $containerId, $hostLockCount }
+      else { "container 0x{0:X}: client opened it for real, host mirrors it open and holds the lock (peer-held)" -f $containerId })
+
+# Leave the world closed rather than open, so the next run does not inherit a held container —
+# closeplaceable is idempotent (a no-op, cleanly refused, on an already-closed target).
+if ($containerId -ne 0) {
+    SendConsole $h2 $b2 ("closeplaceable 0x{0:X}" -f $containerId) | Out-Null
+}
 
 # --- 21. the client's party roster survives a transition ------------------------------------
 # party-reconciliation's own host-roster valid bit (SharedBlock.PartyRosterValid, 0x8000_0000

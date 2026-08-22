@@ -469,6 +469,10 @@ public sealed class CoopCommandDispatcher(
                 UsePlaceable(command.Address ?? string.Empty);
                 break;
 
+            case CoopCommandKind.ClosePlaceable:
+                ClosePlaceable(command.Address ?? string.Empty);
+                break;
+
             case CoopCommandKind.Who:
                 if (manager.Current is not { } who)
                 {
@@ -1136,6 +1140,20 @@ public sealed class CoopCommandDispatcher(
         }
 
         SendCheat(new CheatRequest(CheatKinds.UsePlaceable, Text: token));
+    }
+
+    /// <summary>The close-side counterpart to <see cref="UsePlaceable"/>, added when the
+    /// container-sync live-verify pass found no way to close what <c>useplaceable</c> opened
+    /// — see <c>CoopCommandKind.ClosePlaceable</c> and docs/research/container-sync.md.</summary>
+    private void ClosePlaceable(string token)
+    {
+        if (ConsoleCommand.TryParseObjectId(token, out uint objectId) && objectId != 0)
+        {
+            SendCheat(new CheatRequest(CheatKinds.ClosePlaceable, Target: objectId));
+            return;
+        }
+
+        SendCheat(new CheatRequest(CheatKinds.ClosePlaceable, Text: token));
     }
 
     /// <summary>

@@ -46,13 +46,23 @@ internal static unsafe class OdysseyPlaceables
     /// container panel open) — the two readings are not actually in tension.
     ///
     /// <see cref="PlaceableController"/>'s existing one-way mirror (host's "ever opened" ->
-    /// write 1 on a peer's copy, via <c>Odyssey.SetPlaceableOpen</c>, never cleared) is UNAFFECTED
-    /// by this correction and keeps its own job: a late joiner sees an already-looted chest with
-    /// its lid open. This method is only ever called by the NEW transient tracking in
-    /// <see cref="InteractionLockController"/>, which is a separate concern from that durable
-    /// cosmetic mirror — see docs/research/container-sync.md.
+    /// write 1 on a peer's copy, via <c>Odyssey.SetPlaceableOpen</c>, never cleared) is
+    /// UNAFFECTED by this correction — it keeps its own job (a late joiner sees an already-
+    /// looted chest with its lid open) — but IS live-confirmed to fight this method: that
+    /// durable channel's local agent-side poll (<c>KotorGameBridge.CollectChangedPlaceableState</c>)
+    /// samples this SAME <c>+0x338</c> field independently on every instance and, once it has
+    /// EVER read 1 here, keeps re-asserting it forever (<c>PlaceableFlags.cs</c>: monotonic by
+    /// design). <see cref="ContainerCloseHook.Register"/> below is the LIVE-PASS fix — every
+    /// caller of this method is a mirror-close (see the two call sites in
+    /// <c>InteractionLockController</c>), so registering here covers exactly the edge
+    /// <see cref="ContainerCloseHook"/>'s own hook cannot see on its own (a mirror never calls
+    /// the real <c>CloseInventory</c>, so its splice never fires for this edge).
     /// </summary>
-    public static void ClearPlaceableOpenFlag(nint placeable) => *(int*)(placeable + OpenOffset) = 0;
+    public static void ClearPlaceableOpenFlag(nint placeable)
+    {
+        *(int*)(placeable + OpenOffset) = 0;
+        ContainerCloseHook.Register(GetPlaceableObjectId(placeable));
+    }
 
     /// <summary>Reads the placeable's own object id — same embedded layout every object class
     /// in this plugin already uses.</summary>
@@ -119,6 +129,59 @@ internal static unsafe class OdysseyPlaceables
     public static void PlayContainerCloseAnimation(nint placeable) =>
         SetAnimationFn(placeable, CloseAnimationId);
 
+    // ---- the REAL CloseInventory call, for the closeplaceable staging verb ---------------
+    //
+    // LIVE-PASS ADDITION (2026-08-22). `useplaceable` only replicates the network HALF of a
+    // real click (Odyssey.UseObject -> CSWCMessage::SendPlayerToServerInput_UseObject): the
+    // client-side menu wrapper that actually SHOWS the loot panel (CSWCPlaceable::UsePlaceable,
+    // see Odyssey.cs's remarks on SendUseObjectInputFn) is deliberately not replicated, so the
+    // ENGINE's own +0x338 flips to 1 (confirmed live) but no panel appears for an Escape
+    // keystroke — or a real player — to close. This is the fix: call CSWSPlaceable::
+    // CloseInventory 0x00587560 directly, the same "call the fixed address, no vtable
+    // indirection" choice this file already makes for SetAnimation.
+    //
+    // ⚠ LIVE-CORRECTED: arg1 (`[esp+0x1c]` on entry, matching OpenInventory's own arg1) is NOT
+    // safe as 0. A first attempt at this call passed (0, 0) on the theory that arg2==0's early
+    // `je 0x58762f` branch skips every read of arg1 — true for the player-RESOLVE step
+    // (`call 0x4ae910`, both this and OpenInventory's arg1 reach it the same way), but 0x58762f
+    // is NOT a shortcut to the close animation: it is the SAME unconditional tail every path
+    // through this function falls into (a real close always crosses it too), and that tail
+    // pushes arg1 RAW — unresolved — into a second message dispatch
+    // (`push ebx /* = raw arg1 */; ...; call 0x4aed80; call 0x4b08d0`) BEFORE the close
+    // animation and the `+0x338 = 0` clear that come after it. Live-observed with arg1=0: the
+    // call returned (no crash, the console command replied) but `+0x338` never cleared — this
+    // dispatch call plainly does not tolerate a raw 0 the way OpenInventory's OWN resolved-
+    // player path tolerates an unresolved 0 (which just skips the optional message send there).
+    // Fresh disasm of the real call site, `AIActionUseObject`'s open call at 0x0057EEA3
+    // (`tools/disasm.py 0x57EE80 0x50`), shows exactly what a real click passes for this same
+    // argument: `mov eax,[edi+4]; push eax` — the ACTING CREATURE'S OWN OBJECT ID (the standard
+    // `object + 4` convention this whole plugin already uses for every CSWSObject subclass),
+    // not a sentinel and not a resolved pointer. <see cref="CloseInventoryReal"/> now takes the
+    // closing player's creature pointer and passes ITS OWN OBJECT ID here — live-confirmed this
+    // clears `+0x338` reliably (see docs/research/container-sync.md's live-pass section).
+    private static readonly delegate* unmanaged[Thiscall]<nint, uint, int, void> CloseInventoryFn =
+        (delegate* unmanaged[Thiscall]<nint, uint, int, void>)0x00587560;
+
+    /// <summary>CSWSObject + this = the object's own id — same embedded layout as
+    /// <see cref="ObjectIdOffset"/>, applied to a creature here rather than a placeable.</summary>
+    private const int CreatureObjectIdOffset = 0x04;
+
+    /// <summary>Calls the real engine <c>CloseInventory</c> on <paramref name="placeable"/> with
+    /// arg1 = <paramref name="closingPlayer"/>'s own object id (the exact value a real click's
+    /// <c>AIActionUseObject</c> passes for this argument — see the class remarks above for why
+    /// 0 is NOT safe here) and arg2 = 0 (skip the item-transfer bookkeeping; there is nothing to
+    /// give the player through this programmatic close). Plays the close animation and clears
+    /// <c>+0x338</c>, exactly what closing the loot panel through the normal UI would do. Used
+    /// by the <c>closeplaceable</c> staging verb only — the container-sync mirror
+    /// (<see cref="PlayContainerCloseAnimation"/> + <see cref="ClearPlaceableOpenFlag"/>) never
+    /// calls the real function, for the same "not a real local player" reason
+    /// <c>OpenInventory</c> is never mirrored either.</summary>
+    public static void CloseInventoryReal(nint placeable, nint closingPlayer)
+    {
+        uint playerId = closingPlayer != 0 ? *(uint*)(closingPlayer + CreatureObjectIdOffset) : 0;
+        CloseInventoryFn(placeable, playerId, 0);
+    }
+
     // ---- sweeps, for the useplaceable staging verb --------------------------------------
 
     /// <summary>Copies every placeable in the loaded module into <paramref name="into"/>,
@@ -154,6 +217,52 @@ internal static unsafe class OdysseyPlaceables
         for (int i = 0; i < seen; i++)
         {
             if (!HasInventory(placeables[i]))
+            {
+                continue;
+            }
+
+            Vec3 there = Odyssey.GetPosition(placeables[i]);
+            float dx = here.X - there.X;
+            float dy = here.Y - there.Y;
+            float dz = here.Z - there.Z;
+            float distanceSquared = (dx * dx) + (dy * dy) + (dz * dz);
+
+            if (distanceSquared >= bestDistanceSquared)
+            {
+                continue;
+            }
+
+            best = placeables[i];
+            bestDistanceSquared = distanceSquared;
+        }
+
+        return best;
+    }
+
+    /// <summary>
+    /// The nearest OPEN placeable to <paramref name="player"/> — <c>closeplaceable</c>'s bare
+    /// form. Filters on <c>Odyssey.IsPlaceableOpen</c> rather than <see cref="HasInventory"/>
+    /// deliberately: a live-pass memory probe (2026-08-22) found a real, lootable placeable
+    /// (confirmed by a non-zero item count in its own repository, and by actually opening
+    /// through <c>OpenInventory</c>) reading <c>has_inventory</c> (<c>+0x334</c>) as 0 the whole
+    /// time — that field, inherited from <c>placeables-containers.md</c> and never itself
+    /// live-verified, under-reports containers. "Is it open right now" has no such ambiguity:
+    /// it is the exact field <c>OpenInventory</c>/<c>CloseInventory</c> themselves set and
+    /// clear (§1.2, container-sync.md), so this is unaffected by whatever is wrong with
+    /// <c>has_inventory</c>.
+    /// </summary>
+    public static nint FindNearestOpenContainer(nint player, out int seen)
+    {
+        nint* placeables = stackalloc nint[SweepCapacity];
+        seen = CollectPlaceables(placeables, SweepCapacity);
+
+        Vec3 here = Odyssey.GetPosition(player);
+        nint best = 0;
+        float bestDistanceSquared = float.MaxValue;
+
+        for (int i = 0; i < seen; i++)
+        {
+            if (!Odyssey.IsPlaceableOpen(placeables[i]))
             {
                 continue;
             }

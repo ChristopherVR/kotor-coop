@@ -1476,6 +1476,33 @@ internal struct SharedBlock
     /// </summary>
     public const uint CheatKindUsePlaceable = 18;
 
+    /// <summary>
+    /// CONTAINER-SYNC LIVE-PASS ADDITION (2026-08-22): the close-side counterpart to
+    /// <see cref="CheatKindUsePlaceable"/>, added when the live-verify pass found no way to
+    /// close a container's loot panel unattended — <c>useplaceable</c>'s own
+    /// <c>Odyssey.UseObject</c> send only replicates the network HALF of a real click
+    /// (<c>CSWCMessage::SendPlayerToServerInput_UseObject</c>); the client-side menu code that
+    /// actually shows the GUI panel (<c>CSWCPlaceable::UsePlaceable</c>'s own wrapper, see
+    /// Odyssey.cs's remarks on <c>SendUseObjectInputFn</c>) is deliberately NOT replicated, so
+    /// there is no panel for an Escape keystroke to close and no click for a real player to
+    /// send. This verb calls <c>CSWSPlaceable::CloseInventory 0x00587560</c> directly (VERIFIED
+    /// full disasm, docs/research/container-sync.md's live-pass section) with arg2 == 0 (skips
+    /// the item-transfer bookkeeping — nothing to give the player through a programmatic close)
+    /// and arg1 == the closing player's own object id, NOT 0: a first live attempt at arg1 == 0
+    /// replied but never actually cleared <c>+0x338</c> — arg2 == 0 only skips the player-
+    /// RESOLVE step, not the unconditional tail every path (including a real close) falls into,
+    /// which pushes arg1 RAW into a second message dispatch before the close animation and the
+    /// field clear. Fresh disasm of the real call site (<c>AIActionUseObject</c>'s open call,
+    /// <c>tools/disasm.py 0x57EE80 0x50</c>) shows a real click passes the acting creature's own
+    /// object id here, and using that live-confirmed the field clear.
+    /// <see cref="OffsetCheatTarget"/> is the placeable's object id, <see cref="OffsetCheatText"/>
+    /// its tag; both empty means "whatever <c>useplaceable</c> bare would have found", i.e. the
+    /// nearest container.
+    ///
+    /// ⚠ 19, because 7-18 are taken. Take the next FREE number.
+    /// </summary>
+    public const uint CheatKindClosePlaceable = 19;
+
     /// <summary>The request was carried out here.</summary>
     public const int CheatStatusApplied = 1;
 

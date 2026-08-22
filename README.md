@@ -703,7 +703,7 @@ tools/                   RE helpers, demo scripts, the kotor1_0_3 symbol databas
   (matches rounds 63-64's own finding). See
   [docs/research/phantom-locomotion.md](docs/research/phantom-locomotion.md) §12 for the full
   caller table, the disassembly, and the live fractions.
-- **A container/corpse a player has open now locks for everyone else — NOT yet live-verified
+- **A container/corpse a player has open now locks for everyone else — LIVE-VERIFIED
   (2026-08-22, protocol 37).** Before this, only the opener's own screen ever showed a chest's
   loot panel open, nothing closed it for the other player, and nothing stopped a second player
   from opening the same container mid-loot. The interaction-lock channel `InteractionKind.Conversation`
@@ -715,13 +715,20 @@ tools/                   RE helpers, demo scripts, the kotor1_0_3 symbol databas
   a peer's own attempt to open a held container is refused inside the engine itself
   (`ContainerUseHook`, a `CSWSPlaceable::OpenInventory` detour, same shape as the dialogue gate)
   with an on-screen "`<name> is looting that - wait a moment`" line. `useplaceable [tag|id]`
-  stages a real use through the engine's own input pipe for testing. This pass corrected a real
-  misreading in `docs/research/placeables-containers.md`: the placeable's `open` field
-  (`+0x338`) is not a permanent "ever searched" flag — fresh disassembly of both
+  stages a real use through the engine's own input pipe for testing, and `closeplaceable [tag|id]`
+  (added during the live pass, calling the real `CloseInventory` directly) closes one. This pass
+  corrected a real misreading in `docs/research/placeables-containers.md`: the placeable's `open`
+  field (`+0x338`) is not a permanent "ever searched" flag — fresh disassembly of both
   `OpenInventory` and `CloseInventory` shows the latter unconditionally clears it, so it is a
   transient "is the GUI showing right now" flag, which is what makes it usable as the local
-  open/close detector at all. See
-  [docs/research/container-sync.md](docs/research/container-sync.md) for the full VERIFIED/
-  INFERRED account and the exact live-test script; nothing here has been run against the game
-  yet (`container_locks=1`, `coop.ini`, default on).
+  open/close detector at all. The live pass (round 66, `docs/research/shared-state-audit.md`)
+  found and fixed two real regressions along the way — the pre-existing durable "ever opened"
+  cosmetic mirror was clobbering a fresh close within ~100ms, permanently, until a second detour
+  (`ContainerCloseHook`) latched closes shut for the module; and a dead host's stale lock left a
+  client believing a departed peer still held a container forever, until `CoopClient.ForgetSession`
+  was taught to drop that cache too (the same fix already applied once for the dialogue token). See
+  [docs/research/container-sync.md](docs/research/container-sync.md) §5 for the full live-pass
+  write-up, including one honest gap (a corpse's own loot flow was not exercised) and one
+  documented-not-fixed live defect (`+0x334`'s `has_inventory` reading does not reliably
+  identify a real container, live).
 - KOTOR 2 is untouched, and only GOG v1.0.3 addresses are known.

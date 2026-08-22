@@ -6123,6 +6123,67 @@ save) — the fourth round running without an independent measurement of either.
 round 62, not this pass's own scope); both plugin builds clean across three
 rebuild/redeploy/live-test cycles; no crash observed. README's walk/run bullet is not restored.
 
+### Round 66 (2026-08-22) — container open/close sync's first live pass: two real regressions found and fixed, one masked as "the close doesn't work" until root-caused
+
+Live-verifying the container-sync feature merged in `b67c1f5` (protocol 37/block v50, "not yet
+live-verified"). Full write-up: `docs/research/container-sync.md` §5.
+
+The core one-looter-at-a-time lock and the open/close mirror both work, symmetrically, host-opens
+and client-opens directions, against a real footlocker (0xC6, END_M01AA) — a second player never
+gets a local claim or sees the panel while a peer holds it. But getting there needed two real
+fixes, not just a live-verify pass:
+
+1. **No way to close what `useplaceable` opens.** That verb only sends the network half of a
+   real click, so the engine's `+0x338` genuinely flips but no GUI panel ever shows on ANY
+   instance — nothing for Escape or a click to close. Added `closeplaceable [tag|id]`
+   (`CheatKindClosePlaceable = 19`, kept in sync both halves) calling the real `CloseInventory`
+   directly. First attempt passed the "requesting player" arg as 0 (reasoning from a
+   misread branch) and it silently no-op'd — live-disproven, `+0x338` never cleared. Fixed by
+   passing the closing player's own object id, the value a real click's `AIActionUseObject`
+   actually passes there (fresh disasm of the real call site).
+2. **The durable "ever opened" cosmetic mirror (pre-existing, `PlaceableController`, shared
+   block v11) permanently defeats a close.** That channel is deliberately monotonic
+   ("never the reverse", `PlaceableFlags.cs`) and its agent-side poll re-broadcasts "open" for
+   any placeable it has EVER seen open, forever. A container this pass's own transient close
+   logic genuinely closed got clobbered back open within ~100ms, on every instance, permanently
+   — the close-sync feature worked for one frame and then silently failed for the rest of the
+   session, every single time it was tried. A 4-second suppression window was tried first and
+   ALSO live-disproven (the reassertion pressure never stops, so any timeout eventually loses).
+   Fixed with `ContainerCloseHook`, a second `OpenInventory`-style detour on `CloseInventory`
+   (never refusing) that latches an id as closed for the rest of the module load;
+   `PlaceableController` now checks that latch before re-asserting. Verified stable for 30
+   straight seconds after the fix, both directions.
+
+A THIRD bug surfaced testing lease expiry (kill the host's own agent, expect the client's lock to
+release within the 5s lease): it didn't, for 12+ seconds straight, even though the client
+correctly detected the disconnect. Root cause: `CoopClient.GetInteractionLocks()` is a cache of
+"the locks the host last broadcast," with no expiry of its own — the design assumes the host
+stays alive to publish the pruned list, which does not hold when the HOST itself is what died.
+**Identical shape to a bug already fixed once in the same function**, for the dialogue token
+(`CoopClient.ForgetSession`'s own comment records a host killed mid-conversation leaving a client
+"spectating forever," fixed by dropping the cached token on link-loss) — the container-lock cache
+had the same hole, just never previously exercised live. Fixed the same way: `ForgetSession` now
+also clears `_interactionLocks`/`_interactionLockModule`. Re-verified: clears within 1s of the
+kill.
+
+Also found and fixed in passing: `ContainerUseHook`'s refusal was never logged anywhere (every
+other refusal path in this plugin logs; this one only updated an internal counter for the
+on-screen notice) — added a log line in `InteractionLockController.PollContainerRefusals`. And
+documented, not fixed: `OdysseyPlaceables.HasInventory` (`+0x334`) does not reliably identify a
+real container live — a confirmed working container with a real item in its repository still
+reads `has_inventory=0` — so `useplaceable` bare's own container sweep under-reports; the new
+`closeplaceable` verb sidesteps this by filtering on `Odyssey.IsPlaceableOpen` instead.
+
+Not exercised this pass: a corpse (`slay`'s target, object id `0x35`, fully invalidated
+immediately after the kill rather than leaving a lootable body — not root-caused, possibly
+specific to the `slay` cheat rather than the container feature) and a live dialogue-vs-container
+interleave (no console primitive exists to start a real conversation; argued instead from the
+lock's kind-discriminated key and the untouched, still-passing conversation-lock test suite). An
+ordinary door and the reversed-roles refusal were both live-confirmed working.
+
+`tests/KotorCoop.Tests`: 1590/1591 (the one failure is the documented `HeavyPacketLossStillConverges`
+flake). Both plugin builds clean across five rebuild/redeploy/relaunch cycles.
+
 ## 3. A client's XP is actively erased
 
 `ProgressionSnapshotPacket` is host→client only and absolute (CoopAgent.cs, `PumpProgression`):
