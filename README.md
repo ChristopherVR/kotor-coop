@@ -653,7 +653,6 @@ tools/                   RE helpers, demo scripts, the kotor1_0_3 symbol databas
   local player's own creature — mirrored enemies, mirrored companions and a peer's phantom only —
   so there is no "PC held" mechanism to fix. See
   [docs/research/shared-state-audit.md](docs/research/shared-state-audit.md) §2, round 58.
-<<<<<<< HEAD
 - **A driven body's walk/run animation is unreliable — root-caused this round, partially
   fixed, not resolved.** A peer's phantom (and, by the same shared `DriveBody` path, a
   mirrored enemy or companion under direct drive) tracks position at the right speed, but its
@@ -685,7 +684,6 @@ tools/                   RE helpers, demo scripts, the kotor1_0_3 symbol databas
   [docs/research/phantom-locomotion.md](docs/research/phantom-locomotion.md) §8-§9 for the
   field diff table, the disassembly evidence, the exact gate, and what a future pass should try
   next.
-=======
 - **A container/corpse a player has open now locks for everyone else — NOT yet live-verified
   (2026-08-22, protocol 37).** Before this, only the opener's own screen ever showed a chest's
   loot panel open, nothing closed it for the other player, and nothing stopped a second player
@@ -707,5 +705,4 @@ tools/                   RE helpers, demo scripts, the kotor1_0_3 symbol databas
   [docs/research/container-sync.md](docs/research/container-sync.md) for the full VERIFIED/
   INFERRED account and the exact live-test script; nothing here has been run against the game
   yet (`container_locks=1`, `coop.ini`, default on).
->>>>>>> worktree-agent-a11335eb578936d74
 - KOTOR 2 is untouched, and only GOG v1.0.3 addresses are known.
