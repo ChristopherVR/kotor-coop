@@ -356,3 +356,38 @@ block reads/writes (no world scan), the same argument that justified moving dial
   `interp_ms=0`/40 via `phantomgait.ps1`, blocked by the same "no input injection" tooling gap
   as always; a longer, combat-heavy `party_fast_pump` A/B against the full 3-minute-class
   session shape.
+
+## 2026-08-23 — `party_fast_pump` A/B, real combat this time: LEFT OFF
+
+Round 71 (shared-state-audit.md §2). The smoke test above never put the flag through a real
+fight; this pass did, on both instances at once.
+
+**Rig**: `tar_m10aa`'s Vulkar pool, host and client both given a working `attack` order
+(shared-state-audit.md round 71's own range-closing fix) against separate Vulkars at the same
+time, `frame_stats=1` throughout. Two full rig cycles, ~45 s of real combat sampled per leg —
+shorter than the 3-minute target this task asked for (session time ran out before a longer pass
+was possible); the numbers below are directional, not a claim of statistical rigor.
+
+| | `party_fast_pump=1` | `party_fast_pump=0` |
+| --- | --- | --- |
+| Host mean frame time (combat windows) | 9.63 ms | 6.30 ms |
+| Client mean frame time (combat windows) | 7.15 ms | 5.52 ms |
+| Host frames over 33 ms budget | 197 | 138 |
+| Client frames over 33 ms budget | 217 | 123 |
+
+`=0` read better on all four numbers — lower mean frame time on both instances, and roughly 40%
+fewer over-budget frames on both. Neither leg showed a qualitatively different worst-case spike
+shape (both had one ~200-430 ms outlier per instance, most plausibly tied to a kill/death event
+rather than the flag); this pass did not isolate that further. No companion-position-lag or
+missed-hit metric was separately instrumented this pass — the comparison rests on `frame_stats`
+alone.
+
+**Verdict: default stays OFF.** The task's own rule ("flip default ON only if strictly better
+with no regression") is not met — if anything this measurement points the other way. `coop.ini`
+in both install directories had inherited `party_fast_pump=1` live from round 69's own smoke
+test (never in source, `CoopConfig.cs`'s own default was already `false`); both were returned to
+`=0` after this pass so the installs match the shipped default again.
+
+NEEDS-LIVE, still open: a full 3-minute-per-leg version of this same test; a companion-position-
+lag metric distinct from raw frame time; isolating whether the ~200-430 ms per-leg spikes are
+kill-event-shaped or something `party_fast_pump` itself can still affect at a longer sample size.

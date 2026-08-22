@@ -685,3 +685,56 @@ because no real corpse existed to test them against.
 both this round's changes). Both plugin builds (`src/KotorCoop.Plugin/build.ps1 -Install`, both
 GOG installs) clean, 0 warnings 0 errors. The `UsePlaceable` extension is the only source change
 in this file's area this round; `ClosePlaceable` is untouched.
+
+## 7. Round 71 (2026-08-23) — a REAL kill was finally obtainable, and it answers §6.4's own
+question the wrong way: it is not different from `slay`
+
+§6.4's hard blocker (`attack`'s player-as-attacker form never queuing) was root-caused and fixed
+this round (shared-state-audit.md §2, round 71: a distance problem — the drive-controlled local
+player was never actually in melee range when the order was staged — not a code defect). With a
+working `attack` in hand, this round went straight at §5.5/§6.4's own open question: does a real
+combat kill (not `slay`) leave a lootable corpse?
+
+**No. Three separate creatures, killed through genuine player melee damage, all came back
+exactly as `slay` did.** `tar_m10aa`'s Vulkar pool, `attack 0x7FFFFFFF <id>` against three
+targets in turn (two `vulkarguard`, one `vulkarpool`), each fight watched live via the attack
+probe until hp reached 0 — real damage, real rounds, no cheat kill involved. `resolve <id>`
+immediately after each death: `engine 0x0 walk 0x0 resolve 0x0` — the identical "fully
+invalidated, not converted to a body-bag" reading §5.5 and §6.3 got from `slay`, byte for byte.
+`useplaceable` bare (no id) found no new placeable in the area's sweep after any of the three
+deaths either — nothing new to loot appeared anywhere, not just under the dead creature's own
+old id.
+
+**This is not a coincidence — it is the direct, predictable consequence of both paths sharing
+one call.** `Slay`'s `KillHere` branch and `CombatController.KillOnce` (the path a mirrored
+enemy's death already goes through) both call the exact same `Odyssey.KillCreature`. Whatever
+that call's underlying lethal-damage effect does to a creature's object-array entry, it does
+identically no matter which caller triggered it. §5.5's own hedge ("possibly destroying the body
+outright rather than leaving a corpse... a future pass should either use a real combat kill or
+trace `CombatController`'s own `slay` path") is now answered: a real combat kill was used, and it
+behaves exactly like `slay`, because at the engine-call level they ARE the same kill.
+
+**What this closes and what it reopens.** Closed: whether `slay`'s own cheat implementation is
+somehow special-casing away a corpse that a real kill would otherwise leave — it is not; the
+task brief's proposed `killreal <id>` verb would produce nothing different from `slay` for the
+same reason. Reopened, genuinely: the premise that combat kills in this game leave a lootable
+body at all, for at least these two creature types. Not tested and not ruled out: whether a
+creature that is actually carrying loot (none of the three killed here had any — all read `str`
+in the low teens and no XP, consistent with trivial, empty-handed mooks) gets a body-bag
+placeable that an empty-handed one does not; whether some OTHER death path exists in this engine
+that never calls `Odyssey.KillCreature` at all (a natural HP-reaches-zero-through-damage-
+resolution route, if the retail combat system has one distinct from the lethal-damage-effect
+kill this plugin's own combat mirror and cheat layer both use) and behaves differently.
+
+**Task item (B) (host loots under the lock, client refused, loot removal mirrors) could not be
+run.** No lootable corpse could be produced by any method available this round — the hard
+blocker is no longer "no real kill" (fixed) but "no real kill produces a corpse at all" (a new,
+deeper finding). `ContainerUseHook`'s refusal, the open/close mirror, and `ContainerLoot`
+replication for a corpse specifically all remain exactly as untested as §6.5 left them.
+
+### 7.1 Test suite and build
+
+`dotnet test tests/KotorCoop.Tests`: **1623/1623 passed**, unchanged baseline — this round's
+changes (shared-state-audit.md §2, round 71) touch `TestDriveController`, `Odyssey.cs`, and the
+new `PartyFollowController`, none of which this file's own container/corpse code depends on.
+Both plugin builds clean across the round's several rebuild/redeploy cycles.

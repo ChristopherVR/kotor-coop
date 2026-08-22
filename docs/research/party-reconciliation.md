@@ -539,3 +539,34 @@ comparable "the mechanism looks right but I could not observe the headline case"
 conservative call is to leave `companion_local_combat` off pending either a fix for the staleness
 bug above, or a live pass staged through genuine incremental host movement (walking, not a raw
 position poke) patient enough to let real mirroring keep the client's copy caught up throughout.
+
+## Item 4's own dispatch mechanism, finally built (2026-08-23, round 71)
+
+This document's "Recommended design" (2026-07-31) speced item 4 as "when an owned companion's
+action queue is empty, issue `ActionFollowLeader` — `AddAction(creature, 0x3D, 0xFFFF, 0, 0)` at
+`0x004CEA20`" and never shipped it. Built this round as `PartyFollowController` +
+`Odyssey.QueuePartyFollowLeader`, but NOT as originally speced, for two live-measured reasons:
+
+1. **`0x3D` was never confirmed as `PartyFollowLeader`'s action id.** A LATER, independently
+   verified table in `Odyssey.cs` (`IsMoveAction`, read directly off the RunActions jump table
+   entry by entry) names `0x3C` instead. Live observation this round found a companion's own
+   head-of-queue type sitting at a stable `0x3D` for 30+ seconds with zero movement — consistent
+   with `0x3D` being something else entirely, not the follow action this design assumed it was
+   watching for.
+2. **The raw `AddAction`/`0x004CEA20` marshaling call was flagged elsewhere in this project's
+   own research as unverified and "not safe to ship blind"** (`docs/research/dialogue-join-latency.md`,
+   in the context of a different action type) — a wrong type tag in its 24-value push list is
+   exactly the class of bug this project's engine-write discipline exists to keep out.
+
+The mechanism actually shipped instead dispatches through
+`CSWVirtualMachineCommands::ExecuteCommandActionFollowLeader` (`0x0052CBE0`, confirmed against
+the symbol database and matching this very document's own "Only ONE site enqueues it" citation)
+via the exact same safe, already-verified VM-caller-redirect route `AttackTarget`/`PickUpItem`
+use — no new raw engine call, no unverified push list.
+
+**It is not sufficient on its own.** Live-measured: the dispatch correctly moves a companion's
+`CreMoveState` (`+0xA8C`) to 3 ("follow" — the mode is genuinely entered) but the round could not
+get it to -1 ("walking" — a route genuinely being stepped) for Trask, ever, across every module
+and distance tried. Full elimination list and the honest "not yet closed" status:
+`docs/research/phantom-locomotion.md`, "2026-08-23"; `docs/research/shared-state-audit.md` §2,
+round 71.

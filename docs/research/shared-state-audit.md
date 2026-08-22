@@ -6467,6 +6467,119 @@ the working `RotateControlToFront` fix, then the `control_return=0` live restart
 touched no file it is declared in. Rig torn down clean, `auto_start_agent` restored to `1` in
 both installs.
 
+### Round 71 (2026-08-23) — the player-as-attacker `attack` gap root-caused and fixed (a
+distance problem, not a code defect); a real ActionFollowLeader dispatch built for Trask's
+follow-AI, live-verified safe but not yet sufficient; a real combat kill found to invalidate its
+corpse exactly like `slay` does, closing that open question the wrong way; `party_fast_pump`
+re-measured and left off
+
+Picks up all three harness gaps rounds 65-70 left open. Full write-ups: `docs/research/lag-audit.md`
+("2026-08-23"), `docs/research/container-sync.md` §7, `docs/research/phantom-locomotion.md`
+("2026-08-23").
+
+**Blocker 1 — CLOSED.** `attack <target> 0x7FFFFFFF` (player-as-attacker) was never a code
+defect: `Odyssey.AttackTarget`/`QueueAttackAction` are unchanged since round 11 and still work
+exactly as round 58 found. Live-reproduced the failure first — a `tar_m10aa` Vulkar 14.6 m away
+never took a swing in 20s, `head` locked at a non-attack action the whole window, distance frozen
+at 8.4 m the entire time — then found the reason by elimination: the drive-controlled local
+player has no queued-move step (the SAME limitation `HandleWalk`'s own doc names for
+`ActionMoveToLocation`), so `ActionAttack` never gets the player within melee range unless it
+already started there — exactly what every prior round's own successful test (round 11, round
+58) happened to stage. Fix (`TestDriveController.HandleAttack`/`CloseToMeleeRangeIfNeeded`):
+when the attacker is the local player and not already within 1.5 m, snap it to melee range via
+`Odyssey.SnapTo` (the same real call the `tp` cheat itself uses) before arming the order.
+Live-verified twice more this round on fresh Vulkars, both real kills: hp 22→13→4→dead and
+20→14→9→dead, `dist` settling at 1.79-2.10 m from a genuine >2 m start, both through the
+unmodified round-11 priming path.
+
+**A live methodology trap found and fixed along the way**: an external PowerShell tool
+(`teleport.ps1`) that vtable-scans for "the first creature whose stats say `is_pc`" can and did
+pick a stale/leftover object sharing the player's vtable and id byte pattern, silently writing
+position to a body the engine's own `GetGameObjectFn` never resolves 0x7FFFFFFF to — the write
+"succeeds," a follow-up scan even shows the new position, and nothing about the attack ever
+reflects it. The plugin's own `console 'tp x y z'` (the `Teleport` cheat, `Odyssey.SnapTo` on the
+engine-resolved player pointer `HandleCheat` already holds) does not have this failure mode and
+is what every distance-sensitive test in this round used instead — the existing project
+convention (`docs/research/phantom-locomotion.md` §14.2 already recommends it) has a concrete
+new reason behind it now, not just history.
+
+**Blocker 3 — the missing mechanism is now built and live-verified SAFE and CORRECT at the
+dispatch level; genuine walking is still NOT achieved, honestly.** New `PartyFollowController`
+(and `Odyssey.QueuePartyFollowLeader`, the safe VM-dispatch route into
+`CSWVirtualMachineCommands::ExecuteCommandActionFollowLeader 0x0052CBE0` — confirmed against the
+symbol database, the same class of call `AttackTarget`/`PickUpItem` already use) detects a
+genuinely-owned companion that has stopped moving and reissues a real `ActionFollowLeader`.
+Live-measured: Trask (recruited by a loaded save, and separately via the `talk` test-hook) sat
+with `CreMoveState` (`+0xA8C`; 1 idle, 2 requested, 3 follow, -1 walking) reading 1, not the
+empty-queue story party-reconciliation.md's 2026-07-31 design assumed — his own head action was
+a stable, undocumented `0x3D` (not the verified `0x3C PartyFollowLeader`), unmoving, for 30+
+seconds straight. `QueuePartyFollowLeader` reliably drives `CreMoveState` to 3 ("follow" mode IS
+entered, confirmed every call) — but never to -1 ("walking," a route genuinely being stepped),
+across every module and distance tried this round. One real, self-inflicted bug was found and
+fixed along the way: the controller's own first draft cleared the companion's action queue
+before reissuing (mirroring `HandleAttack`'s "stop fighting" no-op), which — per
+`Odyssey.CaptureClaimState`'s own remarks — unconditionally invalidates a creature's pathing
+target-cache fields, fields that do not self-heal; removing that clear changed nothing further,
+which is itself useful evidence that clearing was never the blocker, only an additional hazard.
+Ruled out with their own live tests, not by inference: an empty vs. stuck queue (both checked);
+perception range (a live control — a plain Vulkar guard ordered to attack from outside its ~11 m
+`PerceptionRange` also never moved, but the SAME order from within range closed 0.87 m of real
+distance in ~8s, so queued AI movement is not universally broken in this rig, narrowing the gap
+to something follow-specific); and the party table's own leader slot (`CSWPartyTable+0xEC` read
+-1 the whole session; writing 0 as a bounded live experiment, then reverting it, produced no
+change). Shipped anyway (`party_follow=1` default) because it is a correct, safe, verified
+improvement over the complete absence of any follow-re-arming that existed before this round —
+but "Trask genuinely walks behind the host" is NOT closed, flagged for a future round with the
+above four causes already eliminated.
+
+**Blocker 2 — NOT closed the way the brief assumed; a real corpse produces the SAME
+"invalidated" result as `slay`, not a different one.** §5.5/§6.3's own hypothesis was that
+`slay`'s own kill path might be what destroys the body, distinct from a real combat kill. This
+round finally had a working `attack` (blocker 1) to test that directly: three separate creatures
+(two `vulkarguard`, one `vulkarpool`) killed through genuine player melee damage — not `slay`,
+not `Odyssey.KillCreature` called directly — all three came back `resolve <id>` → `engine 0x0
+walk 0x0 resolve 0x0` within seconds of death, byte-for-byte the same reading §5.5/§6.3 got from
+`slay`. `useplaceable` bare (no id) found no new placeable in the sweep afterward either — no
+body-bag object appears anywhere for these deaths. Because `CombatController.KillOnce` (the
+mirrored-death path) and `Slay`'s `KillHere` branch both call the exact same
+`Odyssey.KillCreature`, this is expected once measured, not a discrepancy: whatever
+`Odyssey.KillCreature`'s lethal-damage effect does to a creature, it does identically regardless
+of which caller triggers it. **This means the premise itself — that a `killreal` verb distinct
+from `slay` would produce a lootable body — does not hold for the cases tested.** Left genuinely
+open: whether some OTHER death path (a natural HP-reaches-zero-through-ordinary-damage-resolution
+route that never calls `KillCreature` at all, if one exists and is reachable) behaves differently,
+and whether some creature TYPES (ones actually carrying loot, unlike the empty-handed Vulkars
+here) get a body-bag placeable that these did not. (B) from the task brief could not be run: no
+lootable corpse could be produced by any method available this round.
+
+**(A) `party_fast_pump` A/B, real combat, `frame_stats` — re-measured, LEFT OFF.** ~45s per leg,
+host and client both fighting Vulkars simultaneously (shorter than the requested 3 min per side —
+session time ran out before a longer pass was possible; flagged as a real limitation of this
+round's own measurement, not a claim of statistical rigor). `=1`: mean per-window frame time
+9.63 ms (host) / 7.15 ms (client) during the fight, 197 + 217 = 414 frames over the 33 ms budget
+across the two instances. `=0`: 6.30 ms (host) / 5.52 ms (client), 138 + 123 = 261 frames over
+budget. `=0` read better on every one of those four numbers, not worse on any — the opposite of
+what would justify flipping the default on. Full numbers in `docs/research/lag-audit.md`. Default
+stays off; `coop.ini` in both installs was returned to `party_fast_pump=0` after the test (the
+rig had inherited `=1` live from round 69's own smoke test, left set in the install directories,
+not in source).
+
+**(C) Gait sampling — enemy half attempted, inconclusive; Trask's half blocked by the still-open
+follow gap above.** `phantomgait.ps1` against a chasing `vulkarguard`'s mirrored copy, watched
+from the client: two separate attempts, both showing zero position change for the entire 12-15s
+sampling window despite an EARLIER, independently confirmed instance of the identical order
+producing real movement on the identical creature type in this same session (creatures.ps1
+positions before/after, not inferred). Not reproducible on demand within this round's remaining
+time — flagged, not claimed either way. Trask could not be sampled moving at all, for the reasons
+above.
+
+`dotnet test tests/KotorCoop.Tests`: **1623/1623**, unchanged baseline — no new unit tests this
+round (the new controller's live-observed thresholds are not yet extracted into a pure,
+unit-testable rule the way `GaitRule`/`PartyFreezeRule` are; flagged as follow-up). Both plugin
+builds clean across the round's several rebuild/redeploy/relaunch cycles. Rig torn down clean
+(`Get-Process swkotor,KotorCoop.Agent` empty), `auto_start_agent` restored to `1` in both
+installs.
+
 ## 3. A client's XP is actively erased
 
 `ProgressionSnapshotPacket` is host→client only and absolute (CoopAgent.cs, `PumpProgression`):

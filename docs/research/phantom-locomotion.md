@@ -1912,3 +1912,49 @@ change (the `+0x134` edge gate, `TwinLoopingAnimation`, `TwinPositionSyncSlot`'s
 sites reading/advancing it. No crash observed across the whole session (two module loads via
 `warp`, two rig restarts, repeated `tp`/`attack`/`firescript` staging, and the corpse test's own
 `slay`).
+
+## 2026-08-23 — Round 71: the `attack`-hook gap fixed, mirrored companion/enemy gait sampling
+still not achieved
+
+Picks up §14.6's "attack test-hook's player-as-attacker form never queued an action" blocker
+directly (shared-state-audit.md §2, round 71 has the full root-cause: a distance problem — the
+drive-controlled local player is never actually within melee range when the order is staged
+unless a caller puts it there, which every prior successful test happened to do and this round's
+own reproduction happened not to). Fixed in `TestDriveController.HandleAttack`: snap the local
+player to melee range via `Odyssey.SnapTo` before arming a player-as-attacker order. Live-
+reconfirmed with two fresh kills this round (hp 22→13→4→dead, 20→14→9→dead), both through the
+unmodified round-11 priming path — the tool this section's own gait sampling has needed since
+§14.6 is now real and repeatable.
+
+**Enemy gait: attempted twice with the now-working `attack` hook, both inconclusive — not the
+clean result hoped for.** A `vulkarguard` ordered to chase the local player from ~8-9 m (within
+its own ~11 m `PerceptionRange`, confirmed against the blueprint value shared-state-audit.md §2
+already cites) was independently confirmed to close real distance once, via `creatures.ps1`
+position reads before and after (106.61,92.48 → 105.74,90.65, no `tp` involved on the target's
+side). Two SEPARATE follow-up attempts to reproduce that same order specifically to sample it
+with `phantomgait.ps1` from the client both showed the target's position completely static for
+the entire 12-15 s sampling window, despite the mirrored animation/anim-twin fields cycling
+normally. Not root-caused this round which of the two states — moving or stalled — is the
+reliable one; flagged rather than reported either way. `party follow diag` from the same round's
+Blocker 3 work independently confirms queued-move outcomes for NPCs in this rig are not fully
+deterministic run to run, which is at least consistent with (though not proof of) the same
+underlying variability here.
+
+**Companion gait (Trask): still blocked, and now for a precisely narrowed reason.** Not "his
+follow-AI never engaged" (round 68's framing) — `PartyFollowController`
+(`Odyssey.QueuePartyFollowLeader`, a new safe VM-dispatch route into the real
+`ActionFollowLeader`, built this round) reliably gets Trask's own `CreMoveState` (`+0xA8C`) to 3
+("follow" — the mode genuinely engages, confirmed on every call) but never to -1 ("walking" — a
+route genuinely being stepped), across every module, distance, and follow-up experiment this
+round tried (see shared-state-audit.md §2, round 71, for the full elimination list: not an empty
+vs. stuck queue, not the controller's own now-removed harmful action-queue clear, not perception
+range — which the enemy test above shows is not universally blocking NPC movement in this rig —
+and not the party table's own leader slot, tested with a bounded, reverted live write). No gait
+sample was attempted for Trask this round since he could not be gotten to move at all.
+
+### Test suite and build
+
+`dotnet test tests/KotorCoop.Tests`: **1623/1623**, unchanged baseline. Both plugin builds clean
+across the round's several rebuild/redeploy/relaunch cycles (the range-closing fix, the
+`PartyFollowController` iterations, and the diagnostic-logging passes used to root-cause the
+`CreMoveState` finding above).

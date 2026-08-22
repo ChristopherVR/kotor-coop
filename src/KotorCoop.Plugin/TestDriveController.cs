@@ -168,11 +168,40 @@ internal sealed unsafe class TestDriveController(SharedBlockView block)
             : $"test: could not bark from 0x{objectId:X}");
     }
 
+    /// <summary>The engine's "current local player" sentinel id, used throughout Odyssey.cs as
+    /// a bare literal — named here once because <see cref="HandleAttack"/> has to recognise it
+    /// specifically (see the round-71 note below).</summary>
+    private const uint LocalPlayerSentinelId = 0x7FFFFFFF;
+
+    /// <summary>How close the player-as-attacker form snaps to its target before arming the
+    /// order, in metres. Comfortably inside the ~2.6m attack range round 23 measured, so the
+    /// swing lands on the first round rather than racing a marginal distance check.</summary>
+    private const float PlayerAttackMeleeRange = 1.5f;
+
     /// <summary>
     /// Stages a real fight: one creature is ordered to attack another and the AI carries on
     /// from there. This is what makes combat testable at all — the starting area's enemies
     /// never aggro on their own, so without it the damage forward, the swing animations and
     /// the phantom's targetability have no way to be exercised outside a human playthrough.
+    ///
+    /// ROUND 71 (2026-08-23): the player-as-attacker form (<c>attack &lt;target&gt; 0x7FFFFFFF</c>)
+    /// was reported never queuing a real order across five targets in two modules (round 68,
+    /// shared-state-audit.md). Live re-investigation found <see cref="Odyssey.AttackTarget"/>
+    /// itself unchanged and correct — round 58's own four confirmed kills, and this round's
+    /// fresh one (a `tar_m10aa` Vulkar taken 22 hp -&gt; 13 -&gt; 4 -&gt; dead, `resolve` losing the
+    /// object exactly as a real death does), both used the SAME code path. The difference is
+    /// distance: an NPC ordered to attack paths to its target through its own AI, but the local
+    /// player is drive-controlled and has no such step — <c>ActionAttack</c>'s queued order
+    /// sits at the head of the action queue (confirmed live: <c>head=0x1</c>, steady, for the
+    /// whole 20s probe window) while nothing ever closes the gap, exactly the same "queued move
+    /// never executes for a player-controlled creature" limitation <see cref="HandleWalk"/>'s
+    /// own doc comment already names for <c>ActionMoveToLocation</c>. Round 68's targets were
+    /// never confirmed to be within melee range before the order; round 58's were. So the fix
+    /// is not to <see cref="Odyssey.AttackTarget"/> — it is to stop assuming the caller already
+    /// staged the range, and stage it here instead, the same way a human playtester would walk
+    /// up first: when the attacker is the local player and it is not already adjacent to the
+    /// target, snap it to melee range through <see cref="Odyssey.SnapTo"/> — the same real
+    /// engine call the `tp` cheat itself uses — before arming the order.
     /// </summary>
     private void HandleAttack()
     {
@@ -206,6 +235,11 @@ internal sealed unsafe class TestDriveController(SharedBlockView block)
             return;
         }
 
+        if (attacker == LocalPlayerSentinelId)
+        {
+            CloseToMeleeRangeIfNeeded(attacker, target);
+        }
+
         bool ok = Odyssey.AttackTarget(attacker, target, out int failure);
 
         PluginHost.Log(ok
@@ -220,6 +254,52 @@ internal sealed unsafe class TestDriveController(SharedBlockView block)
             _probeUntil = now + ProbeDurationSeconds;
             _probeLastLogAt = now - ProbeLogIntervalSeconds; // log immediately, not 1s from now
         }
+    }
+
+    /// <summary>
+    /// ROUND 71: the drive-controlled local player never walks itself to a queued attack's
+    /// target (see <see cref="HandleAttack"/>'s own remarks), so this closes the distance the
+    /// same way a real click-to-attack would have found the player already standing there.
+    /// A no-op when either body fails to resolve or is already inside
+    /// <see cref="PlayerAttackMeleeRange"/> — <see cref="Odyssey.AttackTarget"/> is left to
+    /// report its own failure for a target it genuinely cannot find.
+    /// </summary>
+    private void CloseToMeleeRangeIfNeeded(uint attacker, uint target)
+    {
+        nint attackerCreature = Odyssey.ResolveServerObject(attacker);
+        nint targetCreature = Odyssey.ResolveServerObject(target);
+        if (attackerCreature == 0 || targetCreature == 0)
+        {
+            return;
+        }
+
+        Vec3 attackerPos = Odyssey.GetPosition(attackerCreature);
+        Vec3 targetPos = Odyssey.GetPosition(targetCreature);
+
+        float dx = attackerPos.X - targetPos.X;
+        float dy = attackerPos.Y - targetPos.Y;
+        float planarDistance = MathF.Sqrt((dx * dx) + (dy * dy));
+        if (planarDistance <= PlayerAttackMeleeRange)
+        {
+            return;
+        }
+
+        // Approach from wherever the attacker already is (degenerate only when the two bodies
+        // are exactly coincident, which the range check above already excluded), so a staging
+        // script that positioned the player deliberately keeps that side of the target.
+        float scale = planarDistance > 0.001f ? (PlayerAttackMeleeRange / planarDistance) : 0f;
+        Vec3 snapPos = new()
+        {
+            X = targetPos.X + (dx * scale),
+            Y = targetPos.Y + (dy * scale),
+            Z = targetPos.Z,
+        };
+
+        Odyssey.SnapTo(attackerCreature, snapPos);
+
+        PluginHost.Log(
+            $"test: closed range for 0x{attacker:X} -> 0x{target:X} "
+            + $"({planarDistance:F2}m -> {PlayerAttackMeleeRange:F2}m) before arming the attack");
     }
 
     private void HandleTalk()

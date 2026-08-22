@@ -90,11 +90,29 @@ internal static unsafe class Odyssey
     /// <summary>ApplyEffectToObject(int durationType, effect e, object target, float dur).</summary>
     private const nint ExpectedApplyEffectToObject = 0x0052E570;
 
+    /// <summary>
+    /// ActionFollowLeader() — zero NWScript parameters. <c>CSWVirtualMachineCommands::
+    /// ExecuteCommandActionFollowLeader</c>, confirmed by the symbol database and matching
+    /// docs/research/party-reconciliation.md's own citation ("Only ONE site enqueues it").
+    /// ROUND 71: the safe VM-dispatch route into the SAME action <see cref="IsMoveAction"/>'s
+    /// own table comment lists as <c>0x3C PartyFollowLeader</c> (that table read directly off
+    /// the RunActions jump table entry by entry, which is why it is trusted over
+    /// party-reconciliation.md's earlier, unverified "action id 61" (0x3D) guess — see
+    /// <see cref="QueuePartyFollowLeader"/>'s own remarks). Deliberately NOT the raw
+    /// <c>CSWSObject::AddAction 0x004CEA20</c> marshaling call party-reconciliation.md's
+    /// "Recommended design" speculated about: docs/research/dialogue-join-latency.md already
+    /// flagged that call's full push-list typing as unverified and "not safe to ship blind."
+    /// This goes through the identical, already-verified VM path <see cref="AttackTarget"/> and
+    /// <see cref="PickUpItem"/> use instead.
+    /// </summary>
+    private const nint ExpectedActionFollowLeader = 0x0052CBE0;
+
     private static int _routineCreateItemOnFloor = -1;
     private static int _routineDestroyObject = -1;
     private static int _routineActionPickUpItem = -1;
     private static int _routineEffectDamage = -1;
     private static int _routineApplyEffect = -1;
+    private static int _routineActionFollowLeader = -1;
 
     // CAppManager, reached through the global at 0x007A39FC.
     private const nint AppManagerPtr = 0x007A39FC;
@@ -8862,6 +8880,92 @@ internal static unsafe class Odyssey
             if (*(int*)(internalVm + StackPointerOffset) != stackPointer)
             {
                 failure = 9;
+            }
+
+            return true;
+        }
+        finally
+        {
+            *(int*)(implementer + ImplHasCallerObject) = savedHasCaller;
+            *(uint*)(implementer + ImplCallerObjectId) = savedCallerId;
+        }
+    }
+
+    /// <summary>
+    /// Queues the engine's own <c>ActionFollowLeader()</c> on a party companion, so its real
+    /// follow-AI (paths, formation slot, gait, animation) takes over from here — exactly what
+    /// a recruiting conversation's own ending script fires in single-player.
+    ///
+    /// ROUND 71 (2026-08-23), docs/research/party-reconciliation.md, shared-state-audit.md
+    /// round 68/71: built for <see cref="PartyFollowController"/>. Live-confirmed necessary —
+    /// Trask recruited (via a real dialogue, or already recruited by a loaded save) sat with a
+    /// genuinely EMPTY action queue (<c>+0xFC</c> head type <c>0xFFFFFFFF</c>) and
+    /// <c>+0xA8C</c> (the follow state <c>AIActionPartyFollowLeader</c> itself sets to 3 while
+    /// running) reading 1, not 3 — no follow order outstanding, nothing about to reissue one.
+    /// The one-time in-party positioning a recruit script or a save's own load leaves behind is
+    /// not a standing behaviour; nothing in retail re-arms it on an idle queue by itself
+    /// (contrary to this project's earlier assumption that a companion's own heartbeat would).
+    ///
+    /// Same VM-caller-redirect shape as <see cref="AttackTarget"/>/<see cref="PickUpItem"/>:
+    /// OBJECT_SELF becomes the companion for the one dispatch, restored after. No stack push —
+    /// <c>ActionFollowLeader</c> takes no parameters.
+    ///
+    /// MAIN THREAD ONLY.
+    /// </summary>
+    public static bool QueuePartyFollowLeader(uint creatureObjectId, out int failure)
+    {
+        failure = 0;
+
+        nint implementer = GetImplementer(out nint vm, out nint internalVm);
+        if (implementer == 0)
+        {
+            failure = 1;
+            return false;
+        }
+
+        nint table = Deref(implementer + CommandsTableOffset);
+        if (table == 0)
+        {
+            failure = 2;
+            return false;
+        }
+
+        if (_routineActionFollowLeader < 0)
+        {
+            _routineActionFollowLeader = FindRoutine(table, ExpectedActionFollowLeader);
+        }
+
+        if (_routineActionFollowLeader < 0)
+        {
+            failure = 3;
+            return false;
+        }
+
+        if (*(int*)(internalVm + CallStackSizeOffset) != 0)
+        {
+            failure = 4;
+            return false;
+        }
+
+        int stackPointer = *(int*)(internalVm + StackPointerOffset);
+        int savedHasCaller = *(int*)(implementer + ImplHasCallerObject);
+        uint savedCallerId = *(uint*)(implementer + ImplCallerObjectId);
+
+        *(int*)(implementer + ImplHasCallerObject) = 1;
+        *(uint*)(implementer + ImplCallerObjectId) = creatureObjectId;
+
+        try
+        {
+            var dispatch = (delegate* unmanaged[Thiscall]<nint, int, int, int>)ExpectedActionFollowLeader;
+            if (dispatch(implementer, _routineActionFollowLeader, 0) != 0)
+            {
+                failure = 5;
+                return false;
+            }
+
+            if (*(int*)(internalVm + StackPointerOffset) != stackPointer)
+            {
+                failure = 6;
             }
 
             return true;

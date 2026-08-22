@@ -29,6 +29,7 @@ internal static unsafe class PluginHost
     private static LivenessReconcileController? _liveness;
     private static EnemyPresenceController? _enemyPresence;
     private static PartyPresenceController? _partyPresence;
+    private static PartyFollowController? _partyFollow;
     private static IncomingDamageController? _incomingDamage;
     private static PeerEffectController? _peerEffects;
 
@@ -129,6 +130,7 @@ internal static unsafe class PluginHost
             _liveness = new LivenessReconcileController(_view, _combat);
             _enemyPresence = new EnemyPresenceController(_view);
             _partyPresence = new PartyPresenceController(_view);
+            _partyFollow = new PartyFollowController(_view);
             _incomingDamage = new IncomingDamageController(_view);
             _peerEffects = new PeerEffectController(_view);
             _peerDamage = new PeerDamageController(_view);
@@ -892,6 +894,11 @@ internal static unsafe class PluginHost
         _enemyPresence?.OnFrame();
         Odyssey.TickFireScriptWatch(Log);
         _partyPresence?.OnFrame();
+
+        // ROUND 71: re-arms real follow-AI on a genuinely-owned, idle companion — see
+        // PartyFollowController's own class comment for why this backs off the instant
+        // PartyPresenceController is actively mirroring instead (a client's companions).
+        _partyFollow?.OnFrame();
 
         // After the companion mirror, not before: reconciling the roster can spawn a companion
         // body, and it should be driven by the mirror on the NEXT frame with the block already
