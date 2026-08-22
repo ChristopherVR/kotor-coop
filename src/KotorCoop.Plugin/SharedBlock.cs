@@ -1504,18 +1504,20 @@ internal struct SharedBlock
     public const uint CheatKindClosePlaceable = 19;
 
     /// <summary>
-    /// DEV-ONLY TEST PRIMITIVE (2026-08-22): switches the LOCAL player's controlled character
-    /// through <c>Odyssey.SwitchControlToPartySlot</c>/<c>SwitchControlToPc</c> — the SAME
-    /// <c>CClientExoAppInternal + 0x20</c> field <c>KotorGameBridge.LockControlToPlayer</c>
-    /// already reverts every tick a client session is up, written the OTHER direction. Built
-    /// because docs/research/control-return.md's live pass needed a way to put a client onto a
-    /// party-roster companion BEFORE connecting — the one manual step
+    /// DEV-ONLY TEST PRIMITIVE (2026-08-22, rewired Round 70 2026-08-22): switches the LOCAL
+    /// player's controlled character through <c>Odyssey.SwitchControlToPartySlot</c>/
+    /// <c>SwitchControlToPc</c> — as of Round 70 (docs/research/control-return.md) these call
+    /// the ENGINE'S OWN <c>ChangeCharacter</c> funnel (0x005F6B60), the exact function a real
+    /// Tab press and portrait click reach, in place of the raw field poke earlier rounds used.
+    /// Built because docs/research/control-return.md's live pass needed a way to put a client
+    /// onto a party-roster companion BEFORE connecting — the one manual step
     /// <c>control-return-live.ps1</c> could not automate (injected keystrokes never reach this
     /// game). <see cref="OffsetCheatAmount"/> is the party-roster slot (0-8), or -1 for "your
-    /// own PC". Id write only, same null-safe resolution every consumer of this field already
-    /// uses — cannot crash. Camera is NOT this verb's job; a caller wanting the camera to
-    /// follow too calls <c>SetCameraFollowServerObject</c>/<c>RestoreCameraToControlledCreature</c>
-    /// separately, exactly as <c>ControlReturnController</c> does for the reverse direction.
+    /// own PC". Requires the target to already be a live CSWParty member (in the active party,
+    /// not merely recruited). Moves the camera too, as a side effect of the real engine call —
+    /// no separate follow-up needed, though calling
+    /// <c>SetCameraFollowServerObject</c>/<c>RestoreCameraToControlledCreature</c> afterward is
+    /// harmless.
     ///
     /// ⚠ 20, because 7-19 are taken. Take the next FREE number.
     /// </summary>

@@ -4,26 +4,38 @@ namespace KotorCoop.Plugin;
 /// Connecting must never leave a client watching, or driving, a body the session has taken
 /// over — and it did.
 ///
-/// ⚠ THE HOLE THIS FILLS. On a client every companion is a host-driven mirror, so the agent
-/// pins input to the player's own PC by writing the controlled-character id
-/// (<c>CClientExoAppInternal + 0x20</c>, docs/research/client-control-lock.md) back to the PC
-/// every tick. That reverts CONTROL. It does not move the CAMERA: the engine's own camera
-/// handoff lives inside <c>ChangeCharacter</c> (the <c>SetCameraFollow</c> at 0x5F6C27), and
-/// an external id write does not go through it. So a player who was playing AS Trask at the
-/// moment they connected got their PC's controls back with the camera still bolted to Trask —
-/// and could not fix it, because the same session arms the byte patch that makes
-/// <c>ChangeCharacter</c> return immediately. Tab dead, portraits dead, view stuck. The same
-/// thing happens on an auto-reconnect, which is unattended by design.
+/// ⚠ THE HOLE THIS FILLS. On a client every companion is a host-driven mirror, so a player who
+/// was playing AS Trask at the moment they connected must get their own PC's controls AND
+/// camera back — and could not, because the same session arms the byte patch that makes
+/// <c>ChangeCharacter</c> (the GUI/keyboard switch funnel) return immediately. Tab dead,
+/// portraits dead, view stuck. The same thing happens on an auto-reconnect, which is
+/// unattended by design.
 ///
 /// So this closes the loop, as a LEVEL rather than a one-shot: whenever a mirroring instance
-/// finds the player driving a party-roster companion it says so, and when control lands back
-/// on the player's own character it points the camera there through the engine's own
-/// <c>CSWCModule::SetCameraFollow</c> — re-asserting a bounded number of passes, because that
-/// call silently does nothing while the client is in combat mode.
+/// finds the player driving a party-roster companion it says so, hands control back
+/// (<see cref="Odyssey.SwitchControlToPc"/>) by reordering CSWParty's own member array so the
+/// PC becomes member[0] again — the SAME end state a real Tab press or portrait click produces
+/// (client-control-lock.md) — and re-asserts the camera through the engine's own,
+/// already-working <c>CSWCModule::SetCameraFollow</c> for a bounded number of passes afterward,
+/// because that call silently does nothing while the client is in combat mode.
 ///
-/// It deliberately does NOT write the control id itself. That lever is the agent's, it runs
-/// at ~30 Hz, and a second writer of the same field in a second process is how you get two
-/// halves disagreeing about who the player is. This half owns the camera only.
+/// ⚠ ROUND 70 (2026-08-22): earlier rounds detected "is the player driving a companion" through
+/// <see cref="Odyssey.GetPlayerCreaturePointer"/> and never wrote the control id at all — both
+/// wrong. Disassembly this round found <c>GetPlayerCreaturePointer</c>
+/// (<c>CServerExoApp::GetPlayerCreature</c>, 0x4B2820) resolves a FIXED "player slot 0" entry
+/// in the server's own connected-players list, a value no control switch ever touches, so the
+/// claim never fired; and the AGENT's own per-tick revert (<c>LockControlToPlayer</c>, a
+/// different process, a different field) never reordered CSWParty's member array, so even when
+/// input authority nominally came back the array stayed in the "companion first" shape
+/// <c>PartyTogetherClampRule</c> exists to defer around. Both are fixed here: detection reads
+/// <see cref="Odyssey.GetControlledCreaturePointer"/> (the field a real switch actually moves),
+/// and the hand-back performs the SAME array reorder the engine's own
+/// <c>ChangeCharacter</c>/<c>SetControlledCreature</c> funnel was supposed to (0x5F6B60/0x635480
+/// — fully disassembled and its calling convention confirmed this round, but calling it live
+/// left the array completely unchanged in every test; see <c>Odyssey.RotateControlToFront</c>'s
+/// own remarks for the full NEEDS-LIVE writeup) plus the engine's own, separately-verified
+/// camera call — not one authoritative engine call, but the same net effect from two working
+/// pieces instead of one that, live, was not.
 ///
 /// Fail-safe direction is fixed: the player controls their own PC. If the hand-back cannot be
 /// made — no client module, combat mode for the whole budget — the worst case is the stock
@@ -87,7 +99,7 @@ internal sealed unsafe class ControlReturnController(SharedBlockView block)
         // companions belong to somebody else.
         bool mirroring = block.Command == SharedBlock.CommandSpawnAndDrive && block.DamageDealtEnabled;
 
-        nint controlled = Odyssey.GetPlayerCreaturePointer();
+        nint controlled = Odyssey.GetControlledCreaturePointer();
         uint controlledId = controlled != 0 ? *(uint*)(controlled + 0x04) : 0;
 
         // Dialogue owns the camera completely, and so does the spectate camera while the
@@ -104,17 +116,28 @@ internal sealed unsafe class ControlReturnController(SharedBlockView block)
         {
             case ControlReturnAction.NoteClaim:
                 _handBackLogged = false;
+
+                // The actual hand-back — see the class remarks (Round 70) for why a raw field
+                // poke was never enough: it never reordered CSWParty's member array, so
+                // PartyTogetherClampRule kept deferring forever with nothing left to converge
+                // toward. Safe to call every pass while this is true: on an already-correct
+                // array, Odyssey.SwitchControlToPc's own index lookup finds the PC already at
+                // member[0] and the rotate is a genuine no-op.
+                bool switched = Odyssey.SwitchControlToPc();
+
                 if (_claimLogged != controlledId)
                 {
                     _claimLogged = controlledId;
 
                     // Names the id it saw, because the interesting failure is this line
-                    // repeating for the same id: that means the agent's control lock is not
-                    // running (party sync off, or the Party capability dropped) and the player
-                    // is still driving a body the host owns.
+                    // repeating for the same id: that would mean the engine switch is
+                    // refusing every attempt (no client world, or the PC is not currently a
+                    // CSWParty member — should not happen) and the player is still driving a
+                    // body the host owns.
                     PluginHost.Log(
                         $"control: you are driving companion 0x{controlledId:X}, which this "
-                        + "session owns — handing you back your own character");
+                        + "session owns — handing you back your own character"
+                        + (switched ? " - array reordered and camera pointed at your PC" : " (switch not ready yet, retrying)"));
                 }
 
                 break;

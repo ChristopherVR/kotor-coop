@@ -16,10 +16,11 @@
 #
 # Four scenarios, one run:
 #   1. CLIENT controls Trask, then reconnects -> the regression itself. PASS means the
-#      client's plugin log shows, in order: "control: you are driving companion 0x..."
-#      (ControlReturnController saw the claim), no "party together: ... clamping ..." line
-#      BETWEEN that claim and the hand-back (PartyTogetherClampRule deferred), then
-#      "control: putting the camera back on your own character (0x...)" (control-return landed).
+#      client's plugin log shows, in order: no "party together: ... clamping ..." line BEFORE
+#      the claim (the array must not be corrupted while still undetected), "control: you are
+#      driving companion 0x..." (ControlReturnController saw the claim AND, as of round 70,
+#      switched the array back to the PC synchronously in the same pass), then
+#      "control: putting the camera back on your own character (0x...)" (the camera re-assert).
 #   2. HOST controls Trask, then the CLIENT reconnects -> the host is untouched by construction
 #      (ControlReturnController's mirroring gate is client-only, and CoopAgent.PumpOnce only
 #      calls LockControlToPlayer when `!session.IsEnemyAuthority`, which a host never is) — PASS
@@ -165,23 +166,31 @@ if ($hitLine) {
     $allPass = $false
 }
 
-if ($claim -and $hitLine) {
-    # THE REGRESSION'S OWN SIGNATURE: a "party together: ... clamping" line landing strictly
-    # between the claim and the hand-back is exactly PartyTogetherClampRule failing to defer -
-    # trimming the PC's own slot out of CSWParty while the player is still driving the
-    # companion. None should appear there; the clamp resumes only once the hand-back line
-    # itself has been logged.
+if ($claim) {
+    # ROUND 70 (docs/research/control-return.md "Round 70") changed WHERE the dangerous
+    # window is. Earlier rounds only detected "you are on a companion" and left the actual
+    # hand-back to a second, later mechanism - so a clamp landing between the claim and that
+    # later hand-back really was the regression's own signature (the array still had the PC's
+    # slot trimmed out while nothing had switched it back yet). As of round 70 the claim IS
+    # the switch: ControlReturnController reorders CSWParty's member array synchronously,
+    # inside the SAME pass that logs the claim (Odyssey.SwitchControlToPc, called from
+    # ControlReturnController's NoteClaim branch) - so by the time this log line exists, the
+    # PC is already back at member[0]. A "party together: ... clamping" line AFTER the claim is
+    # now the ORDINARY, HARMLESS case resuming (PartyTogetherClampRule.ShouldClamp defers only
+    # while IsControllingRosterCompanion is true, which is false again the instant the switch
+    # lands) - not a bug. The real invariant moved: no clamp may land BEFORE the claim, in the
+    # window where the array still has the companion at member[0] and this instance has not
+    # detected it yet.
     $content = Get-Content -Path $clientPluginLog -Raw
     $claimIndex = $content.IndexOf($claim.Trim())
-    $handBackIndex = $content.IndexOf($hitLine.Trim())
 
-    if ($claimIndex -ge 0 -and $handBackIndex -gt $claimIndex) {
-        $between = $content.Substring($claimIndex, $handBackIndex - $claimIndex)
-        if ($between -match 'party together:.*clamping') {
-            "FAIL  the party-together clamp fired WHILE control was still on the companion - PartyTogetherClampRule did not defer"
+    if ($claimIndex -ge 0) {
+        $before = $content.Substring([int]$sincePosition, $claimIndex - [int]$sincePosition)
+        if ($before -match 'party together:.*clamping') {
+            "FAIL  the party-together clamp fired BEFORE control-return's claim - the array was corrupted while still undetected"
             $allPass = $false
         } else {
-            "PASS  the party-together clamp stayed deferred for the whole window"
+            "PASS  the party-together clamp stayed deferred until control-return's claim (which is itself the switch, round 70)"
         }
     }
 }

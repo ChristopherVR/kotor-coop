@@ -287,10 +287,11 @@ public enum CoopCommandKind
     ClosePlaceable,
 
     /// <summary>
-    /// DEV-ONLY TEST PRIMITIVE (2026-08-22): switches the LOCAL player's controlled character
-    /// through <c>Odyssey.SwitchControlToPartySlot</c>/<c>SwitchControlToPc</c> — the reverse
-    /// of the per-tick control lock a co-op client already runs
-    /// (<c>KotorGameBridge.LockControlToPlayer</c>). Built because
+    /// DEV-ONLY TEST PRIMITIVE (2026-08-22, rewired Round 70 2026-08-22): switches the LOCAL
+    /// player's controlled character through <c>Odyssey.SwitchControlToPartySlot</c>/
+    /// <c>SwitchControlToPc</c> — as of Round 70 (docs/research/control-return.md) these call
+    /// the ENGINE'S OWN <c>ChangeCharacter</c> funnel (0x005F6B60), the exact function a real
+    /// Tab press and portrait click reach, rather than poking a raw field. Built because
     /// docs/research/control-return.md's live pass needed a way to put a client onto a
     /// party-roster companion BEFORE connecting: the one manual step
     /// <c>control-return-live.ps1</c> could never automate, since injected keystrokes never

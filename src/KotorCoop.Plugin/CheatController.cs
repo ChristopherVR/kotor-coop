@@ -250,7 +250,22 @@ internal sealed unsafe class CheatController(SharedBlockView block)
         ushort max = Odyssey.GetMaxHitPoints(player);
         if (max == 0)
         {
-            Answer(SharedBlock.CheatStatusEngineRefused, "the player reports 0 maximum hit points");
+            // ROUND 70 DIAGNOSTIC (2026-08-22, docs/research/control-return.md "Round 70"):
+            // this used to just say "0 maximum hit points" with nothing to chase it by. The
+            // resolved object's own id/vtable/current-hp are cheap to add and are exactly what
+            // distinguishes "GetPlayerCreaturePointer resolved the wrong object" from "it
+            // resolved the right one but read a genuinely-zero field". Logged, not put in the
+            // 64-byte detail field (SetCheatDetail truncates without complaint — see this
+            // method's own note below on player, and CheatController.cs:2303).
+            uint id = *(uint*)(player + 0x04);
+            nint vtable = *(nint*)player;
+            short current = Odyssey.GetCurrentHitPoints(player);
+            PluginHost.Log(
+                $"topup: player resolved to 0x{player:X} (object 0x{id:X}, vtable 0x{vtable:X}, "
+                + $"current hp {current}, max 0)");
+            Answer(
+                SharedBlock.CheatStatusEngineRefused,
+                $"0 max hp (obj 0x{id:X} vtable 0x{vtable:X} cur {current}) - see plugin log");
             return;
         }
 
@@ -669,18 +684,22 @@ internal sealed unsafe class CheatController(SharedBlockView block)
     }
 
     /// <summary>
-    /// DEV-ONLY TEST PRIMITIVE (2026-08-22): switches the LOCAL player's controlled character
-    /// through <see cref="Odyssey.SwitchControlToPartySlot"/>/<see cref="Odyssey.SwitchControlToPc"/>
-    /// — the SAME <c>CClientExoAppInternal + 0x20</c> field
-    /// <c>KotorGameBridge.LockControlToPlayer</c> already reverts every tick a client session
-    /// is up, written the OTHER direction. Built because docs/research/control-return.md's
+    /// DEV-ONLY TEST PRIMITIVE (2026-08-22, rewired Round 70 2026-08-22): switches the LOCAL
+    /// player's controlled character through <see cref="Odyssey.SwitchControlToPartySlot"/>/
+    /// <see cref="Odyssey.SwitchControlToPc"/> — the ENGINE'S OWN <c>ChangeCharacter</c> funnel
+    /// (0x005F6B60), the same call a real Tab press and portrait click make
+    /// (docs/research/control-return.md "Round 70"), NOT a raw field poke as of this round.
+    /// Because it goes through the real engine call, it moves the camera too (the same
+    /// <c>SetCameraFollow</c> a Tab press triggers) — a caller no longer needs to follow up
+    /// with <see cref="Odyssey.SetCameraFollowServerObject"/>/
+    /// <see cref="Odyssey.RestoreCameraToControlledCreature"/> separately, though doing so is
+    /// harmless (idempotent while already on target). Built because docs/research/control-return.md's
     /// live pass needed a way to put a client onto a party-roster companion BEFORE connecting —
     /// the one manual step <c>control-return-live.ps1</c> could never automate (injected
     /// keystrokes never reach this game). <see cref="SharedBlock.OffsetCheatAmount"/> is the
     /// party-roster slot (0-8), or -1 for "your own PC". Local only: this never crosses the
-    /// network, and it does not move the camera — a caller wanting that calls
-    /// <see cref="Odyssey.SetCameraFollowServerObject"/>/<see cref="Odyssey.RestoreCameraToControlledCreature"/>
-    /// separately.
+    /// network. Requires the target to already be a live CSWParty member (in the active party,
+    /// not merely recruited) — the engine's own switch has no other way to name one.
     /// </summary>
     private void Leader()
     {

@@ -397,9 +397,12 @@ tools/                   RE helpers, demo scripts, the kotor1_0_3 symbol databas
   Tab and the portraits are locked there on purpose. On the host they work normally. The lock
   lasts exactly as long as the session: disconnecting hands the whole party straight back —
   Tab, the portraits, and the companions themselves, out of the mirror's faction hold and off
-  its health pin — and if you were playing *as* a companion when you connected, control and
-  the camera come back to your own character rather than leaving you stuck watching a body
-  the host now drives. (`control_return=0` opts out of the camera half.)
+  its health pin — and if you were playing *as* a companion when you connected (or reconnect
+  with an unattended auto-reconnect), control and the camera come back to your own character
+  rather than leaving you stuck watching a body the host now drives — live-verified round 70
+  (docs/research/control-return.md), the whole round trip in well under a second: detect,
+  hand control back, re-assert the camera. (`control_return=0` opts out of the whole hand-back,
+  control and camera both — whatever you were on stays yours to leave.)
 - **A mirrored companion cannot swing on a client — except, now, for one, in one narrow
   case, and it is OFF by default.** The presence mirror re-claims and wipes every companion's
   action queue every pass, so only the host's own companions ever really fight; a client sees

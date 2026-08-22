@@ -256,3 +256,244 @@ actually fire on a client." Scenarios 2-4 close cleanly and are no longer NEEDS-
   pass, crash risk); scenario 4 needs a fresh process with the flag set. The "0 max hit points"
   finding above is a NEW open question a future round should chase first — it may be upstream
   of scenario 1's own failure to converge.
+
+---
+
+## Round 70 (2026-08-22)
+
+Closes the regression live. Four parts: why detection never fired, what the 0-max-HP finding
+actually was, the full disassembly of the engine's own switch function (and why calling it did
+not work), and the working fix that replaced it.
+
+### Part 1 — disassembling `CServerExoApp::GetPlayerCreature` (0x004B2820) fully
+
+`tools/disasm.py`/`tools/xrefs.py` against the GOG binary, address by address:
+
+```
+0x004B2820  CServerExoApp::GetPlayerCreature(this)
+    return CServerExoAppInternal_0x4B1790(internal, CServerExoAppInternal_0x4B4CB0(internal))
+    ; internal = [this+4]; both callees reached via thunks (0x4AEA40 / 0x4AE770: mov ecx,[ecx+4]; jmp)
+
+0x004B4CB0  "get player-slot-0's registered PC id, resolved and validated"
+    eax = [0x007A39FC]                      ; APP_MANAGER_PTR (SAME global client-control-lock.md
+                                             ; already names for the client-side control gate)
+    ecx = [eax+8]                           ; ecx = CServerExoApp (the SAME "this" GetPlayerCreature
+                                             ; was called with — this function ignores its own `this`
+                                             ; parameter and re-derives from the global instead)
+    esi = CServerExoAppInternal_0x4B2AE0(ecx, wanted=0, selector=1)
+        ; walks a bucket/linked-list at internal+0x10064 (selector 1) or +0x10068 (selector 2),
+        ; via two helper calls (0x5E9B60 "get value from node", 0x5E9B90 "advance"), for the node
+        ; whose [+4] field equals `wanted` (0) — i.e. "find the connected-player entry for
+        ; player index 0". This is the SERVER's own list of connected human players, unrelated
+        ; to CSWParty (the client-side control/leader struct) entirely.
+    if esi == 0: return 0x7F000000 (ObjectInvalid sentinel)
+    playerObj = CServerExoApp::GetGameObject(server, [esi+0x28])   ; via 0x561080, which ALSO
+        ; type-checks the resolved object's tag byte against a threshold (`ja`, not `==` — a
+        ; range check, not the object-type-trap's exact-match hazard)
+    return playerObj != 0 ? [playerObj+4] : 0x7F000000             ; the object's OWN id field,
+        ; re-read from the resolved object rather than trusted from the table
+
+0x004B1790  "resolve an object id to a pointer, then type-check and vtable-confirm it as a
+             creature" — internal+0x1005c hashtable lookup (0x4D8230, the SAME
+             bit31-flag/low-12-bits hash scheme client-control-lock.md's Recipe A already
+             documents for the CLIENT side) → type-tag byte compare → virtual dispatch at
+             vtable+0x30 (an "AsCreature" confirm, matching the object-type-field-trap's own
+             warning: do not read the type byte directly, use the vtable)
+```
+
+**VERIFIED, this round's own disassembly.** `GetPlayerCreature` resolves a FIXED entry
+("player index 0") in the SERVER's own connected-players list — a completely different
+structure from `CSWParty` (the client-side control/leader struct `ChangeCharacter` mutates) —
+and reads that player's own registered PC id. Nothing in this chain is sensitive to which
+creature the player is currently DRIVING; it is built to answer "who is the human behind this
+connection", and it answers that correctly and consistently regardless of Tab, `leader`, or any
+other control switch. This is not a bug in `GetPlayerCreature` — it is the wrong function for
+"what am I driving right now", which is exactly what `ControlReturnController` and
+`PartyRosterController.IsControllingRosterCompanion` were asking it. See client-control-lock.md
+for the field that DOES answer that question (CSWParty member[0], `party+0x24`).
+
+### Part 2 — the 0-max-HP finding, explained
+
+Live-reproduced first, cleanly, on a fresh rig, both instances, before any `leader` call: `cheat
+topup` on the local player answers `0 max hp (obj 0x7FFFFFFF vtable 0x7470C8 cur 12)`, while
+`console 'where'` (the agent's own, completely independent resolution) answers `hp 12/12` for
+the same moment. The resolved object has the correct creature vtable (`0x7470C8`,
+`creatures.ps1`'s own known-good value) and the correct current hp (12, matching the agent
+exactly) — so `GetPlayerCreaturePointer` resolved the RIGHT object, not a wrong one. Its id,
+`0x7FFFFFFF`, is not garbage either: it is this codebase's own extensively-documented "current
+player" sentinel (`docs/re/object-model.md`: "Player object id is exactly 0x7FFFFFFF"; dozens
+of confirmed uses across `shared-state-audit.md`).
+
+The ONLY genuinely surprising field is max hp reading 0 — and `docs/research/min-one-hitpoint.md`
+already recorded the IDENTICAL reading, three weeks earlier, for the SAME module this rig always
+loads (`end_m01aa`, Endar Spire): `sethp.ps1 -ObjectId 0x7FFFFFFF` → `hp 12 (stored max 0)
+[min1hp]`. That doc traces the cause fully: `end_m01aa/k_pend_area01`'s own `OnEnter` script
+calls `SetMinOneHP(GetFirstPC(), TRUE)` (NCS-disassembly-confirmed at offset 0x11AC), and while
+that pin holds the engine stores the PC's max hp as 0. **`GetPlayerCreaturePointer` needed no
+fix.** The round-69 finding was real and reproducible, but it was KOTOR's own min-one-HP
+behavior on this specific level, not a resolution defect — a case of not cross-referencing this
+same repo's own prior work rather than a new bug. (`TopUp`'s diagnostic detail was still worth
+keeping: it now names the resolved object's id/vtable/current-hp on a 0-max-hp refusal, logged
+via `PluginHost.Log` rather than the block's 64-byte detail field, which silently truncates
+anything this long.)
+
+### Part 3 — the engine's own switch, fully disassembled, calling convention confirmed, but not
+
+Followed the GUI/keyboard path from the top, per the brief: Tab →
+`ChangeCharacterToNextLivingPartyMember` (0x005EDF80/0x005F7960); portrait click →
+`CGuiInGame::ChangeCharacter` (0x0062B0F0) → `CClientExoApp::ChangeCharacter` (0x005EDC30) →
+both funnel into `CClientExoAppInternal::ChangeCharacter` (0x005F6B60,
+client-control-lock.md's own prior finding, re-confirmed). Disassembled in full this round:
+
+```
+CClientExoAppInternal::ChangeCharacter(this, int arg1, int arg2)   ; thiscall, ret 8 (two stack
+                                                                    ; dwords), only arg1 read
+    edi = CSWParty::GetControlledCreature(party)      ; 0x00635460 — the OLD controlled creature
+    CSWParty::SetControlledCreature(party, arg1)      ; 0x00635480 — THE REORDER
+    eax = CSWParty::GetControlledCreature(party)      ; re-read
+    if edi == eax: return                             ; no-op short-circuit — skips EVERYTHING
+                                                        ; below, including the camera call
+    ; ... (spectate/portrait bookkeeping) ...
+    CSWCModule::SetCameraFollow(module, [new+4], 1)    ; 0x0063F9D0, ALWAYS reached unless the
+                                                        ; no-op check fired
+    internal+0x4B4 = 1                                 ; set ONLY past the no-op check — the
+                                                        ; single cleanest "did this actually do
+                                                        ; something" signal in the function
+```
+
+`CSWParty::SetControlledCreature(party, arg1)` (0x00635480) treats `arg1` as an INDEX into the
+CURRENT member array (0..party_count-1), with two sentinels: `-2` reads member[1]'s id directly
+(no bound check at all — confirmed via `xrefs.py 0x5F6B60`: `ChangeCharacterToNextLivingPartyMember`
+itself pushes exactly `push 0; push -2` before this call, i.e. Tab's own real argument); `-3`
+searches for the next living member other than the one currently controlled. The general
+(index) branch bound-checks `arg1` against the party's live count field before using it — the
+SAME bound `PartyTogetherClampRule`'s clamp writes (see Part 4). A second real call site
+(the portrait path) confirmed the general branch is genuinely used in production: it computes
+its argument via `CSWParty::FindMemberIndexById` (0x006349C0, disassembled and found to be
+EXACTLY the bounded id→index search this file already needed — client-control-lock.md's id
+gate, walked by array position instead of resolved by pointer).
+
+**Calling it from this process did not work, in any live test this round ran, including with
+the `-2` sentinel** (which bypasses the count bound check entirely, ruling out an
+index/bounds mistake as the cause): `internal+0x4B4` stayed 0 and the array's raw bytes were
+byte-for-byte unchanged before and after every call, live-verified by direct memory read
+alongside the call. The calling convention itself was checked twice (both argument orderings
+tried) with no change in outcome. Traced as far as ruling out (a) a wrong function address —
+confirmed via the diagnostic's own logged pointer value; (b) wrong `this` — confirmed
+`internal+0x270` (the party pointer `ChangeCharacter` itself dereferences) matches the SAME
+value `GetSWPartyFn` independently resolves; (c) an index/bounds problem — the `-2` sentinel
+bypasses bounds entirely and still had zero effect. The likely remaining explanation is an
+exception somewhere inside `SetControlledCreature`'s own body (which DOES install its own SEH
+frame at entry — `push -1; push handler; mov eax,fs:[0]; push eax; mov fs:[0],esp` — unlike
+`ChangeCharacter` itself, which has none), silently unwound before the array write, for a
+reason this round's tooling (no debugger attach onto the live process) could not isolate
+further.
+
+**NEEDS-LIVE, honestly unresolved**: whether `SetControlledCreature` can be called successfully
+from this process at all, and if not, why. A future round with debugger access (breakpoint at
+0x635480, single-step past the SEH prologue) should pick this up before trying anything else
+here — the full disassembly above is the starting point, so nothing here needs re-deriving.
+
+### Part 4 — the working fix: reproduce the same end state, id-only
+
+Rather than leave the regression open on an unresolved native-calling mystery,
+`Odyssey.RotateControlToFront` performs the SAME reorder `SetControlledCreature` was supposed
+to — move the target to member[0], shift the displaced members down by one, preserving their
+relative order — by direct, id-only memory writes. This is exactly Recipe A's own established
+risk tier (client-control-lock.md: "VERIFIED crash-proof... every consumer resolves it through
+the null-safe GetCreatureByGameObjectID"), just applied across the whole array instead of only
+member[0]. The camera move is delegated to the engine's own, ALREADY-independently-working
+`SetCameraFollowServerObject`/`RestoreCameraToControlledCreature` (both wrap the real
+`CSWCModule::SetCameraFollow`, 0x0063F9D0 — the SAME call `ChangeCharacter` itself would have
+made). `Odyssey.SwitchControlToPartySlot`/`SwitchControlToPc` (the `leader` verb's own
+primitives) and `ControlReturnController`'s hand-back both go through this same pair of
+functions now.
+
+**One real interaction found and fixed along the way.** Live-probed directly (raw memory read,
+independent of the plugin) after a plain `leader 0` on an already-connected client:
+`party_together_fix`'s clamp (`PartyRosterController.SyncClientPartyTogetherState`) had already
+reduced CSWParty's own count field to 1 (CSWPartyTable's companions-only count) — even though
+Trask's full flagged id (`0x80000127`) was still physically sitting at member[1]. Since the
+SAME count bound gates the engine's own index-based switch, this makes a companion
+UNREACHABLE for a deliberate switch attempt while the clamp is active, independent of whatever
+mechanism performs the reorder. The fix: `SwitchControlToPartySlot` first searches within the
+live count (fast path, no write); if that comes up empty, it searches the FULL member-array
+capacity (3 — the PC plus the server table's own two-companion cap) ignoring the count, and if
+found there, raises the count to include exactly that one entry — never inventing data, only
+acknowledging what the search already confirmed is really there. `PartyTogetherClampRule`'s own
+deferral (now driven by the corrected `IsControllingRosterCompanion`, itself now built on
+`Odyssey.GetControlledCreaturePointer`) takes over the very next pass once the switch has
+landed, so nothing re-clamps it back down mid-operation.
+
+`ControlReturnController`'s design changed accordingly: detection now reads
+`Odyssey.GetControlledCreaturePointer` (CSWParty member[0]'s id — the field a real switch
+actually moves) instead of `GetPlayerCreaturePointer`, and its `NoteClaim` branch now calls
+`Odyssey.SwitchControlToPc()` directly — performing the array reorder and arming the camera
+re-assert in the SAME pass the claim is logged, rather than logging a claim and waiting on the
+external agent's per-tick field revert (`LockControlToPlayer`, a DIFFERENT field —
+`internal+0x20` — that round 69's own tracing showed never touches the array at all).
+
+### Live matrix (2026-08-22, this round, three redeploy cycles across the investigation)
+
+`tools/control-return-live.ps1` against a fresh `tools/demo.ps1` pair (END_M01AA, Trask
+recruited, host pid and client pid captured fresh per redeploy):
+
+1. **Client controls Trask, then reconnects (the regression) — PASS.** Client plugin log, in
+   order: `control: you are driving companion 0x127, which this session owns — handing you back
+   your own character - array reordered and camera pointed at your PC`, then
+   `control: putting the camera back on your own character (0x7FFFFFFF)`. Direct memory read
+   before/after confirmed the array reorder lands SYNCHRONOUSLY with the claim log line (same
+   call, `Odyssey.SwitchControlToPc` runs before the log statement) — the "hand-back" line that
+   follows a fraction of a second later is the camera re-assert, not the array fix.
+2. **Host controls Trask, client reconnects — host untouched — PASS.** Zero `control:` lines on
+   the host's plugin log across the whole disconnect/reconnect window, matching source
+   (`ControlReturnController`'s mirroring gate is client-only).
+3. **Client on its own PC, disconnects — no-op — PASS.** No claim logged at all.
+4. **`control_return=0` — LIVE-RESTARTED this round** (rounds 68/69 only verified this by
+   source). Appended `control_return = 0` to the client's `coop.ini`, full rig teardown and
+   relaunch (a fresh process, since the flag is `readonly` and read once at construction),
+   disconnected, `leader 0`, reconnected. Direct memory read: `member[0] = 0x80000127` (Trask),
+   held stable; the plugin log shows zero `control:` lines across the entire window. Reverted
+   the config change and relaunched clean afterward.
+
+`verify.ps1` check 19 ("the host still controls its companions") — **PASS**, run against this
+round's final build: `table 1 companion(s), CSWParty 2 (PC+companions), companion 0x127 (npc
+slot 0) commandable=1, host clamped this run: False`. The host-side restriction
+(`party_together_fix` gated to clients only, `TryGetHostPartyRoster`) this round's changes never
+touch stayed intact. Tab itself could not be exercised on the host (injected keystrokes never
+reach this game, `docs/live-verification.md`) — the host's own `leader 0`/`leader pc` (which
+exercise the SAME `RotateControlToFront` + camera path this round shipped) both answered
+correctly in scenario 2 above, and `DeathController`'s `ChangeCharacter` swap-suppression patch
+— the mechanism that would make a REAL Tab press a no-op mid-session — is untouched by this
+round's changes (this round's fix never calls `ChangeCharacter` at all, so the patch and this
+fix are structurally orthogonal).
+
+`control-return-live.ps1` itself needed updating, not just re-running: its scenario-1 check
+was written for the OLD architecture (claim and hand-back as separate events, with a real gap a
+clamp could corrupt) and flagged the NEW architecture's own correct behavior (the routine clamp
+resuming, harmlessly, AFTER control is already back) as a failure. Moved the check to the window
+that still matters post-round-70: no clamp before the claim.
+
+`dotnet test tests/KotorCoop.Tests`: **1623/1623**, unchanged from the round-69 baseline (this
+round changed control-switch mechanics, not any pure rule under unit test). Both plugin builds
+clean across five redeploy/relaunch cycles. `callaudit.py --bad`: 161/162 declarations agree
+with the binary (the one pre-existing mismatch, `CSWSArea::SetTransitionPending` in
+`EngineHandles.cs`, predates this round and this round never touched that file). Rig torn down
+clean, `auto_start_agent` restored to `1` in both installs.
+
+### Verification tags (Round 70)
+
+- VERIFIED (disasm, this round): `GetPlayerCreature`'s full chain (0x4B2820 → 0x4AEA40/0x4B4CB0
+  → 0x4B2AE0 bucket walk → 0x561080 → 0x4AE770/0x4B1790 hashtable+type-confirm); `ChangeCharacter`
+  (0x5F6B60) and `SetControlledCreature` (0x635480) in full, including the rotate-loop shift
+  algorithm; `FindMemberIndexById` (0x6349C0); the calling convention of all of the above,
+  confirmed against two real call sites via `xrefs.py`.
+- LIVE-VERIFIED 2026-08-22 (this round): the 0-max-hp reading on a fresh rig, both instances,
+  unconditionally; all four control-return-live.ps1 scenarios including a live restart of
+  scenario 4; `verify.ps1` check 19; the array reorder landing synchronously with the claim log
+  line (direct memory read either side of the call).
+- NEEDS-LIVE, still open, precisely scoped: whether `CSWParty::SetControlledCreature` can be
+  called successfully from this process at all (every live attempt this round left the array
+  unchanged, including the bounds-check-free `-2` sentinel) — needs debugger access this
+  round's tooling did not have. Does not block the regression fix, which no longer depends on
+  it.

@@ -434,10 +434,16 @@ internal sealed unsafe class PartyRosterController(SharedBlockView block)
     /// precisely the moment <see cref="PartyTogetherClampRule"/> needs this to be right. The
     /// two controllers ask the same question the same way; see that rule's doc comment for why
     /// <see cref="SyncClientPartyTogetherState"/> needs the answer at all.
+    ///
+    /// ⚠ ROUND 70 (2026-08-22, docs/research/control-return.md): reads
+    /// <see cref="Odyssey.GetControlledCreaturePointer"/>, NOT
+    /// <see cref="Odyssey.GetPlayerCreaturePointer"/> — the latter resolves a fixed "player
+    /// slot 0" entry in the server's own player list and is immune to every control switch, so
+    /// this answered "false" unconditionally before the fix, defeating the whole deferral.
     /// </summary>
     private static bool IsControllingRosterCompanion()
     {
-        nint controlled = Odyssey.GetPlayerCreaturePointer();
+        nint controlled = Odyssey.GetControlledCreaturePointer();
         if (controlled == 0)
         {
             return false;

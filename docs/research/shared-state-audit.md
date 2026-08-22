@@ -6361,6 +6361,112 @@ off by default pending a longer A/B.
 Plugin rebuilt/reinstalled to both GOG directories across two redeploy cycles (the `leader`
 verb's two revisions). Rig torn down clean, `auto_start_agent` restored to `1` in both installs.
 
+### Round 70 (2026-08-22) — the control-return regression closes live: `GetPlayerCreaturePointer`
+disassembled and found structurally incapable of seeing a control switch, the engine's own
+`ChangeCharacter`/`SetControlledCreature` fully reverse-engineered but not reliably callable
+from this process (a genuine NEEDS-LIVE result, not abandoned), and a safe, working, id-only
+substitute shipped and matrix-verified
+
+Full write-up: `docs/research/control-return.md` "Round 70". Short version: round 69 left two
+open questions — why `ControlReturnController` never sees the claim, and why `topup`-class
+cheats report 0 max hit points. Both are closed.
+
+**`CServerExoApp::GetPlayerCreature` (0x004B2820) does not read anything a control switch
+touches, at all.** Disassembled end to end this round: it resolves a FIXED "player slot 0"
+entry from the server's own connected-players list (a bucket search at
+`CServerExoAppInternal+0x10064`) and reads that entry's own registered PC id (`player+0x28`),
+resolved through `CServerExoApp::GetGameObject` with a type-tag range check. Tab, `leader`,
+`ChangeCharacter` — none of them touch this. It always answers "the real PC" (or nothing),
+which is exactly why `ControlReturnController` and `PartyRosterController`'s detection, both
+built on it, never fired. Added `Odyssey.GetControlledCreaturePointer`, which reads the field
+that DOES move — CSWParty member[0]'s client-space id, `client-control-lock.md`'s own control
+gate — resolved through the same safe generic `ResolveServerObject` every other id read in the
+file already uses. Both controllers now key off it.
+
+**The 0-max-HP finding was never a bug — it was `end_m01aa`'s own min-one-HP pin, already
+documented three weeks earlier and not cross-referenced.** Live-reproduced first (both
+instances, unconditionally, before any switching): `GetPlayerCreaturePointer` resolves a real,
+live `CSWSCreature` (correct vtable `0x7470C8`, correct current hp matching the agent's own
+independent read exactly) whose id reads `0x7FFFFFFF` — this codebase's own well-documented
+"current player" sentinel, not garbage — and whose max hp reads 0. `docs/research/min-one-hitpoint.md`
+already recorded the identical reading (`sethp.ps1 -ObjectId 0x7FFFFFFF` → `hp 12 (stored max 0)
+[min1hp]`) for this exact module: the Endar Spire's own `k_pend_area01` OnEnter calls
+`SetMinOneHP(GetFirstPC(), TRUE)`, and the engine stores max hp as 0 while that pin holds.
+`GetPlayerCreaturePointer` needed no fix.
+
+**The engine's own switch function was found, fully disassembled, and its calling convention
+confirmed against two real call sites — but calling it live left the array unchanged, every
+time, and that is an honest, unresolved result, not a workaround for a bug that was never
+found.** `CClientExoAppInternal::ChangeCharacter` (0x5F6B60) → `CSWParty::SetControlledCreature`
+(0x635480): xrefs against real callers (`ChangeCharacterToNextLivingPartyMember`'s own
+`push 0; push -2`, and the portrait path's own `CSWParty::FindMemberIndexById` 0x6349C0, which
+turned out to be exactly the bounded array search this file already needed) confirmed the
+argument shape precisely. Calling it — with the documented `-2` sentinel included, which
+bypasses `SetControlledCreature`'s own count bound entirely — left `internal+0x4B4` (the flag
+the callee only sets past its own no-op short-circuit) at 0 and the array byte-for-byte
+unchanged, in every live test this round ran. Traced as far as ruling out an index/argument
+mistake; the likely remaining cause (an exception inside `SetControlledCreature`'s own SEH
+frame, silently unwound before the array write) needs debugger access this round's tooling did
+not have. Documented in full in `Odyssey.cs`'s own remarks so a future round does not re-derive
+it.
+
+**The working fix reproduces the SAME end state by direct, id-only writes instead.**
+`Odyssey.RotateControlToFront` performs the exact reorder `SetControlledCreature` was supposed
+to (move the target to member[0], shift the rest down, preserving order) using ONLY id writes —
+`client-control-lock.md`'s own "Recipe A", already established crash-proof — then calls the
+engine's own, independently-already-working `SetCameraFollowServerObject`/
+`RestoreCameraToControlledCreature` for the camera. `ControlReturnController`'s hand-back now
+calls this synchronously the instant it detects a session-owned companion, instead of logging a
+claim and waiting on a separate mechanism — closing the exact gap round 69 could not: the array
+reorder and the camera move now happen in the SAME pass the claim is logged in.
+
+**One real interaction found and fixed along the way: `party_together_fix`'s own clamp — which
+exists so a client can cross a real door — also makes a companion UNREACHABLE by array index
+while it is active**, because it clamps CSWParty's count to CSWPartyTable's companions-only
+count, and that is the SAME bound both the real engine's index-based switch and this round's
+manual rotate need to address a target past the PC. Neither the data nor the fix cares: the
+companion's id is still physically sitting in the array past the clamped count (live-confirmed:
+Trask's flagged id at member[1] with count clamped to 1), so `SwitchControlToPartySlot` now
+scans past the live count when the bounded search comes up empty, and — never inventing data,
+only reading what is already there — temporarily raises the count to include exactly the one
+entry it needs. `PartyTogetherClampRule`'s own deferral (now reading the corrected detection)
+takes over the very next pass, so nothing re-clamps it back down mid-switch.
+
+**Live matrix, `control-return-live.ps1` (updated this round — see below), fresh rig, three
+redeploy cycles across the investigation:** ALL PASS. Scenario 1 (the regression itself) closes
+end to end: claim logged, array reordered and camera pointed at the PC in the SAME pass, no
+`party_together_fix` clamp lands before the claim (the one dangerous window that still matters
+— see below for why "clamp lands between claim and hand-back" stopped being the regression's
+signature). Scenario 2 (host untouched) and scenario 3 (PC-only disconnect, no-op) both PASS as
+before. Scenario 4 (`control_return=0`) — NOT live-restarted in rounds 68/69 for lack of time —
+WAS live-restarted this round: appended `control_return = 0` to the client's `coop.ini`, a full
+rig teardown/relaunch (fresh process, config read once at construction), `leader 0` while
+disconnected, reconnect — the array stayed on Trask (`member[0] = 0x80000127`, direct memory
+read) and the plugin log shows zero `control:` lines across the whole window. Reverted the
+config change afterward. `verify.ps1` check 19 ("the host still controls its companions") PASS
+throughout: `table 1 companion(s), CSWParty 2 (PC+companions), companion 0x127 commandable=1,
+host clamped this run: False` — the host-side clamp restriction this round's changes never
+touch stayed intact.
+
+**`control-return-live.ps1` itself needed a real update, not a rerun.** Its scenario-1 check
+was written for the OLD architecture, where "claim" and "hand-back" were separate events with a
+gap between them that a clamp could land in and corrupt — a real signature at the time. Round
+70 makes the claim SYNCHRONOUS with the switch, so a clamp landing AFTER the claim (once the PC
+is already back at member[0]) is now the ordinary, harmless case resuming, live-confirmed by
+timestamp (`.375` claim/switch, `.572` the routine clamp —197 ms later, after control was
+already back, `.604` the camera reassert) — checking for it as a failure was a false positive
+against the very fix this round shipped. Moved the check to the window that still matters: no
+clamp before the claim, where the array could still be corrupted while undetected.
+
+`dotnet test tests/KotorCoop.Tests`: **1623/1623**, unchanged baseline (round 70 changed
+control-switch mechanics, not any pure-logic rule under test). Both plugin builds clean across
+five redeploy cycles (the diagnostic passes that isolated the `ChangeCharacter` dead end, then
+the working `RotateControlToFront` fix, then the `control_return=0` live restart). `callaudit.py
+--bad`: 161/162 engine call declarations agree with the binary — the one that does not
+(`CSWSArea::SetTransitionPending` in `EngineHandles.cs`) predates this round and this round
+touched no file it is declared in. Rig torn down clean, `auto_start_agent` restored to `1` in
+both installs.
+
 ## 3. A client's XP is actively erased
 
 `ProgressionSnapshotPacket` is host→client only and absolute (CoopAgent.cs, `PumpProgression`):
