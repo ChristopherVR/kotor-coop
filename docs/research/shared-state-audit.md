@@ -6184,6 +6184,70 @@ ordinary door and the reversed-roles refusal were both live-confirmed working.
 `tests/KotorCoop.Tests`: 1590/1591 (the one failure is the documented `HeavyPacketLossStillConverges`
 flake). Both plugin builds clean across five rebuild/redeploy/relaunch cycles.
 
+### Round 67 (2026-08-22) — the "0% idle-while-moving" measurement was blind to a SECOND gait
+defect: the walk/run loop was being restarted from frame 0 on every drive step; fixed and
+live-measured at up to an ~800x drop in restart calls, both directions
+
+Round 65 closed the render-field-stuck-at-idle defect (0% idle-while-moving, both phantom
+directions) but a player report after that fix landed described a different, coexisting
+symptom: "combination of sliding with animation stutter — you can see the run animation
+initiated but it just never looks correct." The idle-while-moving metric cannot see this —
+it only checks WHICH animation id the twin shows, never whether that animation is playing
+smoothly. Full write-up, disassembly, and live traces: `docs/research/phantom-locomotion.md`
+§13.
+
+**Root cause (VERIFIED, static disassembly of `CSWCAnimBase::SetAnimationInternal`,
+`0x0069E8D0`, and its caller `ClientServerSyncHandler_Position`, `+0x12C`/`0x00611F50`):**
+`Odyssey.DriveBody` has called `+0x12C` every drive step since round 61 (60 Hz per driven
+body, `PhantomController.StepIntervalSeconds`) — deliberately, because round 61 measured
+that gating it on the gait edge underperformed at the time. Full disassembly of
+`SetAnimationInternal`'s generic path (`0x0069E987`, where every gait id lands — round 63
+§10.2) this round found **no "already playing this id, skip" guard anywhere in the function**:
+every call unconditionally resolves the animation's name and makes the "play" virtual call.
+Round 61 §8.5's own comment already noted the call's interpolation/rate side effects are
+overwritten by `DriveBody`'s own unconditional writes immediately after — meaning the ONLY
+thing that call's per-step repetition accomplished was restarting the walk/run cycle from
+frame 0, up to 60 times a second per driven body — a stutter, not a rare glitch.
+
+**Why gating it now is safe, when it was not in round 61**: round 65's separate fix (keeping
+`twin+0x58`, `looping_animation`, in sync with the intended gait every step) is what now keeps
+`CSWCCreature::AnimationUpdate`'s per-frame reassertion a no-op — that no longer depends on
+`+0x12C` re-firing every step. Position and the playback-rate scale are also both written
+unconditionally every step already, independently of this call. So the call's only remaining
+job is the one-time "start playing this cycle" trigger a genuine gait transition needs.
+
+**Fix**: `Odyssey.DriveBody` now calls `+0x12C` only when `GaitRule.ShouldReissue` (the
+existing `GaitChanged` helper, already tracked for the `+0x134` skip) reports a real
+transition — one evaluation shared between both use sites instead of two. A new counter
+(`sync12c-calls N in Mms`, in the existing periodic gait log line) makes the call rate
+directly observable.
+
+**Live-measured, both directions, on the same combat-heavy save (`END_M01AA`, ~25 mirrored
+hostiles active), true before/after A/B (temporarily reverted the gate, rebuilt, redeployed,
+measured, then restored the fix and redeployed again)**:
+
+| | before (unconditional, round 61-65 behavior) | after (round 67, edge-triggered) |
+| --- | --- | --- |
+| `+0x12C` calls, aggregate across all driven bodies, per ~5-6s window | 35,311 – 55,014 | 0 – 68 (steady-run windows: 0-2) |
+| idle-while-moving, host→client phantom | — (round 65 baseline: 0%) | 0% (0/308-392 moving samples, two runs) |
+| idle-while-moving, client→host phantom | — (round 65 baseline: 0%) | 0% (0/372-381 moving samples, two runs) |
+| twin animation id during a sustained run, fine-grained (16ms) mover | — | stable, no flicker (300+ consecutive identical samples) |
+
+The idle-while-moving fraction (round 65's own metric) stayed at 0% in every run this round —
+this fix does not regress it. The new evidence is the call-rate collapse (roughly 500-800x on
+the busiest windows) and stable per-sample animation ids, which round 65's own metric could
+never have detected. A coarser (40ms) synthetic mover produced walk/run flicker that a
+finer-grained (16ms) mover did not reproduce — diagnosed as a synthetic-mover/network-relay
+polling-rate aliasing artifact of this round's own test harness, not a shipped defect (see
+phantom-locomotion.md §13.5 for the full reasoning).
+
+`dotnet test tests/KotorCoop.Tests`: 1591/1591 before and after. Both plugin builds clean
+across four rebuild/redeploy/relaunch cycles this round (the A/B needed two extra full
+redeploys). No crash observed. Mirrored enemies were exercised live by construction (this
+save's own active combat encounter; `EnemyPresenceController.DriveOne` calls the identical
+`Odyssey.DriveBody` this round changed) and their calls are folded into the aggregate
+before/after counts above — not independently isolated per-creature this round.
+
 ## 3. A client's XP is actively erased
 
 `ProgressionSnapshotPacket` is host→client only and absolute (CoopAgent.cs, `PumpProgression`):

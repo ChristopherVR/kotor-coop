@@ -28,12 +28,24 @@ Both players, each in their own full game:
   updated that cache to walk/run, the reassertion silently reverted a correct walk/run
   render back to idle almost every frame. The fix keeps that cache in sync with the
   intended gait each step; `animations.2da`'s own schema (walk/run are never `Looping`)
-  turns the reassertion into a guaranteed no-op instead of a guaranteed revert. A mirrored
-  enemy and companion share the identical `DriveBody`/`AnimationUpdate` code path by
-  construction but were not independently re-measured this round (the test save's hostile
-  pack turned out to be stationary guards, not patrollers, and its party roster carries no
-  companion). See `docs/research/phantom-locomotion.md` §12 for the caller table, the
-  static disassembly, and the live fractions.
+  turns the reassertion into a guaranteed no-op instead of a guaranteed revert.
+  **A second, coexisting defect — the loop being visibly restarted/stuttering mid-run even
+  though the render field itself was correct — FIXED and live-verified 2026-08-22
+  (round 67)**: `DriveBody` called the engine's own animation-play handler
+  (`ClientServerSyncHandler_Position`, `+0x12C`) every 60 Hz drive step regardless of
+  whether the requested gait had changed, and disassembly showed that handler's target
+  (`SetAnimationInternal`) has no "already playing this id" guard — every call restarted
+  the cycle from frame 0. Now called only on an actual gait transition; live-measured on a
+  combat-heavy save (~25 mirrored hostiles), the call rate dropped from 35,000-55,000
+  invocations per ~5-6s window (aggregate across all driven bodies) to under 70, with
+  idle-while-moving still 0% in both directions and the twin's animation id holding
+  perfectly stable (300+ consecutive samples, no flicker) through a sustained run. A
+  mirrored enemy and companion share the identical `DriveBody`/`AnimationUpdate` code path
+  by construction — this save's own active combat encounter exercised mirrored enemies
+  through both rounds' fixes, folded into the aggregate counts, but no single enemy's
+  stability was isolated the way the phantom's was; no companion was in this save's party
+  (rounds 63-67 all found the same). See `docs/research/phantom-locomotion.md` §12-§13 for
+  the caller table, the static disassembly, and the live fractions.
 - **Travel together, either player leading**: whoever crosses into another area first,
   the other follows immediately through the engine's own module-transition path (the same
   machinery the built-in `warp` cheat uses) — an announce fires the instant the leader's
@@ -703,6 +715,31 @@ tools/                   RE helpers, demo scripts, the kotor1_0_3 symbol databas
   (matches rounds 63-64's own finding). See
   [docs/research/phantom-locomotion.md](docs/research/phantom-locomotion.md) §12 for the full
   caller table, the disassembly, and the live fractions.
+- ~~**A driven body's walk/run animation restarts/stutters even though the correct id
+  renders.**~~ **FIXED and live-verified, round 67 (2026-08-22).** A player report after
+  round 65's own fix landed named a symptom round 65's "0% idle-while-moving" metric cannot
+  see — that metric only checks WHICH animation id the twin shows, never whether it plays
+  smoothly. Root cause, found by disassembling `CSWCAnimBase::SetAnimationInternal`
+  (`0x0069E8D0`, the real address round 63 corrected): `DriveBody` has called the engine's
+  own play handler (`ClientServerSyncHandler_Position`, twin vtable `+0x12C`) every 60 Hz
+  drive step since round 61, and that handler's own generic dispatch path has no
+  "already playing this id, skip" guard anywhere in it — every single call unconditionally
+  restarts the animation from frame 0, regardless of whether the requested id changed. Safe
+  to fix now in a way it was not in round 61 (whose own edge-triggered first attempt
+  measured worse): round 65's separate `looping_animation` fix already keeps the per-frame
+  reassertion a no-op independent of this call firing every step, so the play call's only
+  remaining job is the one-time "start this cycle" trigger a genuine gait transition needs.
+  **The fix**: call `+0x12C` only on an actual `GaitChanged` transition, not every step;
+  position and the playback rate are untouched, still written every step as before.
+  Live-measured on a save with an active ~25-hostile combat encounter, true before/after A/B
+  (temporarily reverted, rebuilt, redeployed, measured, restored): the call rate dropped from
+  35,000-55,000 invocations per ~5-6s window (aggregate across all driven bodies) to under
+  70, with idle-while-moving still 0% in both directions and the twin's animation id holding
+  perfectly stable (300+ consecutive samples, zero flicker) through a sustained run at a
+  fine-grained mover cadence. See
+  [docs/research/phantom-locomotion.md](docs/research/phantom-locomotion.md) §13 for the
+  disassembly, the before/after A/B numbers, and a synthetic-mover-cadence artifact found and
+  ruled out along the way.
 - **A container/corpse a player has open now locks for everyone else — LIVE-VERIFIED
   (2026-08-22, protocol 37).** Before this, only the opener's own screen ever showed a chest's
   loot panel open, nothing closed it for the other player, and nothing stopped a second player

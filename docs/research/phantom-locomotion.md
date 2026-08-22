@@ -1520,3 +1520,206 @@ reversals of the mover. Every write round 61-64 shipped (`TwinPositionSyncBudget
 `TwinPositionSyncSlot`, the `+0x134` skip for Walk/Run, `RebuildClientAppearance`, the
 `gait-class`/`gait-name`/`sync12c` diagnostics) is untouched — this round's net source change
 is the single `TwinLoopingAnimation` constant and its one write site in `DriveBody`.
+
+---
+
+## 13. Round 67 — the render field was correct (round 65) but the underlying animation was
+being restarted from frame 0 on every drive step; M1 confirmed and fixed, M2 tested and found
+not to apply, live-measured up to an ~800x drop in restart calls, both directions
+
+A player report after round 65's fix landed: "combination of sliding with animation stutter —
+you can see the run animation initiated but it just never looks correct." Round 65 measured
+0% idle-while-moving, i.e. the twin's rendered field IS walk/run — but that metric only checks
+WHICH id is showing, never whether the animation behind that id is playing smoothly. Two
+mechanisms were named to test: **M1** (the gait loop being re-REQUESTED every drive step,
+restarting it from frame 0) and **M2** (the twin being teleported to each sample rather than
+interpolating smoothly). Method: static disassembly of the exact call chain first, then a live
+measurement designed around whatever the disassembly found, per this round's own brief.
+
+### 13.1 M1, the caller-side picture — VERIFIED (re-reading DriveBody as shipped)
+
+`Odyssey.DriveBody` (`src/KotorCoop.Plugin/Odyssey.cs`) has, since round 61, called
+`ClientServerSyncHandler_Position` (twin vtable `+0x12C`, `TwinPositionSyncSlot`,
+`0x00611F50`) **every drive step** — for a phantom, that is every `PhantomController` tick
+that passes its `StepIntervalSeconds` gate, **60 Hz** (`private const double
+StepIntervalSeconds = 1.0 / 60.0`, `src/KotorCoop.Plugin/PhantomController.cs:39` — not the
+brief's approximate "30 Hz", read directly from the source), for every driven body (up to 8
+phantoms plus up to 32 mirrored enemies). Round 61 §8.5 explains why it was made
+unconditional: an edge-triggered first attempt measured WORSE render reliability at the time.
+That reasoning predates round 65's fix.
+
+### 13.2 M1, the callee — VERIFIED (fresh disassembly, SetAnimationInternal's real address)
+
+Full disassembly this round of `CSWCAnimBase::SetAnimationInternal` (`0x0069E8D0` — the
+address round 63 §10.1 corrected; `0x0069EE10` is `GetBoundingRect`, not this function) and
+its caller chain from `+0x12C`. Every gait id (`0x2710`/`0x2712`/`0x2714`) lands on the
+generic "everything outside the hardcoded combat-overlay ranges" path, confirmed at
+`0x0069E987`:
+
+```
+0x0069E987  mov ecx,[esp+0x38]; mov edx,[esp+0x34]; mov eax,[esp+0x30]   ; budget
+0x0069E993  mov esi,[ebx]              ; ebx = the resolved name object (GetAnimationName's result)
+0x0069E99C  call 0x5e5670               ; CExoString::CStr - char* from the resolved name
+0x0069E9A4  call [esi+0x18]             ; virtual call: "play this animation" - THE restart
+0x0069E9A7  mov edi,1                   ; success
+```
+
+**There is no comparison anywhere in this function — or in its caller, `+0x12C`, whose own
+walk/run branches (round 62 §9.1) fall into this same tail "unconditionally, no further
+gate" — between the requested id and whatever animation is already playing.** Every single
+invocation reaches `[esi+0x18]` and restarts playback from the top, regardless of whether the
+id matches what is already playing. This is the exact, verified mechanism M1 predicted: a
+per-step call into a function proven to have no "same id, skip" guard IS a per-step restart.
+(VERIFIED, this round — full disassembly, not inferred from behaviour.)
+
+### 13.3 Why the fix is safe now, when round 61's own edge-triggered attempt was not
+
+Round 61 §8.5's own comment already recorded that `+0x12C`'s interpolation-step and rate side
+effects are overwritten by `DriveBody`'s own unconditional position (`TwinDesiredPosition`)
+and rate (`TwinAnimationSpeedFactor`) writes before the next frame reads them — so nothing
+from that call survives to matter except the play call itself. What round 61 could not have
+known: round 65's fix (keeping `twin+0x58`, `looping_animation`, in sync with the intended
+gait every step, independent of this call) is what makes `CSWCCreature::AnimationUpdate`'s
+own per-frame reassertion a structural no-op now — that no longer depends on `+0x12C`
+re-firing every step to "win" against the reassertion (round 61's own reason for calling it
+continuously). With that dependency gone, the play call's only remaining job is the one-time
+"start playing this cycle" trigger a genuine gait transition needs.
+
+### 13.4 The fix
+
+`src/KotorCoop.Plugin/Odyssey.cs`, `DriveBody`: the stateful `GaitChanged(creature, want)`
+check (previously evaluated once, later in the function, only to gate the `+0x134`
+skip/diagnostics) is now evaluated once and shared: the `+0x12C` call (`syncPosition`, plus
+its existing round-62 before/after diagnostic) now only runs `if (gaitChanged)`. Position
+(`TwinDesiredPosition`), the playback rate (`TwinAnimationSpeedFactor`), and round 65's
+`TwinLoopingAnimation` write are all untouched — still unconditional every step, exactly as
+round 65 shipped them. A new counter, `_syncPositionCallCount`, increments on every actual
+`+0x12C` invocation and is folded into the existing periodic `gait:` log line as
+`sync12c-calls N in Mms`, reset each time it prints — direct, always-on, live-observable
+evidence of the call rate with no extra flag to enable.
+
+### 13.5 M2 — tested, found not to apply to this architecture
+
+`PhantomController.DriveDirect` already computes the twin's shown position with its own
+exponential chase (`_shownPosition`, tau-based `alpha`) **every 60 Hz drive step**, before
+`DriveBody` ever runs — the position `DriveBody` writes to the twin every step is therefore
+already a small, continuously-smoothed increment, not a raw 30 Hz network sample. `+0x1E8`
+(`TwinDesiredPositionBudget`) is written `0` every step (round 63 §10.5 already tested and
+reverted writing `0x200` there instead, with no effect on the render symptom) — "snap to what
+I'm handing you now" is the correct semantics for a value that is already pre-smoothed
+upstream; asking the engine to interpolate on top of an already-interpolated stream would be
+double-smoothing, not a fix. Live-measured this round (both directions, a fine-grained 16 ms
+mover — see §13.6): per-sample position deltas during sustained movement were smooth, with no
+0-then-double-step pattern (host to client: mean 0.115, min 0.013, max 0.43 units per 40 ms
+watcher sample; client to host: mean 0.10, min 0.007, max 0.26). **M2 does not describe a real
+defect in this codebase as shipped** — the position half of the pipeline was already doing
+what M2's fix would have asked for.
+
+### 13.6 Live measurement — VERIFIED, a true before/after A/B, both directions
+
+Rig: `tools/demo.ps1` cold start (`END_M01AA` autosave, the same save every round since 60
+has used — this pass's save happened to have an active, ~25-hostile combat encounter already
+in progress, so mirrored-enemy `DriveBody` calls are folded into every count below by
+construction, not isolated separately). Mover: a direct write to the engine player's own
+position via `SharedBlock.OffsetEnginePlayerPointer` (round 60 §7.1's non-scan address
+source), properly time-integrated (an earlier draft of this round's own test script
+recomputed position from total elapsed time at the CURRENT phase's speed on every tick, which
+produced a spurious ~24-unit instantaneous jump at the walk-to-run boundary — a test-harness
+bug, caught and fixed before the numbers below were taken, not a game defect). Sampler: an
+explicit-address reader of the peer's phantom (`CSWSCreature+0x90` position, `+0xD4` server
+anim, `+0xA8C` moveState, `+0xA98` runFlag, twin `+0x48` anim, twin `+0x1F8` rate), addresses
+from each side's own `"spawned phantom ... at 0xADDR"` log line — never a vtable scan, per
+round 60 §7.1's own tooling-trap finding. Script: this round's scratch `gaitcheck67.ps1`.
+
+**A true before/after, not an inferred one**: the gate was temporarily reverted to
+unconditional (matching round 61-65's shipped behaviour, with the new counter left in place
+to measure it), rebuilt, installed to both GOG directories, and the rig relaunched; measured;
+then the fix was restored, rebuilt, reinstalled, and the rig relaunched again for the "after"
+numbers and every other measurement in this section.
+
+| | before (unconditional +0x12C, rounds 61-65) | after (round 67, edge-triggered) |
+| --- | --- | --- |
+| +0x12C (sync12c) calls, aggregate across all driven bodies, per ~5-6s log window | 35,311 / 40,720 / 37,416 / 55,014 / 43,428 / 45,337 / 48,452 | 68 / 10 / 10 / 64 / 40 / 39 (sustained-run windows: 0, 2) |
+| idle-while-moving, host to client phantom | not independently re-measured this round (round 65's own baseline: 0%) | 0% (0/308 and 0/392 moving samples, two runs, 40ms and 16ms cadence) |
+| idle-while-moving, client to host phantom | not independently re-measured this round (round 65's own baseline: 0%) | 0% (0/381 and 0/372 moving samples, two runs) |
+| twin animation id, sustained run phase, 16ms mover cadence | not applicable (id was already correct per round 65; this round measures STABILITY, not correctness) | rock-stable - 300+ and 321 consecutive identical samples with zero flicker in the two cleanest runs |
+
+The call-rate drop is roughly **500-800x** on the busiest (most-driven-bodies) windows, and
+sustained-run windows post-fix show single-digit calls per 5 seconds across the entire
+driven-body population — consistent with "only a genuine gait transition calls this now," not
+"every step for every body." The idle-while-moving fraction — round 65's own success metric —
+stayed at 0% in every post-fix run this round; the fix does not regress it, it closes a
+defect that metric could not see.
+
+### 13.7 A synthetic-mover artifact, found, diagnosed, and separated from the real result
+
+An early 40 ms-cadence mover run showed the twin's animation id flickering rapidly between
+`0x2712` (walk) and `0x2714` (run) for a large stretch of a sustained-run window before
+settling — at first glance indistinguishable from a real defect. Two things ruled it out as
+one: (1) the position trace under that same run showed a large instantaneous jump (up to ~24
+units in one sample) at the walk-to-run phase boundary, traced to the test-harness
+position-integration bug described in §13.6 and fixed before further testing; (2) re-running
+with a finer-grained (16 ms, closer to real per-frame movement granularity) mover write
+cadence and proper position integration produced a rock-stable single-id trace for the entire
+sustained run phase (hundreds of consecutive identical samples, zero flicker), on the SAME
+save, SAME fix, SAME code. A coarse, bursty synthetic mover beating against the network
+relay's own independent polling rate is the far more likely explanation for the residual
+flicker seen at 40 ms than any defect in `DriveBody`'s own logic, which writes the twin's
+position and gait every single drive step regardless of mover cadence. **Not conclusively
+ruled out as a real, separate, upstream noise-sensitivity in the walk/run threshold**
+(`GaitRule.IsRun`, a bare 2.0 u/s cutoff with no hysteresis, unlike the "moving" decision's
+own 0.35 s `StillnessSeconds` hysteresis) — flagged as a candidate follow-up in §13.9, not
+fixed this round, since the finer-cadence, more realistic-movement traces did not reproduce
+it and no real player input could be exercised to settle the question definitively
+(`docs/live-verification.md`: injected keystrokes still do not reach this game).
+
+### 13.8 Screenshots — attempted, unusable this pass, honestly reported
+
+Per this round's brief, a screenshot burst was attempted (`tools/shot.ps1`) during a live run
+phase. **The captures did not show the target KOTOR window** — both a phantom-watching
+instance and, as a control, the mover instance itself returned screenshots of an unrelated
+application's window (Dota 2) occupying the same screen region. `shot.ps1` captures a
+screen-coordinate region after attempting `SetForegroundWindow`/`BringWindowToTop`; in this
+session's desktop state that call did not actually bring the target window to the top of the
+real screen z-order, so `CopyFromScreen` captured whatever was genuinely on top instead. This
+is a report about this session's screenshot tooling in this desktop environment, not about
+the game or the fix — the live memory-read telemetry in §13.6 is unaffected (it never
+depended on window focus or screen content). Not investigated further this round; a future
+pass wanting real screenshots should first confirm `shot.ps1`'s captured image actually shows
+the intended window before trusting it.
+
+### 13.9 What remains (NEEDS-LIVE, not closed this round)
+
+- **Whether the walk/run threshold's lack of hysteresis is a real, separate contributor to
+  stutter under genuine network jitter** (§13.7). This round's evidence leans toward "mostly a
+  synthetic-mover artifact" but did not rule it out with real player input, which this
+  project's tooling still cannot inject.
+- **Mirrored enemy and companion, independently isolated.** This round's save had ~25 active
+  hostiles and their `+0x12C` calls are folded into every aggregate count in §13.6 by
+  construction (`EnemyPresenceController.DriveOne` calls the identical `Odyssey.DriveBody`
+  this round changed — confirmed by reading the call site, unchanged since round 65), but no
+  single enemy's id-stability was sampled in isolation the way the phantom was in §13.6/13.7.
+  No companion was in this save's party (same finding as rounds 63-65).
+- **The tooling gap** (round 60 §7.1, reconfirmed every round since) is still open at the
+  source — this round again worked around it by hand (the plugin's own spawn-log line,
+  `SharedBlock.OffsetEnginePlayerPointer` for the mover) rather than fixing
+  `phantomgait.ps1`'s auto-resolve or `teleport.ps1`.
+- **Real screenshots of the fix**, blocked this round by the desktop/window-focus issue in
+  §13.8, not by anything in the game or the fix itself.
+
+### 13.10 What did NOT regress
+
+`dotnet test tests/KotorCoop.Tests` stayed at **1591/1591** passing, run in full before this
+round's change and again after, on the working tree with the fix applied. Both plugin builds
+(`src/KotorCoop.Plugin/build.ps1 -Install`) clean for both GOG installs `tools/demo.ps1` uses,
+across four rebuild/redeploy/relaunch cycles this round (two extra for the temporary
+before/after A/B, cleanly reverted before the final build — `git diff` shows no leftover
+diagnostic code). No crash observed across the whole session: two directions of sustained
+walk-then-run, a live combat encounter already active in the loaded save, and repeated rig
+stop/relaunch cycles. Every write rounds 61-65 shipped (`TwinPositionSyncBudget`,
+`TwinPositionSyncSlot`, the `+0x134` skip for Walk/Run, `RebuildClientAppearance`,
+`TwinLoopingAnimation`, and the existing `gait-class`/`gait-name`/`sync12c` diagnostics) is
+byte-for-byte unchanged except for the diagnostic's own gating; this round's net source change
+is the single shared `gaitChanged` evaluation, the `if (gaitChanged)` gate around the `+0x12C`
+call and its diagnostic, and the new `_syncPositionCallCount` counter folded into the existing
+periodic gait log line.
