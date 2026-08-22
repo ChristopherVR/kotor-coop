@@ -1032,6 +1032,7 @@ public static class PacketCodec
         w.WriteString(packet.Tag, ProtocolConstants.MaxTagLength);
         w.WriteUInt8((byte)packet.Kind);
         w.WriteUInt8(packet.Active ? (byte)1 : (byte)0);
+        w.WriteUInt32(packet.TargetId); // version 37: InteractionKind.Container's placeable id
         return w.Failed ? 0 : w.Position;
     }
 
@@ -1048,16 +1049,17 @@ public static class PacketCodec
         string tag = r.ReadString();
         byte kind = r.ReadUInt8();
         byte active = r.ReadUInt8();
+        uint targetId = r.ReadUInt32();
 
         // ⚠ An unknown kind is DROPPED rather than coerced. A lock whose release rules this
         // build does not know is worse than no lock at all, because it is the OWNER that
         // would hold the body and never learn when to stop.
-        if (r.Failed || kind > (byte)InteractionKind.Conversation)
+        if (r.Failed || kind > (byte)InteractionKind.Container)
         {
             return null;
         }
 
-        return new InteractionClaimPacket(peerId, module, tag, (InteractionKind)kind, active != 0);
+        return new InteractionClaimPacket(peerId, module, tag, (InteractionKind)kind, active != 0, targetId);
     }
 
     public static int Write(Span<byte> buffer, InteractionLockPacket packet)
@@ -1076,6 +1078,7 @@ public static class PacketCodec
             w.WriteUInt32(entry.PeerId);
             w.WriteString(entry.Tag, ProtocolConstants.MaxTagLength);
             w.WriteUInt8((byte)entry.Kind);
+            w.WriteUInt32(entry.TargetId); // version 37
         }
 
         return w.Failed ? 0 : w.Position;
@@ -1104,13 +1107,14 @@ public static class PacketCodec
             uint peerId = r.ReadUInt32();
             string tag = r.ReadString();
             byte kind = r.ReadUInt8();
+            uint targetId = r.ReadUInt32();
 
-            if (r.Failed || kind > (byte)InteractionKind.Conversation)
+            if (r.Failed || kind > (byte)InteractionKind.Container)
             {
                 return null;
             }
 
-            locks.Add(new InteractionLock(peerId, tag, (InteractionKind)kind));
+            locks.Add(new InteractionLock(peerId, tag, (InteractionKind)kind, targetId));
         }
 
         return r.Failed ? null : new InteractionLockPacket(serverTimeMs, module, locks);

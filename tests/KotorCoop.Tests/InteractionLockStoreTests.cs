@@ -138,4 +138,109 @@ public class InteractionLockStoreTests
         Assert.Single(store.Collect(Module, 1000));
         Assert.Empty(store.Collect(Module, 1000 + InteractionLockStore.DefaultLeaseMs + 1));
     }
+
+    // ---- InteractionKind.Container (docs/research/container-sync.md) --------------------
+
+    private static InteractionClaimPacket ContainerClaim(uint peer, uint targetId = 0x131, bool active = true) =>
+        new(peer, Module, Tag: string.Empty, InteractionKind.Container, active, targetId);
+
+    [Fact]
+    public void AContainerClaimWithNoTargetIdClaimsNothing()
+    {
+        // The container-kind analogue of "an empty tag claims nothing" — TargetId 0 is never a
+        // real placeable id.
+        InteractionLockStore store = new();
+
+        Assert.False(store.Claim(ContainerClaim(2, targetId: 0), 1000));
+        Assert.Equal(0u, store.HolderOfContainer(Module, 0x131, 1000));
+    }
+
+    [Fact]
+    public void TheFirstFreshContainerClaimWins()
+    {
+        InteractionLockStore store = new();
+
+        Assert.True(store.Claim(ContainerClaim(2), 1000));
+        Assert.False(store.Claim(ContainerClaim(3), 1000));
+        Assert.Equal(2u, store.HolderOfContainer(Module, 0x131, 1000));
+    }
+
+    [Fact]
+    public void TheOpenerMayReOpenTheirOwnHeldContainer()
+    {
+        // Re-entrancy: the SAME player using the container they already hold must never be
+        // refused by the very lock protecting it from everyone else.
+        InteractionLockStore store = new();
+        store.Claim(ContainerClaim(2), 1000);
+
+        Assert.True(store.Claim(ContainerClaim(2), 1500));
+        Assert.Equal(2u, store.HolderOfContainer(Module, 0x131, 1500));
+    }
+
+    [Fact]
+    public void ClosingThePanelReleasesTheContainerImmediately()
+    {
+        InteractionLockStore store = new();
+        store.Claim(ContainerClaim(2), 1000);
+
+        store.Claim(ContainerClaim(2, active: false), 1100);
+
+        Assert.Equal(0u, store.HolderOfContainer(Module, 0x131, 1100));
+        Assert.True(store.Claim(ContainerClaim(3), 1100));
+    }
+
+    [Fact]
+    public void TwoContainersSharingATagAreStillIndependentLocks()
+    {
+        // The reason a container keys on the object id and not the tag at all: the base game
+        // routinely places several placeables with the SAME tag (every generic footlocker in a
+        // module, typically). Two peers opening two DIFFERENT footlockers that happen to share
+        // a tag must not contend with each other.
+        InteractionLockStore store = new();
+
+        Assert.True(store.Claim(ContainerClaim(2, targetId: 0x131), 1000));
+        Assert.True(store.Claim(ContainerClaim(3, targetId: 0x132), 1000));
+
+        Assert.Equal(2u, store.HolderOfContainer(Module, 0x131, 1000));
+        Assert.Equal(3u, store.HolderOfContainer(Module, 0x132, 1000));
+    }
+
+    [Fact]
+    public void AConversationAndAContainerNeverCollideEvenAtTheSameNumericId()
+    {
+        // TargetId and a tag live in disjoint keyspaces (InteractionLockStore's own remarks):
+        // claiming container id 0x131 must not appear to hold, or be blocked by, an unrelated
+        // conversation.
+        InteractionLockStore store = new();
+        store.Claim(Claim(2, tag: "end_trask"), 1000);
+
+        Assert.True(store.Claim(ContainerClaim(3, targetId: 0x131), 1000));
+        Assert.Equal(2u, store.HolderOf(Module, "end_trask", 1000));
+        Assert.Equal(3u, store.HolderOfContainer(Module, 0x131, 1000));
+    }
+
+    [Fact]
+    public void CollectCarriesTheContainerTargetIdThrough()
+    {
+        InteractionLockStore store = new();
+        store.Claim(ContainerClaim(2, targetId: 0x131), 1000);
+
+        InteractionLock entry = Assert.Single(store.Collect(Module, 1000));
+        Assert.Equal(InteractionKind.Container, entry.Kind);
+        Assert.Equal(0x131u, entry.TargetId);
+        Assert.Equal(string.Empty, entry.Tag);
+    }
+
+    [Fact]
+    public void ALapsedContainerLeaseFreesItForSomebodyElse()
+    {
+        InteractionLockStore store = new();
+        store.Claim(ContainerClaim(2), 1000);
+
+        long afterLease = 1000 + InteractionLockStore.DefaultLeaseMs + 1;
+
+        Assert.Equal(0u, store.HolderOfContainer(Module, 0x131, afterLease));
+        Assert.True(store.Claim(ContainerClaim(3), afterLease));
+        Assert.Equal(3u, store.HolderOfContainer(Module, 0x131, afterLease));
+    }
 }

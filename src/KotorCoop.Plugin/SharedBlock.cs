@@ -1457,6 +1457,25 @@ internal struct SharedBlock
     /// </summary>
     public const uint CheatKindOpenDoor = 17;
 
+    /// <summary>
+    /// CONTAINER-SYNC STAGING VERB (2026-08-22): makes the local player USE a placeable through
+    /// <c>Odyssey.UseObject</c> — the engine's own client-to-server "I clicked that" input pipe,
+    /// so the real <c>AIActionUseObject</c>/<c>CSWSPlaceable::EventHandler</c>/<c>OpenInventory</c>
+    /// path runs exactly as a real click would (docs/research/container-sync.md), unlike
+    /// <see cref="CheatKindOpenDoor"/>'s door-primitive-based dance: a container needs no walk,
+    /// no walkmesh coupling, just the use action. <see cref="OffsetCheatTarget"/> is the
+    /// placeable's object id, <see cref="OffsetCheatText"/> its tag; both empty means "the
+    /// nearest CONTAINER placeable" (has_inventory set — a switch/lever is skipped).
+    ///
+    /// This is the ONLY caller-side instrument the live-test script needs: the container-use
+    /// GATE and the open/close mirror both live entirely inside the normal per-frame plugin
+    /// machinery (<c>ContainerUseHook</c>, <c>InteractionLockController</c>) and need no staging
+    /// verb of their own — they react to whatever a real click OR this verb produces.
+    ///
+    /// ⚠ 18, because 7-17 are taken. Take the next FREE number.
+    /// </summary>
+    public const uint CheatKindUsePlaceable = 18;
+
     /// <summary>The request was carried out here.</summary>
     public const int CheatStatusApplied = 1;
 
@@ -1888,6 +1907,32 @@ internal struct SharedBlock
     /// counting — the right fix for a genuine anomaly is upstream, never a forced
     /// resurrection.</summary>
     public const int OffsetLivenessAnomalyCount = 0x3F04;
+
+    // ---- container-lock target ids (version 50, region 0x3F08..0x3F1C, no TotalSize growth) --
+    //
+    // InteractionKind.Container (docs/research/container-sync.md) keys on a placeable OBJECT
+    // ID rather than the tag InteractionKind.Conversation already carries at
+    // OffsetLocalInteractionTag/OffsetInteractionLocks — the base game routinely places several
+    // placeables with the SAME tag (every generic footlocker in a module, typically), so a
+    // container claim needs the id instead. Rather than widen InteractionLockStride (0x28,
+    // every one of whose four bytes is already spoken for by peerId/kind/tag) this rides in the
+    // free tail after the creature-liveness region: OffsetLivenessAnomalyCount ends at 0x3F04 +
+    // 4 = 0x3F08, and TotalSize is 0x4000, leaving 0xF8 bytes free — this region uses 20 of
+    // them. No TotalSize growth, no relayout of anything else.
+
+    /// <summary>Plugin -&gt; agent. The object id of the placeable the local player is claiming
+    /// via a Container-kind interaction claim, or 0. Meaningless (and left 0) for any other
+    /// kind, which uses <see cref="OffsetLocalInteractionTag"/> instead.</summary>
+    public const int OffsetLocalInteractionTargetId = 0x3F08;
+
+    /// <summary>Agent -&gt; plugin. Parallel array to <see cref="OffsetInteractionLocks"/>, SAME
+    /// index correspondence, one u32 per slot: the placeable object id a peer's Container-kind
+    /// lock names. 0 for a slot that is empty or names a non-Container kind. Occupies
+    /// 0x3F0C..0x3F1C.</summary>
+    public const int OffsetInteractionLockTargetIds = 0x3F0C;
+
+    public const int InteractionLockTargetIdStride = 0x04;
+
     // ---- generic trigger relay (0x3B88..0x3BD8, no TotalSize growth) --------------
     //
     // A GENERIC trigger's OnEnter (a CSWSTrigger whose script starts a cutscene, dialogue or

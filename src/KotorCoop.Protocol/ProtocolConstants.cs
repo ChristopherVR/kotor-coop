@@ -189,8 +189,20 @@ public static class ProtocolConstants
     /// every OTHER peer fires the trigger locally against the origin's phantom, through the
     /// SAME <c>TriggerRelayController.HandleRequests</c>/<c>OdysseyTriggers.FireTrigger</c>
     /// path the host already used for a client's report — now reachable from any instance.
-    /// Still under <c>trigger_relay</c> (default ON).</summary>
-    public const byte Version = 36;
+    /// Still under <c>trigger_relay</c> (default ON).
+    /// Version 37: <see cref="InteractionKind.Container"/> — a container/corpse joins the
+    /// per-object interaction lock (docs/research/container-sync.md), so a player using a
+    /// shared chest is refused inside the engine while a peer already has it open (the same
+    /// "one at a time" rule <see cref="InteractionKind.Conversation"/> already enforces), and
+    /// every OTHER instance plays the container's open animation on its own copy the moment the
+    /// claim appears, and the close animation the moment the lease ends. Before this, only the
+    /// opener's own screen ever showed the panel open, nothing closed it for the other side, and
+    /// nothing stopped a second player from opening the same container mid-loot.
+    /// <see cref="InteractionClaimPacket"/> and <see cref="InteractionLock"/> both gain
+    /// <c>TargetId</c> (a placeable object id), since containers repeat tags across instances of
+    /// the same footlocker where <see cref="InteractionKind.Conversation"/>'s NPC tags do not.
+    /// </summary>
+    public const byte Version = 37;
 
     /// <summary>Journal quest tags are resrefs plus a little slack.</summary>
     public const int MaxJournalTagLength = 32;

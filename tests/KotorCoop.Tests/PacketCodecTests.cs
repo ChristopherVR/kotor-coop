@@ -786,6 +786,18 @@ public class PacketCodecTests
     }
 
     [Fact]
+    public void InteractionClaimContainerRoundTripsWithTheTargetIdAndAnEmptyTag()
+    {
+        Span<byte> buffer = stackalloc byte[ProtocolConstants.MaxPacketSize];
+        InteractionClaimPacket original = new(
+            PeerId: 5, "end_m01aa", Tag: string.Empty, InteractionKind.Container, Active: true, TargetId: 0x131);
+
+        int length = PacketCodec.Write(buffer, original);
+        Assert.True(length > 0);
+        Assert.Equal(original, PacketCodec.ReadInteractionClaim(buffer[..length]));
+    }
+
+    [Fact]
     public void InteractionClaimRejectsAnUnknownKind()
     {
         // A lock whose release rules this build does not know is worse than no lock: it is
@@ -795,7 +807,7 @@ public class PacketCodecTests
             buffer,
             new InteractionClaimPacket(5, "end_m01aa", "end_trask", InteractionKind.Conversation, true));
 
-        buffer[length - 2] = 0x7F; // the kind byte, second from the end
+        buffer[length - 6] = 0x7F; // the kind byte: TargetId(4) + Active(1) trail it now
 
         Assert.Null(PacketCodec.ReadInteractionClaim(buffer[..length]));
     }
@@ -815,6 +827,22 @@ public class PacketCodecTests
         Assert.NotNull(decoded);
         Assert.Equal(original.ServerTimeMs, decoded.ServerTimeMs);
         Assert.Equal(original.Module, decoded.Module);
+        Assert.Equal(original.Locks, decoded.Locks);
+    }
+
+    [Fact]
+    public void InteractionLockRoundTripsAContainerEntryWithItsTargetId()
+    {
+        Span<byte> buffer = stackalloc byte[ProtocolConstants.MaxPacketSize];
+        InteractionLockPacket original = new(
+            ServerTimeMs: 1234,
+            "end_m01aa",
+            [new InteractionLock(2, Tag: string.Empty, InteractionKind.Container, TargetId: 0x131)]);
+
+        int length = PacketCodec.Write(buffer, original);
+        InteractionLockPacket? decoded = PacketCodec.ReadInteractionLock(buffer[..length]);
+
+        Assert.NotNull(decoded);
         Assert.Equal(original.Locks, decoded.Locks);
     }
 

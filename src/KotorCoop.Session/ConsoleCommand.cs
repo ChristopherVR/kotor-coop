@@ -256,6 +256,17 @@ public enum CoopCommandKind
     /// own guard). Never walks the player through it.
     /// </summary>
     OpenDoor,
+
+    /// <summary>
+    /// CONTAINER-SYNC STAGING VERB (2026-08-22): makes the local player USE a placeable
+    /// (chest, corpse, footlocker) through the engine's own use-object input, so the real
+    /// OnUsed/GUI path runs and this instance's container-lock/animation machinery has
+    /// something real to react to. <see cref="CoopCommand.Address"/> carries the placeable's
+    /// tag, or an object id in the three spellings <see cref="ConsoleCommand.TryParseObjectId"/>
+    /// accepts; empty means "the nearest container placeable". See
+    /// docs/research/container-sync.md.
+    /// </summary>
+    UsePlaceable,
 }
 
 /// <summary>
@@ -727,6 +738,31 @@ public static class ConsoleCommand
                 }
 
                 return new CoopCommand(CoopCommandKind.OpenDoor, Address: rest[0]);
+
+            // CONTAINER-SYNC STAGING VERB: the same shape as opendoor, for a placeable —
+            // see CoopCommandKind.UsePlaceable.
+            case "useplaceable":
+                if (rest.Length > 1)
+                {
+                    return new CoopCommand(
+                        CoopCommandKind.Invalid,
+                        Error: "useplaceable takes one placeable, e.g. useplaceable end_chest01 "
+                            + "(or bare, for the nearest container)");
+                }
+
+                if (rest.Length == 0)
+                {
+                    return new CoopCommand(CoopCommandKind.UsePlaceable);
+                }
+
+                if (!TryParseObjectId(rest[0], out _) && !IsResRef(rest[0], maxLength: 31))
+                {
+                    return new CoopCommand(
+                        CoopCommandKind.Invalid,
+                        Error: $"'{rest[0]}' is not a placeable tag or object id");
+                }
+
+                return new CoopCommand(CoopCommandKind.UsePlaceable, Address: rest[0]);
 
             case "items":
                 // A cap rather than a page: the listing goes to the agent's log, where a
@@ -1415,6 +1451,7 @@ public static class ConsoleCommand
         // order opens the pre-store flush window a movie might swallow.
         "  usedoor [tag|id]                walk through a transition door (nearest by default)",
         "  opendoor [tag|id]               open an ORDINARY door (no transition; nearest by default)",
+        "  useplaceable [tag|id]           use a container/corpse/switch (nearest container by default)",
         "  census [id]         what my enemy census holds, and what my own engine says of each id",
         "  resolve <id>        what the ENGINE knows about one id, in one frame (plugin log has the chain)",
         "retail console cheats, already co-op-safe (they touch only your game):",

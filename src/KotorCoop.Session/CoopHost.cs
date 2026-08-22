@@ -1022,17 +1022,20 @@ public sealed class CoopHost : ICoopSession
     /// Called every tick whether or not anything is claimed, so the module the broadcast is
     /// scoped to is always current: a lock names a TAG, and tags only mean anything inside
     /// the module that loaded them.</summary>
-    public void PublishInteractionClaim(string module, string tag, InteractionKind kind, bool active)
+    public void PublishInteractionClaim(
+        string module, string tag, InteractionKind kind, bool active, uint targetId = 0)
     {
         _interactionModule = module ?? string.Empty;
 
-        if (string.IsNullOrEmpty(tag))
+        // A Container claim keys on the object id instead of the tag (InteractionLockStore's
+        // own remarks) — an empty tag is the NORMAL shape for one, not "nothing to claim".
+        if (string.IsNullOrEmpty(tag) && !(kind == InteractionKind.Container && targetId != 0))
         {
             return;
         }
 
         _interactionLocks.Claim(
-            new InteractionClaimPacket(HostPeerId, _interactionModule, tag, kind, active),
+            new InteractionClaimPacket(HostPeerId, _interactionModule, tag, kind, active, targetId),
             SessionClock.NowMs);
     }
 

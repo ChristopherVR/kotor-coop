@@ -781,6 +781,16 @@ public sealed class KotorGameBridge : IGameBridge
     private const int BlockInteractionLockStride = 0x28;
     private const int BlockInteractionLockCapacity = 4;
 
+    // Container-lock target ids (SharedBlock version 50, region 0x3F08..0x3F1C): a placeable
+    // object id parallel to the tag/kind fields above, since InteractionKind.Container keys on
+    // the id rather than the tag — see docs/research/container-sync.md. Placed in the free
+    // tail after the creature-liveness region (0x3C00..0x3F08, TotalSize 0x4000) rather than
+    // widening BlockInteractionLockStride, so every existing consumer of that stride/offset
+    // pair is untouched.
+    private const int BlockLocalInteractionTargetId = 0x3F08;
+    private const int BlockInteractionLockTargetIds = 0x3F0C;
+    private const int BlockInteractionLockTargetIdStride = 0x04;
+
     private const int BlockLocalDialogueNode = 0x1320;
     private const int BlockLocalDialogueNodeSerial = 0x1324;
     private const int BlockRemoteDialogueNode = 0x1328;
@@ -832,7 +842,7 @@ public sealed class KotorGameBridge : IGameBridge
     /// <b>ItemHarnessTests.TheBlockVersionIsTheSameNumberInBothHalves reads both files and
     /// fails the build if they disagree</b> — added with 42, because nothing had ever
     /// enforced the warning above.</summary>
-    public const string PluginSignature = "4B 4F 43 4F 4F 50 30 31 31 00 00 00 01 EE FF C0";
+    public const string PluginSignature = "4B 4F 43 4F 4F 50 30 31 32 00 00 00 01 EE FF C0";
 
     /// <summary>Agent's view of which coop item id occupies each plugin item slot.</summary>
     private readonly uint[] _itemSlotIds = new uint[BlockItemCapacity];
@@ -4386,11 +4396,12 @@ public sealed class KotorGameBridge : IGameBridge
     /// Reads the object the local player is interacting with, so the session can claim it on
     /// their behalf. An empty tag means "nothing claimed" and is the ordinary case.
     /// </summary>
-    public bool TryReadLocalInteraction(out string tag, out uint kind, out bool active)
+    public bool TryReadLocalInteraction(out string tag, out uint kind, out bool active, out uint targetId)
     {
         tag = string.Empty;
         kind = 0;
         active = false;
+        targetId = 0;
 
         if (_pluginBlock == 0)
         {
@@ -4401,6 +4412,7 @@ public sealed class KotorGameBridge : IGameBridge
             _pluginBlock + BlockLocalInteractionTag, BlockInteractionTagLength, out tag);
         ok &= _memory.TryReadUInt32(_pluginBlock + BlockLocalInteractionKind, out kind);
         ok &= _memory.TryReadUInt32(_pluginBlock + BlockLocalInteractionActive, out uint live);
+        ok &= _memory.TryReadUInt32(_pluginBlock + BlockLocalInteractionTargetId, out targetId);
 
         tag ??= string.Empty;
         active = live != 0;
@@ -4426,10 +4438,13 @@ public sealed class KotorGameBridge : IGameBridge
         {
             InteractionLock entry = locks![i];
             nint slot = _pluginBlock + BlockInteractionLocks + (i * BlockInteractionLockStride);
+            nint targetIdSlot = _pluginBlock + BlockInteractionLockTargetIds
+                + (i * BlockInteractionLockTargetIdStride);
 
             ok &= _memory.TryWrite(slot, entry.PeerId);
             ok &= _memory.TryWrite(slot + 4, (uint)entry.Kind);
             ok &= _memory.TryWriteAsciiString(slot + 8, entry.Tag ?? string.Empty, BlockInteractionTagLength);
+            ok &= _memory.TryWrite(targetIdSlot, entry.TargetId);
         }
 
         ok &= _memory.TryWrite(_pluginBlock + BlockInteractionLockCount, (uint)count);
