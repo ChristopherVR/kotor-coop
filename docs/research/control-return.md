@@ -138,6 +138,121 @@ pwsh tools\control-return-live.ps1 -Game1 'C:\GOG Games\Star Wars KOTOR (GOG)' -
 - INFERRED (strong, from the address-cited disassembly in `client-control-lock.md`): a real
   engine control switch reorders `CSWParty`'s member array so the driven creature becomes
   `member[0]`, which is what puts the PC at the END of the array in this exact scenario.
-- NEEDS-LIVE (this pass did not run the game): that the fix, applied, actually converges live —
-  `tools/control-return-live.ps1` is the script to run next round. The three-part log signature
-  above is the pass criterion.
+- NEEDS-LIVE, still open after the 2026-08-22 live pass below — see that section for exactly
+  what remains and why.
+
+## Live pass (2026-08-22)
+
+Ran `tools/control-return-live.ps1` against a live `tools/demo.ps1` pair (END_M01AA, Trask
+recruited). Three of the four scenarios closed; the fourth — the regression itself — did not,
+and tracing why it did not is the actual finding of this pass.
+
+### The `leader <slot|pc>` verb
+
+Built to remove the one manual step the script could never automate (`docs/live-verification.md`:
+injected keystrokes do not reach this game). Follows `applyeffect`'s wiring exactly:
+`ConsoleCommand.Parse` → `CoopCommandDispatcher.Leader` → `CheatRequest(CheatKinds.Leader, …)` →
+`CheatController.Leader` → `Odyssey.SwitchControlToPartySlot`/`SwitchControlToPc`
+(`src/KotorCoop.Plugin/Odyssey.cs`).
+
+**Trask is party-roster slot 0 in `end_m01aa`, LIVE-CONFIRMED via `partystate.ps1`** — not slot 1
+as this round's own brief assumed. `phantom-locomotion.md` §14.3 already recorded this once;
+this pass re-confirmed it directly (`partystate.ps1 -ProcId <client>` → `member 0: slot 0
+objectId 0x127`).
+
+The verb's write mechanism went through two live-verified revisions:
+
+1. **First version — id write only, `CClientExoAppInternal + 0x20`.** The reverse of
+   `KotorGameBridge.LockControlToPlayer`'s own per-tick revert. A raw-memory read tool
+   (independent of the plugin) confirmed the write lands and **holds stable while
+   disconnected** — 2.5+ seconds, no drift, exactly as `LockControlToPlayer`'s own "toggling
+   control (Tab) and watching it flip" claim predicts for this field. But `leader 0` followed
+   by `reconnect` still produced no `ControlReturnController` claim across a 30 s window.
+2. **Second version — also writes `CSWParty`'s member[0] client-space id (`party + 0x24`),
+   client-control-lock.md's own "Recipe A" for the reverse direction.** Tracing
+   `Odyssey.GetPlayerCreaturePointer` (`ControlReturnController` and
+   `PartyRosterController.IsControllingRosterCompanion` both key off it) via
+   `tools/disasm.py` found it does **not** read `internal + 0x20` at all — it is
+   `CServerExoApp::GetPlayerCreature` (0x004B2820), a chain that resolves through
+   `CServerExoAppInternal` (`0x4B2820 → 0x4AEA40 → 0x4B4CB0 → 0x4AE920 → 0x4B2AE0`), not through
+   the client-side `CSWParty` `GetSWPartyFn` resolves either. So this write was added too —
+   member[0]'s id only, not the full 0x88-byte block or member[1]'s (the doc's own caveat:
+   cosmetic only, never a crash risk since nothing written is a pointer). Live-confirmed via
+   the same raw-read tool: after `leader 0`, `party.member0.client_object_id` reads
+   `0x80000127` (Trask, correctly flagged) and holds. **Still no claim.**
+
+Both writes are shipped (Odyssey.cs's `SwitchControlToPartySlot`/`SwitchControlToPc`) because
+both are real, safe, useful primitives in their own right — `internal+0x20` is the exact field
+a real Tab press moves for input authority, and `party+0x24` is the exact field `IsPartyTogether`
+and the clamp read. Scenarios 2 and 3 below exercise them successfully. The finding is narrower
+than "the verb doesn't work" — it is that **neither of the two documented, safe, id-only control
+fields is what `GetPlayerCreaturePointer` actually reads.**
+
+### What `GetPlayerCreaturePointer` reads instead (traced, not fully resolved)
+
+`0x004B2AE0`'s body (dumped via `tools/disasm.py 0x4B2AE0 0x80`) switches on a small integer
+selector and, on the branch this call site takes, walks what reads like a bucket/list at
+`this + 0x10064`, comparing each node against a wanted value at `[node + 4]` — the shape of a
+"find the object flagged X" search, not an index into `CSWPartyTable`'s roster array or a read
+of `pt_leader_id`/`pt_controlled_npc` (`+0xEC`/`+0xF0`, the fields `client-control-lock.md`
+already ruled out for the client input gate). Neither `internal+0x20` nor `party+0x24` is
+anywhere in that chain. This pass did **not** chase the write site further — the obvious next
+step, calling `CClientExoAppInternal::ChangeCharacter` (0x005F6B60) directly, was disassembled
+(`tools/disasm.py 0x5F6B60 0x100`) but its own stack-argument accounting did not resolve
+cleanly against `CSWParty::SetControlledCreature`'s (0x00635480) apparent read at a THIRD stack
+offset — enough of a mismatch in the arithmetic that guessing the calling convention live,
+against a real running game process, was judged not worth the crash risk for a dev-only test
+primitive. This is the honest state of the RE, not a finished result.
+
+**Side finding, unexplained, flagged for its own round:** `topup`/`Odyssey.GetPlayerCreaturePointer`
+report "0 max hit points" on BOTH instances in this exact session, regardless of Tab/`leader`
+state — while the agent's own independent `where` reading shows `hp 12/12` for the same
+character at the same moment. Whatever `GetPlayerCreaturePointer` resolves to in a live co-op
+session, it is possibly not the real PC even in the ordinary, nobody-switched-anything case.
+This is orthogonal to the `leader` verb (reproduced with it never having been called) and may
+be the real explanation for why `ControlReturnController` never claims — a NEW open question,
+not the one this round set out to answer.
+
+### The four scenarios
+
+1. **Client controls Trask, then reconnects — THE regression.** FAIL: no claim, no hand-back,
+   across every attempt this pass made (`leader` v1, `leader` v2, in a fresh rig after
+   redeploying the fix). Root cause traced above; not closed this pass.
+2. **Host controls Trask, client reconnects — host untouched.** PASS, live. `leader 0` on the
+   host answered "control switched to party slot 0 (0x127)"; across the client's
+   disconnect/reconnect the host's plugin log logged **zero** `control:` lines in either
+   direction — matching source (`ControlReturnController`'s mirroring gate is client-only;
+   `CoopAgent.PumpOnce` only calls `LockControlToPlayer` when `!session.IsEnemyAuthority`,
+   which a host never is).
+3. **Client on its own PC, disconnects — no-op.** PASS, live. No `control: you are driving
+   companion` claim logged at all across the disconnect.
+4. **`control_return=0` opt-out.** NOT live-restarted this pass (the flag is `readonly`, read
+   once at construction — a live toggle needs a fresh process, which this pass's time budget
+   did not extend to). Verified by source only: `ControlReturnController.OnFrame`'s first line
+   is `if (!_enabled) { return; }`.
+
+### Net effect on the fix's status
+
+`PartyTogetherClampRule`'s own logic is unchanged and still fully unit-tested
+(`PartyTogetherClampRuleTests`) — nothing in this pass casts doubt on "defer the clamp while
+`IsControllingRosterCompanion` is true" being the right rule IF that predicate is ever true on a
+client. What this pass could not establish live is whether it ever becomes true through any
+means short of the engine's own `ChangeCharacter` call — which includes a REAL Tab press, the
+scenario the bug report was actually about. So the regression's fix remains statically sound and
+now MORE PRECISELY unverified: not "did the fix run," but "does the trigger it fixes ever
+actually fire on a client." Scenarios 2-4 close cleanly and are no longer NEEDS-LIVE.
+
+### Verification tags (this pass)
+
+- LIVE-VERIFIED 2026-08-22: scenarios 2 and 3 above; `internal+0x20` and `party+0x24` both hold
+  stable after a `leader` write (raw-memory read tool, independent of the plugin); Trask is
+  party-roster slot 0 in `end_m01aa`.
+- VERIFIED (disasm, this pass): `GetPlayerCreaturePointer`'s full call chain from
+  `CServerExoApp::GetPlayerCreature` (0x004B2820) down to the bucket walk at `0x4B2AE0`; neither
+  `internal+0x20` nor `CSWParty`'s member array appears in it.
+- NEEDS-LIVE, narrowed: scenario 1 (the regression itself) and scenario 4
+  (`control_return=0`) — scenario 1 needs either a real human Tab press or a correctly
+  reverse-engineered `ChangeCharacter`/`SetControlledCreature` call (not attempted live this
+  pass, crash risk); scenario 4 needs a fresh process with the flag set. The "0 max hit points"
+  finding above is a NEW open question a future round should chase first — it may be upstream
+  of scenario 1's own failure to converge.

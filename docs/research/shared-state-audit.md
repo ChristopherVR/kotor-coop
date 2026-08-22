@@ -6315,6 +6315,52 @@ net-new tests), run after this round's full change set. Both plugin builds clean
 rebuild/redeploy/relaunch cycles. Rig torn down clean (`Get-Process swkotor,KotorCoop.Agent`
 empty), `auto_start_agent` restored to `1` in both installs by `demo.ps1 -Stop`.
 
+### Round 69 (2026-08-22) — control-return's regression still does not converge live, and
+tracing why found the detection function reads neither of the two documented control fields;
+the lag audit's own premise (`interp_ms` "needs exposing") was already wrong, and a real
+structural win (`party_fast_pump`) shipped behind a flag instead
+
+Two jobs, full write-ups in `docs/research/control-return.md` ("Live pass") and
+`docs/research/lag-audit.md` ("Measurements").
+
+**Control-return: 2 of 4 scenarios closed live, the regression itself did not.** Built a
+dev-only `leader <slot|pc>` console verb (mirrors `applyeffect`'s wiring) so the harness no
+longer needs the one manual Tab step `control-return-live.ps1` could never automate. It writes
+two SEPARATE, both live-verified-stable control fields — `CClientExoAppInternal+0x20` (input
+authority, the field `LockControlToPlayer` reverts) and `CSWParty`'s member[0] client-space id
+(`party+0x24`, client-control-lock.md's own "Recipe A") — and Trask is LIVE-RECONFIRMED
+party-roster slot 0 in `end_m01aa`, not 1 as this round's own brief assumed. Neither field turns
+out to be what `Odyssey.GetPlayerCreaturePointer` (`ControlReturnController`'s detection) reads:
+disassembly traced it to `CServerExoApp::GetPlayerCreature` (0x004B2820), a chain through
+`CServerExoAppInternal` unrelated to either write. Host-untouched and disconnect-while-on-PC
+scenarios both closed live and cleanly; the regression scenario and the `control_return=0`
+opt-out remain NEEDS-LIVE, now precisely scoped to "what does 0x4B2820 actually read, and does
+a real Tab press change it" rather than "does the fix run." A related, unexplained side finding
+— `GetPlayerCreaturePointer`-based cheats (`topup`) report 0 max hit points on both instances
+in this exact session regardless of Tab state, while the agent's own independent reading shows
+12/12 for the same character — is flagged for its own round; it may be upstream of the
+regression's own non-convergence.
+
+**Lag audit: measured, one real code change shipped.** `frame_stats=1` plus a ~190s connected
+session (repeated `tp` hops, one `usedoor`, one staged `attack` fight) on END_M01AA found both
+instances comfortably under budget (2-3 ms mean frame time, 5-7 frames over 33 ms out of
+~220,000 sampled, all attributable to the module-load transition or isolated unexplained ~150-
+180 ms spikes with no per-frame-controller signature) — `EnemyPresenceController`'s scan was
+NOT gated, because the measured hitch pattern did not implicate it, and the audit's own
+conditional instruction was "if it clusters." The bigger finding: `coop.ini interp_ms` already
+IS the "expose `interp_delay_ms`" ask from a prior pass — both installs already had it live at
+`0` (more aggressive than the 40 this round was asked to try), confirmed via `lagstats`, no code
+change needed. Shipped `party_fast_pump` (default OFF, `CoopConfig.cs`/`Program.cs`/
+`CoopAgent.cs`), mirroring `dialogue_fast_join`'s exact rollout shape, to remove one of the two
+stacked 150 ms windows on the companion-mirror path; unit-tested (`PartyFastPumpTests.cs`) and
+smoke-tested live for ~50s with the flag on (party reconciliation intact, zero frame-time
+regression, agent pump unchanged) — not yet run through a full combat-heavy session, so left
+off by default pending a longer A/B.
+
+`dotnet test tests/KotorCoop.Tests`: **1623/1623** (1621 baseline + 2 new `PartyFastPumpTests`).
+Plugin rebuilt/reinstalled to both GOG directories across two redeploy cycles (the `leader`
+verb's two revisions). Rig torn down clean, `auto_start_agent` restored to `1` in both installs.
+
 ## 3. A client's XP is actively erased
 
 `ProgressionSnapshotPacket` is host→client only and absolute (CoopAgent.cs, `PumpProgression`):

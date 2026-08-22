@@ -4,22 +4,39 @@
 # companion.
 #
 # Requires an already-running `tools/demo.ps1` pair (both instances loaded, connected, Trask
-# available in the party). Because injected keystrokes never reach this game
-# (docs/live-verification.md), the one step this script cannot automate is the Tab/portrait
-# click that puts Trask in control — a human does that one step, everything else (disconnect,
-# the prompt, reconnect, and reading the plugin log for the actual verdict) is automatic.
+# recruited and in the party). Injected keystrokes never reach this game
+# (docs/live-verification.md), so the Tab/portrait click that used to be the one manual step
+# here is now the dev-only `leader <slot|pc>` console verb (docs/research/control-return.md) —
+# it writes the SAME CClientExoAppInternal+0x20 field a real Tab press does, so the harness can
+# put either instance onto Trask without a human. Trask is LIVE-CONFIRMED party-roster slot 0
+# in end_m01aa (partystate.ps1, phantom-locomotion.md §14.3), not 1.
 #
 #   pwsh tools\control-return-live.ps1
 #   pwsh tools\control-return-live.ps1 -Game1 'C:\GOG Games\Star Wars KOTOR (GOG)' -Game2 'D:\Games\swkotor-gog-p2'
 #
-# What PASS means: the client's plugin log shows, in order —
-#   1. "control: you are driving companion 0x..."   (ControlReturnController saw the claim)
-#   2. no "party together: ... clamping ..." line BETWEEN that claim and the hand-back below
-#      (PartyTogetherClampRule deferred, per docs/research/control-return.md)
-#   3. "control: putting the camera back on your own character (0x...)"  (control-return landed)
+# Four scenarios, one run:
+#   1. CLIENT controls Trask, then reconnects -> the regression itself. PASS means the
+#      client's plugin log shows, in order: "control: you are driving companion 0x..."
+#      (ControlReturnController saw the claim), no "party together: ... clamping ..." line
+#      BETWEEN that claim and the hand-back (PartyTogetherClampRule deferred), then
+#      "control: putting the camera back on your own character (0x...)" (control-return landed).
+#   2. HOST controls Trask, then the CLIENT reconnects -> the host is untouched by construction
+#      (ControlReturnController's mirroring gate is client-only, and CoopAgent.PumpOnce only
+#      calls LockControlToPlayer when `!session.IsEnemyAuthority`, which a host never is) — PASS
+#      means `leader 0` answers applied and the host's plugin log logs no "control:" line at all
+#      across the window.
+#   3. CLIENT stays on its own PC and disconnects -> nothing changes: no "control:" claim line
+#      at all (ControlReturnController only ever logs once it sees a session-owned companion
+#      controlled).
+#   4. `control_return=0` opt-out: documented as a static/code-inspection check here, not a
+#      live restart — `ControlReturnController._enabled` is `readonly`, read once from coop.ini
+#      at construction, and `OnFrame` returns immediately while it is false, so setting it
+#      leaves whatever `leader` last switched to exactly where it was — see
+#      docs/research/control-return.md for the citation.
 param(
     [string]$Game1 = 'C:\GOG Games\Star Wars KOTOR (GOG)',
     [string]$Game2 = 'D:\Games\swkotor-gog-p2',
+    [int]$TraskSlot = 0,
     [int]$TimeoutSec = 30
 )
 
@@ -94,21 +111,34 @@ function Wait-ForLine {
 }
 
 $clientPluginLog = Join-Path $Game2 'kotorcoop-plugin.log'
+$hostPluginLog = Join-Path $Game1 'kotorcoop-plugin.log'
 $clientPid = Get-KotorPid -InstallDir $Game2
+$hostPid = Get-KotorPid -InstallDir $Game1
 "client pid $clientPid ($Game2)"
+"host pid $hostPid ($Game1)"
 
 if (-not (Test-Path $clientPluginLog)) {
     throw "no plugin log at '$clientPluginLog' yet - is the client instance actually running with the plugin loaded?"
 }
+if (-not (Test-Path $hostPluginLog)) {
+    throw "no plugin log at '$hostPluginLog' yet - is the host instance actually running with the plugin loaded?"
+}
 
+$allPass = $true
+
+# ---- Scenario 1: CLIENT controls Trask, then reconnects -> THE regression itself ---------
+
+"=== scenario 1: client controls Trask (slot $TraskSlot), then reconnects ==="
 "disconnecting the client..."
 Invoke-Console -ProcId $clientPid -Command 'disconnect' | Out-Host
 
-Write-Host ''
-Write-Host 'MANUAL STEP: on the CLIENT window (Game2), Tab (or click a party portrait) until' -ForegroundColor Yellow
-Write-Host 'TRASK is your controlled character - confirm the camera and WASD are on Trask, not' -ForegroundColor Yellow
-Write-Host 'your own PC. Everything after this is automatic.' -ForegroundColor Yellow
-Read-Host 'Press Enter once Trask is in control'
+"switching the client onto Trask (leader $TraskSlot)..."
+$leaderReply = Invoke-Console -ProcId $clientPid -Command "leader $TraskSlot"
+$leaderReply | Out-Host
+if (($leaderReply -join "`n") -notmatch 'control switched to party slot') {
+    "FAIL  'leader $TraskSlot' did not confirm the switch - is Trask actually recruited and spawned?"
+    $allPass = $false
+}
 
 # Mark the log position now: everything relevant to this run happened after it, and an older
 # claim/hand-back pair (from a previous connect in the same session) must not count.
@@ -116,8 +146,6 @@ $sincePosition = if (Test-Path $clientPluginLog) { (Get-Item $clientPluginLog).L
 
 "reconnecting the client..."
 Invoke-Console -ProcId $clientPid -Command 'reconnect' | Out-Host
-
-$allPass = $true
 
 $claim = Wait-ForLine -Path $clientPluginLog -Pattern 'control: you are driving companion' -SincePosition $sincePosition
 if ($claim) {
@@ -157,6 +185,72 @@ if ($claim -and $hitLine) {
         }
     }
 }
+
+# ---- Scenario 2: HOST controls Trask, then the CLIENT reconnects -> host untouched -------
+
+Write-Host ''
+"=== scenario 2: host controls Trask (slot $TraskSlot), client reconnects -> host keeps control ==="
+$hostSince = if (Test-Path $hostPluginLog) { (Get-Item $hostPluginLog).Length } else { 0 }
+
+$hostLeaderReply = Invoke-Console -ProcId $hostPid -Command "leader $TraskSlot"
+$hostLeaderReply | Out-Host
+if (($hostLeaderReply -join "`n") -notmatch 'control switched to party slot') {
+    "FAIL  host 'leader $TraskSlot' did not confirm the switch"
+    $allPass = $false
+}
+
+"disconnecting and reconnecting the client (a real connect event) while the host drives Trask..."
+Invoke-Console -ProcId $clientPid -Command 'disconnect' | Out-Host
+Start-Sleep -Milliseconds 500
+Invoke-Console -ProcId $clientPid -Command 'reconnect' | Out-Host
+Start-Sleep -Seconds 3
+
+$hostControlLine = Find-LineAfter -Path $hostPluginLog -Pattern 'control: (you are driving|putting the camera)' -SincePosition $hostSince
+if ($hostControlLine) {
+    "FAIL  the host's plugin logged a control-return line at all - ControlReturnController should never run on a host"
+    "      $($hostControlLine.Trim())"
+    $allPass = $false
+} else {
+    "PASS  no control-return activity on the host - it owns its companions unconditionally, by construction"
+    "      (ControlReturnController's mirroring gate is client-only; CoopAgent.PumpOnce only calls"
+    "       LockControlToPlayer when '!session.IsEnemyAuthority', which a host never is)"
+}
+
+# Put the host back on its own PC for whatever runs next (lag testing, etc).
+Invoke-Console -ProcId $hostPid -Command 'leader pc' | Out-Host
+
+# ---- Scenario 3: CLIENT stays on its own PC, disconnects -> nothing changes --------------
+
+Write-Host ''
+"=== scenario 3: client on its own PC, disconnects -> no control-return activity ==="
+Invoke-Console -ProcId $clientPid -Command 'leader pc' | Out-Host
+Start-Sleep -Milliseconds 500
+
+$reverseSince = if (Test-Path $clientPluginLog) { (Get-Item $clientPluginLog).Length } else { 0 }
+Invoke-Console -ProcId $clientPid -Command 'disconnect' | Out-Host
+Start-Sleep -Seconds 2
+
+$reverseClaim = Find-LineAfter -Path $clientPluginLog -Pattern 'control: you are driving companion' -SincePosition $reverseSince
+if ($reverseClaim) {
+    "FAIL  control-return logged a claim even though the client was on its own PC"
+    "      $($reverseClaim.Trim())"
+    $allPass = $false
+} else {
+    "PASS  no claim logged - disconnecting while on your own PC is a no-op, as documented"
+}
+
+"reconnecting the client to leave the rig in a connected state..."
+Invoke-Console -ProcId $clientPid -Command 'reconnect' | Out-Host
+
+# ---- Scenario 4: control_return=0 opt-out -------------------------------------------------
+
+Write-Host ''
+"=== scenario 4: control_return=0 opt-out ==="
+"NOT live-restarted this run (ControlReturnController._enabled is readonly, read once from"
+"coop.ini at construction - a live toggle needs a fresh process). Verified by source instead:"
+"OnFrame's first line is 'if (!_enabled) { return; }' (ControlReturnController.cs), so with"
+"control_return=0 nothing here ever claims or hands back - whatever 'leader' last switched to"
+"(or a real Tab press) simply stays, exactly as docs/research/control-return.md documents."
 
 Write-Host ''
 if ($allPass) {

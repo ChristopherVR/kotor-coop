@@ -608,6 +608,10 @@ public sealed class CoopCommandDispatcher(
                 DestroyObject(command.Address ?? string.Empty);
                 break;
 
+            case CoopCommandKind.Leader:
+                Leader(command.Amount);
+                break;
+
             case CoopCommandKind.Cheats:
                 foreach (string line in ConsoleCommand.CheatsText)
                 {
@@ -946,6 +950,17 @@ public sealed class CoopCommandDispatcher(
 
         SendCheat(new CheatRequest(CheatKinds.DestroyObject, Target: objectId));
     }
+
+    /// <summary>
+    /// DEV-ONLY TEST PRIMITIVE (2026-08-22): switches this instance's controlled character to
+    /// a party-roster companion, or back to the PC — the parser already refused anything but a
+    /// valid slot (0-8) or <c>pc</c>/<c>me</c>, so this is a straight hand-off. Built for
+    /// <c>control-return-live.ps1</c>, which needed a scriptable stand-in for the one manual
+    /// step it could never automate: a human Tabbing/portrait-clicking onto Trask before
+    /// connecting (injected keystrokes never reach this game). See
+    /// docs/research/control-return.md.
+    /// </summary>
+    private void Leader(int amount) => SendCheat(new CheatRequest(CheatKinds.Leader, Amount: amount));
 
     /// <summary>Folds the shared block's peer-effect rings into <see cref="_effectLog"/> every
     /// tick, so an entry's "seen Ns ago" reflects roughly when it actually happened rather than

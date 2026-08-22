@@ -110,6 +110,22 @@ public sealed record AgentSettings
     /// so a live pass can A/B it against the existing cadence).
     /// </summary>
     public bool DialogueFastJoin { get; init; }
+
+    /// <summary>
+    /// When true, <see cref="CoopAgent.PumpParty"/> (and <see cref="CoopAgent.PumpPartyRoster"/>,
+    /// same call site) runs on the real-time (every-poll-tick) path instead of waiting for
+    /// <see cref="CombatPumpIntervalMs"/> — the same move <see cref="DialogueFastJoin"/> already
+    /// made, and for the same reason: docs/research/lag-audit.md's suspect #2 for companion-
+    /// mirror latency is two independently-configured 150 ms windows stacking back to back —
+    /// this 150 ms pump, THEN <c>PartyPresenceController</c>'s own 150 ms
+    /// <c>mirror_smooth_ms</c> smoother. Moving the pump to the fast path removes the first of
+    /// the two; the smoother's own window still applies on top; see the shared block for how
+    /// often a companion's position actually lands. coop.ini <c>party_fast_pump</c> (default
+    /// off, so a live pass can A/B it against the existing cadence — the same rollout shape
+    /// <see cref="DialogueFastJoin"/> used).
+    /// </summary>
+    public bool PartyFastPump { get; init; }
+
     /// When true, a follower acts on a host's <see cref="TransitionAnnouncePacket"/> the
     /// instant it arrives — starting its own warp toward the announced destination without
     /// waiting for the host's published <c>PlayerState.Module</c> to change or for
@@ -462,8 +478,17 @@ public sealed class CoopAgent(IGameBridge bridge, ICoopSession session, AgentSet
             PumpPhantomDamage(caps);
             PumpPeerEffects(caps);
             PumpMaterialisedLoot(local.Module);
-            PumpParty(caps);
-            PumpPartyRoster(caps);
+
+            // ⚠ PARTY RODE HERE TOO, ONCE — same shape as dialogue below. Left as the
+            // fallback here (settings.PartyFastPump off) so turning the flag off is a true
+            // rollback to exactly this cadence; the fast path below is where it moves to when
+            // the flag is on. See docs/research/lag-audit.md's companion-mirror-latency
+            // suspect.
+            if (!settings.PartyFastPump)
+            {
+                PumpParty(caps);
+                PumpPartyRoster(caps);
+            }
 
             // ⚠ DIALOGUE RODE HERE TOO, ONCE. It is the same kind of traffic — small block
             // reads, no world scan — and sharing this 150 ms gate with the enemy census (which
@@ -494,6 +519,16 @@ public sealed class CoopAgent(IGameBridge bridge, ICoopSession session, AgentSet
         if (settings.DialogueFastJoin)
         {
             PumpDialogue(local, caps);
+        }
+
+        // Party, on the fast path: every poll tick, same reasoning and same rollout shape as
+        // dialogue above — PumpParty/PumpPartyRoster are cheap block reads/writes, not a world
+        // scan, so nothing about running them every tick costs materially more than the 150 ms
+        // cadence did. coop.ini party_fast_pump=1. See docs/research/lag-audit.md.
+        if (settings.PartyFastPump)
+        {
+            PumpParty(caps);
+            PumpPartyRoster(caps);
         }
 
         // --- heavy world-state path ------------------------------------------------------

@@ -285,6 +285,21 @@ public enum CoopCommandKind
     /// empty means "the nearest container placeable". See docs/research/container-sync.md.
     /// </summary>
     ClosePlaceable,
+
+    /// <summary>
+    /// DEV-ONLY TEST PRIMITIVE (2026-08-22): switches the LOCAL player's controlled character
+    /// through <c>Odyssey.SwitchControlToPartySlot</c>/<c>SwitchControlToPc</c> — the reverse
+    /// of the per-tick control lock a co-op client already runs
+    /// (<c>KotorGameBridge.LockControlToPlayer</c>). Built because
+    /// docs/research/control-return.md's live pass needed a way to put a client onto a
+    /// party-roster companion BEFORE connecting: the one manual step
+    /// <c>control-return-live.ps1</c> could never automate, since injected keystrokes never
+    /// reach this game (docs/live-verification.md). <see cref="CoopCommand.Amount"/> is the
+    /// party-roster slot (0-8, the same index <c>partystate.ps1</c> reports — Trask is slot 0
+    /// in <c>end_m01aa</c>), or -1 for <c>pc</c>/<c>me</c>. Not a network command: this only
+    /// ever touches the local instance's own control, exactly like a real Tab press would.
+    /// </summary>
+    Leader,
 }
 
 /// <summary>
@@ -882,6 +897,10 @@ public static class ConsoleCommand
 
                 return new CoopCommand(CoopCommandKind.DestroyObject, Address: rest[0]);
 
+            // leader <slot|pc>  - DEV-ONLY TEST PRIMITIVE (2026-08-22), see CoopCommandKind.Leader.
+            case "leader":
+                return ParseLeader(rest);
+
             case "cheats":
                 return new CoopCommand(CoopCommandKind.Cheats);
 
@@ -1423,6 +1442,37 @@ public static class ConsoleCommand
             EffectMagnitude: magnitude);
     }
 
+    /// <summary>
+    /// Parses <c>leader &lt;slot|pc&gt;</c> — the dev-only control-switch test primitive (see
+    /// <see cref="CoopCommandKind.Leader"/>). <c>slot</c> is a party-roster index 0-8;
+    /// <c>pc</c>/<c>me</c>/<c>self</c> means "back to your own character".
+    /// </summary>
+    private static CoopCommand ParseLeader(string[] rest)
+    {
+        const string usage =
+            "leader <slot|pc>  (slot: party-roster index 0-8, e.g. Trask is slot 0 in "
+            + "end_m01aa; pc: switch back to your own character)";
+
+        if (rest.Length != 1)
+        {
+            return new CoopCommand(CoopCommandKind.Invalid, Error: usage);
+        }
+
+        if (IsSelfWord(rest[0]) || rest[0].Equals("pc", StringComparison.OrdinalIgnoreCase))
+        {
+            return new CoopCommand(CoopCommandKind.Leader, Amount: -1);
+        }
+
+        if (!int.TryParse(rest[0], out int slot) || slot < 0 || slot > 8)
+        {
+            return new CoopCommand(
+                CoopCommandKind.Invalid,
+                Error: $"'{rest[0]}' is not a party-roster slot (0-8) or 'pc' - {usage}");
+        }
+
+        return new CoopCommand(CoopCommandKind.Leader, Amount: slot);
+    }
+
     /// <summary>A field value: decimal, or hex with an explicit 0x. Unlike an object id a
     /// bare number here is unambiguous — a stack of 20 is 20 — so decimal is the default.</summary>
     private static bool TryParseFieldValue(string value, out uint number)
@@ -1501,6 +1551,8 @@ public static class ConsoleCommand
         "  closeplaceable [tag|id]         close a container's loot panel (nearest by default)",
         "  census [id]         what my enemy census holds, and what my own engine says of each id",
         "  resolve <id>        what the ENGINE knows about one id, in one frame (plugin log has the chain)",
+        "  leader <slot|pc>    dev-only: switch YOUR control to a party-roster companion (0-8)",
+        "                      or back to 'pc'; local only, never crosses the network",
         "retail console cheats, already co-op-safe (they touch only your game):",
         "  giveitem <resref> | givecredits <n> | addexp <n> | addlevel | heal",
         "  revealmap | infiniteuses | invulnerability | whereami | bright | turbo",

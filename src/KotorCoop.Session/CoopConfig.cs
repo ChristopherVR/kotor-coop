@@ -158,6 +158,19 @@ public sealed record CoopConfig
     public bool DialogueFastJoin { get; init; }
 
     /// <summary>
+    /// Whether the party channel (<c>PumpParty</c>/<c>PumpPartyRoster</c>) is pumped on the
+    /// agent's real-time (per-poll-tick) path instead of the ~150 ms combat cadence — the same
+    /// move <see cref="DialogueFastJoin"/> made, for the same reason: two independently-
+    /// configured 150 ms windows (this pump, then <c>PartyPresenceController</c>'s own
+    /// <c>mirror_smooth_ms</c> smoother) stack back to back on the companion-mirror path,
+    /// docs/research/lag-audit.md's suspect #2 for it reading "laggier" than a peer's own
+    /// avatar. OFF by default, same reasoning as dialogue's flag: ships behind a flag so a live
+    /// A/B pass can compare it against the existing cadence. <c>party_fast_pump = 1</c> turns
+    /// it on.
+    /// </summary>
+    public bool PartyFastPump { get; init; }
+
+    /// <summary>
     /// Whether the agent's <c>SessionSaveWatch</c>'s host-side edge (roadmap item
     /// 14 phase 1, design §3.2 item 5) actually tears the session down when it fires. OFF by
     /// default — live-verified 2026-08-21 (shared-state-audit.md §2 round 53) to false-positive
@@ -355,6 +368,7 @@ public sealed record CoopConfig
             DialogueItemSync = !kv.ContainsKey("dialogue_item_sync")
                 || IsTruthy(kv.GetValueOrDefault("dialogue_item_sync")),
             DialogueFastJoin = IsTruthy(kv.GetValueOrDefault("dialogue_fast_join")),
+            PartyFastPump = IsTruthy(kv.GetValueOrDefault("party_fast_pump")),
             SessionSaveHostRefusal = IsTruthy(kv.GetValueOrDefault("session_save_host_refusal")),
             ClientLoadRejoin = IsTruthy(kv.GetValueOrDefault("client_load_rejoin")),
             HostLoadReadopt = IsTruthy(kv.GetValueOrDefault("host_load_readopt")),

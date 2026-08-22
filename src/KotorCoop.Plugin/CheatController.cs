@@ -180,6 +180,10 @@ internal sealed unsafe class CheatController(SharedBlockView block)
                 DestroyObject(playerId);
                 break;
 
+            case SharedBlock.CheatKindLeader:
+                Leader();
+                break;
+
             case SharedBlock.CheatKindUsePlaceable:
                 UsePlaceable(player);
                 break;
@@ -662,6 +666,49 @@ internal sealed unsafe class CheatController(SharedBlockView block)
         Answer(
             verdict == DestroyVerdict.RefuseMissing ? SharedBlock.CheatStatusNoTarget : SharedBlock.CheatStatusRefused,
             explanation);
+    }
+
+    /// <summary>
+    /// DEV-ONLY TEST PRIMITIVE (2026-08-22): switches the LOCAL player's controlled character
+    /// through <see cref="Odyssey.SwitchControlToPartySlot"/>/<see cref="Odyssey.SwitchControlToPc"/>
+    /// — the SAME <c>CClientExoAppInternal + 0x20</c> field
+    /// <c>KotorGameBridge.LockControlToPlayer</c> already reverts every tick a client session
+    /// is up, written the OTHER direction. Built because docs/research/control-return.md's
+    /// live pass needed a way to put a client onto a party-roster companion BEFORE connecting —
+    /// the one manual step <c>control-return-live.ps1</c> could never automate (injected
+    /// keystrokes never reach this game). <see cref="SharedBlock.OffsetCheatAmount"/> is the
+    /// party-roster slot (0-8), or -1 for "your own PC". Local only: this never crosses the
+    /// network, and it does not move the camera — a caller wanting that calls
+    /// <see cref="Odyssey.SetCameraFollowServerObject"/>/<see cref="Odyssey.RestoreCameraToControlledCreature"/>
+    /// separately.
+    /// </summary>
+    private void Leader()
+    {
+        int slot = block.CheatAmount;
+
+        if (slot < 0)
+        {
+            if (!Odyssey.SwitchControlToPc())
+            {
+                Answer(SharedBlock.CheatStatusNoWorld, "leader: no client world to switch in yet");
+                return;
+            }
+
+            PluginHost.Log("leader: switched control to your own PC");
+            Answer(SharedBlock.CheatStatusApplied, "control switched to your own PC");
+            return;
+        }
+
+        if (!Odyssey.SwitchControlToPartySlot(slot, out uint rosterId))
+        {
+            Answer(
+                SharedBlock.CheatStatusNoTarget,
+                $"leader: no party-roster companion in slot {slot} (empty, or no client world yet)");
+            return;
+        }
+
+        PluginHost.Log($"leader: switched control to party slot {slot} (0x{rosterId:X})");
+        Answer(SharedBlock.CheatStatusApplied, $"control switched to party slot {slot} (0x{rosterId:X})");
     }
 
     /// <summary>

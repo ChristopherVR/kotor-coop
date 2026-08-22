@@ -74,6 +74,11 @@ internal static unsafe class FuncInterpHook
         // fires MoviePlayHook directly, so a live pass does not need to wait for a story
         // trigger. `moviewarp` above only ever writes the TRANSITION queue, a different path.
         "movieplay",
+
+        // Dev-only control-switch test primitive (docs/research/control-return.md): switches
+        // the local player's controlled character. Local only, never crosses the network; not
+        // a retail verb.
+        "leader",
     ];
 
     /// <summary>

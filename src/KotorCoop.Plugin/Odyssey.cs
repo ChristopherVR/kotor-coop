@@ -2776,6 +2776,124 @@ internal static unsafe class Odyssey
         return true;
     }
 
+    // ---- control switch: the SAME two fields a real Tab press moves ---------------
+    //
+    // DEV-ONLY TEST PRIMITIVE (2026-08-22, docs/research/control-return.md). The live
+    // control-return regression pass needed a way to put a client onto a party-roster
+    // companion BEFORE connecting — the one manual step control-return-live.ps1 could not
+    // automate (injected keystrokes never reach this game, docs/live-verification.md).
+    //
+    // ⚠⚠ LIVE-VERIFIED TWO-FIELD FINDING: a first version of this wrote ONLY
+    // `CClientExoAppInternal + 0x20` — the reverse of `KotorGameBridge.LockControlToPlayer`
+    // (KotorGameBridge.cs:5406, live-verified there: "the write stuck and +0x3C0 returned to
+    // the PC"). That write DOES move input authority (confirmed live: it persists on a
+    // disconnected client, and is exactly the field a real Tab press also flips per
+    // LockControlToPlayer's own comment) — but a live control-return-live.ps1 run found
+    // `ControlReturnController` never logged the claim even with the write holding. Tracing
+    // `Odyssey.GetPlayerCreaturePointer` (CServerExoApp::GetPlayerCreature 0x004B2820, used by
+    // `ControlReturnController` AND `PartyRosterController.IsControllingRosterCompanion`)
+    // shows it resolves through `CServerExoAppInternal -> "party member 0" -> id`, a chain
+    // that does NOT read `internal+0x20` at all — it reads the CLIENT-SIDE `CSWParty` member
+    // array `GetSWPartyFn` resolves (`[client+4]+0x270`), the SAME struct
+    // `PartyTogetherClampRule`'s clamp and `IsPartyTogether` read (client-control-lock.md's
+    // "Recipe A": member[0].client_object_id at `party+0x24`, id-only, VERIFIED crash-proof —
+    // every consumer resolves it through the null-safe `GetCreatureByGameObjectID`). A real
+    // Tab press moves BOTH fields (via `ChangeCharacter` 0x005F6B60 calling
+    // `CSWParty::SetControlledCreature` 0x00635480, which reorders the member blocks); this
+    // primitive now does too, so the harness actually reaches the code path the regression
+    // fix lives in, not just the input-authority half. `internal+0x20` alone was a real,
+    // live-confirmed dead end for THIS specific purpose — kept fixed here rather than
+    // reverted, because the mistake and its correction are worth keeping on the record.
+    //
+    // Only member[0]'s id is written, not the rest of its 0x88-byte block or member[1]'s
+    // (the doc's own caveat on the reverse-direction write: cosmetic only, self-heals, never
+    // a crash risk since nothing here is a pointer). The PC's own pre-switch id is cached
+    // ONCE, the first time this ever runs in the process, specifically so `leader pc` can put
+    // it back — anything later than the very first call already may have been switched away
+    // from the PC, so re-reading at that point would cache whoever is currently driving,
+    // not the PC.
+    //
+    // Deliberately does NOT touch the camera — `RestoreCameraToControlledCreature`/
+    // `SetCameraFollowServerObject` above already own that, through the engine's real
+    // `SetCameraFollow`, and a harness wanting the camera to follow too should call one of
+    // those next.
+
+    private const int ControlledCharacterIdOffset = 0x20;
+    private const uint ControlPc = 0xFFFFFFFF;
+    private const uint ControlPartyNpcFlag = 0x80000000;
+
+    /// <summary>CSWParty (client-side) + this = member[0]'s client-space object id — the SAME
+    /// field <c>GetSWPartyFn</c>/<see cref="SwPartyMemberCount"/>'s struct exposes at +0x00,
+    /// documented in docs/research/client-control-lock.md's "Recipe A" (id-only, VERIFIED
+    /// crash-proof: every consumer resolves it through the null-safe
+    /// <c>GetCreatureByGameObjectID</c>).</summary>
+    private const int SwPartyMember0ClientId = 0x24;
+
+    /// <summary>The PC's own client-space id in <c>CSWParty</c> member[0], cached the first
+    /// time <see cref="SwitchControlToPartySlot"/> ever runs in this process — see the class
+    /// remarks above for why only the first call may safely capture it.</summary>
+    private static uint _cachedPcPartyClientId;
+
+    /// <summary>Switches the LOCAL player's control to the party-roster companion in
+    /// <paramref name="slot"/> (0..8, the same NPC slot index <c>partystate.ps1</c> reports —
+    /// Trask is slot 0 in <c>end_m01aa</c>, LIVE-CONFIRMED, not 1). Returns false, touching
+    /// nothing, when that slot has no spawned body here or there is no client world yet.
+    /// MAIN THREAD ONLY.</summary>
+    public static bool SwitchControlToPartySlot(int slot, out uint rosterId)
+    {
+        rosterId = GetPartyRosterObjectId(slot);
+        if (rosterId is 0 or ObjectInvalid)
+        {
+            return false;
+        }
+
+        nint client = GetClient();
+        nint internalClient = client == 0 ? 0 : Deref(client + AppClientOffset);
+        if (internalClient == 0)
+        {
+            return false;
+        }
+
+        nint party = GetSWPartyFn(client);
+        if (party != 0)
+        {
+            uint* member0 = (uint*)(party + SwPartyMember0ClientId);
+            if (_cachedPcPartyClientId == 0 && *member0 != 0)
+            {
+                _cachedPcPartyClientId = *member0;
+            }
+
+            *member0 = ControlPartyNpcFlag | rosterId;
+        }
+
+        *(uint*)(internalClient + ControlledCharacterIdOffset) = ControlPartyNpcFlag | rosterId;
+        return true;
+    }
+
+    /// <summary>Switches the LOCAL player's control back to their own PC — the same value
+    /// <c>KotorGameBridge.LockControlToPlayer</c> (KotorGameBridge.cs:5406) already pins a
+    /// client to every tick, exposed here so a dev harness can hand control back without
+    /// waiting a full ~30 Hz cycle. Returns false, touching nothing, when there is no client
+    /// world yet. MAIN THREAD ONLY.</summary>
+    public static bool SwitchControlToPc()
+    {
+        nint client = GetClient();
+        nint internalClient = client == 0 ? 0 : Deref(client + AppClientOffset);
+        if (internalClient == 0)
+        {
+            return false;
+        }
+
+        nint party = GetSWPartyFn(client);
+        if (party != 0 && _cachedPcPartyClientId != 0)
+        {
+            *(uint*)(party + SwPartyMember0ClientId) = _cachedPcPartyClientId;
+        }
+
+        *(uint*)(internalClient + ControlledCharacterIdOffset) = ControlPc;
+        return true;
+    }
+
     // ---- module identity and transitions ----------------------------------------
 
     /// <summary>CServerExoAppInternal + this = CServerInfo* (symbol database: server_info).</summary>

@@ -824,6 +824,7 @@ internal static class Program
             HidePeersInMinigame = config?.HidePeersInMinigame ?? true,
             DialogueItemSync = config?.DialogueItemSync ?? true,
             DialogueFastJoin = config?.DialogueFastJoin ?? false,
+            PartyFastPump = config?.PartyFastPump ?? false,
             TransitionAnnounceEnabled = config?.TransitionAnnounceEnabled ?? false,
             ClientDoorRefusalEnabled = config?.ClientDoorRefusalEnabled ?? false,
             MovieRelayEnabled = config?.MovieRelayEnabled ?? false,

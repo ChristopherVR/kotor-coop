@@ -101,6 +101,9 @@ internal static class ConsoleVerbCatalog
         // story trigger. `moviewarp` only ever writes the TRANSITION queue, a different path.
         ("movieplay", "movieplay <resref>  (plays it NOW; blocks the main thread)"),
 
+        // Dev-only control-switch test primitive; local only, never crosses the network.
+        ("leader", "leader <slot|pc>  (switch YOUR control to a party-roster companion 0-8, or back to pc)"),
+
         // Completable, but NEVER recorded: ConsoleHistoryRing drops password/pw lines, so
         // completion may offer the verb while recall can never replay the secret.
         ("password", "password <pw>"),

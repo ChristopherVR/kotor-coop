@@ -214,5 +214,145 @@ lagstats: interpolation delay 80 ms (deliberate - trades a fixed buffer for smoo
   absence of any synchronization primitive in `SharedBlock.cs`/`SharedBlockView.cs`; the frame
   order in `PluginHost.OnFrame`; `TickRate`/`PollRate` both defaulting to 30 Hz independently.
 - INFERRED: the "top 3 suspects" rankings are reasoned from the numbers above, not measured live.
-- NEEDS-LIVE: an actual `lagstats`/`frame_stats` capture during a reported laggy session, to
-  confirm which suspect(s) the numbers actually point at rather than which look worst on paper.
+- NEEDS-LIVE, closed for frame-time hitching and the send/recv/interpolation numbers — see
+  "Measurements" below. Still open for the direct host-write-to-client-apply phantom latency
+  correlation.
+
+## Measurements (2026-08-22)
+
+`frame_stats=1` enabled on both `coop.ini`; a ~190 s connected session on END_M01AA (repeated
+`tp` hops for both players, one `usedoor` transition, one staged fight via the `attack` engine
+action against `end_weld`); `lagstats` read on both instances afterward, and the plugin's own
+`frame stats` lines (auto-flushed every ~10 s) pulled for the whole window.
+
+### Correction to this doc's own premise: `interp_ms` already IS the exposed knob
+
+The "act on it" instruction assumed `interp_delay_ms` needed adding to `coop.ini`. It does not —
+`coop.ini interp_ms` (`CoopConfig.cs:333`, wired to `AgentSettings.InterpolationDelayMs` since
+before this pass) already does exactly that, and **both install directories already had it set
+to `interp_ms = 0`** — more aggressive than the 40 ms this doc's own instruction proposed
+testing, and confirmed live: `lagstats` on both instances read `interpolation delay 0 ms` for
+the whole session. No code change was needed here; this section corrects the audit's own
+premise rather than shipping a redundant knob.
+
+Whether 0 ms specifically is stable under a REAL walk/run (not a `tp` hop) remains
+`phantomgait.ps1`'s own long-standing tooling gap: `tools/blockpoke.ps1 walk` was tried as the
+drive primitive and confirmed, live, to be a no-op for the local PC (position never changed
+across 15 s of samples, animation parked at idle) — the same "PC is drive-controlled" finding
+`docs/live-verification.md`/round 52 already recorded. The `tp`-hop stress case in this
+session's send/recv/frame-time numbers below shows no instability at 0 ms, but that is a
+different claim from "the interpolation/smoothing pipeline reads clean during continuous
+movement," which still needs a real human walking.
+
+### Frame-time histogram (suspect ii)
+
+`FrameTimeHistogram` reports mean/worst/over-threshold-count per ~10 s flush, not true
+percentiles (deliberately — see its own doc comment above) — so "p50/p95/max" below is the
+closest honest reading of that shape: the per-window MEAN as the p50 proxy (the distribution is
+tight and unimodal around 2-3 ms on both instances), the largest per-window WORST as max, and
+the summed over-threshold count as the hitch tally.
+
+| | host (Game1) | client (Game2) |
+|---|---|---|
+| per-window mean, typical | 2.3-2.7 ms | 1.9-2.7 ms |
+| worst single frame (whole session) | 183.5 ms | 154.3 ms |
+| frames > 33 ms (whole session) | 7 | 5 |
+| total frames sampled | ~101,000 (25 windows) | ~119,000 (25 windows) |
+
+Both far below the 33 ms (30 fps) / 16.7 ms (60 fps) thresholds in the steady state — this rig,
+in this session, is not frame-time-constrained. The 7 and 5 over-threshold frames are not
+spread evenly:
+
+- A cluster of 2+2+1 (host) and 1+3 (client) over-threshold frames lands in the ~24-second
+  window around the scripted `usedoor` transition (elapsed ~64 s into the session, timestamps
+  21:58:17-21:58:41) — a real module-load cost, expected and not a per-frame-controller defect.
+- The remaining single large spikes (177.8 ms, 183.5 ms host; 154.3 ms client) are isolated,
+  roughly one every 2-3 minutes, and do NOT correlate with the `tp` hops, the `attack` order, or
+  any console command this session's driver issued at the same timestamp. Not chased further
+  this pass — candidates are a GC pause or a periodic housekeeping boundary (the 15 s creature-
+  cache refresh is the nearest fixed-period candidate on the AGENT side, though the docs already
+  rule the agent out as a source of PLUGIN frame stalls since there is no lock between them).
+
+**Suspect (ii) verdict: not confirmed.** `EnemyPresenceController`'s unconditional scan was the
+top suspect on paper; this session's own hitch pattern (tied to a module load, not a steady
+elevated cost or a repeating small-overage signature) does not point at it, so it was NOT gated
+behind a coop.ini switch this pass — the audit's own instruction was conditional ("if the audit
+says it clusters"), and it did not. Left as a documented non-finding rather than a speculative
+change.
+
+### Send/recv/agent-pump (suspect i)
+
+```
+lagstats: interpolation delay 0 ms (deliberate - trades a fixed buffer for smoothness, not a stall)
+  send intervals (ms, oldest first): 16, 15, 16, 16, 16, 16, 15, 16
+  recv intervals (ms, oldest first): 16, 0, 16, 0, 16, 0, 15, 0
+  agent pump: 0.5 ms average, 1.3 ms peak (budget 17 ms)
+```
+
+`tick_rate = 60` is set explicitly in both `coop.ini` (not the 30 Hz default this doc's earlier
+pass assumed), so ~16.7 ms send intervals are correct and healthy — confirmed on both host and
+client. `recv` intervals alternate a real gap with 0 ms (packets arriving in the same interval
+as the previous sample) rather than a clean 16 ms cadence — bursty, not stalled, and not
+investigated further: localhost UDP coalescing readily produces exactly this pattern, and
+nothing downstream showed jitter from it. Agent pump cost is negligible (0.3-0.5 ms average,
+≤3.1 ms peak against a 17 ms budget) on both instances throughout — the agent is not the
+bottleneck.
+
+**Not measured this pass:** the direct host-write-timestamp → client-apply-timestamp
+correlation for the same phantom sample (needs new serial-tagged instrumentation this pass did
+not add). The reasoned budget, updated for what WAS measured — `interp_ms=0` instead of the
+80 ms default — drops the single largest deliberate contributor entirely: rough total for a
+peer-avatar phantom is now ~16 ms (publish) + ~16 ms (broadcast) + ~16 ms (client pump) + up to
+60 ms (phantom `smooth_ms`) ≈ **~108 ms typical**, not the ~240 ms this doc computed against the
+80 ms default.
+
+### Companion-mirror latency: `party_fast_pump` (suspect i, #2)
+
+Suspect #2 (two independently-configured 150 ms windows stacking on the companion path — the
+combat pump that reads a companion's state, then `PartyPresenceController`'s own
+`mirror_smooth_ms` smoother) is real and structural, independent of `interp_ms` (companions
+never go through the interpolation buffer at all — `PartyPresenceController`'s own doc comment:
+"companions arrive on the ~150 ms combat pump, not the 30 Hz tick").
+
+**Change made:** `coop.ini party_fast_pump` (default OFF), mirroring `dialogue_fast_join`'s own
+rollout shape exactly. When on, `PumpParty`/`PumpPartyRoster` (`CoopAgent.cs`) move from the
+150 ms combat-pump gate to the same real-time (every poll tick) path dialogue already uses,
+removing the first of the two stacked 150 ms windows. `PumpParty`/`PumpPartyRoster` are cheap
+block reads/writes (no world scan), the same argument that justified moving dialogue.
+
+- Unit-tested: `tests/KotorCoop.Tests/PartyFastPumpTests.cs`, mirroring
+  `DialogueFastJoinPumpTests`'s own technique (an effectively-infinite combat-pump interval, so
+  a write on every `PumpOnce()` can only be the fast path firing).
+- Live-verified (smoke test, ~50 s connected, both instances): `party_fast_pump=1` on both
+  installs; `partystate.ps1` on the client still read `companions 1 soloMode 1 objectId 0x127`
+  correctly reconciled throughout; `lagstats`' agent-pump reading was unchanged (0.5 ms
+  average); `frame stats` showed zero frames over 33 ms across the whole smoke window on both
+  instances. No regression observed. NOT run through the FULL 3-minute session this pass (the
+  measurement session above ran with the flag off, to keep the baseline numbers clean); a
+  longer combat-heavy A/B against the flag is the natural next round.
+- Left OFF by default, same reasoning as `dialogue_fast_join`: real, but a timing change to a
+  channel real players will notice, so it ships behind a flag for a live A/B rather than being
+  trusted on this pass's smoke test alone.
+
+### What was NOT changed
+
+- `EnemyPresenceController`'s scan gating — measured hitch pattern did not implicate it (see
+  above).
+- `interp_ms` / `interp_delay_ms` — already exposed, already tuned to 0 in both installs; no
+  code change needed, only this doc's premise corrected.
+- Default value of `party_fast_pump` — shipped OFF, matching `dialogue_fast_join`'s precedent.
+
+## Verification tags (this pass)
+
+- LIVE-VERIFIED 2026-08-22: the frame-time table and hitch clustering above; the
+  send/recv/agent-pump `lagstats` reading; `interp_ms=0` already active in both installs;
+  `party_fast_pump=1` smoke-tested stable for ~50 s (party reconciliation intact, no frame-time
+  regression, agent pump unchanged).
+- VERIFIED (source, this pass): `party_fast_pump` wiring end to end
+  (`CoopConfig.cs`/`Program.cs`/`CoopAgent.cs`), mirroring `dialogue_fast_join`'s existing,
+  shipped pattern exactly.
+- NEEDS-LIVE, still open: the direct host-write → client-apply phantom-latency correlation (no
+  serial-tagged instrumentation added this pass); a real (non-`tp`-hop) walk/run test of
+  `interp_ms=0`/40 via `phantomgait.ps1`, blocked by the same "no input injection" tooling gap
+  as always; a longer, combat-heavy `party_fast_pump` A/B against the full 3-minute-class
+  session shape.

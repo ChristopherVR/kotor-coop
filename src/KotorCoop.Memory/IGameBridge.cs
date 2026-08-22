@@ -189,6 +189,19 @@ public static class CheatKinds
     /// ⚠ 19, because 7-18 are taken. Take the next FREE number.
     /// </summary>
     public const uint ClosePlaceable = 19;
+
+    /// <summary>
+    /// DEV-ONLY TEST PRIMITIVE (2026-08-22): switches the LOCAL player's controlled character
+    /// to a party-roster companion, or back to their own PC — the reverse of
+    /// <c>KotorGameBridge.LockControlToPlayer</c>'s per-tick revert, written in-process by the
+    /// same id-only field. <c>Amount</c> is the party-roster slot (0-8), or -1 for "your own
+    /// PC". Built so <c>control-return-live.ps1</c> can put a client onto a companion before
+    /// connecting without the one manual step it could never automate. See
+    /// SharedBlock.CheatKindLeader and docs/research/control-return.md.
+    ///
+    /// ⚠ 20, because 7-19 are taken. Take the next FREE number.
+    /// </summary>
+    public const uint Leader = 20;
 }
 
 /// <summary>The plugin's verdicts, mirroring <c>SharedBlock.CheatStatus*</c>.</summary>
