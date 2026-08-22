@@ -8281,6 +8281,39 @@ internal static unsafe class Odyssey
     }
 
     /// <summary>
+    /// ROUND 58 DIAGNOSTIC: everything the "attack armed but never swings" investigation
+    /// (shared-state-audit.md round 56/57) needs to watch on ONE creature, read together so
+    /// the caller does not need <see cref="CreCombatRound"/>'s own private offset. Read-only,
+    /// MAIN THREAD ONLY, safe to call every frame — no engine calls, just field reads.
+    /// </summary>
+    public static void GetAttackDiagnostics(
+        nint creature, out int commandable, out int movePermitted, out int headAction,
+        out int roundActive, out int roundDelay)
+    {
+        commandable = 0;
+        movePermitted = 0;
+        headAction = -1;
+        roundActive = 0;
+        roundDelay = 0;
+
+        if (creature == 0)
+        {
+            return;
+        }
+
+        commandable = *(int*)(creature + ObjCommandable);
+        movePermitted = *(int*)(creature + CreMovePermitted);
+        headAction = GetHeadActionType(creature);
+
+        nint round = *(nint*)(creature + CreCombatRound);
+        if (round != 0)
+        {
+            roundActive = *(int*)(round + 0x958);
+            roundDelay = *(int*)(round + 0x960);
+        }
+    }
+
+    /// <summary>
     /// Makes a creature walk over and pick an item up, via the engine's own
     /// ActionPickUpItem. This is the same action a mouse click on a ground item produces,
     /// which is the point: it exercises the real pickup path rather than simulating one.

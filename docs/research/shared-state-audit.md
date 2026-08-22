@@ -5550,6 +5550,157 @@ A dedicated regression test for `Odyssey.IsDowned`'s new raw-HP fallback (the ex
 test doubles do not model `CSWSCreature::GetDeadTemp`'s live party-membership behaviour, so this
 was verified live rather than in `tests/KotorCoop.Tests`).
 
+### Round 58 (2026-08-22) — the client's own swing, CONFIRMED landing, four times over; no
+"PC held" writer exists; round 56/57's "armed but silent" gap did not reproduce on a clean rig
+
+Picks up round 57's own open item 4 (`local_combat`'s exclusion of a creature `attacktarget` is
+simultaneously driving might be what starves the ordered round) and this round's own brief: find
+whatever holds the client's own PC still and fix it. **It found no such thing, live-reproduced
+the supposedly-broken case four separate ways, and all four worked cleanly, first try.**
+
+**Static audit first, per this doc's own convention (§2's branching discipline).** Every call site
+of `Odyssey.HoldCreatureStill`, `Odyssey.ClearAllActions`(-class) and `Odyssey.ClaimCreature` in
+`src/KotorCoop.Plugin/` was enumerated: `InteractionLockController` (a peer's dialogue-lock target),
+`EnemyPresenceController.ClaimCreatureForFight`/`MaterialisedEnemies` (mirrored enemies only),
+`PartyPresenceController` (mirrored companions only), `PhantomController` (a PEER's phantom, never
+the local player). **None of them is ever handed the local player's own creature pointer.** The
+"PC is drive-controlled" note `TestDriveController.HandleWalk` carries is specific to
+`ActionMoveToLocation` (NWScript routine 21, dead-code message type 1 — round 52's own finding);
+`AttackTarget` queues `ActionAttack` through the identical VM-dispatch mechanism but attack (message
+type 2) IS one of the eight message types this build's player-input channel actually sends, per
+`HandleWalk`'s own doc comment — so nothing in the walk caveat implies attack shares its fate, and
+this round's live evidence below settles it decisively: it does not.
+
+**Instrumentation added** (`src/KotorCoop.Plugin/Odyssey.cs`, `GetAttackDiagnostics`; `TestDrive­Controller.cs`,
+`ProbeAttack`): once `HandleAttack` arms a real order, both bodies are read every second for 20s —
+`ObjCommandable`, `CreMovePermitted`, the head-of-queue action type, and the attacker's own combat
+round (`+0x958`/`+0x960`) — logged as `attack probe: ...`. Diagnostic only, no behaviour change.
+
+**Rig: cold `demo.ps1`, `tar_m10aa`, the same Vulkar pool rounds 53-57 used.** Four live attempts,
+each a fresh `attack 0x7FFFFFFF <id>` order via `blockpoke.ps1`, at melee range (~1-2 units), client
+`cheat god 1` on (floors at 1 hp, matching round 55's own documented artifact):
+
+1. **Client attacks a plain MIRRORED enemy** (`0x33`, never the currently-excluded
+   `local_combat` id at any point during the attack — confirmed via the probe's own
+   `localCombatExcluded=` field, which read `0x24`→`0x26` throughout, never `0x33`). HP fell
+   22→13→1→dead over 20s (`attack probe: ... hp=22 ... hp=13 ... hp=1 ...`), host
+   `combat: killed 0x33 on the owner's authority` (client-side mirror of the death) at
+   `[10:52:05.451]`, ~21s after the order.
+2. **Client attacks the id `local_combat` had JUST armed, then a later id it was no longer
+   fighting** (`0x36`, matching round 56/57's own exact recipe: "the SAME id local_combat had
+   just armed"). Killed cleanly, `combat: killed 0x36 on the owner's authority` at
+   `[10:53:06.869]`, ~7s after the order.
+3. **Client attacks the id CURRENTLY excluded for the entire window** (`0x3B`,
+   `localCombatExcluded=0x3B` unchanged from the order to the kill — the one shape rounds 56/57
+   never confirmed). HP fell 27→17→11→2→1→dead, `combat: killed 0x3B on the owner's authority`
+   at `[10:54:43.877]`, 32s after the order — the probe's own 20s window closed one second
+   before the kill line, which is why the fix keeping the probe running matters for any future
+   pass (a fight can legitimately outlast a fixed 20s watch).
+4. **Both players attack the SAME enemy at once** (`tar10_thermturret` `0x1F`, 80 hp, confirmed
+   alive via `console 'census 0x1F'` — see the methodology note below on why that check, not a
+   raw memory scan, is what picked the target). Host's own HP trace: 80→71→64→57→45→39→27→19→
+   14→9→dead (`[11:05:58]`→`[11:06:15]`, host's native swings). Client's own mirrored trace over
+   the same window: 80→61→49→14→9→dead, `combat: killed 0x1F on the owner's authority` at
+   `[11:06:14.530]` — ONE death, on the host's authority, both contributions counted. XP
+   max-merge confirmed on both sides after: `creatures.ps1` read `0x7FFFFFFF` (the PC sentinel)
+   at **xp 6850 on both instances**, up from the host's own pre-fight 4100 (a prior kill this
+   session had already raised it) — the two converge, exactly as `peer-damage-ledger.md` §4
+   predicts. Loot was not observed for this target (a stationary thermal turret's inventory is
+   plausibly empty; round 54's own `materialised loot: captured 2 item(s) off 0x33's corpse`
+   already stands as the loot channel's live proof and was not re-chased this round).
+
+**Every one of the four is a real kill, on the owner's authority, with the mirror following it.**
+None of the four matches round 56/57's "armed round, HP never moves, ~40-90s, nothing" shape.
+
+**⚠ Methodology note, found the hard way and worth keeping.** The first two follow-up attempts
+this round (re-targeting `0x33` and `0x38` after test 1) picked targets straight out of
+`creatures.ps1`'s raw memory scan — which, exactly as `peer-damage-ledger.md` §7 already warns
+("the census published GHOSTS... cannot distinguish a live creature from the intact bytes of a
+destroyed one"), returned **stale corpse bytes reporting full HP for creatures already dead**
+(confirmed: `console 'census 0x33'` → `not listed in this census` for every one of `0x26 0x2F 0x24
+0x33 0x38 0x31 0x36` after the first three kills). The probe caught this cleanly —
+`resolved=False`, `dead=True`, from the very first sample, same frame as the order — so it read as
+an immediate no-op rather than a mystery, but it means test 4's target was deliberately picked via
+`console 'census <id>'` (the engine-verified check) instead, which is the reliable way to find a
+live target in a room this session had already fought through.
+
+**Round 51/52's own finding reconfirmed, sharply.** The PC's head-of-queue action read `0x3F`
+(move-class, per `IsMoveAction`) continuously through all four successful attacks — never once
+switched to a fight-class type — while real damage landed every second and killed the target every
+time. Anyone using head-action state as ground truth for whether the player is "really fighting"
+will be misled on the ATTACKER side exactly as round 51/52 already found on the receiving side;
+this round adds the player's own queue to that same warning.
+
+**So what explains round 56/57?** Not settled with certainty — the exact session state is gone —
+but the leading candidate, based on everything ruled out here, is session accumulation rather than
+a structural bug: those sessions had run 30+ door-crossing attempts, multiple warps, dialogue
+opens/closes and earlier failed orders before the failing attack, any one of which could have left
+a stray hold (`IncomingDamageController.ApplyOwed`'s own conversation gate, a stuck `attackerRound`
+delay from an aborted prior order, or simply a target that — like this round's first two follow-ups
+— was already a ghost by the time the order landed). **This round's own clean, first-try, four-for-
+four result on a cold rig is itself the evidence that the combat-authority mechanism has no
+structural defect to fix.** The instrumentation now shipped (`GetAttackDiagnostics`/`ProbeAttack`)
+means the next time this shape recurs, whichever session hits it gets a live curve instead of a
+guess.
+
+**`tools/verify.ps1` already carries exactly this check — no new one was needed.** Its own
+`a client hit costs the enemy real hit points` section (find the enemy nearest the client, read
+its hit points out of the HOST's creature, order the client to attack it, read again) is the same
+check this round set out to add. A full battery run (cold `demo.ps1`, `END_M01AA`) confirmed the
+mechanism generally (`swing animations reach the peer` passed, killing `0x35` in ~3s at 41 units)
+but that ONE check failed — `enemy 0x14 at 57 units: hp 15 -> 15` — and this round's own probe,
+attached to the same order, explains why: `dist=128.56` for the ENTIRE 20s window, unchanging,
+head action `0xFFFFFFFF` (no action at all) from the second sample on. The target the check's own
+distance math picked (57 units, from the client's last-known census position) and the target's
+REAL live distance (128.56, from the engine) disagree by more than double — the census position
+was stale, the real target sits on the far side of the Endar Spire's corridor maze, no walkable
+path exists in the window, and the attack action gave up immediately rather than walking there.
+**Not the round 56/57 shape** (which showed a continuously-moving, continuously re-queuing PC —
+head `0x3F` the whole time — with damage that still never landed at melee range); this is a
+target-selection gap in the check itself, picking an enemy that is alive but unreachable, not a
+regression in the plugin. Left as a note for whoever next touches that check's own nearest-enemy
+search (mirror section 10's own approach: judge distance from a position both sides agree is
+current, not a census snapshot) rather than fixed this round, since the mechanism itself is what
+this round was verifying and it already has four clean live confirmations above.
+
+**Item 4, the `DoorUse.WalkThroughPoint` oscillation — NOT the same root cause, left as documented.**
+Round 57's own diagnosis (a fresh external `usedoor` call recomputing the overshoot target on the
+OTHER side of the door plane once the player has nearly crossed) is a navigation-target recompute
+bug inside `DoorUse`, independent of the action-queue/round-timer machinery this round audited end
+to end and found nothing holding. No PC-holding writer exists anywhere in this codebase (confirmed
+above), so there is nothing here to connect the two; not attempted this round.
+
+**Safety.** No coop.ini edits shipped from this pass in either install (both already matched
+`profiles/coop.ini.example`'s defaults going in). `local_combat_bypass_id` unset throughout. God
+mode was on for the client throughout (floors at 1 hp, matches round 55's own documented artifact)
+and off for the host. Rig torn down clean (`Get-Process swkotor,KotorCoop.Agent` empty after
+`demo.ps1 -Stop`), `auto_start_agent` restored to `1` in both installs.
+
+Both builds clean (`dotnet build KotorCoop.slnx`: 0 warnings, 0 errors; `src\KotorCoop.Plugin\build.ps1
+-Install` for both GOG installs: both succeeded, `dinput8.dll` 1761 KB each). Full suite
+`dotnet test tests/KotorCoop.Tests`: **1520/1520**, unchanged (this round added live-only
+diagnostics, no new unit tests — `GetAttackDiagnostics` is a plain field-read helper with nothing
+to assert against an `IGameBridge` double, same class of gap round 57 already logged for
+`Odyssey.IsDowned`). A full `tools/verify.ps1` battery run (separate cold rig, `END_M01AA`,
+recorded above): **37 passed, 8 failed** — two are the pre-existing environment-flaky checks this
+doc's own memory already names (`phantom damageable, not a sink`; `the peer really loses those hit
+points`), one is the target-selection gap in `a client hit costs the enemy real hit points`
+explained above, and the remaining five (a downed-player report, the co-op revive, a journal
+removal gate, an engine-signature count, one phantom-damage variant) are outside this round's own
+scope and were not chased — none of their log windows mention anything this round touched.
+
+**What remains.** Whether round 56/57's exact failure mode can be forced on demand (a stuck
+conversation gate, a poisoned `attackerRound` state, a ghost target) is still open — this round
+ruled out the leading structural suspect (a PC-holding writer) rather than reproducing the original
+symptom. The `WalkThroughPoint` oscillation (still unfixed, still not the same cause). The
+swing-direction door-flip gap (round 57, item 2). A true walking crossing of `end_door10` to settle
+whether Trask mirrors correctly (round 56/57, still blocked on the same oscillation). Loot on a
+lootless target type (turrets) was not chased further. `verify.ps1`'s own nearest-enemy search for
+`a client hit costs the enemy real hit points` should judge distance the way section 10 does
+(a position both sides currently agree on) rather than a possibly-stale census snapshot, so it
+cannot pick an alive-but-unreachable target again. The five unrelated `verify.ps1` failures this
+round's battery run surfaced but did not investigate.
+
 ## 3. A client's XP is actively erased
 
 `ProgressionSnapshotPacket` is host→client only and absolute (CoopAgent.cs, `PumpProgression`):

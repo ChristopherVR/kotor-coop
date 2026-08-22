@@ -619,4 +619,16 @@ tools/                   RE helpers, demo scripts, the kotor1_0_3 symbol databas
   minus the module-transition gate) confirmed an ordinary door opens and mirrors correctly in
   both directions. See
   [docs/research/shared-state-audit.md](docs/research/shared-state-audit.md) §2, round 57.
+- **A client's own swing landing on the host's real creature — CONFIRMED, four ways, live
+  (2026-08-22).** The gap round 56/57 left open (an attack order armed correctly but no hit was
+  ever measured) did not reproduce on a cold rig: a client's `attack` order killed a plain
+  mirrored enemy, the exact enemy `local_combat` had just armed, and an enemy `local_combat` was
+  actively excluding for the whole fight, all three cleanly, first try. A fourth test had the
+  HOST and the CLIENT attack the same enemy at once — both contributions counted, the enemy died
+  once on the owner's authority, and XP converged to the identical total on both screens
+  (max-merge). An audit of every place this codebase ever holds a creature still
+  (`HoldCreatureStill`/`ClaimCreature`/`ClearAllActions`) found none of them is ever handed the
+  local player's own creature — mirrored enemies, mirrored companions and a peer's phantom only —
+  so there is no "PC held" mechanism to fix. See
+  [docs/research/shared-state-audit.md](docs/research/shared-state-audit.md) §2, round 58.
 - KOTOR 2 is untouched, and only GOG v1.0.3 addresses are known.

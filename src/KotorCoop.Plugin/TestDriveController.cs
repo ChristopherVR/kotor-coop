@@ -22,6 +22,16 @@ internal sealed unsafe class TestDriveController(SharedBlockView block)
     private uint _attackSerial;
     private uint _barkSerial;
 
+    // ROUND 58 DIAGNOSTIC: once a real attack order is armed, watch both bodies for a bounded
+    // window instead of trusting "the round timer was set once" as proof anything actually
+    // swings. See shared-state-audit.md round 56/57 — armed rounds that never produced a hit.
+    private uint _probeAttacker;
+    private uint _probeTarget;
+    private double _probeUntil = -1;
+    private double _probeLastLogAt;
+    private const double ProbeDurationSeconds = 20.0;
+    private const double ProbeLogIntervalSeconds = 1.0;
+
     public void Invalidate()
     {
         // Serials are NOT reset: a module change must not replay the last request.
@@ -37,6 +47,64 @@ internal sealed unsafe class TestDriveController(SharedBlockView block)
         HandleWalk();
         HandleAttack();
         HandleBark();
+        ProbeAttack();
+    }
+
+    /// <summary>
+    /// ROUND 58 DIAGNOSTIC: runs every frame for <see cref="ProbeDurationSeconds"/> after
+    /// <see cref="HandleAttack"/> arms a real order, logging once a second so an "armed but
+    /// silent" round leaves a curve instead of one snapshot. Deliberately independent of
+    /// whether the order came from this controller's own serial or whatever else calls
+    /// <see cref="Odyssey.AttackTarget"/> — see the arm site in <see cref="HandleAttack"/>.
+    /// </summary>
+    private void ProbeAttack()
+    {
+        if (_probeUntil < 0)
+        {
+            return;
+        }
+
+        double now = Environment.TickCount64 / 1000.0;
+        if (now >= _probeUntil)
+        {
+            PluginHost.Log($"attack probe: window closed for 0x{_probeAttacker:X} -> 0x{_probeTarget:X}");
+            _probeUntil = -1;
+            return;
+        }
+
+        if (now - _probeLastLogAt < ProbeLogIntervalSeconds)
+        {
+            return;
+        }
+
+        _probeLastLogAt = now;
+
+        nint attacker = Odyssey.ResolveServerObject(_probeAttacker);
+        nint target = Odyssey.ResolveServerObject(_probeTarget);
+
+        Odyssey.GetAttackDiagnostics(attacker, out int aCommandable, out int aMovePermitted,
+            out int aHead, out int aRoundActive, out int aRoundDelay);
+        Odyssey.GetAttackDiagnostics(target, out int tCommandable, out int tMovePermitted,
+            out int tHead, out int tRoundActive, out int tRoundDelay);
+
+        short targetHp = target == 0 ? (short)-1 : Odyssey.GetCurrentHitPoints(target);
+        bool targetDead = target == 0 || Odyssey.IsCreatureDead(target);
+
+        float dist = -1f;
+        if (attacker != 0 && target != 0)
+        {
+            Vec3 a = Odyssey.GetPosition(attacker);
+            Vec3 t = Odyssey.GetPosition(target);
+            dist = MathF.Sqrt(((a.X - t.X) * (a.X - t.X)) + ((a.Y - t.Y) * (a.Y - t.Y)));
+        }
+
+        PluginHost.Log(
+            $"attack probe: 0x{_probeAttacker:X}(resolved={attacker != 0}) commandable={aCommandable} "
+            + $"movePermitted=0x{aMovePermitted:X} head=0x{aHead:X} round(active={aRoundActive},delay={aRoundDelay}) "
+            + $"-> 0x{_probeTarget:X}(resolved={target != 0}) commandable={tCommandable} "
+            + $"movePermitted=0x{tMovePermitted:X} head=0x{tHead:X} round(active={tRoundActive},delay={tRoundDelay}) "
+            + $"hp={targetHp} dead={targetDead} dist={dist:F2} "
+            + $"localCombatExcluded=0x{block.LocalCombatExcludedId:X}");
     }
 
     /// <summary>
@@ -143,6 +211,15 @@ internal sealed unsafe class TestDriveController(SharedBlockView block)
         PluginHost.Log(ok
             ? $"test: 0x{attacker:X} ordered to attack 0x{target:X}"
             : $"test: attack order refused (0x{attacker:X} -> 0x{target:X}, failure {failure})");
+
+        if (ok)
+        {
+            _probeAttacker = attacker;
+            _probeTarget = target;
+            double now = Environment.TickCount64 / 1000.0;
+            _probeUntil = now + ProbeDurationSeconds;
+            _probeLastLogAt = now - ProbeLogIntervalSeconds; // log immediately, not 1s from now
+        }
     }
 
     private void HandleTalk()
