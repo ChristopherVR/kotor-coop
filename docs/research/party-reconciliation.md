@@ -887,3 +887,187 @@ that exact field.
 
 Rig torn down clean (`Get-Process swkotor,KotorCoop.Agent` empty), `auto_start_agent` restored
 to `1` in both installs.
+
+## Round 74 (2026-08-23) — the "other slot" theory disassembled and DISPROVEN; the real defect
+found one layer deeper (a step-FSM reset bug), a real fix shipped that breaks a genuine dead
+loop, but Trask still does not walk — narrow gap, closing this thread
+
+Round 73 left one lead: `WalkUpdateLocation_QuickWalk_FollowLeader` 0x0051C360's own step FSM
+(phase counter at the per-member record's own `+4`, dispatched through an 11-entry jump table
+at 0x51CCEC) computes an obstacle-avoidance lookup against **"the other party member's slot"**
+before the dispatch, and this save has exactly one companion (Trask, index 1) — index 2's
+record is never populated. The brief for this round: disassemble that lookup fully, determine
+whether an empty slot 2 jams the FSM, and — live, either by recruiting a genuine second
+companion or by poking a sane placeholder into slot 2 — settle it one way or the other.
+
+### The "other slot" lookup, disassembled in full: it does not gate on an empty slot
+
+`tools/disasm.py 0x51c700 700` (continuing past round 72's stopping point) and
+`tools/kotor1_0_3.db` name every call site directly. The lookup at 0x51C744-0x51C7AC:
+
+- `cmp ebx,1`/`cmp ebx,2` picks "the other" index (this creature's own index 1 <-> 2, via the
+  same `CClientExoAppInternal::ServerToClientObjectId`/`CSWParty::GetIndex` chain round 72
+  already verified for the CALLER's own index).
+- Resolves `CSWParty + otherIndex*0x88 + 0x24` — which, by this document's own established
+  record-base formula (`CSWParty+0x24+index*0x88`), is exactly `otherRecord+0x0`, the other
+  slot's first field.
+- Converts it through `CServerExoApp::ClientToServerObjectId` (0x4AEA30).
+- **The converted result (`eax`) is never read again.** The very next instructions
+  unconditionally write a hardcoded sentinel float (`0x7f000000`, ~1.7e38 — "far/no obstacle")
+  into `[creature+0x340]+0x34` (an obstacle-avoidance substructure), register that substructure
+  with the creature's own `CSWSObject::GetArea()` at `Area+0x1AC`, and set a per-record weight
+  field (`+0x58`) to `1.0f` — regardless of whether the resolve above returned a real pointer, a
+  null, or anything else.
+
+There is no branch anywhere in this block on whether the "other slot" resolves. It runs the
+same way whether slot 2 holds a real companion, a genuinely empty slot, or garbage. **This
+directly disproves the round-73 theory as literally stated**: an empty companion slot cannot be
+jamming the FSM here, because nothing here inspects the result closely enough to jam on it. It
+looks exactly like vestigial or defensive multiplayer-obstacle-avoidance bookkeeping (`CSWParty`
+supports up to two companions, indices 1 and 2, per `PartyRosterController`'s own documented
+`CSWPartyTable::AddMember` cap of 2) that happens to run unconditionally rather than being
+skipped when there is nothing to avoid.
+
+Live confirmation, via a new read-only diagnostic (`Odyssey.FollowDiag.OtherSlotIndex`/
+`OtherSlotStoredId`, wired into the existing party-follow log line): `otherSlot=2:0x7F000000`,
+every sample, this whole round. `0x7F000000` is this project's own already-documented
+"not spawned" sentinel (this doc's `CSWPartyTable+0x0C` entry, 2026-07-31: "0x7F000000 = not
+spawned") — direct, independent confirmation that slot 2 really is empty, exactly as expected
+for a one-companion party, and that the engine represents that state with a normal, handled
+sentinel rather than raw garbage.
+
+Given (1) and (2) above ruled out this round's item 1, item 2's "recruit a second companion"
+half was not pursued: `END_M01AA` (the Endar Spire opening) never offers a second recruitable
+companion in vanilla KOTOR1 story content at this point (Trask is the only companion available
+until much later), so a live test would have required jumping the save to a materially
+different module/story state rather than testing the SAME save rounds 71-73 built their whole
+evidence chain against — and the disassembly above already answers the question a live
+recruit test would have: the other-slot resolve does not gate anything, so populating it would
+not be expected to change behaviour. Item 2's "sane placeholder" half was accordingly not tried
+either, for the same reason: there is nothing downstream that reads the resolve result to poke.
+
+### The real defect, one layer deeper: a step-FSM reset bug that skips path-finding entirely
+
+Tracing past the other-slot block into the phase dispatch itself
+(`0x0051C7E5-0x0051C7F9`: `record+4` is the phase index, dispatch index = phase+1, jump table
+at 0x51CCEC) and naming every table entry against `tools/kotor1_0_3.db`:
+
+| dispatch index | phase value | target | handler |
+|---|---|---|---|
+| 0 | -1 (initial/reset) | 0x51C800 (inline) | re-snapshot position into `record+0x5c`, **set phase directly to 5**, return — no path request |
+| 1 | 0 | 0x51AC10 | `FindPath` — the ONLY handler that calls `CSWSCreature::AddMoveToPointActionToFront` and unconditionally writes `CreMoveState` (`creature+0xA8C`) to -1 ("walking") on its way out (0x51AF5A, the shared epilogue both of its branches funnel into) |
+| 6 | 5 | 0x5127D0 | `WaitingForPath` — polls an async job-status field (`[creature+0x2DC]+0xFA8` >= 5) and returns "not ready" otherwise; does nothing else |
+| ... | ... | ... | (Offset, Moving_To_Path, Following_Path, Moving_To_Offset, OffsetWaitDest, PathWaitDest, ToOffsetWaitDest, ToPathWaitDest, TeleportForward — all named directly from the symbol DB) |
+
+**The bug**: dispatch index 0 (reached whenever phase == -1) sets phase directly to 5
+(`WaitingForPath`) WITHOUT ever calling `FindPath` — the only handler that submits a real
+path-finding job. And the FSM's own watchdog (`record+0x44`, an attempt counter incremented on
+every dispatch; once it exceeds `0x32` (50) without the phase changing, `0x51C964-0x51C96B`
+force-resets phase back to -1) can ONLY ever land back on -1, which re-enters entry 0, which
+re-enters phase 5 — a permanent two-state loop that never calls `FindPath` again once entered.
+`WaitingForPath` polls a job that was never (re-)submitted, so it can never see it complete.
+Live-observed on Trask (a companion stalled long enough, across several rig cycles'
+worth of repeated stall-reissues, to plausibly have hit this once): `phase=5`, `attempts`
+sampled at 41, 49, 11, 14 across four 2-second-spaced reads — consistent with the watchdog
+firing and re-entering the loop between samples, never escaping.
+
+This is the SAME class of bug this whole investigation keeps finding (round 73's
+`CSWParty::Update` never being pumped; rounds 60-67's animation-tick gap): a legitimate engine
+recovery path (the -1 reset) that, in a plugin-driven session where the FSM has genuinely been
+stuck for an unusually long time, reaches a state vanilla single-player likely never lingers in
+long enough to exercise this specific reset branch.
+
+### Fix shipped: `Odyssey.TryResetStuckFollowPhase` — live-verified to break the dead loop
+
+Writes `record+4` (phase) to 0 and `record+0x44` (attempts) to 0, ONLY when the phase is
+presently -1 or 5 — the two states this round's disasm shows can never self-recover. Any other
+phase is left untouched (mid-flight FSM progression, not a park state this round has evidence
+for stomping). Called every frame from `PartyFollowController.OnFrame`'s existing per-slot loop,
+alongside `TryDriveFollowTarget`, under the same busy/player-valid guard.
+
+**Live-verified round 74**, host `END_M01AA`, Trask recruited, five separate rig cycles: before
+the fix, `phase` cycles 5 -> (watchdog reset, invisible between samples) -> 5 forever, `attempts`
+oscillating as described above. After the fix: `phase` reaches **7** (`PathWaitDest`) and holds
+there — `FindPath` genuinely ran (the only way to reach any phase past 0), broke the -1/5 loop,
+and the FSM advanced further than any prior round observed. Reproduced across a fresh rig cycle
+and confirmed independent of a same-round experimental change to `TryDriveFollowTarget` (see
+below) that was tried and reverted.
+
+**This is real, disassembly-grounded, live-confirmed forward progress — and it is still not
+enough.** Once parked at phase 7, `attempts` (`record+0x44`) stays at exactly 0 for 40+
+continuous seconds (thousands of frames) — meaning the OUTER function's own phase-dispatch
+block (`0x51C7E5` onward, which increments `attempts` on every single reach) is not being
+re-entered at all anymore, not even to re-run `PathWaitDest`. `PathWaitDest` itself
+(`0x512B40`, disassembled this round) is a circular-buffer search comparing a "current path
+node" field (`record+0x24`) against a pathfinder write-cursor read from
+`[creature+0x2DC]+0xFA4` — the same style of "poll an external job's progress" pattern as
+`WaitingForPath`, strongly suggesting the actual blocker now is the SAME class of bug at a
+different layer: whatever async subsystem advances that write-cursor (KOTOR1's own background
+path/A* job processor) is, like `CSWParty::Update` before it, apparently not being pumped by
+anything this plugin's per-frame drive loop reaches — so a path IS now genuinely being
+requested (round 73 and earlier rounds never got even that far), but the job that would resolve
+it never completes.
+
+### Experiment tried and reverted: lagging `prior` behind `target` every frame
+
+On the theory that `WalkUpdateLocation_QuickWalk_FollowLeader`'s own gate at `0x51C4D5`
+(computing `target - prior` and branching on whether that is "close to zero," 0x51C61F — a path
+this round's disasm shows converges with the "real delta" path 0x51C4E6 shares, so it does NOT
+skip the phase dispatch on its own) might still matter for keeping the phase-dispatch block
+re-entering every frame, `Odyssey.TryDriveFollowTarget` was changed to write `prior` <- the OLD
+target value (not the same new value `target` was about to become) unconditionally every call,
+instead of round 73's original "both fields to the same new leader position, only when >10cm
+different." Live-tested against a leader driven through 12 real engine teleports (`tools/
+blockpoke.ps1 console 'tp'`) roughly 1.5s apart, simulating continuous movement: no measurable
+change in `phase`/`attempts` progression versus the phase-reset fix alone, across the whole
+tp-hop window and after. The one-frame window where a real delta would exist (immediately after
+a teleport, before the very next frame's write re-converges them) is too narrow for this
+plugin's ~2s reissue-driven diagnostic sampling to either confirm or rule out cleanly, and
+writing `record+0x18` unconditionally on every frame (vs. round 73's original >10cm-gated write)
+is a real increase in write frequency for a benefit that could not be measured live. Reverted to
+round 73's original, verified-safe, epsilon-gated write rather than ship an unproven behaviour
+change alongside the proven one.
+
+### Verdict: narrow, confirmed gap — closing this thread
+
+Five rounds deep (71-74), with the "other slot" theory now disassembled and disproven, a real
+FSM-reset defect found and fixed (breaking a permanent dead loop and reaching the furthest
+phase any round has observed), and the remaining blocker narrowed to a specific, named
+function (`PathWaitDest`, its external write-cursor at `[creature+0x2DC]+0xFA4`) rather than a
+vague "he just doesn't walk" — this is the point named in this round's own brief to stop: solo-
+companion following is a genuinely narrow gap, not a general co-op regression. Every player who
+recruits a second companion (the common case for most of the game past the opening sequence)
+exercises a completely different party-index arithmetic path in the same engine code and is not
+known to be affected — nothing in five rounds of disassembly here touches multi-companion
+following, and `party_follow`'s own mechanism (reissuing `ActionFollowLeader` whenever a
+companion stalls) remains a correct, real, no-regression improvement over having nothing at all,
+regardless of this specific one-companion FSM defect. A future round with a save that has two
+recruited companions, or a live debugger attached to `swkotor.exe` to single-step
+`WalkUpdateLocation_QuickWalk_FollowLeader_PathWaitDest` and find what is actually supposed to
+advance `[creature+0x2DC]+0xFA4`, would be the concrete next step — not attempted this round, in
+line with the round's own budget.
+
+### Test suite and build
+
+`dotnet test tests/KotorCoop.Tests` (Release): **1623/1623 passed**, unchanged baseline, 2m26s
+— this round's changes are a new read-only diagnostic (`Odyssey.FollowDiag.PhaseIndex`/
+`PhaseAttempts`/`OtherSlotIndex`/`OtherSlotStoredId`), one new shipped primitive
+(`Odyssey.TryResetStuckFollowPhase`), and a same-round experimental change to
+`TryDriveFollowTarget` that was tried, live-tested, and reverted before this round ended — none
+exercised by the (x86 NativeAOT, unreferenced-by-tests) test project. Both plugin builds clean,
+0 warnings 0 errors (the one pre-existing `PortraitController.cs` CA2014 warning is unrelated
+and untouched), across seven full rebuild/redeploy/relaunch cycles this round needed.
+
+`tools/verify.ps1 -Host1 58008 -Client2 27264`: **41 passed / 8 failed** (round 73's own baseline
+was 40/9 on the same battery) — the failures are the same pre-existing combat/item/revive/
+RPC-signature checks round 73 already found unrelated to party-follow ("the peer really loses
+those hit points", "a client hit costs the enemy real hit points", "a downed player is reported
+to the agent", "the co-op revive stands the player back up", "every engine call signature
+matches the binary" (2/167, pre-existing), "a container opened on the client is held and shown
+open on the host", "no per-frame spam", "phantom damageable, not a sink"); the two party-specific
+checks passed clean ("the host still controls its companions", host clamped this run: False; "the
+client party roster survives a transition"). `tools/partystate.ps1` on both instances: host
+`companions 1 soloMode 0`, client `companions 1 soloMode 1`, both `member 1 slot 0 objectId
+0x127` (Trask) — matches the pre-round baseline exactly, no desync introduced by this round's
+changes. Rig torn down clean (`Get-Process swkotor,KotorCoop.Agent` empty), `auto_start_agent`
+restored to `1` in both installs.

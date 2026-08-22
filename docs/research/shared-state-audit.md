@@ -6698,6 +6698,64 @@ exactly (host soloMode=0, client soloMode=1, companions 1 on both). Rig torn dow
 (`Get-Process swkotor,KotorCoop.Agent` empty), `auto_start_agent` restored to `1` in both
 installs.
 
+### Round 74 (2026-08-23) — the "other slot" theory disassembled and disproven; a real step-FSM
+reset bug found and fixed one layer deeper; still narrowly not fixed — thread closed
+
+Picks up round 73's own last lead: an obstacle-avoidance lookup against "the other party
+member's slot" inside `WalkUpdateLocation_QuickWalk_FollowLeader`'s step FSM, which a
+one-companion party (this save has only Trask) leaves empty. Full write-up in
+`docs/research/party-reconciliation.md`'s 2026-08-23 "Round 74" entry. Short version:
+
+- **The "other slot" theory is disproven by direct disassembly.** The lookup resolves the other
+  slot's stored id through `ClientToServerObjectId` and then never reads the result again — the
+  following instructions unconditionally write a hardcoded "far/no obstacle" sentinel and
+  register bookkeeping with the creature's own Area, regardless of whether the resolve
+  succeeded, returned null, or anything else. Live-confirmed: a new diagnostic
+  (`Odyssey.FollowDiag.OtherSlotIndex`/`OtherSlotStoredId`) reads `otherSlot=2:0x7F000000` every
+  sample — `0x7F000000` being this document's OWN already-documented `CSWPartyTable+0x0C`
+  "not spawned" sentinel (2026-07-31 entry), independent confirmation the slot really is empty
+  and handled normally, not garbage. A second recruitable companion was not chased live: the
+  disassembly already answers the question (populating the slot changes nothing downstream
+  reads), and `END_M01AA` (the Endar Spire) never offers one in vanilla story content at this
+  point anyway.
+- **The real defect, one layer deeper**: the step FSM's own phase field (`record+4`) reset path
+  (dispatch index 0, reached whenever phase == -1) re-enters `WaitingForPath` (phase 5) directly,
+  WITHOUT ever calling `FindPath` (phase 0) — the only handler that submits a real path-finding
+  job and writes `CreMoveState` to -1. The watchdog that forces phase back to -1 after 50 stalled
+  attempts can therefore only ever land back in this same two-state loop once entered — a
+  permanent dead loop, live-confirmed via `phase`/`attempts` diagnostics cycling exactly as
+  predicted.
+- **Fix shipped**: `Odyssey.TryResetStuckFollowPhase` resets `record+4`/`record+0x44` to 0 ONLY
+  when phase is -1 or 5, called every frame alongside `TryDriveFollowTarget`. Live-verified
+  across five rig cycles: breaks the dead loop every time, and the companion's step FSM reaches
+  phase 7 (`PathWaitDest`) — the furthest any round has observed — reliably, reproducibly, and
+  independent of an experimental change to `TryDriveFollowTarget` (see below) that was tried and
+  reverted.
+- **Still not enough**: once parked at phase 7, the attempt counter stays at exactly 0 for 40+
+  continuous seconds — the outer per-frame dispatch block is not being re-entered at all.
+  `PathWaitDest` (disassembled this round) polls an async job's write-cursor
+  (`[creature+0x2DC]+0xFA4`) the same way `WaitingForPath` polls a job-status field — strongly
+  suggesting the blocker is now a THIRD instance of this investigation's own recurring pattern
+  (round 73's `CSWParty::Update`, rounds 60-67's animation ticks): an async engine subsystem this
+  plugin's per-frame drive loop does not reach.
+- **Tried and reverted**: lagging `TryDriveFollowTarget`'s `prior` write behind `target` (instead
+  of round 73's "both to the same new value") on the theory that the outer function's own
+  target-vs-prior gate needed a persistent nonzero delta to keep re-triggering. Live-tested
+  against a leader driven through 12 real teleports simulating continuous movement — no
+  measurable benefit over the phase-reset fix alone, and a real increase in per-frame write
+  frequency for it. Reverted rather than ship an unproven behaviour change.
+- **Verdict**: narrow, confirmed gap, thread closed per this round's own budget. Real forward
+  progress (a genuine dead loop broken, the furthest FSM phase any round has reached) shipped
+  alongside an honest "still does not walk" — judged solo-companion-only (nothing in four rounds
+  of disassembly touches the multi-companion party-index path), not a general regression.
+
+`dotnet test tests/KotorCoop.Tests`: **1623/1623**, unchanged baseline. Both plugin builds clean
+across seven rebuild/redeploy/relaunch cycles. `tools/verify.ps1`: 41 passed / 8 failed (one
+better than round 73's 40/9 baseline, same battery — all failures pre-existing and unrelated to
+party-follow); the two party-specific checks passed clean. `tools/partystate.ps1` matched the
+pre-round baseline exactly on both instances. Rig torn down clean (`Get-Process
+swkotor,KotorCoop.Agent` empty), `auto_start_agent` restored to `1` in both installs.
+
 ## 3. A client's XP is actively erased
 
 `ProgressionSnapshotPacket` is host→client only and absolute (CoopAgent.cs, `PumpProgression`):

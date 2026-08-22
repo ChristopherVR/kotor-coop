@@ -1755,6 +1755,33 @@ internal static unsafe class Odyssey
         diag.CachedPosPairLo = *(int*)(creature + 0xb0);
         diag.CachedPosPairHi = *(int*)(creature + 0xb4);
         diag.EnabledFlag = *(int*)(creature + 0x1f8);
+
+        // ROUND 74: the step FSM this round is chasing, per WalkUpdateLocation_QuickWalk_
+        // FollowLeader's own disasm (0x0051C7E5-0x0051C7F9) — record+4 is the phase index the
+        // 11-entry jump table at 0x51CCEC dispatches on (incremented BEFORE the jump: the
+        // dispatch uses phase+1, so a phase that has never left its module-load value reads
+        // back here as whatever that raw value was, not necessarily 0), and record+0x44 is a
+        // SEPARATE attempt/stall counter incremented every call regardless of phase — once it
+        // exceeds 0x32 (50) the function force-resets phase to -1 and the counter to 0
+        // (0x51C95E-0x51C96B). Sampled together, these say whether the phase dispatch is being
+        // reached and cycling AT ALL (proves/disproves this round's leading theory that an
+        // EARLIER gate — the edi+0xD0 step-accumulator throttle at 0x51C458-0x51C486 — returns
+        // early every frame and never reaches the phase dispatch, vs. the phase dispatch being
+        // reached but stalling once inside it, e.g. on the empty "other party slot" read at
+        // 0x51C744-0x51C7AC).
+        diag.PhaseIndex = *(int*)(record + 4);
+        diag.PhaseAttempts = *(int*)(record + 0x44);
+
+        // The "other party member" slot 0x0051C744 resolves against (this creature's own
+        // index 1 <-> 2, or 2 <-> 1) — its raw stored id (record2+0x0) read directly the same
+        // way, so a genuinely empty/never-populated slot 2 in a one-companion party shows up
+        // here as whatever value it actually holds (0 if the array is zero-initialized,
+        // garbage otherwise) rather than being inferred.
+        int otherIndex = index == 1 ? 2 : index == 2 ? 1 : 0;
+        nint otherRecord = party + 0x24 + (otherIndex * 0x88);
+        diag.OtherSlotIndex = otherIndex;
+        diag.OtherSlotStoredId = *(uint*)otherRecord;
+
         diag.Valid = true;
         return true;
     }
@@ -1771,6 +1798,10 @@ internal static unsafe class Odyssey
         public int CachedPosPairLo;
         public int CachedPosPairHi;
         public int EnabledFlag;
+        public int PhaseIndex;
+        public int PhaseAttempts;
+        public int OtherSlotIndex;
+        public uint OtherSlotStoredId;
     }
 
     /// <summary>
@@ -1814,6 +1845,78 @@ internal static unsafe class Odyssey
 
         nint record = party + 0x24 + (index * 0x88);
         *(Vec3*)(record + 0x18) = leaderPos;
+        return true;
+    }
+
+    /// <summary>
+    /// ROUND 74 EXPERIMENT: <c>WalkUpdateLocation_QuickWalk_FollowLeader</c>'s own step FSM
+    /// (0x0051C360, jump table at 0x51CCEC) reads <c>record+4</c> as its phase index (dispatch
+    /// index = phase+1) and <c>record+0x44</c> as an attempt counter that, once it passes 0x32
+    /// (50) WITHOUT the phase changing, force-resets phase to -1 (0x51C964-0x51C96B). Dispatch
+    /// index 0 (phase == -1) is the inline block at 0x51C800: it re-snapshots the creature's
+    /// current position into <c>record+0x5c</c> and sets phase DIRECTLY to 5 — WITHOUT ever
+    /// calling <c>WalkUpdateLocation_QuickWalk_FollowLeader_FindPath</c> (phase 0, dispatch
+    /// index 1, 0x51AC10), the ONLY handler that actually submits a fresh pathfinding request
+    /// (via <c>CSWSCreature::AddMoveToPointActionToFront</c>) and unconditionally writes
+    /// <c>CreMoveState</c> (creature+0xA8C) to -1 ("walking") on its way out
+    /// (0x51AF5A, the shared epilogue both of FindPath's branches funnel into). Phase 5 is
+    /// <c>WalkUpdateLocation_QuickWalk_FollowLeader_WaitingForPath</c> (0x5127D0), which does
+    /// nothing but poll an async job-status field (creature+0x2DC, then +0xFA8 off THAT
+    /// pointer) for &gt;= 5 and return "not ready" otherwise — a job that was never submitted,
+    /// because FindPath was skipped. Once phase lands on -1 this way there is no natural way
+    /// back into FindPath: -1 always redispatches to entry 0, which always re-enters phase 5
+    /// without resubmitting anything. Live-observed round 74: a companion stalled long enough
+    /// to have hit this cycle once (plausible after many minutes of round 71-73's repeated
+    /// stall-reissues, each re-entering this same per-frame continuation) reads phase=5,
+    /// attempts cycling through 0x32 and wrapping back down — the FSM genuinely running, every
+    /// frame, permanently unable to leave the WaitingForPath/-1 ping-pong.
+    ///
+    /// This writes <c>record+4</c> to 0 (dispatch index 1 next call — FindPath, not the
+    /// entry-0 shortcut) and <c>record+0x44</c> to 0 (clear the attempt counter so the
+    /// watchdog does not immediately re-force -1 on the very next call), ONLY when the phase
+    /// is presently stuck at -1 or 5 — the two states this round's disasm shows can never
+    /// self-recover. A companion in any other phase is left alone: those are mid-flight in the
+    /// FSM's own real progression and a phase stomp there would be actively destructive, not a
+    /// nudge.
+    ///
+    /// Returns false when the index does not resolve. Returns true whether or not a write
+    /// happened (the phase-guard is the caller-visible "did I actually intervene" signal via
+    /// <paramref name="wrote"/>).
+    ///
+    /// MAIN THREAD ONLY.
+    /// </summary>
+    public static bool TryResetStuckFollowPhase(uint companionServerObjectId, out bool wrote)
+    {
+        wrote = false;
+        nint client = GetClient();
+        if (client == 0)
+        {
+            return false;
+        }
+
+        uint clientObjectId = ServerToClientObjectIdFn(client, companionServerObjectId);
+
+        nint party = GetSWPartyFn(client);
+        if (party == 0)
+        {
+            return false;
+        }
+
+        int index = GetPartyIndexFn(party, clientObjectId);
+        if (index <= 0)
+        {
+            return false;
+        }
+
+        nint record = party + 0x24 + (index * 0x88);
+        int phase = *(int*)(record + 4);
+        if (phase == -1 || phase == 5)
+        {
+            *(int*)(record + 4) = 0;
+            *(int*)(record + 0x44) = 0;
+            wrote = true;
+        }
+
         return true;
     }
 
@@ -1875,6 +1978,29 @@ internal static unsafe class Odyssey
         Vec3 existingTarget = *(Vec3*)(record + 0x28);
         float dx = existingTarget.X - leaderPos.X;
         float dy = existingTarget.Y - leaderPos.Y;
+
+        // ROUND 74 TRIED AND REVERTED: WalkUpdateLocation_QuickWalk_FollowLeader's own gate at
+        // 0x51C4D5 computes target-minus-prior and branches on whether that is "close to zero"
+        // (0x51C61F — live-confirmed round 74 to park the step FSM at whatever phase it last
+        // reached and never re-trigger the phase dispatch again) or "a real delta" (0x51C4E6 —
+        // the path this round's disasm confirms genuinely reaches and advances the phase
+        // dispatch). This round tried writing prior <- the OLD target (instead of the same new
+        // value target is about to become) EVERY call, unconditionally, on the theory that a
+        // real, honest, small delta every frame would keep the "differs" path live for as long
+        // as the leader keeps moving. Live-tested against a leader driven through 12 real
+        // engine teleports ~1.5s apart (tools/blockpoke.ps1 console 'tp'): the party-follow
+        // diagnostic log (which only samples once every reissue pass, ~2s) never once showed a
+        // nonzero delta, and the phase/attempt counters this round's own diagnostics added
+        // (Odyssey.FollowDiag.PhaseIndex/PhaseAttempts) never advanced past where
+        // Odyssey.TryResetStuckFollowPhase alone already gets a stalled companion. The one-frame
+        // window where target genuinely jumps ahead of prior (right after a teleport, before the
+        // NEXT frame's write converges them again) is far too narrow for this plugin's ~2s
+        // reissue-driven sampling to confirm any benefit, and rewriting record+0x18 on every
+        // single frame (vs. round 73's original >10cm-gated write) is a real increase in engine
+        // write frequency for a benefit that could not be measured. Reverted to round 73's
+        // original, verified-safe, epsilon-gated write rather than ship an unproven behaviour
+        // change — see Odyssey.TryResetStuckFollowPhase's own remarks for what round 74 DID
+        // confirm live.
         if ((dx * dx) + (dy * dy) > 0.01f) // ~10cm — "meaningfully different," not float noise
         {
             *(Vec3*)(record + 0x28) = leaderPos;

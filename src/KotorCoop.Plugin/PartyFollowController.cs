@@ -214,6 +214,12 @@ internal sealed unsafe class PartyFollowController(SharedBlockView block)
             if (player != 0 && !IsBusyHead(headType))
             {
                 Odyssey.TryDriveFollowTarget(objectId, playerPos);
+
+                // ROUND 74 EXPERIMENT (not yet a permanent fix — see Odyssey.
+                // TryResetStuckFollowPhase's own remarks for the disasm this is based on).
+                // Live test only: unwedge the step FSM's phase field when it is caught in the
+                // -1/5 ping-pong that never calls FindPath.
+                Odyssey.TryResetStuckFollowPhase(objectId, out _);
             }
 
             if (!_tracked[slot])
@@ -325,7 +331,8 @@ internal sealed unsafe class PartyFollowController(SharedBlockView block)
                         + $"snapPending={diag.SnapshotPendingFlag} stepAccum={diag.StepAccumulator} "
                         + $"cachedPos=({diag.CachedPosPairLo:X},{diag.CachedPosPairHi:X}) "
                         + $"enabledFlag={diag.EnabledFlag} leaderPos=({leaderPos.X:F1},{leaderPos.Y:F1},{leaderPos.Z:F1}) "
-                        + $"soloMode={soloMode}{refText}"
+                        + $"soloMode={soloMode} phase={diag.PhaseIndex} attempts={diag.PhaseAttempts} "
+                        + $"otherSlot={diag.OtherSlotIndex}:0x{diag.OtherSlotStoredId:X}{refText}"
                     : $" soloMode={soloMode}{refText}";
 
                 PluginHost.Log(ok
