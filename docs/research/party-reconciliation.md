@@ -570,3 +570,115 @@ get it to -1 ("walking" — a route genuinely being stepped) for Trask, ever, ac
 and distance tried. Full elimination list and the honest "not yet closed" status:
 `docs/research/phantom-locomotion.md`, "2026-08-23"; `docs/research/shared-state-audit.md` §2,
 round 71.
+
+## Round 72 (2026-08-23) — the frozen follow TARGET point, found by disassembly and confirmed
+live; two follow-on fix attempts tried and live-disproven; genuinely not yet closed
+
+Round 71 reissues the follow order reliably and gets `CreMoveState` to 3, every time, but Trask
+never reaches -1 ("walking"). This round went looking for the engine's own per-frame CONTINUATION
+— the code that, every frame `CreMoveState==3` holds, decides whether there is a step to queue —
+rather than the one-shot dispatcher round 71 already found and shipped.
+
+### Disassembly: the real per-frame continuation, and its own gates
+
+`tools/kotor1_0_3.db` names the whole function family directly:
+`CSWSCreature::WalkUpdateLocation` (0x0051BB10) dispatches by animation id into
+`WalkUpdateLocation_QuickWalk` (0x0051D9C0), which — on `CreMoveState==3` specifically
+(`cmp eax,3; je`, 0x0051DABA) — calls `WalkUpdateLocation_QuickWalk_FollowLeader` (0x0051C360)
+every single frame the mode holds. `AIActionPartyFollowLeader` (0x00511130, the function round 71's
+`QueuePartyFollowLeader` dispatches into) is the ONE-SHOT arm-and-set-state-3 half; 0x0051C360 is
+the per-frame "is there a step to queue" half, and it was never disassembled before this round.
+
+0x0051C360's own opening gate resolves the CALLING creature's own index inside `CSWParty` (the
+CLIENT-side struct, not `CSWPartyTable`) via `CClientExoAppInternal::ServerToClientObjectId`
+(0x005EDA50) then `CSWParty::GetIndex` (0x006349C0) — confirmed by full disasm and by
+`param_size_bytes`/`calling_convention` in the symbol DB (matching the visible push/call shape
+exactly). Index `-1` (not found) or `0` (the creature IS the leader slot) both bail out for the
+whole frame with nothing queued. Past that gate, the function reads a per-member follow-data
+record at `CSWParty + 0x24 + index*0x88` (stride and base confirmed against this document's own
+2026-08-22 finding on the same struct) — a TARGET follow point at `record+0x28` (a `Vec3`), a
+cached "prior leader position" at `record+0x18` (`Vec3`), and a position SNAPSHOT at `record+0x5c`
+— and computes distances between them before ever reaching the code that would queue a walk step
+(traced as far as ~0x51C700 before the practical limit of hand-decoding x87 stack state without a
+live debugger was reached — not the whole function, but past every gate this round needed).
+
+### Live probe: the target point is frozen at module-load time, confirmed multiple ways
+
+New Odyssey.cs diagnostics this round — `TryGetClientPartyIndex` (the same
+`ServerToClientObjectId`/`GetIndex` chain, read-only) and `TryGetFollowDiagnostics` (the full
+per-member record plus the creature's own `+0xD0`/`+0xB0`/`+0xB4`/`+0x1F8`) — wired into
+`PartyFollowController`'s existing stall-reissue log line. Live, on the host, `END_M01AA`, Trask
+recruited by the loaded save:
+
+```
+cswPartyIndex=1   (a VALID index — rules out the -1/"not found" gate entirely)
+target=(20.0,22.2,-1.3)   prior=(20.0,22.2,-1.3)   <- BOTH frozen at Trask's own spawn/load position
+leaderPos=(45.0,40.0,-1.3)                          <- the REAL player position, 28+ units away
+soloMode=0                                          <- confirmed OFF on the host (see below)
+```
+
+Repeated across a dozen samples, several rebuild/redeploy/relaunch cycles, and after teleporting
+the player to three different distant positions: `target` (the point 0x0051C360 would walk Trask
+toward) and `prior` (its own cached "where the leader was last") never move off the value they held
+the instant the module loaded, no matter how far or how many times the real leader position changes.
+**This is the root cause of "reaches 3, never reaches -1": the per-frame continuation has nothing
+fresh to walk toward, because whatever is supposed to keep this record's leader-position input
+current is not doing so in this session.**
+
+### Ruled out this round, each with its own live test
+
+1. **`CSWParty::GetIndex` failing** (this document's own 2026-08-22 "CSWParty vs CSWPartyTable
+   divergence" finding made this the leading hypothesis going in) — DISPROVEN: `cswPartyIndex=1`,
+   a valid, stable index, every sample.
+2. **Solo mode (`CSWPartyTable+0x190`) suppressing the recompute** — DISPROVEN: read live via the
+   SAME verified pointer chain `PartyFollowController` already uses for the party table
+   (`AppManagerPtr -> +8 -> +4 -> +0x1B770 -> +0x190`), confirmed `0` (off) on the host for the
+   whole session. Consistent with `CoopAgent.PumpParty`'s own documented intent ("the host: publish,
+   do not freeze — its companions follow through the game's own AI exactly as in single-player") —
+   solo mode is a CLIENT mechanism and was never expected to touch the host at all.
+3. **The recompute just needs calling** — `Odyssey.RecalculateFollowPoint()`, a direct call to
+   `CSWParty::RecaulateFollowPoint` (0x006359C0, `__thiscall`, verified 0 stack args from the
+   symbol DB — not a guessed ABI), called every stall pass immediately before reissuing the follow
+   order. LIVE-DISPROVEN: `target` did not move, several cycles.
+4. **The recompute reads its input from `record+0x18`** — `Odyssey.TryPokeFollowPriorPosition`
+   wrote the player's real current position directly into `record+0x18` (confirmed by read-back:
+   the write genuinely stuck, nothing else overwrote it), immediately followed by the same
+   `RecaulateFollowPoint()` call. LIVE-DISPROVEN: `target` STILL did not move — ruling out both
+   "the function isn't being called" and "it reads from this specific cached field" in one pass.
+
+Both experiments (3) and (4) are real, verified-safe engine calls/writes — not guesses at an
+unverified ABI, and neither crashed or corrupted anything observed — but neither produced any
+measured benefit, so **neither is called from `PartyFollowController`'s shipped path**: this
+project's own rule is to verify a write live before shipping it, and a write with a confirmed zero
+effect has nothing to ship. The primitives remain in `Odyssey.cs`, documented with their own live
+results, for whoever picks this up next.
+
+### What is left, precisely
+
+`CSWParty::Update` (0x00637050, `__thiscall`, ONE stack argument whose meaning this round did not
+safely determine) is the new prime suspect, not yet tried: its own body (partially disassembled
+this round) iterates the party's member array starting at `this+0x24` and computes distances
+against a party-level (not per-member) 3-float field at `this+0x2B0..0x2B8`, compared against a
+GLOBAL 3-float cache at `0x7A19B0..0x7A19B8` — a shape that reads like "the party's own reference
+position" being refreshed from somewhere else entirely, distinct from the per-member `record+0x18`
+this round already ruled out. **Not called this round** — guessing its one stack argument's type
+(a delta-time float being the leading guess, but not verified) would be exactly the kind of blind
+ABI guess this project's own engine-write rule exists to prevent. A future round tracing the rest
+of 0x0051C360's own body (the part past ~0x51C700 this round did not finish) or fully decoding
+`CSWParty::Update`'s own disassembly (not started beyond its first ~30 instructions) would settle
+where the party's own reference position is actually meant to come from.
+
+**Genuinely not closed.** `party_follow=1` stays shipped (round 71's own correct, safe, verified
+mechanism — a real improvement over no follow-re-arming at all) but "Trask genuinely walks behind
+the host" remains unproven, now for a much more specific, evidenced reason than round 71 left it.
+
+### Test suite and build
+
+`dotnet test tests/KotorCoop.Tests`: **1623/1623 passed**, unchanged baseline — this round's
+changes are new read-only diagnostics (`Odyssey.TryGetClientPartyIndex`, `TryGetFollowDiagnostics`)
+and two now-unused-in-the-shipped-path experimental primitives (`RecalculateFollowPoint`,
+`TryPokeFollowPriorPosition`), none exercised by the (x86 NativeAOT, unreferenced-by-tests) test
+project. Both plugin builds clean, 0 warnings 0 errors, across the round's many
+rebuild/redeploy/relaunch cycles (six full rig cycles this round alone, each staging a different
+hypothesis). Rig torn down clean (`Get-Process swkotor,KotorCoop.Agent` empty),
+`auto_start_agent` restored to `1` in both installs.

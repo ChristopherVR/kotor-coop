@@ -6580,6 +6580,66 @@ builds clean across the round's several rebuild/redeploy/relaunch cycles. Rig to
 (`Get-Process swkotor,KotorCoop.Agent` empty), `auto_start_agent` restored to `1` in both
 installs.
 
+### Round 72 (2026-08-23) — the corpse-vanish mystery closed as vanilla engine/content behaviour,
+not a coop-plugin defect; Trask's follow-AI traced one function deeper, to a frozen follow-TARGET
+point two live-tested fix attempts did not unstick
+
+Two threads, both live-tested this round; full write-ups in `docs/research/container-sync.md` §8
+(corpses) and `docs/research/party-reconciliation.md`'s own 2026-08-23 entry (Trask's follow-AI),
+`docs/research/phantom-locomotion.md`'s own 2026-08-23 entry has the gait-sampling pointer.
+
+**Thread 1 — CLOSED.** `Odyssey.KillCreature` is a real `EffectDamage` through the VM, not a
+`DestroyObject`; the one `DestroyObjectById` call site that could plausibly reach a GIT-placed
+enemy (`MaterialisedEnemies.Destroy`) only ever touches ids this instance's own mirror spawned,
+never a real body. On the HOST, `EnemyPresenceController`/`CombatController` both gate their whole
+per-slot loop on a peer-forwarded census count that reads 0 on a host (nothing to mirror), so
+neither controller runs at all against a creature the host's own engine kills — confirmed
+structurally AND by grepping the whole session's plugin log (48,000+ lines) for zero
+`"combat: killed"`/`"materialise: destroyed"`/`"enemy drive:"` lines. Live differential: a humanoid
+Sith trooper (`END_M01AA`, `sithsoldier` `0xE`, hp 6, and `end_gensith` `0x38`, hp 12), killed on
+the HOST through genuine melee combat-round resolution via the round-71 `attack` fix (no `slay`, no
+`Odyssey.KillCreature` anywhere in the chain), vanished exactly like round 71's Vulkars —
+`resolve` → `0x0` within 1-2s of death, `useplaceable`'s sweep count unchanged (64), the body gone
+from a raw vtable memory scan too. **Verdict: this is not a coop-plugin bug. There is nothing in
+this codebase to fix.** It is either the creature's own attached `OnDeath` script (an immediate,
+zero-delay `DestroyObject`) or an engine-intrinsic cleanup — bounded to "outside this plugin's own
+code," not further distinguished, because either answer closes the question the task brief asked.
+This also closes container-sync.md's own long-open corpse-loot matrix (§5.5/§6.5/§7's "(B) could
+not be run") as **not applicable** rather than still open: no kill method available to this rig,
+coop or vanilla-equivalent, produces a lootable corpse in either module this project tests
+against, so `ContainerUseHook`'s refusal/mirror machinery has nothing left to be tested against
+here.
+
+**Thread 2 — narrowed one real function deeper, still not closed.** Disassembled
+`WalkUpdateLocation_QuickWalk_FollowLeader` (0x0051C360) — the engine's own PER-FRAME
+continuation for `CreMoveState==3` that round 71 never reached, distinct from the one-shot
+`AIActionPartyFollowLeader`/`QueuePartyFollowLeader` dispatcher round 71 built and shipped. Its
+own opening gate resolves the creature's index inside `CSWParty` via
+`ServerToClientObjectId`/`GetIndex` (both confirmed against the symbol DB's own
+calling-convention/param-size metadata) and reads a per-member follow-data record at
+`CSWParty+0x24+index*0x88`. Live probe (two new read-only Odyssey.cs diagnostics wired into
+`PartyFollowController`'s existing stall log): Trask's own index resolves fine (`1`, not `-1`),
+solo mode reads confirmed `0` (off) on the host the whole session — but the record's TARGET follow
+point AND its own cached "prior leader position" are BOTH frozen at wherever the leader stood the
+instant the module loaded, unmoving across a dozen samples and three teleports to increasingly
+distant positions. Two live-tested fix attempts, both real verified-safe engine calls (not blind
+ABI guesses): a direct `CSWParty::RecaulateFollowPoint` call (0 stack args, confirmed from the
+DB), and writing the record's own cached leader-position field directly (confirmed by read-back
+that the write genuinely stuck) immediately before the same recompute call. **Neither moved the
+frozen target point at all** — live-disproven, not shipped, kept in `Odyssey.cs` as documented
+ruled-out primitives. New prime suspect for a future round: `CSWParty::Update` (0x00637050, one
+stack argument whose meaning this round did not safely determine — not called, per this project's
+own rule against guessing an ABI blind). `party_follow=1` stays shipped (a real, safe improvement
+over no follow-re-arming at all) but "Trask genuinely walks behind the host" remains unproven.
+
+### Test suite and build
+
+`dotnet test tests/KotorCoop.Tests`: **1623/1623**, unchanged baseline — this round's changes are
+new read-only diagnostics plus two experimental primitives not called from any shipped path,
+none of it exercised by the (x86 NativeAOT, unreferenced-by-tests) test project. Both plugin
+builds clean across the round's many rebuild/redeploy/relaunch cycles. Rig torn down clean
+(`Get-Process swkotor,KotorCoop.Agent` empty), `auto_start_agent` restored to `1` in both installs.
+
 ## 3. A client's XP is actively erased
 
 `ProgressionSnapshotPacket` is host→client only and absolute (CoopAgent.cs, `PumpProgression`):

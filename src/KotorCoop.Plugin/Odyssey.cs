@@ -1601,6 +1601,223 @@ internal static unsafe class Odyssey
     }
 
     /// <summary>
+    /// CClientExoAppInternal::ServerToClientObjectId 0x005EDA50 — <c>__thiscall</c> on the same
+    /// <c>client</c> pointer <see cref="GetClient"/> resolves, one stack arg (a SERVER object
+    /// id), returns the CLIENT-side id space's own id for the same object.
+    /// </summary>
+    private static readonly delegate* unmanaged[Thiscall]<nint, uint, uint> ServerToClientObjectIdFn =
+        (delegate* unmanaged[Thiscall]<nint, uint, uint>)0x005EDA50;
+
+    /// <summary>
+    /// CSWParty::GetIndex 0x006349C0 — <c>__thiscall</c> on a CSWParty*, one stack arg (a
+    /// CLIENT-side object id, see <see cref="ServerToClientObjectIdFn"/>), returns that member's
+    /// index in the 0x88-strided array <see cref="GetSWPartyFn"/> exposes, or -1.
+    /// </summary>
+    private static readonly delegate* unmanaged[Thiscall]<nint, uint, int> GetPartyIndexFn =
+        (delegate* unmanaged[Thiscall]<nint, uint, int>)0x006349C0;
+
+    /// <summary>
+    /// CSWParty::RecaulateFollowPoint 0x006359C0 — <c>__thiscall</c>, NO stack arguments beyond
+    /// <c>this</c> (a CSWParty*, see <see cref="GetSWPartyFn"/>).
+    ///
+    /// ROUND 72 (docs/research/phantom-locomotion.md, party-reconciliation.md): live-measured
+    /// that a genuinely-owned, genuinely-following companion's own per-member follow-data record
+    /// (<c>CSWParty+0x24+index*0x88</c>) holds a TARGET follow point (<c>record+0x28</c>) frozen
+    /// at wherever the leader stood the moment the module loaded, unmoving no matter how far the
+    /// leader afterward walks — with solo mode confirmed OFF (0) on the host the whole time,
+    /// ruling out the obvious "the party-together freeze is suppressing this too" theory.
+    ///
+    /// ⚠ LIVE-DISPROVEN AS THE FIX, BY ITSELF. Calling this every stall pass (round 72's first
+    /// live attempt) changed the frozen <c>record+0x28</c> value NOT AT ALL, several cycles,
+    /// including immediately after <see cref="TryPokeFollowPriorPosition"/> had just confirmed
+    /// (via the read-back) that <c>record+0x18</c> genuinely held the leader's fresh position at
+    /// the moment this was called. Two theories that reading alone made attractive — "the
+    /// recompute just isn't being called" and "it reads its input from <c>record+0x18</c>" — are
+    /// therefore BOTH wrong, or at minimum incomplete: either this function reads its own
+    /// "leader position" from somewhere else entirely (a candidate found this same round:
+    /// <c>CSWParty::Update</c> 0x00637050 touches a party-level, not per-member, 3-float field at
+    /// <c>this+0x2B0..0x2B8</c> against a GLOBAL cache at <c>0x7A19B0..0x7A19B8</c> that looks
+    /// like the more likely "current leader/camera position" input — or it additionally requires
+    /// some other precondition (a dirty flag, a moved-since-last-check distance) this call's own
+    /// disassembly was not fully traced far enough to identify. NOT called from
+    /// <see cref="PartyFollowController"/>'s shipped stall-handling path as a result — kept here,
+    /// documented, for whoever picks this up next.
+    /// </summary>
+    private static readonly delegate* unmanaged[Thiscall]<nint, void> RecalculateFollowPointFn =
+        (delegate* unmanaged[Thiscall]<nint, void>)0x006359C0;
+
+    /// <summary>
+    /// Calls the engine's own <c>CSWParty::RecaulateFollowPoint</c> — see
+    /// <see cref="RecalculateFollowPointFn"/>'s own remarks for what this was tried for and why
+    /// it is NOT part of the shipped follow-reissue path. No-ops (returns false) when there is no
+    /// client/party object to call it on.
+    ///
+    /// MAIN THREAD ONLY.
+    /// </summary>
+    public static bool RecalculateFollowPoint()
+    {
+        nint client = GetClient();
+        if (client == 0)
+        {
+            return false;
+        }
+
+        nint party = GetSWPartyFn(client);
+        if (party == 0)
+        {
+            return false;
+        }
+
+        RecalculateFollowPointFn(party);
+        return true;
+    }
+
+    /// <summary>
+    /// ROUND 72 DIAGNOSTIC (docs/research/phantom-locomotion.md, party-reconciliation.md):
+    /// <c>WalkUpdateLocation_QuickWalk_FollowLeader</c> 0x0051C360 — the engine's own PER-FRAME
+    /// continuation for a companion whose <c>CreMoveState</c> (+0xA8C) already reads 3
+    /// ("follow") — opens by resolving <c>this</c> creature's own index within CSWParty via
+    /// exactly this chain (<c>ServerToClientObjectId</c> then <c>CSWParty::GetIndex</c>) and
+    /// bails out for the rest of the frame, without ever queuing a step, if that index comes
+    /// back -1 (not found) or 0 (this creature IS the party's own leader slot — never follows
+    /// itself). <see cref="PartyFollowController"/> calls this to tell "the index lookup itself
+    /// is the blocker" apart from "the index resolves fine and something deeper in the same
+    /// function's own path/offset computation is."
+    /// </summary>
+    public static bool TryGetClientPartyIndex(uint serverObjectId, out int index)
+    {
+        index = -2;
+
+        nint client = GetClient();
+        if (client == 0)
+        {
+            return false;
+        }
+
+        uint clientObjectId = ServerToClientObjectIdFn(client, serverObjectId);
+
+        nint party = GetSWPartyFn(client);
+        if (party == 0)
+        {
+            return false;
+        }
+
+        index = GetPartyIndexFn(party, clientObjectId);
+        return true;
+    }
+
+    /// <summary>
+    /// ROUND 72 DIAGNOSTIC: the raw per-member follow-data record CSWParty holds at
+    /// <c>this+0x24+index*0x88</c> (party-reconciliation.md's own stride, re-confirmed against
+    /// <c>WalkUpdateLocation_QuickWalk_FollowLeader</c> 0x0051C360's own disasm this round), plus
+    /// the creature's own <c>+0xD0</c> (an angle/step accumulator the same function tests before
+    /// ever touching the follow-data record) and <c>+0x1F8</c> (must be non-zero for
+    /// <c>WalkUpdateLocation_QuickWalk</c> 0x0051D9C0 — the caller that dispatches into 0x0051C360
+    /// on <c>CreMoveState==3</c> — to run AT ALL; see 0x0051D9E0's own gate). Returns false when
+    /// the index itself does not resolve (<see cref="TryGetClientPartyIndex"/> already covers
+    /// that case on its own).
+    /// </summary>
+    public static bool TryGetFollowDiagnostics(nint creature, uint serverObjectId, out FollowDiag diag)
+    {
+        diag = default;
+
+        nint client = GetClient();
+        if (client == 0)
+        {
+            return false;
+        }
+
+        uint clientObjectId = ServerToClientObjectIdFn(client, serverObjectId);
+
+        nint party = GetSWPartyFn(client);
+        if (party == 0)
+        {
+            return false;
+        }
+
+        int index = GetPartyIndexFn(party, clientObjectId);
+        diag.Index = index;
+
+        if (index <= 0)
+        {
+            // <=0: no record to read (index 0 is the leader slot 0x0051C360 itself bails on;
+            // -1 is "not found"). Whatever the caller already logs about the index covers this.
+            return true;
+        }
+
+        nint record = party + 0x24 + (index * 0x88);
+        diag.TargetPoint = *(Vec3*)(record + 0x28);
+        diag.PriorPoint = *(Vec3*)(record + 0x18);
+        diag.Snapshot = *(Vec3*)(record + 0x5c);
+        diag.SnapshotPendingFlag = *(int*)(record + 0x68);
+
+        diag.StepAccumulator = *(int*)(creature + 0xd0);
+        diag.CachedPosPairLo = *(int*)(creature + 0xb0);
+        diag.CachedPosPairHi = *(int*)(creature + 0xb4);
+        diag.EnabledFlag = *(int*)(creature + 0x1f8);
+        diag.Valid = true;
+        return true;
+    }
+
+    public struct FollowDiag
+    {
+        public bool Valid;
+        public int Index;
+        public Vec3 TargetPoint;
+        public Vec3 PriorPoint;
+        public Vec3 Snapshot;
+        public int SnapshotPendingFlag;
+        public int StepAccumulator;
+        public int CachedPosPairLo;
+        public int CachedPosPairHi;
+        public int EnabledFlag;
+    }
+
+    /// <summary>
+    /// ROUND 72 EXPERIMENT, LIVE-DISPROVEN: writes the per-member follow-data record's OWN
+    /// cached leader position (<c>record+0x18</c>, <see cref="FollowDiag.PriorPoint"/>) directly
+    /// — testing, combined with an immediate <see cref="RecalculateFollowPoint"/> call, whether
+    /// <c>CSWParty::RecaulateFollowPoint</c> computes the follow TARGET point (<c>record+0x28</c>)
+    /// FROM this cached field. The WRITE itself is confirmed live to work and to stick (read back
+    /// correctly on the very next diagnostic pass, nothing else claws it back) — but the recompute
+    /// that followed it still left <c>record+0x28</c> exactly at its module-load value, so this
+    /// field is NOT the recompute's input, or is not sufficient on its own. NOT called from
+    /// <see cref="PartyFollowController"/>'s shipped path — a field write with a measured zero
+    /// benefit is not something to leave mutating engine state on every stall pass. Kept here,
+    /// with its own live result recorded, as a ruled-out avenue for whoever picks this up next
+    /// (see <see cref="RecalculateFollowPointFn"/>'s own remarks for the current prime suspect,
+    /// <c>CSWParty::Update</c> 0x00637050).
+    ///
+    /// MAIN THREAD ONLY.
+    /// </summary>
+    public static bool TryPokeFollowPriorPosition(uint companionServerObjectId, Vec3 leaderPos)
+    {
+        nint client = GetClient();
+        if (client == 0)
+        {
+            return false;
+        }
+
+        uint clientObjectId = ServerToClientObjectIdFn(client, companionServerObjectId);
+
+        nint party = GetSWPartyFn(client);
+        if (party == 0)
+        {
+            return false;
+        }
+
+        int index = GetPartyIndexFn(party, clientObjectId);
+        if (index <= 0)
+        {
+            return false;
+        }
+
+        nint record = party + 0x24 + (index * 0x88);
+        *(Vec3*)(record + 0x18) = leaderPos;
+        return true;
+    }
+
+    /// <summary>
     /// CServerExoApp::GetPartyTable 0x004AEE70 — <c>mov eax,[ecx+4]; add eax,0x1B770; ret</c>.
     /// A bare <c>ret</c>: no arguments, no dereference past <c>this</c>. The table is EMBEDDED
     /// in CServerExoAppInternal, so this can never be null while the server exists.

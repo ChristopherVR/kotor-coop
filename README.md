@@ -403,6 +403,19 @@ tools/                   RE helpers, demo scripts, the kotor1_0_3 symbol databas
   (docs/research/control-return.md), the whole round trip in well under a second: detect,
   hand control back, re-assert the camera. (`control_return=0` opts out of the whole hand-back,
   control and camera both — whatever you were on stays yours to leave.)
+- **A companion the HOST leaves behind does not reliably walk to catch up, even in solo
+  play with no client connected.** `party_follow=1` (default on) reissues the engine's own real
+  `ActionFollowLeader` whenever a companion sits idle away from the leader, and that reliably
+  gets its `CreMoveState` to 3 ("follow mode entered," confirmed live every time) — but getting
+  it to -1 ("actually walking a route") is not yet achieved. Traced this far (2026-08-23, round
+  72): the engine's own per-frame follow continuation reads a TARGET point inside a `CSWParty`
+  per-member record that stays frozen at wherever the leader stood the moment the module
+  loaded, confirmed live across a dozen samples and three teleports to increasingly distant
+  positions; two live-tested fix attempts (forcing the engine's own recompute call, and writing
+  the record's own cached leader-position input directly first) neither one moved it. Not a
+  regression — no follow-re-arming existed before round 71 — but not fixed either. See
+  [docs/research/party-reconciliation.md](docs/research/party-reconciliation.md)'s 2026-08-23
+  entry for the full disassembly and the live-disproven attempts.
 - **A mirrored companion cannot swing on a client — except, now, for one, in one narrow
   case, and it is OFF by default.** The presence mirror re-claims and wipes every companion's
   action queue every pass, so only the host's own companions ever really fight; a client sees
@@ -788,10 +801,13 @@ tools/                   RE helpers, demo scripts, the kotor1_0_3 symbol databas
   [docs/research/container-sync.md](docs/research/container-sync.md) §5 for the full live-pass
   write-up, including one honest gap (a corpse's own loot flow was not exercised) and one
   documented-not-fixed live defect (`+0x334`'s `has_inventory` reading does not reliably
-  identify a real container, live). **The corpse gap is still open after round 68
-  (2026-08-22)**: the console test primitive (`useplaceable`) now reaches a non-placeable id at
-  all (extended for exactly this), and the likely engine surface for a creature's own inventory
-  was identified in the symbol DB (`CSWSCreature::GetItemRepository`), but no real (non-`slay`)
-  kill was obtainable that round to test either against — see
-  [docs/research/container-sync.md](docs/research/container-sync.md) §6.
+  identify a real container, live). **The corpse gap is now CLOSED (2026-08-23, round 72) — not
+  fixed, resolved as not applicable.** A humanoid enemy killed on the host through genuine
+  combat-round resolution (no `slay`, no coop machinery in the loop — confirmed both structurally
+  and by a zero-hit log grep across the whole session) still vanishes exactly like every other kill
+  method tried across three rounds: `resolve` loses the id within 1-2 seconds and no body-bag
+  placeable ever appears. This is vanilla engine/content behaviour outside this project's own
+  code, not a coop-plugin defect — there is no lootable corpse in either module this project's
+  rig exercises, coop or single-player-equivalent, for `ContainerUseHook`'s corpse-side matrix to
+  be tested against. See [docs/research/container-sync.md](docs/research/container-sync.md) §8.
 - KOTOR 2 is untouched, and only GOG v1.0.3 addresses are known.

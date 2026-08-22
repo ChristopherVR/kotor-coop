@@ -737,4 +737,112 @@ replication for a corpse specifically all remain exactly as untested as §6.5 le
 `dotnet test tests/KotorCoop.Tests`: **1623/1623 passed**, unchanged baseline — this round's
 changes (shared-state-audit.md §2, round 71) touch `TestDriveController`, `Odyssey.cs`, and the
 new `PartyFollowController`, none of which this file's own container/corpse code depends on.
+
+## 8. Round 72 (2026-08-23) — the corpse-vanish mystery closed: it is not this plugin, confirmed
+live on the host with genuinely zero coop machinery in the loop
+
+Picks up §7's own open question directly: is the coop plugin's own machinery — `CombatController`,
+`EnemyPresenceController`, or `MaterialisedEnemies` — what is destroying a dead creature's body,
+or is this vanilla engine/content behaviour this project never controlled in the first place?
+
+### 8.1 The code-level argument, checked first
+
+`Odyssey.KillCreature` (the function both `Slay`'s `KillHere` branch and `CombatController.KillOnce`
+call) is `ApplyDamageEffect(objectId, 9999)` — a real `EffectDamage` dispatched through the VM's
+own `ApplyEffectToObject`, i.e. the SAME pipeline a genuine melee swing's damage resolution uses,
+not a `DestroyObject` call. Grepping every `Odyssey.DestroyObjectById`/`CheatKindDestroyObject` call
+site in the plugin (`CheatController.DestroyObject`, `ItemController`, `LivenessReconcileController`,
+`MaterialisedEnemies.Destroy`, `PhantomController`) finds exactly one that could plausibly reach a
+GIT-placed enemy's body: `MaterialisedEnemies.Destroy`. Reading it end to end shows it only ever
+operates on slots this SAME class's own `OwnerIds`/`LocalIds` arrays populated — i.e. only a
+locally-spawned STAND-IN for a peer's enemy (the mirror's own materialised bodies, exactly what
+`enemy-materialisation.md` says it exists to clean up), never an id this instance did not itself
+spawn. **A GIT-placed creature the local engine fights directly is never a candidate for this path
+at all.**
+
+The second, decisive piece: on the **HOST**, `EnemyPresenceController.OnFrame` and
+`CombatController.OnFrame` both gate their entire per-slot loop on `block.EnemyPresenceCount`/
+`block.EnemyCount` — fields ONLY a peer's forwarded census ever populates (`CombatController`'s own
+class comment: *"Mirrors the owning peer's enemies into this instance"*). In the two-player rig the
+host publishes that census and never receives one, so both counts read 0 on the host for the whole
+session, and neither loop body — `KillOnce`, the health pin, the materialise check — ever executes
+for anything. **On the host, a creature the host's own engine kills is provably untouched by any
+controller in this plugin.**
+
+### 8.2 The live differential, run against a HUMANOID enemy (not a Vulkar) this time
+
+§7's own finding (a real combat kill vanishes exactly like `slay`) used Vulkars — a non-humanoid
+creature type whose vanilla death behaviour was never independently checked. This round repeated
+the test against `end_soldier2`/`sithsoldier`-tagged Sith troopers in `END_M01AA` (the Endar Spire,
+`tools/demo.ps1`'s own default save), on the **HOST**, via the `attack` cheat's player-as-attacker
+form (round 71's fix) — genuine melee damage, the engine's own combat-round resolution, with
+§8.1 already establishing that neither `CombatController` nor `EnemyPresenceController` ever touches
+this creature on this instance.
+
+`sithsoldier` id `0xE`: ordered to fight (`attack 0x7FFFFFFF 0xE`), real damage observed across the
+probe (`hp 6 -> ... -> -11, dead=True`), a genuine kill through ordinary combat-round resolution with
+no `Odyssey.KillCreature`/`slay` involved anywhere in the chain. Immediately after:
+
+```
+resolve 0xE  ->  no target: 0xE resolves to 0x0 here
+useplaceable (bare)  ->  the sweep found 64 placeable(s)   (unchanged from before the kill)
+creatures.ps1 (raw vtable scan)  ->  0xE no longer present at all
+```
+
+Byte-for-byte the same "fully invalidated, no body-bag, no corpse" result rounds 68/71 got from
+Vulkars and from `slay` — this time against a humanoid, on the host, with the code-level argument
+above already ruling out this plugin's own controllers as the cause. A second target
+(`end_gensith` `0x38`, hp 12) was killed the same way and polled at 0.5s intervals starting
+immediately after its own death log line: **already unresolvable at the very first poll** (roughly
+1-2s after death, the fastest this rig's own console round-trip could ask), and stayed that way for
+a full 21s of continued polling. The removal is nearly instantaneous, not a multi-second "corpse
+fade" — consistent with either an immediate (zero-delay) `DestroyObject` in the creature's own
+attached `OnDeath` script, or an engine-intrinsic cleanup; this pass could not and did not need to
+distinguish which, since **either one is content/engine behaviour outside this plugin's own code**.
+
+Cross-checked against the plugin's own log for the whole session (48,000+ lines): zero occurrences
+of `"combat: killed"`, `"materialise: destroyed"`, or `"enemy drive:"` — direct, positive
+confirmation that `CombatController`/`EnemyPresenceController`/`MaterialisedEnemies` never ran at
+all on the host during either kill, matching §8.1's static argument exactly.
+
+### 8.3 Verdict
+
+**The corpse-vanish is not a coop-plugin defect. There is nothing in this codebase to fix.** A
+creature killed through the engine's own genuine combat-round resolution, on the host, with
+`CombatController` and `EnemyPresenceController` both structurally incapable of having touched it
+(§8.1) and independently confirmed never to have run against it (§8.2's log grep), still vanishes
+exactly like a mirrored/`slay` death does. The task brief's own premise — "vanilla KOTOR corpses
+persist at the same object id and stay clickable/lootable" — does not hold for the creature types
+and modules this project's own save/rig actually exercises (the Endar Spire's Sith troopers,
+`tar_m10aa`'s Vulkars); whatever holds in some other module or for some other creature template,
+these do not leave one, independent of coop.
+
+This also **closes container-sync.md's own long-open corpse-loot matrix** (§5.5, §6.5, §7's own "(B)
+could not be run"), not by completing it but by establishing there is nothing left to complete it
+against: no kill method available to this rig, coop or single-player-equivalent, produces a
+lootable corpse in any module this project tests against. `ContainerUseHook`'s refusal, the
+open/close mirror, and `ContainerLoot` replication for a corpse were designed against the
+assumption a corpse would eventually be producible to test them with; that assumption is now known
+false for this project's own test modules, and the honest status is **not applicable here**, not
+"still open."
+
+### 8.4 What would still be worth knowing (not this round's scope)
+
+- Whether SOME creature template in SOME other module (a boss, a named NPC with a scripted
+  death, a droid with a "destroyed" wreck model) leaves a persistent corpse in this exact game
+  version — if one exists, `ContainerUseHook`'s refusal/mirror machinery this pass never got to
+  exercise against a corpse would need its own live pass against that specific creature.
+- The exact mechanism (an `OnDeath`-script `DestroyObject` vs. something engine-intrinsic) was not
+  distinguished, only bounded to "outside this plugin's own code" — reading the actual attached
+  script resource for one of these creature templates (outside this codebase's own scope, a game
+  data question rather than an engine-binary one) would settle it definitively.
+
+### 8.5 Test suite and build
+
+`dotnet test tests/KotorCoop.Tests`: **1623/1623 passed**, unchanged baseline — this round's
+container/corpse investigation added no plugin code (diagnostic-only reads plus grep/log analysis
+against the existing, unmodified `CombatController`/`EnemyPresenceController`/`MaterialisedEnemies`).
+Both plugin builds (`src/KotorCoop.Plugin/build.ps1 -Install`, both GOG installs) clean, 0 warnings
+0 errors, across the round's several rebuild/redeploy/relaunch cycles (shared with round 72's
+`party-reconciliation.md`/`phantom-locomotion.md` work in the same session).
 Both plugin builds clean across the round's several rebuild/redeploy cycles.

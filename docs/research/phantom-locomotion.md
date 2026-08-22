@@ -1958,3 +1958,28 @@ sample was attempted for Trask this round since he could not be gotten to move a
 across the round's several rebuild/redeploy/relaunch cycles (the range-closing fix, the
 `PartyFollowController` iterations, and the diagnostic-logging passes used to root-cause the
 `CreMoveState` finding above).
+
+## 2026-08-23 — Round 72: Trask's `CreMoveState==3` continuation traced to a frozen follow-TARGET
+point; the fix attempts tried so far don't unstick it
+
+Full write-up (the disassembly of `WalkUpdateLocation_QuickWalk_FollowLeader` 0x0051C360, the live
+diagnostic fields, and the two live-disproven fix attempts) is in
+`docs/research/party-reconciliation.md`'s own 2026-08-23 ("Round 72") entry — this is the pointer
+for anyone arriving from this file's own gait-sampling angle.
+
+Short version for gait purposes: Trask still cannot be sampled moving at all this round, for a
+now much more specific reason than "his follow-AI never engaged" — his own per-frame follow
+continuation (traced this round, not previously disassembled) reads a TARGET follow point inside
+`CSWParty`'s own per-member record that is frozen at wherever the leader stood the instant the
+module loaded, confirmed live and unmoving across a dozen samples, three teleports, and two
+separate live-tested fix attempts (a direct `CSWParty::RecaulateFollowPoint` call, and writing the
+record's own cached leader-position field first) — neither changed it. `CSWParty::Update`
+(0x00637050) is the new prime suspect (not yet tried — its one stack argument's meaning was not
+safely determined this round). No gait sample attempted for Trask or the enemy this round; both
+remain exactly as `shared-state-audit.md`'s round-71 entry left them, blocked upstream of anything
+`phantomgait.ps1` could measure.
+
+### Test suite and build
+
+`dotnet test tests/KotorCoop.Tests`: **1623/1623**, unchanged baseline. Both plugin builds clean
+across the round's six rebuild/redeploy/relaunch cycles.

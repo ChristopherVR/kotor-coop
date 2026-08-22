@@ -61,6 +61,14 @@ internal sealed unsafe class PartyFollowController(SharedBlockView block)
     /// <summary>CSWPartyTable + this = int[9] spawned object id per roster slot.</summary>
     private const int PartyObjectIds = 0x0C;
 
+    /// <summary>CSWPartyTable + this = solo mode (party-reconciliation.md's own finding: "the
+    /// game's shipped 'companions stand still' switch"). ROUND 72 DIAGNOSTIC: read alongside the
+    /// follow-data record to test whether solo mode being held on for the session is also
+    /// suppressing the engine's own per-frame recompute of each companion's follow TARGET point
+    /// (a hypothesis raised by <c>target</c>/<c>prior</c> staying frozen at the leader's
+    /// load-time position in every sample taken so far).</summary>
+    private const int PartyTableSoloMode = 0x190;
+
     /// <summary>The verified RunActions id for a genuinely-running follow order
     /// (<see cref="Odyssey"/>'s own <c>IsMoveAction</c> table comment).</summary>
     private const int HeadActionPartyFollowLeader = 0x3C;
@@ -216,6 +224,20 @@ internal sealed unsafe class PartyFollowController(SharedBlockView block)
             // own dispatch (like every other action this codebase queues through the VM) is
             // safe to issue against a non-empty queue without help — that is the entire point
             // of RunActions being a priority queue, not a single slot.
+            // ROUND 72: two follow-on experiments tried here and LIVE-DISPROVEN, not shipped —
+            // Odyssey.RecalculateFollowPoint() alone, and Odyssey.TryPokeFollowPriorPosition()
+            // (writing the per-member record's own cached leader-position field) immediately
+            // before it. Both are real, verified-safe calls (0 stack args; a plain field write
+            // to a field this same record already exposes for reading) and neither is a guess at
+            // an unverified ABI. Live-measured, several cycles: the WRITE sticks (record+0x18
+            // reads back the poked position, confirmed via the diagnostic log below, and nothing
+            // else claws it back) but the follow TARGET point (record+0x28) the walk-continuation
+            // actually reads never moves off its module-load value regardless — ruling out both
+            // "the recompute just needs calling" and "the recompute reads record+0x18." See
+            // Odyssey.RecalculateFollowPoint's and TryPokeFollowPriorPosition's own remarks for
+            // the full finding and the still-unidentified prime suspect
+            // (CSWParty::Update 0x00637050's own un-determined stack argument). Left uncalled
+            // here rather than shipped as machinery with a measured zero benefit.
             bool ok = Odyssey.QueuePartyFollowLeader(objectId, out int failure);
             _stationarySince[slot] = now; // do not re-trigger every pass while the order lands
 
@@ -226,10 +248,30 @@ internal sealed unsafe class PartyFollowController(SharedBlockView block)
                 int commandable = *(int*)(creature + 0xE8);
                 int inParty = *(int*)(creature + 0xA88);
                 int followFlag = *(int*)(creature + 0xA8C);
+
+                // ROUND 72: does this companion even have a resolvable CSWParty index, and — if
+                // so — what does the engine's own per-frame follow continuation
+                // (WalkUpdateLocation_QuickWalk_FollowLeader 0x0051C360) see in its own
+                // follow-data record? See Odyssey.TryGetFollowDiagnostics's own remarks.
+                bool indexOk = Odyssey.TryGetClientPartyIndex(objectId, out int partyIndex);
+                Odyssey.TryGetFollowDiagnostics(creature, objectId, out Odyssey.FollowDiag diag);
+                Vec3 leaderPos = playerPos;
+                int soloMode = *(int*)(partyTable + PartyTableSoloMode);
+                string diagText = diag.Valid
+                    ? $" target=({diag.TargetPoint.X:F1},{diag.TargetPoint.Y:F1},{diag.TargetPoint.Z:F1}) "
+                        + $"prior=({diag.PriorPoint.X:F1},{diag.PriorPoint.Y:F1},{diag.PriorPoint.Z:F1}) "
+                        + $"snapshot=({diag.Snapshot.X:F1},{diag.Snapshot.Y:F1},{diag.Snapshot.Z:F1}) "
+                        + $"snapPending={diag.SnapshotPendingFlag} stepAccum={diag.StepAccumulator} "
+                        + $"cachedPos=({diag.CachedPosPairLo:X},{diag.CachedPosPairHi:X}) "
+                        + $"enabledFlag={diag.EnabledFlag} leaderPos=({leaderPos.X:F1},{leaderPos.Y:F1},{leaderPos.Z:F1}) "
+                        + $"soloMode={soloMode}"
+                    : $" soloMode={soloMode}";
+
                 PluginHost.Log(ok
                     ? $"party follow: 0x{objectId:X} was idle/stalled (head 0x{headType:X}) — "
                         + $"reissued ActionFollowLeader, head now 0x{headAfter:X} "
-                        + $"commandable={commandable} inParty={inParty} followFlag={followFlag}"
+                        + $"commandable={commandable} inParty={inParty} followFlag={followFlag} "
+                        + $"cswPartyIndex={(indexOk ? partyIndex.ToString() : "unreadable")}{diagText}"
                     : $"party follow: could not reissue follow for 0x{objectId:X} (failure {failure}) "
                         + $"head was 0x{headType:X}");
             }
