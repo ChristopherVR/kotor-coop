@@ -75,6 +75,15 @@ public sealed class CoopClient : ICoopSession
     private string _rejectReason = string.Empty;
     private bool _reconnecting;
 
+    /// <summary>Real gaps between successive <see cref="SendStateUpdate"/> calls — what
+    /// <c>lagstats</c> shows so a live round can see the actual send cadence, not just the
+    /// configured tick rate. See docs/research/lag-audit.md.</summary>
+    private readonly IntervalTracker _sendIntervals = new();
+
+    /// <summary>Real gaps between successive liveness-bearing inbound packets — the same
+    /// traffic <see cref="_lastInboundMs"/> already tracks the age of.</summary>
+    private readonly IntervalTracker _recvIntervals = new();
+
     /// <summary>
     /// Set on every Welcome, cleared once all four world stores have been re-requested.
     ///
@@ -1268,6 +1277,9 @@ public sealed class CoopClient : ICoopSession
             FlagVersion = Flags.Version,
             PendingFlagOps = _flagSender.PendingCount,
             LivenessAnomalies = _livenessAnomalyCount,
+            PhantomInterpolationDelayMs = _settings.InterpolationDelayMs,
+            RecentSendIntervalsMs = _sendIntervals.Snapshot(),
+            RecentRecvIntervalsMs = _recvIntervals.Snapshot(),
             Status = _rejectReason.Length > 0
                 ? $"rejected by host: {_rejectReason}"
                 : IsConnected
@@ -1592,6 +1604,8 @@ public sealed class CoopClient : ICoopSession
 
     private void SendStateUpdate(long now)
     {
+        _sendIntervals.Record(now);
+
         PlayerState state;
         lock (_gate)
         {
@@ -1708,6 +1722,7 @@ public sealed class CoopClient : ICoopSession
             or PacketType.JournalAck or PacketType.ContainerLootAck or PacketType.DialogueGrantAck))
         {
             _lastInboundMs = now;
+            _recvIntervals.Record(now);
         }
 
         switch (type)

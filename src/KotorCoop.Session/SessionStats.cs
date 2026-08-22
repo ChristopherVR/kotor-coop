@@ -37,5 +37,20 @@ public sealed record SessionStats
     /// </summary>
     public uint LivenessAnomalies { get; init; }
 
+    /// <summary>The deliberate playback delay behind live truth the avatar stream is buffered
+    /// by (<c>SnapshotBuffer</c>, coop.ini <c>interp_ms</c>) — NOT a defect: it trades a fixed,
+    /// bounded delay for smooth interpolation instead of a step on every network tick. `lagstats`
+    /// surfaces it so a live round can tell "the deliberate 80 ms" from "something is actually
+    /// stalled." See docs/research/lag-audit.md.</summary>
+    public int PhantomInterpolationDelayMs { get; init; }
+
+    /// <summary>The last few real gaps between successive state sends, OLDEST first — the
+    /// ACTUAL send cadence this session is achieving, which can diverge from the configured
+    /// tick rate under load. Empty until at least two sends have happened.</summary>
+    public IReadOnlyList<long> RecentSendIntervalsMs { get; init; } = [];
+
+    /// <summary>The last few real gaps between successive inbound packets, OLDEST first.</summary>
+    public IReadOnlyList<long> RecentRecvIntervalsMs { get; init; } = [];
+
     public string Status { get; init; } = "idle";
 }

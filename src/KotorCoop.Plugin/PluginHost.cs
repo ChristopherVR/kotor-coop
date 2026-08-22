@@ -521,6 +521,62 @@ internal static unsafe class PluginHost
     /// <summary>True while the pre-store flush window is open (trans_pending set).</summary>
     private static bool _transitionPending;
 
+    // ---- frame-time histogram (docs/research/lag-audit.md) ------------------------------
+    //
+    // Cheap and off by default: an EWMA-free accumulator (see FrameTimeHistogram's own doc
+    // comment for why not an EWMA) fed one delta per SwapBuffers callback — i.e. once per
+    // rendered frame, the same cadence a hitch is actually felt at — and flushed to the log
+    // every ~10 s so a live round can measure frame-time hitching instead of guessing at it.
+    // `coop.ini frame_stats=1`.
+
+    private static readonly bool _frameStatsEnabled = PluginConfig.ReadBool("frame_stats", false);
+
+    /// <summary>A frame slower than this counts as a "hitch" in the flushed summary. 33 ms is
+    /// one dropped frame at 30 fps / two at 60 fps — coarse enough to ignore ordinary jitter,
+    /// fine enough to catch a stall a player would notice.</summary>
+    private const double FrameHitchThresholdMs = 33.0;
+
+    private const long FrameStatsFlushIntervalMs = 10_000;
+
+    private static FrameTimeHistogram _frameStats;
+    private static long _frameStatsLastTicks;
+    private static long _frameStatsLastFlushMs;
+
+    /// <summary>Called once per SwapBuffers, before anything else in <see cref="OnFrame"/> —
+    /// so a stall inside a world controller is attributed to the frame it happened in, not the
+    /// next one this ships a frame late relative to.</summary>
+    private static void RecordFrameTime()
+    {
+        long nowTicks = System.Diagnostics.Stopwatch.GetTimestamp();
+
+        if (_frameStatsLastTicks != 0)
+        {
+            double deltaMs = (nowTicks - _frameStatsLastTicks) * 1000.0
+                / System.Diagnostics.Stopwatch.Frequency;
+            _frameStats.Add(deltaMs, FrameHitchThresholdMs);
+        }
+
+        _frameStatsLastTicks = nowTicks;
+
+        long nowMs = Environment.TickCount64;
+        if (_frameStatsLastFlushMs == 0)
+        {
+            _frameStatsLastFlushMs = nowMs;
+            return;
+        }
+
+        if (nowMs - _frameStatsLastFlushMs < FrameStatsFlushIntervalMs || !_frameStats.HasSamples)
+        {
+            return;
+        }
+
+        FrameTimeSnapshot snap = _frameStats.Snapshot();
+        Log($"frame stats: {snap.SampleCount} frames, {snap.AverageMs:F2} ms average, "
+            + $"{snap.MaxMs:F1} ms worst, {snap.OverThresholdCount} over {FrameHitchThresholdMs:F0} ms");
+        _frameStats.Reset();
+        _frameStatsLastFlushMs = nowMs;
+    }
+
     /// <summary>
     /// Called once per frame on the GAME'S thread by <see cref="FrameHook"/>.
     /// Allocation-free and exception-swallowing by construction.
@@ -606,6 +662,14 @@ internal static unsafe class PluginHost
 
     private static void OnFrame()
     {
+        // Before absolutely everything else: whatever this frame is about to spend its time
+        // on, the delta since the LAST callback already happened and belongs to the frame
+        // that just finished, not to whatever runs next.
+        if (_frameStatsEnabled)
+        {
+            RecordFrameTime();
+        }
+
         // Before the epoch gate, deliberately: these run at the main menu too, which is exactly
         // where the gate returns early (no server) — the Enter chat prompt and the chat
         // overlay. (The Co-op button, browsers and menu-load run on MainLoopHook — the swap

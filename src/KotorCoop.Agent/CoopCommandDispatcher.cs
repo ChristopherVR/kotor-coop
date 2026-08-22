@@ -504,6 +504,10 @@ public sealed class CoopCommandDispatcher(
                 Census(command.Address);
                 break;
 
+            case CoopCommandKind.LagStats:
+                LagStats(manager);
+                break;
+
             case CoopCommandKind.ResolveObject:
                 // Straight to the plugin: this question can only be answered on the game
                 // thread, and the value of the answer is that it is taken in ONE frame.
@@ -1923,6 +1927,44 @@ public sealed class CoopCommandDispatcher(
             Reply($"  {peer.Name}  {module}{flags}");
         }
     }
+
+    /// <summary>
+    /// `lagstats` (docs/research/lag-audit.md): what the next live round needs to MEASURE
+    /// rather than guess about lag. Three lines, deliberately none of them a single combined
+    /// verdict — the whole point is telling "the deliberate interpolation delay" apart from
+    /// "the real send/recv cadence this round is actually achieving" apart from "how much of
+    /// the agent's own budget the pump is spending", because those three can diverge
+    /// independently and conflating them is how a live round ends up guessing.
+    /// </summary>
+    private void LagStats(SessionManager manager)
+    {
+        if (manager.Current is not { } session)
+        {
+            Reply("lagstats: not connected - nothing to measure yet");
+            return;
+        }
+
+        SessionStats stats = session.GetStats();
+
+        Reply($"lagstats: interpolation delay {stats.PhantomInterpolationDelayMs} ms "
+            + "(deliberate - trades a fixed buffer for smoothness, not a stall)");
+
+        Reply($"  send intervals (ms, oldest first): {FormatIntervals(stats.RecentSendIntervalsMs)}");
+        Reply($"  recv intervals (ms, oldest first): {FormatIntervals(stats.RecentRecvIntervalsMs)}");
+
+        if (manager.Agent is { } agent)
+        {
+            Reply($"  agent pump: {agent.PumpAverageMs:F1} ms average, {agent.PumpPeakMs:F1} ms peak "
+                + $"(budget {agent.PumpBudgetMs:F0} ms)");
+        }
+        else
+        {
+            Reply("  agent pump: no reading yet");
+        }
+    }
+
+    private static string FormatIntervals(IReadOnlyList<long> intervals) =>
+        intervals.Count == 0 ? "none yet" : string.Join(", ", intervals);
 
     private void Join(string? address, string? password)
     {

@@ -139,6 +139,14 @@ party_roster_sync=1
 # whenever it reads higher; it never raises it, so it cannot invent a companion. Live-verified
 # 2026-08-22: fired on load and every roster reconcile through an extended two-instance session,
 # and the client crossed a real door cleanly once it applied. ON by default.
+#
+# CLIENT-ONLY since 2026-08-22 (an earlier build ran it on the host too and stripped the host's
+# own companions from the same struct), and DEFERRED while the player is still driving one of
+# this instance's own party-roster companions (docs/research/control-return.md): the clamp
+# trims whichever member sits at the END of CSWParty's array, and a player who was already
+# controlling a companion at the moment of connect has the array reversed, so "the end" is the
+# PC's own slot. Costs nothing to defer - control-return converges within its own bounded
+# budget regardless, and the clamp resumes the instant it does.
 party_together_fix=1
 
 # Refuse a CLIENT's own premature door crossing (the host must lead the way) rather than let it
@@ -387,3 +395,12 @@ trigger_relay_patterns=k_p*_*
 # second bug it uncovered (an unbounded relay replay loop). Both the play-now and defer paths
 # are now live-verified end to end - default ON.
 movie_relay=1
+
+# Frame-time histogram (docs/research/lag-audit.md): an allocation-free accumulator fed one
+# wall-clock delta per rendered frame (the SwapBuffers callback), flushed to the plugin log
+# every ~10 s as sample count / average ms / worst ms / frames over 33 ms. OFF by default -
+# it is a diagnostic for tracking down frame-time hitching on a live round, not something a
+# normal session needs running. Pair with the in-game `lagstats` console command, which reports
+# the phantom interpolation delay in use and the real send/recv cadence instead of the
+# configured tick rate.
+frame_stats=0

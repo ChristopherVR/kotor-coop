@@ -35,7 +35,7 @@ internal static unsafe class FuncInterpHook
         "connect", "join", "host", "disconnect", "dc", "leave", "reconnect", "rc",
         "say", "chat", "msg", "clear", "cls", "servers", "browse", "list", "status", "help", "coop",
         "password", "pw",
-        "stat", "commands", "?", "warp", "who", "peers", "where",
+        "stat", "commands", "?", "warp", "who", "peers", "where", "lagstats",
 
         // A diagnostic, not a cheat: prints what this instance's enemy census holds and what
         // its own engine says about each id. It shadows nothing the retail console owns.
