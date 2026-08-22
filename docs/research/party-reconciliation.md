@@ -682,3 +682,208 @@ project. Both plugin builds clean, 0 warnings 0 errors, across the round's many
 rebuild/redeploy/relaunch cycles (six full rig cycles this round alone, each staging a different
 hypothesis). Rig torn down clean (`Get-Process swkotor,KotorCoop.Agent` empty),
 `auto_start_agent` restored to `1` in both installs.
+
+## Round 73 (2026-08-23) — CSWParty::Update's argument and write behaviour settled by disasm
+and confirmed live; two real fixes shipped; the companion still does not walk
+
+Picks up round 72's own "not yet tried" prime suspect directly: CSWParty::Update (0x00637050)
+and its one stack argument, whose meaning round 72 declined to guess ("a delta-time float being
+the leading guess, but not verified -- guessing its one stack argument's type... would be exactly
+the kind of blind ABI guess this project's engine-write rule exists to prevent").
+
+### The argument is a delta-time float -- settled by disasm, not guessed
+
+`tools/xrefs.py 0x637050` finds exactly ONE call/jmp site in the whole binary: 0x0060339A.
+That caller lives inside CClientExoAppInternal's own per-frame update dispatch -- the same
+function that also calls CClientExoAppInternal::ProcessInput (0x6227e0) and
+CExoResMan::Update (0x408d40) every frame, confirmed by disassembling the surrounding code
+(`tools/disasm.py 0x603300 300`). Immediately before the call it computes
+`deltaTime * <a global time-scale multiplier at 0x7439BC>` into a scratch float (0x78E574) and
+pushes exactly that value -- one dword, matching `param_size_bytes=4` for CSWParty::Update in
+`tools/kotor1_0_3.db` (looked up directly: class_name='CSWParty', function_name='Update',
+calling_convention='__thiscall', param_size_bytes=4). The gate on the call itself requires
+`esi+0x18` (a local-player creature pointer) non-null and `[esi+0x18+0x48]` non-zero -- a
+precondition this round's fix does not reproduce; see below.
+
+CSWParty::Update's own body (full disasm, `tools/disasm.py 0x637050 1200`) opens with
+`fld dword ptr [ebp+8]; fadd dword ptr [edi+0x2BC]; fstp dword ptr [edi+0x2BC]` -- an
+elapsed-time ACCUMULATOR at this+0x2BC -- before anything else runs. Nothing but a delta time
+is added into a running accumulator like that.
+
+### What it writes -- a party-level reference position, refreshed from the leader's live position
+
+Past the accumulator, the function (party count > 0, [this] > 0) resolves the leader's own
+id (stored at this+0x24, the leader/member-0 slot's record) through
+CClientExoApp::GetCreatureByGameObjectID (0x5ED5B0, CLIENT-side -- confirmed against the
+symbol DB) and, if it resolves, computes the leader's LIVE position (read at the resolved
+creature +0x24/+0x28/+0x2C -- NOT the same as CSWSObject's usual +0x90 world-position field;
+see round 73's own diagnostic below for how this was told apart) against a PARTY-LEVEL (not
+per-member) 3-float field at this+0x2B0..0x2B8. If the squared distance exceeds a threshold
+(the float at 0x741838), it writes the leader's current position straight into
+this+0x2B0..0x2B8. Past that, it resolves the party's own "furthest member"
+(CSWPartyFollowDataArray::FindFurthestPartyMemeber_Current, this+0x2DC, 0x634DA0) and, if that
+member has drifted far enough (CSWPartyFollowDataArray::PointOnLineDistanceFromLeader, 0x634E00,
+vs the float at 0x747C3C) AND CSWParty::TestAndResetPath() (0x636840) returns zero, calls
+CSWParty::RecaulateFollowPoint (0x6359C0) -- the exact function round 72 already built a direct
+caller for and found to have zero live effect.
+
+**That null result is now explained.** Round 72's manual RecaulateFollowPoint call read
+this+0x2B0..0x2B8 as its own "current leader position" input, and that field is ONLY ever
+refreshed by CSWParty::Update -- which was never being called at all in this plugin's
+coop-driven session (its one real caller lives inside a per-frame CClientExoAppInternal
+dispatch this plugin's own drive loop never reaches, the same class of gap rounds 60-67 already
+found for animation). Round 72's recompute was working from a reference position frozen at
+module-load, same as the per-member target it produced -- not because RecaulateFollowPoint
+reads from somewhere else, and not because it needs some other precondition, but because its own
+input was stale the whole time.
+
+### Fix 1 (shipped): pump CSWParty::Update every frame -- live-verified it un-freezes the
+party-level reference position
+
+`Odyssey.PumpPartyUpdate(float deltaTimeSeconds)` calls CSWParty::Update unconditionally, once
+per rendered frame, from PartyFollowController.OnFrame (which already runs on the plugin's own
+FrameHook/SwapBuffers cadence -- confirmed ~3800-4000 frames per 10s window from the plugin's
+own "frame stats" log lines during this round's live tests). A real measured delta time
+(Stopwatch-based, clamped to 0 < dt < 1s to skip the first frame and any load/stall gap) is
+passed, matching the engine's own argument shape. The caller's own extra gate (esi+0x18 /
+[esi+0x18+0x48]) is deliberately NOT reproduced -- this call is guarded instead by the same
+preconditions PartyFollowController already applies (spawned+driving, not mid-conversation,
+roster not frozen, no peer party-presence channel active).
+
+**Live-verified round 73**, host END_M01AA, Trask recruited: a new diagnostic,
+Odyssey.TryGetPartyReferenceState (reads party+0x24 leader id, party+0x2B0..0x2B8
+reference position, party+0x2BC accumulator, and resolves the leader creature the same way
+CSWParty::Update does to read its +0x24/+0x28/+0x2C position), wired into
+PartyFollowController's existing diagnostic log line. Before the fix, refPos sat frozen at
+the module-load leader position no matter how far or how many times the leader moved (matching
+round 72's target/prior freeze exactly). After shipping the fix:
+
+```
+refId=0xFFFFFFFF refPos=(45.0,35.0,-1.3) refAccum=0.99 leaderCreature=0x18298AB0 leaderFieldPos=(45.0,35.0,-1.3)
+```
+
+-- sampled repeatedly after `console 'tp 45 35 -1.3'` (a REAL engine teleport, via the plugin's
+own console-command channel, not a raw memory poke -- see the methodology note below), refPos
+matched the teleported leader position exactly, every sample, for the whole observation window.
+refAccum visibly incrementing frame to frame (0.00 -> 0.99 -> 0.98 -> ..., cycling near 1.0 rather
+than growing unboundedly -- consistent with an internal "time since last full refresh" the
+function itself resets, not a bug in this round's own instrumentation) is independent proof
+PumpPartyUpdate is genuinely being called every frame.
+
+**This did NOT, by itself, unstick a long-stalled companion's per-member fields.** With refPos
+now genuinely live, CSWParty::Update's own conditional call into RecaulateFollowPoint should
+have had everything it needs -- but target/prior (record+0x28/record+0x18) stayed exactly
+where round 72 left them, frozen at the module-load position, for the whole observation window.
+Adding an UNCONDITIONAL direct call to RecaulateFollowPoint right after PumpPartyUpdate
+(bypassing CSWParty::Update's own TestAndResetPath() gate entirely) made no difference
+either -- same frozen target/prior, same live refPos. CSWParty::TestAndResetPath()
+returning non-zero for a companion stalled this long (blocking CSWParty::Update's OWN call into
+RecaulateFollowPoint) is the leading theory for why the natural per-frame path never reaches
+it; the unconditional direct call sidesteps that gate but still measured no effect, which is not
+yet explained and is flagged for whoever picks this up next.
+
+### Fix 2 (shipped, the task's own sanctioned fallback): drive the per-member record straight
+
+`Odyssey.TryDriveFollowTarget(uint companionServerObjectId, Vec3 leaderPos)` writes
+record+0x28 (target) AND record+0x18 (cached leader position) to the real, current leader
+position, and -- new this round, not part of round 72's TryPokeFollowPriorPosition experiment --
+also sets record+0x68 (FollowDiag.SnapshotPendingFlag) to 1. This last part matters:
+WalkUpdateLocation_QuickWalk_FollowLeader (0x0051C360, disassembled substantially further this
+round, past round 72's ~0x51C700 stopping point) treats record+0x68 as a DIRTY-EVENT flag --
+when set, it copies the creature's own current position (creature+0x90) into record+0x5C
+(the "snapshot" FollowDiag already exposes) and clears the flag (0x51C3D2-0x51C3F2). Round 72's
+raw poke to record+0x18 alone never set this flag, so nothing downstream ever noticed the
+change; this round's version sets it too, only when the target has moved more than a ~10cm
+epsilon (so it does not stomp the flag every frame once a companion is genuinely caught up).
+
+Wired into PartyFollowController.OnFrame's existing per-slot loop, called every frame (not
+just on a stall pass) for every tracked companion not currently busy (IsBusyHead) or
+player-controlled, using the SAME playerPos the controller already computes each frame via
+Odyssey.GetPlayerCreaturePointer()/GetPosition (a different, and -- live-confirmed this
+round -- reliably live, lookup from the party-level this+0x2B0 one PumpPartyUpdate refreshes).
+
+**Live-verified round 73**: after `console 'tp 45 35 -1.3'`, the diagnostic log shows
+
+```
+target=(45.0,35.0,-1.3) prior=(45.0,35.0,-1.3) ... snapPending=0 ... leaderPos=(45.0,35.0,-1.3)
+```
+
+-- target/prior genuinely track the live leader (no longer frozen at the module-load
+position), and snapPending reads back as 0 (not the 1 this round's write set), meaning
+WalkUpdateLocation_QuickWalk_FollowLeader DID see the dirty flag and consumed it (copying
+Trask's own position into record+0x5C, exactly as the disasm predicts) -- real evidence the
+engine's own per-frame continuation is processing the fresher target, not merely that a value
+sits unread in memory.
+
+### Genuinely not closed: CreMoveState still never reaches -1
+
+Despite both fixes -- a genuinely live party-level reference position, and a per-member
+target/prior/dirty-flag that the engine's own continuation visibly processes every frame --
+Trask's CreMoveState (+0xA8C) stayed at 3 ("follow" -- the mode is entered) for the entire
+observation window (20+ seconds, several tp hops of 20-40 units) and never reached -1
+("walking" -- a route genuinely being stepped). His actual position (creature+0x90) never moved
+a single unit.
+
+This round's deeper disasm of 0x0051C360 (now traced past the target/prior/snapshot delta
+computation into the function's OWN step state machine, `tools/disasm.py 0x51c360 1400`) found a
+STEP FSM: a phase counter at the calling creature's OWN +0x44 field, incremented each call and
+dispatched through an 11-entry jump table at 0x51CCEC (`jmp dword ptr [eax*4 + 0x51CCEC]`) into
+per-phase handlers (0x51AC10, 0x511290, 0x511860, 0x511B60, 0x512430, 0x5127D0, and others not
+yet named). Immediately before that dispatch, the function computes an obstacle-avoidance target
+against **"the other party member's slot"** -- it swaps the calling creature's own party index
+(1 <-> 2, via `cmp ebx,1`/`cmp ebx,2`) to find "the other" companion's record, reads ITS stored id
+(`[eax+ebp*0x88+0x24]`), resolves it, and writes into a substructure at this-creature+0x340
+(0x51C792-0x51C7AC) before the phase dispatch runs. **This save has exactly ONE companion
+(Trask, index 1)** -- index 2's record is never populated, so this lookup resolves against an
+empty/uninitialized slot. Whether that degenerate read causes the phase FSM to stall
+indefinitely (rather than erroring or skipping the check) was NOT settled this round -- flagged
+as the leading new lead for round 74, ahead of fully naming and tracing all 11 phase handlers,
+which was judged out of this round's remaining budget.
+
+### Methodology note: a real engine tp beats a raw position poke, again
+
+Early in this round, a raw WriteProcessMemory poke to the CLIENT-side player copy's position
+field (+0x90) was tried as a faster way to move "the leader" for repeated sampling, matching
+Section 14.4's own documented shortcut. It reproduced that finding exactly: the poke stuck on
+local read-back but CSWParty::Update's own leader lookup (leaderFieldPos, read via
+GetCreatureByGameObjectID at the creature's +0x24/+0x28/+0x2C, NOT +0x90) never reflected
+it, and Trask never moved even a single unit across 18 seconds and three hops. Switching to the
+plugin's own `console 'tp x y z'` channel (`tools/blockpoke.ps1 -ProcId <pid> console 'tp 45 35
+-1.3'`) -- which drives the engine's own real teleport, not a raw field write -- is what made
+refPos/target/prior/leaderPos all track correctly. Recorded here as the same lesson
+Section 14.4 already drew, now confirmed a second time against a DIFFERENT subsystem (party-level
+reference tracking, not the cross-process mirror): a raw poke to +0x90 alone is not equivalent
+to a real engine position change for any consumer that reads position through a path other than
+that exact field.
+
+### Verification
+
+- `dotnet test tests/KotorCoop.Tests` (Release): 1623/1623 passed, unchanged baseline, 2m34s.
+- Both plugin builds (`src/KotorCoop.Plugin/build.ps1 -Install`, both GOG installs) clean, 0
+  warnings 0 errors, across five full rebuild/redeploy/relaunch cycles this round needed (the
+  initial PumpPartyUpdate fix, the TryGetPartyReferenceState diagnostic, and the
+  TryDriveFollowTarget fallback each needed their own cycle to test live).
+- `tools/verify.ps1 -Host1 52596 -Client2 44196`: 40 passed / 9 failed. The 9 failures are
+  pre-existing combat/item/revive/RPC-signature checks this round's changes never touch
+  ("the peer really loses those hit points", "a client hit costs the enemy real hit points",
+  "an item picked up here vanishes on the peer", "a downed player is reported to the agent",
+  "the co-op revive stands the player back up", "every engine call signature matches the binary"
+  (2 of 167), "a container opened on the client is held and shown open on the host",
+  "no per-frame spam", "phantom damageable, not a sink") -- all plausibly explained by this being
+  a fresh, unstaged session (no deliberate combat/looting staging the way those specific checks
+  need) rather than anything this round shipped. The PARTY-specific checks both passed clean:
+  "the host still controls its companions" (host clamped this run: False) and "the client
+  party roster survives a transition".
+- `tools/partystate.ps1` on both instances: host soloMode=0, client soloMode=1, both read
+  companions 1, member 0 slot 0 objectId 0x127 (Trask) -- matches the pre-round baseline
+  exactly, no desync introduced.
+- `tools/phantomgait.ps1 -ObjectId 0x127` on the client, 12s @ 250ms: 100% idle
+  (0x2710/0x2710, moving=0 every sample, position frozen) -- consistent with Trask never
+  actually moving this round either; no gait fraction to report beyond "he does not move," which
+  is the honest continuation of every prior round's own finding.
+- No crash on either side across all five rig cycles (FIRST-CHANCE exception (0x406D1388) in
+  both plugin logs is the benign MS_VC_EXCEPTION debugger thread-naming signal, present at the
+  same point in every run including pre-round baselines -- not a fault).
+
+Rig torn down clean (`Get-Process swkotor,KotorCoop.Agent` empty), `auto_start_agent` restored
+to `1` in both installs.

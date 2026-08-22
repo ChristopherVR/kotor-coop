@@ -1983,3 +1983,40 @@ remain exactly as `shared-state-audit.md`'s round-71 entry left them, blocked up
 
 `dotnet test tests/KotorCoop.Tests`: **1623/1623**, unchanged baseline. Both plugin builds clean
 across the round's six rebuild/redeploy/relaunch cycles.
+
+## 2026-08-23 — Round 73 update: two real fixes shipped (CSWParty::Update pumped, per-member
+target/prior driven live); Trask still cannot be sampled moving
+
+Full write-up (the disassembly of `CSWParty::Update` 0x00637050 — confirmed live to be the
+missing per-frame driver of the party-level reference position `RecaulateFollowPoint` reads —
+and of `WalkUpdateLocation_QuickWalk_FollowLeader`'s own step state machine past round 72's
+stopping point) is in `docs/research/party-reconciliation.md`'s 2026-08-23 "Round 73" entry —
+this is the pointer for anyone arriving from this file's own gait-sampling angle.
+
+Short version for gait purposes: round 72 left Trask's per-member follow record's TARGET point
+frozen at module-load, with `CSWParty::Update` named as the untried prime suspect. This round
+settled its argument (a delta-time float, verified via its one caller in the whole binary) and
+its write behaviour (it refreshes a PARTY-LEVEL reference position from the leader's live
+position — confirmed live: this field is no longer frozen after the fix), then shipped a second
+fix (`Odyssey.TryDriveFollowTarget`) that drives the per-member TARGET/prior fields AND their
+own dirty flag straight off the real leader position every frame — live-confirmed the engine's
+own per-frame continuation now genuinely processes a fresh target every frame (the dirty flag
+reads back cleared, evidence it was consumed) instead of a value frozen since module load.
+
+**Trask still does not move.** `CreMoveState` (+0xA8C) stayed at 3 ("follow") for the whole
+observation window and never reached -1 ("walking"); his position never changed by a single
+unit across 20+ seconds and several teleports of the leader 20-40 units away. This round's own
+disasm traced `WalkUpdateLocation_QuickWalk_FollowLeader` past the target/prior computation into
+an 11-phase step state machine (a jump table at 0x51CCEC) gated behind an obstacle-avoidance
+check against "the other party member's slot" — a slot this ONE-companion save leaves empty —
+flagged as the leading new lead for whoever traces the phase handlers next.
+
+No gait sample was possible again this round for the same reason as every prior round: he
+never moves. `tools/phantomgait.ps1 -ObjectId 0x127` on the client, 12s @ 250ms: 100% idle,
+position frozen, `moving=0` every sample — the honest continuation of this file's own finding,
+now with two more real (if insufficient) engine-state bugs fixed underneath it.
+
+### Test suite and build
+
+`dotnet test tests/KotorCoop.Tests`: **1623/1623**, unchanged baseline. Both plugin builds clean
+across the round's five rebuild/redeploy/relaunch cycles.

@@ -100,6 +100,10 @@ internal sealed unsafe class PartyFollowController(SharedBlockView block)
 
     private int _issuedLogged;
 
+    /// <summary>Wall-clock timestamp (on <see cref="_clock"/>) of the last
+    /// <see cref="Odyssey.PumpPartyUpdate"/> call, or -1 before the first frame.</summary>
+    private double _lastUpdateTime = -1;
+
     public void OnFrame()
     {
         if (!_enabled || block.Command != SharedBlock.CommandSpawnAndDrive)
@@ -121,6 +125,39 @@ internal sealed unsafe class PartyFollowController(SharedBlockView block)
         if (Odyssey.IsConversationActive || Odyssey.IsPartyRosterFrozen())
         {
             return;
+        }
+
+        // ROUND 73: CSWParty::Update — the engine's own per-frame driver of the party-level
+        // reference position CSWParty::RecaulateFollowPoint reads (see Odyssey.PumpPartyUpdate's
+        // own remarks for the full disassembly finding). Its one real caller lives inside a
+        // per-frame CClientExoAppInternal dispatch this plugin's drive loop never reaches, so
+        // nothing was refreshing that reference position — round 72's frozen follow-target point
+        // was a symptom of THIS being missing, not of RecaulateFollowPoint itself being wrong.
+        // Called unconditionally, once per rendered frame (this method's own FrameHook cadence),
+        // with a real measured delta time — the same cadence and argument shape the engine's own
+        // caller uses.
+        double nowForUpdate = _clock.Elapsed.TotalSeconds;
+        float dt = _lastUpdateTime < 0 ? 0f : (float)(nowForUpdate - _lastUpdateTime);
+        _lastUpdateTime = nowForUpdate;
+        if (dt > 0f && dt < 1f) // skip the first frame (dt==0) and any huge stall/load gap
+        {
+            Odyssey.PumpPartyUpdate(dt);
+
+            // ROUND 73 CONTINUED: live-measured that PumpPartyUpdate alone refreshes the
+            // PARTY-LEVEL reference position (CSWParty+0x2B0..0x2B8) correctly — it now tracks
+            // a teleported leader within one frame — but does NOT, by itself, unstick a
+            // long-stalled member's PER-MEMBER target/prior fields
+            // (record+0x28/record+0x18, WalkUpdateLocation_QuickWalk_FollowLeader's own
+            // input). CSWParty::Update's own body only forwards the refreshed reference
+            // position into RecaulateFollowPoint conditionally, gated behind
+            // CSWParty::TestAndResetPath() returning zero (see PartyUpdateFn's remarks) — and
+            // live data shows that gate staying shut for a companion that has been stalled
+            // this long. Round 72 already built and verified-safe an UNCONDITIONAL direct
+            // call to the same RecaulateFollowPoint (bypassing that gate entirely, 0 stack
+            // args) but measured zero effect BEFORE this round's fix existed, because its own
+            // input (the reference position) was itself still frozen at that time. Retried now
+            // that PumpPartyUpdate keeps the reference position genuinely live.
+            Odyssey.RecalculateFollowPoint();
         }
 
         nint appManager = *(nint*)AppManagerPtr;
@@ -168,6 +205,16 @@ internal sealed unsafe class PartyFollowController(SharedBlockView block)
 
             int headType = Odyssey.GetHeadActionType(creature);
             Vec3 pos = Odyssey.GetPosition(creature);
+
+            // ROUND 73 FALLBACK: keep this companion's own follow-data record driven straight
+            // off the real leader position every frame — see Odyssey.TryDriveFollowTarget's own
+            // remarks for why the engine's own CSWParty::Update/RecaulateFollowPoint calls above
+            // do not do this on their own for a companion in this state. Skipped while genuinely
+            // busy (combat, casting, a round in progress) so this never fights something real.
+            if (player != 0 && !IsBusyHead(headType))
+            {
+                Odyssey.TryDriveFollowTarget(objectId, playerPos);
+            }
 
             if (!_tracked[slot])
             {
@@ -257,6 +304,20 @@ internal sealed unsafe class PartyFollowController(SharedBlockView block)
                 Odyssey.TryGetFollowDiagnostics(creature, objectId, out Odyssey.FollowDiag diag);
                 Vec3 leaderPos = playerPos;
                 int soloMode = *(int*)(partyTable + PartyTableSoloMode);
+
+                // ROUND 73: the party-level fields CSWParty::Update itself reads/writes — see
+                // Odyssey.TryGetPartyReferenceState's own remarks. refAccum climbing frame over
+                // frame is direct proof PumpPartyUpdate is genuinely being called; refPos moving
+                // toward leaderFieldPos (NOT necessarily the same as leaderPos above — that is a
+                // DIFFERENT lookup, see the field's own remarks) is proof the function's own
+                // leader-refresh block is doing real work.
+                Odyssey.TryGetPartyReferenceState(out Odyssey.PartyRefState refState);
+                string refText = refState.Valid
+                    ? $" refId=0x{refState.LeaderRecordId:X} refPos=({refState.ReferencePos.X:F1},{refState.ReferencePos.Y:F1},{refState.ReferencePos.Z:F1}) "
+                        + $"refAccum={refState.TimeAccumulator:F2} leaderCreature=0x{refState.LeaderCreaturePtr:X} "
+                        + $"leaderFieldPos=({refState.LeaderFieldPos.X:F1},{refState.LeaderFieldPos.Y:F1},{refState.LeaderFieldPos.Z:F1})"
+                    : " refState=unreadable";
+
                 string diagText = diag.Valid
                     ? $" target=({diag.TargetPoint.X:F1},{diag.TargetPoint.Y:F1},{diag.TargetPoint.Z:F1}) "
                         + $"prior=({diag.PriorPoint.X:F1},{diag.PriorPoint.Y:F1},{diag.PriorPoint.Z:F1}) "
@@ -264,8 +325,8 @@ internal sealed unsafe class PartyFollowController(SharedBlockView block)
                         + $"snapPending={diag.SnapshotPendingFlag} stepAccum={diag.StepAccumulator} "
                         + $"cachedPos=({diag.CachedPosPairLo:X},{diag.CachedPosPairHi:X}) "
                         + $"enabledFlag={diag.EnabledFlag} leaderPos=({leaderPos.X:F1},{leaderPos.Y:F1},{leaderPos.Z:F1}) "
-                        + $"soloMode={soloMode}"
-                    : $" soloMode={soloMode}";
+                        + $"soloMode={soloMode}{refText}"
+                    : $" soloMode={soloMode}{refText}";
 
                 PluginHost.Log(ok
                     ? $"party follow: 0x{objectId:X} was idle/stalled (head 0x{headType:X}) — "

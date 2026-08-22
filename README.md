@@ -407,15 +407,23 @@ tools/                   RE helpers, demo scripts, the kotor1_0_3 symbol databas
   play with no client connected.** `party_follow=1` (default on) reissues the engine's own real
   `ActionFollowLeader` whenever a companion sits idle away from the leader, and that reliably
   gets its `CreMoveState` to 3 ("follow mode entered," confirmed live every time) — but getting
-  it to -1 ("actually walking a route") is not yet achieved. Traced this far (2026-08-23, round
-  72): the engine's own per-frame follow continuation reads a TARGET point inside a `CSWParty`
-  per-member record that stays frozen at wherever the leader stood the moment the module
-  loaded, confirmed live across a dozen samples and three teleports to increasingly distant
-  positions; two live-tested fix attempts (forcing the engine's own recompute call, and writing
-  the record's own cached leader-position input directly first) neither one moved it. Not a
-  regression — no follow-re-arming existed before round 71 — but not fixed either. See
+  it to -1 ("actually walking a route") is not yet achieved. Round 73 (2026-08-23) closed two
+  real bugs behind this: the engine's own per-frame `CSWParty::Update` — never being called at
+  all in the coop-driven session — is now pumped every rendered frame with a real measured
+  delta time, which live-verified fixes the party's own reference position (it now tracks a
+  teleported leader within one frame, instead of staying frozen at module-load); and the
+  per-member follow-data record's TARGET/cached-leader-position fields (frozen since round 72)
+  are now driven straight off the real leader position every frame as a verified-safe fallback.
+  Both fixes are live-confirmed and shipped. **The companion still does not walk anyway** —
+  `CreMoveState` still never reaches -1 even with a permanently fresh target, pointing at a
+  deeper per-frame step state machine inside `WalkUpdateLocation_QuickWalk_FollowLeader`
+  (0x0051C360, an 11-phase jump-table FSM including obstacle-avoidance logic against "the other
+  party member's slot" that a one-companion party leaves empty — a new, unconfirmed lead for
+  round 74). Not a regression — no follow-re-arming existed before round 71, and neither of
+  round 73's fixes changes anything else `CSWParty` tracks (party-together, portraits, roster
+  all re-verified live) — but not fixed either. See
   [docs/research/party-reconciliation.md](docs/research/party-reconciliation.md)'s 2026-08-23
-  entry for the full disassembly and the live-disproven attempts.
+  "Round 73" entry for the full disassembly, the live measurements, and what is still open.
 - **A mirrored companion cannot swing on a client — except, now, for one, in one narrow
   case, and it is OFF by default.** The presence mirror re-claims and wipes every companion's
   action queue every pass, so only the host's own companions ever really fight; a client sees

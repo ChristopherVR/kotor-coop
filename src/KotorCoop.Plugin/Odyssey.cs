@@ -1818,6 +1818,211 @@ internal static unsafe class Odyssey
     }
 
     /// <summary>
+    /// ROUND 73 FALLBACK (per the round's own brief, step 3: "if CSWParty::Update doesn't move
+    /// the frozen point either, directly write the follow-target point / cached leader position
+    /// fields to the actual current leader position each step"). It does not — see
+    /// <see cref="PartyUpdateFn"/>'s and <see cref="RecalculateFollowPointFn"/>'s own remarks:
+    /// this round confirmed live that <c>CSWParty::Update</c> genuinely refreshes the
+    /// PARTY-LEVEL reference position (<c>party+0x2B0..0x2B8</c>) from the leader's live
+    /// position every frame, and that an unconditional <c>RecaulateFollowPoint</c> call fed by
+    /// that fresh reference STILL leaves a stalled companion's PER-MEMBER
+    /// <c>record+0x28</c>/<c>record+0x18</c> exactly where they were. Neither engine call
+    /// reaches those two fields for a companion in this state, for a reason this round's
+    /// disassembly of <c>WalkUpdateLocation_QuickWalk_FollowLeader</c> 0x0051C360 suggests but
+    /// did not fully settle: the function treats a "target changed" transition as a DIRTY EVENT
+    /// — <c>record+0x68</c> (<see cref="FollowDiag.SnapshotPendingFlag"/>) is read as a flag
+    /// that, when set, makes the function copy the creature's own current position
+    /// (<c>creature+0x90</c>) into <c>record+0x5c</c> (the "snapshot" <see cref="FollowDiag"/>
+    /// already exposes) and then clear the flag — i.e. it looks like the SIGNAL that tells this
+    /// per-frame continuation "the target moved, re-snapshot and compute a fresh step," not
+    /// merely a byproduct of moving the target. A raw write to <c>record+0x28</c> alone (as
+    /// round 72 tried for <c>record+0x18</c>) never sets it, so nothing downstream ever notices.
+    ///
+    /// This writes <c>record+0x28</c> (target) AND <c>record+0x18</c> (the cached leader
+    /// position <see cref="TryPokeFollowPriorPosition"/> already covers) together, and ALSO
+    /// sets <c>record+0x68</c> to 1 — but ONLY when the target has moved more than a small
+    /// epsilon from its current value, so this does not stomp the flag every single frame once
+    /// the companion is genuinely caught up and walking normally (which would fight the
+    /// function's own snapshot/step bookkeeping instead of helping it). Returns false when the
+    /// index does not resolve; returns true (having written nothing) when the target is already
+    /// within the epsilon of <paramref name="leaderPos"/>.
+    ///
+    /// MAIN THREAD ONLY.
+    /// </summary>
+    public static bool TryDriveFollowTarget(uint companionServerObjectId, Vec3 leaderPos)
+    {
+        nint client = GetClient();
+        if (client == 0)
+        {
+            return false;
+        }
+
+        uint clientObjectId = ServerToClientObjectIdFn(client, companionServerObjectId);
+
+        nint party = GetSWPartyFn(client);
+        if (party == 0)
+        {
+            return false;
+        }
+
+        int index = GetPartyIndexFn(party, clientObjectId);
+        if (index <= 0)
+        {
+            return false;
+        }
+
+        nint record = party + 0x24 + (index * 0x88);
+        Vec3 existingTarget = *(Vec3*)(record + 0x28);
+        float dx = existingTarget.X - leaderPos.X;
+        float dy = existingTarget.Y - leaderPos.Y;
+        if ((dx * dx) + (dy * dy) > 0.01f) // ~10cm — "meaningfully different," not float noise
+        {
+            *(Vec3*)(record + 0x28) = leaderPos;
+            *(Vec3*)(record + 0x18) = leaderPos;
+            *(int*)(record + 0x68) = 1;
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// <c>CSWParty::Update</c> 0x00637050 — <c>__thiscall</c>, ONE stack argument (4 bytes,
+    /// matching <c>param_size_bytes=4</c> in <c>tools/kotor1_0_3.db</c>): a delta-time FLOAT,
+    /// verified live round 73 via this function's single caller in the whole binary (
+    /// <c>tools/xrefs.py 0x637050</c> finds exactly one, at 0x0060339A). That caller sits inside
+    /// <c>CClientExoAppInternal</c>'s own per-frame update dispatch — the same routine that also
+    /// calls <c>CClientExoAppInternal::ProcessInput</c> and <c>CExoResMan::Update</c> every
+    /// frame — and computes <c>deltaTime * &lt;a global time-scale multiplier at 0x7439BC&gt;</c>
+    /// into a scratch float (0x78E574) that it pushes as this function's only argument. This
+    /// function's own body (round 73 disasm) opens with
+    /// <c>fld dword ptr [ebp+8]; fadd dword ptr [this+0x2BC]; fstp dword ptr [this+0x2BC]</c> —
+    /// an elapsed-time ACCUMULATOR at <c>this+0x2BC</c>, consistent with nothing but a delta
+    /// time.
+    ///
+    /// ROUND 73: this is the missing per-frame driver round 72 named as the prime suspect but
+    /// did not call. Past the accumulator, this function refreshes a PARTY-LEVEL (not
+    /// per-member) reference position at <c>this+0x2B0..0x2B8</c> from the leader creature's own
+    /// LIVE position (read fresh via <c>GetCreatureByGameObjectID</c> off the id at
+    /// <c>this+0x24</c>, the leader/member-0 slot) whenever the leader has moved more than a
+    /// threshold (the float at 0x741838) since the last call — then, if the party's own
+    /// "furthest member" (<c>CSWPartyFollowDataArray::FindFurthestPartyMemeber_Current</c>,
+    /// <c>this+0x2DC</c>) has drifted far enough
+    /// (<c>PointOnLineDistanceFromLeader</c> vs the float at 0x747C3C) and
+    /// <c>CSWParty::TestAndResetPath()</c> reports the path is not already being reset, it calls
+    /// <c>CSWParty::RecaulateFollowPoint()</c> itself — the exact function round 72 already tried
+    /// calling directly and found to have ZERO effect on a companion's frozen follow target.
+    /// That null result is now explained: round 72's manual <c>RecaulateFollowPoint</c> call read
+    /// <c>this+0x2B0..0x2B8</c> as its own "current leader position" input, and that field is
+    /// ONLY ever refreshed by THIS function — which was never being called at all in the
+    /// coop-driven session (its one real caller lives inside a per-frame dispatch this plugin's
+    /// own drive loop does not reach for the reasons rounds 60-67 already found for animation),
+    /// so the manual recompute was working from a reference position frozen at module-load, same
+    /// as the per-member target it produced.
+    ///
+    /// The caller's own gate (<c>esi+0x18</c> non-null and <c>[esi+0x18+0x48]</c> non-zero, both
+    /// read immediately before the real engine's push/call) is NOT reproduced here —
+    /// <see cref="PumpPartyUpdate"/> calls this unconditionally, once per rendered frame, while a
+    /// party object exists, guarded only by the same preconditions
+    /// <see cref="PartyFollowController"/> already applies before touching anything (spawned and
+    /// driving, not mid-conversation, roster not frozen, no peer party-presence channel active).
+    /// </summary>
+    private static readonly delegate* unmanaged[Thiscall]<nint, float, void> PartyUpdateFn =
+        (delegate* unmanaged[Thiscall]<nint, float, void>)0x00637050;
+
+    /// <summary>
+    /// Calls the engine's own per-frame <c>CSWParty::Update</c> — see
+    /// <see cref="PartyUpdateFn"/>'s own remarks for what this drives and why round 72's fix
+    /// attempts had no effect without it. Returns false when there is no client/party object to
+    /// call it on.
+    ///
+    /// MAIN THREAD ONLY.
+    /// </summary>
+    public static bool PumpPartyUpdate(float deltaTimeSeconds)
+    {
+        nint client = GetClient();
+        if (client == 0)
+        {
+            return false;
+        }
+
+        nint party = GetSWPartyFn(client);
+        if (party == 0)
+        {
+            return false;
+        }
+
+        PartyUpdateFn(party, deltaTimeSeconds);
+        return true;
+    }
+
+    /// <summary>
+    /// CClientExoApp::GetCreatureByGameObjectID 0x005ED5B0 — <c>__thiscall</c> on the CLIENT
+    /// (<see cref="GetClient"/>), one stack arg (a CLIENT-side object id), returns the creature
+    /// pointer or 0. This is the SAME call <c>CSWParty::Update</c> itself makes (round 73 disasm,
+    /// see <see cref="PartyUpdateFn"/>) to resolve the leader record's own stored id
+    /// (<c>party+0x24</c>) into a creature pointer before reading its position.
+    /// </summary>
+    private static readonly delegate* unmanaged[Thiscall]<nint, uint, nint> GetCreatureByClientIdFn =
+        (delegate* unmanaged[Thiscall]<nint, uint, nint>)0x005ED5B0;
+
+    /// <summary>
+    /// ROUND 73 DIAGNOSTIC: direct visibility into the PARTY-LEVEL fields
+    /// <c>CSWParty::Update</c> itself reads and writes, to tell "the function isn't running"
+    /// apart from "it runs but its own leader lookup or position offset isn't what this round's
+    /// disasm assumed": <c>party+0x24</c> (the leader record's own stored CLIENT object id),
+    /// <c>party+0x2B0..0x2B8</c> (the reference position the function refreshes from the
+    /// leader), and <c>party+0x2BC</c> (the elapsed-time accumulator its first three
+    /// instructions maintain — a monotonically increasing value while
+    /// <see cref="PumpPartyUpdate"/> is genuinely being called each frame, regardless of
+    /// whether anything else in the function's body does what this round's disasm expects).
+    /// Also resolves the leader id through <see cref="GetCreatureByClientIdFn"/> — the SAME
+    /// call the function itself makes — and reads that creature's <c>+0x24/+0x28/+0x2C</c>,
+    /// the exact offsets <c>CSWParty::Update</c> subtracts from <c>party+0x2B0..0x2B8</c> (NOT
+    /// necessarily the same as <c>CSWSObject</c>'s usual <c>+0x90</c> world-position field —
+    /// this round's live data is what settles whether they agree).
+    /// </summary>
+    public static bool TryGetPartyReferenceState(out PartyRefState state)
+    {
+        state = default;
+
+        nint client = GetClient();
+        if (client == 0)
+        {
+            return false;
+        }
+
+        nint party = GetSWPartyFn(client);
+        if (party == 0)
+        {
+            return false;
+        }
+
+        state.LeaderRecordId = *(uint*)(party + 0x24);
+        state.ReferencePos = *(Vec3*)(party + 0x2b0);
+        state.TimeAccumulator = *(float*)(party + 0x2bc);
+
+        nint leaderCreature = GetCreatureByClientIdFn(client, state.LeaderRecordId);
+        state.LeaderCreaturePtr = leaderCreature;
+        if (leaderCreature != 0)
+        {
+            state.LeaderFieldPos = *(Vec3*)(leaderCreature + 0x24);
+        }
+
+        state.Valid = true;
+        return true;
+    }
+
+    public struct PartyRefState
+    {
+        public bool Valid;
+        public uint LeaderRecordId;
+        public Vec3 ReferencePos;
+        public float TimeAccumulator;
+        public nint LeaderCreaturePtr;
+        public Vec3 LeaderFieldPos;
+    }
+
+    /// <summary>
     /// CServerExoApp::GetPartyTable 0x004AEE70 — <c>mov eax,[ecx+4]; add eax,0x1B770; ret</c>.
     /// A bare <c>ret</c>: no arguments, no dereference past <c>this</c>. The table is EMBEDDED
     /// in CServerExoAppInternal, so this can never be null while the server exists.

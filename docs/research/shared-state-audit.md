@@ -6640,6 +6640,64 @@ none of it exercised by the (x86 NativeAOT, unreferenced-by-tests) test project.
 builds clean across the round's many rebuild/redeploy/relaunch cycles. Rig torn down clean
 (`Get-Process swkotor,KotorCoop.Agent` empty), `auto_start_agent` restored to `1` in both installs.
 
+### Round 73 (2026-08-23) — CSWParty::Update's argument and write behaviour settled by disasm and
+confirmed live; two real fixes shipped for Trask's frozen follow record; he still does not walk
+
+Picks up round 72's own named prime suspect, `CSWParty::Update` (0x00637050), whose one stack
+argument round 72 declined to guess. Full disassembly + live-measurement write-up in
+`docs/research/party-reconciliation.md`'s 2026-08-23 "Round 73" entry;
+`docs/research/phantom-locomotion.md`'s own 2026-08-23 update carries the gait-sampling pointer.
+Short version:
+
+- **The argument is a delta-time float** — settled by disasm (its one caller in the whole
+  binary, `tools/xrefs.py 0x637050`, sits inside `CClientExoAppInternal`'s per-frame update and
+  pushes `deltaTime * <a time-scale global>`; the function's own first three instructions
+  accumulate the argument into `this+0x2BC`) and matches `param_size_bytes=4` in
+  `tools/kotor1_0_3.db` — not a blind ABI guess.
+- **What it writes**: a PARTY-LEVEL (not per-member) reference position at `this+0x2B0..0x2B8`,
+  refreshed from the leader's live position, which `CSWParty::RecaulateFollowPoint` reads as its
+  own input — the field round 72's manual `RecaulateFollowPoint` call was working from stale,
+  because `CSWParty::Update` (its one real caller living inside a per-frame dispatch this
+  plugin's drive loop never reaches) was never being called at all.
+- **Fix 1 (shipped)**: `Odyssey.PumpPartyUpdate` calls `CSWParty::Update` once per rendered frame
+  with a real measured delta time, from `PartyFollowController.OnFrame`. Live-verified: a new
+  diagnostic (`Odyssey.TryGetPartyReferenceState`) shows the party-level reference position
+  genuinely tracking a teleported leader within one frame, where it previously stayed frozen at
+  the module-load position exactly like round 72's per-member fields.
+- **This alone did not unstick the per-member fields.** With the reference position now
+  genuinely live, both `CSWParty::Update`'s own conditional call into `RecaulateFollowPoint` and
+  an added UNCONDITIONAL direct call (bypassing `CSWParty::TestAndResetPath()`'s gate entirely)
+  left the per-member target/prior fields exactly where round 72 found them, frozen at
+  module-load — not yet explained.
+- **Fix 2 (shipped, the task's own sanctioned fallback)**: `Odyssey.TryDriveFollowTarget` writes
+  the per-member target/prior fields to the live leader position AND sets the record's own
+  "target changed" dirty flag (`record+0x68`) — round 72's raw poke never set this flag, which
+  this round's deeper disasm of `WalkUpdateLocation_QuickWalk_FollowLeader` (0x0051C360, past
+  round 72's ~0x51C700 stopping point) found is what actually triggers the function's own
+  re-snapshot step. Live-verified: target/prior now genuinely track the leader, and the dirty
+  flag reads back cleared (the engine's own continuation visibly consumed it).
+- **Genuinely still not closed.** `CreMoveState` never reached -1 ("walking") even with a
+  permanently fresh target — this round's disasm traced the function into an 11-phase step state
+  machine (a jump table at 0x51CCEC) gated behind an obstacle-avoidance check against "the other
+  party member's slot," which this ONE-companion save leaves empty/uninitialized — a new,
+  unconfirmed lead for round 74, ahead of tracing all 11 phase handlers.
+- **Methodology, reconfirmed**: a raw `WriteProcessMemory` poke to the leader's own position
+  field does NOT propagate into `CSWParty::Update`'s own leader lookup (which reads a DIFFERENT
+  offset, `+0x24/+0x28/+0x2C`, not `CSWSObject`'s usual `+0x90`) — the same §14.4 lesson, now
+  confirmed against a second, different subsystem. `console 'tp x y z'` (a real engine teleport
+  via the plugin's own console-command channel) is what actually moves everything downstream
+  correctly.
+
+`dotnet test tests/KotorCoop.Tests`: **1623/1623**, unchanged baseline. Both plugin builds clean
+across the round's five rebuild/redeploy/relaunch cycles. `tools/verify.ps1`: 40 passed / 9
+failed, all 9 pre-existing combat/item/revive/RPC-signature checks unrelated to this round's
+changes (unstaged fresh-session gaps, not a regression) — the two party-specific checks ("the
+host still controls its companions", "the client party roster survives a transition") both
+passed clean, and `tools/partystate.ps1` on both instances matched the pre-round baseline
+exactly (host soloMode=0, client soloMode=1, companions 1 on both). Rig torn down clean
+(`Get-Process swkotor,KotorCoop.Agent` empty), `auto_start_agent` restored to `1` in both
+installs.
+
 ## 3. A client's XP is actively erased
 
 `ProgressionSnapshotPacket` is host→client only and absolute (CoopAgent.cs, `PumpProgression`):
