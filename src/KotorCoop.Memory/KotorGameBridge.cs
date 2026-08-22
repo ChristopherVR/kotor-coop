@@ -3143,6 +3143,14 @@ public sealed class KotorGameBridge : IGameBridge
     private const int BlockTriggerRequestStride = 0x08;
     private const int BlockTriggerRequestCapacity = 4;
 
+    // Native-fire report (protocol 36), fit into the 40 bytes of tail-slack the version-44
+    // comment above already measured and the trigger-relay region (ending 0x3BD8) did not use
+    // — see SharedBlock.cs. No TotalSize growth.
+    private const int BlockTriggerNativeFiredCount = 0x3BD8;
+    private const int BlockTriggerNativeFiredSerial = 0x3BDC;
+    private const int BlockTriggerNativeFired = 0x3BE0;
+    private const int BlockTriggerNativeFiredCapacity = 4;
+
     private uint _triggerRequestSerial;
 
     private bool _triggerWatchWritten;
@@ -3177,6 +3185,32 @@ public sealed class KotorGameBridge : IGameBridge
         for (int i = 0; i < count; i++)
         {
             if (_memory.TryReadUInt32(_pluginBlock + BlockTriggerInside + (i * 4), out uint id)
+                && id != 0)
+            {
+                ids.Add(id);
+            }
+        }
+
+        return ids;
+    }
+
+    /// <summary>Protocol 36: the plugin's own recent, filtered, natively-fired trigger ids —
+    /// see <see cref="IGameBridge.ReadNativeFiredTriggers"/>.</summary>
+    public IReadOnlyList<uint> ReadNativeFiredTriggers()
+    {
+        if (_pluginBlock == 0
+            || !_memory.TryReadUInt32(_pluginBlock + BlockTriggerNativeFiredCount, out uint count)
+            || count == 0)
+        {
+            return [];
+        }
+
+        count = Math.Min(count, (uint)BlockTriggerNativeFiredCapacity);
+
+        List<uint> ids = new((int)count);
+        for (int i = 0; i < count; i++)
+        {
+            if (_memory.TryReadUInt32(_pluginBlock + BlockTriggerNativeFired + (i * 4), out uint id)
                 && id != 0)
             {
                 ids.Add(id);

@@ -63,6 +63,29 @@ internal sealed unsafe class TriggerRelayController(SharedBlockView block)
     private bool _offLogged;
     private int _refusalsLogged;
 
+    // ---- native fire observation (protocol 36) -------------------------------------
+
+    /// <summary>Trigger ids this instance's own engine has already been OBSERVED natively
+    /// firing this module — checked before either resolving the trigger or publishing it, so a
+    /// capture is never re-processed. Distinct from <see cref="_nativeFiredPublished"/>: an id
+    /// can land here (permanently, this module) without ever reaching the published list, if
+    /// it failed eligibility/allowlist or arrived once the list was already at capacity.
+    /// </summary>
+    private readonly HashSet<uint> _nativeFiredThisModule = [];
+
+    /// <summary>The bounded set actually published to <see cref="SharedBlock.OffsetTriggerNativeFired"/>
+    /// this module — capacity <see cref="SharedBlock.TriggerNativeFiredCapacity"/> (4). A 5th
+    /// distinct native fire in one module visit is not relayed to other peers (it still fires
+    /// correctly on THIS engine, natively, completely unaffected — only the RELAY to other
+    /// peers is capped), the same headroom trade <see cref="_inside"/>'s own capacity already
+    /// accepts for the watch direction.</summary>
+    private readonly List<uint> _nativeFiredPublished = [];
+
+    private uint _nativeFiredSerial;
+    private uint _lastDrainedNativeSequence;
+    private bool _nativeHookInstalled;
+    private bool _nativeHookInstallLogged;
+
     private static string[] ParsePatterns(string? raw)
     {
         if (string.IsNullOrWhiteSpace(raw))
@@ -80,6 +103,11 @@ internal sealed unsafe class TriggerRelayController(SharedBlockView block)
         _insideCount = 0;
         _requestSerial = block.TriggerRequestSerial;
         block.SetTriggersInside([], ++_insideSerial);
+
+        _nativeFiredThisModule.Clear();
+        _nativeFiredPublished.Clear();
+        block.SetTriggerNativeFired([], ++_nativeFiredSerial);
+        TriggerFireHook.Invalidate();
     }
 
     public void OnFrame()
@@ -109,6 +137,11 @@ internal sealed unsafe class TriggerRelayController(SharedBlockView block)
         // tick should not wait behind a throttled watch pass.
         HandleRequests();
         HandleWatch();
+
+        // Separate from the verify-bytes gate above: a failure to install the NEW native-fire
+        // observer must not take down the EXISTING watch/request relay it shares this
+        // controller with — see docs/research/trigger-relay.md's protocol-36 section.
+        HandleNativeFireObservation();
     }
 
     private bool EnsureVerified()
@@ -342,5 +375,116 @@ internal sealed unsafe class TriggerRelayController(SharedBlockView block)
         }
 
         return 0;
+    }
+
+    // ---- native fire observation (protocol 36 — the reverse relay direction) --------
+
+    /// <summary>
+    /// Installs <see cref="TriggerFireHook"/> (once) and drains whatever it has captured since
+    /// the last pass: any REAL entry, by ANY creature, into ANY generic trigger that fired for
+    /// real this frame. Filtered here, on the main thread where every primitive it needs
+    /// (<see cref="Odyssey.GetPlayerObjectId"/>, <see cref="OdysseyTriggers.ResolveTrigger"/>,
+    /// the eligibility and allowlist checks) is safe to call, down to exactly the same shape
+    /// <see cref="HandleWatch"/> already publishes for a currently-standing report: only MY OWN
+    /// real character's entry, only an eligible trigger, only one matching the allowlist.
+    /// </summary>
+    private void HandleNativeFireObservation()
+    {
+        if (!_nativeHookInstalled)
+        {
+            _nativeHookInstalled = TriggerFireHook.Install(out string diagnostic);
+
+            if (!_nativeHookInstallLogged)
+            {
+                _nativeHookInstallLogged = true;
+                PluginHost.Log(_nativeHookInstalled
+                    ? $"triggers: {diagnostic}"
+                    : $"triggers: REFUSED — {diagnostic}");
+            }
+
+            if (!_nativeHookInstalled)
+            {
+                return;
+            }
+        }
+
+        uint sequence = TriggerFireHook.Sequence;
+        if (sequence == _lastDrainedNativeSequence)
+        {
+            return;
+        }
+
+        uint localPlayerId = Odyssey.GetPlayerObjectId();
+        if (localPlayerId == 0)
+        {
+            // No world loaded (or a transition mid-flight): leave the sequence where it is and
+            // try again next frame. The ring only holds the last few captures regardless, so a
+            // fire that happens during this window is bounded loss, not a stuck state — the
+            // same trade every other "cannot read the world right now" guard in this codebase
+            // already accepts.
+            return;
+        }
+
+        uint newCount = sequence - _lastDrainedNativeSequence;
+        if (newCount > TriggerFireHook.Capacity)
+        {
+            newCount = (uint)TriggerFireHook.Capacity;
+        }
+
+        bool changed = false;
+
+        for (uint i = 0; i < newCount; i++)
+        {
+            int index = (int)(sequence - newCount + i);
+            TriggerFireHook.Read(index, out uint triggerId, out uint enteringObjectId);
+
+            if (triggerId == 0 || enteringObjectId != localPlayerId)
+            {
+                // Not my own real character entering — a companion, an NPC, a hostile
+                // creature crossing the same polygon — out of scope, matching the watch's own
+                // "only the local player" semantics exactly.
+                continue;
+            }
+
+            if (!_nativeFiredThisModule.Add(triggerId))
+            {
+                continue;
+            }
+
+            nint trigger = OdysseyTriggers.ResolveTrigger(triggerId);
+            if (trigger == 0 || !OdysseyTriggers.IsRelayEligible(trigger))
+            {
+                continue;
+            }
+
+            string scriptName = OdysseyTriggers.PeekScriptOnEnter(trigger);
+            if (!MatchesAnyPattern(scriptName))
+            {
+                continue;
+            }
+
+            if (_nativeFiredPublished.Count >= SharedBlock.TriggerNativeFiredCapacity)
+            {
+                // See _nativeFiredPublished's own doc comment: a 5th distinct id this module
+                // visit still fired correctly, natively, on this engine — only the relay to
+                // other peers is capped.
+                continue;
+            }
+
+            _nativeFiredPublished.Add(triggerId);
+            changed = true;
+
+            PluginHost.Log(
+                $"triggers: observed my own engine natively fire OnEnter of 0x{triggerId:X} "
+                + "— publishing for other peers");
+        }
+
+        _lastDrainedNativeSequence = sequence;
+
+        if (changed)
+        {
+            Span<uint> span = System.Runtime.InteropServices.CollectionsMarshal.AsSpan(_nativeFiredPublished);
+            block.SetTriggerNativeFired(span, ++_nativeFiredSerial);
+        }
     }
 }

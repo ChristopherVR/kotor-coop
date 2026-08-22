@@ -172,8 +172,25 @@ public static class ProtocolConstants
     /// which is what host-mid-session-load re-adoption (coop.ini <c>host_load_readopt</c>)
     /// needs to tell "the host saved" apart from "the host loaded a different save" without a
     /// dedicated broadcast packet. Gated OFF by default, like every roadmap-14-phase-2 action,
-    /// until live-verified.</summary>
-    public const byte Version = 35;
+    /// until live-verified.
+    /// Version 36: <see cref="TriggerRelayPacket"/> gains <c>NativeFiredIds</c> /
+    /// <c>NativeFiredOriginPeerIds</c> — the reverse direction docs/research/trigger-relay.md's
+    /// symmetry pass closes. Before this, only a CLIENT's own presence in a generic trigger
+    /// ever reached the other instance (via <c>TriggerIds</c>, fired by the HOST alone); the
+    /// HOST's own real character walking through the identical trigger was invisible to this
+    /// whole channel — nothing told a client to also run the OnEnter against the host's
+    /// phantom. A new native-fire detour (<c>TriggerFireHook</c>, on
+    /// <c>CSWSTrigger::EventHandler</c>'s generic-script RunScript call site) observes any
+    /// instance's own engine firing a trigger for its own real PC; the allowlisted, eligible
+    /// result is reported peer-&gt;host in <c>NativeFiredIds</c> and merged into the SAME
+    /// per-module fired-set <c>TriggerRelayStore</c> already keeps, so the two directions can
+    /// never double-fire the same trigger. The host rebroadcasts every known native fire with
+    /// its origin peer in <c>NativeFiredIds</c>/<c>NativeFiredOriginPeerIds</c> (host-&gt;all);
+    /// every OTHER peer fires the trigger locally against the origin's phantom, through the
+    /// SAME <c>TriggerRelayController.HandleRequests</c>/<c>OdysseyTriggers.FireTrigger</c>
+    /// path the host already used for a client's report — now reachable from any instance.
+    /// Still under <c>trigger_relay</c> (default ON).</summary>
+    public const byte Version = 36;
 
     /// <summary>Journal quest tags are resrefs plus a little slack.</summary>
     public const int MaxJournalTagLength = 32;
@@ -266,6 +283,16 @@ public static class ProtocolConstants
     /// over a couple of extra ticks.
     /// </summary>
     public const int MaxTriggerFiredIds = 8;
+
+    /// <summary>
+    /// Native-fire entries (own-engine trigger fires, with origin peer) carried per
+    /// <see cref="PacketType.TriggerRelay"/> packet, both directions: peer-&gt;host reports at
+    /// most this many of ITS OWN recent natively-fired ids (<see cref="SharedBlock"/>'s mirror
+    /// region caps at the same figure the plugin's watch region already uses); host-&gt;all
+    /// rebroadcasts the merged per-module set, matched 1:1 against an origin-peer-id array of
+    /// the same length. Same headroom reasoning as <see cref="MaxTriggerRelayEntries"/>.
+    /// </summary>
+    public const int MaxTriggerNativeFires = 4;
 
     /// <summary>
     /// Objects locked at once across the whole session. One conversation at a time is already

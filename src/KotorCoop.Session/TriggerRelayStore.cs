@@ -42,15 +42,32 @@ public sealed class TriggerRelayStore
     /// (<see cref="ProtocolConstants.MaxTriggerRelayEntries"/>); this matches.</summary>
     public const int MaxRequests = 4;
 
-    private readonly record struct PeerReport(string Module, uint[] TriggerIds, long ReceivedAtMs);
+    private readonly record struct PeerReport(
+        string Module, uint[] TriggerIds, uint[] NativeFiredIds, long ReceivedAtMs);
 
     private readonly Dictionary<uint, PeerReport> _byPeer = [];
 
     /// <summary>Per-module set of trigger ids this host has already asked its engine to fire.
     /// Never cleared except by <see cref="ForgetModule"/> — a module the host has left is not
     /// coming back with a fresh GIT, so its trigger ids mean nothing new, but there is no
-    /// reason to carry the memory of every module visited in one long session either.</summary>
+    /// reason to carry the memory of every module visited in one long session either.
+    ///
+    /// SHARED between the two directions this store now covers (protocol 36): a trigger id
+    /// claimed here by <see cref="Collect"/> (a client's watch report, fired FOR that peer's
+    /// phantom by this host) and one claimed by <see cref="ReportNativeFires"/> (any peer's OWN
+    /// engine already having fired it natively) are the SAME set, checked before either path
+    /// claims an id — the one dedup docs/research/trigger-relay.md's symmetry pass asked for,
+    /// applying "both ways" by construction rather than by two separate bookkeeping tables that
+    /// could disagree.</summary>
     private readonly Dictionary<string, HashSet<uint>> _firedByModule =
+        new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>Per-module: which peer's OWN engine natively fired a given trigger id, for the
+    /// host's own rebroadcast (<see cref="GetNativeFires"/>). A subset of
+    /// <see cref="_firedByModule"/>'s keys — every id here is also in the fired-set, but not
+    /// every fired-set id has a recorded origin (a plain <see cref="Collect"/>-driven fire has
+    /// none; only <see cref="ReportNativeFires"/> populates this).</summary>
+    private readonly Dictionary<string, Dictionary<uint, uint>> _nativeOriginByModule =
         new(StringComparer.OrdinalIgnoreCase);
 
     private readonly Lock _gate = new();
@@ -75,9 +92,106 @@ public sealed class TriggerRelayStore
             .Distinct()
             .Take(ProtocolConstants.MaxTriggerRelayEntries)];
 
+        uint[] nativeIds = [.. packet.NativeFiredIds
+            .Where(id => id is not 0 and not 0x7F000000)
+            .Distinct()
+            .Take(ProtocolConstants.MaxTriggerNativeFires)];
+
         lock (_gate)
         {
-            _byPeer[packet.PeerId] = new PeerReport(packet.Module ?? string.Empty, ids, nowMs);
+            _byPeer[packet.PeerId] =
+                new PeerReport(packet.Module ?? string.Empty, ids, nativeIds, nowMs);
+        }
+
+        if (nativeIds.Length > 0)
+        {
+            ClaimNativeFires(packet.PeerId, packet.Module ?? string.Empty, nativeIds);
+        }
+    }
+
+    /// <summary>
+    /// The host's own local counterpart to the peer-&gt;host half of <see cref="Report"/> — no
+    /// packet, no network round trip, because the host talks to its own store directly. Same
+    /// claim path as a reported peer's native fires, keyed on <paramref name="peerId"/>
+    /// (normally <c>CoopHost.HostPeerId</c>).
+    /// </summary>
+    public void ReportNativeFires(uint peerId, string module, IReadOnlyList<uint> triggerIds)
+    {
+        if (peerId == 0 || triggerIds.Count == 0)
+        {
+            return;
+        }
+
+        uint[] ids = [.. triggerIds
+            .Where(id => id is not 0 and not 0x7F000000)
+            .Distinct()
+            .Take(ProtocolConstants.MaxTriggerNativeFires)];
+
+        if (ids.Length > 0)
+        {
+            ClaimNativeFires(peerId, module ?? string.Empty, ids);
+        }
+    }
+
+    /// <summary>
+    /// Folds newly-claimed native fires into the SHARED fired-set (so <see cref="Collect"/>
+    /// never re-offers one of these as a watch-driven request) and records their origin for
+    /// <see cref="GetNativeFires"/>'s rebroadcast. An id already in the fired-set — whichever
+    /// path claimed it first, a watch-driven <see cref="Collect"/> or an earlier native report
+    /// — is left alone: first claim wins, exactly like <see cref="Collect"/> already does for
+    /// two peers standing in the same polygon.
+    /// </summary>
+    private void ClaimNativeFires(uint originPeerId, string module, IReadOnlyList<uint> triggerIds)
+    {
+        lock (_gate)
+        {
+            if (!_firedByModule.TryGetValue(module, out HashSet<uint>? fired))
+            {
+                fired = [];
+                _firedByModule[module] = fired;
+            }
+
+            if (!_nativeOriginByModule.TryGetValue(module, out Dictionary<uint, uint>? origins))
+            {
+                origins = [];
+                _nativeOriginByModule[module] = origins;
+            }
+
+            foreach (uint id in triggerIds)
+            {
+                if (!fired.Add(id))
+                {
+                    continue;
+                }
+
+                origins[id] = originPeerId;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Every trigger this store currently knows was fired NATIVELY (as opposed to by
+    /// <see cref="Collect"/>'s relay path) in <paramref name="module"/>, paired with the peer
+    /// whose own engine fired it — a LEVEL, resent by the host's broadcast every tick like
+    /// <see cref="GetFiredIds"/>, so a lost datagram costs one tick, never a permanently missed
+    /// relay.
+    /// </summary>
+    public IReadOnlyList<TriggerFireRequest> GetNativeFires(string module)
+    {
+        lock (_gate)
+        {
+            if (!_nativeOriginByModule.TryGetValue(module ?? string.Empty, out Dictionary<uint, uint>? origins))
+            {
+                return [];
+            }
+
+            List<TriggerFireRequest> result = new(origins.Count);
+            foreach ((uint triggerId, uint originPeerId) in origins)
+            {
+                result.Add(new TriggerFireRequest(triggerId, originPeerId));
+            }
+
+            return result;
         }
     }
 
@@ -98,6 +212,7 @@ public sealed class TriggerRelayStore
         lock (_gate)
         {
             _firedByModule.Remove(module ?? string.Empty);
+            _nativeOriginByModule.Remove(module ?? string.Empty);
         }
     }
 
@@ -107,6 +222,7 @@ public sealed class TriggerRelayStore
         {
             _byPeer.Clear();
             _firedByModule.Clear();
+            _nativeOriginByModule.Clear();
         }
     }
 

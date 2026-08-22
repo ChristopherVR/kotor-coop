@@ -913,6 +913,26 @@ public static class PacketCodec
             w.WriteUInt32(packet.FiredIds[i]);
         }
 
+        // Protocol 36. NativeFiredOriginPeerIds is written only up to however many entries
+        // NativeFiredIds itself carries — a peer->host report never fills it (origin is
+        // implicit), and the host->all direction always keeps the two lists the same length
+        // (TriggerRelayStore.GetNativeFires builds them together).
+        int nativeCount = Math.Min(packet.NativeFiredIds.Count, ProtocolConstants.MaxTriggerNativeFires);
+        w.WriteUInt8((byte)nativeCount);
+        for (int i = 0; i < nativeCount; i++)
+        {
+            w.WriteUInt32(packet.NativeFiredIds[i]);
+        }
+
+        int originCount = Math.Min(
+            Math.Min(packet.NativeFiredOriginPeerIds.Count, nativeCount),
+            ProtocolConstants.MaxTriggerNativeFires);
+        w.WriteUInt8((byte)originCount);
+        for (int i = 0; i < originCount; i++)
+        {
+            w.WriteUInt32(packet.NativeFiredOriginPeerIds[i]);
+        }
+
         return w.Failed ? 0 : w.Position;
     }
 
@@ -963,7 +983,44 @@ public static class PacketCodec
             firedIds.Add(id);
         }
 
-        return new TriggerRelayPacket(peerId, module, triggerIds, firedIds);
+        byte nativeCount = r.ReadUInt8();
+        if (r.Failed || nativeCount > ProtocolConstants.MaxTriggerNativeFires)
+        {
+            return null;
+        }
+
+        List<uint> nativeFiredIds = new(nativeCount);
+        for (int i = 0; i < nativeCount; i++)
+        {
+            uint id = r.ReadUInt32();
+            if (r.Failed)
+            {
+                return null;
+            }
+
+            nativeFiredIds.Add(id);
+        }
+
+        byte originCount = r.ReadUInt8();
+        if (r.Failed || originCount > ProtocolConstants.MaxTriggerNativeFires)
+        {
+            return null;
+        }
+
+        List<uint> nativeFiredOrigins = new(originCount);
+        for (int i = 0; i < originCount; i++)
+        {
+            uint id = r.ReadUInt32();
+            if (r.Failed)
+            {
+                return null;
+            }
+
+            nativeFiredOrigins.Add(id);
+        }
+
+        return new TriggerRelayPacket(
+            peerId, module, triggerIds, firedIds, nativeFiredIds, nativeFiredOrigins);
     }
 
     public static int Write(Span<byte> buffer, InteractionClaimPacket packet)

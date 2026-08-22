@@ -2659,7 +2659,7 @@ public sealed class CoopAgent(IGameBridge bridge, ICoopSession session, AgentSet
             bridge.SetEncounterWatch(false);
             PumpEncounterRequests(local);
             bridge.SetTriggerWatch(false);
-            PumpTriggerRequests(local);
+            PumpTriggerFiring(local);
 
             // Census and damage carry the module label; a dirty label skips them (see the
             // same-breath note above).
@@ -2750,6 +2750,11 @@ public sealed class CoopAgent(IGameBridge bridge, ICoopSession session, AgentSet
 
             session.PublishTriggerEntries(local.Module, entered);
         }
+
+        // Protocol 36's reverse relay: publish this client's own natively-fired triggers, and
+        // fire (locally) any OTHER peer's — including the host's — that this engine has not
+        // yet been asked to run. See PumpTriggerFiring's own doc comment.
+        PumpTriggerFiring(local);
 
         // ROUND 41 DIAGNOSTIC: settling whether the moduleClean gate is what's silently
         // skipping the exclusion filter downstream. Temporary.
@@ -3155,39 +3160,136 @@ public sealed class CoopAgent(IGameBridge bridge, ICoopSession session, AgentSet
     private bool _encounterRequestsOutstanding;
 
     /// <summary>
-    /// Owner side of TriggerRelay: hand the plugin whatever GENERIC triggers clients say they
-    /// are standing in, so this instance's engine runs the same OnEnter script against that
-    /// peer's phantom that the client's own engine already ran against its real character.
-    /// Same shape as <see cref="PumpEncounterRequests"/>, with one difference: idempotence is
-    /// NOT free here (a trigger's OnEnter carries no engine one-shot flag the way an
-    /// encounter's <c>started</c> field does), so <see cref="TriggerRelayStore.Collect"/>
-    /// already removed anything this host has fired before — every request handed to the
-    /// bridge here is genuinely new.
+    /// Every generic-trigger fire request this pump owes its own plugin, from BOTH directions,
+    /// combined into the one write the bridge's fixed-size request region can carry per tick:
+    ///
+    /// - the OLD, host-only half (<see cref="ICoopSession.GetTriggerFireRequests"/>): whatever
+    ///   GENERIC triggers clients say they are standing in, so THIS instance's engine (always
+    ///   the host, today) runs the same OnEnter script against that peer's phantom the client's
+    ///   own engine already ran against its real character. Idempotence is NOT free here (a
+    ///   trigger's OnEnter carries no engine one-shot flag), so
+    ///   <see cref="TriggerRelayStore.Collect"/> already removed anything fired before — every
+    ///   entry here is genuinely new.
+    /// - the NEW half, symmetric across every peer (<see cref="PumpNativeTriggerFires"/>):
+    ///   triggers a DIFFERENT peer's engine already fired NATIVELY (its own real character,
+    ///   observed by the plugin's <c>TriggerFireHook</c>), that this engine has not yet been
+    ///   asked to also run — the reverse direction docs/research/trigger-relay.md's symmetry
+    ///   pass closes: previously only a client's presence ever reached the host this way, never
+    ///   the host's own presence reaching a client.
+    ///
+    /// Called from BOTH peer types every pump; the old half is a no-op on a client
+    /// (<see cref="ICoopSession.GetTriggerFireRequests"/>'s own default returns empty there).
     /// </summary>
-    private void PumpTriggerRequests(in PlayerState local)
+    private void PumpTriggerFiring(in PlayerState local)
     {
-        IReadOnlyList<TriggerFireRequest> requests = IsFallbackModuleName(local.Module)
+        IReadOnlyList<TriggerFireRequest> watchRequests = IsFallbackModuleName(local.Module)
             ? []
             : session.GetTriggerFireRequests(local.Module);
-        if (requests.Count == 0 && !_triggerRequestsOutstanding)
+
+        IReadOnlyList<TriggerFireRequest> nativeRequests = PumpNativeTriggerFires(local);
+
+        bool anyOutstanding = watchRequests.Count > 0 || nativeRequests.Count > 0;
+        if (!anyOutstanding && !_triggerRequestsOutstanding)
         {
             return;
         }
 
-        _triggerRequestsOutstanding = requests.Count > 0;
+        _triggerRequestsOutstanding = anyOutstanding;
 
-        bridge.TryRequestTriggerFire([.. requests.Select(r => (r.TriggerId, r.PeerId))]);
-
-        if (requests.Count > 0 && _triggerRequestsLogged != requests.Count)
+        List<(uint TriggerId, uint PeerId)> combined = new(watchRequests.Count + nativeRequests.Count);
+        foreach (TriggerFireRequest r in watchRequests)
         {
-            _triggerRequestsLogged = requests.Count;
-            Log?.Invoke($"firing {requests.Count} generic trigger(s) a peer walked into");
+            combined.Add((r.TriggerId, r.PeerId));
         }
-        else if (requests.Count == 0)
+
+        foreach (TriggerFireRequest r in nativeRequests)
+        {
+            combined.Add((r.TriggerId, r.PeerId));
+        }
+
+        bridge.TryRequestTriggerFire(combined);
+
+        if (watchRequests.Count > 0 && _triggerRequestsLogged != watchRequests.Count)
+        {
+            _triggerRequestsLogged = watchRequests.Count;
+            Log?.Invoke($"firing {watchRequests.Count} generic trigger(s) a peer walked into");
+        }
+        else if (watchRequests.Count == 0)
         {
             _triggerRequestsLogged = 0;
         }
+
+        if (nativeRequests.Count > 0 && _nativeTriggerRequestsLogged != nativeRequests.Count)
+        {
+            _nativeTriggerRequestsLogged = nativeRequests.Count;
+            Log?.Invoke(
+                $"firing {nativeRequests.Count} natively-fired generic trigger(s) for another peer's phantom");
+        }
+        else if (nativeRequests.Count == 0)
+        {
+            _nativeTriggerRequestsLogged = 0;
+        }
     }
+
+    /// <summary>
+    /// Both halves of protocol 36's reverse relay, every peer: publish whatever THIS engine
+    /// natively fired for its own real character since last pump (already allowlist- and
+    /// eligibility-filtered by the plugin), and hand back the OTHER peers' native fires this
+    /// engine has not yet been asked to run too — deduplicated per module, since
+    /// <see cref="ICoopSession.GetNativeTriggerFireRequests"/> is a resent LEVEL and asking the
+    /// plugin to re-fire the SAME trigger every tick forever would run its OnEnter script every
+    /// tick forever (a trigger's OnEnter has no engine one-shot flag to fall back on).
+    /// </summary>
+    private IReadOnlyList<TriggerFireRequest> PumpNativeTriggerFires(in PlayerState local)
+    {
+        if (IsFallbackModuleName(local.Module))
+        {
+            return [];
+        }
+
+        IReadOnlyList<uint> ownNativeFires = bridge.ReadNativeFiredTriggers();
+        if (ownNativeFires.Count > 0)
+        {
+            session.PublishNativeTriggerFires(local.Module, ownNativeFires);
+        }
+
+        if (!string.Equals(_nativeFireHandledModule, local.Module, StringComparison.OrdinalIgnoreCase))
+        {
+            _nativeFireHandledModule = local.Module;
+            _nativeFireHandledIds.Clear();
+        }
+
+        IReadOnlyList<TriggerFireRequest> known = session.GetNativeTriggerFireRequests(local.Module);
+        if (known.Count == 0)
+        {
+            return [];
+        }
+
+        List<TriggerFireRequest> fresh = new(known.Count);
+        foreach (TriggerFireRequest request in known)
+        {
+            // Peer 0 never names a real peer (see TriggerRelayPacket's own doc comment); my
+            // own origin means my own engine already ran this for real — nothing to relay to
+            // myself.
+            if (request.PeerId == 0 || request.PeerId == session.LocalPeerId)
+            {
+                continue;
+            }
+
+            if (!_nativeFireHandledIds.Add(request.TriggerId))
+            {
+                continue;
+            }
+
+            fresh.Add(request);
+        }
+
+        return fresh;
+    }
+
+    private string _nativeFireHandledModule = string.Empty;
+    private readonly HashSet<uint> _nativeFireHandledIds = [];
+    private int _nativeTriggerRequestsLogged;
 
     private bool _triggerRequestsOutstanding;
 

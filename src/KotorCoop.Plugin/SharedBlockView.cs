@@ -712,6 +712,21 @@ internal sealed unsafe class SharedBlockView(byte* baseAddress)
         set => *U32(SharedBlock.OffsetTriggerStatus) = value;
     }
 
+    /// <summary>Plugin -&gt; agent, protocol 36: publishes the generic triggers THIS instance's
+    /// own engine has natively fired for its own real character. Same payload-then-key
+    /// ordering as <see cref="SetTriggersInside"/>.</summary>
+    public void SetTriggerNativeFired(ReadOnlySpan<uint> ids, uint serial)
+    {
+        int count = Math.Min(ids.Length, SharedBlock.TriggerNativeFiredCapacity);
+        for (int i = 0; i < count; i++)
+        {
+            *U32(SharedBlock.OffsetTriggerNativeFired + (i * 4)) = ids[i];
+        }
+
+        *U32(SharedBlock.OffsetTriggerNativeFiredSerial) = serial;
+        *U32(SharedBlock.OffsetTriggerNativeFiredCount) = (uint)count;
+    }
+
     /// <summary>Cumulative damage this player owes for hits their phantom took elsewhere.</summary>
     public uint IncomingDamage => *U32(SharedBlock.OffsetIncomingDamage);
 

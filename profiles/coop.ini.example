@@ -157,17 +157,25 @@ client_door_refusal=1
 transition_announce=1
 
 # Be pulled into a conversation another player starts, instead of clicking the same NPC to
-# join. OFF, and read both reasons before turning it on.
-#   * It is the behaviour that was removed once already: players were yanked out of whatever
-#     they were doing from anywhere in the module. Joining is a click because walking away
-#     while your partner talks to a shopkeeper is a legitimate thing to want.
-#   * A conversation that recruits or dismisses a companion calls AddPartyMember /
-#     RemovePartyMember. Those now HAVE a channel (party_roster_sync above), which reconciles
-#     the party seat afterwards - but recruitment itself still does not replicate, so a player
-#     driven into a recruitment conversation whose scripts do not run to the end here can be
-#     left without the companion the other instance has. Better than before; not yet settled.
-# Ordinary conversation is fine. Recruitment is still the case to test.
-force_dialogue_party=0
+# join - the seamless successor to the old force_dialogue_party flag (which shipped OFF; see
+# docs/research/shared-state-audit.md's "force_dialogue_party, and why it is OFF" for why).
+# Three settings:
+#   near   (default) - auto-join only when already within dialogue_auto_join_range of the
+#          conversation's NPC, and not in combat, a minigame, or a conversation of your own.
+#          Too far (or busy) shows a "walk over to join" notice instead of doing nothing.
+#   always - auto-join regardless of distance; dialogue_join_teleport (below) covers the gap,
+#          the same way a distant click already does.
+#   off    - the old click-only behaviour.
+# Both reasons the old flag stayed off are addressed: "yanked from anywhere in the module" is
+# what `near`'s range gate exists to prevent, and recruitment/dismissal conversations now have a
+# roster channel (dialogue_recruit_sync below) the old flag's own note found missing. Runs
+# symmetrically on every peer - whichever side is NOT talking decides for itself whether to
+# join, using only its own distance/combat/minigame state, regardless of who started it.
+dialogue_auto_join=near
+
+# The range (game units) dialogue_auto_join=near auto-joins within. Beyond it, the walk-over
+# notice shows instead. Not consulted under always or off.
+dialogue_auto_join_range=20
 
 # A reward node's SCRIPT only ever runs on the conversation OWNER's instance - the spectator
 # never calls HandleReply, so an item the script places into the speaker's inventory (the
@@ -194,7 +202,7 @@ dialogue_item_sync=1
 dialogue_fast_join=0
 
 # The DISTANCE half of the join-latency report, not the cadence half above: a joiner who is not
-# already standing near the NPC when they join (force_dialogue_party's automatic join, or the
+# already standing near the NPC when they join (dialogue_auto_join's automatic join, or the
 # test hook) never reaches the engine's own StartDialog at all in this build, because the player
 # character is drive-controlled rather than walked by the action queue - so the request just
 # sits, silently, until this instance's own 15 s join grace gives up on it. See

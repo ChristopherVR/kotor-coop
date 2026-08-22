@@ -1,4 +1,6 @@
-﻿namespace KotorCoop.Plugin;
+﻿using KotorCoop.Protocol;
+
+namespace KotorCoop.Plugin;
 
 /// <summary>
 /// Both halves of the per-object interaction lock.
@@ -26,23 +28,31 @@ internal sealed unsafe class InteractionLockController(SharedBlockView block)
 
     /// <summary>
     /// Pull this player into a conversation another player has started with an NPC, instead of
-    /// waiting for them to click the same NPC themselves.
+    /// waiting for them to click the same NPC themselves — the seamless version of what
+    /// <c>force_dialogue_party</c> used to gate (docs/research/shared-state-audit.md's
+    /// "force_dialogue_party, and why it is OFF").
     ///
-    /// ⚠ DEFAULT OFF, and it should stay off until two things are settled.
-    ///
-    /// First, it is the behaviour that was already removed once. An earlier build opened the
-    /// peer's conversation by itself and players were yanked out of what they were doing from
-    /// anywhere in the module; joining became a click precisely because walking away while
-    /// your partner talks to a shopkeeper is a legitimate thing to want.
-    ///
-    /// Second, and unresolved: a conversation that RECRUITS or DISMISSES a companion calls
-    /// AddPartyMember / RemovePartyMember, and those have no channel in this mod at all. A
-    /// player driven into a recruitment conversation by this flag ends it with a party roster
-    /// the other instance does not share, and the roster is what the companion channel keys
-    /// on. Turning this on for ordinary conversation is fine; turning it on and then walking
-    /// into Trask's recruitment is not.
+    /// That flag shipped OFF for two reasons. First, it is the behaviour that was already
+    /// removed once: an earlier build opened the peer's conversation unconditionally and
+    /// players were yanked out of what they were doing from anywhere in the module — walking
+    /// away while your partner talks to a shopkeeper is a legitimate thing to want, so joining
+    /// became a click. <see cref="DialogueAutoJoinMode.Near"/> (the default here) answers that
+    /// directly: only auto-join when already close enough that being pulled in does not feel
+    /// like a teleport, and show the walk-over notice otherwise
+    /// (<see cref="_farNoticeUntilMs"/>). Second, and now resolved: a recruitment/dismissal
+    /// conversation's <c>AddPartyMember</c>/<c>RemovePartyMember</c> now HAS a channel
+    /// (<c>PartyRosterController</c>, <c>dialogue_recruit_sync</c>) — the gap that made turning
+    /// the old flag on unsafe for Trask's recruitment specifically no longer exists.
     /// </summary>
-    private readonly bool _forceDialogue = PluginConfig.ReadBool("force_dialogue_party", false);
+    private readonly DialogueAutoJoinMode _autoJoinMode =
+        DialogueAutoJoinRule.ParseMode(PluginConfig.Read("dialogue_auto_join"));
+
+    /// <summary><c>dialogue_auto_join_range</c> (default 20 game units) — only meaningful
+    /// under <see cref="DialogueAutoJoinMode.Near"/>. <c>dialogue_join_teleport</c> (a separate,
+    /// smaller, engine-verified 10-unit gate — docs/research/dialogue-join-latency.md) still
+    /// handles the actual walk/snap once a join is decided; this is purely the "does being
+    /// auto-joined feel reasonable from here" threshold.</summary>
+    private readonly float _autoJoinRange = PluginConfig.ReadFloat("dialogue_auto_join_range", 20f);
 
     /// <summary>Pause between attempts to be pulled into a peer's conversation. The open is a
     /// server round trip that walks the player into range first, so retrying faster than this
@@ -91,6 +101,7 @@ internal sealed unsafe class InteractionLockController(SharedBlockView block)
         block.LocalInteractionActive = false;
         block.LocalInteractionKind = 0;
         _heldLogged = -1;
+        _farNoticeUntilMs = 0;
     }
 
     /// <summary>
@@ -119,6 +130,10 @@ internal sealed unsafe class InteractionLockController(SharedBlockView block)
         }
 
         PublishLocalClaim();
+
+        // Drawn every frame, independent of ApplyPeerLocks's throttle — a notice that only
+        // repaints once every ten frames flickers.
+        DrawFarNotice();
 
         if (_countdown > 0)
         {
@@ -207,7 +222,7 @@ internal sealed unsafe class InteractionLockController(SharedBlockView block)
                 held++;
             }
 
-            TryForceOpen(entry, tag);
+            TryForceOpen(entry, tag, creature);
         }
 
         // ⚠ The COUNT is what says the channel works; the HELD count does not.
@@ -230,24 +245,78 @@ internal sealed unsafe class InteractionLockController(SharedBlockView block)
 
     /// <summary>
     /// Asks the engine to open the conversation a peer is holding this NPC for, so both
-    /// players are in it without the second one having to click.
+    /// players are in it without the second one having to click — <c>dialogue_auto_join</c>'s
+    /// live half. The decision itself is <see cref="DialogueAutoJoinRule.ShouldAutoJoin"/>
+    /// (pure, tested); everything here is only gathering the facts that rule needs from the
+    /// live world and acting on its answer.
     ///
-    /// Nothing here forces anything by itself: it sends the same request a click sends. The
-    /// dialogue gate lets it through because the target IS the peer's partner, the engine
-    /// opens the same conversation locally, and DialogueSpectateController's adopt path turns
-    /// it into a follow — the identical route a real click takes. That is deliberate: a
-    /// second way into a conversation would be a second thing to keep working.
+    /// Nothing here forces anything by itself: on a join, it sends the exact same request a
+    /// click sends. The dialogue gate lets it through because the target IS the peer's
+    /// partner, the engine opens the same conversation locally, and
+    /// DialogueSpectateController's adopt path turns it into a follow — the identical route a
+    /// real click takes. That is deliberate: a second way into a conversation would be a
+    /// second thing to keep working.
+    ///
+    /// Symmetric by construction: this runs identically on every peer (see
+    /// <see cref="DialogueAutoJoinRule"/>'s own header), so a host deciding whether to join a
+    /// CLIENT's conversation and a client deciding whether to join the HOST's run the exact
+    /// same code with no branch on which side started it.
     /// </summary>
-    private void TryForceOpen(byte* entry, byte* tag)
+    private void TryForceOpen(byte* entry, byte* tag, nint partnerCreature)
     {
-        if (!_forceDialogue || *(uint*)(entry + 4) != InteractionKindConversation)
+        if (_autoJoinMode == DialogueAutoJoinMode.Off
+            || *(uint*)(entry + 4) != InteractionKindConversation)
         {
             return;
         }
 
         // Already talking to somebody — including, most of the time, this very conversation.
-        if (Odyssey.IsConversationActive)
+        bool localAlreadyInConversation = Odyssey.IsConversationActive;
+
+        int length = 0;
+        while (length < SharedBlock.InteractionLockTagLength - 1 && tag[length] != 0)
         {
+            length++;
+        }
+
+        if (length == 0)
+        {
+            return;
+        }
+
+        float distance = float.PositiveInfinity;
+        nint player = Odyssey.GetPlayerCreaturePointer();
+        if (player != 0 && partnerCreature != 0)
+        {
+            Vec3 a = Odyssey.GetPosition(player);
+            Vec3 b = Odyssey.GetPosition(partnerCreature);
+            float dx = a.X - b.X;
+            float dy = a.Y - b.Y;
+            float dz = a.Z - b.Z;
+            distance = MathF.Sqrt((dx * dx) + (dy * dy) + (dz * dz));
+        }
+
+        bool shouldJoin = DialogueAutoJoinRule.ShouldAutoJoin(
+            _autoJoinMode,
+            localAlreadyInConversation,
+            Odyssey.IsPlayerInCombat,
+            MinigameController.LocalInMinigame,
+            distance,
+            _autoJoinRange);
+
+        if (!shouldJoin)
+        {
+            // "Too far, but otherwise would have joined" is the ONLY case worth telling the
+            // player about — not already-in-a-conversation (they already know), not
+            // combat/minigame (the screen already says so). Near-mode's whole reason to exist
+            // is exactly this notice: the player is not stuck, they can walk over.
+            if (_autoJoinMode == DialogueAutoJoinMode.Near
+                && !localAlreadyInConversation && !Odyssey.IsPlayerInCombat
+                && !MinigameController.LocalInMinigame && float.IsFinite(distance))
+            {
+                _farNoticeUntilMs = Environment.TickCount64 + FarNoticeDurationMs;
+            }
+
             return;
         }
 
@@ -259,16 +328,40 @@ internal sealed unsafe class InteractionLockController(SharedBlockView block)
 
         _nextForceOpenMs = now + ForceOpenRetryMs;
 
-        int length = 0;
-        while (length < SharedBlock.InteractionLockTagLength - 1 && tag[length] != 0)
+        if (Odyssey.StartDialogueWith(new ReadOnlySpan<byte>(tag, length)))
         {
-            length++;
+            PluginHost.Log("interaction: auto-joining a peer's conversation with "
+                + $"'{System.Text.Encoding.ASCII.GetString(tag, length)}' (dialogue_auto_join={_autoJoinMode})");
+        }
+    }
+
+    /// <summary>How long the "walk over to join" notice stays on screen after being triggered
+    /// — long enough to read, short enough not to linger once the player has moved on.</summary>
+    private const long FarNoticeDurationMs = 3000;
+
+    private long _farNoticeUntilMs;
+
+    private static readonly byte[] FarNotice =
+        "A peer is talking nearby - walk over to join"u8.ToArray();
+
+    /// <summary>Draws the walk-over notice while it is live. Reuses the queued text path every
+    /// other on-screen line in this codebase does (<see cref="Odyssey.PostTextLine"/>) — see
+    /// docs/research/text-render-queued.md.
+    ///
+    /// Row 6, deliberately: <see cref="DialogueSpectateController"/>'s own "click to join"
+    /// notice sits at (8, 4) and <c>AgentLivenessController</c>'s stale-agent message sits at
+    /// (3, 5) — same row, different column, close enough that a long AgentLiveness message
+    /// could run into this one if both shared a row. Row 6 clears both.</summary>
+    private void DrawFarNotice()
+    {
+        if (Environment.TickCount64 >= _farNoticeUntilMs)
+        {
+            return;
         }
 
-        if (length > 0 && Odyssey.StartDialogueWith(new ReadOnlySpan<byte>(tag, length)))
+        fixed (byte* p = FarNotice)
         {
-            PluginHost.Log("interaction: joining a peer's conversation with "
-                + $"'{System.Text.Encoding.ASCII.GetString(tag, length)}' (force_dialogue_party)");
+            Odyssey.PostTextLine(p, 8, 6, 0.5f);
         }
     }
 
