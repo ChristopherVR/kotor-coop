@@ -9117,9 +9117,45 @@ internal static unsafe class Odyssey
                 // Its interpolation-step and rate side effects are overwritten by this same
                 // function's unconditional position (above) and rate (below) writes before the
                 // next frame ever reads them.
+                // ROUND 62: the budget arg matters more than "some sane float" — static
+                // disassembly of 0x00611F50 (docs/research/phantom-locomotion.md §9.1) shows
+                // the RUNNING branch (AnimationRunning(want)==true) only reaches the real,
+                // classifier-approved "play by name" step when budget < 0.5 (fcomp against the
+                // constant at 0x0073E9AC, verified live-read as 0.5f). Any budget >= 0.5 —
+                // which is exactly what creature+0xD8 (ObjAnimationBudget) reads live, ~1.0,
+                // per round 60's own measurement — permanently diverts to the
+                // "RunLooksAwful"-branched fallback, which has its own further gates (the
+                // animBase+0xCC flag this same call computes from a SEPARATE, twin+0x210-keyed
+                // comparison) that do not reliably resolve for a body this handler has never
+                // driven before. WALK has no such gate at all (AnimationWalking's branch falls
+                // straight into the shared play tail unconditionally) — this asymmetry is
+                // exactly why round 61 measured walk partially working and run almost never.
+                // We call this handler every step to look like a continuously-moving creature,
+                // not a fresh onset — 0f is the semantically-correct "still moving, not a new
+                // blend" budget for that, and it is what TwinDesiredPositionBudget already uses
+                // for the same reason. Deliberately NOT reusing ObjAnimationBudget here — this
+                // call's budget is unrelated to what TwinAnimationSyncSlot passes below, which
+                // never reaches this gate (see TwinAnimationSyncSlot's doc, round 61 §8.1).
                 var syncPosition =
                     (delegate* unmanaged[Thiscall]<nint, Vec3*, uint, float, void>)(*(nint*)(*(nint*)twin + TwinPositionSyncSlot));
-                syncPosition(twin, &position, (uint)want, *(float*)(creature + ObjAnimationBudget));
+
+                // ROUND 62 DIAGNOSTIC (capped): does THIS call's own write to twin+0x48 stick
+                // for even one instant, or does it never take effect at all? Distinguishes
+                // "the play step never fires" from "it fires and something else reverts it
+                // before the next sample" — see phantom-locomotion.md §9.3.
+                bool diag = moving && _syncPositionDiagLogged < 60;
+                ushort before = diag ? *(ushort*)(twin + TwinCurrentAnimation) : (ushort)0;
+
+                syncPosition(twin, &position, (uint)want, TwinPositionSyncBudget);
+
+                if (diag)
+                {
+                    _syncPositionDiagLogged++;
+                    ushort after = *(ushort*)(twin + TwinCurrentAnimation);
+                    PluginHost.Log(
+                        $"sync12c: want 0x{want:X} run={run} before=0x{before:X} "
+                        + $"after=0x{after:X} budget={TwinPositionSyncBudget:F2}");
+                }
 
                 if (GaitChanged(creature, want))
                 {
@@ -9232,6 +9268,9 @@ internal static unsafe class Odyssey
     /// prints a handful of samples across process lifetime, not once per gait change.</summary>
     private static int _gaitClassLogged;
 
+    /// <summary>Caps the round-62 "sync12c" before/after diagnostic (see DriveBody).</summary>
+    private static int _syncPositionDiagLogged;
+
     /// <summary>Last gait asserted per driven creature, so the twin call fires on change
     /// only. Fixed slots rather than a dictionary: at most 8 phantoms plus 32 mirrored
     /// enemies exist, and this runs on the game's frame hook where allocation is unwelcome.</summary>
@@ -9323,6 +9362,15 @@ internal static unsafe class Odyssey
     /// gait (see docs/research/phantom-locomotion.md round 61).
     /// </summary>
     private const int TwinPositionSyncSlot = 0x12C;
+
+    /// <summary>
+    /// ROUND 62: the budget passed to <see cref="TwinPositionSyncSlot"/>'s call specifically —
+    /// NOT <see cref="ObjAnimationBudget"/> (which reads ~1.0 live and permanently fails the
+    /// run-branch's budget &lt; 0.5 gate at 0x0073E9AC, docs/research/phantom-locomotion.md
+    /// §9.1/§9.2). 0f matches every other "this is a snap/continuous update, not a fresh
+    /// blend" budget already used in this method (<see cref="TwinDesiredPositionBudget"/>).
+    /// </summary>
+    private const float TwinPositionSyncBudget = 0f;
 
     /// <summary>CSWSObject + this = float forwarded with the engine's animation sync.</summary>
     private const int ObjAnimationBudget = 0xD8;

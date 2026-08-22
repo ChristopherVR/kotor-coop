@@ -5976,6 +5976,51 @@ round investigates predates the claim) and replaced with an Honest Limitations e
 the real, partial state. Full evidence, the field diff table, live sample transcripts, and what
 a future pass should try next: `docs/research/phantom-locomotion.md` §8.
 
+### Round 62 (2026-08-22) — the run/walk asymmetry's exact gate found and closed; not
+sufficient, the deeper defect isolated one level further down
+
+Continuation of round 61, tasked specifically with the float-threshold gate round 61 left
+untraced (constant at `0x0073E9AC`, gating `ClientServerSyncHandler_Position`'s RUN-only "play
+nicely" branch). Full static disassembly this round (stack-depth hand-traced and cross-checked)
+identified it precisely: the gate compares the handler's own `budget` argument (arg4) against
+`0.5f` (live-read from the binary, `raw=0x3F000000`), taking the nicer formula only when
+`budget < 0.5`. `DriveBody` was passing `ObjAnimationBudget` (`creature+0xD8`), an engine field
+that reads `~1.0` live — `1.0` never satisfies `< 0.5`, so every RUN call permanently took the
+worse fallback formula while WALK (no such gate) did not. This precisely explains round 61's
+own walk-partially-works / run-almost-never asymmetry, from a verified constant rather than a
+guess.
+
+Fix: a new call-site-local constant, `TwinPositionSyncBudget = 0f`, passed to the `+0x12C` call
+specifically (not `ObjAnimationBudget`, which is untouched and still feeds the separate,
+already-proven-inert-for-gait `+0x134` call). Both plugin builds clean; `tests/KotorCoop.Tests`
+stayed at 1566/1566.
+
+**Live-measured, honestly: this does not fix the reported bug.** Two directions, 10 s walk + 10
+s run each: host→client phantom measured **99.4%** idle-while-moving (166 moving samples, 165
+idle), client→host phantom **81.2%** (117 moving, 95 idle) — not better than round 61's 64-89%
+range, arguably worse on one direction. Mirrored enemy was not independently sampled (time);
+the companion (Trask) stayed pinned by the party-follow AI for the whole test window and
+produced no usable movement samples.
+
+The round's real contribution is isolating the defect one level deeper than round 61 reached: a
+new capped diagnostic read `twin+0x48` immediately before and after the `+0x12C` call itself,
+for 60 samples on each instance (walk phase only — the cap exhausted before any run sample was
+captured). **`before == after` in 60/60, with zero exceptions** — the call never changes the
+rendered animation field synchronously, even though that same field visibly does change across
+separate calls a frame or more apart. This rules out "it plays correctly, then gets reverted
+within the step" and points at `CSWCAnimBase::SetAnimationInternal` (`animBase_vtable+0x54`,
+`0x0069EE10`, db-confirmed name) — reached unconditionally at the end of every branch inside
+`ClientServerSyncHandler_Position` — as either deferring its effect to a separate engine update
+pass, or gating internally on something this round did not decode. That function itself, not
+its caller, is the target for the next pass. Full input table, the live sample transcripts, and
+the before/after diagnostic evidence: `docs/research/phantom-locomotion.md` §9.
+
+`tests/KotorCoop.Tests` stayed at 1566/1566; both plugin builds clean across two
+rebuild/redeploy/live-test cycles; no crash observed. README's Honest Limitations entry for
+this bug was updated with round 62's numbers, not marked fixed — the walk/run bullet is not
+restored (all four cases were not clean; two of four were not even independently measured this
+round).
+
 ## 3. A client's XP is actively erased
 
 `ProgressionSnapshotPacket` is host→client only and absolute (CoopAgent.cs, `PumpProgression`):

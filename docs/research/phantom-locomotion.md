@@ -668,3 +668,135 @@ is the most likely place the run path specifically keeps failing; not confirmed 
 plugin builds (`src/KotorCoop.Plugin/build.ps1 -Install`) are clean for both GOG installs used
 by `tools/demo.ps1`. No crash was observed across four rebuild/redeploy/live-test cycles this
 round.
+
+---
+
+## 9. Round 62 — the run/walk asymmetry's exact gate found and closed; the deeper "does not
+stick" defect isolated to a specific engine call, not fixed
+
+Continuation of round 61 (§8), whose own "what remains" list named an untraced float
+threshold gate at `0x0073E9AC` as "the most likely place the run path specifically keeps
+failing." This round traced it to ground, closed it, and — being honest about the result —
+found that closing it does **not** bring the bug down anywhere near reliable.
+
+### 9.1 The `ClientServerSyncHandler_Position` (+0x12C) input table — VERIFIED
+
+Full static disassembly of `0x00611F50` this round (stack-depth traced by hand, cross-checked
+against the arg3/`animId` slot being reused as scratch at the SAME offset both at function
+entry and mid-function — the two independent readings agree, which is the check that the
+depth tracking itself is correct). Every input the RUN decision actually reads:
+
+| input | source | verified how |
+| --- | --- | --- |
+| `desiredPos` (arg2, `Vector*`) | caller | copied into `twin+0x1DC` unconditionally, first thing the function does |
+| `serverAnimId` (arg3) | caller | our own `want` (0x2710/0x2712/0x2714) |
+| `budget` (arg4, float) | caller | **the actual gate input, see below** |
+| `AnimationStationary(serverAnimId)` | `0x0063C170` | if true, function returns immediately — no play at all, confirmed by disassembling the early-out target (`0x006123D7`: plain `pop/pop/pop/ret 0xC`) |
+| `AnimationWalking(serverAnimId)` | `0x0063C240` | true → falls straight into the shared "play" tail (`0x00612071`) **unconditionally, no further gate** |
+| `AnimationRunning(serverAnimId)` | `0x0063C2A0` | true → runs the RunLooksAwful-flag update, THEN hits a **second, run-only gate** before it may reach the same shared tail |
+| `GetRunLooksAwfulRate(appearance)` | `0x006975D0` (`CSWCCreatureAppearance::GetRunLooksAwfulRate`, param_size=0) | compared against `twin+0x210` (an unidentified float, presumably a cached measured speed) to set `animBase+0xCC` |
+| the run-only gate: `budget < 0.5f` | `fcomp` against the constant at `0x0073E9AC`, live-read from the binary this round: **`0.5f` exactly** (`raw=0x3F000000`) | `fld [arg4]; fcomp [0x73E9AC]; fnstsw ax; test ah,5; jp 0x612238` — `jp` (branch to the RunLooksAwful fallback) is taken for `budget > 0.5`, `budget == 0.5`, AND unordered (NaN); it is NOT taken (i.e. the "nice run" formula is used) only for `budget < 0.5`, strictly |
+| `ebx == 0x2714` (exact id) | `cmp ebx,0x2714; jne 0x612238` | a second, redundant-looking check right after the budget gate — belt-and-suspenders on the same branch |
+| appearance.2da row (`appearance+0x18`) × column (cached in globals `0x7A212C` walk / `0x7A2120` run) | `C2DA::GetFLOATEntry` (`0x00413350`) | both walk and run-prep always do this lookup before the tail |
+| `GetCurrentAnimation()`/`GetAnimationLength()` | `0x0063C060`/`0x0063C0E0` | used to scale the final playback rate; a validity check compares the 2DA rate and the anim length against `0.0` (constant `0x0073D700`) before dividing, zeroing the rate rather than crashing if either is non-positive |
+| the actual "play" call | `animBase_vtable+0x54` → **`CSWCAnimBase::SetAnimationInternal`** (`0x0069EE10`, `db`-confirmed name, `__thiscall`, 20 bytes of stack args = 5 dwords) | reached unconditionally at the end of EVERY branch (nice-run, awful-run, and walk) — the function never silently skips this call once it gets past the early `AnimationStationary` check |
+
+`ObjAnimationBudget` (`creature+0xD8`, what `DriveBody` was passing as `budget` before this
+round) reads **~1.0 live** (round 60's own measurement, reconfirmed structurally this round —
+it is a plain pass-through of an engine field we never write). **1.0 is not less than 0.5.**
+Every single call into the RUN branch therefore permanently took the RunLooksAwful fallback,
+never the "nice run" formula — a structural, 100%-reproducible asymmetry, not a race. WALK has
+no budget gate anywhere in its path. This precisely explains round 61's own observation that
+walk partially worked while run almost never did, and does so from a verified constant, not a
+guess.
+
+### 9.2 The fix: a call-site-local budget, not the engine's
+
+`Odyssey.DriveBody` (`src/KotorCoop.Plugin/Odyssey.cs`) now passes a new constant,
+`TwinPositionSyncBudget = 0f`, to the `+0x12C` call specifically — **not**
+`ObjAnimationBudget`, which is untouched and still used for the separate `+0x134` call below it
+(proven in round 61 §8.1 never to reach this gate at all, so changing it there would be a no-op
+either way). `0f` satisfies `budget < 0.5` unconditionally, and is the same "this is a
+continuous update, not a fresh onset" semantics already used for
+`TwinDesiredPositionBudget`/`TwinDesiredPosition`'s own budget=0 "snap" write two lines above
+it. Nothing else in the traced RUN path re-reads the budget value after the gate (confirmed —
+`[esp+0x34]`'s slot is not loaded again on the taken branch), so this is a pure gate flip, not
+a scaling change.
+
+Both plugin builds clean; `dotnet test tests/KotorCoop.Tests` stayed at **1566/1566** before and
+after.
+
+### 9.3 The fix does NOT bring the bug down to acceptable — live-measured, and root-caused one
+level deeper than round 61 reached
+
+Live rig, this round's `movepc2.ps1`/`gaitsample.ps1` (reused unmodified from round 61's scratch
+tooling — the plugin's `SharedBlock.OffsetEnginePlayerPointer` for the mover, the plugin's own
+`"spawned phantom … at 0xADDR"` log line for the sample target, per round 60 §7.1's tooling-trap
+finding; **not** a vtable scan), 10 s walk (1.6 u/s) + 10 s run (3.96 u/s), both directions:
+
+| case | moving samples | idle-while-moving | fraction |
+| --- | --- | --- | --- |
+| host→client phantom | 166 | 165 | **99.4%** |
+| client→host phantom | 117 | 95 | **81.2%** |
+| mirrored enemy | not independently sampled this round (time) — shares the identical `DriveBody` code path by construction, same as round 61 left it | — | — |
+| companion (Trask, `end_trask`, id `0x127`) | the companion stayed pinned at a near-fixed offset for the entire 20 s window (`party drive: companion 0x127 held neutral and pinned — the host owns its health`) regardless of the host's own sustained movement — only 1 of ~90 samples showed it moving at all, an artifact of the party-follow AI, not this bug. Not a valid movement sample this round. | — | — |
+
+**This is not an improvement over round 61's 64-89% range — if anything, this specific run
+measured worse.** The budget-gate fix is real and verified (§9.1/§9.2), but it was necessary,
+not sufficient: it only controls which FORMULA `ClientServerSyncHandler_Position` uses to
+compute the play call's arguments. It does not control whether that play call's effect is
+actually visible.
+
+**New finding this round, isolating the defect one level deeper.** A capped (60-sample),
+call-site diagnostic was added around the `+0x12C` call: read `twin+0x48` immediately before
+the call, call it, read `twin+0x48` immediately after. Live result: **`before == after` in
+60/60 samples, on both instances, with zero exceptions** — the call never changes `twin+0x48`
+synchronously, ever, even though the SAME field visibly does change across separate calls a
+frame or more apart (the sporadic non-idle reads noted in round 61 and reproduced again this
+round: `0x27A3`, `0x27A8`, occasional correct `0x2712`). This rules out round 61's implicit
+model ("it plays, then something reverts it within the same step") — the 60-sample cap was
+exhausted during the WALK phase before any RUN sample was captured, so this specific
+before/after result is confirmed for the WALK branch only; RUN was not independently
+re-verified with the diagnostic this round (NEEDS-LIVE).
+
+What this means: `SetAnimationInternal` (`animBase_vtable+0x54`, `0x0069EE10`,
+`db`-confirmed as `CSWCAnimBase::SetAnimationInternal`, 5 stack dwords) either queues its
+effect for a later, separate engine update pass rather than applying it inline, or has its own
+internal gate (an "already playing"/dedup check, a `Gob` visibility precondition, or something
+keyed on the 5 args this round did not individually decode) that silently no-ops most calls.
+Whichever it is, it is downstream of everything `ClientServerSyncHandler_Position` computes,
+and is the actual place a future round needs to disassemble next — `SetAnimationInternal`
+itself, not its caller.
+
+### 9.4 Cost
+
+No controlled with/without A/B was run this round (would need a second build with the `+0x12C`
+call compiled out, and time did not allow it — same limitation round 61 left open). A relative
+signal only: `tools/pluginstate.ps1`'s frame counter, sampled on both instances while the
+phantom was actively moving (walk+run, the call firing every step for the one live phantom on
+each side), showed no stall or frame-counter freeze — both instances kept advancing at a normal
+rate for an unfocused/background window throughout the test. This is the same "no user-visible
+slowdown observed, heavier module not tried" caveat round 61 already recorded; still true, still
+not a real measurement.
+
+### 9.5 What remains (NEEDS-LIVE, not closed this round)
+
+- **`SetAnimationInternal` itself.** The actual next step: disassemble `0x0069EE10` (or
+  single-step it live) to find why its effect on `twin+0x48` is not synchronous and not
+  reliable — this is now a precisely-scoped target instead of "somewhere in the chain."
+- **RUN-specific verification of the before/after diagnostic.** The 60-sample cap exhausted
+  during walk; re-run with a higher cap or a run-only trigger to confirm the "never synchronous"
+  finding also holds for the run branch's "nice" sub-path (now reachable thanks to §9.2's fix).
+- **Mirrored enemy**, independently sampled (shares the code path by construction; not
+  independently measured two rounds running now).
+- **Companion/Trask**, with an actual moving companion — this round's rig had it pinned by the
+  party-follow logic for the whole window, not a fault of the gait mechanism being tested.
+- **Cost**, a real with/without A/B build.
+
+### 9.6 What did NOT regress
+
+`tests/KotorCoop.Tests` stayed at 1566/1566 passing before and after. Both plugin builds
+(`src/KotorCoop.Plugin/build.ps1 -Install`) clean for both GOG installs `tools/demo.ps1` uses.
+No crash observed across two rebuild/redeploy/live-test cycles this round. `ObjAnimationBudget`
+and the `+0x134` call path are untouched — this round's change is scoped to the single new
+`TwinPositionSyncBudget` constant and its one call site, plus a capped, read-only diagnostic.

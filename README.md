@@ -667,12 +667,21 @@ tools/                   RE helpers, demo scripts, the kotor1_0_3 symbol databas
   own bad interpolation/rate side effects immediately overwritten by writes `DriveBody` already
   made, produces real, live-confirmed walk/run playback — proven by multiple live samples
   showing the twin's rendered animation actually leave idle and match server state for
-  multi-second stretches, something no prior pass achieved. But it is inconsistent: the same
-  live rig still measured 35-75% of moving samples showing idle depending on test conditions
-  (worse, not better, under smoother movement in one run), so the body still visibly slides
-  part of the time. Shipped anyway because it strictly improves on shipping nothing (no
-  regression in 1566 tests, no crash across four rebuild/redeploy/live-test cycles) and gives
-  the next pass a proven-correct mechanism to build on instead of a wrong one to un-learn. See
-  [docs/research/phantom-locomotion.md](docs/research/phantom-locomotion.md) §8 for the field
-  diff table, the disassembly evidence, and what a future pass should try next.
+  multi-second stretches, something no prior pass achieved. But it is inconsistent: live rigs
+  have measured 35-99% of moving samples showing idle depending on test conditions and
+  direction, so the body still visibly slides most of the time. **Round 62** traced and closed
+  the specific reason RUN was worse than WALK — `ClientServerSyncHandler_Position`'s run-only
+  branch gates on its `budget` argument being `< 0.5`, and `DriveBody` was passing an engine
+  field that reads `~1.0`, permanently failing the gate — but live-measured that fixing it does
+  not bring the bug down to acceptable (99.4% and 81.2% idle-while-moving on a 10s-walk +
+  10s-run test, both directions), and isolated the remaining defect one level deeper: a capped
+  diagnostic proved the handler's own "play" call (`CSWCAnimBase::SetAnimationInternal`) never
+  changes the rendered animation field synchronously, 60/60 samples, so whatever intermittently
+  does show a correct gait is coming from elsewhere/later, not from this call directly. Shipped
+  anyway because it strictly improves on shipping nothing (no regression in 1566 tests, no
+  crash across six rebuild/redeploy/live-test cycles across both rounds) and narrows the next
+  pass's target to a single, precisely-named function instead of a whole call chain. See
+  [docs/research/phantom-locomotion.md](docs/research/phantom-locomotion.md) §8-§9 for the
+  field diff table, the disassembly evidence, the exact gate, and what a future pass should try
+  next.
 - KOTOR 2 is untouched, and only GOG v1.0.3 addresses are known.
