@@ -9267,6 +9267,46 @@ internal static unsafe class Odyssey
                 // for the same reason. Deliberately NOT reusing ObjAnimationBudget here — this
                 // call's budget is unrelated to what TwinAnimationSyncSlot passes below, which
                 // never reaches this gate (see TwinAnimationSyncSlot's doc, round 61 §8.1).
+                // ROUND 65 FIX: neutralise CSWCCreature::AnimationUpdate's own per-frame
+                // re-assertion instead of racing it. Static disassembly this round
+                // (docs/research/phantom-locomotion.md §12) found the exact re-asserter: every
+                // AIUpdate tick that does NOT dispatch to DriveAnimationUpdate/
+                // FollowAnimationUpdate (neither applies to a directly-driven phantom/mirrored
+                // enemy — no drive flag, no follow target) instead calls the DEFAULT
+                // AnimationUpdate (0x0061A980), which — whenever twin+0x48 (TwinCurrentAnimation)
+                // is NOT already AnimationStationary — calls CSWCObject::SetAnimation
+                // (vtable+0x9C) with whatever id GetLoopingAnimation() (0x0063C100, verified a
+                // one-line `return this->+0x58`) returns, UNCONDITIONALLY, every single frame.
+                // twin+0x58 is the symbol db's own `looping_animation` field
+                // (tools/kotor1_0_3.db: CSWCObject+0x058, ushort) and nothing in this codebase
+                // (or, per round 61's own disassembly of TwinAnimationSyncSlot's target, anything
+                // reachable for gait ids AT ALL) ever seeds it with 0x2712/0x2714 — it sits at
+                // whatever idle/pause id it last legitimately held. So every frame our own
+                // TwinPositionSyncSlot call below (or, rarely, some other path) manages to paint
+                // a real walk/run id onto twin+0x48, THIS SAME OR THE VERY NEXT AnimationUpdate
+                // tick reads the stale idle value out of twin+0x58 and reapplies it — and that
+                // reassertion succeeds (unlike a direct walk/run write) because
+                // CSWCObject::SetAnimation gates on AnimationLooping(id), and idle/pause rows
+                // ARE Looping=1 (animations.2da row 6 "pause1": looping=1) while walkSS/runSS are
+                // not (round 62's own finding) — the SAME structural rejection that permanently
+                // blocks a direct walk/run write through this path is, in reverse, exactly what
+                // lets a STALE idle value win the reassertion every time.
+                //
+                // The fix: keep twin+0x58 in sync with our own intended gait `want` every step,
+                // the same "every step, not gated" discipline TwinPositionSyncSlot already needed
+                // (see its own doc). Once twin+0x58 holds 0x2712/0x2714 instead of stale idle,
+                // AnimationUpdate's reassertion call becomes `SetAnimation(twin, walkSS/runSS,
+                // ...)` — which AnimationLooping structurally rejects, so the call bails WITHOUT
+                // touching twin+0x48 (round 61 §8.1's own disassembly: "false -> bail, twin+0x48/
+                // +0x58 untouched"). The re-asserter degrades from "guaranteed revert to idle"
+                // to "guaranteed no-op" for exactly the two ids this bug is about — a plain,
+                // verified-offset memory write, no new engine call, no risk to any other
+                // consumer of this field (round 65 xref of GetLoopingAnimation's 8 call sites:
+                // the other 7 are one-shot appearance/equip/network-update paths, not a per-frame
+                // decider, and this is the SAME field DriveBody already relies on AnimationLooping
+                // permanently rejecting for these two ids — see TwinAnimationSyncSlot's doc).
+                *(ushort*)(twin + TwinLoopingAnimation) = (ushort)want;
+
                 var syncPosition =
                     (delegate* unmanaged[Thiscall]<nint, Vec3*, uint, float, void>)(*(nint*)(*(nint*)twin + TwinPositionSyncSlot));
 
@@ -9541,6 +9581,19 @@ internal static unsafe class Odyssey
 
     /// <summary>CSWCObject + this = the animation actually being rendered (u16).</summary>
     private const int TwinCurrentAnimation = 0x48;
+
+    /// <summary>
+    /// ROUND 65: CSWCObject + this = <c>looping_animation</c> (u16), the symbol db's own field
+    /// name for tools/kotor1_0_3.db's CSWCObject offset table. This is exactly what
+    /// <c>CSWCObject::GetLoopingAnimation</c> (0x0063C100, verified live-disassembled this
+    /// round: <c>mov ax,[ecx+0x58]; ret</c>, a one-line getter of this field and nothing else)
+    /// returns, and it is what <c>CSWCCreature::AnimationUpdate</c>'s per-frame re-assertion
+    /// reads and reapplies via <c>SetAnimation</c> (vtable +0x9C) whenever
+    /// <see cref="TwinCurrentAnimation"/> is not already "stationary" — see the write site in
+    /// <c>DriveBody</c> (just above <see cref="TwinPositionSyncSlot"/>'s call) for the full
+    /// mechanism, and docs/research/phantom-locomotion.md §12.
+    /// </summary>
+    private const int TwinLoopingAnimation = 0x58;
 
     /// <summary>
     /// CSWCObject vtable +0x134 = ClientServerSyncHandler_Animation(anim, budget) — the entry

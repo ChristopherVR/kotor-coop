@@ -14,16 +14,26 @@ Both players, each in their own full game:
 
 - **See each other** as a real engine creature ("phantom") wearing the other player's
   actual appearance, armor and weapons, with their name in the selection band, tracking
-  position at true walk/run speed on the real walkmesh. **Known bug, live-reproduced and
-  re-measured 2026-08-22 (round 64)**: the phantom's walk/run cycle mostly does not render —
-  it slides at the correct speed with the animation parked on idle, 96.8%/91.1% of moving
-  samples idle-while-moving on the two tested directions. Round 64 ground-truthed the leading
-  theory (that `GetAnimationName` silently substitutes idle's name for the gait ids) and found
-  it FALSE — the engine resolves a real, non-empty name (`walk`/`run`) for the phantom every
-  time — and fixed a real, separate gap along the way (the phantom's client-side model was
-  never told to reload after its appearance was set; it is now). Neither closed the actual
-  symptom: whatever plays a resolved name back is the open question. See `docs/research/
-  phantom-locomotion.md` §11 for the diagnostic, the fix, and what's still open.
+  position at true walk/run speed on the real walkmesh, **with a real walk/run cycle
+  instead of a slide — FIXED and live-verified 2026-08-22 (round 65), both directions,
+  0% idle-while-moving** (10s walk + 10s run, host→client and client→host, `tools/
+  phantomgait.ps1`-style sampling; baseline before this round was 91-99% idle-while-moving).
+  Five rounds (60-64) chased the wrong layer of the engine — the SERVER-side classifiers,
+  the `+0x12C`/`+0x134` sync handlers, `SetAnimationInternal`, `GetAnimationName` — all of
+  which turned out to work correctly. The real defect was on the RENDER side:
+  `CSWCCreature::AnimationUpdate`, the per-frame animation decider every driven body (no
+  drive flag, no follow target) runs through, re-asserts a STALE cached id
+  (`CSWCObject+0x58`, `looping_animation`, read by the one-line `GetLoopingAnimation`)
+  every single frame the rendered field isn't already idle — and because nothing ever
+  updated that cache to walk/run, the reassertion silently reverted a correct walk/run
+  render back to idle almost every frame. The fix keeps that cache in sync with the
+  intended gait each step; `animations.2da`'s own schema (walk/run are never `Looping`)
+  turns the reassertion into a guaranteed no-op instead of a guaranteed revert. A mirrored
+  enemy and companion share the identical `DriveBody`/`AnimationUpdate` code path by
+  construction but were not independently re-measured this round (the test save's hostile
+  pack turned out to be stationary guards, not patrollers, and its party roster carries no
+  companion). See `docs/research/phantom-locomotion.md` §12 for the caller table, the
+  static disassembly, and the live fractions.
 - **Travel together, either player leading**: whoever crosses into another area first,
   the other follows immediately through the engine's own module-transition path (the same
   machinery the built-in `warp` cheat uses) — an announce fires the instant the leader's
@@ -658,37 +668,41 @@ tools/                   RE helpers, demo scripts, the kotor1_0_3 symbol databas
   local player's own creature — mirrored enemies, mirrored companions and a peer's phantom only —
   so there is no "PC held" mechanism to fix. See
   [docs/research/shared-state-audit.md](docs/research/shared-state-audit.md) §2, round 58.
-- **A driven body's walk/run animation is unreliable — root-caused this round, partially
-  fixed, not resolved.** A peer's phantom (and, by the same shared `DriveBody` path, a
-  mirrored enemy or companion under direct drive) tracks position at the right speed, but its
-  rendered animation can still show idle while it moves — the reported "slides instead of
-  walking" bug. Two prior passes misdiagnosed the mechanism (round 60 blamed the wrong
-  classifier function). This round found the real one: the client twin's walk/run animation is
-  only ever resolved and played by `CSWCCreature::ClientServerSyncHandler_Position` (vtable
-  `+0x12C`, the POSITION sync handler) — never by the ANIMATION sync handler (`+0x134`) this
-  codebase has always used for gait — and `DriveBody` has always suppressed the position dirty
-  bit that would trigger it, to dodge a *different*, older bug (a zero playback rate from
-  `ComputeSpeedFactor` on a waypoint-less body). Calling `+0x12C` directly, with the engine's
-  own bad interpolation/rate side effects immediately overwritten by writes `DriveBody` already
-  made, produces real, live-confirmed walk/run playback — proven by multiple live samples
-  showing the twin's rendered animation actually leave idle and match server state for
-  multi-second stretches, something no prior pass achieved. But it is inconsistent: live rigs
-  have measured 35-99% of moving samples showing idle depending on test conditions and
-  direction, so the body still visibly slides most of the time. **Round 62** traced and closed
-  the specific reason RUN was worse than WALK — `ClientServerSyncHandler_Position`'s run-only
-  branch gates on its `budget` argument being `< 0.5`, and `DriveBody` was passing an engine
-  field that reads `~1.0`, permanently failing the gate — but live-measured that fixing it does
-  not bring the bug down to acceptable (99.4% and 81.2% idle-while-moving on a 10s-walk +
-  10s-run test, both directions), and isolated the remaining defect one level deeper: a capped
-  diagnostic proved the handler's own "play" call (`CSWCAnimBase::SetAnimationInternal`) never
-  changes the rendered animation field synchronously, 60/60 samples, so whatever intermittently
-  does show a correct gait is coming from elsewhere/later, not from this call directly. Shipped
-  anyway because it strictly improves on shipping nothing (no regression in 1566 tests, no
-  crash across six rebuild/redeploy/live-test cycles across both rounds) and narrows the next
-  pass's target to a single, precisely-named function instead of a whole call chain. See
-  [docs/research/phantom-locomotion.md](docs/research/phantom-locomotion.md) §8-§9 for the
-  field diff table, the disassembly evidence, the exact gate, and what a future pass should try
-  next.
+- ~~**A driven body's walk/run animation is unreliable.**~~ **FIXED and live-verified,
+  round 65 (2026-08-22), for a peer's phantom, both directions: 0% idle-while-moving** (was
+  91-99% before this round; see the top bullet). Six rounds (60-65) worked through the engine's
+  gait pipeline layer by layer — the server-side classifiers, the `+0x12C`/`+0x134` sync
+  handlers, the `budget<0.5` run-branch gate (round 62), `SetAnimationInternal`'s real address
+  and generic dispatch (round 63), `GetAnimationName`'s two-attempt name resolution and a real
+  client-side model-reload gap (round 64) — and every one of those layers turned out to be
+  working correctly once measured directly. **Round 65 found the actual re-asserter**: static
+  disassembly of `CSWCCreature::AIUpdate` (0x0061AD60) showed a directly-driven body (no drive
+  flag, no follow target — exactly what a phantom or mirrored enemy looks like to the engine)
+  always dispatches to the DEFAULT `CSWCCreature::AnimationUpdate` (0x0061A980), never to
+  `DriveAnimationUpdate`/`FollowAnimationUpdate`. That default path, every frame the rendered
+  field (`twin+0x48`) is not already `AnimationStationary`, calls `CSWCObject::SetAnimation`
+  (vtable `+0x9C`) with whatever `GetLoopingAnimation()` returns — a one-line getter
+  (`mov ax,[ecx+0x58]; ret`) of `CSWCObject+0x58` (the symbol db's own `looping_animation`
+  field). Nothing had ever written that field to a gait id (the one call that legitimately
+  could, `+0x134`, was proven dead for Walk/Run back in round 63 and is skipped for them), so
+  it always held a stale idle id — and `SetAnimation`'s own `AnimationLooping` gate lets an
+  idle/pause id through (animations.2da row 6 "pause1": `Looping=1`) while a genuinely correct
+  walk/run write from `+0x12C` (round 61's fix) got silently stomped back to idle on the very
+  next `AnimationUpdate` tick, because idle passes the gate and walk/run structurally never can
+  (row 338 "walkSS"/row 345 "runSS": `Looping=0`, round 62's own finding). **The fix**:
+  `DriveBody` now keeps `looping_animation` in sync with the intended gait id every step. Once
+  it holds `0x2712`/`0x2714` instead of stale idle, the SAME structural rejection that used to
+  block a direct gait write now blocks the *reassertion* instead — `AnimationLooping` rejects
+  it, `SetAnimation` bails without touching the render field, and the reassertion degrades from
+  "guaranteed revert to idle" to "guaranteed no-op." A plain, verified-offset memory write, no
+  new engine call. A mirrored enemy and companion share the identical `DriveBody`/
+  `AnimationUpdate` code path by construction, so the same fix applies to them, but neither was
+  independently re-measured this round: the test save's hostile pack (Black Vulkars,
+  `tar_m10aa`) turned out to be stationary guards that attack in place rather than chase, even
+  after real aggro and a native `tp` retreat, and this save's party roster carries no companion
+  (matches rounds 63-64's own finding). See
+  [docs/research/phantom-locomotion.md](docs/research/phantom-locomotion.md) §12 for the full
+  caller table, the disassembly, and the live fractions.
 - **A container/corpse a player has open now locks for everyone else — NOT yet live-verified
   (2026-08-22, protocol 37).** Before this, only the opener's own screen ever showed a chest's
   loot panel open, nothing closed it for the other player, and nothing stopped a second player

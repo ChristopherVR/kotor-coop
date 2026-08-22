@@ -62,6 +62,34 @@ mechanism already plays correctly. A direct call to the sync handler's own disas
 fallthrough target was tried live and did not fix it. Full writeup, sample transcripts, and
 what remains: `docs/research/phantom-locomotion.md` §7.
 
+### Round 65 (2026-08-22) — FIXED and live-verified: the per-frame re-asserter found statically
+(`CSWCCreature::AnimationUpdate` reapplying a stale `looping_animation` cache), closed with a
+one-field write, 0% idle-while-moving in both phantom directions
+
+Five rounds (60-64) exhaustively verified every layer of the engine's gait-request path (the
+classifiers, the `+0x12C`/`+0x134` sync handlers, the budget gate, `SetAnimationInternal`'s
+real address and dispatch, `GetAnimationName`'s name resolution) and found each one working
+correctly — the bug was never in the request. Round 65 found it downstream: static disassembly
+of `CSWCCreature::AIUpdate` showed a directly-driven body (a phantom or mirrored enemy — no
+drive flag, no follow target) always dispatches to the default `CSWCCreature::AnimationUpdate`,
+which, every frame the rendered field isn't already idle, reapplies whatever
+`CSWCObject+0x58` (`looping_animation`, the symbol db's own field name) holds via a gated
+`SetAnimation` call. Nothing had ever written that field to a gait id, so it always held stale
+idle — and idle passes the gate (`animations.2da` row 6 "pause1": `Looping=1`) while walk/run
+structurally never can (rows 338/345: `Looping=0`), so the reassertion silently won every time.
+The fix keeps `looping_animation` in sync with the driven gait each step (one `ushort` memory
+write, no new engine call); once it holds a walk/run id, the SAME `AnimationLooping` rejection
+that always blocked a direct gait write now blocks the *reassertion* instead, turning it from
+"guaranteed revert to idle" into "guaranteed no-op." Live-measured, host→client and
+client→host, 10s walk + 10s run: **0% idle-while-moving both directions** (132/132 and 122/122
+moving samples correctly rendered), against a round 62-64 baseline of 91.1%-99.4%. Mirrored
+enemy and companion share the identical `DriveBody`/`AnimationUpdate` code path by
+construction but were not independently re-measured this round — real aggro was triggered live
+on the `tar_m10aa` Black Vulkar pool (repeated real forwarded hits from six distinct attacker
+ids), but that specific pack turned out to be stationary point-defence guards that never
+chase, and this save's roster carries no companion. `dotnet test` stayed at 1591/1591; both
+plugin builds clean. Full writeup: `docs/research/phantom-locomotion.md` §12.
+
 ### Round 64 (2026-08-22) — the leading theory (idle-substitution) is falsified; a real, narrower
 client-side sync gap found and half-fixed; the render symptom itself still unexplained
 

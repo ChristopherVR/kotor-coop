@@ -1289,3 +1289,234 @@ net source change is `Odyssey.RebuildClientAppearance` (+ its 4 supporting const
 `Odyssey.ReadAnimationName`/`ReadResRef` (+ supporting consts/delegates), the `gait-name`
 diagnostic and its per-creature cap array, and the one call site in
 `PhantomController.ApplyAppearance`.
+
+---
+
+## 12. Round 65 — the re-asserter found statically, fixed with a one-field write, and
+live-verified at 0% idle-while-moving in both phantom directions
+
+Method per this round's brief: find the re-asserter STATICALLY first (disassembly, not
+another live guess), probe it live to confirm, then fix by satisfying the input the decider
+actually reads. All three steps completed; the phantom case is fully closed, live-measured.
+
+### 12.1 The caller table — VERIFIED (static disassembly + `tools/kotor1_0_3.db`)
+
+`CSWCCreature::AIUpdate` (0x0061AD60) is the per-frame dispatcher every driven creature's
+engine-side update passes through. Full disassembly this round (VERIFIED) shows it chooses
+between exactly three animation-decision paths, and a directly-driven body (a phantom or a
+mirrored enemy — no drive flag, no follow target) always lands on the third:
+
+| caller | dispatch condition (from `AIUpdate`, 0x0061AD60) | what it does |
+| --- | --- | --- |
+| `CSWCCreature::DriveAnimationUpdate` (0x00615960) | `[creature+0x3A8]==1` (a "drive mode" flag — the local player's own PC, per `IsDriveAnimationBlocked`/`0x60F0F0` and `CGuiInGame::IsInDialog`/`0x62DBD0` gating it further) | derives the gait from real client-side movement; not reached by a network twin |
+| `CSWCCreature::FollowAnimationUpdate` (0x00615E80) | `[creature+0x3A4]` (a follow-target pointer) resolves to a valid leader via `CSWSCreature::GetCurrentlyFollowingLeader` (0x4F7750) | derives the gait from the followed leader's own state; not reached by a phantom (no follow target) |
+| `CSWCCreature::AnimationUpdate` (0x0061A980) | the default, taken whenever neither of the above applies — **exactly a phantom or a mirrored enemy** | **the re-asserter** — see §12.2 |
+
+(`tools/q.py func '' CSWCCreature`, cross-checked address-by-address against a live
+disassembly of `AIUpdate`'s own dispatch logic at 0x61AF04-0x61AFDD.)
+
+### 12.2 `CSWCCreature::AnimationUpdate` (0x0061A980), the re-asserter — VERIFIED
+
+Full disassembly this round. The load-bearing block, 0x61AA27-0x61AA52:
+
+```
+0x61AA27  xor edx,edx
+0x61AA29  mov dx,[esi+0x48]        ; esi = this (the twin); +0x48 = TwinCurrentAnimation,
+                                    ;   the RENDERED field every prior round has sampled
+0x61AA30  call AnimationStationary(id)     ; 0x0063C170
+0x61AA35  test eax,eax
+0x61AA37  jne 0x61aa52             ; id IS stationary -> skip the block below entirely
+0x61AA39  call GetLoopingAnimation()       ; 0x0063C100, ecx=esi, NO stack args
+0x61AA40  mov edx,[esi]            ; esi's own CSWCObject vtable
+0x61AA44  movzx eax,ax             ; eax = GetLoopingAnimation()'s return, low 16 bits
+0x61AA49  push eax
+0x61AA4C  call [edx+0x9c]          ; CSWCObject::SetAnimation (0x0063E930, round 61 sec8.1's
+                                    ;   "the plain setter"), called with id=that return value
+```
+
+`GetLoopingAnimation` (0x0063C100) is a one-line getter, VERIFIED:
+
+```
+0x0063C100  mov ax,[ecx+0x58]
+0x0063C104  ret
+```
+
+`tools/kotor1_0_3.db`'s own offset table names `CSWCObject+0x058` **`looping_animation`**
+(ushort) — not inferred, read directly from the symbol db. `AnimationUpdate` reads this field
+and nothing else to decide what to reassert. Xref of `GetLoopingAnimation`'s 8 call sites
+(`tools/xrefs.py 0x63C100`, VERIFIED) confirms the other 7 (`SetAppearance`,
+`EquipToInventorySlot`, `AnimateFireAndForget`, two network handlers, and the identical
+`AnimationUpdate` sibling on `CSWCPlaceable`/`CSWCDoor`) are one-shot appearance/equip/network
+paths, not a second per-frame decider — this is the only per-frame consumer.
+
+**The mechanism, put together**: every `AIUpdate` tick that reaches this default path,
+whenever `twin+0x48` is not currently `AnimationStationary` (i.e. it is showing a real
+walk/run id — the rare case where `DriveBody`'s own `ClientServerSyncHandler_Position`
+(`+0x12C`, round 61's fix) or `SetAnimationInternal` (round 63 sec10.2) actually landed one),
+`AnimationUpdate` unconditionally calls `SetAnimation(twin, looping_animation, 0, 0)`.
+`SetAnimation` (0x0063E930, already disassembled round 61 sec8.1) gates on
+`AnimationLooping(id)` and, on a pass, overwrites `twin+0x48`/`twin+0x58` together; on a
+fail, "bail, twin+0x48/+0x58 untouched." `animations.2da` (VERIFIED,
+`tools/kotorfiles.py 2da animations.2da`):
+
+| row | name | looping |
+| --- | --- | --- |
+| 6 | pause1 (idle, `0x2710`) | **1** |
+| 338 | walkSS (`0x2712` for weapon class 2) | **0** |
+| 345 | runSS (`0x2714` for weapon class 2) | **0** |
+
+Nothing in this codebase (or, per round 61 sec8.1's own disassembly of the ONE call that ever
+touched `+0x134` for these ids, anything reachable at all before this round) ever wrote
+`looping_animation` to a gait id — the `+0x134` edge-triggered call was proven dead for
+Walk/Run in round 63 sec10.4 and is skipped for them. So `looping_animation` always held a
+stale idle id. The reassertion is therefore `SetAnimation(twin, 0x2710, 0, 0)` —
+`AnimationLooping(0x2710)` passes (row 6, `Looping=1`) — and the write proceeds, stomping the
+correct walk/run render back to idle. This is precisely the "something re-decides idle every
+frame after our request" the brief predicted, mechanistically closed: not a movement/velocity
+field, an animation-id CACHE that nothing had ever pointed at the right value.
+
+### 12.3 The live probe — VERIFIED
+
+`Odyssey.DriveBody`'s existing capped diagnostics (rounds 60-64) already established that
+`twin+0x48` briefly shows a real walk/run/resolved-name id after a successful `+0x12C` call,
+then reverts almost immediately — consistent with a per-frame reassertion running right after.
+This round's fix (§12.4) IS the live probe: rather than instrumenting the read side further
+(which six prior rounds already did exhaustively), the fastest confirmation was to write the
+predicted fix and measure whether the predicted mechanism (a structural
+`AnimationLooping` rejection once `looping_animation` holds a non-looping id) actually holds —
+see §12.5's live fractions, which move from the baseline's 91-99% idle-while-moving to 0%,
+exactly as the static analysis predicted, with the SAME `+0x12C`/rate/position code left
+byte-for-byte unchanged from round 63.
+
+### 12.4 The fix
+
+`src/KotorCoop.Plugin/Odyssey.cs`: a new constant `TwinLoopingAnimation = 0x58`, and, in
+`DriveBody`, inside the `twin != 0 && *(nint*)twin == ClientCreatureVtable` block (immediately
+before the existing `TwinPositionSyncSlot` call), one line:
+
+```csharp
+*(ushort*)(twin + TwinLoopingAnimation) = (ushort)want;
+```
+
+Every step, not gated on `GaitChanged` — the same "every step, not gated" discipline
+`TwinPositionSyncSlot` already needed (round 61 sec8.5: edge-triggering measurably
+underperformed). `want` is `DriveBody`'s own already-computed gait id (`GaitRule.AnimIdle`/
+`AnimWalk`/`AnimRun`), so this costs one `ushort` memory write per driven body per frame — no
+new engine call, no new indirection, nothing to guard beyond the existing `twin != 0` and
+vtable checks already in place for every other write in this block.
+
+**Why this doesn't just re-break in reverse**: writing `looping_animation` to `0x2710` (idle)
+when `want==Idle` is exactly what the existing, previously-live-verified idle path already
+produced (via the kept `+0x134` call), so idle behaviour is unchanged. Writing it to
+`0x2712`/`0x2714` when moving means `AnimationUpdate`'s reassertion call becomes
+`SetAnimation(twin, walkSS/runSS, ...)`, which `AnimationLooping` rejects structurally (same
+table as §12.2) — the call bails without touching `twin+0x48`, so whatever `+0x12C`/
+`SetAnimationInternal` most recently painted there survives untouched. The reassertion does
+not stop firing; it just stops being able to do anything, which is exactly the "no-op instead
+of a fresh poke" a purely additive fix should aim for — no removed call, no changed call
+order, one new memory write.
+
+### 12.5 Live measurement — VERIFIED, both phantom directions clean
+
+Rig: `tools/demo.ps1` cold start (`END_M01AA` autosave), both GOG installs rebuilt/redeployed
+with the fix (`src/KotorCoop.Plugin/build.ps1 -Install`, both `-GameDir`s, clean). Mover: a
+direct write to the engine player's position via `SharedBlock.OffsetEnginePlayerPointer`
+(round 60 sec7.1's non-scan address source), 1.6 u/s walk for 10s then 3.96 u/s run for 10s,
+150ms step. Sampler: an explicit-address variant of `tools/phantomgait.ps1` reading the same
+fields plus the new `twin+0x58`, 100ms cadence, addresses taken from the plugin's own
+`"spawned phantom in slot 0: id 0x... at 0xADDR"` log line (never a vtable scan, per round 60
+sec7.1's own trap finding).
+
+| case | moving samples (speed>0.3) | idle-while-moving | fraction |
+| --- | --- | --- | --- |
+| host→client phantom | 132 | 0 | **0%** |
+| client→host phantom | 122 | 0 | **0%** |
+| mirrored enemy | not independently measured — see §12.6 | — | — |
+| companion | not measured — this save's roster carries no companion (0 party-presence entries, matches rounds 63-64) | — | — |
+
+Both measured cases show `anim`/`twin`/`loop` moving in lockstep on every single sampled
+frame throughout both the walk and run phases (`twin+0x58` tracking the requested id exactly
+as written, `twin+0x48` tracking `twin+0x58`) — not a single idle-while-moving sample in
+either 20-second run, against a round 62-64 baseline of 91.1%-99.4% on the same test shape.
+Full transcripts: this pass's scratch `gaitsample65.ps1` output, CSV export in the session's
+scratch dir (`r65-h2c.csv`, 200 rows; `r65-c2h.csv`, 198 rows).
+
+### 12.6 Mirrored enemy and companion — attempted live, blocked by this save/module, not by
+the fix
+
+A host-only `console 'warp tar_m10aa'` (party-reconciliation.md's established recipe) put
+both instances in the Black Vulkar pool room round 55/62/64 used, with the client's own enemy
+census confirming active mirroring (`"enemy drive: mirroring 25 of the owner's 25 enemies"`).
+A `[W_SAVE] different save` warning appeared once immediately after the transition but proved
+transient — the census count and subsequent samples show mirroring was live throughout,
+contradicting the warning's own text.
+
+The enemy address was resolved without a raw vtable scan, per this round's own instruction:
+a scan for the `CSWSCreature` vtable (`0x007470C8`) matched against the target id (`0x33`)
+returned exactly one candidate, cross-checked against the position already known from the
+client's own `EnemyPresenceSlots` table (`SharedBlock.OffsetEnemyPresenceSlots`, agent-fed
+ground truth, not a scan) — the two agreed exactly, disambiguating the round 60 sec7.1 "frozen
+duplicate" trap the way sec7.5 suggested for a future pass (cross-check a scan hit against a
+second live-only field) rather than trusting the first hit blind.
+
+With that address confirmed, the host was moved point-blank to the pool (native `tp` cheat,
+`ConsoleVerbCatalog`'s `tp <x> <y> [z]`) to trigger genuine engine perception/aggro — it did,
+immediately and repeatedly (`"combat ground-truth: local PC took N damage, attacker=0x33"`
+and six other distinct attacker ids, real forwarded hits, matching round 55's own recipe
+exactly). The host was then retreated, twice, once by a direct position write and once by the
+native `tp` verb, to try to provoke a real chase (the thing this section needs: genuine
+AI-driven locomotion to sample). **Neither retreat produced any movement**: re-reading the
+full 25-entry enemy presence table before and after several minutes of live combat shows every
+single entry's position byte-for-byte unchanged from the first read, including `0x33`, despite
+it (and five others) having visibly, repeatedly hit the host during that window. This specific
+pack are stationary point-defence guards around the pool — they attack whatever is in range
+without pursuing — not patrollers, and this save/location has no other hostile or companion to
+substitute (`OffsetPartyPresenceCount` read `0`, matching rounds 63-64's own finding that this
+save's roster is PC-only).
+
+This is the same category of gap round 64 sec11.5's E4 left open: this codebase's test-drive
+surface exposes no way to force an arbitrary NPC to walk a path, and building one was judged
+out of scope for a locomotion-focused pass, same call round 64 made. **The fix itself is not
+in question for these two cases** — `EnemyPresenceController.DriveOne` and
+`PartyPresenceController`'s companion drive both call the exact same `Odyssey.DriveEnemy` ->
+`DriveBody` this round changed (confirmed by reading both call sites this round,
+`src/KotorCoop.Plugin/EnemyPresenceController.cs:1297`,
+`src/KotorCoop.Plugin/PartyPresenceController.cs:434`), and the re-asserter this round found
+(`CSWCCreature::AnimationUpdate`) is a property of the RENDERING side — it does not
+distinguish a phantom's twin from a mirrored enemy's twin; both are plain `CSWCCreature`
+objects reached through the identical default `AIUpdate` dispatch path (§12.1). The only thing
+missing is a live sample of a genuinely-moving instance of each, which this round's save could
+not supply.
+
+### 12.7 What remains (NEEDS-LIVE, not closed this round)
+
+- **Mirrored enemy and companion, independently sampled.** Needs either a save/module with a
+  patrolling (not stationary-guard) hostile, or a small, explicit-target-id addition to
+  `TestDriveController`/`SharedBlock` so an arbitrary NPC can be driven along a path for
+  testing — round 64 sec11.5/sec10.7 (E4) already scoped this same gap and it remains
+  unaddressed by design (out of scope for a locomotion pass).
+- **The `+0x134` call's remaining purpose.** Round 63 sec10.4 proved it dead for Walk/Run and
+  kept it only for Idle and `DriveEnemy`'s owner-animation (combat-overlay) branch. This
+  round's fix makes `looping_animation` a second, independent writer of the same idle
+  steady-state the `+0x134` call already produces; whether the `+0x134` call is now fully
+  redundant for Idle too (i.e. could be dropped entirely, leaving only combat-overlay ids on
+  that path) was not investigated — low priority given it is proven harmless, not proven
+  necessary either way.
+- **The tooling gap** (round 60 sec7.1, reconfirmed working-around-able every round since) is
+  still open at the source; this round again worked around it by hand
+  (`SharedBlock.OffsetEnginePlayerPointer` for the mover, the plugin's own spawn-log line for
+  the phantom, a scan-then-cross-check-against-presence-table for the enemy) rather than fixing
+  `phantomgait.ps1`'s auto-resolve or `teleport.ps1`.
+
+### 12.8 What did NOT regress
+
+`dotnet test tests/KotorCoop.Tests` stayed at **1591/1591** passing, run in full before this
+round's change and again after, on the working tree with the fix applied. Both plugin builds
+(`src/KotorCoop.Plugin/build.ps1 -Install`) clean for both GOG installs `tools/demo.ps1` uses.
+No crash observed across the round's rebuild/redeploy/live-test cycle, a module transition, a
+sustained multi-attacker combat encounter at 1 HP (the plugin's own min-1-hp clamp held, per
+`docs/research/live-verification.md`'s own documented behaviour — no death), and two direction
+reversals of the mover. Every write round 61-64 shipped (`TwinPositionSyncBudget`,
+`TwinPositionSyncSlot`, the `+0x134` skip for Walk/Run, `RebuildClientAppearance`, the
+`gait-class`/`gait-name`/`sync12c` diagnostics) is untouched — this round's net source change
+is the single `TwinLoopingAnimation` constant and its one write site in `DriveBody`.
