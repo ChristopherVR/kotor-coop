@@ -5701,6 +5701,216 @@ lootless target type (turrets) was not chased further. `verify.ps1`'s own neares
 cannot pick an alive-but-unreachable target again. The five unrelated `verify.ps1` failures this
 round's battery run surfaced but did not investigate.
 
+### Round 59 (2026-08-22) — the two symmetry-pass claims live-verified, `verify.ps1` hardened with four regression checks, and round 58's own distance-selection fix landed
+
+Three jobs: live-verify the merged symmetry pass (host→client story-trigger relay, protocol 36;
+dialogue auto-join); harden `verify.ps1` with the checks this week's regressions would have
+caught, plus round 58's own named fix for `a client hit costs the enemy real hit points`; run
+the full test suite. Rig: cold `demo.ps1`, GOG pair, both `build.ps1 -Install` (1770 KB
+`dinput8.dll` each), both a solution build and the plugin build clean going in.
+
+**1a. HOST→CLIENT story trigger (protocol 36): PASS, fresh live evidence, all four sub-claims.**
+Both instances warped to `end_m01ab` together (`end_trig_carth02` sits on the `from_01a`
+arrival waypoint, per trigger-relay.md §11/§12) — both real players' presence crossed it within
+8 ms of each other, and the HOST's own same-tick apply (no network hop) won the race on
+`TriggerRelayStore` exactly as trigger-relay.md §12 predicts:
+
+```
+HOST    [11:40:22.229] triggers: observed my own engine natively fire OnEnter of 0x26 -
+                        publishing for other peers
+CLIENT  [11:40:22.237] triggers: observed my own engine natively fire OnEnter of 0x26 -
+                        publishing for other peers          <- the client's OWN native fire,
+                                                                 silently absorbed as already-fired
+CLIENT  [11:40:25.340] triggers: fired OnEnter of 0x26 for peer 1 (phantom 0x6C)
+```
+
+No `fired OnEnter ... for peer 2` line appears on the host for this crossing — the shared
+`_firedByModule` dedup working exactly as documented, the client's own claim losing the race to
+the host's zero-latency one. **No re-fire on revisit**: the host was `tp`'d out of the polygon
+and back in (`50,60` then `50.3,120.4`); zero new lines in either log across the round trip.
+**The pre-existing CLIENT→HOST direction still works, unregressed**: `tp`'d the client alone
+into `end_trig10`'s polygon (id `0x27`, a different STORY trigger, `end_m01ab`'s own
+`TriggerList`, host nowhere near it) —
+
+```
+CLIENT  [11:42:59.991] triggers: standing in 1 generic trigger(s), first 0x27 - asking the
+                        enemy owner to run its OnEnter too
+HOST    [11:43:00.876] triggers: fired OnEnter of 0x27 for peer 2 (phantom 0x6D)
+```
+
+No crash either instance, either direction.
+
+**1b. Dialogue auto-join (`dialogue_auto_join=near`, default): PASS, all sub-claims, plus
+`always`/`off` cross-checked with real coop.ini/restart cycles.** Endar Spire, `end_trask`
+(already recruited — every run below is a recruitment-class NPC, and none of them touched
+recruitment/dismissal, which stayed off `dialogue_recruit_sync=0`, the shipped default in both
+`coop.ini`s and `profiles/coop.ini.example`).
+
+- **Host starts, client auto-joins with no click**: `dlgprobe.ps1 -NoJoin` (so the joiner's own
+  click test-hook is never fired) — `interaction: auto-joining a peer's conversation with
+  'end_trask' (dialogue_auto_join=Near)` on the client, unprompted. `NODES: on the same entry
+  for 28 of 28 paired samples`, serials settled (host +0, client +2 over 30 s).
+- **Peer starts, the other side auto-joins**: observed organically from Trask's own known
+  scripted re-initiate (dialogue-sync.md's documented "worst case" quirk) racing the token —
+  `interaction: auto-joining a peer's conversation with 'end_trask' (dialogue_auto_join=Near)`
+  fired on the HOST this time, confirming the mechanism is symmetric by construction exactly as
+  `InteractionLockController.TryForceOpen`'s own doc comment claims (no host/client branch).
+- **Separated >20 m: no pull, for the RIGHT reason.** `tp`'d the client to 58 units from Trask
+  (near-mode's own distance test is the LOCAL player's own distance to the NPC, not
+  peer-to-peer — worth naming since it is easy to misread). Host reinitiated the SAME
+  conversation repeatedly across a 40+s window (5 separate close/reopen cycles); the client's
+  log shows zero `interaction: auto-joining` lines the entire time — confirmed via the same
+  code path that also arms the "walk over to join" notice (`_farNoticeUntilMs`,
+  `InteractionLockController.cs`), though the on-screen text itself was not independently
+  screenshotted this pass (log-only evidence). Moving the client back to 0 units and closing
+  again: **not immediately reproduced** (the very next close/reopen also stayed unjoined for
+  ~14 s before eventually joining — Trask's reinitiate loop makes exact edge-timing on this one
+  NPC noisy; the FAR case's negative result over 40+ s is unambiguous, the NEAR-again positive
+  result took longer than expected without being a clean single data point. Not chased further
+  this round — see "what remains" below).
+- **`dialogue_auto_join=always`: pulls regardless of distance, confirmed with a real
+  restart.** `coop.ini` on both installs, `demo.ps1` cycled. Client `tp`'d to 58 units from
+  Trask; host `talk end_trask`; client log: `interaction: auto-joining a peer's conversation
+  with 'end_trask' (dialogue_auto_join=Always)`, content delivered 0 ms after opening, node
+  followed 19→29.
+- **`dialogue_auto_join=off`: restores click-to-join, confirmed with a real restart.** Host
+  `talk end_trask` with the client standing right next to Trask: client shows `remote: active
+  1` (aware) but `local: partner ''` (not pulled in) — zero `auto-joining` log lines. The
+  client's own explicit talk request (the same channel a real click drives) then opened,
+  adopted and followed normally (`test: opened a conversation` → `engine started the same
+  conversation here; adopting it to follow` → `followed the owner 19 -> 29`), confirming the
+  OLD click-to-join path is intact underneath the auto-join layer.
+- **Recruitment-class safety**: no crash, no roster corruption, across every cycle above — all
+  against `end_trask`, a companion/recruitment-class NPC, with `dialogue_recruit_sync=0`
+  (default) throughout. Check 19 below (`the host still controls its companions`) independently
+  confirms the party roster was intact at the end of the session.
+- `dialogue_auto_join` restored to unset (default `near`) in both `coop.ini`s before the
+  `verify.ps1` battery below — no coop.ini edits shipped from this pass, matching round 58's
+  own precedent.
+
+**2. `verify.ps1` hardened — four new checks (19-22), the round-58 distance fix landed, one
+stale check fixed, one tooling false-positive diagnosed and left alone.**
+
+- **Check 19, "the host still controls its companions"**: `CSWPartyTable`'s own companion
+  count vs. `CSWParty`'s own count (client-chain read, `am→+4→+4→+0x270`) must differ by
+  exactly one (the PC); the seated companion must read `ObjCommandable=1`
+  (`creature+0xE8`); and the client-only `party together: ...clamping` line
+  (`PartyRosterController.cs`) must never have fired against the HOST's own log — the exact
+  regression class `b491b74` fixed earlier the same day. **First draft of this check was
+  itself wrong**: scanning the WHOLE log file (the same pattern check 6's crash scan uses)
+  reads HOURS-OLD clamp lines from a PRIOR session as if they were live evidence — a clean rig
+  failed on lines timestamped 08:51-10:15, none from the run under test. Fixed to scope the
+  scan to a mark taken at the top of the script (`$battery1`), matching the file's own
+  documented rule ("Log checks must only look at lines written AFTER the action that is being
+  tested"). Re-run clean: `table 1 companion(s), CSWParty 2 (PC+companions), companion 0x127
+  commandable=1, host clamped this run: False`.
+- **Check 20, "a door opened on the client opens on the host"**: `opendoor` (blank = nearest,
+  round 57's own verb) on the client; the oracle is the HOST's own live door-open-state byte
+  (`door+0x2CC`), found via the same vtable-scan technique `FindCreature` already uses
+  (`CSWSDoor` vtable `0x007498B0`, added to `verify.ps1`'s own C# helper as `FindDoor`), driven
+  through the SAME agent<-plugin console channel `blockpoke.ps1`'s `console` verb uses
+  (`SendConsole`, new helper). **First run read state=0 after a single post-resolve read and a
+  10s address-only wait; a live investigation traced this to `SetDoorOpenState`'s deferred
+  commit (`bDeferred=1`) not having landed yet at read time** — a harness bug (read-once
+  instead of poll-to-completion), fixed by polling the STATE itself for up to 20s. Also added a
+  distance-diagnostic (host's own distance to the door) to the failure detail, since the first
+  investigation briefly suspected a distance-dependent dormancy (a door 114 units from the host
+  read 0 for 7+ real minutes in that one session) — **not reproduced** on a clean re-run at an
+  even greater distance (141 units, PASS within the 20s poll), so this is recorded as a
+  one-off/needs-a-repro rather than a confirmed structural gap. Clean run: `door 0x4D: client
+  opened it, host reads open-state 2 (141 units from the door)`.
+- **Check 21, "the client's party roster survives a transition"**: the host-roster valid bit
+  (`SharedBlock.PartyRosterValid`, `0x8000_0000` of `OffsetHostPartyRoster`/`0x3304`) must stay
+  set through a real module teardown/rebuild, not merely a flag left over from before. Rather
+  than needing a second module (a `warp` round-trip risks stranding the rig somewhere the rest
+  of the battery cannot recover from), it self-warps to the module the client is already in —
+  a real `ExecuteLoadModule` cycle, exactly the window round 56's own `PumpPartyRoster` fix
+  targets, with no net displacement. PASS: `roster before 0x80010001 (valid=True) after
+  0x80010001 (valid=True)`.
+- **Check 22, "no per-frame spam"**: groups every log line since the battery started by
+  `(whole second, exact message text)`; fails if any single line repeats more than 10 times in
+  one second — the shape a LEVEL-not-EDGES bug produces (`PartyRosterController`'s own "A LEVEL,
+  NOT EDGES" comment names exactly this failure mode). PASS both instances every run this round.
+- **Round 58's own named fix, section 13's nearest-enemy distance selection**: was reading the
+  ENEMY's position from the client's mirrored census slot (`$h2, $slot+4/+8`) — round 58 found
+  this stale by more than double (57 reported vs. 128.56 real) in one session. Now reads the
+  enemy's position straight off the HOST's own live creature (`$cand`, already resolved via
+  `FindCreature`, `+0x90/+0x94` — `Odyssey.ObjPosition`), the same "judge distance from what the
+  engine says NOW" discipline section 10 already uses for the attacker's own side. **Verified
+  live that the fix is actually engaging**: a direct comparison this round (census slot vs.
+  `$cand`'s own live position for the same enemy id) read IDENTICAL coordinates
+  (`46.77889, 33.26784` both ways) — for this specific creature the census was not stale, so the
+  check's own repeated "enemy 0x14 at 57 units: hp 15 -> 15" FAIL across two separate battery
+  runs this round is an HONEST result, not the round-58 bug recurring: the nearest
+  still-alive census entry in this well-used save genuinely sits 57 live units from the client
+  (plausibly because many nearer enemies have already been killed by repeated testing today),
+  too far for the attack to close within the check's window. The SELECTION is now correct; a
+  session with no live target closer than 57 units will still fail this check, honestly.
+- **`journal removal logged as gated off by default` fixed — it was asserting the OLD
+  default.** `Odyssey.RemoveJournalEntry`'s own remarks record "confirmed live 2026-08-22" (a
+  pass earlier the SAME DAY as this round) and `JournalController.cs` was promoted to
+  `PluginConfig.ReadBool("journal_remove_sync", true)` — default ON — with
+  `profiles/coop.ini.example` shipping `journal_remove_sync=1` to match. `verify.ps1`'s own
+  section 5c still expected the pre-promotion acknowledge-only default and failed for that
+  reason alone on every run, a stale-test harness bug, not a regression. Fixed to assert what
+  the current default actually does (`removed on the session's authority
+  (journal_remove_sync)`); the old assertion is preserved as the documented way to exercise the
+  OFF path (`journal_remove_sync=0`).
+- **`every engine call signature matches the binary` — investigated, false positive, left
+  unchanged.** `callaudit.py` flagged `CSWSArea::SetTransitionPending` (`0x00506B30`,
+  `EngineHandles.cs`): "callee pops 4, declaration passes 8". Live disassembly
+  (`tools/disasm.py 0x00506B30 0x50`) shows the function reads BOTH stack arguments
+  (`mov eax,[esp+4]` then `mov dl,[esp+8]`, written into `area+0x2C4`/`+0x2C9` exactly as
+  documented) before UNCONDITIONALLY TAIL-JUMPING into a shared, unrelated thunk chain
+  (`jmp 0x5EDA10` → `jmp 0x5F6B10`, the SAME chain thirteen other, unrelated call sites across
+  the binary also jump into — `tools/xrefs.py 0x5eda10`). The function has no `ret` of its own
+  at all; `callaudit.py`'s linear epilogue scanner is reading some OTHER function's `ret 4`
+  after following (or failing to follow) the tail-jump. **The C# declaration is correct** — both
+  arguments are genuinely read and used — and this is a `callaudit.py` control-flow-following
+  limitation (a real, understood, harmless false positive for a tail-calling function), not a
+  plugin ABI defect. Left both `EngineHandles.cs` and `callaudit.py` unchanged: fixing the
+  scanner's tail-jump handling is a separate piece of tooling work, out of this round's three
+  jobs, and guessing at a "fix" for a declaration that is already correct would only add risk.
+
+**Battery result (final, clean rig, host pid 32132 / client pid 16372): 41 passed, 7 failed.**
+Two are the pre-existing, documented environment-flaky checks (`phantom damageable, not a
+sink`; `the peer really loses those hit points` — both named in this repo's own standing memory
+note on `verify.ps1` flakiness, Endar Spire min-1-hp / re-permitted-attack artifacts, not
+regressions). One is the round-58 distance check's own honest "no target close enough this
+session" result, explained above. The remaining four (`an item picked up here vanishes on the
+peer`; `a downed player is reported to the agent`; `the co-op revive stands the player back up`;
+and the `callaudit.py` false positive) are pre-existing, outside this round's three jobs, and —
+matching round 58's own precedent for the checks it did not chase — not investigated further
+this round. `a downed player is reported to the agent` reads `down-block reason 1` (min-1-hp),
+plausibly the same Endar Spire deck artifact the two known-flaky checks already carry, but not
+confirmed as the same root cause this round.
+
+**3. Full test suite: 1566/1566, up from the stated 1555 baseline** (this round added no new
+unit tests of its own — all four `verify.ps1` checks and the distance fix are PowerShell, not
+C#; the extra 11 came from work already landed earlier the same day, before this round began).
+Both the solution build (`dotnet build KotorCoop.slnx`) and the plugin build
+(`src\KotorCoop.Plugin\build.ps1 -Install`, both GOG installs, 1770 KB `dinput8.dll` each) clean
+throughout. `dotnet test` was run only after `demo.ps1 -Stop` — the live agent processes lock
+their own DLLs, and a test run attempted while the rig was still up failed on `MSB3027`
+file-lock errors (a harness-usage note, not a code issue).
+
+**Safety.** `dialogue_auto_join` cycled through `always`/`off` and back to unset (default
+`near`) in both `coop.ini`s; `journal_remove_sync=1` (matching `profiles/coop.ini.example`,
+already the environment's state going in, not touched this round) is the only non-default
+setting left standing. Rig torn down clean (`Get-Process swkotor,KotorCoop.Agent` empty after
+the final `demo.ps1 -Stop`), `auto_start_agent` restored to `1` in both installs.
+
+**What remains.** The near-mode "moved back into range, took ~14s longer than expected to
+rejoin" observation (1b, far-notice section) — likely more Trask-reinitiate noise than a real
+timing gap, given the FAR case's own 40+s clean negative result, but not isolated to a single
+clean data point this round. The far-notice on-screen text itself (`_farNoticeUntilMs`'s actual
+draw) was not screenshotted — confirmed only via the log-absence + code-path argument. Whether
+the door check's own "one-off 114-unit dormancy" was real or a fluke of that specific session
+(not reproduced at 141 units on a clean rig) — worth a repeat if it recurs. The four pre-existing
+`verify.ps1` failures named above, not chased. `callaudit.py`'s tail-jump-following gap — a real,
+now-diagnosed tooling limitation that will misreport again the next time a `SetX`-shaped
+thunk-and-jump function is declared; worth a proper fix outside this round's scope.
+
 ## 3. A client's XP is actively erased
 
 `ProgressionSnapshotPacket` is host→client only and absolute (CoopAgent.cs, `PumpProgression`):

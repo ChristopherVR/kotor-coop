@@ -60,6 +60,20 @@ public class VF {
             return (long)m.BaseAddress+i; }
       long next=(long)m.BaseAddress+size; if(next<=addr) break; addr=next; }
     return 0; }
+  // Same technique as FindCreature, different vtable (CSWSDoor 0x007498B0 — see
+  // src/KotorCoop.Plugin/CreatureFinder.cs's own DoorVtable). Door open-state is a byte at
+  // door+0x2CC (Odyssey.GetDoorOpenState / DoorOpenState).
+  public static long FindDoor(IntPtr h, uint objId){
+    long addr=0; int sz=Marshal.SizeOf(typeof(MBI));
+    while(addr<0x7FFFFFFF){ MBI m; if(VirtualQueryEx(h,new IntPtr(addr),out m,sz)==0) break;
+      long size=(long)m.RegionSize; if(size<=0) break;
+      if(m.State==0x1000&&m.Type==0x20000&&(m.Protect&0x101)==0&&size<=64L*1024*1024){
+        var buf=R(h,(long)m.BaseAddress,(int)size);
+        if(buf!=null) for(int i=0;i+8<=buf.Length;i+=4)
+          if(BitConverter.ToUInt32(buf,i)==0x007498B0 && BitConverter.ToUInt32(buf,i+4)==objId)
+            return (long)m.BaseAddress+i; }
+      long next=(long)m.BaseAddress+size; if(next<=addr) break; addr=next; }
+    return 0; }
   public static long FindBlock(IntPtr h){
     byte[] sig = { 0x4B,0x4F,0x43,0x4F,0x4F,0x50,0x30,0x31, 0,0,0,0, 0x01,0xEE,0xFF,0xC0 };
     long addr=0; int sz=Marshal.SizeOf(typeof(MBI));
@@ -114,6 +128,41 @@ function WaitForLog($path, $pattern, [int]$since, [int]$seconds) {
     return $false
 }
 
+# Drives the SAME agent<-plugin console channel blockpoke.ps1's own 'console' verb uses
+# (0x9F8 command text, 0x9F4 command serial, 0xA58 reply serial) — the only way to run a
+# co-op console verb (warp, opendoor, ...) unattended, since injected keystrokes never reach
+# this game. Waits for the REPLY SERIAL to move, not for non-empty text, for the same reason
+# blockpoke.ps1's own 'console' verb does: the reply field holds the previous answer until
+# the next one lands.
+function SendConsole($h, $b, [string]$cmdText) {
+    $before = [VF]::U32($h, $b + 0xA58)
+    $bytes = [byte[]]::new(96)
+    $ascii = [Text.Encoding]::ASCII.GetBytes($cmdText)
+    [Array]::Copy($ascii, $bytes, [Math]::Min($ascii.Length, 95))
+    for ($i = 0; $i -lt 96; $i += 4) { [VF]::W32($h, $b + 0x9F8 + $i, [BitConverter]::ToInt32($bytes, $i)) | Out-Null }
+    [VF]::W32($h, $b + 0x9F4, [int]([VF]::U32($h, $b + 0x9F4) + 1)) | Out-Null
+    return WaitFor2 { ([VF]::U32($h, $b + 0xA58)) -ne $before } 10
+}
+
+# Groups every log line since a mark by (whole second, message text) and returns the worst
+# (key, count) pair — the check for "no log line repeating >10x/s" this round's own task asked
+# for. A real per-frame spam bug logs the exact SAME text every frame with nothing that varies
+# (no serial, no counter), which is exactly what grouping on the literal message text catches;
+# a line that legitimately differs each time it fires (an embedded counter, a changing id)
+# never collides with itself here.
+function WorstSpam($path, [int]$since) {
+    $lines = NewLogLines $path $since
+    $buckets = @{}
+    foreach ($line in $lines) {
+        if ($line -match '^\[(\d\d:\d\d:\d\d)\.\d+\]\s?(.*)$') {
+            $key = "$($matches[1]) | $($matches[2])"
+            if ($buckets.ContainsKey($key)) { $buckets[$key]++ } else { $buckets[$key] = 1 }
+        }
+    }
+    if ($buckets.Count -eq 0) { return $null }
+    return ($buckets.GetEnumerator() | Sort-Object Value -Descending | Select-Object -First 1)
+}
+
 # Put the game back to a known state before measuring anything: a conversation left open by
 # an earlier run defers damage and blocks attack orders, which fails unrelated checks.
 # The counterpart to CloseConversations: a creature left in combat by an earlier check cannot
@@ -139,6 +188,14 @@ $b2 = [VF]::FindBlock($h2)
 
 "host  pid $Host1  block 0x{0:X}  version {1}" -f $b1, [VF]::U32($h1, $b1 + 8)
 "client pid $Client2  block 0x{0:X}  version {1}" -f $b2, [VF]::U32($h2, $b2 + 8)
+
+# The plugin log files are NOT rotated per run — they accumulate across every past demo
+# session on this machine. A "did this ever happen" check must scope to what THIS run
+# produced, or it reads history as if it were live evidence (this file's own header rule,
+# applied here to the two standing-state checks below that scan for a line rather than
+# waiting on one specific action).
+$battery1 = LogLines $Log1
+$battery2 = LogLines $Log2
 
 # Idempotence: close anything a previous run left open, and WAIT for it to actually be
 # gone — issuing the close and pressing on measured a world still mid-conversation.
@@ -225,13 +282,16 @@ Check 'journal DECREASE request serviced' (($afterDecrease -ne $beforeDecrease) 
 Check 'journal DECREASE logged by the plugin' (LogHasSince $Log2 'journal:' $decreaseMark) `
     ((Select-String -Path $Log2 -Pattern 'journal:' | Select-Object -Last 1).Line ?? 'no journal line')
 
-# --- 5c. journal removal defaults to acknowledge-only (journal_remove_sync=0) --------
-# The RemoveJournalQuestEntry native call was found by static disassembly only (see
-# Odyssey.RemoveJournalEntry's remarks) and ships OFF by default. This proves the DEFAULT
-# path — the request is serviced (so the agent's one-slot queue never stalls) without
-# reaching the unverified engine call. Flip journal_remove_sync=1 in coop.ini and re-run
-# this check to exercise the live call once it has been through its own separate
-# live-verification pass.
+# --- 5c. journal removal reaches the live engine call (journal_remove_sync=1, default) ----
+# ⚠ ROUND 59: this section used to assert the OPPOSITE of what ships. The RemoveJournalQuestEntry
+# native call (Odyssey.RemoveJournalEntry / CSWSJournal::Destroy) was "confirmed live 2026-08-22"
+# (Odyssey.cs's own remarks) EARLIER THE SAME DAY as this round and promoted to
+# `PluginConfig.ReadBool("journal_remove_sync", true)` — DEFAULT ON — in `JournalController.cs`,
+# and `profiles/coop.ini.example` ships `journal_remove_sync=1` to match. This check still
+# expected the OLD acknowledge-only default and failed for that reason alone, not a regression.
+# Fixed to test what the current default actually does: the request is serviced AND reaches the
+# live removal call. Set journal_remove_sync=0 in coop.ini to exercise the acknowledge-only path
+# this check used to assert instead.
 $removeMark = LogLines $Log2
 $beforeRemove = [VF]::U32($h2, $b2 + 0x99C)
 [VF]::W32($h2, $b2 + 0x998, [int]::MinValue) | Out-Null
@@ -239,10 +299,11 @@ $beforeRemove = [VF]::U32($h2, $b2 + 0x99C)
 Start-Sleep -Seconds 3
 $afterRemove = [VF]::U32($h2, $b2 + 0x99C)
 $statusRemove = [VF]::U32($h2, $b2 + 0x9A0)
-Check 'journal removal request serviced (default: acknowledge-only)' `
+Check 'journal removal request serviced (default: reaches the live call)' `
     (($afterRemove -ne $beforeRemove) -and ($statusRemove -eq 0)) `
     "applied serial $beforeRemove -> $afterRemove, status $statusRemove"
-Check 'journal removal logged as gated off by default' (LogHasSince $Log2 'journal_remove_sync is off' $removeMark) `
+Check 'journal removal logged as reaching the live engine call by default' `
+    (LogHasSince $Log2 "removed on the session's authority \(journal_remove_sync\)" $removeMark) `
     ((Select-String -Path $Log2 -Pattern 'journal_remove_sync' | Select-Object -Last 1).Line ?? 'no removal line')
 
 # --- 6. hooks installed --------------------------------------------------------------
@@ -547,7 +608,17 @@ for ($i = 0; $i -lt [Math]::Min($presence2, 32); $i++) {
     $cand = [VF]::FindCreature($h1, $id)
     if ($cand -eq 0 -or [VF]::I16($h1, $cand + 0xDC) -le 1) { continue }
 
-    $d = [math]::Sqrt([math]::Pow([VF]::F32($h2, $slot + 4) - $cx, 2) + [math]::Pow([VF]::F32($h2, $slot + 8) - $cy, 2))
+    # ⚠ ROUND 58: the census slot position ($h2, $slot+4/+8) is a mirrored SNAPSHOT and can go
+    # stale — measured picking a target the census placed 57 units away while its real, live
+    # engine position was 128 units away on the far side of the map, so the attack gave up
+    # immediately (no walkable path in the window) and the check failed for a reason that had
+    # nothing to do with the damage channel under test. $cand is already the HOST's own live
+    # creature (resolved above), so read its position straight out of the host's engine
+    # (Odyssey.ObjPosition = +0x90) instead — the same "judge distance from what the engine
+    # says NOW, not a snapshot" discipline section 10 uses for the attacker's own position.
+    $ex = [VF]::F32($h1, $cand + 0x90)
+    $ey = [VF]::F32($h1, $cand + 0x94)
+    $d = [math]::Sqrt([math]::Pow($ex - $cx, 2) + [math]::Pow($ey - $cy, 2))
     if ($d -lt $dmgDist) { $dmgDist = $d; $dmgId = $id }
 }
 
@@ -975,6 +1046,150 @@ $eventCrashes = @(
 Check 'no swkotor crash in the event log' ($eventCrashes.Count -eq 0) `
     $(if ($eventCrashes.Count -eq 0) { "clean since $($sinceRun.ToString('HH:mm'))" }
       else { ($eventCrashes | Select-Object -First 2 | ForEach-Object { ($_.Message -split "`n")[0] }) -join ' | ' })
+
+# --- 19. the host still controls its companions --------------------------------------------
+# Round 58 (shared-state-audit.md): CSWPartyTable counts COMPANIONS only (Trask -> 1); CSWParty
+# (the struct a real door's IsPartyTogether actually reads) counts the PC too (PC + Trask -> 2).
+# An earlier build clamped CSWParty down to the table's own count on EVERY instance, which on
+# the HOST dropped its own Trask out of the struct the control/portrait/follow logic reads —
+# "the host loses control of its own companions". party_together_fix is now client-only
+# (gated on TryGetHostPartyRoster, true only for a client); this check is the regression test
+# that class of bug would have caught: the host's own table/CSWParty counts must differ by
+# exactly one (the PC), the companion (if any) must be commandable, and the client-only clamp
+# line must never have fired against the HOST's own log.
+function SwPartyCount($h) {
+    $am = [VF]::U32($h, 0x7A39FC)
+    if ($am -eq 0) { return -1 }
+    $cli = [VF]::U32($h, $am + 4)
+    if ($cli -eq 0) { return -1 }
+    $cliInt = [VF]::U32($h, $cli + 4)
+    if ($cliInt -eq 0) { return -1 }
+    $party = [VF]::U32($h, $cliInt + 0x270)
+    if ($party -eq 0) { return -1 }
+    return [int]([VF]::U32($h, $party))
+}
+
+$hostTableCount = if ($partyTable1) { [int]([VF]::U32($h1, $partyTable1 + 0x00)) } else { -1 }
+$hostSwCount = SwPartyCount $h1
+$companionOk = $true
+$companionDetail = 'no companion in the host party'
+if ($hostTableCount -gt 0) {
+    $npcSlot = [VF]::U32($h1, $partyTable1 + 0x04)                       # first active companion's NPC slot index
+    $companionObjId = [VF]::U32($h1, $partyTable1 + 0x0C + ($npcSlot * 4))
+    $companionAddr = if ($companionObjId -ne 0) { [VF]::FindCreature($h1, $companionObjId) } else { 0 }
+    if ($companionAddr -ne 0) {
+        $commandable = [VF]::U32($h1, $companionAddr + 0xE8)             # ObjCommandable
+        $companionOk = ($commandable -eq 1)
+        $companionDetail = "companion 0x{0:X} (npc slot {1}) commandable={2}" -f $companionObjId, $npcSlot, $commandable
+    }
+    else {
+        $companionOk = $false
+        $companionDetail = "companion object 0x{0:X} (npc slot {1}) not found in the host's engine" -f $companionObjId, $npcSlot
+    }
+}
+# ⚠ Scoped to THIS run ($battery1, taken right after the blocks were found), NOT the whole
+# file. The plugin log is never rotated between runs — it accumulates every past session on
+# this machine — so a whole-file scan (check 6's crash scan does this deliberately, because a
+# crash is never expected at all) reads yesterday's already-fixed bug as if it were live
+# evidence. Measured doing exactly that this round: a clean rig still failed on clamp lines
+# timestamped hours before this battery ran.
+$hostClamped = LogHasSince $Log1 'party together:.*clamping' $battery1
+Check 'the host still controls its companions' `
+    (($hostTableCount -ge 0) -and ($hostSwCount -eq ($hostTableCount + 1)) -and $companionOk -and -not $hostClamped) `
+    ("table {0} companion(s), CSWParty {1} (PC+companions), {2}, host clamped this run: {3}" -f `
+        $hostTableCount, $hostSwCount, $companionDetail, $hostClamped)
+
+# --- 20. a door opened on the client opens on the host --------------------------------------
+# The symmetric-doors channel (symmetry.md: "either peer's own engine-native open/unlock/swing
+# is detected locally... applied by DoorController.Apply on every instance"), driven end to end
+# through the same 'opendoor' verb shared-state-audit.md round 57 built for exactly this ("one
+# usedoor refuses by design"): blank picks the nearest door, so no tag needs to be known ahead
+# of time. The oracle is the HOST's own live door-open-state byte (door+0x2CC), read off the
+# host's engine directly, not either side's bookkeeping.
+$doorMark = LogLines $Log2
+$doorReplied = SendConsole $h2 $b2 'opendoor'
+Start-Sleep -Seconds 1
+$doorLine = @(NewLogLines $Log2 $doorMark | Where-Object { $_ -match 'door: opened 0x([0-9A-Fa-f]+) \(state (\d+) -> (\d+)\)' } | Select-Object -First 1)
+$doorId = 0
+$doorOpenedOnClient = $false
+if ($doorLine.Count -gt 0 -and $doorLine[0] -match 'door: opened 0x([0-9A-Fa-f]+) \(state (\d+) -> (\d+)\)') {
+    $doorId = [Convert]::ToUInt32($matches[1], 16)
+    $doorOpenedOnClient = ([int]$matches[3] -ne [int]$matches[2])
+}
+$hostDoorAddr = 0
+$hostDoorState = 0
+if ($doorId -ne 0) {
+    # Poll the STATE itself, not just the address: round 57 measured ~1.8s mirror latency for a
+    # nearby door, so a single read taken the instant the address resolves can catch state=0
+    # before DoorController.Apply's mirror write lands. 20s is generous over that.
+    WaitFor2 {
+        if ($script:hostDoorAddr -eq 0) { $script:hostDoorAddr = [VF]::FindDoor($h1, $doorId) }
+        if ($script:hostDoorAddr -ne 0) { $script:hostDoorState = [VF]::U8($h1, $script:hostDoorAddr + 0x2CC) }
+        $script:hostDoorState -gt 0
+    } 20 | Out-Null
+}
+# Distance diagnostic: SetDoorOpenState's engine call is DEFERRED (bDeferred=1) — it commits
+# once the door's own animation runs, which round 59 measured NOT happening for a door far
+# outside the reading instance's own active radius (host 114 units from a door the CLIENT'S
+# "nearest door" sweep picked at 26 units from itself — current AND pending both stayed 0 for
+# 7+ minutes, well past DoorController's own 25-pass commit-fallback). Reported here so a
+# future FAIL reads as "known distance-dependent gap" rather than "check is broken".
+$hostDoorDist = -1.0
+if ($hostDoorAddr -ne 0) {
+    $hx = [VF]::F32($h1, $hostDoorAddr + 0x90); $hy = [VF]::F32($h1, $hostDoorAddr + 0x94)
+    $hpx = [VF]::F32($h1, $b1 + 0x10); $hpy = [VF]::F32($h1, $b1 + 0x14)
+    $hostDoorDist = [math]::Sqrt([math]::Pow($hx - $hpx, 2) + [math]::Pow($hy - $hpy, 2))
+}
+Check 'a door opened on the client opens on the host' `
+    (($doorId -ne 0) -and $doorOpenedOnClient -and ($hostDoorAddr -ne 0) -and ($hostDoorState -gt 0)) `
+    $(if (-not $doorReplied) { 'the opendoor console command got no reply within 10s' }
+      elseif ($doorId -eq 0) { "no 'door: opened' line seen on the client (sweep may have found no door nearby)" }
+      elseif (-not $doorOpenedOnClient) { "door 0x{0:X} did not change state on the client" -f $doorId }
+      elseif ($hostDoorAddr -eq 0) { "door 0x{0:X} not found in the host's engine" -f $doorId }
+      elseif ($hostDoorState -eq 0) { "door 0x{0:X}: client opened it, host STILL reads open-state 0 after 20s (host is {1:F0} units from the door — see this check's own comment on the deferred-commit/distance gap)" -f $doorId, $hostDoorDist }
+      else { "door 0x{0:X}: client opened it, host reads open-state {1} ({2:F0} units from the door)" -f $doorId, $hostDoorState, $hostDoorDist })
+
+# --- 21. the client's party roster survives a transition ------------------------------------
+# party-reconciliation's own host-roster valid bit (SharedBlock.PartyRosterValid, 0x8000_0000
+# of OffsetHostPartyRoster/0x3304) is the client's only signal that it has something to
+# reconcile against; ReleaseSession already proved it can be left set incorrectly (round 56's
+# "a disconnected agent... nothing lowered it on teardown"). This checks the OTHER direction: a
+# real module teardown/rebuild must not silently drop it. Round-trips through a self-warp (the
+# module the client is already in) so the check restores exactly where it found the session.
+$hostRosterBefore = [VF]::U32($h2, $b2 + 0x3304)
+$validBefore = ($hostRosterBefore -band 0x80000000) -ne 0
+$moduleBefore = [VF]::Str($h2, $b2 + 0x20, 32)
+if ($validBefore -and $moduleBefore.Length -gt 0) {
+    $warpReplied = SendConsole $h2 $b2 "warp $moduleBefore"
+    Start-Sleep -Seconds 2
+    $reloaded = WaitFor2 { ([VF]::Str($h2, $b2 + 0x20, 32)) -eq $moduleBefore } 40
+    Start-Sleep -Seconds 5
+    $hostRosterAfter = [VF]::U32($h2, $b2 + 0x3304)
+    $validAfter = ($hostRosterAfter -band 0x80000000) -ne 0
+    Check 'the client party roster survives a transition' $validAfter `
+        ("module '{0}', warp replied {1}, reloaded {2}, roster before 0x{3:X8} (valid={4}) after 0x{5:X8} (valid={6})" `
+            -f $moduleBefore, $warpReplied, $reloaded, $hostRosterBefore, $validBefore, $hostRosterAfter, $validAfter)
+}
+else {
+    Check 'the client party roster survives a transition' $false `
+        ("no valid host roster to begin with (0x{0:X8}), module '{1}' — nothing to round-trip" -f $hostRosterBefore, $moduleBefore)
+}
+
+# --- 22. no per-frame spam -------------------------------------------------------------------
+# What this week's regressions would have caught: a bug that logs the SAME line every frame
+# (no serial, no counter, nothing that varies) rather than once on a state CHANGE — the pattern
+# every LEVEL-shaped channel in this codebase (doors, roster, pause, ...) is supposed to avoid
+# by design (see PartyRosterController's own "A LEVEL, NOT EDGES" comment). Scoped to the whole
+# session log, same as check 6's crash scan: this is a standing-quality check, not tied to one
+# action this run triggers.
+$worst1 = WorstSpam $Log1 0
+$worst2 = WorstSpam $Log2 0
+$spamOk1 = ($null -eq $worst1) -or ($worst1.Value -le 10)
+$spamOk2 = ($null -eq $worst2) -or ($worst2.Value -le 10)
+Check 'no per-frame spam' ($spamOk1 -and $spamOk2) `
+    ("host worst: {0}x in one second ({1}); client worst: {2}x in one second ({3})" -f `
+        $(if ($worst1) { $worst1.Value } else { 0 }), $(if ($worst1) { $worst1.Key } else { 'n/a' }),
+        $(if ($worst2) { $worst2.Value } else { 0 }), $(if ($worst2) { $worst2.Key } else { 'n/a' }))
 
 # Leave the world as we found it, so the next run measures the same starting conditions.
 CloseConversations $h1 $b1

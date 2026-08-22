@@ -701,3 +701,44 @@ peer's phantom (`FindPhantom`, unchanged, already generic over peer id).
 6. Reverse the roles (client's real character reaches an eligible trigger the host has not) and
    confirm the EXISTING direction (§5/§11) still works unchanged — protocol 36 must not have
    regressed the direction that was already live-verified.
+
+## 13. Live pass (2026-08-22, round 59) — the §12 script run for real, all six items PASS
+
+Ran exactly §12's own script above, `end_m01ab`, both instances warped there together
+(`end_trig_carth02` sitting on the arrival waypoint, per §11). Both real players' presence
+crossed the polygon within 8 ms of each other — a genuine simultaneous double-fire, and it
+resolved exactly as §12's "VERIFIED" call-order note predicts: the host's own same-tick apply
+(no network hop) won the race, the client's own separately-observed native fire silently
+absorbed as already-fired.
+
+```
+HOST    [11:40:22.229] triggers: observed my own engine natively fire OnEnter of 0x26 -
+                        publishing for other peers
+CLIENT  [11:40:22.237] triggers: observed my own engine natively fire OnEnter of 0x26 -
+                        publishing for other peers          <- absorbed, never relayed
+CLIENT  [11:40:25.340] triggers: fired OnEnter of 0x26 for peer 1 (phantom 0x6C)
+```
+
+Item 3 (host log): **PASS.** Item 4 (client log, "fired ... for peer N"): **PASS**, N=1
+(`CoopHost.HostPeerId`), targeting the client's own view of the host's phantom (`0x6C`). Item 5
+(no repeat): **PASS** — the host was `tp`'d out of the polygon and back in twice; zero new lines
+in either log across the round trip. Item 6 (the pre-existing direction, unregressed):
+**PASS** — `tp`'d the client alone into `end_trig10`'s polygon (id `0x27`, host nowhere near it):
+
+```
+CLIENT  [11:42:59.991] triggers: standing in 1 generic trigger(s), first 0x27 - asking the
+                        enemy owner to run its OnEnter too
+HOST    [11:43:00.876] triggers: fired OnEnter of 0x27 for peer 2 (phantom 0x6D)
+```
+
+No crash either instance, either direction. §12's own NEEDS-LIVE list is now fully closed for
+the mechanics it named: a real, unrelayed HOST entry is captured, correctly filtered, reaches a
+CLIENT as a native-fire broadcast, and that client's own `FireTrigger` call runs with no crash;
+the shared `_firedByModule` dedup genuinely prevents a double-fire between the two paths when
+both claim the same id in the same tick (observed directly above, not merely inferred); the
+existing client→host direction is unregressed. §4's own INFERRED claim (whether
+`GetEnteringObject()` reads `+0x29C` for a trigger specifically) remains exactly as inferred as
+before — this pass, like §11's, found no visible script-driven consequence to independently
+confirm it either way, on `end_trig_carth02`/`end_trig10` specifically. Full battery context
+(the `verify.ps1` hardening this pass also shipped, and the dialogue-side live pass run
+alongside it) is in docs/research/shared-state-audit.md's own "Round 59" section (§2).

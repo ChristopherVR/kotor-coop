@@ -163,6 +163,18 @@ Both players, each in their own full game:
   last-resort recovery for a conversation shell that will not close could loop, unattended, for
   minutes with no effect — is fixed unconditionally (not gated on the flag above): see
   `docs/research/dialogue-join-latency.md`'s "Far-join live pass".
+- **Auto-join a nearby conversation, no click needed — `dialogue_auto_join=near` (default),
+  live-verified both directions plus `always`/`off`, 2026-08-22.** The moment a peer opens a
+  conversation, everyone within `dialogue_auto_join_range` (20 units by default) of the NPC is
+  pulled in automatically — the same request a click on that NPC sends, decided identically on
+  every peer with no host/client branch. Confirmed live: host starts, the client auto-joins
+  unprompted (`interaction: auto-joining a peer's conversation with '...' (dialogue_auto_join=
+  Near)`, exact node agreement the whole way); the reverse direction, observed the same way;
+  standing more than 20 units from the NPC skips the pull and shows a "walk over to join" notice
+  instead; `dialogue_auto_join=always` pulls regardless of distance; `dialogue_auto_join=off`
+  restores the original click-to-join behaviour exactly. See
+  [docs/research/dialogue-sync.md](docs/research/dialogue-sync.md)'s 2026-08-22 "round 59"
+  section.
 - **A trigger/cutscene-started conversation (both players' own engines starting it on arrival,
   not a click) is now live-verified — live pass 2026-08-22.** Warping both instances to
   `end_m01ab`'s shared arrival waypoint produced a genuine double-fire: both engines reached
@@ -400,18 +412,24 @@ tools/                   RE helpers, demo scripts, the kotor1_0_3 symbol databas
   damage flowed both ways — the spawns hurt the client through its phantom, and the
   client's own hits were spent by the host on the real bodies.
 - **A generic trigger's OnEnter (the classic "walk into the room, the scene starts") now
-  relays from a client to the host — live-verified 2026-08-21, ON by default.** A client's own
-  story triggers already fired correctly on the client's own engine; the gap was the HOST never
-  running the same script, so a plot `CreateObject`/`DestroyObject` in it drifted the two
-  instances' ids apart. `TriggerRelay` reports which generic triggers a client is standing in
-  (excluding traps and area transitions, and filtered by a `coop.ini` allowlist pattern) and the
-  host runs the trigger's own `ScriptOnEnter` against that peer's phantom, the same `RunScript`
-  call the engine's own `EventHandler` makes. Live pass on `end_m01ab`: the story trigger
-  `end_trig_carth02` fired once against the client's phantom, stayed at "fired 1" across four
-  separate re-visits (the per-module fired-set dedup held), and the negative control
-  (`k_trg_stealth`) — confirmed geometrically inside the client's own position — never entered
-  the watch's report at all. `coop.ini` `trigger_relay=0` opts out. See
-  [docs/research/trigger-relay.md](docs/research/trigger-relay.md) §11.
+  relays BOTH ways between host and client — live-verified in both directions (2026-08-21
+  client→host, 2026-08-22 host→client, protocol 36), ON by default.** Either player's own real
+  presence crossing an eligible trigger fires the same `RunScript` call the engine's own
+  `EventHandler` makes for the OTHER player's phantom too, so a plot `CreateObject`/
+  `DestroyObject` in the trigger's script never drifts the two instances' object-id counters
+  apart regardless of which player actually walked through it. `TriggerRelay` reports which
+  generic triggers a player is standing in (excluding traps and area transitions, filtered by a
+  `coop.ini` allowlist pattern); a small detour (`TriggerFireHook`) additionally observes each
+  instance's own engine natively firing one, so the HOST's own entry reaches a client exactly
+  the way a client's already reached the host. Live pass on `end_m01ab`: `end_trig_carth02`
+  fired once against the client's phantom on a client crossing (stayed at "fired 1" across four
+  re-visits, the per-module fired-set dedup held) and, in the reverse direction, the host's own
+  crossing produced `triggers: observed my own engine natively fire OnEnter of 0x26` on the host
+  and `triggers: fired OnEnter of 0x26 for peer 1 (phantom 0x…)` on the client, no re-fire on
+  revisit either way; the negative control (`k_trg_stealth`) — confirmed geometrically inside
+  the client's own position — never entered the watch's report at all. `coop.ini`
+  `trigger_relay=0` opts out, both directions. See
+  [docs/research/trigger-relay.md](docs/research/trigger-relay.md) §11-§13.
 - **Mid-module movies (a script's own `PlayMovie`, not a transition) relay to the other player —
   found broken by a live pass, then root-caused and fixed the same day.** `MoviePlayHook`
   detours `CClientExoAppInternal::PlayMovie 0x00602CF0` (VERIFIED disassembled; never the

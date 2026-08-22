@@ -1022,3 +1022,59 @@ gesture at. What remains open is narrower: the owner-ends-to-spectator-closes la
 milliseconds, and a case where the trigger's OWN script (rather than a coincident arrival
 cutscene) is unambiguously what starts a NEW conversation nobody's engine would have started
 natively.
+
+## Live pass (2026-08-22, round 59): `dialogue_auto_join` — all four documented modes confirmed
+
+`end_trask` (already recruited; a recruitment-class NPC, `dialogue_recruit_sync=0` default
+throughout — no recruit/dismiss script exercised, so this is a safety observation about the
+auto-join CHANNEL, not a recruitment-sync test). Full context and the `verify.ps1` hardening
+shipped alongside this pass are in docs/research/shared-state-audit.md's own "Round 59" section.
+
+**`near` (default), host starts, client auto-joins with zero clicks — PASS.** `dlgprobe.ps1
+-NoJoin` (the joiner's own click test-hook never fires): `interaction: auto-joining a peer's
+conversation with 'end_trask' (dialogue_auto_join=Near)` on the client, unprompted, `NODES: on
+the same entry for 28 of 28 paired samples`.
+
+**`near`, the OTHER direction — PASS, observed organically.** Trask's own known scripted
+re-initiate (this file's own "worst case for this" quirk) raced the conversation token during a
+close/reopen cycle, and this time the CLIENT held it: `interaction: auto-joining a peer's
+conversation with 'end_trask' (dialogue_auto_join=Near)` fired on the HOST — confirming
+`TryForceOpen` really does run identically on every peer with no host/client branch, live, not
+only via `DialogueAutoJoinRuleTests`.
+
+**`near`, separated >20 m — no pull, confirmed for the distance reason, not a hang.** Worth
+naming plainly since it is easy to misread: near-mode's distance check is the LOCAL (deciding)
+player's own distance to the NPC, not peer-to-peer distance. `tp`'d the client to 58 units from
+Trask; the host reinitiated the same conversation five separate times across 40+ s; zero
+`interaction: auto-joining` lines on the client the entire window. The on-screen "walk over to
+join" notice itself was not independently screenshotted this pass — confirmed only via log
+absence plus the code path (`_farNoticeUntilMs` is set whenever `shouldJoin=false` and the
+local player is not already talking/in combat/in a minigame and the NPC's distance resolved,
+all of which held here). Moving the client back to 0 units did not rejoin on the very next
+close/reopen (Trask's own reinitiate cadence made that one data point noisy — took roughly 14
+extra seconds longer than the clean-arrival case above); the FAR case's own 40+ s negative
+result stands as the clean evidence, this near-again edge is flagged as unresolved-not-alarming
+below.
+
+**`always` — pulls regardless of distance, confirmed with a real coop.ini + restart cycle.**
+Client `tp`'d to 58 units from Trask; host `talk end_trask`; client:
+`interaction: auto-joining a peer's conversation with 'end_trask' (dialogue_auto_join=Always)`,
+content delivered 0 ms after opening, node followed 19→29 — the SAME clean numbers `near` gets
+when already in range, just without the distance gate.
+
+**`off` — restores exact click-to-join parity, confirmed with a real coop.ini + restart
+cycle.** Host `talk end_trask` with the client standing right next to Trask: client shows
+`remote: active 1` (aware a peer holds something) but `local: partner ''` (never pulled in),
+zero `auto-joining` lines. The client's own explicit talk request — the identical channel a
+real click drives — then opened, adopted and followed exactly as the pre-`dialogue_auto_join`
+era's click-to-join always did (`test: opened a conversation` → `the engine started the same
+conversation here; adopting it to follow` → `followed the owner 19 -> 29`).
+
+**Recruitment-class safety**: no crash, no roster corruption, across every cycle above.
+`verify.ps1`'s own new "the host still controls its companions" check (shared-state-audit.md
+round 59, §2) independently confirmed the party roster was intact at session end.
+
+**What remains**: the "moved back into range, took longer than expected" observation above —
+likely Trask's own reinitiate noise rather than a real auto-join timing gap, but not isolated
+to a single clean repro this pass; and the on-screen far-notice text itself, still confirmed
+only by log absence + code path, never screenshotted.

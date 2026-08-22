@@ -84,3 +84,26 @@ See docs/research/trigger-relay.md §12 (B1, native trigger-fire symmetry, proto
 docs/research/shared-state-audit.md's "RESOLVED (2026-08-22): `dialogue_auto_join` replaces the
 flag, seamless" section (B2) for the full file lists, VERIFIED/INFERRED/NEEDS-LIVE tagging, and
 exact live-test scripts for each.
+
+## Live pass (2026-08-22, round 59): B1 and B2 both confirmed on the running game
+
+Both channels this pass's own B1/B2 marked FIXED/SYMMETRIC by static analysis and prior partial
+live passes are now confirmed end to end on a live two-instance session — full evidence and the
+exact log lines in docs/research/shared-state-audit.md's own "Round 59" section (§2) and in
+trigger-relay.md §12 / dialogue-sync.md's own dated sections below.
+
+- **Story triggers, host→client (protocol 36)**: the host's own real PC crossing
+  `end_trig_carth02` produced `triggers: observed my own engine natively fire OnEnter of 0x26`
+  on the host and `triggers: fired OnEnter of 0x26 for peer 1 (phantom 0x…)` on the client, no
+  re-fire on revisit, the pre-existing client→host direction unregressed (a different trigger,
+  fresh evidence). The row's "FIXED this pass" verdict above is now backed by a live pass, not
+  only the disassembly-and-unit-test evidence B1 shipped with.
+- **Dialogue join, both directions plus `always`/`off`**: `dialogue_auto_join=near` (default)
+  pulled the joiner in with zero clicks in both directions (host→client and, observed
+  organically via Trask's own scripted re-initiate, client/peer→host), refused the pull at 58
+  units with no observed regression, `always` pulled regardless of distance, and `off` restored
+  exact click-to-join parity with the pre-B2 behaviour. The row's "None remaining — verified by
+  `DialogueAutoJoinRuleTests`" verdict above is now backed by a live pass for all four documented
+  modes, not only the unit-level symmetry proof.
+
+No new asymmetry found in either channel this pass.
