@@ -67,7 +67,12 @@ internal sealed unsafe class PartyRosterController(SharedBlockView block)
     /// client cross. coop.ini <c>party_together_fix</c>, default ON, CLIENT-ONLY since
     /// 2026-08-22: an earlier build ran it on the host as well and took the host's own
     /// companions out of the struct their control and portraits read (see
-    /// <see cref="SyncClientPartyTogetherState"/>).
+    /// <see cref="SyncClientPartyTogetherState"/>). Restricting it to clients on the SAME day
+    /// let it reach a client scenario it had never run against before — a player who was
+    /// already controlling a companion at the moment of connect — and trimmed the PC's OWN
+    /// slot instead of a companion's, locking control onto the companion
+    /// (docs/research/control-return.md, <see cref="PartyTogetherClampRule"/>). The clamp now
+    /// defers while that is true.
     /// </summary>
     private readonly bool _togetherFixEnabled = PluginConfig.ReadBool("party_together_fix", true);
 
@@ -177,7 +182,22 @@ internal sealed unsafe class PartyRosterController(SharedBlockView block)
         }
 
         int clientCount = Odyssey.GetClientPartyMemberCount();
-        if (clientCount < 0 || clientCount <= tableCount)
+        if (clientCount < 0)
+        {
+            return;
+        }
+
+        // ⚠ DEFERS TO CONTROL-RETURN (docs/research/control-return.md). The clamp trims
+        // whichever member sits at the END of CSWParty's array, without regard for who that is
+        // — ordinarily always a companion (harmless), but a client who was already controlling
+        // one of its own party-roster companions at the moment of connect has the array the
+        // other way round, and the member at the end is the PC's own slot. See
+        // PartyTogetherClampRule's doc comment for the full chain. Skipping the clamp for as
+        // long as that is true costs nothing: ControlReturnController converges control back to
+        // the PC within its own bounded budget regardless, and the clamp resumes the instant it
+        // does — the ordinary, safe case.
+        bool controllingCompanion = IsControllingRosterCompanion();
+        if (!PartyTogetherClampRule.ShouldClamp(controllingCompanion, clientCount, tableCount))
         {
             return;
         }
@@ -404,5 +424,40 @@ internal sealed unsafe class PartyRosterController(SharedBlockView block)
         }
 
         return 0;
+    }
+
+    /// <summary>
+    /// Whether the local player is currently DRIVING one of this instance's own party-roster
+    /// companions — the whole roster (0..8), not just the currently-published active party,
+    /// for the same reason <c>ControlReturnController.IsPartyRosterBody</c> uses the whole
+    /// roster: at the moment of connect the companion presence has not arrived yet, and that is
+    /// precisely the moment <see cref="PartyTogetherClampRule"/> needs this to be right. The
+    /// two controllers ask the same question the same way; see that rule's doc comment for why
+    /// <see cref="SyncClientPartyTogetherState"/> needs the answer at all.
+    /// </summary>
+    private static bool IsControllingRosterCompanion()
+    {
+        nint controlled = Odyssey.GetPlayerCreaturePointer();
+        if (controlled == 0)
+        {
+            return false;
+        }
+
+        uint controlledId = *(uint*)(controlled + 0x04);
+        if (controlledId == 0)
+        {
+            return false;
+        }
+
+        for (int slot = 0; slot < SharedBlock.PartyRosterSlots; slot++)
+        {
+            uint id = Odyssey.GetPartyRosterObjectId(slot);
+            if (id == controlledId && id is not 0 and not Odyssey.ObjectInvalid)
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 }

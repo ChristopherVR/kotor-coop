@@ -35,6 +35,7 @@ internal static class ConsoleVerbCatalog
         ("list", "list"),
         ("status", "status"),
         ("stat", "stat"),
+        ("lagstats", "lagstats  (interpolation delay, real send/recv intervals, agent pump cost)"),
         ("help", "help"),
         ("commands", "commands"),
         ("coop", "coop <command>"),

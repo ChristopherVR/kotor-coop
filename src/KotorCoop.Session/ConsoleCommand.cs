@@ -108,6 +108,14 @@ public enum CoopCommandKind
     /// </summary>
     NetSim,
 
+    /// <summary>
+    /// Prints what the next live round needs to MEASURE rather than guess about lag: the
+    /// phantom interpolation delay actually in use, the last few real send/recv intervals
+    /// (vs. the configured tick rate), and the agent's own pump cost (average/peak/budget).
+    /// See docs/research/lag-audit.md.
+    /// </summary>
+    LagStats,
+
     // ---- staging cheats ---------------------------------------------------------
     //
     // Only the verbs whose ANSWER DEPENDS ON WHO TYPED THEM, plus the two that stage a
@@ -463,6 +471,9 @@ public static class ConsoleCommand
 
             case "status" or "stat":
                 return new CoopCommand(CoopCommandKind.Status);
+
+            case "lagstats":
+                return new CoopCommand(CoopCommandKind.LagStats);
 
             case "help" or "?" or "commands":
                 return new CoopCommand(CoopCommandKind.Help);
@@ -1436,7 +1447,7 @@ public static class ConsoleCommand
 
     /// <summary>One-line help listing the commands, for the overlay and dashboard.</summary>
     public const string HelpText =
-        "commands: servers | connect <ip|#n> [password] | password <pw> | host | disconnect | reconnect | say <msg> | clear | status | warp <module> | who | where | census | resolve <id> | cheats | netsim <off|status|loss|latency|blackout> | help (see `cheats` for applyeffect/effects and the rest of the staging verbs)";
+        "commands: servers | connect <ip|#n> [password] | password <pw> | host | disconnect | reconnect | say <msg> | clear | status | lagstats | warp <module> | who | where | census | resolve <id> | cheats | netsim <off|status|loss|latency|blackout> | help (see `cheats` for applyeffect/effects and the rest of the staging verbs)";
 
     /// <summary>
     /// The staging-cheat listing. Two halves on purpose: what co-op adds, and what the

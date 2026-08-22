@@ -111,6 +111,14 @@ public sealed class CoopHost : ICoopSession
     private uint _nextPeerId = HostPeerId + 1;
     private long _lastInboundMs;
 
+    /// <summary>Real gaps between successive world-snapshot broadcasts — what <c>lagstats</c>
+    /// shows so a live round can see the actual send cadence, not just the configured tick
+    /// rate. See docs/research/lag-audit.md.</summary>
+    private readonly IntervalTracker _sendIntervals = new();
+
+    /// <summary>Real gaps between successive inbound packets from any peer.</summary>
+    private readonly IntervalTracker _recvIntervals = new();
+
     public CoopHost(SessionSettings settings)
     {
         _settings = settings;
@@ -1585,6 +1593,9 @@ public sealed class CoopHost : ICoopSession
             LastInboundAgeMs = _lastInboundMs == 0 ? 0 : SessionClock.NowMs - _lastInboundMs,
             FlagVersion = Flags.Version,
             LivenessAnomalies = _livenessAnomalyCount,
+            PhantomInterpolationDelayMs = _settings.InterpolationDelayMs,
+            RecentSendIntervalsMs = _sendIntervals.Snapshot(),
+            RecentRecvIntervalsMs = _recvIntervals.Snapshot(),
             Status = peerCount == 0
                 ? $"hosting on {_channel.LocalEndPoint} (waiting for players)"
                 : $"hosting on {_channel.LocalEndPoint}",
@@ -1697,6 +1708,8 @@ public sealed class CoopHost : ICoopSession
                 }
             }
         }
+
+        _sendIntervals.Record(now);
 
         WorldSnapshotPacket snapshot = new(
             now, Flags.Version, Items.Version, Journal.Version, _lootStore.Version,
@@ -2144,6 +2157,7 @@ public sealed class CoopHost : ICoopSession
         PacketType type = PacketCodec.PeekType(span);
         long now = SessionClock.NowMs;
         _lastInboundMs = now;
+        _recvIntervals.Record(now);
 
         switch (type)
         {
