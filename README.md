@@ -653,4 +653,25 @@ tools/                   RE helpers, demo scripts, the kotor1_0_3 symbol databas
   local player's own creature — mirrored enemies, mirrored companions and a peer's phantom only —
   so there is no "PC held" mechanism to fix. See
   [docs/research/shared-state-audit.md](docs/research/shared-state-audit.md) §2, round 58.
+- **A container/corpse a player has open now locks for everyone else — NOT yet live-verified
+  (2026-08-22, protocol 37).** Before this, only the opener's own screen ever showed a chest's
+  loot panel open, nothing closed it for the other player, and nothing stopped a second player
+  from opening the same container mid-loot. The interaction-lock channel `InteractionKind.Conversation`
+  already used for the one-conversation rule now carries `InteractionKind.Container` too, keyed
+  on the placeable's object id rather than its tag (the base game routinely places several
+  footlockers with the same tag) — see `InteractionLockStore`/`ContainerUseRule`. A player
+  opening a container plays the OPEN animation on every other instance's own copy and marks it
+  held; the same player closing the panel plays the CLOSE animation everywhere and releases it;
+  a peer's own attempt to open a held container is refused inside the engine itself
+  (`ContainerUseHook`, a `CSWSPlaceable::OpenInventory` detour, same shape as the dialogue gate)
+  with an on-screen "`<name> is looting that - wait a moment`" line. `useplaceable [tag|id]`
+  stages a real use through the engine's own input pipe for testing. This pass corrected a real
+  misreading in `docs/research/placeables-containers.md`: the placeable's `open` field
+  (`+0x338`) is not a permanent "ever searched" flag — fresh disassembly of both
+  `OpenInventory` and `CloseInventory` shows the latter unconditionally clears it, so it is a
+  transient "is the GUI showing right now" flag, which is what makes it usable as the local
+  open/close detector at all. See
+  [docs/research/container-sync.md](docs/research/container-sync.md) for the full VERIFIED/
+  INFERRED account and the exact live-test script; nothing here has been run against the game
+  yet (`container_locks=1`, `coop.ini`, default on).
 - KOTOR 2 is untouched, and only GOG v1.0.3 addresses are known.

@@ -180,6 +180,10 @@ internal sealed unsafe class CheatController(SharedBlockView block)
                 DestroyObject(playerId);
                 break;
 
+            case SharedBlock.CheatKindUsePlaceable:
+                UsePlaceable(player);
+                break;
+
             default:
                 Answer(SharedBlock.CheatStatusRefused, $"unknown cheat kind {kind}");
                 break;
@@ -1760,6 +1764,95 @@ internal sealed unsafe class CheatController(SharedBlockView block)
                 ? $"door 0x{doorId:X}: opened (state {before} -> {after})"
                 : $"door 0x{doorId:X}: REFUSED to open (still state {after})");
     }
+
+    /// <summary>
+    /// CONTAINER-SYNC LIVE-TEST PRIMITIVE (2026-08-22): makes the local player USE a placeable
+    /// through <c>Odyssey.UseObject</c> — the engine's own client-to-server "I clicked that"
+    /// input pipe, so the real <c>AIActionUseObject</c>/<c>CSWSPlaceable::EventHandler</c>/
+    /// <c>OpenInventory</c> path runs exactly as a real click would, which is what makes this a
+    /// meaningful test of <see cref="ContainerUseHook"/> and <see cref="InteractionLockController"/>
+    /// rather than a synthetic poke. Unlike <see cref="UseDoor"/>/<see cref="OpenDoor"/> there is
+    /// no walk to queue and no walkmesh coupling — <c>Odyssey.UseObject</c> is a single fire-and-
+    /// forget send, so this either reports the send succeeded or explains why it could not be
+    /// attempted at all (range, resolution). See docs/research/container-sync.md.
+    /// </summary>
+    private void UsePlaceable(nint player)
+    {
+        uint requestedId = block.CheatTarget;
+        string text = ReadCheatText();
+
+        nint placeable;
+        string what;
+        int seen = 0;
+
+        if (requestedId != 0)
+        {
+            placeable = Odyssey.ResolvePlaceable(requestedId);
+            what = $"0x{requestedId:X}";
+
+            if (placeable == 0 && Odyssey.ResolveServerObject(requestedId) != 0)
+            {
+                Answer(SharedBlock.CheatStatusNoTarget, $"{what} exists but is not a placeable");
+                return;
+            }
+        }
+        else if (text.Length > 0)
+        {
+            byte* tag = block.CheatText;
+            int length = 0;
+            while (length < SharedBlock.CheatTextLength - 1 && tag[length] != 0)
+            {
+                length++;
+            }
+
+            placeable = OdysseyPlaceables.FindPlaceableByTag(tag, length);
+            what = $"'{text}'";
+        }
+        else
+        {
+            // Logged FIRST, unconditionally: a bare `useplaceable` is also the live-test
+            // script's way to discover ids, and it should see the whole sweep even when the
+            // nearest-container search below comes up empty.
+            OdysseyPlaceables.LogPlaceableSweep(player);
+            placeable = OdysseyPlaceables.FindNearestContainer(player, out seen);
+            what = "the nearest container";
+        }
+
+        if (placeable == 0)
+        {
+            Answer(SharedBlock.CheatStatusRefused, seen == 0
+                ? "the sweep found no placeables at all in this module"
+                : $"the sweep found {seen} placeable(s) but none close enough / none with inventory");
+            return;
+        }
+
+        uint placeableId = OdysseyPlaceables.GetPlaceableObjectId(placeable);
+        float distance = Distance(Odyssey.GetPosition(player), Odyssey.GetPosition(placeable));
+
+        if (distance > PlaceableUseRange)
+        {
+            Answer(
+                SharedBlock.CheatStatusRefused,
+                $"placeable 0x{placeableId:X} ({what}) is {distance:F1}m away, too far to use");
+            return;
+        }
+
+        bool sent = Odyssey.UseObject(placeableId);
+        PluginHost.Log(
+            $"placeable: use-object sent for 0x{placeableId:X} at {distance:F1}m ({(sent ? "ok" : "FAILED")})");
+
+        Answer(
+            sent ? SharedBlock.CheatStatusApplied : SharedBlock.CheatStatusEngineRefused,
+            sent
+                ? $"placeable 0x{placeableId:X}: use sent (the container/interaction-lock "
+                    + "machinery reacts to it like a real click)"
+                : $"placeable 0x{placeableId:X}: UseObject failed (no client or no message object)");
+    }
+
+    /// <summary>How close the player has to be for <c>useplaceable</c> to send the use — the
+    /// engine resolves range/reach itself once the input reaches it, but a request aimed at a
+    /// container across the map is a mistake worth catching here rather than silently sent.</summary>
+    private const float PlaceableUseRange = 15f;
 
     /// <summary>Sweeps the module for doors and returns the nearest one, with no linked-to-
     /// module filter — the opposite of <see cref="FindNearestTransitionDoor"/>, and the whole

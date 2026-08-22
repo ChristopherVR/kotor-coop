@@ -105,6 +105,19 @@ internal static unsafe partial class CreatureFinder
     public static nint FindDoorByTag(ReadOnlySpan<byte> tag) =>
         tag.IsEmpty ? 0 : Sweep(0, tag, DoorVtable);
 
+    /// <summary>CSWSPlaceable vtable (docs/research/placeables-containers.md) — the same value
+    /// <c>Odyssey.ResolvePlaceable</c> vtable-checks against. Redeclared here rather than
+    /// exposed from Odyssey.cs so this file's sweep helpers stay self-contained, the same way
+    /// <see cref="DoorVtable"/> already is for doors.</summary>
+    public const nint PlaceableVtable = 0x007494D0;
+
+    /// <summary>Finds a PLACEABLE by tag, for the container-use staging verb. Like
+    /// <see cref="FindDoorByTag"/>, this stops at the first match — the base game routinely
+    /// places several placeables with the same tag, so "by tag" only ever means "one of them",
+    /// exactly as fuzzy as the door verb's own tag lookup.</summary>
+    public static nint FindPlaceableByTag(ReadOnlySpan<byte> tag) =>
+        tag.IsEmpty ? 0 : Sweep(0, tag, PlaceableVtable);
+
     /// <summary>
     /// Copies every object with <paramref name="vtable"/> into <paramref name="into"/> and
     /// returns how many were written (never more than <paramref name="capacity"/>).

@@ -1598,12 +1598,14 @@ public sealed class CoopAgent(IGameBridge bridge, ICoopSession session, AgentSet
     /// </summary>
     private void PumpInteractionLocks(in PlayerState local)
     {
-        bridge.TryReadLocalInteraction(out string tag, out uint kind, out bool active);
+        bridge.TryReadLocalInteraction(out string tag, out uint kind, out bool active, out uint targetId);
 
         // Sent even when the tag is empty: that is how the session learns which module the
-        // locks are scoped to, and a lock names a tag, which only means anything in one.
+        // locks are scoped to, and a lock names a tag (or, for InteractionKind.Container, a
+        // target id instead — see InteractionLockStore's remarks), which only means anything
+        // in one.
         session.PublishInteractionClaim(
-            local.Module, tag ?? string.Empty, (InteractionKind)kind, active);
+            local.Module, tag ?? string.Empty, (InteractionKind)kind, active, targetId);
 
         // ⚠ OUR OWN LOCK IS FILTERED OUT HERE, so the plugin can hold everything it is given
         // without needing to know its own peer id.

@@ -1468,11 +1468,13 @@ public sealed class CoopClient : ICoopSession
     private string _interactionTag = string.Empty;
     private InteractionKind _interactionKind;
     private bool _interactionActive;
+    private uint _interactionTargetId;
 
     private IReadOnlyList<InteractionLock> _interactionLocks = [];
     private string _interactionLockModule = string.Empty;
 
-    public void PublishInteractionClaim(string module, string tag, InteractionKind kind, bool active)
+    public void PublishInteractionClaim(
+        string module, string tag, InteractionKind kind, bool active, uint targetId = 0)
     {
         lock (_gate)
         {
@@ -1480,6 +1482,7 @@ public sealed class CoopClient : ICoopSession
             _interactionTag = tag ?? string.Empty;
             _interactionKind = kind;
             _interactionActive = active;
+            _interactionTargetId = targetId;
         }
     }
 
@@ -1512,21 +1515,25 @@ public sealed class CoopClient : ICoopSession
         string tag;
         InteractionKind kind;
         bool active;
+        uint targetId;
         lock (_gate)
         {
             module = _interactionModule;
             tag = _interactionTag;
             kind = _interactionKind;
             active = _interactionActive;
+            targetId = _interactionTargetId;
         }
 
-        if (tag.Length == 0)
+        // A Container claim keys on the object id instead of the tag — an empty tag is the
+        // NORMAL shape for one, not "nothing to claim" (InteractionLockStore's own remarks).
+        if (tag.Length == 0 && !(kind == InteractionKind.Container && targetId != 0))
         {
             return;
         }
 
         int length = PacketCodec.Write(
-            _sendBuffer, new InteractionClaimPacket(_localPeerId, module, tag, kind, active));
+            _sendBuffer, new InteractionClaimPacket(_localPeerId, module, tag, kind, active, targetId));
         if (length > 0)
         {
             _channel.Send(_hostEndPoint, _sendBuffer.AsSpan(0, length));

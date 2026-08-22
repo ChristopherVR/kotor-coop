@@ -75,6 +75,11 @@ internal static class ConsoleVerbCatalog
         // a queued movie might swallow, so this and `moviewarp queue` are used together.
         ("usedoor", "usedoor [tag|id]  (blank = nearest module transition door)"),
         ("opendoor", "opendoor [tag|id]  (blank = nearest door; unlike usedoor, no transition needed)"),
+
+        // The container-sync live-test primitive: use a chest/corpse/switch through the
+        // engine's own use-object input, exactly like a real click. See
+        // docs/research/container-sync.md.
+        ("useplaceable", "useplaceable [tag|id]  (blank = nearest container placeable)"),
         // The item-identity harness. `items` finds a target, `setitem` makes it worth
         // sending, `dropitem 0x..` sends it, `item` reads back what arrived — the whole loop
         // is these four, and none of them shadows a retail verb (the engine's list has

@@ -87,6 +87,59 @@ internal sealed unsafe class InteractionLockController(SharedBlockView block)
 
     private int _heldLogged = -1;
 
+    // ---- containers (protocol version 37, docs/research/container-sync.md) -------------
+    //
+    // The Container-kind sibling of everything above: a peer's Container claim carries a
+    // placeable object id (SharedBlockView.InteractionLockTargetId), not a tag, so it is
+    // resolved via Odyssey.ResolvePlaceable rather than the creature-tag sweep, and the "hold"
+    // it applies is a one-shot open/close ANIMATION at the edges of the lease rather than a
+    // per-frame ClearAllActions.
+
+    /// <summary>Mirrors <c>InteractionKind.Container</c>; the plugin does not reference the
+    /// protocol assembly (same reasoning as <see cref="InteractionKindConversation"/>).</summary>
+    private const uint InteractionKindContainer = 2;
+
+    /// <summary>Containers a PEER currently holds, this pass — refreshed every
+    /// <see cref="ApplyPeerLocks"/> and handed to <see cref="ContainerUseHook"/> so this
+    /// instance's own attempt to open the same one is refused inside the engine.</summary>
+    private readonly uint[] _peerContainerIds = new uint[SharedBlock.InteractionLockCapacity];
+    private readonly uint[] _peerContainerPeerIds = new uint[SharedBlock.InteractionLockCapacity];
+
+    /// <summary>Containers THIS instance has already played the open animation for, on a
+    /// peer's behalf. Diffed against the current peer-held set every pass: new entries get the
+    /// open animation, entries that drop out get the close animation — see
+    /// <see cref="ReconcileContainerAnimations"/>.</summary>
+    private readonly uint[] _mirroredOpenContainerIds = new uint[SharedBlock.InteractionLockCapacity];
+    private int _mirroredOpenContainerCount;
+
+    /// <summary>An allowed <c>OpenInventory</c> attempt this instance's own engine made,
+    /// waiting for <c>Odyssey.IsPlaceableOpen</c> to confirm it actually opened (the function
+    /// has its own internal no-op branches — see <see cref="ContainerUseHook"/> — so an
+    /// attempt is not yet a claim).</summary>
+    private uint _pendingContainerId;
+    private uint _seenAttemptSerial;
+    private int _pendingFramesLeft;
+
+    /// <summary>How many <see cref="OnFrame"/> passes to keep watching a pending attempt
+    /// before giving up. <see cref="PollLocalContainerUse"/> runs every frame (untimed, like
+    /// <see cref="PublishLocalClaim"/> itself), so this is a frame count, not a duration —
+    /// generous enough that a real open (which runs synchronously inside the same engine call
+    /// that produced the attempt) is never missed, short enough that a declined attempt does
+    /// not poll forever.</summary>
+    private const int PendingContainerTimeoutFrames = 90;
+
+    /// <summary>The container THIS instance's own local player currently has open, or 0.</summary>
+    private uint _localContainerId;
+    private bool _localContainerActive;
+
+    private uint _seenBlockedCount;
+    private long _containerNoticeUntilMs;
+    private readonly byte[] _containerNoticeBuffer = new byte[SharedBlock.NameLength + ContainerNoticeSuffix.Length];
+    private int _containerNoticeLength;
+
+    private static readonly byte[] ContainerNoticeSuffix = " is looting that - wait a moment"u8.ToArray();
+    private static readonly byte[] ContainerNoticeGenericName = "Another player"u8.ToArray();
+
     /// <summary>A module change reassigns every body, so a cached pointer names nothing.</summary>
     public void Invalidate()
     {
@@ -100,8 +153,22 @@ internal sealed unsafe class InteractionLockController(SharedBlockView block)
         *block.LocalInteractionTag = 0;
         block.LocalInteractionActive = false;
         block.LocalInteractionKind = 0;
+        block.LocalInteractionTargetId = 0;
         _heldLogged = -1;
         _farNoticeUntilMs = 0;
+
+        // The OLD module's placeables are gone; a mirrored-open id names nothing there, so
+        // this forgets rather than trying to play a close animation nobody will ever see —
+        // same discipline the creature cache above already follows.
+        _mirroredOpenContainerCount = 0;
+        _pendingContainerId = 0;
+        _seenAttemptSerial = 0;
+        _pendingFramesLeft = 0;
+        _localContainerId = 0;
+        _localContainerActive = false;
+        _seenBlockedCount = 0;
+        _containerNoticeUntilMs = 0;
+        _containerNoticeLength = 0;
     }
 
     /// <summary>
@@ -116,9 +183,28 @@ internal sealed unsafe class InteractionLockController(SharedBlockView block)
     /// </summary>
     public void ReleaseSession()
     {
+        // A courtesy, not a correctness requirement: play the close pose on anything this
+        // instance mirrored open on a peer's behalf, so a clean disconnect does not leave a
+        // container looking open forever on THIS screen even though the session that was
+        // holding it is gone. Invalidate() below forgets the tracking either way (the same
+        // "module change reassigns everything" discipline applies to "session ended" too), so
+        // this has to run first.
+        for (int i = 0; i < _mirroredOpenContainerCount; i++)
+        {
+            nint placeable = Odyssey.ResolvePlaceable(_mirroredOpenContainerIds[i]);
+            if (placeable == 0)
+            {
+                continue;
+            }
+
+            OdysseyPlaceables.PlayContainerCloseAnimation(placeable);
+            OdysseyPlaceables.ClearPlaceableOpenFlag(placeable);
+        }
+
         block.ClearInteractionLocks();
         Invalidate();
         _lockCountLogged = -1;
+        ContainerUseHook.SetHeldContainers([], []);
         PluginHost.Log("interaction: dropped every peer lock — nobody else is holding anything here");
     }
 
@@ -134,6 +220,12 @@ internal sealed unsafe class InteractionLockController(SharedBlockView block)
         // Drawn every frame, independent of ApplyPeerLocks's throttle — a notice that only
         // repaints once every ten frames flickers.
         DrawFarNotice();
+
+        // Container refusals come straight off ContainerUseHook's own capture, which fires the
+        // instant the engine reaches OpenInventory — polling it only on ApplyPeerLocks's
+        // ten-frame cadence would show the notice up to a third of a second late.
+        PollContainerRefusals();
+        DrawContainerNotice();
 
         if (_countdown > 0)
         {
@@ -170,11 +262,85 @@ internal sealed unsafe class InteractionLockController(SharedBlockView block)
 
         claim[i] = 0;
 
-        block.LocalInteractionKind = i > 0 ? InteractionKindConversation : 0;
+        if (i > 0)
+        {
+            // Talking takes priority defensively — the engine's own dialogue system and the
+            // container GUI cannot both have the player's attention in practice, but a claim
+            // naming the wrong kind is worse than one naming nothing, so this never lets a
+            // stale container watch overwrite a real conversation claim.
+            block.LocalInteractionKind = InteractionKindConversation;
+            block.LocalInteractionActive = true;
+            block.LocalInteractionTargetId = 0;
+            return;
+        }
+
+        PollLocalContainerUse();
+
+        if (_localContainerActive)
+        {
+            block.LocalInteractionKind = InteractionKindContainer;
+            block.LocalInteractionActive = true;
+            block.LocalInteractionTargetId = _localContainerId;
+            return;
+        }
+
+        block.LocalInteractionKind = 0;
 
         // A LEVEL. The lease on the far side expires on its own when this stops being true,
         // which is the whole reason there is no release message to lose.
-        block.LocalInteractionActive = i > 0;
+        block.LocalInteractionActive = false;
+        block.LocalInteractionTargetId = 0;
+    }
+
+    /// <summary>
+    /// Detects "the local player is now looking at container C's loot panel" and "the local
+    /// player closed it again", purely by correlating <see cref="ContainerUseHook"/>'s own
+    /// capture of an ALLOWED <c>OpenInventory</c> attempt with <c>Odyssey.IsPlaceableOpen</c>
+    /// actually flipping — no engine call of our own, and no guess: the same field the real
+    /// <c>OpenInventory</c>/<c>CloseInventory</c> functions themselves set and clear (see
+    /// <c>OdysseyPlaceables</c>'s own remarks on that field's real, transient semantics).
+    /// </summary>
+    private void PollLocalContainerUse()
+    {
+        uint attemptId = ContainerUseHook.LatestAttempt(out uint serial);
+        if (serial != 0 && serial != _seenAttemptSerial)
+        {
+            _seenAttemptSerial = serial;
+            if (attemptId != 0 && attemptId != _localContainerId)
+            {
+                _pendingContainerId = attemptId;
+                _pendingFramesLeft = PendingContainerTimeoutFrames;
+            }
+        }
+
+        if (_pendingContainerId != 0)
+        {
+            nint pending = Odyssey.ResolvePlaceable(_pendingContainerId);
+            if (pending != 0 && Odyssey.IsPlaceableOpen(pending))
+            {
+                _localContainerId = _pendingContainerId;
+                _localContainerActive = true;
+                _pendingContainerId = 0;
+            }
+            else if (--_pendingFramesLeft <= 0)
+            {
+                // OpenInventory's own internal no-op branches (already open with no message
+                // context, the "+0x324 not set" gate, ...) declined silently — give up
+                // watching rather than poll forever.
+                _pendingContainerId = 0;
+            }
+        }
+
+        if (_localContainerActive)
+        {
+            nint held = Odyssey.ResolvePlaceable(_localContainerId);
+            if (held == 0 || !Odyssey.IsPlaceableOpen(held))
+            {
+                // The player closed their own panel, or the module changed under us.
+                _localContainerActive = false;
+                _localContainerId = 0;
+            }
+        }
     }
 
     /// <summary>Mirrors <c>InteractionKind.Conversation</c>; the plugin does not reference the
@@ -189,6 +355,7 @@ internal sealed unsafe class InteractionLockController(SharedBlockView block)
     {
         uint count = block.InteractionLockCount;
         int held = 0;
+        int containerCount = 0;
 
         for (int i = 0; i < SharedBlock.InteractionLockCapacity; i++)
         {
@@ -201,6 +368,26 @@ internal sealed unsafe class InteractionLockController(SharedBlockView block)
             }
 
             byte* entry = block.InteractionLock(i);
+            uint kind = *(uint*)(entry + 4);
+
+            if (kind == InteractionKindContainer)
+            {
+                // Not a creature; the tag-resolve cache below names nothing for this slot.
+                _creature[i] = 0;
+                _cachedTag[i][0] = 0;
+                _nextRetryMs[i] = 0;
+
+                uint targetId = block.InteractionLockTargetId(i);
+                if (targetId != 0 && containerCount < _peerContainerIds.Length)
+                {
+                    _peerContainerIds[containerCount] = targetId;
+                    _peerContainerPeerIds[containerCount] = *(uint*)entry; // peerId @0
+                    containerCount++;
+                }
+
+                continue;
+            }
+
             byte* tag = entry + 8;
 
             if (*tag == 0)
@@ -225,6 +412,11 @@ internal sealed unsafe class InteractionLockController(SharedBlockView block)
             TryForceOpen(entry, tag, creature);
         }
 
+        ReconcileContainerAnimations(containerCount);
+        ContainerUseHook.SetHeldContainers(
+            new ReadOnlySpan<uint>(_peerContainerIds, 0, containerCount),
+            new ReadOnlySpan<uint>(_peerContainerPeerIds, 0, containerCount));
+
         // ⚠ The COUNT is what says the channel works; the HELD count does not.
         //
         // HoldCreatureStill only reports true when it actually cleared a walk, so an NPC that
@@ -242,6 +434,162 @@ internal sealed unsafe class InteractionLockController(SharedBlockView block)
     }
 
     private int _lockCountLogged = -1;
+
+    /// <summary>Reused across passes rather than allocated fresh — <see cref="ReconcileContainerAnimations"/>
+    /// runs every <see cref="IntervalFrames"/> frames, not per-frame, but there is still no
+    /// reason to churn two lists thirty times a minute.</summary>
+    private readonly List<uint> _toOpen = [];
+    private readonly List<uint> _toClose = [];
+
+    /// <summary>
+    /// Plays the container open/close animation exactly once per edge. The DECISION — which ids
+    /// are newly held and which dropped out — is <c>KotorCoop.Protocol.ContainerAnimationEdges.Diff</c>,
+    /// a pure function tested directly (this class is x86 NativeAOT and nothing in the test
+    /// project references it, the same reason <c>DialogueAutoJoinRule</c> lives outside it);
+    /// everything here is only the live engine calls that decision result implies.
+    /// </summary>
+    private void ReconcileContainerAnimations(int currentCount)
+    {
+        ContainerAnimationEdges.Diff(
+            new ArraySegment<uint>(_peerContainerIds, 0, currentCount),
+            new ArraySegment<uint>(_mirroredOpenContainerIds, 0, _mirroredOpenContainerCount),
+            _toOpen,
+            _toClose);
+
+        foreach (uint id in _toOpen)
+        {
+            nint placeable = Odyssey.ResolvePlaceable(id);
+            if (placeable == 0)
+            {
+                // Not resolvable yet (streaming in, or a stale/foreign id from a module we no
+                // longer share) — retried next pass rather than recorded as mirrored, so a
+                // late resolve still gets its open animation.
+                continue;
+            }
+
+            if (!Odyssey.IsPlaceableOpen(placeable))
+            {
+                OdysseyPlaceables.PlayContainerOpenAnimation(placeable);
+                Odyssey.SetPlaceableOpen(placeable);
+            }
+
+            if (_mirroredOpenContainerCount < _mirroredOpenContainerIds.Length)
+            {
+                _mirroredOpenContainerIds[_mirroredOpenContainerCount++] = id;
+            }
+        }
+
+        foreach (uint id in _toClose)
+        {
+            nint placeable = Odyssey.ResolvePlaceable(id);
+            if (placeable != 0)
+            {
+                OdysseyPlaceables.PlayContainerCloseAnimation(placeable);
+                OdysseyPlaceables.ClearPlaceableOpenFlag(placeable);
+            }
+
+            RemoveMirrored(id);
+        }
+    }
+
+    /// <summary>Swap-remove: order within this small tracking array carries no meaning.</summary>
+    private void RemoveMirrored(uint id)
+    {
+        for (int i = 0; i < _mirroredOpenContainerCount; i++)
+        {
+            if (_mirroredOpenContainerIds[i] != id)
+            {
+                continue;
+            }
+
+            _mirroredOpenContainerCount--;
+            _mirroredOpenContainerIds[i] = _mirroredOpenContainerIds[_mirroredOpenContainerCount];
+            return;
+        }
+    }
+
+    /// <summary>
+    /// Notices a fresh refusal from <see cref="ContainerUseHook"/> and composes the on-screen
+    /// line — "&lt;name&gt; is looting that - wait a moment", falling back to "Another player"
+    /// when the holder's slot cannot be found (a peer that just disconnected, say). Composed
+    /// once per refusal rather than every frame: the peer-name scan is cheap but there is no
+    /// reason to repeat it thirty times a second for a notice that only changes on an edge.
+    /// </summary>
+    private void PollContainerRefusals()
+    {
+        uint blocked = ContainerUseHook.BlockedCount;
+        if (blocked == _seenBlockedCount)
+        {
+            return;
+        }
+
+        _seenBlockedCount = blocked;
+        _containerNoticeUntilMs = Environment.TickCount64 + FarNoticeDurationMs;
+        (_, uint holderPeerId) = ContainerUseHook.LastBlocked;
+        _containerNoticeLength = BuildContainerNoticeText(holderPeerId);
+    }
+
+    private int BuildContainerNoticeText(uint holderPeerId)
+    {
+        int n = 0;
+        uint remoteCount = Math.Min(block.RemoteCount, (uint)SharedBlock.SlotCapacity);
+
+        for (int i = 0; i < remoteCount; i++)
+        {
+            RemoteView remote = block.GetRemote(i);
+            if (!remote.Active || remote.PeerId != holderPeerId)
+            {
+                continue;
+            }
+
+            byte* name = block.GetRemoteName(i);
+            int cap = _containerNoticeBuffer.Length - ContainerNoticeSuffix.Length;
+            while (n < cap && n < SharedBlock.NameLength && name[n] != 0)
+            {
+                _containerNoticeBuffer[n] = name[n];
+                n++;
+            }
+
+            break;
+        }
+
+        if (n == 0)
+        {
+            foreach (byte b in ContainerNoticeGenericName)
+            {
+                _containerNoticeBuffer[n++] = b;
+            }
+        }
+
+        foreach (byte b in ContainerNoticeSuffix)
+        {
+            if (n >= _containerNoticeBuffer.Length)
+            {
+                break;
+            }
+
+            _containerNoticeBuffer[n++] = b;
+        }
+
+        return n;
+    }
+
+    /// <summary>Row 7: <see cref="DrawFarNotice"/> already claims row 6,
+    /// <c>DialogueSpectateController</c>'s own notice sits at row 4 and
+    /// <c>AgentLivenessController</c>'s at row 5 — see <see cref="DrawFarNotice"/>'s own remarks
+    /// for why each of these lives on its own row.</summary>
+    private void DrawContainerNotice()
+    {
+        if (Environment.TickCount64 >= _containerNoticeUntilMs || _containerNoticeLength == 0)
+        {
+            return;
+        }
+
+        fixed (byte* p = _containerNoticeBuffer)
+        {
+            Odyssey.PostTextLine(p, 8, 7, 0.5f);
+        }
+    }
 
     /// <summary>
     /// Asks the engine to open the conversation a peer is holding this NPC for, so both

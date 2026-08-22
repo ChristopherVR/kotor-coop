@@ -164,6 +164,17 @@ public static class CheatKinds
     /// ⚠ 17, because 7-16 are taken. Take the next FREE number.
     /// </summary>
     public const uint OpenDoor = 17;
+
+    /// <summary>
+    /// Makes the local player USE a placeable (container, corpse, switch) through the engine's
+    /// own client-to-server input pipe, so the real OnUsed/GUI path runs — the container-sync
+    /// live-test primitive. <c>Text</c> is the placeable's tag, <c>Target</c> its object id;
+    /// both empty means "the nearest container placeable". See SharedBlock.CheatKindUsePlaceable
+    /// and docs/research/container-sync.md.
+    ///
+    /// ⚠ 18, because 7-17 are taken. Take the next FREE number.
+    /// </summary>
+    public const uint UsePlaceable = 18;
 }
 
 /// <summary>The plugin's verdicts, mirroring <c>SharedBlock.CheatStatus*</c>.</summary>
@@ -589,12 +600,16 @@ public interface IGameBridge : IDisposable
         int nodeIndex, uint nodeSerial) => false;
 
     /// <summary>The object the local player is interacting with, so the session can claim it
-    /// on their behalf. Default is "nothing claimed".</summary>
-    bool TryReadLocalInteraction(out string tag, out uint kind, out bool active)
+    /// on their behalf. Default is "nothing claimed". <paramref name="targetId"/> is the
+    /// placeable object id an <see cref="KotorCoop.Protocol.InteractionKind.Container"/> claim
+    /// carries (docs/research/container-sync.md); every other kind keys on
+    /// <paramref name="tag"/> instead and leaves this 0.</summary>
+    bool TryReadLocalInteraction(out string tag, out uint kind, out bool active, out uint targetId)
     {
         tag = string.Empty;
         kind = 0;
         active = false;
+        targetId = 0;
         return false;
     }
 

@@ -322,6 +322,19 @@ internal static unsafe class PluginHost
                 Log($"dialogue gate NOT installed: {gateDiagnostic}");
             }
 
+            // The container half of the same one-at-a-time rule — see ContainerUseHook and
+            // docs/research/container-sync.md.
+            ContainerUseHook.Enabled = PluginConfig.ReadBool("container_locks", true);
+            if (ContainerUseHook.Install(out string containerGateDiagnostic))
+            {
+                Log($"container: {containerGateDiagnostic}"
+                    + (ContainerUseHook.Enabled ? string.Empty : " (disabled by coop.ini)"));
+            }
+            else
+            {
+                Log($"container-use gate NOT installed: {containerGateDiagnostic}");
+            }
+
             // Opt-in diagnostic: records who writes CGuiInGame+0xB4, which is the one thing
             // that would settle why a wedged instance's conversation flag comes straight back.
             DialogStateWatchHook.Enabled = PluginConfig.ReadBool("dialog_state_watch", false);
@@ -463,7 +476,10 @@ internal static unsafe class PluginHost
         //      docs/research/cinematics.md's 2026-08-22 section.
         // 49 = the world-load edge at 0x396C (roadmap item 14 phase 2's save-vs-load
         //      detection primitive) — see docs/research/session-save.md's Phase 2 section.
-        _block->Version = 49;
+        // 50 = container-lock target ids at 0x3F08..0x3F1C, InteractionKind.Container's own
+        //      object-id key parallel to the existing tag-keyed interaction lock region — see
+        //      docs/research/container-sync.md.
+        _block->Version = 50;
 
         // A guard dword after the version. Magic plus version alone was not selective
         // enough: a scan once matched something else at a lower address and the agent
@@ -1041,6 +1057,7 @@ internal static unsafe class PluginHost
         PendingMoviePlay.Cancel();
         _barks?.Invalidate();
         _interactionLocks?.Invalidate();
+        ContainerUseHook.Invalidate();
         _partyRoster?.Invalidate();
 
         // ⚠ THIS LINE WAS MISSING, so the spectate controller's ENTIRE teardown had never run

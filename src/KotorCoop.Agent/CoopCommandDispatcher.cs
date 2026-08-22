@@ -465,6 +465,10 @@ public sealed class CoopCommandDispatcher(
                 OpenDoor(command.Address ?? string.Empty);
                 break;
 
+            case CoopCommandKind.UsePlaceable:
+                UsePlaceable(command.Address ?? string.Empty);
+                break;
+
             case CoopCommandKind.Who:
                 if (manager.Current is not { } who)
                 {
@@ -1118,6 +1122,20 @@ public sealed class CoopCommandDispatcher(
         }
 
         SendCheat(new CheatRequest(CheatKinds.OpenDoor, Text: token));
+    }
+
+    /// <summary>The container-sync live-test primitive: the same dispatch shape as
+    /// <see cref="OpenDoor"/>, for a placeable. See <c>CoopCommandKind.UsePlaceable</c> and
+    /// docs/research/container-sync.md.</summary>
+    private void UsePlaceable(string token)
+    {
+        if (ConsoleCommand.TryParseObjectId(token, out uint objectId) && objectId != 0)
+        {
+            SendCheat(new CheatRequest(CheatKinds.UsePlaceable, Target: objectId));
+            return;
+        }
+
+        SendCheat(new CheatRequest(CheatKinds.UsePlaceable, Text: token));
     }
 
     /// <summary>

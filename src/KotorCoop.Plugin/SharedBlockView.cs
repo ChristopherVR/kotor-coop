@@ -1489,6 +1489,21 @@ internal sealed unsafe class SharedBlockView(byte* baseAddress)
         baseAddress + SharedBlock.OffsetInteractionLocks
         + (Clamp(index, SharedBlock.InteractionLockCapacity) * SharedBlock.InteractionLockStride);
 
+    /// <summary>Plugin-written; the placeable object id claimed by a Container-kind local
+    /// interaction claim, or 0 for any other kind — see <see cref="LocalInteractionKind"/>.</summary>
+    public uint LocalInteractionTargetId
+    {
+        get => *U32(SharedBlock.OffsetLocalInteractionTargetId);
+        set => *U32(SharedBlock.OffsetLocalInteractionTargetId) = value;
+    }
+
+    /// <summary>Agent-written; the object id a peer's Container-kind lock at the SAME index
+    /// names (0 otherwise). Parallel array to <see cref="InteractionLock"/> rather than folded
+    /// into its stride — see SharedBlock's own region comment.</summary>
+    public uint InteractionLockTargetId(int index) =>
+        *(uint*)(baseAddress + SharedBlock.OffsetInteractionLockTargetIds
+            + (Clamp(index, SharedBlock.InteractionLockCapacity) * SharedBlock.InteractionLockTargetIdStride));
+
     // ---- companion roster reconciliation ----------------------------------------
     //
     // One packed dword per direction; see SharedBlock's region comment for why the two masks
