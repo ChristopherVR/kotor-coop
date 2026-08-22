@@ -60,14 +60,14 @@ internal sealed unsafe class PartyRosterController(SharedBlockView block)
     /// <summary>
     /// docs/research/party-reconciliation.md's client-door root cause, and
     /// <c>Odyssey.TryClampClientPartyCount</c>'s own doc comment for the mechanism: CSWParty
-    /// (the struct <c>CSWParty::IsPartyTogether</c> actually reads) can hold a stale, higher
-    /// member count than CSWPartyTable's own after a roster reconciliation remove, which makes
-    /// the engine refuse every door transition on a client — even one with zero real
-    /// companions. coop.ini <c>party_together_fix</c>, default ON — live-verified 2026-08-22
-    /// (transition-smoothness.md §8.5's follow-up, and this doc's own dated live-pass
-    /// section): fired naturally on load and on every roster reconcile across an extended
-    /// two-instance session, always shrinking toward CSWPartyTable's real count and never
-    /// growing it, and the client crossed a real door cleanly once it applied.
+    /// (the struct <c>CSWParty::IsPartyTogether</c> actually reads) holds a HIGHER member count
+    /// than CSWPartyTable's because it counts the PC too — not staleness, as first diagnosed.
+    /// On a client the companions in it are mirrored bodies standing wherever the host's are,
+    /// so IsPartyTogether refuses every door; clamping the count past them is what lets a
+    /// client cross. coop.ini <c>party_together_fix</c>, default ON, CLIENT-ONLY since
+    /// 2026-08-22: an earlier build ran it on the host as well and took the host's own
+    /// companions out of the struct their control and portraits read (see
+    /// <see cref="SyncClientPartyTogetherState"/>).
     /// </summary>
     private readonly bool _togetherFixEnabled = PluginConfig.ReadBool("party_together_fix", true);
 
@@ -152,6 +152,21 @@ internal sealed unsafe class PartyRosterController(SharedBlockView block)
     private void SyncClientPartyTogetherState()
     {
         if (!_togetherFixEnabled)
+        {
+            return;
+        }
+
+        // ⚠ CLIENTS ONLY. The "divergence" this clamps is not staleness: CSWPartyTable counts
+        // COMPANIONS (Trask -> 1) while CSWParty counts the PC as well (PC + Trask -> 2), so the
+        // two read differently on every healthy instance. Clamping CSWParty to the table's
+        // count drops the last companion out of the struct the selection UI, portraits and
+        // follow logic read — which on the HOST meant the player lost control of their own
+        // companions the moment the channel came up (reported 2026-08-22). A client mirrors its
+        // companions from the host and never commands them, so there the loss is harmless and
+        // the clamp is what lets IsPartyTogether pass a door whose "party" is standing wherever
+        // the host's companions are. The host-roster valid bit is the cleanest "I am a client
+        // in a live session" signal this plugin has (it is only ever written for a client).
+        if (!block.TryGetHostPartyRoster(out _, out _))
         {
             return;
         }
