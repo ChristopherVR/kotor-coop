@@ -1936,6 +1936,35 @@ internal struct SharedBlock
     /// Region ends here, at 0x3BD8.</summary>
     public const int OffsetTriggerStatus = 0x3BD4;
 
+    // ---- generic trigger relay: native fires (protocol 36, region 0x3BD8..0x3BF0) ----
+    //
+    // The REVERSE direction docs/research/trigger-relay.md's symmetry pass closes: the region
+    // above only ever carried a client's own WATCH report (currently standing in). This one
+    // carries the SAME instance's own engine having NATIVELY fired a generic trigger for its
+    // own real character — observed by TriggerFireHook's detour on
+    // CSWSTrigger::EventHandler's generic-script RunScript call site, not by a per-frame
+    // polygon test — so it fires exactly once per module per genuinely-new trigger id, already
+    // allowlist- and eligibility-filtered by TriggerRelayController the same way the watch is.
+    //
+    // Placed in the 40 bytes of tail-slack OffsetTriggerStatus's own comment already measured
+    // and did not use (0x3BD8..0x3C00). This region ends at 0x3BF0, so 16 bytes of that slack
+    // are still free after it. No TotalSize growth.
+
+    /// <summary>Plugin -&gt; agent. How many entries of <see cref="OffsetTriggerNativeFired"/>
+    /// are valid.</summary>
+    public const int OffsetTriggerNativeFiredCount = 0x3BD8;
+
+    /// <summary>Plugin -&gt; agent. Bumped whenever the set changes.</summary>
+    public const int OffsetTriggerNativeFiredSerial = 0x3BDC;
+
+    /// <summary>Plugin -&gt; agent. Object ids of the generic triggers THIS instance's own
+    /// engine has natively fired for its own real character, allowlist- and
+    /// eligibility-filtered, capacity <see cref="TriggerNativeFiredCapacity"/>. Occupies
+    /// 0x3BE0..0x3BF0. Region ends here, at 0x3BF0.</summary>
+    public const int OffsetTriggerNativeFired = 0x3BE0;
+
+    public const int TriggerNativeFiredCapacity = 4;
+
     // ---- co-op death handling (version 14, region 0x1020..0x1080) -----------------
     //
     // KOTOR party members never truly die: at 0 HP they go "temp dead" and the engine

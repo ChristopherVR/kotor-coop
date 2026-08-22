@@ -423,9 +423,41 @@ public sealed record EncounterTriggerPacket(
 /// A LEVEL in both directions, like <see cref="EncounterTriggerPacket"/>: both sides resend
 /// their current truth every tick rather than an edge, so one lost datagram costs a tick, not
 /// a permanently missed relay. See docs/research/trigger-relay.md.
+///
+/// <paramref name="NativeFiredIds"/> / <paramref name="NativeFiredOriginPeerIds"/> close the
+/// REVERSE direction (protocol 36): before this, only a client's presence in a trigger ever
+/// reached the other instance. A <c>TriggerFireHook</c> detour on
+/// <c>CSWSTrigger::EventHandler</c>'s own generic-script call site observes ANY instance's
+/// engine natively firing a trigger for its own real PC (allowlist- and eligibility-filtered
+/// the same way the watch already is) —
+///
+/// - client/host -&gt; host (<paramref name="PeerId"/> the sender's real id): triggers THIS
+///   peer's own engine has natively fired for itself, in <paramref name="NativeFiredIds"/>.
+///   <paramref name="NativeFiredOriginPeerIds"/> is empty — origin is implicitly the sender.
+/// - host -&gt; all (<paramref name="PeerId"/> == 0): the merged per-module native-fire set —
+///   every peer's own natural OnEnter this host knows about — in
+///   <paramref name="NativeFiredIds"/>, matched 1:1 by index against the peer id that fired it
+///   in <paramref name="NativeFiredOriginPeerIds"/>. A receiver whose own peer id already
+///   equals an entry's origin skips it (that engine already ran it for real); every OTHER
+///   receiver fires the SAME trigger locally against the origin's phantom, through the same
+///   <c>TriggerRelayController.HandleRequests</c> path the host already used one-way. Folded
+///   into the SAME per-module fired-set <see cref="FiredIds"/> already dedupes, so the two
+///   directions can never double-fire one trigger.
 /// </summary>
 public sealed record TriggerRelayPacket(
-    uint PeerId, string Module, IReadOnlyList<uint> TriggerIds, IReadOnlyList<uint> FiredIds);
+    uint PeerId, string Module, IReadOnlyList<uint> TriggerIds, IReadOnlyList<uint> FiredIds,
+    IReadOnlyList<uint> NativeFiredIds, IReadOnlyList<uint> NativeFiredOriginPeerIds)
+{
+    /// <summary>Convenience for the many existing callers that predate protocol 36 and never
+    /// send a native fire in the same breath as their other report. Parameter names match the
+    /// primary constructor's exactly so a caller using named arguments (<c>PeerId: 5</c>, say)
+    /// still resolves to this overload rather than being forced onto the 6-arg one.</summary>
+    public TriggerRelayPacket(
+        uint PeerId, string Module, IReadOnlyList<uint> TriggerIds, IReadOnlyList<uint> FiredIds)
+        : this(PeerId, Module, TriggerIds, FiredIds, [], [])
+    {
+    }
+}
 
 /// <summary>
 /// One NPC bark: the line an NPC throws into a bubble without opening a conversation.

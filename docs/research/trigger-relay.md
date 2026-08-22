@@ -565,3 +565,139 @@ dedup/negative-control verdict above, and the double-fire risk named in §3/§7 
 bounded rather than removed for `end_trig_carth02`'s own script specifically (still absorbed
 without visible effect) — but now also observed for the DIFFERENT double-fire shape (an arrival
 cutscene, not this channel's own relay) that the same waypoint happens to sit on top of.
+
+## 12. Protocol 36 — the REVERSE direction: the host's own entry now reaches a client
+
+Everything above closes exactly one direction: a CLIENT walking through a story trigger reaches
+the HOST. The gap this section closes is the mirror image, and it is real — this document's own
+§1 already named it in passing ("nothing turns off a client's own generic triggers... its own
+engine fires `ScriptOnEnter` correctly") without ever noticing the same sentence is equally true
+of the HOST's own real character, and that the HOST's own entry had **no channel at all**: no
+watch, no request, nothing to relay, because the host's engine simply fires the trigger and
+nothing in this codebase was ever told.
+
+### What ships
+
+A new detour, `TriggerFireHook` (`src/KotorCoop.Plugin/TriggerFireHook.cs`), on
+`CSWSTrigger::EventHandler`'s own generic-script RunScript call site — **VERIFIED** by
+disassembling the exact bytes with `tools/disasm.py` against `tools/kotor1_0_3.db` (same GOG
+1.0.3 binary this whole document is read from):
+
+```
+0x0058F504  8B 46 04              mov eax, dword ptr [esi + 4]      ; trigger's own id
+0x0058F507  6A 01                 push 1
+0x0058F509  50                    push eax
+0x0058F50A  8D 8E 4C 02 00 00     lea ecx, [esi + 0x24C]
+0x0058F510  51                    push ecx
+0x0058F511  8B 0D 00 3A 7A 00     mov ecx, dword ptr [0x7A3A00]
+0x0058F517  E8 A4 1A 04 00        call CVirtualMachine::RunScript (0x5D0FC0)
+```
+
+The first 5 bytes (`mov eax,[esi+4]` + `push 1`) are exactly one instruction-aligned JMP's
+worth. The hook captures `(triggerId=[esi+4], enteringObjectId=[esi+0x29C])` — the SAME cached
+field §2 step 1 already establishes is written unconditionally before this call is ever reached
+— into a small ring buffer, then jumps back. Nothing here calls the engine (same "least possible
+work, no engine calls" discipline `PhantomEffectHook` sets); filtering happens on the main
+thread in `TriggerRelayController.HandleNativeFireObservation`, which drains the ring, keeps
+only entries whose entering object is THIS instance's own `Odyssey.GetPlayerObjectId()` (a
+companion or hostile creature crossing the same polygon is out of scope, matching the watch's
+own "only the local player" semantics), and re-applies the SAME `IsRelayEligible` + allowlist
+gates the watch already does before publishing.
+
+Firing THROUGH the existing relay (`OdysseyTriggers.FireTrigger`) never reaches this hook site —
+it calls `RunScript` directly at 0x5D0FC0, bypassing `EventHandler` entirely — so the hook only
+ever observes a genuinely NEW native entry, never its own relayed fire looping back on itself.
+
+The plugin's own capture publishes into a new 24-byte shared-block region
+(`0x3BD8..0x3BF0`, fit into the same tail-slack §5's own region already measured, no
+`TotalSize` growth — see `SharedBlock.cs`'s own comment there). `CoopAgent.PumpNativeTriggerFires`
+reads it every pump, on EVERY peer (not only the host), and calls the new
+`ICoopSession.PublishNativeTriggerFires` — on a client this reaches the host over the wire
+(`TriggerRelayPacket.NativeFiredIds`, protocol 36); on the host it folds straight into
+`TriggerRelayStore` with **no packet at all** (`CoopHost.PublishNativeTriggerFires` calls
+`TriggerRelayStore.ReportNativeFires` directly), using `CoopHost.HostPeerId` as origin — the
+same entry point a client's report reaches over the wire, just without the round trip.
+
+`TriggerRelayStore` merges every peer's native-fire claims into the SAME per-module fired-set
+`Collect()` already uses (`_firedByModule`), with a parallel `_nativeOriginByModule` recording
+WHO fired each one. This is the "dedup applies both ways" the task asked for: whichever path —
+a client's watch-driven `Collect()` request, or ANY peer's native-fire report — claims a
+trigger id first wins; the other path silently sees it as already fired. The host rebroadcasts
+the merged native-fire set with origins every tick (`BroadcastTriggerRelay`, extended
+`TriggerRelayPacket.NativeFiredIds`/`NativeFiredOriginPeerIds`, 1:1 matched by index) — a LEVEL,
+like the existing `FiredIds` broadcast, so a lost datagram costs one tick, never a stuck state.
+
+Every OTHER peer, on receipt (`CoopAgent.PumpNativeTriggerFires`, filtering out entries whose
+origin is its own `LocalPeerId`, and deduplicating locally per module so a repeat broadcast
+never re-fires the same id — `_nativeFireHandledIds`), asks its OWN plugin to fire the trigger
+through the EXACT SAME `TriggerRelayController.HandleRequests` → `OdysseyTriggers.FireTrigger`
+path the host already used one-way — now reachable from any instance, targeting the origin
+peer's phantom (`FindPhantom`, unchanged, already generic over peer id).
+
+### VERIFIED vs INFERRED vs NEEDS-LIVE
+
+- **VERIFIED**: the hook site's exact bytes and instruction boundaries (read directly off the
+  binary this pass, cited above); that the relay's own fire path never reaches this call site
+  (it calls `RunScript` directly, a different call site); that nothing between the hook site
+  and the branch's eventual `jmp 0x58F663` a few instructions later depends on FLAGS set before
+  the hook (so the hook's own `call`, which does not preserve FLAGS, is safe) — confirmed by
+  reading the whole branch, not merely the hook site; the entering-object cache field
+  (`[esi+0x29C]`) is written unconditionally before this call is ever reached (§2 step 1,
+  already VERIFIED for the existing relay).
+- **INFERRED** (same status §4's existing claim already carries for the write side of this
+  field): whether `GetEnteringObject()`, as read by the fired SCRIPT, actually reads this exact
+  field for a trigger specifically. The bytes and the call shape are verified; the semantic
+  meaning for the running script is carried over from the identical, only-partially-live-settled
+  claim §11 item 4 already made.
+- **NEEDS-LIVE** (nothing in this pass was run against the game — same status every other
+  protocol-gated addition in this codebase starts from): that a real, unrelayed entry by the
+  HOST's own real character is captured, correctly filtered (own-player-id, eligibility,
+  allowlist), reaches a CLIENT as a native-fire broadcast, and that client's own `FireTrigger`
+  call runs with no crash; that the shared `_firedByModule` dedup genuinely prevents a
+  double-fire between the watch/`Collect()` path and the native-fire path when both could claim
+  the same trigger id in the same tick (the two paths' ordering inside one `CoopHost` pump is
+  not itself live-measured); the double-fire risk this document's own §3/§7 item 5/§11 already
+  names and bounds (never removes) for the SAME-trigger-native-on-both-sides case — this pass
+  adds a THIRD engine that can now run the script (the peer who receives the broadcast), which
+  is new exposure to that same, already-accepted risk, not a new kind of risk.
+
+`trigger_relay=1` remains the single kill switch for the whole channel, both directions.
+
+### Files touched this pass
+
+- `src/KotorCoop.Plugin/TriggerFireHook.cs` — new, the detour.
+- `src/KotorCoop.Plugin/TriggerRelayController.cs` — `HandleNativeFireObservation`, the new
+  publish-side per-module dedup/allowlist pass, `SetTriggerNativeFired`.
+- `src/KotorCoop.Plugin/SharedBlock.cs` / `SharedBlockView.cs` — the new region.
+- `src/KotorCoop.Memory/IGameBridge.cs` / `KotorGameBridge.cs` — `ReadNativeFiredTriggers`.
+- `src/KotorCoop.Protocol/Packets.cs` / `PacketCodec.cs` / `ProtocolConstants.cs` —
+  `TriggerRelayPacket.NativeFiredIds`/`NativeFiredOriginPeerIds`, protocol 36.
+- `src/KotorCoop.Session/TriggerRelayStore.cs` — `ReportNativeFires`, `GetNativeFires`,
+  `_nativeOriginByModule`, the shared dedup.
+- `src/KotorCoop.Session/ICoopSession.cs` / `CoopHost.cs` / `CoopClient.cs` —
+  `PublishNativeTriggerFires`, `GetNativeTriggerFireRequests`.
+- `src/KotorCoop.Session/CoopAgent.cs` — `PumpTriggerFiring` (unifies the old host-only request
+  path and the new symmetric native-fire path into one combined bridge write),
+  `PumpNativeTriggerFires`.
+- Tests: `tests/KotorCoop.Tests/TriggerRelayStoreTests.cs` (native-fire dedup, both-ways
+  sharing with the watch path, origin tracking, per-module/clear semantics),
+  `tests/KotorCoop.Tests/PacketCodecTests.cs` (round trip, both directions, cap truncation).
+
+### An exact live-test script for this section
+
+1. Host and client both load a save in `end_m01ab` (or any module from §8's inventory), both
+   `trigger_relay=1` (default).
+2. Have the HOST's real character walk into a story trigger the CLIENT is nowhere near (a
+   trigger the client cannot also natively fire in the same window) — `end_trig_carth02` at
+   `end_m01ab`'s `from_01a` waypoint is the same one §11's live pass already reached for free on
+   arrival, but this time watch it from the HOST's side specifically.
+3. Host log should read `triggers: observed my own engine natively fire OnEnter of 0x… —
+   publishing for other peers`.
+4. Client log should read `triggers: fired OnEnter of 0x… for peer 1 (phantom 0x…)` — peer 1
+   being `CoopHost.HostPeerId`, confirming the client fired it against the HOST's own phantom.
+5. Confirm no repeat: leave both standing and confirm the host does not re-log the observation
+   and the client does not re-fire (the shared per-module fired-set holding, same check §11
+   item 6 already made for the reverse direction).
+6. Reverse the roles (client's real character reaches an eligible trigger the host has not) and
+   confirm the EXISTING direction (§5/§11) still works unchanged — protocol 36 must not have
+   regressed the direction that was already live-verified.

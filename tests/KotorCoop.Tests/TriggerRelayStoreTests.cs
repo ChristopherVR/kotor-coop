@@ -244,4 +244,123 @@ public class TriggerRelayStoreTests
             [new TriggerFireRequest(0x50, 5)],
             store.Collect("end_m01aa", nowMs: 1000));
     }
+
+    // ---- native fires (protocol 36 — the reverse relay direction) -----------------------
+
+    [Fact]
+    public void TheHostsOwnNativeFireIsRecordedWithNoPacket()
+    {
+        // CoopHost.ReportNativeFires's own local path — no Report() call at all.
+        TriggerRelayStore store = new();
+        store.ReportNativeFires(peerId: 1, "end_m01aa", [0x26]);
+
+        Assert.Equal(
+            [new TriggerFireRequest(0x26, 1)],
+            store.GetNativeFires("end_m01aa"));
+    }
+
+    [Fact]
+    public void APeersReportedNativeFireIsRecordedWithItsOrigin()
+    {
+        TriggerRelayStore store = new();
+        store.Report(new TriggerRelayPacket(5, "end_m01aa", [], [], [0x26], []), nowMs: 1000);
+
+        Assert.Equal(
+            [new TriggerFireRequest(0x26, 5)],
+            store.GetNativeFires("end_m01aa"));
+    }
+
+    [Fact]
+    public void ANativeFireJoinsTheSameFiredSetAWatchDrivenFireUses()
+    {
+        // The one dedup set: a trigger a peer's own engine already fired natively must never
+        // also be handed out as a Collect() request for someone else's watch report.
+        TriggerRelayStore store = new();
+        store.ReportNativeFires(peerId: 1, "end_m01aa", [0x26]);
+
+        store.Report(Report(5, "end_m01aa", 0x26), nowMs: 1000);
+        Assert.Empty(store.Collect("end_m01aa", nowMs: 1000));
+        Assert.Equal([0x26u], store.GetFiredIds("end_m01aa"));
+    }
+
+    [Fact]
+    public void AWatchDrivenFireBlocksALaterNativeFireReportForTheSameId()
+    {
+        // The reverse of the above: whichever path claims a trigger id first wins, so a
+        // native-fire report for an id the relay already fired must not overwrite its origin.
+        TriggerRelayStore store = new();
+        store.Report(Report(5, "end_m01aa", 0x26), nowMs: 1000);
+        store.Collect("end_m01aa", nowMs: 1000);
+
+        store.ReportNativeFires(peerId: 1, "end_m01aa", [0x26]);
+
+        Assert.Empty(store.GetNativeFires("end_m01aa"));
+    }
+
+    [Fact]
+    public void TwoPeersClaimingTheSameNativeFireKeepTheFirstOrigin()
+    {
+        TriggerRelayStore store = new();
+        store.ReportNativeFires(peerId: 1, "end_m01aa", [0x26]);
+        store.ReportNativeFires(peerId: 2, "end_m01aa", [0x26]);
+
+        Assert.Equal(
+            [new TriggerFireRequest(0x26, 1)],
+            store.GetNativeFires("end_m01aa"));
+    }
+
+    [Fact]
+    public void NativeFiresArePerModule()
+    {
+        TriggerRelayStore store = new();
+        store.ReportNativeFires(peerId: 1, "end_m01aa", [0x26]);
+
+        Assert.Empty(store.GetNativeFires("tar_m02aa"));
+    }
+
+    [Fact]
+    public void ForgettingAModuleDropsItsNativeFires()
+    {
+        TriggerRelayStore store = new();
+        store.ReportNativeFires(peerId: 1, "end_m01aa", [0x26]);
+        store.ForgetModule("end_m01aa");
+
+        Assert.Empty(store.GetNativeFires("end_m01aa"));
+
+        // Fired-set membership is dropped too, so a re-visit can fire it again.
+        store.ReportNativeFires(peerId: 1, "end_m01aa", [0x26]);
+        Assert.Equal(
+            [new TriggerFireRequest(0x26, 1)],
+            store.GetNativeFires("end_m01aa"));
+    }
+
+    [Fact]
+    public void ClearingDropsNativeFiresToo()
+    {
+        TriggerRelayStore store = new();
+        store.ReportNativeFires(peerId: 1, "end_m01aa", [0x26]);
+        store.Clear();
+
+        Assert.Empty(store.GetNativeFires("end_m01aa"));
+    }
+
+    [Fact]
+    public void AZeroOrObjectInvalidNativeFireIdIsDropped()
+    {
+        TriggerRelayStore store = new();
+        store.ReportNativeFires(peerId: 1, "end_m01aa", [0, 0x7F000000, 0x26]);
+
+        Assert.Equal(
+            [new TriggerFireRequest(0x26, 1)],
+            store.GetNativeFires("end_m01aa"));
+    }
+
+    [Fact]
+    public void PeerZeroCannotClaimANativeFire()
+    {
+        TriggerRelayStore store = new();
+        store.ReportNativeFires(peerId: 0, "end_m01aa", [0x26]);
+
+        Assert.Empty(store.GetNativeFires("end_m01aa"));
+    }
 }

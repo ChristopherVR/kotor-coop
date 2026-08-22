@@ -708,6 +708,18 @@ public interface IGameBridge : IDisposable
     IReadOnlyList<uint> ReadEnteredTriggers() => [];
 
     /// <summary>
+    /// Every peer, protocol 36: the object ids of GENERIC triggers this instance's OWN engine
+    /// has natively fired for its own real character since last read — the plugin's
+    /// <c>TriggerFireHook</c> observer, already allowlist- and eligibility-filtered the same
+    /// way <see cref="ReadEnteredTriggers"/>'s watch is. Unlike that watch (a currently-standing
+    /// SET, level-published every frame), the plugin controller only adds an id here once it
+    /// has actually been observed firing — see docs/research/trigger-relay.md's protocol-36
+    /// section. Empty when the plugin is absent, nothing has fired natively yet, or the
+    /// channel is disabled.
+    /// </summary>
+    IReadOnlyList<uint> ReadNativeFiredTriggers() => [];
+
+    /// <summary>
     /// Owner side: asks the plugin to run the SAME OnEnter script the requesting peer's own
     /// engine already ran, against that peer's phantom standing in as the entering object.
     /// Unlike <see cref="TryRequestEncounterFire"/>, a repeat is NOT free here — a generic

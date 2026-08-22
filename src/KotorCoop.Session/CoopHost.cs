@@ -936,12 +936,30 @@ public sealed class CoopHost : ICoopSession
         _triggerRelay.GetFiredIds(module);
 
     /// <summary>
-    /// Announces this host's fired-set for every module it currently has one for. Unreliable
-    /// and re-sent every tick, like <see cref="BroadcastEnemies"/>: a lost datagram costs a
-    /// client re-reporting an already-fired trigger for one more tick, never a stuck state —
-    /// the host's own <see cref="TriggerRelayStore.Collect"/> silently no-ops a repeat
-    /// request regardless, so a client's watch not yet caught up is a bandwidth cost, not a
-    /// correctness one.
+    /// The host's own real character natively firing a trigger reaches
+    /// <see cref="TriggerRelayStore"/> straight from here — no packet, no round trip, exactly
+    /// the entry point a client's report reaches over the wire (<see cref="HandleTriggerRelay"/>).
+    /// Both peer types call the SAME <see cref="ICoopSession.PublishTriggerEntries"/>-adjacent
+    /// method for this (<c>CoopAgent</c> calls it from both branches of its trigger pump), so
+    /// the code path is symmetric even though this half of it never touches the network.
+    /// </summary>
+    public void PublishNativeTriggerFires(string module, IReadOnlyList<uint> triggerIds) =>
+        _triggerRelay.ReportNativeFires(HostPeerId, module, triggerIds);
+
+    /// <summary>Every native fire this host currently knows about for <paramref name="module"/>,
+    /// itself included — the caller (<c>CoopAgent</c>) filters out entries whose origin is its
+    /// own peer id.</summary>
+    public IReadOnlyList<TriggerFireRequest> GetNativeTriggerFireRequests(string module) =>
+        _triggerRelay.GetNativeFires(module);
+
+    /// <summary>
+    /// Announces this host's fired-set — AND its merged native-fire set with origins — for
+    /// every module it currently has either for. Unreliable and re-sent every tick, like
+    /// <see cref="BroadcastEnemies"/>: a lost datagram costs a client re-reporting an
+    /// already-fired trigger, or re-asking for a native fire it already has, for one more tick,
+    /// never a stuck state — <see cref="TriggerRelayStore.Collect"/> and
+    /// <see cref="TriggerRelayStore.ReportNativeFires"/> both silently no-op a repeat regardless,
+    /// so a client's watch not yet caught up is a bandwidth cost, not a correctness one.
     /// </summary>
     private void BroadcastTriggerRelay(List<PeerConnection> recipients)
     {
@@ -953,13 +971,22 @@ public sealed class CoopHost : ICoopSession
         foreach (string module in _triggerRelay.ModulesWithFired)
         {
             IReadOnlyList<uint> fired = _triggerRelay.GetFiredIds(module);
-            if (fired.Count == 0)
+            IReadOnlyList<TriggerFireRequest> native = _triggerRelay.GetNativeFires(module);
+            if (fired.Count == 0 && native.Count == 0)
             {
                 continue;
             }
 
+            uint[] nativeIds = new uint[native.Count];
+            uint[] nativeOrigins = new uint[native.Count];
+            for (int i = 0; i < native.Count; i++)
+            {
+                nativeIds[i] = native[i].TriggerId;
+                nativeOrigins[i] = native[i].PeerId;
+            }
+
             int length = PacketCodec.Write(
-                _sendBuffer, new TriggerRelayPacket(0, module, [], fired));
+                _sendBuffer, new TriggerRelayPacket(0, module, [], fired, nativeIds, nativeOrigins));
             if (length == 0)
             {
                 continue;

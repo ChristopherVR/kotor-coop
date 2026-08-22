@@ -5567,7 +5567,7 @@ is a few lines — it sends the same request a click sends and takes the same ad
 Verified live: with nobody clicking, the host joined **531 ms** after the client started and
 landed on the same node (14/14 paired samples).
 
-It ships **off**, for two reasons:
+It shipped **off**, for two reasons:
 
 1. It is the behaviour that was already removed once. Players were yanked out of whatever they
    were doing from anywhere in the module; joining became a click because walking away while
@@ -5577,3 +5577,52 @@ It ships **off**, for two reasons:
    driven into a recruitment conversation ends it holding a party roster the other instance
    does not share — and the roster is what the companion channel keys on. Ordinary
    conversation is fine; recruitment is not.
+
+### RESOLVED (2026-08-22): `dialogue_auto_join` replaces the flag, seamless
+
+Both reasons above are now addressed and the bare on/off flag is gone, replaced by
+`dialogue_auto_join=near` (default) / `always` / `off` in `InteractionLockController.cs`.
+
+Reason 2 is resolved elsewhere first: `PartyRosterController`'s `dialogue_recruit_sync` gives
+recruitment/dismissal an actual channel (a `PartyRoster` packet reconciling the seat on both
+instances) — the exact gap this section's own point 2 named as missing. Ordinary conversation
+was already fine; recruitment now has somewhere for its consequence to go.
+
+Reason 1 — the "yanked from anywhere in the module" complaint — is answered directly by
+`near`, the new default, instead of by leaving the whole feature off: auto-join now only fires
+when the joining player is already within `dialogue_auto_join_range` (default 20 game units) of
+the conversation's NPC, and not in combat, a minigame, or a conversation of their own. Outside
+that range the player is not silently ignored — a "walk over to join" notice
+(`InteractionLockController.DrawFarNotice`) tells them a peer is talking nearby, the same
+spirit as the existing "click the same character to join" notice `DialogueSpectateController`
+already shows for a blocked click, just for the case where auto-join declined rather than
+refused. `always` is available for a player who wants the old unconditional pull back (now
+safe, since reason 2 no longer applies); `off` restores click-only.
+
+The decision itself — `DialogueAutoJoinRule.ShouldAutoJoin`
+(`src/KotorCoop.Protocol/DialogueAutoJoinRule.cs`, unit-tested, shared by source into the
+plugin) — is a pure function of the mode and the JOINING peer's own local facts: no parameter
+for "am I the host" or "who started this conversation" exists in its signature at all. Both
+directions run the identical code path on whichever peer would be joining
+(`InteractionLockController.TryForceOpen`, plugin), so a host auto-joining a client's
+conversation and a client auto-joining the host's conversation cannot diverge by construction —
+verified by `DialogueAutoJoinRuleTests.TheRuleProducesTheSameAnswerRegardlessOfWhoStartedTheConversation`.
+This is narrower than the ARBITER's own known host-favouring race (§ above, "first speaker
+wins" when two players click different NPCs at once) — auto-join only decides whether a JOIN
+request is sent for a conversation that already exists, it does not touch who wins a
+simultaneous NEW claim.
+
+Distance is measured from the joining player's own position to the resolved partner creature
+(the same body `ApplyPeerLocks` already resolves and holds still), independent of
+`dialogue_join_teleport`'s own separate, smaller, engine-verified 10-unit range (which still
+handles the actual walk/snap once a join is decided — the two thresholds serve different
+questions: "does this feel reasonable" versus "can the engine's own `StartDialog` even be
+reached from here").
+
+NEEDS-LIVE (nothing in this pass was run against the game): that the notice actually renders
+without flicker or overlap alongside `DialogueSpectateController`'s own notice (placed on an
+adjacent screen row, not measured together); that a real recruitment conversation, joined
+automatically under `near`, ends with both instances' party rosters agreeing via
+`dialogue_recruit_sync` in practice and not merely in theory; the exact feel of the 20-unit
+default range in play (chosen as a middle ground between `dialogue_join_teleport`'s 10-unit
+engine gate and "anywhere in the module", not measured).

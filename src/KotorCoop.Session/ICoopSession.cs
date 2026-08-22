@@ -187,6 +187,30 @@ public interface ICoopSession : IDisposable
     IReadOnlyList<uint> GetFiredTriggerIds(string module) => [];
 
     /// <summary>
+    /// Every peer, host included: "my OWN engine just natively fired these GENERIC triggers
+    /// for my OWN real character" — the reverse of <see cref="PublishTriggerEntries"/>, which
+    /// only ever covered a client's presence, never the host's. Allowlist- and
+    /// eligibility-filtered by the plugin's <c>TriggerFireHook</c> observer before this is ever
+    /// called, the same gates <see cref="PublishTriggerEntries"/>'s watch already applies. On a
+    /// client this reaches the host over the wire (<see cref="TriggerRelayPacket.NativeFiredIds"/>,
+    /// peer-&gt;host); on the host it folds straight into <see cref="TriggerRelayStore"/> with
+    /// no packet at all — <c>CoopHost.HostPeerId</c> as origin. See
+    /// docs/research/trigger-relay.md's protocol-36 section.
+    /// </summary>
+    void PublishNativeTriggerFires(string module, IReadOnlyList<uint> triggerIds) { }
+
+    /// <summary>
+    /// Every trigger this instance currently knows was natively fired by ANY peer (including
+    /// itself — the caller filters entries whose origin is its own <see cref="LocalPeerId"/>,
+    /// since that engine already ran the script for real) in <paramref name="module"/>. On the
+    /// host this is <see cref="TriggerRelayStore.GetNativeFires"/> directly; on a client it is
+    /// the most recent host broadcast. A LEVEL, like <see cref="GetFiredTriggerIds"/> — the
+    /// caller is responsible for not re-issuing the SAME entry as a fresh fire request once it
+    /// has already asked its own engine to run it (see <c>CoopAgent.PumpNativeTriggerFires</c>).
+    /// </summary>
+    IReadOnlyList<TriggerFireRequest> GetNativeTriggerFireRequests(string module) => [];
+
+    /// <summary>
     /// Announces one NPC bark — the line an NPC throws into a bubble without ever opening a
     /// conversation, which the whole dialogue channel is blind to.
     ///

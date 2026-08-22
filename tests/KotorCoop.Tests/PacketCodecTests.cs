@@ -936,6 +936,79 @@ public class PacketCodecTests
     }
 
     [Fact]
+    public void TriggerRelayNativeFireReportRoundTrips()
+    {
+        // Protocol 36, peer->host direction: a peer's own engine natively fired these; origin
+        // is implicit (the sender), so NativeFiredOriginPeerIds travels empty.
+        Span<byte> buffer = stackalloc byte[ProtocolConstants.MaxPacketSize];
+        TriggerRelayPacket original =
+            new(PeerId: 5, "end_m01aa", [], [], NativeFiredIds: [0x26], NativeFiredOriginPeerIds: []);
+
+        int length = PacketCodec.Write(buffer, original);
+        Assert.True(length > 0);
+
+        TriggerRelayPacket? decoded = PacketCodec.ReadTriggerRelay(buffer[..length]);
+
+        Assert.NotNull(decoded);
+        Assert.Equal(5u, decoded.PeerId);
+        Assert.Equal<uint[]>([0x26], [.. decoded.NativeFiredIds]);
+        Assert.Empty(decoded.NativeFiredOriginPeerIds);
+    }
+
+    [Fact]
+    public void TriggerRelayNativeFireBroadcastRoundTripsWithOrigins()
+    {
+        // Protocol 36, host->all direction: the merged set, 1:1 matched against who fired it.
+        Span<byte> buffer = stackalloc byte[ProtocolConstants.MaxPacketSize];
+        TriggerRelayPacket original = new(
+            PeerId: 0, "end_m01aa", [], [],
+            NativeFiredIds: [0x26, 0x30], NativeFiredOriginPeerIds: [1, 5]);
+
+        int length = PacketCodec.Write(buffer, original);
+        Assert.True(length > 0);
+
+        TriggerRelayPacket? decoded = PacketCodec.ReadTriggerRelay(buffer[..length]);
+
+        Assert.NotNull(decoded);
+        Assert.Equal<uint[]>([0x26, 0x30], [.. decoded.NativeFiredIds]);
+        Assert.Equal<uint[]>([1, 5], [.. decoded.NativeFiredOriginPeerIds]);
+    }
+
+    [Fact]
+    public void TriggerRelayPreProtocol36CallersStillCompileAndRoundTrip()
+    {
+        // The 4-arg constructor kept for every call site that predates native fires.
+        Span<byte> buffer = stackalloc byte[ProtocolConstants.MaxPacketSize];
+        TriggerRelayPacket original = new(5, "end_m01aa", [0x50], []);
+
+        int length = PacketCodec.Write(buffer, original);
+        TriggerRelayPacket? decoded = PacketCodec.ReadTriggerRelay(buffer[..length]);
+
+        Assert.NotNull(decoded);
+        Assert.Empty(decoded.NativeFiredIds);
+        Assert.Empty(decoded.NativeFiredOriginPeerIds);
+    }
+
+    [Fact]
+    public void TriggerRelayNativeFireListsAreCappedToo()
+    {
+        Span<byte> buffer = stackalloc byte[ProtocolConstants.MaxPacketSize];
+
+        uint[] tooMany =
+            [.. Enumerable.Range(1, ProtocolConstants.MaxTriggerNativeFires + 3).Select(i => (uint)i)];
+        uint[] tooManyOrigins =
+            [.. Enumerable.Range(1, ProtocolConstants.MaxTriggerNativeFires + 3).Select(_ => 1u)];
+
+        int length = PacketCodec.Write(
+            buffer, new TriggerRelayPacket(0, "end_m01aa", [], [], tooMany, tooManyOrigins));
+        TriggerRelayPacket? decoded = PacketCodec.ReadTriggerRelay(buffer[..length]);
+
+        Assert.NotNull(decoded);
+        Assert.Equal(ProtocolConstants.MaxTriggerNativeFires, decoded.NativeFiredIds.Count);
+        Assert.Equal(ProtocolConstants.MaxTriggerNativeFires, decoded.NativeFiredOriginPeerIds.Count);
+    }
+
+    [Fact]
     public void TheEnemyDamageDirectionCarriesNeitherHealthNorPresence()
     {
         Span<byte> buffer = stackalloc byte[ProtocolConstants.MaxPacketSize];

@@ -1062,26 +1062,49 @@ public sealed class CoopClient : ICoopSession
         }
     }
 
+    private string _nativeFireModule = string.Empty;
+    private uint[] _nativeFireIds = [];
+
+    /// <summary>The client half of protocol 36's reverse relay: this player's own engine
+    /// natively fired these (already allowlist- and eligibility-filtered by the plugin's
+    /// <c>TriggerFireHook</c> observer, exactly like <see cref="PublishTriggerEntries"/>'s
+    /// watch is). Held as a level for the same reason that set is.</summary>
+    public void PublishNativeTriggerFires(string module, IReadOnlyList<uint> triggerIds)
+    {
+        lock (_gate)
+        {
+            _nativeFireModule = module ?? string.Empty;
+            _nativeFireIds = [.. triggerIds.Take(ProtocolConstants.MaxTriggerNativeFires)];
+        }
+    }
+
     private void SendTriggerEntries()
     {
         string module;
         uint[] ids;
+        uint[] nativeIds;
 
         lock (_gate)
         {
-            if (_triggerIds.Length == 0 || _localPeerId == 0)
+            if ((_triggerIds.Length == 0 && _nativeFireIds.Length == 0) || _localPeerId == 0)
             {
                 // Nothing to say, same silence PublishEncounterTriggers's sender keeps: the
                 // host ages a peer's last report out on its own.
                 return;
             }
 
-            module = _triggerModule;
+            // Both fields are published from the SAME plugin frame pass and always name the
+            // current module, so one of the two module strings (whichever is non-empty) is
+            // authoritative for both — they can only disagree for one tick around a module
+            // change, and a stale native-fire id against a fresh module is harmless: the host
+            // rejects it the same way any cross-module id already is elsewhere in this channel.
+            module = _triggerIds.Length > 0 ? _triggerModule : _nativeFireModule;
             ids = _triggerIds;
+            nativeIds = _nativeFireIds;
         }
 
         int length = PacketCodec.Write(
-            _sendBuffer, new TriggerRelayPacket(_localPeerId, module, ids, []));
+            _sendBuffer, new TriggerRelayPacket(_localPeerId, module, ids, [], nativeIds, []));
         if (length > 0)
         {
             _channel.Send(_hostEndPoint, _sendBuffer.AsSpan(0, length));
@@ -1094,6 +1117,22 @@ public sealed class CoopClient : ICoopSession
         {
             return _firedTriggersByModule.TryGetValue(module ?? string.Empty, out uint[]? fired)
                 ? fired
+                : [];
+        }
+    }
+
+    private readonly Dictionary<string, TriggerFireRequest[]> _nativeFiresByModule =
+        new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>The most recent host broadcast of every peer's native fires for
+    /// <paramref name="module"/>, itself included — <c>CoopAgent</c> filters out entries whose
+    /// origin is this client's own <see cref="LocalPeerId"/>.</summary>
+    public IReadOnlyList<TriggerFireRequest> GetNativeTriggerFireRequests(string module)
+    {
+        lock (_gate)
+        {
+            return _nativeFiresByModule.TryGetValue(module ?? string.Empty, out TriggerFireRequest[]? requests)
+                ? requests
                 : [];
         }
     }
@@ -1805,6 +1844,27 @@ public sealed class CoopClient : ICoopSession
                         // fired-set every tick, so there is no "unfired" edge to miss.
                         _firedTriggersByModule[triggerRelay.Module ?? string.Empty] =
                             [.. triggerRelay.FiredIds];
+
+                        // Protocol 36: the merged native-fire set, 1:1 matched against its
+                        // origin peer. A malformed broadcast (mismatched list lengths) is
+                        // dropped defensively rather than zipped into wrong pairs.
+                        string module = triggerRelay.Module ?? string.Empty;
+                        if (triggerRelay.NativeFiredIds.Count > 0
+                            && triggerRelay.NativeFiredIds.Count == triggerRelay.NativeFiredOriginPeerIds.Count)
+                        {
+                            TriggerFireRequest[] requests = new TriggerFireRequest[triggerRelay.NativeFiredIds.Count];
+                            for (int i = 0; i < requests.Length; i++)
+                            {
+                                requests[i] = new TriggerFireRequest(
+                                    triggerRelay.NativeFiredIds[i], triggerRelay.NativeFiredOriginPeerIds[i]);
+                            }
+
+                            _nativeFiresByModule[module] = requests;
+                        }
+                        else if (triggerRelay.NativeFiredIds.Count == 0)
+                        {
+                            _nativeFiresByModule[module] = [];
+                        }
                     }
                 }
 
