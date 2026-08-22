@@ -5363,6 +5363,193 @@ stale-true reading after a `tp`-class reposition is a real, walk-reachable bug o
 `tp` testing artifact. Death-test staging (god mode, or player separation) before any future pass
 that puts an un-godded client near more than one live hostile.
 
+### Round 57 (2026-08-22) — The round-56 crash root-caused and fixed, live-reproduced and
+re-verified twice; an ordinary door confirmed both ways; a real transition's party-roster
+behaviour confirmed steady; a client's own swing still unconfirmed
+
+Picks up round 56's four open items, crash first per this round's own brief.
+
+**1. THE CRASH — root-caused, fixed, live-reproduced and re-verified twice.** Round 56's
+un-godded client death (`tar_m10aa`, the Vulkar pool — the same substitution round 56 itself made
+after finding END_M01AB's placed Sith never aggro without Trask's own assault script) left no
+crash-probe dump, no Windows Application-log event (`tools\crashlog.ps1`, `Get-WinEvent` over the
+exact window: nothing), and no minidump (no admin rights to enable `HKLM` `LocalDumps`; a
+`HKCU`-scoped `LocalDumps` key was tried this round and Windows did not honour it either) — a
+silent, un-symbolizable process death matching `CrashProbe.cs`'s own documented native-AOT
+fail-fast class (`RaiseFailFastException`/`0xC0000602`, which bypasses vectored exception
+handlers, `AppDomain.UnhandledException`, and WER's own event log, "the process is gone before
+anything is written").
+
+**Root cause**, found from the plugin log's own evidence (`agent2.1.log`/`kotorcoop-plugin.log`
+from the original round-56 crash, still on disk): the client's PC took a first overkill hit
+(HP 12 → -4), then a SECOND forwarded hit half a second later (HP -4 → -15) — and
+`IncomingDamageController`'s own "a downed player takes no further damage" guard
+(`Odyssey.IsDowned(player)`) should have refused that second application outright. It didn't:
+no `death: the local player is down` line ever appeared in the crash session's log despite HP
+sitting at -15, proving `IsDowned` — `CSWSCreature::GetDeadTemp` (0x004EF890) alone — read FALSE
+the entire time. `GetDeadTemp` loops the ENGINE's own idea of "the client party" (`CSWParty`, not
+`CSWPartyTable`) to decide whether the creature it was called on is a member at all before testing
+its hit points, and this exact session's own `party_together_fix` diagnostic
+(`party together: CSWParty's own member count read N against CSWPartyTable's M - clamping`) is
+direct, repeated, live evidence that `CSWParty` can hold a stale membership view relative to the
+table — the SAME mechanism `party_together_fix` corrects for door transitions. When the local
+player's own creature is not found as a party member by that stale view, `GetDeadTemp` silently
+returns false — including inside the ENGINE'S OWN internal copy of this identical check
+(`CSWSEffectListHandler::OnApplyDamage`'s own already-dead early-out calls the same function), not
+just the plugin's. The second hit therefore reached a genuinely fragile, effectively-untested
+engine path (re-running death choreography, or worse, on a creature the engine's own gate should
+have already refused), and something in it terminated the process with no crash-reporting path
+left standing to say why.
+
+**Live reproduction** (this round, deterministic): rather than fight AI/aggro timing, the
+forwarded-damage wire fields (`SharedBlock.OffsetIncomingDamage`/`...Attacker`, 0x1D50/0x1D54 — the
+exact fields `IncomingDamageController` reads) were written directly on the client via a one-off
+script mirroring `blockpoke.ps1`'s own signature-scan technique
+(`pokedamage.ps1`, scratchpad-only, not shipped). First write: owed 16 on top of 0 applied → HP
+12 → -4, confirmed via `blockpoke.ps1 <pid> death` reading `downed 0` despite HP -4 (the bug,
+caught live). Second write: owed +11 more while still at -4 → **client process confirmed DEAD**
+(`Get-Process` empty) within the same second — the crash, reproduced on demand, twice across the
+two builds below.
+
+**Fix**, two parts:
+- `Odyssey.IsDowned` (`src/KotorCoop.Plugin/Odyssey.cs`) now ORs in a direct raw-HP read
+  (`GetCurrentHitPoints(creature) <= 0`) alongside `GetDeadTempFn`. This fixes every one of
+  `IsDowned`'s six call sites at once (`IncomingDamageController`, `SpectateController`,
+  `ControlReturnController`, `DeathController`, `PartyPresenceController`, `CheatController`'s
+  `standup`) rather than papering over the one that happened to crash — chosen because the raw
+  current-HP field (+0xDC) is ground truth the whole codebase already trusts for "how hurt is
+  this creature" (`GetCurrentHitPoints`'s own doc comment), and by the engine's OWN definition a
+  recognised party member's temp-dead state IS "current hit points <= 0"; ORing it in can never
+  call a genuinely-still-up creature (positive HP) downed.
+- `IncomingDamageController.cs`'s own guard is unchanged in shape (`if (Odyssey.IsDowned(player))
+  { ...; return; }`) — it inherits the fix for free — with a comment pointing at the root cause
+  for the next reader.
+
+**Re-verified live, twice, same rig, same fix build** (host pid 45220, client pid 18600, both
+freshly rebuilt via `build.ps1 -Install` with the fix in place): cycle 1 — `pokedamage.ps1` drove
+the client to HP -4 (`downed 1` this time, confirming the `IsDowned` fix), a second overkill write
+was **silently refused** (HP unchanged, `Get-Process` still ALIVE), `spectate: watching 0x128`
+fired on the client (camera handoff), the host `tp`'d to the client's position (the closest this
+rig's harness gets to "walks over" — see the door-walk note below), and
+`Lanik revived you (0.0 units...)` / `spectate: back up` closed the loop, HP back to 12/12. Cycle
+2 — identical shape, same result: refused second hit, `ALIVE`, `spectate: watching 0x128` again,
+`Lanik revived you (2.2 units...)`, back up. **No crash, either time.** Full solution build clean;
+`dotnet test tests/KotorCoop.Tests`: 1520/1520 with the fix in place.
+
+⚠ **A concurrent session's fix landed mid-round and is folded in.** While this round's crash work
+was in progress, a coordinator message reported (and committed, `b491b74`,
+`PartyRosterController.cs` only) a second, independent bug in the SAME
+`party_together_fix`/`SyncClientPartyTogetherState` machinery this round's root-cause analysis
+already leaned on as evidence: the clamp had been running on the HOST too, and because
+`CSWPartyTable` counts companions only (Trask → 1) while `CSWParty` counts the PC as well
+(PC + Trask → 2), the "divergence" it was clamping away on a host was never staleness — it was
+correct, and clamping it out dropped the host's own Trask from the struct the game's control,
+portrait and follow logic reads. Fixed by gating the clamp on `block.TryGetHostPartyRoster`
+(true only for a client actually receiving a host roster). This round rebuilt and re-deployed
+**with** that fix before any of the live checks below, and confirmed live: the host's own
+`party together: ... - clamping` line, which had fired repeatedly earlier in this exact session
+(09:21, 09:30, 10:15), does not fire again after the merged fix and a fresh roster publish
+(10:20:47 `party roster: local party is now 0x001`, no clamp line following) — the host keeps
+Trask.
+
+**2. ORDINARY DOOR, both ways — confirmed.** Round 56 could not test this at all (no working
+`walk`/click; `usedoor` refuses every non-transition door by design). Added the smallest
+possible verb, `opendoor [tag|id]` (mirrors `usedoor`'s own door-resolution and distance/state
+checks via the same `DoorUse.Decide`, called with `linked` forced true — the one gate that exists
+specifically to keep `usedoor` incapable of this), calling `Odyssey.OpenDoorFully` — the identical
+engine door-use action `usedoor` already calls, never a state-byte poke — so `DoorController`'s
+own generic open-state mirror is what gets exercised. New `SharedBlock.CheatKindOpenDoor = 17` /
+`CheatKinds.OpenDoor = 17` (next free number after `DestroyObject`), full verb wiring
+(`ConsoleCommand`, `CoopCommandDispatcher`, `ConsoleVerbCatalog`, `FuncInterpHook`'s in-game `~`
+console list). **Host → client:** `opendoor end_door02` on the host opened door 0x46
+(state 0 → 1); the client's own log showed `door 0x46: swinging 0 -> 1 on the session's authority`
+~1.8s later. **Client → host:** `opendoor end_door05` on the client opened door 0x42
+(state 0 → 2); the host's log showed the identical mirror line ~1.8s later. Both directions,
+clean 0→open transitions, confirmed live.
+
+One caveat found and not chased (out of scope for this round, real but narrow): a door already
+ajar that gets `opendoor`'d again from a DIFFERENT approach side flips SWING DIRECTION (2↔1, not
+0→open) — and that specific transition does NOT mirror, because both the reliable flag store's
+own max-merge (`DoorFlags` values are compared numerically; 1 is not "more open" than 2) and
+`DoorController.Apply`'s own forward-only gate (`desired.OpenState <= current` refuses) treat
+open-state as a monotonically-increasing scale, which a swing-direction flip is not. The
+plain closed→open case this task asked about is unaffected and works correctly either direction;
+worth a note for whoever next touches `DoorController` or `DoorFlags`.
+
+**3. TRASK AFTER A REAL TRANSITION — the round-56 roster fix confirmed live; the walk-crossing
+itself still not achieved.** Over 30 combined attempts across two approaches
+(`usedoor end_door10`, and blockpoke's raw `walk`), from more than a dozen different `tp`-staged
+approach positions and distances (0.2m to 5.7m), the player's queued `ActionMoveToLocation` never
+completed a real crossing of `end_door10` this round either — the closest and most reproducible
+failure mode was a stable TWO-POINT OSCILLATION: an `usedoor` call from ~4m out would make real
+progress to ~1.5m, but the NEXT fresh `usedoor` call from that near position recomputed
+`DoorUse.WalkThroughPoint`'s overshoot target on the OTHER side of the door plane (the player,
+having nearly crossed, reads as "already on that side"), sending them back to the far anchor
+point every time — a real, reproducible defect in `WalkThroughPoint`'s per-call side recompute,
+worth a fix the next time a working `walk`/click makes it testable without this much trial and
+error. Not fixed this round (out of scope; `usedoor`'s own internal per-call retry, which reuses
+one fixed target across its 600-frame window, is unaffected — only fresh external calls flip).
+
+Given that, this round substituted `warp` (host → `end_m01ab`, client followed automatically via
+the announce path) to get SOME real module-teardown/reload cycle — the specific window round 56's
+`PumpPartyRoster` fix targets (`bridge.SupportsPartySync` false for ~1s while the player object
+tears down and rebuilds) — without needing a working walk. Confirmed: `party roster: reconciling
+against a peer party of 0x001` held steady through the transition (no `no peer roster to
+reconcile against` regression — round 56's own fix holding). A SEPARATE, pre-existing,
+already-working gate — `co-op [W_SAVE] different save: enemies, doors, items and party are off`
+— fired on BOTH sides (matching identical behaviour already present in round 56's own log at
+08:52:05/08:52:51, unrelated to anything this round changed) and self-recovered on its own after
+~4 minutes (`co-op: enemies, doors, items and party shared again`), same shape both times. Trask
+himself was correctly and consistently ABSENT from both instances after the warp (matches
+documented vanilla behaviour — a warp carries no companions — not a new finding), with no stale
+duplicate or phantom on either side. **Genuinely unresolved, honestly:** whether Trask's body and
+map marker actually mirror correctly on the client after a true WALKING crossing — the specific
+thing this item asked for — remains untested, blocked on the same `WalkThroughPoint` oscillation
+above.
+
+**4. CLIENT'S OWN SWING — still not confirmed.** `tar_m10aa`'s Vulkar pool again (END_M01AB's
+own placed Sith still don't aggro without Trask's script, matching round 56 exactly). Two separate
+`attack 0x7FFFFFFF 0x38` orders (blockpoke's `TestDriveController` harness, the player as
+attacker) against a Vulkar at ~1m, each confirmed armed (`attacktarget diag: 0x7FFFFFFF
+round+0x958 0->1`), over roughly 90 seconds combined observation (longer than round 55's own
+successful precedent needed) — HP on the host's real copy of the target (`creatures.ps1`,
+before/after) never moved from 22. Left open exactly as round 56 left it: not a confirmed
+regression (round 55's own kills took real time too), but not a confirmed pass either. This
+round's own local-combat log showed the SAME target repeatedly excluded from the driven census
+(`STILL SEEING excluded id 0x38`) while the ordered attack sat armed — worth checking next
+whether `local_combat`'s own exclusion of a creature `attacktarget` is simultaneously driving is
+itself what starves the ordered round of ever being processed.
+
+| Check | Result | Fixed this round? |
+|---|---|---|
+| The round-56 crash | **Root-caused and reproduced live** (deterministic, `pokedamage.ps1`) | **Yes** — `Odyssey.IsDowned` now ORs a raw-HP check; **re-verified live twice**, no crash either time |
+| Spectate camera handoff on down | **Yes**, confirmed live both cycles (`spectate: watching 0x...`) | — (already worked once `IsDowned` was fixed) |
+| Peer rescue (host reaches downed client) | **Yes**, confirmed live both cycles (`... revived you`, HP restored) | — (already worked once `IsDowned` was fixed) |
+| Host keeps control of its own companions | **Was broken this session** (a concurrent fix, `b491b74`, landed mid-round) | **Yes** (by the other fix) — confirmed live: no more host-side clamp after rebuild |
+| Doors — ordinary door, host → client | **Yes**, confirmed live (~1.8s) | New verb (`opendoor`) added to make this testable at all |
+| Doors — ordinary door, client → host | **Yes**, confirmed live (~1.8s) | Same verb, same round |
+| Doors — a swing-direction flip on an already-open door | **No** — genuine, narrow gap found (numeric-ordering assumption) | Not this round |
+| Party roster steady through a real transition (round 56's fix) | **Yes**, confirmed live via `warp` (no `no peer roster` regression) | — (round 56's own fix, re-verified) |
+| Trask carried through a TRUE WALKING door crossing | **Still untested** — the walk itself never completed, 30+ attempts | Not this round |
+| Trask absent-but-consistent after a `warp` | **Yes**, matches documented vanilla behaviour on both sides | N/A (not a bug) |
+| Combat — client's own local swing landing on host's real creature | **Still not confirmed** (armed, no measured hit in ~90s) | Not this round |
+
+**Safety.** No coop.ini edits shipped from this pass in either install. `local_combat_bypass_id`
+unset throughout. God mode was toggled on both instances repeatedly for staging and always turned
+back off before the checks that needed it off; the client's own save was found to already carry
+`min1hp` on load (from an earlier, unrelated session) and was explicitly toggled off before the
+crash reproduction so the test genuinely exercised an un-godded client. Rig torn down clean
+(`Get-Process swkotor,KotorCoop.Agent` empty after `demo.ps1 -Stop`), `auto_start_agent` restored
+to `1` in both installs.
+
+**What remains.** The `WalkThroughPoint` side-recompute oscillation (item 3) — a real, reproducible
+bug worth its own fix once a working `walk`/click exists to verify it without dozens of `tp`
+round-trips. Whether `local_combat`'s own census-exclusion of a creature `attacktarget` is also
+driving starves that ordered round (item 4's new lead). The swing-direction door-flip gap (item 2).
+A dedicated regression test for `Odyssey.IsDowned`'s new raw-HP fallback (the existing IGameBridge
+test doubles do not model `CSWSCreature::GetDeadTemp`'s live party-membership behaviour, so this
+was verified live rather than in `tests/KotorCoop.Tests`).
+
 ## 3. A client's XP is actively erased
 
 `ProgressionSnapshotPacket` is host→client only and absolute (CoopAgent.cs, `PumpProgression`):

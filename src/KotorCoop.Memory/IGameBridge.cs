@@ -153,6 +153,17 @@ public static class CheatKinds
     /// ⚠ 16, because 7-15 are taken. Take the next FREE number.
     /// </summary>
     public const uint DestroyObject = 16;
+
+    /// <summary>
+    /// Opens an ORDINARY door (not a module transition — <c>usedoor</c> refuses those by
+    /// design) through the engine's own door-use action. <c>Text</c> is the door tag,
+    /// <c>Target</c> its object id; both empty means "the nearest door", with no
+    /// linked-to-module filter. See SharedBlock.CheatKindOpenDoor and
+    /// docs/research/shared-state-audit.md round 56/57.
+    ///
+    /// ⚠ 17, because 7-16 are taken. Take the next FREE number.
+    /// </summary>
+    public const uint OpenDoor = 17;
 }
 
 /// <summary>The plugin's verdicts, mirroring <c>SharedBlock.CheatStatus*</c>.</summary>

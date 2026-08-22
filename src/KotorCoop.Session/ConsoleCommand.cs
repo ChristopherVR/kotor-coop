@@ -246,6 +246,16 @@ public enum CoopCommandKind
     /// because there is no destroy-ledger to spend a forwarded destroy through.
     /// </summary>
     DestroyObject,
+
+    /// <summary>
+    /// ROUND 57 STAGING VERB: opens an ORDINARY (non-transition) door through the engine's own
+    /// door-use action, so the generic door-sync path can be verified without a working
+    /// walk/click primitive. <see cref="CoopCommand.Address"/> carries the door's tag, or an
+    /// object id in the three spellings <see cref="ConsoleCommand.TryParseObjectId"/> accepts;
+    /// empty means "the nearest door" (no module-transition filter — that is <c>usedoor</c>'s
+    /// own guard). Never walks the player through it.
+    /// </summary>
+    OpenDoor,
 }
 
 /// <summary>
@@ -693,6 +703,31 @@ public static class ConsoleCommand
                 }
 
                 return new CoopCommand(CoopCommandKind.UseDoor, Address: rest[0]);
+
+            // ROUND 57: an ordinary door, deliberately not gated to LinkedToModule the way
+            // usedoor is — see CoopCommandKind.OpenDoor.
+            case "opendoor":
+                if (rest.Length > 1)
+                {
+                    return new CoopCommand(
+                        CoopCommandKind.Invalid,
+                        Error: "opendoor takes one door, e.g. opendoor end_door01 (or bare, for the nearest)");
+                }
+
+                if (rest.Length == 0)
+                {
+                    return new CoopCommand(CoopCommandKind.OpenDoor);
+                }
+
+                if (!TryParseObjectId(rest[0], out _) && !IsResRef(rest[0], maxLength: 31))
+                {
+                    return new CoopCommand(
+                        CoopCommandKind.Invalid,
+                        Error: $"'{rest[0]}' is not a door tag or object id");
+                }
+
+                return new CoopCommand(CoopCommandKind.OpenDoor, Address: rest[0]);
+
             case "items":
                 // A cap rather than a page: the listing goes to the agent's log, where a
                 // hundred rows costs nothing, but the on-screen overlay is a handful of lines
@@ -1379,6 +1414,7 @@ public static class ConsoleCommand
         // The pair: queue the movie, then make the ENGINE start the transition. Only this
         // order opens the pre-store flush window a movie might swallow.
         "  usedoor [tag|id]                walk through a transition door (nearest by default)",
+        "  opendoor [tag|id]               open an ORDINARY door (no transition; nearest by default)",
         "  census [id]         what my enemy census holds, and what my own engine says of each id",
         "  resolve <id>        what the ENGINE knows about one id, in one frame (plugin log has the chain)",
         "retail console cheats, already co-op-safe (they touch only your game):",

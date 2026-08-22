@@ -1437,6 +1437,26 @@ internal struct SharedBlock
     /// </summary>
     public const uint CheatKindDestroyObject = 16;
 
+    /// <summary>
+    /// ROUND 57 STAGING VERB (2026-08-22): opens an ORDINARY door — one <c>usedoor</c> refuses
+    /// by design, since it must be incapable of doing anything except starting a module
+    /// transition (see <see cref="CheatKindUseDoor"/>'s own doc comment). Built because
+    /// docs/research/shared-state-audit.md round 56 found the non-transition case genuinely
+    /// untested: no working `walk`/click primitive in the rig could reach one, and `usedoor`
+    /// refuses every door `end_m01aa`'s GIT names that is not linked to a module.
+    ///
+    /// Calls the SAME <c>Odyssey.OpenDoorFully</c> the transition path already uses — the
+    /// engine's own door-use action, not a poke of the open-state byte — so the ordinary sync
+    /// path (<c>DoorController</c>'s generic open-state mirror) is what actually gets
+    /// exercised. <see cref="OffsetCheatTarget"/> is the door's object id, <see cref="OffsetCheatText"/>
+    /// its tag; both empty means "the nearest door" (no linked-only filter — that filter is
+    /// `usedoor`'s guard, not a fact about doors in general). Never walks the player through
+    /// it: an ordinary door has nowhere to transition to.
+    ///
+    /// ⚠ 17, because 7-16 are taken. Take the next FREE number.
+    /// </summary>
+    public const uint CheatKindOpenDoor = 17;
+
     /// <summary>The request was carried out here.</summary>
     public const int CheatStatusApplied = 1;
 

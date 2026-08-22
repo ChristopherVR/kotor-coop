@@ -152,6 +152,10 @@ internal sealed unsafe class CheatController(SharedBlockView block)
                 UseDoor(player, playerId);
                 break;
 
+            case SharedBlock.CheatKindOpenDoor:
+                OpenDoor(player, playerId);
+                break;
+
             case SharedBlock.CheatKindGiveLoot:
                 GiveLoot();
                 break;
@@ -1652,6 +1656,136 @@ internal sealed unsafe class CheatController(SharedBlockView block)
             together
                 ? $"walking through door 0x{doorId:X} ({distance:F1}m) -> '{module}'"
                 : $"door 0x{doorId:X} -> '{module}' BUT the party is not together");
+    }
+
+    /// <summary>
+    /// ROUND 57: opens an ORDINARY door — one <c>usedoor</c> refuses by design (see its own
+    /// doc comment: a bare <c>usedoor</c> must be incapable of doing anything except starting
+    /// a module transition). Built because docs/research/shared-state-audit.md round 56 left
+    /// the non-transition case genuinely untested: no working <c>walk</c>/click primitive in
+    /// the rig could reach one, and every door <c>usedoor</c>'s own sweep found in
+    /// END_M01AA/AB that is not linked to a module is refused outright.
+    ///
+    /// Calls <see cref="Odyssey.OpenDoorFully"/> — the SAME engine door-use action
+    /// <see cref="UseDoor"/> already calls before its walk — so the ordinary open-state mirror
+    /// (<c>DoorController</c>) is what actually gets exercised, not a poke of the open-state
+    /// byte. Per <see cref="UseDoor"/>'s own §1465-1470 finding, an engine "open" call posts
+    /// event 0x1A (OnUsed), never 0x1E (the movement-crossing transition event) — so this is
+    /// safe to point at a LINKED door too; it will only ever open it, never transition it.
+    ///
+    /// Deliberately does not walk the player through it or gather the party: an ordinary door
+    /// has nowhere to transition to, so neither concern applies.
+    /// </summary>
+    private void OpenDoor(nint player, uint playerId)
+    {
+        uint requestedId = block.CheatTarget;
+        string text = ReadCheatText();
+
+        nint door;
+        string what;
+        int doorsSeen = 0;
+
+        if (requestedId != 0)
+        {
+            door = Odyssey.ResolveDoor(requestedId);
+            what = $"0x{requestedId:X}";
+
+            if (door == 0 && Odyssey.ResolveServerObject(requestedId) != 0)
+            {
+                Answer(
+                    SharedBlock.CheatStatusNoTarget,
+                    DoorUse.Explain(DoorUseVerdict.RefuseNotADoor, what, 0f));
+                return;
+            }
+        }
+        else if (text.Length > 0)
+        {
+            byte* tag = block.CheatText;
+            int length = 0;
+            while (length < SharedBlock.CheatTextLength - 1 && tag[length] != 0)
+            {
+                length++;
+            }
+
+            door = Odyssey.FindDoorByTag(tag, length);
+            what = $"'{text}'";
+        }
+        else
+        {
+            door = FindNearestAnyDoor(player, out doorsSeen);
+            what = "the nearest door";
+        }
+
+        float distance = door != 0 ? Distance(Odyssey.GetPosition(player), Odyssey.GetPosition(door)) : 0f;
+
+        // Same decision table usedoor uses, with `linked` forced true: that gate exists
+        // specifically to keep a bare `usedoor` incapable of opening an ordinary door, and
+        // opening an ordinary door is this verb's entire purpose.
+        DoorUseVerdict verdict = DoorUse.Decide(
+            hasPlayer: player != 0,
+            found: door != 0,
+            isDoor: door != 0,
+            linked: true,
+            openState: door != 0 ? Odyssey.GetDoorOpenState(door) : 0,
+            transitionPending: Odyssey.IsAreaTransitionPending(),
+            moviePlaying: Odyssey.IsMoviePlaying(),
+            distance: distance);
+
+        if (verdict != DoorUseVerdict.Use)
+        {
+            string detail = DoorUse.Explain(verdict, what, distance);
+
+            if (verdict == DoorUseVerdict.RefuseMissing && requestedId == 0 && text.Length == 0)
+            {
+                detail = doorsSeen == 0
+                    ? "the sweep found no doors at all in this module"
+                    : $"the sweep found {doorsSeen} door(s) but none close enough to open";
+            }
+
+            Answer(SharedBlock.CheatStatusRefused, detail);
+            return;
+        }
+
+        uint doorId = *(uint*)(door + 0x04);
+        byte before = Odyssey.GetDoorOpenState(door);
+        byte after = Odyssey.OpenDoorFully(door, playerId);
+
+        PluginHost.Log(
+            $"door: opened 0x{doorId:X} (state {before} -> {after}) at {distance:F1}m"
+            + (Odyssey.IsDoorLocked(door) ? ", LOCKED" : string.Empty));
+
+        Answer(
+            after != before ? SharedBlock.CheatStatusApplied : SharedBlock.CheatStatusEngineRefused,
+            after != before
+                ? $"door 0x{doorId:X}: opened (state {before} -> {after})"
+                : $"door 0x{doorId:X}: REFUSED to open (still state {after})");
+    }
+
+    /// <summary>Sweeps the module for doors and returns the nearest one, with no linked-to-
+    /// module filter — the opposite of <see cref="FindNearestTransitionDoor"/>, and the whole
+    /// reason <see cref="OpenDoor"/> exists.</summary>
+    private static nint FindNearestAnyDoor(nint player, out int doorsSeen)
+    {
+        nint* doors = stackalloc nint[DoorSweepCapacity];
+        doorsSeen = Odyssey.CollectDoors(doors, DoorSweepCapacity);
+
+        Vec3 here = Odyssey.GetPosition(player);
+        nint best = 0;
+        float bestDistance = float.MaxValue;
+
+        for (int i = 0; i < doorsSeen; i++)
+        {
+            float distance = Distance(here, Odyssey.GetPosition(doors[i]));
+            if (distance >= bestDistance)
+            {
+                continue;
+            }
+
+            best = doors[i];
+            bestDistance = distance;
+        }
+
+        return best;
     }
 
     /// <summary>

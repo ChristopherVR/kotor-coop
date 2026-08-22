@@ -604,4 +604,19 @@ tools/                   RE helpers, demo scripts, the kotor1_0_3 symbol databas
   on the host's real creature (armed correctly, but no hit was measured in this pass's ~40s
   window). See [docs/research/shared-state-audit.md](docs/research/shared-state-audit.md) §2,
   round 56, for the full evidence and the honest per-check table.
+- **The round-56 client crash — an un-godded player dying under a multi-attacker swarm — is
+  root-caused, fixed, and live-reproduced/re-verified twice (2026-08-22).** A second overkill hit
+  landing on an already-downed client killed the game process silently (no crash dump, no
+  Windows Application-log event, matching `CrashProbe.cs`'s own documented native-AOT fail-fast
+  class) because `Odyssey.IsDowned` — `CSWSCreature::GetDeadTemp` alone — can read false for the
+  local player's own creature when the engine's `CSWParty` struct holds a stale party-membership
+  view (the same staleness `party_together_fix` already corrects for door transitions), letting
+  `IncomingDamageController`'s "no further damage once downed" guard through when it should have
+  refused. Fixed by having `IsDowned` OR in a direct raw-HP check, fixing all six of its call
+  sites (spectate, rescue, control-return, party-presence) at once. Re-verified live twice: the
+  client goes down, the spectate camera hands off, the host reaches them and revives them — no
+  crash either time. A new `opendoor [tag|id]` console verb (mirrors `usedoor`'s own machinery
+  minus the module-transition gate) confirmed an ordinary door opens and mirrors correctly in
+  both directions. See
+  [docs/research/shared-state-audit.md](docs/research/shared-state-audit.md) §2, round 57.
 - KOTOR 2 is untouched, and only GOG v1.0.3 addresses are known.

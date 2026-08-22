@@ -269,6 +269,14 @@ internal sealed class IncomingDamageController(SharedBlockView block)
 
         // A downed player takes no further damage: the engine's temp-death owns the body,
         // and piling on would fight the revive path.
+        //
+        // ⚠ ROUND 57 CRASH FIX. This guard is the one that let a client's game process die
+        // silently after a second overkill hit — see Odyssey.IsDowned's own doc comment for
+        // the full root cause (CSWSCreature::GetDeadTemp's party-membership lookup going stale
+        // and reading false while HP sits deeply negative, on the engine's OWN internal copy
+        // of "already downed" too) and docs/research/shared-state-audit.md round 57 for the
+        // live reproduction. IsDowned itself is now fixed at the source (it ORs in a direct
+        // HP <= 0 read), so this call is reliable again; nothing else here changed.
         if (Odyssey.IsDowned(player))
         {
             block.IncomingDamageApplied = owed;

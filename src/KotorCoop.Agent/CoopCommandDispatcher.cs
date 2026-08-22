@@ -461,6 +461,10 @@ public sealed class CoopCommandDispatcher(
                 UseDoor(command.Address ?? string.Empty);
                 break;
 
+            case CoopCommandKind.OpenDoor:
+                OpenDoor(command.Address ?? string.Empty);
+                break;
+
             case CoopCommandKind.Who:
                 if (manager.Current is not { } who)
                 {
@@ -1101,6 +1105,19 @@ public sealed class CoopCommandDispatcher(
         }
 
         SendCheat(new CheatRequest(CheatKinds.UseDoor, Text: token));
+    }
+
+    /// <summary>ROUND 57: the same dispatch shape as <see cref="UseDoor"/>, for an ordinary
+    /// door — see <c>CoopCommandKind.OpenDoor</c>.</summary>
+    private void OpenDoor(string token)
+    {
+        if (ConsoleCommand.TryParseObjectId(token, out uint objectId) && objectId != 0)
+        {
+            SendCheat(new CheatRequest(CheatKinds.OpenDoor, Target: objectId));
+            return;
+        }
+
+        SendCheat(new CheatRequest(CheatKinds.OpenDoor, Text: token));
     }
 
     /// <summary>

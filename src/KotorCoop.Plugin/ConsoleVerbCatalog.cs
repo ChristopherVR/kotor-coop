@@ -74,6 +74,7 @@ internal static class ConsoleVerbCatalog
         // The engine-initiated half: only a door transition opens the pre-store flush window
         // a queued movie might swallow, so this and `moviewarp queue` are used together.
         ("usedoor", "usedoor [tag|id]  (blank = nearest module transition door)"),
+        ("opendoor", "opendoor [tag|id]  (blank = nearest door; unlike usedoor, no transition needed)"),
         // The item-identity harness. `items` finds a target, `setitem` makes it worth
         // sending, `dropitem 0x..` sends it, `item` reads back what arrived — the whole loop
         // is these four, and none of them shadows a retail verb (the engine's list has
