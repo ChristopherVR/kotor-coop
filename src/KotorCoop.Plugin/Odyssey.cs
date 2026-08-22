@@ -8972,9 +8972,8 @@ internal static unsafe class Odyssey
     /// is exactly the body gliding along with no run cycle.</param>
     public static void DrivePhantom(nint creature, Vec3 position, float facing, float speed, bool moving)
     {
-        bool run = speed > 2.0f;
-        int want = moving ? (run ? AnimRun : AnimWalk) : AnimIdle;
-        DriveBody(creature, position, facing, speed, moving, want, run);
+        int want = GaitRule.SelectAnimation(speed, moving);
+        DriveBody(creature, position, facing, speed, moving, want, GaitRule.IsRun(speed));
     }
 
     /// <summary>
@@ -8991,16 +8990,14 @@ internal static unsafe class Odyssey
     /// See the bit table on <see cref="ClaimCreature(nint, bool, uint)"/>.</param>
     public static void DriveEnemy(nint creature, Vec3 position, float facing, float speed, bool moving, uint ownerAnimation, uint bisectMask = 0)
     {
-        bool run = speed > 2.0f;
-
         // NEEDS-LIVE: engine looping ids sit at 0x2710 (10000) and up; anything outside
         // that band here is a read gone wrong or a one-shot that does not belong in a
         // looping field, and idle is the safe substitute.
         int want = moving
-            ? (run ? AnimRun : AnimWalk)
+            ? GaitRule.SelectAnimation(speed, moving: true)
             : (ownerAnimation is >= 0x2710 and < 0x2800 ? (int)ownerAnimation : AnimIdle);
 
-        DriveBody(creature, position, facing, speed, moving, want, run, bisectMask);
+        DriveBody(creature, position, facing, speed, moving, want, GaitRule.IsRun(speed), bisectMask);
     }
 
     private static void DriveBody(nint creature, Vec3 position, float facing, float speed, bool moving, int want, bool run, uint bisectMask = 0)
@@ -9130,7 +9127,7 @@ internal static unsafe class Odyssey
         {
             if (GaitCreature[i] == creature)
             {
-                if (GaitLast[i] == want)
+                if (!GaitRule.ShouldReissue(GaitLast[i], want))
                 {
                     return false;
                 }
