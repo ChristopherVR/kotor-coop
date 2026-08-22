@@ -226,7 +226,7 @@ a mod, and only ever adds to the override folder.
 
 Verified live on two GOG instances: the whole session started from inside the game (Host on
 one, Connect on the other, both loading their real saved characters with no injected
-clicks), phantoms both ways with appearance and equipment, run-gait, item drop/pickup,
+clicks), phantoms both ways with appearance and equipment, item drop/pickup,
 enemy health/death mirroring, enemy and companion presence (positions, health and rendered
 bodies identical across both games), door unlock propagation, map pins, and going down and
 being picked up by the other player. And no longer only on the Endar Spire: the same pair
@@ -653,4 +653,26 @@ tools/                   RE helpers, demo scripts, the kotor1_0_3 symbol databas
   local player's own creature — mirrored enemies, mirrored companions and a peer's phantom only —
   so there is no "PC held" mechanism to fix. See
   [docs/research/shared-state-audit.md](docs/research/shared-state-audit.md) §2, round 58.
+- **A driven body's walk/run animation is unreliable — root-caused this round, partially
+  fixed, not resolved.** A peer's phantom (and, by the same shared `DriveBody` path, a
+  mirrored enemy or companion under direct drive) tracks position at the right speed, but its
+  rendered animation can still show idle while it moves — the reported "slides instead of
+  walking" bug. Two prior passes misdiagnosed the mechanism (round 60 blamed the wrong
+  classifier function). This round found the real one: the client twin's walk/run animation is
+  only ever resolved and played by `CSWCCreature::ClientServerSyncHandler_Position` (vtable
+  `+0x12C`, the POSITION sync handler) — never by the ANIMATION sync handler (`+0x134`) this
+  codebase has always used for gait — and `DriveBody` has always suppressed the position dirty
+  bit that would trigger it, to dodge a *different*, older bug (a zero playback rate from
+  `ComputeSpeedFactor` on a waypoint-less body). Calling `+0x12C` directly, with the engine's
+  own bad interpolation/rate side effects immediately overwritten by writes `DriveBody` already
+  made, produces real, live-confirmed walk/run playback — proven by multiple live samples
+  showing the twin's rendered animation actually leave idle and match server state for
+  multi-second stretches, something no prior pass achieved. But it is inconsistent: the same
+  live rig still measured 35-75% of moving samples showing idle depending on test conditions
+  (worse, not better, under smoother movement in one run), so the body still visibly slides
+  part of the time. Shipped anyway because it strictly improves on shipping nothing (no
+  regression in 1566 tests, no crash across four rebuild/redeploy/live-test cycles) and gives
+  the next pass a proven-correct mechanism to build on instead of a wrong one to un-learn. See
+  [docs/research/phantom-locomotion.md](docs/research/phantom-locomotion.md) §8 for the field
+  diff table, the disassembly evidence, and what a future pass should try next.
 - KOTOR 2 is untouched, and only GOG v1.0.3 addresses are known.

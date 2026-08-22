@@ -434,3 +434,237 @@ falsified fix attempt and the kept diagnostic). Both plugin builds are clean. No
 change shipped this pass beyond the capped, read-only diagnostic log — `DriveBody`'s actual
 drive logic (position, moveState, runFlag, rate, the `+0x134` sync call itself) is byte-for-
 byte what §0–§6 already found unchanged from the last live-verified commit.
+
+---
+
+## 8. Round 61 — the real mechanism found by static disassembly, a live-confirmed partial fix,
+and honest evidence it is not fully reliable
+
+Method used, per this round's brief: differential, not guessing — static disassembly of the
+exact engine call chain from the sync call down to the render field, cross-checked against
+`animations.2da` and live probes, rather than another round of "try a call and see."
+
+### 8.1 Round 60's classifier attribution was wrong — corrected here
+
+Round 60 concluded `CSWCObject::AnimationLooping` (vtable-independent, `0x0063C300`) gates
+`ClientServerSyncHandler_Animation` (twin vtable `+0x134`, `0x0060C100`) and that the phantom's
+animbase "does not classify these ids as playable at all." **Disassembling `0x0060C100` itself
+shows this is not what it does.** VERIFIED (static disassembly, this round):
+
+```
+0x0060C100  mov eax,[esp+8]         ; budget (float, arg3)
+0x0060C10F  mov edi,ecx             ; edi = twin
+0x0060C112  mov [edi+0x4c],eax      ; store budget, unconditionally
+0x0060C115  je 0x60c184             ; id in {0x2719,0x277d,0x271c,0x271b,0x271e,
+                                    ;   0x2716,0x2718,0x27ac} -> early return (no-op)
+0x0060C14F  call 0x63c060           ; GetCurrentAnimation(twin+0x58)
+0x0060C157  cmp esi,ecx; je 0x60c184  ; already current -> early return
+0x0060C15B  call 0x63c380           ; AnimationFireAndForget(twin, id)
+0x0060C163  test eax,eax
+0x0060C169  je 0x60c179
+0x0060C16E    call [twin_vtbl+0xa0]   ; fire-and-forget path
+0x0060C179  else call [twin_vtbl+0x9c] ; CSWCObject::SetAnimation — UNCONDITIONALLY
+```
+
+`AnimationLooping` is never called here at all. The function only ever branches on
+`AnimationFireAndForget`, then falls through to the plain setter (vtable `+0x9C`,
+`CSWCObject::SetAnimation`, `0x0063E930`) for everything that isn't fire-and-forget or one of
+eight hardcoded combat-overlay ids — which is exactly where our gait ids (0x2710/0x2712/0x2714)
+land.
+
+`AnimationLooping` **is** called, but one level deeper, inside `CSWCObject::SetAnimation`
+itself (`0x0063E930`, "the plain setter", already known from earlier rounds to "not stick"):
+
+```
+0x0063EC5D  push ebp                ; id
+0x0063EC67  call 0x63c300           ; AnimationLooping(current-anim-family, id)
+0x0063EC6E  je 0x63f224             ; false -> bail, twin+0x48/+0x58 untouched
+0x0063EC74  ... (compare against current, then the actual twin+0x58/+0x48 write)
+```
+
+So `AnimationLooping` genuinely does gate the write — just not the function round 60 named.
+This distinction matters because of §8.2.
+
+### 8.2 Why `AnimationLooping` rejects gait ids for EVERY creature, not just phantoms
+
+`AnimationLooping` (`0x0063C300`) has a fast path for `object_type==5` (creature) with id in
+`[0x578,0x5F7]` or `[0x640,0x6BF]` (combat/action loops — not our range) that returns true
+immediately. For anything else it translates the id through
+`CSWCAnimBase::ServerToClientAnimation` (animbase vtable `+0xE0`, `0x0069F650`, keyed on
+`animBase+0xC5` — the weapon-model-class byte) into a row number, then looks up that row's
+`Looping` column in `animations.2da` via `0x00413510` and returns `row.Looping != 0`.
+
+`ServerToClientAnimation`'s own jump table (dumped from the binary, VERIFIED) resolves
+`0x2712`→idx 2 and `0x2714`→idx 4. For weapon class 2 (confirmed live, both the local player
+and the phantom — see §8.3), those handlers return row **338** and row **345** respectively
+when `animBase+0xDC` ("run looks awful", `CSWCCreature::SetRunLooksAwful`) is nonzero, which it
+always was in every live sample this round took.
+
+`tools/kotorfiles.py --game <install> 2da animations.2da` (VERIFIED, read directly from the
+retail file):
+
+| row | name | walking | running | looping |
+| --- | --- | --- | --- | --- |
+| 338 | walkSS | 1 | 0 | **0** |
+| 345 | runSS | 0 | 1 | **0** |
+
+**Walking and running are their own `animations.2da` category, never `Looping`.** This means
+`AnimationLooping` structurally, permanently rejects 0x2712/0x2714 for *every* creature that
+reaches it through this call chain — the phantom is not special-cased against; nothing walking
+through `SetAnimation`'s plain-setter path can ever get a gait id past this gate. Round 60's
+"the animbase does not classify these ids as playable" reading was directionally right about
+the *symptom* (this call chain never plays gait ids) but wrong about *why* (it is not a
+per-creature animbase defect; it is `AnimationLooping` checking the wrong column for this
+category of id, by design, for a call chain gait was never meant to travel).
+
+### 8.3 The differential dump (per the brief's requested method) — and why it came up empty
+
+A live diff of the two structures the brief asked for — `CSWCAnimBase` (240 bytes,
+`tools/kotor1_0_3.db`) for the local player's own twin (natively animated, though NOT actually
+walking at sample time — see the caveat below) vs. a driven phantom's twin, both read via
+`SharedBlock.OffsetEnginePlayerPointer`/the plugin's own spawn-log address (not a vtable scan,
+per round 60's §7.1 trap):
+
+| offset | field | player | phantom | differs? |
+| --- | --- | --- | --- | --- |
+| 0xB8 | `gob` (Gob\*) | 0x1BED7B88 | 0x1BED7D60 | yes, but expected (different object) |
+| 0xC4 | (packed bytes) | 0x03 | 0x03 | no |
+| 0xC5 | weapon model class | **0x02** | **0x02** | **no** |
+| 0xC6 | (gate byte `ServerToClientAnimation` checks) | 0x01 | 0x01 | no |
+| 0xC8 | unidentified float-ish | 8.28 | 137.97 | yes, but not load-bearing (§8.4 traces the real gate; this field is never read on the path that matters) |
+| 0xCC | `runLooksAwful` (`SetRunLooksAwful`) | 0 | 0 | no |
+| 0xDC | unidentified byte (gates `ServerToClientAnimation`'s weapon-class branches: must be non-zero) | 4 | 5 | yes, but **both non-zero** — same branch taken either way |
+
+**VERIFIED, this round.** No field in this struct differs in a way that changes
+`ServerToClientAnimation`'s or `AnimationLooping`'s output between the player and the phantom —
+both resolve to the same rows, both get the same (permanent, §8.2) rejection. This is the
+honest negative result: the brief's hypothesis ("the phantom's animbase/appearance state
+differs from a normally-animated creature's") does not hold for this creature pair. The real
+defect is not a per-creature state gap at all — it is that gait was never meant to travel
+through this call chain (§8.2), on any creature.
+
+### 8.4 The real mechanism: `ClientServerSyncHandler_Position`, not
+`ClientServerSyncHandler_Animation`
+
+`CSWCObject` vtable has a THIRD relevant classifier pair the earlier rounds never found:
+`CSWCObject::AnimationWalking` (`0x0063C240`) and `CSWCObject::AnimationRunning`
+(`0x0063C2A0`) — siblings of `AnimationLooping`, keyed on the `Walking`/`Running` 2DA columns
+instead. `tools/xrefs.py` (VERIFIED): each has exactly **one** call site in the whole image,
+both inside `CSWCCreature::ClientServerSyncHandler_Position` (twin vtable `+0x12C`,
+`0x00611F50` — the POSITION sync handler, `docs/research/realtime-creature-movement.md` §10).
+
+Disassembling `0x00611F50` (VERIFIED, this round) shows it is called with
+`(twin, Vector* desiredPos, uint serverAnimId, float budget)` and, after an
+`AnimationStationary` short-circuit, does exactly this:
+
+```
+call AnimationWalking(serverAnimId)     ; 0x63c240
+if true:  resolve the "Walking" 2DA column's animation name, eventually
+          call animbase-vtable+0x54     ; the actual "play by name" step
+else:
+  call AnimationRunning(serverAnimId)   ; 0x63c2a0
+  if true (gated by a float-threshold check on id==0x2714 specifically): same play step
+  else: falls to a RunLooksAwful-branched variant of the same play step
+```
+
+**This is the only place in the engine that ever calls `AnimationWalking`/`AnimationRunning`
+and plays a walk/run animation by name.** `ClientServerSyncHandler_Animation` (`+0x134`, §8.1)
+never reaches this logic — it only handles fire-and-forget/overlay ids and (via the plain
+setter) `AnimationLooping`-approved ids, which walk/run ids never are (§8.2).
+
+`ClientServerSyncHandler_Position` fires from the engine's own AI-master sync pass whenever
+dirty bit 1 (position) is set. **`DriveBody` has, since it was written, called
+`SetPositionFn(creature, &position, 1, 0, 1)` with `bSuppressDirty=1` — deliberately
+suppressing exactly that bit**, to avoid a *different*, earlier-diagnosed bug: this same
+handler's own interpolation step and its `ComputeSpeedFactor` re-derivation (which returns
+`0.0` for a waypoint-less body — the historical "flying" bug,
+`docs/research/realtime-creature-movement.md` §9's own documented reason for the suppression).
+
+**The fix that solved the position/rate bug threw out the only code path that ever plays
+gait.** Live-verified this round with `AnimationWalkingFn`/`AnimationRunningFn` probes added
+to the existing capped diagnostic:
+
+```
+[14:43:22.146] gait-class: id 0x2712 on twin 0x192575E8 -> looping=0 fireForget=0 overlay=0
+  animBase=0x19C6EDA8 gob=0x1BF461D8 animationExists=1 walking=1 running=0 weaponClass=8
+  runLooksAwful=0
+```
+
+`walking=1` confirms `AnimationWalking(0x2712)` correctly recognises the gait id on the
+phantom's own animbase — the classifier is not the problem; never reaching it is.
+
+### 8.5 The fix, and its honest, live-measured reliability
+
+`Odyssey.DriveBody` (`src/KotorCoop.Plugin/Odyssey.cs`) now calls
+`ClientServerSyncHandler_Position` (twin vtable `+0x12C`, `TwinPositionSyncSlot`) directly,
+every step (not gated on `GaitChanged` — a first attempt gating it on the gait edge only
+produced correct display intermittently; calling it every step, matching how the engine's own
+dirty-bit mechanism would fire continuously for a really-moving creature, measurably improved
+consistency), passing `DriveBody`'s own position/id/budget. Its interpolation and rate side
+effects are overwritten immediately after by the position (`twin+0x1DC`, budget 0) and rate
+(`twin+0x1F8`) writes `DriveBody` already made unconditionally every step — so the historical
+"flying"/zero-rate bug this suppression originally fixed does not come back.
+
+**Live evidence it works, at least some of the time** (host walks/runs, client watches its
+phantom, `tools/phantomgait.ps1`-style sampling via a scratch `gaitsample.ps1`, synced start
+with the mover so no movement window is missed):
+
+```
+14:46:21.730 pos(113.86,22.15) anim 0x2714 twin 0x2710 rate 0.60 moveState -1 run 1 speed 1.24
+14:46:22.135 pos(114.48,22.15) anim 0x2714 twin 0x2714 rate 0.60 moveState -1 run 1 speed 1.72  <- MATCHES
+14:46:23.587 pos(115.80,22.15) anim 0x2714 twin 0x2714 rate 1.50 moveState -1 run 1 speed 2.95  <- MATCHES
+14:46:26.680 pos(120.95,22.15) anim 0x2712 twin 0x2712 rate 0.96 moveState -1 run 0 speed 1.63  <- MATCHES (walk)
+14:51:32.394 through 14:51:34.684 (11 consecutive 200ms samples, run phase):
+  twin stayed at 0x27A3 (a real, non-idle animation — the resolved by-name variant id, not our
+  raw 0x2714) for the ENTIRE stretch — no idle-while-moving in this window at all
+```
+
+The 11-sample sustained-non-idle run stretch and the individual walk/run matches above did not
+happen even once, anywhere, in this bug's entire prior audit trail (rounds 59/60 measured
+132/133 and 87/90 samples stuck at idle). This is real, live-confirmed progress on the actual
+mechanism.
+
+**It is not reliable.** The same live rig, same fix, different runs:
+
+| run | mover cadence | moving samples | idle-while-moving | % slide |
+| --- | --- | --- | --- | --- |
+| edge-triggered (`GaitChanged` only), 1st attempt | 100ms steps | 44 | 39 | 89% |
+| every-step call, 2nd attempt | 100ms steps | 44 | 28 | 64% |
+| every-step call, 2nd attempt | 33ms steps (smoother) | 123 | 103 | **84%, run phase ~100%** |
+
+The smoother-movement run was expected to do *better* (closer to a real player's continuous
+WASD input) and instead did worse, especially during sustained running — the opposite of what
+a synthetic-mover-artifact theory would predict. **The residual failure mode was not
+identified this pass**: `ClientServerSyncHandler_Position`'s run-specific branch (§8.4) is
+gated behind an extra float-threshold comparison (`fcomp` against a constant at `0x73e9ac`
+against a value this pass did not trace the origin of) that walk's branch does not have, and
+is the most likely place the run path specifically keeps failing; not confirmed live.
+
+### 8.6 What remains (NEEDS-LIVE, not closed this pass)
+
+- **Why the fix is intermittent.** The exact condition under which
+  `ClientServerSyncHandler_Position`'s walk/run branches fail to "stick" between calls was not
+  isolated — candidates: the unidentified float compared against `0x73e9ac` gating the run
+  branch specifically; a possible race between the edge-triggered `+0x134` call (still made on
+  `GaitChanged`, for the 8 combat-overlay ids and one-shot compatibility) and the new
+  every-step `+0x12C` call touching the same `twin+0x58` cache; or a genuine per-frame
+  precondition (e.g. the animbase's `Gob` visibility/culling state) this pass did not probe.
+- **Whether the `+0x134` call is still needed at all for pure gait ids.** It was proven this
+  round never to play walk/run (§8.1); it may be safe to skip entirely for `DrivePhantom`'s
+  ids and keep only for `DriveEnemy`'s owner-animation branch, which can pass real
+  combat-overlay ids. Not tried.
+- **Mirrored enemy and companion, and the reverse direction (client→host).** Time in this pass
+  went entirely into the host→client, PC-only differential; `DriveEnemy`/companion drive share
+  the exact same `DriveBody` code path so the same partial fix applies by construction, but
+  was not independently sampled.
+- **Performance.** `ClientServerSyncHandler_Position` does real floating-point and a 2DA
+  lookup; it now runs every `DriveBody` step for every driven body (up to 8 phantoms + 32
+  mirrored enemies) instead of only on a gait edge. Not measured this pass; no user-visible
+  slowdown observed on a 2-instance rig, but a heavier module was not tried.
+
+### 8.7 What did NOT regress
+
+`tests/KotorCoop.Tests` stayed at 1566/1566 passing before and after this round's change. Both
+plugin builds (`src/KotorCoop.Plugin/build.ps1 -Install`) are clean for both GOG installs used
+by `tools/demo.ps1`. No crash was observed across four rebuild/redeploy/live-test cycles this
+round.

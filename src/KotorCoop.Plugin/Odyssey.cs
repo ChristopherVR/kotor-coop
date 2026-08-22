@@ -4202,6 +4202,51 @@ internal static unsafe class Odyssey
     private static readonly delegate* unmanaged[Thiscall]<nint, ushort, int> AnimationLoopingFn =
         (delegate* unmanaged[Thiscall]<nint, ushort, int>)0x0063C300;
 
+    /// <summary>ROUND 61 DIAGNOSTIC: CSWCObject::AnimationWalking(u16) / AnimationRunning(u16)
+    /// — the predicates <c>ClientServerSyncHandler_Position</c> (0x00611F50, vtable +0x12C)
+    /// actually branches on to decide whether to resolve and play a walk/run animation by
+    /// name. Probed to confirm the +0x12C call this pass added is even reaching the
+    /// animbase-vtable+0x54 "play" step for this creature.</summary>
+    private static readonly delegate* unmanaged[Thiscall]<nint, ushort, int> AnimationWalkingFn =
+        (delegate* unmanaged[Thiscall]<nint, ushort, int>)0x0063C240;
+
+    private static readonly delegate* unmanaged[Thiscall]<nint, ushort, int> AnimationRunningFn =
+        (delegate* unmanaged[Thiscall]<nint, ushort, int>)0x0063C2A0;
+
+    /// <summary>
+    /// ROUND 61: <c>CSWCAnimBase::AnimationExists(u16)</c>, animbase vtable +0x50
+    /// (0x0069D910, confirmed by name in tools/kotor1_0_3.db). This — NOT
+    /// AnimationLooping/FireAndForget/Overlay, which round 60 blamed — is the real gate on
+    /// whether a gait id actually plays. Static disassembly of the two functions between the
+    /// sync call and the render field settles it:
+    /// <list type="bullet">
+    /// <item><c>CSWCCreature::ClientServerSyncHandler_Animation</c> (vtable +0x134,
+    /// 0x0060C100 — the entry <see cref="TwinAnimationSyncSlot"/> calls) never calls
+    /// AnimationLooping at all. It only calls AnimationFireAndForget to choose between
+    /// vtable +0xA0 (fire-and-forget path) and vtable +0x9C (the plain setter) — our gait ids
+    /// are not fire-and-forget, so it always takes +0x9C.</item>
+    /// <item><c>CSWCObject::SetAnimation</c> (vtable +0x9C, 0x0063E930 — the "plain setter"
+    /// the file's own comments already knew "does not stick") calls
+    /// <c>animBase-&gt;vtbl[0x50](id)</c> = AnimationExists and returns immediately, WITHOUT
+    /// touching twin+0x48 at all, when it reports false. AnimationExists itself returns false
+    /// immediately if the animbase's own <c>Gob*</c> (tools/kotor1_0_3.db:
+    /// <c>CSWCAnimBase.gob</c>, offset 184 = <see cref="AnimBaseGob"/>) is null — the loaded
+    /// render/scene node — and otherwise resolves the id to a model animation name
+    /// (<c>GetAnimationName</c>, animbase vtable +0x40, 0x0069E620) and asks the Gob whether a
+    /// node with that name exists on the loaded model.</item>
+    /// </list>
+    /// So "the animbase does not classify these ids as playable" (round 60's read of
+    /// AnimationLooping) was the wrong function; THIS is the one that actually decides.
+    /// </summary>
+    private static readonly delegate* unmanaged[Thiscall]<nint, ushort, int> AnimationExistsFn =
+        (delegate* unmanaged[Thiscall]<nint, ushort, int>)0x0069D910;
+
+    /// <summary>CSWCAnimBase + this = Gob* (the render/scene node this animbase drives).
+    /// Null until the model has finished loading. tools/kotor1_0_3.db: CSWCAnimBase.gob,
+    /// offset 184 (0xB8). <see cref="AnimationExistsFn"/> refuses everything while this is
+    /// null.</summary>
+    private const int AnimBaseGob = 0xB8;
+
     private static int _animationClassLogged;
 
     /// <summary>Reports the first few unclassified ids. All three predicates are data-driven
@@ -9058,6 +9103,24 @@ internal static unsafe class Odyssey
                 // — reported from play as "the X animation no longer shows". The engine
                 // restores the looping gait by itself when a one-shot ends, so leaving the
                 // field alone between gait changes costs nothing.
+                // ROUND 61 FIX, call #2 of 2: ClientServerSyncHandler_Position (+0x12C) is the
+                // ONLY function that ever resolves 0x2712/0x2714 into a real, classifier-
+                // approved (AnimationWalking/AnimationRunning) animation and plays it by name —
+                // see TwinPositionSyncSlot's doc. The engine itself calls this on EVERY frame a
+                // moving creature's position dirty bit is set (i.e. continuously while moving),
+                // not once per gait change — DriveBody's bSuppressDirty=1 (the SetPositionFn
+                // call above) has always kept it from firing at all. Calling it only on
+                // GaitChanged (this fix's first live attempt) made walk display CORRECTLY SOME
+                // of the time but not reliably, and run not at all — live-measured evidence
+                // that, like the engine's own re-assertion loop in AnimationUpdate, this needs
+                // to fire every step to stick, not just on the edge. So: every step, not gated.
+                // Its interpolation-step and rate side effects are overwritten by this same
+                // function's unconditional position (above) and rate (below) writes before the
+                // next frame ever reads them.
+                var syncPosition =
+                    (delegate* unmanaged[Thiscall]<nint, Vec3*, uint, float, void>)(*(nint*)(*(nint*)twin + TwinPositionSyncSlot));
+                syncPosition(twin, &position, (uint)want, *(float*)(creature + ObjAnimationBudget));
+
                 if (GaitChanged(creature, want))
                 {
                     var syncAnimation =
@@ -9084,15 +9147,35 @@ internal static unsafe class Odyssey
                     // a directly-driven phantom. The real fix needs the per-model row a
                     // normally AI/waypoint-driven creature would resolve through — not found
                     // this pass; kept as a live, capped diagnostic for whoever picks it up.
-                    if (_gaitClassLogged < 6)
+                    if (_gaitClassLogged < 30)
                     {
                         _gaitClassLogged++;
                         int loop = AnimationLoopingFn(twin, (ushort)want);
                         int fireForget = AnimationFireAndForgetFn(twin, (ushort)want);
                         int overlay = AnimationOverlayFn(twin, (ushort)want);
+
+                        // ROUND 61: AnimationLooping/FireAndForget/Overlay (above) do NOT gate
+                        // this call — disassembly of ClientServerSyncHandler_Animation
+                        // (0x0060C100) and the plain setter it falls through to
+                        // (CSWCObject::SetAnimation, 0x0063E930) shows the real gate is
+                        // CSWCAnimBase::AnimationExists (animbase vtable +0x50, 0x0069D910),
+                        // which refuses everything while the animbase's own Gob* (+0xB8) is
+                        // null. Probe both directly. Also probe AnimationWalking/Running —
+                        // the predicates ClientServerSyncHandler_Position (the round-61 +0x12C
+                        // fix call, above) actually branches on — to see whether that call is
+                        // even reaching its animbase-vtable+0x54 "play" step for this creature.
+                        nint animBase = *(nint*)(twin + TwinAnimBase);
+                        nint gob = animBase == 0 ? 0 : *(nint*)(animBase + AnimBaseGob);
+                        int exists = animBase == 0 ? -1 : AnimationExistsFn(animBase, (ushort)want);
+                        int walking = AnimationWalkingFn(twin, (ushort)want);
+                        int running = AnimationRunningFn(twin, (ushort)want);
+                        byte weaponClass = animBase == 0 ? (byte)0xFF : *(byte*)(animBase + 0xC5);
+                        int runLooksAwful = animBase == 0 ? -1 : *(int*)(animBase + 0xCC);
                         PluginHost.Log(
                             $"gait-class: id 0x{want:X} on twin 0x{twin:X} -> looping={loop} "
-                            + $"fireForget={fireForget} overlay={overlay}");
+                            + $"fireForget={fireForget} overlay={overlay} animBase=0x{animBase:X} "
+                            + $"gob=0x{gob:X} animationExists={exists} walking={walking} "
+                            + $"running={running} weaponClass={weaponClass} runLooksAwful={runLooksAwful}");
                     }
                 }
 
@@ -9206,6 +9289,40 @@ internal static unsafe class Odyssey
     /// that owns twin+0x48; calling the plain setter (+0x9C) instead does not stick.
     /// </summary>
     private const int TwinAnimationSyncSlot = 0x134;
+
+    /// <summary>
+    /// ROUND 61 FIX: CSWCObject vtable +0x12C = ClientServerSyncHandler_Position(Vector*
+    /// desiredPos, uint serverAnimId, float budget), ret 0xC — 0x00611F50, the entry the
+    /// engine's server→client dirty-push calls for the POSITION bit (dirty bit 1), which
+    /// DriveBody has always deliberately suppressed (see the comment on
+    /// <see cref="BisectBitDrivePosition"/>'s call site below) because its OWN interpolation
+    /// step and its <c>ComputeSpeedFactor</c> re-derivation return 0.0 for a waypoint-less
+    /// phantom — the historical "flying" bug.
+    ///
+    /// What that suppression ALSO threw out, undiscovered until this pass: static
+    /// disassembly of 0x00611F50 shows it is the ONLY place in the engine that calls
+    /// <c>CSWCObject::AnimationWalking</c> (0x0063C240) / <c>AnimationRunning</c> (0x0063C2A0)
+    /// against the SERVER's animation id (the third arg) and, on a match, resolves and plays
+    /// the walk/run animation BY NAME through the "Walking"/"Running" columns of
+    /// animations.2da — a completely different mechanism from
+    /// <see cref="TwinAnimationSyncSlot"/>'s id-based <c>AnimationLooping</c> gate, which
+    /// (ROUND 61, see <see cref="AnimationExistsFn"/>'s doc) structurally rejects gait ids for
+    /// every creature: <c>animations.2da</c> rows 338 "walkSS" and 345 "runSS" (what
+    /// <c>ServerToClientAnimation</c> resolves 0x2712/0x2714 to for weapon class 2, live-
+    /// confirmed) both have <c>Looping = 0</c> — walking/running are their own 2DA category,
+    /// never "looping". <c>CSWCCreature::AnimationUpdate</c> (0x0061A980) never selects a new
+    /// gait itself; it only re-asserts whatever is already cached at twin+0x58 each frame, so
+    /// if nothing ever seeds that cache with the walk/run row, nothing ever will — exactly the
+    /// "moves in sync but slides" symptom, on every driven body, always.
+    ///
+    /// Calling this handler ourselves — with our OWN position/id/budget, immediately followed
+    /// by the SAME authoritative twin+0x1DC/+0x1E8/+0x1F8 overwrites <see cref="DriveBody"/>
+    /// already performs every step — lets its internal AnimationWalking/Running dispatch run
+    /// while the bad interpolation/rate side effects it also produces are overwritten before
+    /// the next frame ever reads them. NEEDS-LIVE verification that this actually plays the
+    /// gait (see docs/research/phantom-locomotion.md round 61).
+    /// </summary>
+    private const int TwinPositionSyncSlot = 0x12C;
 
     /// <summary>CSWSObject + this = float forwarded with the engine's animation sync.</summary>
     private const int ObjAnimationBudget = 0xD8;

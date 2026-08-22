@@ -5927,6 +5927,55 @@ the door check's own "one-off 114-unit dormancy" was real or a fluke of that spe
 now-diagnosed tooling limitation that will misreport again the next time a `SetX`-shaped
 thunk-and-jump function is declared; worth a proper fix outside this round's scope.
 
+### Round 61 (2026-08-22) — phantom locomotion: the real mechanism found, a partial live-verified fix shipped, honestly not fully reliable
+
+Continuation of round 60's phantom-slide audit (`docs/research/phantom-locomotion.md` §7),
+this time with the live rig from the start and a differential method as instructed: sample a
+baseline (a genuinely engine-animated creature's own state) against the driven phantom, find
+the field(s) that differ, and fix by replicating what the engine's own path does.
+
+**Correction to round 60.** Static disassembly of `ClientServerSyncHandler_Animation`
+(`0x0060C100`, twin vtable `+0x134` — the entry `DriveBody` calls for gait) shows it never
+calls `AnimationLooping` at all; that classifier is called one level deeper, inside the plain
+setter it falls through to (`CSWCObject::SetAnimation`, vtable `+0x9C`). Round 60's read of
+"the animbase does not classify these ids as playable" was the right symptom traced to the
+wrong function.
+
+**The actual root cause.** `AnimationLooping` structurally rejects walk/run ids for every
+creature, not just phantoms — `animations.2da` rows 338 (`walkSS`) and 345 (`runSS`), what
+`0x2712`/`0x2714` resolve to, both have `Looping = 0` (VERIFIED, read straight from the retail
+2DA file with `tools/kotorfiles.py`); walking/running are their own 2DA category. The
+differential dump the brief asked for (a live byte-for-byte diff of `CSWCAnimBase`, the local
+player's own twin vs. the phantom's) came up genuinely empty — weapon class, the "run looks
+awful" flag, and every field that feeds the classifier chain matched between the two — which is
+itself the finding: this is not a per-creature state gap. `CSWCCreature::ClientServerSyncHandler_Position`
+(twin vtable `+0x12C`) is the ONLY place in the whole binary that ever calls
+`CSWCObject::AnimationWalking`/`AnimationRunning` and plays a walk/run animation by name
+(`tools/xrefs.py`: one call site each, both there) — and `DriveBody` has, since it was written,
+suppressed the position dirty bit that would trigger it (`SetPositionFn(..., bSuppressDirty:
+1)`), to dodge a different, earlier-fixed bug (`ComputeSpeedFactor` returning 0 for a
+waypoint-less body). The fix for one bug silently disabled the only code path that plays the
+other.
+
+**The fix.** `Odyssey.DriveBody` now calls `ClientServerSyncHandler_Position` directly every
+step, with its bad interpolation/rate side effects immediately overwritten by the position and
+rate writes `DriveBody` already made unconditionally. Live-verified this round to actually work
+some of the time — sustained multi-second stretches of the twin's rendered animation correctly
+leaving idle and matching server gait, something no prior round achieved (rounds 59/60 measured
+essentially 100% stuck idle) — but NOT reliably: repeat live runs measured 64-89% of moving
+samples still showing idle depending on test conditions, with the run gait specifically worse
+than walk and, in one run, nearly 100% still sliding. The residual failure mode (a suspected
+extra float-threshold gate specific to the run branch) was not isolated this pass.
+
+**Shipped anyway, not reverted**, unlike round 60's own falsified `+0xA0` attempt — this one is
+not a no-op; it demonstrably plays the correct animation part of the time, which round 60's
+attempt never did at all. `tests/KotorCoop.Tests` stayed at 1566/1566; both plugin builds clean
+across four rebuild/redeploy/live-test cycles; no crash observed. README's "run-gait" claim in
+the "Verified live" summary was removed (it was not true even before this round — the bug this
+round investigates predates the claim) and replaced with an Honest Limitations entry describing
+the real, partial state. Full evidence, the field diff table, live sample transcripts, and what
+a future pass should try next: `docs/research/phantom-locomotion.md` §8.
+
 ## 3. A client's XP is actively erased
 
 `ProgressionSnapshotPacket` is host→client only and absolute (CoopAgent.cs, `PumpProgression`):
