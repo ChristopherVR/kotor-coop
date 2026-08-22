@@ -14,11 +14,14 @@ Both players, each in their own full game:
 
 - **See each other** as a real engine creature ("phantom") wearing the other player's
   actual appearance, armor and weapons, with their name in the selection band, tracking
-  position at true walk/run speed on the real walkmesh. **Known bug, live-reproduced
-  2026-08-22**: the phantom's walk/run cycle mostly does not render — it slides at the
-  correct speed with the animation parked on idle; see `docs/research/
-  phantom-locomotion.md` §7 for the root cause (an engine-side animation classifier that
-  does not recognize the gait ids for a directly-placed creature) and what's still open.
+  position at true walk/run speed on the real walkmesh. **Known bug, live-reproduced and
+  re-measured 2026-08-22 (round 63)**: the phantom's walk/run cycle mostly does not render —
+  it slides at the correct speed with the animation parked on idle, 97.6%/96.9% of moving
+  samples idle-while-moving on the two tested directions. See `docs/research/
+  phantom-locomotion.md` §10 for the precise mechanism traced so far (a five-round-deep engine
+  call chain — `ClientServerSyncHandler_Position` → `CSWCAnimBase::SetAnimation` →
+  `SetAnimationInternal` → `GetAnimationName`, the last of which appears to silently substitute
+  idle's name for an unresolved gait name, not live-confirmed) and what's still open.
 - **Travel together, either player leading**: whoever crosses into another area first,
   the other follows immediately through the engine's own module-transition path (the same
   machinery the built-in `warp` cheat uses) — an announce fires the instant the leader's

@@ -800,3 +800,275 @@ not a real measurement.
 No crash observed across two rebuild/redeploy/live-test cycles this round. `ObjAnimationBudget`
 and the `+0x134` call path are untouched — this round's change is scoped to the single new
 `TwinPositionSyncBudget` constant and its one call site, plus a capped, read-only diagnostic.
+
+---
+
+## 10. Round 63 — a citation error corrected, two hypotheses tested live and falsified, and
+the real chokepoint traced one level further than any prior round, still not fixed
+
+Method, per this round's brief: one variable at a time (E1–E4), each measured live with
+`tools/phantomgait.ps1`'s methodology before being kept or reverted. **Honest headline: the bug
+is not fixed this round either.** Final live numbers, 10 s walk (1.6 u/s) + 10 s run (3.96 u/s),
+both directions, with the round's one kept change (E1) shipped:
+
+| case | moving samples | idle-while-moving | fraction |
+| --- | --- | --- | --- |
+| host→client phantom | 84 | 82 | **97.6%** |
+| client→host phantom | 129 | 125 | **96.9%** |
+| mirrored enemy | not sampled — this pass's save (`END_M01AA`, the ending sequence) has no live hostiles; same code path (`Odyssey.DriveEnemy` → `DriveBody`) applies by construction, unconfirmed independently for the fourth round running | — | — |
+| companion (party member) | not sampled — no companion in this save's party; round 62's own finding (follow-AI pinned, plugin holds it "neutral") is the standing evidence and was not re-tested | — | — |
+
+Both measured cases are statistically indistinguishable from round 62's baseline (99.4% /
+81.2%) — within the noise a 10-second synthetic-mover sample produces, not an improvement.
+**README's walk/run bullet is not restored.**
+
+### 10.1 A load-bearing citation error, found and corrected: `SetAnimationInternal` is at
+`0x0069E8D0`, not `0x0069EE10`
+
+Round 62 §9.1 named `animBase_vtable+0x54` → `CSWCAnimBase::SetAnimationInternal` at
+`0x0069EE10`, "db-confirmed name," and round 62 §9.3 pointed the next round at disassembling
+that address. **This address is wrong, and disassembling it directly makes the mistake
+self-perpetuating**: `0x0069EE10` decodes to plausible-looking x86 for the first few bytes
+before resyncing into garbage-then-real code that is actually the *middle* of a different,
+unrelated function.
+
+Verified three independent ways this round:
+
+1. **The debug symbol database disagrees.** `tools/q.py func SetAnimationInternal` (queries
+   `tools/kotor1_0_3.db`, the same SQLite symbol DB every `db-confirmed` claim in this file
+   traces back to) returns `CSWCAnimBase::SetAnimationInternal` at **`0x0069E8D0`**. A
+   companion query, `SELECT ... FROM functions WHERE address BETWEEN 0x69EA00 AND 0x69EFA0`,
+   shows `0x0069EE10` falls inside `CSWCAnimBase::GetBoundingRect` (starts `0x0069EDC0`) — a
+   bounding-box computation, unrelated to animation playback.
+2. **A linear disassembly from a known-good earlier boundary (`0x0069EDF0`, inside
+   `GetBoundingRect`) shows `0x0069EE10` sits one byte before a real instruction boundary**
+   (`0x0069EE11`, `mov dword ptr [esp+0x30],0`) — not a function entry at all. `push -1; push
+   <SEH frame>; mov eax,fs:[0]; ...` (the standard MSVC SEH-frame prologue every function in
+   this binary that uses one starts with) is what a *real* entry looks like, and `0x0069E8D0`
+   has exactly that prologue; `0x0069EE10` does not.
+3. **The vtable itself was read directly off disk, not trusted from either citation.**
+   `CSWCAnimBase`'s vtable (`0x00754F60`, from `tools/q.py class CSWCAnimBase`) at `+0x54`
+   holds `0x0069D4F0`. That address is **`CSWCAnimBase::SetAnimation`** (confirmed via the
+   same symbol DB), a five-line thiscall-forwarding stub:
+
+   ```
+   0x0069D4F0  mov edx,[esp+0x10]; push edx        ; forward arg4
+   0x0069D4F7  mov edx,[esp+0x10]; push edx        ; forward arg3 (esp shifted by prior push)
+   0x0069D4FC  mov edx,[esp+0x10]; push edx        ; forward arg2
+   0x0069D501  mov edx,[esp+0x10]; push edx        ; forward arg1
+   0x0069D506  mov edx,[ecx+0xb8]; push edx        ; prepend animBase->gob (AnimBaseGob)
+   0x0069D50D  call dword ptr [eax+0xf0]           ; SAME animBase, vtable slot +0xF0
+   0x0069D513  ret 0x10
+   ```
+
+   `CSWCAnimBase` vtable `+0xF0` (read the same way) is `0x0069E8D0` — matching the symbol DB
+   exactly. So the real call chain, one hop longer than round 62 thought, is
+   `ClientServerSyncHandler_Position (+0x12C)` → `animBase_vtable+0x54` = `SetAnimation`
+   (thin forwarder) → `animBase_vtable+0xF0` = **`SetAnimationInternal` (real address
+   `0x0069E8D0`)**.
+
+**Why this matters beyond bookkeeping**: every prior round's disassembly of "SetAnimationInternal"
+was reading `GetBoundingRect`'s body — an unrelated bounding-box routine with its own jump
+tables (the "garbage" bytes several earlier rounds' raw dumps show past the resync point were
+literal switch-table data belonging to `GetBoundingRect`, not corrupted code). Round 62's §9.3
+conclusion ("either queues its effect for a later pass, or has its own internal gate ... the
+target for the next pass") was reasoning about the wrong function's shape. It is not wrong as a
+*hypothesis about the real function* — see §10.2 — but nothing in round 62 actually looked at
+`SetAnimationInternal` yet.
+
+### 10.2 The real `SetAnimationInternal`, disassembled — idle, walk and run all reach the
+identical generic path
+
+Full static disassembly of `0x0069E8D0` (VERIFIED, this round; `python tools/disasm.py
+0x69E8D0 1264`, cross-checked against the SEH-frame prologue/epilogue matching every other
+function in the binary that has one). Signature: `bool __thiscall SetAnimationInternal(this,
+ushort id, ..., float budget, ...)` (exact stack layout not fully typed; the epilogue's `ret
+0x14` confirms 5 stack dwords, matching round 62's byte count even though it was attached to
+the wrong address).
+
+The function's own dispatch, decoded from its jump tables as **data**, not disassembled
+in-line as code (the mistake that produced garbage in every earlier round's raw dump of the
+wrong address):
+
+- `id > 0x2798` or `id` in `[0x2713, 0x2792]`: dispatches through one of two byte-indexed jump
+  tables (`0x0069E9E4`/`0x0069E9F0` for the low range, `0x0069EA70`/`0x0069EA7C` for the high
+  range) to a small set of per-id handlers — mostly combat-overlay/one-shot ids.
+- **Every id outside those hardcoded ranges — including all three gait ids, since `0x2710`
+  and `0x2712` are below `0x2713` (unsigned-wrap out of the low table entirely) and `0x2714`
+  (offset 1 into the low table) maps to case 2, decoded directly from the byte table: `case
+  2 → 0x0069E987`, the SAME address the out-of-range default falls through to** — lands on one
+  shared "generic" path:
+
+  ```
+  0x0069E987  mov ecx,[esp+0x38]; mov edx,[esp+0x34]; mov eax,[esp+0x30]   ; the budget float
+  0x0069E993  mov esi,[ebx]              ; ebx = result of the vtable+0x40 lookup (below)
+  0x0069E99C  call 0x5e5670               ; CExoString::CStr — char* from a name
+  0x0069E9A4  call [esi+0x18]             ; virtual call: ebx->vtable[0x18](name-derived arg)
+  0x0069E9A7  mov edi,1                   ; success
+  ```
+
+  **Idle, walk and run are not treated differently by `SetAnimationInternal` at all** — this
+  rules out an internal per-gait-id divergence as the explanation for round 61/62's
+  walk-vs-run asymmetry (already fully explained by the `ClientServerSyncHandler_Position`
+  budget gate round 62 closed) and rules it out as the explanation for why NONE of the three
+  gait ids render reliably.
+- `ebx` (dereferenced for the virtual call above) comes from an earlier call at the top of the
+  function: `call [eax+0x40]` on `animBase`'s own vtable, with the **real requested id**
+  pushed as an argument. `CSWCAnimBase` vtable `+0x40` (read off disk, same method as §10.1) is
+  **`0x0069E620` = `CSWCAnimBase::GetAnimationName`** — confirmed by the symbol DB. If this
+  lookup fails (the early `je 0x69e9ac` at the very top of the function, before any of the
+  above), `SetAnimationInternal` returns `false` having touched nothing.
+
+### 10.3 A promising, NOT live-confirmed lead: `GetAnimationName` silently substitutes idle
+for an unresolved gait name
+
+Disassembling `GetAnimationName` (`0x0069E620`, VERIFIED, this round — `python tools/disasm.py
+0x69E620 350` plus a second pass to `0x69E8C9` for its tail) shows a two-attempt structure:
+
+1. **First attempt, with the real id.** Calls `animBase_vtable+0xE0`
+   (`AnimBaseServerToClientSlot`/`ServerToClientAnimation`, already wired as a callable
+   delegate in `Odyssey.cs` and already proven live in round 61 to resolve `0x2712`→row 338
+   (`walkSS`) and `0x2714`→row 345 (`runSS`) for weapon class 2) with the real requested id,
+   then looks up a 2DA string for the resolved row. If that string's length is `> 0`, it is
+   copied into the caller's return buffer and the function returns immediately — this is the
+   success path a genuinely-resolvable id takes.
+2. **Fallback, only reached when step 1's string comes back empty.** The function then checks
+   eight small hardcoded id ranges (`[0x3e8,0x467]`, `[0x4b0,0x52f]`, `[0x578,0x5f7]`,
+   `[0x640,0x6bf]` — all well below `0x2710`, so none of our gait ids match any of them) for a
+   combat/overlay name table. **Falling through that too** (`0x0069E816` onward — exactly the
+   branch every gait id reaches, since none is in those ranges), it does one more check
+   (`call 0x5e58a0` on the step-1 local string; skip if a special-cased `id == 0x2772`) and
+   then — for everything that reaches this point — **calls `animBase_vtable+0xE0` a SECOND
+   time with the literal constant `0x2710` (idle) hardcoded in the call, discarding the real
+   requested id entirely**, and uses whatever that resolves to (or an empty string, if even
+   that fails) as the name eventually handed to `SetAnimationInternal`'s "play" step.
+
+**If step 1's 2DA-string lookup for `0x2712`/`0x2714` comes back empty on this codepath, this
+would be a complete, mechanistic explanation for the whole bug**: `SetAnimationInternal` would
+be told to play IDLE's name whenever asked for walk or run, on every creature reached through
+this call chain, by design of the engine's own fallback — not because of anything a driven
+phantom does differently from an AI-walked creature. This would also explain why three
+separate rounds (60–63) chasing "what's different about the phantom" kept coming up with
+negative results (§8.3's differential dump, this round's E1/E2) — there may be nothing
+different about the phantom to find; the mechanism may fail the same way for every creature
+that reaches it, and a normally-walking creature's *rendered* gait may come from an entirely
+separate, velocity/blend-driven subsystem that never calls `SetAnimationInternal` with a
+discrete id at all (consistent with `animations.2da`'s own schema — VERIFIED this round via
+`tools/kotorfiles.py --game <install> 2da animations.2da --rows 337:346` — having no
+"model"/"root name" column distinct from the row's own `name` field, i.e. nothing for step 1's
+lookup to plausibly return besides the literal, always-non-empty strings `walkSS`/`runSS`,
+which is the one piece of live evidence that argues AGAINST the empty-string theory as
+literally stated and this round did not resolve).
+
+**NOT confirmed live.** Reaching a firm answer needs one of: a capped live diagnostic (this
+round's remaining time went to E1/E2/E4 instead) reading the step-1 2DA string's actual length
+for `0x2712`/`0x2714` on a real phantom; or single-stepping `GetAnimationName` with a debugger,
+which this project's tooling does not have (static disassembly plus targeted `ReadProcessMemory`
+probes only). Flagged honestly as the most concrete unfinished lead this file has produced —
+more specific than "somewhere in the chain" (round 60), "the caller, not this function" (round
+61→62), or "this function, not its caller" (round 62→63, and it turned out round 62 was
+disassembling the wrong function besides).
+
+### 10.4 E1 — skip the animation-sync call (`+0x134`) for Walk/Run — live-tested, no effect,
+kept as a proven dead-code cleanup
+
+Hypothesis: `DriveBody` still calls the edge-triggered `+0x134` `ClientServerSyncHandler_Animation`
+sync handler for every gait change including Walk/Run, and — round 61 §8.1 already proved this
+call structurally can never PLAY a gait id (`AnimationLooping` rejects `walkSS`/`runSS` rows
+inside `CSWCObject::SetAnimation`, the setter `+0x134` falls through to) — the E1 hypothesis was
+that this dead call was actively harmful: re-touching the twin's `+0x58` animation cache on the
+exact same edge frame `+0x12C` seeds it might stomp that seed before the per-frame update ever
+applies it.
+
+Change: `Odyssey.DriveBody` now skips the `+0x134` call when `want` is `GaitRule.AnimWalk` or
+`GaitRule.AnimRun`, keeping it for Idle and for `DriveEnemy`'s owner-animation branch (which can
+legitimately pass real combat/overlay ids the call chain DOES handle).
+
+**Live-measured, host→client, 10 s walk + 10 s run**: 77 moving samples, 74 idle-while-moving
+(**96.1%**) — statistically the same as round 62's pre-E1 baseline (99.4%), not an improvement.
+**Kept anyway**, unlike round 60's falsified `+0xA0` attempt: unlike that attempt, this one is
+not a guess — round 61's own disassembly already proves the skipped call is a no-op for these
+two ids specifically, so removing it is a correct simplification independent of whether it fixes
+the bug, and it measured no regression.
+
+### 10.5 E2 — stop telling the twin it has already arrived while moving — live-tested, no
+effect, reverted
+
+Hypothesis: `DriveBody` writes `twin+0x1E8` (`TwinDesiredPositionBudget`) to `0` every step —
+"snap, zero distance to travel" — even while genuinely moving, which is the opposite of the
+engine's own normal semantics (`CSWCCreature::ResetDesiredPositionTimer` writes `0x200`, 512 ms,
+during real engine-driven movement, per this file's own top-of-region comment). If whatever
+per-frame logic decides walk-vs-idle reads *interpolation progress* rather than the discrete
+gait id, telling it "arrived instantly" every single step could be exactly what keeps the answer
+at idle.
+
+Change (tested): write `0x200` instead of `0` while `moving` is true, keep `0` for idle/arrived.
+
+**Live-measured, host→client, E1+E2 combined, 10 s walk + 10 s run**: 127 moving samples, 123
+idle-while-moving (**96.9%**) — again statistically unchanged from baseline. **Reverted.** Unlike
+E1, this change has no independent justification once it fails to help — it touches a field a
+downstream engine pass genuinely consumes (unlike the proven-dead `+0x134` call), so shipping an
+unproven, unhelpful change to it is worse than reverting to the known, previously-live-verified
+`0` write. `TwinInTransitBudgetMs` and its call site were removed; `Odyssey.cs` is back to
+round 62's exact write here.
+
+### 10.6 E3 — see §10.1–10.3. The disassembly work is done; the live confirmation is not.
+
+### 10.7 E4 — a control creature, attempted and blocked
+
+The brief's control case ("sample a Sith soldier the engine walks via `ActionMoveToLocation`")
+needs a creature under genuine engine AI control, not the local player. Two paths were tried:
+
+- **The local player, via the plugin's own test-drive hook** (`SharedBlock.OffsetTestWalkX/Y/
+  Serial`, `TestDriveController.HandleWalk`, which queues a real `ActionMoveToLocation` — no
+  raw position poke). **Blocked by design, confirmed live**: the plugin's own log line explains
+  why — `"NOTE the PC is drive-controlled, so an action-queue move may not move it at all"` —
+  and live-measured this round, that is exactly what happened: `moveState` went `1`→`2`
+  ("requested") and stayed there for the full 15 s sample window; position never changed at all.
+  The queued action never executes because the player-controlled body overrides its own action
+  queue.
+- **A companion or hostile NPC.** This pass's save (`END_M01AA`, the ending sequence, loaded by
+  `demo.ps1`'s default autosave) has no hostiles and no party companion loaded — `Odyssey.
+  MoveToLocation` can target an arbitrary creature id, but nothing in the current test-drive
+  surface exposes an arbitrary target id (only the player), and no candidate creature exists in
+  this save to target even if it did. Adding that surface (a new shared-block target-id field)
+  was judged out of scope for a locomotion-diagnostic pass.
+
+**E4 was not completed.** A future round needs either a save with a live hostile or party
+companion, or a small addition to `TestDriveController`/`SharedBlock` exposing an explicit
+target object id for the test-walk hook (not just the player).
+
+### 10.8 What remains (NEEDS-LIVE, not closed this round)
+
+- **§10.3's lead, confirmed or falsified live.** The single highest-value next step: a capped
+  diagnostic reading `GetAnimationName`'s step-1 2DA-string length for `0x2712`/`0x2714` on a
+  live phantom (and, for comparison, on a creature that does show a working gait, if one can be
+  found or constructed) settles whether the fallback-to-idle substitution in §10.3 is the actual
+  mechanism.
+- **Whether ANY creature in this engine ever renders walk/run through `SetAnimationInternal` at
+  all**, or whether a normally-AI-driven creature's visible gait comes from an entirely separate,
+  velocity-driven blend system that this whole `ClientServerSyncHandler_Position` /
+  `SetAnimationInternal` chain was never meant to serve for continuous locomotion (only for the
+  hardcoded combat-overlay/one-shot id ranges `SetAnimationInternal`'s jump tables actually
+  specialize). If true, three-plus rounds of work on this exact call chain have been chasing a
+  mechanism that was never going to produce a rendered walk cycle, and the real fix is finding
+  and driving whatever field `CSWCCreature::AnimationUpdate`'s per-frame pass reads for blend
+  weight/velocity instead.
+- **E4**, genuinely completed against an AI-controlled creature — needs a save with a hostile or
+  companion, or a small, explicit-target-id addition to the test-drive surface.
+- **Mirrored enemy**, independently sampled — fourth round running without this.
+- **The tooling gap round 60 §7.1/§7.6 already flagged** (`phantomgait.ps1`'s vtable-scan
+  auto-resolve can latch a frozen duplicate on this module) is still open; every live sample in
+  this file since round 60 has worked around it with an explicit `-Address`, never fixed it.
+
+### 10.9 What did NOT regress
+
+`tests/KotorCoop.Tests` stayed at **1591/1591** passing before and after (baseline grew from
+1566 since round 62 from unrelated work on other branches merged into this one; no test in this
+pass's own scope changed count). Both plugin builds
+(`src/KotorCoop.Plugin/build.ps1 -Install`) clean for both GOG installs across three
+rebuild/redeploy/live-test cycles this round. No crash observed. `ObjAnimationBudget`,
+`TwinPositionSyncBudget`, the `+0x12C` call, and the rate/position writes are all byte-for-byte
+what round 62 shipped — this round's net source change is the single `+0x134` skip for Walk/Run
+(§10.4), a corrected address citation in this file, and the `gait-class`/`sync12c` diagnostics
+left exactly as round 61/62 left them.

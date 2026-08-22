@@ -6021,6 +6021,63 @@ this bug was updated with round 62's numbers, not marked fixed — the walk/run 
 restored (all four cases were not clean; two of four were not even independently measured this
 round).
 
+### Round 63 (2026-08-22) — a citation error found and corrected, two hypotheses tested live
+and falsified, still not fixed
+
+Continuation of round 62, tasked with testing four specific one-variable-at-a-time hypotheses
+(E1–E4) for why `ClientServerSyncHandler_Position`'s effect on `twin+0x48` is not synchronous.
+Full write-up: `docs/research/phantom-locomotion.md` §10.
+
+**The biggest finding is a correction, not a fix.** Round 62 named `0x0069EE10` as
+`CSWCAnimBase::SetAnimationInternal`, "db-confirmed." It is not — the debug symbol database
+(`tools/kotor1_0_3.db`, queried directly this round with `tools/q.py`) puts
+`SetAnimationInternal` at **`0x0069E8D0`**; `0x0069EE10` falls inside a completely unrelated
+function, `CSWCAnimBase::GetBoundingRect`. Confirmed three ways (the symbol DB, a linear
+disassembly from a known-good boundary showing `0x0069EE10` is not even an instruction
+boundary, and reading `CSWCAnimBase`'s vtable directly off disk — `+0x54` is a five-line
+forwarding stub, `SetAnimation`, that itself calls `+0xF0`, which IS `0x0069E8D0`). Every
+prior round's disassembly of "`SetAnimationInternal`" was reading `GetBoundingRect`'s jump-table
+data as code.
+
+Disassembling the real function (VERIFIED) shows idle, walk and run all reach one identical
+generic path — ruling out a per-gait-id divergence inside this function as the cause — and
+that the path's "play" step depends on `CSWCAnimBase::GetAnimationName` (vtable `+0x40`)
+resolving a non-empty name for the requested id. `GetAnimationName`'s own disassembly (VERIFIED)
+shows a fallback: if its first attempt (with the real id) comes back empty, it retries with the
+literal constant `0x2710` (idle) hardcoded in place of the real id, before ever reaching the
+combat-overlay range checks any gait id would skip anyway. **If the first attempt is empty for
+`0x2712`/`0x2714` on a phantom, this is a complete, mechanistic explanation for the whole bug —
+not live-confirmed this round** (would need a capped diagnostic reading the intermediate
+string's length, not attempted — time went to E1/E2/E4 instead). Flagged as the most concrete
+unfinished lead the phantom-locomotion investigation has produced across four rounds.
+
+Two of the brief's four experiments were live-tested:
+
+- **E1** (skip the proven-dead `+0x134` animation-sync call for Walk/Run): live-measured no
+  change (96.1% idle-while-moving vs. round 62's 99.4% baseline, host→client). Kept anyway —
+  round 61 already proved this call is a structural no-op for these two ids, so removing it is
+  correct regardless of whether it fixes the bug.
+- **E2** (stop writing "arrived instantly" to the twin's desired-position budget while moving):
+  live-measured no change (96.9% combined with E1). Reverted — unlike E1, this has no
+  independent justification once it measured no help.
+- **E3** (disassemble `SetAnimationInternal`): done — see above; this IS what produced the
+  citation correction and the `GetAnimationName` lead.
+- **E4** (a control creature, AI-walked via `ActionMoveToLocation`): blocked. The plugin's own
+  test-drive hook targets only the player, and the player is confirmed live this round to be
+  "drive-controlled" — a queued `ActionMoveToLocation` on the PC never executes (`moveState`
+  went to "requested" and stayed there the whole 15 s sample; position never moved). This pass's
+  save has no hostile or party companion to target instead.
+
+**Final live numbers, both directions, 10 s walk + 10 s run, with this round's one kept change
+(E1) shipped**: host→client phantom **97.6%** idle-while-moving (84 moving samples, 82 idle),
+client→host phantom **96.9%** (129 moving, 125 idle) — statistically unchanged from round 62's
+baseline. Mirrored enemy and companion were not sampled (no hostiles or party members in this
+save) — the fourth round running without an independent measurement of either.
+
+`tests/KotorCoop.Tests` stayed at 1591/1591 (baseline grew from 1566 via unrelated merges since
+round 62, not this pass's own scope); both plugin builds clean across three
+rebuild/redeploy/live-test cycles; no crash observed. README's walk/run bullet is not restored.
+
 ## 3. A client's XP is actively erased
 
 `ProgressionSnapshotPacket` is host→client only and absolute (CoopAgent.cs, `PumpProgression`):

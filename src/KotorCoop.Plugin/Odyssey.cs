@@ -9159,9 +9159,30 @@ internal static unsafe class Odyssey
 
                 if (GaitChanged(creature, want))
                 {
-                    var syncAnimation =
-                        (delegate* unmanaged[Thiscall]<nint, uint, float, void>)(*(nint*)(*(nint*)twin + TwinAnimationSyncSlot));
-                    syncAnimation(twin, (uint)want, *(float*)(creature + ObjAnimationBudget));
+                    // ROUND 63 EXPERIMENT E1 (docs/research/phantom-locomotion.md §10): skip
+                    // this call entirely for Walk/Run. Round 61 §8.1 already proved it never
+                    // PLAYS a gait id (AnimationLooping structurally rejects 0x2712/0x2714 for
+                    // every creature — walking/running are their own animations.2da category,
+                    // so CSWCObject::SetAnimation's own AnimationLooping gate always bails
+                    // before touching twin+0x48/+0x58 for these two ids specifically) — this
+                    // is a provable dead call for Walk/Run, not a guess. The E1 hypothesis was
+                    // that it was worse than dead — that re-touching twin+0x58's cache on the
+                    // SAME edge frame ClientServerSyncHandler_Position (+0x12C, below) seeds it
+                    // stomps that seed before the animbase's per-frame update ever applies it.
+                    // Live-measured this round: skipping it changed nothing (96% idle-while-
+                    // moving, statistically the same as the pre-E1 baseline) — it is not the
+                    // cause, but the call is still proven dead weight for these two ids, so the
+                    // skip stays as a no-behaviour-change cleanup. Idle and DriveEnemy's
+                    // owner-animation branch (which can pass real combat/overlay ids, not just
+                    // the three gait ids) still need this
+                    // entry — see PlayOneShotAnimation/MirrorAnimation, which route through it
+                    // for one-shots — so the skip is scoped to exactly Walk/Run.
+                    if (want != GaitRule.AnimWalk && want != GaitRule.AnimRun)
+                    {
+                        var syncAnimation =
+                            (delegate* unmanaged[Thiscall]<nint, uint, float, void>)(*(nint*)(*(nint*)twin + TwinAnimationSyncSlot));
+                        syncAnimation(twin, (uint)want, *(float*)(creature + ObjAnimationBudget));
+                    }
 
                     // ⚠ ROUND 60 DIAGNOSTIC (docs/research/phantom-locomotion.md, live pass
                     // 2026-08-22): +0x134 is confirmed address-correct (live vtable read
