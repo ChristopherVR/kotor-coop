@@ -13,8 +13,12 @@ itself; everything else attaches from outside with `OpenProcess`.
 Both players, each in their own full game:
 
 - **See each other** as a real engine creature ("phantom") wearing the other player's
-  actual appearance, armor and weapons, with their name in the selection band, walking
-  and running at true speed on the real walkmesh.
+  actual appearance, armor and weapons, with their name in the selection band, tracking
+  position at true walk/run speed on the real walkmesh. **Known bug, live-reproduced
+  2026-08-22**: the phantom's walk/run cycle mostly does not render — it slides at the
+  correct speed with the animation parked on idle; see `docs/research/
+  phantom-locomotion.md` §7 for the root cause (an engine-side animation classifier that
+  does not recognize the gait ids for a directly-placed creature) and what's still open.
 - **Travel together, either player leading**: whoever crosses into another area first,
   the other follows immediately through the engine's own module-transition path (the same
   machinery the built-in `warp` cheat uses) — an announce fires the instant the leader's

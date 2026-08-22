@@ -267,3 +267,170 @@ signature — with the offending rows.
 Per the task's boundaries, `CheatController.cs`, `DoorUse.cs`, the trigger/dialogue files and
 `TestDriveController.cs` were not touched. No behavior of the live drive path changed — only
 a duplicated, previously-untested threshold was named and tested.
+
+---
+
+## 7. Live pass (2026-08-22) — round 60: the bug is real, live-reproduced, and root-caused
+to a specific engine function; a fix attempt was tried and falsified
+
+The static audit above (§0–§6) found no code regression and concluded the report needed a
+live rig. This pass ran the rig. **The report is correct and the mechanism is now precisely
+located, but a working fix was not found this session** — see §7.5 for what remains.
+
+### 7.1 Tooling trap found first: this module has frozen duplicate objects
+
+Before any gait data could be trusted, two test tools turned out to be unreliable on this
+save (`END_M01AA`, loaded via `demo.ps1`'s default autosave): **`teleport.ps1` and
+`phantomgait.ps1`'s auto-resolve both find their target with a raw vtable-address scan**, and
+this module's memory has **frozen duplicate copies of nearly every creature** — including the
+local player and the phantom itself — sharing vtable, object id, tag and stats pointer with
+the live object, exactly the failure mode `KotorGameBridge.TryReadLocalState`'s own comment
+already documents and defends against ("the scan can latch a FREED COPY of the player... every
+cheap validation passes while its position and health stay frozen"). Measured: a scan-based
+mover wrote a real, persistent position change to one address; `creatures.ps1` confirmed the
+write stuck; but the peer's phantom never moved, because the write landed on the *wrong* one
+of two nearly-identical `is_pc=1` objects. The correct address only comes from a source the
+scan cannot be fooled by:
+
+- **Local player**: the plugin's own `SharedBlock.OffsetEnginePlayerPointer` (0x2260, written
+  from `Odyssey.GetPlayerCreaturePointer()` — the real `CServerExoApp::GetPlayerCreature()`
+  call, not a scan). A throwaway mover script (`movepc2.ps1` in this pass's scratch dir) reads
+  this instead of scanning, and writes `+0x90` directly at a controlled speed/cadence to
+  simulate sustained walk (1.6 u/s) and run (3.96 u/s) without working keyboard injection
+  (confirmed still true this pass: `docs/live-verification.md` line 220, "injected keystrokes
+  never reach this game" — `sendkey.ps1`/`blockpoke walk` were not usable for this).
+- **Phantom**: the plugin's own `"spawned phantom in slot 0: id 0x... at 0x..."` log line is
+  ground truth (the plugin created it and knows its real address); the auto-resolve scan in
+  `phantomgait.ps1` can and did latch a duplicate for the SAME id. A `gaitsample.ps1` variant
+  taking an explicit `-Address` (skipping the scan) was used instead once the real address was
+  read off the log.
+
+This is worth fixing in the tools themselves (a future pass), but was not blocking for this
+report once worked around.
+
+### 7.2 The measurement, with the correct addresses
+
+Two live samples, 40 ms and 100 ms cadence, sustained real walk-then-run, host→client and
+client→host, both directions:
+
+```
+time         pos                        anim   twin      rate  moveState    run  speed moving
+13:46:21.798 (   64.62,  22.15) 0x2714 0x2710      0.60         -1      1   0.00      1
+13:46:22.907 (   66.28,  22.15) 0x2714 0x2710      1.04         -1      1   9.78      1
+13:46:23.389 (   67.85,  22.15) 0x2714 0x2710      1.50         -1      1   7.37      1
+13:46:25.657 (   75.80,  22.15) 0x2714 0x2710      1.17         -1      1  10.52      1
+13:46:28.593 (   86.33,  22.15) 0x2714 0x2710      1.50         -1      1   7.04      1
+13:46:29.762 (   90.76,  22.15) 0x2714 0x2710      0.99         -1      1   2.95      1
+SLIDE DETECTED: 132 sample(s) moving at >0.3 u/s while twin anim read idle (0x2710).
+samples with speed>0.1: 132 / 133
+```
+
+(Full 133-row transcript, and the second 173-row/100ms run, in this pass's scratch logs —
+excerpted here for length; every field/column matches `tools/phantomgait.ps1`'s own layout.)
+
+Reverse direction (client walks/runs, host watches its phantom of the client):
+
+```
+SLIDE DETECTED: 87 sample(s) moving at >0.3 u/s while twin anim read idle (0x2710).
+samples with speed>0.1: 90 / 108
+```
+
+In both directions, across three independent runs (one at 250 ms, two at 40–100 ms), the
+picture is identical and unambiguous:
+
+- **`pos`** advances exactly as commanded (1.6 u/s walking, 3.96 u/s running, confirmed by the
+  mover's own before/after read).
+- **`anim`** (server `CSWSObject+0xD4`, written by `Odyssey.DriveBody`'s `SetAnimation` vtable
+  call) correctly cycles `0x2710`→`0x2712`→`0x2714` and back, tracking `GaitRule`'s decisions.
+- **`moveState`** (`CSWSCreature+0xA8C`) is `-1` while moving, `1` at rest — correct.
+- **`rate`** (twin `+0x1F8`, the playback-speed scale) is nonzero and varies with speed —
+  correct; §9's documented `ComputeSpeedFactor` gap is being compensated for as designed.
+- **`twin`** (`CSWCObject+0x48`, the field `CSWCCreature::AnimationUpdate` actually renders
+  from) **stays at `0x2710` (idle) for the entire sustained run — 132/133 and 87/90 samples**,
+  briefly catching up to the correct value only a handful of times across hundreds of samples,
+  never for a full "run" cycle in the tight 40 ms trace.
+
+This is a clean, reproducible, symmetric confirmation of the report: **the body is placed
+correctly (position, moveState, rate all track), but the client twin's rendered animation
+field almost never updates — the exact "moves in sync but slides, no walk/run animation"
+signature**, on both peer directions.
+
+### 7.3 Root cause, precisely located
+
+`Odyssey.DriveBody` calls the documented, address-verified sync entry —
+`CSWCObject` vtable `+0x134` (`ClientServerSyncHandler_Animation`, `0x0060C100`) — live-read
+and confirmed **exactly matching the docs** on the running phantom (`vtable=0x74F5F8`,
+`+0x134=0x60C100`, `+0x12C=0x611F50`), with a **sane** budget argument (`+0xD8` read as
+`1.0`, not garbage). So the call target, the vtable slot, and the arguments are all correct —
+this is not the address/slot mistake §3 originally worried about.
+
+Live disassembly of `0x0060C100` in the running process shows it stores the budget arg at
+`twin+0x4C`, special-cases roughly eight specific one-shot ids (none of which are
+`0x2710`/`0x2712`/`0x2714`), and for everything else calls a helper (`~0x0063C0xx`, shaped
+like the documented `GetLoopingAnimation`), then only reaches the actual "play it" step behind
+a conditional gate on that helper's result. **The engine's own animation classifiers — the
+same `AnimationLooping`/`AnimationFireAndForget`/`AnimationOverlay` predicates this codebase
+already uses successfully for one-shots (`Odyssey.PlayOneShotAnimation`) — were called live
+against this exact phantom's twin for `0x2712`, and all three report `0`:**
+
+```
+[14:01:25.396] gait-class: id 0x2712 on twin 0x1ABFF190 -> looping=0 fireForget=0 overlay=0
+[14:01:25.396] gait-class: id 0x2712 on twin 0x1ABD4410 -> looping=0 fireForget=0 overlay=0
+```
+
+The client-side animbase **does not classify `0x2710`/`0x2712`/`0x2714` as playable at all** —
+not looping, not fire-and-forget, not overlay. This is consistent with those ids being
+SERVER-side abstract state markers (`AnimationWalking 0x004CC1C0`, `AnimationStationary
+0x004CAE60` — functions that set `CSWSObject+0xD4` as a state flag) rather than per-model
+`animations.2da` rows the client's classifiers look up. A normally AI/waypoint-driven creature
+presumably reaches its actual walk-cycle row through some other translation this direct-drive
+phantom never triggers (no waypoints, no queued action — the same category of gap §9 already
+flags for `ComputeSpeedFactor`). That translation was not found this pass.
+
+### 7.4 Fix attempted and falsified
+
+The disassembly showed `ClientServerSyncHandler_Animation`'s "not special-cased" branch falls
+through to a further call at twin vtable `+0xA0` (thiscall, `(twin, want)`, confirmed live as
+a distinct, valid function pointer `0x006183D0`, different from `+0x9C`'s plain setter
+`0x0063E930`) when its internal gate passes. **A direct call to `+0xA0`, bypassing the whole
+gated function, was added, built, deployed, and live-retested — and did not fix it**: the
+twin's animation still never left idle (132/173 samples). This rules out "the call chain just
+needs one more hop" as the explanation and points the remaining work at whatever actually
+computes a valid per-model animation row for a directly-placed creature. The unsuccessful
+`+0xA0` call was reverted; a small, safe, capped (6-sample) diagnostic log using the
+already-proven classifier calls was kept in `Odyssey.DriveBody` instead
+(`src/KotorCoop.Plugin/Odyssey.cs`, the `gait-class:` log line) so a future pass has the
+classification answer without re-deriving it.
+
+### 7.5 What remains (NEEDS-LIVE, not closed this pass)
+
+- **The actual fix.** The mechanism that resolves a "walking" *state* into a per-model,
+  classifier-recognized animation row for a normally-driven creature was not identified. Likely
+  candidates for a future pass: giving the twin a real (even synthetic, one-point) waypoint
+  list via the documented `CSWCCreature::SetWayPoints 0x0060C790` so the engine's own
+  movement/animation machinery treats the phantom as genuinely walking (this was NOT tried —
+  it conflicts with this codebase's deliberate, previously-researched choice of direct
+  placement over waypoint-driven movement, §5, and needs its own live verification that it
+  does not reintroduce position/speed fighting); or single-stepping
+  `ClientServerSyncHandler_Animation`'s helper call with a debugger to read the real
+  translation table it consults.
+- **Mirrored enemy and companion.** `EnemyPresenceController.DriveOne` and
+  `PartyPresenceController`'s companion drive both call the exact same `Odyssey.DriveBody` —
+  the log during this pass confirms both were live and active (`"enemy drive: mirroring 25 of
+  the owner's 25 enemies"`, `"party drive: mirroring 1 of the host's companions"`) — so the
+  same root cause applies by construction. Time did not allow forcing sustained real AI
+  movement on a mirrored enemy or companion to sample it directly this pass; this is the same
+  defect, not a separately-confirmed one.
+- **Tooling**: `teleport.ps1` and `phantomgait.ps1`'s auto-resolve should stop trusting a raw
+  vtable scan on a save where duplicate/frozen objects exist (see §7.1) — prefer
+  `SharedBlock.OffsetEnginePlayerPointer` for the player and the plugin's own spawn-log address
+  for a phantom, or teach the scan to disambiguate (e.g. prefer the `+0x1F8`
+  visible-to-player bit, or cross-check against a second live-only field).
+
+### 7.6 What did NOT regress
+
+`tests/KotorCoop.Tests` stayed at 1566/1566 passing throughout (before, during, and after the
+falsified fix attempt and the kept diagnostic). Both plugin builds are clean. No behavior
+change shipped this pass beyond the capped, read-only diagnostic log — `DriveBody`'s actual
+drive logic (position, moveState, runFlag, rate, the `+0x134` sync call itself) is byte-for-
+byte what §0–§6 already found unchanged from the last live-verified commit.

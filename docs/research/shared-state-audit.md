@@ -46,6 +46,22 @@ MIRRORS — driven puppets, not creatures its own AI is fighting — so the clie
 genuinely never enters combat. Forcing `+0x4E0` on the client would be a lie the engine
 recomputes away, and combat state gates round timing and AI.
 
+### Round 60 (2026-08-22) — a sibling case: gait ANIMATION also silently fails to share,
+live-reproduced and root-caused, fix not found
+
+Same shape as this section's own headline — a piece of state the server side computes
+correctly (here, `CSWSObject+0xD4`, the gait animation id) but that never actually reaches
+what the peer renders. Live-verified both directions on the rig: position, moveState and the
+playback-rate scale all track a real walk/run perfectly, but the client twin's own rendered
+animation field (`CSWCObject+0x48`) stays parked at idle for 87–132 of ~90–133 samples per run
+across three independent live traces. Root cause: the engine's own animation classifiers
+(`AnimationLooping`/`AnimationFireAndForget`/`AnimationOverlay`) report `0` for all three when
+asked about the gait ids on a directly-driven phantom's twin — the client-side animbase does
+not recognize `0x2710`/`0x2712`/`0x2714` as playable at all, unlike the one-shot ids this same
+mechanism already plays correctly. A direct call to the sync handler's own disassembled
+fallthrough target was tried live and did not fix it. Full writeup, sample transcripts, and
+what remains: `docs/research/phantom-locomotion.md` §7.
+
 ### Status as of round 55 (2026-08-21) — read this first; supersedes every status note below it
 
 **Host natural aggro — SETTLED: it works, with the plugin loaded, no bisection needed.**

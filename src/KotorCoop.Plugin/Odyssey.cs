@@ -9063,6 +9063,37 @@ internal static unsafe class Odyssey
                     var syncAnimation =
                         (delegate* unmanaged[Thiscall]<nint, uint, float, void>)(*(nint*)(*(nint*)twin + TwinAnimationSyncSlot));
                     syncAnimation(twin, (uint)want, *(float*)(creature + ObjAnimationBudget));
+
+                    // ⚠ ROUND 60 DIAGNOSTIC (docs/research/phantom-locomotion.md, live pass
+                    // 2026-08-22): +0x134 is confirmed address-correct (live vtable read
+                    // matches docs exactly) and confirmed NOT to stick — 132/133 samples at
+                    // 40ms cadence during a sustained real run showed server 0xD4 correctly
+                    // cycling walk/run, rate nonzero, moveState -1, but twin+0x48 never left
+                    // idle. A direct call to this function's own disassembled fallthrough
+                    // apply slot (+0xA0) did not fix it either (tested live, reverted) — so
+                    // whatever gates the apply is upstream of both. The engine's OWN
+                    // classifiers (already proven correct elsewhere in this file for
+                    // one-shots, see PlayOneShotAnimation) settle whether this creature's
+                    // animbase recognises 0x2710/0x2712/0x2714 as looping/fire-forget/overlay
+                    // AT ALL: live-measured answer is looping=0, fireForget=0, overlay=0 for
+                    // every one of them — the animbase does not classify these ids as
+                    // anything playable, which is consistent with them being SERVER-side
+                    // abstract state markers (AnimationWalking/AnimationStationary) rather
+                    // than per-model animations.2da rows, and explains why the client-side
+                    // sync handler's internal "is this a real animation" gate never opens for
+                    // a directly-driven phantom. The real fix needs the per-model row a
+                    // normally AI/waypoint-driven creature would resolve through — not found
+                    // this pass; kept as a live, capped diagnostic for whoever picks it up.
+                    if (_gaitClassLogged < 6)
+                    {
+                        _gaitClassLogged++;
+                        int loop = AnimationLoopingFn(twin, (ushort)want);
+                        int fireForget = AnimationFireAndForgetFn(twin, (ushort)want);
+                        int overlay = AnimationOverlayFn(twin, (ushort)want);
+                        PluginHost.Log(
+                            $"gait-class: id 0x{want:X} on twin 0x{twin:X} -> looping={loop} "
+                            + $"fireForget={fireForget} overlay={overlay}");
+                    }
                 }
 
                 // The playback rate the engine would have computed from the waypoint list we
@@ -9113,6 +9144,10 @@ internal static unsafe class Odyssey
     private static long _gaitLoggedAtMs;
 
     private const long GaitLogIntervalMs = 5000;
+
+    /// <summary>Caps the round-60 "gait-class" one-time diagnostic (see DriveBody) so it
+    /// prints a handful of samples across process lifetime, not once per gait change.</summary>
+    private static int _gaitClassLogged;
 
     /// <summary>Last gait asserted per driven creature, so the twin call fires on change
     /// only. Fixed slots rather than a dictionary: at most 8 phantoms plus 32 mirrored
