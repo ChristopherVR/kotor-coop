@@ -885,6 +885,13 @@ internal sealed unsafe class PhantomController(SharedBlockView block)
     /// later weapon equip then rebuilds the appearance, reads one of those stale strings and
     /// crashes. Rebuild the derived state right after the write. See
     /// docs/research/phantom-equip-crash.md.
+    ///
+    /// ROUND 64 X2: <c>UpdateAppearanceDependantInfo</c> is the SERVER-side rebuild only. The
+    /// CLIENT twin's own model/animbase — spawned for the blueprint's original appearance
+    /// (<c>k_coop_phantom</c>) and never told to reload — was never rebuilt by anything in this
+    /// codebase before this round. <see cref="Odyssey.RebuildClientAppearance"/> is the
+    /// corresponding client-side call (docs/research/phantom-locomotion.md §11's X2
+    /// experiment); called here, once, the same way the server-side rebuild already is.
     /// </summary>
     private static void ApplyAppearance(nint phantom, uint appearance)
     {
@@ -898,6 +905,7 @@ internal sealed unsafe class PhantomController(SharedBlockView block)
         {
             *field = (ushort)appearance;
             Odyssey.RebuildAppearance(phantom);
+            Odyssey.RebuildClientAppearance(phantom);
         }
     }
 

@@ -1072,3 +1072,220 @@ rebuild/redeploy/live-test cycles this round. No crash observed. `ObjAnimationBu
 what round 62 shipped — this round's net source change is the single `+0x134` skip for Walk/Run
 (§10.4), a corrected address citation in this file, and the `gait-class`/`sync12c` diagnostics
 left exactly as round 61/62 left them.
+
+---
+
+## 11. Round 64 — §10.3's idle-substitution theory ground-truthed and falsified; a real,
+different client-side sync gap found and partially fixed (the model, not the weapon class);
+still not fixed end to end
+
+Two decisive experiments per this round's brief: **X1**, a live diagnostic reading
+`GetAnimationName`'s actual resolved string (not just the classifier booleans) on the phantom
+AND, side by side, on the local player's own animbase; **X2**, testing whether the phantom's
+CLIENT-side model/animbase is ever told to reload after the appearance-row poke, since nothing
+in this codebase called the client-side counterpart of `UpdateAppearanceDependantInfo` before
+this round.
+
+**Headline: §10.3's hypothesis, taken literally, is FALSE.** `GetAnimationName` does not
+substitute an empty/idle string for the phantom's gait ids — it resolves real, non-empty,
+non-idle names (`'walk'`, `'run'`, `'cwalk'`, `'pause1'`, …), live-confirmed on both the
+phantom and, incidentally, on 26 simultaneously-mirrored hostiles. X2's fix (§11.2) is real and
+measurably closes part of the gap (the phantom's model resref, always empty in every prior
+round, now matches the player's), but the aggregate idle-while-moving fraction barely moves.
+The actual remaining defect is narrower and more specific than three prior rounds' framing: a
+SECOND client-side field the network equip-message would normally set (here: the weapon-class
+byte, not the appearance row) is never populated, and even where the resolved name is
+comparable to the player's, the render field still does not reliably update — pointing the next
+round at what happens AFTER `GetAnimationName`, not at name resolution itself.
+
+### 11.1 X1 — the name diagnostic, live, both sides, and (incidentally) on 26 mirrored enemies
+
+A new diagnostic (`Odyssey.ReadAnimationName`, wrapping the real `CSWCAnimBase::GetAnimationName`
+call, `0x0069E620`, through its actual ABI — hidden-return `CExoString*` first stack arg, id
+second, `ret 8`, verified this round by disassembling the prologue/epilogue, not assumed) logs,
+capped at 20 samples per driven creature, the resolved name/length for the requested gait id on
+BOTH the driven body's animbase and the local player's own animbase, side by side, plus each
+one's model resref (`CSWCAnimBase.name`, a `CResRef` at animbase+0x2C) and weapon-class byte
+(animbase+0xC5). It was wired into `Odyssey.DriveBody`'s existing gait-change hook.
+
+**Tooling trap, found and fixed mid-round:** the diagnostic was first nested inside the
+existing `_gaitClassLogged < 30` cap from round 60/61 — a GLOBAL, process-lifetime counter
+already exhausted after a few hours of rig uptime, which silently dead-coded the new diagnostic
+for the rest of that process's life before a single line was seen. Decoupled into its own
+per-creature cap (`GaitNameLogged`, mirroring the existing `GaitCreature`/`GaitLast` slot
+array) and re-verified live after a redeploy+restart.
+
+**The diff, live, host→client (client renders a phantom of the host; both post-equip, model
+loaded, `gob != 0`):**
+
+| id | phantom name | phantom len | phantom model | phantom weaponClass | player name | player len | player model | player weaponClass |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 0x2712 (walk) | `walk` | 5 | `pfbalb01` | **8** | `walkSS` | 7 | `pfbbl01` | **2** |
+| 0x2714 (run) | `run` | 4 | `pfbalb01` | **8** | `runSS` | 6 | `pfbbl01` | **2** |
+| 0x2710 (idle) | `pause1` | 7 | `pfbalb01` | 8 | `pause1` | 7 | `pfbbl01` | 2 |
+
+(Raw log lines, `D:\Games\swkotor-gog-p2\kotorcoop-plugin.log`, 16:54:50–16:54:55 in the same
+pass's rig; `pfbalb01`/`pfbbl01` are the same base female-Twi'lek-adjacent body class, two body
+variants — the appearance row on both sides was 114, the host's real PC appearance.)
+
+**Reading the diff**: every field is non-empty. The MODEL matches (§11.2 — this is new; every
+prior round's differential dump found the phantom's model resref empty). The only field that
+differs is **weaponClass: 8 on the phantom, 2 on the player** — and `ServerToClientAnimation`
+keys its row lookup on exactly this byte (§8.2), so the phantom legitimately resolves a
+DIFFERENT valid row (`walk`/`run`, the unarmed/generic locomotion set) than the player
+(`walkSS`/`runSS`, the single-weapon-stance set) — not a failure to resolve anything. `idle`
+resolves identically on both (`pause1`) because idle has no weapon-stance variant.
+
+**Before the model fix landed** (a sample taken the same run, at spawn, one frame before the
+gob/model finished loading): `phantom-> name='cwalk' len=6 model='' appearanceRow=114
+weaponClass=8` — this is what every prior round's sample looked like (empty model, and note
+even THIS early sample resolved a real name, `cwalk`, not an empty string — the "idle
+substitution" was never observed live, in this round's sampling, at any point).
+
+**The same diagnostic, incidentally, on 26 simultaneously-mirrored hostiles** (client mirroring
+the host's Vulkar pack at `tar_m10aa`, each with its own model/weaponClass): every single one
+also resolved a real, non-empty, non-idle name for its own gait id —
+`c_drdassassin`/weaponClass 7 → `crun`/`cwalk`; `n_commf03`/weaponClass 8 → `walk`/`cwalk`;
+`pmbd01`/weaponClass 5 → `pause1`. **This was not asked for by X1 specifically but is strong
+corroborating evidence**: name resolution is not a phantom-specific failure and not an
+idle-substitution failure anywhere this round could observe it, on 27 different driven bodies
+across two categories (phantom, mirrored enemy).
+
+**Verdict**: §10.3's mechanism, as literally stated ("`GetAnimationName` silently substitutes
+idle"), is FALSIFIED. The real, narrower finding is a weapon-class sync gap (§11.3), and the
+still-open question is what happens downstream of a successfully-resolved name (§11.4).
+
+### 11.2 X2 — the client-side appearance rebuild, implemented and confirmed to fix the model
+
+Static disassembly this round found the exact gap the brief hypothesized: `PhantomController`'s
+appearance poke (`ApplyAppearance`) already called the SERVER-side rebuild
+(`CSWSCreature::UpdateAppearanceDependantInfo`, per `phantom-equip-crash.md`), but nothing in
+this codebase ever called the CLIENT-side counterpart. Traced live from the vtable:
+`CSWCAnimBase` vtable+0xF0 → `SetAnimationInternal` (§10.1) already established the animbase
+chain; this round instead traced `CSWCCreature::ForceAppearanceUpdate` (`0x00614A30`, thiscall,
+no stack args, db-confirmed), which:
+
+1. reads `this+0x38C` (a CLIENT-side cached "desired appearance row" ushort — never written by
+   anything in this codebase before this round),
+2. writes it into `this->appearance->appearance_info.appearance_id`
+   (`CSWCCreatureAppearance+0x18`, matching `CCAppearanceInfo.appearance_id` at offset 24 in the
+   symbol db, embedded at that object's own offset 0), and
+3. calls `CSWCCreature::SetAppearance` (`0x006134C0`, one of `ForceAppearanceUpdate`'s own 7
+   live call sites) — which itself calls `CSWCObject::GetAnimBase` (`0x0063C070`) and the
+   `AnimationLooping`/`AnimationStationary` classifiers, i.e. genuinely touches the animbase,
+   not just server bookkeeping.
+
+**Fix**: `Odyssey.RebuildClientAppearance(creature)` reads the server's already-correct
+appearance row (`CSWSCreature+0xA60`, the same field `PhantomController.ApplyAppearance` just
+wrote), writes it to the twin's `+0x38C`, and calls `ForceAppearanceUpdateFn(twin)`. Wired into
+`ApplyAppearance` right after the existing server-side `RebuildAppearance` call, same guard
+(only on an actual row change).
+
+**Live result**: confirmed working for the MODEL, per §11.1's diff table —`pfbalb01`/`pfbbl01`
+model match is a first for this investigation; every prior round's differential dump
+(round 61 §8.3, round 62, round 63) found the phantom's model resref empty or never checked it
+post-equip. **Not confirmed to fix the render symptom** — see §11.4's fractions, which are
+statistically the same as round 62/63's baseline. The fix is real, necessary, and kept (no
+regression, no crash across the round's rebuild/redeploy/live-test cycles), but it was not
+sufficient on its own.
+
+### 11.3 A second, still-open client-side sync gap: weapon class
+
+`CSWCCreature::UpdateWeaponClass` (`0x00613710`, thiscall, no stack args, db-confirmed) sits
+immediately after `SetAppearance` in the binary and has the same shape as the appearance gap:
+it reads `this+0x230`/`this+0x234` (`CSWCCreature.main_hand_id`/`off_hand_id`, both already
+named in `tools/kotor1_0_3.db`) — CLIENT-side cached "what's in my hands" fields — and writes
+the derived weapon-class byte to the animbase. `PhantomController.ApplyEquipment` equips the
+phantom's weapon through the SERVER-side NWScript pair (`CreateItemOnObject`/`ActionEquipItem`,
+§ Odyssey.EquipItemFromTemplate) and never touches `main_hand_id`/`off_hand_id` on the client
+twin — the exact same shape of gap X2 just closed for appearance, unclosed for weapon class.
+
+**NOT fixed this round.** `CSWCCreature::EquipToInventorySlot` (`0x00613ba0`, the likely
+client-side counterpart, 10 live call sites) takes a CLIENT-side item pointer as its second
+argument (dereferencing `item+0x10`/`item+0x14` for the value it stores) — a type this codebase
+does not have a way to obtain for a server-created item without further tracing. Flagged as the
+next concrete target rather than attempted blind, given the live-write risk of guessing wrong
+values for a field two engine calls deep. This is NOT the same defect as §11.4's residual
+render failure — it is a genuine, separate, honestly-scoped gap: even a perfect fix here would
+only make the phantom request `walkSS`/`runSS` instead of `walk`/`run`, both of which already
+resolve to real names (§11.1), so it would not by itself explain why the render field mostly
+does not update at all.
+
+### 11.4 The render symptom, live-measured after the X2 fix — not fixed
+
+`tools/phantomgait.ps1`-style sampling (this round's scratch `gaitsample.ps1`/`mover.ps1`, per
+round 60 §7.1's tooling-trap workaround — explicit `-Address`, never a vtable scan), 8s walk
+(1.6 u/s) + 10s run (3.96 u/s), both directions, `tar_m10aa`, with X2's fix live:
+
+| case | moving samples (speed>0.3) | idle-while-moving | fraction |
+| --- | --- | --- | --- |
+| host→client phantom | 252 | 244 | **96.8%** |
+| client→host phantom | 247 | 225 | **91.1%** |
+| mirrored enemy | not measured — see §11.5 | — | — |
+| companion (party member) | not measured — see §11.5 | — | — |
+
+Both measured cases are statistically indistinguishable from round 62/63's baseline (81–99%
+range measured across rounds 62–63) — **not an improvement**, despite the confirmed model fix.
+One brief, genuine non-idle stretch was observed mid-run in this round's raw trace (twin held a
+real animation id, `0x27A3`, for roughly 1.5s during the run phase) — consistent with round
+61's own "11 consecutive non-idle samples" finding — showing the render CAN succeed
+momentarily, just not reliably. **README's walk/run bullet is not restored** — not all four
+required cases are even measured this round, and the two that are measured are not clean.
+
+### 11.5 Mirrored enemy and companion — both blocked, for two different, newly-documented reasons
+
+**Mirrored enemy: blocked by a tooling trap, not by the phantom-locomotion defect.** Warped to
+`tar_m10aa` (host-only `warp`, client follows — `party-reconciliation.md`'s established
+recipe) and picked the same Black Vulkar pool round 55/62 used (`0x38`). A direct position poke
+on the HOST's authoritative copy was confirmed to work (re-read on the host: position moved
+~85 units across the test). **The CLIENT's mirrored copy never showed the movement.** A full
+(not first-match) memory scan for object id `0x38` on the client found **two** distinct
+addresses, both frozen at different stale positions, neither ever updating — round 60 §7.1's
+"frozen duplicate" trap, now independently confirmed to affect mirrored enemies, not just
+players/phantoms. Unlike the player (`SharedBlock.OffsetEnginePlayerPointer`), this codebase
+has no trusted non-scan address source for an arbitrary mirrored enemy, so the fraction could
+not be measured this round. A second, independent complication found along the way: this
+specific creature also has its own proximity-triggered `local_combat` auto-engage subsystem
+that excludes it from normal `DriveEnemy` census-mirroring whenever the local client player is
+within its `engageRange` (11 units) — worth knowing for whoever picks this up next: stay
+farther than that, and confirm via the `"enemy drive: mirroring N"` log line (and the absence
+of any `"local combat"` line for the target id) that the creature is in the normal
+census-mirrored path before sampling it.
+
+**Companion (Trask): blocked, identical to round 63.** This save's party roster is `0x001`
+(PC only) — no companion recruited, same as round 63's finding. No in-plugin cheat exists to
+force a recruit; building one (a custom NWScript) was judged out of scope for a
+locomotion-focused pass and not attempted.
+
+### 11.6 What remains (NEEDS-LIVE, not closed this round)
+
+- **What happens downstream of a successfully-resolved name.** §11.1 shows `GetAnimationName`
+  resolves real names reliably; §11.4 shows the render field still mostly does not update. The
+  gap is now precisely between those two facts: `SetAnimationInternal`'s virtual "apply" call
+  (`ebx->vtable[0x18]` off the resolved-name lookup, §10.2) or the per-frame `AnimationUpdate`
+  reassertion is the next disassembly target, not `GetAnimationName` itself.
+- **The weapon-class client-side sync gap (§11.3)**, genuinely scoped this round but not fixed —
+  needs either a client-side item pointer for `EquipToInventorySlot`'s second argument, or a
+  more direct write to `main_hand_id`/`off_hand_id` plus `UpdateWeaponClass`, both unverified
+  live.
+- **Mirrored enemy and companion fractions**, blocked this round for the two reasons in §11.5 —
+  a non-scan address source for a mirrored enemy (or a scan that disambiguates frozen
+  duplicates), and a save/cheat that puts a companion in the party, are both needed before
+  either can be measured.
+- **The tooling gap itself** (round 60 §7.1, reconfirmed for enemies this round) is still open
+  in the actual tools (`phantomgait.ps1`'s auto-resolve, `teleport.ps1`) — every live sample in
+  this file since round 60 has worked around it by hand, never fixed it at the source.
+
+### 11.7 What did NOT regress
+
+`tests/KotorCoop.Tests` stayed at **1591/1591** passing, before this round's changes and again
+after, on a full run. Both plugin builds (`src/KotorCoop.Plugin/build.ps1 -Install`) clean for
+both GOG installs across two rebuild/redeploy/live-test cycles this round (one to fix the
+capped-diagnostic tooling trap found mid-round). No crash observed across the whole session —
+warps, equips, two direct-position-poke movers, a companion-search dead end, and the mirrored-
+enemy tooling investigation. `TwinPositionSyncBudget`, `TwinPositionSyncSlot`, the `+0x134`
+skip for Walk/Run, and every other round 61–63 write are byte-for-byte unchanged; this round's
+net source change is `Odyssey.RebuildClientAppearance` (+ its 4 supporting consts/delegates),
+`Odyssey.ReadAnimationName`/`ReadResRef` (+ supporting consts/delegates), the `gait-name`
+diagnostic and its per-creature cap array, and the one call site in
+`PhantomController.ApplyAppearance`.

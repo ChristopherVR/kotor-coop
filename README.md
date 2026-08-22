@@ -15,13 +15,15 @@ Both players, each in their own full game:
 - **See each other** as a real engine creature ("phantom") wearing the other player's
   actual appearance, armor and weapons, with their name in the selection band, tracking
   position at true walk/run speed on the real walkmesh. **Known bug, live-reproduced and
-  re-measured 2026-08-22 (round 63)**: the phantom's walk/run cycle mostly does not render —
-  it slides at the correct speed with the animation parked on idle, 97.6%/96.9% of moving
-  samples idle-while-moving on the two tested directions. See `docs/research/
-  phantom-locomotion.md` §10 for the precise mechanism traced so far (a five-round-deep engine
-  call chain — `ClientServerSyncHandler_Position` → `CSWCAnimBase::SetAnimation` →
-  `SetAnimationInternal` → `GetAnimationName`, the last of which appears to silently substitute
-  idle's name for an unresolved gait name, not live-confirmed) and what's still open.
+  re-measured 2026-08-22 (round 64)**: the phantom's walk/run cycle mostly does not render —
+  it slides at the correct speed with the animation parked on idle, 96.8%/91.1% of moving
+  samples idle-while-moving on the two tested directions. Round 64 ground-truthed the leading
+  theory (that `GetAnimationName` silently substitutes idle's name for the gait ids) and found
+  it FALSE — the engine resolves a real, non-empty name (`walk`/`run`) for the phantom every
+  time — and fixed a real, separate gap along the way (the phantom's client-side model was
+  never told to reload after its appearance was set; it is now). Neither closed the actual
+  symptom: whatever plays a resolved name back is the open question. See `docs/research/
+  phantom-locomotion.md` §11 for the diagnostic, the fix, and what's still open.
 - **Travel together, either player leading**: whoever crosses into another area first,
   the other follows immediately through the engine's own module-transition path (the same
   machinery the built-in `warp` cheat uses) — an announce fires the instant the leader's

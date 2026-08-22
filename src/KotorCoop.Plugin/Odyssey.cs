@@ -4214,6 +4214,137 @@ internal static unsafe class Odyssey
         (delegate* unmanaged[Thiscall]<nint, ushort, int>)0x0063C2A0;
 
     /// <summary>
+    /// ROUND 64 X1: <c>CSWCAnimBase::GetAnimationName(u16 id)</c>, animbase vtable +0x40
+    /// (0x0069E620, db-confirmed) — the function <c>SetAnimationInternal</c> (animbase
+    /// vtable +0xF0, 0x0069E8D0) calls to turn a requested id into the model-row NAME it
+    /// actually plays (docs/research/phantom-locomotion.md §10.2). Returns the resolved
+    /// CExoString by value through a hidden first stack argument (static disassembly,
+    /// this round: prologue takes <c>this</c> in ecx, <c>[ebp+8]</c> = output CExoString*,
+    /// <c>[ebp+0xc]</c> = the id as a zero-extended dword; epilogue is <c>ret 8</c>, i.e.
+    /// exactly those two stack args). <see cref="ReadAnimationName"/> wraps the ABI.
+    /// </summary>
+    private static readonly delegate* unmanaged[Thiscall]<nint, byte*, ushort, nint> GetAnimationNameFn =
+        (delegate* unmanaged[Thiscall]<nint, byte*, ushort, nint>)0x0069E620;
+
+    /// <summary>
+    /// ROUND 64 X1: calls the real engine name-resolver and reads back what it constructed,
+    /// then frees it (<see cref="CExoStringDtorFn"/>, the same destructor
+    /// <see cref="SetControlText"/> already uses, and — independently confirmed this round —
+    /// the exact address (0x005E5C20) <c>GetAnimationName</c>'s own tail calls to destruct its
+    /// internal temporaries) so this can be called repeatedly from a live diagnostic without
+    /// leaking.
+    ///
+    /// Cut at the first null rather than trusted-length, per the CExoString length trap (the
+    /// stored length includes the terminating null — see BarkHook.cs/CreatureFinder.cs) — and
+    /// belt-and-suspenders here anyway, since an unresolved id is expected to come back empty.
+    ///
+    /// MAIN THREAD ONLY (it can allocate/free through the engine's own string routines).
+    /// </summary>
+    private static string ReadAnimationName(nint animBase, ushort id, out int rawLength)
+    {
+        byte* buf = stackalloc byte[16];
+        for (int i = 0; i < 16; i++)
+        {
+            buf[i] = 0;
+        }
+
+        GetAnimationNameFn(animBase, buf, id);
+
+        byte* chars = *(byte**)buf;
+        int length = *(int*)(buf + 4);
+        rawLength = length;
+
+        string name = "";
+        if (chars != null && length > 0)
+        {
+            int cap = Math.Min(length, 63);
+            int n = 0;
+            while (n < cap && chars[n] != 0)
+            {
+                n++;
+            }
+
+            name = n > 0 ? System.Text.Encoding.ASCII.GetString(chars, n) : "";
+        }
+
+        CExoStringDtorFn(buf);
+        return name;
+    }
+
+    /// <summary>CSWCAnimBase + this = the model's own resref (CResRef, fixed char[16],
+    /// zero-filled — NOT a CExoString). tools/kotor1_0_3.db: CSWCAnimBase.name, offset 44.
+    /// ROUND 64 X1: read for context alongside <see cref="ReadAnimationName"/> — which model
+    /// this animbase's classifiers/name table are actually keyed to.</summary>
+    private const int AnimBaseModelName = 0x2C;
+
+    /// <summary>Reads a fixed CResRef (char[16], zero-filled, not a CExoString) as ASCII,
+    /// cutting at the first null or 16 bytes, whichever comes first.</summary>
+    private static string ReadResRef(nint address)
+    {
+        byte* chars = (byte*)address;
+        int n = 0;
+        while (n < 16 && chars[n] != 0)
+        {
+            n++;
+        }
+
+        return n > 0 ? System.Text.Encoding.ASCII.GetString(chars, n) : "";
+    }
+
+    /// <summary>CSWSCreature + this = appearance.2da row (ushort), inside the embedded
+    /// CSWSCreatureAppearanceInfo at +0xA50 (tools/kotor1_0_3.db:
+    /// CSWSCreatureAppearanceInfo.appearance_type, offset 16 -> 0xA50+0x10 = 0xA60). The
+    /// same field <see cref="PhantomController"/>'s appearance poke writes.</summary>
+    private const int CreServerAppearanceRow = 0xA60;
+
+    /// <summary>
+    /// ROUND 64 X2: CSWCCreature + this = the CLIENT-side cached "desired appearance" row
+    /// (ushort). <c>CSWCCreature::ForceAppearanceUpdate</c> (0x00614A30, thiscall, no stack
+    /// args — db-confirmed) reads exactly this field, writes it into
+    /// <c>this-&gt;appearance-&gt;appearance_info.appearance_id</c> (CSWCCreatureAppearance
+    /// +0x18, matching tools/kotor1_0_3.db's CCAppearanceInfo.appearance_id at offset 24
+    /// embedded at CSWCCreatureAppearance offset 0), and then calls
+    /// <c>CSWCCreature::SetAppearance</c> (0x006134C0, one of ForceAppearanceUpdate's own 7
+    /// live call sites, static disassembly this round) — which itself calls
+    /// <c>CSWCObject::GetAnimBase</c> (0x0063C070, the same <c>[ecx+0x68]</c> accessor
+    /// <see cref="TwinAnimBase"/> uses) and the AnimationLooping/AnimationStationary
+    /// classifiers, i.e. it touches the animbase, not just server-side bookkeeping.
+    ///
+    /// NEEDS-LIVE: whether writing this field then calling ForceAppearanceUpdate actually
+    /// reloads the twin's model/animbase name table (the X2 hypothesis) was not confirmed by
+    /// static disassembly alone — SetAppearance's own body was not fully traced past its
+    /// animbase-touching calls. See phantom-locomotion.md §11 for the live result.
+    /// </summary>
+    private const int TwinDesiredAppearanceRow = 0x38C;
+
+    /// <summary>ROUND 64 X2: CSWCCreature::ForceAppearanceUpdate(this) — thiscall, no stack
+    /// args (db-confirmed param_size_bytes=0). See <see cref="TwinDesiredAppearanceRow"/>'s
+    /// doc for the call chain this reaches.</summary>
+    private static readonly delegate* unmanaged[Thiscall]<nint, void> ForceAppearanceUpdateFn =
+        (delegate* unmanaged[Thiscall]<nint, void>)0x00614A30;
+
+    /// <summary>
+    /// ROUND 64 X2 FIX: rebuilds the client twin's render-side appearance/model — and, by
+    /// construction (<see cref="TwinDesiredAppearanceRow"/>'s doc), its animbase's model name
+    /// table — after a phantom's appearance row is poked directly. <see cref="RebuildAppearance"/>
+    /// (server-side, <c>UpdateAppearanceDependantInfo</c>) already ran; this is the CLIENT-side
+    /// counterpart the engine's own network appearance-change handler would have triggered, which
+    /// nothing in this codebase called before this round. MAIN THREAD ONLY.
+    /// </summary>
+    public static void RebuildClientAppearance(nint creature)
+    {
+        nint twin = GetClientTwin(creature);
+        if (twin == 0 || *(nint*)twin != ClientCreatureVtable)
+        {
+            return;
+        }
+
+        ushort row = *(ushort*)(creature + CreServerAppearanceRow);
+        *(ushort*)(twin + TwinDesiredAppearanceRow) = row;
+        ForceAppearanceUpdateFn(twin);
+    }
+
+    /// <summary>
     /// ROUND 61: <c>CSWCAnimBase::AnimationExists(u16)</c>, animbase vtable +0x50
     /// (0x0069D910, confirmed by name in tools/kotor1_0_3.db). This — NOT
     /// AnimationLooping/FireAndForget/Overlay, which round 60 blamed — is the real gate on
@@ -9221,18 +9352,63 @@ internal static unsafe class Odyssey
                         // the predicates ClientServerSyncHandler_Position (the round-61 +0x12C
                         // fix call, above) actually branches on — to see whether that call is
                         // even reaching its animbase-vtable+0x54 "play" step for this creature.
-                        nint animBase = *(nint*)(twin + TwinAnimBase);
-                        nint gob = animBase == 0 ? 0 : *(nint*)(animBase + AnimBaseGob);
-                        int exists = animBase == 0 ? -1 : AnimationExistsFn(animBase, (ushort)want);
+                        nint animBaseC = *(nint*)(twin + TwinAnimBase);
+                        nint gob = animBaseC == 0 ? 0 : *(nint*)(animBaseC + AnimBaseGob);
+                        int exists = animBaseC == 0 ? -1 : AnimationExistsFn(animBaseC, (ushort)want);
                         int walking = AnimationWalkingFn(twin, (ushort)want);
                         int running = AnimationRunningFn(twin, (ushort)want);
-                        byte weaponClass = animBase == 0 ? (byte)0xFF : *(byte*)(animBase + 0xC5);
-                        int runLooksAwful = animBase == 0 ? -1 : *(int*)(animBase + 0xCC);
+                        byte weaponClassC = animBaseC == 0 ? (byte)0xFF : *(byte*)(animBaseC + 0xC5);
+                        int runLooksAwful = animBaseC == 0 ? -1 : *(int*)(animBaseC + 0xCC);
                         PluginHost.Log(
                             $"gait-class: id 0x{want:X} on twin 0x{twin:X} -> looping={loop} "
-                            + $"fireForget={fireForget} overlay={overlay} animBase=0x{animBase:X} "
+                            + $"fireForget={fireForget} overlay={overlay} animBase=0x{animBaseC:X} "
                             + $"gob=0x{gob:X} animationExists={exists} walking={walking} "
-                            + $"running={running} weaponClass={weaponClass} runLooksAwful={runLooksAwful}");
+                            + $"running={running} weaponClass={weaponClassC} runLooksAwful={runLooksAwful}");
+                    }
+
+                    // ROUND 64 X1 (docs/research/phantom-locomotion.md §11): the actual
+                    // resolved NAME §10.3 predicted GetAnimationName would substitute idle
+                    // for, ground-truthed instead of inferred from the classifier booleans the
+                    // block above already logs. Capped at 20 PER CREATURE (not global) —
+                    // deliberately its OWN cap (GaitNameLogged), independent of
+                    // _gaitClassLogged: that counter is process-lifetime and a long test
+                    // session exhausts it long before this diagnostic was added, which would
+                    // silently dead-code this one too if it shared the same gate.
+                    nint animBase = *(nint*)(twin + TwinAnimBase);
+                    int gaitSlot = GaitSlotOf(creature);
+                    if (animBase != 0 && gaitSlot >= 0 && GaitNameLogged[gaitSlot] < 20)
+                    {
+                        GaitNameLogged[gaitSlot]++;
+                        byte weaponClass = *(byte*)(animBase + 0xC5);
+                        string phantomName = ReadAnimationName(animBase, (ushort)want, out int phantomLen);
+                        string model = ReadResRef(animBase + AnimBaseModelName);
+                        ushort appearanceRow = *(ushort*)(creature + CreServerAppearanceRow);
+
+                        // The SAME probe on the LOCAL PLAYER's own twin/animbase — the
+                        // control this round's brief asked for. GetAnimationName takes no
+                        // moveState/velocity input (static disassembly, §10.2/§11: it is a
+                        // pure function of (animBase, id)), so sampling it while the local
+                        // player happens to be standing still is not a weaker sample than
+                        // sampling it mid-stride — there is no "in transit" state for this
+                        // specific call to observe.
+                        nint myTwin = GetLocalPlayerTwin();
+                        nint myAnimBase = myTwin == 0 ? 0 : *(nint*)(myTwin + TwinAnimBase);
+                        string myName = "";
+                        int myLen = -1;
+                        string myModel = "";
+                        byte myWeaponClass = 0xFF;
+                        if (myAnimBase != 0)
+                        {
+                            myName = ReadAnimationName(myAnimBase, (ushort)want, out myLen);
+                            myModel = ReadResRef(myAnimBase + AnimBaseModelName);
+                            myWeaponClass = *(byte*)(myAnimBase + 0xC5);
+                        }
+
+                        PluginHost.Log(
+                            $"gait-name: id 0x{want:X} phantom-> name='{phantomName}' len={phantomLen} "
+                            + $"model='{model}' appearanceRow={appearanceRow} weaponClass={weaponClass} "
+                            + $"| player-> name='{myName}' len={myLen} model='{myModel}' "
+                            + $"weaponClass={myWeaponClass} animBase=0x{myAnimBase:X}");
                     }
                 }
 
@@ -9298,6 +9474,11 @@ internal static unsafe class Odyssey
     private static readonly nint[] GaitCreature = new nint[48];
     private static readonly int[] GaitLast = new int[48];
 
+    /// <summary>ROUND 64 X1: per-creature cap for the "gait-name" diagnostic (see DriveBody) —
+    /// parallels <see cref="GaitCreature"/> by slot index, so each driven body gets its own
+    /// first-20 budget instead of sharing one global counter.</summary>
+    private static readonly int[] GaitNameLogged = new int[48];
+
     private static bool GaitChanged(nint creature, int want)
     {
         int free = -1;
@@ -9323,7 +9504,24 @@ internal static unsafe class Odyssey
         int slot = free >= 0 ? free : 0;
         GaitCreature[slot] = creature;
         GaitLast[slot] = want;
+        GaitNameLogged[slot] = 0;
         return true;
+    }
+
+    /// <summary>ROUND 64 X1: the slot <see cref="GaitCreature"/> is holding this creature in,
+    /// or -1. Only meaningful right after <see cref="GaitChanged"/> returned true for the same
+    /// creature (which guarantees a slot exists).</summary>
+    private static int GaitSlotOf(nint creature)
+    {
+        for (int i = 0; i < GaitCreature.Length; i++)
+        {
+            if (GaitCreature[i] == creature)
+            {
+                return i;
+            }
+        }
+
+        return -1;
     }
 
     /// <summary>Forget a creature's gait memory (call when a phantom is destroyed, so a
@@ -9336,6 +9534,7 @@ internal static unsafe class Odyssey
             {
                 GaitCreature[i] = 0;
                 GaitLast[i] = 0;
+                GaitNameLogged[i] = 0;
             }
         }
     }

@@ -62,6 +62,23 @@ mechanism already plays correctly. A direct call to the sync handler's own disas
 fallthrough target was tried live and did not fix it. Full writeup, sample transcripts, and
 what remains: `docs/research/phantom-locomotion.md` §7.
 
+### Round 64 (2026-08-22) — the leading theory (idle-substitution) is falsified; a real, narrower
+client-side sync gap found and half-fixed; the render symptom itself still unexplained
+
+Two live experiments settled a question three prior rounds only guessed at: does
+`CSWCAnimBase::GetAnimationName` actually fail to resolve a name for the phantom's gait ids (the
+round 63 theory), or does it resolve fine and something else drops the ball? Live-read directly
+(not inferred): it resolves fine — `walk`/`run`/`pause1`, real non-empty names, on the phantom
+AND on 26 simultaneously mirrored hostiles sampled the same way. The one field that actually
+differed from the player was the animbase's weapon-class byte (phantom 8, player 2 — a
+different but still valid row), and a SEPARATE finding — the phantom's client-side model was
+never told to reload after its appearance-row poke (only the server side ever was) — was found,
+fixed (`Odyssey.RebuildClientAppearance`), and confirmed live to fix the model. The rendered
+gait itself is still stuck at idle 91–97% of moving samples, statistically unchanged from round
+62/63's baseline — the model fix was real but not sufficient, and the actual remaining gap is
+now known to be downstream of name resolution (the "apply by name" step or the per-frame
+reassertion), not in it. Full writeup: `docs/research/phantom-locomotion.md` §11.
+
 ### Status as of round 55 (2026-08-21) — read this first; supersedes every status note below it
 
 **Host natural aggro — SETTLED: it works, with the plugin loaded, no bisection needed.**
