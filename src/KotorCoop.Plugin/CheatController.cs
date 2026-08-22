@@ -1794,9 +1794,44 @@ internal sealed unsafe class CheatController(SharedBlockView block)
             placeable = Odyssey.ResolvePlaceable(requestedId);
             what = $"0x{requestedId:X}";
 
-            if (placeable == 0 && Odyssey.ResolveServerObject(requestedId) != 0)
+            if (placeable == 0)
             {
-                Answer(SharedBlock.CheatStatusNoTarget, $"{what} exists but is not a placeable");
+                // ROUND 68 (docs/research/container-sync.md §6): a corpse is not a
+                // CSWSPlaceable — clicking it in a real game sends the SAME UseObject input
+                // (Odyssey.UseObject is already object-type-agnostic; only THIS cheat handler
+                // used to gate it to placeables). Explicit-id/tag targets fall through to a
+                // raw object use so the live-test rig can exercise a corpse (or anything else
+                // an id names) through the identical client-to-server pipe a placeable uses,
+                // without adding a second cheat verb. The bare sweep (no id/tag) keeps
+                // refusing non-placeables — it exists to find containers, not to guess what a
+                // nearby id might be.
+                nint rawObject = Odyssey.ResolveServerObject(requestedId);
+                if (rawObject == 0)
+                {
+                    Answer(SharedBlock.CheatStatusNoTarget, $"{what} does not resolve to anything here");
+                    return;
+                }
+
+                float rawDistance = Distance(Odyssey.GetPosition(player), Odyssey.GetPosition(rawObject));
+                if (rawDistance > PlaceableUseRange)
+                {
+                    Answer(
+                        SharedBlock.CheatStatusRefused,
+                        $"object {what} is {rawDistance:F1}m away, too far to use");
+                    return;
+                }
+
+                bool rawSent = Odyssey.UseObject(requestedId);
+                PluginHost.Log(
+                    $"object: use-object sent for {what} (not a placeable) at {rawDistance:F1}m "
+                    + $"({(rawSent ? "ok" : "FAILED")})");
+
+                Answer(
+                    rawSent ? SharedBlock.CheatStatusApplied : SharedBlock.CheatStatusEngineRefused,
+                    rawSent
+                        ? $"object {what}: use sent (not a placeable — a corpse or other creature "
+                            + "goes through the same UseObject pipe)"
+                        : $"object {what}: UseObject failed (no client or no message object)");
                 return;
             }
         }

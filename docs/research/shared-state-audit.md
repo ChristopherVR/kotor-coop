@@ -6248,6 +6248,73 @@ save's own active combat encounter; `EnemyPresenceController.DriveOne` calls the
 `Odyssey.DriveBody` this round changed) and their calls are folded into the aggregate
 before/after counts above — not independently isolated per-creature this round.
 
+### Round 68 (2026-08-22) — walk/run hysteresis shipped and unit-tested; the mirrored
+companion/enemy gait isolation rounds 63-67 all deferred is STILL not closed — this time
+because AI/combat state, not `DriveBody`, blocked it, and a raw-memory-poke shortcut was
+found NOT to propagate through the mirroring pipeline at all
+
+Three gaps left by rounds 65-67 (`docs/research/phantom-locomotion.md` §12-§13,
+`docs/research/container-sync.md` §5): mirrored companion/enemy gait sampled independently
+rather than folded into an aggregate; hysteresis on the bare walk/run threshold; and the
+corpse-looting question. Full write-ups: `docs/research/phantom-locomotion.md` §14 (gait
+hysteresis + the companion/enemy attempts), `docs/research/container-sync.md` §6 (corpse
+looting).
+
+**Hysteresis: DONE.** `GaitRule` gets a two-threshold band (enter Run above 2.4, drop to Walk
+below 1.6 — the old bare 2.0 cutoff sits in the dead band between them) plus a 0.15s dwell
+before a near-zero speed reads as idle. 23 unit tests (`GaitRuleTests.cs`, rewritten), including
+a hovering-jitter simulation (1.8/2.2 alternating) proving zero transitions and a
+ramp-up-then-down simulation proving real acceleration still transitions exactly once each way.
+Live-observed via a `tp`-hop cadence mover (the least-bad available primitive — real player
+input still cannot be injected): after a ~1s cold-start settle, the client's mirrored phantom
+held Run for the rest of the window with zero flicker despite an independently re-measured
+speed signal swinging between 0.25 and 2.94 u/s sample to sample — real evidence, but
+methodologically coarse (a re-derived speed estimate, not the engine's own internal value) —
+see phantom-locomotion.md §14.2 for the honest caveat.
+
+**Mirrored companion/enemy gait: still NEEDS-LIVE, blocked upstream of `DriveBody`.** Recruited
+Trask via the `talk`/dialogue test-hook (confirmed in the party table on both host and client),
+but his follow-AI never engaged — 20 straight seconds of his real position not moving a single
+float bit while stationary, and no sustained movement after either a long or a point-blank `tp`
+of the player. Firing his own `+0x260` combat-end script produced exactly one discrete jump,
+then he froze again. In END_M01AB, standing the player next to the exact Sith soldiers rounds
+52-58 name as chasing-once-aggroed produced no reaction, and the `attack` test-hook's
+player-as-attacker form (`attack 0x7FFFFFFF <id>`, round 58's own documented recipe for a real
+kill) never queued an action against five distinct targets across two modules —
+`head=0xFFFFFFFF`, zero combat-round activity, the entire observation window, every attempt —
+while the REVERSE order (an NPC ordered to attack the player) reliably produced real combat
+rounds on the same targets. Whether this is a save/module property (several targets read hp
+1/1, consistent with cutscene-placeholder NPCs, not real combatants) or a genuine regression
+since round 58's `tar_m10aa` session (same day) the same recipe got four confirmed kills was
+NOT settled this round — flagged for a future pass.
+
+**A new methodology finding, worth keeping**: a raw `WriteProcessMemory` poke to a creature's
+own position field persists on local read-back (confirmed for an idle Sith and for the local
+player's own position) but does **not** propagate to a mirroring instance at all — the enemy
+census stayed at 0 entries, and a poked player's own phantom on the other instance never moved,
+for the entire poked window. Only a REAL engine call (`console 'tp ...'`, genuine AI movement,
+or an existing test hook) reliably drives what the network layer republishes. This was tried
+specifically as a shortcut past the AI-state blockers above and ruled OUT as a viable one — not
+root-caused why the read side disagrees with a local re-read, but confirmed reproducible three
+separate ways (companion, enemy, player).
+
+**Corpse looting: still open, one level of progress.** Identified the likely engine surface
+(`CSWSCreature::GetItemRepository`, `0x004EF770`, via the symbol DB — a corpse is never a
+`CSWSPlaceable`, so `ContainerUseHook`'s existing `OpenInventory` detour structurally cannot
+cover it). Extended `useplaceable`'s cheat handler so an explicit id/tag that resolves to any
+server object — not only a placeable — sends the same generic `Odyssey.UseObject` click;
+verified this reproduces §5.5's own `slay`-body finding exactly (`does not resolve to anything
+here`). Could not obtain a REAL kill this round (blocked by the same `attack`-hook gap above),
+so the extension was never exercised against a genuine corpse — whether `ContainerUseHook`
+needs a creature-side sibling detour, whether the client gets refused while the host loots, and
+whether loot removal mirrors, are all still open questions for the next round with a working
+kill path.
+
+`dotnet test tests/KotorCoop.Tests`: **1601/1601** (up from the round's own 1591 baseline by 10
+net-new tests), run after this round's full change set. Both plugin builds clean across two
+rebuild/redeploy/relaunch cycles. Rig torn down clean (`Get-Process swkotor,KotorCoop.Agent`
+empty), `auto_start_agent` restored to `1` in both installs by `demo.ps1 -Stop`.
+
 ## 3. A client's XP is actively erased
 
 `ProgressionSnapshotPacket` is host→client only and absolute (CoopAgent.cs, `PumpProgression`):

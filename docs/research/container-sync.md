@@ -593,3 +593,95 @@ entirely by filtering on `Odyssey.IsPlaceableOpen` instead (unambiguous — the 
 regression from this pass. Both plugin builds (`build.ps1 -Install`, both GOG installs) clean,
 0 warnings 0 errors, across five rebuild/redeploy/relaunch cycles this pass needed as each live
 finding above required a code fix.
+
+## 6. Round 68 — corpse looting: the console primitive extended, the refusal path verified,
+the real-corpse question still genuinely open
+
+Picks up §5.5's honest gap directly: whether a corpse from a REAL combat kill (not `slay`)
+behaves as a lootable container under the container-sync lock, and whether it needs its own
+`ContainerUseHook`-equivalent detour.
+
+### 6.1 Where a corpse's inventory actually lives, per the symbol DB
+
+A corpse is not a `CSWSPlaceable` (confirmed: `Odyssey.ResolvePlaceable` on a dead creature's id
+returns 0 — the vtable never matches `PlaceableVtable`). `tools/q.py func`/`class` against
+`tools/kotor1_0_3.db` finds the real engine surface instead: `CSWSCreature::GetItemRepository`
+(`0x004EF770`, `__thiscall`) returns a `CItemRepository*` — the SAME kind of object
+`CSWSItem::InitRepository`/`CItemRepository::GetItemInRepository` (0x00555F40) work with for an
+item's own container contents (a backpack, say). No creature-specific `OpenInventory`/
+`CloseInventory` pair analogous to `CSWSPlaceable`'s exists in the symbol DB — `CSWSItem`
+has its own `OpenInventory`/`CloseInventory` (0x005561A0/0x0055D800), suggesting a corpse's loot
+panel is opened through the SAME generic "open this repository-bearing thing" machinery an item
+container uses, dispatched from `CSWSObject::AIActionUseObject` (0x0057E8C0) — the same function
+whose disassembly `docs/research/container-sync.md` §5.2 already traced for the placeable case,
+this time the branch that resolves to a script/repository open rather than
+`CSWSPlaceable::OpenInventory` specifically was not isolated (§6.4: no real kill was available
+to trace it live against). **Not a full disassembly of the creature-open path — a symbol-DB
+identification of where it plausibly lives, one level short of what a live trace would confirm.**
+
+### 6.2 The console test primitive, extended to reach a corpse
+
+`useplaceable`'s cheat handler (`CheatController.UsePlaceable`) refused any explicit id/tag
+that did not resolve as a `CSWSPlaceable` — exactly what stood between the live-test rig and a
+corpse, since `Odyssey.UseObject` (the underlying `SendUseObjectInputFn` — the engine's real
+client-to-server "I clicked that" input, already object-type-agnostic) never itself needed the
+target to be a placeable. Extended: an explicit id/tag that fails `ResolvePlaceable` but
+resolves to ANY server object now falls through to a raw `Odyssey.UseObject` send (its own
+range check against the resolved object's position, its own log line and answer text
+distinguishing "not a placeable" from a genuine failure) instead of refusing outright. The bare
+sweep (no id/tag — `useplaceable` alone) is UNCHANGED and still refuses non-placeables; it
+exists to discover containers, not to guess at a nearby id. No new console verb, no protocol
+change, no `CheatKind` added — this is a widening of an existing cheat's own resolve logic.
+
+### 6.3 Verified against the ALREADY-KNOWN case: a `slay`d body, exactly reproducing §5.5
+
+`slay` (bare) killed a nearby hostile (id `0x17`); immediately after, `resolve 0x17` reported
+`resolves to 0x0` (fully invalidated, matching §5.5's own finding byte-for-byte), and the new
+`useplaceable 0x17` extension correctly answered `does not resolve to anything here` — the
+clean, honest refusal the extension is supposed to produce when there is genuinely nothing to
+use, rather than a crash or a stale-pointer read. This confirms the EXTENSION works as designed;
+it does not, and cannot, confirm anything about a real corpse, since `slay` never leaves one
+(§5.5, re-confirmed, not re-investigated further this round).
+
+### 6.4 A real (non-`slay`) kill was not obtainable this round — the corpse question remains open
+
+The plan was: `attack 0x7FFFFFFF <id>` (the player-as-attacker form of the `attack` test-hook,
+round 58's own documented recipe for a real kill) against a live hostile, then
+`useplaceable <corpse id>` on the resulting body. The first half never completed — see
+`docs/research/phantom-locomotion.md` §14.3 for the full finding: across five distinct targets
+in two modules (END_M01AA, END_M01AB), every player-as-attacker order left the target's action
+queue empty (`head=0xFFFFFFFF`) and its combat round inactive for the entire observation window,
+while the REVERSE (an enemy ordered to attack the player) reliably produced real combat-round
+activity on the same targets. Nothing died from player damage this round, so §6.2's extension
+was never actually exercised against a genuine corpse, and the questions the task brief asked
+for — does the client get refused while the host loots, does open/close mirror, does loot
+removal replicate the same way `ContainerLoot`/materialised-loot already do for a placeable —
+are **all still open**, not newly closed. **Precisely what does and does not apply to a corpse,
+honestly**: confirmed — the identity of the engine surface (§6.1, symbol-DB level); confirmed —
+the console primitive now reaches a non-placeable id cleanly (§6.2/§6.3); NOT confirmed — any of
+`ContainerUseHook`'s refusal, the open/close mirror, or loot replication for a real corpse,
+because no real corpse existed to test them against.
+
+### 6.5 What remains (NEEDS-LIVE, not closed this round)
+
+- **A real kill, on a save/module where the `attack` test-hook's player-as-attacker form
+  actually queues an action** (or via genuine player input, still blocked by the tooling gap
+  `docs/live-verification.md` names) — the hard blocker for everything else in this section.
+- **Whether `ContainerUseHook` (on `CSWSPlaceable::OpenInventory`) covers a corpse at all**,
+  once one exists to test against — §6.1's symbol-DB reading suggests it structurally cannot
+  (a corpse is never a `CSWSPlaceable`), which would mean a second detour on the creature-side
+  open path (§6.1's `GetItemRepository`/the `AIActionUseObject` branch that reaches it) is
+  needed for the lock to apply to a corpse the same way it applies to a chest — not built this
+  round, since there was nothing live to verify it against.
+- **The lease kind** — whether a corpse needs its own `InteractionKind` (alongside
+  `Conversation`/`Container`) or reuses `Container` keyed on the corpse's object id the same way
+  a placeable already is, is a design question best settled once the open path is confirmed
+  live, not guessed at now.
+
+### 6.6 Test suite and build
+
+`dotnet test tests/KotorCoop.Tests`: **1601/1601 passed** (see
+`docs/research/phantom-locomotion.md` §14.7 for the same run — one combined session covered
+both this round's changes). Both plugin builds (`src/KotorCoop.Plugin/build.ps1 -Install`, both
+GOG installs) clean, 0 warnings 0 errors. The `UsePlaceable` extension is the only source change
+in this file's area this round; `ClosePlaceable` is untouched.

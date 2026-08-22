@@ -1723,3 +1723,192 @@ byte-for-byte unchanged except for the diagnostic's own gating; this round's net
 is the single shared `gaitChanged` evaluation, the `if (gaitChanged)` gate around the `+0x12C`
 call and its diagnostic, and the new `_syncPositionCallCount` counter folded into the existing
 periodic gait log line.
+
+## 14. Round 68 — walk/run hysteresis shipped and live-observed; mirrored companion and enemy
+gait remain unverified, blocked by two newly-found, honestly-reported gaps unrelated to
+`DriveBody`
+
+Picks up §13.9's two open items: whether the bare walk/run threshold is a real flicker risk,
+and independently isolating a mirrored enemy/companion's gait rather than folding it into an
+aggregate.
+
+### 14.1 The fix — `GaitRule` gets a two-threshold hysteresis band and an idle dwell
+
+`GaitRule.IsRun` was `speed > 2.0f`, stateless, exactly the shape §13.7 flagged as a candidate
+noise-sensitivity: a speed estimate hovering near 2.0 (measurement jitter, a coarse network
+tick, a synthetic mover) could cross a single threshold every sample and flicker the gait.
+Replaced with:
+
+- **`RunEnterThreshold = 2.4f`**, **`RunExitThreshold = 1.6f`** — a body already Walking needs
+  to exceed 2.4 to become a Run; a body already Running needs to drop *below* 1.6 to fall back
+  to Walk. Anywhere in the 1.6..2.4 dead band — including the old bare 2.0 cutoff this
+  replaces — a sampled speed keeps whichever gait was already showing.
+  `GaitRule.IsRun(speed, wasRunning)` takes the previous classification explicitly; the
+  1-argument form defaults `wasRunning: false` for source compatibility.
+- **`IdleSpeedThreshold = 0.3f`** with **`IdleDwellSeconds = 0.15f`** — a "moving" body under
+  0.3 u/s only drops to idle after staying there continuously for 0.15s
+  (`GaitRule.AdvanceBelowIdle`, a pure clock-agnostic accumulator: callers supply real `dt` and
+  store the returned value back per body), not instantly on the first low sample.
+
+`Odyssey.DrivePhantom`/`DriveEnemy` now carry the hysteresis memory per driven creature: a new
+`AdvanceGaitHysteresis(creature, speed)` helper reads `wasRunning` off the *already-asserted*
+gait (`GaitLast[slot] == GaitRule.AnimRun` — the value only `GaitChanged` writes, i.e. what
+last actually reached the engine, not a value computed and discarded) and advances a
+per-creature `GaitBelowIdleAccum`/`GaitHysteresisLastStepMs` pair (a new 48-slot table
+parallel to, but independent of, `GaitCreature`/`GaitLast` — independent because those only
+populate once a client twin has been read inside `DriveBody`, and the dwell timer must start
+counting from the very first drive step, twin or not). `ForgetGait` clears the new table too.
+
+**Unit-tested** (`tests/KotorCoop.Tests/GaitRuleTests.cs`, rewritten): boundary tests for both
+thresholds (`>`/`>=` on the correct side, mirroring the enter/exit asymmetry), a dead-band test
+proving the old bare 2.0 cutoff now keeps whichever gait was showing either way, a
+hovering-jitter simulation (speed alternating 1.8/2.2 for 10 samples — the concrete "slow jog
+near the old threshold" scenario) asserting **zero** transitions, a monotonic ramp-up-then-down
+test asserting **exactly one** Walk→Run and one Run→Walk transition (hysteresis suppresses
+jitter, not real acceleration), the idle-dwell boundary and its accumulator in isolation, and
+an end-to-end dwell simulation at 60 Hz cadence asserting the Idle transition fires exactly
+once and never flickers back. 23 tests total in the file, all new or rewritten this round.
+
+### 14.2 Live observation — a real, jittery movement stream, zero flicker after settling
+
+No reliable way exists to drive the local player at a precise, sustained ~2.0 u/s (§14.4 below
+explains why the more obvious "poke the position directly" shortcut does not work at all for
+this purpose), so this was tested with the least-bad available primitive: repeated `tp`
+console commands (the plugin's own `SharedBlock` console channel, a REAL engine position set,
+not a raw memory poke — see §14.4) at a ~0.4-unit hop every ~200ms (nominal 2.0 u/s, but actual
+inter-hop timing jitters with the console round-trip, and `MotionSmoother`'s own instantaneous
+speed estimate — re-derived independently by `phantomgait.ps1`'s own dx/dy/dt calc for this
+observation, itself a further, coarser re-sampling of an already-coarse stream — swung between
+0.25 and 2.94 u/s from sample to sample). Watching the CLIENT's mirrored phantom
+(`tools/phantomgait.ps1 -ObjectId 0x12D`, id resolved via the `resolve` console diagnostic, not
+a raw scan) through this: the first ~1s (six samples, while the "moving" classification and
+the speed estimate were both still settling from a cold start — the same warm-up
+`ARunningPeerNeverReadsIdleOnceMotionIsEstablished`'s own test comment documents) showed six
+Walk/Run flips, then the gait locked onto Run and held it for the remaining ~14 consecutive
+samples with **zero** transitions — despite the independently re-measured speed readings in
+that same steady window repeatedly dropping under the new 1.6 exit threshold (0.31, 0.25, 1.38,
+1.14 u/s among them). Under the OLD bare threshold, any one of those same low readings would
+have flipped the gait to Walk instantly. This is consistent with the hysteresis holding under a
+genuinely noisy stream, but the caveat is real: the "speed" values quoted are `phantomgait.ps1`'s
+own re-derivation from its 150ms poll against the tp-hop's own ~200ms cadence, not the exact
+value `MotionSmoother`/`GaitRule` saw internally, so this is **evidence, not a byte-for-byte
+confirmation** — the cleaner test (a real player walking at a controlled cadence, or a fixed
+16ms-cadence engine-level mover) is still blocked by the same tooling gap §13.9 already named
+(`docs/live-verification.md`: injected keystrokes do not reach this game).
+
+Transition count over the settled window: **0 per ~2.5s** of the steady-state sample, well
+under the round's own ≤2-per-10s target; the six transitions all occurred within the
+already-expected cold-start settling burst, not the steady-state window the target is about.
+
+### 14.3 Mirrored companion and enemy gait — both blocked, for two new, unrelated reasons; not
+the same "blocked by this save" shape as rounds 63-65
+
+**Companion (Trask).** `dlgprobe.ps1`'s own test-hook (`talk end_trask`, the shared block's
+`OffsetTestTalkTag`/`Serial`) opened the conversation and one `sendkey.ps1` pick completed it;
+`partystate.ps1` confirmed Trask in slot 0 on both host (`companions 1, soloMode 0`) and client
+(`companions 1, soloMode 1`) afterward — the party-membership half worked exactly as designed.
+His FOLLOW AI did not: `blockpoke.ps1 walk` (the PC-move test hook) is host-side no-op by
+design (`TestDriveController.HandleWalk`'s own doc: the PC is drive-controlled, matching round
+52's finding), so the player was instead moved via `console 'tp ...'` — a real engine position
+set — first a single ~26-unit hop (crossing a closed door, confirmed present via `opendoor`),
+then a return to point-blank range (~2.8m). Trask's own real position
+(`0x1786E230+0x90`, resolved via the `resolve` console diagnostic, not a scan pick among
+duplicates) never moved a single float bit in **20 consecutive seconds** of direct, repeated
+memory reads while stationary, nor after either `tp`. Firing his own `+0x260` event script
+(`firescript 0x127 fire` → `k_hen_combend01`, his OnCombatEnd handler) produced exactly ONE
+discrete ~4-unit jump, then he froze again for the following 15s — consistent with some
+leftover Endar-Spire-opening scripted-guard behavior (a `ClearAllActions`-then-nothing state)
+that this save's Trask is stuck in, not with a `DriveBody`/phantom-locomotion defect: there was
+never any sustained real movement to mirror, so DrivePhantom's gait selection was never
+actually exercised end-to-end for a companion this round either. **Not the same finding as
+rounds 63-65** ("no companion in this save's party") — this save now genuinely has Trask as an
+active party member, and the new, specific finding is that his follow-AI is stuck, a save/session
+state question for a future round to either reset (a fresh, un-tested-on save) or root-cause
+(why `k_hen_combend01` produces exactly one displacement and no more).
+
+**Enemy.** In END_M01AB (Bastila-rescue Sith, `end_sith01`/`end_sith04`/`end_sithsol01`, the
+exact enemies rounds 52-58 name as chasing once aggroed), standing the player within ~8m of
+`end_sith03` for 10+ seconds produced no movement at all — no spot/perception reaction. The
+`attack` test-hook (`blockpoke.ps1 attack <attacker> <target>`, `SharedBlock`'s
+`OffsetTestAttacker`/`Target`/`Serial`, `Odyssey`'s own `GetAttackDiagnostics` probe logging
+`attack probe: ...` every second) was tried as round 58's own documented recipe next: ordering
+**the enemy to attack the player** (`attack <sith> 0x7FFFFFFF`) reliably produced real combat
+round activity (`round(active=1,...)` toggling) on five different targets across both modules;
+ordering **the player to attack an enemy** (`attack 0x7FFFFFFF <sith>`, round 58's own exact
+recipe, which that round reports four confirmed real kills with) never once did, on the SAME
+five targets, at point-blank range (0.0-0.4m), commandable=1, movePermitted=0xFFFF throughout —
+`head=0xFFFFFFFF` (no action ever reached the queue) and `round(active=0,delay=0)` for the
+entire observation window, every single attempt, in both END_M01AA and END_M01AB, host and
+client alike. This is the opposite of what round 58 measured on `tar_m10aa` (Taris) the same
+day; whether the difference is the save/module (Endar Spire's opening NPCs may be
+plot-gated/non-combatant placeholders — several read hp 1/1, a shape consistent with cutscene
+set-dressing rather than a real combatant) or a genuine regression in the player-as-attacker
+path since round 58 was **not settled this round** — flagged for the next pass, since it also
+blocked §14.5's corpse test (no real, non-`slay` kill was obtainable).
+
+Net effect: gap (1) from this round's brief — sampling a moving companion's and a chasing
+enemy's mirrored gait — remains **NEEDS-LIVE**, blocked upstream of `DriveBody` by AI/combat
+state this round could not get past, not by anything the gait code itself does.
+
+### 14.4 A methodology finding: a raw `WriteProcessMemory` poke to a creature's position field
+does NOT propagate through the mirroring pipeline, even though it persists on local read-back
+
+Tried as a shortcut past §14.3's blockers (move Trask/an enemy/the player's own position
+directly, bypassing whatever AI state was stuck): in every case the WRITE succeeded and
+persisted on a local re-read (confirmed for an idle Sith held steady for 10+ seconds of
+continuous fine-grained writes, and for the local player's own position after a single poke) —
+but the CLIENT never observed any of it. For the player's own phantom and for the enemy census
+alike, the mirrored side's position stayed byte-for-byte frozen at its pre-poke value for the
+entire test window. (Trask's own case is a THIRD, different failure mode — see §14.3: the
+engine itself reasserted his position every frame, reverting the poke, rather than the mirror
+simply not seeing it.) `KotorGameBridge.ReadEnemies`/the phantom position stream both read a
+creature's position fresh via cross-process memory reads each pump, the same technique a raw
+external poke uses to write it — so the two SHOULD, in principle, observe the same bytes; that
+they measurably do not (enemy census count stayed 0 for the entire poked window; the player's
+own phantom mirror never moved) was not root-caused this round, and is a separate open question
+from §14.3's AI-state blockers. Practical conclusion for future rounds: only a REAL engine
+call — `console 'tp ...'` (§14.2), an actual AI-driven move, or the plugin's own test hooks —
+reliably drives what the network layer republishes; a bare position-field poke is a dead end
+for this kind of test regardless of how faithfully it is written (§13.7's own "proper position
+integration" fix was about smoothing a REAL mover's steps, not about this — a distinct issue,
+now separated out).
+
+### 14.5 Corpse looting — extended the console test primitive, verified the refusal path, could
+not verify a real corpse (blocked by §14.3's kill gap)
+
+See `docs/research/container-sync.md` §6 for the corpse-looting write-up in full (it belongs
+there structurally, since it is a container-sync question, not a locomotion one) — cross-
+referenced here only because reaching a real kill to test it against hit the exact same
+`attack` test-hook blocker as §14.3's enemy-chase test.
+
+### 14.6 What remains (NEEDS-LIVE, not closed this round)
+
+- **Mirrored companion gait**, blocked by Trask's stuck follow-AI in this specific save
+  (§14.3) — needs either a fresh save where he genuinely follows, or root-causing why
+  `k_hen_combend01` produces exactly one displacement.
+- **Mirrored enemy gait under real chase**, blocked by the Endar Spire's placeholder NPCs not
+  reacting to proximity and the `attack` test-hook not queuing a player-as-attacker action on
+  any of five tried targets (§14.3) — needs either a real chase-capable save/module or
+  root-causing the attacker-asymmetry.
+- **Why a raw position poke does not propagate through the mirroring pipeline** (§14.4) —
+  genuinely open; matters for any future round tempted to reach for the same shortcut.
+- **A byte-for-byte confirmation of the hysteresis fix under a real, controlled cadence**
+  (§14.2) — this round's evidence is real but methodologically coarse (a `tp`-hop cadence
+  re-measured by an independent poller, not the engine's own internal speed value); still
+  blocked by the same "no real player input" tooling gap §13.9 already named.
+- **The corpse-looting question** — see container-sync.md §6.
+
+### 14.7 What did NOT regress
+
+`dotnet test tests/KotorCoop.Tests`: **1601/1601** passing (up from the round's own 1591
+baseline by the 10 net-new `GaitRuleTests`), run after this round's changes. Both plugin builds
+(`src/KotorCoop.Plugin/build.ps1 -Install`, both GOG installs `tools/demo.ps1` uses) clean, 0
+warnings 0 errors, across two rebuild/redeploy/relaunch cycles this round needed (one for the
+hysteresis change, one for the container-sync corpse-use extension in §14.5/container-sync.md
+§6). Every pre-existing `GaitRule`/`Odyssey.DriveBody` behavior not touched by the hysteresis
+change (the `+0x134` edge gate, `TwinLoopingAnimation`, `TwinPositionSyncSlot`'s own gating, the
+`ShouldReissue` edge-trigger) is byte-for-byte unchanged; the only new state is the
+`GaitHysteresisCreature`/`GaitBelowIdleAccum`/`GaitHysteresisLastStepMs` table and the two call
+sites reading/advancing it. No crash observed across the whole session (two module loads via
+`warp`, two rig restarts, repeated `tp`/`attack`/`firescript` staging, and the corpse test's own
+`slay`).

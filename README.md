@@ -740,6 +740,24 @@ tools/                   RE helpers, demo scripts, the kotor1_0_3 symbol databas
   [docs/research/phantom-locomotion.md](docs/research/phantom-locomotion.md) §13 for the
   disassembly, the before/after A/B numbers, and a synthetic-mover-cadence artifact found and
   ruled out along the way.
+- **The walk/run threshold got hysteresis, round 68 (2026-08-22).** `GaitRule`'s bare
+  `speed > 2.0f` cutoff (a candidate flicker source round 67 flagged but did not confirm) is
+  now a two-threshold band — enter Run above 2.4 u/s, drop to Walk below 1.6 — plus a 0.15s
+  dwell before a near-zero speed reads as idle; the old bare 2.0 cutoff sits inside the new
+  dead band, so a speed sampled there keeps whichever gait was already showing. 23 unit tests
+  cover both boundaries, the dead band, a hovering-jitter simulation (zero transitions) and a
+  real-acceleration ramp (exactly one transition each way). Live-observed via a `tp`-hop mover:
+  after a brief cold-start settle, the mirrored gait held Run with zero flicker through a
+  window where an independently re-measured speed signal repeatedly dropped under the new exit
+  threshold — real evidence, though methodologically coarser than a controlled cadence (no way
+  yet to inject real player input). The same round's attempt to isolate a mirrored companion's
+  and a chasing enemy's gait (rather than folding them into an aggregate, as every round since
+  63 has) did not get far enough to observe either: this save's recruited companion has a stuck
+  follow-AI, and the Endar Spire's nearby Sith did not react to proximity or to the
+  player-as-attacker test order (the reverse order — an enemy ordered to attack the player —
+  worked reliably on the same targets). See
+  [docs/research/phantom-locomotion.md](docs/research/phantom-locomotion.md) §14 for the fix,
+  the live observation and its caveats, and the companion/enemy attempt in full.
 - **A container/corpse a player has open now locks for everyone else — LIVE-VERIFIED
   (2026-08-22, protocol 37).** Before this, only the opener's own screen ever showed a chest's
   loot panel open, nothing closed it for the other player, and nothing stopped a second player
@@ -767,5 +785,10 @@ tools/                   RE helpers, demo scripts, the kotor1_0_3 symbol databas
   [docs/research/container-sync.md](docs/research/container-sync.md) §5 for the full live-pass
   write-up, including one honest gap (a corpse's own loot flow was not exercised) and one
   documented-not-fixed live defect (`+0x334`'s `has_inventory` reading does not reliably
-  identify a real container, live).
+  identify a real container, live). **The corpse gap is still open after round 68
+  (2026-08-22)**: the console test primitive (`useplaceable`) now reaches a non-placeable id at
+  all (extended for exactly this), and the likely engine surface for a creature's own inventory
+  was identified in the symbol DB (`CSWSCreature::GetItemRepository`), but no real (non-`slay`)
+  kill was obtainable that round to test either against — see
+  [docs/research/container-sync.md](docs/research/container-sync.md) §6.
 - KOTOR 2 is untouched, and only GOG v1.0.3 addresses are known.

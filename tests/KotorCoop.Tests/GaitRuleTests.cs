@@ -7,6 +7,10 @@ namespace KotorCoop.Tests;
 /// The gait DECISION (idle/walk/run + when to reissue), extracted from Odyssey.DrivePhantom/
 /// DriveEnemy so the threshold that used to be an untested inline "speed &gt; 2.0f" in two
 /// places has one tested definition. See docs/research/phantom-locomotion.md.
+///
+/// ROUND 68 (phantom-locomotion.md §14) added a two-threshold walk/run hysteresis band and an
+/// idle-dwell for low speed, replacing the bare "speed &gt; 2.0f" §13 flagged as a possible
+/// flicker source under measurement jitter. Both are covered here.
 /// </summary>
 public class GaitRuleTests
 {
@@ -21,27 +25,115 @@ public class GaitRuleTests
     }
 
     [Fact]
-    public void MovingBelowThresholdIsWalk()
+    public void MovingBelowRunEnterThresholdWithNoHistoryIsWalk()
     {
+        // wasRunning defaults to false: with no memory of a previous decision, the body needs
+        // to CROSS the enter threshold, not merely equal it, to read as a run.
         Assert.Equal(GaitRule.AnimWalk, GaitRule.SelectAnimation(0f, moving: true));
         Assert.Equal(GaitRule.AnimWalk, GaitRule.SelectAnimation(1.6f, moving: true));
-        Assert.Equal(GaitRule.AnimWalk, GaitRule.SelectAnimation(GaitRule.RunSpeedThreshold, moving: true));
+        Assert.Equal(GaitRule.AnimWalk, GaitRule.SelectAnimation(GaitRule.RunEnterThreshold, moving: true));
     }
 
     [Fact]
-    public void MovingAboveThresholdIsRun()
+    public void MovingAboveRunEnterThresholdWithNoHistoryIsRun()
     {
-        Assert.Equal(GaitRule.AnimRun, GaitRule.SelectAnimation(2.01f, moving: true));
+        Assert.Equal(GaitRule.AnimRun, GaitRule.SelectAnimation(GaitRule.RunEnterThreshold + 0.01f, moving: true));
         Assert.Equal(GaitRule.AnimRun, GaitRule.SelectAnimation(3.96f, moving: true));
         Assert.Equal(GaitRule.AnimRun, GaitRule.SelectAnimation(12f, moving: true));
     }
 
     [Fact]
-    public void ExactlyAtTheThresholdIsAWalkNotARun()
+    public void ExactlyAtTheEnterThresholdIsAWalkNotARun()
     {
-        // Documents which side of the boundary wins: "> threshold", not ">=".
-        Assert.False(GaitRule.IsRun(GaitRule.RunSpeedThreshold));
-        Assert.True(GaitRule.IsRun(GaitRule.RunSpeedThreshold + 0.001f));
+        // Documents which side of the boundary wins entering Run: "> threshold", not ">=".
+        Assert.False(GaitRule.IsRun(GaitRule.RunEnterThreshold, wasRunning: false));
+        Assert.True(GaitRule.IsRun(GaitRule.RunEnterThreshold + 0.001f, wasRunning: false));
+    }
+
+    [Fact]
+    public void ExactlyAtTheExitThresholdStaysARunNotAWalk()
+    {
+        // The exit side of the band is the mirror boundary: a running body needs to drop
+        // STRICTLY UNDER the exit threshold to fall back to walk -- exactly at it, it is still
+        // classified as running (">=", not ">").
+        Assert.True(GaitRule.IsRun(GaitRule.RunExitThreshold, wasRunning: true));
+        Assert.False(GaitRule.IsRun(GaitRule.RunExitThreshold - 0.001f, wasRunning: true));
+    }
+
+    [Fact]
+    public void TheDeadBandBetweenTheTwoThresholdsKeepsWhicheverGaitWasAlreadyShowing()
+    {
+        // The old bare 2.0 u/s cutoff (docs/research/phantom-locomotion.md §13's flagged
+        // risk) sits inside the new dead band (1.6 .. 2.4). A speed sampled there must not
+        // flip the gait either way -- that is the entire point of hysteresis.
+        const float oldBareThreshold = 2.0f;
+        Assert.True(oldBareThreshold > GaitRule.RunExitThreshold && oldBareThreshold < GaitRule.RunEnterThreshold);
+
+        Assert.False(GaitRule.IsRun(oldBareThreshold, wasRunning: false)); // already walking: stays walk
+        Assert.True(GaitRule.IsRun(oldBareThreshold, wasRunning: true));   // already running: stays run
+    }
+
+    [Fact]
+    public void HoveringNearTheOldBareThresholdNeverFlickersOnceAGaitIsEstablished()
+    {
+        // The concrete flicker scenario: a slow jog whose measured speed jitters between 1.8
+        // and 2.2 -- straddling the old single 2.0 threshold every other sample. Under
+        // hysteresis, once the gait settles it must not change again while the jitter stays
+        // inside the dead band, no matter how many samples arrive.
+        float[] jitter = { 2.0f, 1.8f, 2.2f, 1.9f, 2.1f, 1.8f, 2.2f, 2.0f, 1.9f, 2.1f };
+
+        bool wasRunning = false; // starts walking
+        int transitions = 0;
+        int previousAnim = GaitRule.AnimWalk;
+
+        foreach (float speed in jitter)
+        {
+            int anim = GaitRule.SelectAnimation(speed, moving: true, wasRunning);
+            if (anim != previousAnim)
+            {
+                transitions++;
+            }
+
+            previousAnim = anim;
+            wasRunning = GaitRule.IsRun(speed, wasRunning);
+        }
+
+        Assert.Equal(0, transitions);
+        Assert.Equal(GaitRule.AnimWalk, previousAnim);
+    }
+
+    [Fact]
+    public void ARealAccelerationStillCrossesBothThresholdsExactlyOnce()
+    {
+        // Hysteresis must not prevent a genuine speed-up/slow-down from registering -- only
+        // suppress jitter inside the dead band. A monotonic ramp from a stop to a full sprint
+        // and back down should show exactly one Walk->Run and one Run->Walk transition.
+        float[] rampUpThenDown =
+        {
+            0f, 0.5f, 1.0f, 1.5f, 2.0f, 2.5f, 3.0f, 3.96f, 3.96f, 3.0f, 2.5f, 2.0f, 1.5f, 1.0f, 0.5f,
+        };
+
+        bool wasRunning = false;
+        int walkToRun = 0;
+        int runToWalk = 0;
+
+        foreach (float speed in rampUpThenDown)
+        {
+            bool nowRunning = GaitRule.IsRun(speed, wasRunning);
+            if (nowRunning && !wasRunning)
+            {
+                walkToRun++;
+            }
+            else if (!nowRunning && wasRunning)
+            {
+                runToWalk++;
+            }
+
+            wasRunning = nowRunning;
+        }
+
+        Assert.Equal(1, walkToRun);
+        Assert.Equal(1, runToWalk);
     }
 
     [Theory]
@@ -51,8 +143,10 @@ public class GaitRuleTests
     {
         // A negative speed is never a run; NaN must not throw or silently select run through
         // a stray comparison — every relational operator on NaN is false, so IsRun(NaN) is
-        // false and the result stays Walk, which is the safe substitute.
-        Assert.Equal(GaitRule.AnimWalk, GaitRule.SelectAnimation(speed, moving: true));
+        // false and the result stays Walk, which is the safe substitute. True for a body with
+        // no run history AND for one that was already (implausibly) classified as running.
+        Assert.Equal(GaitRule.AnimWalk, GaitRule.SelectAnimation(speed, moving: true, wasRunning: false));
+        Assert.Equal(GaitRule.AnimWalk, GaitRule.SelectAnimation(speed, moving: true, wasRunning: true));
     }
 
     [Fact]
@@ -64,6 +158,110 @@ public class GaitRuleTests
         // does not silently flip it without a test noticing.
         Assert.True(GaitRule.IsRun(float.PositiveInfinity));
         Assert.Equal(GaitRule.AnimRun, GaitRule.SelectAnimation(float.PositiveInfinity, moving: true));
+    }
+
+    // ---- idle-speed dwell (round 68) ---------------------------------------------------
+
+    [Fact]
+    public void AMovingBodyBelowIdleSpeedStaysWalkUntilTheDwellElapses()
+    {
+        Assert.Equal(
+            GaitRule.AnimWalk,
+            GaitRule.SelectAnimation(0.1f, moving: true, wasRunning: false, belowIdleSeconds: 0f));
+        Assert.Equal(
+            GaitRule.AnimWalk,
+            GaitRule.SelectAnimation(
+                0.1f, moving: true, wasRunning: false, belowIdleSeconds: GaitRule.IdleDwellSeconds - 0.01f));
+    }
+
+    [Fact]
+    public void AMovingBodyBelowIdleSpeedDropsToIdleOnceTheDwellElapses()
+    {
+        Assert.Equal(
+            GaitRule.AnimIdle,
+            GaitRule.SelectAnimation(
+                0.1f, moving: true, wasRunning: false, belowIdleSeconds: GaitRule.IdleDwellSeconds));
+        Assert.Equal(
+            GaitRule.AnimIdle,
+            GaitRule.SelectAnimation(0.1f, moving: true, wasRunning: false, belowIdleSeconds: 1f));
+    }
+
+    [Fact]
+    public void ADwellLongEnoughButASpeedAtOrAboveTheIdleThresholdNeverGoesIdle()
+    {
+        // The dwell only matters once the speed itself is under the threshold -- a long
+        // accumulated value from an earlier slow patch must not condemn a body to idle the
+        // instant it merely touches the threshold again.
+        Assert.Equal(
+            GaitRule.AnimWalk,
+            GaitRule.SelectAnimation(
+                GaitRule.IdleSpeedThreshold, moving: true, wasRunning: false, belowIdleSeconds: 5f));
+    }
+
+    [Fact]
+    public void AdvanceBelowIdleAccumulatesWhileUnderThresholdAndResetsAboveIt()
+    {
+        float accum = 0f;
+        accum = GaitRule.AdvanceBelowIdle(accum, speed: 0.1f, dt: 0.05f);
+        Assert.Equal(0.05f, accum, precision: 4);
+
+        accum = GaitRule.AdvanceBelowIdle(accum, speed: 0.1f, dt: 0.05f);
+        Assert.Equal(0.10f, accum, precision: 4);
+
+        // A single sample back above the threshold resets it completely, not decays it --
+        // a real recovery, not more jitter.
+        accum = GaitRule.AdvanceBelowIdle(accum, speed: 1.0f, dt: 0.05f);
+        Assert.Equal(0f, accum);
+    }
+
+    [Fact]
+    public void AdvanceBelowIdleNeverGoesNegativeOnABackwardsClock()
+    {
+        float accum = GaitRule.AdvanceBelowIdle(0.2f, speed: 0.1f, dt: -0.05f);
+        Assert.True(accum >= 0.2f);
+    }
+
+    [Fact]
+    public void ADwellDrivenIdleTransitionSimulatedStepByStepFiresExactlyOnce()
+    {
+        // End-to-end: a body decelerating under the idle-speed threshold and staying there,
+        // stepped at PhantomController's 60 Hz cadence, should walk for a short stretch and
+        // then settle into idle -- and never flicker back once it gets there.
+        const float stepSeconds = 1f / 60f;
+        float belowIdleAccum = 0f;
+        int idleCount = 0;
+        int walkCount = 0;
+        int lastAnim = GaitRule.AnimWalk;
+        int transitionsAfterFirstIdle = 0;
+        bool sawIdle = false;
+
+        for (int step = 0; step < 30; step++)
+        {
+            const float speed = 0.1f; // under IdleSpeedThreshold the whole time
+            belowIdleAccum = GaitRule.AdvanceBelowIdle(belowIdleAccum, speed, stepSeconds);
+            int anim = GaitRule.SelectAnimation(speed, moving: true, wasRunning: false, belowIdleAccum);
+
+            if (anim == GaitRule.AnimIdle)
+            {
+                idleCount++;
+                sawIdle = true;
+            }
+            else
+            {
+                walkCount++;
+            }
+
+            if (sawIdle && anim != lastAnim && anim != GaitRule.AnimIdle)
+            {
+                transitionsAfterFirstIdle++;
+            }
+
+            lastAnim = anim;
+        }
+
+        Assert.True(walkCount > 0); // the dwell window itself is still Walk
+        Assert.True(idleCount > 0); // and it does eventually settle to Idle
+        Assert.Equal(0, transitionsAfterFirstIdle); // never flickers back out of Idle
     }
 
     [Fact]
@@ -109,6 +307,7 @@ public class GaitRuleTests
         bool sawIdleAfterWarmup = false;
         bool sawRun = false;
         int stepsAfterWarmup = 0;
+        bool wasRunning = false;
 
         // Two seconds of continuous straight-line running, stepped at 60 Hz.
         for (int step = 0; step < 120; step++)
@@ -122,7 +321,8 @@ public class GaitRuleTests
             }
 
             (_, float speed, bool moving) = smoother.Step(0, networkPosition, now);
-            int anim = GaitRule.SelectAnimation(speed, moving);
+            int anim = GaitRule.SelectAnimation(speed, moving, wasRunning);
+            wasRunning = GaitRule.IsRun(speed, wasRunning);
 
             // Skip the first few steps: the very first sample has no prior displacement to
             // measure a speed from (MotionSmoother's own "first movement never has a dt"
@@ -167,11 +367,13 @@ public class GaitRuleTests
         Vec3 stoppedAt = new() { X = (float)(RunSpeed * now), Y = 0f, Z = 0f };
 
         int lastAnim = GaitRule.AnimRun;
+        bool wasRunning = true;
         for (int step = 0; step < 60; step++)
         {
             now += StepSeconds;
             (_, float speed, bool moving) = smoother.Step(0, stoppedAt, now);
-            lastAnim = GaitRule.SelectAnimation(speed, moving);
+            lastAnim = GaitRule.SelectAnimation(speed, moving, wasRunning);
+            wasRunning = GaitRule.IsRun(speed, wasRunning);
         }
 
         Assert.Equal(GaitRule.AnimIdle, lastAnim);

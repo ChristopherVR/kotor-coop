@@ -9148,8 +9148,9 @@ internal static unsafe class Odyssey
     /// is exactly the body gliding along with no run cycle.</param>
     public static void DrivePhantom(nint creature, Vec3 position, float facing, float speed, bool moving)
     {
-        int want = GaitRule.SelectAnimation(speed, moving);
-        DriveBody(creature, position, facing, speed, moving, want, GaitRule.IsRun(speed));
+        (bool wasRunning, float belowIdleSeconds) = AdvanceGaitHysteresis(creature, speed);
+        int want = GaitRule.SelectAnimation(speed, moving, wasRunning, belowIdleSeconds);
+        DriveBody(creature, position, facing, speed, moving, want, GaitRule.IsRun(speed, wasRunning));
     }
 
     /// <summary>
@@ -9166,14 +9167,16 @@ internal static unsafe class Odyssey
     /// See the bit table on <see cref="ClaimCreature(nint, bool, uint)"/>.</param>
     public static void DriveEnemy(nint creature, Vec3 position, float facing, float speed, bool moving, uint ownerAnimation, uint bisectMask = 0)
     {
+        (bool wasRunning, float belowIdleSeconds) = AdvanceGaitHysteresis(creature, speed);
+
         // NEEDS-LIVE: engine looping ids sit at 0x2710 (10000) and up; anything outside
         // that band here is a read gone wrong or a one-shot that does not belong in a
         // looping field, and idle is the safe substitute.
         int want = moving
-            ? GaitRule.SelectAnimation(speed, moving: true)
+            ? GaitRule.SelectAnimation(speed, moving: true, wasRunning, belowIdleSeconds)
             : (ownerAnimation is >= 0x2710 and < 0x2800 ? (int)ownerAnimation : AnimIdle);
 
-        DriveBody(creature, position, facing, speed, moving, want, GaitRule.IsRun(speed), bisectMask);
+        DriveBody(creature, position, facing, speed, moving, want, GaitRule.IsRun(speed, wasRunning), bisectMask);
     }
 
     private static void DriveBody(nint creature, Vec3 position, float facing, float speed, bool moving, int want, bool run, uint bisectMask = 0)
@@ -9640,6 +9643,83 @@ internal static unsafe class Odyssey
                 GaitNameLogged[i] = 0;
             }
         }
+
+        for (int i = 0; i < GaitHysteresisCreature.Length; i++)
+        {
+            if (GaitHysteresisCreature[i] == creature)
+            {
+                GaitHysteresisCreature[i] = 0;
+                GaitBelowIdleAccum[i] = 0f;
+                GaitHysteresisLastStepMs[i] = 0;
+            }
+        }
+    }
+
+    /// <summary>ROUND 68 (docs/research/phantom-locomotion.md §14): per-driven-creature
+    /// walk/run hysteresis memory, parallel to but separate from GaitCreature/GaitLast — those
+    /// only populate once a client twin has been read inside DriveBody (see the ClientTwin
+    /// gate above GaitChanged's call site), while this must exist from the very first drive
+    /// step so the idle-dwell accumulator starts counting immediately rather than after the
+    /// first twin-bearing frame.</summary>
+    private static readonly nint[] GaitHysteresisCreature = new nint[48];
+
+    /// <summary>Seconds this creature's speed has been continuously under
+    /// GaitRule.IdleSpeedThreshold — see GaitRule.AdvanceBelowIdle.</summary>
+    private static readonly float[] GaitBelowIdleAccum = new float[48];
+
+    /// <summary>Wall-clock time (Environment.TickCount64) of this creature's previous
+    /// AdvanceGaitHysteresis call, 0 meaning "no previous step" (first-ever sample gets dt=0,
+    /// never a spurious huge dt from an uninitialised slot).</summary>
+    private static readonly long[] GaitHysteresisLastStepMs = new long[48];
+
+    private static int GaitHysteresisSlotOf(nint creature)
+    {
+        int free = -1;
+        for (int i = 0; i < GaitHysteresisCreature.Length; i++)
+        {
+            if (GaitHysteresisCreature[i] == creature)
+            {
+                return i;
+            }
+
+            if (GaitHysteresisCreature[i] == 0 && free < 0)
+            {
+                free = i;
+            }
+        }
+
+        int slot = free >= 0 ? free : 0;
+        GaitHysteresisCreature[slot] = creature;
+        GaitBelowIdleAccum[slot] = 0f;
+        GaitHysteresisLastStepMs[slot] = 0;
+        return slot;
+    }
+
+    /// <summary>
+    /// Reads and advances a driven creature's round-68 hysteresis memory for this step:
+    /// whether it was previously classified as running — from GaitLast, which only changes on
+    /// an actual reissue (the last gait genuinely asserted to the engine), not a value
+    /// computed and then discarded on an early return — and the updated "seconds continuously
+    /// under GaitRule.IdleSpeedThreshold" accumulator (GaitRule.AdvanceBelowIdle). A creature
+    /// with no GaitLast slot yet (no client twin read for it this session) reads as
+    /// wasRunning=false, the same "no history" default GaitRule.IsRun already documents.
+    /// MAIN THREAD ONLY, same as DriveBody/DrivePhantom/DriveEnemy.
+    /// </summary>
+    private static (bool WasRunning, float BelowIdleSeconds) AdvanceGaitHysteresis(nint creature, float speed)
+    {
+        int gaitSlot = GaitSlotOf(creature);
+        bool wasRunning = gaitSlot >= 0 && GaitLast[gaitSlot] == GaitRule.AnimRun;
+
+        int slot = GaitHysteresisSlotOf(creature);
+        long nowMs = Environment.TickCount64;
+        long lastMs = GaitHysteresisLastStepMs[slot];
+        float dt = lastMs == 0 ? 0f : (nowMs - lastMs) / 1000f;
+        GaitHysteresisLastStepMs[slot] = nowMs;
+
+        float accum = GaitRule.AdvanceBelowIdle(GaitBelowIdleAccum[slot], speed, dt);
+        GaitBelowIdleAccum[slot] = accum;
+
+        return (wasRunning, accum);
     }
 
     /// <summary>CSWCObject + this = the animation actually being rendered (u16).</summary>
