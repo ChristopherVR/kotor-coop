@@ -106,10 +106,17 @@ public sealed record AgentSettings
     /// real-time (every-poll-tick) path instead of the <see cref="CombatPumpIntervalMs"/>
     /// cadence, and an unchanged read is deduped against a resend rather than republished on
     /// a fixed timer — see <see cref="KotorCoop.Protocol.DialogueTickGate"/> and
-    /// docs/research/dialogue-join-latency.md. coop.ini <c>dialogue_fast_join</c> (default off,
-    /// so a live pass can A/B it against the existing cadence).
+    /// docs/research/dialogue-join-latency.md. coop.ini <c>dialogue_fast_join</c>, default ON
+    /// since 2026-08-23: round 79's `skipline`-driven A/B on the exact skip-desync repro
+    /// (docs/research/dialogue-skip-desync.md) found the 150 ms cadence genuinely DROPS
+    /// content — a rapid-skip burst delivered only the first and last node, the intermediate
+    /// lines never reaching the follower at all — while the fast path caught every node
+    /// individually with zero coalescing on the identical burst. Unlike
+    /// <see cref="PartyFastPump"/>/container_fast_pump (both measured with no benefit and left
+    /// off), this is a real, live-measured fix for a real content-loss bug, not a latency
+    /// tweak with unproven upside.
     /// </summary>
-    public bool DialogueFastJoin { get; init; }
+    public bool DialogueFastJoin { get; init; } = true;
 
     /// <summary>
     /// When true, <see cref="CoopAgent.PumpParty"/> (and <see cref="CoopAgent.PumpPartyRoster"/>,

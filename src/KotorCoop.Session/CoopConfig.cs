@@ -149,13 +149,14 @@ public sealed record CoopConfig
     /// Whether the dialogue channel is pumped on the agent's real-time (per-poll-tick) path
     /// instead of the ~150 ms combat cadence, and whether an unchanged read is deduped against
     /// a resend rather than republished on a fixed timer — docs/research/dialogue-join-latency.md
-    /// has the measured before/after. OFF by default: it changes the timing of a channel that
-    /// the "second player joins a conversation and the subtitles take a few seconds to appear"
-    /// report is about, so it ships behind a flag specifically so a live A/B pass can compare it
-    /// against the existing cadence rather than trusting the change on the strength of the static
-    /// analysis alone. <c>dialogue_fast_join = 1</c> turns it on.
+    /// has the measured before/after. Default ON since 2026-08-23: docs/research/dialogue-skip-
+    /// desync.md's live A/B on the exact skip-desync repro found the 150 ms cadence genuinely
+    /// DROPS content (a rapid-skip burst delivered only the first and last node; the
+    /// intermediate lines never reached the follower at all), while the fast path caught every
+    /// node with zero coalescing on the identical burst. <c>dialogue_fast_join = 0</c> reverts
+    /// to the old cadence.
     /// </summary>
-    public bool DialogueFastJoin { get; init; }
+    public bool DialogueFastJoin { get; init; } = true;
 
     /// <summary>
     /// Whether the party channel (<c>PumpParty</c>/<c>PumpPartyRoster</c>) is pumped on the
@@ -385,7 +386,8 @@ public sealed record CoopConfig
             StatusToasts = !kv.ContainsKey("status_toasts") || IsTruthy(kv.GetValueOrDefault("status_toasts")),
             DialogueItemSync = !kv.ContainsKey("dialogue_item_sync")
                 || IsTruthy(kv.GetValueOrDefault("dialogue_item_sync")),
-            DialogueFastJoin = IsTruthy(kv.GetValueOrDefault("dialogue_fast_join")),
+            DialogueFastJoin = !kv.ContainsKey("dialogue_fast_join")
+                || IsTruthy(kv.GetValueOrDefault("dialogue_fast_join")),
             PartyFastPump = IsTruthy(kv.GetValueOrDefault("party_fast_pump")),
             ContainerFastPump = IsTruthy(kv.GetValueOrDefault("container_fast_pump")),
             SessionSaveHostRefusal = IsTruthy(kv.GetValueOrDefault("session_save_host_refusal")),

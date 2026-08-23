@@ -823,7 +823,7 @@ internal static class Program
             SyncPause = config?.PauseSync ?? true,
             HidePeersInMinigame = config?.HidePeersInMinigame ?? true,
             DialogueItemSync = config?.DialogueItemSync ?? true,
-            DialogueFastJoin = config?.DialogueFastJoin ?? false,
+            DialogueFastJoin = config?.DialogueFastJoin ?? true,
             PartyFastPump = config?.PartyFastPump ?? false,
             ContainerFastPump = config?.ContainerFastPump ?? false,
             TransitionAnnounceEnabled = config?.TransitionAnnounceEnabled ?? false,

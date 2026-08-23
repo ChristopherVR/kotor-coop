@@ -31,8 +31,8 @@ off by default or waiting on a live pass; the linked doc always has the dated ev
 | Dialogue — one conversation at a time, spectate with real lines, late-join adopt | Live-verified | [dialogue-sync.md](docs/research/dialogue-sync.md) |
 | Dialogue — a trigger/cutscene-started conversation, both engines racing to `StartDialog` | Live-verified, lock adopts cleanly | dialogue-sync.md |
 | Dialogue — auto-join is forced-conversation-only, `off` by default for ordinary chat | Both sides live-verified (2026-08-23 negative pass, 2026-08-23 round-77 positive pass); the START-side exclusivity-gate bug the positive pass exposed is fixed and live-confirmed; auto-join from genuine distance still NEEDS-LIVE (a tooling/positioning gap, not a code question) | dialogue-sync.md |
-| Dialogue — rapid-skip node coalescing, root-caused and reproduced live | Live-verified (2026-08-23, round 79): a new in-process `skipline` console verb (no OS input) reproduced the "skip mid-sentence desyncs" report on demand — 3 real node transitions in 55-70ms coalesce to 1 follower drive under the default cadence; `dialogue_fast_join=1` closes it completely in a direct A/B, same test. Recommended, not yet the shipped default | dialogue-skip-desync.md, shared-state-audit.md round 79 |
-| Combat presence freeze after a followed conversation ends | Live-measured (2026-08-23, round 78): a 1.5s debounce sized "by feel" was the dominant term in a ~2.7s census-freeze gap; cut to 300ms, gap now ~0.8-1.4s. Practical bar met (census unfreezes in about a second, not several); literal "same frame" target still open, needs `dialogue_fast_join=1` too | dialogue-sync.md, shared-state-audit.md round 78 |
+| Dialogue — rapid-skip node coalescing, root-caused, fixed | Live-verified (2026-08-23, round 79): a new in-process `skipline` console verb (no OS input) reproduced the "skip mid-sentence desyncs" report on demand — 3 real node transitions in 55-70ms coalesced to 1 follower drive under the old cadence; `dialogue_fast_join=1` closes it completely in a direct A/B, same test. Flipped to the shipped default the same day | dialogue-skip-desync.md, shared-state-audit.md round 79 |
+| Combat presence freeze after a followed conversation ends | Live-measured (2026-08-23, round 78): a 1.5s debounce sized "by feel" was the dominant term in a ~2.7s census-freeze gap; cut to 300ms, gap now ~0.8-1.4s. `dialogue_fast_join` shipping ON by default (round 79) should tighten this further, since it removes the same 150ms cadence round 79 measured elsewhere — not independently re-measured with both fixes together | dialogue-sync.md, shared-state-audit.md round 78 |
 | Container open/close cross-instance latency | Live-measured (2026-08-23, round 78): the real bottleneck was a release-packet bug (every close rode a 5s dead-host lease fallback) — fixed, CLOSE latency ~5.1s → ~290ms (~18x). `container_fast_pump` itself measured with no effect either way once fixed and stays OFF by default | container-sync.md §10 |
 | Mid-module movies (a script's own `PlayMovie`) | Live-verified, ON by default | [cinematics.md](docs/research/cinematics.md) §10.9 |
 | Item identity (stack/charges/upgrades) crossing the wire | Implemented; apply path not yet live-verified | [item-identity.md](docs/research/item-identity.md) |
@@ -222,9 +222,9 @@ Both players, each in their own full game:
   measured at 0 ms of self-reported content latency after opening across every run of a
   2026-08-21 A/B (`docs/research/dialogue-join-latency.md`'s "Live A/B" section), because a
   joiner already standing near the NPC resolves through this mod's fast **adopt** path rather
-  than a slower cross-instance replay. `dialogue_fast_join` (off by default; targets a
-  *distance* join, where the joiner has to be walked in before their own dialogue opens) is
-  still unverified live for that specific path — the same doc's honest account of what this
+  than a slower cross-instance replay. `dialogue_fast_join` (ON by default since 2026-08-23 —
+  see the skip-desync bullet below; targets a *distance* join, where the joiner has to be
+  walked in before their own dialogue opens) is still unverified live for that specific path — the same doc's honest account of what this
   rig's fixed player-adjacent-to-NPC setup could and couldn't exercise. A 2026-08-22 pass ran
   the proper repeated A/B (`tools\dlgjoinlatency.ps1`, several runs per arm) on a genuine
   14 m far join with `dialogue_join_teleport=1` active, and found the same null result with
@@ -288,8 +288,11 @@ Both players, each in their own full game:
   follower — three transitions in 55-70ms produced exactly one follower drive, the two nodes in
   between (their line, VO and lipsync) never delivered at all (H2), the reported symptom
   reproduced on demand. `dialogue_fast_join=1` closes the gap completely in a direct A/B against
-  the identical burst shape — a real, decisive fix candidate, recommended but not yet the
-  shipped default. See docs/research/dialogue-skip-desync.md's 2026-08-23 "Round 79" section.
+  the identical burst shape — a real, decisive fix, unlike `party_fast_pump`/`container_fast_pump`
+  (both measured with no benefit and left off). **Flipped to the shipped default the same day**:
+  a real content-loss bug with a live-measured, zero-regression fix clears a higher bar than a
+  latency tweak with unproven upside. `dialogue_fast_join=0` reverts to the old cadence. See
+  docs/research/dialogue-skip-desync.md's 2026-08-23 "Round 79" section.
 - **Scripted scenes play out the same on both screens**: cutscene actors and story NPCs
   replicate their positions, stances and movements, while staying exempt from the combat
   channel — the module decides who is un-killable, not the session.

@@ -658,6 +658,17 @@ shipped default — left at `0` in the template itself (a default flip is a broa
 diagnostic round should make unilaterally) and reverted back to `0` on both rig installs before
 tear-down, matching the shipped default a fresh install would get.
 
+**Update, same day, made by the coordinator with the full session's context**: flipped
+`dialogue_fast_join` to `1` in `profiles/coop.ini.example`, `CoopConfig.DialogueFastJoin`'s
+default (and its "key absent" parse behaviour, matching `dialogue_item_sync`'s existing
+pattern), `AgentSettings.DialogueFastJoin`'s default, and `Program.cs`'s no-config fallback —
+all four sites a real install can reach. Unlike `party_fast_pump`/`container_fast_pump` (each
+measured twice with no benefit and left off), this closes a real, live-measured content-loss
+bug with a direct A/B showing zero regression on the identical repro — a materially different
+evidence bar than "a latency tweak with unproven upside," which is what made those two stay off
+and this one a reasonable default-flip candidate on its own record. Full suite (1635/1635) and
+both builds reconfirmed clean after the flip.
+
 What remains, honestly:
 
 - **The verb's own authority model is deliberately minimal** — no `CheatAuthority` gate, matching
@@ -674,7 +685,8 @@ What remains, honestly:
   navigation aid, not a shipped feature verb; a future script using it should pace commits with a
   real wait (as this round's own working sequences did), unlike `skipline`, which is safe to fire
   as fast as the caller can manage.
-- **`dialogue_fast_join=1` is a recommendation, not a shipped default flip** — see above.
+- ~~**`dialogue_fast_join=1` is a recommendation, not a shipped default flip**~~ — flipped
+  the same day; see the update above.
 - The fastest cadence this round could produce (~15-16ms, bounded by the game's own frame rate)
   is very likely close to the fastest ANY mechanism — human or automated — could ever make this
   engine advance, since the engine itself only processes one `UpdateDialog` tick per frame. The
