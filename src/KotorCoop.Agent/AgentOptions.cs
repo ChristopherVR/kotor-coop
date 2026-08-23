@@ -86,6 +86,16 @@ public sealed record AgentOptions
     public int Phantoms { get; init; } = 4;
 
     /// <summary>
+    /// DEBUG ONLY: overrides <c>KotorGameBridge</c>'s built-in 32-creature enemy-census
+    /// truncation to something smaller, so a live test can exercise the creature-liveness
+    /// reconciliation channel's "beyond the census cap" path (docs/research/creature-liveness.md
+    /// item 1) in an ordinary module without needing one that legitimately places 33+
+    /// creatures. 0 (default) keeps the built-in 32 — no behaviour change unless a session
+    /// explicitly opts in via <c>--enemy-census-cap</c>.
+    /// </summary>
+    public int EnemyCensusCap { get; init; }
+
+    /// <summary>
     /// Optional path the agent watches for a drop request. Writing a blueprint resref into
     /// this file (or touching it empty to use the built-in cycle) drops that item at the
     /// player's feet and deletes the file. Exists because the dashboard's D key needs an
@@ -194,6 +204,7 @@ public sealed record AgentOptions
         int loadSave = 0;
         bool useKotorBridge = false;
         int phantoms = 4;
+        int enemyCensusCap = 0;
         bool filterByModule = true;
         bool followHostModule = true;
         bool loadViaMenuClicks = false;
@@ -331,6 +342,19 @@ public sealed record AgentOptions
                         : phantoms;
                     break;
 
+                case "--enemy-census-cap":
+                    // DEBUG ONLY (docs/research/creature-liveness.md §"why 32 already covers
+                    // this some other way"): lowers the enemy-census truncation
+                    // (KotorGameBridge.BlockEnemyCapacity, 32) so a small, ordinary module can
+                    // be pushed past the cap without needing real content that places 33+
+                    // creatures. 0 (default) keeps the built-in 32. Clamped to at least 1 so a
+                    // mistyped 0 here cannot be confused with "unset" and silently publish an
+                    // empty census.
+                    enemyCensusCap = int.TryParse(Next(), out int parsedCap) && parsedCap > 0
+                        ? Math.Clamp(parsedCap, 1, 32)
+                        : enemyCensusCap;
+                    break;
+
                 default:
                     Console.Error.WriteLine($"Unknown argument '{arg}'.");
                     return new AgentOptions { Command = AgentCommand.Help };
@@ -362,6 +386,7 @@ public sealed record AgentOptions
             LoadSave = loadSave,
             UseKotorBridge = useKotorBridge,
             Phantoms = phantoms,
+            EnemyCensusCap = enemyCensusCap,
             FilterByModule = filterByModule,
             FollowHostModule = followHostModule,
             LoadViaMenuClicks = loadViaMenuClicks,

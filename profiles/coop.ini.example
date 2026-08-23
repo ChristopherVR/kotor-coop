@@ -261,10 +261,14 @@ dialogue_join_teleport=1
 # not availability itself - see its own comment). Because K1's nine companion slots are a
 # fixed, game-defined mapping identical on both installs, the peer's availability bit is
 # ALREADY on the wire every tick (party_roster_sync's own channel); this just acts on it,
-# poking the same flag locally instead of only logging "recruitment does not replicate".
-# OFF by default - NEEDS-LIVE: docs/research/dialogue-consequences.md SS4.2's open risk is
-# whether the bare flag is enough for the engine to spawn a body afterwards, or whether
-# AddAvailableNPCByTemplate also records a second association this raw poke does not touch.
+# recruiting the same slot locally through the engine's own AddAvailableNPCByTemplate call
+# (Odyssey.AddAvailableNpcByTemplate) instead of only logging "recruitment does not replicate".
+# An earlier build here poked the availability flag directly instead of calling the engine -
+# docs/research/party-reconciliation.md Round 75 live-confirmed that alone is NOT enough (the
+# subsequent spawn has nothing to build from). OFF by default - NEEDS-LIVE:
+# docs/research/dialogue-consequences.md SS4.2's remaining open risk is the per-slot NPC ->
+# template mapping this now calls through, live-confirmed for only one of nine slots so far
+# (slot 2 = Carth).
 dialogue_recruit_sync=0
 
 # Whether a host's own SessionSaveWatch edge (roadmap item 14 phase 1) actually disconnects
