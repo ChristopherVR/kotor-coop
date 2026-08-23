@@ -404,3 +404,112 @@ other-client relay and the self-echo filter over actual loopback UDP. No test ex
 plugin's native code (`CheatController.GiveLoot`'s new branch, `Odyssey.TrySetSlotAvailable`,
 `PartyRosterController`'s poke) — that class of code has never had unit coverage in this
 codebase and needs the live rig, per every `NEEDS-LIVE` line above.
+
+## Round (2026-08-23) — the raw-poke risk settles NEGATIVE (already live-confirmed elsewhere),
+## and `Odyssey.AddAvailableNpcByTemplate` replaces it
+
+Task: check whether `dialogue_recruit_sync`'s flag poke is actually sufficient for the engine to
+spawn/add a companion on a peer's screen — §4.2 item 1's own headline risk, still open per the
+prior section. Two things settle it, one already in the repo and one new this round:
+
+**Already settled, just not folded back into this document.**
+`docs/research/party-reconciliation.md` Round 75 (2026-08-23, same day, a different task) built
+`CheatKindRecruit`/`recruit <slot>` — a dev-only console verb that runs the EXACT sequence
+`PartyRosterController.Reconcile()` runs behind `dialogue_recruit_sync`: `TrySetSlotAvailable`,
+then `SpawnAvailableNpc`, then `AddPartyMemberBySlot`. Live result: **`SpawnAvailableNpc` refuses
+every time** ("spawn failed, failure 0" — a genuine engine refusal). Round 75's own words: "a bare
+availability poke does not carry the BLUEPRINT `AddAvailableNPCByTemplate` also records, which
+settles `TrySetSlotAvailable`'s own long-standing NEEDS-LIVE question: the flag alone is *not*
+enough." That IS this document's §4.2 item 1, closed, in the negative — it just was not recorded
+here because the two rounds were tracking different bugs (Trask's follow-AI) and happened to reuse
+the same primitive as a staging tool.
+
+**New this round: the disassembled ROOT CAUSE, from static analysis of the GOG `swkotor.exe`
+(`tools/disasm.py`, `tools/kotor1_0_3.db`, no live game touched).** `Odyssey.SpawnAvailableNpc`
+calls `CSWPartyTable::GetNPCObject` (`0x00564700`), which:
+1. Refuses unless `table+0x30+slot*4` (the availability flag) is non-zero — the ONE thing the raw
+   poke sets correctly.
+2. Reads the cached object-id slot (`table+0x0C+slot*4`, `PartyObjectIds`). If it is not the
+   sentinel `0x7F000000` (`OBJECT_INVALID`), it resolves that cached object directly.
+3. **If it IS still the sentinel — the raw poke never touches this array, so it always is —
+   `GetNPCObject` rebuilds from a resource literally named `"AVAILNPC%d"`** (the format string at
+   `0x007490B4`, VERIFIED by reading the string straight out of the image; built via
+   `CSWPartyTable::GetFilename` `0x00563620`, which formats it purely from the slot index). This
+   is a per-slot RUNTIME CACHE of that companion's off-stage character sheet, populated as a side
+   effect of a real recruit (`CSWPartyTable::AddNPC_2`/`AddNPC`, see below) — not a static
+   resource shipped in `chitin.key`/`templates.bif`. A slot the raw poke marks available has never
+   had this cache populated on THIS instance, so `LoadFromTemplate` (`0x005026D0`, the same load
+   call `docs/re/spawn.md`'s own `CreateObject` trace documents) has nothing to open, the
+   freshly-allocated object is deleted, and `GetNPCObject` returns nothing — exactly matching
+   Round 75's live "spawn failed, failure 0".
+
+**The fix, matching §4.2 item 2's own fallback recommendation, now built with real addresses
+instead of "not traced this pass":** `Odyssey.AddAvailableNpcByTemplate(slot)` calls
+`CSWPartyTable::AddNPC_2(int nNPC, CExoString* sTemplate)` (`0x005645F0`) directly — the same
+function `CSWVirtualMachineCommands::ExecuteCommandAddAvailableNPCByTemplate` (`0x0052DCD0`, the
+NWScript `AddAvailableNPCByTemplate` handler itself) calls, VERIFIED by disassembling its call
+site (`0x0052DD65`). It builds a fresh off-stage creature straight from the STORY blueprint
+resref (e.g. `p_carth`) via the SAME `LoadFromTemplate` path — no dependency on the `AVAILNPC%d`
+cache at all — then calls `CSWPartyTable::AddNPC` (`0x00564300`) on it, which sets the
+availability flag AND runs the bookkeeping the raw poke skipped entirely:
+`CSWSFaction::AddMember` (`0x005BFA70`, faction membership — low practical risk, since
+`docs/re/spawn.md`'s own parse of `p_carth` already shows `FactionID=2=Friendly_1` baked into the
+blueprint independent of this call) and `CSWPartyTable::TransferInventory` (`0x005641E0`, merges
+starting inventory into the party pool — also run a second time by `AddMember` itself when the
+body is added to the active party, so redundant rather than missing if this call is ever skipped).
+`PartyRosterController.Reconcile()` now calls this instead of `TrySetSlotAvailable` behind
+`dialogue_recruit_sync`, and — since it hands back a live object id directly — adds the companion
+to the party in the SAME pass rather than waiting on a separate spawn pass.
+`Odyssey.TrySetSlotAvailable` itself is UNCHANGED and still used by `CheatController.Recruit`
+(Round 75's own dev primitive), where the documented engine refusal and its tag-lookup fallback
+are the point, not a defect.
+
+**What is still NEEDS-LIVE, narrowed from "does the flag do anything" to one specific,
+independently checkable fact:** the per-slot NPC-id → template-resref mapping
+(`Odyssey.PartyRosterTemplates`, standard nwscript.nss order: Bastila, Canderous, Carth, HK-47,
+Jolee, Juhani, Mission, T3-M4, Zaalbar). Every resref is individually confirmed to exist in
+`templates.bif` (`docs/re/spawn.md` §4, VERIFIED), and slot 2 = Carth is independently
+live-confirmed (Round 75's own `recruit 2 carth` succeeded, and `ConsoleCommand.ParseRecruit`'s
+comment says the same). The other eight slots are NOT independently re-derived from this repo's
+own decompilation pipeline (no `.dlg`/`.ncs` decompiler wired up here) — a wrong entry would spawn
+the WRONG companion rather than fail outright, which is exactly what the live-test plan below
+checks for directly.
+
+### Live-test plan
+
+Fastest reachable recruitment for a clean two-instance check: **Carth on the Endar Spire**
+(`k_hcar_dialog`, the very first companion the game hands over, reachable within a minute of a
+fresh start, no travel). Steps:
+
+1. Both instances on the SAME fresh save, at or just before the point Carth is recruited (the
+   Endar Spire escape, before the two players split up). `dialogue_recruit_sync=1` and
+   `party_roster_sync=1` (default) on BOTH `coop.ini`s.
+2. Player A runs the recruitment conversation with Carth to completion (A is the OWNER of that
+   conversation). Do not have B in the same conversation.
+3. Watch B's plugin log for, within one `PartyRosterController` pass (`IntervalFrames=30`, well
+   under a second): `party roster: recruited NPC slot 2 as 0x... from its own template (peer
+   recruited ..., here ...) - dialogue_recruit_sync; adding them to the party now`, immediately
+   followed by `party roster: added NPC slot 2 (object 0x...) to the party`. Absence of the first
+   line (or a `party roster: could not recruit NPC slot 2 from its own template ... engine call
+   refused` line instead) means `AddNPC_2` itself refused — check `PartyRosterStatus` (written
+   `200` on this specific refusal) and re-open the "is the flag/call enough" question with a live
+   debugger, since static analysis would then have missed something.
+4. **The identity check the mapping needs**: on B's own screen, does the newly-added party member
+   actually look like, and portrait as, Carth — not some other companion? This is the one thing
+   this round's static analysis could not settle (only slot 2 = Carth is independently confirmed;
+   every other slot's template is unverified against the real `.dlg`/`.ncs` content). If the wrong
+   companion appears, `Odyssey.PartyRosterTemplates`'s ordering is wrong and needs correcting
+   against a real `.ncs` decompile per §4.2 item 2's own original method, not guessed again.
+5. Confirm on B: open the party/character sheet for the new companion — does it have a real
+   inventory (not empty), a plausible level/HP, and is it controllable/selectable the way a
+   normally-recruited companion is? This exercises the `TransferInventory`/`AddMember` bookkeeping
+   path.
+6. Confirm faction correctness the cheap way: have B's own hostiles (if any are nearby) NOT
+   attack the newly-added Carth, and have Carth not attack B's own player character. This is the
+   one piece of `AddNPC`'s bookkeeping (`CSWSFaction::AddMember`) `AddNPC_2` DOES run (unlike the
+   old raw poke), so it is expected to be fine, but is cheap enough to eyeball while already there.
+7. Repeat with a second companion from a DIFFERENT part of the mapping (e.g. Bastila, slot 0, or
+   Mission, slot 6) to get a second independently-confirmed mapping entry beyond Carth.
+
+If steps 3-6 all pass for two slots, `dialogue_recruit_sync` can default ON with high confidence;
+if step 4 fails for one slot, only that slot's template entry needs fixing, not the mechanism.

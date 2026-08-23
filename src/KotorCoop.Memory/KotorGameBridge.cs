@@ -867,13 +867,31 @@ public sealed class KotorGameBridge : IGameBridge
 
     public nint PluginBlockAddress => _pluginBlock;
 
-    public KotorGameBridge(ProcessMemory memory, int maxPhantoms = 4, bool ownsMemory = true)
+    public KotorGameBridge(
+        ProcessMemory memory, int maxPhantoms = 4, bool ownsMemory = true, int enemyCensusCap = 0)
     {
         _memory = memory;
         _maxPhantoms = maxPhantoms;
         _ownsMemory = ownsMemory;
         _globals = new GlobalVariableTable(memory);
+
+        // DEBUG ONLY (docs/research/creature-liveness.md item 1, AgentOptions.EnemyCensusCap's
+        // own doc comment): 0/out-of-range keeps the built-in BlockEnemyCapacity untouched —
+        // this can only ever LOWER the cap, never raise it past what the fixed-size SharedBlock
+        // region actually holds.
+        _enemyCensusCap = enemyCensusCap is > 0 and <= BlockEnemyCapacity
+            ? enemyCensusCap
+            : BlockEnemyCapacity;
     }
+
+    /// <summary>See the constructor's <c>enemyCensusCap</c> parameter. Read by
+    /// <see cref="ReadEnemies"/> in place of <see cref="BlockEnemyCapacity"/> when set below the
+    /// built-in 32, so a live test can push an ordinary module's population past the count the
+    /// combat census actually carries without needing real content that places 33+ creatures.
+    /// <see cref="TryWriteEnemies"/>'s own wire write stays bounded by
+    /// <see cref="BlockEnemyCapacity"/> regardless — the SharedBlock region has exactly 32
+    /// physical slots, and this can only ever select FEWER of them, never more.</summary>
+    private readonly int _enemyCensusCap;
 
     public string Description =>
         $"KOTOR [pid {_memory.ProcessId}] player={(_player is null ? "?" : $"0x{_player.Address:X}")} "
@@ -4731,7 +4749,11 @@ public sealed class KotorGameBridge : IGameBridge
             ? (a.Fighting ? -1 : 1)
             : a.DistanceSquared.CompareTo(b.DistanceSquared));
 
-        int count = Math.Min(candidates.Count, BlockEnemyCapacity);
+        // _enemyCensusCap, not BlockEnemyCapacity directly: normally the same 32, but a debug
+        // session can lower it (AgentOptions.EnemyCensusCap) to exercise the "beyond the cap"
+        // shedding this truncation performs without needing a module that legitimately places
+        // 33+ creatures. See _enemyCensusCap's own doc comment.
+        int count = Math.Min(candidates.Count, _enemyCensusCap);
         for (int i = 0; i < count; i++)
         {
             enemies.Add(candidates[i].State);

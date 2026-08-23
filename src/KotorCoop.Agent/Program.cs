@@ -454,7 +454,8 @@ internal static class Program
     {
         if (options.UseKotorBridge)
         {
-            KotorGameBridge kotor = new(memory, options.Phantoms, ownsMemory: false);
+            KotorGameBridge kotor = new(
+                memory, options.Phantoms, ownsMemory: false, options.EnemyCensusCap);
             resolved = kotor.TryResolve(out diagnostic);
 
             // Co-op means at most one of the two windows is focused, and KOTOR pauses the

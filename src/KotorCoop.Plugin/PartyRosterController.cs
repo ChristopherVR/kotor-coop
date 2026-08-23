@@ -34,10 +34,16 @@ namespace KotorCoop.Plugin;
 /// Behind <c>dialogue_recruit_sync=1</c> (docs/research/dialogue-consequences.md §4.2), the
 /// exception: since K1's nine companion slots are a fixed, game-defined mapping identical on
 /// both installs, the ALREADY-broadcast <c>hostAvailable</c> mask is itself sufficient — no
-/// blueprint needed — so a peer's extra bit is poked directly onto this instance's own party
-/// table (<see cref="Odyssey.TrySetSlotAvailable"/>) instead of only logged. OFF by default:
-/// whether the bare flag is enough for <c>SpawnAvailableNpc</c> to resolve a template
-/// afterward is the design doc's own NEEDS-LIVE risk, not yet confirmed.
+/// wire payload needed — to recruit a peer's extra slot locally through the real engine call
+/// (<see cref="Odyssey.AddAvailableNpcByTemplate"/>) instead of only logging it. OFF by
+/// default: an EARLIER build here poked the availability flag directly
+/// (<see cref="Odyssey.TrySetSlotAvailable"/>), which docs/research/party-reconciliation.md
+/// Round 75 live-confirmed insufficient on its own (the subsequent spawn has nothing to build
+/// from — see that method's own doc comment for the disassembled root cause);
+/// <see cref="Odyssey.AddAvailableNpcByTemplate"/> replaced it, going through the same STORY
+/// template the engine's own recruitment conversations use, but the per-slot template MAPPING
+/// it relies on is cross-checked against only one live data point (slot 2 = Carth) — the
+/// remaining eight need a live check before this defaults on.
 ///
 /// Kill switch: <c>party_roster_sync=0</c> in coop.ini.
 /// </summary>
@@ -46,14 +52,12 @@ internal sealed unsafe class PartyRosterController(SharedBlockView block)
     private readonly bool _enabled = PluginConfig.ReadBool("party_roster_sync", true);
 
     /// <summary>
-    /// Whether an availability bit the peer has and this instance lacks is POKED directly
-    /// (<see cref="Odyssey.TrySetSlotAvailable"/>) rather than only logged and skipped —
-    /// docs/research/dialogue-consequences.md §4.2. OFF by default: the design doc's own
-    /// biggest open risk is whether the bare flag is enough for <c>SpawnAvailableNpc</c> to
-    /// resolve a template afterward, or whether <c>AddAvailableNPCByTemplate</c> also records a
-    /// second association elsewhere in the table that a raw flag poke does not touch — NEEDS
-    /// the live check that doc names before this should default on. coop.ini
-    /// <c>dialogue_recruit_sync</c>.
+    /// Whether an availability bit the peer has and this instance lacks is RECRUITED locally
+    /// through the real engine call (<see cref="Odyssey.AddAvailableNpcByTemplate"/>) rather than
+    /// only logged and skipped — docs/research/dialogue-consequences.md §4.2. OFF by default:
+    /// <see cref="Odyssey.AddAvailableNpcByTemplate"/>'s own doc comment names the one remaining
+    /// open risk (the per-slot template mapping is live-confirmed for only one of nine slots).
+    /// coop.ini <c>dialogue_recruit_sync</c>.
     /// </summary>
     private readonly bool _pokeAvailability = PluginConfig.ReadBool("dialogue_recruit_sync", false);
 
@@ -327,75 +331,98 @@ internal sealed unsafe class PartyRosterController(SharedBlockView block)
         }
 
         int addSlot = LowestSlot(toAdd);
+        uint objectId;
 
         // Not recruited here. Ordinarily the documented boundary of the channel: availability
         // comes from the recruitment conversation running on this instance too, and nothing in
         // the roster records the blueprint that would let us synthesise it (party table +0x30
-        // is a bare 1, written at 0x00564350). Behind dialogue_recruit_sync, poke the flag
-        // directly instead of giving up — docs/research/dialogue-consequences.md §4.2: K1's
-        // nine companion slots are a fixed, game-defined mapping (slot -> blueprint is baked
-        // into nwscript.nss and identical on both installs), so the party-roster channel
-        // ALREADY carries the one bit that matters (hostAvailable, on the wire every tick);
-        // the only missing step was acting on a bit the peer has that we do not.
+        // is a bare 1, written at 0x00564350). Behind dialogue_recruit_sync, recruit through the
+        // real engine call instead of giving up — docs/research/dialogue-consequences.md §4.2:
+        // K1's nine companion slots are a fixed, game-defined mapping (slot -> blueprint is
+        // baked into nwscript.nss and identical on both installs), so the party-roster channel
+        // ALREADY carries the one bit that matters (hostAvailable, on the wire every tick); the
+        // only missing step was acting on a bit the peer has that we do not.
         if ((localAvailable & (1u << addSlot)) == 0)
         {
-            if (_pokeAvailability && Odyssey.TrySetSlotAvailable(addSlot))
+            if (!_pokeAvailability)
             {
-                PluginHost.Log($"party roster: poking NPC slot {addSlot} available locally "
-                    + $"(peer recruited 0x{hostAvailable:X3}, here 0x{localAvailable:X3}) — "
-                    + "dialogue_recruit_sync; falls through to spawn+add next pass if it took");
+                if ((_unavailableLogged & (1u << addSlot)) == 0)
+                {
+                    _unavailableLogged |= 1u << addSlot;
+                    PluginHost.Log($"party roster: a peer has NPC slot {addSlot} in its party, but that "
+                        + "companion was never recruited here — recruitment does not replicate "
+                        + $"(peer recruited 0x{hostAvailable:X3}, here 0x{localAvailable:X3})");
+                }
+
                 return;
             }
 
-            if ((_unavailableLogged & (1u << addSlot)) == 0)
-            {
-                _unavailableLogged |= 1u << addSlot;
-                PluginHost.Log($"party roster: a peer has NPC slot {addSlot} in its party, but that "
-                    + "companion was never recruited here — recruitment does not replicate "
-                    + $"(peer recruited 0x{hostAvailable:X3}, here 0x{localAvailable:X3})");
-            }
-
-            return;
-        }
-
-        // AddPartyMember needs a LIVE object: AddMember resolves the id through
-        // CServerExoApp::GetGameObject at 0x00565666 and refuses one that does not resolve. A
-        // recruited companion who has never been in the party here has no body, so put one in
-        // the world first — the same pair the game's own party-selection screen performs
-        // (CSWGuiPartySelection::AcceptParty: SpawnNPC 0x006BE90C, then AddMember 0x006BEA25).
-        uint objectId = Odyssey.GetPartyRosterObjectId(addSlot);
-        if (objectId is 0 or Odyssey.ObjectInvalid
-            || Odyssey.ResolveServerObject(objectId) == 0)
-        {
-            // Fresh engine resolve — the block's copy is agent-written and stale through a
-            // module transition (see the EncounterController travel-follow crash).
-            nint player = Odyssey.GetPlayerCreaturePointer();
-            if (player == 0)
-            {
-                return;
-            }
-
-            objectId = Odyssey.SpawnAvailableNpc(addSlot, Odyssey.GetPosition(player), out int spawnFailure);
+            // Odyssey.AddAvailableNpcByTemplate — NOT Odyssey.TrySetSlotAvailable's raw poke,
+            // which docs/research/party-reconciliation.md Round 75 live-confirmed insufficient
+            // (SpawnAvailableNpc has nothing to spawn from afterward; see
+            // TrySetSlotAvailable's own doc comment for the disassembled root cause). This goes
+            // through the real per-slot STORY template instead, which does not depend on the
+            // same resource, and hands back a live object directly — no separate spawn step.
+            objectId = Odyssey.AddAvailableNpcByTemplate(addSlot);
             if (objectId is 0 or Odyssey.ObjectInvalid)
             {
-                block.PartyRosterStatus = (uint)(100 + spawnFailure);
-                PluginHost.Log($"party roster: could not spawn NPC slot {addSlot} "
-                    + $"(failure {spawnFailure}); the add is deferred to the next pass");
+                block.PartyRosterStatus = 200;
+                PluginHost.Log($"party roster: could not recruit NPC slot {addSlot} from its own "
+                    + $"template (peer recruited 0x{hostAvailable:X3}, here 0x{localAvailable:X3}) "
+                    + "- dialogue_recruit_sync's engine call refused; retrying next pass");
                 return;
             }
 
-            // Deliberately falls through to the add in the SAME pass. A spawned companion that
-            // is not yet in the party is an ordinary loose creature — the pre-store flush does
-            // not know about it and SaveCreatures does not skip it (only the in-party flag at
-            // +0xA88 buys that exemption) — so the window between the two calls is kept to zero
-            // rather than a half second.
-            //
-            // ⚠ If the add still fails, the body is NOT destroyed and NOT re-spawned. SpawnNPC
-            // has already written the new id into party table +0x0C, so the next pass resolves
-            // it and goes straight to the add. That bounds the damage at one orphaned body per
-            // slot for one pass; destroying it instead would leave the table pointing at a
-            // creature that no longer exists, which is the worse of the two.
-            PluginHost.Log($"party roster: spawned NPC slot {addSlot} as 0x{objectId:X} to add them here");
+            PluginHost.Log($"party roster: recruited NPC slot {addSlot} as 0x{objectId:X} from its "
+                + $"own template (peer recruited 0x{hostAvailable:X3}, here 0x{localAvailable:X3}) "
+                + "- dialogue_recruit_sync; adding them to the party now");
+
+            // Deliberately falls through to the add below in the SAME pass — the same reasoning
+            // as the ordinary spawn+add fallthrough further down: a recruited-but-not-yet-in-party
+            // body is an ordinary loose creature until AddPartyMemberBySlot runs, so the window
+            // between the two calls is kept to zero rather than a half second.
+        }
+        else
+        {
+            // AddPartyMember needs a LIVE object: AddMember resolves the id through
+            // CServerExoApp::GetGameObject at 0x00565666 and refuses one that does not resolve. A
+            // recruited companion who has never been in the party here has no body, so put one in
+            // the world first — the same pair the game's own party-selection screen performs
+            // (CSWGuiPartySelection::AcceptParty: SpawnNPC 0x006BE90C, then AddMember 0x006BEA25).
+            objectId = Odyssey.GetPartyRosterObjectId(addSlot);
+            if (objectId is 0 or Odyssey.ObjectInvalid
+                || Odyssey.ResolveServerObject(objectId) == 0)
+            {
+                // Fresh engine resolve — the block's copy is agent-written and stale through a
+                // module transition (see the EncounterController travel-follow crash).
+                nint player = Odyssey.GetPlayerCreaturePointer();
+                if (player == 0)
+                {
+                    return;
+                }
+
+                objectId = Odyssey.SpawnAvailableNpc(addSlot, Odyssey.GetPosition(player), out int spawnFailure);
+                if (objectId is 0 or Odyssey.ObjectInvalid)
+                {
+                    block.PartyRosterStatus = (uint)(100 + spawnFailure);
+                    PluginHost.Log($"party roster: could not spawn NPC slot {addSlot} "
+                        + $"(failure {spawnFailure}); the add is deferred to the next pass");
+                    return;
+                }
+
+                // Deliberately falls through to the add in the SAME pass. A spawned companion that
+                // is not yet in the party is an ordinary loose creature — the pre-store flush does
+                // not know about it and SaveCreatures does not skip it (only the in-party flag at
+                // +0xA88 buys that exemption) — so the window between the two calls is kept to zero
+                // rather than a half second.
+                //
+                // ⚠ If the add still fails, the body is NOT destroyed and NOT re-spawned. SpawnNPC
+                // has already written the new id into party table +0x0C, so the next pass resolves
+                // it and goes straight to the add. That bounds the damage at one orphaned body per
+                // slot for one pass; destroying it instead would leave the table pointing at a
+                // creature that no longer exists, which is the worse of the two.
+                PluginHost.Log($"party roster: spawned NPC slot {addSlot} as 0x{objectId:X} to add them here");
+            }
         }
 
         if (Odyssey.AddPartyMemberBySlot(addSlot, objectId, out int addFailure))

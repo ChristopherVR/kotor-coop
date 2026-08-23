@@ -11150,17 +11150,34 @@ internal static unsafe class Odyssey
 
     /// <summary>
     /// Raw-pokes this instance's own availability flag for one NPC slot — the write half of
-    /// <see cref="TryReadPartyRoster"/>'s read, used only by the dialogue recruitment-sync path
-    /// (docs/research/dialogue-consequences.md §4.2, coop.ini <c>dialogue_recruit_sync</c>).
+    /// <see cref="TryReadPartyRoster"/>'s read.
     ///
     /// Mirrors the literal store <c>AddAvailableNPCByTemplate</c> performs at the same offset
     /// (<c>*(int*)(table + PartyAvailable + slot*4) = 1</c> at <c>0x00564350</c> — VERIFIED, the
     /// same evidence <see cref="PartyAvailable"/>'s own doc comment already cites:
-    /// <c>AddMember</c>/<c>RemoveMember</c> testing this exact array for a zero entry). What is
-    /// **NEEDS-LIVE**, per the design doc's own biggest open risk, is whether the flag ALONE is
-    /// enough for <see cref="SpawnAvailableNpc"/> to resolve a template afterward, or whether
-    /// <c>AddAvailableNPCByTemplate</c> also records a second association elsewhere in the
-    /// table that this raw poke does not touch.
+    /// <c>AddMember</c>/<c>RemoveMember</c> testing this exact array for a zero entry). **The
+    /// flag ALONE is NOT enough for <see cref="SpawnAvailableNpc"/> to resolve a template
+    /// afterward — LIVE-CONFIRMED, not just NEEDS-LIVE**: docs/research/party-reconciliation.md
+    /// Round 75's <c>CheatKindRecruit</c> dev primitive runs exactly this poke, then
+    /// <see cref="SpawnAvailableNpc"/>, and the spawn refuses every time ("spawn failed, failure
+    /// 0" — a genuine engine refusal, not a plumbing bug). Root cause, from this round's own
+    /// disassembly of <c>CSWPartyTable::GetNPCObject</c> (0x00564700, <see cref="SpawnAvailableNpc"/>'s
+    /// own resolver): when the cached object-id slot (<see cref="PartyObjectIds"/>) still holds
+    /// its default sentinel (0x7F000000, OBJECT_INVALID), it rebuilds from a resource literally
+    /// named <c>"AVAILNPC%d"</c> (the format string at 0x007490B4, read via
+    /// <c>CSWPartyTable::GetFilename</c> 0x00563620) — a per-slot SAVE-GAME CACHE of that
+    /// companion's off-stage character sheet, only ever populated as a side effect of a real
+    /// <c>AddNPC_2</c>/<c>AddNPC</c> call (see <see cref="AddAvailableNpcByTemplate"/>), never by
+    /// this raw poke. A slot this raw poke marks available therefore has no "AVAILNPC&lt;N&gt;"
+    /// resource to rebuild from and <see cref="SpawnAvailableNpc"/> has nothing to spawn.
+    /// <see cref="AddAvailableNpcByTemplate"/> is the fix used by the dialogue recruitment-sync
+    /// path now (docs/research/dialogue-consequences.md §4.2, coop.ini
+    /// <c>dialogue_recruit_sync</c>): it goes through the real STORY template resref instead
+    /// (which does not depend on that cache at all), the same way the engine's own recruitment
+    /// conversations do. This raw poke is kept only for
+    /// <see cref="CheatController.Recruit"/>'s dev-only test primitive, where the documented
+    /// engine refusal — and its own tag-lookup fallback against an already-placed body — is the
+    /// point.
     /// </summary>
     public static bool TrySetSlotAvailable(int slot)
     {
@@ -11172,6 +11189,98 @@ internal static unsafe class Odyssey
 
         *(int*)(table + PartyAvailable + (slot * 4)) = 1;
         return true;
+    }
+
+    // CSWPartyTable::AddNPC_2(int nNPC, CExoString* sTemplate) -> object oCreature. VERIFIED by
+    // disassembly this round: CSWVirtualMachineCommands::ExecuteCommandAddAvailableNPCByTemplate
+    // (0x0052DCD0, the NWScript AddAvailableNPCByTemplate handler) pops an int then a CExoString
+    // (StackPopInteger 0x005D1000, StackPopString 0x005D1080), resolves the party table via
+    // CServerExoApp::GetPartyTable (0x004AEE70), and calls exactly this function
+    // (0x0052DD65 -> 0x005645F0) with (nNPC, &sTemplate). Internally: refuses if the slot is
+    // already available (same +0x30 guard TrySetSlotAvailable's own poke sets); otherwise
+    // allocates sizeof(CSWSCreature)=0xAC8 (Global::operator_new_2 0x006FA7E6), constructs it
+    // (CSWSCreature::Constructor-equivalent 0x004F7A10), builds a CResRef from the template
+    // string (0x00406D60) and loads the blueprint via CSWSCreature::LoadFromTemplate (0x005026D0
+    // — the SAME load path docs/re/spawn.md's CreateObject trace uses, so any resref confirmed
+    // in templates.bif there works here), then calls CSWPartyTable::AddNPC (0x00564300) on the
+    // fresh object: sets the +0x30 flag AND runs the derived bookkeeping the raw poke skips —
+    // CSWSFaction::AddMember (0x005BFA70, faction membership; low-risk in practice since
+    // docs/re/spawn.md's own parse of a companion .utc (p_carth) already shows
+    // FactionID=2=Friendly_1 baked into the blueprint) and CSWPartyTable::TransferInventory
+    // (0x005641E0, merges starting inventory into the shared party pool — also run a second time
+    // by AddMember itself when the caller adds the body to the active party, so redundant, not
+    // missing, if this function is skipped). Returns the new object id, or 0/OBJECT_INVALID on
+    // refusal (bad slot, already available, or the template failed to resolve).
+    private static readonly delegate* unmanaged[Thiscall]<nint, int, byte*, uint> AddNpcByTemplateFn =
+        (delegate* unmanaged[Thiscall]<nint, int, byte*, uint>)0x005645F0;
+
+    /// <summary>
+    /// K1's nine companion slots are a fixed, game-defined mapping (the <c>NPC_*</c> constants in
+    /// nwscript.nss, identical on both installs since both run the same executable and game
+    /// data) to a fixed party-member blueprint. Order matches the standard nwscript.nss
+    /// declaration order (Bastila, Canderous, Carth, HK-47, Jolee, Juhani, Mission, T3-M4,
+    /// Zaalbar) — cross-checked against this project's own live-confirmed data point
+    /// (docs/research/party-reconciliation.md Round 75: <c>console 'recruit 2 carth'</c>
+    /// succeeded, confirming slot 2 = Carth) and <c>ConsoleCommand.ParseRecruit</c>'s own comment
+    /// ("Carth is slot 2"), but NOT independently re-derived from this repo's own decompilation
+    /// pipeline for the other eight (no .dlg/.ncs decompiler wired up here) — every resref is
+    /// individually confirmed present in <c>templates.bif</c> (docs/re/spawn.md §4, VERIFIED), so
+    /// a wrong mapping would spawn the WRONG companion rather than fail outright, which is
+    /// exactly what a live check must confirm before this is trusted for anything but slot 2. See
+    /// docs/research/dialogue-consequences.md §4.2.
+    /// </summary>
+    private static readonly string[] PartyRosterTemplates =
+    {
+        "p_bastilla", "p_cand", "p_carth", "p_hk47", "p_jolee",
+        "p_juhani", "p_mission", "p_t3m4", "p_zaalbar",
+    };
+
+    /// <summary>
+    /// Recruits NPC slot <paramref name="slot"/> the way the engine's own
+    /// <c>AddAvailableNPCByTemplate</c> does — <see cref="AddNpcByTemplateFn"/>'s own doc comment
+    /// has exactly what this buys over <see cref="TrySetSlotAvailable"/>'s raw poke it replaces
+    /// in <c>PartyRosterController</c> (that poke is LIVE-CONFIRMED insufficient — see
+    /// <see cref="TrySetSlotAvailable"/>'s own doc comment). Used by the dialogue
+    /// recruitment-sync path (docs/research/dialogue-consequences.md §4.2, coop.ini
+    /// <c>dialogue_recruit_sync</c>).
+    ///
+    /// Builds the CExoString with the engine's own constructor
+    /// (<see cref="CExoStringCtorFn"/>/<see cref="CExoStringDtorFn"/>, the same live-verified
+    /// pattern <see cref="SetControlText"/> and <see cref="PlayBark"/> already use) rather than
+    /// hand-laying the struct out, for the same reason those two do: getting the length
+    /// convention right by hand is a standing hazard this codebase avoids everywhere else.
+    ///
+    /// Returns the new object id, or 0/<see cref="ObjectInvalid"/> if the slot was out of range,
+    /// already available, or the template failed to resolve. MAIN THREAD ONLY.
+    /// </summary>
+    public static uint AddAvailableNpcByTemplate(int slot)
+    {
+        nint table = GetPartyTable();
+        if (table == 0 || slot is < 0 or >= PartyRosterSlots)
+        {
+            return 0;
+        }
+
+        byte* exoString = stackalloc byte[16];
+        for (int i = 0; i < 16; i++)
+        {
+            exoString[i] = 0;
+        }
+
+        string resref = PartyRosterTemplates[slot];
+        byte* templateName = stackalloc byte[32];
+        int count = resref.Length < 31 ? resref.Length : 31;
+        for (int i = 0; i < count; i++)
+        {
+            templateName[i] = (byte)resref[i];
+        }
+
+        templateName[count] = 0;
+
+        CExoStringCtorFn(exoString, templateName);
+        uint objectId = AddNpcByTemplateFn(table, slot, exoString);
+        CExoStringDtorFn(exoString);
+        return objectId;
     }
 
     /// <summary>This instance's spawned object id for an NPC slot, or 0 / OBJECT_INVALID when

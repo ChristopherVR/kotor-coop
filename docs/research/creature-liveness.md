@@ -646,3 +646,105 @@ dispatch regardless of population or module choice. The next concrete step is na
 either prior pass's own: instrument or directly test `LiveObjectGate.Confirm`
 (`EngineGlobals.TryResolveServerObject`) against a `DestroyObject`ed id specifically, to confirm
 or refute that reading before touching the reconcile controller itself.
+
+## Round (2026-08-23) — why "under 32" already covers this case some other way, and a debug
+## `--enemy-census-cap` built to make the KILL half of item 1 testable without new content
+
+Task: understand precisely why every module small enough to have been tested in "already covers
+this case some other way" while under the 32-slot census cap, and look for a way to make item 1
+(a creature beyond the cap, shed by distance) testable without needing a module that legitimately
+places 33+ creatures.
+
+### Why "under the cap" already covers it
+
+`KotorGameBridge.ReadEnemies` (the SAME scan `CombatController`'s ordinary real-time health/death
+mirroring runs off every tick, distinct from this channel's own uncapped
+`ReadCreatureLiveness`/`EnumerateCreatures` — see §1.1 above) truncates to `BlockEnemyCapacity`
+(32) creatures, prioritising in-combat first, then nearest-to-a-player. **Every creature that
+truncation KEEPS is already being health/death-mirrored by the ordinary channel, every tick,
+independent of this document's own reconcile path** — that is what "covers this case some other
+way" means concretely: with population ≤ cap, nothing is ever shed, so the ordinary channel alone
+already produces exact agreement, and `LivenessReconcileController`'s own Kill/Destroy dispatch
+never has a divergence to correct because one never opens in the first place. This is exactly what
+the two `tat_m20aa`/`END_M01AA` passes above measured directly (31 and fewer hostiles respectively,
+both under 32, both leaving the dispatch unexercised). It is **not** the same gap the third pass
+(`destroyobject`) found — that one is population-independent (the agent's own scan not noticing a
+`DestroyObject`ed body promptly) and would block the Destroy half of this channel even in a module
+that DID exceed 32. This round's own fix (below) only targets the population-gated half — an
+ordinary `slay` (`Odyssey.KillCreature`, HP -> 0) on a creature past the cap — which the third
+pass's own control case already showed the agent's scan DOES notice promptly (`census` dropped
+25 -> 24 within 3 seconds of a `slay`, unlike the `destroyobject` case).
+
+### Made testable: `--enemy-census-cap`, a debug-only agent CLI option
+
+Precedent checked first, per the task's own steer: `AgentOptions.Phantoms` (`-Phantoms N`,
+`KotorGameBridge`'s existing `maxPhantoms` constructor parameter) is the established pattern in
+this codebase for "an agent-side cap, normally a small built-in default, overridable per-session
+for testing" — a CLI option threaded through `Program.CreateBridge` into the bridge's own
+constructor, not a `coop.ini` key (that file is read by the PLUGIN process and the connect-flow
+`CoopConfig`, neither of which owns `KotorGameBridge` or its census truncation, which lives
+entirely in the out-of-process AGENT). `--enemy-census-cap` follows the identical shape:
+
+- `AgentOptions.EnemyCensusCap` (int, default `0` = "use the built-in 32"), parsed by
+  `--enemy-census-cap N`, clamped to `1..32` (never allowed to exceed the SharedBlock's actual
+  32-slot wire capacity — this can only ever LOWER the truncation, never raise it).
+- `KotorGameBridge`'s constructor takes an `enemyCensusCap` parameter (mirroring `maxPhantoms`'s
+  own shape exactly) and stores it as `_enemyCensusCap`, falling back to `BlockEnemyCapacity` (32)
+  when unset or out of range.
+- `ReadEnemies` truncates to `_enemyCensusCap` instead of `BlockEnemyCapacity` directly.
+  `TryWriteEnemies` (the actual wire write into the plugin's fixed-size SharedBlock region) is
+  UNCHANGED — it still bounds itself by the true `BlockEnemyCapacity`, which is always safe
+  since `_enemyCensusCap` can never exceed it.
+- Zero behaviour change with the flag absent (`0`, the default): `_enemyCensusCap` falls back to
+  the same 32 every existing session already runs with.
+
+No `coop.ini` key, no `SharedBlock` layout change, no protocol version bump — this is purely an
+agent-process launch parameter, exactly as narrow as `-Phantoms` is.
+
+### Live-test plan
+
+Goal: exercise `LivenessReconcileController`'s KILL dispatch (`liveness: 0x... is a corpse on the
+owner and was still alive here - killing to match`) specifically, isolated from the separate
+`DestroyObject`-scan-freshness blocker the third pass above found.
+
+1. Launch the HOST agent with `--enemy-census-cap 5` (or similar — small enough that an ordinary
+   populated area exceeds it, without needing a module anyone has confirmed has 33+ creatures).
+   Leave the CLIENT agent's own cap at the default 32 (only the OWNER's publish needs shedding —
+   the reconcile channel this tests is host -> client).
+2. `liveness_sync=1` on both `coop.ini`s (still OFF by default; this is a deliberate opt-in test
+   session). Warp both instances to any module with more than 5 creatures — `tat_m20aa` already
+   has 31 confirmed live (see above), comfortably past a cap of 5.
+3. Confirm the shed is real: `census` on the host should read at most 5 (the ordinary combat
+   channel's own view), while `tools/creatures.ps1`/the liveness channel's own scan (uncapped, per
+   §1.1) still sees the full population — the gap between the two IS the creature(s) now
+   population-shed rather than distance-shed by a real player position, which is easier to
+   reproduce on demand than physically separating two players far enough apart.
+4. `slay <id>` on the HOST for a creature OUTSIDE the host's own now-5-wide `ReadEnemies` result
+   (i.e., one that would have been included at cap 32 but is now shed) — confirmed via the
+   `census`/`resolve` verbs before killing, the same discipline the third pass's own control case
+   used.
+5. Because that creature is no longer in the host's own `ReadEnemies` output, `CombatController`'s
+   ordinary real-time channel never mirrors this kill to the client at all — the ONLY path left
+   that can correct the client's now-stale "still alive" copy is this document's own liveness
+   reconcile. Watch the CLIENT's plugin log for `liveness: 0x... is a corpse on the owner and was
+   still alive here - killing to match` within `LivenessScanIntervalMs` (2 s) of the kill. This
+   line, on THIS specific creature (never the "already dead here" anomaly path both prior live
+   passes exercised repeatedly), is the dispatch this whole channel exists to prove.
+6. If it fires: `liveness_sync`'s Kill half is confirmed live for the first time: the flag's
+   remaining default-OFF reason narrows to the third pass's own `DestroyObject`-scan-freshness
+   gap alone (the Destroy half), not "never independently exercised" in general.
+7. If it does NOT fire within the window: this is now a genuinely NEW data point distinct from
+   all three prior passes (population-gated case, real shed, ordinary `slay` — not
+   `DestroyObject`, not an already-dead-here anomaly) and should be recorded here with the same
+   rigor those three passes used (host log timing, client log timing, `census` before/after).
+
+Not attempted this round — no live rig access (another agent owns the two-instance rig this
+session); this is a design + implementation pass only, same as `destroyobject`'s own verb-building
+round was before its own live pass.
+
+### Test suite
+
+`dotnet test tests/KotorCoop.Tests` (Release): 1638/1638 passed, unchanged baseline other than the
+new build succeeding — this round's changes are additive (`AgentOptions.EnemyCensusCap`,
+`KotorGameBridge`'s new constructor parameter and `_enemyCensusCap` field) and behaviour-neutral
+with the flag unset, so no existing test's expectations moved.

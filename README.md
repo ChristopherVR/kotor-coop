@@ -310,13 +310,17 @@ tools/                   RE helpers, demo scripts, the kotor1_0_3 symbol databas
   fires from the in-game Load menu is unverified; a client loading mid-session is detected but
   not auto-rejoined. See [session-save.md](docs/research/session-save.md).
 - **Dialogue reward-node consequences** (item grants) are built and forward automatically,
-  on by default. Recruitment sync defaults off — whether the flag it pokes is actually enough
-  for the engine to spawn a companion has never been checked live. Alignment is left to
-  diverge on purpose (two people making different choices in one story). See
+  on by default. Recruitment sync defaults off — an earlier raw availability poke was
+  live-confirmed insufficient (the engine had nothing to spawn a body from) and has been
+  replaced with a call through the real recruitment routine; the per-slot companion mapping it
+  relies on is confirmed for only one of nine companions so far. Alignment is left to diverge on
+  purpose (two people making different choices in one story). See
   [dialogue-consequences.md](docs/research/dialogue-consequences.md).
 - **A body left alive on one screen and dead on the other** can be corrected by a liveness
   channel that's built but effectively unreachable: every module small enough to test in stays
-  under the ordinary 32-creature census that already covers this case. Off by default. See
+  under the ordinary 32-creature census that already covers this case some other way. A
+  debug-only agent flag can now shrink that census on demand to make the channel testable
+  without needing an oversized module. Off by default. See
   [creature-liveness.md](docs/research/creature-liveness.md).
 - **Alignment (light/dark) is per-player on purpose** — no sync channel needed. An
   alignment-gated dialogue option reflects whichever player owns the conversation.
