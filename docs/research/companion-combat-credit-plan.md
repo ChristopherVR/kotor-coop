@@ -1,8 +1,15 @@
 # Live-test plan: does a released companion's swing land as CREDITED damage?
 
-Status: **not yet run** (this document is the staged plan, written 2026-08-23 from a static
-pass with no rig access — see `party-reconciliation.md`'s dated 2026-08-23 entry for the code
-read that produced it). Execute once the two-instance rig is free.
+Status: **RUN, 2026-08-23 (round 82)** — decisive result on hypothesis 2 (solo mode), the
+first row of the decision tree below. See `party-reconciliation.md`'s "Round 82" entry for the
+full log evidence: a real, sustained multi-Vulkar fight staged via `blockpoke.ps1 attack`, two
+independent release cycles (11 samples total), `head` never left `0xFFFFFFFF` (empty) on a single
+sample while `soloMode=1` held and the client's own PC was demonstrably taking real damage from
+multiple attackers. **Solo mode is confirmed, not merely suspected, to block a released
+companion's AI from ever queuing an attack.** No live fix was attempted (the task's own gate for
+a scoped per-companion release was not met — see that entry). `companion_local_combat` stays OFF.
+The original plan below is left intact as the recipe that was actually followed, for whoever
+picks up the "scoped solo-mode release" design next.
 
 ## What this settles, precisely
 

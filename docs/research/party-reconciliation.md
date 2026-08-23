@@ -1601,3 +1601,84 @@ from writing solo mode directly (2026-08-22, "No write to solo mode ... or to an
 the queue shows real attack-shaped activity, solo mode is exonerated and the staleness bug already
 on record is the whole story. Either answer is a real, load-bearing result — see the live-test
 plan in `docs/research/companion-combat-credit-plan.md` for the exact staged steps.
+
+## Round 82 (2026-08-23) — the solo-mode hypothesis settled live, decisively: `head` stays empty
+through two full release windows totalling 11 samples under real sustained combat
+
+Executed the staged live-test plan in `docs/research/companion-combat-credit-plan.md` in full.
+`companion_local_combat=1` and `companion_local_combat_range=15` on both installs, host warped to
+`tar_m10aa` (`warp tar_m10aa`, host-only, client follows through the co-op travel-follow channel —
+avoided the independent-warp `[W_SAVE]` trap this document's own 2026-08-22 entry already
+documents), Trask following the host in genuinely, per round 81's own confirmed mechanism. Rather
+than staging a slow walk into the Vulkar pool, the client's own player was forced into a real,
+sustained fight directly via `tools/blockpoke.ps1 attack 0x7FFFFFFF <vulkarId>` (the engine's own
+`ActionAttack`, the same primitive `docs/research/console-cheats.md` already documents as safe) —
+this produced a real, prolonged multi-Vulkar swarm engagement (the client's own PC took repeated
+`combat ground-truth: local PC took N damage` hits from at least eight distinct Vulkar ids over
+~40 seconds, confirming genuine, sustained hostile contact, not a single glancing blow), which is
+exactly the condition the decision tree needs: a companion released, `nearEnemy` true, for long
+enough to see whether her AI ever does anything.
+
+### Result: `head` never left `0xFFFFFFFF` across two full release cycles
+
+```
+[19:33:26.591] party drive: companion 0x11C released to fight locally — ... (head=0xFFFFFFFF moveState=-1 soloMode=1 t=45.9s slot=0)
+[19:33:26.594] party drive: companion 0x11C still released — head=0xFFFFFFFF moveState=-1 soloMode=1 t=45.9s slot=0
+[19:33:29.595] party drive: companion 0x11C still released — head=0xFFFFFFFF moveState=-1 soloMode=1 t=48.9s slot=0
+[19:33:31.715] party drive: companion 0x11C reclaimed — resuming the host mirror
+...
+[19:34:54.500] party drive: companion 0x11C released to fight locally — ... (head=0xFFFFFFFF moveState=1 soloMode=1 t=133.8s slot=0)
+[19:34:54.503] party drive: companion 0x11C still released — head=0xFFFFFFFF moveState=1 soloMode=1 t=133.8s slot=0
+[19:34:57.503] party drive: companion 0x11C still released — head=0xFFFFFFFF moveState=1 soloMode=1 t=136.8s slot=0
+[19:35:00.504] party drive: companion 0x11C still released — head=0xFFFFFFFF moveState=1 soloMode=1 t=139.8s slot=0
+[19:35:03.504] party drive: companion 0x11C still released — head=0xFFFFFFFF moveState=1 soloMode=1 t=142.8s slot=0
+[19:35:06.506] party drive: companion 0x11C still released — head=0xFFFFFFFF moveState=1 soloMode=1 t=145.8s slot=0
+[19:35:09.508] party drive: companion 0x11C still released — head=0xFFFFFFFF moveState=1 soloMode=1 t=148.8s slot=0
+[19:35:11.828] party drive: companion 0x11C reclaimed — resuming the host mirror
+```
+
+Two independent release cycles (~5s and ~17.3s), eleven diagnostic samples total, `soloMode=1`
+confirmed on every single one, and `head` — the companion's own action-queue head type — never
+once left `0xFFFFFFFF` (empty). This is throughout a period the client's own PC was demonstrably
+under real, sustained, multi-attacker fire (see the damage log above) — `nearEnemy` was genuinely
+true, not a proximity false-positive. Per the decision tree in
+`docs/research/companion-combat-credit-plan.md`: **"`head` never leaves `0x-1` for the whole
+release window, position samples confirm the companion was genuinely in range throughout" →
+solo mode (or something else party-wide) blocks a released companion's AI from ever acting.**
+That is exactly what happened, twice, independently. **Hypothesis 2 from the
+2026-08-23 static-pass entry above is confirmed, not merely plausible: solo mode (or an
+equivalent party-wide suppression riding the same flag) is the actual blocker on the swing.**
+The credit pipeline (`PeerDamageController`, `PhantomHitHook`) was never reached because there was
+nothing for it to credit — the companion's engine AI never attempted to act at all.
+
+One secondary, unexplained observation, recorded but not chased further this round: immediately
+at the second reclaim, `combat ground-truth: local PC took 4 damage, attacker=0x11C` — the
+companion's own object id briefly named as a damage attacker against the LOCAL PC. Given `head`
+was empty and `moveState` stationary for the whole release window immediately before this, a
+genuine friendly-fire swing from Trask seems unlikely; a stale/mis-attributed forwarded-damage
+packet landing in the same instant as the faction-flip-back is the more likely read, but this was
+not investigated further (out of this round's scope) and is flagged here for whoever picks up the
+credit-pipeline side of this next.
+
+### No live fix attempted — per the task's own explicit gate
+
+The task authorizing this round allowed a scoped, per-companion solo-mode release ONLY if a safe
+way to do it could be identified AND verified live not to reintroduce the "other companion's
+native follow-AI fights this controller's position writes" drift risk this document's own
+2026-08-22 entry already flags. Neither condition is met: (1) no per-creature equivalent of solo
+mode is known to exist — every read of `CSWPartyTable+0x190` in this codebase treats it as a
+single party-wide flag, and this round did no disassembly work to find a narrower lever; (2) this
+session only ever had one companion recruited (Trask), so even a scoped release could not have
+been tested against the two-companion drift risk it exists to guard against. Per the task's own
+"if unsure, do NOT flip it blind" instruction, no write to solo mode was attempted.
+`companion_local_combat` stays OFF by default (unchanged) — this round answers the open question
+decisively but does not change the flag's shipped state, since the actual blocker (solo mode)
+remains unaddressed.
+
+### Test suite and build
+
+`dotnet test tests/KotorCoop.Tests` (Release): **1638/1638 passed**, unchanged baseline — no
+production code was changed for this round (a pure live observation pass against the read-only
+diagnostic `PartyPresenceController` already shipped 2026-08-23). Rig cycled cleanly across this
+round's own restart (needed to pick up the new `companion_local_combat=1`/`_range=15` coop.ini
+values, which `PartyPresenceController`'s readonly fields only read at plugin construction).
