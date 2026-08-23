@@ -2490,3 +2490,179 @@ future round finds a NEW crash signature at this same warp site.
 
 No code changed this round — verification only. `dotnet test`: 1674/1674 green throughout
 (unrelated to this fix; no production code touched).
+
+## Round 89 (2026-08-24, static pass, no rig access) — round 88's own "0x512C09 onward" open item
+followed to its end: the "missing side effect" theory is DISASSEMBLY-REFUTED, a sharper hypothesis
+and a new live-testable diagnostic take its place
+
+Picks up round 88's own precise open item verbatim: "the disassembly was not followed past
+0x512C09 itself to see whether it also arms something Moving_To_Path's entry depends on, which
+jumping straight to phase 3 would then be skipping." This round had no rig access (another agent
+owns it), so everything below is `tools/disasm.py`/`tools/xrefs.py` disassembly and source-reading
+only.
+
+### What is actually at 0x512C09 onward
+
+`tools/disasm.py 0x512B40 300` disassembles PathWaitDest (0x00512B40) in full, including past the
+point round 88 stopped. The accept branch is the ENTIRE remainder of the function:
+
+```
+0x00512C09  5f                   pop edi
+0x00512C0A  c7460403000000       mov dword ptr [esi + 4], 3      ; phase = 3, Moving_To_Path
+0x00512C11  a1bc5d7400           mov eax, dword ptr [0x745dbc]   ; eax = 1 (a DATA constant)
+0x00512C16  5e                   pop esi
+0x00512C17  5b                   pop ebx
+0x00512C18  83c40c               add esp, 0xc
+0x00512C1B  c21000               ret 0x10
+```
+
+`0x745dbc` is not code — reading the raw bytes directly (`struct.unpack_from('<i', ...)`) confirms
+it holds the plain 32-bit integer `1`. It is loaded into `eax` purely as this function's own return
+value; nothing is called, and no field besides `record+4` is written. Both paths that reach
+0x512C09 — the unconditional "search found DestNode at a later index" branch (`jne 0x512c09` at
+0x512B80) and the geometric-test PASS branch (falling through from 0x512C03) — land on this exact
+same tail. **Round 88's own leading theory is refuted, not merely untraced: there is no missing
+field write or engine call inside PathWaitDest's accept path.** It does precisely what
+`Odyssey.TryAcceptFinalPathNode` already does: `*(int*)(record+4) = 3`.
+
+### The return value IS real, but it belongs to the CALLER, not to PathWaitDest itself
+
+`tools/xrefs.py 0x512B40` finds exactly one call site, `0x0051C902`, inside
+`CSWSCreature::WalkUpdateLocation_QuickWalk_FollowLeader` (0x0051C360 — confirmed against
+`tools/kotor1_0_3.db`'s own `functions` table, and the same function round 87 already named as this
+plugin's own `TryDriveFollowLeaderStep(objectId, 16)` entry point). Disassembling the call site's
+own epilogue (`tools/disasm.py 0x51C8EF 40`) shows phase 6-10's call sites (including PathWaitDest's)
+share a short epilogue at 0x0051C955 that phases 0-4 skip:
+
+```
+0x0051C955  c7464400000000       mov dword ptr [esi + 0x44], 0   ; attempts = 0 (only for phases 6-10)
+0x0051C95C  8be8                 mov ebp, eax                    ; ebp = the handler's own return value
+0x0051C95E  837e4432             cmp dword ptr [esi + 0x44], 0x32
+0x0051C962  7e0e                 jle 0x51c972
+0x0051C964  c74604ffffffff       mov dword ptr [esi + 4], 0xffffffff  ; attempts>50 watchdog: phase=-1
+0x0051C96B  c7464400000000       mov dword ptr [esi + 0x44], 0
+0x0051C972  3b2dbc5d7400         cmp ebp, dword ptr [0x745dbc]   ; did the handler return 1 ("accepted")?
+0x0051C978  0f8452feffff         je 0x51c7d0                     ; if so, redispatch NOW
+```
+
+`0x51C7D0` is the TOP of this function's own attempts-increment + phase-dispatch jump table
+(`tools/disasm.py 0x51C7A0 220`; the jump table itself, `0x0051CCEC`, 12 entries indexed by
+`phase+1`, was read in full — phase -1 is inlined snapshot-copy code, phases 0-10 each `call` one of
+the already-known handlers, e.g. index 4 = phase 3 = `call 0x511b60`, `Moving_To_Path`):
+
+```
+0x0051C7D0  d9442414             fld dword ptr [esp + 0x14]
+0x0051C7D4  d81d00d77300         fcomp dword ptr [0x73d700]      ; a per-call frame-time-budget check
+0x0051C7DA  dfe0                 fnstsw ax
+0x0051C7DC  f6c401               test ah, 1
+0x0051C7DF  0f8599010000         jne 0x51c97e                    ; budget exhausted: stop for this call
+0x0051C7E5  8b5644               mov edx, dword ptr [esi + 0x44] ; attempts++
+0x0051C7E8  8b4604               mov eax, dword ptr [esi + 4]    ; eax = phase
+0x0051C7EB  42                   inc edx
+0x0051C7EC  40                   inc eax                          ; index = phase+1
+0x0051C7ED  83f80b               cmp eax, 0xb
+0x0051C7F0  895644               mov dword ptr [esi + 0x44], edx
+0x0051C7F3  0f8765010000         ja 0x51c95e
+0x0051C7F9  ff2485eccc5100       jmp dword ptr [eax*4 + 0x51ccec] ; re-enter the SAME jump table
+```
+
+So a return value of exactly `1` is a generic "I changed phase, please redispatch immediately"
+signal that EVERY handler in this switch uses, consumed entirely by the caller's own loop — not
+something PathWaitDest arms for `Moving_To_Path` specifically. When the genuine accept branch fires,
+`WalkUpdateLocation_QuickWalk_FollowLeader` calls `Moving_To_Path`'s handler (0x511b60) again
+immediately, in the SAME engine call (subject to the time-budget float check against the global at
+0x73D700 and the `attempts<50` watchdog on `record+0x44`).
+
+### Why this same-call cascade is very likely NOT the actual cause of the disproven cycling
+
+`Odyssey.TryAcceptFinalPathNode` pokes `record+4=3` from `PartyFollowController`'s own per-frame
+loop, strictly AFTER that frame's `TryDriveFollowLeaderStep` call has already returned (confirmed by
+reading `PartyFollowController.cs`: the call is at line ~359, `TryAcceptFinalPathNode` at line
+~415) — so it never gets the same-call cascade; `Moving_To_Path` only gets its first real chance to
+run on the FOLLOWING frame's normal dispatch (which reaches it directly via the jump table, since
+`record+4` already reads 3 by then — the same mechanism round 88's Findings 2 and 3 already rely on
+and already proved works). Critically, `TryAdvanceStalledMovingToPath` and
+`TryForceWalkingWhenMovingToPathStalled` poke `record+4` the EXACT same way — from outside the
+dispatcher, also strictly after that frame's `TryDriveFollowLeaderStep` call, in the same
+per-companion loop — and are live-verified (round 88) to produce real, sustained motion. A one-frame
+dispatch deferral is therefore not fatal in general; it does not explain why THIS poke specifically
+produces a worse result than doing nothing.
+
+### Sharper hypothesis, and a new diagnostic to settle it live without another disassembly pass
+
+The likelier explanation: PathWaitDest's own geometric accept/reject test (0x512B86-0x512C03,
+comparing squared distances from the recorded node's own point to `TargetPoint` (`record+0x28`) and
+`PriorPoint` (`record+0x18`)) may be REJECTING CORRECTLY, not spuriously blocking. Round 73's own
+finding already established that `TargetPoint`/`PriorPoint` go stale (frozen, not refreshed by the
+engine's own `CSWParty::Update`/`RecaulateFollowPoint`) for a companion parked in a stall — if the
+recorded node genuinely has not yet been "passed" relative to a `TargetPoint` that is honestly
+behind where the leader now is, forcing the accept anyway hands `Moving_To_Path` a segment with no
+real remaining distance to walk, which fits the observed 7 -> 3 -> 0 (FindPath) -> 7 cycle (arrives
+instantly with nothing to do, falls back to FindPath, re-lands on the same degenerate node) better
+than "a skipped side effect" does, now that this round has confirmed no side effect exists to skip.
+
+This was NOT live-tested this round. To make it testable without a further disassembly pass, this
+round adds one new read-only diagnostic field, `Odyssey.FollowDiag.RecordedDestPoint` — the recorded
+trail node at `CurrentPathNode`'s own index, read via `CSWPartyFollowDataArray::GetPoint`'s own
+disassembled addressing (`tools/disasm.py 0x634CC0 80` and the in-range path at `0x634D1E`:
+`lea ecx,[esi+esi*4]; lea eax,[edi+ecx*8]`, i.e. `this + index*40`, confirmed consistent with the
+already-established `WriteCursor` offset — 100 entries * 40 bytes = 0xFA0, `WriteCursor` sits at
+0xFA4 immediately after). No engine call is made; it is a plain, bounds-checked memory read, wired
+into the `party follow finelog` line as `recordedDestPoint=(x,y)` alongside the existing
+`target=`/`prior=` fields.
+
+`Odyssey.TryAcceptFinalPathNode`'s own poke is UNCHANGED this round — still exactly
+`*(int*)(record+4) = 3`, still defaulted off (`party_follow_accept_final_node=0`). Extending it
+based on the original "missing side effect" premise would have meant building on a premise this
+round's own disassembly disproved; there is nothing else PathWaitDest's accept path does that this
+function does not already replicate.
+
+### Live-verification step for whoever has the rig next
+
+1. `src/KotorCoop.Plugin/build.ps1 -Install` on both installs, `tools/demo.ps1` up, reproduce round
+   88's own recipe (`tp 20 22 -1.3`, `walk 10 15`, `END_M01AA`) with `party_follow_finelog=1` and,
+   this time, `party_follow_accept_final_node=1` (still off by default; enable it explicitly for
+   this pass only).
+2. Let the companion close the leg down to the final-node stall (phase 7, `pathNode==destNode`,
+   `writeCursor-pathNode==1`) exactly as round 88 described.
+3. Read the `party follow finelog` line at and immediately after the stall: compare
+   `recordedDestPoint=(x,y)` against `target=(x,y)` and `prior=(x,y)` on the SAME line.
+   - If `recordedDestPoint` is genuinely closer to `prior` than to `target` (i.e. the real engine
+     test's rejection looks geometrically correct given where `target`/`prior` actually sit), that
+     confirms this round's hypothesis: the fix is wrong to force acceptance here, and the real
+     problem is `target`/`prior` staying stale during the stall (a round-73/74-shaped problem, one
+     layer earlier than PathWaitDest) rather than anything about PathWaitDest's own test.
+   - If `recordedDestPoint` is already closer to `target` than to `prior` (the test SHOULD be
+     accepting on its own terms) yet still stalls, that rules this hypothesis out and reopens the
+     search for a genuinely different blocker — at that point, breaking in a debugger on the
+     `fcompp` at 0x512BF2 to single-step the actual flag outcome would settle the comparison
+     direction precisely, something this round's static pass did not attempt.
+4. With `party_follow_accept_final_node=1` active, also re-confirm round 88's own disproven result
+   still reproduces (phase cycling 7 -> 3 -> 0 -> 7, `CreMoveState` settling at 1) — this round
+   changed no behaviour, so it should be unchanged, but confirming it is unchanged is cheap and
+   rules out this round's diagnostic-only edit having any accidental side effect.
+
+### Test suite and build
+
+`dotnet test tests/KotorCoop.Tests` (Release): 1674/1674 passed (baseline unchanged — this round
+adds one new read-only struct field and one new bounds-checked memory read, neither exercised by the
+x86 NativeAOT plugin-only test project, same as every prior round's diagnostic additions).
+`src/KotorCoop.Plugin/build.ps1` builds clean, x86 confirmed, 0 warnings introduced (the one
+pre-existing `PortraitController.cs` CA2014 warning is unrelated and untouched). No
+`SharedBlock`/protocol version change — everything this round touches
+(`Odyssey.FollowDiag.RecordedDestPoint`, its read in `TryGetFollowDiagnostics`, and the new
+`recordedDestPoint=` finelog field) is plugin-internal diagnostics, nothing crosses the wire.
+
+### Verdict
+
+Round 88's own named next step — follow the disassembly past 0x512C09 — is now fully done. The
+"PathWaitDest's accept branch arms something extra" theory it left open is disassembly-refuted: the
+accept branch writes only `record+4=3` and returns a status code consumed solely by the caller's own
+same-call redispatch convenience, which this round shows (by comparison with two sibling fixes using
+the identical external-poke pattern) is unlikely to be what makes `TryAcceptFinalPathNode`
+specifically fail. The likelier explanation — PathWaitDest's geometric test correctly rejecting a
+stale `TargetPoint`/`PriorPoint` pair — is now a concrete, falsifiable hypothesis with a
+purpose-built, zero-risk diagnostic (`FollowDiag.RecordedDestPoint`) already shipped to settle it on
+the very next live pass, rather than requiring yet another disassembly round first. The walk still
+does not complete end-to-end; the honest gap remaining is unchanged in practice (still the very last
+recorded waypoint) but the open question about it is now sharper and directly testable.

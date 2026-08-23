@@ -457,7 +457,12 @@ internal sealed unsafe class PartyFollowController(SharedBlockView block)
                         // FollowMoveGateCheckFn's own remarks for what each field means.
                         + $"gateAreaId=0x{fd.GateAreaId:X} gateFires={fd.GateFires} "
                         + $"partySlot0Id=0x{fd.PartySlot0Id:X} selfIsPartySlot0={fd.SelfMatchesPartySlot0} "
-                        + $"moveBudget={fd.MoveBudget:F6}");
+                        + $"moveBudget={fd.MoveBudget:F6} "
+                        // ROUND 89: the recorded trail node at CurrentPathNode's own index — see
+                        // Odyssey.TryAcceptFinalPathNode's own remarks for why this is here (testing
+                        // whether PathWaitDest's geometric accept/reject test is correctly rejecting
+                        // a stale Target/Prior pair, not spuriously blocking a healthy one).
+                        + $"recordedDestPoint=({fd.RecordedDestPoint.X:F2},{fd.RecordedDestPoint.Y:F2})");
                 }
             }
 
