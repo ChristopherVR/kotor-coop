@@ -1242,3 +1242,91 @@ testing could safely continue). Rig torn down clean (`Get-Process swkotor,KotorC
 empty), `auto_start_agent` restored to `1` in both installs, the round's own test-only
 `dialogue_recruit_sync=1` override removed from both `coop.ini`s afterward (not part of this
 round's shipped defaults).
+
+## 2026-08-23 (static pass, no rig access): a second, previously unexamined candidate for why
+`companion_local_combat`'s swing has never been observed — solo mode itself, not just
+party-presence staleness
+
+The 2026-08-22 live pass (above, "Live pass ... proven clean; the swing itself not independently
+confirmed") pinned the blocker on a party-presence staleness bug: the mirroring client's own
+`SharedBlock.PartyPresenceSlots` copy of a companion's position froze for minutes, so the
+released companion's body was never mirrored close enough to the fight to have anything to swing
+at. That is a real, live-confirmed defect and stays open. But re-reading the whole release ->
+credit pipeline end to end this pass (`CompanionLocalFightRule`, `PartyPresenceController
+.DriveOne`, `PeerDamageController`, `PhantomHitHook`, `MaterialisedEnemies`, the
+`CoopAgent`/`CoopHost`/`CoopClient` wire) found the plumbing itself sound and, on the credit side,
+already exercised by item 1's own proven `local_combat` path — `PeerDamageController
+.RefreshAttackers` reads every id in `CSWPartyTable`'s own `int[9]` slot array regardless of
+mirror/release state, and `PhantomHitHook.IsOursToCredit` treats any of those ids as "ours"
+without caring whether it belongs to the PC or a companion. Nothing there is companion-specific
+or newly broken.
+
+**What every one of those files takes for granted, and never states as an assumption, is that a
+released companion's own engine AI can complete an attack round at all.** Two OTHER documents in
+this project, written independently and before `companion_local_combat` existed, say the opposite:
+
+- `docs/research/peer-damage-ledger.md` (`PeerDamageController`'s own design doc), on the
+  attacker set: *"A client holds solo mode so only the PC is swinging today"* — i.e., its own
+  author's working model was that solo mode is WHY a client's companions do not fight, not
+  merely why they do not follow. The same document lists *"the party leg of the attacker set"*
+  as items 7 in its own "known-unexercised" list: *"With solo mode on, a client's companions are
+  not in the world [combat sense], so this path is untested by ordinary play."*
+- `docs/research/party-reconciliation.md` itself (this document), 2026-07-31: solo mode
+  (`partyTable+0x190`) is described as *"the game's shipped 'companions stand still' switch"* —
+  not "stop following" — and `KotorGameBridge.TryWritePartyMembers` (`src/KotorCoop.Memory
+  /KotorGameBridge.cs`) asserts it unconditionally, every agent pump, for the WHOLE co-op
+  session (`_memory.TryWrite<byte>(partyTable + PartySoloMode, 1)`, no exception for a companion
+  a client happens to have released) — a client NEVER lowers it while connected, release state
+  or not.
+
+`CompanionLocalFightRule`/`PartyPresenceController`'s own release gate was designed by direct
+analogy to `EnemyPresenceController`'s excluded-enemy handoff (`docs/research/party-reconciliation
+.md`, 2026-08-21: "the same handoff EnemyPresenceController's own excluded enemy gets from
+DriveOne: no claim, no position/health write, nothing"). That analogy is exact for an ENEMY —
+nothing else in the engine suppresses an enemy's own combat AI, so "stop overwriting it" really
+is sufficient. It is NOT obviously exact for a COMPANION, which is the one class of creature this
+whole co-op session holds under a second, independent suppression flag (solo mode) that this
+project's own earlier writing describes as blocking action, not just movement. If that reading is
+right, `companion_local_combat`'s release/reclaim gate can be perfectly clean (it is — three live
+cycles, 2026-08-22) and the credit pipeline can be perfectly sound (it appears to be, by
+inspection) and the companion would STILL never land a swing, because the engine AI it was handed
+back to never gets to run at all.
+
+**Not fixed this pass, deliberately.** Flipping solo mode off for the release window is exactly
+the kind of engine write this project's own rule holds back without a live pass first (see
+`docs/roadmap-seamless.md`'s "verify a researched offset live before shipping the write"), and
+solo mode is party-wide, not per-companion — releasing it while a SECOND, still-mirrored
+companion is also in the party would hand that other companion's own native follow-AI back too,
+reintroducing exactly the "companion fights its own follow-AI against this controller's position
+writes" drift `party-reconciliation.md`'s roster-freeze section (2026-08-22) already documented
+as a real risk of touching this flag casually. Nobody has live-measured whether that risk is real
+in this specific narrow window (one companion released, `local_combat` active, a few seconds to a
+couple of minutes at a time) or how bad it would be if so — guessing here would be the same
+mistake this document already called out and refused to make for `ActionFollowLeader`'s own
+action-id guess (round 71).
+
+**What IS shipped this pass: a read-only diagnostic that settles the question live, cheaply,
+without touching the engine.** `PartyPresenceController` now reads `CSWPartyTable+0x190` (the
+same offset `PartyFollowController` already reads for its own diagnostic — no new pointer chain)
+and logs it alongside the released companion's action-queue head type
+(`Odyssey.GetHeadActionType`, already used elsewhere in this file, no engine call) and
+`CreMoveState` on every release edge and every ~3 seconds while a companion stays released
+(`party drive: companion 0x... still released — head=0x.. moveState=.. soloMode=.. ...`), capped
+at 60 lines total so a long session does not grow the log forever. This is pure observation — it
+changes no behaviour and ships correctly gated behind the already-off-by-default
+`companion_local_combat` flag, so it has zero effect on anyone who has not turned that on.
+
+**What the next live pass should look for, once the party-presence staleness bug above is worked
+around or fixed enough to get the companion's body close enough to the fight to matter**: does
+`head` ever leave `0x-1` (empty) while `soloMode` reads nonzero and a hostile is genuinely in
+range? If it never does — the queue stays perpetually empty for the whole release window no
+matter how long it runs — that is first-hand, live evidence the swing is blocked by solo mode
+specifically, not by proximity/staleness, and the fix belongs in `KotorGameBridge
+.TryWritePartyMembers`/`ReleasePartyFreeze` (the field's sole owner), gated on a new "at least one
+companion is currently released" signal this controller would need to publish into the shared
+block for that layer to read — not in this file, which the project's own rule already forbids
+from writing solo mode directly (2026-08-22, "No write to solo mode ... or to anything
+`PartyFreezeRule`'s own reasoning above already ruled out touching"). If `head` DOES leave -1 and
+the queue shows real attack-shaped activity, solo mode is exonerated and the staleness bug already
+on record is the whole story. Either answer is a real, load-bearing result — see the live-test
+plan in `docs/research/companion-combat-credit-plan.md` for the exact staged steps.
