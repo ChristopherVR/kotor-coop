@@ -1729,6 +1729,53 @@ internal static unsafe class Odyssey
         (delegate* unmanaged[Thiscall]<nint, float>)0x004F1BE0;
 
     /// <summary>
+    /// ROUND 88 (2026-08-24, party-reconciliation.md): the ONLY other site in the whole binary
+    /// that writes a literal 3 into <c>CreMoveState</c> (<c>creature+0xA8C</c>), found by a full
+    /// <c>tools/fieldwrites.py 0xa8c</c> sweep — 0x005111A1, inside a small, previously
+    /// undocumented, thiscall function at 0x00511130 (no stack args, returns a bool-shaped
+    /// engine constant at 0x745dbc/0x745dc4). Full disassembly this round: after several
+    /// liveness/commandability gates (<c>creature+0xA88</c>/<c>+0x4C0</c>[<c>party_follow_info</c>,
+    /// per <c>tools/kotor1_0_3.db</c>]/vtbl+0x94 GetDead/0x63E7F0/GetDeadTemp 0x4EF890/
+    /// <c>creature+0x340</c>/<c>creature+0x9F0</c>&amp;2, none logged separately here — all
+    /// already known-true for a live, commandable companion mid-follow) it calls
+    /// <see cref="FollowMoveGateCheckFn"/> (0x004CB120) and, ONLY if that returns nonzero, compares
+    /// <see cref="ResolvePartySlot0Fn"/>'s result against the creature's OWN self id
+    /// (<c>[creature+4]</c>, the same field <c>KotorGameBridge.OffObjectId</c> already names) — if
+    /// they differ (always true for a companion, which is never party slot 0 itself), it sets
+    /// <c>CreMoveState = 3</c>, unconditionally reverting "walking" back to "follow requested."
+    /// This is the single most direct static candidate found for round 84's still-open
+    /// "<c>CreMoveState</c> reverts from -1 to 3 partway through a leg, for a reason not yet
+    /// found" mystery — everything gates on whether <see cref="FollowMoveGateCheckFn"/> fires.
+    /// See that delegate's own remarks for what it tests and why. Called ONLY from one site,
+    /// 0x0057F79E, inside a large per-action-type jump-table dispatcher (0x5801E4, ~0x41
+    /// entries) gated on a separate "phase/reason" value (<c>ebx==5</c>) this round did not
+    /// further name — consistent with this being the specific queued action type's own
+    /// per-tick "OnUpdate" handler, i.e. genuinely reached every frame the move action is live,
+    /// not a rare edge case.
+    ///
+    /// What this function ITSELF tests, fully disassembled: resolves <c>[creature+0x8C]</c> (the
+    /// creature's own AREA id; <see cref="GetAreaId"/> already names this field,
+    /// "module-lifetime stable") through <c>CServerExoApp::GetObjectArray</c> +
+    /// <c>CGameObjectArray::GetGameObject</c> (the same two-step <see cref="ResolveServerObject"/>
+    /// collapses into one call); if that id does not resolve to a live object, returns 0 (false —
+    /// the caller then takes 0x511130's no-revert exit). If it DOES resolve, calls the resolved
+    /// object's own vtable slot +0x28 — <c>tools/kotor1_0_3.db</c>'s <c>GameObjectMethods</c>
+    /// table names this slot <c>AsSWCModule</c> (offset 28; cross-checked against the SAME
+    /// table's offset 16 = <c>AsSWSObject</c> and offset 48 = <c>AsSWSCreature</c>, both of which
+    /// match this project's own independently live-verified vtable citations round 32 already
+    /// established — the table is trustworthy for this row too) — and returns whatever that call
+    /// returns. Read plainly: "does my current area's own object id currently resolve to
+    /// something that casts as a MODULE" — an odd, narrow condition to be gating a per-frame
+    /// move-completion check on, and the leading candidate for why the revert is INTERMITTENT
+    /// (round 81/84's own "closes ~90% then stalls" shape) rather than immediate: most frames
+    /// this presumably reads false, some frames — not yet understood why — it does not. NOT yet
+    /// correlated against a live repro; see <see cref="FollowDiag.GateAreaId"/>/
+    /// <see cref="FollowDiag.GateFires"/> for the live diagnostic this round wires in to test it.
+    /// </summary>
+    private static readonly delegate* unmanaged[Thiscall]<nint, int> FollowMoveGateCheckFn =
+        (delegate* unmanaged[Thiscall]<nint, int>)0x004CB120;
+
+    /// <summary>
     /// ROUND 72 DIAGNOSTIC: the raw per-member follow-data record CSWParty holds at
     /// <c>this+0x24+index*0x88</c> (party-reconciliation.md's own stride, re-confirmed against
     /// <c>WalkUpdateLocation_QuickWalk_FollowLeader</c> 0x0051C360's own disasm this round), plus
@@ -1858,6 +1905,17 @@ internal static unsafe class Odyssey
         diag.CreMoveState = *(int*)(creature + 0xA8C);
         diag.MovingToPathAccumulator = *(int*)(record + 0x6C);
 
+        // ROUND 88 (2026-08-24, party-reconciliation.md): live test of the static hypothesis
+        // built around FollowMoveGateCheckFn/0x00511130 (see those delegates' own remarks) — the
+        // only other CreMoveState=3 writer in the whole binary, gated on this exact condition.
+        // Read-only: FollowMoveGateCheckFn (0x004CB120) only resolves and downcasts, never
+        // writes; ResolvePartySlot0Fn is the same bare zero-argument call round 30 already
+        // proved safe and pure.
+        diag.GateAreaId = *(uint*)(creature + 0x8C);
+        diag.GateFires = FollowMoveGateCheckFn(creature) != 0;
+        diag.PartySlot0Id = ResolvePartySlot0Fn();
+        diag.SelfMatchesPartySlot0 = diag.PartySlot0Id == serverObjectId;
+
         // ⚠ CRASHED THE HOST LIVE the first attempt at this read (2026-08-23): this code
         // originally treated party+0x2DC as a POINTER FIELD (mirroring
         // tools/kotor1_0_3.db's "CSWParty.follow_data: CSWPartyFollowDataArray*" offset row)
@@ -1879,6 +1937,24 @@ internal static unsafe class Odyssey
         diag.WriteCursor = NativeMethods.IsReadable(followData + 0xFA4)
             ? *(int*)(followData + 0xFA4)
             : -1;
+
+        // ROUND 88: live test of a SECOND, independent stall shape found this round —
+        // distinct from round 84's "CreMoveState reverts -1->3" (that mechanism, see
+        // FollowMoveGateCheckFn's own remarks, was live-measured NOT the active blocker for
+        // THIS reproduction: moveState pins at 3 continuously, never touching -1, once a
+        // companion is left within ~1-2 path nodes of a now-stationary leader). Full disasm of
+        // handler 0x00511860 (phase=2, previously unexamined) this round: it computes the
+        // distance between PriorPoint (record+0x18) and Snapshot (record+0x5c) and compares its
+        // SQUARE against a threshold built from `*(float*)followData * [0x746f4c]`, squared —
+        // i.e. followData+0x0 (the FIRST dword of the whole, party-wide, embedded
+        // CSWPartyFollowDataArray struct) is read as a float and used as THIS tick's
+        // "close enough to advance" radius. Live data shows PriorPoint==Snapshot (a
+        // zero-length segment, trivially "close enough" under any sane positive threshold) yet
+        // phase never advances past 2 — consistent with this threshold-source field itself
+        // reading zero or a degenerate value, the same class of "self-inflicted, our own direct
+        // engine call bypasses whatever the OUTER caller normally refreshes" bug rounds 80/84
+        // already found twice for creature+0xD0 and record+0x34. Read-only.
+        diag.MoveBudget = NativeMethods.IsReadable(followData) ? *(float*)followData : float.NaN;
 
         diag.Valid = true;
         return true;
@@ -1908,6 +1984,14 @@ internal static unsafe class Odyssey
         public int WriteCursor;
         public float WalkRate;
         public float RunRate;
+
+        // ROUND 88: see FollowMoveGateCheckFn's own remarks — the live test of the "only other
+        // CreMoveState=3 writer in the binary" hypothesis.
+        public uint GateAreaId;
+        public bool GateFires;
+        public uint PartySlot0Id;
+        public bool SelfMatchesPartySlot0;
+        public float MoveBudget;
     }
 
     /// <summary>
@@ -2315,6 +2399,452 @@ internal static unsafe class Odyssey
         }
 
         *(int*)(record + 0x34) = newDest;
+        wrote = true;
+        return true;
+    }
+
+    /// <summary>
+    /// ROUND 88 (2026-08-24, party-reconciliation.md): a THIRD, independent permanent-stall
+    /// shape, found live-reproducing round 84's own "CreMoveState reverts from -1 to 3" recipe
+    /// again this round — but the ACTUAL live data showed a DIFFERENT mechanism than round 84
+    /// described: <c>CreMoveState</c> never reverted from -1 at all in this round's own repro
+    /// (it stayed pinned at 3 for the entire ~35-second stalled tail; a genuine, single-frame
+    /// -1 blip WAS reached, went straight to phase=2, and never touched -1 again). Round 84's
+    /// own "0x00511130" ownership-check mechanism (see <see cref="FollowMoveGateCheckFn"/>) was
+    /// live-measured this round to fire (<c>gateFires=true</c>) CONSTANTLY, even during genuine
+    /// smooth walking, so it is not what is timing this specific stall — a real mechanism, and
+    /// possibly still the cause of round 84's own separately-observed symptom, but not the one
+    /// this round's own live data implicates.
+    ///
+    /// Full disassembly of handler 0x00511860 (dispatch phase 2, never examined by this document
+    /// before this round) instead: it computes the distance between <c>PriorPoint</c>
+    /// (<c>record+0x18</c>) and <c>Snapshot</c> (<c>record+0x5c</c>), squares it, and compares
+    /// against a threshold built from <c>*(float*)followData</c> (the FIRST dword of the whole,
+    /// party-wide, embedded <c>CSWPartyFollowDataArray</c> struct — read here as
+    /// <see cref="FollowDiag.MoveBudget"/>) times the constant at 0x746f4c (0.7), squared. When
+    /// PriorPoint == Snapshot (a zero-length remaining segment — confirmed live: reads bit-identical
+    /// across 30+ consecutive 25 Hz samples spanning the entire stall) this comparison is
+    /// trivially satisfied (0 &lt;= any positive threshold), which looked, at first, like it should
+    /// unconditionally commit phase 3 (<c>Moving_To_Path</c>) — but does NOT: the "close enough"
+    /// branch (0x51191B) only sets a LOCAL variable (<c>ebp = 3</c>) that is not actually written
+    /// into <c>record+4</c> until much later (0x511ACD), gated behind
+    /// <c>CSWSArea::TestDirectLine</c> (0x004BCB70, called via <c>CSWSObject::GetArea</c>
+    /// 0x004CB120's returned area pointer as <c>this</c>) returning EXACTLY 1. If TestDirectLine
+    /// returns anything else (live data: this happens on essentially every call once parked in
+    /// this exact PriorPoint==Snapshot shape), the function instead pool-allocates a small object
+    /// and queues a re-check via <c>CServerAIMaster::AddEventDeltaTime</c> (0x004B08D0) —
+    /// deferring to a LATER engine tick — and <c>record+4</c> (phase) is left completely
+    /// untouched. The requeued event apparently never resolves favourably either: live-measured,
+    /// this cycles (phase 2, <c>attempts</c> climbing 0-50, the engine's own watchdog forcing
+    /// phase -1, <see cref="TryResetStuckFollowPhase"/> immediately restarting FindPath, which
+    /// re-derives the SAME degenerate phase-2 input) for 30+ seconds straight with zero position
+    /// change and zero further engine progress, in one live repro.
+    ///
+    /// This targets exactly that degenerate shape: phase parked at 2 with PriorPoint and Snapshot
+    /// already equal (this tick's own "close enough" condition is provably already satisfied —
+    /// the ENGINE's own 0.7x-budget threshold squared against a genuinely ZERO distance can never
+    /// be the reason this fails) and the watchdog already having made at least one real pass
+    /// (<c>attempts &gt; 0</c>, so this never fires on the very first, still-legitimate visit to
+    /// phase 2). Commits phase 3 directly — the SAME value the engine's own "close enough" branch
+    /// would have written had TestDirectLine returned 1 — WITHOUT calling TestDirectLine or
+    /// touching followData's own budget field (unnecessary: the engine's own budget subtraction is
+    /// <c>sqrt(distance) * 1.4285714</c>, and distance is already zero). This does not bypass any
+    /// actual movement/collision validation: Moving_To_Path's OWN "close enough to the next
+    /// recorded node" gate (round 84's own citation, 0x4AA980) still runs on every subsequent
+    /// call and is what decides whether <c>CurrentPathNode</c> is really allowed to advance — this
+    /// fix only unblocks the FSM from being stuck one phase EARLIER than that check, on a shortcut
+    /// optimisation test whose own failure path leads nowhere for a companion in this exact
+    /// coop-driven state (round 87's own leading theory, matching round 80/84's own established
+    /// pattern: this plugin's own direct-call drive loop most likely bypasses whatever the async
+    /// AddEventDeltaTime callback needs from the engine's normal per-frame tick to eventually
+    /// resolve favourably — not chased further this round).
+    ///
+    /// Returns false when the index does not resolve. <paramref name="wrote"/> reports whether the
+    /// stall shape was actually observed and corrected this call. Kill switch:
+    /// <c>party_follow_advance_movingtopath=0</c> (default on).
+    ///
+    /// MAIN THREAD ONLY.
+    /// </summary>
+    public static bool TryAdvanceStalledMovingToPath(uint companionServerObjectId, out bool wrote)
+    {
+        wrote = false;
+
+        nint client = GetClient();
+        if (client == 0)
+        {
+            return false;
+        }
+
+        uint clientObjectId = ServerToClientObjectIdFn(client, companionServerObjectId);
+
+        nint party = GetSWPartyFn(client);
+        if (party == 0)
+        {
+            return false;
+        }
+
+        int index = GetPartyIndexFn(party, clientObjectId);
+        if (index <= 0)
+        {
+            return false;
+        }
+
+        nint record = party + 0x24 + (index * 0x88);
+        int phase = *(int*)(record + 4);
+        if (phase != 2)
+        {
+            return true; // not parked in the stall shape this targets — nothing to do
+        }
+
+        int attempts = *(int*)(record + 0x44);
+        if (attempts <= 0)
+        {
+            return true; // first visit this cycle — let the engine's own normal path run once
+        }
+
+        Vec3 prior = *(Vec3*)(record + 0x18);
+        Vec3 snapshot = *(Vec3*)(record + 0x5C);
+        float dx = prior.X - snapshot.X;
+        float dy = prior.Y - snapshot.Y;
+        float dz = prior.Z - snapshot.Z;
+        const float Epsilon = 0.001f;
+        if ((dx * dx) + (dy * dy) + (dz * dz) > Epsilon * Epsilon)
+        {
+            return true; // genuinely still has distance to close — TestDirectLine's own gate is
+                          // the engine's normal path for that case, not this stall shape
+        }
+
+        *(int*)(record + 4) = 3; // Moving_To_Path — the same value the engine's own "close
+                                  // enough" branch commits, just without TestDirectLine's gate
+        wrote = true;
+        return true;
+    }
+
+    /// <summary>
+    /// ROUND 88: cheap, read-only accessor for <c>record+0x6C</c>
+    /// (<see cref="FollowDiag.MovingToPathAccumulator"/>) alone, without the rest of
+    /// <see cref="TryGetFollowDiagnostics"/>'s work — cheap enough to call every frame so
+    /// <see cref="TryForceWalkingWhenMovingToPathStalled"/> can tell "the handler ran since last
+    /// frame" apart from "nothing touched it." Returns false when the index does not resolve.
+    ///
+    /// MAIN THREAD ONLY.
+    /// </summary>
+    public static bool TryGetMovingToPathAccumulator(uint companionServerObjectId, out int accumulator)
+    {
+        accumulator = 0;
+
+        nint client = GetClient();
+        if (client == 0)
+        {
+            return false;
+        }
+
+        uint clientObjectId = ServerToClientObjectIdFn(client, companionServerObjectId);
+
+        nint party = GetSWPartyFn(client);
+        if (party == 0)
+        {
+            return false;
+        }
+
+        int index = GetPartyIndexFn(party, clientObjectId);
+        if (index <= 0)
+        {
+            return false;
+        }
+
+        nint record = party + 0x24 + (index * 0x88);
+        accumulator = *(int*)(record + 0x6C);
+        return true;
+    }
+
+    /// <summary>
+    /// ROUND 88 (2026-08-24, party-reconciliation.md): round 84's own originally-described
+    /// mechanism, reproduced live THIS round one layer past <see cref="TryAdvanceStalledMovingToPath"/>'s
+    /// own fix: phase settles at 3 (<c>Moving_To_Path</c>, handler 0x00511B60), <c>record+0x6C</c>
+    /// (<see cref="FollowDiag.MovingToPathAccumulator"/>) climbs every call (direct, cheap proof
+    /// the handler genuinely runs, every frame — round 84's own established diagnostic), yet the
+    /// companion's real position never changes and <c>CurrentPathNode</c> never advances, while
+    /// <see cref="FollowDiag.CreMoveState"/> (creature+0xA8C) reads 3 ("follow requested") rather
+    /// than -1 ("walking"). Round 84 named the cause but did not find it: "whatever real,
+    /// engine-native <c>AddMoveToPointAction</c> FindPath originally queued is no longer active
+    /// ... for a reason not yet found."
+    ///
+    /// This round found the reason: <see cref="FollowMoveGateCheckFn"/> (0x004CB120, called from
+    /// 0x00511130 — see that delegate's own remarks) is the ONLY other <c>CreMoveState=3</c>
+    /// writer in the whole binary, and it is reached from a SEPARATE per-frame dispatch
+    /// (0x0057F79E, inside a generic per-action-type "OnUpdate" jump table, ebx==5) than the one
+    /// this plugin drives directly — the engine's own natural processing of whichever generic
+    /// <c>AddMoveToPointAction</c> FindPath queued, running independently of and interleaved with
+    /// this controller's own <see cref="TryDriveFollowLeaderStep"/> calls. Live-measured this
+    /// round: that check's own gate (<see cref="FollowDiag.GateFires"/>) reads <c>true</c> on
+    /// every single sample taken, including during genuinely smooth walking — i.e. it does not
+    /// discriminate WHEN the revert happens, only that the underlying condition (this creature is
+    /// never party slot 0) is permanently satisfied, so the revert fires on essentially every
+    /// tick the generic dispatcher's own per-object schedule happens to reach this creature's
+    /// queued action, independent of this controller's own frame cadence.
+    ///
+    /// Rather than trying to suppress or race that separate dispatch (not controllable from this
+    /// hook — it runs on the engine's own per-object update schedule, not a call this plugin
+    /// makes), the FIRST version of this fix re-asserted the one thing it clobbers directly
+    /// (<c>CreMoveState = -1</c>) — LIVE-TESTED and MEASURED INSUFFICIENT ALONE: the poke sticks
+    /// (moveState reads -1 continuously afterward, confirmed in the fine-log) but real position
+    /// never resumes and <c>CurrentPathNode</c> stays frozen — toggling the flag back does not
+    /// resurrect whatever real, engine-native queued move action Moving_To_Path's own geometric
+    /// check (0x4AA980, round 84's own citation) needs to have something to measure progress
+    /// against. Only <c>FindPath</c> (0x51AC10, phase 0, dispatch index 1) actually calls
+    /// <c>AddMoveToPointActionToFront</c> AND sets <c>CreMoveState = -1</c> as part of the SAME
+    /// shared epilogue (0x51AF5A) — so this instead forces PHASE back to 0, letting the engine's
+    /// own FindPath handler do both jobs itself on this controller's very next
+    /// <see cref="TryDriveFollowLeaderStep"/> call, the same call already made every frame.
+    ///
+    /// Fires only when <c>Moving_To_Path</c>'s own handler is confirmed genuinely running (its
+    /// accumulator has advanced since the last read — passed in by the caller, which already
+    /// samples it every frame) AND real, unconsumed trail remains
+    /// (<c>CurrentPathNode &lt; WriteCursor</c>, so this never fires once she has genuinely caught
+    /// up) AND <c>CreMoveState</c> currently reads something other than -1 (the live signature of
+    /// round 84's own "reverted away from walking" shape).
+    ///
+    /// Returns false when the index does not resolve. <paramref name="wrote"/> reports whether the
+    /// poke fired this call. Kill switch: <c>party_follow_force_walking=0</c> (default on).
+    ///
+    /// MAIN THREAD ONLY.
+    /// </summary>
+    public static bool TryForceWalkingWhenMovingToPathStalled(
+        uint companionServerObjectId, int lastMovingToPathAccumulator, out bool wrote)
+    {
+        wrote = false;
+
+        nint client = GetClient();
+        if (client == 0)
+        {
+            return false;
+        }
+
+        uint clientObjectId = ServerToClientObjectIdFn(client, companionServerObjectId);
+
+        nint party = GetSWPartyFn(client);
+        if (party == 0)
+        {
+            return false;
+        }
+
+        int index = GetPartyIndexFn(party, clientObjectId);
+        if (index <= 0)
+        {
+            return false;
+        }
+
+        nint record = party + 0x24 + (index * 0x88);
+        int phase = *(int*)(record + 4);
+        if (phase != 3)
+        {
+            return true; // only Moving_To_Path's own stall shape — nothing to do elsewhere
+        }
+
+        int accumulator = *(int*)(record + 0x6C);
+        if (accumulator == lastMovingToPathAccumulator)
+        {
+            return true; // handler is not even being reached right now — a genuine reissue,
+                          // not this stall; forcing anything here would not be informed
+        }
+
+        int pathNode = *(int*)(record + 0x24);
+        nint followData = party + 0x2DC;
+        if (!NativeMethods.IsReadable(followData + 0xFA4))
+        {
+            return true;
+        }
+
+        int writeCursor = *(int*)(followData + 0xFA4);
+        if (pathNode == writeCursor)
+        {
+            return true; // genuinely caught up — nothing left to walk toward
+        }
+
+        nint creature = ResolveServerObject(companionServerObjectId);
+        if (creature == 0)
+        {
+            return false;
+        }
+
+        if (*(int*)(creature + CreMoveState) == -1)
+        {
+            return true; // already walking — nothing clobbered it since the last sample
+        }
+
+        // ROUND 88 REVISION: force phase to 0 (FindPath), not CreMoveState directly — see this
+        // method's own remarks for why the CreMoveState-only version measured insufficient.
+        // record+0x44 (attempts) is left alone: FindPath's own dispatch epilogue (0x51c95c, per
+        // round 84's table) does not zero it either, and this is a resubmission, not a reset.
+        *(int*)(record + 4) = 0;
+        wrote = true;
+        return true;
+    }
+
+    /// <summary>
+    /// ROUND 88: cheap, read-only accessor for <c>record+4</c> (phase) and <c>record+0x24</c>
+    /// (CurrentPathNode) together — lets <see cref="PartyFollowController"/> track "how many
+    /// consecutive frames has this exact shape persisted" without calling the heavier
+    /// <see cref="TryGetFollowDiagnostics"/> every frame. Returns false when the index does not
+    /// resolve.
+    ///
+    /// MAIN THREAD ONLY.
+    /// </summary>
+    public static bool TryGetPhaseAndPathNode(uint companionServerObjectId, out int phase, out int pathNode)
+    {
+        phase = 0;
+        pathNode = 0;
+
+        nint client = GetClient();
+        if (client == 0)
+        {
+            return false;
+        }
+
+        uint clientObjectId = ServerToClientObjectIdFn(client, companionServerObjectId);
+
+        nint party = GetSWPartyFn(client);
+        if (party == 0)
+        {
+            return false;
+        }
+
+        int index = GetPartyIndexFn(party, clientObjectId);
+        if (index <= 0)
+        {
+            return false;
+        }
+
+        nint record = party + 0x24 + (index * 0x88);
+        phase = *(int*)(record + 4);
+        pathNode = *(int*)(record + 0x24);
+        return true;
+    }
+
+    /// <summary>
+    /// ROUND 88 (2026-08-24, party-reconciliation.md): a FOURTH, narrower stall found live
+    /// downstream of the previous three fixes in this same round — with all of
+    /// <see cref="TryAdvanceStalledMovingToPath"/>/<see cref="TryForceWalkingWhenMovingToPathStalled"/>
+    /// active, a companion now closes the ENTIRE distance of a real leg down to the very LAST
+    /// recorded trail node (live-confirmed: <c>writeCursor - pathNode == 1</c>, ~1.4 units short
+    /// of the leader) before parking permanently at phase 7 (<c>PathWaitDest</c>, 0x00512B40).
+    ///
+    /// Full disassembly of PathWaitDest this round (superseding round 83's own partial read):
+    /// its forward search from <c>CurrentPathNode</c> tests against <c>DestNode</c> BEFORE ever
+    /// incrementing, so when they are ALREADY equal (this exact live shape) it matches on the
+    /// very first comparison and falls into an accept/reject test ONLY when
+    /// <c>DestNode == CurrentPathNode</c> (0x512B7E: <c>cmp ebx,edx; jne 0x512c09</c> — UNEQUAL
+    /// skips straight to the unconditional accept at 0x512c09, <c>mov [esi+4],3</c>). The test
+    /// itself (0x512B86-0x512C03): looks up the recorded point at that index
+    /// (<c>CSWPartyFollowDataArray::GetPoint</c>-shaped call, 0x00634CC0) and accepts only when
+    /// that point is STRICTLY closer to <c>TargetPoint</c> (<c>record+0x28</c>) than to
+    /// <c>PriorPoint</c> (<c>record+0x18</c>) — a "has this waypoint been passed yet" geometric
+    /// test. Live-confirmed this round: it never resolves favourably here — same rejected result
+    /// across 3+ minutes of continuous observation, no natural recovery.
+    ///
+    /// <see cref="TryAdvanceStalledPathDestination"/>'s own round-83 fix cannot reach this case:
+    /// it requires <c>gap &gt;= 2</c> specifically because <c>DestNode == WriteCursor</c> is
+    /// structurally unreachable by this same search loop (the loop's own increment-then-test-
+    /// WriteCursor exit fires one iteration before a re-test against a DestNode set to that same
+    /// value could ever happen) — and here <c>gap == 1</c>, so <c>WriteCursor</c> is the ONLY
+    /// other in-range candidate DestNode could be set to, which is exactly the unreachable one.
+    /// <c>DestNode</c> already sits at its only workable value (equal to <c>CurrentPathNode</c>);
+    /// there is no poke-the-index fix available here, only the geometric accept/reject test
+    /// itself, which this round did not have budget to determine WHY it rejects (the recorded
+    /// node's own coordinates were not logged this round — a concrete next diagnostic for
+    /// whoever picks this up, if a fix short of the one below is wanted).
+    ///
+    /// This instead commits phase 3 directly — the exact value the unconditional-accept branch
+    /// commits — but ONLY once this specific terminal shape (<c>pathNode == destNode</c>,
+    /// <c>writeCursor - pathNode == 1</c>, i.e. genuinely the LAST recorded node, nothing further
+    /// to walk toward even if accepted) has been observed for several consecutive frames (passed
+    /// in by the caller, which already tracks per-slot stall duration for its own reissue logic)
+    /// — never on a single, possibly-still-legitimate visit.
+    ///
+    /// LIVE-TESTED AND DISPROVEN (round 87, same session): forcing phase 3 here does not produce
+    /// real motion. Instead it opens a NEW, DIFFERENT unproductive cycle together with
+    /// <see cref="TryForceWalkingWhenMovingToPathStalled"/>: phase visibly cycles
+    /// 7 -&gt; 3 -&gt; 0 (FindPath) -&gt; 7 -&gt; ... roughly every 0.3-0.5s, <c>CreMoveState</c>
+    /// settles at 1 ("idle") rather than 3 ("follow") or -1 ("walking"), and real position stays
+    /// bit-identical for 30+ continuous seconds — worse than the shape this was meant to fix, not
+    /// better. <see cref="PartyFollowController"/> defaults this OFF
+    /// (<c>party_follow_accept_final_node=0</c>) for that reason; the function is kept, named, and
+    /// documented as a ruled-out avenue (this project's own established convention — see round
+    /// 80's <c>TryPokeStepAccumulator</c>) rather than deleted. The likely reason forcing phase 3
+    /// alone is insufficient: unlike phase 2's TestDirectLine gate (a pure optimisation shortcut,
+    /// safe to skip), PathWaitDest's own accept/reject test may be the actual mechanism that
+    /// determines whether a real underlying move action gets (re)armed for the next node — jumping
+    /// straight to phase 3 without whatever that test's PASS branch does internally (not traced
+    /// this round; the geometric test's own two operand points were read, but nothing past
+    /// 0x512C09 itself, the "call GetPoint again / arm the next segment" logic phase 3's own entry
+    /// may depend on, was disassembled) may hand Moving_To_Path a segment with nothing real behind
+    /// it to step.
+    ///
+    /// Returns false when the index does not resolve. <paramref name="wrote"/> reports whether the
+    /// poke fired this call. Kill switch (to enable): <c>party_follow_accept_final_node=1</c>
+    /// (default off).
+    ///
+    /// MAIN THREAD ONLY.
+    /// </summary>
+    public static bool TryAcceptFinalPathNode(uint companionServerObjectId, out bool wrote)
+    {
+        wrote = false;
+
+        nint client = GetClient();
+        if (client == 0)
+        {
+            return false;
+        }
+
+        uint clientObjectId = ServerToClientObjectIdFn(client, companionServerObjectId);
+
+        nint party = GetSWPartyFn(client);
+        if (party == 0)
+        {
+            return false;
+        }
+
+        int index = GetPartyIndexFn(party, clientObjectId);
+        if (index <= 0)
+        {
+            return false;
+        }
+
+        nint record = party + 0x24 + (index * 0x88);
+        int phase = *(int*)(record + 4);
+        if (phase != 7)
+        {
+            return true;
+        }
+
+        int pathNode = *(int*)(record + 0x24);
+        int destNode = *(int*)(record + 0x34);
+        if (pathNode != destNode)
+        {
+            return true; // not the trivial-match shape this fires on
+        }
+
+        nint followData = party + 0x2DC;
+        if (!NativeMethods.IsReadable(followData + 0xFA4))
+        {
+            return true;
+        }
+
+        int writeCursor = *(int*)(followData + 0xFA4);
+        int gap = writeCursor - pathNode;
+        if (gap < 0)
+        {
+            gap += 100;
+        }
+
+        if (gap != 1)
+        {
+            return true; // gap==0 is "genuinely caught up, nothing recorded"; gap>=2 is
+                          // TryAdvanceStalledPathDestination's own, different shape
+        }
+
+        *(int*)(record + 4) = 3;
         wrote = true;
         return true;
     }

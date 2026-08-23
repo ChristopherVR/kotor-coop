@@ -128,6 +128,50 @@ internal sealed unsafe class PartyFollowController(SharedBlockView block)
     /// cursor so the search can escape the degenerate self-comparison. Kill switch:
     /// <c>party_follow_advance_destnode=0</c>.</summary>
     private readonly bool _advanceStalledDestNode = PluginConfig.ReadBool("party_follow_advance_destnode", true);
+
+    /// <summary>ROUND 88 (party-reconciliation.md): see
+    /// Odyssey.TryAdvanceStalledMovingToPath's own remarks — phase 2's own handler
+    /// (0x00511860) never commits its "close enough" acceptance (phase -> 3) unless
+    /// CSWSArea::TestDirectLine also returns exactly 1, and live data shows that gate never
+    /// resolving for a companion parked with a genuinely zero-length PriorPoint/Snapshot delta,
+    /// stalling permanently. Kill switch: <c>party_follow_advance_movingtopath=0</c>.</summary>
+    private readonly bool _advanceStalledMovingToPath =
+        PluginConfig.ReadBool("party_follow_advance_movingtopath", true);
+
+    /// <summary>ROUND 88 (party-reconciliation.md): see
+    /// Odyssey.TryForceWalkingWhenMovingToPathStalled's own remarks — round 84's own originally
+    /// -described mechanism (CreMoveState reverts from -1 to 3 mid-leg), traced this round to
+    /// FollowMoveGateCheckFn/0x00511130, a SEPARATE per-frame dispatch this controller does not
+    /// drive and cannot suppress at the source; this re-asserts CreMoveState=-1 whenever
+    /// Moving_To_Path is confirmed still running (its own accumulator advancing) with real
+    /// unconsumed trail remaining. Kill switch: <c>party_follow_force_walking=0</c>.</summary>
+    private readonly bool _forceWalkingWhenStalled =
+        PluginConfig.ReadBool("party_follow_force_walking", true);
+
+    /// <summary>Per-slot previous-frame read of <c>record+0x6C</c> — see
+    /// Odyssey.TryForceWalkingWhenMovingToPathStalled's own remarks for why this needs to be
+    /// sampled every frame, not just on the throttled fine-log pass.</summary>
+    private readonly int[] _lastMovingToPathAccumulator = new int[PartyNpcSlots];
+
+    /// <summary>ROUND 88 (party-reconciliation.md): see Odyssey.TryAcceptFinalPathNode's own
+    /// remarks — LIVE-TESTED AND DISPROVEN: forcing phase 3 on this exact terminal shape does
+    /// not unstick real motion; instead it opens a NEW unproductive cycle with
+    /// TryForceWalkingWhenMovingToPathStalled (phase 7 -&gt; 3 -&gt; 0/FindPath -&gt; 7 -&gt;
+    /// ... every ~0.3-0.5s, moveState settling at 1/idle rather than 3/follow, position still
+    /// frozen) — confirmed live, 30+ seconds, zero position change. Default OFF; the function is
+    /// kept, named, and documented as a ruled-out avenue rather than removed, matching this
+    /// project's own established convention (see round 80's TryPokeStepAccumulator). Kill switch
+    /// (to enable, for whoever wants to re-test it against a fix for the underlying oscillation):
+    /// <c>party_follow_accept_final_node=1</c>.</summary>
+    private readonly bool _acceptFinalPathNode = PluginConfig.ReadBool("party_follow_accept_final_node", false);
+    private readonly int[] _finalNodeStallFrames = new int[PartyNpcSlots];
+    private readonly int[] _lastFinalNodeSeen = new int[PartyNpcSlots];
+
+    /// <summary>How many consecutive frames the exact terminal shape must persist before
+    /// Odyssey.TryAcceptFinalPathNode is allowed to fire — enough to rule out a single,
+    /// possibly-still-legitimate visit, short enough not to add a perceptible extra pause.</summary>
+    private const int FinalNodeStallFrameThreshold = 10;
+
     private const int FineLogCap = 20000;
 
     /// <summary>Tightened from 0.2s to 0.04s (round 81, party-reconciliation.md) — round 80's
@@ -293,6 +337,54 @@ internal sealed unsafe class PartyFollowController(SharedBlockView block)
                 {
                     Odyssey.TryAdvanceStalledPathDestination(objectId, out _);
                 }
+
+                // ROUND 88: a third, independent permanent-stall shape — see Odyssey.
+                // TryAdvanceStalledMovingToPath's own remarks. Called last, after both of the
+                // above, so it only ever acts on whatever phase this frame's earlier calls
+                // could not themselves resolve.
+                if (_advanceStalledMovingToPath)
+                {
+                    Odyssey.TryAdvanceStalledMovingToPath(objectId, out _);
+                }
+
+                // ROUND 88: round 84's own originally-described "CreMoveState reverts from -1 to
+                // 3" mechanism — see Odyssey.TryForceWalkingWhenMovingToPathStalled's own
+                // remarks. Uses last frame's own accumulator sample (below) to tell "the handler
+                // ran this frame" apart from "nothing touched it" before deciding to poke.
+                if (_forceWalkingWhenStalled)
+                {
+                    Odyssey.TryForceWalkingWhenMovingToPathStalled(
+                        objectId, _lastMovingToPathAccumulator[slot], out _);
+                }
+
+                if (Odyssey.TryGetMovingToPathAccumulator(objectId, out int currentAccumulator))
+                {
+                    _lastMovingToPathAccumulator[slot] = currentAccumulator;
+                }
+
+                // ROUND 88: see Odyssey.TryAcceptFinalPathNode's own remarks — track how many
+                // consecutive frames the exact terminal shape (phase 7, parked on the same
+                // pathNode) has persisted before allowing that poke to fire.
+                if (_acceptFinalPathNode
+                    && Odyssey.TryGetPhaseAndPathNode(objectId, out int phaseNow, out int pathNodeNow))
+                {
+                    if (phaseNow == 7 && pathNodeNow == _lastFinalNodeSeen[slot])
+                    {
+                        _finalNodeStallFrames[slot]++;
+                    }
+                    else
+                    {
+                        _finalNodeStallFrames[slot] = 0;
+                    }
+
+                    _lastFinalNodeSeen[slot] = pathNodeNow;
+
+                    if (_finalNodeStallFrames[slot] >= FinalNodeStallFrameThreshold)
+                    {
+                        Odyssey.TryAcceptFinalPathNode(objectId, out _);
+                        _finalNodeStallFrames[slot] = 0;
+                    }
+                }
             }
 
             // ROUND 80: fine-grained unthrottled poll — see _fineLogEnabled's own remarks.
@@ -328,7 +420,13 @@ internal sealed unsafe class PartyFollowController(SharedBlockView block)
                         + $"preStepPrior=({preStep.PriorPoint.X:F2},{preStep.PriorPoint.Y:F2}) "
                         + $"preStepPhase={preStep.PhaseIndex} "
                         + $"snapshot=({fd.Snapshot.X:F2},{fd.Snapshot.Y:F2}) "
-                        + $"targetVsSnapshotDist={targetVsSnapshot:F3} enabledFlag={fd.EnabledFlag}");
+                        + $"targetVsSnapshotDist={targetVsSnapshot:F3} enabledFlag={fd.EnabledFlag} "
+                        // ROUND 88: live test of FollowMoveGateCheckFn/0x00511130 — the only
+                        // other CreMoveState=3 writer in the binary. See Odyssey.
+                        // FollowMoveGateCheckFn's own remarks for what each field means.
+                        + $"gateAreaId=0x{fd.GateAreaId:X} gateFires={fd.GateFires} "
+                        + $"partySlot0Id=0x{fd.PartySlot0Id:X} selfIsPartySlot0={fd.SelfMatchesPartySlot0} "
+                        + $"moveBudget={fd.MoveBudget:F6}");
                 }
             }
 

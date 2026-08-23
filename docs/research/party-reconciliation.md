@@ -2098,3 +2098,176 @@ before anyone treats this as a full regression-clean pass. `companion_local_comb
 `dotnet test tests/KotorCoop.Tests` (Release): unchanged this round — no production code touched
 (pure live observation against already-shipped round-83 code). Build and baseline confirmed green
 before starting (see this round's own commit).
+
+## Round 88 (2026-08-24) — round 84's own "CreMoveState reverts from -1 to 3" mystery resolved
+into THREE separate, disassembly-grounded mechanisms, not one; two real fixes shipped and
+live-verified (a companion now closes an entire leg down to its very last 1-3 recorded path
+nodes, ~1.3-1.4 units short, versus round 84's own best of ~2.44 units short); a third fix
+attempted, live-tested, and disproven — kept, documented, and defaulted off, not deleted
+
+Picks up round 84's own precise open item: "WHY `CreMoveState` reverts from -1 to 3 partway
+through a leg was not chased." Reproduced round 80/81/84's own recipe (`tp 20 22 -1.3`, `walk 10
+15`, `END_M01AA`) fresh this round, with a new 25 Hz diagnostic reading every field this round
+could reach, and chased the disassembly to the actual bytes doing the reverting.
+
+### Finding 1: the ONLY other `CreMoveState=3` writer in the whole binary, found and disassembled
+— real, but NOT the mechanism reproducing live this round
+
+A full `tools/fieldwrites.py 0xa8c` sweep (round 74's own established technique) finds exactly one
+other write site besides the follow-FSM itself: 0x005111A1, inside a small, previously
+undocumented function at 0x00511130 (`Odyssey.FollowMoveGateCheckFn`'s own remarks have the full
+disasm). It gates on `CSWSObject::GetArea` (0x004CB120, misidentified at first — its own vtable
+slot-0x28 call looked like `AsSWCModule` from the `GameObjectMethods` table alone, but the DB's
+`functions` table settles the address as `GetArea` directly) returning a live area, then compares
+`ResolvePartySlot0()` (party slot 0's own resolved id — "the local player," round 30's own
+citation) against the creature's OWN self id (`creature+4`, the same field
+`KotorGameBridge.OffObjectId` already names) — if they differ (structurally always true for a
+companion, which is never party slot 0), it force-sets `CreMoveState = 3`.
+
+Live-measured this round: the diagnostic built to test this (`FollowDiag.GateFires`,
+`.GateAreaId`, `.PartySlot0Id`, `.SelfMatchesPartySlot0`) reads `gateFires=true` on **every single
+sample taken, 4636 in a row, including throughout genuinely smooth walking** — it does not
+discriminate the moment of the revert; the underlying condition is permanently satisfied. This is
+real, structurally the only other candidate for round 84's own literal symptom, and is very likely
+still relevant to whatever round 84's own original repro hit — but it is not what this round's own
+live reproduction turned out to be gated by (see Finding 3). Left as a precisely-characterized,
+not-yet-actioned lead: reaching it requires the engine's own SEPARATE generic per-action-type
+dispatch (0x0057F79E, `ebx==5`) to process this creature's queued move, a call this plugin does not
+make and cannot directly suppress or race from its own per-frame hook.
+
+### Finding 2 (fixed, live-verified): phase 2's own handler silently requires
+`CSWSArea::TestDirectLine` to succeed, even when the geometric "close enough" test is already
+trivially satisfied
+
+Full disassembly of handler 0x00511860 (dispatch phase 2, never examined by this document before
+this round): it computes the distance between `PriorPoint` (`record+0x18`) and `Snapshot`
+(`record+0x5c`), squares it, and compares it against a threshold built from
+`*(float*)followData * 0.7` (the constant at 0x746f4c), squared — `followData` here is the FIRST
+dword of the whole, party-wide, embedded `CSWPartyFollowDataArray` struct (party+0x2DC), read live
+this round as `FollowDiag.MoveBudget` (consistently ~19.6, healthy — ruling out the "budget pinned
+at zero" theory this round tried first and disproved). When `PriorPoint == Snapshot` (a zero-length
+remaining segment — live-confirmed bit-identical across 30+ consecutive 25 Hz samples spanning an
+entire stall) this comparison is trivially satisfied, but the "close enough" branch does NOT
+actually commit `record+4 = 3` until reaching 0x511ACD, gated the whole way behind
+`CSWSArea::TestDirectLine` (0x004BCB70, called via `GetArea`'s returned area pointer as `this`)
+returning EXACTLY 1. Live data: this never resolves favourably once parked in the degenerate shape
+— the function instead pool-allocates and queues a re-check via
+`CServerAIMaster::AddEventDeltaTime` (0x004B08D0), deferring to a later tick that never seems to
+land either, and `record+4` is left completely untouched — cycling (phase 2, `attempts` climbing
+0-50, the engine's own watchdog forcing -1, this document's own `TryResetStuckFollowPhase`
+immediately restarting FindPath, which re-derives the SAME degenerate phase-2 input) for 30+
+seconds straight with zero position change in one live repro.
+
+**Fix**: `Odyssey.TryAdvanceStalledMovingToPath` commits phase 3 directly — the same value the
+engine's own "close enough" branch would have written had TestDirectLine returned 1 — but ONLY when
+`PriorPoint == Snapshot` (within a tight epsilon) AND at least one real watchdog pass has already
+happened (`attempts > 0`, so the very first, still-legitimate visit to phase 2 is left alone). Kill
+switch `party_follow_advance_movingtopath=0` (default **on**).
+
+### Finding 3 (fixed, live-verified, one revision): round 84's own literal symptom, reproduced —
+and a naive "poke CreMoveState back to -1" fix measured insufficient before a working fix was found
+
+With Finding 2's fix active, a companion now genuinely reaches phase 3 (`Moving_To_Path`) and
+`record+0x6C`'s own accumulator (`FollowDiag.MovingToPathAccumulator`, round 84's own diagnostic)
+climbs every call — direct proof the handler runs every frame — while `CreMoveState` reads a steady
+**3**, not -1, and real position stays frozen. This is round 84's own literal symptom, reproduced
+cleanly this round.
+
+First attempt (live-tested, insufficient alone): re-assert `CreMoveState = -1` directly whenever
+this shape holds. **Live result: the poke sticks — `moveState` reads -1 continuously afterward,
+confirmed in the fine-log — but real position never resumes and `CurrentPathNode` stays frozen.**
+Toggling the flag back does not resurrect whatever real, engine-native queued move action
+Moving_To_Path's own geometric progress check (0x4AA980, round 84's own citation) needs to measure
+against — the flag and the underlying queued action are evidently two different things, and only
+the flag was being restored.
+
+**Fix (shipped)**: `Odyssey.TryForceWalkingWhenMovingToPathStalled` forces phase back to **0**
+(`FindPath`) instead of touching `CreMoveState` directly — `FindPath` (0x51AC10) is the ONLY
+handler that both calls `AddMoveToPointActionToFront` (queuing a real move) AND sets
+`CreMoveState = -1`, as part of the SAME shared epilogue (0x51AF5A per round 74's own citation) —
+so this lets the engine's own FindPath handler do both jobs itself, on this controller's very next
+`TryDriveFollowLeaderStep` call (already made every frame). Fires only when Moving_To_Path is
+confirmed genuinely running (its accumulator has advanced since the last frame — tracked via a new
+cheap accessor, `Odyssey.TryGetMovingToPathAccumulator`, called every frame rather than only on the
+throttled fine-log pass) AND real, unconsumed trail remains AND `CreMoveState` currently reads
+something other than -1. Kill switch `party_follow_force_walking=0` (default **on**).
+
+**Live result with both fixes active**: a companion now covers real, continuous distance all the
+way down to the very LAST 1-3 recorded trail nodes of a leg (live-confirmed twice more this round,
+different runs landing on different final nodes — pathNode 28 and 30 in two separate cycles — each
+time stalling cleanly at ~1.3-1.4 units short of the leader, no oscillation, `moveState` holding a
+stable 3). This is a real, measured improvement over round 84's own best result (~90% covered, 2.44
+units short) — she now consumes essentially the entire recorded trail before stopping.
+
+### Finding 4 (attempted, live-tested, DISPROVEN — kept, documented, defaulted off): the final
+1-3 nodes stall at `PathWaitDest`'s own geometric accept/reject test, a fourth, narrower, distinct
+shape
+
+With Findings 2 and 3 both active, the companion now reliably stalls one layer further still: phase
+7 (`PathWaitDest`, 0x00512B40), `CurrentPathNode == DestNode`, `WriteCursor - CurrentPathNode == 1`
+— genuinely the LAST recorded node. Full disassembly of PathWaitDest this round (superseding round
+83's own partial read): the forward search matches `DestNode` on the very first comparison when
+they are already equal (this shape), falling into an accept/reject test that looks up the recorded
+point at that index (`CSWPartyFollowDataArray::GetPoint`-shaped call, 0x00634CC0) and accepts only
+when that point is STRICTLY closer to `TargetPoint` than to `PriorPoint` — a "has this waypoint
+been passed yet" geometric test. Live-confirmed: it never resolves favourably here, no natural
+recovery across 3+ minutes of continuous observation. Round 83's own `TryAdvanceStalledPathDestination`
+fix cannot reach this case — its own `gap >= 2` requirement exists precisely because
+`DestNode == WriteCursor` is structurally unreachable by this same search loop, and here `gap == 1`
+leaves no other in-range candidate value for `DestNode` to be poked to.
+
+**Attempted fix**: `Odyssey.TryAcceptFinalPathNode` commits phase 3 directly (the value the
+accept branch would write) once this exact terminal shape has persisted for several consecutive
+frames (tracked via a new per-slot counter in `PartyFollowController`, since PathWaitDest's own
+dispatch epilogue zeroes `attempts` every call, unlike phase 2's). **Live-tested and DISPROVEN**:
+rather than unsticking real motion, it opens a NEW, different unproductive cycle together with
+Finding 3's own fix — phase visibly cycles 7 → 3 → 0 (FindPath) → 7 → ... roughly every 0.3-0.5s,
+`CreMoveState` settles at 1 ("idle") rather than 3 or -1, and real position stays bit-identical for
+30+ continuous seconds — objectively worse than the shape it targets. Per this project's own
+established convention (round 80's `TryPokeStepAccumulator`), the function is kept, fully
+documented with its own live-disproven result, and defaulted OFF
+(`party_follow_accept_final_node=0`) rather than deleted. Leading theory for why it fails, not
+chased further this round: unlike phase 2's TestDirectLine (a pure optimisation shortcut, safe to
+skip), PathWaitDest's own accept/reject PASS branch may do more than just write the phase — the
+disassembly was not followed past 0x512C09 itself to see whether it also arms something
+Moving_To_Path's entry depends on, which jumping straight to phase 3 would then be skipping.
+
+### What was NOT attempted this round
+
+Round 85's own still-open module-warp access-violation crash (0x4AA984) was not investigated —
+time went entirely to the primary CreMoveState thread, which turned out to require four separate
+disassembly-grounded investigations rather than one. Flagged again, unchanged, for whoever picks
+this up next.
+
+### Test suite and build
+
+`dotnet test tests/KotorCoop.Tests` (Release): **1670/1670 passed**, 2m32s. This round's changes:
+three new small engine-writes (`TryAdvanceStalledMovingToPath`, `TryForceWalkingWhenMovingToPathStalled`
+revised, `TryAcceptFinalPathNode` shipped but defaulted off), two new cheap read-only accessors
+(`TryGetMovingToPathAccumulator`, `TryGetPhaseAndPathNode`), and several new read-only diagnostic
+fields (`FollowDiag.GateAreaId`/`.GateFires`/`.PartySlot0Id`/`.SelfMatchesPartySlot0`/`.MoveBudget`,
+all wired into the fine-log line) — none exercised by the (x86 NativeAOT, unreferenced-by-tests)
+test project. Both plugin builds clean, 0 warnings 0 errors. Across this round's several
+rebuild/redeploy/relaunch cycles (one per hypothesis: the phase-2 TestDirectLine fix, the
+CreMoveState-only poke that measured insufficient, its FindPath-based revision, the phase-7
+final-node fix that measured harmful and was defaulted off). Rig torn down clean
+(`Get-Process swkotor,KotorCoop.Agent` empty), `auto_start_agent` restored to `1` in both GOG
+installs. No `SharedBlock` layout or protocol version change — every new field/call this round adds
+is plugin-internal, nothing crosses the wire.
+
+### Verdict
+
+Round 84's own "CreMoveState reverts from -1 to 3, for a reason not yet found" is now resolved into
+three separate, disassembly-grounded, live-tested mechanisms — not the single cause its own framing
+implied. Two are real, shipped fixes (a TestDirectLine gate silently blocking a trivially-satisfied
+acceptance test, and a naive CreMoveState poke that needed to become a FindPath re-entry poke once
+live-measured insufficient alone), together taking a companion from round 84's own best result
+(~90% of a leg, 2.44 units short) to consuming essentially the ENTIRE recorded trail, stopping only
+at its very last 1-3 nodes, ~1.3-1.4 units short — reproduced cleanly across three separate rig
+cycles this round with no oscillation and a stable `CreMoveState`. The third (a fourth, narrower
+stall at the very last node) was attempted, live-tested, found to make things WORSE, and shipped
+disabled rather than either forced through unverified or silently discarded — the walk still does
+not complete end-to-end, but the honest gap remaining is now precisely one geometric accept/reject
+test at the very last recorded waypoint, with a concrete disassembly starting point
+(0x00512C09 onward) named for whoever picks this up next, rather than the vague "reverts, cause
+unknown" this round inherited.
