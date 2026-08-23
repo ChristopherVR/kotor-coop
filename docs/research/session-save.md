@@ -1261,3 +1261,108 @@ time). Read `docs/live-verification.md`'s standing rules before starting.
 4. **Timing**: note how long `TriggerMidSessionLoad`'s poll actually takes to settle, and
    whether 90s is comfortably enough — adjust if a live pass finds it isn't (NEEDS-LIVE item
    4).
+
+## Live pass (2026-08-23, live rig round): the core mechanism works, live-confirmed twice; a real precondition trap found and worked around; the rejoin gates could not be validly exercised this round
+
+Ran on the two-instance rig. `dotnet build`/`dotnet test` green (1652/1652) before touching
+anything live.
+
+### Item 0 — the smoke test: PASSES, once a genuine precondition trap is understood
+
+First attempt refused cleanly with `failure 9` (`menu: mid-session load refused - the
+message-box precondition was not met`), deterministically, on every retry. This is NEEDS-LIVE
+item 2 answered directly: **the message-box precondition is NOT always clear during ordinary
+play — it was clear (bit 0 of `CSWGuiMessageBox+0x64`) on every attempt this round made, because
+this rig's session never opens the real pause-menu GUI at all** (the plugin route loads saves
+with no click/keystroke ever landing — `docs/live-verification.md`'s own established fact,
+"injected keystrokes never reach this game"). A scratch diagnostic
+(`msgboxpoke.ps1`, not committed — same category as this project's other throwaway live-test
+pokes, e.g. `minigamepoke.ps1`) read the live object and confirmed: freshly constructed, the
+byte at `+0x64` is `0x06` (bits 1–2 set by the constructor's own `and 0xE7; or 6`, bit 0 left at
+whatever raw memory held — `0` here). Disassembling `CSWGuiMessageBox::Constructor`
+(`0x00626DF0`) confirms bit 0 is genuinely never touched at construction — it must be set by
+some LATER Show/Hide cycle real menu use would trigger, which an all-console session never
+produces.
+
+Setting bit 0 by hand (`msgboxpoke.ps1 -Set`) and re-firing `loadgame 0` succeeded completely:
+
+```
+[23:14:47.620] menu: constructing the save panel (mid-session)
+[23:14:47.623] menu: staging the load screen (mid-session)
+[23:14:47.623] menu: tearing down the existing server for a mid-session load
+[23:14:47.663] menu: creating the server and loopback session (mid-session)
+[23:14:47.665] menu: connect started; giving it 1000 ms of real pumping before the load (mid-session)
+[23:14:47.665] world: unannounced teardown - treating as a load, not a transition
+[23:14:48.710] menu: routed the login to the saved character (LoadPrimaryPlayer)
+[23:14:50.727] menu: presentation handed over (gui status 1, expect 1)
+[23:14:50.727] menu: the world is up and on screen
+```
+
+**3.1 seconds start to finish** — NEEDS-LIVE item 4 answered: 90s is generous, not tight.
+`partystate.ps1` before/after confirmed a REAL character/world reload, not a no-op: companions
+dropped from 2 (Trask + a live-session-recruited Carth) to 1 (Trask only, matching the on-disk
+save's own pristine state), and position shifted from the live in-session point to the save
+file's own stored coordinates — NEEDS-LIVE item 5 (the chosen save's own character, not a
+blank/default one) confirmed directly. `world: unannounced teardown - treating as a load, not a
+transition` firing is `WorldLoadRule.IsUnannouncedTeardown` working exactly as the static
+analysis predicted — NEEDS-LIVE item 3's FIRST half (the plugin-side detection) confirmed.
+Repeated successfully a second time from a fresh rig restart (a different instance, a
+freshly-crafted second save) with the same bit-0 workaround — not a one-off.
+
+**Item 1 (crash/hang risk) is closed**: `DestroyServer`+`ClientUnloadModule`+`CreateServer`, the
+one call sequence this pass could not previously verify live, ran cleanly, twice, with no crash
+and no hang.
+
+**The honest caveat this finding adds**: `loadgame` as shipped will reliably refuse with
+`failure 9` for ANY session that has never shown a real pause-menu message box — which describes
+every console/agent-driven rig session, and possibly also a real player's very first mid-session
+load attempt if the engine doesn't set this bit some other way earlier in normal play (untested,
+since this round's only live evidence is the all-console case). This is not a defect in the new
+code — it is faithfully replicating retail's own precondition, exactly as designed — but it means
+a coordinator relying on `loadgame` for further live-testing on this rig should expect the FIRST
+call each fresh session to need the same bit-0 workaround (or some other, not-yet-found way of
+touching a real message box) before it stops refusing.
+
+### Items 2/3 — could not be validly exercised this round: the digest half of the rejoin gate never saw a change to correlate against
+
+With `client_load_rejoin=1`/`host_load_readopt=1` set on both installs and the rig restarted so
+the agents picked up the new config (both gate fields are read once and cached —
+`_clientLoadRejoinEnabled ??= ...` — so an in-place `coop.ini` edit needs a fresh agent process,
+not just a fresh read), `loadgame 0` was fired on the CLIENT twice (once reloading the same save
+already in play, once reloading a freshly `craft-save`d copy of it). Both calls succeeded
+exactly as item 0 describes (`world: unannounced teardown` fired both times, confirmed via the
+plugin log), but **neither produced `you loaded a save - rejoining the host's world` or any
+other rejoin-related line in the agent log**, despite the gate being on.
+
+Reading `SaveOrLoadClassifier.Observe` (`src/KotorCoop.Session/WorldLoadWatch.cs`) explains why,
+and it is not a defect: a `Load` verdict requires BOTH the world-load edge (confirmed firing,
+above) AND a correlated `SaveIdentityDigest` change within a 5-second window — the classifier's
+own doc comment states plainly that "a load edge that never gets a matching digest change within
+the window simply expires unconsumed and produces no verdict at all," an ALREADY-ACCEPTED gap,
+not new. `SaveDigest.TryComputeSaveIdentity` (`src/KotorCoop.Memory/SaveDigest.cs`) hashes the
+save's **module, `Mod_NextObjId0/1`, and the stored GIT's explicit ObjectId list** — none of
+which `GlobalFlagCraft`/`craft-save` touches (by design — it only ever rewrites
+`GLOBALVARS.res`). Both saves tested this round (the original `000002 - Game1` and a
+`craft-save` copy of it differing only in one global boolean) are therefore **digest-identical**
+by construction, so the classifier correctly saw no digest change on either `loadgame` call — it
+is not that the mechanism failed, it is that this round could not construct a save that differs
+in any digest-relevant way without either real in-game save-menu interaction (broken on this
+rig, per item 0's own finding) or a module transition producing a genuinely different real
+autosave, neither of which this round could reach in the remaining time.
+
+**This is a genuine testing-methodology gap this round hit, not a result about the rejoin
+mechanism itself** — `ClientLoadRejoinRule`/`SaveOrLoadClassifier` were not exercised, favourably
+or unfavourably, because the precondition their own contract requires (a real digest change) was
+never produced. Per the task's own instruction ("only flip either gate's default ON with a
+direct, decisive, zero-regression result"), **both gates stay OFF** — this round has no decisive
+result either way, only a clean, well-understood reason why it could not get one. A future round
+with either working GUI-driven save-menu interaction or a save reachable via genuine module
+transition (not a `craft-save` flag copy) is what item 2/3 actually needs.
+
+### What changed, and what did not
+
+No production code changed this round — this was pure live verification against already-shipped
+code (the `loadgame`/`FireMidSessionPhase1` mechanism built in the round above). Both installs'
+`coop.ini`s were flipped to `client_load_rejoin=1`/`host_load_readopt=1` for the test and flipped
+back to `0` afterward (shipped defaults), the same undo discipline this document's other rounds
+use. The crafted test save (`000003 - zzz_loadtest`) was deleted after use.
