@@ -1535,3 +1535,251 @@ a strictly smaller, better-scoped question for whoever has the rig next.
 No code changed this round — verification only. The crafted test save was deleted at the end of
 this round (throwaway artifact, not meant to persist); `000002 - Game1` was never modified.
 `dotnet test`: 1674/1674 green throughout.
+
+## 16. Why the transition never fires: `#509` really is `StartNewModule` (externally verified),
+the whole call is DEFERRED via `DelayCommand(0.1, ...)` rather than run inline, no script-side
+precondition gates it at all — and the leading suspect is now KOTOR's own focus-loss world-timer
+pause, not the script (2026-08-24, follow-up round)
+
+Picked up exactly where §15 left off: three live possibilities, none distinguished, no rig access
+this round (reads only, same constraint as every round in this section). Re-disassembled
+`k_ptar_bekrace.ncs` end to end — not just the one decisive line §14.4 quoted — plus its two
+cutscene neighbours, and checked `#509`'s identity against a real, external, KOTOR-specific action
+table instead of inferring it from argument shape alone. The answer changes what §15's three open
+possibilities even mean.
+
+### 16.0 Housekeeping: this worktree started 100+ commits behind and had to be fast-forwarded
+before any of this was possible
+
+The worktree handed to this round was pinned at `1665671` — the commit right before the round that
+built `NcsReader.cs`/`NwscriptActions.cs` in the first place, per `kotor-coop-worktree-base-and-
+shared-checkout.md`'s standing warning. `git merge --ff-only 0377fd9` (a plain, no-conflict
+fast-forward — verified an ancestor first with `git merge-base --is-ancestor`) brought it current
+before any of this round's own work started. Recorded here because it is exactly the failure mode
+that memory file warns about, and because a future round trusting `git log` alone in a fresh
+worktree without checking it is current would silently redo work this repo already has.
+
+### 16.1 Tooling: a throwaway console project referencing this repo's own `KotorCoop.Memory`, same
+"one-off is fine" call as §14.1
+
+No bytes were embedded in §14's own writeup, so the two Taris archives were re-extracted directly
+from the live GOG install (`C:\GOG Games\Star Wars KOTOR (GOG)\modules\tar_m11aa_s.rim`,
+`tar_m03af.rim`, `tar_m03af_s.rim` — reads only, no writes, consistent with this round's access
+grant). A small console project (not checked into the repo) referencing this worktree's
+`KotorCoop.Memory.csproj` opened each RIM with `RimArchive.Open`, pulled every `k_ptar_*` script
+byte-for-byte with `TryRead(resref, "ncs", ...)`, ran `NcsReader.Disassemble` + `FindActionCalls`
+over each, and separately parsed `tar_m03af`'s `module.ifo`/`m03af.git` with `Gff.Parse` for the
+waypoint check task step 4 asked for. Nothing here found a gap in the existing `GameFiles` readers
+worth promoting into the tree.
+
+### 16.2 `#509` genuinely is `StartNewModule` — confirmed against xoreos-tools' own KOTOR function
+table, not inferred from the argument shape the way §14.4 had to
+
+xoreos-tools ships a KOTOR-specific (not KOTOR2) action-routine table,
+[`src/nwscript/game_kotor.h`](https://github.com/xoreos/xoreos-tools/blob/master/src/nwscript/game_kotor.h),
+independent of anything this project had built or assumed. Looked it up directly:
+
+```
+509: StartNewModule(String, String, String, String, String, String, String, String)
+```
+
+Eight string parameters, exactly matching the eight-argument `CallEngine` this project's own
+disassembler already found. §14.4's identification was right, but it was circumstantial (argument
+shape only); this round makes it a verified fact, closing off §15's possibility 2 outright — the
+routine's identity is not the problem, and `NwscriptActions.KnownActions` could add `[509] =
+"StartNewModule"` as a genuinely verified (not inferred) entry, sourced externally rather than from
+this project's own binary the way 578-581 were. (Not added this round — the table's own doc comment
+frames it as "the handful this project has actually needed," and this round is investigation, not a
+production change to that shared table.)
+
+Also looked up every OTHER routine number `k_ptar_bekrace.ncs`/`racecs0`/`racecs1` call, closing the
+task's "read every action call, not just the transition" requirement for real:
+
+| # | Name | Args | Where used |
+|---|---|---|---|
+| 200 | `GetObjectByTag` | (String, Int) | fetching Gadon by tag |
+| 548 | `GetFirstPC` | () | the PC, called repeatedly |
+| 50 / 49 | `GetMaxHitPoints` / `GetCurrentHitPoints` | (Object) | computing missing HP |
+| 78 | `EffectHeal` | (Int) | building the heal effect |
+| 220 | `ApplyEffectToObject` | (Int, Effect, Object, Float) | applying the heal |
+| 393 | `GiveXPToCreature` | (Object, Int) | the quest-XP award |
+| 166 | `GetHitDice` | (Object) | feeds the XP if/else |
+| 42 | `GetIsObjectValid` | (Object) | a validity guard |
+| 680 | `SetLocalBoolean` | (Object, Int, Int) | a flag set near the end |
+| 7 | `DelayCommand` | (Float, ScriptState) | **wraps the `StartNewModule` call** |
+| 6 | `AssignCommand` | (Object, ScriptState) | `racecs0`/`racecs1`'s NPC moves |
+| 9 | `ClearAllActions` | () | `racecs0` |
+| 22 | `ActionMoveToObject` | (Object, Int, Float) | the walk-to-waypoint staging |
+| 196 | `ActionJumpToObject` | (Object, Int) | `racecs0` |
+| 202 | `ActionWait` | (Float) | `racecs0`/`racecs1` |
+| 205 / 206 | `ActionPauseConversation` / `ActionResumeConversation` | () | bracket the walk actions |
+| 213 | `GetLocation` | (Object) | `racecs0` |
+| 241 | `DestroyObject` | (Object, Float, Int, Float) | `racecs0`/`racecs1` |
+| 243 | `CreateObject` | (Int, String, Location, Int) | spawning an escort NPC |
+| 575 / 577 | `RemovePartyMember` / `GetPartyMemberByIndex` | (Int) / (Int) | party bookkeeping |
+| 719 / 720 | `SetGlobalFadeIn` / `SetGlobalFadeOut` | (Float×5) | the "restless night" fade |
+
+`racecs0`/`racecs1` are exactly what §14.4 described from the outside — a fade-to-black, an
+`AssignCommand`-driven NPC walk to a waypoint, party add/remove bookkeeping, another fade-in — now
+confirmed name-by-name rather than shape-guessed. Nothing in either cutscene script's own call list
+is a precondition on `k_ptar_bekrace` running later; they are simply earlier, separate dialogue
+nodes that already finished (§15's own `dialogue-node-pub` log lines already proved nodes 17/18 ran
+before node 21).
+
+### 16.3 The real structure of `k_ptar_bekrace.ncs`, corrected: it is not "call `#509`", it is
+"queue a `DelayCommand`, unconditionally, with nothing gating it"
+
+§14.4 quoted one decisive line out of 1554 bytes. Read in full, `int main()` does, in order,
+unconditionally, with **zero `JumpIfZero`/`JumpIfNonZero` anywhere in the entire 1554 bytes** (every
+jump in the file is either the boilerplate trampoline or the `StoreState` "skip over the closure
+body" jump described below — confirmed by listing every instruction, not sampling):
+
+1. `GetObjectByTag("gadonthek112", 0)` — fetches Gadon (result not visibly consumed by name in the
+   trace; almost certainly feeds the subroutine call next as an already-standard NWScript compiled
+   idiom).
+2. A subroutine call into a ~20-way `if`/`else if` chain (offsets 838-1348) comparing a parameter
+   against ten stored constants and calling `GiveXPToCreature(GetFirstPC(), n)` with `n` one of
+   `150`, `200`, or `100` (`CopyTopSp * {15,20,10}`) depending which branch matches — a quest-XP
+   award, unconditional in the sense that SOME branch always fires (the chain's own fallback path
+   at 1342 still reaches the shared exit).
+3. `ApplyEffectToObject(DURATION_TYPE_INSTANT, EffectHeal(GetMaxHitPoints(PC) - GetCurrentHitPoints
+   (PC)), GetFirstPC(), 0.0)` — heals the PC to full. Ordinary, unconditional, "patch you up before
+   the big race" content.
+4. `DelayCommand(0.1, StartNewModule("tar_m03af", "", "", "", "", "", "", ""))` — the module
+   resref is the FIRST declared parameter (`sNewModule`), confirmed by which string sits closest to
+   the `CallEngine` instruction (NWScript's own reverse-argument-push convention: the last-pushed
+   value is the first declared parameter) — consistent with §16.2's verified signature, not just
+   plausible. `sNewWaypoint` and all six movie slots are empty strings.
+5. `main()` returns.
+
+Step 4 is the actual bytecode shape of a `DelayCommand` call: `StoreState` captures the closure (the
+`#509` call and its arguments) as a value, an unconditional `Jump` skips over the closure's own body
+in the normal control-flow reading, and only AFTER that jump target does the code push the 0.1
+second delay and call `DelayCommand` itself with the captured closure. **This means `StartNewModule`
+is never executed inline as part of running this script — it is scheduled to run roughly a tenth of
+a real second later**, through whatever the engine's normal delayed-command dispatch is. This is new
+context §14.4 did not have (it only showed the isolated `#509` line) and it directly reframes §15's
+own possibility 3: there is no hidden precondition inside `k_ptar_bekrace.ncs` silently no-op'ing —
+the disassembly proves there is nothing to no-op past. **§15's possibilities 2 and 3 are both now
+ruled out by hard evidence, not narrowed:** the routine is verified `StartNewModule` (§16.2), and the
+script unconditionally schedules the call with no gate of any kind (§16.3).
+
+### 16.4 `tar_m03af`'s own waypoint data is fine — the empty `sNewWaypoint` argument is not a bug
+
+Task step 4 asked whether the destination module's own `StartingList`/waypoint data could make an
+empty or mismatched waypoint argument silently no-op. `tar_m03af`'s `module.ifo`, read directly this
+round:
+
+```
+Mod_Entry_Area = 'm03af'
+Mod_Entry_X = 246.196,  Mod_Entry_Y = 218.443,  Mod_Entry_Z = 8.246
+Mod_Entry_Dir_X = -1,   Mod_Entry_Dir_Y ≈ 0
+```
+
+A populated, sane default entry point. `StartNewModule`'s own real signature (§16.2) treats
+`sNewWaypoint=""` as "use the module's own default entry" — exactly what `k_ptar_bekrace.ncs` passes
+— so this is the NORMAL, working case, not a starved argument. `tar_m03af.rim`'s GIT also lists 19
+real waypoints (`tar03_wpraceover`, `tar03_wpswoopie` ×3, `RedrosHome`, `AngluHome`, etc.) confirming
+the module is fully populated content, not a stub. **Task hypothesis 4 (bad/missing waypoint) is
+ruled out.**
+
+### 16.5 The leading hypothesis, now much narrower than §15's three: the delayed action's own
+scheduler, not the script, is where this stalls — and this project's own code names the one
+mechanism that stalls EXACTLY this way with zero crash and zero movement
+
+`DelayCommand(0.1, ...)`'s event needs the engine's own world clock to advance roughly a tenth of a
+second before it fires. `docs/re/frame-hook.md` §3 (VERIFIED) already established the server tick
+(`CServerExoAppInternal::MainLoop`, whose own call list includes `CWorldTimer::SetSnapshotTime`) runs
+300+ times a second even when the window is not foreground. A tenth of a second of REAL engine time
+should never take three minutes to arrive under a healthy world clock — §15's own several-minute,
+zero-movement, zero-transition, no-crash stall is the signature of the world clock **not advancing
+at all**, not of a slow scheduler.
+
+This project has already reverse-engineered and named the one thing that does exactly that:
+`FocusKeeper.cs`'s own doc comment — "KOTOR pauses itself when its window loses focus: the
+`WM_ACTIVATEAPP` handler calls `Global::DeactivateRenderWindow`, which calls
+`CServerExoApp::SetPauseState(2, 1)`, which calls `CWorldTimer::PauseWorldTimer`." A paused
+`CWorldTimer` freezes literally everything time-based — movement, animation, and any
+`DelayCommand`-scheduled event — while leaving the process fully alive and `Responding=True`
+(matching §15's own `crashlog.ps1` observation) and the player's position exactly where it was
+(matching §15's own `console 'where'` polls). This is a better-fitting match to every single symptom
+§15 recorded than any of its original three possibilities.
+
+The project already ships a countermeasure — `KotorCoop.Agent`'s attach path calls
+`SetKeepAliveUnfocused(true)` on every successful bridge attach (`Program.cs:526`), which arms
+`FocusKeeper.OnFrame` to clear that ONE pause-reason bit roughly every 30 frames
+(`Odyssey.PauseReasonUnfocused` only — the doc comment is explicit that a script- or
+player-imposed pause uses a different bit and is deliberately left alone). §15's round drove the
+game through `console 'warp ...'` / `console 'talk ...'` and polled with repeated `console 'where'`
+calls from what was almost certainly an external terminal — exactly the kind of interaction that
+moves OS window focus away from the game window for the affected window's whole duration. Whether
+`FocusKeeper` actually kept up is not knowable from §15's own log excerpts (it records dialogue-node
+publishes and position polls, not focus or pause state), so this is a **hypothesis with a named,
+plausible mechanism**, not a confirmed cause — the honest standard this document has kept
+throughout this section.
+
+### 16.6 The exact next live-test step
+
+Two independent, cheap checks, neither requiring new code, using surfaces this project already has:
+
+1. **Check whether the world clock was actually paused during the stall window.** Repeat §15's exact
+   recipe, and this time watch `kotorcoop-plugin.log` for `"unfocused-pause suppression on"` (proves
+   `KeepAliveUnfocused` was armed at all this session) and any `"cleared focus-loss pause (#N)"`
+   lines specifically inside the 08:02:05-08:05:26-equivalent stall window. Separately, poll
+   `KotorGameBridge.PausesCleared` (already exposed on the agent-side bridge, `KotorGameBridge.cs:
+   1430`, backed by `SharedBlock` offset `0x26C`) before starting the Gadon conversation and again
+   after the stall — a flat count across the whole wait, combined with the window genuinely having
+   lost focus (check via any external means, e.g. `Get-Process`'s `MainWindowHandle` vs
+   `GetForegroundWindow`), would mean `FocusKeeper` never got the chance to clear the reason that
+   paused it, or the pause used a different reason bit than `PauseReasonUnfocused` — either way,
+   directly implicating the focus-pause path. A steadily climbing count with the transition still
+   never firing would rule this hypothesis out and point back to something else in the delayed-event
+   scheduler.
+2. **Control for it directly**: repeat the recipe once more keeping the game window focused and in
+   the foreground for the ENTIRE wait after node 21 publishes — no alt-tabbing to a terminal, drive
+   `console` commands from a window that does not steal focus, or simply do not poll at all for the
+   first 10-15 real seconds (comfortably more than the 0.1 s the script actually asked for) before
+   checking `console 'where'`/module state once. If the transition fires within moments of that
+   first check, this round's hypothesis is confirmed and the fix is almost certainly "make the
+   agent's own console-relay path (or whatever issues these test commands) avoid stealing window
+   focus during a live test," not a change to `k_ptar_bekrace.ncs`, `TravelController`, or any
+   engine hook — the script and the destination module are both now confirmed correct and
+   unconditional (§16.3, §16.4).
+
+### 16.7 A real, separate shipping risk surfaced along the way — not the cause of this stall, but
+worth its own line
+
+Task step 3 asked whether this project's own transition-watching machinery could be interfering.
+Checked `TransitionAnnounceWatch`/`PluginHost.OnFrame`'s `Odyssey.IsAreaTransitionPending()` gate
+directly: `Odyssey.cs`'s own doc comment is explicit that the flag it reads
+(`CSWSArea + 0x2C4`, `trans_pending`) is raised specifically by `CSWSDoor::EventHandler` for a
+**door/trigger** transition, "a byte that goes 1 roughly half a second before a door/trigger
+transition stores the area." A script-triggered `StartNewModule()` call — the mechanism this whole
+section is about — almost certainly does not go through `CSWSDoor::EventHandler` at all and so
+likely never raises this flag, meaning `PluginHost`'s pre-store phantom/replicated-item flush window
+(the one `TravelController.cs`'s own header warns is needed because `StoreCurrentModule` "skips only
+party members" and would otherwise bake plugin-spawned objects permanently into the stored module)
+probably never opens for a scripted transition like this one. This did not matter for §15's own
+solo, state-free test (nothing was spawned to flush), but it is a real, currently-unverified risk
+for any FUTURE live co-op test of this exact path once real phantom companions / replicated ground
+items exist — not fixed this round (no live confirmation either way, and this task's own standard is
+no speculative production changes without confidence), but worth a named line item for whoever next
+runs this recipe with a real second player connected.
+
+### 16.8 What this changes about the shipping recommendation
+
+Nothing changes yet — still `minigame_hide_peer` default-on, still not shipped, still not observed
+working end to end. What this round adds: **the transition call itself is now fully verified
+correct** (right routine, right primary argument, valid destination module, zero script-side
+preconditions) and **the mystery is now provably about WHEN it runs, not WHETHER it was ever going to
+run** — narrowed from three open possibilities to one well-evidenced leading hypothesis with a named
+mechanism (`CWorldTimer`'s focus-loss pause) and two concrete, cheap checks (§16.6) that need no new
+code, just a live round paying attention to window focus and an existing counter this project already
+exposes.
+
+No production code changed this round (investigation only, per this round's own scope — a fix, if
+§16.6 confirms the focus-loss theory, most likely belongs in whatever drives `console` commands
+during a live test rather than in the shipped plugin, which already has `FocusKeeper` built and
+armed for exactly this). `dotnet build -c Release`: clean, 0 warnings, 0 errors, confirming the
+fast-forward in §16.0 did not disturb anything. No `dotnet test` run this round (no code changed to
+verify); the last recorded green run remains 1674/1674 (§15).
