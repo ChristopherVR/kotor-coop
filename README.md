@@ -45,7 +45,7 @@ off by default or waiting on a live pass; the linked doc always has the dated ev
 | Dialogue recruitment sync — duplicate-body defect | Root-caused (an off-stage recruitment cache was being mistaken for an addable party member) and fixed; live-confirmed clean across all four verification steps | [dialogue-consequences.md](docs/research/dialogue-consequences.md); `dialogue_recruit_sync` stays off by default (per-slot template mapping still only confirmed for one of nine companions) |
 | `loadgame` console verb (deterministic mid-session Load, no mouse clicks) | Built and live-confirmed: a real teardown/reload in 3.1s, correct character/party swap, the classifier fires correctly | [session-save.md](docs/research/session-save.md); unblocks future live testing of the mid-session save/load gates below |
 | Companion local combat — two-companion drift risk | CONFIRMED clean live: a released companion fought and landed real credited damage while the OTHER, non-released companion stayed within 0.05 units of the host's position throughout, no drift | [party-reconciliation.md](docs/research/party-reconciliation.md) round 85; `companion_local_combat` stays off pending broader testing, not because of this result |
-| Minigames — swoop-race trigger precondition | SOLVED via a new NCS bytecode disassembler: the trigger was never a race-start gate at all — it's an unconditional collectible-flag setter. A companion script points at a dialogue node as the real gate instead | [minigames.md](docs/research/minigames.md) §13; three rounds of flag-guessing were chasing the wrong script the whole time |
+| Minigames — swoop-race trigger precondition | SOLVED via a new NCS bytecode disassembler: the trigger was never a race-start gate at all — it's an unconditional collectible-flag setter. A `.dlg` sweep across every Taris module then found the real gate is not a single condition script but the payoff of the "Search for Bastila" questline — give Gadon (`GadonThek112`, module `tar_m11aa`) the prototype swoop accelerator, and the conversation's terminal node (`k_ptar_bekrace`) disassembles to a module-transition call naming `tar_m03af`, a dedicated swoop-track module | [minigames.md](docs/research/minigames.md) §13–§14; `Tar_SwoopRace`/`k_ptar_swoop` turned out to be a post-race "you already won" flag, not an entry gate — four rounds of flag-guessing plus one dialogue-hypothesis were chasing the wrong mechanism the whole time |
 
 ### Still needs work
 
@@ -53,7 +53,7 @@ off by default or waiting on a live pass; the linked doc always has the dated ev
 | --- | --- | --- |
 | Mid-session save/load — rejoin gates | Live-tested against a genuinely different save for the first time. `host_load_readopt`'s classifier/trigger logic fires correctly but the actual reconnect loses a timing race against the host's own server rebuild; `client_load_rejoin`'s classifier never produces a Load verdict at all despite the world-load edge firing | Two distinct real bugs, neither fixed yet — both gates stay off — [session-save.md](docs/research/session-save.md) round 86 |
 | `party_fast_pump` (companion-position latency) | Tested twice (combat: worse; non-combat: no measurable difference) | OFF by default, real cause of reported lag still open — [lag-audit.md](docs/research/lag-audit.md) |
-| Minigames — swoop racing, now that the real gate is known | The actual race-start check lives in a dialogue node's condition script (`Tar_SwoopRace`), not the entrance trigger | never live-tested against the right script — [minigames.md](docs/research/minigames.md) §13; needs finding which `.dlg`/NPC uses `k_ptar_swoop.ncs` as a condition, then a live pass |
+| Minigames — swoop racing, now that the real gate is known | The actual race-start path is Gadon's questline conversation (`tar11_gadon112.dlg`, module `tar_m11aa`) ending on `k_ptar_bekrace`, which disassembles to a module transition into `tar_m03af` (a dedicated swoop-track module) once the global boolean `Tar_SwoopEng` is set | never live-tested — [minigames.md](docs/research/minigames.md) §14; needs a save with `Tar_SwoopEng = 1` at a Hidden-Bek-reachable story point, then a live pass talking to `GadonThek112` |
 | Creature liveness reconciliation (a body alive on one screen, dead on the other) | CONFIRMED working live for the first time — a debug `--enemy-census-cap` flag makes the out-of-census case reachable, and the Kill→Destroy correction fires correctly | OFF by default; a separate, still-unfixed `DestroyObject`-scan-freshness issue is untouched by this result — [creature-liveness.md](docs/research/creature-liveness.md) |
 | KOTOR 2 | Untouched | only GOG v1.0.3 addresses are known |
 
@@ -315,15 +315,16 @@ tools/                   RE helpers, demo scripts, the kotor1_0_3 symbol databas
   [mod-compatibility.md](docs/research/mod-compatibility.md).
 - **Minigames**: the turret sequence is CONFIRMED a genuinely separate module — spectate/park
   is structurally forced there (not a design choice) and the current parked-peer behavior is
-  verified clean. Swoop racing is confirmed architecturally *capable* of true co-visibility
-  (same module, no transition, live-confirmed). Three rounds of guessing which global flag
-  gates the race all failed for the same reason: they were reading the wrong script. A new
-  NCS bytecode disassembler (built this session, no such tool existed before) read the actual
-  compiled trigger and found it's not a race gate at all — just an unconditional collectible
-  flag setter. The real gate lives in a dialogue node's condition script instead
-  (`k_ptar_swoop.ncs`, checks `Tar_SwoopRace`); finding which NPC/`.dlg` uses it is the
-  concrete next step. Pazaak is unrelated and uncovered. See
-  [minigames.md](docs/research/minigames.md).
+  verified clean. The swoop-race `CSWMiniGame` subsystem is confirmed architecturally *capable*
+  of running in-place with no module boundary (forced-pointer live test). Four rounds of
+  guessing which global flag gates the race all failed for the same reason: they were reading
+  the wrong script/node entirely. A new NCS bytecode disassembler (built this session, no such
+  tool existed before) found the entrance trigger is not a race gate at all — just an
+  unconditional collectible flag setter — and a full `.dlg` sweep across every Taris module
+  found the real gate is a story-quest conversation with Gadon (`tar_m11aa`) whose terminal
+  node disassembles to a call naming a separate module, `tar_m03af`, as its argument — not yet
+  live-confirmed, and in honest tension with the in-place finding above (minigames.md §14.6).
+  Pazaak is unrelated and uncovered. See [minigames.md](docs/research/minigames.md).
 - **Non-damage combat effects** (stun, slow, frightened, choke, force push/whirlwind) forward
   live, both directions, on by default. Knockdown, Paralyze and Sleep are captured but never
   replayed — their apply-side engine call is still unverified. See

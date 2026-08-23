@@ -1251,3 +1251,204 @@ future round wants to keep pulling on it. No file under `CoopAgent.cs`, `Minigam
 or `MinigameRule.cs` was touched. The only production code this round adds is the disassembler
 itself (`NcsReader.cs`, `NwscriptActions.cs`) — new, additive, general-purpose tooling with no
 call site in the shipping plugin/agent path, exactly the same category as §11's `GlobalFlagCraft`.
+
+## 14. The `.dlg` sweep §13.4 asked for — `Tar_SwoopRace` turns out to be a completion flag, not
+an entry gate, and the REAL race-start conversation is found and disassembly-confirmed (2026-08-24,
+follow-up round)
+
+§13.4 left one concrete, scoped lead: grep every `.dlg` this game ships for a script reference to
+`k_ptar_swoop`, to find the conversation node that gates entering the swoop race. This round did
+exactly that — and the answer inverts the working hypothesis. `Tar_SwoopRace` is not a pre-race
+permission flag at all; it is a **post-race "you already won" flag**, and the real entry point to
+the race is a completely different, story-gated conversation with Gadon at the Hidden Bek base,
+found by broadening the search past the one exact resref name.
+
+### 14.1 Tooling: no new reusable class needed — `Gff.cs` already reads `.dlg` as-is
+
+`.dlg` is plain GFF (confirmed against `tools/kotorfiles.py`'s own format table, line 66:
+`2029: "dlg"`), and this project's existing `Gff`/`GffStruct`/`GffLocString` reader
+(`src/KotorCoop.Memory/GameFiles/Gff.cs`) already decodes every field type a `.dlg` uses —
+`ResRef` (the `Active`/`Script` condition/action-script fields), `List` (`EntryList`, `ReplyList`,
+`StartingList`, and each node's own `RepliesList`/`EntriesList`), `Struct`, and `ExoLocString`
+(`Text`, resolved via `dialog.tlk` StrRef when there's no inline substring — `Tlk.cs`, also
+already in the tree). Nothing in the format needed a new writer. This round's search tool is a
+one-off console program (not checked into the repo) built against `RimArchive`, `ErfArchive`,
+`Gff`, `Tlk`, and `NcsReader`/`NcsInstructionsExtensions.FindActionCalls` exactly as they already
+exist — a generic recursive walker over every `GffStruct` field, flagging any `ResRef`-typed field
+whose value matched a target string, with the parent link struct's `Index`/`Active` pair resolved
+back into `EntryList`/`ReplyList` text via `dialog.tlk`. This is the same "one-off is fine" call
+§13's own writeup flagged as the right level of investment for a single bounded question, and nothing
+here revealed a gap in `Gff.cs` worth building a dedicated `.dlg`-node class around.
+
+### 14.2 The narrow sweep: every StartingList `Active == "k_ptar_swoop"` across all 46 `tar_*`
+module archives
+
+Scanned every `.dlg` resource inside every `tar_m*.rim`/`tar_m*_s.rim` (46 archive files, 291
+distinct `.dlg` resources total) for a `ResRef` field exactly equal to `k_ptar_swoop`. **11 hits**,
+in 9 different `.dlg` files across 4 different modules (`tar_m02ae`, `tar_m03aa`, `tar_m03ae`,
+`tar_m11aa`), every one of them a `StartingList` link (the "which greeting does this NPC open
+with" condition), and every single resolved `EntryList` line is a **congratulations-after-the-fact
+bark**:
+
+* `tar02_musictwi21.dlg` (a Twi'lek musician, Lower City cantina): *"You may be a big celebrity and
+  all, but I'm trying to earn a living here!"*
+* `tar03_hidbek031.dlg`, `tar03_hidbekguar.dlg`, `tar11_hidbek113/114/115/116.dlg` (rank-and-file
+  Hidden Bek gang members): *"Hey — I recognize you! You're the one who won the swoop race!"* /
+  *"With Brejik dead it won't be long until those Vulkars of his collapse..."*
+* `tar03_cardsell31.dlg` (a card seller): *"...the hero of the swoop race makes an appearance to
+  brighten our day in this dingy cantina. People all over the Lower City are talking about your
+  glorious victory."*
+* `tar03_vulkar.dlg` (a rank-and-file Black Vulkar): *"I saw what you did to Brejik. I won't be
+  trying anything in here, but if we ever meet out on the street you're dead!"*
+* `tar11_zaerdra111.dlg` (Zaerdra, the Hidden Beks' second-in-command): *"On behalf of Gadon, I
+  want to offer the thanks of all the Hidden Beks. You rode like a true champion in the swoop
+  race."*
+
+**Every text this condition gates is written in the past tense about a race and about Brejik's
+death.** `k_ptar_swoop.ncs`'s `return GetGlobalBoolean("Tar_SwoopRace") == 1;` (disassembled in
+§13.4) is the shared condition roughly a dozen random NPCs across four modules use to pick their
+"ambient reaction" line once the swoop race has already happened — a scene-dressing flag, not an
+entry gate. §13.4's inference that the "conversation node" behind `k_ptar_swoop` would be the
+race's front door was reasonable given only the trigger and the script name, but it is now
+disproven by direct evidence: no node gated by `k_ptar_swoop`/`Tar_SwoopRace` offers a "start the
+race" option anywhere; every one of them offers ordinary barks, and the barks only make sense
+after Brejik is already dead.
+
+One dead-end ruled out concretely along the way: `plc_swpbike1`, the swoop bike placeable seen
+sitting in `tar_m02ab`'s own `Placeable List` (the same module as the entrance trigger), has
+`Useable = 0` and every script field blank — it is pure set dressing, not an interaction point.
+
+### 14.3 The broad sweep: every `ResRef` field containing `"race"` or `"swoop"` (not just the exact
+`k_ptar_swoop` name), across the same 46 archives
+
+Widening the substring match (still scoped to `tar_*` modules) surfaces the real questline. The
+decisive hits, all in `tar_m11aa_s.rim` (`tar11_gadon112.dlg`, the Hidden Bek leader Gadon) and
+`tar_m03af_s.rim` (`tar03_mechanic.dlg`, the swoop-track mechanic; `tar03_announcer.dlg`,
+`tar03_brejik031.dlg`, `tar03_bastila.dlg`, and four individual rival-racer `.dlg`s —
+`tar03_anglu`, `tar03_doba`, `tar03_phirk`, `tar03_redros` — none of which exist in the Lower City
+module set at all, confirming `tar_m03af` is a dedicated swoop-track module, not the Lower City
+area the entrance trigger sits in):
+
+* `tar03_mechanic.dlg`'s own `StartingList[0]` opens on `Active='k_ptar_raceover'`, and the full
+  conversation tree is explicitly about racing — the mechanic explains the rules, the reply
+  *"How do we get the race started?"* routes to *"Sounds like you're ready. Go talk to the race
+  announcer over by the counter."* This is the confirmation that `tar_m03af` (not `tar_m02ab`) is
+  where an actual heat runs, with its own mechanic/announcer/rival-racer NPCs — a genuinely
+  separate module from the one the three earlier live rounds (§9–§12) explored.
+* `tar11_gadon112.dlg` — Gadon's full conversation is the "Search for Bastila" questline
+  (`Quest="tar_bastsearch"`) itself. The path: give Gadon the prototype swoop accelerator
+  (`Reply[5]`, gated `Active='k_ptar_hasaccel'`, text *"I have the accelerator right here."*) →
+  `Entry[9]` (`Script='k_ptar_takeaccel'`) → Zaerdra objects, Gadon insists the PC rides →
+  `Reply[18]` *"Okay, I'm ready for the race."* → `Entry[17]` (`Script='k_ptar_racecs0'`) →
+  `Entry[18]` (`Script='k_ptar_racecs1'`, `Listener=Zaerdra111`, the text literally reads
+  *"[You spend a restless night in the Bek base. In the morning, one of the Beks takes you
+  to...]"*) → the terminal node, **`ReplyList[21]`, `Script='k_ptar_bekrace'`, no further
+  `EntriesList` — ending the conversation and firing the script that actually starts the race.**
+
+### 14.4 Disassembly confirms it: `k_ptar_bekrace.ncs` calls a module-transition action with the
+literal module name `"tar_m03af"` as an argument
+
+Ran `NcsReader.Disassemble` + `FindActionCalls` (both unmodified from §13) against
+`k_ptar_bekrace.ncs` (1554 bytes, `tar_m11aa_s.rim`) and its neighbours. The decisive line:
+
+```
+ACTION   782: #509("", "", "", "", "", "", "", "tar_m03af", ...) [routine 509, 8 args]
+```
+
+Routine `#509` is not in this project's `NwscriptActions.KnownActions` table (only 578/579/580/581
+and the two INFERRED ids from §13 are verified there), so the routine's *name* is not claimed —
+but the **literal 8th string argument is the real, existing Taris module resref `tar_m03af`**,
+the exact module identified in §14.3 as the dedicated swoop-track area. An engine call taking a
+module resref as a string argument, called from the terminal node of "I'm ready for the race," is
+about as strong a circumstantial identification of a module-transition action as static analysis
+without symbol names can give. (`k_ptar_racecs0`/`k_ptar_racecs1`, the two cutscene entries
+immediately before it, call `CreateObject`/`AssignCommand`-shaped actions against waypoint tags
+`tar11_wppcsleep`/`tar11_wpcsbek`/`tar11_csbek` — consistent with staging the "restless night,
+morning departure" cutscene in place before the module transition fires.)
+
+Also disassembled `k_ptar_hasaccel.ncs` (110 bytes, the condition on Gadon's *"I have the
+accelerator right here"* reply) — confirmed, not inferred, since it uses the same
+`GetGlobalBoolean` (routine 578) verified in §13:
+
+```c
+int main() { return GetGlobalBoolean("Tar_SwoopEng") == 1; }
+```
+
+So the item-possession gate on this path is the global boolean **`Tar_SwoopEng`**, a different
+name from every candidate §11.2/§12 tried (`Tar_SwoopRace`, `Tar_SwoopNew`, `Tar_SwoopStatus`,
+`TAR_FIRST_SWOOP_USE`, `TAR_STARTED`) — which is exactly why none of those five crafted-save
+combinations in §12 could ever have worked, independent of the §13 finding that the entrance
+trigger checks nothing at all.
+
+### 14.5 The answer, stated as a recipe
+
+**There is no single NPC/trigger "gate" for the swoop race in the sense the original question
+assumed** — it is the payoff of the "Search for Bastila" main questline (`tar_bastsearch`), not a
+side interaction:
+
+1. Progress the Bastila/Black Vulkar Base questline through recovering the prototype swoop engine
+   accelerator (sets the global boolean `Tar_SwoopEng = 1` — not directly observed being set this
+   round, but it is exactly what `k_ptar_hasaccel.ncs` reads, and `tar10_waitress.dlg` independently
+   confirms the accelerator is a distinct trackable quest item — *"Where can I find the prototype
+   swoop engine accelerator?"*).
+2. Return to **Gadon** (creature tag `GadonThek112`, module `tar_m11aa` — the Hidden Bek base,
+   `.dlg` resref `tar11_gadon112`) and take the conversation path that opens once `Tar_SwoopEng`
+   is true: *"I have the accelerator right here."* → accept riding for the Beks → *"Okay, I'm
+   ready for the race."*
+3. The conversation ends on `k_ptar_bekrace` (a Reply node with no further entries), which
+   disassembles to a call taking `"tar_m03af"` as a literal argument — the module transition into
+   the dedicated swoop-track area.
+4. `tar_m03af` is where the actual race happens (mechanic, announcer, rival racers Anglu/Doba/
+   Phirk/Redros, and Brejik's death cutscene all live there) and where `Tar_SwoopRace` is almost
+   certainly the flag the race's own completion script sets — consumed afterward by the §14.2 barks
+   back in the Lower City and Bek-base modules.
+
+None of this was live-tested this round (same access constraint as §13: reads only, no
+`demo.ps1`/`build.ps1 -Install`, no game process). The concrete next step for a live round: craft
+a save with `Tar_SwoopEng = 1` (via the existing `craft-save --bool Tar_SwoopEng` from §11.3) at a
+point in the story where the Hidden Bek base is otherwise reachable, warp to `tar_m11aa`, and talk
+to `GadonThek112` — if the accelerator-handoff branch opens and running it through to *"Okay, I'm
+ready for the race"* actually transitions into `tar_m03af`, that is live confirmation of this
+round's entire chain in one pass.
+
+### 14.6 An honest tension with §9.1, flagged rather than papered over
+
+§9.1's live pass forced `CSWCArea::mini_game` non-null while staying inside `tar_m02ab` and watched
+`CSWMiniGame::Update` start running on the very next frame with no module-changed event anywhere —
+concluding **"same module, in-place… co-visible swoop racing is not ruled out by the engine's own
+architecture the way the turret sequence is."** §14.4's disassembly of the only known real entry
+path (`k_ptar_bekrace`) shows it calling an unnamed 8-argument engine routine whose 8th argument is
+the literal module resref `tar_m03af` — which reads, on its face, like a `StartNewModule`-shaped
+transition out of the CURRENT module entirely. These are not the same claim, and this round did not
+resolve which one governs the actually-shipped experience:
+
+* §9.1's evidence is about the **engine subsystem's own requirements** (a forced pointer, observed
+  live, with a real crash as corroboration) — it shows the `CSWMiniGame` machinery *can* run without
+  a module boundary. That finding stands on its own and is not contradicted by anything this round
+  found.
+* §14.4's evidence is about **what the shipped content's own script actually calls** at the one
+  real trigger point this round found — and it is a `.ncs` disassembly, not a live observation;
+  routine `#509`'s identity is inferred from its argument shape, not verified against a published
+  action table the way 578–581 are.
+
+The most likely reconciliation, **not verified either way**: the engine mechanism doesn't *require*
+a module boundary (§9.1), but BioWare's own authored swoop-race sequence uses one anyway (§14.4) —
+for staging reasons (a dedicated track-with-pits-and-announcer-booth area, camera work, spawning
+Brejik) rather than a technical necessity. If that reconciliation is right, it matters for shipping:
+**the real, only-known player path into the race crosses a module boundary**, which puts it
+structurally closer to the turret sequence's forced-spectate case (§9.2) than to the "same module,
+no transition" framing §9.1's conclusion implied — even though the underlying engine subsystem
+itself doesn't force that. A future round should not treat §9.1's "not ruled out" conclusion as the
+last word on co-visibility without first live-testing whether `k_ptar_bekrace` really does leave
+`tar_m02ab`.
+
+### 14.7 What this changes about the shipping recommendation
+
+Nothing. **`minigame_hide_peer` stays default-on; co-visible swoop racing is still not shipped.**
+This round replaces a wrong-but-plausible working hypothesis (`Tar_SwoopRace`/`k_ptar_swoop` as an
+entry gate) with a disassembly-backed one (`Tar_SwoopEng`/`k_ptar_hasaccel`/`k_ptar_bekrace`, and
+a likely-but-not-live-confirmed module transition into `tar_m03af` — see §14.6's honest caveat on
+that last point) and narrows "what a live pass needs" from "grep every `.dlg`" to one specific NPC
+and one specific global boolean. No production file was touched; the search tool built this round
+is a throwaway console program, not checked into the repo, for the
+reason given in §14.1 — `Gff.cs` already reads everything a `.dlg` needed.
