@@ -922,3 +922,133 @@ without crashing cannot be safely fabricated from nothing:
   both new, additive, opt-in tooling — nothing in `CoopAgent.cs`, `MinigameController.cs`, or
   `MinigameRule.cs` was touched, and `minigame_hide_peer` stays default-on exactly as §9.5/§10.5
   already concluded.
+
+## 12. The live pass (2026-08-23, live rig round) — the flag theory tested and DISPROVEN for two combinations; a real navigation bug found and fixed along the way
+
+This round had live install access (the two prior rounds either couldn't reach the trigger at
+all, §9, or reached it but had no crafted save to test against, §10) and ran §11's own plan
+end to end, twice, with two different flag combinations. **Neither started the race.** This is
+a materially stronger result than §10.4's open question — that round had no flags forced at
+all; this one did, on two separate live saves, and still got nothing.
+
+### 12.1 What was run
+
+`dotnet build`/`dotnet test` green (1652/1652) before touching anything live.
+`src/KotorCoop.Plugin/build.ps1 -Install` re-run against both real GOG install dirs (`-GameDir`
+explicitly — the script's own default points at a Steam copy that happens to sit on this
+machine too, which is not the rig; that default install was left as harmless dead weight, see
+§12.4).
+
+Two saves were crafted with `KotorCoop.Agent craft-save`, both from the rig's own
+`saves\000002 - Game1` (Endar Spire, unmodified, never opened for writing):
+
+* `000003 - zzz_swoop_flagtest`: `TAR_FIRST_SWOOP_USE`, `Tar_SwoopRace`, `Tar_SwoopNew`,
+  `TAR_STARTED` all forced `0 -> 1` — every boolean candidate §11.2 named, all at once.
+* `000004 - zzz_swoop_flagtest2`: only `TAR_FIRST_SWOOP_USE` and `Tar_SwoopNew` forced
+  `0 -> 1` — deliberately leaving `Tar_SwoopRace` and `TAR_STARTED` at their default `0`, on the
+  theory that a name shaped like "already racing" or "already started" could plausibly be an
+  ALREADY-IN-PROGRESS gate that a fresh crossing should NOT have set, rather than a
+  permission-to-start gate. (Both `craft-save` runs printed every flag's `0 -> N` transition and
+  a summary; nothing was invented — the same source-immutability guarantee §11.3's tests cover.)
+
+Both were loaded and driven to the trigger with `warp tar_m02ab` + the tp/walk recipe from §10.2,
+crossed, and watched for `MinigameController`'s `minigame: entered` log line for 40–90+ seconds
+after a confirmed `OnEnter` fire. **Neither combination produced it.**
+
+### 12.2 A real navigation bug found: a closed ORDINARY door, not a walkmesh gap
+
+§10.2 already found two hazards (off-mesh `tp` landings, a mid-route banter trigger). This round
+found a third, and it is the actual explanation for why earlier rounds' `walkto` stalled at
+almost exactly the same coordinate every time: **`m02ab.git`'s own `Door List` has a real door,
+`tar02_xstddoor` (an "ordinary" door — `LinkedToModule` empty, not a transition), sitting at
+`(221.25, 132.56)` — directly athwart the route from the module entrance to the swoop trigger at
+`(221.4, 141.0)`.** `walkto` does not open doors on approach; every call toward the trigger
+stalled at `(220.9, 131.7)`, a few tenths of a metre short of the door, no matter how many times
+it was reissued, from how many different intermediate points, or how long between attempts —
+**indistinguishable from Hazard 1's "off-mesh" symptom (zero coverage, repeatable) but with a
+completely different cause and fix.** Retreating and re-approaching from any angle produced the
+identical stall at the identical coordinate — the tell that it is a real object in the way, not
+a bad pathfind.
+
+**The fix**: this project's console already has `opendoor <tag>` for exactly this case (ordinary,
+non-transition doors — distinct from `usedoor`, which is for transition doors and correctly
+refuses an ordinary one: `"door 'tar02_xstddoor': no LinkedToModule - an ordinary door"`).
+`console 'opendoor tar02_xstddoor'` then the SAME `walkto 221.4 141.0 0` covered the entire
+remaining ~9 m in one call and landed exactly on the trigger centre. Confirmed twice, on two
+independently-loaded instances of the module (§12.1's two saves), both times with the identical
+stall-then-clear behaviour. **This is now the definitive navigation recipe for this module**,
+superseding §10.2's plan where it stops short: `warp tar_m02ab` → sanity `walkto` → full-distance
+`walkto 221.4 141.0 0` reissued on stall (watching for Hazard 2's banter trigger) → at the stall
+point `(220.9, 131.7)`, `opendoor tar02_xstddoor` → reissue the same `walkto` once more → done.
+
+### 12.3 The trigger fires cleanly both times; nothing after it does
+
+Both crossings produced the expected engine-level fire in the plugin log —
+`triggers: observed my own engine natively fire OnEnter of 0x3D — publishing for other peers`
+(object id differs per session; the tag and behaviour do not) — confirming §10.3's finding holds
+regardless of which globals are set. In neither case, across a combined ~2+ minutes of
+post-crossing observation with zero other console commands issued to disturb it, did
+`MinigameController` log `minigame: entered`, did `console 'dialogue'` show a partner, or did
+`where` show any movement — the character just stands there.
+
+**This narrows §10.4's hypothesis rather than confirming it, but narrows it hard.** Two disjoint
+flag sets (all four candidates together; then two of them alone, specifically avoiding the two
+whose names most plausibly mean "already in progress") both failed identically. That rules out,
+with real live evidence rather than a documentation gap, the simplest version of "one of these
+five names, set true, is sufficient." What remains open is exactly what §10.4 and §11.6 already
+named as the honest uncertainty: either `k_ptar_swoop02ab` checks a **different** global
+entirely (a Taris story-arc flag unrelated to swoop-specific naming, plausible since this save's
+only station is the Endar Spire, before any Taris content has run), or it checks one of these
+five names but wants a **specific non-1 value** (only `Tar_SwoopStatus`/`Tar_SwoopRaceCounter`
+etc. were left untried, per §11.2's own read those are number-shaped race-clock fields, not
+preconditions, so this is not a promising next guess), or the visible effect of a correctly-
+satisfied precondition is not "the race starts immediately" but something this round's
+instrumentation would not have caught (a HUD prompt, a change to what `usedialog`-style
+interaction becomes available — nothing in this module's creature list, per §10.3, offers one).
+**Resolving this for certain still needs either an NCS disassembler (none exists in this tree) or
+a save with genuine, naturally-earned Taris story progress** — exactly §10.4's and §11.6's
+conclusion, now resting on two rounds of live negative evidence instead of zero.
+
+### 12.4 Two operational notes, not swoop-specific
+
+* **`build.ps1 -Install`'s bare (no `-GameDir`) default installs into a Steam KOTOR copy that
+  happens to be present on this machine, not either rig install.** Run once by mistake this
+  round before the omission was caught; corrected immediately by re-running with explicit
+  `-GameDir` against both real installs. The stray Steam install was left in place (harmless —
+  that copy is never launched by anything this project's tooling drives) because this round's
+  sandboxing refused the `-Uninstall` cleanup call against that path; flagged here rather than
+  silently left unmentioned.
+* **Killing and relaunching one instance's game process while a peer is still connected in an
+  ordinary (non-minigame) module reproduces the existing `travel-map-init-crash` class.**
+  Attempting to swap in a differently-crafted save mid-round (rather than a fresh
+  `tools\demo.ps1` run) meant killing instance 1's `swkotor.exe` and relaunching it via
+  `agent launch --instance 3` + `agent load` while instance 2 (the peer, itself parked in
+  `tar_m02ab`, an ordinary module, not a minigame) was still connected. Instance 2's process did
+  not survive the host's reappearance (`* following the host to 'END_M01AA'` in its log,
+  session-saved character carried over, then gone) — the same crash class §9.4 already
+  documented for a manual reload during an ACTIVE minigame module, now shown to trigger under
+  the more mundane condition of an ordinary shared module too. This was caused by this round's
+  own test methodology (an operator-driven process swap), not by anything a real player's
+  session would do (finishing/leaving a race, or a normal disconnect/reconnect), so it is
+  recorded here as reinforcing evidence for the existing `docs/research/travel-map-init-crash.md`
+  item rather than filed as a new one. Not chased further this round — out of scope for item 8.
+
+### 12.5 Conclusion, stated plainly
+
+* **The shipping decision is unchanged**: co-visible swoop racing is **not shipped**.
+  `minigame_hide_peer` stays default-on. No code in `CoopAgent.cs`, `MinigameController.cs`, or
+  `MinigameRule.cs` changed this round.
+* **The navigation problem is now fully solved**, including the door hazard §10.2 did not know
+  about — §12.2's recipe reaches and crosses the trigger reliably, twice, from a cold `warp`.
+* **The precondition question is not solved, but the search space shrank.** Two live, disjoint
+  attempts at "the right global flag(s)" both failed cleanly with no crash, no side effect, and
+  no ambiguity in the observation. The honest state of this investigation is now "reaching and
+  crossing the trigger is a solved, five-step console recipe; making the race actually start
+  needs either NCS disassembly of `k_ptar_swoop02ab` or a save with real Taris story progress,"
+  which is strictly more precise than any prior round could say.
+* **The original open question — is genuine dual-visibility possible — remains unanswered**,
+  because no round has yet observed an actual race. §9.5's structural finding (same module,
+  in-place mode switch, not precluded by architecture) stands unmodified; whether it looks good
+  is still untested. Park/spectate (the shipped default) remains the correct, safe behaviour
+  given that unresolved uncertainty — this round adds no reason to change it and no new evidence
+  either way on the visual question.
