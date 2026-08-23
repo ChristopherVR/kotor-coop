@@ -167,7 +167,12 @@ public static class InstallDigest
                 Path.GetFileName(p).ToLowerInvariant(), StringComparer.Ordinal))
             {
                 digest = FnvString(digest, Path.GetFileName(path).ToLowerInvariant());
-                digest = Fnv(digest, File.ReadAllBytes(path));
+
+                // Not File.ReadAllBytes: while swkotor.exe is running (exactly when this
+                // digest is computed) it can hold an Override\*.2da file open with write
+                // access it never uses, and File.ReadAllBytes's default FileShare.Read is
+                // a sharing violation against that. See GameFileIo.ReadAllBytes.
+                digest = Fnv(digest, GameFileIo.ReadAllBytes(path));
             }
 
             return true;

@@ -39,7 +39,10 @@ internal sealed class KeyIndex
         Path = path;
         _gameDirectory = System.IO.Path.GetDirectoryName(System.IO.Path.GetFullPath(path))!;
 
-        byte[] data = File.ReadAllBytes(path);
+        // Not File.ReadAllBytes: it opens with FileShare.Read, which is a sharing
+        // violation against the handle swkotor.exe holds on chitin.key while the game the
+        // agent is fingerprinting is the one running. See GameFileIo.ReadAllBytes.
+        byte[] data = GameFileIo.ReadAllBytes(path);
 
         if (data.Length < 0x20 || GameFileText.Decode(data.AsSpan(0, 4)) != "KEY ")
         {
