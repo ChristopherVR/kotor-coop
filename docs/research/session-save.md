@@ -1748,3 +1748,76 @@ gates:
    but the live game is the only real judge, and a residual gap (a THIRD signal-ordering case
    neither round considered, or a genuinely new failure mode the fix itself introduces) is
    still possible.
+
+## Live-verified (2026-08-24): both round 87 fixes confirmed working, both directions, both gates — defaults flipped ON
+
+Ran round 87's own live-verification plan above, end to end, on a fresh `build.ps1 -Install` of
+both installs, `tools/demo.ps1` up on save 1. `party_follow=0` (round 85/86's crash workaround) was
+deliberately NOT applied — this session's own earlier check (see the entry above in
+`party-reconciliation.md`) had just live-confirmed the `0x4AA984` warp crash is fixed, making that
+workaround obsolete. The message-box precondition trap recurred exactly as predicted (`msgboxpoke.ps1`
+bit-0 workaround needed on the FIRST `loadgame` of the session, both sides — the scratch tool from
+the prior round was still on disk and reused as-is).
+
+**Produced a genuinely different save**: host-only `console 'warp tar_m10aa'`, confirmed offline
+against `SAVENFO.res` — `000001 - AUTOSAVE` came back `LASTMODULE=tar_m10aa` /
+`AREANAME='Taris - Black Vulkar Base'` vs. `000002 - Game1`'s untouched `LASTMODULE=END_M01AA` /
+`AREANAME='Endar Spire - Command Module'`.
+
+### `client_load_rejoin`: fired `loadgame 0` on the CLIENT — CONFIRMED
+
+Both predicted lines appeared verbatim in the client's own agent log:
+`* you loaded a save - rejoining the host's world` then `* session-save: starting rejoin (OwnLoad)`
+(neither ever appeared in round 86). The client ended up connected, in `tar_m10aa` (matching the
+host's live module), `hp 12/12`, `moduleClean=True`. **One real nuance worth recording**: the
+rejoin did not land directly in `tar_m10aa` — `WorldTransfer.FetchAsync` first adopted a STALE
+snapshot (`world adoption: adopted 'END_M01AA' (666,579 bytes, ...)`, matching the host's own
+on-disk session-save catalogue, not its live in-memory module), the client briefly reconnected into
+`END_M01AA`, and only then did the ORDINARY co-op travel-follow channel (`announcing transition to
+'tar_m10aa'` / `following the host to 'tar_m10aa'`) carry it the rest of the way to the host's real
+live module, converging within about 3 seconds. End state is correct either way, but a coordinator
+reading the log for the first time should not be alarmed by the mid-sequence `END_M01AA` bounce —
+it is `BuildWorldSnapshot` reading the host's own periodic session-save (which can legitimately lag
+a few seconds behind a host-only warp), not a bug in the rejoin logic itself. Character carried
+throughout (`117 fields`, consistent across every hop).
+
+### `host_load_readopt`: fired `loadgame 0` on the HOST — CONFIRMED
+
+Exact predicted host-side lines: `* session-save: host-side load verdict - announcing re-adoption`
+then `* host loaded a save - everyone re-joins`. Critically, the client's own log shows the fetch
+**succeeding** this time — `* world adoption: adopted 'END_M01AA' (654,006 bytes, identity
+0x155107BD), carrying the character from the session-saved character (...)` — with no
+`could not fetch the host's world - ... actively refused it` anywhere (round 86's own failure
+signature). Both sides converged on `END_M01AA`, `hp 12/12`, connected, peers 1.
+
+### Gates OFF: regression-checked on both sides, explicitly, not just by absence
+
+Flipped both gates to `0` on both installs, killed only the `KotorCoop.Agent.exe` processes (not
+the still-running games) and reattached with `tools/demo.ps1 -SkipLaunch` so the fresh agent
+processes picked up the new config (config is read once per agent process, per round 86's own
+finding — an in-place `coop.ini` edit needs a fresh process). Two results, not just "nothing
+happened":
+
+* **Client side**: `loadgame 0` still produced `* you loaded a save - rejoining the host's world`
+  (the classifier still correctly detects the load — this half of the feature is gate-independent
+  by design) immediately followed by `* session-save: OwnLoad rejoin trigger seen - NOT acting
+  (gate off)` — the gate explicitly suppresses the action, not just "no evidence it fired."
+* **Host side**: after a host-only warp to `tar_m03aa` (to force a genuinely different digest —
+  a same-digest reload produces no verdict at all either way, which would have been a weaker,
+  ambiguous check), `loadgame 0` produced the exact symmetric line: `* session-save: host-side
+  load verdict - NOT acting (host_load_readopt=0, session_save_host_refusal=0)`. No `world
+  transfer listening` line appeared anywhere in this reattached session (confirmed by grepping the
+  full host log), matching `HostingWithBothRejoinGatesOffServesNothing`'s offline pin.
+
+### Verdict and the default-flip decision
+
+**Both bugs CONFIRMED FIXED, live-verified, in both directions, on both gates.** No crash, no hang,
+no regression, character state preserved through every hop, exact predicted log lines on every
+path. This meets the task's own bar ("a direct, decisive, zero-regression result") for flipping the
+shipped default ON rather than leaving it documented-but-off: **both live installs now carry
+`client_load_rejoin=1` / `host_load_readopt=1` in `coop.ini`** (these files live beside the game
+executables, outside the git tree, so there is no code-level default to change — `CoopConfig`'s own
+absent-key default remains `false`, unaffected). A coordinator setting up a fresh install should
+turn both on explicitly to get this feature; it is not yet the code's own implicit default.
+
+No code changed this round — verification only. `dotnet test`: 1674/1674 green throughout.
