@@ -165,11 +165,17 @@ public sealed record CoopConfig
     /// configured 150 ms windows (this pump, then <c>PartyPresenceController</c>'s own
     /// <c>mirror_smooth_ms</c> smoother) stack back to back on the companion-mirror path,
     /// docs/research/lag-audit.md's suspect #2 for it reading "laggier" than a peer's own
-    /// avatar. OFF by default, same reasoning as dialogue's flag: ships behind a flag so a live
-    /// A/B pass can compare it against the existing cadence. <c>party_fast_pump = 1</c> turns
-    /// it on.
+    /// avatar. Two earlier live A/Bs (2026-08-23, combat and non-combat) found no benefit or a
+    /// regression — both were confounded by the companion follow-AI stall bug of the time: a
+    /// companion that never moves has no position lag to reduce. With that bug fixed
+    /// (rounds 80/84/88), a third A/B against a companion genuinely walking/following
+    /// (2026-08-24, docs/research/lag-audit.md's own dated entry) measured a real, reproduced
+    /// ~45-55% cut in companion-position lag (median ~160 ms vs ~320-350 ms across two
+    /// independent legs each) with no frame-time regression in either a non-combat or a light
+    /// combat check. ON by default since that result. <c>party_fast_pump = 0</c> reverts to the
+    /// old cadence.
     /// </summary>
-    public bool PartyFastPump { get; init; }
+    public bool PartyFastPump { get; init; } = true;
 
     /// <summary>
     /// Whether <c>PumpPlaceables</c> (the DURABLE container/door open-or-locked STATE — what
@@ -392,7 +398,8 @@ public sealed record CoopConfig
                 || IsTruthy(kv.GetValueOrDefault("dialogue_item_sync")),
             DialogueFastJoin = !kv.ContainsKey("dialogue_fast_join")
                 || IsTruthy(kv.GetValueOrDefault("dialogue_fast_join")),
-            PartyFastPump = IsTruthy(kv.GetValueOrDefault("party_fast_pump")),
+            PartyFastPump = !kv.ContainsKey("party_fast_pump")
+                || IsTruthy(kv.GetValueOrDefault("party_fast_pump")),
             ContainerFastPump = IsTruthy(kv.GetValueOrDefault("container_fast_pump")),
             SessionSaveHostRefusal = IsTruthy(kv.GetValueOrDefault("session_save_host_refusal")),
             ClientLoadRejoin = !kv.ContainsKey("client_load_rejoin")

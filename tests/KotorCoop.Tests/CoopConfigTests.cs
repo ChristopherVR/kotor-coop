@@ -309,4 +309,50 @@ public class CoopConfigTests
             File.Delete(path);
         }
     }
+
+    [Fact]
+    public void PartyFastPumpDefaultsOn()
+    {
+        // CoopConfig.PartyFastPump's own doc comment: two earlier live A/Bs (2026-08-23) found
+        // no benefit, but both were confounded by the companion follow-AI's permanent stall bug
+        // of the time (a companion that never moves has no position lag to reduce). With that
+        // bug fixed (rounds 80/84/88), a third A/B (2026-08-24, docs/research/lag-audit.md)
+        // against a companion actually walking/following measured a real, reproduced ~45-55%
+        // cut in companion-position lag with no frame-time regression — the same bar
+        // DialogueFastJoin and the rejoin gates cleared earlier.
+        string path = WriteTemp("mode = join");
+
+        try
+        {
+            CoopConfig? c = CoopConfig.TryLoad(path);
+            Assert.NotNull(c);
+            Assert.True(c.PartyFastPump);
+            Assert.True(new CoopConfig().PartyFastPump);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void PartyFastPumpCanBeTurnedOff()
+    {
+        string path = WriteTemp("""
+            [coop]
+            mode = join
+            party_fast_pump = 0
+            """);
+
+        try
+        {
+            CoopConfig? c = CoopConfig.TryLoad(path);
+            Assert.NotNull(c);
+            Assert.False(c.PartyFastPump);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
 }

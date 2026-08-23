@@ -233,9 +233,25 @@ dialogue_item_sync=1
 # coalesced on the follower: `dialogue-node-drive` jumped straight from the first node to the
 # last, the two nodes in between (their speaker/line/VO/lipsync) never delivered at all. The
 # SAME burst shape with =1 landed every intermediate node, live-verified, twice, back to back.
-# Flipped ON by default 2026-08-23: unlike party_fast_pump/container_fast_pump below (both
-# measured with no benefit and left off), this closes a real, live-measured content-loss bug.
+# Flipped ON by default 2026-08-23: unlike container_fast_pump below (measured with no benefit
+# and left off) and party_fast_pump's own first two A/Bs (both confounded, see below), this
+# closes a real, live-measured content-loss bug.
 dialogue_fast_join=1
+
+# Moves the party channel (PumpParty/PumpPartyRoster - who's in the party, their health/faction,
+# the companion-mirror position feed) off the ~150 ms combat cadence onto the same real-time
+# per-poll-tick path dialogue_fast_join uses above. docs/research/lag-audit.md's suspect #2:
+# two independently-configured 150 ms windows (this pump, then PartyPresenceController's own
+# mirror_smooth_ms smoother) stack back to back on the companion-mirror path. Two earlier A/Bs
+# (2026-08-23, combat and non-combat) found no benefit - both were run before rounds 80/84/88
+# fixed the companion follow-AI's permanent stall, so there was no genuine companion motion to
+# measure a lag improvement against. A third A/B (2026-08-24) against a companion actually
+# walking/following measured a real, reproduced ~45-55% cut in companion-position lag (median
+# ~160 ms vs ~320-350 ms across two independent legs each side, host-vs-client position
+# cross-correlation via tools/phantomgait.ps1), with no frame-time regression in a non-combat or
+# a light combat check. ON by default since that result - see docs/research/lag-audit.md's
+# 2026-08-24 entry. party_fast_pump=0 reverts to the old cadence.
+party_fast_pump=1
 
 # Moves PumpPlaceables (the DURABLE container/door open-or-locked STATE) off the agent's
 # ~1000 ms heavy-world-state cadence onto the ~150 ms combat cadence, the same one the
@@ -243,9 +259,9 @@ dialogue_fast_join=1
 # a container can take 1-2+ seconds end to end for a peer to see: the animation and the lock
 # release quickly, but the STATE that keeps it looking closed lags a full heavy-pass cycle
 # behind - see docs/research/container-sync.md's 2026-08-23 section for the measured gap. Same
-# rollout shape as dialogue_fast_join/party_fast_pump: OFF by default so a live pass can A/B it
-# against the existing cadence. Door/placeable state for anything nobody has recently touched
-# is unaffected either way.
+# rollout shape as dialogue_fast_join/party_fast_pump originally shipped: OFF by default so a
+# live pass can A/B it against the existing cadence. Door/placeable state for anything nobody
+# has recently touched is unaffected either way.
 container_fast_pump=0
 
 # The DISTANCE half of the join-latency report, not the cadence half above: a joiner who is not

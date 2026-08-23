@@ -456,3 +456,106 @@ does not genuinely move" root cause `party-reconciliation.md` itself is chasing 
 only cleanly measurable once that bug is fixed, or against a companion driven by real, continuous
 engine movement (a genuine walk, not a teleport or a poke) rather than any staging technique tried
 so far.
+
+## 2026-08-24 — `party_fast_pump` A/B round 3: the follow-AI confound is gone, the
+position-lag metric finally measures cleanly, and it is decisive — default flipped ON
+
+`party-reconciliation.md`'s rounds 80/84/88 (this same session, earlier) fixed the companion
+follow-AI's permanent stall: Trask now genuinely walks and closes real distance behind a moving
+leader, down to her last 1-3 recorded path nodes. That is exactly the organic-motion signal the
+two rounds above (2026-08-23) needed and never had — this round re-runs the exact experiment they
+describe (host-write vs. client-apply position, same technique, `tools/phantomgait.ps1 -ObjectId
+0x127`) now that there is real motion to sample.
+
+### Method
+
+Recipe confirmed reliable by `party-reconciliation.md` round 80/84/88: `tp 20 22 -1.3` (a known-
+good origin — other origins are flaky, see round 80's own note on `ActionMoveToLocation` no-
+opping for a drive-controlled PC) then `walk 10 15`, a genuine ~10.8-unit leg. Repeating this
+cycle (tp, 500 ms settle, walk, ~5-6 s gap) for the length of a leg produces several seconds of
+real per-frame companion motion per cycle, cleanly separated by idle gaps.
+
+`tools/phantomgait.ps1` was run **simultaneously on the host process and the client process**,
+sampling Trask's position (`objectId 0x127`) every 100 ms into a CSV each, for the whole leg.
+Because both instances share the same OS clock (one PC, two `swkotor.exe` processes), the two
+CSVs' timestamps are directly comparable with no cross-process clock-sync needed — the exact gap
+the two 2026-08-23 rounds identified but could not fill for lack of a moving companion to time.
+
+Analysis (`analyze_lag.ps1`, scratch tooling, not shipped): find contiguous "active bursts" in
+the HOST trajectory (Trask genuinely moving, not frozen between cycles); for each burst, search
+candidate lags 0-900 ms in 10 ms steps and pick the one that minimizes mean-squared distance
+between the CLIENT's position at time *t* and the HOST's (linearly-interpolated) position at time
+*t − lag*, evaluated across the burst's own window. This directly answers "how many ms behind is
+the client's rendered companion position, relative to the host's real one," per burst; residual
+RMSE at the best lag (mostly 0.2-1.0 game units, small relative to the ~10-unit legs) confirms
+the fit is meaningful, not noise.
+
+### Result: reproduced twice, ~45-55% lower median lag with the flag on
+
+`END_M01AA`, save slot 1, Trask recruited. Two independent ~55-65 s legs per setting (fresh rig
+relaunch between settings, since `party_fast_pump` is read once at agent startup):
+
+| | `party_fast_pump=0` (old default) | `party_fast_pump=1` |
+| --- | --- | --- |
+| Run 1 — bursts used | 13 | 14 |
+| Run 1 — median lag | **350 ms** | **160 ms** |
+| Run 1 — mean lag | 396.9 ms | 199.3 ms |
+| Run 1 — min/max | 210 / 810 ms | 20 / 540 ms |
+| Run 2 — bursts used | 8 | 9 |
+| Run 2 — median lag | **320 ms** | **160 ms** |
+| Run 2 — mean lag | 382.5 ms | 180.0 ms |
+| Run 2 — min/max | 260 / 870 ms | 160 / 290 ms |
+
+Consistent both times: `=1` reads **160 ms** median in both independent runs; `=0` reads
+320-350 ms. A third smoke leg run AFTER the code default was flipped (no explicit `coop.ini`
+override, confirming the shipped default actually behaves this way) read **190 ms** median,
+7 bursts — same band as the two `=1` measurement runs.
+
+**This lines up with the mechanism exactly.** Companions never go through the interpolation
+buffer (`PartyPresenceController`'s own doc comment: "companions arrive on the ~150 ms combat
+pump, not the 30 Hz tick"). Old cadence: up to a ~150 ms wait for the combat-pump gate to open,
+plus ordinary network/pump hops, plus the ~150 ms `mirror_smooth_ms` smoother on the far side —
+a worst case in the 300-400 ms range, matching the measured `=0` median almost exactly. New
+cadence removes the combat-pump wait entirely (party rides the same real-time per-poll-tick path
+dialogue already uses): what is left is essentially just the smoother's own ~150 ms window plus
+network/pump hops — matching the measured `=1` median almost exactly. Two independently-derived
+numbers (one from reading the code's own cadence constants, one from a live host-vs-client
+position trace) land in the same place.
+
+### Regression check: frame time and agent pump, clean in every leg
+
+`frame_stats=1` throughout. Every leg, both settings, both instances: ~1.8-2.1 ms mean frame
+time, 0 frames over the 33 ms budget. `lagstats`' agent-pump reading stayed negligible (<1 ms
+average) throughout. No frame-time cost from moving `PumpParty`/`PumpPartyRoster` onto the fast
+path — consistent with `CoopConfig`'s own reasoning that these are cheap block reads/writes, not
+a world scan.
+
+A light combat spot-check (`END_M01AA`'s own `end_weld`, id `0x35`, staged via `tp` + the
+`attack` console verb — a single low-HP enemy, not `party-reconciliation.md` round 71's heavier
+`tar_m10aa` Vulkar-pool fight) showed no regression either: `=0` combat window read 2.44-3.00 ms
+host / 2.05-2.22 ms client mean frame time; `=1` read 2.27-2.40 ms host / 2.00-2.14 ms client (one
+162/214 ms spike apiece at the moment of the `tp`+engagement event itself, not sustained — 0
+further over-threshold frames on either side). This does **not** fully re-run round 71's own
+heavier, multi-enemy, sustained-combat scenario (out of scope this pass, time-limited) — round
+71's own 53%-worse combat frame-time finding was measured against a companion that could not move
+at all (this session's own follow-AI fix postdates it) and is left as a documented, not-fully-
+retested caution for a future heavier-combat pass, rather than either overridden or ignored.
+
+### Verdict: **default flipped ON**
+
+This clears the project's own established bar (`dialogue_fast_join`, `client_load_rejoin`/
+`host_load_readopt`): a direct, decisive improvement on the metric the flag exists for
+(companion-position lag, ~45-55% lower median, reproduced twice independently plus one
+post-flip smoke confirmation), with no regression observed in frame time, agent pump cost, or a
+light combat check. `CoopConfig.PartyFastPump`/`AgentSettings.PartyFastPump` now default to
+`true`; `party_fast_pump=0` still reverts to the old cadence. This closes the "does moving the
+party channel off the 150 ms combat-pump cadence reduce companion-position lag" question
+definitively — three A/Bs across three confound-states (combat/frozen, non-combat/frozen,
+non-combat/genuinely-moving) — the first two null/negative because there was no real motion to
+measure a benefit against, the third decisive once there was.
+
+NEEDS-LIVE, still open: a full re-run of round 71's own heavier, sustained multi-enemy combat
+scenario now that the follow-AI fix is in place (this pass's own combat check was intentionally
+light, time-limited); a genuinely human-driven (non-scripted) walk/run test, since every A/B this
+project has run for this flag has driven the leader through the `tp`+`walk` console/test-harness
+path rather than real OS input.

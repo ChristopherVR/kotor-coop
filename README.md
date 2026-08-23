@@ -48,14 +48,15 @@ off by default or waiting on a live pass; the linked doc always has the dated ev
 | Party-follow module-warp crash | Root-caused (the one per-frame controller with no transition-epoch guard) and fixed; LIVE-CONFIRMED: no new access violation, diagnostics resume correctly one frame after a warp | [party-reconciliation.md](docs/research/party-reconciliation.md) round 87/88 |
 | Companion local combat — two-companion drift risk | CONFIRMED clean live: a released companion fought and landed real credited damage while the OTHER, non-released companion stayed within 0.05 units of the host's position throughout, no drift | [party-reconciliation.md](docs/research/party-reconciliation.md) round 85; `companion_local_combat` stays off pending broader testing, not because of this result |
 | Minigames — swoop-race trigger precondition | SOLVED via a new NCS bytecode disassembler: the trigger was never a race-start gate at all — it's an unconditional collectible-flag setter. A `.dlg` sweep across every Taris module then found the real gate is not a single condition script but the payoff of the "Search for Bastila" questline — give Gadon (`GadonThek112`, module `tar_m11aa`) the prototype swoop accelerator, and the conversation's terminal node (`k_ptar_bekrace`) disassembles to a module-transition call naming `tar_m03af`, a dedicated swoop-track module | [minigames.md](docs/research/minigames.md) §13–§14; `Tar_SwoopRace`/`k_ptar_swoop` turned out to be a post-race "you already won" flag, not an entry gate — four rounds of flag-guessing plus one dialogue-hypothesis were chasing the wrong mechanism the whole time |
+| Companion-mirror lag (`party_fast_pump`) | Two earlier A/Bs found no benefit — both confounded by the companion follow-AI stall bug (a frozen companion has no position lag to reduce). With that bug fixed, a third A/B against a companion genuinely walking/following measured a real, reproduced ~45-55% cut in companion-position lag (median ~160 ms vs ~320-350 ms, host-vs-client position cross-correlation, two independent legs each side), no frame-time regression | [lag-audit.md](docs/research/lag-audit.md) 2026-08-24 entry; a direct, decisive, zero-regression result, so `party_fast_pump` now ships **ON by default** |
 
 ### Still needs work
 
 | Area | Status | Blocker |
 | --- | --- | --- |
-| `party_fast_pump` (companion-position latency) | Tested twice (combat: worse; non-combat: no measurable difference) | OFF by default, real cause of reported lag still open — [lag-audit.md](docs/research/lag-audit.md) |
 | Minigames — swoop racing, now that the real gate is known | Live-tested: `Tar_SwoopEng=1` alone was enough to open Gadon's dialogue into the exact six-node chain the disassembly predicted — the flag theory is confirmed correct. But the terminal node's own module-transition action never fired within several minutes of real time; a clean stall, not a crash, position never moving | [minigames.md](docs/research/minigames.md) §14; three unresolved hypotheses recorded for the next pass |
 | Creature liveness reconciliation (a body alive on one screen, dead on the other) | CONFIRMED working live for the first time — a debug `--enemy-census-cap` flag makes the out-of-census case reachable, and the Kill→Destroy correction fires correctly | OFF by default; a separate, still-unfixed `DestroyObject`-scan-freshness issue is untouched by this result — [creature-liveness.md](docs/research/creature-liveness.md) |
+| `party_fast_pump`'s own heavier-combat frame-time check | A light single-enemy combat spot-check showed no regression when the flag was flipped ON, but an earlier round's heavier, sustained multi-enemy fight found a real 53% frame-time regression — measured before the companion follow-AI fix, not yet fully re-run since | Time-limited this pass — [lag-audit.md](docs/research/lag-audit.md) 2026-08-24 entry |
 | KOTOR 2 | Untouched | only GOG v1.0.3 addresses are known |
 
 ## What works today
@@ -299,9 +300,6 @@ tools/                   RE helpers, demo scripts, the kotor1_0_3 symbol databas
   within 0.05 units of the host's position the whole time — no drift. `companion_local_combat`
   stays off pending broader testing, not because of a problem found here. See
   party-reconciliation.md.
-- **Companion-mirror lag** ("lag even on localhost"): investigated twice (`party_fast_pump`),
-  found no benefit either time, left off. The follow-AI bug that blocked a clean measurement
-  is now fixed, so this is open to re-measure. See [lag-audit.md](docs/research/lag-audit.md).
 - **One conversation at a time.** By design, not a bug — it keeps one plot line advancing.
   The other player spectates rather than getting their own copy.
 - **The Endar Spire's command deck floors damage at 1 hp for everyone** — that's KOTOR's own

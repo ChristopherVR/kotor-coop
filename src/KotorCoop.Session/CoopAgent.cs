@@ -111,10 +111,10 @@ public sealed record AgentSettings
     /// (docs/research/dialogue-skip-desync.md) found the 150 ms cadence genuinely DROPS
     /// content — a rapid-skip burst delivered only the first and last node, the intermediate
     /// lines never reaching the follower at all — while the fast path caught every node
-    /// individually with zero coalescing on the identical burst. Unlike
-    /// <see cref="PartyFastPump"/>/container_fast_pump (both measured with no benefit and left
-    /// off), this is a real, live-measured fix for a real content-loss bug, not a latency
-    /// tweak with unproven upside.
+    /// individually with zero coalescing on the identical burst. This was a real, live-measured
+    /// fix for a real content-loss bug, distinct from <see cref="PartyFastPump"/>'s own latency
+    /// tweak below (real too, but a benefit that took three rounds to prove rather than a
+    /// content-loss bug).
     /// </summary>
     public bool DialogueFastJoin { get; init; } = true;
 
@@ -126,12 +126,17 @@ public sealed record AgentSettings
     /// mirror latency is two independently-configured 150 ms windows stacking back to back —
     /// this 150 ms pump, THEN <c>PartyPresenceController</c>'s own 150 ms
     /// <c>mirror_smooth_ms</c> smoother. Moving the pump to the fast path removes the first of
-    /// the two; the smoother's own window still applies on top; see the shared block for how
-    /// often a companion's position actually lands. coop.ini <c>party_fast_pump</c> (default
-    /// off, so a live pass can A/B it against the existing cadence — the same rollout shape
-    /// <see cref="DialogueFastJoin"/> used).
+    /// the two; the smoother's own window still applies on top. Two earlier live A/Bs
+    /// (2026-08-23, combat and non-combat) found no benefit or a regression — both were
+    /// confounded by the companion follow-AI's permanent stall bug of the time: a companion that
+    /// never genuinely moves has no position lag for this flag to reduce. With that bug fixed
+    /// (rounds 80/84/88), a third A/B against a companion actually walking/following
+    /// (2026-08-24, docs/research/lag-audit.md's own dated entry) measured a real, reproduced
+    /// ~45-55% cut in companion-position lag (median ~160 ms vs ~320-350 ms across two
+    /// independent legs each side), no frame-time regression either side. coop.ini
+    /// <c>party_fast_pump</c>, default ON since that result.
     /// </summary>
-    public bool PartyFastPump { get; init; }
+    public bool PartyFastPump { get; init; } = true;
 
     /// <summary>
     /// When true, <see cref="CoopAgent.PumpPlaceables"/> (the durable container/door

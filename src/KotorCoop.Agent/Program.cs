@@ -888,7 +888,7 @@ internal static class Program
             HidePeersInMinigame = config?.HidePeersInMinigame ?? true,
             DialogueItemSync = config?.DialogueItemSync ?? true,
             DialogueFastJoin = config?.DialogueFastJoin ?? true,
-            PartyFastPump = config?.PartyFastPump ?? false,
+            PartyFastPump = config?.PartyFastPump ?? true,
             ContainerFastPump = config?.ContainerFastPump ?? false,
             TransitionAnnounceEnabled = config?.TransitionAnnounceEnabled ?? false,
             ClientDoorRefusalEnabled = config?.ClientDoorRefusalEnabled ?? false,
