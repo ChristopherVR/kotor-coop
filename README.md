@@ -40,19 +40,19 @@ off by default or waiting on a live pass; the linked doc always has the dated ev
 | Map pins, minimap arrows, pause-together, downed/revive + spectate camera | Live-verified | — |
 | Control lock-in (client stuck as a companion on connect) | Fixed and live-verified, round 70 | [control-return.md](docs/research/control-return.md) |
 | Session lifecycle — in-game Co-op menu, console connect/reconnect, mod-compat per-channel degrade | Live-verified for the agreeing case | shared-state-audit.md |
-| Companion follow-AI (Trask now walks to catch up) | Fixed and live-verified 3x, round 80 — reaches walking state, closes distance | [party-reconciliation.md](docs/research/party-reconciliation.md); per-frame smoothness not yet independently confirmed |
+| Companion follow-AI (Trask now walks to catch up) | Fixed round 80; round 81 confirmed the motion is genuinely smooth when it progresses | [party-reconciliation.md](docs/research/party-reconciliation.md); the catch-up can still stall unpredictably partway (same open pathfinder cursor issue) |
+| Mod-compatibility mismatch paths | Live-exercised 7 of 8 categories (override, modules, 2da, appearance, save-identity default + strict-refuse, exe) | every observed behavior matched the code exactly — [mod-compatibility.md](docs/research/mod-compatibility.md) round 2026-08-23; module-GIT and globals-catalogue mismatches deliberately not forced, per the doc's own recommendation |
 
 ### Still needs work
 
 | Area | Status | Blocker |
 | --- | --- | --- |
-| Companion local combat (client's mirrored companion fighting) | Release/reclaim gate verified clean; a second blocker found (solo mode) — a landed swing not independently confirmed | OFF by default — party-reconciliation.md |
+| Companion local combat (client's mirrored companion fighting) | Release/reclaim gate verified clean; round 82 CONFIRMED the blocker — client-side "solo mode" stops a released companion's AI from ever queuing an attack | OFF by default — no per-companion scoped fix exists yet — party-reconciliation.md |
 | `party_fast_pump` (companion-position latency) | Tested twice (combat: worse; non-combat: no measurable difference) | OFF by default, real cause of reported lag still open — [lag-audit.md](docs/research/lag-audit.md) |
-| Minigames (swoop races, forced turret sequences) | Detection + peer-park built | never run in a live two-instance session — [minigames.md](docs/research/minigames.md) |
-| Mid-session save/load (host or client loading a different save) | Phase 1 (client character survives to next session) live-tested; host mid-session load is refused, not re-adopted | [session-save.md](docs/research/session-save.md) |
-| Dialogue recruitment sync | Item grants confirmed by design; recruitment pokes a flag whose sufficiency is unconfirmed | OFF by default — [dialogue-consequences.md](docs/research/dialogue-consequences.md) |
-| Mod-compatibility mismatch paths | Every path unit-tested | never run against a genuine mismatch, only the agreeing case |
-| Creature liveness reconciliation (a body alive on one screen, dead on the other) | Built; every reachable module stays under the 32-slot census that already covers this | agent's own scan doesn't notice a `DestroyObject`ed body — [creature-liveness.md](docs/research/creature-liveness.md) |
+| Minigames (swoop races, forced turret sequences) | Turret sequence CONFIRMED a genuinely separate module — spectate/park is structurally forced and verified clean. Swoop racing confirmed architecturally *capable* of co-visibility (same module, no transition) but never actually witnessed — this rig's save can't reach a live race | [minigames.md](docs/research/minigames.md) §9-§10 |
+| Mid-session save/load (host or client loading a different save) | Phase 1 (client character survives to next session) live-tested. The regression check for ordinary travel vs. a real Load is CONFIRMED clean both directions | Real in-game Load-menu detection still unverified — blocked by a rig input-injection gap, not a code issue — [session-save.md](docs/research/session-save.md) |
+| Dialogue recruitment sync | Carth CONFIRMED recruits correctly end-to-end live. Found a real (contained) bug: the primary spawn path falls through to an older mechanism that leaves an orphaned duplicate body | OFF by default — [dialogue-consequences.md](docs/research/dialogue-consequences.md) |
+| Creature liveness reconciliation (a body alive on one screen, dead on the other) | CONFIRMED working live for the first time — a debug `--enemy-census-cap` flag makes the out-of-census case reachable, and the Kill→Destroy correction fires correctly | OFF by default; a separate, still-unfixed `DestroyObject`-scan-freshness issue is untouched by this result — [creature-liveness.md](docs/research/creature-liveness.md) |
 | KOTOR 2 | Untouched | only GOG v1.0.3 addresses are known |
 
 ## What works today
@@ -275,17 +275,18 @@ tools/                   RE helpers, demo scripts, the kotor1_0_3 symbol databas
 - **A companion now reliably walks to catch up**, fixed round 80. Two stacked engine gates
   were the cause: a step-accumulator field nothing ever incremented, and a pathfinder
   write-cursor gate downstream of it — both closed by driving the engine step directly rather
-  than waiting on the built-in scheduler. Live-confirmed 3x (reaches walking state, closes
-  distance); whether the resulting motion is smooth per-frame walking or a fast multi-node
-  catch-up hasn't been independently confirmed yet. See
+  than waiting on the built-in scheduler. Round 81 confirmed the motion is genuinely smooth
+  when it progresses (small, steady per-frame deltas, not a snap), but the catch-up can still
+  stall partway at an unpredictable point — the same open pathfinder-cursor issue, now
+  narrowed one layer deeper. See
   [party-reconciliation.md](docs/research/party-reconciliation.md).
 - **A mirrored companion cannot swing on a client**, except for one narrow, off-by-default
   case (`companion_local_combat=1`) that releases a companion standing close enough to both
   players and the enemy to its own engine AI. The release/reclaim mechanism is live-verified
-  clean; a second, previously unexamined blocker was found (client-side "solo mode" may hold
-  companion AI locked regardless of release) and a read-only diagnostic shipped to settle it
-  live; whether a swing actually lands credited damage is still unconfirmed. See
-  party-reconciliation.md.
+  clean; round 82 CONFIRMED the second blocker suspected earlier — client-side "solo mode"
+  stops a released companion's AI from ever queuing an attack, verified via 11 diagnostic
+  samples across a real sustained fight. No per-companion scoped fix exists yet, so
+  `companion_local_combat` stays off. See party-reconciliation.md.
 - **Companion-mirror lag** ("lag even on localhost"): investigated twice (`party_fast_pump`),
   found no benefit either time, left off. The follow-AI bug that blocked a clean measurement
   is now fixed, so this is open to re-measure. See [lag-audit.md](docs/research/lag-audit.md).
@@ -295,36 +296,48 @@ tools/                   RE helpers, demo scripts, the kotor1_0_3 symbol databas
   tutorial script (`SetMinOneHP`), not this mod. See
   [min-one-hitpoint.md](docs/research/min-one-hitpoint.md).
 - **Enemies target purely by proximity.** No threat shaping.
-- **The mod-compatibility check has never seen a real mismatch.** Every mismatch path
-  (different executable, override folder, save, module edits, globals table) is unit-tested
-  and coded on screen (`E_EXE`, `W_GIT`, `W_SAVE`...), but only the agreeing case has run
-  live — two installs whose *same* resref names a differently-modded item still aren't
-  detected either.
-- **Minigames** (swoop races, forced turret sequences) are detected and the peer is parked,
-  but nobody has watched this run in a live session yet. Pazaak is unrelated and uncovered.
-  See [minigames.md](docs/research/minigames.md).
+- **The mod-compatibility check is now live-verified against real mismatches**, not just the
+  agreeing case. A round of live fixtures exercised different executable, override folder,
+  modules census, 2DA, appearance.2da, save identity (both the default degrade and the strict
+  `--require-identical-save` refuse-and-evict path) — every one matched the code's own
+  degradation matrix exactly. Module-GIT and globals-catalogue mismatches remain deliberately
+  unforced (too risky to fabricate safely); two installs whose *same* resref names a
+  differently-modded item still aren't detected. See
+  [mod-compatibility.md](docs/research/mod-compatibility.md).
+- **Minigames**: the turret sequence is CONFIRMED a genuinely separate module — spectate/park
+  is structurally forced there (not a design choice) and the current parked-peer behavior is
+  verified clean. Swoop racing is confirmed architecturally *capable* of true co-visibility
+  (same module, no transition, live-confirmed), but actually watching a race requires story
+  progress this project's rig save doesn't have — still an open question pending a different
+  save. Pazaak is unrelated and uncovered. See [minigames.md](docs/research/minigames.md).
 - **Non-damage combat effects** (stun, slow, frightened, choke, force push/whirlwind) forward
   live, both directions, on by default. Knockdown, Paralyze and Sleep are captured but never
   replayed — their apply-side engine call is still unverified. See
   [effect-sync.md](docs/research/effect-sync.md).
 - **Mid-session save/load**: a joiner's progress now survives to the next session (their
-  character is captured and preferred on rejoin). A host loading a different save mid-session
-  is detected and refused rather than serving a stale world, but whether the detection reliably
-  fires from the in-game Load menu is unverified; a client loading mid-session is detected but
-  not auto-rejoined. See [session-save.md](docs/research/session-save.md).
+  character is captured and preferred on rejoin). Both the host-refuse and client-rejoin
+  upgrades exist behind off-by-default gates; the regression check that matters most — does an
+  ordinary co-op travel warp ever get misclassified as a Load Game action — is now CONFIRMED
+  clean live, both directions. Whether the positive case (a genuine Load via the real in-game
+  menu) is detected and handled correctly is still unverified, blocked by a rig-tooling gap
+  (mouse-click injection doesn't reliably land on this rig's windows), not a code defect. See
+  [session-save.md](docs/research/session-save.md).
 - **Dialogue reward-node consequences** (item grants) are built and forward automatically,
   on by default. Recruitment sync defaults off — an earlier raw availability poke was
   live-confirmed insufficient (the engine had nothing to spawn a body from) and has been
-  replaced with a call through the real recruitment routine; the per-slot companion mapping it
-  relies on is confirmed for only one of nine companions so far. Alignment is left to diverge on
-  purpose (two people making different choices in one story). See
+  replaced with a call through the real recruitment routine, now CONFIRMED live end-to-end for
+  Carth (appears in both parties' rosters correctly). That pass also found a real, contained
+  bug: the primary spawn path can fall through to an older mechanism, leaving an orphaned
+  duplicate body — documented, not yet fixed. The per-slot companion mapping is confirmed for
+  only one of nine companions so far. Alignment is left to diverge on purpose (two people
+  making different choices in one story). See
   [dialogue-consequences.md](docs/research/dialogue-consequences.md).
 - **A body left alive on one screen and dead on the other** can be corrected by a liveness
-  channel that's built but effectively unreachable: every module small enough to test in stays
-  under the ordinary 32-creature census that already covers this case some other way. A
-  debug-only agent flag can now shrink that census on demand to make the channel testable
-  without needing an oversized module. Off by default. See
-  [creature-liveness.md](docs/research/creature-liveness.md).
+  channel that's now CONFIRMED working live for the first time: a debug-only
+  `--enemy-census-cap` agent flag shrinks the 32-creature census on demand, and the
+  Kill→Destroy correction fired cleanly in a real out-of-census kill. Off by default; a
+  separate, still-unfixed `DestroyObject`-scan-freshness issue from an earlier round is
+  untouched by this result. See [creature-liveness.md](docs/research/creature-liveness.md).
 - **Alignment (light/dark) is per-player on purpose** — no sync channel needed. An
   alignment-gated dialogue option reflects whichever player owns the conversation.
 - KOTOR 2 is untouched, and only GOG v1.0.3 addresses are known.
