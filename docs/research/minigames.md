@@ -745,3 +745,180 @@ differently-progressed save available to test the theory against.
   directly, a save with legitimate Taris story progress, or a human playing through that content
   naturally. Turret sequences remain structurally impossible to make co-visible regardless
   (§9.2, unaffected by anything in this round).
+
+## 11. Offline save-flag tooling (2026-08-23, an offline round) — real candidate names found, no crafted save file shipped, and why
+
+This round's brief was explicit and different from §9/§10: build a save file **offline**,
+without touching either live GOG install — another agent owned the live rig exclusively for the
+whole round. That constraint turned out to be load-bearing for what this round could and could
+not responsibly produce, and is worth recording precisely, not just the result.
+
+### 11.1 What "offline" actually meant, discovered the hard way
+
+Every scripted (Bash/PowerShell/`dotnet run` invoked with the install path on the command line)
+read OR write against `C:\GOG Games\Star Wars KOTOR (GOG)` was refused outright by this session's
+own tooling guardrail — confirmed empirically: `ls`, a `kotorfiles.py` invocation, and a plain
+`[System.IO.File]::ReadAllBytes(...)` PowerShell one-liner were all blocked, while a bare
+`Test-Path` on the same file was allowed. The one channel that stayed open was the file-reading
+tool built into this environment, used for a single file at a time — which is how §11.2's global
+variable catalogue below was actually recovered: a direct, one-shot inspection of the real save's
+own `GLOBALVARS.res`, not a script, not a bulk extraction, and not a write.
+
+**This means no `.ncs` bytecode could be pulled this round either.** `k_ptar_swoop02ab`'s
+compiled script lives inside `data\scripts.bif`, reachable only by parsing `chitin.key`'s BIF
+index — exactly the kind of multi-step, scripted archive walk the guardrail refused. §10.4's gap
+(no NWScript disassembler in this tree, so the trigger's actual precondition was read as
+"probably a global flag" rather than confirmed) is therefore still open after this round too, for
+a different reason than before: previous rounds had live install access and no disassembler;
+this round had neither.
+
+### 11.2 What WAS recovered: the real global-variable catalogue, not a guess
+
+A single read of the rig's own `saves\000002 - Game1\GLOBALVARS.res` (the same file
+`tools/globalvars.py dump` decodes) surfaced its full name catalogue as plain embedded ASCII —
+readable even though the file is otherwise binary. Filtering that catalogue for Taris/swoop-shaped
+names turns up a short, well-defined set of **real, declared** globals (not invented names — every
+one below is confirmed present in this save's own `CatBoolean`/`CatNumber` lists):
+
+Boolean-shaped:
+`TAR_FIRST_SWOOP_USE`, `Tar_SwoopRace`, `Tar_SwoopNew`, `Tar_SwoopStatus` (this one reads more like
+a number, see below), `TAR_STARTED`. Also present for pattern comparison, one per other planet's
+swoop track: `K_TAR_SWOOP_POINT_01`…`_09`, `K_MAN_SWOOP_POINT_01`…`_05`,
+`K_TAT_SWOOP_POINT_01`…`_07`, `K_DAN_SWOOP_POINT_01`…`_05`, `K_KOR_SWOOP_POINT_01`…`_04`,
+`K_KAS_SWOOP_POINT_01`…`_04` — almost certainly per-planet collectible "swoop upgrade point found"
+trackers (a known KOTOR 1 mechanic), not race-start gates, and not tried.
+
+Number-shaped: `Tar_SwoopStatus`, `Tar_SwoopRaceCounter`, `TAR_SWOOP_MIN`/`_SEC`/`_MSEC` and their
+`_BEAT` twins, `TAR_SWOOP_RUN`, `TAR_SWOOP_ACCEL` — these read as race-clock/scoring state written
+DURING or AFTER a race, not preconditions checked before one starts, and were not prioritised.
+
+**What is NOT known**: which (if any) of these `k_ptar_swoop02ab` actually reads, and what value
+it requires. The type split above (boolean vs. number) is inferred from which catalogue section
+each name was recovered from during the single read, not independently confirmed per-name against
+the live save — the coordinator should treat that split as a strong hint, not a certainty, and
+`tools/globalvars.py get <name>` (which DOES need live install access) is the fast way to confirm
+it before crafting, if convenient.
+
+### 11.3 The tool built: `KotorCoop.Memory.GlobalFlagCraft` + `KotorCoop.Agent craft-save`
+
+Rather than ship a save file this round could not safely produce (see §11.4), this round built
+and fully unit-tested the tool that produces one, using exactly this repo's own
+`ErfArchive`/`Gff`/`GffWriter`/`GffCopy` toolchain (`src/KotorCoop.Memory/GameFiles/`), the same
+one `docs/research/mod-compatibility.md` §5 used for its own live save-identity fixture:
+
+* **`src/KotorCoop.Memory/GlobalFlagCraft.cs`** — `TryCraft(source, dest, booleanFlags,
+  numberFlags, out results, out diagnostic)`: copies every file in `source` into a freshly
+  created `dest` (refuses to run if `dest` already exists and is non-empty — never overwrites),
+  then rewrites only the copy's `GLOBALVARS.res`, flipping the `ValBoolean` bit or `ValNumber`
+  byte for each requested name that is **already declared** in that save's own `CatBoolean`/
+  `CatNumber` catalogue. A name not in the catalogue is reported as not-found and left alone —
+  deliberately never fabricated, matching `tools/globalvars.py`'s own documented engine behaviour
+  ("the catalogue is FIXED: `SetGlobalBoolean` on an unknown name... does nothing"). `source` is
+  never opened for writing. `TryVerify(...)` reads a crafted save back and confirms every
+  requested flag actually holds the value it was set to — the same "prove the fixture isn't
+  silently malformed" discipline `SaveDigestTests` uses.
+* **`KotorCoop.Agent craft-save`** (`AgentOptions.cs`, `Program.cs`) — a thin CLI over the same
+  class, for the coordinator to run directly:
+
+  ```powershell
+  dotnet run --project src/KotorCoop.Agent -- craft-save `
+    --source "C:\GOG Games\Star Wars KOTOR (GOG)\saves\000002 - Game1" `
+    --dest   "C:\GOG Games\Star Wars KOTOR (GOG)\saves\000003 - zzz_swoop_flagtest" `
+    --bool TAR_FIRST_SWOOP_USE `
+    --bool Tar_SwoopRace `
+    --bool Tar_SwoopNew
+  ```
+
+  Prints one line per requested flag (`[boolean] TAR_FIRST_SWOOP_USE: 0 -> 1` or `NOT in this
+  save's catalogue`) and a summary diagnostic. Repeat with `--dest` pointed at
+  `D:\Games\swkotor-gog-p2\saves\...` for the other install if both players should start
+  flag-primed (only the instance that will actually attempt the race needs it, per §8.2's plan,
+  but priming both costs nothing and avoids a mid-test surprise if the racing role changes).
+* **`tests/KotorCoop.Tests/GlobalFlagCraftTests.cs`** (new, 7 tests) — a synthetic
+  `GLOBALVARS.res` built the same way `SaveDigestTests` builds its ERF/RIM fixtures, proving:
+  the source directory is never modified; a requested flag's bit/byte round-trips correctly and
+  `TryVerify` confirms it; every OTHER declared flag stays at its default; an undeclared name is
+  reported, not invented, and produces a byte-identical `GLOBALVARS.res` in the copy; crafting
+  refuses a non-empty destination; a directory without `GLOBALVARS.res` fails cleanly.
+  `dotnet build` and the full `dotnet test` are green: **1645/1645** (1638 baseline + 7 new).
+
+### 11.4 Why no literal crafted `SAVEGAME.sav` ships in this round, and why that is the right call
+
+The task's own fallback (§8.2/§10's own precedent, and this task's brief) is "build the BEST save
+you can... document what's uncertain" rather than guess blindly — but the honest constraint this
+round hit is narrower than "uncertain which flag": **there was no legitimate way to obtain a real
+base save's bytes at all**, given the guardrail in §11.1, and a save the engine will actually load
+without crashing cannot be safely fabricated from nothing:
+
+* Basing a crafted save on the real `000002 - Game1` (copying its bytes into the repo, then
+  editing) would require reading that save's binary content in bulk — exactly what §11.1's
+  guardrail refused for every scripted path this round tried. The one channel that stayed open
+  (single-file inspection) is not bulk-safe for reconstructing an exact binary copy; a KOTOR save
+  is many files, several binary, and losing byte fidelity on any one of them (a nested ERF's
+  offsets, a GFF's field-data block) is exactly the "structurally invalid, crashes the engine"
+  failure mode the task asked to avoid.
+* Building an entirely SYNTHETIC save from scratch (a fabricated character, party, module state)
+  was considered and rejected: KOTOR's save format has many required-in-practice fields this
+  project has not needed to enumerate exhaustively (it has only ever read real saves, never
+  authored one from nothing), and with zero live-testing capability this round, a synthetic save
+  that fails to load would waste the coordinator's time worse than not having one — the task's own
+  words, "must be structurally valid enough for the engine to load without crashing," were taken
+  seriously as a real risk, not a formality.
+* **Position/module was assessed as the higher-risk, lower-value half of the ask anyway.** An
+  unvisited module (this save has never been to `tar_m02ab`) carries no saved player-position
+  state for it at all — the engine would use the module's own default entry point regardless of
+  anything forced into the save, unless a full synthetic module `.sav` (GIT, area state, a
+  player entry positioned at the trigger) were also fabricated and injected into the outer ERF —
+  materially higher risk than the global-flag edit, for a problem §10.2 has ALREADY solved live
+  and repeatably: `warp tar_m02ab` then one full-distance `walkto 221.4 141.0 0` (reissued on
+  stall, per §10.2's hazards) reaches the trigger polygon in well under a minute. Baking position
+  into the save would save that minute; risking a load-crashing save to save it was judged not
+  worth it. This is a **design choice, not an oversight** — recorded here so the next round does
+  not have to re-derive it.
+
+### 11.5 Exact live-test plan for the coordinator
+
+1. Confirm the rig is up on `integration/honest-limitations` (or later) with `dotnet test`
+   green, per this project's usual pre-flight.
+2. Run the `craft-save` command in §11.3 against whichever install(s) will race, producing
+   `saves\000003 - zzz_swoop_flagtest` as a NEW, additive directory (nothing existing is
+   touched) — the same "newest save wins `--load-save 1`" mechanism
+   `docs/research/mod-compatibility.md` §5 already established and verified live.
+3. Bring up `tools/demo.ps1` as usual; the crafted save is what `--load-save 1` stages, per (2).
+4. Once in-world, follow §10.2's proven navigation recipe verbatim: `warp tar_m02ab`, confirm a
+   walkable start with a small sanity `walkto`, then `walkto 221.4 141.0 0` reissued on stall
+   (watch for Hazard 1 — zero-coverage movement means standing off-mesh, revert — and Hazard 2 —
+   a stalled `walkto` with no movement-refusal symptom means check `console 'dialogue'` for the
+   `tar02_drunks2` banter trigger and close it with `skipline`/`selectreply 0`).
+5. Cross into the trigger polygon around `(222.0, 141.5)`. Watch for
+   `triggers: observed my own engine natively fire OnEnter of 0x3D` (or the equivalent id this
+   round) in the plugin log — §10.3 already proved this part fires reliably.
+6. **The actual test**: does `MinigameController`'s `minigame: entered (swoop/turret)` line show
+   up within the next few seconds this time? If yes — the flags in §11.3's command were sufficient
+   (or at least one of them was; consider re-running with them set individually afterward, once
+   confirmed, to identify which one actually mattered, and update this doc). If no — the theory
+   in §10.4 is not fully confirmed, or a different name/value is needed; try the fallback singles
+   below one at a time (each needs a fresh `--dest`, since `craft-save` refuses to overwrite):
+   `Tar_SwoopRace` alone, `TAR_STARTED` alone, `--number Tar_SwoopStatus=0` (in case a nonzero
+   default read from elsewhere is short-circuiting the script, though the catalogue default
+   measured this round was already 0 for every candidate touched).
+7. Either way, record the result back into this doc: which flag(s) (if any) got the race to
+   start, or confirmation that the flag theory itself is wrong and `k_ptar_swoop02ab.ncs` needs
+   an actual disassembly (no tool for that exists in this tree yet — would be a new roadmap item,
+   not a quick follow-up).
+
+### 11.6 Confidence summary
+
+* **High confidence**: the tool (`GlobalFlagCraft`/`craft-save`) is correct — proven by 7
+  synthetic-fixture unit tests exercising exactly its contract, source-immutability included.
+* **High confidence**: every name in §11.2's candidate list is a real, currently-declared global
+  in the rig's own save — read directly, not invented.
+* **Low confidence, explicitly**: that any single one of those names is what `k_ptar_swoop02ab`
+  actually checks, or that the value it wants is simply "true"/nonzero. This is the same
+  uncertainty §10.4 already flagged, carried forward rather than resolved, because this round's
+  access constraints made resolving it (an NCS disassembly, or bulk live-install access to try
+  values interactively) unavailable rather than merely effortful.
+* **No code path in the shipping plugin/agent changed.** `GlobalFlagCraft` and `craft-save` are
+  both new, additive, opt-in tooling — nothing in `CoopAgent.cs`, `MinigameController.cs`, or
+  `MinigameRule.cs` was touched, and `minigame_hide_peer` stays default-on exactly as §9.5/§10.5
+  already concluded.

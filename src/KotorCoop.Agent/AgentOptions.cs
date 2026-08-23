@@ -21,6 +21,11 @@ public enum AgentCommand
 
     /// <summary>Adopt a host's world and load it carrying this install's own character.</summary>
     Adopt,
+
+    /// <summary>Offline save-crafting utility: an additive copy of a save directory with
+    /// named global booleans/numbers forced to a value. See docs/research/minigames.md §11
+    /// and <see cref="KotorCoop.Memory.GlobalFlagCraft"/>.</summary>
+    CraftSave,
 }
 
 public enum CoopMode
@@ -107,6 +112,19 @@ public sealed record AgentOptions
     /// this file gets one timestamped line per change, which is the form worth keeping.</summary>
     public string? LogFile { get; init; }
 
+    /// <summary>craft-save: the save directory to copy from. Untouched by the craft.</summary>
+    public string? CraftSource { get; init; }
+
+    /// <summary>craft-save: the save directory to create. Must not already exist.</summary>
+    public string? CraftDest { get; init; }
+
+    /// <summary>craft-save: "NAME=0" / "NAME=1" pairs, one per --bool. A bare "NAME" means
+    /// 1 (set true).</summary>
+    public IReadOnlyList<string> CraftBooleans { get; init; } = [];
+
+    /// <summary>craft-save: "NAME=VALUE" pairs, one per --number.</summary>
+    public IReadOnlyList<string> CraftNumbers { get; init; } = [];
+
     /// <summary>
     /// Hide peers whose module differs from ours. Correct between two copies of the same
     /// game, but wrong when bridging different games (or a mock harness), because the two
@@ -179,6 +197,7 @@ public sealed record AgentOptions
             "install-datamods" => AgentCommand.InstallDataMods,
             "serve-world" => AgentCommand.ServeWorld,
             "adopt" => AgentCommand.Adopt,
+            "craft-save" => AgentCommand.CraftSave,
             _ => AgentCommand.Help,
         };
 
@@ -215,6 +234,10 @@ public sealed record AgentOptions
         bool menuConnect = false;
         string? dropFile = null;
         string? logFile = null;
+        string? craftSource = null;
+        string? craftDest = null;
+        List<string> craftBooleans = [];
+        List<string> craftNumbers = [];
 
         for (int i = 1; i < args.Length; i++)
         {
@@ -336,6 +359,30 @@ public sealed record AgentOptions
                     logFile = Next();
                     break;
 
+                case "--source":
+                    craftSource = Next();
+                    break;
+
+                case "--dest":
+                    craftDest = Next();
+                    break;
+
+                case "--bool":
+                    if (Next() is { } boolArg)
+                    {
+                        craftBooleans.Add(boolArg);
+                    }
+
+                    break;
+
+                case "--number":
+                    if (Next() is { } numberArg)
+                    {
+                        craftNumbers.Add(numberArg);
+                    }
+
+                    break;
+
                 case "--phantoms":
                     phantoms = int.TryParse(Next(), out int parsedPhantoms)
                         ? Math.Clamp(parsedPhantoms, 0, 8)
@@ -397,6 +444,10 @@ public sealed record AgentOptions
             MenuConnect = menuConnect,
             DropFile = dropFile,
             LogFile = logFile,
+            CraftSource = craftSource,
+            CraftDest = craftDest,
+            CraftBooleans = craftBooleans,
+            CraftNumbers = craftNumbers,
         };
     }
 
@@ -457,6 +508,19 @@ public sealed record AgentOptions
                     in appearance.2da. Merges into the user's current tables (existing
                     mod rows are preserved), is safe to re-run, and never touches
                     dialog.tlk. Point it at the game with --game-path <dir or exe>.
+          craft-save
+                    Offline, additive save-flag surgery: copies --source into a brand new
+                    --dest directory (which must not already exist) and, in the copy only,
+                    forces named GLOBALVARS.res booleans/numbers to a value. Never touches
+                    --source, never touches SAVEGAME.sav/module/position/GIT — only the two
+                    ValBoolean/ValNumber blobs behind names already in that save's own
+                    catalogue. A name not in the catalogue is reported, not invented. See
+                    docs/research/minigames.md §11.
+                      --source <dir>       save directory to copy from
+                      --dest <dir>         save directory to create
+                      --bool <NAME[=0|1]>  force a global boolean (repeatable; bare NAME
+                                            means =1)
+                      --number <NAME=N>    force a global number, -128..127 (repeatable)
 
         TARGET SELECTION
 
