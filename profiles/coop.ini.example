@@ -50,6 +50,13 @@ chat_overlay_fade_ms = 9000
 
 ; While a peer is racing or manning a turret, park their phantom instead of mirroring it
 ; (same treatment as a peer in a different module). 0 keeps mirroring it anyway.
+; Default is 1 (park) because co-visible swoop racing has never actually been WATCHED
+; happen - two live rounds (docs/research/minigames.md §9, §10) confirmed swoop racing is
+; architecturally possible (same module, no transition) and got progressively closer to an
+; actual race, but neither could get the in-fiction race itself to start, so nobody has yet
+; seen whether a mirrored peer's phantom/swoop-bike looks right during one. Turret sequences
+; (the other minigame kind) are a dedicated separate module that auto-parks everyone who
+; enters it regardless of this setting - flipping it to 0 has no effect there.
 minigame_hide_peer = 1
 
 ; Hand this instance's camera to a peer while they are in a minigame, the way a downed

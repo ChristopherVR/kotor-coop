@@ -582,3 +582,166 @@ watched an active race or an active gunnery view.
 * No production behaviour changed this round. The one code addition, `walkto`, is a live-test
   instrument (`SharedBlock.CheatKindWalkTo` / `CheatKinds.WalkTo`, both `24`, covered by the
   existing `CheatKindSyncTests`), not a gameplay change.
+
+## 10. The follow-up round (2026-08-23, later same day) — the navigation problem is SOLVED, and the blocker moved one layer deeper
+
+Picked up exactly where §9.3 left off: §9's own round could not get a human-quality walk to the
+swoop trigger and called that a genuine tooling limit. This round's brief was explicit — reach
+the trigger a different way than `walkto` alone, using the project's established **tp-hop, then
+walk the last stretch** pattern (the same idiom `console 'tp 45 35 -1.3'` uses elsewhere in this
+project, see `docs/research/party-reconciliation.md`) instead of one long blind walk. That
+technique worked. What it uncovered is a **new, more specific blocker** than "can't get there":
+the trigger fires cleanly and the race still does not start.
+
+### 10.1 Rig state and screenshot capability, checked first
+
+`dotnet test` was green (1638/1638) before touching anything live. Both game directories'
+`dinput8.dll`/agent files were rebuilt and reinstalled (`src/KotorCoop.Plugin/build.ps1
+-Install`) to be certain the running rig matched this branch, then `tools/demo.ps1` brought up
+both instances against the rig's only non-autosave save (`000002 - Game1`, save slot 1).
+
+`tools/shot.ps1` was tried once, purely to sanity-check whether this round could get real visual
+evidence instead of relying on logs. It came back **solid black**, confirming what
+`docs/research/spectate-camera.md`, `docs/research/phantom-locomotion.md`,
+`docs/research/dialogue-join-latency.md` and `docs/research/shared-state-audit.md` already say
+independently: KOTOR's 3D viewport does not BitBlt, so `shot.ps1` is only ever useful for menu
+overlays, never gameplay. **Every observation in this round is therefore from the plugin log and
+console-command state reads (`where`, `dialogue`, `census`, `resolve`), the same evidentiary
+standard the rest of this project's live-verification docs already use** — not a limitation this
+round introduced.
+
+### 10.2 Navigation: tp-hop-then-walk, with two real hazards found and both worked around
+
+Starting point (fresh `warp tar_m02ab`): `(109.4, 123.4, 0.0)`. Target: the trigger centred at
+`(221.4, 141.0)` per §9.1's static GIT read (the north of the two `tar02_swoop02ab` polygons,
+picked as slightly closer to the entry point than the south one at `(221.2, 64.5)`).
+
+**Hazard 1 — a blind `tp` can land you completely off the walkmesh, and the symptom is total,
+silent movement refusal, not a partial short walk.** A three-hop `tp` chain
+(`109→150→190→214,138`) landed cleanly by the tool's own report (`"moved from X,Y to X,Y"`,
+every hop), but from `(214, 138, 0)` **every subsequent `walkto` — even a 2 m nudge — moved the
+player 0.0 m**, repeatably, across five different target directions tried. This is a materially
+different failure mode than §9.3's partial-progress-then-stall; it is worth distinguishing for
+whoever hits this next: partial coverage means "the pathfinder is working, the destination or
+route is hard"; **zero coverage from a `tp` landing means "you are almost certainly standing on
+un-walkable geometry, revert to the last confirmed-walkable point."**
+
+**The fix, confirmed live: don't guess `tp` targets from raw GIT numbers, and don't chain short
+`walkto` hops either — issue ONE `walkto` at the FULL remaining distance to the real target and
+let the engine's own pathfinder route around whatever is in the way, reissuing the identical
+command (not a different intermediate point) each time it stalls.** From the confirmed-walkable
+entry point `(112.0, 124.0)` (verified by a successful 2 m sanity-check walk first), a single
+`walkto 221.4 141.0 0` reissued three times over about 35 seconds of real elapsed time covered
+the full ~112 m — the pathfinder visibly routed through corridors on its own (the intermediate
+reads, `(140.9,102.1)` then `(185.4,105.3)` then `(220.9,131.7)`, are NOT on the straight line to
+the target — Y briefly drops to 102 before climbing back to 131, meaning real corridor-following
+happened, not a straight-line nudge). This got the player to within 9.3 m of the trigger centre,
+dramatically further than §9.3's ~110 m dead stop.
+
+**Hazard 2 — a story/banter trigger fired mid-walk and silently absorbed every subsequent
+`walkto` until closed out.** At `(220.9, 131.7)` — actually mid-route, well before the swoop
+trigger — `tar_m02ab`'s own `tar02_drunks2`/banter content put the player into a conversation
+with `drunk023` (visible only via `console 'dialogue'`, not `where` or the plugin log's usual
+"cheat: walking to..." accept line, which kept reporting `status 1` normally even while every
+walk was actually a no-op). **`skipline` + `selectreply 0`, looped a handful of times until
+`console 'dialogue'` showed an empty local partner, closed it out** — after which movement
+resumed immediately from the exact position the dialogue interrupted. Left as a documented
+hazard for future live navigation through this specific module: any `walkto` that stops making
+progress with no movement-refusal symptom (Hazard 1's tell) and no crash should prompt a
+`console 'dialogue'` check before assuming a pathing problem.
+
+After closing the dialogue, the walk resumed and closed the remaining distance in stages exactly
+as before (the same "one full-distance `walkto`, reissue on stall" pattern), reaching the
+trigger's actual polygon.
+
+### 10.3 The trigger itself: reached, crossed, and identified with certainty — twice
+
+At `(222.0, 141.5)` — inside the box `docs/research/trigger-relay.md`'s GIT read describes
+(`~4×3.7 m` around `(221.4, 141.0)`) — the plugin log recorded:
+
+```
+[19:02:08.426] triggers: observed my own engine natively fire OnEnter of 0x3D — publishing for other peers
+```
+
+This is not an inference. `console 'resolve 0x3D'` plus a small scratch reader (**not committed
+— a throwaway diagnostic, same category as §9.1's `minigamepoke.ps1`**) that reads
+`CSWSObject+0x18` (the tag `CExoString`, the same offset `tools/creatures.ps1` already uses)
+off the resolved address confirmed, byte for byte:
+
+```
+tag at 0x3389BB8 = 'tar02_swoop02ab ' (len 16)
+```
+
+**This is the swoop-race entrance trigger, confirmed live by its own tag, not assumed by
+position.** A second crossing later in the round (continuing north to `(221.3, 146.5)`, near the
+`k_trans_abort` placeable §9.1 flagged) fired a second, different trigger, `0x3F`, which resolved
+to tag `tar02_npcext` — an unrelated party/NPC-visibility trigger also placed in this module (see
+`docs/research/trigger-relay.md`'s full sweep), not part of the swoop flow. Only the first one
+matters for this task.
+
+`tools/creatures.ps1` (a `CSWSCreature`-vtable memory scan already in the tree, previously used
+for census-style checks elsewhere in this project) was run against the loaded module and turned
+up 53 live creatures — Taris citizens, droids, Sith patrols, "gortlistener" NPCs, three
+`drunk0##` tags (matching the banter trigger from §10.2, clustered near `(235-238, 94-97)`, i.e.
+a *different* location from the swoop trigger entirely) — **and nothing resembling a swoop-track
+attendant, bookie, or kiosk NPC.** Whatever the intended interaction is, it is not "walk up and
+talk to someone" the way most of this module's other content is; it is squarely the trigger
+volume itself, matching this project's own prior (§8.2) assumption that the trigger alone is the
+entry point.
+
+### 10.4 The new finding: crossing the trigger does not start the race, and this round could not determine why
+
+After the confirmed `OnEnter of 0x3D` fire, the player was left alone — no further console
+commands issued — for **43 real seconds** (`19:02:08.426` to the next command at `19:02:51.928`).
+In that entire window: no `minigame: entered` log line (`MinigameController`'s own log, grepped
+for the whole session — the only two `minigame: entered` hits anywhere in the log are timestamped
+`18:30` and `18:34`, both **before** this round's swoop attempt even began, left over from a
+previous session's turret test), no `dialogue-node-pub` line, no `StartDialog`, nothing. A second
+attempt — retreating just outside the box and walking cleanly back in for a fresh crossing —
+produced no second `OnEnter` fire at all (KOTOR trigger scripts commonly latch a "already fired"
+local/global the first time, so this is consistent with the first fire being the one that
+mattered and simply not doing what §8.2 assumed it would).
+
+**This directly narrows, rather than confirms, §8.2's assumption** ("reachable by console warp
+alone, no story progress required" — stated there as a plan, not verified). The live result says
+the trigger's `OnEnter` script (`k_ptar_swoop02ab`) genuinely runs — the engine-level fire is not
+in question — but whatever it does either has no visible effect from this save's state, or its
+effect requires a precondition this save does not satisfy. The leading candidate, unverified:
+**the rig's only available save is `000002 - Game1`, loaded from module `END_M01AA` — the Endar
+Spire, i.e. the very first area of the game** — and this round warped straight from there into
+deep Taris Lower City content with no intervening story progress. If `k_ptar_swoop02ab` checks a
+global/local flag that vanilla KOTOR's own Taris storyline sets somewhere between the Endar Spire
+and the Lower City swoop track (plausible — the trigger's resref is classified `STORY` by
+`docs/research/trigger-relay.md`'s own naming heuristic, not `generic`), a save this early would
+never have set it. **This is INFERRED, not confirmed** — this project has no NWScript
+(`.ncs`) disassembler (`tools/kotorfiles.py` reads GFF/BIF/ERF resource containers, not compiled
+script bytecode), so `k_ptar_swoop02ab`'s actual condition was not read directly, and the rig's
+save directory has exactly one non-autosave slot (`000002 - Game1`), so there was no
+differently-progressed save available to test the theory against.
+
+### 10.5 What this round did and did not answer
+
+* **Solved**: the ~110 m navigation problem §9.3 stopped at. The tp-hop-then-full-distance-walk
+  pattern, plus the two hazards documented above (off-mesh `tp` landings, and mid-route
+  story/banter triggers silently absorbing walk commands), is the reusable recipe for the next
+  round that needs to reach interactive content blind.
+* **Not answered, again, but for a different and now much more specific reason**: whether a
+  co-visible swoop race looks reasonable. §9's round could not reach the trigger. This round
+  reached it, crossed it, and had the engine confirm the correct script ran — and the race still
+  did not start. The open question moved from "can an agent get there" to "what precondition
+  does `k_ptar_swoop02ab` check, and does this rig's save satisfy it" — a strictly narrower, more
+  actionable question for whoever picks this up next, but not one this round could close without
+  either an NCS disassembler or a differently-progressed save.
+* **No code was changed this round.** `git status` is clean against `fff98c0` — every observation
+  came from existing live-test primitives (`tp`, `walkto`, `skipline`, `selectreply`, `census`,
+  `resolve`, `tools/creatures.ps1`) plus one uncommitted scratch tag-reader, the same category as
+  §9.1's `minigamepoke.ps1`.
+* **The shipping decision is unchanged and still cannot be otherwise**: co-visible swoop racing
+  is **not shipped**. `minigame_hide_peer` stays default-on (park/hide the racing peer's
+  phantom). This is not a new caution — it is the same conclusion §9.5 already reached, now
+  resting on one additional, concrete round of live evidence that reaching and crossing the
+  actual trigger is achievable but insufficient on its own; actually watching a race still
+  requires either decompiling `k_ptar_swoop02ab.ncs` to find and satisfy its precondition
+  directly, a save with legitimate Taris story progress, or a human playing through that content
+  naturally. Turret sequences remain structurally impossible to make co-visible regardless
+  (§9.2, unaffected by anything in this round).
