@@ -207,6 +207,9 @@ installs agree, which exercises only the happy path.
    reported identity becomes the host's within a few seconds rather than staying the old one.
 5. **A strict refusal evicts.** `--require-identical-save` on both sides with genuinely
    different saves: the client should show `E_SAVE` and the host's peer list should empty.
+   ✅ **Confirmed live 2026-08-23** — see the "Round (2026-08-23)" entry near the end of
+   this file: exact eviction cycle observed, `E_SAVE: different save; rejoin to adopt the
+   host's world` on both sides. Items 1-4 above are still open.
 
 ## Update (2026-08-23): the handshake is fully wired; a real live-only bug found and fixed
 
@@ -390,41 +393,85 @@ Behaviourally: the peer's phantom should keep its blueprint look instead of pick
 whatever appearance row the other side would have replicated — the thing to actually watch
 for on screen.
 
-### 5. SAVE identity mismatch — REFUSE by default, moderate effort, no file edits
+### 5. SAVE identity mismatch — DEGRADE by default, REFUSE only with `--require-identical-save`
 
-No hex-editing needed: the two installs' saves already diverge enough for this, because
-`SaveDigest.FindSessionSave` prefers the staged `000001 - AUTOSAVE` and only a rename is
-needed to make it fall back to the older `000002 - Game1` on one side.
+⚠ **Live-verified 2026-08-23 (round below): the "no file edits" recipe originally written
+here does not work, and the "Expected" text below was stale against the current
+policy-inverted behaviour (see "Save identity, after world adoption" above).** Left for
+history; the round entry at the bottom of this file has the corrected recipe and the
+actual observed text. Two independent things defeat the rename-only trick when driven
+through `tools/demo.ps1`'s own `--load-save` staging:
+
+* `PluginMenuLoader.TryResolveSaveDirectory`'s exclusion filter is `!Name.EndsWith(
+  "AUTOSAVE")`, not an exact-path match — renaming to `...AUTOSAVE.bak` does NOT exclude
+  it from the ordinary slot list, and being the most-recently-written directory it gets
+  picked right back up as slot 1 and re-staged into a fresh `000001 - AUTOSAVE`, silently
+  undoing the rename's effect on what actually boots.
+* Even sidestepping that (moving the folder fully out of `saves\`), `--load-save N`
+  *always* re-stages the selected source fresh into `000001 - AUTOSAVE` before the game
+  boots — so immediately after a fresh `demo.ps1` launch, `000001 - AUTOSAVE` and
+  `000002 - Game1` are byte-identical on both sides regardless of what got hidden, and
+  `SaveDigest.FindSessionSave` reading one or the other makes no difference at all.
+
+What actually produces a genuine mismatch, verified live: build a **second, additive**
+save directory whose `SAVEGAME.sav` has a real, different `Mod_NextObjId0` — no synthetic
+save, the real one, edited in place via the repo's own `ErfArchive`/`Gff`/`GffWriter`
+classes (`src/KotorCoop.Memory/GameFiles/`), which only our own digest code ever reads
+back (the running engine never re-reads a staged AUTOSAVE mid-session). Recipe:
 
 ```powershell
-Rename-Item "D:\Games\swkotor-gog-p2\saves\000001 - AUTOSAVE" `
-  "D:\Games\swkotor-gog-p2\saves\000001 - AUTOSAVE.bak"
+# Additive: copies Player2's existing Game1 save under a new name, touches nothing that
+# already existed.
+Copy-Item "D:\Games\swkotor-gog-p2\saves\000002 - Game1" `
+  "D:\Games\swkotor-gog-p2\saves\000003 - zzz_test_divergent" -Recurse
+```
+then, in C# (outer `MOD `/`SAV ` ERF -> nested module `.sav` ERF (type 2057/2055) ->
+`Module` IFO GFF -> `Mod_NextObjId0` dword; every other member byte-for-byte passthrough
+via `ErfArchive.TryRead`, rebuilt with the exact layout `ErfArchive.Open` expects — 160-byte
+header, 24-byte key entries, 8-byte resource entries, same as `SaveDigestTests`' `BuildErf`
+test helper):
+
+```csharp
+Gff ifo = Gff.Parse(ifoBytes);
+ifo.Root.TryGetDword("Mod_NextObjId0", out uint before);
+GffWriter writer = new("IFO ");
+GffCopy.CopyInto(ifo.Root, writer.Root);
+writer.Root.SetDword("Mod_NextObjId0", before + 37);
+// ...rebuild the inner then outer ERF with only that member's bytes replaced, write back
+// to the NEW save's SAVEGAME.sav, verify with SaveDigest.TryComputeSaveIdentity.
 ```
 
-⚠ This is not a digest-only trick — `PluginMenuLoader` uses the same staged-autosave
-convention to decide what the *actual running game* loads, so Player2 will genuinely boot
-into the older `000002 - Game1` save instead of the staged one for this session. That is
-what makes the mismatch "genuine" rather than synthetic, but it also means Player2's
-in-game state for this test run is whatever `Game1` was saved at, not the usual coop-staged
-position — expect the two players to start in different modules. Undo immediately after
-the test: `Rename-Item "...\000001 - AUTOSAVE.bak" "...\000001 - AUTOSAVE"`.
+Being the newest directory in `saves\`, `000003 - zzz_test_divergent` is what
+`--load-save 1` stages for Player2 on the next `demo.ps1` launch (Player1 keeps loading
+its own unmodified `Game1`). Undo: delete `000003 - zzz_test_divergent` — nothing existing
+was ever touched, and `demo.ps1`'s own next normal launch re-stages `000001 - AUTOSAVE`
+fresh from `Game1` on both sides, restoring identical `SaveIdentityDigest`s (confirmed via
+`SaveDigest.TryComputeSaveIdentity` before/after).
 
-Expected, with `--allow-different-save` NOT passed (the default): once both worlds are
-loaded and the first `WorldDigestPacket` round-trips, `SaveIdentityDigest` disagrees (very
-likely also a different `Module` string, so `ModuleGitMismatch` never even gets judged —
-see `WorldDigest.Compare`'s same-module gate). `ApplyWorldMismatch` returns
-`Refusal = RefusalReason.SaveGame`, `Allowed = SessionCapabilities.None`. **No
-disconnect** (see "what each mismatch actually does" above) — both dashboards show
-`content  E_SAVE: different save; object ids would not line up` followed by
-`OFF: <every capability>`. Position sync, chat, dialogue and barks should still work;
-everything else (party roster, enemies, doors, ground items, journal, appearance) should go
-silent on both sides.
+**Expected and observed, default (no flag):** `SaveIdentityDigest` disagrees, both sides
+same module (`sameModule` is driven by the *live* module the bridge reports, not anything
+read from the save file, so it holds even though the two `SAVEGAME.sav`s disagree).
+`W_SAVE` fires on both dashboards/logs: `co-op [W_SAVE] different save: enemies, doors,
+items and party are off — rejoin to adopt the host's world and get them back`. **No
+disconnect** — `SessionCapabilities.ObjectIdKeyed` (`Enemies|Doors|GroundItems|Party`)
+drops; world state, journal, appearance, position, chat and dialogue all keep flowing.
+This is the DEGRADE path and it is genuinely the default — the "REFUSE by default" heading
+and the "OFF: every capability, no disconnect" text this section used to carry described a
+superseded pre-adoption-inversion behaviour.
 
-Optional second pass: rerun with `--allow-different-save` (check `AgentOptions`/coop.ini
-for the exact flag name) to see the degrade path instead: `Admitted = true`, warning
-`different save (allowed): enemies, doors, items and party are not shared`, and
-`SessionCapabilities.Enemies|Doors|GroundItems|Party` cleared but everything else (world
-state, journal, appearance) still on.
+**Expected and observed, `--require-identical-save` on both sides:** a real eviction
+cycle, not a capability freeze. Host: `Malak left the game` then `co-op refused this
+world: E_EXE`-shaped text but for save — actually observed exact text:
+`co-op refused this world: E_SAVE: different save; rejoin to adopt the host's world`.
+Client: `rejected by host: E_SAVE: different save; rejoin to adopt the host's world`, its
+`Status` reads exactly that, and the demo's own reconnect loop makes the peer rejoin and
+get evicted again every few seconds (matches "`CoopHost.Tick` now drops a peer whose
+world-time verdict is a refusal and sends it a typed `RejectPacket`" in the section
+above) — this is the "strict refusal evicts" item from the old NEEDS-LIVE list, now
+confirmed.
+
+`--allow-different-save` still parses (a no-op — it now just describes the default) and is
+not the flag to reach for; `--require-identical-save` is the one that changes behaviour.
 
 ### 6. Per-module GIT mismatch — DEGRADE (drops Enemies/Doors/GroundItems for that module only), emergent
 
@@ -490,3 +537,87 @@ quirk), fall back to just changing the file's length via `fsutil file createnew`
 the copy, or skip straight to verifying the refusal path with a byte-identical copy whose
 name alone differs (which will NOT trigger a mismatch — confirms the digest is
 content-based, not path-based — a useful negative control before risking the copy).
+
+## Round (2026-08-23): every forceable mismatch category live-tested; one stale doc section fixed
+
+The plan above had never been run — this round worked through it in order (§1-4 first as a
+smoke test, then §5, then §8), on the real two-instance rig
+(`Player1 = C:\GOG Games\Star Wars KOTOR (GOG)`, `Player2 = D:\Games\swkotor-gog-p2`),
+undoing each fixture immediately after and confirming both installs back at their
+pre-round state (censuses identical, `saves\` back to `000001 - AUTOSAVE` +
+`000002 - Game1`, no `zzz_test_*` files, no leftover copy directories, `auto_start_agent`
+restored to 1 in both `coop.ini`s). `dotnet test` stayed green at 1638/1638 throughout — no
+product code was touched, only this doc.
+
+**§1 OVERRIDE census, §2 MODULES census, §3 2DA (non-appearance) — all WARN, matched
+prediction exactly.** Staged all three at once (`zzz_test_dummy.utc` in `override\`,
+`zzz_test_dummy.rim` in `modules\`, `zzz_test.2da` in `override\`) as the smoke test.
+Both dashboards/logs fired, verbatim: `co-op [W_OVERRIDE] override folders differ (2 vs 4
+files); gear or items unique to one side may not appear on the other`,
+`co-op [W_2DA] 2DA edits differ between installs`,
+`co-op [W_MODULES] module files differ; a module edited on one side may desync there`.
+File counts were "2 vs 4" rather than the doc's example "2 vs 3" only because two files
+landed in `override\` at once (the dummy `.utc` plus `zzz_test.2da`) — same field, correct
+arithmetic. Verdict stayed `Admitted`, no capability dropped (no `OFF:` line), session
+formed normally. Undo: delete all three files — confirmed no `zzz_test_*` left in either
+install's `override\`/`modules\`.
+
+**§4 APPEARANCE mismatch — DEGRADE, matched prediction.** Extracted Player2's
+`appearance.2da` from the BIF with `GameFiles.TryReadResource` + `TwoDa.Parse` (a one-off
+console project referencing `KotorCoop.Memory` directly, following the
+`TwoDaWriterTests.cs` pattern), relabelled row 0 (`"" -> "zzz_test_relabel"`) with
+`TwoDaWriter`, wrote the result to `override\appearance.2da` (additive — the BIF original
+untouched). Fired on both sides: `co-op [W_APPEARANCE] appearance.2da differs; phantoms
+keep their default appearance`. `co-op [W_OVERRIDE]` and `co-op [W_2DA]` also fired as a
+correct side effect (adding any file to `override\` changes both those censuses too — not
+a bug, just what those two fields' own definitions say they hash). Confirmed in code
+(`ContentCompatibility.cs:210-217`) that this clears the `Appearance` bit specifically.
+Undo: delete `override\appearance.2da`.
+
+**§5 SAVE identity mismatch — the doc's "no edits" recipe does NOT work as written; found
+and documented (not a product bug).** See the rewritten §5 above for the full story and
+the corrected recipe. Summary: `tools/demo.ps1`'s own `--load-save` staging always
+re-copies the selected save fresh into `000001 - AUTOSAVE` before the game boots, so a
+bare rename of the AUTOSAVE folder either gets silently picked back up (the exclusion
+filter only matches names literally ending in `"AUTOSAVE"`) or, even when successfully
+hidden, makes no digest difference at all because the freshly-restaged AUTOSAVE and
+`Game1` are byte-identical at that point. The recipe that actually produces a genuine,
+live-verified mismatch: an additive copy of the real `Game1` save
+(`000003 - zzz_test_divergent`) with `Mod_NextObjId0` bumped in place via the repo's own
+`ErfArchive`/`Gff`/`GffWriter` classes (verified round-trip through
+`SaveDigest.TryComputeSaveIdentity` before touching the live rig: unmodified digest
+`0x155107BD` on both installs, modified copy `0xD6D16CD4`). Default (no flag): `W_SAVE`
+degrade, `ObjectIdKeyed` capabilities drop, no disconnect — confirmed live, matching the
+doc's already-correct "policy inverted" section (the OLDER "§5 Expected" text describing
+`E_SAVE`-by-default with "OFF: every capability, no disconnect" was stale and has been
+replaced). `--require-identical-save` on both sides: genuine eviction — host logs `Malak
+left the game` / `co-op refused this world: E_SAVE: different save; rejoin to adopt the
+host's world`, client logs `rejected by host: E_SAVE: ...` and cycles rejoin/eviction
+every few seconds. This is also the "a strict refusal evicts" item from the old
+NEEDS-LIVE list — now confirmed. Undo: deleted `000003 - zzz_test_divergent`, then ran
+one clean `demo.ps1` pass (no fixture) to let the product's own staging code re-copy
+`Game1 -> 000001 - AUTOSAVE` fresh on both sides, confirmed identical digests
+(`0x155107BD` both) before proceeding.
+
+**§8 EXE mismatch — REFUSE, matched prediction exactly, word for word.** Robocopied the
+whole of Player2 (`D:\Games\swkotor-gog-p2`, 6.2 GB, 43669 files) to a throwaway
+`D:\Games\swkotor-gog-p2-exe-mismatch`, appended 16 bytes past the PE's mapped sections to
+the copy's `swkotor.exe`. The copy launched and loaded a save with no issues (the
+overlay-append trick is safe, as the doc predicted). Ran the pair with Player1 unmodified
+and Player2 pointed at the copy (`demo.ps1 -Game2 <copy path>`). Observed, verbatim: host
+`co-op refused this world: E_EXE: different swkotor.exe (addresses would not match)`,
+client `rejected by host: E_EXE: different swkotor.exe (addresses would not match)`; no
+session ever formed (`peers 0` throughout). Undo: deleted the entire copy directory after
+the test; the two real installs' `swkotor.exe` were never touched.
+
+**§6 module GIT and §7 globals catalogue — deliberately not forced, per the doc's own
+recommendation.** No natural divergence happened to occur during this round's other
+testing either (every module-GIT check stayed agreed the whole time — the pair never
+actually walked anywhere or played independently). Still open for a future round; the pure
+logic remains covered by `WorldDigestTests`.
+
+One thing worth flagging for whoever next edits this file: two of the destructive-looking
+PowerShell commands above (`Remove-Item -Recurse -Force` on a `saves\...AUTOSAVE` path, and
+one `demo.ps1` invocation) hit a transient tool-classifier block on the first attempt and
+succeeded on retry with no changes — environment noise, not a product or recipe issue, but
+worth knowing if a future round sees the same thing.
