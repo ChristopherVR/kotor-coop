@@ -212,6 +212,29 @@ public static class CheatKinds
     /// ⚠ 21, because 7-20 are taken. Take the next FREE number.
     /// </summary>
     public const uint Recruit = 21;
+
+    /// <summary>
+    /// LIVE-TEST PRIMITIVE (2026-08-23, docs/research/dialogue-skip-desync.md): forces the
+    /// local player's OWNED conversation's current line/VO to finish immediately — the
+    /// in-process equivalent of a human's retail skip keypress/click, built because injected
+    /// OS input never reaches this game (docs/live-verification.md). No fields carried; the
+    /// target is always "whatever conversation this instance owns right now". See
+    /// SharedBlock.CheatKindSkipLine.
+    ///
+    /// ⚠ 22, because 7-21 are taken. Take the next FREE number.
+    /// </summary>
+    public const uint SkipLine = 22;
+
+    /// <summary>
+    /// LIVE-TEST PRIMITIVE (2026-08-23, docs/research/dialogue-skip-desync.md): commits reply
+    /// slot <c>Amount</c> on the local player's OWNED conversation — the console's way to
+    /// navigate past a reply-choice screen without real OS input, needed so the skip live-test
+    /// can reach an actual narration stretch (skip is a no-op on a reply screen; see
+    /// <c>SkipLine</c>). See SharedBlock.CheatKindSelectReply.
+    ///
+    /// ⚠ 23, because 7-22 are taken. Take the next FREE number.
+    /// </summary>
+    public const uint SelectReply = 23;
 }
 
 /// <summary>The plugin's verdicts, mirroring <c>SharedBlock.CheatStatus*</c>.</summary>

@@ -7196,3 +7196,60 @@ Two jobs, both round 77's own honest leftovers. Full write-ups: `docs/research/c
   throughout (both fixes are plugin/agent field-plumbing and constant changes with no new managed
   surface). Both plugin builds clean, both installs rebuilt/redeployed multiple times mid-round as
   each fix was found, applied, and re-verified live.
+
+### Round 79 (2026-08-23) — the "skip mid-sentence desyncs" report reproduced entirely
+### in-process, H1 and H2 both settled with real live data, no OS input anywhere
+
+Full write-up: `docs/research/dialogue-skip-desync.md`'s own dated 2026-08-23 "Round 79" section
+(the doc's fourth live-pass entry, superseding all three "blocked on input" verdicts before it).
+Short version, because the premise every prior round shared turned out to be wrong: **the "skip"
+KOTOR's own dialogue UI runs is not an OS input problem at all** — it is one specific case inside
+`CSWGuiDialog::HandleInputEvent 0x006A7230` that calls `CServerExoApp::SkipPastDialog 0x004AE970`,
+whose entire effect (through a thunk and an id-hashtable lookup) is `[owner+0x1F4] = 1` — a flag
+`CSWSObject::IsDialogDelay 0x004CD2D0` already checks, and a field this codebase already had a
+name for (`Odyssey.ObjDlgSendScratch`, found independently via `DriveDialogueToNode`'s own RE,
+never before connected to skip). VERIFIED by disassembly; exposed as a new console verb,
+`skipline` (`SharedBlock.CheatKindSkipLine` / `CheatKinds.SkipLine`, kind 22, wired
+`ConsoleCommand` → `CoopCommandDispatcher` → `CheatController` → `Odyssey.SkipDialogueLine`,
+following `useplaceable`'s exact shape), which writes that same flag on the already-resolved,
+vtable-verified dialogue owner `TryGetActiveDialogue` hands back — no OS input, no raw engine call
+with an inferred ABI, entirely in-process. A second, test-only helper, `selectreply <slot>`
+(kind 23), exposes an already-verified, previously-unused primitive
+(`Odyssey.SelectDialogueReply`) so the live test could navigate Trask's reply-heavy tutorial loop
+without OS input either.
+
+Live results, both hypotheses settled with real data for the first time:
+
+- **H1 — does skip advance the node?** Yes, confirmed repeatedly: every `skipline` call against a
+  genuinely playing line advanced the node on the very next logged frame (3-32ms later,
+  measured many times), and was a correctly inert no-op against a reply-list screen every time
+  (`IsDialogDelay`'s own second guard, `isDialogDelay 0` before the write, matching the panel's
+  screenshot-confirmed reply-list state).
+- **H2 — do rapid transitions coalesce on the follower's polling cadence?** Yes, confirmed
+  directly. A burst of `skipline` calls at ~15-16ms cadence (bypassing the agent's own
+  console-relay hop, which topped out at ~230-310ms per request and dropped most rapid writes to
+  its single-slot mailbox — a real, separate finding about the TOOLING, not the game) drove three
+  real node transitions (22→23→24→25) in 55-70ms, well inside the 150ms `dialogue_fast_join=0`
+  sample. The follower's `dialogue-node-drive` log for that exact window shows exactly ONE drive —
+  straight from 22 to 25 — nodes 23 and 24, and every bit of their speaker/line/VO/lipsync, never
+  delivered at all. Reproduced twice, independently. This is the reported symptom, reproduced on
+  demand and root-caused to precisely the mechanism `dialogue-skip-desync.md`'s own H2 predicted
+  from the code alone, before any live data existed.
+- **`dialogue_fast_join=0` vs `=1`, direct A/B**: the identical burst sequence replayed with
+  `dialogue_fast_join=1` on both installs caught EVERY intermediate node individually (22, 23, 24,
+  25, each its own logged `dialogue-node-drive` line) against a burst of comparable speed. Zero
+  coalescing. This is decisive where `dialogue-join-latency.md`'s 2026-08-22 A/B found a null
+  result — that pass measured JOIN latency, a different axis; this one measured mid-conversation
+  coalescing, which join-latency testing never exercised.
+
+**No code change to `DialogueTickGate`/`DialogueSpectateController`/`CoopAgent.PumpDialogue` was
+made or is recommended** — the level-triggered, periodically-sampled wire those implement is
+working exactly as its own design says; a skip burst (or a fast human keypress) is simply faster
+than its 150ms assumption. The fix that already exists and, measured directly, closes the gap
+completely is `dialogue_fast_join=1`; `profiles/coop.ini.example`'s comment on that key now
+records this round's finding as a recommendation (left at `0` in the shipped template — a default
+flip is a broader call than one diagnostic round should make alone). Tests: `dotnet test
+tests/KotorCoop.Tests` 1635/1635, unchanged baseline (no new managed surface — two new cheat
+kinds, no new fields). Both plugin builds clean, both installs rebuilt/redeployed and
+live-verified on the final build before tear-down; `dialogue_fast_join` reverted to the shipped
+default (`0`) on both rig installs afterward.

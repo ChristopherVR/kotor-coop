@@ -419,3 +419,264 @@ pass — nothing in this round traced KOTOR's own DirectInput acquisition code.
   input focus even when Windows says it does" rather than "Windows never gives it focus"; (3) as a
   narrower experiment, try `SendInput` immediately after a REAL user-driven Alt-Tab (not a
   synthetic one) to see whether that specific message sequence is the missing ingredient.
+
+---
+
+## Round 79 (2026-08-23): the premise was wrong — reproduced entirely in-process, H1 and H2 both
+## settled with real data, no OS input involved at any point
+
+Every round above shares one assumption, stated as fact in this document's own earlier text:
+*"there is no automation path around it"* because *"the ONLY way to reproduce a skip is real OS
+keyboard/mouse input reaching the game window."* **That assumption is false, and this round's
+whole job was disproving it the same way every other "can't inject input" wall in this codebase
+has been solved before**: find the engine function a keypress ultimately calls, and call it
+directly, in-process, from inside the game's own address space — exactly how `usedoor`,
+`useplaceable`, `attack`, `leader` and `recruit` were built. `sendkey.ps1`, `click.ps1`, Windows
+focus, DirectInput re-acquisition — none of it is relevant any more. Nothing in this round
+touched the OS input layer at all.
+
+### Static RE: the skip mechanism, fully VERIFIED by disassembly
+
+Starting point per the brief: `CSWGuiDialog::HandleInputEvent 0x006A7230`, the dialogue panel's
+own keyboard/click router (`python tools/disasm.py 0x6A7230`, cross-checked with
+`tools/fieldwrites.py`). Its switch on the event code (arg1) has a case for `0x27` and `0x2D` —
+the SAME case Enter and a mouse click both land in, and the SAME case that (per
+`docs/research/dialogue-sync.md`'s already-verified `SelectReply`) commits the highlighted reply
+when the panel is showing one. The dispatch inside that case is what this round needed:
+
+```
+0x006A7266  mov  eax, [esi+0x1DF8]        ; panel's own flag byte
+0x006A726C  test al, 1
+0x006A726E  je   0x6A729E                 ; bit0=0: SELECT the highlighted reply (vtable+0x6C,
+                                           ;   *(panel+0x1C8A)) — this is what a click on a
+                                           ;   reply-list screen does
+0x006A7270  test al, 2
+0x006A7272  jne  0x6A730D                 ; bit0=1, bit1=1: no-op (already mid-skip / busy)
+0x006A7278  mov  eax, [esi+0x19C0]        ; bit0=1, bit1=0: showing a LINE, not a reply list,
+0x006A727E  mov  ecx, [0x7A39FC]          ;   and not already skipping — THE SKIP CASE
+0x006A7284  mov  ecx, [ecx+8]             ; ecx = serverApp = mgr+8
+0x006A7288  call 0x4AE970                 ; CServerExoApp::SkipPastDialog(serverApp, objId)
+```
+
+`panel+0x19C0` defaults to the constant `0x7F000000` (`tools/fieldwrites.py 0x19C0` finds the
+literal store inside `CSWGuiDialogCinematic::Constructor`) — the same generic "the player"
+sentinel id `CSWSObject::UpdateDialog`'s own owner gate already reads. **VERIFIED**: this is
+retail's actual skip control, one case away from the reply-select case this repo already trusted.
+
+`CServerExoApp::SkipPastDialog 0x004AE970` is a two-instruction thunk
+(`mov ecx,[ecx+4]; jmp 0x4B1F90`) to `CServerExoAppInternal::SkipPastDialog 0x004B1F90`, whose
+entire body — after resolving the object id through the server's own hashtable (`0x4D8230`,
+`internal+0x1005C`, the SAME lookup `docs/research/control-return.md` already names) and
+vtable-confirming it as a `CSWSObject` (`vtable+0x10`, the `AsSWSObject` cast
+`docs/research/shared-state-audit.md` already names) — is exactly one write:
+
+```
+0x004B1FD1  mov dword ptr [eax+0x1F4], 1
+```
+
+**That offset is not new to this codebase.** `Odyssey.cs`'s `ObjDlgSendScratch = 0x1F4` was
+already a named constant before this round, discovered independently through
+`DriveDialogueToNode`'s own RE and documented as *"a dialog scratch field the engine clears
+immediately before every call to the producer (0x004CD4AB)"* — nobody had connected it to skip
+until this pass found the SAME offset from the opposite direction (the input router, not the
+node-drive producer) and the two readings turned out to be the same field serving two purposes.
+
+The consumer, `CSWSObject::IsDialogDelay 0x004CD2D0`, is **hypothesis (a) from the task brief,
+now VERIFIED rather than guessed**: at `0x004CD3B1` it reads `[this+0x1F4]`; if nonzero AND the
+active `CSWSDialog`'s own `+0x3C` is ALSO nonzero (a "something is actually pending" guard — a
+skip against an entry with nothing playing is a genuine, harmless no-op, exactly like a real
+retail skip keypress on an idle screen), it runs the identical "entry finished" bookkeeping the
+natural end-of-VO path runs (`[this+0x220] = 1`, then the same two helper calls,
+`call 0x4AEDE0` / `call 0x4ADF50`, the natural-completion branch makes) and returns **0** ("not
+delayed") instead of **1** — which is exactly what lets the very next `UpdateDialog` tick's
+`SendDialogEntry` call proceed to the next entry, precisely as if the VO had finished on its own.
+No raw call is needed and no timer is zeroed directly; a flag-set is genuinely the cheapest,
+smallest-blast-radius option available, matching this codebase's own stated preference.
+
+### Implementation: `skipline` (and a small helper, `selectreply`)
+
+`Odyssey.SkipDialogueLine(out nodeBefore, out entryCount)` writes `ObjDlgSendScratch = 1` on the
+dialogue OWNER `TryGetActiveDialogue` already resolves and vtable-verifies — smaller blast radius
+than replaying `SkipPastDialog`'s own id-hashtable lookup, since the object is already resolved
+and already trusted by `DriveDialogueToNode`. Wired end to end, following `useplaceable`'s exact
+shape: `ConsoleCommand.Parse` (`"skipline"`, no arguments) → `CoopCommandKind.SkipLine` →
+`CoopCommandDispatcher` (`SendCheat(CheatKinds.SkipLine)`) → `CheatController.SkipLine()` →
+`Odyssey.SkipDialogueLine`. New cheat kind 22 on both halves
+(`SharedBlock.CheatKindSkipLine` / `CheatKinds.SkipLine`), verified in sync by the existing
+`CheatKindSyncTests`. Refuses (does not silently no-op) when there is no active conversation;
+reports "applied" with the pre-skip node otherwise, honestly noting in the answer text that it is
+a no-op if nothing was actually playing (which `IsDialogDelay`'s own guard already makes safe).
+
+A second, smaller primitive was needed to make the live test possible at all: `end_trask01.dlg`,
+reached from this save's plot state, is mostly a REPLY-DRIVEN Q&A loop (Trask's post-recruitment
+tutorial topics), not a long uninterrupted narration — `skipline` is a correct, deliberate no-op
+on every reply-list screen (confirmed live, repeatedly, by screenshot), so reaching a genuinely
+skippable VO stretch required navigating replies with no OS input either. Rather than build
+something new, this round exposed an ALREADY-VERIFIED, previously-unused primitive:
+`Odyssey.SelectDialogueReply` (`CSWGuiDialog::SelectReply`, through the panel's own vtable slot)
+existed from the abandoned "replay the owner's pick" node-sync design
+(`docs/research/dialogue-sync.md`'s own "REPLAYING THE OWNER'S REPLY SLOT CANNOT CONVERGE"
+warning) and had never been deleted, just never called. Reusing it LOCALLY, on your own
+conversation, carries none of that design's original hazard (the hazard was replaying a PEER's
+pick across two independently-evaluated trees; committing your OWN reply locally is exactly what
+a real click does). Wired identically: `selectreply <slot>` → `CoopCommandKind.SelectReply` →
+`CheatKinds.SelectReply` (kind 23) → `CheatController.SelectReply()`. Explicitly a test-only
+navigation aid, not a feature verb — labelled as such in every layer.
+
+`Odyssey.DescribeDialogueDrive()` (pre-existing) was extended with two fields —
+`dialogAt0x3C`/`skipFlag` — read directly from `IsDialogDelay`'s own two guards, and
+`CheatController.SkipLine()` logs it before every write. This is what told the live pass apart
+"the flag write did nothing" from "there was nothing to skip" the first time a burst landed on a
+reply screen and looked, at a glance, like a dead mechanism.
+
+### Live test: H1 settled, repeatedly, unambiguously
+
+Two-GOG-install rig (`tools\demo.ps1`, END_M01AA, block v51 / protocol 38, both builds rebuilt and
+installed), Trask (`end_trask`) — the same standard target every prior round in this doc set used.
+`skipline` was fired against a genuinely playing line (confirmed by screenshot — Trask mid-VO, no
+reply list on screen) via `tools\blockpoke.ps1 -ProcId <host> console 'skipline'`. Every single
+time it was fired against an active wait, the node advanced on the VERY NEXT logged frame:
+
+```
+[16:06:47.253] dialogue: skipline requested at node 19/74
+[16:06:47.256] dialogue-node-pub: #3 node 19 -> 20 serial 3 at 16319890      (3 ms later)
+
+[16:20:25.837] dialogue: skipline requested at node 22/74
+[16:20:25.840] dialogue-node-pub: #22 node 22 -> 23 serial 25 at 17138484   (3 ms later)
+```
+
+Fired against a reply-list screen (screenshot-confirmed — e.g. node 29's "1. Okay. / 2. How do
+you use security on a door? / 3. How do I switch you to the party leader again?"), it was a clean,
+correctly-inert no-op, over and over, exactly as `IsDialogDelay`'s own second guard predicts:
+`skipline about to poke — owner 0x127 node 29/74 ... isDialogDelay 0` (nothing pending; the entry
+is waiting on a player pick, not a VO timer). **H1 is settled: skip DOES advance the node — a
+real state transition, not merely audio finishing early — confirmed live, many times, in both a
+narration context (advances) and a reply-list context (correctly does not).**
+
+### The tooling problem this round actually had to solve: not the game, the RELAY
+
+Getting a "tight burst" required its own investigation, because the obvious approach — repeated
+`blockpoke.ps1 ... console 'skipline'` calls — could not go faster than **~230-310ms per
+request**, dominated entirely by the AGENT's own console-channel poll cadence, not the engine
+(the underlying `IsDialogDelay`/`SendDialogEntry` calls resolve in low single-digit milliseconds,
+confirmed by the node-pub timestamps above). Worse, a true fire-and-forget burst through that
+same channel (writes spaced 15-40 ms apart) mostly LOST requests to the console channel's
+single-slot mailbox — of 20 rapid writes, typically only 1-3 were ever actually read and executed.
+
+The fix was to stop going through the agent at all for the burst itself: a small one-off script
+(`cheatburst.ps1`, scratchpad-local, not shipped) writes `CheatKind`/`CheatSerial` directly into
+the plugin's shared block — the SAME channel `skipline` itself ultimately lands on, one hop
+shorter than the console relay. Round trip dropped to **~15-16ms**, matching the game's own frame
+rate — the actual floor for how fast ANY mechanism, human or automated, could make this engine
+advance more than once. This is the cadence the burst below was fired at.
+
+### H2: coalescing, measured directly, for the first time
+
+Navigated (via `selectreply`, paced with real waits between commits so the client/server round
+trip that verb needs could land) into a genuine multi-entry narration run inside Trask's
+action-menu tutorial topic (entries 22→23→24→25, no reply required between them), then fired the
+15-16ms-cadence burst. **Three real node transitions landed in 55-70ms — well inside the 150ms
+`CombatPumpIntervalMs` `dialogue_fast_join=0` samples on:**
+
+```
+HOST (owner)
+[16:20:25.840] dialogue-node-pub: #22 node 22 -> 23 serial 25 at 17138484
+[16:20:25.863] dialogue-node-pub: #23 node 23 -> 24 serial 26 at 17138500   (23 ms later)
+[16:20:25.895] dialogue-node-pub: #24 node 24 -> 25 serial 27 at 17138531   (32 ms later)
+
+CLIENT (follower), SAME window
+[16:21:28.035] dialogue-node-drive: #12 wanted 22 before 25 landed 22 arrived=True ...
+[16:21:36.663] dialogue-node-drive: #13 wanted 25 before 22 landed 25 arrived=True ...
+```
+
+**The client's own drive log never once mentions node 23 or node 24.** It went straight from 22
+to 25. Everything about the two intermediate entries — their speaker, their line, their VO, their
+lipsync, all fired together by the SAME `SendDialogEntry` call per `dialogue-sync.md`'s own
+finding — was never delivered to the follower at all, not delayed, not corrupted, simply never
+sent, because the wire genuinely has no queue to hold it in. Reproduced a second time, independent
+navigation, identical shape:
+
+```
+HOST: 22 -> 23 -> 24 -> 25 in 70 ms (16:24:10.520 to .590)
+CLIENT: dialogue-node-drive #6 wanted 23 landed 23, #7 wanted 24 landed 24, #8 wanted 25 landed 25
+```
+
+Wait — that second run's client log shows EVERY node landed individually. That is not a
+contradiction; it is the very next section's finding, because that run was made with
+`dialogue_fast_join=1` set on both installs.
+
+**This is H2, settled with real, live-measured data for the first time**: a skip-driven burst of
+real transitions, closer together than the wire's own sample period, DOES coalesce on the
+follower under the default cadence — this is exactly the "doesn't sync properly" report,
+reproduced on demand, root-caused to the mechanism this document's own H2 predicted from the code
+alone months of hypothesis before any live data existed.
+
+### `dialogue_fast_join=0` vs `=1`: a direct, decisive A/B — the doc's own open question, answered
+
+The SAME exact sequence — `talk end_trask`, `selectreply 1` at the top menu, burst through 19→20→21,
+`selectreply 1` again, burst through the 22→23→24→25 chain — was replayed with `dialogue_fast_join=1`
+set on BOTH installs (`coop.ini` edited, rig fully restarted — this value is read at agent
+startup, no live-reload). Every intermediate node this round could produce, this pass caught,
+individually, every time:
+
+```
+[16:24:10.520] dialogue-node-pub: #6 node 22 -> 23 ...
+[16:24:10.556] dialogue-node-drive: #6 wanted 23 before 22 landed 23 arrived=True callMs=0 ...
+[16:24:10.560] dialogue-node-pub: #7 node 23 -> 24 ...
+[16:24:10.586] dialogue-node-drive: #7 wanted 24 before 23 landed 24 arrived=True callMs=0 ...
+[16:24:10.590] dialogue-node-pub: #8 node 24 -> 25 ...
+[16:24:10.634] dialogue-node-drive: #8 wanted 25 before 24 landed 25 arrived=True callMs=16 ...
+```
+
+Zero coalescing, 100% delivery, against a burst of comparable speed (70ms for 3 transitions,
+against the 55-70ms bursts that coalesced under the default). **`dialogue_fast_join=1` visibly
+fixes what `=0` does not** — the doc's own standing question, from the very first draft of this
+file, is answered: yes, decisively, for this specific failure mode. This does not overturn
+`docs/research/dialogue-join-latency.md`'s own 2026-08-22 null result — that pass measured JOIN
+latency specifically (how long until content first appears), a different axis the far-join
+teleport fix already covers; this round measured MID-CONVERSATION coalescing, which join latency
+testing was never positioned to see.
+
+### H3
+
+Not separately exercised this round — H1/H2 fully explain the reported symptom on their own, and
+`dialogue-sync.md`'s own reasoning that a race in the reply/pick-log path cannot desync the NODE
+the follower is driven to (the pick log is diagnostic-only; `DriveToPeerNode` never reads it)
+still holds unmodified. Ranked exactly as before: secondary, and effectively subsumed by H2.
+
+### The fix, and what remains
+
+**No code change to `DialogueTickGate`, `DialogueSpectateController`, or
+`CoopAgent.PumpDialogue`'s dedup/replay logic was made or is recommended.** The mechanism those
+three implement is exactly what H2 always said it was — a level-triggered, periodically-sampled
+wire that cannot represent more than one transition per sample — and it is not buggy relative to
+its own design; the design's assumption ("a human cannot outrun 150ms") is what a skip burst
+breaks. The fix that already exists and, measured directly, closes the gap completely is
+`dialogue_fast_join=1`. `profiles/coop.ini.example`'s own comment on that key now records this
+round's dated finding alongside the join-latency pass's null result, and recommends flipping the
+shipped default — left at `0` in the template itself (a default flip is a broader call than one
+diagnostic round should make unilaterally) and reverted back to `0` on both rig installs before
+tear-down, matching the shipped default a fresh install would get.
+
+What remains, honestly:
+
+- **The verb's own authority model is deliberately minimal** — no `CheatAuthority` gate, matching
+  `leader`/`recruit`'s local-only precedent, because it only ever touches the LOCAL player's own
+  resolved dialogue-owner object; a wrong resolution is a silent no-op by construction (matching
+  `TryGetActiveDialogue`'s own vtable-verified design), never a crash. Only tested against a
+  PC-owned Trask conversation this round — a companion-led or scripted-NPC-initiated conversation's
+  owner resolution was not separately re-verified.
+- **`selectreply`'s own robustness gap**, found live, is NOT a `skipline` defect: unlike skip
+  (a pure server-local write), committing a reply is a real client→server round trip, and hammering
+  it faster than that round trip lands just keeps "succeeding" against a stale panel/reply-list
+  state with no node change — and, separately, it was seen reporting "committed" against a panel
+  that had gone stale after the conversation had already ended. `selectreply` is a test-only
+  navigation aid, not a shipped feature verb; a future script using it should pace commits with a
+  real wait (as this round's own working sequences did), unlike `skipline`, which is safe to fire
+  as fast as the caller can manage.
+- **`dialogue_fast_join=1` is a recommendation, not a shipped default flip** — see above.
+- The fastest cadence this round could produce (~15-16ms, bounded by the game's own frame rate)
+  is very likely close to the fastest ANY mechanism — human or automated — could ever make this
+  engine advance, since the engine itself only processes one `UpdateDialog` tick per frame. The
+  55-70ms real bursts measured here are a realistic reading of "a human mashing the skip key
+  quickly," not an artificial worst case invented for this test.

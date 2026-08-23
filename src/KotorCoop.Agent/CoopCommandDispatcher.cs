@@ -616,6 +616,14 @@ public sealed class CoopCommandDispatcher(
                 Recruit(command.Amount, command.Address ?? string.Empty);
                 break;
 
+            case CoopCommandKind.SkipLine:
+                SendCheat(new CheatRequest(CheatKinds.SkipLine));
+                break;
+
+            case CoopCommandKind.SelectReply:
+                SendCheat(new CheatRequest(CheatKinds.SelectReply, Amount: command.Amount));
+                break;
+
             case CoopCommandKind.Cheats:
                 foreach (string line in ConsoleCommand.CheatsText)
                 {

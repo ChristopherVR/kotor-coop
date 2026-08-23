@@ -6468,6 +6468,12 @@ internal static unsafe class Odyssey
             + $" node {*(int*)(dialog + DialogCurrentEntryIndex)}/{*(int*)(dialog + DialogEntriesCount)}"
             + $" pending {*(int*)(owner + ObjDlgPendingFlag)}:{*(int*)(owner + ObjDlgPendingEntry)}"
             + $" sendGate {*(int*)(owner + ObjDlgSendGate)}"
+            // dialog+0x3C, NOT owner+0x3C (ObjDlgDelayMs is a different field on a different
+            // struct despite the same numeric offset): this is the SECOND guard
+            // CSWSObject::IsDialogDelay's skip branch reads at 0x004CD3BE — SkipDialogueLine's
+            // flag is a no-op unless this is also nonzero. skipFlag is the raw ObjDlgSendScratch
+            // byte itself, read BEFORE IsDialogDelayFn's own call can consume it below.
+            + $" dialogAt0x3C {*(int*)(dialog + 0x3C)} skipFlag {*(int*)(owner + ObjDlgSendScratch)}"
             + $" isDialogDelay {IsDialogDelayFn(owner)}"
             + $" delay {*(uint*)(owner + ObjDlgDelayDay)}:{*(uint*)(owner + ObjDlgDelayMs)}"
             + $" last {*(uint*)(owner + ObjDlgLastDay)}:{*(uint*)(owner + ObjDlgLastMs)}";
@@ -6537,6 +6543,81 @@ internal static unsafe class Odyssey
         // here verify by RE-READING the node anyway — a producer that reports success is
         // still not proof a line arrived, which is the lesson that produced this comment.
         return status != DialogEntryDeferred;
+    }
+
+    /// <summary>
+    /// Forces the OWNER's current dialogue line/VO to finish right now — the in-process
+    /// equivalent of the retail skip keypress/click, and the mechanism
+    /// docs/research/dialogue-skip-desync.md's earlier rounds could never reach because
+    /// injected OS input never lands on this game. No OS input is involved here at all.
+    ///
+    /// VERIFIED by disassembly, round 2026-08-23:
+    ///
+    ///   * <c>CSWGuiDialog::HandleInputEvent 0x006A7230</c> is the panel's own input router.
+    ///     Its case for event codes 0x27/0x2D (Enter and the click-equivalent — the SAME case
+    ///     that selects the highlighted reply when the panel is showing the reply list) reads
+    ///     a flag byte at <c>panel+0x1DF8</c>: bit0=0 selects the highlighted reply
+    ///     (<c>*(panel+0x1C8A)</c> through vtable+0x6C, matching <see cref="SelectDialogueReply"/>'s
+    ///     own mechanism); bit0=1,bit1=1 is a no-op; **bit0=1,bit1=0 — i.e. showing a LINE, not
+    ///     a reply list, and not already mid-skip — calls
+    ///     <c>CServerExoApp::SkipPastDialog 0x004AE970</c>**, passing the object id cached at
+    ///     <c>panel+0x19C0</c> (defaults to the generic PLAYER sentinel <c>0x7F000000</c>,
+    ///     confirmed by <c>fieldwrites.py 0x19C0</c> and the SAME constant
+    ///     <c>CSWSObject::UpdateDialog</c>'s own owner-id gate uses).
+    ///   * <c>SkipPastDialog</c> is a two-hop thunk (<c>0x004AE970 -> CServerExoAppInternal::
+    ///     SkipPastDialog 0x004B1F90</c>) whose ENTIRE body, once it resolves the object id
+    ///     through the server's own hashtable and vtable-confirms it as a <c>CSWSObject</c>
+    ///     (<c>AsSWSObject</c>, vtable+0x10 — the SAME cast <c>docs/research/shared-state-audit.md</c>
+    ///     already names), is <c>[resolved+0x1F4] = 1</c> — this repo's own
+    ///     <see cref="ObjDlgSendScratch"/>, already named and already read/written by
+    ///     <see cref="DriveDialogueToNode"/> above, from independent RE done before this pass
+    ///     connected the two.
+    ///   * <c>CSWSObject::IsDialogDelay 0x004CD2D0</c> is the SOLE consumer: at 0x004CD3B1 it
+    ///     reads <c>[this+0x1F4]</c>, and when nonzero AND the active <c>CSWSDialog</c>'s own
+    ///     <c>+0x3C</c> is ALSO nonzero (a "there really is a wait in progress" guard — a skip
+    ///     with nothing playing is a genuine no-op, exactly like the retail keypress), it runs
+    ///     the SAME finish-the-entry bookkeeping the natural end-of-VO path runs (marks
+    ///     <c>+0x220</c>, clears the per-tick delay timers via the identical helper calls the
+    ///     normal-completion branch makes) and returns 0 ("not delayed") instead of 1 — which
+    ///     is precisely what lets the next <c>UpdateDialog</c> tick's own
+    ///     <c>SendDialogEntry</c> call proceed to the NEXT entry, as if the VO had simply
+    ///     finished on its own. This is hypothesis (a) from the task brief, confirmed rather
+    ///     than assumed: a flag the per-tick driver checks, not a raw call and not a timer
+    ///     zero.
+    ///
+    /// Writing the flag directly on the ALREADY-RESOLVED, ALREADY-VTABLE-VERIFIED owner
+    /// <see cref="TryGetActiveDialogue"/> hands back is deliberately smaller than replaying
+    /// <c>SkipPastDialog</c>'s own id-hashtable lookup: same effect, no second resolution path
+    /// to get wrong, and it matches this codebase's own "prefer a flag-set over a raw call"
+    /// rule (docs' engine-write-rules memory). The one thing this does NOT replicate is
+    /// <c>panel+0x19C0</c>'s object id, which only matters if that id could ever differ from
+    /// the owner <see cref="TryGetActiveDialogue"/> resolves — it defaults to the generic
+    /// player id and <see cref="TryGetActiveDialogue"/>'s own owner test is the engine's
+    /// definition of the ticked object, so in practice they name the same object; not
+    /// independently proven live that they always would (NEEDS-LIVE, but low risk — a wrong
+    /// object here means the flag is a no-op, not a crash, exactly like a stale
+    /// <see cref="ObjDlgSendScratch"/> write is elsewhere).
+    ///
+    /// Meaningful only for the DIALOGUE OWNER (see <see cref="TryGetActiveDialogue"/>'s own
+    /// definition) — a follower's instance does not drive VO timing at all, so setting this
+    /// flag on a non-owner would touch a field <c>IsDialogDelay</c> never reads for that
+    /// object. Returns false (no-op) when there is no active conversation to skip.
+    /// </summary>
+    public static bool SkipDialogueLine(out int nodeBefore, out int entryCount)
+    {
+        nodeBefore = -1;
+        entryCount = 0;
+
+        if (!TryGetActiveDialogue(out nint owner, out nint dialog))
+        {
+            return false;
+        }
+
+        entryCount = *(int*)(dialog + DialogEntriesCount);
+        nodeBefore = *(int*)(dialog + DialogCurrentEntryIndex);
+
+        *(int*)(owner + ObjDlgSendScratch) = 1;
+        return true;
     }
 
     /// <summary>

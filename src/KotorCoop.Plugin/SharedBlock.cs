@@ -1545,6 +1545,39 @@ internal struct SharedBlock
     /// </summary>
     public const uint CheatKindRecruit = 21;
 
+    /// <summary>
+    /// LIVE-TEST PRIMITIVE (2026-08-23, docs/research/dialogue-skip-desync.md): forces the
+    /// local player's OWNED conversation's current line/VO to finish immediately, the same
+    /// way a human's retail skip keypress/click does — in-process, no OS input involved. See
+    /// <c>Odyssey.SkipDialogueLine</c> for the VERIFIED mechanism (a flag on the dialogue
+    /// owner's <c>CSWSObject</c>, at the same offset the engine's own
+    /// <c>CServerExoApp::SkipPastDialog</c> writes, consumed once by
+    /// <c>CSWSObject::IsDialogDelay</c>). Built because two prior rounds established that
+    /// injected OS input never reaches this game at all — the same wall every other console
+    /// verb in this file was built to route around. Meaningful only as the conversation OWNER;
+    /// a no-op (not a refusal) when there is no active conversation to skip.
+    ///
+    /// ⚠ 22, because 7-21 are taken. Take the next FREE number.
+    /// </summary>
+    public const uint CheatKindSkipLine = 22;
+
+    /// <summary>
+    /// LIVE-TEST PRIMITIVE (2026-08-23, docs/research/dialogue-skip-desync.md): commits reply
+    /// slot <see cref="OffsetCheatAmount"/> on the local player's OWNED conversation, through
+    /// <c>Odyssey.SelectDialogueReply</c> — a fully verified, self-contained call
+    /// (<c>CSWGuiDialog::SelectReply</c>, through the panel's own vtable slot) that already
+    /// existed, unused, from an earlier "replay the owner's pick" design dialogue-sync.md's
+    /// node-sync section replaced as the DRIVE mechanism (a reply slot cannot converge across
+    /// two independently-evaluated trees). Reusing it LOCALLY, on your own conversation, has
+    /// none of that hazard — it is exactly what a real click on a reply does. Built because
+    /// this round's skip live-test needs a way to navigate PAST a reply-choice screen into a
+    /// narration stretch without real OS input (skip itself is meaningless on a reply screen —
+    /// see <c>CheatKindSkipLine</c>'s own remarks on the panel's +0x1DF8 flag).
+    ///
+    /// ⚠ 23, because 7-22 are taken. Take the next FREE number.
+    /// </summary>
+    public const uint CheatKindSelectReply = 23;
+
     /// <summary>The request was carried out here.</summary>
     public const int CheatStatusApplied = 1;
 

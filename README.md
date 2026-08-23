@@ -31,6 +31,7 @@ off by default or waiting on a live pass; the linked doc always has the dated ev
 | Dialogue — one conversation at a time, spectate with real lines, late-join adopt | Live-verified | [dialogue-sync.md](docs/research/dialogue-sync.md) |
 | Dialogue — a trigger/cutscene-started conversation, both engines racing to `StartDialog` | Live-verified, lock adopts cleanly | dialogue-sync.md |
 | Dialogue — auto-join is forced-conversation-only, `off` by default for ordinary chat | Both sides live-verified (2026-08-23 negative pass, 2026-08-23 round-77 positive pass); the START-side exclusivity-gate bug the positive pass exposed is fixed and live-confirmed; auto-join from genuine distance still NEEDS-LIVE (a tooling/positioning gap, not a code question) | dialogue-sync.md |
+| Dialogue — rapid-skip node coalescing, root-caused and reproduced live | Live-verified (2026-08-23, round 79): a new in-process `skipline` console verb (no OS input) reproduced the "skip mid-sentence desyncs" report on demand — 3 real node transitions in 55-70ms coalesce to 1 follower drive under the default cadence; `dialogue_fast_join=1` closes it completely in a direct A/B, same test. Recommended, not yet the shipped default | dialogue-skip-desync.md, shared-state-audit.md round 79 |
 | Combat presence freeze after a followed conversation ends | Live-measured (2026-08-23, round 78): a 1.5s debounce sized "by feel" was the dominant term in a ~2.7s census-freeze gap; cut to 300ms, gap now ~0.8-1.4s. Practical bar met (census unfreezes in about a second, not several); literal "same frame" target still open, needs `dialogue_fast_join=1` too | dialogue-sync.md, shared-state-audit.md round 78 |
 | Container open/close cross-instance latency | Live-measured (2026-08-23, round 78): the real bottleneck was a release-packet bug (every close rode a 5s dead-host lease fallback) — fixed, CLOSE latency ~5.1s → ~290ms (~18x). `container_fast_pump` itself measured with no effect either way once fixed and stays OFF by default | container-sync.md §10 |
 | Mid-module movies (a script's own `PlayMovie`) | Live-verified, ON by default | [cinematics.md](docs/research/cinematics.md) §10.9 |
@@ -47,7 +48,6 @@ off by default or waiting on a live pass; the linked doc always has the dated ev
 | **Companion follow-AI (Trask doesn't walk)** | Real fixes shipped (round 71-75), still doesn't reach "walking" state | needs a live debugger on an async pathfinder cursor — [party-reconciliation.md](docs/research/party-reconciliation.md) |
 | Companion local combat (client's mirrored companion fighting) | Release/reclaim gate verified clean; a landed swing not independently confirmed | OFF by default — party-reconciliation.md |
 | `party_fast_pump` (companion-position latency) | Tested twice (combat: worse; non-combat: no measurable difference) | OFF by default, real cause of reported lag still open — [lag-audit.md](docs/research/lag-audit.md) |
-| Dialogue skip-mid-sentence desync | Instrumented (timestamped node logs both sides), not yet reproduced | blocked on real keyboard/foreground input to the game — [dialogue-skip-desync.md](docs/research/dialogue-skip-desync.md) |
 | Forced-conversation auto-join, positive case | Flag design verified by disassembly + 6 clean negatives | no genuinely-forced trigger found reachable yet — dialogue-sync.md |
 | Minigames (swoop races, forced turret sequences) | Detection + peer-park built | never run in a live two-instance session — [minigames.md](docs/research/minigames.md) |
 | Mid-session save/load (host or client loading a different save) | Phase 1 (client character survives to next session) live-tested; host mid-session load is refused, not re-adopted | [session-save.md](docs/research/session-save.md) |
@@ -276,15 +276,20 @@ Both players, each in their own full game:
   precise millisecond figure for that specific hop is still unmeasured (no independent host-side
   timestamp to diff against). See
   [docs/research/dialogue-sync.md](docs/research/dialogue-sync.md)'s dated live-pass section.
-- **A reported "skip mid-sentence desyncs the other player" symptom** got fine-grained
-  publish/drive logging (`dialogue-node-pub`/`dialogue-node-drive`) rather than a guessed fix,
-  since the mechanism (the owner publishes POSITION on a poll, not a queue of every node
-  visited — see docs/research/dialogue-skip-desync.md) makes coalescing during a fast skip
-  burst plausible but unconfirmed. A 2026-08-23 live pass confirmed the instrumentation itself
-  end to end (publish and drive both fired correctly, `arrived=True callMs=0` on a real
-  owner/follower join) but could not deliver an actual skip keypress to the game — the KOTOR
-  window never held Windows' own foreground focus during that pass, a genuine human-at-the-
-  keyboard blocker rather than a code gap. See that doc's 2026-08-23 section.
+- **A reported "skip mid-sentence desyncs the other player" symptom, reproduced live and
+  root-caused (round 79, 2026-08-23).** Three prior passes assumed the only way to trigger a
+  skip was real OS keyboard/mouse input, which never reaches this game. That assumption was
+  wrong: a new in-process console verb, `skipline`, calls the exact engine function KOTOR's own
+  retail skip control reaches (`CServerExoApp::SkipPastDialog`, found from
+  `CSWGuiDialog::HandleInputEvent`'s Enter/click case) directly, no OS input involved at all —
+  the same technique behind `usedoor`, `useplaceable` and every other console verb in this repo.
+  With that, both open hypotheses were settled with real data: skip DOES advance the node (H1),
+  and a burst of real transitions closer together than the wire's 150ms sample coalesces on the
+  follower — three transitions in 55-70ms produced exactly one follower drive, the two nodes in
+  between (their line, VO and lipsync) never delivered at all (H2), the reported symptom
+  reproduced on demand. `dialogue_fast_join=1` closes the gap completely in a direct A/B against
+  the identical burst shape — a real, decisive fix candidate, recommended but not yet the
+  shipped default. See docs/research/dialogue-skip-desync.md's 2026-08-23 "Round 79" section.
 - **Scripted scenes play out the same on both screens**: cutscene actors and story NPCs
   replicate their positions, stances and movements, while staying exempt from the combat
   channel — the module decides who is un-killable, not the session.

@@ -218,6 +218,17 @@ dialogue_item_sync=1
 # snaps a far joiner into adopt range before the join request is even sent, so every far join
 # still resolves through the fast adopt path this flag's own hops never sit on. See
 # docs/research/dialogue-join-latency.md's dated 2026-08-22 entry.
+#
+# ⚠ A SEPARATE, LATER finding is NOT a null result: docs/research/dialogue-skip-desync.md's
+# 2026-08-23 live pass (the `skipline` console verb, in-process - no OS input) measured this
+# flag against the "skip mid-sentence desyncs" report directly, for the first time. Under the
+# default (=0), a real 3-node skip burst 55-70 ms wide - well inside the 150 ms cadence -
+# coalesced on the follower: `dialogue-node-drive` jumped straight from the first node to the
+# last, the two nodes in between (their speaker/line/VO/lipsync) never delivered at all. The
+# SAME burst shape with =1 landed every intermediate node, live-verified, twice, back to back.
+# Left OFF here because this is a recommendation, not yet a default this round is positioned to
+# change unilaterally (see that doc's own dated entry for the caveats) - but the evidence for
+# flipping it is real and decisive where the join-latency pass above found none.
 dialogue_fast_join=0
 
 # Moves PumpPlaceables (the DURABLE container/door open-or-locked STATE) off the agent's

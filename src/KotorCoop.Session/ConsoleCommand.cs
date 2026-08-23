@@ -313,6 +313,26 @@ public enum CoopCommandKind
     /// <see cref="Leader"/>.
     /// </summary>
     Recruit,
+
+    /// <summary>
+    /// <c>skipline</c> — LIVE-TEST PRIMITIVE (2026-08-23, docs/research/dialogue-skip-desync.md).
+    /// Forces the local player's OWNED conversation's current line/VO to finish immediately,
+    /// in-process, the same way a real skip keypress/click does — built because two prior
+    /// rounds established injected OS input never reaches this game at all. Meaningful only
+    /// when the local player is the conversation OWNER (a follower does not drive VO timing);
+    /// a no-op when there is no active conversation. Takes no arguments.
+    /// </summary>
+    SkipLine,
+
+    /// <summary>
+    /// <c>selectreply &lt;slot&gt;</c> — LIVE-TEST PRIMITIVE (2026-08-23,
+    /// docs/research/dialogue-skip-desync.md). Commits reply slot <see cref="CoopCommand.Amount"/>
+    /// on the local player's OWNED conversation, through <c>Odyssey.SelectDialogueReply</c> —
+    /// the console's way to navigate past a reply-choice screen without real OS input, needed
+    /// so <c>skipline</c> can be tested against an actual narration stretch rather than a
+    /// screen with nothing to skip.
+    /// </summary>
+    SelectReply,
 }
 
 /// <summary>
@@ -917,6 +937,23 @@ public static class ConsoleCommand
             // recruit <slot>  - DEV-ONLY TEST PRIMITIVE (2026-08-23), see CoopCommandKind.Recruit.
             case "recruit":
                 return ParseRecruit(rest);
+
+            // skipline  - LIVE-TEST PRIMITIVE (2026-08-23), see CoopCommandKind.SkipLine.
+            case "skipline":
+                return rest.Length > 0
+                    ? new CoopCommand(CoopCommandKind.Invalid, Error: "skipline takes no arguments")
+                    : new CoopCommand(CoopCommandKind.SkipLine);
+
+            // selectreply <slot>  - LIVE-TEST PRIMITIVE (2026-08-23), see CoopCommandKind.SelectReply.
+            case "selectreply":
+                if (rest.Length != 1 || !int.TryParse(rest[0], out int replySlot) || replySlot < 0)
+                {
+                    return new CoopCommand(
+                        CoopCommandKind.Invalid,
+                        Error: "selectreply needs one reply slot (0-based), e.g. selectreply 0");
+                }
+
+                return new CoopCommand(CoopCommandKind.SelectReply, Amount: replySlot);
 
             case "cheats":
                 return new CoopCommand(CoopCommandKind.Cheats);
@@ -1601,6 +1638,10 @@ public static class ConsoleCommand
         "                      or back to 'pc'; local only, never crosses the network",
         "  recruit <slot>      dev-only: force NPC roster slot (0-8) into the local active",
         "                      party, no dialogue needed; local only, never crosses the network",
+        "  skipline            finish your OWNED conversation's current line/VO right now,",
+        "                      in-process (no OS input); no-op if nothing is playing",
+        "  selectreply <slot>  commit a reply slot on your OWNED conversation, in-process",
+        "                      (no OS input); test-only navigation helper for skipline",
         "retail console cheats, already co-op-safe (they touch only your game):",
         "  giveitem <resref> | givecredits <n> | addexp <n> | addlevel | heal",
         "  revealmap | infiniteuses | invulnerability | whereami | bright | turbo",
