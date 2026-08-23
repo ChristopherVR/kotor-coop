@@ -44,15 +44,16 @@ off by default or waiting on a live pass; the linked doc always has the dated ev
 | Mod-compatibility mismatch paths | Live-exercised 7 of 8 categories (override, modules, 2da, appearance, save-identity default + strict-refuse, exe) | every observed behavior matched the code exactly — [mod-compatibility.md](docs/research/mod-compatibility.md) round 2026-08-23; module-GIT and globals-catalogue mismatches deliberately not forced, per the doc's own recommendation |
 | Dialogue recruitment sync — duplicate-body defect | Root-caused (an off-stage recruitment cache was being mistaken for an addable party member) and fixed; live-confirmed clean across all four verification steps | [dialogue-consequences.md](docs/research/dialogue-consequences.md); `dialogue_recruit_sync` stays off by default (per-slot template mapping still only confirmed for one of nine companions) |
 | `loadgame` console verb (deterministic mid-session Load, no mouse clicks) | Built and live-confirmed: a real teardown/reload in 3.1s, correct character/party swap, the classifier fires correctly | [session-save.md](docs/research/session-save.md); unblocks future live testing of the mid-session save/load gates below |
+| Companion local combat — two-companion drift risk | CONFIRMED clean live: a released companion fought and landed real credited damage while the OTHER, non-released companion stayed within 0.05 units of the host's position throughout, no drift | [party-reconciliation.md](docs/research/party-reconciliation.md) round 85; `companion_local_combat` stays off pending broader testing, not because of this result |
+| Minigames — swoop-race trigger precondition | SOLVED via a new NCS bytecode disassembler: the trigger was never a race-start gate at all — it's an unconditional collectible-flag setter. A companion script points at a dialogue node as the real gate instead | [minigames.md](docs/research/minigames.md) §13; three rounds of flag-guessing were chasing the wrong script the whole time |
 
 ### Still needs work
 
 | Area | Status | Blocker |
 | --- | --- | --- |
-| Companion local combat (client's mirrored companion fighting) | Round 82 confirmed solo mode as the blocker; round 83 shipped a fix candidate that never touches solo mode at all — it drives the released companion's attack directly through the same call the `attack` cheat already proves works | OFF by default — the two-companion drift-risk check this needs has never been run (this rig has never had two companions at once) — party-reconciliation.md |
+| Mid-session save/load — rejoin gates | Live-tested against a genuinely different save for the first time. `host_load_readopt`'s classifier/trigger logic fires correctly but the actual reconnect loses a timing race against the host's own server rebuild; `client_load_rejoin`'s classifier never produces a Load verdict at all despite the world-load edge firing | Two distinct real bugs, neither fixed yet — both gates stay off — [session-save.md](docs/research/session-save.md) round 86 |
 | `party_fast_pump` (companion-position latency) | Tested twice (combat: worse; non-combat: no measurable difference) | OFF by default, real cause of reported lag still open — [lag-audit.md](docs/research/lag-audit.md) |
-| Minigames — swoop racing specifically | Confirmed architecturally *capable* of co-visibility (same module, no transition). Two disjoint global-flag theories for the trigger's precondition were live-tested and disproven; a real door-navigation bug blocking the route was found and fixed along the way | [minigames.md](docs/research/minigames.md) §9-§12; the exact precondition is still unknown — needs NCS disassembly or a save with real Taris story progress |
-| Mid-session save/load (host or client loading a different save) | Phase 1 (client character survives to next session) live-tested. The regression check for ordinary travel vs. a real Load is CONFIRMED clean both directions, and the new `loadgame` verb proves the underlying mechanism works | Whether the `client_load_rejoin`/`host_load_readopt` gates correctly react to a *real* Load is still untested — the crafted saves available so far are digest-identical by construction — [session-save.md](docs/research/session-save.md) |
+| Minigames — swoop racing, now that the real gate is known | The actual race-start check lives in a dialogue node's condition script (`Tar_SwoopRace`), not the entrance trigger | never live-tested against the right script — [minigames.md](docs/research/minigames.md) §13; needs finding which `.dlg`/NPC uses `k_ptar_swoop.ncs` as a condition, then a live pass |
 | Creature liveness reconciliation (a body alive on one screen, dead on the other) | CONFIRMED working live for the first time — a debug `--enemy-census-cap` flag makes the out-of-census case reachable, and the Kill→Destroy correction fires correctly | OFF by default; a separate, still-unfixed `DestroyObject`-scan-freshness issue is untouched by this result — [creature-liveness.md](docs/research/creature-liveness.md) |
 | KOTOR 2 | Untouched | only GOG v1.0.3 addresses are known |
 
@@ -280,7 +281,9 @@ tools/                   RE helpers, demo scripts, the kotor1_0_3 symbol databas
   live-confirmed: smooth, continuous motion for roughly 90% of a real leg, the cleanest result
   across twelve rounds. A second, deeper stall was found and precisely characterized one layer
   further in (`CreMoveState` reverts from "walking" back to "follow requested" partway through),
-  not yet fixed. See [party-reconciliation.md](docs/research/party-reconciliation.md).
+  not yet fixed. A related finding: warping modules while the follow diagnostics are active
+  (shipped default) can crash the host with an access violation — worked around for now, real
+  fix still needed. See [party-reconciliation.md](docs/research/party-reconciliation.md).
 - **A mirrored companion cannot swing on a client yet**, except for one narrow, off-by-default
   case (`companion_local_combat=1`) that releases a companion standing close enough to both
   players and the enemy to its own engine AI. The release/reclaim mechanism is live-verified
@@ -288,8 +291,10 @@ tools/                   RE helpers, demo scripts, the kotor1_0_3 symbol databas
   companion's AI from ever queuing an attack); round 83 shipped a fix candidate that sidesteps
   solo mode entirely rather than trying to scope it — it drives the released companion's attack
   directly through the same call the `attack` console cheat already proves lands real damage.
-  Not yet live-tested: this rig has never had two companions available at once, which is what
-  the fix's own drift-risk check needs. `companion_local_combat` stays off. See
+  Round 85 ran the fix's own drift-risk check for the first time with two companions live: the
+  released companion landed real credited damage while the OTHER, non-released companion held
+  within 0.05 units of the host's position the whole time — no drift. `companion_local_combat`
+  stays off pending broader testing, not because of a problem found here. See
   party-reconciliation.md.
 - **Companion-mirror lag** ("lag even on localhost"): investigated twice (`party_fast_pump`),
   found no benefit either time, left off. The follow-AI bug that blocked a clean measurement
@@ -311,27 +316,29 @@ tools/                   RE helpers, demo scripts, the kotor1_0_3 symbol databas
 - **Minigames**: the turret sequence is CONFIRMED a genuinely separate module — spectate/park
   is structurally forced there (not a design choice) and the current parked-peer behavior is
   verified clean. Swoop racing is confirmed architecturally *capable* of true co-visibility
-  (same module, no transition, live-confirmed), but actually starting one needs story-progress
-  state a crafted test save hasn't reproduced yet — two disjoint global-flag theories were
-  tried and disproven, and a real door blocking the route to the trigger was found and fixed
-  along the way. Still open; the exact precondition needs either NCS script disassembly (no
-  decompiler exists in this tree yet) or a save with genuine Taris story progress. Pazaak is
-  unrelated and uncovered. See [minigames.md](docs/research/minigames.md).
+  (same module, no transition, live-confirmed). Three rounds of guessing which global flag
+  gates the race all failed for the same reason: they were reading the wrong script. A new
+  NCS bytecode disassembler (built this session, no such tool existed before) read the actual
+  compiled trigger and found it's not a race gate at all — just an unconditional collectible
+  flag setter. The real gate lives in a dialogue node's condition script instead
+  (`k_ptar_swoop.ncs`, checks `Tar_SwoopRace`); finding which NPC/`.dlg` uses it is the
+  concrete next step. Pazaak is unrelated and uncovered. See
+  [minigames.md](docs/research/minigames.md).
 - **Non-damage combat effects** (stun, slow, frightened, choke, force push/whirlwind) forward
   live, both directions, on by default. Knockdown, Paralyze and Sleep are captured but never
   replayed — their apply-side engine call is still unverified. See
   [effect-sync.md](docs/research/effect-sync.md).
 - **Mid-session save/load**: a joiner's progress now survives to the next session (their
-  character is captured and preferred on rejoin). Both the host-refuse and client-rejoin
-  upgrades exist behind off-by-default gates; the regression check that matters most — does an
-  ordinary co-op travel warp ever get misclassified as a Load Game action — is CONFIRMED
-  clean live, both directions. The old blocker (mouse clicks not landing reliably on the pause
-  menu) is now moot: a new `loadgame <slot>` console verb calls the real engine Load path
-  directly and is live-confirmed to work (a genuine teardown/reload in ~3s, correct
-  character/party swap). What's still unverified is specifically whether the
-  `client_load_rejoin`/`host_load_readopt` gates react correctly to a real Load — the crafted
-  test saves used so far are digest-identical to the original by construction, since they only
-  patch global flags, not the module/object-id state the gates actually watch. See
+  character is captured and preferred on rejoin). The regression check that matters most — does
+  an ordinary co-op travel warp ever get misclassified as a Load Game action — is CONFIRMED
+  clean live, both directions, and a new `loadgame <slot>` console verb calls the real engine
+  Load path directly and is live-confirmed to work (a genuine teardown/reload in ~3s, correct
+  character/party swap) — the old mouse-click blocker is moot now. Tested against a genuinely
+  different save for the first time, both rejoin gates turned up real, distinct bugs rather
+  than just "unverified": `host_load_readopt`'s classifier and trigger fire exactly as designed,
+  but the actual reconnect then loses a timing race against the host's own server rebuild;
+  `client_load_rejoin`'s classifier never produces a Load verdict at all, despite the
+  world-load edge firing correctly. Neither gate flips on until these are fixed. See
   [session-save.md](docs/research/session-save.md).
 - **Dialogue reward-node consequences** (item grants) are built and forward automatically,
   on by default. Recruitment sync defaults off — an earlier raw availability poke was
