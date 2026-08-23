@@ -513,3 +513,93 @@ fresh start, no travel). Steps:
 
 If steps 3-6 all pass for two slots, `dialogue_recruit_sync` can default ON with high confidence;
 if step 4 fails for one slot, only that slot's template entry needs fixing, not the mechanism.
+
+## Live pass (2026-08-23): Carth reconciles correctly end-to-end, via the console fallback path —
+plus a real, newly-found duplicate-body defect in the same-pass fallthrough
+
+Ran against the two-instance rig, `dialogue_recruit_sync=1` on both installs, `END_M01AA`
+(Endar Spire — the same save this document's own plan names as fastest-reachable). The real
+dialogue conversation with Carth (`talk carth`) was not attempted this pass — this project's own
+prior finding (`docs/research/party-reconciliation.md` round 75) already established that hook
+reaches Carth as an "unreachable NPC" with no renderable content from this save's console path, so
+per this task's own explicit sanction ("if Carth isn't reachable from this save's story point, use
+the console recruit-equivalent path... to force the same code path deterministically instead"),
+the HOST recruited Carth via `console 'recruit 2 carth'` — the dev-only `CheatKindRecruit` verb,
+which sets `partyTable+0x30+2*4=1` (the SAME bit `PartyRosterController`'s wire read publishes as
+`available`) and adds a real body to the host's own active party. This is deliberately NOT the
+`AddAvailableNpcByTemplate` code path itself — the point was to get the SAME bit set on the wire so
+the CLIENT's own `dialogue_recruit_sync` reconciliation (which DOES go through
+`AddAvailableNpcByTemplate`) has something to react to, independent of how the host itself came to
+have Carth.
+
+### Result: Carth appears in the client's party, confirmed by object resolve and party-table read
+
+Host: `partystate.ps1` showed `companions 2`, slot 0 = Trask (0x127), slot 2 = Carth (0x2),
+immediately after the `recruit` console command. Client, within the next `PartyRosterController`
+pass (well under a second):
+
+```
+[19:30:05.023] party roster: recruited NPC slot 2 as 0x1 from its own template (peer recruited 0x005, here 0x001) - dialogue_recruit_sync; adding them to the party now
+[19:30:05.024] party roster: could not add NPC slot 2 (failure 9)
+[19:30:05.088] party roster: spawned NPC slot 2 as 0x13B to add them here
+[19:30:05.088] party roster: added NPC slot 2 (object 0x13B) to the party
+[19:30:05.091] party roster: local party is now 0x005 (recruited 0x005)
+```
+
+Client `partystate.ps1` afterward: `companions 2`, slot 0 = Trask (0x127), slot 2 = Carth
+(object 0x13B). `resolve 0x13B` on the client confirmed a real, live, resolvable object
+(`0x13B resolves to 0x1D1859C8 here`). **`dialogue_recruit_sync` genuinely closes the recruitment
+gap this document exists to fix — Carth appears in BOTH players' party after the flag fires,
+confirmed by object resolution, not just a mask bit.** This uses the already-independently-verified
+slot-2-is-Carth mapping (`Odyssey.PartyRosterTemplates`, confirmed live in
+`party-reconciliation.md` round 75) — the other eight slots' template mappings remain unverified,
+exactly as this document already flagged.
+
+### A real, newly-found defect in the same pass: the immediate-add-after-recruit fallthrough fails
+and leaks an orphaned duplicate body
+
+The log above shows the mechanism did NOT work the way `PartyRosterController`'s own code comment
+describes ("hands back a live object id directly — no separate spawn step"). `AddAvailableNpcByTemplate(2)`
+returned object `0x1` and the code fell through to `AddPartyMemberBySlot(2, 0x1, ...)` in the SAME
+pass, which refused with **failure 9** — `AddMember`'s own VM dispatch returning nonzero, most
+likely its `GetGameObject`-resolves-to-a-live-body gate (`party-reconciliation.md`'s own
+2026-07-31 entry: "the object id must resolve through `CServerExoApp::GetGameObject`... the add
+needs a LIVE body"). Reading this against the same document's `AddAvailableNpcByTemplate` doc
+comment (`Odyssey.cs`, 2026-08-23 round): `AddNPC_2` builds the creature via `LoadFromTemplate` and
+registers it in the party table's own bookkeeping, but that is apparently NOT the same as being a
+`GetGameObject`-resolvable live world object — a distinction this document's own design never
+anticipated when it said the object could be added "in the SAME pass."
+
+The system self-healed on the VERY NEXT pass (56ms later, same batch): with `localAvailable` now
+carrying bit 2 (set by `AddNPC_2`'s own bookkeeping), the controller took the OTHER branch
+(`GetPartyRosterObjectId`/`ResolveServerObject` failing over to the OLDER `SpawnAvailableNpc`
+fallback), which produced a genuinely new, different, in-world object (`0x13B`) that DID resolve
+and DID get added successfully. **Net result: correct (Carth ends up in the party), but at the
+cost of a real, verified duplicate body** — `resolve 0x1` on the client afterward confirmed object
+`0x1` (the first, never-added recruit) is STILL a real, resolvable object
+(`0x1 resolves to 0x3314E04 here`), sitting off-stage, never cleaned up, never referenced by
+anything after the fallback took over. This is a genuine, reproducible bug in
+`PartyRosterController`'s same-pass fallthrough optimisation (§4.3 of this document's own design,
+"no change needed there" — which this pass shows is not quite true), not merely a theoretical risk.
+
+**Not fixed this pass** (out of scope for an observation-first live-verification round; the
+end-to-end outcome IS correct, so this is a leak/inefficiency, not a correctness bug the way a
+failed recruit would be). The fix is narrow when someone picks it up: either don't attempt the
+same-pass `AddPartyMemberBySlot` call immediately after `AddAvailableNpcByTemplate` (let the very
+next pass's `else` branch — which already handles "recruited but no live body yet" via
+`SpawnAvailableNpc` — do the work, avoiding the wasted first object entirely), or destroy the
+orphaned object when the immediate add fails with failure 9 specifically.
+
+### Verdict
+
+`dialogue_recruit_sync` stays OFF by default (unchanged) — the channel works end-to-end (the
+headline claim this document exists to prove), but this pass found a real, minor, previously
+unknown defect (an orphaned duplicate body per recruit) that was not part of the design's own
+NEEDS-LIVE list. Per this project's "flip on if clean" bar, a defect found during the very live
+pass meant to clear the flag is a reason to keep it off, not flip it, until the fallthrough is
+fixed or the leak is otherwise judged harmless enough to accept. The core recruitment mechanism
+itself (`Odyssey.AddAvailableNpcByTemplate`, the wire, `PartyRosterController.Reconcile`'s overall
+shape) is proven sound.
+
+`dotnet test tests/KotorCoop.Tests` (Release): 1638/1638 passed — no production code touched by
+this pass (pure live observation against already-shipped code).
