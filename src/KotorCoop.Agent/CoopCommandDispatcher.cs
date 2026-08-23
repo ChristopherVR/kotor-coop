@@ -183,6 +183,20 @@ public sealed class CoopCommandDispatcher(
     /// <c>MenuLoadController._firedSerial</c>, is what actually prevents a double-apply).</summary>
     private Task? _loadGameTask;
 
+    /// <summary>
+    /// The host's own world-serve listener for roadmap item 14's mid-session rejoin gates —
+    /// see <see cref="MaintainWorldServing"/>'s own doc comment for the bug this closes
+    /// (session-save.md's round entry on <c>host_load_readopt</c>'s reconnect: nothing in a
+    /// live host session ever served the world at all, so every rejoin fetch was refused —
+    /// not raced, refused outright, because there was never a listener on the other end).
+    /// Held only so the fire-and-forget <c>Task.Run</c> is not flagged as unobserved, the same
+    /// pattern <see cref="_loadGameTask"/> already uses; cancellation (via
+    /// <see cref="_worldServeCts"/>), not awaiting this task, is what actually stops it.
+    /// </summary>
+    private Task? _worldServeTask;
+
+    private CancellationTokenSource? _worldServeCts;
+
     /// <summary>Polls the block for console/menu commands and reflects status until cancelled.</summary>
     public async Task RunAsync(CancellationToken cancellationToken)
     {
@@ -218,6 +232,7 @@ public sealed class CoopCommandDispatcher(
                     AnnounceCompatibilityChanges();
                     AnnounceConnectionStatus();
                     MaintainSessionSave();
+                    MaintainWorldServing();
                     DrainChat();
                     ReflectCheatAnswer();
                     DrainAutomaticLoot();
@@ -1789,6 +1804,110 @@ public sealed class CoopCommandDispatcher(
                 TriggerRejoin(RejoinTrigger.HostReload);
             }
         }
+    }
+
+    /// <summary>
+    /// Roadmap item 14's mid-session rejoin gates need the HOST to actually SERVE its world
+    /// over <see cref="WorldTransfer"/> — <see cref="TriggerRejoin"/>'s background task calls
+    /// <see cref="SessionManager.RejoinAfterLoadAsync"/>, which fetches the host's world via
+    /// <see cref="WorldAdoption.TryAdoptAsync"/>/<see cref="WorldTransfer.FetchAsync"/> exactly
+    /// the way the standalone <c>agent adopt</c>/<c>agent serve-world</c> CLI pair already
+    /// does — but until this method existed, NOTHING in a live <c>agent run --host</c> session
+    /// ever called <see cref="WorldTransfer.ServeAsync(IReadOnlyList{KotorCoop.Session.WorldFile},int,uint,uint,Action{string},CancellationToken)"/>:
+    /// that overload is called from exactly one production call site,
+    /// <c>Program.ServeWorldAsync</c>, the standalone verb, entirely separate from a real
+    /// co-op session.
+    ///
+    /// docs/research/session-save.md's round entry on <c>host_load_readopt</c> diagnosed the
+    /// resulting "target machine actively refused it" as a race against the ENGINE's own
+    /// <c>CAppManager::DestroyServer</c>/<c>CreateServer</c> rebuild — a plausible-looking but
+    /// incomplete read: those engine calls live entirely inside the GAME process's own
+    /// loopback server and have no connection to this AGENT process's own TCP listener. The
+    /// real cause is simpler and more fundamental: there was never a listener on the other
+    /// end AT ALL, at any point in a live host session, so every fetch was refused outright —
+    /// not raced. Starting the listener HERE, once, for the life of the host session (rather
+    /// than only around a reload), and reading the CURRENT session save fresh on every
+    /// accepted connection (<see cref="WorldTransfer.ServeAsync(Func{ValueTuple{IReadOnlyList{KotorCoop.Session.WorldFile},uint}},int,uint,Action{string},CancellationToken)"/>)
+    /// removes the race entirely rather than narrowing its window: the listener is already up
+    /// long before any reload happens, so a rejoining client's fetch can never arrive before
+    /// it is ready.
+    ///
+    /// Gated the same way every other roadmap item 14 feature is — off unless a coop.ini gate
+    /// that could actually need it is on — because it opens a new TCP listener on the session
+    /// port, a real (if modest) new attack surface a host that never uses this feature should
+    /// not carry. Either gate can trigger a CLIENT's own fetch (<see cref="ClientLoadRejoinEnabled"/>
+    /// for the client's own load, <see cref="HostLoadReadoptEnabled"/> for the host's), and the
+    /// host cannot see which gate any given connected client has set, so it serves whenever
+    /// EITHER of its own is on — the same "both installs set together" convention this
+    /// feature's own live-test scripts already use.
+    /// </summary>
+    private void MaintainWorldServing()
+    {
+        bool shouldServe = manager.Current is CoopHost
+            && !string.IsNullOrEmpty(gameDirectory)
+            && (ClientLoadRejoinEnabled || HostLoadReadoptEnabled);
+
+        if (!shouldServe)
+        {
+            if (_worldServeCts is { } stale)
+            {
+                stale.Cancel();
+                stale.Dispose();
+                _worldServeCts = null;
+                _worldServeTask = null;
+            }
+
+            return;
+        }
+
+        if (_worldServeTask is not null)
+        {
+            return; // already running for this host session
+        }
+
+        if (manager.CurrentSettings is not { } settings)
+        {
+            return; // should not happen once Current is a CoopHost, but never assume it
+        }
+
+        string capturedGameDirectory = gameDirectory;
+        uint passwordHash = SessionPassword.Hash(settings.Password);
+        CancellationTokenSource cts = new();
+        _worldServeCts = cts;
+
+        _worldServeTask = Task.Run(async () =>
+        {
+            try
+            {
+                await WorldTransfer.ServeAsync(
+                    () => BuildWorldSnapshot(capturedGameDirectory),
+                    settings.Port,
+                    passwordHash,
+                    Log,
+                    cts.Token).ConfigureAwait(false);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                Log?.Invoke($"session-save: world-serve listener failed - {ex.Message}");
+            }
+        });
+    }
+
+    /// <summary>Reads the CURRENT session save fresh — the world+identity pair a rejoining
+    /// client should receive if it connects RIGHT NOW, never a snapshot captured when serving
+    /// started. Same resolution <see cref="MaintainSessionSave"/>'s client branch already uses
+    /// for its own capture (<see cref="SaveDigest.FindSessionSave"/>).</summary>
+    private static (IReadOnlyList<WorldFile> World, uint SaveIdentity) BuildWorldSnapshot(string gameDirectory)
+    {
+        string? currentSave = SaveDigest.FindSessionSave(gameDirectory);
+        if (currentSave is null)
+        {
+            return ([], 0);
+        }
+
+        IReadOnlyList<WorldFile> world = WorldTransfer.ReadSaveDirectory(currentSave);
+        uint identity = SaveDigest.TryComputeSaveIdentity(currentSave, out uint computed) ? computed : 0;
+        return (world, identity);
     }
 
     /// <summary>

@@ -1,3 +1,5 @@
+using System.Net;
+using System.Net.Sockets;
 using KotorCoop.Agent;
 using KotorCoop.Memory;
 using KotorCoop.Protocol;
@@ -282,6 +284,154 @@ public class CoopCommandDispatcherTests
         }
         catch (OperationCanceledException)
         {
+        }
+    }
+
+    /// <summary>
+    /// Pins the fix for the round-86 "target machine actively refused it" bug: nothing in a
+    /// live host session used to call <see cref="WorldTransfer.ServeAsync(System.Func{(System.Collections.Generic.IReadOnlyList{WorldFile},uint)},int,uint,System.Action{string}?,CancellationToken)"/>
+    /// at all, so a client's <c>RejoinAfterLoadAsync</c> fetch was always refused outright —
+    /// not raced against a rebuild, refused because there was never a listener on the other
+    /// end. With either rejoin gate on, a live host must actually serve its current session
+    /// save over <see cref="WorldTransfer"/> on the SAME port its co-op session bound.
+    /// </summary>
+    [Fact]
+    public async Task HostingWithARejoinGateOnServesItsWorldOverWorldTransfer()
+    {
+        string gameDirectory = Path.Combine(
+            Path.GetTempPath(), "kotorcoop-worldserve-" + Guid.NewGuid().ToString("N"));
+        string saveDirectory = Path.Combine(gameDirectory, "saves", "000001 - AUTOSAVE");
+        Directory.CreateDirectory(saveDirectory);
+        byte[] saveBytes = "not a real save, just bytes to round-trip"u8.ToArray();
+        File.WriteAllBytes(Path.Combine(saveDirectory, "SAVEGAME.sav"), saveBytes);
+
+        int port = FreePort();
+
+        MenuBridge bridge = new();
+        using SessionManager manager = new(bridge, new AgentSettings { PollRate = 30 });
+        CoopConfig config = new() { ClientLoadRejoin = true };
+        CoopCommandDispatcher dispatcher = new(
+            manager, bridge, ProtocolConstants.DefaultPort,
+            p => new SessionSettings { PlayerName = "Host", Port = port, TickRate = 30, Password = p },
+            () => config,
+            gameDirectory: gameDirectory);
+
+        try
+        {
+            dispatcher.Dispatch(new CoopCommand(CoopCommandKind.Host));
+            Assert.IsType<CoopHost>(manager.Current);
+
+            using CancellationTokenSource dispatchCts = new();
+            Task dispatchTask = dispatcher.RunAsync(dispatchCts.Token);
+
+            using CancellationTokenSource fetchCts = new(TimeSpan.FromSeconds(10));
+            IReadOnlyList<WorldFile> received = (await FetchWithRetryAsync(
+                new IPEndPoint(IPAddress.Loopback, port), SessionPassword.None, fetchCts.Token)).Files;
+
+            WorldFile saveFile = Assert.Single(received);
+            Assert.Equal("SAVEGAME.sav", saveFile.Name);
+            Assert.Equal(saveBytes, saveFile.Data);
+
+            await dispatchCts.CancelAsync();
+            await dispatchTask;
+        }
+        finally
+        {
+            manager.Disconnect();
+
+            try
+            {
+                Directory.Delete(gameDirectory, recursive: true);
+            }
+            catch (IOException)
+            {
+            }
+        }
+    }
+
+    [Fact]
+    public async Task HostingWithBothRejoinGatesOffServesNothing()
+    {
+        // The default state, and the regression check: a host that never enabled either gate
+        // must not open a new listener at all.
+        string gameDirectory = Path.Combine(
+            Path.GetTempPath(), "kotorcoop-worldserve-off-" + Guid.NewGuid().ToString("N"));
+        string saveDirectory = Path.Combine(gameDirectory, "saves", "000001 - AUTOSAVE");
+        Directory.CreateDirectory(saveDirectory);
+        File.WriteAllBytes(Path.Combine(saveDirectory, "SAVEGAME.sav"), [1, 2, 3]);
+
+        int port = FreePort();
+
+        MenuBridge bridge = new();
+        using SessionManager manager = new(bridge, new AgentSettings { PollRate = 30 });
+        CoopConfig config = new(); // both gates default off
+        CoopCommandDispatcher dispatcher = new(
+            manager, bridge, ProtocolConstants.DefaultPort,
+            p => new SessionSettings { PlayerName = "Host", Port = port, TickRate = 30, Password = p },
+            () => config,
+            gameDirectory: gameDirectory);
+
+        try
+        {
+            dispatcher.Dispatch(new CoopCommand(CoopCommandKind.Host));
+            Assert.IsType<CoopHost>(manager.Current);
+
+            using CancellationTokenSource dispatchCts = new();
+            Task dispatchTask = dispatcher.RunAsync(dispatchCts.Token);
+
+            // Give the tick loop several chances to (wrongly) start serving before asserting
+            // it never does.
+            await Task.Delay(500);
+
+            using TcpClient probe = new();
+            SocketException refused = await Assert.ThrowsAsync<SocketException>(
+                () => probe.ConnectAsync(IPAddress.Loopback, port));
+            Assert.Equal(SocketError.ConnectionRefused, refused.SocketErrorCode);
+
+            await dispatchCts.CancelAsync();
+            await dispatchTask;
+        }
+        finally
+        {
+            manager.Disconnect();
+
+            try
+            {
+                Directory.Delete(gameDirectory, recursive: true);
+            }
+            catch (IOException)
+            {
+            }
+        }
+    }
+
+    private static int FreePort()
+    {
+        using TcpListener probe = new(IPAddress.Loopback, 0);
+        probe.Start();
+        int port = ((IPEndPoint)probe.LocalEndpoint).Port;
+        probe.Stop();
+        return port;
+    }
+
+    /// <summary>The world-serve listener starts on the dispatcher's own 150 ms tick, so the
+    /// very first fetch attempt can legitimately race it — retry rather than requiring the
+    /// caller to guess a safe delay.</summary>
+    private static async Task<FetchedWorld> FetchWithRetryAsync(
+        IPEndPoint endpoint, uint passwordHash, CancellationToken cancellationToken)
+    {
+        while (true)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            try
+            {
+                return await WorldTransfer.FetchAsync(endpoint, passwordHash, cancellationToken);
+            }
+            catch (SocketException)
+            {
+                await Task.Delay(20, cancellationToken);
+            }
         }
     }
 }

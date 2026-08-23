@@ -149,19 +149,56 @@ public static class WorldTransfer
     /// served, or 0 when it could not be computed. Sent in the reply header so the joiner can
     /// check what it staged against what it was promised; 0 skips the check, per the
     /// house rule that an unknown never blocks anything.</param>
-    public static async Task ServeAsync(
+    public static Task ServeAsync(
         IReadOnlyList<WorldFile> world,
         int port,
         uint passwordHash,
         uint saveIdentity,
         Action<string>? log,
+        CancellationToken cancellationToken) =>
+        ServeAsync(() => (world, saveIdentity), port, passwordHash, log, cancellationToken);
+
+    /// <summary>
+    /// Serves whatever <paramref name="worldProvider"/> returns, invoked FRESH on every
+    /// accepted connection rather than once for the whole listener's lifetime — the overload
+    /// a LIVE, ongoing host session needs (roadmap item 14's <c>host_load_readopt</c>/
+    /// <c>client_load_rejoin</c>) and the fixed-snapshot overload above cannot provide.
+    ///
+    /// ⚠ WHY THIS EXISTS, and the bug it closes. session-save.md's round 86 live pass found
+    /// <c>host_load_readopt</c>'s reconnect "actively refused" — diagnosed at the time as a
+    /// race against the ENGINE's own <c>CAppManager::DestroyServer</c>/<c>CreateServer</c>
+    /// rebuild. Re-auditing the wiring found a deeper cause: nothing in a live
+    /// <c>agent run --host</c> session ever called <see cref="ServeAsync(IReadOnlyList{WorldFile},int,uint,uint,Action{string},CancellationToken)"/>
+    /// at all — the fixed-snapshot overload was, and remains, only ever invoked by the
+    /// STANDALONE <c>agent serve-world</c> CLI verb, a manual tool entirely separate from a
+    /// real co-op session. <c>SessionManager.RejoinAfterLoadAsync</c>'s fetch was therefore
+    /// racing NOTHING listening at all, not a rebuild in progress — no amount of retry or
+    /// backoff on the client side could ever have closed that gap, because there was never a
+    /// server on the other end. The real fix is for the host session itself to serve its
+    /// world, continuously, for the whole time either rejoin gate could need it — which is
+    /// what <see cref="KotorCoop.Agent.CoopCommandDispatcher"/> now does with this overload.
+    ///
+    /// Reading fresh per connection (rather than restarting the listener after every reload)
+    /// is deliberate and stronger than a restart would be: starting the listener ONCE, for
+    /// the life of the host session, and re-reading the save directory only when a joiner
+    /// actually connects removes the race entirely rather than narrowing its window — there
+    /// is no instant, ever, where a rejoining client's fetch can arrive before the listener is
+    /// up, because the listener was already up long before any reload happened. This is also
+    /// exactly the "re-served fresh — not the stale copy from before" behaviour design doc
+    /// §4.2 item 2 already specified for the client's own re-adoption fetch.
+    /// </summary>
+    public static async Task ServeAsync(
+        Func<(IReadOnlyList<WorldFile> World, uint SaveIdentity)> worldProvider,
+        int port,
+        uint passwordHash,
+        Action<string>? log,
         CancellationToken cancellationToken)
     {
-        ArgumentNullException.ThrowIfNull(world);
+        ArgumentNullException.ThrowIfNull(worldProvider);
 
         using TcpListener listener = new(IPAddress.Any, port);
         listener.Start();
-        log?.Invoke($"world transfer listening on :{port} ({world.Count} file(s), {TotalBytes(world):N0} bytes)");
+        log?.Invoke($"world transfer listening on :{port}");
 
         try
         {
@@ -171,6 +208,7 @@ public static class WorldTransfer
 
                 try
                 {
+                    (IReadOnlyList<WorldFile> world, uint saveIdentity) = worldProvider();
                     await ServeOneAsync(client, world, passwordHash, saveIdentity, log, cancellationToken)
                         .ConfigureAwait(false);
                 }
