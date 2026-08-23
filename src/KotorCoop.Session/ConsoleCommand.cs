@@ -333,6 +333,18 @@ public enum CoopCommandKind
     /// screen with nothing to skip.
     /// </summary>
     SelectReply,
+
+    /// <summary>
+    /// <c>walkto &lt;x&gt; &lt;y&gt; [z]</c> — LIVE-TEST PRIMITIVE (2026-08-23, minigames.md
+    /// round). Queues a real <c>ActionMoveToLocation</c> for the local player through
+    /// <c>Odyssey.MoveToLocation</c>, the same engine call <c>usedoor</c>'s walk already uses,
+    /// but to a bare point rather than a door's threshold. Built because a subarea trigger's
+    /// <c>OnEnter</c> (event 0xC, docs/research/trigger-relay.md §2) only fires for a MOVING
+    /// creature — a <c>tp</c> snap runs no movement update and crosses nothing — and `usedoor`
+    /// only ever walks toward a door. This is the generic version, for reaching a trigger
+    /// polygon (the swoop-track entrance) with no door involved.
+    /// </summary>
+    WalkTo,
 }
 
 /// <summary>
@@ -703,6 +715,31 @@ public static class ConsoleCommand
                 }
 
                 return new CoopCommand(CoopCommandKind.Teleport, X: x, Y: y, Z: z);
+
+            // walkto <x> <y> [z] - LIVE-TEST PRIMITIVE, see CoopCommandKind.WalkTo. Same
+            // argument shape as tp, deliberately, so a live pass can try both at one spot.
+            case "walkto":
+                if (rest.Length < 2)
+                {
+                    return new CoopCommand(
+                        CoopCommandKind.Invalid,
+                        Error: "walkto needs coordinates, e.g. walkto 12.5 -30.0 (z optional)");
+                }
+
+                if (!TryParseCoordinate(rest[0], out float walkX) || !TryParseCoordinate(rest[1], out float walkY))
+                {
+                    return new CoopCommand(
+                        CoopCommandKind.Invalid,
+                        Error: $"'{rest[0]} {rest[1]}' is not a coordinate pair");
+                }
+
+                float walkZ = 0f;
+                if (rest.Length > 2 && !TryParseCoordinate(rest[2], out walkZ))
+                {
+                    return new CoopCommand(CoopCommandKind.Invalid, Error: $"'{rest[2]}' is not a height");
+                }
+
+                return new CoopCommand(CoopCommandKind.WalkTo, X: walkX, Y: walkY, Z: walkZ);
 
             case "goto":
                 return rest.Length == 0
@@ -1597,6 +1634,7 @@ public static class ConsoleCommand
         "  destroyobject <id>  destroy a creature outright (Odyssey.DestroyObjectById);",
         "                      HOST-ONLY, no forward path - refused on a mirroring instance",
         "  tp <x> <y> [z]      move yourself inside this area",
+        "  walkto <x> <y> [z]  queue a real walk (not a snap) - crosses subarea triggers",
         "  goto <player>       move yourself to a peer (same module)",
         "  dropitem <resref>   drop a blueprint; the item channel shares it",
         "  dropitem 0x131      drop a copy of a LIVE item, carrying its real state",

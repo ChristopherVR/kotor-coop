@@ -235,6 +235,19 @@ public static class CheatKinds
     /// ⚠ 23, because 7-22 are taken. Take the next FREE number.
     /// </summary>
     public const uint SelectReply = 23;
+
+    /// <summary>
+    /// LIVE-TEST PRIMITIVE (2026-08-23, docs/research/minigames.md round): queues a real
+    /// <c>ActionMoveToLocation</c> for the local player, through <c>Odyssey.MoveToLocation</c> —
+    /// the same call <see cref="UseDoor"/>'s walk already uses, but to a bare point (<c>X</c>/
+    /// <c>Y</c>/<c>Z</c>) rather than a door threshold. Built because a subarea trigger's
+    /// <c>OnEnter</c> only fires for a MOVING creature (docs/research/trigger-relay.md §2) — a
+    /// <see cref="Teleport"/> snap crosses nothing — and reaching a trigger polygon that has no
+    /// door on it (a swoop-track entrance) had no walk primitive before this.
+    ///
+    /// ⚠ 24, because 7-23 are taken. Take the next FREE number.
+    /// </summary>
+    public const uint WalkTo = 24;
 }
 
 /// <summary>The plugin's verdicts, mirroring <c>SharedBlock.CheatStatus*</c>.</summary>

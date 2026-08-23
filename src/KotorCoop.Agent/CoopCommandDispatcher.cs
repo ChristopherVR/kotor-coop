@@ -568,6 +568,10 @@ public sealed class CoopCommandDispatcher(
                 SendCheat(new CheatRequest(CheatKinds.Teleport, X: command.X, Y: command.Y, Z: command.Z));
                 break;
 
+            case CoopCommandKind.WalkTo:
+                SendCheat(new CheatRequest(CheatKinds.WalkTo, X: command.X, Y: command.Y, Z: command.Z));
+                break;
+
             case CoopCommandKind.GoTo:
                 GoTo(command.Address ?? string.Empty);
                 break;

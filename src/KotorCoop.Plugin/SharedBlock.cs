@@ -1578,6 +1578,19 @@ internal struct SharedBlock
     /// </summary>
     public const uint CheatKindSelectReply = 23;
 
+    /// <summary>
+    /// LIVE-TEST PRIMITIVE (2026-08-23, docs/research/minigames.md round): queues a real
+    /// <c>ActionMoveToLocation</c> for the local player through <c>Odyssey.MoveToLocation</c> —
+    /// the same call <see cref="CheatKindUseDoor"/>'s walk already uses, but to a bare point
+    /// (<see cref="OffsetCheatX"/>/<see cref="OffsetCheatY"/>/<see cref="OffsetCheatZ"/>) rather
+    /// than a door threshold. Built because a subarea trigger's <c>OnEnter</c> only fires for a
+    /// MOVING creature (docs/research/trigger-relay.md §2) — <see cref="CheatKindTeleport"/>'s
+    /// snap crosses nothing — and there was no walk primitive that did not require a door.
+    ///
+    /// ⚠ 24, because 7-23 are taken. Take the next FREE number.
+    /// </summary>
+    public const uint CheatKindWalkTo = 24;
+
     /// <summary>The request was carried out here.</summary>
     public const int CheatStatusApplied = 1;
 

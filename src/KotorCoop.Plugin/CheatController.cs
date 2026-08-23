@@ -204,6 +204,10 @@ internal sealed unsafe class CheatController(SharedBlockView block)
                 SelectReply();
                 break;
 
+            case SharedBlock.CheatKindWalkTo:
+                WalkTo(playerId);
+                break;
+
             default:
                 Answer(SharedBlock.CheatStatusRefused, $"unknown cheat kind {kind}");
                 break;
@@ -1153,6 +1157,32 @@ internal sealed unsafe class CheatController(SharedBlockView block)
         Answer(
             SharedBlock.CheatStatusApplied,
             $"moved from {here.X:F1},{here.Y:F1} to {landed.X:F1},{landed.Y:F1}");
+    }
+
+    /// <summary>
+    /// LIVE-TEST PRIMITIVE (2026-08-23, docs/research/minigames.md round): the bare-point
+    /// counterpart to <see cref="Teleport"/> — a real queued walk instead of a snap, so a
+    /// subarea trigger's OnEnter (which only fires for a MOVING creature) actually has a
+    /// chance to see the crossing. No retry/watch machinery unlike <see cref="UseDoor"/>'s
+    /// walk — this is a one-shot instrument for an unattended live pass, which can just
+    /// reissue the command if the VM was mid-call (failure 4).
+    /// </summary>
+    private void WalkTo(uint playerId)
+    {
+        Vec3 destination = block.CheatPosition;
+
+        if (destination.X == 0f && destination.Y == 0f && destination.Z == 0f)
+        {
+            Answer(SharedBlock.CheatStatusRefused, "refusing to walk to the area origin");
+            return;
+        }
+
+        bool accepted = Odyssey.MoveToLocation(playerId, destination, run: true, out int failure);
+        Answer(
+            accepted ? SharedBlock.CheatStatusApplied : SharedBlock.CheatStatusRefused,
+            accepted
+                ? $"walking to {destination.X:F1},{destination.Y:F1}"
+                : $"the walk was refused (failure {failure})");
     }
 
     /// <summary>

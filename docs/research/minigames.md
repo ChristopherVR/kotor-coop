@@ -380,3 +380,205 @@ Every NEEDS-LIVE item in §7 resolved one way or the other (including item 5's f
 check — worth a few minutes of ordinary cutscene-heavy play, e.g. a couple of story
 conversations, watching for a stray `minigame: entered` that should not have fired), plus the
 §6 damage-fairness call made explicit in this doc rather than left as an open question.
+
+## 9. The live pass (2026-08-23) — co-visibility answered, and it is different per category
+
+Run against `integration/honest-limitations` on the real two-GOG-install rig
+(`tools/demo.ps1`), plugin freshly built and installed into both game dirs, agent rebuilt.
+This is the round that actually answers the question item 8 opened but never tested: **can a
+swoop race or a turret sequence be genuinely co-visible, or does the engine structurally force
+spectate/park?** Short answer, confirmed live and not just reasoned: **swoop racing is
+architecturally NOT precluded from co-visibility — same module, in-place mode switch — but
+this round could not get a human-quality walk to the actual trigger to observe what it LOOKS
+like; the turret sequence is a dedicated separate module and co-visibility is impossible there
+by construction, confirmed live on both sides at once.**
+
+### 9.1 Swoop: confirmed live to be an IN-PLACE mode switch, not a module transition
+
+Three independent lines of evidence, one of them a live crash that turned out to be the most
+informative event of the round:
+
+* **Static: no minigame data lives in the module's own files.** `tar_m02ab`'s `.are` and
+  `module.ifo` were read in full (`tools/kotorfiles.py gff`) — neither carries any
+  minigame-related field. The swoop track's `CSWMiniGame` GFF (§3's `"Type"` field) is loaded
+  by a script call at race-start time, not baked into the area the way `Mod_Entry_Area` or
+  `OnEnter` are. If entering the race required a `StartNewModule` to a dedicated instanced
+  track, there would be no reason for the CURRENT area's own `.are`/`.ifo` to stay silent
+  about it — a real per-module minigame would show up in the module's own data the way the
+  turret module's `Mod_OnModLoad` does (see §9.2). It does not, because there is no second
+  module to hold it.
+* **Static: the swoop track is furniture inside an ordinary populated area, reached by a
+  subarea trigger, not a door.** `m02ab.git`'s `TriggerList` carries two `tar02_swoop02ab`
+  triggers (world centre ≈ `(221.2, 64.5)` and `(221.4, 141.0)`, ~4×3.7 m polygons) sitting a
+  few metres from two `plc_swpbike1` display placeables (`(238.1,103.2)`, `(236.1,105.5)`,
+  both `Useable=0` — decorative, not the interaction point) and two `k_trans_abort` placeables
+  (`(221.4,56.4)`, `(221.3,145.7)`, `Conversation=k_transabort`, also `Useable=0` — almost
+  certainly the confirm/decline prompt a subarea-enter script starts). None of this needs a
+  door or a module boundary; it is ordinary GIT furniture inside the same Lower City area
+  players already walk through for every other Taris errand.
+* **LIVE, and decisive: forcing `CSWCArea::mini_game` non-null while the player stayed in
+  `tar_m02ab` the whole time made the engine start calling `CSWMiniGame::Update` (0x6735d0)
+  on the very next frame — with no `travel:`/`epoch: module changed` line anywhere near it.**
+  This was not a passive read: a scratch script
+  (`tools/../scratchpad/minigamepoke.ps1`, not committed — a throwaway diagnostic, not
+  product code) walked the exact chain `MinigameController`/`EngineGlobals` already use
+  (`0x007A39FC → +4 → +4 → +0x18 → +0x48 → +0x264`) and wrote a nonzero-but-fake pointer into
+  `+0x264`. The plugin log shows the client peer's phantom being destroyed
+  (`peer left: destroyed phantom 0xCF`) within 20 ms — the parking mechanism engaged
+  correctly and immediately — and then, because the fake pointer had none of a real
+  `CSWMiniGame`'s sub-objects (gun banks, track data, `CSWMiniGame::Load`'s own construction),
+  the very next `Update` call dereferenced garbage and crashed the host
+  (`FIRST-CHANCE access violation (0xC0000005) at 0x6736D8`, symbolised via
+  `tools/kotor1_0_3.db` to `CSWMiniGame::Update+0x108`). **The crash is not a mod defect — it
+  is the expected outcome of forcing a field the real loader normally populates — but the
+  crash itself is proof that the engine treats an armed minigame as an ACTIVE PER-FRAME
+  SUBSYSTEM running inside the CURRENT area's own frame loop, not a separate simulation behind
+  a module boundary.** Nothing about entering the swoop race, per this evidence, requires
+  leaving `tar_m02ab`.
+
+**What this settles and what it does not.** The structural question — same module or a
+separate instanced one — is answered: same module, in-place. That means co-visible swoop
+racing is not ruled out by the engine's own architecture the way the turret sequence is (§9.2).
+**What it does NOT answer is what it actually LOOKS like** — whether a peer's ordinary
+creature-phantom, still position-synced through the normal channel while `CSWMiniGame::Update`
+drives the racer's camera/physics every frame, renders as a sensible "watching a friend race"
+scene or as something uncanny (a stationary or sliding on-foot body while a rail-vehicle HUD
+takes over the racer's own screen). Answering that needs a human to actually watch a race
+happen with the peer-hide gate turned off, and this round could not manufacture that
+observation unattended — see §9.3. **No code change was made to the parking behaviour as a
+result.** Forcing co-visibility on the strength of the architecture alone, without having seen
+it, would be exactly the kind of change the task brief said not to make.
+
+### 9.2 Turret: confirmed live to be a dedicated, separate module — spectate/park is structurally forced
+
+`warp m12ab` (§8.1's inferred lead) resolved cleanly and is now **VERIFIED, not inferred**:
+
+```
+travel: moving to module 'm12ab' on the session's authority
+epoch: world unloading; clearing phantom, item, combat and door state
+...
+where -> module m12ab at 3.0 3.0 -0.7
+```
+
+`m12ab`'s own `module.ifo` names it `Mod_Name = "Ebon Hawk Turret"` and — the key field —
+**`Mod_OnModLoad = k_pebo_mgload`**, a script that runs automatically the instant the module
+finishes loading, no interaction with any placeable required (`m12ab.git`'s `Placeable List`
+is ten `plc_invisible` markers, `Useable=0` — position anchors for the minigame, not clickable
+objects; the `Creature List` and `TriggerList` are both empty). `Mod_OnHeartbeat =
+k_pebo_mgheart` keeps polling once inside.
+
+Live-confirmed the consequence of that auto-start directly: **both instances, independently,
+logged `minigame: entered` the moment each one's own engine finished loading `m12ab`** — the
+host at `18:30:37.634` (having warped there) and the client at `18:30:39.498` (having followed
+via the existing "travel together" mechanism, `docs/live-verification.md`'s already-proven
+host-warps-client-follows path). Each side's `MinigameController` read its OWN engine's
+`CSWCArea::mini_game`, set independently by that engine's own `Mod_OnModLoad` run — not
+something the wire told it. **This is the structural answer**: because merely being present in
+the module puts a player into minigame mode on their OWN engine, there is no state a peer
+could be in that is "in the same space, watching, not racing" — anyone who follows into
+`m12ab` is themselves auto-parked the instant they arrive, symmetrically, on their own
+initiative, with no gate the mod could relax to change that. Spectating the turret sequence
+from inside the shared module is not a design choice this mod made; it is not offered by the
+module at all. The only way to be "together" during this sequence is for the mod's existing
+park behaviour to hide both directions at once, which is exactly what it already does.
+
+**§8.1's inference is now confirmed and §7 item 3 is closed**: `m12ab` is the turret module,
+reached from the Leviathan-escape `StartNewModule` chain `cinematics.md` §4.4 traced
+statically; this round found it live from a bare `warp` with no story progress needed.
+
+### 9.3 Why an actual race/gunnery run could not be observed this round — a genuine tooling limit, not a shortcut taken
+
+Reaching the swoop trigger polygon (§9.1) or getting past `m12ab`'s auto-start into an actual
+interactive gunnery view both need the player CHARACTER to physically move, and the mod's only
+existing player-walk primitive (`usedoor`'s internal `Odyssey.MoveToLocation` call) is coupled
+to a door target. This round added a bare-point equivalent —
+**`walkto <x> <y> [z]`** (`CoopCommandKind.WalkTo` / `CheatKinds.WalkTo = 24` /
+`SharedBlock.CheatKindWalkTo = 24`, `src/KotorCoop.Session/ConsoleCommand.cs`,
+`src/KotorCoop.Plugin/CheatController.cs`) — the same `Odyssey.MoveToLocation` call `usedoor`
+already uses, queued at a raw point instead of a door threshold, because a subarea trigger's
+`OnEnter` only fires for a genuinely MOVING creature (`docs/research/trigger-relay.md` §2) and
+a `tp` snap crosses nothing.
+
+**Measured live, and the primitive itself works — the problem is not knowing the map.** From
+the `tar_m02ab` module entry point, a 3.6 m `walkto` covered 2.6 m (72%) before stopping, and
+an initial call toward a ~10 m target covered 1.4 m before stalling — both consistent with
+this project's own prior finding for `usedoor` ("0.9–2.4 m short… the pathfinder cuts a
+corner near the doorway"), i.e. ordinary partial-pathing friction, not a broken primitive.
+But every attempt to close the remaining **~110 m** from the entry point to the swoop trigger
+— through unmapped, unseen interior geography — either stalled after a few metres or (twice,
+from coordinates picked off the GIT polygon's raw numbers with no sight of the room) refused
+to move at all, most likely because the guessed point sat outside walkable geometry entirely.
+Reissuing the same call more often made this WORSE, not better (a tight retry loop produced
+zero net movement where a single call, given time, had produced some) — repeated re-queuing
+appears to restart the pathfind before the creature builds any momentum.
+
+This matches, exactly, this project's own repeated prior conclusion for interactive content —
+real party-following, real PvP-style combat, real dialogue choices — recorded throughout
+`docs/live-verification.md`: **"needs a person playing,"** not a gap in effort. Blind
+turn-by-turn navigation through an unfamiliar building via coordinate guesses is not a
+substitute for a human who can see the screen. `walkto` is left in the tree as a real,
+useful primitive for future live passes (a human — or an agent with screen access — can use it
+for the LAST few metres once they can see the target), but this round does not claim to have
+watched an active race or an active gunnery view.
+
+### 9.4 The parked-peer path, live end to end
+
+* **Entry (hide) is correct and immediate**, confirmed twice with two different triggers for
+  the same underlying flag: the forced-pointer test (§9.1, `peer left: destroyed phantom
+  0xCF` within 20 ms of the flag going up) and the real `m12ab` auto-start (§9.2, the
+  client's own `flush, before the module is stored: destroyed phantom 0x12D` firing the
+  instant its own follow-travel carried it into the minigame module). Matches §8's static
+  audit exactly: destroyed, not frozen.
+* **A peer disappearing entirely while parked degrades safely.** The host crash from §9.1's
+  forced-pointer test killed the host process outright while the client still believed itself
+  connected and parked. The client's own log shows the ordinary disconnect path running
+  cleanly — `* Lanik left the game` → `* co-op: connecting...` → a steady reconnect loop, no
+  stuck state, no repeated errors — the same resilience already proven for a killed agent
+  process in `docs/live-verification.md`'s 2026-08-01 pass, now shown to hold when the GAME
+  process itself disappears mid-park.
+* **An unattended, no-input run of the turret sequence ends on its own — but the ending is
+  rough.** Left alone with zero player input for ~65 s inside `m12ab` (nothing this rig can
+  do reaches the actual gunnery controls — see §9.3), the host's world tore itself down on its
+  own initiative: `world: unannounced teardown - treating as a load, not a transition`, then
+  a clean drop to the main menu (`menu: Co-op button shown, labelled and bound`, no crash, no
+  error spam). Read against ordinary KOTOR 1 design — a defend-the-ship sequence with a
+  passive player almost certainly means the player LOSES and the game ends the run — this is
+  very likely vanilla single-player Game Over behaviour, not a co-op-specific bug, and the
+  plugin's existing "unannounced teardown" fallback (built for exactly this shape of surprise
+  world loss) absorbed it without incident on both sides.
+* **One genuine rough edge, found by an unusual sequence, not ordinary play.** Manually
+  reloading the host's save from that main-menu state (the same `KotorCoop.Agent.exe load
+  --pid … --load-save 1` demo.ps1 itself uses) while the CLIENT was still sitting parked
+  inside `m12ab` made the client's own "travel together" logic immediately try to follow the
+  host's fresh load back into `END_M01AA` — and the client's game process did not survive
+  it (log ends mid-transition, process gone). This is very likely the ALREADY-DOCUMENTED
+  `docs/research/travel-map-init-crash.md` class (a plugin-driven transition reaching the
+  engine's map init before the client has torn its own world down), not a new defect, and it
+  needed a specifically artificial trigger — an external forced reload of one side while the
+  other is still deep inside an unrelated minigame module — that normal play (finishing or
+  failing a race/turret sequence through the game's own flow, not an operator's manual
+  reload) does not produce. Flagged here rather than chased further this round; a session
+  ending on both sides at once through the sequence's own natural conclusion, not an
+  operator's reload, is the case that actually matters and was not itself observed to fail.
+* **Item/journal/global-flag sync is unaffected**, per §8's static grep (`IsInMinigame` never
+  gates `ItemController`/`JournalController`/`EventFlagStore`) — nothing in this round's live
+  observations contradicts that, and nothing needed to change there.
+
+### 9.5 Conclusion, stated plainly
+
+* **Swoop racing: co-visibility is not structurally precluded** (same module, in-place mode
+  switch — live-confirmed via the `CSWMiniGame::Update` crash evidence) **but is not yet
+  demonstrated to look good, or to look like anything at all** — that needs a human at the
+  controls to actually start a race with the peer-hide gate off and look at both screens. The
+  current default (hide/park) is the safe, shipped behaviour and stays unchanged.
+* **Turret sequences: spectate/park is the only possible outcome, confirmed live, not
+  inferred.** `m12ab` is a dedicated module whose own `Mod_OnModLoad` auto-parks anyone who
+  merely walks in, on both sides independently — there is no state to relax into
+  co-visibility here even in principle.
+* **The parked-peer mechanism itself is solid**: entry is immediate and correct, a lost peer
+  (even by a hard crash) degrades to a clean reconnect loop, and the one rough edge found
+  needed an artificial combination (a manual reload of one side while the other sits inside an
+  unrelated minigame module) that ordinary play does not produce.
+* No production behaviour changed this round. The one code addition, `walkto`, is a live-test
+  instrument (`SharedBlock.CheatKindWalkTo` / `CheatKinds.WalkTo`, both `24`, covered by the
+  existing `CheatKindSyncTests`), not a gameplay change.
