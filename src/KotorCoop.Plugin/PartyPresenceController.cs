@@ -71,6 +71,36 @@ internal sealed unsafe class PartyPresenceController(SharedBlockView block)
     /// every other per-slot cache here.</summary>
     private readonly bool[] _released = new bool[SharedBlock.PartyPresenceCapacity];
 
+    /// <summary>CSWPartyTable + this = the solo-mode byte. Read-only here — this controller
+    /// never writes it (see the "No write to solo mode" note on the release gate below); the
+    /// field is entirely owned by <c>KotorGameBridge.TryWritePartyMembers</c>/
+    /// <c>ReleasePartyFreeze</c>, one layer up. Same offset <see cref="PartyFollowController"/>
+    /// already reads for its own diagnostic.</summary>
+    private const int PartyTableSoloMode = 0x190;
+
+    /// <summary>
+    /// ⚠ NEVER LIVE-CONFIRMED: whether a companion's own engine AI can complete an attack
+    /// round AT ALL while solo mode holds the party table's own "companions stand still"
+    /// flag (<see cref="PartyTableSoloMode"/>) — see docs/research/party-reconciliation.md,
+    /// dated entry 2026-08-23 ("Does solo mode block a released companion's own combat AI,
+    /// not just its follow AI"). <c>KotorGameBridge.TryWritePartyMembers</c> asserts solo mode
+    /// EVERY agent pump for the WHOLE co-op session, release state or not — this diagnostic
+    /// does not change that (an untested party-wide write is exactly the class of engine
+    /// change this project's own rule holds back); it only makes the open question visible: if
+    /// a released companion's action-queue head NEVER leaves -1 (empty) while solo mode reads
+    /// nonzero and a hostile is in range, that is live, first-hand evidence the swing is being
+    /// blocked here — not by the release/reclaim gate, and not by the party-presence staleness
+    /// bug already on record. Throttled per slot so a long fight costs a handful of lines, not
+    /// one per frame; capped in total so a session left running does not grow the log forever.
+    /// </summary>
+    private const double ReleaseDiagIntervalSeconds = 3.0;
+
+    private const int ReleaseDiagMaxLines = 60;
+
+    private readonly double[] _lastReleaseDiagAt = new double[SharedBlock.PartyPresenceCapacity];
+
+    private int _releaseDiagLogged;
+
     /// <summary>Per slot: is the body currently held Neutral. Tri-state via
     /// <see cref="_factionKnown"/> so the first pass always writes.</summary>
     private readonly bool[] _heldNeutral = new bool[SharedBlock.PartyPresenceCapacity];
@@ -336,13 +366,15 @@ internal sealed unsafe class PartyPresenceController(SharedBlockView block)
                 ApplyCompanionFaction(slot, creature, objectId, neutral: false);
                 PluginHost.Log(
                     $"party drive: companion 0x{objectId:X} released to fight locally — "
-                    + "within range of both you and the enemy you are fighting");
+                    + "within range of both you and the enemy you are fighting "
+                    + $"({ReleaseDiagSnapshot(creature, now, slot)})");
                 return false;
 
             case CompanionLocalFightAction.StayReleased:
                 // Hands off entirely, the same handoff EnemyPresenceController's own excluded
                 // enemy gets from DriveOne: no claim, no position/health write, nothing. The
                 // companion's own engine AI is what fights from here.
+                LogReleaseDiagIfDue(objectId, creature, now, slot);
                 return false;
 
             case CompanionLocalFightAction.ReclaimAndLog:
@@ -433,6 +465,65 @@ internal sealed unsafe class PartyPresenceController(SharedBlockView block)
         (Vec3 shown, float speed, bool moving) = _smoother.Step(slot, member.Position, now);
         Odyssey.DriveEnemy(creature, shown, member.Facing, speed, moving, member.Animation);
         return true;
+    }
+
+    /// <summary>
+    /// One line of ground truth for the open solo-mode question (see
+    /// <see cref="PartyTableSoloMode"/>'s own doc comment): the released companion's
+    /// action-queue head type (-1 = empty), its <c>CreMoveState</c>, and whether solo mode
+    /// currently reads nonzero. Three reads, no engine call — safe to call from the frame
+    /// hook, same discipline as <see cref="Odyssey.GetHeadActionType"/> itself.
+    /// </summary>
+    private static string ReleaseDiagSnapshot(nint creature, double now, int slot)
+    {
+        int headType = Odyssey.GetHeadActionType(creature);
+        int moveState = *(int*)(creature + Odyssey.CreMoveState);
+        int soloMode = ReadSoloMode();
+        return $"head=0x{headType:X} moveState={moveState} soloMode={soloMode} t={now:F1}s slot={slot}";
+    }
+
+    /// <summary>Throttled per slot (<see cref="ReleaseDiagIntervalSeconds"/>) and capped in
+    /// total (<see cref="ReleaseDiagMaxLines"/>) — see <see cref="PartyTableSoloMode"/>'s own
+    /// doc comment for what this is trying to settle.</summary>
+    private void LogReleaseDiagIfDue(uint objectId, nint creature, double now, int slot)
+    {
+        if (_releaseDiagLogged >= ReleaseDiagMaxLines
+            || now - _lastReleaseDiagAt[slot] < ReleaseDiagIntervalSeconds)
+        {
+            return;
+        }
+
+        _lastReleaseDiagAt[slot] = now;
+        _releaseDiagLogged++;
+        PluginHost.Log(
+            $"party drive: companion 0x{objectId:X} still released — {ReleaseDiagSnapshot(creature, now, slot)}");
+    }
+
+    /// <summary>CSWPartyTable+0x190, read fresh every call — the same pointer chain
+    /// <see cref="ResolveRosterObjectId"/> already walks, plus the solo-mode offset
+    /// <see cref="PartyTableSoloMode"/>. Read-only: see that field's own doc comment for why
+    /// this controller never writes it.</summary>
+    private static int ReadSoloMode()
+    {
+        nint appManager = *(nint*)AppManagerPtr;
+        if (appManager == 0)
+        {
+            return -1;
+        }
+
+        nint server = *(nint*)(appManager + AppServerOffset);
+        if (server == 0)
+        {
+            return -1;
+        }
+
+        nint serverInternal = *(nint*)(server + InternalOffset);
+        if (serverInternal == 0)
+        {
+            return -1;
+        }
+
+        return *(byte*)(serverInternal + PartyTableOffset + PartyTableSoloMode);
     }
 
     /// <summary>This instance's object id for a roster slot, from its OWN party table.</summary>
