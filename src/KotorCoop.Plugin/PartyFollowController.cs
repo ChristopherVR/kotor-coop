@@ -120,6 +120,14 @@ internal sealed unsafe class PartyFollowController(SharedBlockView block)
     /// (rather than periodically zeroing it) was found anywhere in the binary. Kill switch:
     /// <c>party_follow_pokestep=0</c>.</summary>
     private readonly bool _pokeStepAccumulator = PluginConfig.ReadBool("party_follow_pokestep", true);
+
+    /// <summary>ROUND 83 (party-reconciliation.md): see
+    /// Odyssey.TryAdvanceStalledPathDestination's own remarks — WaitingForPath's own per-frame
+    /// re-commit resets DestNode back to CurrentPathNode every call, permanently defeating
+    /// PathWaitDest's forward search; this pokes DestNode ahead to the already-recorded write
+    /// cursor so the search can escape the degenerate self-comparison. Kill switch:
+    /// <c>party_follow_advance_destnode=0</c>.</summary>
+    private readonly bool _advanceStalledDestNode = PluginConfig.ReadBool("party_follow_advance_destnode", true);
     private const int FineLogCap = 20000;
 
     /// <summary>Tightened from 0.2s to 0.04s (round 81, party-reconciliation.md) — round 80's
@@ -243,9 +251,21 @@ internal sealed unsafe class PartyFollowController(SharedBlockView block)
             // remarks for why the engine's own CSWParty::Update/RecaulateFollowPoint calls above
             // do not do this on their own for a companion in this state. Skipped while genuinely
             // busy (combat, casting, a round in progress) so this never fights something real.
+            Odyssey.FollowDiag preStep = default;
+            bool logThisSlot = _fineLogEnabled && _fineLogged < FineLogCap && player != 0
+                && !IsBusyHead(headType) && now - _lastFineLogTime[slot] >= FineLogIntervalSeconds;
+
             if (player != 0 && !IsBusyHead(headType))
             {
                 Odyssey.TryDriveFollowTarget(objectId, playerPos);
+
+                // ROUND 83 DIAGNOSTIC: sample target/prior IMMEDIATELY after our own write,
+                // before TryDriveFollowLeaderStep's engine call runs — see the finelog line's own
+                // remarks below for what this is testing.
+                if (logThisSlot)
+                {
+                    Odyssey.TryGetFollowDiagnostics(creature, objectId, out preStep);
+                }
 
                 // ROUND 74 EXPERIMENT (not yet a permanent fix — see Odyssey.
                 // TryResetStuckFollowPhase's own remarks for the disasm this is based on).
@@ -263,11 +283,20 @@ internal sealed unsafe class PartyFollowController(SharedBlockView block)
                 {
                     Odyssey.TryDriveFollowLeaderStep(objectId, 16);
                 }
+
+                // ROUND 83: break the phase=7 permanent stall at its real, disassembly-grounded
+                // root — see Odyssey.TryAdvanceStalledPathDestination's own remarks. Called AFTER
+                // TryDriveFollowLeaderStep so it acts on this frame's post-WaitingForPath-commit
+                // state, ahead of WaitingForPath getting another chance to re-collapse it next
+                // frame.
+                if (_advanceStalledDestNode)
+                {
+                    Odyssey.TryAdvanceStalledPathDestination(objectId, out _);
+                }
             }
 
             // ROUND 80: fine-grained unthrottled poll — see _fineLogEnabled's own remarks.
-            if (_fineLogEnabled && _fineLogged < FineLogCap && player != 0 && !IsBusyHead(headType)
-                && now - _lastFineLogTime[slot] >= FineLogIntervalSeconds)
+            if (logThisSlot)
             {
                 _lastFineLogTime[slot] = now;
                 _fineLogged++;
@@ -279,13 +308,25 @@ internal sealed unsafe class PartyFollowController(SharedBlockView block)
                     float dty = fd.TargetPoint.Y - fd.Snapshot.Y;
                     float targetVsSnapshot = MathF.Sqrt((dtx * dtx) + (dty * dty));
 
+                    // ROUND 83: preStep is target/prior read IMMEDIATELY after our own
+                    // TryDriveFollowTarget write, before TryDriveFollowLeaderStep's engine call
+                    // runs this same frame — comparing it to fd (read after that engine call)
+                    // tells apart "our write never took" from "our write took, then something
+                    // inside the engine's own per-frame continuation clobbered it before we could
+                    // observe it standing."
                     PluginHost.Log(
                         $"party follow finelog: 0x{objectId:X} t={now:F2} phase={fd.PhaseIndex} "
                         + $"attempts={fd.PhaseAttempts} stepAccum={fd.StepAccumulator} "
                         + $"walkRate={fd.WalkRate:F4} runRate={fd.RunRate:F4} "
-                        + $"pathNode={fd.CurrentPathNode} writeCursor={fd.WriteCursor} "
+                        + $"pathNode={fd.CurrentPathNode} destNode={fd.DestNode} writeCursor={fd.WriteCursor} "
+                        + $"moveState={fd.CreMoveState} m2pAccum={fd.MovingToPathAccumulator} "
                         + $"headType=0x{headType:X} pos=({pos.X:F2},{pos.Y:F2}) "
+                        + $"leaderPos=({playerPos.X:F2},{playerPos.Y:F2}) "
                         + $"target=({fd.TargetPoint.X:F2},{fd.TargetPoint.Y:F2}) "
+                        + $"prior=({fd.PriorPoint.X:F2},{fd.PriorPoint.Y:F2}) "
+                        + $"preStepTarget=({preStep.TargetPoint.X:F2},{preStep.TargetPoint.Y:F2}) "
+                        + $"preStepPrior=({preStep.PriorPoint.X:F2},{preStep.PriorPoint.Y:F2}) "
+                        + $"preStepPhase={preStep.PhaseIndex} "
                         + $"snapshot=({fd.Snapshot.X:F2},{fd.Snapshot.Y:F2}) "
                         + $"targetVsSnapshotDist={targetVsSnapshot:F3} enabledFlag={fd.EnabledFlag}");
                 }
@@ -413,7 +454,7 @@ internal sealed unsafe class PartyFollowController(SharedBlockView block)
                         + $"enabledFlag={diag.EnabledFlag} leaderPos=({leaderPos.X:F1},{leaderPos.Y:F1},{leaderPos.Z:F1}) "
                         + $"soloMode={soloMode} phase={diag.PhaseIndex} attempts={diag.PhaseAttempts} "
                         + $"otherSlot={diag.OtherSlotIndex}:0x{diag.OtherSlotStoredId:X} "
-                        + $"pathNode={diag.CurrentPathNode} writeCursor={diag.WriteCursor} "
+                        + $"pathNode={diag.CurrentPathNode} destNode={diag.DestNode} writeCursor={diag.WriteCursor} "
                         + $"walkRate={diag.WalkRate:F4} runRate={diag.RunRate:F4} "
                         + $"followData=0x{diag.FollowDataArray:X}{refText}"
                     : $" soloMode={soloMode}{refText}";

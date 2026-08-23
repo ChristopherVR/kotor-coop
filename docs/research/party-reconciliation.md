@@ -1740,3 +1740,208 @@ default.
 round's change (one pre-existing, unrelated `CA2014` warning in `PortraitController.cs`). No rig
 access this round — static disassembly and unit tests only; the NEEDS-LIVE items above are for
 whoever picks up the rig next.
+
+## Round 84 (2026-08-23) — the phase=7 permanent stall's real root cause found, fixed, and
+live-confirmed (two independent bugs, both this plugin's own doing); the walk now genuinely
+completes ~90% of a real leg; a second, deeper stall found one layer further and precisely
+characterized, not yet fixed
+
+Picks up round 81's own open item directly: "stalls specifically when X" rather than "stalls
+unpredictably." Round 81 left the stall narrowed to `phase=7` (`PathWaitDest`, 0x00512B40) with
+`CurrentPathNode < WriteCursor` — unconsumed trail sitting right there, never picked up — but did
+not know why. This round found it by full disassembly of every function in the chain
+(`tools/disasm.py`, cross-checked against `tools/kotor1_0_3.db`), reproduced the exact stall live
+with a 25 Hz diagnostic sampled on BOTH sides of this plugin's own engine call (a technique this
+round introduces — see below), and found the answer was not in the engine at all: **it is this
+plugin's own two per-frame writes fighting each other and fighting the engine's own housekeeping.**
+
+### The real mechanism, disassembled in full
+
+`WalkUpdateLocation_QuickWalk_FollowLeader` 0x0051C360's phase-dispatch jump table
+(`tools/disasm.py 0x51CCEC 44` read as raw dwords, not code — it is DATA, disassembling it as
+instructions produces garbage) resolves cleanly to 11 short trampolines at 0x51C800-0x51C93B, each
+`push`ing the same `(followData, record)` pair and calling one of eleven real handler bodies:
+
+| dispatch | phase | handler | epilogue |
+|---|---|---|---|
+| 0 | -1 (reset) | inline @ 0x51C800 (snapshot + force phase=5) | 0x51c95e |
+| 1 | 0 | `FindPath` 0x51AC10 | 0x51c95c (does NOT zero attempts) |
+| 2-5 | 1-4 | 0x511290 / 0x511860 / **0x511B60 ("Moving_To_Path")** / 0x512430 | 0x51c95c |
+| 6 | 5 | `WaitingForPath` 0x5127D0 | 0x51c95c |
+| 7-10 | 6-9 | 0x512A60 / **`PathWaitDest` 0x512B40** / 0x512C20 / 0x512DE0 | 0x51c955 (ZEROES attempts first) |
+
+`WaitingForPath` (0x5127D0) is the ONLY writer of `record+0x34` (`DestNode`) in the whole binary
+(confirmed by disassembling every handler + `CSWPartyFollowDataArray::Reset`/`SmoothFollowPath`/
+`ProcessPoint`) — and it sets `DestNode` to the SAME value it writes into `record+0x24`
+(`CurrentPathNode`), every time its own two gates (`[followData]+0xFA8 >= 5`, and a second
+distance/time gate via a shared helper at 0x6350F0) pass. `PathWaitDest` 0x00512B40's own forward
+search (from `CurrentPathNode` toward `WriteCursor`, looking for an index equal to `DestNode`)
+finds a match trivially on its FIRST comparison whenever `DestNode == CurrentPathNode` — and ONLY
+in that exact case does it fall into a fragile accept/reject test comparing `(node - Prior)`
+against `(node - Target)` (0x512B98-0x512C03, an `fcompp` + parity-flag/unordered-comparison
+idiom) — a test that is meaningless when `Prior == Target` (a zero-length segment has no direction
+to measure "past" against).
+
+### Bug 1 (found and fixed): `TryResetStuckFollowPhase` was resetting a healthy WaitingForPath
+every single frame, before its own async job ever had a chance to resolve
+
+Round 74 built `Odyssey.TryResetStuckFollowPhase` to force phase back to 0 (FindPath) whenever
+caught at phase `-1` OR `5`, reasoning (correctly, AT THE TIME) that both states "can never
+self-recover." That was true only in the context round 74 measured it in: before round 80's
+step-accumulator fix existed, the function never ran far enough per frame for phase 5 to be
+anything other than the -1 reset's own dead-end target. Once round 80's fix lets the function
+genuinely run to completion every frame, phase 5 (`WaitingForPath`) is ALSO the normal, legitimate
+state it parks in for the handful of frames its own async job-status field needs to catch up — and
+this plugin's own `TryResetStuckFollowPhase`, called unconditionally every frame, was interrupting
+it on a permanent one-frame duty cycle: reset to 0 → FindPath resubmits a job (which resets the
+SAME status field back to "pending") → next frame reads 5 again → reset again, forever. Live-
+confirmed with a NEW diagnostic this round (`preStepPhase`, sampled immediately after this
+controller's own per-frame writes but BEFORE its engine call — see methodology below): phase read
+5 on essentially every single sampled frame, for the whole observation window, never given the
+chance to hold still long enough to resolve.
+
+**Fix**: narrowed `TryResetStuckFollowPhase` to phase `== -1` only (`src/KotorCoop.Plugin/Odyssey.cs`).
+Phase 5 now runs its own natural course, including its own internal watchdog (`record+0x44`, which
+`WaitingForPath`'s own dispatch route does NOT zero) if it is ever genuinely, permanently stuck.
+
+**Live-verified**: `attempts` (the watchdog counter) started counting up cleanly for the first time
+this whole investigation has ever seen it do at phase 5 (`6 → 10 → 30 → 46`, wrapping at the
+engine's own 0x32 threshold exactly as designed) instead of pinning at a value this plugin itself
+kept clobbering. Phase progressed 5 → 3 (`Moving_To_Path`) for the first time in eleven rounds.
+
+### Bug 2 (found and fixed): `DestNode == WriteCursor` is structurally unreachable by
+`PathWaitDest`'s own search loop (an off-by-one in this round's OWN first fix attempt)
+
+Before finding bug 1, this round tried a narrower fix first: `Odyssey.TryAdvanceStalledPathDestination`,
+poking `DestNode` forward to `WriteCursor` whenever the FSM is parked at phase 7 with
+`CurrentPathNode == DestNode` (the exact degenerate shape `PathWaitDest`'s search trivially matches
+without ever really searching). **First version live-tested and disproven**: `DestNode` visibly
+advanced in the diagnostic, but `PathWaitDest` kept returning "not ready" forever anyway.
+Disassembly of the search loop explains why precisely: it tests `eax == DestNode` BEFORE
+incrementing `eax`, then tests `eax == WriteCursor` AFTER incrementing to decide whether to keep
+looping — so a `DestNode` set to the exact SAME value as `WriteCursor` is unreachable: the loop's
+own "give up" exit fires the instant the incremented `eax` reaches `WriteCursor`, one iteration
+before it would ever re-test that value against `DestNode`. **Fixed** to poke `DestNode =
+WriteCursor - 1` instead (only when the gap is `>= 2`, so it never produces a second degenerate
+`DestNode == CurrentPathNode` in the process) — live-confirmed reachable by the search loop.
+
+Both fixes are independently real and independently safe (each only acts in a narrow, precisely-
+identified trigger condition), and both are needed together: bug 1 alone still parks at phase 7
+with a degenerate `DestNode`; bug 2 alone never gets called because bug 1's interference prevents
+`WaitingForPath`'s own commit from ever landing on a genuinely stale `DestNode` for long enough to
+matter. Kill switches: `party_follow_advance_destnode=0` for bug 2's fix (default **on**); bug 1's
+fix has no separate switch (it narrows an existing, already-shipped mechanism rather than adding a
+new write).
+
+### Methodology: sampling on both sides of this plugin's own engine call, in the same frame
+
+New this round: `PartyFollowController`'s fine-log now also samples `TryGetFollowDiagnostics`
+**immediately after this controller's own `TryDriveFollowTarget` write, before
+`TryDriveFollowLeaderStep`'s engine call runs** (`preStepTarget`/`preStepPrior`/`preStepPhase` in
+the log line), alongside the existing post-engine-call sample. This is what let bug 1 be told apart
+from a purely engine-internal phenomenon: the pre-call sample showed OUR OWN write standing
+correctly (`preStepTarget` == the leader's real position), and the post-call sample showed it
+already clobbered back to a degenerate value — proving the clobber happens INSIDE the engine call
+this same frame, not across frames, which narrowed the search to exactly the handlers reachable
+from whatever phase the record was actually resting at (which turned out to be 5, not 7 as the
+post-call reads alone would have suggested).
+
+### Live result: real, sustained, correct motion for ~90% of a leg — then a SECOND, deeper stall,
+precisely characterized
+
+Same recipe as rounds 80/81 (`tp 20 22 -1.3`, then `walk 10 15`), fresh rig cycle, both fixes
+active. Trask genuinely walked from her stalled position (19.35, 22.77) to (11.84, 17.90) — real,
+continuous position change, `pathNode`/`writeCursor` climbing together (`0→7`, `7→16`), `phase`
+progressing `5 → 3` for the first time ever observed — then stopped, bit-identical position, for
+the rest of a 55+ second observation window, 2.44 units short of the leader's own landing spot.
+
+This is a DIFFERENT, deeper stall than rounds 74-81's `phase=7` one: `phase` now reads a steady
+**3** (`Moving_To_Path`, handler 0x00511B60), not 7. Two new diagnostics this round settle exactly
+what is and is not happening:
+
+- **`CreMoveState` (creature+0xA8C) reads a steady `3`** ("follow requested"), not `-1` ("walking",
+  an actual queued movement action being stepped) — despite round 80's own headline finding that
+  `-1` genuinely is reached earlier in the SAME leg (confirmed again this round: it demonstrably
+  does reach -1 while she is visibly walking). Partway through, it reverts back to 3.
+- **A new accumulator this round found and reads, `record+0x6C`** — `Moving_To_Path`'s own
+  handler unconditionally adds `creature+0xD0` (the step accumulator this plugin pokes to 16 every
+  frame) into it on every call — climbs linearly and steadily the WHOLE stalled window
+  (`6392 → 423290` over ~45s, ≈9400/s, consistent with ~60fps × 16 per tick) — direct, live proof
+  `Moving_To_Path`'s own handler body IS being reached and IS running, every single frame,
+  throughout the "stall." It is not stuck outside the function; it is stuck INSIDE it, cycling
+  uselessly.
+
+Full disassembly of 0x00511B60 (`tools/disasm.py 0x511b60 700`) shows why: past its own
+obstacle-avoidance bookkeeping (a near-identical pattern to round 74's already-disproven "other
+slot" theory — a resolve-and-discard, not a real gate, for a one-companion party), it calls a
+geometric "has the creature's own real position (`creature+0x90`) gotten close enough to
+`FollowDataArray`'s recorded node at the current search index" check (`call 0x4aa980` at
+0x511D5A). Only if that returns true does it commit an advance — writing the achieved index into
+`CurrentPathNode` (`record+0x24`, exactly matching this round's live data: pinned at 16) AND
+resetting `record+0x44` (its own attempts/watchdog counter) to 0 as part of that SAME commit,
+EVERY call, regardless of whether the achieved index has actually changed. This is why `attempts`
+reads a permanent `0` for this stall (unlike phase 5's stall, where `attempts` climbing was the
+signature of THIS round's own fix working) — it is not evidence the handler is unreached; it is
+evidence of a handler-internal reset firing on every call, masking its own watchdog from ever
+detecting a real stall the way `WaitingForPath`'s does.
+
+**The chain of causation, precisely**: `CreMoveState` reverting to 3 (not this round's own
+doing — nothing in this plugin writes `CreMoveState`) means whatever real, engine-native
+`AddMoveToPointAction` `FindPath` originally queued (round 74's own citation: the ONLY handler
+that calls `AddMoveToPointActionToFront`) is no longer active — completed, superseded, or cleared
+by something this round did not chase further. With no live action stepping her real position,
+the `0x4aa980` "close enough to the next node" check can never pass again, no matter how many more
+times `Moving_To_Path`'s own body re-runs — and nothing in phase 3 itself re-arms a fresh move
+action or forces a return to `FindPath`; only the -1 reset does that, and this phase's own
+watchdog can never reach it because the SAME commit block that would need 50 real stalled calls to
+trip it resets itself to 0 on every one of those calls first.
+
+### What was NOT attempted this round, and the concrete next step
+
+No fix was shipped for this second stall — this project's own engine-write rule requires
+understanding a write's target before shipping it, and two things are still open: (1) WHY
+`CreMoveState` reverts from -1 to 3 partway through a leg was not chased (a live debugger or a
+disassembly pass over the engine's own native `AddMoveToPointAction` completion/action-queue
+machinery, not yet examined by this document at all, would be the way in); (2) whether forcing
+phase back to `-1` whenever this exact shape holds (`phase==3`, `CreMoveState!=-1`, position
+frozen past a threshold) is safe was not tested — it is the same class of fix that worked twice
+this round (bugs 1 and 2 above), and is the natural next experiment, but this round's own remaining
+budget went to characterizing the NEW stall precisely rather than guessing at a third poke without
+first understanding why `CreMoveState` reverts. New diagnostics `FollowDiag.CreMoveState` and
+`.MovingToPathAccumulator` are shipped, read-only, wired into the fine-log line, ready for whoever
+picks this up.
+
+### Verdict
+
+Two real, live-verified, disassembly-grounded bugs found and fixed this round — both in THIS
+plugin's own code, not the engine — closing out the `phase=7` permanent stall that blocked every
+one of rounds 74, 75, 80, and 81. Trask now demonstrably completes ~90% of a real walking leg with
+genuinely smooth, continuous motion (matching round 81's own "smooth when it progresses" finding,
+now sustained far longer and covering far more distance than any prior round observed). The
+walk does not yet complete end-to-end: a second, different, deeper stall — `CreMoveState`
+reverting away from "walking" partway through a leg, stranding `Moving_To_Path`'s own otherwise-
+healthy per-frame handler with nothing left to make geometric progress against — is now
+precisely characterized (not "stalls unpredictably" but "the queued native move action stops
+being active partway through the leg, for a reason not yet found, and nothing re-arms it"), with
+concrete new diagnostics in place and a specific, scoped next experiment named for whoever picks
+this up next.
+
+### Test suite and build
+
+`dotnet test tests/KotorCoop.Tests` (Release): **1650/1650 passed**, 2m30s-2m48s across two runs —
+this round's changes are two new small writes (`TryAdvanceStalledPathDestination`, and narrowing
+`TryResetStuckFollowPhase`'s own condition) and several new read-only diagnostic fields
+(`FollowDiag.DestNode`/`.CreMoveState`/`.MovingToPathAccumulator`, `preStepTarget`/`preStepPrior`/
+`preStepPhase` in the fine-log line), none exercised by the (x86 NativeAOT, unreferenced-by-tests)
+test project. Both plugin builds clean, 0 warnings 0 errors (the one pre-existing
+`PortraitController.cs` CA2014 warning is unrelated and untouched), across the round's several
+rebuild/redeploy/relaunch cycles (one per hypothesis: the DestNode-advance experiment, its
+off-by-one fix, and the TryResetStuckFollowPhase narrowing). Rig torn down clean
+(`Get-Process swkotor,KotorCoop.Agent` empty), `auto_start_agent` restored to `1` in both GOG
+installs. No `SharedBlock` layout or protocol version change — every new field/call this round adds
+is plugin-internal, nothing crosses the wire. Note: this round's session also needed a full
+solution rebuild (`dotnet build KotorCoop.slnx`) plus a fresh plugin install partway through, after
+three other agents' work landed on this branch mid-session (a solo-mode companion-combat fix, an
+offline swoop-save-crafting tool, and a new `loadgame` console verb) and bumped `SharedBlock`'s own
+version — a stale agent/plugin pairing briefly produced "plugin shared block not found" until both
+halves were rebuilt from the same merged HEAD.

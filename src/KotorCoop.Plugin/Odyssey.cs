@@ -1825,6 +1825,39 @@ internal static unsafe class Odyssey
         // (cursor advancing) while a stalled companion's own current-node index sits frozen.
         diag.CurrentPathNode = *(int*)(record + 0x24);
 
+        // ROUND 83 (2026-08-23, party-reconciliation.md): record+0x34 — read (never written) by
+        // PathWaitDest (0x0051512B40's own disasm, full trace this round) as the loop's OWN exit
+        // target: it walks the 100-entry circular buffer forward from CurrentPathNode looking for
+        // an index that equals THIS field, returning "not ready" if it wraps all the way to
+        // WriteCursor first without finding a match. A full binary sweep for every writer of
+        // record+0x34 (FindPath 0x51AC10, phases 1-4, WaitingForPath 0x5127D0, PathWaitDest
+        // itself, phases 8-9, CSWPartyFollowDataArray::Reset/SmoothFollowPath/ProcessPoint) found
+        // exactly ONE write site in the whole binary: inside WaitingForPath (0x00512865,
+        // `mov [esi+0x34], eax`), where it is set to the SAME value just written into
+        // CurrentPathNode (record+0x24) at that exact moment (0x00512852). Two OTHER handlers
+        // (phase1 at 0x00511847, phase3/"Moving_To_Path" at 0x00511E5C) independently advance
+        // CurrentPathNode further as real walking progresses — but NOTHING ever advances this
+        // field to match. If CurrentPathNode is later advanced past this value by one of those
+        // other handlers before PathWaitDest is re-entered, the forward-only search can never
+        // find it again (it is now BEHIND the search start, not ahead), and PathWaitDest returns
+        // "not ready" every single call, forever — a plausible, disassembly-grounded explanation
+        // for the phase=7 permanent stall rounds 74/75/80/81 already observed live. Read here,
+        // read-only, to test that prediction against real stall data before writing anything.
+        diag.DestNode = *(int*)(record + 0x34);
+
+        // ROUND 83 (2026-08-23, party-reconciliation.md): CreMoveState (creature+0xA8C, this
+        // document's own established offset since round 71) — the second phase=3 ("Moving_To_Path",
+        // handler 0x00511B60) stall this round found (see PartyFollowController's own remarks)
+        // needs telling apart "still nominally walking, just not making geometric progress" from
+        // "quietly reverted out of the walking state while the follow-FSM's own phase field never
+        // noticed." record+0x6c is a running accumulator 0x00511B60 adds creature+0xD0 (the
+        // step-accumulator this document already tracks) into, every single call — since this
+        // plugin pokes creature+0xD0 unconditionally every frame, this field climbing is a direct,
+        // cheap proof the handler is still being reached and running its own body, independent of
+        // whether it ever advances CurrentPathNode.
+        diag.CreMoveState = *(int*)(creature + 0xA8C);
+        diag.MovingToPathAccumulator = *(int*)(record + 0x6C);
+
         // ⚠ CRASHED THE HOST LIVE the first attempt at this read (2026-08-23): this code
         // originally treated party+0x2DC as a POINTER FIELD (mirroring
         // tools/kotor1_0_3.db's "CSWParty.follow_data: CSWPartyFollowDataArray*" offset row)
@@ -1868,6 +1901,9 @@ internal static unsafe class Odyssey
         public int OtherSlotIndex;
         public uint OtherSlotStoredId;
         public int CurrentPathNode;
+        public int DestNode;
+        public int CreMoveState;
+        public int MovingToPathAccumulator;
         public nint FollowDataArray;
         public int WriteCursor;
         public float WalkRate;
@@ -1944,10 +1980,32 @@ internal static unsafe class Odyssey
     /// This writes <c>record+4</c> to 0 (dispatch index 1 next call — FindPath, not the
     /// entry-0 shortcut) and <c>record+0x44</c> to 0 (clear the attempt counter so the
     /// watchdog does not immediately re-force -1 on the very next call), ONLY when the phase
-    /// is presently stuck at -1 or 5 — the two states this round's disasm shows can never
-    /// self-recover. A companion in any other phase is left alone: those are mid-flight in the
-    /// FSM's own real progression and a phase stomp there would be actively destructive, not a
-    /// nudge.
+    /// is presently stuck at -1 — the one state this round's disasm shows can never
+    /// self-recover on its own. A companion in any other phase is left alone: those are
+    /// mid-flight in the FSM's own real progression and a phase stomp there would be actively
+    /// destructive, not a nudge.
+    ///
+    /// ROUND 83 CORRECTION (party-reconciliation.md): originally also fired on phase == 5
+    /// (WaitingForPath), on the theory that round 74's own disasm showed it "can never
+    /// self-recover" either. That was true only in the SAME broken context round 74 measured it
+    /// in — before round 80's step-accumulator fix existed, phase 5 was reached ONLY via the -1
+    /// ping-pong's own inline reset (which really can never resubmit a job on its own), so every
+    /// phase-5 sighting really was the pathological case. Once round 80's fix lets the FSM
+    /// genuinely progress, phase 5 is ALSO the normal, legitimate state WaitingForPath parks in
+    /// for the few frames its own async path-job status field
+    /// (<c>[followData]+0xFA8</c> &gt;= 5, per <see cref="TryGetFollowDiagnostics"/>'s own
+    /// remarks) needs to catch up — and this method, called every frame, was resetting phase to 0
+    /// (forcing a FRESH FindPath resubmission, which resets that SAME status field back to
+    /// "pending") before the job it had JUST submitted the previous frame ever got a chance to
+    /// resolve. Live-confirmed round 83: a companion's own per-frame diagnostic sampled
+    /// IMMEDIATELY before this call fired showed phase reading 5 on essentially every single
+    /// frame, forever — not because WaitingForPath was stuck, but because this method kept
+    /// interrupting it on a permanent one-frame duty cycle, never letting its own internal
+    /// watchdog (record+0x44, which WaitingForPath's own dispatch route does NOT zero — see
+    /// <see cref="TryGetFollowDiagnostics"/>'s epilogue remarks) accumulate the 50 real dispatches
+    /// it needs to detect a GENUINE stall and self-recover via the engine's own -1 force-reset.
+    /// Narrowing this to phase == -1 only lets phase 5 run its own natural course, including its
+    /// own built-in watchdog if it is ever truly stuck.
     ///
     /// Returns false when the index does not resolve. Returns true whether or not a write
     /// happened (the phase-guard is the caller-visible "did I actually intervene" signal via
@@ -1980,7 +2038,7 @@ internal static unsafe class Odyssey
 
         nint record = party + 0x24 + (index * 0x88);
         int phase = *(int*)(record + 4);
-        if (phase == -1 || phase == 5)
+        if (phase == -1) // ROUND 83: phase == 5 removed — see this method's own remarks
         {
             *(int*)(record + 4) = 0;
             *(int*)(record + 0x44) = 0;
@@ -2129,6 +2187,139 @@ internal static unsafe class Odyssey
     }
 
     /// <summary>
+    /// ROUND 83 (2026-08-23, party-reconciliation.md): the real, disassembly-grounded root cause
+    /// of the phase=7 permanent stall rounds 74/75/80/81 kept finding at the SAME `pathNode ==
+    /// DestNode &lt; WriteCursor` shape.
+    ///
+    /// Full disassembly of <c>WalkUpdateLocation_QuickWalk_FollowLeader_WaitingForPath</c>
+    /// (0x005127D0, the phase=5 handler) this round found it is the ONLY writer of
+    /// <c>record+0x34</c> (<see cref="FollowDiag.DestNode"/>) in the whole binary, and it sets it
+    /// to the SAME value it writes into <c>record+0x24</c> (<see cref="FollowDiag.CurrentPathNode"/>)
+    /// — i.e. every time this handler's own commit runs, DestNode is reset to EQUAL CurrentPathNode,
+    /// never advanced toward the write cursor
+    /// (<c>[followData]+0xFA4</c>, <see cref="FollowDiag.WriteCursor"/>) even when the trail
+    /// already holds further, already-recorded, unconsumed points. Live-confirmed this round: a
+    /// companion parked with the leader stationary shows CurrentPathNode == DestNode, both frozen,
+    /// while WriteCursor sits 3 higher (already-recorded nodes going unconsumed) — and a new
+    /// "sample right before vs. right after this frame's engine call" diagnostic
+    /// (<see cref="PartyFollowController"/>'s own round-83 preStep trace) shows WaitingForPath's
+    /// commit re-firing and re-collapsing DestNode back to CurrentPathNode on EVERY SINGLE FRAME
+    /// this plugin drives the step function directly, not as a rare edge case.
+    ///
+    /// <c>PathWaitDest</c> 0x00512B40's own full disasm explains why this is fatal: its forward
+    /// search from CurrentPathNode toward WriteCursor looking for an index equal to DestNode finds
+    /// it on the FIRST comparison whenever DestNode == CurrentPathNode (trivially true right after
+    /// WaitingForPath's commit) — and ONLY in that exact case does it fall into a fragile
+    /// accept/reject test comparing (node - Prior) against (node - Target), which requires Prior
+    /// != Target to be meaningful (see <see cref="TryDriveFollowTarget"/>'s own round-83 remarks
+    /// for why that degenerate-input problem is real but insufficient alone to explain the live
+    /// data — WaitingForPath's own re-commit clobbers Prior/Target back to identical values on the
+    /// very same frame, faster than either side of that fix can win). If DestNode is instead
+    /// DIFFERENT from CurrentPathNode when PathWaitDest runs, the search walks forward past the
+    /// degenerate first comparison and, on finding DestNode reached, takes PathWaitDest's OTHER,
+    /// UNCONDITIONAL accept branch (0x00512C09: <c>mov [record+4],3</c>, "Moving_To_Path") —
+    /// skipping the fragile line test entirely.
+    ///
+    /// This writes <c>record+0x34</c> (DestNode) to the current WriteCursor value — i.e. "catch up
+    /// to everything already recorded" — ONLY when the FSM is genuinely parked in exactly this
+    /// shape (phase 7, CurrentPathNode == DestNode, WriteCursor genuinely ahead by a small,
+    /// circular-buffer-sane amount), so it never touches a companion that is mid-flight in a
+    /// healthy cycle. Called AFTER <see cref="TryDriveFollowLeaderStep"/> in the same frame (so it
+    /// acts on this frame's post-WaitingForPath-commit state, and its effect is visible to NEXT
+    /// frame's dispatch before WaitingForPath gets another chance to re-collapse it).
+    ///
+    /// Returns false when the index does not resolve. <paramref name="wrote"/> reports whether the
+    /// stall shape was actually observed and corrected this call.
+    ///
+    /// MAIN THREAD ONLY.
+    /// </summary>
+    public static bool TryAdvanceStalledPathDestination(uint companionServerObjectId, out bool wrote)
+    {
+        wrote = false;
+
+        nint client = GetClient();
+        if (client == 0)
+        {
+            return false;
+        }
+
+        uint clientObjectId = ServerToClientObjectIdFn(client, companionServerObjectId);
+
+        nint party = GetSWPartyFn(client);
+        if (party == 0)
+        {
+            return false;
+        }
+
+        int index = GetPartyIndexFn(party, clientObjectId);
+        if (index <= 0)
+        {
+            return false;
+        }
+
+        nint record = party + 0x24 + (index * 0x88);
+        int phase = *(int*)(record + 4);
+        if (phase != 7)
+        {
+            return true; // not parked in the stall shape this targets — nothing to do
+        }
+
+        int pathNode = *(int*)(record + 0x24);
+        int destNode = *(int*)(record + 0x34);
+        if (pathNode != destNode)
+        {
+            return true; // DestNode already differs — PathWaitDest's search can already progress
+        }
+
+        nint followData = party + 0x2DC;
+        if (!NativeMethods.IsReadable(followData + 0xFA4))
+        {
+            return true;
+        }
+
+        int writeCursor = *(int*)(followData + 0xFA4);
+        if (writeCursor == pathNode)
+        {
+            return true; // genuinely nothing new recorded yet — not a stall, just caught up
+        }
+
+        // Circular buffer, 100 slots (0x0051C700's own wrap-at-0x64 constant, and PathWaitDest's
+        // own search loop). A sane "ahead by" gap is small in ordinary play (rounds 75/80 observed
+        // 2-3); cap generously to avoid ever acting on a bogus wraparound read.
+        int gap = writeCursor - pathNode;
+        if (gap < 0)
+        {
+            gap += 100;
+        }
+
+        // ROUND 83 LIVE-DISPROVEN FIRST ATTEMPT, FIXED: PathWaitDest's own search loop
+        // (0x00512B60-0x00512B6E) tests `eax == DestNode` BEFORE incrementing `eax`, then tests
+        // `eax == WriteCursor` AFTER incrementing to decide whether to keep looping — so a
+        // DestNode set to the SAME value as WriteCursor is structurally unreachable: the loop's
+        // own "give up" exit fires the instant the incremented eax reaches WriteCursor, one
+        // iteration before it would ever re-test that value against DestNode. Live-confirmed:
+        // setting DestNode = WriteCursor advanced DestNode (visibly, in the diagnostic) but
+        // PathWaitDest kept returning "not ready" forever anyway, CurrentPathNode never moved.
+        // Needs `gap >= 2` (WriteCursor strictly ahead of a DestNode that is itself strictly
+        // ahead of CurrentPathNode) — DestNode = WriteCursor - 1 is always found by the loop
+        // BEFORE the increment can reach WriteCursor.
+        if (gap is < 2 or > 90)
+        {
+            return true;
+        }
+
+        int newDest = writeCursor - 1;
+        if (newDest < 0)
+        {
+            newDest += 100;
+        }
+
+        *(int*)(record + 0x34) = newDest;
+        wrote = true;
+        return true;
+    }
+
+    /// <summary>
     /// ROUND 73 FALLBACK (per the round's own brief, step 3: "if CSWParty::Update doesn't move
     /// the frozen point either, directly write the follow-target point / cached leader position
     /// fields to the actual current leader position each step"). It does not — see
@@ -2192,27 +2383,38 @@ internal static unsafe class Odyssey
         // (0x51C61F — live-confirmed round 74 to park the step FSM at whatever phase it last
         // reached and never re-trigger the phase dispatch again) or "a real delta" (0x51C4E6 —
         // the path this round's disasm confirms genuinely reaches and advances the phase
-        // dispatch). This round tried writing prior <- the OLD target (instead of the same new
-        // value target is about to become) EVERY call, unconditionally, on the theory that a
-        // real, honest, small delta every frame would keep the "differs" path live for as long
-        // as the leader keeps moving. Live-tested against a leader driven through 12 real
-        // engine teleports ~1.5s apart (tools/blockpoke.ps1 console 'tp'): the party-follow
-        // diagnostic log (which only samples once every reissue pass, ~2s) never once showed a
-        // nonzero delta, and the phase/attempt counters this round's own diagnostics added
-        // (Odyssey.FollowDiag.PhaseIndex/PhaseAttempts) never advanced past where
-        // Odyssey.TryResetStuckFollowPhase alone already gets a stalled companion. The one-frame
-        // window where target genuinely jumps ahead of prior (right after a teleport, before the
-        // NEXT frame's write converges them again) is far too narrow for this plugin's ~2s
-        // reissue-driven sampling to confirm any benefit, and rewriting record+0x18 on every
-        // single frame (vs. round 73's original >10cm-gated write) is a real increase in engine
-        // write frequency for a benefit that could not be measured. Reverted to round 73's
-        // original, verified-safe, epsilon-gated write rather than ship an unproven behaviour
-        // change — see Odyssey.TryResetStuckFollowPhase's own remarks for what round 74 DID
-        // confirm live.
+        // dispatch). Round 74 tried writing prior <- the OLD target UNCONDITIONALLY, every call,
+        // and reverted it: measured against active tp-hop movement only, it showed no effect and
+        // cost a real increase in write frequency.
+        //
+        // ROUND 83 (2026-08-23, party-reconciliation.md): full disassembly of PathWaitDest
+        // (0x00512B40, the phase=7 handler every stall rounds 74/75/80/81 land in) finds its own
+        // accept/reject test at 0x512B98-0x512C03 computes TWO vectors — (node - Prior) and
+        // (node - Target), the SAME Prior/Target fields this function writes — and compares them
+        // (an fcompp + parity-flag test, the idiom for an UNORDERED/NaN-sensitive comparison).
+        // Live-reproduced this round: a companion stalled at phase=7 with CurrentPathNode ==
+        // DestNode (both frozen at the same value) has Prior and Target ALSO frozen at the exact
+        // same value — because this method's own >10cm gate, once the leader stops moving
+        // relative to the last-written target, never fires again, and the ORIGINAL round-73
+        // write set BOTH fields to the identical new leaderPos every time it did fire. Two
+        // IDENTICAL points make (node-Prior) and (node-Target) identical vectors — a degenerate,
+        // zero-length Prior-to-Target segment with no direction for PathWaitDest's own test to
+        // measure "past" against, which the live data is consistent with never being accepted.
+        //
+        // Fix: when the gate fires, write Prior <- the OLD target (a real prior waypoint) and
+        // Target <- the new leaderPos, instead of collapsing both to the same new value. This
+        // keeps round 73's original throttle (still only writes past the 10cm threshold, not
+        // every frame — round 74's own objection does not apply here) while guaranteeing Prior
+        // != Target on every write that actually happens, so the segment PathWaitDest tests
+        // against is never degenerate. Once the leader stops for good, the LAST such write leaves
+        // a genuine, non-zero, static Prior->Target segment aimed at the leader's final position
+        // for PathWaitDest to evaluate every subsequent frame — rather than round 73's own
+        // Prior==Target dead end.
         if ((dx * dx) + (dy * dy) > 0.01f) // ~10cm — "meaningfully different," not float noise
         {
+            Vec3 oldTarget = existingTarget;
             *(Vec3*)(record + 0x28) = leaderPos;
-            *(Vec3*)(record + 0x18) = leaderPos;
+            *(Vec3*)(record + 0x18) = oldTarget;
             *(int*)(record + 0x68) = 1;
         }
 
