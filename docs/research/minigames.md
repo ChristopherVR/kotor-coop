@@ -1052,3 +1052,202 @@ conclusion, now resting on two rounds of live negative evidence instead of zero.
   is still untested. Park/spectate (the shipped default) remains the correct, safe behaviour
   given that unresolved uncertainty — this round adds no reason to change it and no new evidence
   either way on the visual question.
+
+## 13. An NCS disassembler, and the precondition question actually answered (2026-08-24)
+
+§12.5 left the investigation at "reaching and crossing the trigger is solved; making the race
+start needs either NCS disassembly of `k_ptar_swoop02ab` or a save with real Taris story
+progress" — and noted this project has no NCS bytecode reader at all. This round built one and
+used it. **The result is definitive and negative in a way no flag-guessing round could reach:
+`k_ptar_swoop02ab`'s OnEnter script checks no precondition whatsoever. It is not a race-start
+gate. It is a collectible "found this swoop point" flag setter, unconditionally writing two
+globals every prior round correctly identified as unlikely candidates and correctly declined to
+try.**
+
+### 13.1 Access note: this round could read the real install directly
+
+Unlike §11's round, this round's sandboxing did **not** block reading `chitin.key`, `data\*.bif`,
+or `modules\*.rim` directly (via `[System.IO.File]::ReadAllBytes`, run through this session's
+PowerShell tool) — only *writing* into the install was blocked (a `WriteAllBytes` call to a
+scratch output path was refused by the auto-mode classifier). This is the opposite constraint
+from §11 (which could read but not write) and enough to do the job: every byte quoted below was
+read straight out of this machine's real `C:\GOG Games\Star Wars KOTOR (GOG)` install, not
+synthesised. No `demo.ps1`, no `build.ps1 -Install`, no game process was launched or touched —
+this is pure static-archive reading, the same class of operation `tools/kotorfiles.py` already
+does, just done here in-process against the KEY/BIF/RIM formats `src/KotorCoop.Memory/GameFiles/`
+already parses.
+
+**First finding, before any disassembly**: `k_ptar_swoop02ab.ncs` is **not in `scripts.bif`** —
+`chitin.key`'s global index has zero entries for it (confirmed by an exhaustive scan of all
+25,836 KEY entries for `*swoop*`/`k_ptar*`, which turns up every OTHER planet's swoop script
+— `k_pman_swoop01`..`18`, `k_pebn_swoop` — but no Taris one). It lives **inside the module's own
+companion archive**, `modules\tar_m02ab_s.rim` (`k_ptar_swoop02ab.ncs`, 145 bytes, alongside 188
+other module-local compiled scripts including a second, shorter one, `k_ptar_swoop.ncs`, 111
+bytes — see §13.4). This is exactly why a chitin.key/BIF-only reader would never have found it;
+the extraction had to go through the module archive reader (`RimArchive` in
+`src/KotorCoop.Memory/GameFiles/Archives.cs`), already in this project's tree for GIT/ARE
+reading, unmodified.
+
+### 13.2 The tool: `NcsReader` (`src/KotorCoop.Memory/GameFiles/NcsReader.cs`)
+
+A pure byte-in/instructions-out disassembler for NWScript compiled bytecode — no file I/O of its
+own, so it works identically on bytes pulled from a BIF, a RIM, or a hand-built test fixture.
+Implements the full stack-machine instruction set (opcode + type byte, then per-opcode
+operands): `RSADD`/`CONST`/`ACTION`/the jump family (`JMP`/`JSR`/`JZ`/`JNZ`)/the
+stack-copy family (`CPDOWNSP`/`CPTOPSP`/`CPDOWNBP`/`CPTOPBP`)/`MOVSP`/`DECISP`/`INCISP`/
+`DECIBP`/`INCIBP`/the arithmetic-logic-compare group/`DESTRUCT`/`STORESTATE`/`RETN`/`NOP`, plus
+the 5-byte `0x42` program-size pseudo-instruction every compiled file opens its header with.
+
+**The format was cross-checked against a real published implementation before trusting it**,
+not assembled from memory alone: a first hand-decode attempt (assuming jump instructions have no
+type byte, matching some informal community notes) produced garbage after a handful of
+instructions. Fetching xoreos' own `ncsfile.cpp` (the reference open-source NWScript VM/decompiler)
+settled it precisely — **every instruction has a type byte, including the jump family and
+`RETN`/`MOVSP`/`SAVEBP`/`RESTOREBP`** (the informal notes were wrong on this one point) — and
+that jump offsets are relative to the **start of the jump instruction itself** (its own opcode
+byte), confirmed by the exact code: `_script->skip(offset - 6)` immediately after reading a
+6-byte jump instruction (opcode + type + 4-byte offset), which only resolves to "target =
+instruction start + offset" when worked through. With that fix, **both real compiled scripts this
+round pulled out of the game disassemble end to end with zero leftover bytes and every jump
+target landing exactly on a real instruction boundary** — the strongest evidence this format
+implementation is correct, independent of the KOTOR-specific action-id question below.
+
+`NwscriptActions.cs` adds the numeric-routine-to-name table `ACTION` calls need to be readable at
+all: **578/579/580/581 = `GetGlobalBoolean`/`SetGlobalBoolean`/`GetGlobalNumber`/
+`SetGlobalNumber` are VERIFIED** — cross-checked against xoreos-tools' published KOTOR2 function
+table, then confirmed to hold for KOTOR1's own numbering too (this game's binary) because the
+argument counts the bytecode itself carries (1 for the `Get*` pair, 2 for the `Set*` pair) match
+each routine's real NWScript signature exactly, and using them turns the raw bytecode into
+unambiguous, idiomatic script logic (§13.3). Two more (25, 217) are used and labelled **INFERRED**
+in the table itself — resolved only from the bytecode's own shape (a 0-arg object getter feeding
+a 1-arg object→bool predicate feeding a `JZ` gate is the standard compiled form of
+`if (GetIsPC(GetEnteringObject()))`), not independently checked against a published table.
+
+`FindActionCalls()` (`NcsInstructionsExtensions`, same file area) is the actually-useful surface:
+walks the instruction stream, and for every `ACTION` call, resolves its name and collects
+whatever string constants were pushed immediately before it — which is exactly how a global
+variable's name shows up right next to a `GetGlobalBoolean`/`SetGlobalBoolean`-style call, since
+NCS embeds string constants inline via `CONST` with a length-prefixed string operand.
+
+**Tested** (`tests/KotorCoop.Tests/NcsReaderTests.cs`, 11 tests, all green): 9 always run,
+against a hand-built synthetic script constructed with a small purpose-built `NcsBuilder` test
+helper (mirrors the real format byte-for-byte, including the jump-offset convention, entirely
+independent of any real game file) — header parsing, full-stream disassembly with no leftover
+bytes, jump-target resolution (both `JSR`-forward-into-a-labelled-block and
+`JZ`-skip-past-a-guarded-block), constant decoding, `FindActionCalls` pairing a string constant
+with its `SetGlobalBoolean` call, and two negative tests (bad magic, truncated stream both throw
+`InvalidDataException`, matching this project's other GameFiles readers' Try/throw discipline).
+Two more tests are gated by a new `[SwoopModuleFact]` attribute (same skip-not-fail pattern as
+the existing `[GogInstallFact]`, checking for `modules\tar_m02ab_s.rim` specifically) — these run
+the disassembler against the REAL extracted scripts and assert §13.3/§13.4's findings directly as
+executable proof, not just prose. **On this machine they ran (not skipped) and passed.** Full
+suite: 1663/1663 (1652 baseline + 11 new), one unrelated pre-existing timing-flaky test
+(`DisconnectRecoveryTests.ADamageLedgerDoesNotReBankAPeersTotalAfterAReconnect`) confirmed to
+pass in isolation, not a regression from this work.
+
+### 13.3 `k_ptar_swoop02ab.ncs`, fully disassembled — the answer
+
+The complete 145-byte file (base64 `TkNTIFYxLjBCAAAAkR4AAAAACCAAAgYFAAAZAAEB////+AAEGwD////8
+AwH////8AAQFAADZAR8AAAAAUgQDAAAAAQQFABRLX1RBUl9TV09PUF9QT0lOVF8wMQUAAkMCBAMAAAABBAUAFEtfVEFSX1NX
+T09QX1BPSU5UXzAyBQACQwIdAAAAAAYbAP////wgAA==`, decode this to reproduce independently):
+
+```
+    8: ProgramSize      totalSize=145
+   13: JumpToSubroutine  type=00 -> 21          ; jumps past the next line, into main()
+   19: Return            type=00                 ; top-level RETN — reached when main() returns
+   21: Reserve           type=06 (object)         ; local: object oPC
+   23: CallEngine        type=00 routine=25  argcount=0   ; GetEnteringObject() [INFERRED name]
+   28: CopyDownSp        type=01 offset=-8  size=4         ; oPC = <result>
+   36: MoveSp            type=00 -4
+   42: CopyTopSp         type=01 offset=-4  size=4          ; push oPC
+   50: CallEngine        type=00 routine=217 argcount=1     ; GetIsPC(oPC) [INFERRED name]
+   55: JumpIfZero        type=00 -> 137                     ; if (!GetIsPC(oPC)) skip the block below
+   61: PushConstant      int 1
+   67: PushConstant      string "K_TAR_SWOOP_POINT_01"
+   91: CallEngine        type=00 routine=579 argcount=2     ; SetGlobalBoolean("K_TAR_SWOOP_POINT_01", TRUE)
+   96: PushConstant      int 1
+  102: PushConstant      string "K_TAR_SWOOP_POINT_02"
+  126: CallEngine        type=00 routine=579 argcount=2     ; SetGlobalBoolean("K_TAR_SWOOP_POINT_02", TRUE)
+  131: Jump              type=00 -> 137
+  137: MoveSp            type=00 -4
+  143: Return            type=00
+```
+
+Equivalent NWScript:
+
+```c
+void main()
+{
+    object oPC = GetEnteringObject();
+
+    if (GetIsPC(oPC))
+    {
+        SetGlobalBoolean("K_TAR_SWOOP_POINT_01", TRUE);
+        SetGlobalBoolean("K_TAR_SWOOP_POINT_02", TRUE);
+    }
+}
+```
+
+**This settles the question §10.4/§11.6/§12.5 all left open, with certainty rather than
+inference: the trigger's OnEnter script reads no global, checks no story flag, and gates on
+nothing except "is the thing that walked in here the player character."** It only ever WRITES —
+unconditionally, once — two globals that §11.2's own read had already flagged as the more likely
+red herring ("`K_TAR_SWOOP_POINT_01`…`_09` … almost certainly per-planet collectible 'swoop
+upgrade point found' trackers … not race-start gates, and not tried"). That inference is now
+directly confirmed by disassembly: they are exactly that, a collectible marker, not a
+precondition of anything. **Neither of §12's two crafted-save attempts could ever have started
+the race, no matter which of the five candidate names or values had been chosen** — the script
+that runs the instant the trigger fires does not read any of them, and there is no other script
+attached to this trigger.
+
+### 13.4 The concrete new lead: `k_ptar_swoop.ncs`, the companion script that DOES read `Tar_SwoopRace`
+
+The same RIM holds a second, shorter script, `k_ptar_swoop.ncs` (111 bytes, base64
+`TkNTIFYxLjBCAAAAbwIDHgAAAAAIIAACAwQFAA1UYXJfU3dvb3BSYWNlBQACQgEEAwAAAAELIAEB////+AAEGwD////8AwH
+////8AAQBAf////QABBsA////+B0AAAAAEhsA/////BsA/////CAA`), which disassembles (same zero-leftover,
+every-jump-lands-clean confidence) to:
+
+```c
+int main()   // compiled shape of a boolean-returning conditional script
+{
+    return GetGlobalBoolean("Tar_SwoopRace") == 1;
+}
+```
+
+This is the one script in the module that actually reads `Tar_SwoopRace` — but its compiled
+shape (a single global `int` reserved before the `JSR`, the body computing a bool and storing it
+into that slot, then falling through to a bare `RETN` with no further branching) is the standard
+form the reference compiler emits for a **conversation/dialogue condition script** — the kind a
+`.dlg` node's "Active" field points at to decide whether a line or reply is even offered — not a
+trigger's OnEnter (which is `void`, not `int`, and this project's own trigger sweep already
+confirms `k_ptar_swoop02ab` — not `k_ptar_swoop` — is what `tar02_swoop02ab`'s OnEnter actually
+names).
+
+**The honest conclusion, and the next concrete step for whoever picks this up:** the real
+race-start gate almost certainly lives behind a **conversation node** somewhere — an NPC or a
+kiosk placeable whose dialogue offers a "start the race" option only when
+`Tar_SwoopRace == 1` (or offers a DIFFERENT option, such as "you need to earn the right first",
+when it is not) — rather than at the entrance trigger this project's three prior live rounds
+correctly reached, correctly crossed, and correctly found to do nothing race-related. This round
+did not locate that conversation node: `k_transabort.dlg` (the placeable `k_trans_abort` sits
+right next to the trigger and was flagged in §9.1 as "almost certainly the confirm/decline
+prompt") turned out to be a **generic, chitin.key-global dialog** (not module-local, not
+swoop-specific — the same shared "leave this subarea?" prompt other transition-abort placeables
+across the game use), so it is very unlikely to be the swoop-specific gate. The concrete,
+scoped-but-not-yet-done next step: grep every `.dlg` this game ships (via the same
+`RimArchive`/`ErfArchive`/`KeyIndex` infrastructure `NcsReader` now complements) for a script
+reference to `k_ptar_swoop`, which will name the exact conversation node — and, from there, the
+exact placeable or NPC tag — that is the real swoop-race entry point. That is a bounded,
+mechanical search with the tooling now in place to do it; it was not attempted this round because
+the task's actual question (does the entrance trigger check a flag) was already fully answered
+without it.
+
+### 13.5 What this changes about the shipping recommendation
+
+Nothing. **`minigame_hide_peer` stays default-on; co-visible swoop racing is still not shipped.**
+This round closes the precondition-guessing thread definitively (it was never going to work, and
+now there is a citable reason why) and opens a narrower, better-aimed one (§13.4) for whichever
+future round wants to keep pulling on it. No file under `CoopAgent.cs`, `MinigameController.cs`,
+or `MinigameRule.cs` was touched. The only production code this round adds is the disassembler
+itself (`NcsReader.cs`, `NwscriptActions.cs`) — new, additive, general-purpose tooling with no
+call site in the shipping plugin/agent path, exactly the same category as §11's `GlobalFlagCraft`.
