@@ -36,11 +36,15 @@ internal sealed unsafe class InteractionLockController(SharedBlockView block)
     /// removed once: an earlier build opened the peer's conversation unconditionally and
     /// players were yanked out of what they were doing from anywhere in the module — walking
     /// away while your partner talks to a shopkeeper is a legitimate thing to want, so joining
-    /// became a click. <see cref="DialogueAutoJoinMode.Near"/> (the default here) answers that
-    /// directly: only auto-join when already close enough that being pulled in does not feel
-    /// like a teleport, and show the walk-over notice otherwise
-    /// (<see cref="_farNoticeUntilMs"/>). Second, and now resolved: a recruitment/dismissal
-    /// conversation's <c>AddPartyMember</c>/<c>RemovePartyMember</c> now HAS a channel
+    /// became a click. <see cref="DialogueAutoJoinMode.Off"/> (the default here, since
+    /// 2026-08-23 — docs/research/dialogue-sync.md's Item 1) is the user's own stated
+    /// preference: an ORDINARY conversation stays a click, full stop, with the walk-over notice
+    /// only shown under the opt-in <see cref="DialogueAutoJoinMode.Near"/>
+    /// (<see cref="_farNoticeUntilMs"/>). A conversation the vanilla ENGINE ITSELF forces —
+    /// an ambush, a scripted cutscene — auto-joins regardless of this setting; see
+    /// <see cref="TryForceOpen"/>'s <c>isForced</c> path, which is not this flag's concern at
+    /// all. Second, and now resolved: a recruitment/dismissal conversation's
+    /// <c>AddPartyMember</c>/<c>RemovePartyMember</c> now HAS a channel
     /// (<c>PartyRosterController</c>, <c>dialogue_recruit_sync</c>) — the gap that made turning
     /// the old flag on unsafe for Trask's recruitment specifically no longer exists.
     /// </summary>
@@ -620,14 +624,10 @@ internal sealed unsafe class InteractionLockController(SharedBlockView block)
     /// </summary>
     private void TryForceOpen(byte* entry, byte* tag, nint partnerCreature)
     {
-        if (_autoJoinMode == DialogueAutoJoinMode.Off
-            || *(uint*)(entry + 4) != InteractionKindConversation)
+        if (*(uint*)(entry + 4) != InteractionKindConversation)
         {
             return;
         }
-
-        // Already talking to somebody — including, most of the time, this very conversation.
-        bool localAlreadyInConversation = Odyssey.IsConversationActive;
 
         int length = 0;
         while (length < SharedBlock.InteractionLockTagLength - 1 && tag[length] != 0)
@@ -639,6 +639,26 @@ internal sealed unsafe class InteractionLockController(SharedBlockView block)
         {
             return;
         }
+
+        // Item 1 (docs/research/dialogue-sync.md's 2026-08-23 section): a conversation the
+        // vanilla engine itself forces regardless of distance auto-joins UNCONDITIONALLY, even
+        // under dialogue_auto_join=off — that is matching behaviour vanilla already forces onto
+        // a single-player PC, not inventing a new one. Sourced from the session's single
+        // arbitrated dialogue token (block.RemoteDialogue*), not this interaction lock entry
+        // (a courtesy mirror published slightly earlier, before the token itself resolves) —
+        // the tag match confirms THIS lock entry names the same conversation the token
+        // describes, so a transient mismatch during the token's own resolve window degrades to
+        // "not forced yet" rather than a wrong answer.
+        bool isForced = block.RemoteDialogueActive && block.RemoteDialogueForced
+            && TagEquals(tag, length, block.RemoteDialoguePartnerTag);
+
+        if (_autoJoinMode == DialogueAutoJoinMode.Off && !isForced)
+        {
+            return;
+        }
+
+        // Already talking to somebody — including, most of the time, this very conversation.
+        bool localAlreadyInConversation = Odyssey.IsConversationActive;
 
         float distance = float.PositiveInfinity;
         nint player = Odyssey.GetPlayerCreaturePointer();
@@ -654,6 +674,7 @@ internal sealed unsafe class InteractionLockController(SharedBlockView block)
 
         bool shouldJoin = DialogueAutoJoinRule.ShouldAutoJoin(
             _autoJoinMode,
+            isForced,
             localAlreadyInConversation,
             Odyssey.IsPlayerInCombat,
             MinigameController.LocalInMinigame,
@@ -665,7 +686,9 @@ internal sealed unsafe class InteractionLockController(SharedBlockView block)
             // "Too far, but otherwise would have joined" is the ONLY case worth telling the
             // player about — not already-in-a-conversation (they already know), not
             // combat/minigame (the screen already says so). Near-mode's whole reason to exist
-            // is exactly this notice: the player is not stuck, they can walk over.
+            // is exactly this notice: the player is not stuck, they can walk over. A forced
+            // conversation never reaches this branch (ShouldAutoJoin returns true unconditionally
+            // once safety-gated), so it never needs the notice either.
             if (_autoJoinMode == DialogueAutoJoinMode.Near
                 && !localAlreadyInConversation && !Odyssey.IsPlayerInCombat
                 && !MinigameController.LocalInMinigame && float.IsFinite(distance))
@@ -687,9 +710,33 @@ internal sealed unsafe class InteractionLockController(SharedBlockView block)
         if (Odyssey.StartDialogueWith(new ReadOnlySpan<byte>(tag, length)))
         {
             PluginHost.Log("interaction: auto-joining a peer's conversation with "
-                + $"'{System.Text.Encoding.ASCII.GetString(tag, length)}' (dialogue_auto_join={_autoJoinMode})");
+                + $"'{System.Text.Encoding.ASCII.GetString(tag, length)}' "
+                + (isForced
+                    ? "(forced — matching the engine's own force)"
+                    : $"(dialogue_auto_join={_autoJoinMode})"));
         }
     }
+
+    /// <summary>Case-insensitive compare of a length-prefixed tag against a null-terminated one
+    /// — both operands here are OUR OWN block fields (written by <c>TryWriteAsciiString</c>),
+    /// never raw engine memory, so this needs none of <c>DialogueGateHook</c>'s CExoString
+    /// length-includes-null handling.</summary>
+    private static bool TagEquals(byte* tag, int length, byte* nulTerminated)
+    {
+        for (int i = 0; i < length; i++)
+        {
+            byte a = tag[i];
+            byte b = nulTerminated[i];
+            if (b == 0 || Lower(a) != Lower(b))
+            {
+                return false;
+            }
+        }
+
+        return nulTerminated[length] == 0;
+    }
+
+    private static byte Lower(byte c) => c is >= (byte)'A' and <= (byte)'Z' ? (byte)(c + 32) : c;
 
     /// <summary>How long the "walk over to join" notice stays on screen after being triggered
     /// — long enough to read, short enough not to linger once the player has moved on.</summary>

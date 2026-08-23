@@ -791,6 +791,11 @@ public sealed class KotorGameBridge : IGameBridge
     private const int BlockInteractionLockTargetIds = 0x3F0C;
     private const int BlockInteractionLockTargetIdStride = 0x04;
 
+    // Dialogue forced-conversation bit (SharedBlock version 51, region 0x3F1C..0x3F24) — see
+    // docs/research/dialogue-sync.md's 2026-08-23 Item 1 and SharedBlock.cs's own remarks.
+    private const int BlockLocalDialogueForced = 0x3F1C;
+    private const int BlockRemoteDialogueForced = 0x3F20;
+
     private const int BlockLocalDialogueNode = 0x1320;
     private const int BlockLocalDialogueNodeSerial = 0x1324;
     private const int BlockRemoteDialogueNode = 0x1328;
@@ -4355,7 +4360,7 @@ public sealed class KotorGameBridge : IGameBridge
     /// </summary>
     public bool TryReadLocalDialogueFollow(
         out string partnerTag, out uint replySerial, out int replyIndex, out byte[] pickLog,
-        out int nodeIndex, out uint nodeSerial)
+        out int nodeIndex, out uint nodeSerial, out bool forced)
     {
         partnerTag = string.Empty;
         replySerial = 0;
@@ -4363,6 +4368,7 @@ public sealed class KotorGameBridge : IGameBridge
         pickLog = [];
         nodeIndex = -1;
         nodeSerial = 0;
+        forced = false;
 
         if (_pluginBlock == 0)
         {
@@ -4387,6 +4393,13 @@ public sealed class KotorGameBridge : IGameBridge
         {
             pickLog = log;
         }
+
+        // Item 1 (docs/research/dialogue-sync.md's 2026-08-23 section): latched by the plugin
+        // for the whole conversation's duration, so a torn read here at worst holds the
+        // previous conversation's bit for one tick — the same tolerance every other field on
+        // this call already has.
+        ok &= _memory.TryReadUInt32(_pluginBlock + BlockLocalDialogueForced, out uint forcedRaw);
+        forced = forcedRaw != 0;
 
         partnerTag ??= string.Empty;
         return ok;
@@ -4510,7 +4523,7 @@ public sealed class KotorGameBridge : IGameBridge
     /// </summary>
     public bool WriteRemoteDialogue(
         bool active, string partnerTag, uint replySerial, int replyIndex, byte[]? pickLog,
-        int nodeIndex, uint nodeSerial)
+        int nodeIndex, uint nodeSerial, bool forced)
     {
         if (_pluginBlock == 0)
         {
@@ -4533,6 +4546,12 @@ public sealed class KotorGameBridge : IGameBridge
         // same reason: the serial is what the far side acts on.
         ok &= _memory.TryWrite(_pluginBlock + BlockRemoteDialogueNode, (uint)nodeIndex);
         ok &= _memory.TryWrite(_pluginBlock + BlockRemoteDialogueNodeSerial, nodeSerial);
+
+        // Item 1 (docs/research/dialogue-sync.md's 2026-08-23 section): written BEFORE the
+        // active flag below, same reasoning as node/serial — the plugin's auto-join check
+        // (InteractionLockController.TryForceOpen) reads this alongside RemoteDialogueActive,
+        // so it must never see "active" before "forced" has landed for that same conversation.
+        ok &= _memory.TryWrite(_pluginBlock + BlockRemoteDialogueForced, forced ? 1u : 0u);
 
         ok &= _memory.TryWrite(_pluginBlock + BlockRemoteDialogueActive, active ? 1u : 0u);
         return ok;

@@ -1450,6 +1450,19 @@ internal sealed unsafe class SharedBlockView(byte* baseAddress)
     /// <summary>Agent-written; bumped when the owner moves to a different node.</summary>
     public uint RemoteDialogueNodeSerial => *U32(SharedBlock.OffsetRemoteDialogueNodeSerial);
 
+    /// <summary>Plugin-written; nonzero while the local conversation is a forced one (the
+    /// vanilla engine itself would run it regardless of distance) — see
+    /// <see cref="KotorCoop.Plugin.DialogueForceFlagHook"/>.</summary>
+    public bool LocalDialogueForced
+    {
+        get => *U32(SharedBlock.OffsetLocalDialogueForced) != 0;
+        set => *U32(SharedBlock.OffsetLocalDialogueForced) = value ? 1u : 0u;
+    }
+
+    /// <summary>Agent-written; nonzero while the conversation named by
+    /// <see cref="RemoteDialoguePartnerTag"/> is a forced one.</summary>
+    public bool RemoteDialogueForced => *U32(SharedBlock.OffsetRemoteDialogueForced) != 0;
+
     // ---- per-object interaction locks -------------------------------------------
 
     /// <summary>Plugin-written; the tag of the object the local player is interacting with.</summary>

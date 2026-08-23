@@ -61,9 +61,11 @@ public sealed class DialogueFastJoinPumpTests
             return true;
         }
 
+        public bool Forced { get; set; }
+
         public bool TryReadLocalDialogueFollow(
             out string partnerTag, out uint replySerial, out int replyIndex, out byte[] pickLog,
-            out int nodeIndex, out uint nodeSerial)
+            out int nodeIndex, out uint nodeSerial, out bool forced)
         {
             partnerTag = "trask";
             replySerial = 0;
@@ -71,12 +73,13 @@ public sealed class DialogueFastJoinPumpTests
             pickLog = [];
             nodeIndex = NodeIndex;
             nodeSerial = NodeSerial;
+            forced = Forced;
             return true;
         }
 
         public bool WriteRemoteDialogue(
             bool active, string partnerTag, uint replySerial, int replyIndex, byte[]? pickLog,
-            int nodeIndex, uint nodeSerial) => true;
+            int nodeIndex, uint nodeSerial, bool forced) => true;
 
         public void Dispose()
         {
@@ -136,7 +139,7 @@ public sealed class DialogueFastJoinPumpTests
         public void PublishDialogue(
             bool active, string speakerName, string line,
             string partnerTag = "", uint replySerial = 0, int replyIndex = 0, byte[]? pickLog = null,
-            int nodeIndex = -1, uint nodeSerial = 0)
+            int nodeIndex = -1, uint nodeSerial = 0, bool forced = false)
         {
             PublishCalls.Add((active, speakerName, line, nodeIndex, nodeSerial));
         }

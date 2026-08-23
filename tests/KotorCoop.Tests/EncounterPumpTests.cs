@@ -1,4 +1,4 @@
-﻿using KotorCoop.Memory;
+using KotorCoop.Memory;
 using KotorCoop.Protocol;
 using KotorCoop.Session;
 using Xunit;
@@ -145,7 +145,7 @@ public class EncounterPumpTests
         public void PublishDialogue(
             bool active, string speakerName, string line,
             string partnerTag = "", uint replySerial = 0, int replyIndex = 0, byte[]? pickLog = null,
-            int nodeIndex = -1, uint nodeSerial = 0) { }
+            int nodeIndex = -1, uint nodeSerial = 0, bool forced = false) { }
 
         public DialogueState GetDialogue() => DialogueState.Idle;
 

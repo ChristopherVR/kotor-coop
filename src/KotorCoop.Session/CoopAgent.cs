@@ -1597,6 +1597,11 @@ public sealed class CoopAgent(IGameBridge bridge, ICoopSession session, AgentSet
 
     private uint _dialogueHeldNodeSerial;
 
+    /// <summary>The local conversation's forced-ness, held across the same flicker for the
+    /// same reason as the partner tag/node above — docs/research/dialogue-sync.md's 2026-08-23
+    /// Item 1.</summary>
+    private bool _dialogueHeldForced;
+
     /// <summary>
     /// Governs PumpDialogue's work on the <see cref="AgentSettings.DialogueFastJoin"/> path:
     /// a genuine change (a new line, a new node, the conversation starting/ending, the peer's
@@ -1672,7 +1677,7 @@ public sealed class CoopAgent(IGameBridge bridge, ICoopSession session, AgentSet
         bridge.TryReadLocalDialogue(out string speaker, out string line);
         bridge.TryReadLocalDialogueFollow(
             out string partnerTag, out uint replySerial, out int replyIndex, out byte[] pickLog,
-            out int nodeIndex, out uint nodeSerial);
+            out int nodeIndex, out uint nodeSerial, out bool localForced);
 
         // Who owns a conversation right now, from the last broadcast. Read FIRST because it
         // gates the local claim below.
@@ -1714,6 +1719,11 @@ public sealed class CoopAgent(IGameBridge bridge, ICoopSession session, AgentSet
                 _dialogueHeldNode = nodeIndex;
                 _dialogueHeldNodeSerial = nodeSerial;
             }
+
+            // The plugin latches this for the whole conversation (set once, at its own start
+            // edge), so it never needs a "only hold a real value" guard the way the tag/node
+            // above do — it is simply carried the same way.
+            _dialogueHeldForced = localForced;
         }
 
         bool active = rawInDialogue
@@ -1723,6 +1733,7 @@ public sealed class CoopAgent(IGameBridge bridge, ICoopSession session, AgentSet
             _dialogueHeldPartnerTag = string.Empty;
             _dialogueHeldNode = DialogueState.NoNode;
             _dialogueHeldNodeSerial = 0;
+            _dialogueHeldForced = false;
         }
 
         // ⚠ THE DEBOUNCE ABOVE ALWAYS RUNS, EVEN WHEN THE GATE BELOW SAYS "NOTHING TO DO".
@@ -1742,7 +1753,7 @@ public sealed class CoopAgent(IGameBridge bridge, ICoopSession session, AgentSet
                 replySerial, replyIndex, active ? _dialogueHeldNode : DialogueState.NoNode);
             fingerprint = HashCode.Combine(
                 fingerprint, active ? _dialogueHeldNodeSerial : 0u, followingPeer,
-                token.Serial, token.NodeSerial, token.ReplySerial);
+                token.Serial, token.NodeSerial, token.ReplySerial, active && _dialogueHeldForced);
 
             if (!_dialogueTickGate.ShouldPump(nowMs, fingerprint))
             {
@@ -1754,7 +1765,8 @@ public sealed class CoopAgent(IGameBridge bridge, ICoopSession session, AgentSet
             active, speaker, line,
             active ? _dialogueHeldPartnerTag : string.Empty, replySerial, replyIndex, pickLog,
             active ? _dialogueHeldNode : DialogueState.NoNode,
-            active ? _dialogueHeldNodeSerial : 0);
+            active ? _dialogueHeldNodeSerial : 0,
+            active && _dialogueHeldForced);
 
         // The item-grant channel needs "do WE own an active conversation right now", which is
         // exactly what `active` already means (debounced across the engine's between-entries
@@ -1773,7 +1785,8 @@ public sealed class CoopAgent(IGameBridge bridge, ICoopSession session, AgentSet
             followingPeer ? token.ReplyIndex : 0,
             followingPeer ? token.PickLog : null,
             followingPeer ? token.NodeIndex : DialogueState.NoNode,
-            followingPeer ? token.NodeSerial : 0);
+            followingPeer ? token.NodeSerial : 0,
+            followingPeer && token.Forced);
 
         _lastSpectateSerial = token.Serial;
     }

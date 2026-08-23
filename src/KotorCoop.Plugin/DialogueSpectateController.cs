@@ -58,6 +58,70 @@ internal sealed unsafe class DialogueSpectateController(SharedBlockView block)
     private const int NoNode = -1;
 
     private bool _hadDialogue;
+
+    /// <summary>Latched at the moment a NEW local conversation is detected (the
+    /// <c>_hadDialogue</c> false-&gt;true edge) from <see cref="DialogueGateHook.LastStartForced"/>,
+    /// and held for the whole conversation — the underlying hook table entry can expire or be
+    /// overwritten by an unrelated action long before the conversation itself ends. See
+    /// docs/research/dialogue-sync.md's 2026-08-23 Item 1.</summary>
+    private bool _localForced;
+
+    // ══════════════════════════════════════════════════════════════════════════════════════
+    // Item 2 instrumentation (docs/research/dialogue-skip-desync.md, 2026-08-23): the
+    // "skip mid-sentence desyncs" report needs live reproduction to diagnose, which this round
+    // does not have the rig for. What it CAN do is make the next round's evidence trail
+    // unambiguous — a monotonic, timestamped, capped log of every node transition on BOTH the
+    // publish side (here) and the consume/replay side (DriveToPeerNode below), the same
+    // ground-truth-instrument discipline round 52's attacker-id log used for combat
+    // (shared-state-audit.md). Two independent counters, two independent caps: a flooded
+    // publish side must not starve the consume side's own budget or a fast owner-side skip
+    // burst would silently blind the very half of the picture it is most likely to stress.
+    // ══════════════════════════════════════════════════════════════════════════════════════
+
+    /// <summary>Total node-transition log lines this conversation, on EITHER side — capped so a
+    /// pathological rapid-skip test cannot flood the log file, generous enough that no real live
+    /// test session should ever hit it (a .dlg has, at most, a few hundred entries; even mashing
+    /// skip through every one of them twice over stays well under this).</summary>
+    private const int NodeLogBudget = 4000;
+
+    private uint _publishNodeCounter;
+    private int _publishNodeLogged;
+
+    private uint _driveAttemptCounter;
+    private int _driveNodeLogged;
+
+    private void LogNodePublish(int fromNode, int toNode, uint serial)
+    {
+        if (_publishNodeLogged >= NodeLogBudget)
+        {
+            return;
+        }
+
+        _publishNodeLogged++;
+        _publishNodeCounter++;
+        PluginHost.Log($"dialogue-node-pub: #{_publishNodeCounter} node {fromNode} -> {toNode} "
+            + $"serial {serial} at {Environment.TickCount64}");
+    }
+
+    /// <summary>Every ATTEMPT to drive the follower to a node — not only the ones that land
+    /// immediately (the existing <c>LogFew("dialogue: followed the owner ...")</c> line only
+    /// fires on arrival or at the deferral-complaint threshold; this fires on every call,
+    /// including a deferred one, so a live round can see the full sequence rather than only its
+    /// endpoints) — with how long the drive CALL ITSELF took, so a slow engine call is
+    /// distinguishable from a slow WIRE update.</summary>
+    private void LogDriveAttempt(int beforeNode, int wantedNode, int landedNode, long callMs, bool arrived)
+    {
+        if (_driveNodeLogged >= NodeLogBudget)
+        {
+            return;
+        }
+
+        _driveNodeLogged++;
+        _driveAttemptCounter++;
+        PluginHost.Log($"dialogue-node-drive: #{_driveAttemptCounter} wanted {wantedNode} "
+            + $"before {beforeNode} landed {landedNode} arrived={arrived} callMs={callMs} "
+            + $"at {Environment.TickCount64}");
+    }
     private uint _lastLineHash;
     private long _lastLiveMs;
 
@@ -103,6 +167,18 @@ internal sealed unsafe class DialogueSpectateController(SharedBlockView block)
         *block.LocalDialogueLine = 0;
         *block.LocalDialoguePartnerTag = 0;
         block.LocalDialogueSerial++;
+
+        _localForced = false;
+        block.LocalDialogueForced = false;
+
+        // Item 2 instrumentation counters are SESSION-lifetime, not per-conversation, so a live
+        // round's monotonic numbering stays meaningful across several conversations in one
+        // sitting — but a module change is still a clean break worth resetting the BUDGET at,
+        // the same reasoning LogFew's own window refill uses one level up.
+        _publishNodeCounter = 0;
+        _publishNodeLogged = 0;
+        _driveAttemptCounter = 0;
+        _driveNodeLogged = 0;
 
         // A node index names an entry in ONE .dlg. Carrying one across a module change points
         // it at a different file's entry list, so it goes with everything else here.
@@ -215,6 +291,9 @@ internal sealed unsafe class DialogueSpectateController(SharedBlockView block)
                 *block.LocalDialoguePartnerTag = 0;
                 block.LocalDialogueSerial++;
 
+                _localForced = false;
+                block.LocalDialogueForced = false;
+
                 // The node is per conversation, like the pick log: a stale index surviving
                 // into the next one names an entry in a different .dlg entirely.
                 block.LocalDialogueNode = NoNode;
@@ -229,6 +308,17 @@ internal sealed unsafe class DialogueSpectateController(SharedBlockView block)
             }
 
             return;
+        }
+
+        // Latched ONCE, at the false->true edge: DialogueForceFlagHook's table entry for this
+        // object can be overwritten by an unrelated later action (someone else being talked at,
+        // an NPC's own ambient AI) long before this conversation itself ends, so re-reading it
+        // every frame would let the bit flicker mid-conversation. It must be read here, before
+        // _hadDialogue flips, or every frame looks like a continuation rather than a start.
+        if (!_hadDialogue)
+        {
+            _localForced = DialogueGateHook.LastStartForced;
+            block.LocalDialogueForced = _localForced;
         }
 
         _hadDialogue = true;
@@ -260,8 +350,17 @@ internal sealed unsafe class DialogueSpectateController(SharedBlockView block)
         int node = Odyssey.GetDialogueNodeIndex();
         if (node >= 0 && node != block.LocalDialogueNode)
         {
+            int publishedFrom = block.LocalDialogueNode;
             block.LocalDialogueNode = node;
             block.LocalDialogueNodeSerial++; // serial last: the far side reads it first
+
+            // Item 2 instrumentation (docs/research/dialogue-skip-desync.md): every node
+            // transition the OWNER's own instance publishes, monotonically counted and
+            // timestamped, so a live round can see exactly which transitions happened and how
+            // close together — the question a fixed-cadence poll (150 ms by default,
+            // dialogue_fast_join=0) cannot answer from the wire alone, since the wire only ever
+            // carries the LATEST node, never the sequence a fast skip passed through.
+            LogNodePublish(publishedFrom, node, block.LocalDialogueNodeSerial);
         }
 
         // Replies WE picked, appended to the pick LOG with the hash of the line they were
@@ -353,10 +452,16 @@ internal sealed unsafe class DialogueSpectateController(SharedBlockView block)
 
         // Diagnostic for the joiner-cannot-talk defect: does the engine reach StartDialog at
         // all here? Reported from the frame hook because the detour itself must not log.
+        //
+        // The "forced=" suffix is Item 1's own NEEDS-LIVE evidence trail
+        // (docs/research/dialogue-sync.md's 2026-08-23 section): the next live round needs to
+        // see this read TRUE for a real ambush/forced conversation and FALSE for a real player
+        // click, and this is the one line that shows it without any extra tooling.
         if (DialogueGateHook.StartAttempts != _seenStartAttempts)
         {
             _seenStartAttempts = DialogueGateHook.StartAttempts;
-            LogFew($"dialogue: engine reached StartDialog ({_seenStartAttempts} so far)");
+            LogFew($"dialogue: engine reached StartDialog ({_seenStartAttempts} so far, "
+                + $"forced={DialogueGateHook.LastStartForced})");
         }
 
         // Who writes CGuiInGame+0xB4, reported from here because the detour itself must not
@@ -542,21 +647,34 @@ internal sealed unsafe class DialogueSpectateController(SharedBlockView block)
         // instances through any stretch of a conversation without a choice in it.
         if (_nodes.Arrived(wantedSerial, before, wantedNode))
         {
+            // Item 2 instrumentation: this is the branch a "skip mid-sentence" report would hit
+            // if the follower's OWN local advance happened to already be sitting on the node the
+            // (possibly several-nodes-ahead) wire update names — worth distinguishing from a
+            // real drive call in the log, not folding into the same line.
+            LogDriveAttempt(before, wantedNode, before, callMs: 0, arrived: true);
             return;
         }
 
         // ⚠ A SUCCESSFUL CALL IS NOT AN ARRIVAL, AND BANKING THE SERIAL ON ONE STRANDS THE
         // FOLLOWER FOR THE REST OF THE CONVERSATION. See DialogueNodeFollower for the
         // measurement; nothing is banked until a re-read shows the engine actually moved.
-        if (!Odyssey.DriveDialogueToNode(wantedNode))
+        long callStartMs = Environment.TickCount64;
+        bool called = Odyssey.DriveDialogueToNode(wantedNode);
+        long callMs = Environment.TickCount64 - callStartMs;
+
+        if (!called)
         {
+            LogDriveAttempt(before, wantedNode, before, callMs, arrived: false);
             return; // could not even be asked for yet; try again next frame
         }
 
         int landed = Odyssey.GetDialogueNodeIndex();
         int deferrals = _nodes.Deferrals;
+        bool arrived = _nodes.Arrived(wantedSerial, landed, wantedNode);
 
-        if (_nodes.Arrived(wantedSerial, landed, wantedNode))
+        LogDriveAttempt(before, wantedNode, landed, callMs, arrived);
+
+        if (arrived)
         {
             LogFew($"dialogue: followed the owner {before} -> {wantedNode}"
                 + (deferrals > 0 ? $" (after {deferrals} deferred attempts)" : string.Empty));

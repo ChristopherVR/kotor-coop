@@ -131,6 +131,18 @@ internal static unsafe class DialogueGateHook
 
     public static uint StartAttempts => _startAttempts;
 
+    /// <summary>
+    /// Whether the MOST RECENT <c>StartDialog</c> call — refused or not, any object — was
+    /// forced (docs/research/dialogue-sync.md's 2026-08-23 Item 1). Sourced from
+    /// <see cref="DialogueForceFlagHook.WasForced"/> keyed on <c>target</c>'s own object id
+    /// (<c>CSWSObject+4</c>), so a conversation this instance's own engine would have run
+    /// regardless of distance is distinguishable from an ordinary click. Latched rather than
+    /// consumed: <c>DialogueSpectateController</c> reads it once, at the moment it notices a
+    /// NEW local conversation, and that read happens within a frame or two of the StartDialog
+    /// call that produced it — no other consumer exists.
+    /// </summary>
+    public static volatile bool LastStartForced;
+
     private static bool _installed;
 
     /// <summary>Verify-bytes-or-refuse, like every patch in the plugin: an unrecognised
@@ -240,6 +252,14 @@ internal static unsafe class DialogueGateHook
         try
         {
             _startAttempts++;
+
+            // Recorded regardless of what happens below — a refused start is still worth
+            // knowing was forced (diagnostically), and the spectate controller only ever reads
+            // this for a start that actually proceeds.
+            if (target is > 0x10000 and < 0x7FFF_0000)
+            {
+                LastStartForced = DialogueForceFlagHook.WasForced(*(int*)(target + 4));
+            }
 
             if (!Enabled || !PeerHoldsConversation)
             {

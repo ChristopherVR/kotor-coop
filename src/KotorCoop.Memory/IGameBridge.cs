@@ -606,7 +606,7 @@ public interface IGameBridge : IDisposable
     /// </summary>
     bool TryReadLocalDialogueFollow(
         out string partnerTag, out uint replySerial, out int replyIndex, out byte[] pickLog,
-        out int nodeIndex, out uint nodeSerial)
+        out int nodeIndex, out uint nodeSerial, out bool forced)
     {
         partnerTag = string.Empty;
         replySerial = 0;
@@ -614,17 +614,20 @@ public interface IGameBridge : IDisposable
         pickLog = [];
         nodeIndex = -1;
         nodeSerial = 0;
+        forced = false;
         return false;
     }
 
     /// <summary>
     /// Tells the game which conversation a peer owns and which node it is on, so this
     /// instance runs the same one and is driven to the same line without being able to
-    /// choose. Default false.
+    /// choose. <paramref name="forced"/> (2026-08-23, docs/research/dialogue-sync.md's Item 1):
+    /// whether the owner's conversation is one the vanilla engine itself forces regardless of
+    /// distance — see <see cref="TryReadLocalDialogueFollow"/>'s own remarks. Default false.
     /// </summary>
     bool WriteRemoteDialogue(
         bool active, string partnerTag, uint replySerial, int replyIndex, byte[]? pickLog,
-        int nodeIndex, uint nodeSerial) => false;
+        int nodeIndex, uint nodeSerial, bool forced) => false;
 
     /// <summary>The object the local player is interacting with, so the session can claim it
     /// on their behalf. Default is "nothing claimed". <paramref name="targetId"/> is the

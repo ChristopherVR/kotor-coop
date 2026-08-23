@@ -194,18 +194,23 @@ Both players, each in their own full game:
   last-resort recovery for a conversation shell that will not close could loop, unattended, for
   minutes with no effect — is fixed unconditionally (not gated on the flag above): see
   `docs/research/dialogue-join-latency.md`'s "Far-join live pass".
-- **Auto-join a nearby conversation, no click needed — `dialogue_auto_join=near` (default),
-  live-verified both directions plus `always`/`off`, 2026-08-22.** The moment a peer opens a
-  conversation, everyone within `dialogue_auto_join_range` (20 units by default) of the NPC is
-  pulled in automatically — the same request a click on that NPC sends, decided identically on
-  every peer with no host/client branch. Confirmed live: host starts, the client auto-joins
-  unprompted (`interaction: auto-joining a peer's conversation with '...' (dialogue_auto_join=
-  Near)`, exact node agreement the whole way); the reverse direction, observed the same way;
-  standing more than 20 units from the NPC skips the pull and shows a "walk over to join" notice
-  instead; `dialogue_auto_join=always` pulls regardless of distance; `dialogue_auto_join=off`
-  restores the original click-to-join behaviour exactly. See
-  [docs/research/dialogue-sync.md](docs/research/dialogue-sync.md)'s 2026-08-22 "round 59"
-  section.
+- **Auto-join is now FORCED-CONVERSATION-ONLY by default — `dialogue_auto_join=off`
+  (default since 2026-08-23), `near`/`always` optional, 2026-08-22 live pass on the mechanism
+  underneath.** The user's own stated preference: ordinary, player-clicked conversations should
+  never auto-pull the other player in, only a conversation the vanilla ENGINE ITSELF forces
+  regardless of position (an ambush, a scripted cutscene — NWScript `ActionStartConversation`
+  with `bIgnoreStartRange=TRUE`) should. `dialogue_auto_join`'s three settings (`off` default,
+  `near` within `dialogue_auto_join_range` — 20 units by default — `always` regardless of
+  distance) now govern ONLY an ordinary conversation; a FORCED one auto-joins unconditionally
+  regardless of this setting, matching what vanilla already forces onto a single-player PC
+  rather than inventing new behaviour. The forced-conversation DETECTION is confirmed by static
+  disassembly of `CSWSObject::AIActionDialogObject`'s own range-bypass flag but NOT YET
+  confirmed live against a real ambush — see
+  [docs/research/dialogue-sync.md](docs/research/dialogue-sync.md)'s 2026-08-23 Item 1 section
+  for the VERIFIED/INFERRED/NEEDS-LIVE breakdown. The underlying mode/range mechanics
+  (near/always/off, the distance gate, the walk-over notice, symmetric host/client decision)
+  were live-verified in all four configurations on 2026-08-22 — see that same doc's "round 59"
+  section — before the default flipped to `off`.
 - **A trigger/cutscene-started conversation (both players' own engines starting it on arrival,
   not a click) is now live-verified — live pass 2026-08-22.** Warping both instances to
   `end_m01ab`'s shared arrival waypoint produced a genuine double-fire: both engines reached

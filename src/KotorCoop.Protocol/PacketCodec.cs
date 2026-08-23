@@ -1231,6 +1231,9 @@ public static class PacketCodec
         WritePickLog(ref w, s.PickLog);
         w.WriteInt32(s.NodeIndex);
         w.WriteUInt32(s.NodeSerial);
+        // 2026-08-23 (docs/research/dialogue-sync.md's Item 1): appended after every existing
+        // field, same convention as every prior version bump on this packet.
+        w.WriteBool(s.Forced);
 
         return w.Failed ? 0 : w.Position;
     }
@@ -1255,6 +1258,7 @@ public static class PacketCodec
         byte[]? pickLog = ReadPickLog(ref r);
         int nodeIndex = r.ReadInt32();
         uint nodeSerial = r.ReadUInt32();
+        bool forced = r.ReadBool();
 
         // Anything other than a real entry index or the explicit "unknown" is treated as
         // unknown. A negative index that is not -1, or one past any conceivable .dlg, can only
@@ -1271,7 +1275,7 @@ public static class PacketCodec
                 serverTime,
                 new DialogueState(
                     active, owner, serial, speaker, line, partnerTag, replySerial, replyIndex,
-                    pickLog, nodeIndex, nodeSerial));
+                    pickLog, nodeIndex, nodeSerial, forced));
     }
 
     public static int Write(Span<byte> buffer, ProgressionSnapshotPacket packet)
@@ -1372,6 +1376,7 @@ public static class PacketCodec
         WritePickLog(ref w, packet.PickLog);
         w.WriteInt32(packet.NodeIndex);
         w.WriteUInt32(packet.NodeSerial);
+        w.WriteBool(packet.Forced);
 
         return w.Failed ? 0 : w.Position;
     }
@@ -1394,6 +1399,7 @@ public static class PacketCodec
         byte[]? pickLog = ReadPickLog(ref r);
         int nodeIndex = r.ReadInt32();
         uint nodeSerial = r.ReadUInt32();
+        bool forced = r.ReadBool();
 
         // Same clamp as the snapshot: an index that is neither real nor the explicit
         // "unknown" is treated as unknown, so a corrupt claim cannot drive a follower.
@@ -1406,7 +1412,7 @@ public static class PacketCodec
             ? null
             : new DialogueRequestPacket(
                 peerId, active, speaker, line, partnerTag, replySerial, replyIndex, pickLog,
-                nodeIndex, nodeSerial);
+                nodeIndex, nodeSerial, forced);
     }
 
     public static int Write(Span<byte> buffer, WorldDigestPacket packet)

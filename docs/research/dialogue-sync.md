@@ -1078,3 +1078,128 @@ round 59, §2) independently confirmed the party roster was intact at session en
 likely Trask's own reinitiate noise rather than a real auto-join timing gap, but not isolated
 to a single clean repro this pass; and the on-screen far-notice text itself, still confirmed
 only by log absence + code path, never screenshotted.
+
+## 2026-08-23, Item 1: stop auto-forcing ORDINARY dialogue joins; auto-join UNCONDITIONALLY only when the ENGINE itself would force it
+
+User's own words: "we don't want to force dialogue joins unless it's a critical/fixed point
+where dialogue was auto forced. The dialogue sync should still happen properly." Read together
+with the round-59 pass above (which confirmed all three `dialogue_auto_join` modes work exactly
+as coded), the gap was never in the mechanism — it was that `near` pulled the other player into
+EVERY conversation within range, with no distinction between an ordinary player-clicked NPC
+chat and a script-forced/cutscene conversation. This section closes that gap.
+
+### The signal: re-deriving `bIgnoreStartRange` from the existing disassembly, one step further
+
+`docs/research/dialogue-join-latency.md`'s "Far-join live pass" (already in this repo) found
+`CSWSObject::AIActionDialogObject 0x0057A470`'s range gate (`[0x747450]`, a flat 10.0-unit
+threshold, VERIFIED LIVE) and a bypass flag on the action struct at `[ebx+0x48]`, INFERRED to be
+NWScript's `bIgnoreStartRange` by position and effect. This pass re-derived that finding
+statically (`tools/disasm.py`/`tools/xrefs.py` against the on-disk GOG exe — read-only, no
+process, no rig needed) and traced the data flow one step further, since the earlier pass never
+needed to know WHERE the flag lived at function entry:
+
+```
+0x0057A4B2  mov ebx, [esp+0xb4]        ; ebx = the action struct — VERIFIED: this is the
+                                        ;   function's OWN FIRST STACK ARGUMENT. At entry (esp0
+                                        ;   = value right after the call instruction), [esp+0xb4]
+                                        ;   works out to [esp0+4] once the two vtable calls and
+                                        ;   3 pushes before it are accounted for — traced
+                                        ;   instruction-by-instruction, not assumed.
+0x0057A4E5  mov edx, [ebx+0x48]        ; VERIFIED: the SAME field dialogue-join-latency.md
+0x0057A4F9  mov [esp+0x24], edx        ;   already found
+...
+0x0057A74A  mov eax, [esp+0x24]        ; VERIFIED (re-derived here): the store above and this
+0x0057A750  test eax, eax              ;   read are the SAME stack slot — esp is unchanged
+0x0057A756  jne 0x57a9d7               ;   between the two (every intervening call is
+                                        ;   thiscall/stdcall with its own cleanup), so this is
+                                        ;   the identical flag, not a coincidentally-matching one
+```
+
+Two things new in this pass, both **VERIFIED**:
+
+1. **The flag is the function's first stack argument**, present and readable from the moment
+   `AIActionDialogObject` is entered — `this` (ECX) is the actor whose action queue is running
+   the conversation, and `[esp+4]` at entry is the `ActionStruct*`. This matters because it
+   means the flag can be tapped at the WHOLE-FUNCTION PROLOGUE, the same low-risk hook shape
+   `DialogueGateHook` already uses for `StartDialog`, rather than needing a mid-function
+   trampoline (which dialogue-join-latency.md's own house rules flag as materially riskier).
+2. **`CServerExoAppInternal+0x1B910` (`action_conversation`) is a re-entrancy BOOLEAN, not the
+   action struct pointer.** dialogue-sync.md's own §4 described it as "the queued/active
+   `ActionStartConversation` handle" without pinning its type. This pass disassembled all three
+   setter call sites (`xrefs.py 0x004AF010` → `0x004FF65C`, `0x00588258`, `0x0058BF3A`) and every
+   one pushes a literal `1` before the call — never a struct pointer. So the ONE place
+   `dialogue-sync.md` already documented as durable and reachable from `StartDialog`'s own
+   call chain (`BeginConversation`, which calls `GetActionConversation`/`SetActionConversation`
+   right before dispatching) carries no flag to read. **This closes off the "read it at
+   StartDialog's own site" approach dialogue-sync.md left open as a possibility** — the flag
+   must be tapped where it is still alive, at `AIActionDialogObject` itself.
+
+### Implementation: a second, read-only whole-function tap
+
+`KotorCoop.Plugin.DialogueForceFlagHook` (new file) hooks `AIActionDialogObject`'s prologue —
+verify-bytes-or-refuse, same discipline as every native patch in this plugin — and records
+(object id, forced) into a small fixed table. `DialogueGateHook.OnStartDialog` (already firing
+on every `StartDialog` call) looks the SAME object id up and latches
+`DialogueGateHook.LastStartForced`; `DialogueSpectateController.PublishLocal` reads that latch
+exactly once, at the moment it detects a NEW local conversation (the `_hadDialogue` false->true
+edge), and holds it in `block.LocalDialogueForced` for the conversation's whole duration —
+mirroring how the partner tag is already held across the engine's own between-entries flicker.
+
+**Why `this` should be the same object at both hook sites (INFERRED, not proven here):**
+NWN-heritage engine convention queues `ActionStartConversation` on the SPEAKING object (the
+actor whose action executes the "start conversation" step), which is also the object that
+becomes `StartDialog`'s own `this` (dialogue-sync.md's headline table: `StartDialog`'s `this` =
+"the object that initiates"). A real click queues it on the PC; a scripted ambush typically
+queues it on the ambushing NPC via `AssignCommand`. Both cases: whichever object's action queue
+runs it is the one `StartDialog` later fires on. **This correlation is not independently proven
+by this pass** — it is inference from engine convention, not from tracing a live call. If it is
+wrong, the failure mode is a missed match: `WasForced` returns `false` (its default), and the
+conversation is treated as ordinary — today's cautious behaviour, never a wrong TRUE.
+
+**One wire field, following the existing pattern exactly**: `DialogueState`/
+`DialogueRequestPacket` gain `Forced` (protocol version 38), threaded through
+`DialogueArbiter.Apply`, `CoopHost`/`CoopClient`, `IGameBridge.TryReadLocalDialogueFollow`/
+`WriteRemoteDialogue`, and two new `SharedBlock` fields (`LocalDialogueForced`/
+`RemoteDialogueForced`, version 51, riding the free tail slack after the container-lock-target-
+ids region — no `TotalSize` growth). `InteractionLockController.TryForceOpen` reads
+`block.RemoteDialogueActive && block.RemoteDialogueForced`, confirms the interaction-lock
+entry's tag matches `block.RemoteDialoguePartnerTag` (so a transient mismatch during the token's
+own resolve window degrades to "not forced yet" rather than a wrong answer), and if so calls
+`DialogueAutoJoinRule.ShouldAutoJoin` with `isForced: true` — which the pure rule answers
+UNCONDITIONALLY true, ignoring the configured mode (including `off`) and range, subject only to
+three runtime-safety gates that were never a policy choice (already-in-a-conversation, combat,
+minigame — the engine cannot correctly enter a second conversation regardless of how
+vanilla-forced the first one is).
+
+**The default flipped**: `DialogueAutoJoinRule.ParseMode`'s fallback (unset/unrecognised text)
+changed from `near` to `off` — the user's stated preference is no forced joins for ordinary
+chat, full stop. `dialogue_join_teleport` (already shipped, default on) is untouched and still
+covers a forced conversation's own joiner-too-far case exactly the way it already covers a far
+`always`/`near` join, since it triggers off `Odyssey.StartDialogueWith`'s own distance check
+regardless of WHY the join is happening.
+
+### VERIFIED / INFERRED / NEEDS-LIVE
+
+| Claim | Status |
+| --- | --- |
+| `[0x747450]` = 10.0-unit range threshold | VERIFIED LIVE (prior pass) |
+| `[ebx+0x48]` bypasses the ENTIRE range/walk block when nonzero | VERIFIED (disasm, both passes) |
+| `[ebx+0x48]` is the function's first stack arg, readable at prologue | VERIFIED (this pass, instruction-traced) |
+| `action_conversation` (`+0x1B910`) is a boolean, not the action struct pointer | VERIFIED (this pass, all 3 setter sites disassembled) |
+| `[ebx+0x48]` = NWScript's `bIgnoreStartRange` specifically (not merely "the range bypass") | INFERRED (position + effect match; not DB-named) |
+| `AIActionDialogObject`'s `this` = the same object `StartDialog` later fires `this` on | INFERRED (NWN-heritage convention; fails safe if wrong) |
+| A real click's action is built with this flag hardcoded to 0 (`HandlePlayerToServerInputMessage`'s "mostly-zeroed pushes") | INFERRED (dialogue-join-latency.md's own reading of that call site; not independently re-verified this pass) |
+| **The flag reads TRUE for a real ambush/forced conversation and FALSE for a real player click, on the actual game** | **NEEDS-LIVE — the one item this round names explicitly** |
+
+Everything else in this section either follows deterministically from a VERIFIED disasm fact or
+is pure managed code covered by unit tests (`DialogueAutoJoinRuleTests`'s forced x mode x range
+matrix). The NEEDS-LIVE item is narrow and has a ready-made diagnostic:
+`DialogueSpectateController`'s `dialogue: engine reached StartDialog (N so far, forced=...)` log
+line (extended this pass specifically for this) fires on every `StartDialog` call, refused or
+not, on either instance. A live round should: (a) `talk <tag>` (the existing test hook, which
+sends the same request a click does) against an ordinary NPC and confirm `forced=False`; (b)
+find or trigger a real ambush/forced conversation (docs/research/dialogue-consequences.md
+may already name one; Taris and the Endar Spire both script forced conversations) and confirm
+`forced=True` there, and confirm `interaction: auto-joining a peer's conversation with '...'
+(forced — matching the engine's own force)` fires on the OTHER instance even with
+`dialogue_auto_join=off`.

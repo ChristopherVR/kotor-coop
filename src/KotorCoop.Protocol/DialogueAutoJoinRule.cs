@@ -1,13 +1,19 @@
 namespace KotorCoop.Protocol;
 
 /// <summary>
-/// <c>coop.ini dialogue_auto_join</c>'s three settings. Default <see cref="Near"/>.
+/// <c>coop.ini dialogue_auto_join</c>'s three settings. Default <see cref="Off"/> (2026-08-23:
+/// changed from <see cref="Near"/> — docs/research/dialogue-sync.md's Item 1. The user does not
+/// want ordinary player-clicked conversations to auto-pull the other player, ever; only a
+/// FORCED conversation should, and that path bypasses this mode entirely — see
+/// <see cref="ShouldAutoJoin"/>'s <c>isForced</c> parameter).
 /// </summary>
 public enum DialogueAutoJoinMode
 {
-    /// <summary>The pre-existing behaviour: never pulled in automatically, only by clicking the
-    /// same NPC (docs/research/shared-state-audit.md's "force_dialogue_party, and why it is
-    /// OFF").</summary>
+    /// <summary>The default: never pulled in automatically for an ORDINARY conversation, only
+    /// by clicking the same NPC (docs/research/shared-state-audit.md's "force_dialogue_party,
+    /// and why it is OFF") — spectate and click-to-join/walk-over instead. A FORCED
+    /// conversation (see <see cref="DialogueAutoJoinRule.ShouldAutoJoin"/>'s <c>isForced</c>)
+    /// still auto-joins regardless of this setting; that is not this mode's concern.</summary>
     Off = 0,
 
     /// <summary>Auto-join when close enough to the conversation's NPC not to feel like being
@@ -46,7 +52,23 @@ public static class DialogueAutoJoinRule
     /// send (the existing adopt path already carries it from there — see
     /// <c>DialogueSpectateController</c>'s "adopt" state).
     /// </summary>
-    /// <param name="mode">The configured <see cref="DialogueAutoJoinMode"/>.</param>
+    /// <param name="mode">The configured <see cref="DialogueAutoJoinMode"/>. Irrelevant when
+    /// <paramref name="isForced"/> is true — see that parameter.</param>
+    /// <param name="isForced">
+    /// True when the conversation is one the vanilla ENGINE ITSELF would force onto a
+    /// single-player PC regardless of position — an ambush or scripted cutscene conversation
+    /// (NWScript <c>ActionStartConversation</c> with <c>bIgnoreStartRange=TRUE</c> — see
+    /// docs/research/dialogue-sync.md's 2026-08-23 Item 1 and
+    /// <c>KotorCoop.Plugin.DialogueForceFlagHook</c> for how the plugin reads it). When true,
+    /// this rule joins UNCONDITIONALLY — ignoring <paramref name="mode"/> (including
+    /// <see cref="DialogueAutoJoinMode.Off"/>) and <paramref name="distanceToPartner"/> — because
+    /// this is matching behaviour vanilla already forces, not inventing a new one; the
+    /// mode/range knobs exist only to govern whether an ORDINARY, player-clicked conversation
+    /// pulls the other player in. The three runtime-safety gates below (already-in-conversation,
+    /// combat, minigame) still apply even when forced: none of them is a "does the user want
+    /// this" policy choice, they are "can the engine correctly do this right now" guards, and a
+    /// forced conversation the local engine cannot currently enter is not this rule's problem to
+    /// force through.</param>
     /// <param name="localAlreadyInConversation">This player is already in a conversation of
     /// their own (their own, not the one being offered — a peer already holding a DIFFERENT
     /// token is handled by the existing yield/adopt machinery, not this rule; this flag exists
@@ -59,23 +81,31 @@ public static class DialogueAutoJoinRule
     /// this player in every other sense already; a dialogue window would not make sense either.
     /// </param>
     /// <param name="distanceToPartner">This player's own distance to the conversation's NPC, in
-    /// game units. Ignored under <see cref="DialogueAutoJoinMode.Always"/>.</param>
+    /// game units. Ignored under <see cref="DialogueAutoJoinMode.Always"/> and whenever
+    /// <paramref name="isForced"/> is true.</param>
     /// <param name="rangeLimit"><c>dialogue_auto_join_range</c> (default 20). Ignored under
-    /// <see cref="DialogueAutoJoinMode.Always"/>.</param>
+    /// <see cref="DialogueAutoJoinMode.Always"/> and whenever <paramref name="isForced"/> is
+    /// true.</param>
     public static bool ShouldAutoJoin(
         DialogueAutoJoinMode mode,
+        bool isForced,
         bool localAlreadyInConversation,
         bool localInCombat,
         bool localInMinigame,
         float distanceToPartner,
         float rangeLimit)
     {
-        if (mode == DialogueAutoJoinMode.Off)
+        if (localAlreadyInConversation || localInCombat || localInMinigame)
         {
             return false;
         }
 
-        if (localAlreadyInConversation || localInCombat || localInMinigame)
+        if (isForced)
+        {
+            return true;
+        }
+
+        if (mode == DialogueAutoJoinMode.Off)
         {
             return false;
         }
@@ -92,13 +122,15 @@ public static class DialogueAutoJoinRule
     }
 
     /// <summary>Parses <c>coop.ini dialogue_auto_join</c>. Unrecognised text (including empty
-    /// or missing — the default) falls to <see cref="DialogueAutoJoinMode.Near"/>, the least
-    /// surprising of the three: closer to today's click-to-join feel than <c>always</c>, and
-    /// still an improvement over <c>off</c>'s pre-existing behaviour.</summary>
+    /// or missing — the default) falls to <see cref="DialogueAutoJoinMode.Off"/> (2026-08-23:
+    /// changed from <see cref="DialogueAutoJoinMode.Near"/> — the user's own stated preference
+    /// is no forced joins for ordinary chat; a genuinely forced/critical conversation still
+    /// auto-joins regardless of this setting, via <see cref="ShouldAutoJoin"/>'s
+    /// <c>isForced</c>).</summary>
     public static DialogueAutoJoinMode ParseMode(string? raw) => raw?.Trim().ToLowerInvariant() switch
     {
-        "off" => DialogueAutoJoinMode.Off,
+        "near" => DialogueAutoJoinMode.Near,
         "always" => DialogueAutoJoinMode.Always,
-        _ => DialogueAutoJoinMode.Near,
+        _ => DialogueAutoJoinMode.Off,
     };
 }

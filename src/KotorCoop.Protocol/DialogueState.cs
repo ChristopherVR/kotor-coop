@@ -38,6 +38,13 @@ namespace KotorCoop.Protocol;
 ///
 /// <see cref="SpeakerName"/> and <see cref="Line"/> remain as a diagnostic read of the
 /// owner's current line.
+///
+/// <see cref="Forced"/> (2026-08-23, docs/research/dialogue-sync.md's Item 1): whether the
+/// OWNER's conversation is one the vanilla engine itself forces regardless of distance — an
+/// ambush or scripted cutscene conversation, as opposed to an ordinary player-clicked chat.
+/// <c>DialogueAutoJoinRule.ShouldAutoJoin</c> auto-joins UNCONDITIONALLY when this is set,
+/// ignoring the configured mode and range, because that is matching behaviour vanilla already
+/// forces onto a single-player PC rather than inventing a new one.
 /// </summary>
 public readonly record struct DialogueState(
     bool Active,
@@ -50,7 +57,8 @@ public readonly record struct DialogueState(
     int ReplyIndex = 0,
     byte[]? PickLog = null,
     int NodeIndex = -1, // = NoNode; a record's own const is not in scope for its parameter list
-    uint NodeSerial = 0)
+    uint NodeSerial = 0,
+    bool Forced = false)
 {
     /// <summary>The pick log's fixed wire size: 8 entries x (serial, slot, lineHash).</summary>
     public const int PickLogBytes = 96;
