@@ -40,13 +40,13 @@ off by default or waiting on a live pass; the linked doc always has the dated ev
 | Map pins, minimap arrows, pause-together, downed/revive + spectate camera | Live-verified | — |
 | Control lock-in (client stuck as a companion on connect) | Fixed and live-verified, round 70 | [control-return.md](docs/research/control-return.md) |
 | Session lifecycle — in-game Co-op menu, console connect/reconnect, mod-compat per-channel degrade | Live-verified for the agreeing case | shared-state-audit.md |
+| Companion follow-AI (Trask now walks to catch up) | Fixed and live-verified 3x, round 80 — reaches walking state, closes distance | [party-reconciliation.md](docs/research/party-reconciliation.md); per-frame smoothness not yet independently confirmed |
 
 ### Still needs work
 
 | Area | Status | Blocker |
 | --- | --- | --- |
-| **Companion follow-AI (Trask doesn't walk)** | Real fixes shipped (round 71-75), still doesn't reach "walking" state | needs a live debugger on an async pathfinder cursor — [party-reconciliation.md](docs/research/party-reconciliation.md) |
-| Companion local combat (client's mirrored companion fighting) | Release/reclaim gate verified clean; a landed swing not independently confirmed | OFF by default — party-reconciliation.md |
+| Companion local combat (client's mirrored companion fighting) | Release/reclaim gate verified clean; a second blocker found (solo mode) — a landed swing not independently confirmed | OFF by default — party-reconciliation.md |
 | `party_fast_pump` (companion-position latency) | Tested twice (combat: worse; non-combat: no measurable difference) | OFF by default, real cause of reported lag still open — [lag-audit.md](docs/research/lag-audit.md) |
 | Minigames (swoop races, forced turret sequences) | Detection + peer-park built | never run in a live two-instance session — [minigames.md](docs/research/minigames.md) |
 | Mid-session save/load (host or client loading a different save) | Phase 1 (client character survives to next session) live-tested; host mid-session load is refused, not re-adopted | [session-save.md](docs/research/session-save.md) |
@@ -86,9 +86,8 @@ Both players, each in their own full game:
 - **See each other on the map**: a coloured arrow per player on the minimap and a live pin on
   the M-screen map.
 - **Share one party.** The host drives the companions with the game's own AI; each client
-  mirrors them frame by frame, swings included. `--no-party-sync` opts out. (Companions
-  walking to catch up after being idle is the one piece of this still not reliable — see
-  Honest limitations.)
+  mirrors them frame by frame, swings included, and now reliably walks to catch up after
+  being idle. `--no-party-sync` opts out.
 - **Start from the game's own menu.** A "Co-op" button opens a real KOTOR panel; one player
   hosts, the other connects, both load their own save into one shared world. No console, no
   alt-tabbing. A password keeps strangers out; a dropped player reconnects automatically.
@@ -273,19 +272,23 @@ tools/                   RE helpers, demo scripts, the kotor1_0_3 symbol databas
   straight back. If you were controlling a companion when you connected, control and the
   camera come back to your own character automatically, live-verified. `control_return=0`
   opts out. See [control-return.md](docs/research/control-return.md).
-- **A companion does not reliably walk to catch up.** Genuinely not yet fixed. It reliably
-  enters "follow mode" but the underlying engine pathfinding step it depends on stalls for a
-  reason that needs a live debugger, not more static analysis, to find. Not a regression — no
-  follow-re-arming existed before this session's work started it. See
+- **A companion now reliably walks to catch up**, fixed round 80. Two stacked engine gates
+  were the cause: a step-accumulator field nothing ever incremented, and a pathfinder
+  write-cursor gate downstream of it — both closed by driving the engine step directly rather
+  than waiting on the built-in scheduler. Live-confirmed 3x (reaches walking state, closes
+  distance); whether the resulting motion is smooth per-frame walking or a fast multi-node
+  catch-up hasn't been independently confirmed yet. See
   [party-reconciliation.md](docs/research/party-reconciliation.md).
 - **A mirrored companion cannot swing on a client**, except for one narrow, off-by-default
   case (`companion_local_combat=1`) that releases a companion standing close enough to both
   players and the enemy to its own engine AI. The release/reclaim mechanism is live-verified
-  clean; whether a swing actually lands credited damage is still unconfirmed. See
+  clean; a second, previously unexamined blocker was found (client-side "solo mode" may hold
+  companion AI locked regardless of release) and a read-only diagnostic shipped to settle it
+  live; whether a swing actually lands credited damage is still unconfirmed. See
   party-reconciliation.md.
 - **Companion-mirror lag** ("lag even on localhost"): investigated twice (`party_fast_pump`),
-  found no benefit either time, left off. The follow bug above blocks a clean measurement of
-  this report's real cause. See [lag-audit.md](docs/research/lag-audit.md).
+  found no benefit either time, left off. The follow-AI bug that blocked a clean measurement
+  is now fixed, so this is open to re-measure. See [lag-audit.md](docs/research/lag-audit.md).
 - **One conversation at a time.** By design, not a bug — it keeps one plot line advancing.
   The other player spectates rather than getting their own copy.
 - **The Endar Spire's command deck floors damage at 1 hp for everyone** — that's KOTOR's own
