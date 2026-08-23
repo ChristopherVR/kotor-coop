@@ -850,10 +850,15 @@ public sealed class KotorGameBridge : IGameBridge
     /// 0x33 = 51) — a conversation the engine itself forces regardless of range, distinct
     /// from a player's own click. See docs/research/dialogue-sync.md's forced-conversation
     /// section.
+    /// 52 = the mid-session-load-request flag at 0x3F24 (no TotalSize growth; 0x34 = 52), the
+    /// `loadgame` verb's own signal telling MenuLoadController to replay retail's
+    /// bFromMainMenu==0 branch (DestroyServer + UnloadModule before CreateServer) instead of
+    /// acking-and-mooting when a server already exists. See docs/research/session-save.md's
+    /// dated entry.
     /// <b>ItemHarnessTests.TheBlockVersionIsTheSameNumberInBothHalves reads both files and
     /// fails the build if they disagree</b> — added with 42, because nothing had ever
     /// enforced the warning above.</summary>
-    public const string PluginSignature = "4B 4F 43 4F 4F 50 30 31 33 00 00 00 01 EE FF C0";
+    public const string PluginSignature = "4B 4F 43 4F 4F 50 30 31 34 00 00 00 01 EE FF C0";
 
     /// <summary>Agent's view of which coop item id occupies each plugin item slot.</summary>
     private readonly uint[] _itemSlotIds = new uint[BlockItemCapacity];
@@ -2282,13 +2287,18 @@ public sealed class KotorGameBridge : IGameBridge
     /// world's own (the host's). No new engine RE: this is the exact call the first-join path
     /// already makes, reused for a mid-session re-adopt.
     ///
-    /// ⚠ NEEDS-LIVE, and this is the honest gap: <c>MenuLoadController</c>'s replay is a
-    /// MAIN-MENU-ONLY mechanism — it acks and no-ops the instant <c>Odyssey.HasServer</c> is
-    /// true (see its own header). Whether the game has returned all the way to "no server" by
-    /// the time this fires — after the PLAYER's own in-game Load Game action has already
-    /// finished standing up a fresh one — has never been measured. If it has not, this call
-    /// degrades to a harmless no-op ack rather than a crash; see
-    /// docs/research/session-save.md's Phase 2 NEEDS-LIVE list.
+    /// ⚠ NEEDS-LIVE, and this is the honest gap: this call always passes the default
+    /// <c>inSession: false</c>, so <c>MenuLoadController</c> still acks-and-no-ops the instant
+    /// <c>Odyssey.HasServer</c> is true (see its own header) — unchanged from before
+    /// <see cref="TryRequestMidSessionLoad"/> existed. Whether the game has returned all the
+    /// way to "no server" by the time this fires — after the PLAYER's own in-game Load Game
+    /// action has already finished standing up a fresh one — has never been measured. If it
+    /// has not, this call degrades to a harmless no-op ack rather than a crash; see
+    /// docs/research/session-save.md's Phase 2 NEEDS-LIVE list. <see cref="TryRequestMidSessionLoad"/>
+    /// is the new, separate entry point built to close a related but distinct gap (a genuine
+    /// mid-session Load Game action, for testing <c>WorldLoadRule.IsUnannouncedTeardown</c>'s
+    /// positive case) — once THAT is live-verified, passing <c>inSession: true</c> here too is
+    /// the natural next step, not attempted by this pass.
     /// </summary>
     public bool TryRequestAdoptedWorldLoad(out string diagnostic)
     {
@@ -2301,15 +2311,74 @@ public sealed class KotorGameBridge : IGameBridge
         return ok;
     }
 
-    /// <summary>Polls the outcome of the last <see cref="TryRequestAdoptedWorldLoad"/> — see
-    /// <see cref="PluginMenuLoader.TryReadStatus"/>. False while nothing has been requested
-    /// yet or the block cannot be read.</summary>
+    /// <summary>Polls the outcome of the last <see cref="TryRequestAdoptedWorldLoad"/> (or
+    /// <see cref="TryRequestMidSessionLoad"/> — both write the SAME status fields through
+    /// <see cref="PluginMenuLoader"/>, so one poll serves either). False while nothing has
+    /// been requested yet or the block cannot be read.</summary>
     public bool TryGetAdoptedWorldLoadStatus(out uint applied, out int status)
     {
         applied = 0;
         status = 0;
         return _menuLoadBlock != 0
             && PluginMenuLoader.TryReadStatus(_memory, _menuLoadBlock, out applied, out status);
+    }
+
+    /// <summary>
+    /// STATIC RE (2026-08-23, docs/research/session-save.md's dated entry): fires a GENUINE
+    /// mid-session (pause-menu-equivalent) Load Game action — the `loadgame &lt;slot&gt;`
+    /// console verb's own engine call. Stages <paramref name="slotIndex"/> over the autosave
+    /// slot first (the SAME agent-side staging <c>SaveLoader</c>/<c>agent -Save N</c> already
+    /// does), then requests the SAME <see cref="PluginMenuLoader.TryRequestLoad"/> channel
+    /// <see cref="TryRequestAdoptedWorldLoad"/> uses, but with <c>inSession: true</c> so
+    /// <c>MenuLoadController</c> runs retail's own extra
+    /// <c>CAppManager::DestroyServer</c> + <c>CClientExoApp::UnloadModule</c> pre-step
+    /// (<c>CSWGuiSaveLoad::LoadGame</c>'s <c>bFromMainMenu==0</c> branch) instead of
+    /// acking-and-mooting the instant a server already exists.
+    ///
+    /// Built to let a live round exercise <c>WorldLoadRule.IsUnannouncedTeardown</c>'s
+    /// positive case (a genuine in-game Load, as opposed to an ordinary save or a peer-follow
+    /// warp) deterministically, without the mouse-click/screenshot rig-tooling gap
+    /// docs/research/session-save.md's most recent round hit. Deliberately NOT wired into
+    /// <see cref="TryRequestAdoptedWorldLoad"/>/the <c>client_load_rejoin</c>/
+    /// <c>host_load_readopt</c> rejoin path — this is a separate, additive, test-only entry
+    /// point; folding <c>inSession: true</c> into the rejoin path is a natural follow-up once
+    /// THIS path is itself live-verified, not something this pass claims to have done.
+    /// </summary>
+    public bool TryRequestMidSessionLoad(int slotIndex, out string diagnostic)
+    {
+        string? gameDirectory;
+        try
+        {
+            using var process = System.Diagnostics.Process.GetProcessById(_memory.ProcessId);
+            gameDirectory = Path.GetDirectoryName(process.MainModule?.FileName);
+        }
+        catch (Exception ex)
+        {
+            diagnostic = $"cannot resolve the game directory: {ex.Message}";
+            return false;
+        }
+
+        if (gameDirectory is null)
+        {
+            diagnostic = "cannot resolve the game directory";
+            return false;
+        }
+
+        if (!PluginMenuLoader.TryStageSaveAsAutosave(gameDirectory, slotIndex, out string staging))
+        {
+            diagnostic = staging;
+            return false;
+        }
+
+        bool ok = PluginMenuLoader.TryRequestLoad(
+            _memory, out nint block, out string request, adoptedWorld: false, inSession: true);
+        if (ok)
+        {
+            _menuLoadBlock = block;
+        }
+
+        diagnostic = ok ? $"{staging}; {request}" : request;
+        return ok;
     }
 
     /// <summary>

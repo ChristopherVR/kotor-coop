@@ -175,6 +175,14 @@ public sealed class CoopCommandDispatcher(
 
     private Task? _rejoinTask;
 
+    /// <summary>The in-flight <c>loadgame</c> poll, if any — see <see cref="TriggerMidSessionLoad"/>.
+    /// Held only so the fire-and-forget <c>Task.Run</c> is not flagged as unobserved; nothing
+    /// reads it back (a second <c>loadgame</c> before the first settles just starts a second
+    /// poll racing the first for the SAME <c>_menuLoadBlock</c> status field, which is a
+    /// harmless double-read, not a double-fire — the plugin's own serial guard,
+    /// <c>MenuLoadController._firedSerial</c>, is what actually prevents a double-apply).</summary>
+    private Task? _loadGameTask;
+
     /// <summary>Polls the block for console/menu commands and reflects status until cancelled.</summary>
     public async Task RunAsync(CancellationToken cancellationToken)
     {
@@ -626,6 +634,10 @@ public sealed class CoopCommandDispatcher(
 
             case CoopCommandKind.SelectReply:
                 SendCheat(new CheatRequest(CheatKinds.SelectReply, Amount: command.Amount));
+                break;
+
+            case CoopCommandKind.LoadGame:
+                TriggerMidSessionLoad(command.Amount);
                 break;
 
             case CoopCommandKind.Cheats:
@@ -1866,6 +1878,67 @@ public sealed class CoopCommandDispatcher(
             {
                 _rejoinState = ClientLoadRejoinRule.Complete(_rejoinState);
             }
+        });
+    }
+
+    /// <summary>
+    /// <c>loadgame &lt;slot&gt;</c> — LIVE-TEST PRIMITIVE (2026-08-23,
+    /// docs/research/session-save.md's dated entry). Fires <see cref="KotorGameBridge.TryRequestMidSessionLoad"/>
+    /// so a follow-up live round can exercise <c>WorldLoadRule.IsUnannouncedTeardown</c>'s
+    /// POSITIVE case (a genuine in-game Load Game action) deterministically, closing the gap
+    /// the most recent live round hit: the real pause-menu path needs mouse clicks a working
+    /// screenshot loop could confirm landed, and both are broken on this rig
+    /// (shot.ps1's black-frame capture; click injection not landing on repositioned windows).
+    /// This bypasses the GUI entirely, the same pattern <c>skipline</c>/<c>walkto</c>/<c>usedoor</c>
+    /// already established.
+    ///
+    /// Needs the in-process bridge (<see cref="KotorGameBridge"/>) — refused, not silently
+    /// no-op'd, when it is unavailable. Polls <see cref="KotorGameBridge.TryGetAdoptedWorldLoadStatus"/>
+    /// (the SAME status fields <see cref="TriggerRejoin"/> polls, since both requests write
+    /// through the identical <c>PluginMenuLoader</c> channel) for up to 90s, matching
+    /// <see cref="TriggerRejoin"/>'s own deadline for the same reason: a mid-session load goes
+    /// through the SAME connect-grace-then-load-then-present sequence.
+    /// </summary>
+    private void TriggerMidSessionLoad(int slotIndex)
+    {
+        if (_kotor is null)
+        {
+            Reply("loadgame needs the in-process bridge (not available on this connection)");
+            return;
+        }
+
+        if (slotIndex < 0)
+        {
+            Reply("loadgame needs a save slot 0 or higher (0-based, most-recent-first)");
+            return;
+        }
+
+        if (!_kotor.TryRequestMidSessionLoad(slotIndex, out string request))
+        {
+            Reply($"loadgame: {request}");
+            return;
+        }
+
+        Reply($"loadgame: {request}");
+
+        KotorGameBridge kotor = _kotor;
+        _loadGameTask = Task.Run(async () =>
+        {
+            DateTime deadline = DateTime.UtcNow + TimeSpan.FromSeconds(90);
+            while (DateTime.UtcNow < deadline)
+            {
+                if (kotor.TryGetAdoptedWorldLoadStatus(out uint applied, out int status) && applied != 0)
+                {
+                    Reply(status == 0
+                        ? "loadgame: the world is up"
+                        : $"loadgame: the plugin refused (failure {status})");
+                    return;
+                }
+
+                await Task.Delay(500).ConfigureAwait(false);
+            }
+
+            Reply("loadgame: no result within 90s - check the plugin log");
         });
     }
 

@@ -33,6 +33,10 @@ public static class PluginMenuLoader
     private const int BlockMenuLoadModuleLength = 16;
     private const int BlockHeartbeat = 0x4C;
 
+    // SharedBlock.OffsetMenuLoadInSession (block version 52). See TryRequestLoad's own
+    // <paramref name="inSession"/> remark and docs/research/session-save.md's dated entry.
+    private const int BlockMenuLoadInSession = 0x3F24;
+
     // SharedBlock.OffsetAdoptWorldLogin / OffsetAdoptWorldApplied (block version 35).
     private const int BlockAdoptWorldLogin = 0x3320;
     private const int BlockAdoptWorldApplied = 0x3324;
@@ -176,8 +180,16 @@ public static class PluginMenuLoader
     /// instead of the staged world's own module.ifo — which holds the HOST's character. See
     /// the adopted-world login region in <c>SharedBlock</c> and
     /// docs/research/character-login-chain.md.</param>
+    /// <param name="inSession">True to request the MID-SESSION (pause-menu-equivalent) replay
+    /// instead of the main-menu-only one: <c>MenuLoadController</c> then runs retail's own
+    /// extra <c>CAppManager::DestroyServer</c> + <c>CClientExoApp::UnloadModule</c> pre-step
+    /// (<c>CSWGuiSaveLoad::LoadGame</c>'s <c>bFromMainMenu==0</c> branch) instead of
+    /// acking-and-mooting the instant <c>Odyssey.HasServer</c> is true. See
+    /// <c>SharedBlock.OffsetMenuLoadInSession</c> (block version 52) and
+    /// docs/research/session-save.md's dated entry on the <c>loadgame</c> verb.</param>
     public static bool TryRequestLoad(
-        ProcessMemory memory, out nint block, out string diagnostic, bool adoptedWorld = false)
+        ProcessMemory memory, out nint block, out string diagnostic, bool adoptedWorld = false,
+        bool inSession = false)
     {
         block = 0;
 
@@ -255,6 +267,16 @@ public static class PluginMenuLoader
             return false;
         }
 
+        // Same rule, same reason: whether this is the mid-session replay must already be
+        // there when the plugin reads the bumped serial. Always written (0 or 1), not only
+        // when true, so a STALE flag from an earlier mid-session request can never leak into
+        // a later plain one.
+        if (!memory.TryWrite(block + BlockMenuLoadInSession, inSession ? 1u : 0u))
+        {
+            diagnostic = "could not write the in-session flag";
+            return false;
+        }
+
         // Continue from whatever serial the block holds — the plugin outlives agents.
         if (!memory.TryReadUInt32(block + BlockMenuLoadSerial, out uint serial)
             || !memory.TryWrite(block + BlockMenuLoadSerial, serial + 1))
@@ -264,7 +286,8 @@ public static class PluginMenuLoader
         }
 
         diagnostic = $"load request {serial + 1} sent to the plugin (module {moduleName}"
-            + (adoptedWorld ? ", carried character)" : ")");
+            + (adoptedWorld ? ", carried character" : string.Empty)
+            + (inSession ? ", mid-session)" : ")");
         return true;
     }
 
