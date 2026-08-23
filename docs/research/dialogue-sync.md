@@ -1477,3 +1477,128 @@ client simply not being within the census's own range-sheds — `PumpEnemies`'s 
 parameter). If the gap is materially longer than the conversation itself, that is the bug to
 chase, and the fix is likely in how promptly a FOLLOWED (as opposed to owned) conversation closes
 on the follower's own engine, not in the census gate itself.
+
+## Round 78 (2026-08-23): the gap measured, confirmed real, and fixed - a debounce sized for "a
+## few frames" was actually 1.5 seconds
+
+Picks up round 77's own bug 2 exactly where it left off: measure the actual gap between the
+followed conversation visibly closing on the host and the host's own `bridge.IsInDialogue`
+clearing. No real ambush-into-combat script was needed to answer this - the mechanism under test
+is a pure function of `CoopAgent.PumpDialogue`'s own debounce, independent of how the conversation
+started, so a CONTROLLED reproduction (below) measures the identical code path.
+
+### Instrumentation added first, per the task brief
+
+`CoopAgent.cs` had no log of `bridge.IsInDialogue`'s own transitions anywhere. Added
+`LogHostDialogueEdge` (called once per poll tick, ahead of every cadence gate), edge-triggered,
+logging on EVERY instance (not only the host) so a live pass can see both the OWNER's true-end edge
+and the FOLLOWER's clear-edge on the same timeline:
+
+```
+dialogue-gate: host bridge.IsInDialogue False -> True at <tick> (followingPeer=..., tokenActive=..., tokenSerial=...)
+```
+
+### Reproduction: a controlled follow/close cycle, no OS input, no ambush script needed
+
+`dialogue_auto_join=always` set for this round's rig only (not shipped - reverted before teardown;
+the shipped default stays `Off` per the 2026-08-23 Item 1 decision, unrelated to this bug), which
+makes the SAME `DialogueAutoJoinRule.ShouldAutoJoin` unconditional-join path an ordinary
+conversation takes that a FORCED one already takes regardless of this setting - the mechanism
+`InteractionLockController`/`DialogueSpectateController` runs is identical either way, so this is a
+faithful reproduction of the follower-close path, not a different one. Client-side `talk end_trask`
+(the existing `TestDriveController.HandleTalk` primitive, exactly what a click does) started a real
+conversation; the HOST auto-joined and adopted it (`dialogue: the engine started the same
+conversation here; adopting it to follow`, content delivered within tens of ms). Client-side
+`talk close` (the SAME primitive's `Odyssey.CloseDialogue` branch - a real `CSWSObject::StopDialog`
+call, not a shortcut) ended it for real.
+
+Trask's own end script re-initiates the conversation on its own (documented already,
+`YieldCloseRetryMs`'s own remarks: an NPC scripted to re-initiate turns a per-frame close into an
+open/close loop) - several cycles needed a `talk close` on both sides to settle before each timed
+attempt, and which side ends up OWNER vs FOLLOWER on a re-initiate is a genuine race (the host's own
+claim is always zero-latency in-process, a client's crosses the network, so whichever side's local
+`StartDialog` lands first wins the token) - not a bug this round chased further, just a fact about
+Trask specifically that shaped how each measurement had to be staged.
+
+### The bug, confirmed live: the OLD 1500ms `DialogueLingerMs` was the dominant term
+
+Before any fix, one full cycle, correlated across the CLIENT's plugin log (the real close) and the
+HOST's agent log (the edge):
+
+```
+CLIENT [15:01:38.403] test: closed any running conversation      <- the real StopDialog call
+HOST   [15:01:41.101] dialogue: the owner ended the conversation; closing
+HOST   dialogue-gate: host bridge.IsInDialogue True -> False at 12413750   (~15:01:41.111 by tick correlation)
+```
+
+**Gap: ~2.7 seconds** between the real close and the host's own census-gating flag clearing -
+consistent with `DialogueLingerMs`'s 1500ms ceiling plus the existing ~150ms x2 wire/pump cadence
+(client detects+publishes, host reads+republishes) the debounce sits on top of. `CoopAgent.cs`'s own
+`DialogueLingerMs` comment - "Longer than any between-entries gap... shorter than feels laggy on a
+real close" - was sized by feel, not by a measured flicker duration, and its true cost was invisible
+to every existing test: nothing reads a conversation OWNER's own debounce state (its
+`bridge.IsInDialogue` is a raw, undebounced engine read - see `KotorGameBridge.IsInDialogue`), so
+this only ever mattered for a FOLLOWER, and specifically for `PumpEnemies`'s host-only census gate,
+which nothing in this codebase's test suite exercises (the plugin assembly carries no managed
+tests, and the census gate itself has no unit-test seam either).
+
+### Fix: `DialogueLingerMs` 1500 -> 300 (`src/KotorCoop.Session/CoopAgent.cs`)
+
+Sized against the debounce's OWN stated purpose - surviving "a few frames" of the engine's
+between-entries flicker (the frame hook runs at ~300 Hz, so a few frames is on the order of
+10-20ms) - 300ms is still a 15-30x safety margin over that, while being 5x smaller than the old
+value. A 50ms value was also tried live, as an isolation experiment (see below) - not shipped.
+
+### Isolating what the debounce itself actually controls, live
+
+Three more measured cycles at `DialogueLingerMs=300` (the shipped value):
+
+```
+cycle 1: client true-close 15:09:08.906 -> host clear ~15:09:09.921   (1015 ms)
+cycle 2: client true-close 15:09:18.594 -> host clear ~15:09:19.389   ( 795 ms)
+cycle 3: client true-close 15:09:28.293 -> host clear ~15:09:29.729   (1436 ms)
+```
+
+Average ~1082ms - a real, repeatable ~60% cut from the ~2708ms measured before the fix (roughly
+2.5x faster). A further isolation experiment at `DialogueLingerMs=50` (one clean cycle,
+964-1089ms) landed in the SAME 800-1500ms band as the 300ms samples - i.e. shrinking the debounce
+below ~300ms bought no further measurable improvement, because the remaining time is dominated by
+the pre-existing, unrelated ~150ms x2 wire/pump cadence stacking (client detect+publish, host
+read+republish - the same cadence `dialogue-join-latency.md` already documents for the join side of
+this exact machinery), not by the debounce ceiling itself once it is no longer the dominant term.
+300ms was kept over 50ms specifically because of this finding: it buys the same real-world latency
+as a much smaller value while keeping a comfortable margin against a between-entries flicker this
+round did not have time to directly measure (no OS input access to click through a long multi-line
+conversation and watch the raw engine flag flicker directly) - the safe, evidence-respecting choice
+given a genuinely flat region of the latency curve, not a guess.
+
+### What this does NOT close
+
+The remaining ~800-1400ms is the SAME wire/pump cadence every other dialogue-follow channel in this
+codebase already rides (`dialogue-join-latency.md`'s own documented numbers for the join side) - not
+a new bug this round introduces, and reducing it further is exactly what `dialogue_fast_join`
+already exists for (a separately, already-decided, off-by-default setting - out of this round's
+scope to flip). The task brief's own target - "visible... within roughly one census cadence"
+(~150ms) - is met in the sense that matters practically (the census unfreezes in about a second
+instead of several), but not literally in the "same frame or two" sense; getting there would need
+`dialogue_fast_join=1` as well, which this round did not turn on by default (unrelated decision,
+already made in the 2026-08-23 Item 1 entry above).
+
+### Regression check: no flicker observed
+
+Across the ~6 full talk/adopt/close cycles run this round (some spanning up to 30 real seconds with
+multiple node transitions before the deliberate close), zero spurious `dialogue: the owner ended the
+conversation; closing` / `adopting` pairs appeared BETWEEN a cycle's own adopt and its own deliberate
+close - i.e. no premature-flicker regression at either 300ms or (in the one cycle it was tried)
+50ms. Not exhaustive (a single rig session, one NPC's own script shape), which is exactly why 300ms
+was kept rather than the smaller value that showed no benefit anyway.
+
+### Test suite and build
+
+`dotnet test tests/KotorCoop.Tests`: **1635/1635 passed**, unchanged baseline - the fix is a
+constant change plus a broadened log line in `CoopAgent.cs`, no new managed surface. Both plugin
+builds (`src/KotorCoop.Plugin/build.ps1 -Install`, both GOG installs) clean, 0 warnings, 0 errors
+(the plugin itself is untouched by this job; rebuilt anyway as part of the same session's combined
+verification pass with job 1's `InteractionLockController.cs` fix). No crash, no new exception in
+either plugin log across the whole session (same `FIRST-CHANCE exception (0x406D1388)` benign
+startup diagnostic as every other round, nothing new).

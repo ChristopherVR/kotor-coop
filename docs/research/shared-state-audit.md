@@ -7151,3 +7151,48 @@ Two jobs from the original brief plus three real bug reports the user filed mid-
   the plugin changes (same count — the changes threaded settings and fixed a gate, added no new
   managed surface needing its own test). Both builds clean, both installs rebuilt/redeployed
   mid-round to pick up the `DialogueGateHook` fix before its own live-confirmation pass.
+
+### Round 78 (2026-08-23) — round 77's two open items closed: `container_fast_pump` actually
+measured (and a much bigger, unrelated bug found and fixed along the way), and bug 2's real gap
+measured, confirmed, and cut
+
+Two jobs, both round 77's own honest leftovers. Full write-ups: `docs/research/container-sync.md`
+§10 and `docs/research/dialogue-sync.md`'s own dated round-78 section. Short version:
+
+- **Container latency: the real measurement found a bug ~18x bigger than `container_fast_pump`'s
+  own theory.** Baseline (`container_fast_pump=0`, unchanged code): OPEN ~1.1-1.6s (walk-dependent),
+  CLOSE a rock-steady **5099-5138ms across five cycles** — not jitter, a fixed timeout.
+  Root-caused: `InteractionLockController.PublishLocalClaim` blanked a container's WHOLE claim
+  identity (`kind=None, targetId=0`) the instant it closed, and both `CoopHost`'s own claim guard
+  and `InteractionLockStore.TryKey` require a nonzero id to recognise a Container-kind packet at
+  all — so every container close, since protocol version 37 shipped, silently dropped its own
+  release and fell all the way back to the interaction lock's 5-second DEAD-HOST lease expiry, a
+  path never previously exercised by this specific check. Fixed (`InteractionLockController.cs`):
+  the controller now remembers the just-closed id and keeps naming it while `active=false`, so the
+  release is recognisable — an optimisation on top of the same lease, not a replacement (a lost
+  packet still costs the same 5s it always did). Live-confirmed: CLOSE dropped to **248-326ms
+  (avg 290ms)**, an ~18x improvement, symmetric in both directions. With that bug out of the way,
+  `container_fast_pump=1` was measured cleanly against the fixed baseline and showed **no
+  measurable difference** (OPEN/CLOSE both within the fixed baseline's own jitter) — its own
+  channel (`PumpPlaceables`/`PlaceableController`) only ever OPENS, never closes, and the live
+  open/close mirror both edges actually use (`PumpInteractionLocks`, always on the 150ms cadence)
+  was never gated by this flag to begin with. **Decision: stays off by default, confirmed by
+  measurement rather than assumed** — the setting keeps its real, narrower job (a late joiner's
+  catch-up), which is not what the user's own "very big delay" report turned out to be.
+- **Bug 2 (combat presence goes quiet after dialogue): the gap measured and cut.** Added an
+  edge-triggered log of `bridge.IsInDialogue` on every instance
+  (`CoopAgent.LogHostDialogueEdge`). A controlled follower/close reproduction (no ambush script
+  needed — the mechanism is a pure function of `PumpDialogue`'s own debounce, exercised identically
+  either way) measured the real gap at **~2.7 seconds** before any fix, dominated by
+  `DialogueLingerMs` — a debounce sized "by feel" (its own comment) at 1500ms against a real
+  between-entries flicker window on the order of 10-20ms. Cut to 300ms (a live isolation test at
+  50ms showed no further measurable improvement — the remaining latency is the pre-existing
+  150ms×2 wire/pump cadence, not the debounce), dropping the measured gap to **~800-1400ms (avg
+  ~1082ms)**, a real ~60% cut. Zero flicker regressions observed across ~6 full cycles. Does not
+  reach "same frame or two" literally (that needs `dialogue_fast_join=1` too, an unrelated,
+  already-decided, still-off-by-default setting), but meets the practical bar: the census
+  unfreezes in about a second instead of several.
+- **Tests and build**: `dotnet test tests/KotorCoop.Tests` 1635/1635 passed, unchanged baseline
+  throughout (both fixes are plugin/agent field-plumbing and constant changes with no new managed
+  surface). Both plugin builds clean, both installs rebuilt/redeployed multiple times mid-round as
+  each fix was found, applied, and re-verified live.

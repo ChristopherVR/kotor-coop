@@ -375,6 +375,10 @@ public sealed class CoopAgent(IGameBridge bridge, ICoopSession session, AgentSet
             _lastPeers = peers;
         }
 
+        // Round 78 instrumentation — every tick, ahead of every cadence gate below, so the
+        // logged edge is as close to the engine's own true transition as this process can see.
+        LogHostDialogueEdge();
+
         if (!bridge.CanWriteRemotes)
         {
             // TEMPORARY DIAGNOSTIC (live stall investigation) - throttled to once/sec so it
@@ -1647,9 +1651,69 @@ public sealed class CoopAgent(IGameBridge bridge, ICoopSession session, AgentSet
     /// </summary>
     private readonly DialogueTickGate _dialogueTickGate = new(heartbeatIntervalMs: 150);
 
-    /// <summary>How long a conversation may read inactive before it is reported over.
-    /// Longer than any between-entries gap, shorter than feels laggy on a real close.</summary>
-    private const long DialogueLingerMs = 1500;
+    /// <summary>
+    /// How long a conversation may read inactive before it is reported over.
+    ///
+    /// ⚠ FIX (round 78, shared-state-audit.md's Round 77 bug 2 / dialogue-sync.md's dated
+    /// section): was 1500 — sized generously against "any between-entries gap" with no
+    /// measurement behind the number (the old comment's own words). That generosity was
+    /// invisible for an OWNER (nothing reads a conversation owner's own debounce state) but
+    /// directly gated <see cref="PumpEnemies"/>'s enemy census through <c>bridge.IsInDialogue</c>
+    /// on a FOLLOWER that happens to be the host: a followed conversation's true end could take
+    /// up to 1.5s to clear the census gate, on top of the wire/adopt latency already in the
+    /// path. LIVE-MEASURED (container-sync.md's sibling section in dialogue-sync.md): with the
+    /// old 1500ms value, a followed conversation's real close-to-census-unfreeze gap measured at
+    /// ~2.7s end to end. Cut to 300ms — still an order of magnitude past a real between-entries
+    /// flicker (the frame hook runs at ~300 Hz, so "a few frames" is on the order of 10-20ms).
+    /// LIVE-MEASURED again after the cut: the gap dropped to ~0.8-1.4s (avg ~1.1s), a real ~60%
+    /// reduction — a separate isolation test at 50ms showed NO further improvement (the
+    /// remaining time is the pre-existing ~150ms×2 wire/pump cadence this debounce sits on top
+    /// of, not the debounce itself), which is why 300ms was kept rather than something smaller:
+    /// same real-world latency, more margin against a flicker window this pass could not
+    /// directly measure. See dialogue-sync.md's round-78 section for every number.
+    /// </summary>
+    private const long DialogueLingerMs = 300;
+
+    /// <summary>Round 78 instrumentation (shared-state-audit.md's Round 77 bug 2): the last
+    /// value logged for <see cref="IGameBridge.IsInDialogue"/> on THIS instance. Null before the
+    /// first read, so the very first poll never logs a spurious "edge" against nothing.</summary>
+    private bool? _lastLoggedIsInDialogue;
+
+    /// <summary>
+    /// Edge-triggered log of <see cref="IGameBridge.IsInDialogue"/> on THIS instance, every poll
+    /// tick (<see cref="AgentSettings.PollRate"/> — no cadence gate of its own). On the enemy
+    /// authority (the host) this is the exact flag <see cref="PumpEnemies"/> gates the enemy
+    /// census on (<c>!bridge.IsInDialogue &amp;&amp; !bridge.IsInMinigame</c>), so a transition
+    /// logged there IS the census unfreezing (or freezing); logged on every instance (not only
+    /// the host) so a live pass can also see the OWNER's own true-end edge to measure the real
+    /// gap against, not just infer it. Exists to answer shared-state-audit.md's Round 77 bug 2
+    /// directly: does this clear promptly when a FOLLOWED conversation ends, or does it linger —
+    /// see the token/serial logged alongside it, which is exactly <see cref="DialogueLingerMs"/>'s
+    /// own debounce state.
+    /// </summary>
+    private void LogHostDialogueEdge()
+    {
+        bool nowInDialogue = bridge.IsInDialogue;
+        if (_lastLoggedIsInDialogue == nowInDialogue)
+        {
+            return;
+        }
+
+        bool firstRead = _lastLoggedIsInDialogue is null;
+        _lastLoggedIsInDialogue = nowInDialogue;
+        if (firstRead)
+        {
+            return; // nothing to call an edge against yet
+        }
+
+        DialogueState token = session.GetDialogue();
+        string role = session.IsEnemyAuthority ? "host" : "client";
+        Log?.Invoke(
+            $"dialogue-gate: {role} bridge.IsInDialogue {!nowInDialogue} -> {nowInDialogue} at "
+            + $"{Environment.TickCount64} (followingPeer="
+            + $"{token.IsHeldByAnotherThan(session.LocalPeerId)}, tokenActive={token.Active}, "
+            + $"tokenSerial={token.Serial})");
+    }
 
     /// <summary>
     /// Publishes whether the local player is in a conversation (so the session can hold a

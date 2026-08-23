@@ -136,6 +136,33 @@ internal sealed unsafe class InteractionLockController(SharedBlockView block)
     private uint _localContainerId;
     private bool _localContainerActive;
 
+    /// <summary>
+    /// ⚠ FIX (round 78, docs/research/container-sync.md's dated section): the id of the
+    /// container this instance just RELEASED, held so <see cref="PublishLocalClaim"/> can keep
+    /// naming it (kind=Container, targetId=this, active=false) instead of blanking the whole
+    /// identity to "nothing happening" the instant the close is detected.
+    ///
+    /// Without this, a release was UNIDENTIFIABLE on the wire: <c>CoopHost</c>'s own claim
+    /// guard and <c>InteractionLockStore.TryKey</c> both require a kind+id (or a tag) to know
+    /// WHAT is being released, and a blanked identity made every close silently indistinguishable
+    /// from "the player was never interacting with anything" — the release was dropped before it
+    /// ever reached the lock store, and the only thing that ever cleared the stale entry was the
+    /// 5s lease expiring on its own (<see cref="KotorCoop.Session.InteractionLockStore.DefaultLeaseMs"/>).
+    /// LIVE-MEASURED: every close took ~5.0-5.1s to reach the peer, byte for byte the lease
+    /// duration, regardless of <c>container_fast_pump</c> — that setting's own channel
+    /// (<c>PumpPlaceables</c>) never carries a close at all (see <c>PlaceableController.Apply</c>,
+    /// which only ever OPENS), so it could not have been the bottleneck the delay was measured
+    /// against.
+    ///
+    /// Cleared the moment a NEW hold starts (superseded, nothing stale left to carry) and on
+    /// <see cref="Invalidate"/> (a module change reassigns every id). Left set indefinitely
+    /// otherwise — republishing an already-released id is a no-op on the far side
+    /// (<c>ContainerUseRule.MayRelease</c> requires a FRESH current holder, and the entry is
+    /// already gone after the first successful release), so there is no "stale forever" hazard
+    /// to guard against with a one-shot flag.
+    /// </summary>
+    private uint _lastClosedContainerId;
+
     private uint _seenBlockedCount;
     private long _containerNoticeUntilMs;
     private readonly byte[] _containerNoticeBuffer = new byte[SharedBlock.NameLength + ContainerNoticeSuffix.Length];
@@ -170,6 +197,7 @@ internal sealed unsafe class InteractionLockController(SharedBlockView block)
         _pendingFramesLeft = 0;
         _localContainerId = 0;
         _localContainerActive = false;
+        _lastClosedContainerId = 0;
         _seenBlockedCount = 0;
         _containerNoticeUntilMs = 0;
         _containerNoticeLength = 0;
@@ -285,15 +313,27 @@ internal sealed unsafe class InteractionLockController(SharedBlockView block)
             block.LocalInteractionKind = InteractionKindContainer;
             block.LocalInteractionActive = true;
             block.LocalInteractionTargetId = _localContainerId;
+
+            // A fresh hold supersedes whatever this instance last released; nothing stale is
+            // left to (harmlessly) keep naming.
+            _lastClosedContainerId = 0;
             return;
         }
 
-        block.LocalInteractionKind = 0;
-
-        // A LEVEL. The lease on the far side expires on its own when this stops being true,
-        // which is the whole reason there is no release message to lose.
+        // A LEVEL — STILL true after the round-78 fix below, and still the whole reason a lost
+        // packet is not a correctness problem: the lease on the far side expires on its own
+        // regardless. What changed is that a container release is no longer published as a
+        // BLANK identity ("nothing happening", indistinguishable from "never interacted with
+        // anything"), which is what made a close UNMATCHABLE against the claim it was supposed
+        // to release (CoopHost.PublishInteractionClaim's own guard and
+        // InteractionLockStore.TryKey both need a kind+id to find the entry) and forced every
+        // close to fall all the way back to the 5s lease expiry — LIVE-MEASURED, round 78,
+        // container-sync.md's dated section. Naming the id here is an OPTIMISATION on top of
+        // the same lease, not a replacement for it: losing this packet costs exactly the 5s it
+        // always cost, nothing more.
+        block.LocalInteractionKind = _lastClosedContainerId != 0 ? InteractionKindContainer : 0u;
         block.LocalInteractionActive = false;
-        block.LocalInteractionTargetId = 0;
+        block.LocalInteractionTargetId = _lastClosedContainerId;
     }
 
     /// <summary>
@@ -340,7 +380,10 @@ internal sealed unsafe class InteractionLockController(SharedBlockView block)
             nint held = Odyssey.ResolvePlaceable(_localContainerId);
             if (held == 0 || !Odyssey.IsPlaceableOpen(held))
             {
-                // The player closed their own panel, or the module changed under us.
+                // The player closed their own panel, or the module changed under us. Remember
+                // WHICH one so the release itself can still be published — see
+                // _lastClosedContainerId's own remarks.
+                _lastClosedContainerId = _localContainerId;
                 _localContainerActive = false;
                 _localContainerId = 0;
             }

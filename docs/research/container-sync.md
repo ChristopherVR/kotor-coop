@@ -915,3 +915,136 @@ this round's changes — the new setting only threads an existing bool through, 
 added or needed (`CoopAgent`'s own pump-loop split has no unit test seam; it is exercised the
 same way `DialogueFastJoin`/`PartyFastPump` are, by the live rig). Both plugin builds
 (`src/KotorCoop.Plugin/build.ps1 -Install`, both GOG installs) clean, 0 warnings, 0 errors.
+
+## 10. Round 78 (2026-08-23) — the real measurement, and a MUCH bigger bug than
+`container_fast_pump` found and fixed along the way; the flag itself stays off, for a documented
+reason that has nothing to do with its own cadence
+
+Picks up §9's own honest gap: an actual before/after latency measurement, `container_fast_pump=0`
+vs `=1`, never done. Two GOG installs, `tools/demo.ps1`'s default save (END_M01AA), driven entirely
+through the plugin's console channel (`useplaceable`/`closeplaceable`, the same primitive §5/§6
+already established) — no OS input needed, so this round's own version of the "no keyboard/mouse
+access" blocker that limited round 77 never applied here.
+
+### 10.1 Method
+
+A dedicated script (`container-latency.ps1`, the same `VirtualQueryEx`/vtable-scan technique
+`verify.ps1` already uses for `CSWSPlaceable`) timestamps the HOST's own `useplaceable`/
+`closeplaceable` console send, then polls the CLIENT's own copy of placeable `+0x338` (the
+`OpenInventory`/`CloseInventory` field itself — the DURABLE open/closed state a peer actually
+sees, not merely the lock) at 10ms resolution until it flips. Five open/close cycles per
+condition, host teleported onto the container first (`tp 10.8 21.87`, its own position — §5's own
+technique) so a real AI walk-and-use delay never contaminates the number being measured.
+
+### 10.2 The baseline measurement surfaced a FAR bigger bug than the one this round came to check
+
+First baseline pass (`container_fast_pump=0`, the shipped default, UNCHANGED code):
+
+```
+[baseline-off] OPEN  avg=1602.6ms min=1075 max=3273 n=5
+[baseline-off] CLOSE avg=5120.4ms min=5099 max=5138 n=5
+```
+
+CLOSE landing at **5099-5138ms, five times, to within 39ms of each other** is not network jitter —
+it is a fixed timeout. `InteractionLockStore.DefaultLeaseMs = ProtocolConstants.PeerTimeoutMs`
+(5000ms) was the only 5-second constant anywhere near this code, which meant every close was
+missing its own RELEASE message entirely and falling all the way back to the interaction lock's
+LEASE EXPIRING on its own — the same slow path §5.4 designed for a DEAD HOST, not an ordinary
+close.
+
+**Root cause, traced through the code, not guessed:** `InteractionLockController.PublishLocalClaim`
+(`src/KotorCoop.Plugin/InteractionLockController.cs`) blanks the WHOLE claim identity to
+`kind=None, targetId=0, tag=""` the instant a container closes — the class's own header comment
+even defends this as deliberate: *"A LEVEL. The lease on the far side expires on its own when this
+stops being true, which is the whole reason there is no release message to lose."* That reasoning
+holds for `InteractionKind.Conversation` (a claim is meaningless without its tag, and a blank tag
+already reads as "nothing"), but it silently defeated `InteractionKind.Container`, whose claim is
+keyed on an OBJECT ID rather than a tag: `CoopHost.PublishInteractionClaim`'s own guard —
+```csharp
+if (string.IsNullOrEmpty(tag) && !(kind == InteractionKind.Container && targetId != 0))
+{
+    return;
+}
+```
+— and `InteractionLockStore.TryKey` (`case InteractionKind.Container: if (targetId == 0) { ...
+return false; }`) BOTH require a nonzero `targetId` to even recognise a Container-kind packet at
+all. A release with `targetId=0` is indistinguishable, at both of those call sites, from "nothing
+happening" — so `_interactionLocks.Claim(...)` was never even reached for a container release, on
+either the host's own claim (`CoopHost.PublishInteractionClaim`'s guard) or a client's (silently
+dropped one hop later, at `TryKey`, inside `HandleInteractionClaim`). **Every container close in
+this codebase, since protocol version 37 shipped, has been riding the 5-second dead-host lease
+fallback instead of an immediate release — completely unrelated to `container_fast_pump`, whose own
+channel (`PumpPlaceables` → `PlaceableController.Apply`) only ever OPENS
+(`if (desired.Open && !Odyssey.IsPlaceableOpen(placeable) && ...)` — no `Open=false` branch exists
+at all) and could not have been the close-side bottleneck under any setting.**
+
+**Fix** (`src/KotorCoop.Plugin/InteractionLockController.cs`): a new field, `_lastClosedContainerId`,
+remembers the id `PollLocalContainerUse` just detected as closed (set in the same branch that
+already clears `_localContainerId`/`_localContainerActive`), and `PublishLocalClaim`'s inactive tail
+now publishes `kind=Container, targetId=_lastClosedContainerId, active=false` instead of an
+all-zero blank — an OPTIMISATION on top of the same lease (a lost packet still costs exactly the 5s
+it always cost; the class's own "no release message to lose" argument is preserved verbatim), not a
+replacement for it. Cleared the moment a fresh hold starts or the module changes; left standing
+otherwise, since a stale republish is a harmless no-op (`ContainerUseRule.MayRelease` requires a
+FRESH current holder, gone after the first successful release).
+
+**Live-confirmed fixed**, same rig, same container, same script, `container_fast_pump` still `=0`:
+
+```
+[off-fixed-tp] OPEN  avg=1257ms  min=1151 max=1401 n=5
+[off-fixed-tp] CLOSE avg=289.6ms min=248  max=326  n=5
+```
+
+CLOSE dropped from a rock-steady ~5.1s to ~290ms — an **~18x improvement**, and the new numbers are
+tight and consistent (248-326ms), not a wide scatter, which is itself evidence the fix removed a
+fixed-timeout dependency rather than just getting lucky once. Re-tested in the REVERSED direction
+(client opens/closes, host observes) for symmetry: `OPEN avg=1282.7ms, CLOSE avg=322.7ms` (n=3) —
+statistically the same numbers, confirming the fix (like everything else in this file) has no
+host/client branch.
+
+### 10.3 `container_fast_pump`'s OWN effect, measured cleanly against the now-fixed baseline
+
+With the release bug out of the way, `container_fast_pump=1` was measured against the identical
+scenario:
+
+```
+container_fast_pump=0 (fixed):  OPEN avg=1257.0ms (1151-1401)   CLOSE avg=289.6ms (248-326)   n=5
+container_fast_pump=1 (fixed):  OPEN avg=1277.0ms (1091-1375)   CLOSE avg=333.4ms (217-439)   n=5
+```
+
+**No measurable difference — the two conditions are statistically indistinguishable, well inside
+each other's own run-to-run jitter.** This matches §10.2's own structural finding exactly:
+`PumpInteractionLocks` (the animation mirror AND the use-lock claim/release, §2.2/§2.3) already
+rides the fixed 150ms combat cadence UNCONDITIONALLY — it is not gated by `container_fast_pump` at
+all, and it is what actually flips a peer's `+0x338` for both edges, open and close alike, in a
+live two-peer session. `container_fast_pump` only moves `PumpPlaceables` (`PlaceableController`'s
+own OPEN-only durable/"ever opened" channel, §5.3) onto that same cadence — a channel that never
+touches a close, and whose OPEN-only reassertion is largely redundant with the lock mirror for two
+players already connected to the same session. Its real job (matching §9's own design note) is
+catching up a LATE JOINER or a post-module-reload resync, not the live open/close visibility this
+round measured.
+
+**Decision: `container_fast_pump` stays OFF by default — CONFIRMED by measurement, not merely
+carried over.** The setting itself is not removed (it still has the late-joiner/resync job its own
+design intended), but it is not what closes the latency gap the user actually reported. That gap is
+now understood and fixed at its real root (§10.2): the same `useplaceable`/`closeplaceable` round-
+trip that used to take ~5.1s for a close now takes ~290-330ms, independent of this flag either way.
+
+### 10.4 Regression check
+
+Full session (five rebuild/redeploy/relaunch cycles as the fix above was found and iterated,
+~20 open/close cycles total across baseline, fixed, `container_fast_pump=1`, and the reversed-role
+check): no crash, no flicker, no false-open observed on either instance. `grep`-ing both plugin
+logs for `exception`/`crash`/`access violation` across the whole session finds only the standard
+per-session startup diagnostics (`FIRST-CHANCE exception (0x406D1388)` at the same fixed address
+every session — the well-known benign .NET thread-naming exception, unchanged in shape from every
+prior round's own log) — no new exception of any kind.
+
+### 10.5 Test suite and build
+
+`dotnet test tests/KotorCoop.Tests`: **1635/1635 passed**, same baseline as before this round's
+changes (the fix is a plugin-side field-plumbing change with no new managed surface — the plugin
+assembly is x86 NativeAOT and carries no unit test coverage, per this project's own standing note;
+it is exercised by the live rig above instead). Both plugin builds
+(`src/KotorCoop.Plugin/build.ps1 -Install`, both GOG installs) clean, 0 warnings, 0 errors, across
+the round's several rebuild/redeploy cycles.
