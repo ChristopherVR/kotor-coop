@@ -100,6 +100,31 @@ internal sealed unsafe class PartyFollowController(SharedBlockView block)
 
     private int _issuedLogged;
 
+    /// <summary>ROUND 80 (party-reconciliation.md): a fine-grained, UNTHROTTLED poll of the same
+    /// FollowDiag fields, sampled far more often than the once-per-reissue log below (which only
+    /// fires roughly every <see cref="StallThresholdSeconds"/>) — built to answer round 74/75's
+    /// still-open question, "why does the phase-dispatch block stop being re-entered for a parked
+    /// companion," by watching `attempts` (record+0x44) at ~10Hz to see whether it ever ticks even
+    /// once between reissue samples, and whether WalkRate/RunRate/StepAccumulator ever go
+    /// negative/zero/stuck while parked. This round's own live rig work is what this was built
+    /// for and is now done, so it defaults OFF for a normal play session (log volume, not
+    /// correctness — every field here is also read-only) — opt in with
+    /// <c>party_follow_finelog=1</c>; capped at <see cref="FineLogCap"/> lines total either way so
+    /// a long-parked companion cannot grow the log unbounded.</summary>
+    private readonly bool _fineLogEnabled = PluginConfig.ReadBool("party_follow_finelog", false);
+
+    /// <summary>ROUND 80 EXPERIMENT (party-reconciliation.md): see
+    /// Odyssey.TryPokeStepAccumulator's own remarks — creature+0xD0 (the step accumulator
+    /// WalkUpdateLocation_QuickWalk_FollowLeader's own first gate requires to be nonzero) is
+    /// live-measured pinned at 0 for a parked companion, and no producer that increments it
+    /// (rather than periodically zeroing it) was found anywhere in the binary. Kill switch:
+    /// <c>party_follow_pokestep=0</c>.</summary>
+    private readonly bool _pokeStepAccumulator = PluginConfig.ReadBool("party_follow_pokestep", true);
+    private const int FineLogCap = 4000;
+    private const double FineLogIntervalSeconds = 0.2;
+    private int _fineLogged;
+    private readonly double[] _lastFineLogTime = new double[PartyNpcSlots];
+
     /// <summary>Wall-clock timestamp (on <see cref="_clock"/>) of the last
     /// <see cref="Odyssey.PumpPartyUpdate"/> call, or -1 before the first frame.</summary>
     private double _lastUpdateTime = -1;
@@ -220,6 +245,43 @@ internal sealed unsafe class PartyFollowController(SharedBlockView block)
                 // Live test only: unwedge the step FSM's phase field when it is caught in the
                 // -1/5 ping-pong that never calls FindPath.
                 Odyssey.TryResetStuckFollowPhase(objectId, out _);
+
+                // ROUND 80 EXPERIMENT: see Odyssey.TryDriveFollowLeaderStep's own remarks — a
+                // bare TryPokeStepAccumulator poke was live-tested and found insufficient (the
+                // engine's own outer caller re-zeroes the field before ever consuming a poke left
+                // for it); this drives the real FollowLeader step function directly instead. 16
+                // ~= one frame at 60fps, the same millisecond unit the cached-time-pair fields
+                // this record already exposes are measured in.
+                if (_pokeStepAccumulator)
+                {
+                    Odyssey.TryDriveFollowLeaderStep(objectId, 16);
+                }
+            }
+
+            // ROUND 80: fine-grained unthrottled poll — see _fineLogEnabled's own remarks.
+            if (_fineLogEnabled && _fineLogged < FineLogCap && player != 0 && !IsBusyHead(headType)
+                && now - _lastFineLogTime[slot] >= FineLogIntervalSeconds)
+            {
+                _lastFineLogTime[slot] = now;
+                _fineLogged++;
+
+                Odyssey.TryGetFollowDiagnostics(creature, objectId, out Odyssey.FollowDiag fd);
+                if (fd.Valid)
+                {
+                    float dtx = fd.TargetPoint.X - fd.Snapshot.X;
+                    float dty = fd.TargetPoint.Y - fd.Snapshot.Y;
+                    float targetVsSnapshot = MathF.Sqrt((dtx * dtx) + (dty * dty));
+
+                    PluginHost.Log(
+                        $"party follow finelog: 0x{objectId:X} t={now:F2} phase={fd.PhaseIndex} "
+                        + $"attempts={fd.PhaseAttempts} stepAccum={fd.StepAccumulator} "
+                        + $"walkRate={fd.WalkRate:F4} runRate={fd.RunRate:F4} "
+                        + $"pathNode={fd.CurrentPathNode} writeCursor={fd.WriteCursor} "
+                        + $"headType=0x{headType:X} pos=({pos.X:F2},{pos.Y:F2}) "
+                        + $"target=({fd.TargetPoint.X:F2},{fd.TargetPoint.Y:F2}) "
+                        + $"snapshot=({fd.Snapshot.X:F2},{fd.Snapshot.Y:F2}) "
+                        + $"targetVsSnapshotDist={targetVsSnapshot:F3} enabledFlag={fd.EnabledFlag}");
+                }
             }
 
             if (!_tracked[slot])
@@ -345,6 +407,7 @@ internal sealed unsafe class PartyFollowController(SharedBlockView block)
                         + $"soloMode={soloMode} phase={diag.PhaseIndex} attempts={diag.PhaseAttempts} "
                         + $"otherSlot={diag.OtherSlotIndex}:0x{diag.OtherSlotStoredId:X} "
                         + $"pathNode={diag.CurrentPathNode} writeCursor={diag.WriteCursor} "
+                        + $"walkRate={diag.WalkRate:F4} runRate={diag.RunRate:F4} "
                         + $"followData=0x{diag.FollowDataArray:X}{refText}"
                     : $" soloMode={soloMode}{refText}";
 

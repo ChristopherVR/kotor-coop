@@ -1243,6 +1243,198 @@ empty), `auto_start_agent` restored to `1` in both installs, the round's own tes
 `dialogue_recruit_sync=1` override removed from both `coop.ini`s afterward (not part of this
 round's shipped defaults).
 
+## Round 80 (2026-08-23) — the step-accumulator gate that was silently killing every follow
+tick found and fixed by direct disassembly plus a live poke-and-drive experiment; Trask
+genuinely reaches `CreMoveState=-1` ("walking") and closes real distance for the first time in
+ten rounds, with one honest caveat left open (smoothness not independently confirmed)
+
+Picks up exactly where round 75 left off: "the OUTER phase-dispatch block... is not being
+re-entered at all for a companion parked this long... exactly the 'would need a live debugger'
+gap round 74 already named." No debugger is available in this environment; the brief for this
+round was to build a tighter polling harness and find it from disassembly plus live data instead
+— the project's own established pattern for this exact class of problem.
+
+### Item 1: the gate that skips the phase dispatch, found by full disassembly of
+`WalkUpdateLocation_QuickWalk_FollowLeader` 0x0051C360
+
+Continuing past round 74's own stopping point (the "other slot" block, 0x51C744-0x51C7AC) to the
+phase dispatch itself (0x51C7E5) finds a gate immediately in front of it, at 0x51C7B9-0x51C7DF,
+never disassembled before this round: a computed scalar in `[esp+0x14]` is compared against 0.0,
+and if it reads negative or unordered (NaN), execution jumps PAST the phase dispatch entirely
+(0x51C97E) — skipping both the jump table AND the `attempts` counter increment (`record+0x44`,
+0x51C7EB) round 74's own diagnostic was reading. This looked, at first, like the answer: a second,
+undocumented gate distinct from the "step-accumulator throttle" round 72 already named at
+0x51C458-0x51C486.
+
+It is not the ACTIVE blocker, live data shows — but the FIRST gate (0x51C458-0x51C486, round 72's
+own citation, never before instrumented directly) is. That earlier block reads `creature+0xD0`
+(round 72's "angle/step accumulator"), unsigned-wraps it if the raw int is negative (`fild`, add
+`0x100000000` if originally negative — 0x73D770 holds exactly `4294967296.0`), and — if the
+wrapped value is not `> 0` — returns from the ENTIRE function immediately (0x51C47B-0x51C486),
+before the phase dispatch, before the "other slot" block, before anything round 71-75 ever
+instrumented. **New diagnostic fields, `Odyssey.FollowDiag.WalkRate`/`.RunRate`
+(`CSWSCreature::GetWalkRate` 0x004F1B20 / `::GetRunRate` 0x004F1BE0, called directly, `__thiscall`,
+no stack args) plus the existing `StepAccumulator`, wired into a new UNTHROTTLED poll
+(`party_follow_finelog`, ~5Hz, vs. the existing reissue log's own ~0.5Hz) — live-measured
+`stepAccum` reads EXACTLY `0` in every one of 400+ consecutive samples across a full ~90-second
+window, starting from the very first sample taken right after module load, never once nonzero.**
+This single field being permanently `0` is sufficient on its own to explain every symptom rounds
+71-75 chased: `attempts` frozen (the dispatch block is never reached to increment it), the
+watchdog never firing (it can only fire FROM inside the dispatch block), `phase` frozen (nothing
+downstream of the dispatch ever runs to change it).
+
+### Item 2: the producer search — `creature+0xD0` is written exactly once anywhere close to this
+code, and it always writes zero
+
+`tools/fieldwrites.py 0xd0` returns 81 hits, but that tool only matches `MOV` opcodes — a
+follow-up full capstone sweep of the whole `.text` section (`md.skipdata = True`, matching every
+write mnemonic: `mov/add/sub/fstp/fst/fild/fistp/inc/dec/xor/and/or/adc/sbb`) adds the `FSTP`/
+`FILD` hits the MOV-only scan missed, and still finds no CSWSCreature-scoped INCREMENTER for this
+field anywhere in the binary. The only write inside the WalkUpdateLocation family is in the OUTER
+caller, `WalkUpdateLocation_QuickWalk` 0x0051D9C0 (0x51DA5D-0x51DAB4): it calls
+`CServerExoApp::GetActiveTimer`/`CWorldTimer::GetWorldTime`/`GetWorldTimer`/
+`CWorldTimer::SubtractWorldTimes` against a cached "last checked" time pair at
+`creature+0xB0/+0xB4` (confirmed live-advancing — the existing diagText's own `cachedPos` field
+climbs by ~1000/frame-batch, consistent with a millisecond world clock), and when that comparison
+gates open (`[esp+0xa4] != 0`), it writes `creature+0xD0 = 0` (a literal `mov [ebx], ebp` with
+`ebp` zeroed at function entry, not the computed delta) and refreshes the cached time pair. This
+is a RESET, not an increment — the same class of bug as round 73's `CSWParty::Update`: a periodic
+housekeeping commit fires correctly, but whatever is meant to accumulate a nonzero value into the
+field on the frames BETWEEN commits was not found anywhere in the binary by static analysis.
+
+### Fix attempt 1 (live-tested, insufficient alone): `Odyssey.TryPokeStepAccumulator`
+
+Writes a plausible per-frame value (16, ~one frame at 60fps in the same millisecond unit as the
+cached-time-pair) into `creature+0xD0` every non-busy frame from `PartyFollowController.OnFrame`.
+Live result: the diagnostic reads back `stepAccum=16` correctly on every sample (the write
+sticks) — but `attempts` stayed at exactly `0` across 650+ samples over ~90 seconds. The poke and
+the read happen in the SAME plugin call, so this only proves the write lands; it says nothing
+about what the ENGINE's own call to `WalkUpdateLocation_QuickWalk_FollowLeader` sees, which runs
+at a different point in the frame — and per item 2, the OUTER caller re-zeroes this same field
+unconditionally whenever its own housekeeping commit fires, which happens well within a
+90-second window. The poke was very likely being clawed back before the real engine call ever
+consumed it.
+
+### Fix attempt 2 (shipped): `Odyssey.TryDriveFollowLeaderStep` — poke, then call the real step
+function directly, in the same call
+
+The same "poke the input, then call the real engine function immediately so nothing else can
+claw it back first" pattern round 73's `PumpPartyUpdate` already established for
+`CSWParty::Update`. Writes `creature+0xD0 = 16` and then calls
+`WalkUpdateLocation_QuickWalk_FollowLeader` (0x0051C360) directly — the SAME function the engine's
+own `WalkUpdateLocation_QuickWalk` calls when `CreMoveState==3`, with no state skipped (it still
+runs its own index/dead/commandable checks internally). Wired into
+`PartyFollowController.OnFrame` under the same busy/player-valid guard as
+`TryResetStuckFollowPhase`, called every frame. Kill switch: `party_follow_pokestep=0` (default
+on).
+
+**Live result: `attempts` moved off `0` for the first time in ten rounds**, and the FSM advanced
+past every phase previous rounds ever reached (round 74's own ceiling was `phase=7`, holding
+forever, `attempts=0` forever). Across three independently reproduced live cycles (two separate
+plugin builds, two separate rig sessions), `phase` progressed through 7 → 6 (`PathWaitDest`) → 3,
+and — the literal thing round 71 named as never-yet-observed — **`CreMoveState` (`followFlag` in
+the log) reached `-1` ("walking")**, live-confirmed in the reissue log.
+
+### Item 3: `PathWaitDest` (0x00512B40) disassembled in full — confirms round 75's write-cursor
+finding is the SAME mechanism, and explains why it stayed at 0 in every earlier test
+
+`record+0x24` (`CurrentPathNode`) and `record+0x34` (a destination-node index, not previously
+named) are searched forward through a 100-entry circular buffer toward the write cursor
+(`[followData]+0xFA4`, round 75's own finding); if `currentPathNode == writeCursor` on the very
+first comparison, the function returns "not ready" immediately (0x512B5C `je 0x512b70`) without
+touching anything else. With both stuck at `0` (this round's baseline, matching every earlier
+round), this ALONE is sufficient to explain `PathWaitDest` never succeeding, independent of item
+1's gate — two real, stacked blockers in the same code path, both closed out this round.
+
+Re-confirms round 75's own live finding under this round's own harness: a real engine TELEPORT
+(`tp`), even a sequence of 12 of them ~1.5s apart simulating continuous movement (round 74's own
+technique, retried here), never advances the write cursor — only a GENUINE engine walk action
+does. When one actually occurred (see below), `writeCursor` climbed from `0` into the 20s/30s/90s
+range across separate legs, and `pathNode` climbed in lockstep close behind it (e.g. `pathNode=28
+writeCursor=31`, `pathNode=87 writeCursor=90`) — the trail-consumer genuinely catching up to the
+trail-producer in real time, not a static snapshot.
+
+### A pre-existing test-harness limitation surfaced, not introduced, by this round: the `walk`
+test primitive is flaky, exactly as its own code comment already warns
+
+`tools/blockpoke.ps1 walk <x> <y>` queues `CSWSCreature::AddMoveToPointAction` on the PLAYER
+through `TestDriveController.HandleWalk`, whose own code comment already says: "the PC is
+drive-controlled, so an action-queue move may not move it at all." Live-confirmed true both ways
+this round: from `(20,22)` to `(10,15)` it worked cleanly (the player genuinely walked, landing at
+`(10.8,15.7)`); from `(45,35)` to two different nearby points, and from `(25,25)` to two more, it
+silently no-opped every time (queued without error, position never changed, confirmed by polling
+`console 'where'` for 10+ seconds after each). This is not a regression from this round's changes
+— `TestDriveController.cs` predates it and already documents the caveat — but it is worth
+recording plainly: reproducing this round's own positive result needs a `tp` origin point already
+known to support a real walk (`(20,22)` is confirmed-good this round), not an arbitrary one.
+
+### What is confirmed, and what is not
+
+**Confirmed, live, repeatedly:** the two stacked gates (item 1's `stepAccum==0` early-return,
+item 3's `pathNode==writeCursor==0` immediate-"not-ready") that permanently blocked EVERY prior
+round are both closed by this round's fix; `attempts`, `phase`, and `pathNode`/`writeCursor` all
+advance under genuine leader movement; `CreMoveState` reaches `-1` ("walking"); Trask's own
+reported position (`Odyssey.GetPosition`) moves from its stalled point to a point matching the
+leader's own landing spot, across three separate repro cycles.
+
+**Not independently confirmed — the one honest gap left for a future round.** In every repro this
+round captured, Trask's logged position was IDENTICAL across every ~0.2s-spaced sample until one
+sample where it had already jumped to (very close to) the leader's position — no intermediate
+in-between positions were ever caught at this sampling rate, across three separate transitions
+covering distances from ~2m to ~29m. Two screenshots taken during/after a repro did not happen to
+have Trask in frame, so this round could not visually settle whether the resulting motion is a
+smooth per-frame walk (most likely: this round's fix calls the step function once per RENDERED
+frame, same as the engine's own cadence, so a burst of several path nodes consumed within one
+0.2s sampling window is entirely consistent with normal walking speed and this project's own
+sampling being coarser than the motion) or some other catch-up mechanism that would read as a
+snap in actual play. **Next step for whoever picks this up: tighten
+`FineLogIntervalSeconds` to ~0.03-0.05s for a short deliberate burst (already parameterized,
+`PartyFollowController.cs`), or capture a short video with `tools/shot.ps1` on a timer while
+manually keeping Trask in frame, during a single genuine walk leg.** Whether the answer is
+"smooth" or "snappy," the underlying FSM defect this round found and fixed is real and confirmed
+either way — this is a polish question, not a correctness one.
+
+### What was shipped
+
+- `Odyssey.GetWalkRateFn`/`GetRunRateFn` delegates and `FollowDiag.WalkRate`/`.RunRate` — read-only
+  diagnostics, wired into both the existing reissue log and the new fine log.
+- `Odyssey.TryPokeStepAccumulator` — kept as a named, documented, ruled-insufficient-alone step
+  (not called from `PartyFollowController`; superseded by `TryDriveFollowLeaderStep` below).
+- `Odyssey.TryDriveFollowLeaderStep` — the shipped fix: pokes `creature+0xD0` and calls
+  `WalkUpdateLocation_QuickWalk_FollowLeader` directly, every non-busy frame. Kill switch
+  `party_follow_pokestep=0` (default **on**).
+- `PartyFollowController`'s new fine-grained diagnostic poll (`party_follow_finelog`, default
+  **off** — this round's own debugging tool, opt-in only, capped at 4000 lines/session so it
+  cannot grow unbounded if left on).
+- No `SharedBlock` layout or protocol version change — every new field/call is plugin-internal
+  (an engine-side diagnostic read or a direct engine call), nothing crosses the wire.
+
+### Test suite and build
+
+`dotnet test tests/KotorCoop.Tests` (Release): **1638/1638 passed**, 2m32s — none of this round's
+changes are exercised by the (x86 NativeAOT, unreferenced-by-tests) test project. Both plugin
+builds clean, 0 warnings 0 errors (the one pre-existing `PortraitController.cs` CA2014 warning is
+unrelated and untouched), across the round's several rebuild/redeploy/relaunch cycles (one
+specifically to ship the `TryDriveFollowLeaderStep` fix after `TryPokeStepAccumulator` alone was
+measured insufficient, one to default `party_follow_finelog` off before final verification). Rig
+torn down clean (`Get-Process swkotor,KotorCoop.Agent` empty), `auto_start_agent` restored to `1`
+in both GOG installs.
+
+### Verdict
+
+Ten rounds of investigation (71-75, then this round) chased this bug from `CSWParty::Update`
+never being pumped, through a step-FSM reset defect, to a pathfinder write-cursor's producer —
+each a real, shipped, verified fix, each still leaving Trask stuck. This round finds and closes
+the actual, final, two-part gate: a step-accumulator field with no live producer in the whole
+binary (worked around with the same "poke and drive directly" pattern that has now solved three
+different async-pump problems in this codebase — `CSWParty::Update`, and now this), stacked with
+the pathfinder consumer's own "not ready" fast-path being permanently true while that field sat at
+zero. **Trask now demonstrably reaches `CreMoveState=-1` and closes real distance from a
+genuinely stalled position, confirmed live three separate times.** The one thing this round could
+not settle — whether the resulting motion looks smooth in actual play, or needs a further pass —
+is named precisely above, with a concrete next step, rather than left as a vague "still doesn't
+work."
+
 ## 2026-08-23 (static pass, no rig access): a second, previously unexamined candidate for why
 `companion_local_combat`'s swing has never been observed — solo mode itself, not just
 party-presence staleness

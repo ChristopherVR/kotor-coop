@@ -1707,6 +1707,28 @@ internal static unsafe class Odyssey
     }
 
     /// <summary>
+    /// ROUND 80 DIAGNOSTIC (party-reconciliation.md): <c>CSWSCreature::GetWalkRate</c> 0x004F1B20
+    /// — <c>__thiscall</c>, no stack args, returns a clamped rate (<c>[creature+0xA08]</c> clamped
+    /// to [0, 1.5] times <c>[[creature+0xA74]+0x19C]</c> times 1000.0, sanity-clamped to 0.0 if the
+    /// product exceeds 100.0). Round 80's own disasm of
+    /// <c>WalkUpdateLocation_QuickWalk_FollowLeader</c> 0x0051C360 found a SECOND gate past the
+    /// step-accumulator one round 72 already named: at 0x51C7B9-0x51C7DF, a per-frame computed
+    /// scalar (built from this rate, a distance-bucket multiplier, and the step accumulator) is
+    /// compared against 0.0 and the entire phase-dispatch block (and its <c>attempts</c> counter
+    /// increment) is skipped whenever that scalar reads negative OR unordered (NaN) — never when
+    /// it is exactly zero. Read here alongside <see cref="FollowDiag.RunRate"/> to see whether
+    /// either rate itself is ever negative/NaN for a parked companion (which would explain
+    /// <c>attempts</c> freezing without any watchdog ever firing).
+    /// </summary>
+    private static readonly delegate* unmanaged[Thiscall]<nint, float> GetWalkRateFn =
+        (delegate* unmanaged[Thiscall]<nint, float>)0x004F1B20;
+
+    /// <summary>CSWSCreature::GetRunRate 0x004F1BE0 — same shape as <see cref="GetWalkRateFn"/>,
+    /// reading <c>[creature+0xA74]+0x198</c> instead of <c>+0x19C</c>.</summary>
+    private static readonly delegate* unmanaged[Thiscall]<nint, float> GetRunRateFn =
+        (delegate* unmanaged[Thiscall]<nint, float>)0x004F1BE0;
+
+    /// <summary>
     /// ROUND 72 DIAGNOSTIC: the raw per-member follow-data record CSWParty holds at
     /// <c>this+0x24+index*0x88</c> (party-reconciliation.md's own stride, re-confirmed against
     /// <c>WalkUpdateLocation_QuickWalk_FollowLeader</c> 0x0051C360's own disasm this round), plus
@@ -1755,6 +1777,12 @@ internal static unsafe class Odyssey
         diag.CachedPosPairLo = *(int*)(creature + 0xb0);
         diag.CachedPosPairHi = *(int*)(creature + 0xb4);
         diag.EnabledFlag = *(int*)(creature + 0x1f8);
+
+        // ROUND 80: see GetWalkRateFn's own remarks — the phase-dispatch gate at 0x51C7B9 skips
+        // the whole phase dispatch (attempts never increments) whenever a scalar built partly
+        // from these rates reads negative or NaN.
+        diag.WalkRate = GetWalkRateFn(creature);
+        diag.RunRate = GetRunRateFn(creature);
 
         // ROUND 74: the step FSM this round is chasing, per WalkUpdateLocation_QuickWalk_
         // FollowLeader's own disasm (0x0051C7E5-0x0051C7F9) — record+4 is the phase index the
@@ -1842,6 +1870,8 @@ internal static unsafe class Odyssey
         public int CurrentPathNode;
         public nint FollowDataArray;
         public int WriteCursor;
+        public float WalkRate;
+        public float RunRate;
     }
 
     /// <summary>
@@ -1957,6 +1987,144 @@ internal static unsafe class Odyssey
             wrote = true;
         }
 
+        return true;
+    }
+
+    /// <summary>
+    /// ROUND 80 EXPERIMENT (party-reconciliation.md): <c>creature+0xD0</c> — the "step
+    /// accumulator" round 72 already named — is read (never written) by
+    /// <c>WalkUpdateLocation_QuickWalk_FollowLeader</c> 0x0051C360 at its own first gate
+    /// (0x51C458-0x51C486): the raw dword is unsigned-wrapped, compared against 0.0, and the
+    /// ENTIRE function returns immediately (before ever reaching the phase-dispatch block whose
+    /// <c>attempts</c> counter round 74 was tracking) whenever it reads exactly 0. Live-measured
+    /// this round: for a parked companion this reads 0 in every one of 400 consecutive samples
+    /// (~60s, ~150ms apart, via <see cref="Odyssey.FollowDiag.StepAccumulator"/>), including the
+    /// very first sample taken right after module load — this field appears to never leave 0 in a
+    /// coop session, which alone accounts for <c>attempts</c> freezing at 0 with no watchdog ever
+    /// firing (round 74's own still-open question).
+    ///
+    /// The producer: disassembling the OUTER caller <c>WalkUpdateLocation_QuickWalk</c> 0x0051D9C0
+    /// (0x51DA5D-0x51DAB4) finds the SAME field written exactly once, unconditionally to LITERAL
+    /// ZERO (<c>mov [creature+0xD0], 0</c>), gated behind a GetWorldTimer/SubtractWorldTimes
+    /// comparison against a cached "last checked" time pair at <c>creature+0xB0/+0xB4</c> (which
+    /// DOES advance live — see the existing diagText's own <c>cachedPos</c> field, confirmed
+    /// climbing by ~1000/sec, consistent with a millisecond world clock). No instruction anywhere
+    /// in the .text section (a full capstone sweep, not just <c>tools/fieldwrites.py</c>'s
+    /// MOV-only scan, to also catch FADD/FSTP/ADD) writes a genuinely INCREMENTING value into this
+    /// field for CSWSCreature specifically — the periodic commit above is the only writer found,
+    /// and it always zeroes. This is the same class of bug as round 73's
+    /// <c>CSWParty::Update</c>: an async producer's "commit" fires (the cache advances, the
+    /// counter is zeroed as the new baseline) but whatever is meant to accumulate a nonzero value
+    /// into it on the frames IN BETWEEN commits was never isolated by static analysis alone — so
+    /// this pokes a plausible per-frame delta directly, the established pattern for this exact
+    /// situation (see <see cref="PumpPartyUpdate"/>'s own round 73 precedent).
+    ///
+    /// Writes <paramref name="ticks"/> (interpreted the same way the consumer does: an unsigned
+    /// dword, nominally milliseconds given the cached-time-pair unit above) directly into
+    /// <c>creature+0xD0</c>. Returns false only when the index does not resolve.
+    ///
+    /// MAIN THREAD ONLY.
+    /// </summary>
+    public static bool TryPokeStepAccumulator(uint companionServerObjectId, int ticks)
+    {
+        nint client = GetClient();
+        if (client == 0)
+        {
+            return false;
+        }
+
+        uint clientObjectId = ServerToClientObjectIdFn(client, companionServerObjectId);
+
+        nint party = GetSWPartyFn(client);
+        if (party == 0)
+        {
+            return false;
+        }
+
+        int index = GetPartyIndexFn(party, clientObjectId);
+        if (index <= 0)
+        {
+            return false;
+        }
+
+        nint creature = ResolveServerObject(companionServerObjectId);
+        if (creature == 0)
+        {
+            return false;
+        }
+
+        *(int*)(creature + 0xd0) = ticks;
+        return true;
+    }
+
+    /// <summary>CSWSCreature::WalkUpdateLocation_QuickWalk_FollowLeader 0x0051C360 —
+    /// <c>__thiscall</c>, no stack args beyond <c>this</c> (a CSWSCreature*). See
+    /// <see cref="TryDriveFollowLeaderStep"/>'s own remarks for why this is called directly
+    /// rather than relying on the engine's own per-frame dispatch.</summary>
+    private static readonly delegate* unmanaged[Thiscall]<nint, void> WalkUpdateLocationQuickWalkFollowLeaderFn =
+        (delegate* unmanaged[Thiscall]<nint, void>)0x0051C360;
+
+    /// <summary>
+    /// ROUND 80 EXPERIMENT (party-reconciliation.md): <see cref="TryPokeStepAccumulator"/> alone
+    /// (write <c>creature+0xD0</c>, return, let the engine's own per-frame call chain pick it up
+    /// later) was live-tested first and measured NOT sufficient — <c>attempts</c>
+    /// (<c>record+0x44</c>) stayed at 0 even with the poked value reading back correctly on the
+    /// very next diagnostic sample, 650+ samples across ~90s. The likely reason, found by
+    /// re-reading <c>WalkUpdateLocation_QuickWalk</c> 0x0051D9C0's own disasm: that OUTER caller
+    /// unconditionally re-zeroes <c>creature+0xD0</c> itself (0x51DAA6, gated behind its own
+    /// GetWorldTimer/SubtractWorldTimes check, which — per the existing diagText's own
+    /// <c>cachedPos</c> field, confirmed climbing live — genuinely fires) EVERY time the ENGINE's
+    /// own per-frame call chain reaches this creature, which happens at a different point in the
+    /// frame than this plugin's own hook — so by the time the real
+    /// <c>WalkUpdateLocation_QuickWalk_FollowLeader</c> call the engine makes on its own actually
+    /// runs, the poke from a prior plugin frame has already been reset back to 0 by the engine's
+    /// own zeroing, before ever being consumed.
+    ///
+    /// This pokes <c>creature+0xD0</c> AND THEN calls
+    /// <c>WalkUpdateLocation_QuickWalk_FollowLeader</c> directly, in the same call, from this
+    /// plugin's own drive loop — the exact same "poke the input, then call the real engine
+    /// function immediately so nothing else can claw it back first" pattern round 73's
+    /// <see cref="PumpPartyUpdate"/> already established for <c>CSWParty::Update</c>. This is the
+    /// SAME function the engine's own <c>WalkUpdateLocation_QuickWalk</c> calls when
+    /// <c>CreMoveState==3</c> (follow) — calling it directly does not skip any state validation
+    /// FollowLeader itself performs (its own index/dead/commandable checks still run inside it);
+    /// it only skips the OUTER function's own re-zeroing of the very field this call needs to be
+    /// nonzero.
+    ///
+    /// Returns false when the index does not resolve (mirroring <see cref="TryResetStuckFollowPhase"/>).
+    ///
+    /// MAIN THREAD ONLY.
+    /// </summary>
+    public static bool TryDriveFollowLeaderStep(uint companionServerObjectId, int ticks)
+    {
+        nint client = GetClient();
+        if (client == 0)
+        {
+            return false;
+        }
+
+        uint clientObjectId = ServerToClientObjectIdFn(client, companionServerObjectId);
+
+        nint party = GetSWPartyFn(client);
+        if (party == 0)
+        {
+            return false;
+        }
+
+        int index = GetPartyIndexFn(party, clientObjectId);
+        if (index <= 0)
+        {
+            return false;
+        }
+
+        nint creature = ResolveServerObject(companionServerObjectId);
+        if (creature == 0)
+        {
+            return false;
+        }
+
+        *(int*)(creature + 0xd0) = ticks;
+        WalkUpdateLocationQuickWalkFollowLeaderFn(creature);
         return true;
     }
 
