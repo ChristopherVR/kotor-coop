@@ -1452,3 +1452,86 @@ that last point) and narrows "what a live pass needs" from "grep every `.dlg`" t
 and one specific global boolean. No production file was touched; the search tool built this round
 is a throwaway console program, not checked into the repo, for the
 reason given in §14.1 — `Gff.cs` already reads everything a `.dlg` needed.
+
+## 15. The live attempt (2026-08-24) — `Tar_SwoopEng` alone gets the dialogue all the way to the terminal node exactly as disassembled, but the module transition itself never fires
+
+Ran §14.5's exact recipe live, on a fresh `build.ps1 -Install` rig. `KotorCoop.Agent craft-save
+--source "...saves\000002 - Game1" --dest "...saves\000003 - zzz_swoop_test" --bool Tar_SwoopEng`
+against the install's own pristine, never-modified `000002 - Game1` (confirmed untouched before AND
+after — `TIMEPLAYED=146`, `LASTMODULE=END_M01AA`, the very start of the game, nowhere near Taris).
+Confirmed offline the craft actually stuck (`Tar_SwoopEng: 0 -> 1`, verified via `globalvars.py get`
+against the crafted copy) before ever loading it. `craft-save`'s own safety behavior held exactly as
+documented: `--source` was never opened for writing, `--dest` was refused if non-empty (moot here,
+freshly created), and the crafted directory was deleted again at the end of this round (a throwaway
+test artifact, not meant to persist) — `000002 - Game1` was never touched at any point.
+
+Loaded the crafted save into the live host session via the `loadgame` console verb (newest-by-mtime
+save resolves to slot 0, confirmed by directory listing before the load), then host-only
+`console 'warp tar_m11aa'`, `tp 65.0 76.0 0.12` to land next to Gadon's own `.git`-recorded spawn
+point (`(63.90, 78.62)`, read directly from `tar_m11aa.git`'s `Creature List` rather than guessed),
+then `console 'talk GadonThek112'`.
+
+### What happened: the dialogue ran itself, and it matches §14.3's traced node sequence exactly
+
+**No additional Taris story/faction state was needed beyond the single flag** — this answers the
+task's own open question directly. With only `Tar_SwoopEng=1` set (no Hidden Bek alliance flag, no
+Bastila-met flag, nothing else touched, on a save that has literally never left the Endar Spire),
+`talk GadonThek112` did not stop at a greeting waiting for a reply pick; it opened directly into a
+chain of six auto-advancing dialogue nodes over about 30 seconds, published in
+`kotorcoop-plugin.log` as `dialogue-node-pub: #1 node -1 -> 17` ... `#5 node 20 -> 21` — an exact,
+non-coincidental match to §14.3's own disassembly-traced node numbers for `tar11_gadon112.dlg`:
+entry 17 is `k_ptar_racecs0`, entry 18 is `k_ptar_racecs1` (the node with `Listener=Zaerdra111` —
+consistent with the dialogue tracker's `partner` field showing `'zaerdra111'` mid-sequence, matching
+her interjection rather than a wrong-NPC mistake), and node 21 is the terminal `ReplyList[21]`
+(`Script='k_ptar_bekrace'`) §14.4 disassembled as the module-transition call. Each step auto-advanced
+with no `selectreply`/`skipline` issued by this round at all — every branch encountered had exactly
+one satisfied continuation, which is itself further live confirmation that the flag theory is
+sufficient to open this entire path, not just its first line.
+
+### What did NOT happen: no module transition, ever, across several minutes of real time
+
+After node 21 published, the tracked dialogue partner cleared (conversation ended, `local: partner
+''`) and the log went quiet — no `epoch: world unloading`, no `transition:` line, nothing resembling
+§9.1's own AV-corroborated `CSWMiniGame` engine activity. Watched for **just under 3 minutes**
+(`08:02:05` terminal node to `08:05:26`, several `console 'where'` polls in between): the player's
+own position never moved from the `tp` landing spot at all (`65.0, 76.0` unchanged start to finish —
+notable because §14.4's own disassembly read describes a staged cutscene, "a restless night... in
+the morning, one of the Beks takes you to...", with `AssignCommand`-shaped waypoint-walk actions in
+`k_ptar_racecs0`/`racecs1` that should visibly move somebody), the module stayed `tar_m11aa`
+throughout (`console 'where'` polled repeatedly), the journal's `tar_bastsearch`-adjacent state never
+advanced beyond the module-entry `tar_vulkarbase` bump that fired on the earlier warp itself, and
+`tools/crashlog.ps1` showed no new access violation and both processes stayed `Responding=True` the
+whole time — this is a clean stall, not a crash.
+
+### Honest assessment: three live possibilities, not distinguished this round
+
+1. **The cutscene staging never completed.** `k_ptar_racecs0`/`racecs1`'s own waypoint-walk
+   `AssignCommand` actions may depend on real pathfinding/animation time that a console-driven
+   `talk`/auto-advance session doesn't actually produce (the player's own position never moving is
+   the strongest evidence for this reading) — if the terminal `k_ptar_bekrace` script itself gates
+   on that staging having finished (e.g. waiting on an NPC reaching a waypoint before firing its own
+   action), a console session that skips straight through dialogue text without letting movement
+   actions resolve could stall it indefinitely without ever reaching the transition call at all.
+2. **Routine `#509`'s inferred identity is wrong, or takes more than the one argument this project's
+   `NwscriptActions` table has verified.** §14.4 was explicit that the routine is not in the
+   verified table and its behavior is inferred purely from the literal `"tar_m03af"` argument shape
+   — this round's negative result is consistent with (but does not prove) that inference being
+   incomplete.
+3. **A precondition inside `k_ptar_bekrace.ncs` itself, before the action call, silently no-ops on
+   this save's otherwise-untouched world state** (no companions beyond Trask, no other Taris
+   progression) — §14.4's disassembly excerpt showed only the decisive action-call line, not the
+   script's full control flow, so an earlier guard this round never saw is not ruled out.
+
+This round cannot distinguish between the three without either a live debugger break at the
+`k_ptar_bekrace` script's own entry point, or a repeat of this exact recipe with a REAL human
+driving the dialogue clicks (to rule out possibility 1 specifically) rather than the console `talk`
+shortcut. **The shipping decision is unchanged**: `minigame_hide_peer` stays default-on; co-visible
+swoop racing is still not shipped and still not observed. What this round adds, concretely: the
+single-flag theory is now confirmed sufficient to reach and auto-play the ENTIRE dialogue chain
+identified in §14.3–14.4 (closing that open question decisively), and the remaining gap is narrowed
+from "does the flag even work" to "why doesn't the terminal script's own transition action fire" —
+a strictly smaller, better-scoped question for whoever has the rig next.
+
+No code changed this round — verification only. The crafted test save was deleted at the end of
+this round (throwaway artifact, not meant to persist); `000002 - Game1` was never modified.
+`dotnet test`: 1674/1674 green throughout.
