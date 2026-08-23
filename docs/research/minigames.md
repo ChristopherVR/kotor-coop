@@ -227,12 +227,156 @@ frozen mid-animation for the length of a hand looking wrong) — the detection w
 2. Take damage from a peer's fight while racing, then finish the race: confirm whether the
    accrued damage lands as described in §6, and decide from the live result whether that
    needs fixing before this is more than "documented as a known limitation".
-3. Enter a forced turret sequence (the escape pod launch is the earliest one) and confirm the
-   plugin's own log shows the `minigame: entered` / `minigame: exited` lines from
-   `MinigameController` on the correct frames.
+3. Enter a forced turret sequence — see §8's correction below on where that actually is, the
+   escape pod is NOT it — and confirm the plugin's own log shows the `minigame: entered` /
+   `minigame: exited` lines from `MinigameController` on the correct frames.
 4. Confirm `minigame_hide_peer = 0` in `coop.ini` actually restores the old (mirrored,
    possibly frozen-looking) behaviour, for players who prefer it.
 5. Check whether `PumpEnemies`/`PumpParty`'s minigame guard ever fires falsely during an
    ordinary cutscene that also happens to touch `CSWCArea` — the guard is a single pointer
    read and should be cheap to confirm has zero false positives across a normal playthrough's
    cutscenes.
+
+⚠ **Item 3's original wording ("the escape pod launch is the earliest [turret sequence]") is
+almost certainly wrong** — see §8 for the correction and the citation. Left unedited above
+(struck through in spirit, not in fact) so the mistake and its fix are both on the record;
+§8 is the section to actually follow.
+
+## 8. Ready to test (2026-08-23 round)
+
+Static-audited this round: every file item 8 (§5) claims to have changed —
+`MinigameController.cs`, `MinigameRule.cs`, `EngineGlobals.TryIsInMiniGame`,
+`KotorGameBridge.IsInMinigame`/`ReadLocalFlags`, `PlayerState.FlagInMinigame`/
+`SharedBlockView.FlagInMinigame` (both `32`, no collision with the other five flag bits),
+`CoopConfig`/`coop.ini.example`'s `minigame_hide_peer`/`minigame_spectate`, and the three
+`CoopAgent.cs` call sites (peer-visibility filter, `PumpPhantomDamage`, `PumpParty`,
+`PumpEnemies`) — was read and traced against this doc and found to **match exactly**: same
+offsets (`0x007A39FC` → `+0x04` → `+0x04` → `+0x18` → `+0x48` → `+0x264`) in both
+`MinigameController` (plugin, in-process) and `EngineGlobals` (agent, cross-process), same
+flag bit, same gating logic. `dotnet build` and the full `dotnet test` (1635 tests, including
+the 10 in `MinigameRuleTests.cs`) are green on this commit. **No code drift, no bug found in
+the gating/parking/restore logic itself** — traced end to end:
+
+* A hidden peer is not merely "not driven", it is **destroyed** on the peer's own instance
+  (`PhantomController.OnFrame`, `!remote.Active` branch → `DestroySlot`) the first frame their
+  `Active` flag clears, and **respawned** fresh (`TrySpawnOne`, at their currently-published
+  position) once it sets again — matching §7 item 1's "disappears, not freezes" expectation
+  exactly, not an assumption.
+* The slot a hidden peer occupies is **not** reclaimed while they are parked:
+  `PeerSlotMap.Assign`/`KotorGameBridge.WriteToPlugin` treat "filtered out of `visible` this
+  tick" exactly like "walked through a door" (the mechanism `PeerSlotMap`'s own doc comment
+  was written for) — a slot is only evicted from a holder that is provably absent AND another
+  peer needs the space. With two players there is no eviction pressure at all, so no
+  desync-by-reassignment is possible here.
+* `MinigameRule.cs` (the tested pure-policy class) is **not actually called from production
+  code** — `CoopAgent.cs` restates its three booleans inline instead (§5 already says this is
+  deliberate: "the rule class is the one place the policy is stated once and tested in
+  isolation"). Confirmed by grep: `MinigameRule` appears only in its own file and
+  `MinigameRuleTests.cs`. Not a bug — the inline booleans in `CoopAgent.cs` were checked
+  line-by-line against `MinigameRule`'s three methods and agree with all of them — but worth
+  knowing before assuming the tested class is what is running live.
+
+No fix was made because none of the three questions the task asked about turned up a gap:
+"what does parked mean" → destroyed-and-respawned, not frozen (verified above); "is there a
+re-entry stuck state" → no, `ClearSlot` on destroy resets every per-slot latch
+(`_factionKnown`, `_twinNamed`, `_lastAnim`, equipment cache, damage watch) so the respawn is
+identical in every way to a peer's very first spawn of the session; "does anything triggered
+by minigame completion fail to sync" → item/journal/global-flag sync (`ItemController.cs`,
+`JournalController.cs`, `EventFlagStore`) is not gated on `IsInMinigame` anywhere (grepped —
+zero hits), so a swoop-race prize or a turret-sequence story flag flows through the ordinary,
+already-tested channels the moment the pump after minigame-exit runs; it is not a
+minigame-specific path that could have been missed.
+
+### 8.1 A correction found while planning the live pass, not a code bug
+
+§7 item 3 says "the escape pod launch is the earliest [turret sequence]". Cross-checking that
+against this project's OWN prior, fully-disassembled trace of the escape pod
+(`docs/research/cinematics.md` §4.1–4.3) turns up **no minigame involvement at all**: the pod
+flow is `end_pod.utp OnUsed → k_pend_pod02` (fade, gather party, jump to the pod) →
+conversation `end_pod.dlg` → `k_pend_pod01`, which is 0x46 bytes and does exactly one thing —
+`StartNewModule("STUNT_00", "", "01c", ...)`. A movie queue and a module transition, nothing
+that touches `CSWCArea::mini_game`. `cinematics.md` traced this chain in enough detail to name
+the exact script and its byte count; if there were a turret placeable in that flow it would
+have surfaced there.
+
+The same document's §4.4 full static sweep of every `StartNewModule` call in the game
+(34 queued transitions found) names exactly one that leads into a minigame module:
+**`"11a"` (→ the turret minigame module `m12ab`)**, immediately next to `"17a"+"11a"` labelled
+"Leviathan escape" and `"17"` labelled "Leviathan capture". Read together, this is almost
+certainly the Leviathan turret-gunner sequence (defending the Ebon Hawk during the escape),
+not anything at the start of the game. **This is INFERRED, not itself live-verified in this
+round** — `m12ab` has not been visited or confirmed to actually raise `mini_game` — but it is
+the only lead this codebase's own research has for "which module hosts a turret", and it
+directly contradicts the escape-pod claim with a citable trace. Use it as the target below;
+if `warp m12ab` does not put the plugin log's `LocalInMinigame` anywhere near true, that is
+itself useful information the live pass should record back into this doc.
+
+### 8.2 Swoop race — exact steps
+
+Grounded in this repo's own trigger sweep (`docs/research/trigger-relay.md`): module
+`tar_m02ab` (Taris, Lower City) carries a trigger literally named `tar02_swoop02ab` running
+`k_ptar_swoop02ab` — the in-fiction swoop-track entrance. This is reachable by console warp
+alone, no story progress required.
+
+1. Both instances connected and in the same module (any starting module — `warp` moves both
+   independently, they do not need to already be together).
+2. **Player A** (will race): `~` console → `warp tar_m02ab`. Once loaded, walk to the swoop
+   track entrance (the game's own map/HUD marks it — this is ordinary Taris Lower City
+   geography, not a co-op-specific location) and start a race through the normal in-game
+   prompt (talk to the swoop-track NPC, accept the race).
+3. **Player B** (stays put, watching): remain in `tar_m02ab`, near where A was standing, camera
+   on A's phantom.
+4. The moment A's race actually starts (screen changes to the swoop HUD/track view), check:
+   - **A's plugin log** (`<gameA-dir>\kotorcoop-plugin.log`): `minigame: entered (swoop/turret)
+     — peers will park this player's phantom`.
+   - **B's screen**: A's phantom should visibly disappear within roughly one spawn-cooldown
+     window (30 frames) of A's flag going up — not freeze in place.
+   - **B's plugin log**: a `DestroySlot`-driven log line for A's slot (`"peer left: destroyed
+     phantom 0x.. (slot N)"` — the reason string is literally `"peer left"`, inherited from
+     the general "peer absent from this publication" path; that is correct and expected here,
+     not a mislabelled minigame message).
+5. While A is racing, have B deal damage to something (an enemy, or use `god`/`slay` cheats to
+   generate a combat event) so there is a "damage owed" total in flight, per §6.
+6. When A's race ends (win or lose, back to the normal HUD):
+   - **A's plugin log**: `minigame: exited — back in the shared world`.
+   - **B's screen**: A's phantom respawns at A's current (post-race) position within one
+     spawn-cooldown window.
+   - **A's own screen**, within the next pump or two: confirm whether B's mid-race damage now
+     lands on A (per §6, it should — "delayed, not forgiven"). This is the live call §6 asks
+     for: does that read as fair or as a surprise. Record the verdict either way.
+7. Repeat with `minigame_hide_peer = 0` in both `coop.ini`s: confirm A's phantom now stays
+   mirrored (frozen/odd-looking is expected and correct under this setting) through the whole
+   race instead of disappearing — proves the toggle itself works, for players who prefer the
+   old behaviour.
+8. Optional, no keyboard needed: `pwsh tools\blockpoke.ps1 -ProcId <A's pid> cheat status`
+   or the existing `creatures.ps1`/log tailing already used elsewhere in
+   `docs/live-verification.md` can substitute for eyes-on-screen checks where useful.
+
+### 8.3 Turret sequence — exact steps (target corrected per §8.1)
+
+This one is genuinely less certain than the swoop test — `m12ab` has not been visited by any
+prior round of this project's research — so treat step 2 as the actual experiment, not a
+known-good recipe.
+
+1. **Player A**: `~` console → `warp m12ab`. If the warp is refused (bad resref — the module
+   may not exist under this exact name, or may need a waypoint tag `warp m12ab <tag>`), that
+   itself is the finding: record the refusal and fall back to reaching the sequence by normal
+   story progress from an existing save at/after the Leviathan capture, if the test rig has
+   one — do not spend the session guessing resrefs blind.
+2. If the warp lands: look for whatever placeable/console the module presents as a turret seat
+   and interact with it the normal way (this project has not mapped that placeable's tag —
+   it will be obvious in-game, the same way a swoop kiosk is).
+3. The moment gunner view starts, check the same four things as the swoop test (§8.2 steps
+   4–7): A's log `minigame: entered`, B's phantom-of-A disappearance, B's log destroy line,
+   and on exit, A's log `minigame: exited` + B's respawn.
+4. Whatever module actually turns out to host the working turret sequence — `m12ab` or
+   something else found along the way — write the confirmed resref and any waypoint/placeable
+   tag back into this section so the NEEDS-LIVE tag on §7 item 3 can be dropped and the next
+   round does not have to re-derive it.
+
+### 8.4 What "pass" looks like
+
+Every NEEDS-LIVE item in §7 resolved one way or the other (including item 5's false-positive
+check — worth a few minutes of ordinary cutscene-heavy play, e.g. a couple of story
+conversations, watching for a stray `minigame: entered` that should not have fired), plus the
+§6 damage-fairness call made explicit in this doc rather than left as an open question.
