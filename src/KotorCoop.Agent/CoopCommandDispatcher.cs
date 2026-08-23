@@ -612,6 +612,10 @@ public sealed class CoopCommandDispatcher(
                 Leader(command.Amount);
                 break;
 
+            case CoopCommandKind.Recruit:
+                Recruit(command.Amount, command.Address ?? string.Empty);
+                break;
+
             case CoopCommandKind.Cheats:
                 foreach (string line in ConsoleCommand.CheatsText)
                 {
@@ -961,6 +965,9 @@ public sealed class CoopCommandDispatcher(
     /// docs/research/control-return.md.
     /// </summary>
     private void Leader(int amount) => SendCheat(new CheatRequest(CheatKinds.Leader, Amount: amount));
+
+    private void Recruit(int amount, string tag) =>
+        SendCheat(new CheatRequest(CheatKinds.Recruit, Amount: amount, Text: tag));
 
     /// <summary>Folds the shared block's peer-effect rings into <see cref="_effectLog"/> every
     /// tick, so an entry's "seen Ns ago" reflects roughly when it actually happened rather than

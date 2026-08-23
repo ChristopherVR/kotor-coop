@@ -391,3 +391,68 @@ test (never in source, `CoopConfig.cs`'s own default was already `false`); both 
 NEEDS-LIVE, still open: a full 3-minute-per-leg version of this same test; a companion-position-
 lag metric distinct from raw frame time; isolating whether the ~200-430 ms per-leg spikes are
 kill-event-shaped or something `party_fast_pump` itself can still affect at a longer sample size.
+
+## 2026-08-23 — `party_fast_pump` A/B, non-combat this time (round 75): still LEFT OFF, and the
+position-lag metric this pass wanted turned out to be unmeasurable for a concrete, disassembly-
+relevant reason
+
+The user's own report ("lag even on localhost") reads more like companion-mirror latency during
+ordinary walking than a combat-specific effect, which is exactly what this section's suspect #2
+targets and what the round above never tested. This pass: `docs/research/party-reconciliation
+.md`'s round 75, `tar/END_M01AA`, both instances, `frame_stats=1`, 120 s per leg, no combat.
+
+### What was measured: frame time — no meaningful difference either way
+
+| | `party_fast_pump=1` | `party_fast_pump=0` |
+| --- | --- | --- |
+| Host mean frame time | 1.91 ms | 2.01 ms |
+| Client mean frame time | 1.88 ms | 1.96 ms |
+| Host worst single 10 s bucket | 17.9 ms | 7.4 ms |
+| Client worst single 10 s bucket | 179.1 ms | 133.0 ms |
+| Client frames over 33 ms budget (of ~79,000 sampled) | 1 | 1 |
+
+Both legs sit in the same ~1.9-2.0 ms band on both instances — an order of magnitude below the
+combat legs above, as expected outside a fight — with one single-frame spike apiece on the
+client (not the host), most plausibly ordinary per-module housekeeping rather than anything tied
+to the flag, since it appears in both legs at a similar magnitude. **No frame-time regression
+either way; no case for flipping the default.**
+
+### What could NOT be measured: the companion position-lag metric this pass was asked for
+
+The task's own ask was host-write-timestamp vs. client-apply-timestamp for the SAME sample. Two
+independent attempts, both blocked:
+
+1. **The natural signal doesn't exist.** Trask's real follow-AI does not walk — the exact bug
+   `party-reconciliation.md`'s rounds 71-75 spend their whole length on — so there is no organic
+   position change on the host to time in the first place. Sampling his real position
+   (`tools/phantomgait.ps1 -ObjectId 0x127`) on the host for the whole 120 s window in EITHER leg
+   showed exactly one distinct `(x, y)` value: he never moves.
+2. **A manufactured signal gets reverted before it propagates.** `party-reconciliation.md`
+   round 73's own "test staging only" technique — a raw `WriteProcessMemory` poke to the resolved
+   creature's `+0x90` position field, cycling through a small patrol every 3 s — was tried as a
+   substitute (`console 'resolve 0x127'` first, to get the real engine-resolved address rather
+   than a vtable-scanned guess, which the first attempt got wrong and which explains why an
+   EARLIER attempt at this exact test found zero propagation at all). With the correct address,
+   the poked value DOES occasionally reach the client — but only as a single 250 ms sample before
+   snapping back to the pre-poke value, on both `party_fast_pump=1` and `=0` equally (client CSV:
+   `19.01311,21.150425` steady, one `32,22`-shaped flash roughly every 30-45 s despite pokes
+   every 3 s, i.e. most individual pokes never survive long enough on the HOST to be read at all).
+   Since the reversion happens at the same rate and magnitude under both settings, it is not
+   something `party_fast_pump` itself causes — it is the host's own per-frame system re-asserting
+   a stationary companion's cached position faster than either the external poke or the publish
+   channel underneath it, independently confirming `party-reconciliation.md` round 75's own
+   `CSWCCreature::SetPrecalculatedPosition -> CSWPartyFollowDataArray::ProcessPoint` disassembly
+   finding from the same round's pathfinder-cursor work (a live creature's position is not a bare
+   field a plugin can just overwrite and expect to stick, even briefly, for a body the engine's
+   own movement system considers "not moving").
+
+**Verdict: default stays OFF**, per the combat round's own finding, since this pass supplies no
+evidence to override it — a null result on frame time, and an inability to produce the requested
+lag metric at all, are not "strictly better with no regression." `coop.ini` in both installs
+restored to `party_fast_pump=0` (the shipped default) after this pass.
+
+NEEDS-LIVE, still open: the companion-position-lag metric, blocked on the same "the companion
+does not genuinely move" root cause `party-reconciliation.md` itself is chasing — this is likely
+only cleanly measurable once that bug is fixed, or against a companion driven by real, continuous
+engine movement (a genuine walk, not a teleport or a poke) rather than any staging technique tried
+so far.

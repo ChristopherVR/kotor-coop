@@ -301,6 +301,18 @@ public enum CoopCommandKind
     /// ever touches the local instance's own control, exactly like a real Tab press would.
     /// </summary>
     Leader,
+
+    /// <summary>
+    /// <c>recruit &lt;slot&gt;</c> — DEV-ONLY TEST PRIMITIVE (2026-08-23, party-reconciliation.md
+    /// round 75). Forces NPC roster slot <see cref="CoopCommand.Amount"/> (0-8) into the local
+    /// active party without a real recruitment conversation: poke the availability flag if
+    /// needed, spawn a body at the player's own position if the slot has none, then
+    /// <c>AddPartyMember</c>. Built because the natural recruit path is a GUI-only dialogue
+    /// tree with no console equivalent, and staging a genuine two-companion party for a live
+    /// test needed some way in. Not a network command: local roster state only, same as
+    /// <see cref="Leader"/>.
+    /// </summary>
+    Recruit,
 }
 
 /// <summary>
@@ -902,6 +914,10 @@ public static class ConsoleCommand
             case "leader":
                 return ParseLeader(rest);
 
+            // recruit <slot>  - DEV-ONLY TEST PRIMITIVE (2026-08-23), see CoopCommandKind.Recruit.
+            case "recruit":
+                return ParseRecruit(rest);
+
             case "cheats":
                 return new CoopCommand(CoopCommandKind.Cheats);
 
@@ -1474,6 +1490,35 @@ public static class ConsoleCommand
         return new CoopCommand(CoopCommandKind.Leader, Amount: slot);
     }
 
+    /// <summary>
+    /// Parses <c>recruit &lt;slot&gt; [tag]</c> — the dev-only force-into-party test primitive
+    /// (see <see cref="CoopCommandKind.Recruit"/>). <c>slot</c> is a party-roster index 0-8.
+    /// The optional <c>tag</c> is a fallback: if the slot has no availability-linked body
+    /// (<c>SpawnAvailableNPC</c> needs a blueprint association a raw availability poke does not
+    /// carry — see <c>Odyssey.TrySetSlotAvailable</c>'s own NEEDS-LIVE note), the plugin looks
+    /// up an already-placed live creature by this tag instead and adds THAT body.
+    /// </summary>
+    private static CoopCommand ParseRecruit(string[] rest)
+    {
+        const string usage = "recruit <slot> [tag]  (party-roster index 0-8, e.g. Carth is slot 2; "
+            + "tag is a fallback lookup for a body already placed in the module, e.g. p_carth001)";
+
+        if (rest.Length is not (1 or 2))
+        {
+            return new CoopCommand(CoopCommandKind.Invalid, Error: usage);
+        }
+
+        if (!int.TryParse(rest[0], out int slot) || slot < 0 || slot > 8)
+        {
+            return new CoopCommand(
+                CoopCommandKind.Invalid,
+                Error: $"'{rest[0]}' is not a party-roster slot (0-8) - {usage}");
+        }
+
+        string tag = rest.Length == 2 ? rest[1] : string.Empty;
+        return new CoopCommand(CoopCommandKind.Recruit, Amount: slot, Address: tag);
+    }
+
     /// <summary>A field value: decimal, or hex with an explicit 0x. Unlike an object id a
     /// bare number here is unambiguous — a stack of 20 is 20 — so decimal is the default.</summary>
     private static bool TryParseFieldValue(string value, out uint number)
@@ -1554,6 +1599,8 @@ public static class ConsoleCommand
         "  resolve <id>        what the ENGINE knows about one id, in one frame (plugin log has the chain)",
         "  leader <slot|pc>    dev-only: switch YOUR control to a party-roster companion (0-8)",
         "                      or back to 'pc'; local only, never crosses the network",
+        "  recruit <slot>      dev-only: force NPC roster slot (0-8) into the local active",
+        "                      party, no dialogue needed; local only, never crosses the network",
         "retail console cheats, already co-op-safe (they touch only your game):",
         "  giveitem <resref> | givecredits <n> | addexp <n> | addlevel | heal",
         "  revealmap | infiniteuses | invulnerability | whereami | bright | turbo",

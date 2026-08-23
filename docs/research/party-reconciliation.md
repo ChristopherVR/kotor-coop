@@ -1071,3 +1071,174 @@ client party roster survives a transition"). `tools/partystate.ps1` on both inst
 0x127` (Trask) — matches the pre-round baseline exactly, no desync introduced by this round's
 changes. Rig torn down clean (`Get-Process swkotor,KotorCoop.Agent` empty), `auto_start_agent`
 restored to `1` in both installs.
+
+## Round 75 (2026-08-23) — a real second companion staged with a new dev-only test primitive
+(confounded, not conclusive on its own); the pathfinder cursor's PRODUCER identified, disassembled
+and live-confirmed working; the CONSUMER's non-re-entry (round 74's own open question) narrowed
+further but still not closed; `party_fast_pump` re-tested non-combat and left off
+
+Picks up round 74's own two leads in order: (1) whether a genuine two-companion party sidesteps
+the whole follow-FSM problem, untested in four rounds; (2) `PathWaitDest`'s external write-cursor
+at `[record-base]+0xFA4`, flagged as the next disassembly target.
+
+### Item 1: a new dev-only `recruit <slot> [tag]` console primitive, because there was no other way in
+
+`END_M01AA` genuinely offers no second recruitable companion this early (round 74's own finding,
+confirmed again this round) and driving a real recruitment CONVERSATION with Carth end-to-end
+needs GUI dialogue-choice navigation this project's tooling cannot automate. `talk carth`
+(the existing test hook) does open a real `StartDialog` against him, but the conversation never
+renders any content — consistent with `docs/research/dialogue-sync.md`'s own characterisation of
+that exact hook/target pair as reaching an "unreachable NPC," not a normal conversation.
+
+Built instead: `CheatKindRecruit` (`SharedBlock.cs`, kind 21 — the next free number after
+`CheatKindLeader`), a dev-only console verb `recruit <slot> [tag]` (parsed in
+`ConsoleCommand.cs`, dispatched by `CoopCommandDispatcher.cs`, executed by
+`CheatController.Recruit`). It runs the exact three-call sequence
+`PartyRosterController.Reconcile` already runs for a peer's roster — `Odyssey.TrySetSlotAvailable`,
+then `Odyssey.SpawnAvailableNpc`, then `Odyssey.AddPartyMemberBySlot` — for a slot named directly
+rather than one read off a peer's mask. Live result: `SpawnAvailableNpc` refuses every time with
+its own "spawn failed, failure 0" (a genuine engine refusal, not a plumbing bug) — a bare
+availability poke does not carry the BLUEPRINT `AddAvailableNPCByTemplate` also records, which
+**settles `TrySetSlotAvailable`'s own long-standing NEEDS-LIVE question**: the flag alone is
+*not* enough. The verb falls back to a tag lookup (`CreatureFinder.FindByTag`) against a body
+already placed in the module by its own static creature list —
+`python tools/kotorfiles.py creatures END_M01AA` names Carth's placement directly
+(`p_carth001` at (35.16, 161.43, 0.0)) and confirms his real in-world TAG is `carth` (not the
+template resref) — and `console 'recruit 2 carth'` (NPC slot 2, matching this project's own
+recalled K1 constant mapping, cross-checked against the loaded save's own `PARTYTABLE.res`
+showing Trask at `PT_MEMBER_ID=0`) succeeded: `NPC slot 2 recruited and added to the party
+(0x2)`, live-confirmed via `partystate.ps1`: `companions 2`, `member 1: slot 2 objectId 0x2`.
+
+### Item 1's own result: genuinely two companions, but the STAGING METHOD is its own confound
+
+With Trask (slot 0) and Carth (slot 2) both in the active party, `PartyFollowController`'s own
+diagnostic line (extended this round, see below) was sampled for both. Trask reproduced the
+exact round 74 baseline (`followFlag=3`, `phase=7`, `attempts=0`, parked). Carth's own
+`followFlag` **never left 0** — the follow MODE itself never gets entered — for the whole
+observation window, across two separate rig cycles. Chased one level deeper: the creature-side
+`CSWParty` per-member-record backlink `EnemyPresenceController` already names
+(`CrePartyFollowInfo`, `creature+0x4C0`, "non-zero means the party system queues follow actions
+on it") reads back **non-zero** (`0x1926A4B8`-class addresses, live) for Carth — so that
+specific gate this round went looking for is NOT the blocker; the real cause is more mundane:
+Carth's action-queue head stays parked at `0x1` (a leftover action from his own static-placement
+idle behaviour, from BEFORE this round's raw force-add ever touched him) and every reissued
+`ActionFollowLeader` order queues behind it without ever becoming head — a state a companion who
+joined through a REAL recruitment conversation (which the game's own script machinery would have
+already cleared) would not start in.
+
+**This means item 1's live result is a genuine but confounded data point, not the clean answer
+round 74's brief asked for.** The disassembly evidence remains the stronger signal here: round
+74's own full disassembly of `WalkUpdateLocation_QuickWalk_FollowLeader`'s "other slot" block
+already proved it does not gate on slot 2 being empty or populated (§"the other slot lookup...
+does not gate on an empty slot"), and this round's own producer/consumer finding below (which
+touches `CSWParty`-level, not per-member, state) is likewise company-count-agnostic. Both lines
+of evidence point the same way: **solo-companion is not a special case of this bug** — but this
+round could not, and does not claim to, prove it live with a cleanly-recruited second companion.
+`recruit` is kept as a shipped dev-only test primitive (documented, never network-crossing) for
+whoever gets a save with a real second companion, or builds dialogue-choice automation, next.
+
+### Item 2: the pathfinder cursor's PRODUCER, found and live-confirmed; the CONSUMER's own
+re-entry gap narrowed, not closed
+
+`tools/fieldwrites.py 0xFA4` finds exactly 8 write sites in the whole binary, all inside
+`CSWPartyFollowDataArray::Reset` (0x634B60), `::SmoothFollowPath` (0x635AF0) and — three call
+sites, all clustered together — **`::ProcessPoint`** (0x636A30). Nothing inside `PathWaitDest`
+itself ever writes it, confirming `PathWaitDest` is the CONSUMER, never the producer, exactly as
+round 74's own framing assumed. `tools/xrefs.py 0x636a30` names `ProcessPoint`'s own 8 callers,
+including one squarely inside `CSWParty::Update` (0x006377C7) — the very function round 73's
+`PumpPartyUpdate` fix already drives every frame — and one inside `CSWCCreature
+::SetPrecalculatedPosition` (0x00615930), a CLIENT-side per-creature position-commit function.
+
+**A structural correction to the symbol DB, found by a crash.** The first attempt at reading the
+cursor treated `CSWParty+0x2DC` (`tools/kotor1_0_3.db`'s own `follow_data:
+CSWPartyFollowDataArray*` offset row) as a POINTER FIELD and dereferenced it — this crashed the
+HOST live (2026-08-23; the process disappeared mid-session, no engine crash dialogue, no
+`crashlog.txt`, confirmed by `Get-Process` losing exactly the host pid right after the read ran).
+Disassembling `CSWParty::Update`'s own call into
+`CSWPartyFollowDataArray::FindFurthestPartyMemeber_Current` settles why:
+`0x006372E1: lea ebx, [edi + 0x2dc]; mov ecx, ebx; call 0x634da0` is an **LEA, not a MOV** —
+`CSWPartyFollowDataArray` (4020 bytes, `classes.size` in the DB) is **embedded inline** inside
+`CSWParty` at `+0x2DC`, not stored behind a pointer there; the DB's own `classes.size=736` for
+`CSWParty` is consequently also wrong (this project's own established caveat: ~310 DB rows do
+not match this binary). Fixed in `Odyssey.TryGetFollowDiagnostics` to treat `party+0x2DC` as the
+address itself (never dereferenced as a pointer), with `NativeMethods.IsReadable` guarding the
+final field read as post-crash discipline. Live-reverified afterward: no crash across the rest
+of the round's rig cycles.
+
+**Live-confirmed: the producer genuinely works once `CSWParty::Update` is pumped (round 73's own
+fix is sufficient).** With the corrected read wired into the existing `party follow` diagnostic
+line (`diag.CurrentPathNode` = record+0x24, the field `PathWaitDest` and
+`FindFurthestPartyMemeber_Current` both read as the per-member "current path node" index;
+`diag.WriteCursor` = `[party+0x2DC]+0xFA4`), a REAL engine teleport (`console 'tp 45 35 -1.3'`)
+alone left `writeCursor` flat at `0`, but a REAL engine move action (`console 'walk 30 25'`)
+advanced it `0 -> 2` within seconds — direct, live proof that the trail-recording producer runs
+and advances correctly under genuine movement, with no further pump needed beyond round 73's
+already-shipped `PumpPartyUpdate`.
+
+**This did not unstick Trask.** `pathNode` (the companion's own consumption index) stayed at `0`
+the whole time the cursor advanced to `2` and beyond — not because the search logic in
+`PathWaitDest` failed (nothing here found evidence of that), but because — matching round 74's
+own `attempts` reading exactly — the OUTER phase-dispatch block that would call `PathWaitDest`
+again is not being re-entered at all for a companion parked this long. The producer question
+round 74 could not settle 74 ("does the trail even get recorded") is now closed: it does. The
+remaining, narrower question — why `WalkUpdateLocation_QuickWalk_FollowLeader`'s own per-frame
+re-entry stops for THIS creature once parked past a certain phase, while the leader (a plain
+`CSWSCreature` receiving the SAME per-frame `WalkUpdateLocation` dispatch) keeps moving freely —
+is exactly the "would need a live debugger" gap round 74 already named and this round's own
+static-disassembly toolchain has no way to close either. No fix shipped for it; a genuine
+zero-effect experiment is worse than an honest "not closed."
+
+**New shipped diagnostics, no behaviour change**: `Odyssey.FollowDiag.CurrentPathNode` /
+`.WriteCursor` / `.FollowDataArray`, wired into `PartyFollowController`'s existing per-slot log
+line (`pathNode=... writeCursor=... followData=0x...`). `PartyFollowController` also now logs
+`partyFollowInfo` (`creature+0x4C0`, read for item 1's own investigation above) on the same line.
+
+### Item 3: `party_fast_pump`, non-combat re-test — left OFF; the position-lag metric this task
+asked for could not be produced, for reasons themselves worth recording
+
+See `docs/research/lag-audit.md`'s own dated entry for the full write-up. Summary: frame-time
+comparison shows no meaningful difference between `party_fast_pump=1` and `=0` in a non-combat,
+two-companion-attempted session (both ~1.9-2.0 ms mean frame time on both instances, one
+similar-sized single spike per leg on the client in both legs) — default **stays OFF**, since
+the task's own rule ("flip on only if strictly better") is not met either way. The requested
+companion-position-lag metric (host write timestamp vs. client apply timestamp) could not be
+produced: Trask's own follow-AI does not walk (the very bug this whole round investigates, so
+there is no NATURAL position change to time), and a raw `+0x90` position poke used to manufacture
+a synthetic one (this document's own established "test staging only" technique, round 73's own
+precedent) is actively reverted by the host's own per-frame system within roughly one poll
+interval most of the time — the client's mirror shows the poked value for exactly one 250 ms
+sample before snapping back to the pre-poke value, on BOTH flag settings equally, confirming the
+reversion is not something `party_fast_pump` itself causes or fixes. This is consistent with (and
+adds live evidence for) this round's own `CSWCCreature::SetPrecalculatedPosition -> ProcessPoint`
+finding above: something recomputes and re-asserts a stationary party member's position every
+frame from the engine's own cached movement state, independent of and faster than either this
+plugin's publish cadence or an external `WriteProcessMemory` poke.
+
+### Verdict
+
+Two real, live-verified, disassembly-grounded findings this round (the pathfinder trail's
+producer identified and confirmed working; a DB error found and fixed by a real crash, with a
+safety lesson recorded), one genuinely new but confounded live data point (a second companion's
+follow MODE gate is blocked by a pre-existing action-queue head, not by anything company-count
+related), and one flag left where the evidence already had it. **Trask still does not walk.**
+The narrowed, still-open question — why the per-frame walk-update dispatch stops re-entering a
+parked companion's own follow continuation — is precisely where round 74 left it, now with the
+producer side of the mechanism it depends on fully closed out from underneath it. A live debugger
+attached to `swkotor.exe`, single-stepping `WalkUpdateLocation` for a parked companion across
+several frames, remains the concrete next step.
+
+### Test suite and build
+
+`dotnet test tests/KotorCoop.Tests` (Release): **1623/1623 passed**, unchanged baseline, 2m28s —
+this round's changes are one new shipped dev-only console primitive (`recruit`, `CheatKindRecruit
+= 21`, no `SharedBlock` layout change — it reuses the existing generic cheat-request slot exactly
+like `CheatKindLeader` before it, so no block-version bump), and new read-only diagnostics
+(`FollowDiag.CurrentPathNode`/`.WriteCursor`/`.FollowDataArray`, `partyFollowInfo` in the
+existing log line), none exercised by the (x86 NativeAOT, unreferenced-by-tests) test project.
+Both plugin builds clean, 0 warnings 0 errors (the one pre-existing `PortraitController.cs`
+CA2014 warning is unrelated and untouched), across the round's several rebuild/redeploy/relaunch
+cycles (one of which was needed specifically to ship the crash fix above before any further live
+testing could safely continue). Rig torn down clean (`Get-Process swkotor,KotorCoop.Agent`
+empty), `auto_start_agent` restored to `1` in both installs, the round's own test-only
+`dialogue_recruit_sync=1` override removed from both `coop.ini`s afterward (not part of this
+round's shipped defaults).

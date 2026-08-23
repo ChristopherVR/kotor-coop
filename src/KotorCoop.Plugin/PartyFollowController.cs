@@ -302,6 +302,17 @@ internal sealed unsafe class PartyFollowController(SharedBlockView block)
                 int inParty = *(int*)(creature + 0xA88);
                 int followFlag = *(int*)(creature + 0xA8C);
 
+                // ROUND 75 DIAGNOSTIC (2026-08-23, party-reconciliation.md): the creature-side
+                // CSWParty per-member-record backlink EnemyPresenceController's own
+                // CrePartyFollowInfo already names ("non-zero means the party system queues
+                // follow actions on it") — party-reconciliation.md's own "Party follow... gates
+                // on +0xA88, +0x4C0, +0x9F0 & 2" citation, never read back here before. A
+                // force-recruited second companion (docs/research/party-reconciliation.md round
+                // 75's dev-only `recruit` test primitive) is the first case that can tell zero
+                // from nonzero here against a companion NOT populated by the normal save-load/
+                // recruit-conversation path.
+                int partyFollowInfo = *(int*)(creature + 0x4C0);
+
                 // ROUND 72: does this companion even have a resolvable CSWParty index, and — if
                 // so — what does the engine's own per-frame follow continuation
                 // (WalkUpdateLocation_QuickWalk_FollowLeader 0x0051C360) see in its own
@@ -332,13 +343,16 @@ internal sealed unsafe class PartyFollowController(SharedBlockView block)
                         + $"cachedPos=({diag.CachedPosPairLo:X},{diag.CachedPosPairHi:X}) "
                         + $"enabledFlag={diag.EnabledFlag} leaderPos=({leaderPos.X:F1},{leaderPos.Y:F1},{leaderPos.Z:F1}) "
                         + $"soloMode={soloMode} phase={diag.PhaseIndex} attempts={diag.PhaseAttempts} "
-                        + $"otherSlot={diag.OtherSlotIndex}:0x{diag.OtherSlotStoredId:X}{refText}"
+                        + $"otherSlot={diag.OtherSlotIndex}:0x{diag.OtherSlotStoredId:X} "
+                        + $"pathNode={diag.CurrentPathNode} writeCursor={diag.WriteCursor} "
+                        + $"followData=0x{diag.FollowDataArray:X}{refText}"
                     : $" soloMode={soloMode}{refText}";
 
                 PluginHost.Log(ok
                     ? $"party follow: 0x{objectId:X} was idle/stalled (head 0x{headType:X}) — "
                         + $"reissued ActionFollowLeader, head now 0x{headAfter:X} "
                         + $"commandable={commandable} inParty={inParty} followFlag={followFlag} "
+                        + $"partyFollowInfo=0x{partyFollowInfo:X} "
                         + $"cswPartyIndex={(indexOk ? partyIndex.ToString() : "unreadable")}{diagText}"
                     : $"party follow: could not reissue follow for 0x{objectId:X} (failure {failure}) "
                         + $"head was 0x{headType:X}");

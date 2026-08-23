@@ -1782,6 +1782,43 @@ internal static unsafe class Odyssey
         diag.OtherSlotIndex = otherIndex;
         diag.OtherSlotStoredId = *(uint*)otherRecord;
 
+        // ROUND 75 (2026-08-23, party-reconciliation.md): record+0x24 is the "current path
+        // node" index PathWaitDest (0x0051C7E5's dispatch, phase 6 -> 0x00512B40) compares
+        // against the write cursor — confirmed by disasm cross-reference:
+        // CSWPartyFollowDataArray::FindFurthestPartyMemeber_Current (0x00634D40) reads the SAME
+        // field through a different path (party+0x24+index*0x88+0x24, i.e. [CSWParty-backptr
+        // +0xD0] for index 1 = record+0x24 for index 1) when computing which companion is
+        // furthest behind on the shared trail. party+0x2DC is CSWParty's own `follow_data`
+        // pointer (CSWPartyFollowDataArray*, tools/kotor1_0_3.db offsets table); +0xFA4 on THAT
+        // object is the write cursor PathWaitDest polls (tools/fieldwrites.py 0xFA4 finds its 8
+        // write sites, entirely inside CSWPartyFollowDataArray::Reset/SmoothFollowPath/
+        // ProcessPoint — never inside PathWaitDest itself, confirming it is a CONSUMER, not the
+        // producer). Read together, these say whether the trail is genuinely being recorded
+        // (cursor advancing) while a stalled companion's own current-node index sits frozen.
+        diag.CurrentPathNode = *(int*)(record + 0x24);
+
+        // ⚠ CRASHED THE HOST LIVE the first attempt at this read (2026-08-23): this code
+        // originally treated party+0x2DC as a POINTER FIELD (mirroring
+        // tools/kotor1_0_3.db's "CSWParty.follow_data: CSWPartyFollowDataArray*" offset row)
+        // and dereferenced it — which read a genuinely garbage value (0x41A01AD9, which
+        // decodes as a plausible position float, ~20.03 — clearly stray struct data, not a
+        // heap pointer) and then crashed dereferencing THAT as a pointer's own +0xFA4.
+        // Disassembling CSWParty::Update's own call into
+        // CSWPartyFollowDataArray::FindFurthestPartyMemeber_Current (0x006372E1:
+        // `lea ebx, [edi + 0x2dc]; mov ecx, ebx; call 0x634da0`) settles it: that is an LEA,
+        // not a MOV — CSWPartyFollowDataArray is EMBEDDED INLINE inside CSWParty at +0x2DC,
+        // not stored behind a pointer there. The DB's "*" suffix on this one offset row is
+        // wrong (this project's own established caveat: ~310 DB rows do not match the
+        // binary); CSWParty's own real size is therefore at least 0x2DC + 0xFB4 (the embedded
+        // array's own 4020-byte size) = 0x1290, not the DB's claimed 736. followData is
+        // therefore the ADDRESS party+0x2DC itself, never dereferenced as a pointer — still
+        // range-checked before the final field read purely as post-crash discipline.
+        nint followData = party + 0x2DC;
+        diag.FollowDataArray = followData;
+        diag.WriteCursor = NativeMethods.IsReadable(followData + 0xFA4)
+            ? *(int*)(followData + 0xFA4)
+            : -1;
+
         diag.Valid = true;
         return true;
     }
@@ -1802,6 +1839,9 @@ internal static unsafe class Odyssey
         public int PhaseAttempts;
         public int OtherSlotIndex;
         public uint OtherSlotStoredId;
+        public int CurrentPathNode;
+        public nint FollowDataArray;
+        public int WriteCursor;
     }
 
     /// <summary>

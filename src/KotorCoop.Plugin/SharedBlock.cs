@@ -1523,6 +1523,28 @@ internal struct SharedBlock
     /// </summary>
     public const uint CheatKindLeader = 20;
 
+    /// <summary>
+    /// DEV-ONLY TEST PRIMITIVE (2026-08-23, round 75 of docs/research/party-reconciliation.md):
+    /// forces NPC roster slot <see cref="OffsetCheatAmount"/> (0-8) into the LOCAL active party
+    /// without a real recruitment conversation — <c>Odyssey.TrySetSlotAvailable</c> (poke the
+    /// availability flag if the slot is not already recruited), then
+    /// <c>Odyssey.SpawnAvailableNpc</c> (if the slot has no live body) at the player's own
+    /// position, then <c>Odyssey.AddPartyMemberBySlot</c> — the exact three-call sequence
+    /// <c>PartyRosterController.Reconcile</c> already runs for a peer's roster, run here on
+    /// demand for a slot this instance names directly. Built because the natural in-story path
+    /// to a second companion (a full dialogue tree, GUI-only, no console equivalent) could not
+    /// be driven from an unattended test, and party-reconciliation.md's round 75 needed a real
+    /// two-companion party to test whether solo-companion following is a narrow edge case or a
+    /// general defect. This closes <c>TrySetSlotAvailable</c>'s own long-standing NEEDS-LIVE
+    /// note ("whether the flag ALONE is enough for SpawnAvailableNpc to resolve a template
+    /// afterward") the same pass that uses it.
+    ///
+    /// Never crosses the network — local roster state only, same as <see cref="CheatKindLeader"/>.
+    /// Refuses (does not silently reuse) a slot already occupied by a live, in-party companion.
+    /// ⚠ 21, because 7-20 are taken. Take the next FREE number.
+    /// </summary>
+    public const uint CheatKindRecruit = 21;
+
     /// <summary>The request was carried out here.</summary>
     public const int CheatStatusApplied = 1;
 

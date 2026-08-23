@@ -403,29 +403,33 @@ tools/                   RE helpers, demo scripts, the kotor1_0_3 symbol databas
   (docs/research/control-return.md), the whole round trip in well under a second: detect,
   hand control back, re-assert the camera. (`control_return=0` opts out of the whole hand-back,
   control and camera both — whatever you were on stays yours to leave.)
-- **A SOLO companion (one recruited party member, e.g. Trask on the Endar Spire) does not
-  reliably walk to catch up, even in solo play with no client connected — narrow, confirmed gap,
-  not expected to affect the common 2+-companion case.** `party_follow=1` (default on) reissues
-  the engine's own real `ActionFollowLeader` whenever a companion sits idle away from the
-  leader, reliably getting its `CreMoveState` to 3 ("follow mode entered," confirmed live every
-  time). Four rounds (71-74, 2026-08-23) traced why it never reaches -1 ("actually walking a
-  route") for a one-companion party: `CSWParty::Update` (never being pumped) and a stalled
-  per-member target/prior record (both fixed, round 73); and — round 74 — a genuine step-FSM
-  reset bug inside `WalkUpdateLocation_QuickWalk_FollowLeader` (0x0051C360): its own -1
-  ("reset") phase always re-enters a "wait for a path" phase without ever calling the ONE
-  handler that actually requests a path, so a companion that stalls long enough gets stuck in a
-  permanent two-state loop. Round 74 also fully disassembled and DISPROVED the round-73 theory
-  that an empty "second companion slot" was the blocker — that lookup's result is never even
-  read. `Odyssey.TryResetStuckFollowPhase` (shipped) breaks the dead loop live — the companion's
-  step FSM now reliably advances to its furthest phase yet (`PathWaitDest`, waiting on a
-  path-finding job) — but **still does not walk**: that job-status field appears to depend on
-  another async engine subsystem this plugin's per-frame drive loop does not reach either, the
-  same class of gap as `CSWParty::Update` before it. Not a regression — no follow-re-arming
-  existed before round 71 — and nothing in four rounds of disassembly here touches the
-  multi-companion case (a different party-index arithmetic path), so this is judged a narrow,
-  solo-companion-only gap rather than a general co-op regression. See
+- **A companion does not reliably walk to catch up — genuinely not yet fixed, and no longer
+  believed to be solo-companion-specific, though a clean live test of a properly-recruited
+  second companion still hasn't been run.** `party_follow=1` (default on) reissues the engine's
+  own real `ActionFollowLeader` whenever a companion sits idle away from the leader, reliably
+  getting its `CreMoveState` to 3 ("follow mode entered," confirmed live every time). Five rounds
+  (71-75, 2026-08-23) traced why it never reaches -1 ("actually walking a route"): `CSWParty
+  ::Update` (never being pumped) and a stalled per-member target/prior record (both fixed, round
+  73); a genuine step-FSM reset bug inside `WalkUpdateLocation_QuickWalk_FollowLeader`
+  (0x0051C360) that skipped path-finding entirely (round 74, fixed — `Odyssey
+  .TryResetStuckFollowPhase` breaks a permanent dead loop and gets the FSM to its furthest phase
+  yet, `PathWaitDest`); and — round 75 — `PathWaitDest`'s own external write-cursor, fully
+  disassembled: the trail-recording PRODUCER (`CSWPartyFollowDataArray::ProcessPoint`) is
+  confirmed, live, to work correctly once `CSWParty::Update` is pumped (no further fix needed
+  there), but the CONSUMER side — the per-frame re-entry into `WalkUpdateLocation`'s own follow
+  continuation — simply stops happening for a companion parked this long, for a reason that needs
+  a live debugger (not further static disassembly) to find. Round 75 also tried to settle whether
+  this is solo-companion-specific with a new dev-only `recruit <slot> [tag]` test primitive
+  (forces a second companion into the party without a real recruit conversation, since `END_M01AA`
+  offers no natural second companion this early) — Carth's own follow gate turned out to be
+  blocked by a leftover action from his forced, non-standard placement, not by anything
+  company-count related, so the result is a confounded data point rather than a clean answer.
+  The disassembly itself (round 74's "other slot" disproof, round 75's producer/consumer finding)
+  is company-count-agnostic and points toward "not solo-only," but this remains unproven live with
+  a genuinely, normally recruited second companion. Not a regression — no follow-re-arming existed
+  before round 71. See
   [docs/research/party-reconciliation.md](docs/research/party-reconciliation.md)'s 2026-08-23
-  "Round 74" entry for the full disassembly, the live measurements, and what remains open.
+  "Round 75" entry for the full disassembly, the live measurements, and what remains open.
 - **A mirrored companion cannot swing on a client — except, now, for one, in one narrow
   case, and it is OFF by default.** The presence mirror re-claims and wipes every companion's
   action queue every pass, so only the host's own companions ever really fight; a client sees
@@ -445,6 +449,19 @@ tools/                   RE helpers, demo scripts, the kotor1_0_3 symbol databas
   party-presence channel rather than by anything wrong with the gate; see
   [docs/research/party-reconciliation.md](docs/research/party-reconciliation.md)'s dated
   2026-08-22 entry. Still off by default pending that.
+- **Companion-mirror lag ("lag even on localhost"): investigated twice, left off both times, and
+  a clean measurement is still blocked by the follow bug above.** `party_fast_pump` (default OFF)
+  moves the companion-position publish/apply path off the 150 ms combat pump onto the same
+  real-time path dialogue already uses. A combat A/B (round 71, `docs/research/lag-audit.md`)
+  found it measurably WORSE in a real fight (higher mean frame time, ~40% more over-budget
+  frames on both instances) and left it off. A non-combat re-test (round 75, the same doc) found
+  no meaningful frame-time difference either way, but could not produce the companion-position-lag
+  metric it was asked for at all: the companion whose position would need to move (Trask) does not
+  walk under his own follow-AI (the bug above), and a raw position poke used to manufacture a
+  synthetic movement signal gets reverted by the host's own per-frame system within about one poll
+  interval, on both flag settings equally — so there is currently no clean way to measure this
+  specific report's own cause independent of the follow bug. Left off; the combat regression alone
+  is reason enough.
 - **One conversation at a time.** While a player is talking, nobody else can start a
   dialogue; the other player spectates rather than getting their own copy. That is the
   design (it keeps one plot line advancing), not a limitation to be lifted. While a player

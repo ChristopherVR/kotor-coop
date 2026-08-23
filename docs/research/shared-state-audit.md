@@ -6756,6 +6756,72 @@ party-follow); the two party-specific checks passed clean. `tools/partystate.ps1
 pre-round baseline exactly on both instances. Rig torn down clean (`Get-Process
 swkotor,KotorCoop.Agent` empty), `auto_start_agent` restored to `1` in both installs.
 
+### Round 75 (2026-08-23) — a second companion staged (confounded, not conclusive); the
+pathfinder cursor's PRODUCER found, disassembled and live-confirmed working; the CONSUMER's
+non-re-entry (round 74's own open question) narrowed further, still not closed; `party_fast_pump`
+re-tested non-combat, left off
+
+Full write-up in `docs/research/party-reconciliation.md`'s 2026-08-23 "Round 75" entry and
+`docs/research/lag-audit.md`'s matching dated entry. Short version:
+
+- **A new dev-only test primitive, because there was no other way to a second companion.**
+  `CheatKindRecruit` (kind 21, no `SharedBlock` layout change) + a `recruit <slot> [tag]` console
+  verb force NPC roster slot `<slot>` into the local active party — poke available, spawn if
+  possible, fall back to an already-placed body by tag otherwise, then `AddPartyMember`. Live
+  result along the way: `SpawnAvailableNpc` genuinely refuses on a bare availability poke (no
+  blueprint association) — **settling `Odyssey.TrySetSlotAvailable`'s own long-standing
+  NEEDS-LIVE question**: the flag alone is not enough. The tag fallback (Carth's real in-world
+  tag is `carth`, found via `tools/kotorfiles.py creatures END_M01AA`) worked:
+  `console 'recruit 2 carth'` → `companions 2` on the host, live-confirmed via `partystate.ps1`.
+- **The two-companion result is real but confounded.** Carth's `CreMoveState`/followFlag never
+  left 0 (the follow mode itself never engages) — traced to his action-queue head staying parked
+  on a leftover static-placement action from BEFORE the force-add, not to anything company-count
+  related: his creature-side `CSWParty` backlink (`creature+0x4C0`,
+  `EnemyPresenceController`'s own `CrePartyFollowInfo`) reads non-zero, ruling out the gate this
+  round went looking for. Round 74's own full disassembly already proved the "other slot" lookup
+  does not gate on slot 2 being populated, and this round's producer/consumer finding below
+  touches only party-level (not per-member) state — both lines of static evidence say
+  solo-companion is not a special case, but this round could not prove it live with a cleanly
+  (not force-) recruited second companion, so this stays a confounded data point, not a closed
+  question.
+- **The pathfinder cursor's PRODUCER, found.** `tools/fieldwrites.py 0xFA4` finds all 8 writers
+  to the cursor `PathWaitDest` polls, entirely inside `CSWPartyFollowDataArray::Reset`/
+  `SmoothFollowPath`/`ProcessPoint` — never inside `PathWaitDest` itself, confirming it is purely
+  a CONSUMER. `ProcessPoint`'s own callers (`tools/xrefs.py`) include one inside `CSWParty::Update`
+  (the function round 73's `PumpPartyUpdate` fix already drives every frame) and one inside
+  `CSWCCreature::SetPrecalculatedPosition`.
+- **A DB error found by a real crash, and fixed.** The first read of the cursor treated
+  `CSWParty+0x2DC` as a POINTER field (mirroring the symbol DB's own offset row) and dereferenced
+  it — crashed the host live. Disassembling `CSWParty::Update`'s own call into
+  `FindFurthestPartyMemeber_Current` (`lea ebx, [edi+0x2dc]`, not a `mov`) proves
+  `CSWPartyFollowDataArray` is embedded INLINE in `CSWParty` at `+0x2DC`, not pointed to from
+  there — the DB's `*` suffix on this one row, and its `CSWParty` size (736, too small to hold
+  the 4020-byte embedded array), are both wrong. Fixed to treat `party+0x2DC` as the address
+  itself, `NativeMethods.IsReadable`-guarded; no further crash across the rest of the round.
+- **Live-confirmed: the producer works once `CSWParty::Update` is pumped.** A real engine
+  teleport left the cursor flat; a real engine move action (`console 'walk 30 25'`) advanced it
+  `0 -> 2` within seconds — round 73's already-shipped fix is sufficient for this half of the
+  mechanism, no further pump needed.
+- **This did not unstick Trask.** His own consumption index stayed at 0 while the cursor advanced
+  past it — matching round 74's own `attempts` reading exactly: the outer phase-dispatch block
+  that would re-poll `PathWaitDest` is not being re-entered for this creature at all anymore, for
+  a reason that (per round 74's own conclusion, unchanged by this round) needs a live debugger to
+  find, not further static disassembly. No fix shipped for it.
+- **`party_fast_pump` non-combat re-test: still left OFF.** Frame time shows no meaningful
+  difference either way (~1.9-2.0 ms mean on both instances, one similar single spike per leg).
+  The requested companion-position-lag metric could not be produced: Trask's own follow-AI does
+  not move (no natural signal), and a raw position poke used to manufacture one is reverted by
+  the host's own per-frame system within about one poll interval on BOTH flag settings equally —
+  itself live evidence for the `SetPrecalculatedPosition -> ProcessPoint` finding above, not
+  something the flag causes or fixes.
+
+`dotnet test tests/KotorCoop.Tests`: **1623/1623**, unchanged baseline, 2m28s. Both plugin builds
+clean across the round's several rebuild/redeploy/relaunch cycles (one specifically needed to ship
+the crash fix before further live testing could safely continue). Rig torn down clean
+(`Get-Process swkotor,KotorCoop.Agent` empty), `auto_start_agent` restored to `1` in both
+installs, the round's own test-only `dialogue_recruit_sync=1` override removed from both
+`coop.ini`s afterward.
+
 ## 3. A client's XP is actively erased
 
 `ProgressionSnapshotPacket` is host→client only and absolute (CoopAgent.cs, `PumpProgression`):

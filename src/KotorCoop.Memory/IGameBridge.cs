@@ -202,6 +202,16 @@ public static class CheatKinds
     /// ⚠ 20, because 7-19 are taken. Take the next FREE number.
     /// </summary>
     public const uint Leader = 20;
+
+    /// <summary>
+    /// DEV-ONLY TEST PRIMITIVE (2026-08-23, party-reconciliation.md round 75): forces NPC
+    /// roster slot <c>Amount</c> (0-8) into the local active party — poke available, spawn if
+    /// needed, add — without a real recruitment conversation. See
+    /// SharedBlock.CheatKindRecruit.
+    ///
+    /// ⚠ 21, because 7-20 are taken. Take the next FREE number.
+    /// </summary>
+    public const uint Recruit = 21;
 }
 
 /// <summary>The plugin's verdicts, mirroring <c>SharedBlock.CheatStatus*</c>.</summary>
