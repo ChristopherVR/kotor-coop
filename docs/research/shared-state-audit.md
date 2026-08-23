@@ -7085,3 +7085,69 @@ automatically under `near`, ends with both instances' party rosters agreeing via
 `dialogue_recruit_sync` in practice and not merely in theory; the exact feel of the 20-unit
 default range in play (chosen as a middle ground between `dialogue_join_teleport`'s 10-unit
 engine gate and "anywhere in the module", not measured).
+
+### Round 77 (2026-08-23) — skip-desync retest (still blocked, narrower now); the forced-
+conversation positive case finally observed live, twice; three real-play bug reports triaged, one
+fixed and live-confirmed, one shipped-but-not-latency-measured, one root-caused and documented
+
+Two jobs from the original brief plus three real bug reports the user filed mid-round from actual
+(not staged) play, folded in per the coordinator's own priority call. Full write-ups:
+`docs/research/dialogue-skip-desync.md`'s and `docs/research/dialogue-sync.md`'s own dated
+"round 77" sections, and `docs/research/container-sync.md` §9. Short version:
+
+- **Skip-desync retest: still blocked, but the blocker moved.** `tools/sendkey.ps1`/`click.ps1`'s
+  `Focus()` genuinely could not move Windows' OS-level foreground pointer at all (same symptom as
+  last round, different competing app). Root-caused one level deeper: `AttachThreadInput` alone
+  does not satisfy Windows' foreground-lock guard; a synthetic Alt keydown/keyup immediately
+  before `SetForegroundWindow` does — fixed in both tools. But even with foreground CONFIRMED
+  held (verified by `GetForegroundWindow()` and a same-call screenshot showing the live game),
+  a burst of injected key presses still produced **zero effect** — no node change, byte-identical
+  screenshot before/after. The desktop was independently confirmed to be in genuine concurrent
+  use by its own human operator throughout (explains the transient re-loss of focus between
+  separate tool calls, does not explain the zero-effect result inside the atomic, held-focus
+  test). Points at KOTOR's own DirectInput device re-acquisition needing a real
+  `WM_ACTIVATE`-shaped message sequence a forced `SetForegroundWindow` may not deliver — inferred,
+  not disassembly-verified this pass.
+- **Forced-conversation positive case: closed.** `DialogueGateHook.LastStartForced` read TRUE
+  live, twice, independently (host and client, two different trigger ids in the Taris Sith-base
+  interrogation cluster in `tar_m02ad`, reached by warp per the user's own direction) — the item
+  `docs/research/dialogue-sync.md` has carried as NEEDS-LIVE since its own 2026-08-23 forced-flag
+  work. The auto-join-from-genuine-distance half stayed unconfirmed (both real characters kept
+  landing at the same module arrival waypoint before a `blockpoke.ps1 walk` away could clear it in
+  time) — left NEEDS-LIVE, a tooling/positioning limitation, not a code question this pass found
+  wrong.
+- **Bug 1 (forced dialogue didn't reach the other player) — a real defect found and fixed.**
+  Reading the code this pass's own positive-case reproduction produced found
+  `DialogueGateHook.OnStartDialog` computing "is this forced" purely for diagnostics and never
+  consulting it in the refusal decision: a genuinely forced `StartDialog` got refused
+  ("a peer holds the token") exactly like an ordinary click competing with someone else's
+  conversation — and a refusal here clears the engine's own queued `BeginConversation` action, so
+  an unlucky forced conversation could be lost outright, not merely delayed. Fixed: the forced
+  case now bypasses the whole exclusivity gate unconditionally, mirroring
+  `DialogueAutoJoinRule.ShouldAutoJoin`'s own `isForced` handling on the JOIN side. Live-confirmed
+  fixed: zero `blocked` lines before the FIRST forced `StartDialog` attempt of a fresh session,
+  after rebuild/redeploy, same rig, same trigger cluster.
+- **Bug 2 (combat presence went quiet after dialogue-into-combat) — root-caused, not fixed.**
+  `CoopAgent.PumpEnemies` holds the enemy census (not damage, which is unconditional) while
+  `bridge.IsInDialogue` on the HOST — always the census authority — matching the report's own
+  damage-synced/presence-didn't split exactly. Most likely mechanism: this round's OWN forced-join
+  fix (and the underlying design generally) can now pull the host into FOLLOWING any peer's forced
+  conversation, which genuinely pauses the host's own hostile-AI simulation for that conversation's
+  duration, the same as it always has for the host's OWN conversations. Not fixed this round:
+  the gate's underlying behaviour is correct (a paused simulation genuinely cannot produce fresh
+  census data), and no live reproduction of the specific ambush-into-combat timing was available
+  this session to judge a fix against. Documented with a specific next-step measurement for a
+  future round.
+- **Bug 3 (container open/close cross-instance delay) — found, fixed, smoke-tested, not
+  latency-measured.** `PumpInteractionLocks` (the open/close animation, the use-lock) already rode
+  the ~150 ms combat cadence; `PumpPlaceables` (the DURABLE open-or-locked state) rode the
+  ~1000 ms heavy cadence — up to ~850 ms of daylight between "looks closed" and "durably marked
+  closed" for a peer, matching "very big delay... closing biggest". Fixed with the same rollout
+  shape `dialogue_fast_join`/`party_fast_pump` already used: `container_fast_pump` (default off)
+  moves `PumpPlaceables` onto the 150 ms cadence. Ran a full live session with the flag on — no
+  crash, no regression in anything else exercised — but no actual open/close timing was measured
+  before vs. after (no OS input access this session to click a container).
+- **Tests and build**: `dotnet test tests/KotorCoop.Tests` 1635/1635 passed both before and after
+  the plugin changes (same count — the changes threaded settings and fixed a gate, added no new
+  managed surface needing its own test). Both builds clean, both installs rebuilt/redeployed
+  mid-round to pick up the `DialogueGateHook` fix before its own live-confirmation pass.

@@ -846,3 +846,72 @@ Both plugin builds (`src/KotorCoop.Plugin/build.ps1 -Install`, both GOG installs
 0 errors, across the round's several rebuild/redeploy/relaunch cycles (shared with round 72's
 `party-reconciliation.md`/`phantom-locomotion.md` work in the same session).
 Both plugin builds clean across the round's several rebuild/redeploy cycles.
+
+## 9. Round 77 (2026-08-23) — the open/close cadence mismatch: found by reading, fixed, smoke-
+## tested live, exact latency not directly measured
+
+A real (not staged) user report: *"very big delay... closing biggest"*, describing container
+open/close taking noticeably longer to reach a peer than other state.
+
+### 9.1 The mismatch, confirmed by reading `CoopAgent.cs`'s own pump loop
+
+Two different channels carry two different halves of "a container is closed":
+
+- `PumpInteractionLocks` — the open/close ANIMATION and the use-lock claim itself — runs on the
+  ~150 ms combat cadence (`CombatPumpIntervalMs`), the same cadence enemy presence and phantom
+  damage ride.
+- `PumpPlaceables` — the DURABLE open-or-locked STATE (`bridge.CollectChangedPlaceableState()` /
+  `TryWritePlaceableStates`) — what actually keeps a container looking closed rather than getting
+  reasserted open (the round-66 `ContainerCloseHook` fix this document's own §2 covers) — ran on
+  the ~1000 ms heavy-world-state cadence (`HeavyPumpIntervalMs`), alongside items, progression,
+  world-state globals, journal and doors.
+
+So a container's visible close animation and use-lock release could reach a peer within ~150 ms,
+while the STATE that keeps it looking closed could lag up to a full ~1000 ms cycle behind it —
+matching "closing biggest" (a container is the one interaction where the ANIMATION and the
+DURABLE STATE are both directly, immediately visible to the player, so the gap between them reads
+as a stall) more precisely than doors (animation-only, no separate durable-state channel most
+players would notice diverging).
+
+### 9.2 The fix — the same rollout shape `dialogue_fast_join`/`party_fast_pump` already used
+
+New setting, `container_fast_pump` (`coop.ini`, default **off**), threaded through
+`CoopConfig.cs` → `KotorCoop.Agent/Program.cs` → `CoopAgent.AgentSettings.ContainerFastPump`.
+When on, `PumpPlaceables` moves from the 1000 ms heavy pass onto the SAME 150 ms combat cadence
+`PumpInteractionLocks` already rides, so a container's animation/lock and its durable state land
+in the same ~150 ms window instead of being staggered by up to ~850 ms. Off, behaviour is
+byte-for-byte identical to before this pass (the call site simply moves back to the heavy pass).
+Door/placeable state for anything nobody has recently touched is unaffected either way —
+`CollectChangedPlaceableState` is a shadow-diff that only ever reports a REAL change, so polling
+it more often costs nothing extra when nothing changed, the same argument dialogue's and party's
+own fast-path flags already made for their own channels.
+
+Files: `src/KotorCoop.Session/CoopConfig.cs` (setting + `container_fast_pump` ini key),
+`src/KotorCoop.Session/CoopAgent.cs` (`AgentSettings.ContainerFastPump`, the pump-loop split),
+`src/KotorCoop.Agent/Program.cs` (threading), `profiles/coop.ini.example` (documented).
+
+### 9.3 What this round could and could not verify live
+
+**Smoke-tested, not latency-measured.** `container_fast_pump=1` set on both installs for the
+back half of this round's rig session (the same session used for `dialogue-sync.md`'s round-77
+forced-conversation work above): a full session including a module transition (`end_m01aa` →
+`tar_m02ad`), trigger firing, and a forced dialogue ran with the flag on throughout — no crash,
+no new exception in either plugin log (the "FIRST-CHANCE exception"/"crash probe installed"
+lines present are the same standard startup diagnostics every session logs, unchanged in shape
+from before this pass), no regression in anything else this session exercised.
+
+**Not done, and left for a future round**: an actual before/after container open/close timing
+measurement (host closes a container, timestamp; client's own placeable-state field flips,
+timestamp; compare `container_fast_pump=0` vs `=1`) — this round's rig time went to the dialogue
+work above instead, and no OS-level mouse/keyboard input was available this session (see
+`docs/research/dialogue-skip-desync.md`'s own round-77 entry) to actually click a container open
+and closed for a timed test. The fix is shipped and reasoned from the code's own cadence
+constants, not yet confirmed against a measured clock.
+
+### 9.4 Test suite and build
+
+`dotnet test tests/KotorCoop.Tests`: **1635/1635 passed**, same baseline as immediately before
+this round's changes — the new setting only threads an existing bool through, no new test was
+added or needed (`CoopAgent`'s own pump-loop split has no unit test seam; it is exercised the
+same way `DialogueFastJoin`/`PartyFastPump` are, by the live rig). Both plugin builds
+(`src/KotorCoop.Plugin/build.ps1 -Install`, both GOG installs) clean, 0 warnings, 0 errors.

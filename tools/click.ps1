@@ -35,6 +35,7 @@ public class Mouse {
     [DllImport("user32.dll")] public static extern bool AttachThreadInput(uint a, uint b, bool f);
     [DllImport("kernel32.dll")] public static extern uint GetCurrentThreadId();
     [DllImport("user32.dll")] public static extern bool ClientToScreen(IntPtr h, ref POINT p);
+    [DllImport("user32.dll")] public static extern void keybd_event(byte bVk, byte bScan, uint dwFlags, UIntPtr dwExtraInfo);
     [StructLayout(LayoutKind.Sequential)] public struct POINT { public int X, Y; }
 
     public static void Focus(IntPtr hwnd) {
@@ -42,6 +43,11 @@ public class Mouse {
         uint pid;
         uint fg = GetWindowThreadProcessId(GetForegroundWindow(), out pid);
         bool att = (fg != 0 && fg != cur) && AttachThreadInput(cur, fg, true);
+        // Same Alt-tap fix as sendkey.ps1's Focus(): AttachThreadInput alone was confirmed
+        // live (2026-08-23) NOT to satisfy Windows' foreground-lock guard by itself; the
+        // synthetic Alt keydown/keyup right before SetForegroundWindow does.
+        keybd_event(0x12, 0, 0, UIntPtr.Zero);
+        keybd_event(0x12, 0, 2, UIntPtr.Zero);
         ShowWindow(hwnd, 9); BringWindowToTop(hwnd); SetForegroundWindow(hwnd);
         if (att) AttachThreadInput(cur, fg, false);
     }

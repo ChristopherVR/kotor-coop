@@ -1291,3 +1291,189 @@ that most plausibly could have been a false positive and was not.
 
 No source change was needed for item 1 — the mechanism performed exactly as designed on every
 observation.
+
+## Live pass, retry (2026-08-23, round 77): the TRUE half finally observed, live, twice — and a
+## real gate bug it exposed, found and fixed
+
+Two-GOG-install rig, warped (not walked in from a fresh save — the user's own direction this
+round) to `tar_m02ad`, the Taris Sith-base interrogation cluster (`tar02_sithtortur`/
+`tar02_sithresume`/`tar02_sithatk`, trigger ids `0x33`/`0x35`/`0x36` this session — see
+`docs/research/trigger-relay.md` for the inventory these resrefs come from). `blockpoke.ps1
+travel tar_m02ad` on the host; the client auto-followed via the existing module-follow channel
+(`docs/research/cinematics.md`'s module-transition machinery, unrelated to dialogue). Both
+players' real characters arrived together at the module's own arrival waypoint, `(90.00,
+125.21)`, which sits inside the interrogation trigger cluster's footprint on its own — no OS
+keyboard/mouse input was used anywhere in this pass; every position change was
+`blockpoke.ps1 walk`, the engine's own move action (`TestDriveController`), never a raw
+position write.
+
+### The positive case, finally: `forced=True`, observed independently on both instances
+
+```
+CLIENT  [13:51:25.815] triggers: observed my own engine natively fire OnEnter of 0x33 — publishing for other peers
+CLIENT  [13:51:25.826] dialogue-node-pub: #1 node -1 -> 9 serial 3 at 8198468
+CLIENT  [13:51:25.826] dialogue: engine reached StartDialog (3 so far, forced=True)
+```
+
+```
+HOST    [13:51:37.456] triggers: observed my own engine natively fire OnEnter of 0x36 — publishing for other peers
+HOST    [13:51:37.457] dialogue: engine reached StartDialog (6 so far, forced=True)
+```
+
+Both are the engine's own `EventHandler`-driven native fire of a STORY trigger's `OnEnter`
+(`TriggerFireHook`, `docs/research/trigger-relay.md` §12) — genuinely uninitiated by a player
+click on either side — followed immediately by `DialogueGateHook.LastStartForced` reading
+**TRUE**. This closes dialogue-sync.md's own long-standing NEEDS-LIVE item verbatim: *"The flag
+reads TRUE for a real ambush/forced conversation and FALSE for a real player click, on the
+actual game"* — now observed twice, independently, on two different trigger ids in the same
+cluster, on two different instances. No false positive: every ordinary (`talk`-hook or
+click-adjacent) `StartDialog` in this pass and every one from the prior 2026-08-23 pass still
+read `forced=False`.
+
+The auto-join-from-genuine-distance half of item 2's brief (the OTHER player, positioned
+elsewhere and not clicking, auto-joining) was **not cleanly isolated this pass** — both real
+characters kept landing at the identical module arrival waypoint, so both independently and
+natively entered the same trigger cluster before a `blockpoke.ps1 walk` command sending one of
+them away could get clear of it (a `~90` unit walk takes real seconds; the cluster's own
+triggers fired well inside that window both times this was tried, including a repeat attempt
+aimed at a fresh, untried trigger — `tar02_sartlk` — which never fired a conversation at all,
+either because its script does not call `ActionStartConversation` or because the walk did not
+land inside its polygon; `tar02_crtpty` fired natively but is a spawn/setup script with no
+dialogue, confirmed harmless). What was observed instead, both times, was the pre-existing
+**adopt** path (`dialogue: the engine started the same conversation here; adopting it to
+follow`) — both engines independently and natively entering the identical conversation, which is
+a different, already-verified code path from the cross-instance forced-auto-join
+(`InteractionLockController.TryForceOpen`) this item also asked about. The `interaction:
+auto-joining a peer's conversation ... (forced — matching the engine's own force)` log line
+never appeared in either pass's full log. This is left NEEDS-LIVE for a future round with a
+reliable way to hold two real characters at genuine, sustained distance — `blockpoke.ps1 walk`'s
+own documented unreliability (`trigger-relay.md` §11) is the limiting factor here, not anything
+this pass found wrong with the auto-join code itself (see the bug found below, which is a
+different code path entirely — the START side, not the JOIN side).
+
+### A real bug this pass found and fixed: the exclusivity gate had no forced bypass
+
+The first attempt's raw log showed something worth reading closely — not "the client's forced
+conversation reached the client," which worked, but what happened on the **HOST** while it did:
+
+```
+HOST [13:51:35.579] dialogue: blocked a local conversation start; a peer holds the token
+HOST [13:51:35.580] dialogue: engine reached StartDialog (4 so far, forced=False)
+HOST [13:51:36.487] dialogue: blocked a local conversation start; a peer holds the token
+HOST [13:51:36.487] dialogue: engine reached StartDialog (5 so far, forced=False)
+HOST [13:51:37.456] triggers: observed my own engine natively fire OnEnter of 0x36 — publishing for other peers
+HOST [13:51:37.456] dialogue: blocked a local conversation start; a peer holds the token
+HOST [13:51:37.457] dialogue: engine reached StartDialog (6 so far, forced=True)
+```
+
+**A genuinely forced `StartDialog` — attempt #6, `forced=True` — was refused**, "a peer holds
+the token", the exact same refusal an ordinary click gets when another peer is mid-conversation.
+Reading `KotorCoop.Plugin.DialogueGateHook.OnStartDialog` explained why: it computes
+`LastStartForced` (via `DialogueForceFlagHook.WasForced`) purely for diagnostics, and the
+refusal decision a few lines later (`!Enabled || !PeerHoldsConversation` → `BypassGrants` →
+`TargetIsPeersPartner`) **never once consulted it**. The hook's own doc comment on
+`BypassGrants` already said as much, in so many words: *"NOTHING GRANTS ONE TODAY... the next
+thing that needs one — a scripted cutscene join, say — should use it instead of inventing a
+second door."* Forced conversations were exactly that unimplemented case, and this pass is what
+finally exercised it live.
+
+This is not a cosmetic delay. The hook's own header documents that a refusal takes the engine's
+real StartDialog failure path, which **clears the queued `BeginConversation` action** (retail's
+own cleanup, `0x004F34A0`). If the NPC's script does not re-queue the `AssignCommand` itself (not
+knowable without a decompile), a forced conversation refused by this mod's own gate could be
+**lost outright**, not merely delayed — worse than doing nothing, since vanilla KOTOR never
+refuses its own forced conversation regardless of what else the engine is doing. In this
+session's own case the sith-interrogation script evidently DID retry (attempts #4, #5, #6 across
+~2 seconds, #6 finally the forced one), and it eventually got through when the client's own
+earlier conversation ended — but relying on every future forced-conversation script to retry
+indefinitely is not a foundation to build on.
+
+**Fix** (`src/KotorCoop.Plugin/DialogueGateHook.cs`, `OnStartDialog`): compute the forced flag
+into a local before any refusal branch, and bypass the whole gate — `Enabled`/
+`PeerHoldsConversation`/`BypassGrants`/`TargetIsPeersPartner`, all of it — unconditionally when
+the attempt is forced, mirroring `DialogueAutoJoinRule.ShouldAutoJoin`'s own `isForced` handling
+on the JOIN side (*"this rule joins UNCONDITIONALLY... because this is matching behaviour
+vanilla already forces, not inventing a new one"*). `LastStartForced` itself is still recorded
+exactly as before (same stale-value-preserving guard when `target` fails the plausible-pointer
+check), so nothing about the diagnostic changes — only the refusal decision does.
+
+**Live-confirmed fixed**, same rig, same module, same trigger cluster, after rebuilding and
+reinstalling on both instances:
+
+```
+HOST [14:12:31.543] triggers: observed my own engine natively fire OnEnter of 0x33 — publishing for other peers
+HOST [14:12:31.544] dialogue: engine reached StartDialog (1 so far, forced=True)
+```
+
+Zero `blocked` lines anywhere before it — the FIRST `StartDialog` attempt this session, forced,
+succeeded immediately, with the client adopting and following normally afterward
+(`dialogue-node-drive` landed `arrived=True` on both subsequent nodes). Full `dotnet test
+tests/KotorCoop.Tests` still 1635/1635 after the change (the plugin assembly itself carries no
+managed test coverage — native x86 NativeAOT, nothing references it, per this project's own
+standing note).
+
+### Bug report 2 (combat presence goes quiet after a forced-dialogue-into-combat transition) —
+### root-caused by reading, NOT fixed this round
+
+User report, from real (not staged) play: *"the other clients were able to kill one NPC which did
+sync correctly, however when the first client that initiated dialogue started entering combat
+with the sith soldiers — the other clients did not [see them enter combat], damage was synced
+though."*
+
+Reading `CoopAgent.PumpEnemies` (~line 2705) confirms the shape exactly: the enemy CENSUS
+(presence, not damage) is published only by the enemy authority, which is **always the host**
+(`CoopHost.IsEnemyAuthority => true`, `CoopClient.IsEnemyAuthority => false` — static per role,
+never dynamic), and only while `!bridge.IsInDialogue` — held, not merely delayed, for the WHOLE
+duration any conversation (the host's own, or one it is only FOLLOWING) is open on the host's
+own engine:
+
+```
+// Hold the last snapshot rather than publishing while in a conversation. The
+// dialogue system wipes every hostile's action queue in this instance on every
+// tick, so what we would send is a pacified fight — and the peer, who is not
+// talking, would have their own fight go quiet for the duration.
+if (!bridge.IsInDialogue && !bridge.IsInMinigame) { ... }
+```
+
+Damage (`PumpPeerEffects`/the phantom-damage channel) carries no such gate — "published every
+pass, even when it is empty" — which is exactly why the report's own damage-synced/
+presence-didn't split matches the code precisely, not approximately.
+
+**The most likely mechanism, given this round's OWN forced-auto-join fix above**: before today,
+the host rarely entered ANY conversation except its own, so this gate rarely mattered for a
+fight the host was not personally having. Once a peer's forced conversation can pull the HOST
+itself into FOLLOWING it (a real, native `StartDialog` on the host's own engine — dialogue-sync's
+own node-sync design opens a genuine local `CSWSDialog` copy, not a fake one), the host's own
+engine now ALSO has hostile AI queues paused by the SAME vanilla mechanism that pauses them
+during the host's own conversations — for the SAME duration the followed conversation is open,
+not longer. If the sith soldiers attack the instant the conversation's last node closes (a
+common ambush-then-fight script shape), the client's own real combat can start while the host's
+followed copy is still catching up to the close, so the census stays frozen for that window.
+
+**This round did NOT ship a fix for this.** Two reasons, both deliberate rather than a shortage
+of time alone:
+
+1. **The underlying engine behaviour the gate protects against is real and correct.** KOTOR's own
+   dialogue system genuinely pauses hostile AI action queues on WHICHEVER instance has any
+   conversation open, including a purely-followed one — this is not a bug in the gate, it is the
+   gate correctly refusing to publish data the host's own paused simulation cannot currently
+   produce accurately. Simply removing the gate would publish a pacified snapshot, which is the
+   exact failure this code was written to prevent in the first place (see the comment above,
+   predating this pass).
+2. **No live reproduction of the specific timing this round's fix would need to be judged
+   against.** Setting up "forced dialogue that rolls immediately into combat, with the HOST
+   specifically pulled into following it while a peer fights" needs either a scripted
+   ambush→combat sequence this rig could reliably trigger (not found this pass — the sith
+   cluster's own three triggers produced a conversation but no immediate follow-on combat in
+   either live pass) or a human at the controls (this round's own standing focus blocker, see
+   below).
+
+**What a future round should try**: measure the actual gap between the followed conversation
+visibly closing on the host (`the owner ended the conversation; closing`) and the host's own
+`bridge.IsInDialogue` clearing, under a real ambush→combat script; if that gap is small (under a
+second, matching the existing `DialogueLingerMs` debounce elsewhere in this file), the report is
+better explained by something else (a stale census cap, `otherPlayers` distance shedding, or the
+client simply not being within the census's own range-sheds — `PumpEnemies`'s own `otherPlayers`
+parameter). If the gap is materially longer than the conversation itself, that is the bug to
+chase, and the fix is likely in how promptly a FOLLOWED (as opposed to owned) conversation closes
+on the follower's own engine, not in the census gate itself.

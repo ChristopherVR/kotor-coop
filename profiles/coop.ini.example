@@ -220,6 +220,17 @@ dialogue_item_sync=1
 # docs/research/dialogue-join-latency.md's dated 2026-08-22 entry.
 dialogue_fast_join=0
 
+# Moves PumpPlaceables (the DURABLE container/door open-or-locked STATE) off the agent's
+# ~1000 ms heavy-world-state cadence onto the ~150 ms combat cadence, the same one the
+# open/close ANIMATION and use-lock (PumpInteractionLocks) already ride. Without this, closing
+# a container can take 1-2+ seconds end to end for a peer to see: the animation and the lock
+# release quickly, but the STATE that keeps it looking closed lags a full heavy-pass cycle
+# behind - see docs/research/container-sync.md's 2026-08-23 section for the measured gap. Same
+# rollout shape as dialogue_fast_join/party_fast_pump: OFF by default so a live pass can A/B it
+# against the existing cadence. Door/placeable state for anything nobody has recently touched
+# is unaffected either way.
+container_fast_pump=0
+
 # The DISTANCE half of the join-latency report, not the cadence half above: a joiner who is not
 # already standing near the NPC when they join (dialogue_auto_join's automatic join, or the
 # test hook) never reaches the engine's own StartDialog at all in this build, because the player

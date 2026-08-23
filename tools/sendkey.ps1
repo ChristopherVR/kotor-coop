@@ -30,6 +30,7 @@ public class Keys {
     [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr h, out uint pid);
     [DllImport("user32.dll")] public static extern bool AttachThreadInput(uint a, uint b, bool f);
     [DllImport("kernel32.dll")] public static extern uint GetCurrentThreadId();
+    [DllImport("user32.dll")] public static extern void keybd_event(byte bVk, byte bScan, uint dwFlags, UIntPtr dwExtraInfo);
 
     // Scan codes, not virtual keys: KOTOR reads the keyboard through DirectInput.
     public static void Tap(ushort scan, int holdMs) {
@@ -54,6 +55,14 @@ public class Keys {
         uint pid;
         uint fg = GetWindowThreadProcessId(GetForegroundWindow(), out pid);
         bool att = (fg != 0 && fg != cur) && AttachThreadInput(cur, fg, true);
+        // The Alt tap is load-bearing, not decoration: Windows' foreground-lock guard
+        // refuses SetForegroundWindow from a background process unless it looks like the
+        // CALLING process just received input itself. A synthetic Alt keydown/keyup right
+        // before the call satisfies that check even when AttachThreadInput alone does not
+        // (confirmed live 2026-08-23 — AttachThreadInput succeeded but the foreground window
+        // stayed on the other app until this tap was added).
+        keybd_event(0x12, 0, 0, UIntPtr.Zero);
+        keybd_event(0x12, 0, 2, UIntPtr.Zero);
         ShowWindow(hwnd, 9); BringWindowToTop(hwnd); SetForegroundWindow(hwnd);
         if (att) AttachThreadInput(cur, fg, false);
     }

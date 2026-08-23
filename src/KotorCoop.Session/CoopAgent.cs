@@ -126,6 +126,20 @@ public sealed record AgentSettings
     /// </summary>
     public bool PartyFastPump { get; init; }
 
+    /// <summary>
+    /// When true, <see cref="CoopAgent.PumpPlaceables"/> (the durable container/door
+    /// open-or-locked STATE, as opposed to <see cref="CoopAgent.PumpInteractionLocks"/>'s
+    /// open/close animation and use-lock, which already runs on <see cref="CombatPumpIntervalMs"/>)
+    /// runs on the real-time (every-poll-tick) path instead of waiting for
+    /// <see cref="HeavyPumpIntervalMs"/> — the same move <see cref="DialogueFastJoin"/> and
+    /// <see cref="PartyFastPump"/> already made. Without this, a container's visible close
+    /// (fast, on the combat cadence) and its durable closed STATE (slow, on the ~1 s heavy
+    /// cadence) can disagree for up to a full heavy-pass cycle — see
+    /// docs/research/container-sync.md's 2026-08-23 section. coop.ini
+    /// <c>container_fast_pump</c> (default off, same A/B rollout shape as the other two).
+    /// </summary>
+    public bool ContainerFastPump { get; init; }
+
     /// When true, a follower acts on a host's <see cref="TransitionAnnouncePacket"/> the
     /// instant it arrives — starting its own warp toward the announced destination without
     /// waiting for the host's published <c>PlayerState.Module</c> to change or for
@@ -508,6 +522,19 @@ public sealed class CoopAgent(IGameBridge bridge, ICoopSession session, AgentSet
             PumpInteractionLocks(local);
             PumpBarks(local);
             PumpMidModuleMovies(local);
+
+            // ⚠ CONTAINER STATE RODE HERE TOO, ONCE — same shape as dialogue/party above.
+            // PumpInteractionLocks (just above) already publishes the open/close ANIMATION and
+            // the use-lock on this same 150 ms cadence; PumpPlaceables carries the DURABLE
+            // open-or-locked STATE that is what actually keeps a closed container looking
+            // closed. Left on the heavy 1 s cadence by default (settings.ContainerFastPump
+            // off) so turning the flag off is a true rollback to exactly today's behaviour —
+            // see docs/research/container-sync.md's 2026-08-23 section for the measured gap
+            // this closes.
+            if (settings.ContainerFastPump)
+            {
+                PumpPlaceables(caps);
+            }
         }
 
         // Dialogue, on the fast path: every poll tick (as fast as the position write above),
@@ -570,7 +597,14 @@ public sealed class CoopAgent(IGameBridge bridge, ICoopSession session, AgentSet
         PumpWorldState(caps);
         PumpJournal(caps);
         PumpDoors(caps);
-        PumpPlaceables(caps);
+
+        // Moved to the 150 ms combat cadence above when settings.ContainerFastPump is on —
+        // see the call site there for why. Left here, unchanged, as the fallback cadence.
+        if (!settings.ContainerFastPump)
+        {
+            PumpPlaceables(caps);
+        }
+
         PumpContainerLoot(caps);
     }
 

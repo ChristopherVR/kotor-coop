@@ -30,7 +30,8 @@ off by default or waiting on a live pass; the linked doc always has the dated ev
 | Container/corpse open-close animation + use-lock | Live-verified, ON by default | [container-sync.md](docs/research/container-sync.md) |
 | Dialogue — one conversation at a time, spectate with real lines, late-join adopt | Live-verified | [dialogue-sync.md](docs/research/dialogue-sync.md) |
 | Dialogue — a trigger/cutscene-started conversation, both engines racing to `StartDialog` | Live-verified, lock adopts cleanly | dialogue-sync.md |
-| Dialogue — auto-join is forced-conversation-only, `off` by default for ordinary chat | Negative side live-verified 2026-08-23; forced-conversation positive case still open | dialogue-sync.md |
+| Dialogue — auto-join is forced-conversation-only, `off` by default for ordinary chat | Both sides live-verified (2026-08-23 negative pass, 2026-08-23 round-77 positive pass); the START-side exclusivity-gate bug the positive pass exposed is fixed and live-confirmed; auto-join from genuine distance still NEEDS-LIVE (a tooling/positioning gap, not a code question) | dialogue-sync.md |
+| Container/corpse durable open-locked STATE, `container_fast_pump` (default off) narrows the cross-instance gap | Shipped, smoke-tested live (no crash/regression); latency not yet measured before/after | container-sync.md |
 | Mid-module movies (a script's own `PlayMovie`) | Live-verified, ON by default | [cinematics.md](docs/research/cinematics.md) §10.9 |
 | Item identity (stack/charges/upgrades) crossing the wire | Implemented; apply path not yet live-verified | [item-identity.md](docs/research/item-identity.md) |
 | Journal/globals merge-upward, including removal and decrease | Live-verified | [quest-sync.md](docs/research/quest-sync.md) |

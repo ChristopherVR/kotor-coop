@@ -825,6 +825,7 @@ internal static class Program
             DialogueItemSync = config?.DialogueItemSync ?? true,
             DialogueFastJoin = config?.DialogueFastJoin ?? false,
             PartyFastPump = config?.PartyFastPump ?? false,
+            ContainerFastPump = config?.ContainerFastPump ?? false,
             TransitionAnnounceEnabled = config?.TransitionAnnounceEnabled ?? false,
             ClientDoorRefusalEnabled = config?.ClientDoorRefusalEnabled ?? false,
             MovieRelayEnabled = config?.MovieRelayEnabled ?? false,

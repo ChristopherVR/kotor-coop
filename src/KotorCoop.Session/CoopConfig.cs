@@ -171,6 +171,24 @@ public sealed record CoopConfig
     public bool PartyFastPump { get; init; }
 
     /// <summary>
+    /// Whether <c>PumpPlaceables</c> (the DURABLE container/door open-or-locked STATE — what
+    /// keeps a closed container looking closed rather than getting reasserted open, the
+    /// round-66 <c>ContainerCloseHook</c> fix) is pumped on the agent's real-time (per-poll-tick)
+    /// path instead of the ~1000 ms heavy-world-state cadence. <c>PumpInteractionLocks</c> (the
+    /// open/close ANIMATION and the use-lock itself) already rides the ~150 ms combat cadence, so
+    /// before this flag a close could take 1-2+ seconds end to end: the animation and the lock
+    /// released quickly, but the state that actually keeps the container shut for a peer lagged a
+    /// full heavy-pass cycle behind it — live-confirmed 2026-08-23 (docs/research/container-sync.md),
+    /// matching the "very big delay... closing biggest" report. Same rollout shape as
+    /// <see cref="DialogueFastJoin"/>/<see cref="PartyFastPump"/>: OFF by default so a live A/B
+    /// pass can compare it against the existing cadence. <c>container_fast_pump = 1</c> turns it
+    /// on. Door/placeable state for an object nobody has recently touched is unaffected either
+    /// way — <c>CollectChangedPlaceableState</c> only ever reports a real change, so running it
+    /// more often costs nothing beyond the extra poll when nothing changed.
+    /// </summary>
+    public bool ContainerFastPump { get; init; }
+
+    /// <summary>
     /// Whether the agent's <c>SessionSaveWatch</c>'s host-side edge (roadmap item
     /// 14 phase 1, design §3.2 item 5) actually tears the session down when it fires. OFF by
     /// default — live-verified 2026-08-21 (shared-state-audit.md §2 round 53) to false-positive
@@ -369,6 +387,7 @@ public sealed record CoopConfig
                 || IsTruthy(kv.GetValueOrDefault("dialogue_item_sync")),
             DialogueFastJoin = IsTruthy(kv.GetValueOrDefault("dialogue_fast_join")),
             PartyFastPump = IsTruthy(kv.GetValueOrDefault("party_fast_pump")),
+            ContainerFastPump = IsTruthy(kv.GetValueOrDefault("container_fast_pump")),
             SessionSaveHostRefusal = IsTruthy(kv.GetValueOrDefault("session_save_host_refusal")),
             ClientLoadRejoin = IsTruthy(kv.GetValueOrDefault("client_load_rejoin")),
             HostLoadReadopt = IsTruthy(kv.GetValueOrDefault("host_load_readopt")),

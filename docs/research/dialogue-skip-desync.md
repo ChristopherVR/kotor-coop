@@ -343,3 +343,79 @@ desktop conditions.
 - **`dialogue_fast_join=0` vs `=1`**: not exercised this round (no skip to compare it against).
 - Left shipped, unchanged, for whoever can supply the one missing ingredient: a real keypress or
   click landing on a KOTOR window that actually holds Windows' foreground focus.
+
+## Live pass, retry (2026-08-23, round 77): foreground WAS achieved this time — and the skip
+## still never registered, so the blocker is narrower and deeper than last round's
+
+The user reported this should work now. It was retested, precisely, before attempting the skip
+burst itself, per this document's own standing instruction not to burn a round on a blocked path.
+
+### Step 1: the SAME positive control the prior round used — still failed, but differently
+
+`tools\sendkey.ps1 -Keys space -ProcId <host>`, run exactly as the prior round ran it: before and
+after, `GetForegroundWindow()` still read an unrelated window (`chrome`, not `Dota 2` this time —
+a different competing app, same symptom). The script's own built-in `Focus()` (`ShowWindow` +
+`BringWindowToTop` + `SetForegroundWindow`, wrapped in `AttachThreadInput`) did not move the OS
+foreground pointer at all, confirming the prior round's finding reproduces on this machine
+independent of which application happens to be competing for focus.
+
+### Step 2: root-caused one level deeper, and fixed — `AttachThreadInput` alone does not satisfy
+### Windows' foreground-lock guard; a synthetic Alt key tap does
+
+Windows refuses `SetForegroundWindow` from a background process unless the CALLING process looks
+like it just received real input itself. `AttachThreadInput` alone (the script's existing
+approach) did not satisfy this guard on this session. Adding a synthetic Alt keydown/keyup
+(`keybd_event(0x12, ...)`) immediately before `SetForegroundWindow` — a well-known, narrow trick,
+not a broad input simulation — did:
+
+```
+before: foreground pid=3472 name=chrome
+[SetForegroundWindow with the Alt-tap fix]
+after:  foreground pid=6672 name=swkotor
+```
+
+**Fixed in the tooling** (`tools/sendkey.ps1`, `tools/click.ps1` — both `Focus()` helpers), so
+every future round gets this for free rather than re-discovering it. This is a genuine
+improvement over last round's total inability to move the OS foreground pointer at all.
+
+### Step 3: even with confirmed, atomic, held foreground — the keypress still never registered
+
+This is the round's real finding, and it is more specific than "input does not reach the game":
+with `GetForegroundWindow()` verified to read the KOTOR process immediately after the fix, and a
+screenshot taken in the SAME atomic script call confirming the window was genuinely visible and
+on top (showing a live Trask reply-choice screen, not another app's pixels), a repeated burst of
+scan-code `1` key presses (3 taps, 80 ms hold, 200 ms gaps, all inside one `AttachThreadInput`
+session, no gap for anything else to steal focus back) produced **zero change**: the same reply
+screen, byte-identical, in a screenshot taken at the end of the same atomic call, and no new
+`dialogue-node-pub` line in the plugin log for the whole window.
+
+This machine's desktop was independently confirmed to be in genuine, active, concurrent use by
+the machine's own human operator throughout this session (a full-desktop screenshot mid-session
+showed two Chrome windows actively navigating Gmail and a GitHub notifications page, with a
+live-updating on-screen clock) — which explains why the OS foreground pointer kept drifting back
+to Chrome a few seconds after each grab, exactly as the prior round's Dota 2 competitor did. But
+it does NOT explain the zero-effect result inside the ATOMIC test above, where foreground was
+verified held for the whole send. That result points at something past simple OS-level
+foreground contention: most plausibly that KOTOR's own DirectInput device acquisition (its
+`DISCL_FOREGROUND` cooperative-level re-`Acquire()`) depends on the window actually receiving a
+real `WM_ACTIVATE`/`WM_ACTIVATEAPP` message sequence from a genuine user-driven focus change,
+which a `SetForegroundWindow` call forced from an external process via `AttachThreadInput` and a
+synthetic Alt tap may set the OS-level pointer without necessarily delivering in the exact form
+the engine's own window procedure expects. This is inference, not verified by disassembly this
+pass — nothing in this round traced KOTOR's own DirectInput acquisition code.
+
+### Verdict: still blocked, but the failure mode moved from "cannot get foreground" to "foreground
+### confirmed, input still not registering" — a narrower, more specific target for next time
+
+- **H1/H2/H3**: still none resolved. No skip was ever delivered to the game.
+- **The sendkey.ps1/click.ps1 Alt-tap fix**: real, live-confirmed, and kept — future rounds start
+  one step ahead of where this one did.
+- **`dialogue_fast_join=0` vs `=1`**: still not exercised (no skip to compare it against).
+- **What a future round should try next**, in order: (1) a human physically at the keyboard, which
+  sidesteps this whole class of problem outright; (2) if automation must continue, trace
+  `swkotor.exe`'s own DirectInput device setup (`IDirectInput8::CreateDevice` /
+  `SetCooperativeLevel` / `Acquire`) to confirm the exact cooperative level and re-acquire
+  trigger, since this round's evidence narrows the problem to "the engine does not believe it has
+  input focus even when Windows says it does" rather than "Windows never gives it focus"; (3) as a
+  narrower experiment, try `SendInput` immediately after a REAL user-driven Alt-Tab (not a
+  synthetic one) to see whether that specific message sequence is the missing ingredient.

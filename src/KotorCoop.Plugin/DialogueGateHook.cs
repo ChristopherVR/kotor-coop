@@ -256,9 +256,32 @@ internal static unsafe class DialogueGateHook
             // Recorded regardless of what happens below — a refused start is still worth
             // knowing was forced (diagnostically), and the spectate controller only ever reads
             // this for a start that actually proceeds.
+            bool forcedThisAttempt = false;
             if (target is > 0x10000 and < 0x7FFF_0000)
             {
-                LastStartForced = DialogueForceFlagHook.WasForced(*(int*)(target + 4));
+                forcedThisAttempt = DialogueForceFlagHook.WasForced(*(int*)(target + 4));
+                LastStartForced = forcedThisAttempt;
+            }
+
+            // ⚠ A conversation the vanilla ENGINE ITSELF forces onto a single-player PC
+            // regardless of position (an ambush, a scripted cutscene — bIgnoreStartRange) must
+            // never be refused by this mod's OWN single-token exclusivity gate just because an
+            // unrelated peer conversation happens to be active. Vanilla KOTOR never refuses its
+            // own forced conversation, and refusing here is worse than doing nothing: this
+            // hook's own doc comment above records that a refusal takes the engine's real
+            // failure path, which clears the queued BeginConversation action — so a script that
+            // does not itself retry the AssignCommand could lose the forced conversation
+            // outright, on top of just delaying it. Live-confirmed
+            // (docs/research/dialogue-sync.md, round 77): a real forced StartDialog (Taris Sith
+            // interrogation trigger) was refused here — "a peer holds the token" — while an
+            // unrelated peer conversation was in progress, and only succeeded several retries
+            // later once that other conversation had ended. Mirrors
+            // DialogueAutoJoinRule.ShouldAutoJoin's own isForced handling on the JOIN side: a
+            // forced conversation bypasses the mode/token machinery unconditionally, because
+            // this is matching behaviour vanilla already forces, not inventing a new one.
+            if (forcedThisAttempt)
+            {
+                return 0;
             }
 
             if (!Enabled || !PeerHoldsConversation)
