@@ -1203,3 +1203,91 @@ may already name one; Taris and the Endar Spire both script forced conversations
 `forced=True` there, and confirm `interaction: auto-joining a peer's conversation with '...'
 (forced — matching the engine's own force)` fires on the OTHER instance even with
 `dialogue_auto_join=off`.
+
+## Live pass (2026-08-23): the FALSE half confirmed both directions; the TRUE half still open
+
+Two-GOG-install rig (`tools\demo.ps1`), `END_M01AA`, block v51 / protocol v38, both builds
+rebuilt and installed with `build.ps1 -Install` before this pass. `dialogue_auto_join` unset in
+either install's `coop.ini` (so both ride the new code default, `off`).
+
+### (a) Ordinary conversation: no auto-pull, either direction — PASS
+
+Host opens `end_trask` via the `talk` test hook (the same request a click sends):
+
+```
+HOST    [12:15:06.640] dialogue-node-pub: #1 node -1 -> 29 serial 1 at 2419281
+HOST    [12:15:06.641] dialogue: engine reached StartDialog (1 so far, forced=False)
+```
+
+Client's block, sampled seconds later: `remote: active 1 partner 'end_trask'` (aware a peer
+holds one) but `local: partner ''` (never pulled in) — no `interaction: auto-joining` line
+anywhere in the client's log for this open. The client's own explicit `talk end_trask` (the
+click-to-join equivalent) then opens and adopts normally: `local: partner 'end_trask'` — click-
+to-join parity confirmed intact under the new default.
+
+Reversed — client opens, host must not get pulled:
+
+```
+CLIENT  [12:17:20.797] dialogue-node-pub: #2 node -1 -> 19 serial 3 at 2553437
+CLIENT  [12:17:20.798] dialogue: engine reached StartDialog (2 so far, forced=False)
+```
+
+Host's block: `remote: active 1 partner 'end_trask'`, `local: partner ''` — same result, other
+direction. **Both halves of (a) pass, both directions, forced=False logged both times.**
+
+### (b) A genuinely forced conversation: not reached live this round — the positive case stays NEEDS-LIVE
+
+Extensive search, all negative (each entry below is a distinct thing tried, not a retry of the
+same one): repeated `end_trask` open/close cycles waiting up to ~60 s for the documented
+scripted re-initiate; teleporting (`console 'tp x y z'`, the same lever `CheatController.tp`
+uses) into the `nulltrigger` (`k_pend_pctut`) polygon right at the spawn point; into the
+`end_sealbridge` (`k_pend_bridge06`/`07`) polygon at the far end of the corridor; and into the
+Carth/`end_bridgerep1`/`end_bridgerep2` cluster near the bridge, including killing the two
+hostile `sithsoldier`s blocking the approach (`cheat slay`) so the area could be reached
+without combat noise drowning the log. None produced a spontaneous `StartDialog` outside a
+`talk`-hook request.
+
+**One genuinely useful negative did turn up, though, and it is worth keeping**: Trask's own
+documented scripted re-initiate (dialogue-sync.md's own "worst case for this" quirk, first
+seen 2026-08-22) reproduced live, unprompted, ~60 s after the owner's conversation had gone
+idle at a reply node with no player input:
+
+```
+HOST    [12:26:40.279] dialogue-node-pub: #8 node -1 -> 1 serial 13 at 3112921
+HOST    [12:26:40.279] dialogue: engine reached StartDialog (6 so far, forced=False)
+```
+
+This `StartDialog` was NOT reached via the `talk` test hook (no `test: opened a conversation`
+line anywhere near it) — it is the engine's own NPC-driven re-initiate, exactly the kind of
+"conversation nobody clicked into" this section's whole design exists to classify correctly.
+**It reads `forced=False`, and that is the CORRECT answer, not a miss.** `[ebx+0x48]` is
+specifically the range/walk BYPASS bit (`bIgnoreStartRange`) — Trask standing directly next to
+an already-in-range player passes the ordinary range gate on its own merits and never needs the
+bypass, so an NPC deciding to talk is not automatically "forced" in this flag's sense. This is
+useful live confirmation that the flag tracks what the disassembly says it tracks (the bypass),
+not a looser "who initiated" proxy that would have made it fire here — and the client, correctly,
+did not auto-join this re-initiate either (`dialogue_auto_join=off`, no `auto-joining` line on
+either instance's log for this event).
+
+Combined FALSE-side tally this pass: **6 independent `StartDialog` events, host and client
+combined, every one `forced=False`** — 2 ordinary `talk`-hook opens (a) above, 1 client-side
+join-click, 2 short "already-friendly, no reply needed" branches hit while probing for a
+different starting entry, and the 1 spontaneous Trask re-initiate — comfortably past the task's
+own "five separate ordinary conversations, no false positives" floor for a round that could not
+reach the positive case.
+
+**Why the positive case stayed out of reach**: the two saves available to this rig
+(`docs/live-verification.md`'s own long-standing limitation) are both already past whatever
+truly-forced content the Endar Spire's early script has to offer, and none of the 14 STORY
+triggers this session could reach without walking (the explosion/reinforcement cluster, the
+seal-bridge trigger, the tutorial null-trigger) turned out to independently fire a `StartDialog`
+of their own when entered by teleport rather than by the scripted sequence that normally leads
+into them — consistent with `trigger-relay.md`'s own finding that several of these triggers are
+idempotent or content-free when fired out of their native order, not evidence that no forced
+conversation exists in this game at all. **The positive case (`forced=True` observed live)
+remains NEEDS-LIVE**, same status as before this pass — what changed is the FALSE side is now
+verified far more thoroughly, including the one case (an NPC-initiated, non-click conversation)
+that most plausibly could have been a false positive and was not.
+
+No source change was needed for item 1 — the mechanism performed exactly as designed on every
+observation.

@@ -203,11 +203,18 @@ Both players, each in their own full game:
   `near` within `dialogue_auto_join_range` — 20 units by default — `always` regardless of
   distance) now govern ONLY an ordinary conversation; a FORCED one auto-joins unconditionally
   regardless of this setting, matching what vanilla already forces onto a single-player PC
-  rather than inventing new behaviour. The forced-conversation DETECTION is confirmed by static
-  disassembly of `CSWSObject::AIActionDialogObject`'s own range-bypass flag but NOT YET
-  confirmed live against a real ambush — see
+  rather than inventing new behaviour. **Live-verified 2026-08-23, both directions**: an
+  ordinary `talk`-driven conversation no longer auto-pulls the other player (`forced=False`
+  logged on 6 independent conversation starts, no `auto-joining` line on the non-owner in any
+  of them, click-to-join parity intact) — including the one case most likely to false-positive,
+  an NPC's own scripted re-initiate with no player click involved, which correctly read
+  `forced=False` because the range-bypass bit it depends on genuinely wasn't set. The FORCED
+  half (a real ambush/cutscene reading `forced=True` and pulling the other player in
+  unconditionally) is still NOT confirmed live — an extensive search of this save's reachable
+  story triggers found none that independently fired `StartDialog` outside the `talk` hook — see
   [docs/research/dialogue-sync.md](docs/research/dialogue-sync.md)'s 2026-08-23 Item 1 section
-  for the VERIFIED/INFERRED/NEEDS-LIVE breakdown. The underlying mode/range mechanics
+  for the VERIFIED/INFERRED/NEEDS-LIVE breakdown and the 2026-08-23 live-pass writeup. The
+  underlying mode/range mechanics
   (near/always/off, the distance gate, the walk-over notice, symmetric host/client decision)
   were live-verified in all four configurations on 2026-08-22 — see that same doc's "round 59"
   section — before the default flipped to `off`.
@@ -221,6 +228,15 @@ Both players, each in their own full game:
   precise millisecond figure for that specific hop is still unmeasured (no independent host-side
   timestamp to diff against). See
   [docs/research/dialogue-sync.md](docs/research/dialogue-sync.md)'s dated live-pass section.
+- **A reported "skip mid-sentence desyncs the other player" symptom** got fine-grained
+  publish/drive logging (`dialogue-node-pub`/`dialogue-node-drive`) rather than a guessed fix,
+  since the mechanism (the owner publishes POSITION on a poll, not a queue of every node
+  visited — see docs/research/dialogue-skip-desync.md) makes coalescing during a fast skip
+  burst plausible but unconfirmed. A 2026-08-23 live pass confirmed the instrumentation itself
+  end to end (publish and drive both fired correctly, `arrived=True callMs=0` on a real
+  owner/follower join) but could not deliver an actual skip keypress to the game — the KOTOR
+  window never held Windows' own foreground focus during that pass, a genuine human-at-the-
+  keyboard blocker rather than a code gap. See that doc's 2026-08-23 section.
 - **Scripted scenes play out the same on both screens**: cutscene actors and story NPCs
   replicate their positions, stances and movements, while staying exempt from the combat
   channel — the module decides who is un-killable, not the session.

@@ -221,10 +221,15 @@ switch ($Command) {
 
             # The setitem fields go back to "unchanged" so a leftover value from an earlier
             # poke cannot ride along with an unrelated kind.
-            WU32 0x33B0 0xFFFFFFFF
-            WU32 0x33B4 0xFFFFFFFF
-            WU32 0x33B8 0xFFFFFFFF
-            WU32 0x33BC 0xFFFFFFFF
+            # ([uint32]::MaxValue) rather than the bare 0xFFFFFFFF literal: PowerShell parses
+            # that literal as a signed value wider than Int32, and passing it straight into a
+            # [uint32] parameter throws "Cannot convert value ... System.UInt32" on this PS
+            # version. Found live 2026-08-23 -- every 'cheat' call was printing four of these
+            # errors (harmlessly; the writes still landed) before this fix.
+            WU32 0x33B0 ([uint32]::MaxValue)
+            WU32 0x33B4 ([uint32]::MaxValue)
+            WU32 0x33B8 ([uint32]::MaxValue)
+            WU32 0x33BC ([uint32]::MaxValue)
 
             WU32 0x3368 0
             WAscii 0x336C '' 64

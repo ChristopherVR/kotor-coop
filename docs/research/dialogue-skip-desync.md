@@ -263,3 +263,83 @@ instead of 75.
   this is the single most actionable knob this investigation can hand back: if `=1` visibly
   fixes what `=0` does not, that is a strong argument for flipping the default, independent of
   everything else in this document.
+
+## Live pass (2026-08-23): blocked on real input access, not on the instrumentation
+
+Two-GOG-install rig, `END_M01AA`, both builds rebuilt/installed (block v51 / protocol v38). The
+save's clean state (freshly reloaded via `tools\demo.ps1`, before any other testing touched it)
+puts `end_trask`'s conversation at entry **29** — the long, multi-starting-entry recruitment-
+shaped dialogue this document names as the target content. Host opened it (`talk end_trask`);
+client joined and adopted within the same tick:
+
+```
+HOST    [12:32:54.993] dialogue-node-pub: #1 node -1 -> 29 serial 1 at 3487625
+HOST    [12:32:54.994] dialogue: engine reached StartDialog (1 so far, forced=False)
+CLIENT  [12:33:04.887] dialogue-node-pub: #1 node -1 -> 19 serial 1 at 3497531
+CLIENT  [12:33:04.887] dialogue: engine reached StartDialog (1 so far, forced=False)
+CLIENT  [12:33:04.888] dialogue: the engine started the same conversation here; adopting it to follow
+CLIENT  [12:33:04.891] dialogue: followed conversation delivered content 0 ms after opening (0 ms after the request)
+CLIENT  [12:33:04.891] dialogue-node-drive: #1 wanted 29 before 19 landed 29 arrived=True callMs=0 at 3497531
+CLIENT  [12:33:04.892] dialogue: followed the owner 19 -> 29
+CLIENT  [12:33:04.896] dialogue-node-pub: #2 node 19 -> 29 serial 2 at 3497531
+```
+
+**The instrumentation itself is confirmed live and working exactly as designed**: `dialogue-
+node-pub` fires on the owner for every real transition (including the client's own brief local
+start at 19 before it recognised and adopted the owner's copy — the adopt path publishes its
+own node too, which is expected and correctly distinguished from the drive path below);
+`dialogue-node-drive` fires on the follower with the `wanted`/`before`/`landed`/`arrived`/
+`callMs` shape this round's own design specified, and it landed correctly (`arrived=True`,
+`callMs=0`) on the first attempt. This is real evidence the publish/drive plumbing this document
+depends on is sound going into the skip test — whatever the skip test itself could or could not
+show, it would not have been contaminated by broken instrumentation.
+
+### The skip test itself: blocked, and the blocker is more specific than "input never reaches KOTOR"
+
+`docs/live-verification.md`'s standing note says injected input does not reach the game at all
+(tested 2026-08-01: held-W movement, mouse-click loader). This round found the SAME outcome but
+a MORE PRECISE cause, worth recording because it changes what a future round should try first.
+
+`tools\sendkey.ps1 -Keys space` (the documented skip control) and `tools\click.ps1` against the
+dialogue panel both produced **zero** effect on the live conversation — `localNode` stayed at
+`29` across a 10-press rapid burst, a single Space, a mouse click, and (as a positive control,
+since an EARLIER pass's `dlgprobe.ps1` run had reported a reply-key press working) a bare `1`
+reply key. All four produced no node change whatsoever. Checking *why*, rather than assuming the
+old finding still applied unchanged, found the actual mechanism this time: **the KOTOR window
+never had Windows foreground focus to begin with.** `GetForegroundWindow()` returned an
+unrelated application's window (a live Steam game the operating this machine, "Dota 2") every
+time it was checked, including immediately after `sendkey.ps1`'s own `SetForegroundWindow` +
+`AttachThreadInput` sequence ran, and including after an explicit, separate
+`ShowWindow`/`BringWindowToTop`/`SetForegroundWindow` call made directly against the KOTOR host
+window from this session. Windows' foreground-lock protection is doing exactly what it is
+designed to do: a background automation process cannot steal input focus from a window the
+actual logged-in user is actively running, and rightly so — nothing in this codebase should be
+trying to forcibly seize the desktop out from under a person's own foreground application. One
+non-destructive attempt was made to un-block this (minimizing the competing window) and it did
+not change the outcome either; that avenue was not pursued further, because repeatedly fighting
+another live, human-owned application for OS focus is not something an automated round should be
+doing regardless of whether it would eventually succeed.
+
+**This is the item that genuinely needs a human at the keyboard**, exactly as this document
+predicted before any live attempt was made. It is not a KOTOR-specific input-injection failure
+this time so much as an ordinary desktop-focus contention that happens to produce the identical
+symptom (zero observable effect) — worth distinguishing for whoever tries next: on a machine
+where the two KOTOR windows genuinely hold foreground focus (no competing foreground
+application), `sendkey.ps1 -Keys space` and a real reply-key press are both still untested this
+round and remain the first things to try, since the EARLIER `dlgprobe.ps1` pass's own reply-key
+success (2026-08-11, `sendkey.ps1`'s `PickAfter` mechanism advancing a real conversation) shows
+the injection technique itself has worked on this exact game build before, under different
+desktop conditions.
+
+### What this pass could, and could not, settle
+
+- **H1/H2/H3**: none resolved. No skip was ever delivered to the game, so no node transition
+  attributable to a skip was ever produced or lost. The hypotheses stand exactly as ranked before
+  this pass.
+- **The instrumentation**: fully confirmed working, both the publish side (owner) and the drive
+  side (follower), with real timestamps and the exact log shapes this document specified. A
+  future round with real input access can trust it immediately rather than needing to re-verify
+  it before trusting what it reports about a skip burst.
+- **`dialogue_fast_join=0` vs `=1`**: not exercised this round (no skip to compare it against).
+- Left shipped, unchanged, for whoever can supply the one missing ingredient: a real keypress or
+  click landing on a KOTOR window that actually holds Windows' foreground focus.
