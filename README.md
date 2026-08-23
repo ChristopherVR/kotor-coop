@@ -274,16 +274,17 @@ tools/                   RE helpers, demo scripts, the kotor1_0_3 symbol databas
   straight back. If you were controlling a companion when you connected, control and the
   camera come back to your own character automatically, live-verified. `control_return=0`
   opts out. See [control-return.md](docs/research/control-return.md).
-- **A companion now reliably walks to catch up for most of a leg**, fixed round 80, root
-  cause corrected round 84. The permanent stall rounds 74-81 kept hitting turned out to be two
-  bugs in this plugin's own code — a reset that fired before an async job could ever resolve,
-  and an off-by-one assumption in a search-loop poke — not an unresolved engine mystery. Fixed,
-  live-confirmed: smooth, continuous motion for roughly 90% of a real leg, the cleanest result
-  across twelve rounds. A second, deeper stall was found and precisely characterized one layer
-  further in (`CreMoveState` reverts from "walking" back to "follow requested" partway through),
-  not yet fixed. A related finding: warping modules while the follow diagnostics are active
-  (shipped default) can crash the host with an access violation — worked around for now, real
-  fix still needed. See [party-reconciliation.md](docs/research/party-reconciliation.md).
+- **A companion now reliably walks to catch up for nearly an entire leg**, fixed round 80, root
+  cause corrected round 84, deepened round 88. What looked like one open mystery (`CreMoveState`
+  reverting mid-leg) turned out to be three separate, disassembly-grounded engine mechanisms —
+  two are now fixed and live-verified (a companion consumes essentially the whole recorded trail,
+  stopping only 1-3 nodes short, up from round 84's own ~90%); a third, narrower stall at the
+  very last waypoint was attempted, live-tested, found to make things WORSE, and shipped off by
+  default rather than forced through. A related crash — warping modules while the follow
+  diagnostics run (shipped default) could access-violate the host — is root-caused and fixed
+  (round 87: the controller was the one per-frame system in the codebase with no
+  transition-epoch guard) but not yet live-verified. See
+  [party-reconciliation.md](docs/research/party-reconciliation.md).
 - **A mirrored companion cannot swing on a client yet**, except for one narrow, off-by-default
   case (`companion_local_combat=1`) that releases a companion standing close enough to both
   players and the enemy to its own engine AI. The release/reclaim mechanism is live-verified
@@ -335,12 +336,14 @@ tools/                   RE helpers, demo scripts, the kotor1_0_3 symbol databas
   clean live, both directions, and a new `loadgame <slot>` console verb calls the real engine
   Load path directly and is live-confirmed to work (a genuine teardown/reload in ~3s, correct
   character/party swap) — the old mouse-click blocker is moot now. Tested against a genuinely
-  different save for the first time, both rejoin gates turned up real, distinct bugs rather
-  than just "unverified": `host_load_readopt`'s classifier and trigger fire exactly as designed,
-  but the actual reconnect then loses a timing race against the host's own server rebuild;
-  `client_load_rejoin`'s classifier never produces a Load verdict at all, despite the
-  world-load edge firing correctly. Neither gate flips on until these are fixed. See
-  [session-save.md](docs/research/session-save.md).
+  different save for the first time, both rejoin gates turned up real, distinct bugs — not what
+  a "timing race" first looked like. `host_load_readopt`'s classifier/trigger logic was correct
+  all along; the actual problem was that a real `agent run --host` session never served its world
+  for a client to fetch in the first place (only the standalone `agent serve-world` verb did).
+  `client_load_rejoin`'s classifier silently discarded its digest-change signal because the
+  `loadgame` verb produces it in the opposite order the correlation window assumed. Both
+  root-caused and fixed (round 87); neither gate flips on by default until the fixes are
+  live-verified. See [session-save.md](docs/research/session-save.md).
 - **Dialogue reward-node consequences** (item grants) are built and forward automatically,
   on by default. Recruitment sync defaults off — an earlier raw availability poke was
   live-confirmed insufficient (the engine had nothing to spawn a body from) and has been
