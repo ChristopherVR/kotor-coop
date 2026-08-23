@@ -11622,6 +11622,18 @@ internal static unsafe class Odyssey
     ///
     /// Returns the new object id, or 0/<see cref="ObjectInvalid"/> if the slot was out of range,
     /// already available, or the template failed to resolve. MAIN THREAD ONLY.
+    ///
+    /// ⚠ THE RETURNED OBJECT IS OFF-STAGE, NOT A LIVE IN-WORLD BODY. <c>AddNpcByTemplateFn</c>'s
+    /// own doc comment traces the call chain (<c>AddNPC_2</c> -&gt; <c>AddNPC</c>) and it never
+    /// calls <c>CSWSCreature::AddToArea</c> — unlike <c>CreateObject</c>'s own trace
+    /// (docs/re/spawn.md §3.6 step 9), which does. NWScript's own <c>AddAvailableNPCByTemplate</c>
+    /// is declared <c>void</c> for exactly this reason: no script is meant to treat this id as an
+    /// addable body either. Do NOT pass this id to <see cref="AddPartyMemberBySlot"/> — it will
+    /// refuse with failure 9 forever, not just this pass (see
+    /// <see cref="PartyRosterRecruitRule"/>'s doc comment for the disassembled reason: the object
+    /// never gains the in-world flag bit <c>AddMember</c>'s own typed live-body check requires).
+    /// Only <see cref="SpawnAvailableNpc"/> — which reads the off-stage cache this call populates
+    /// — produces a body that check will accept.
     /// </summary>
     public static uint AddAvailableNpcByTemplate(int slot)
     {

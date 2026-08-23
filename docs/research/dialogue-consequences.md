@@ -603,3 +603,111 @@ shape) is proven sound.
 
 `dotnet test tests/KotorCoop.Tests` (Release): 1638/1638 passed — no production code touched by
 this pass (pure live observation against already-shipped code).
+
+## Round (2026-08-23): the duplicate-body defect's root cause, disassembled and fixed —
+## `AddAvailableNpcByTemplate`'s object was never meant to be added directly
+
+Task: the previous round left the duplicate-body defect open with two candidate fixes ("don't
+attempt the same-pass add" or "destroy the orphan on failure 9") and no root cause beyond "AddMember's
+own `GetGameObject`-resolves-to-a-live-body gate... needs a LIVE body" — inherited from an older,
+more general finding, not re-derived for this specific call. This round disassembles the real
+`CSWPartyTable::AddMember` (`0x00565625`, `tools/disasm.py` against `tools/kotor1_0_3.db`, no live
+game touched) to settle it precisely, then ships the first candidate fix.
+
+### Root cause: the object is real, but never placed in the world — so the wrong check refuses it, permanently, not just for one pass
+
+`CSWPartyTable::AddNPC_2` (`0x005645F0`, `Odyssey.AddAvailableNpcByTemplate`'s callee) allocates
+and constructs a `CSWSCreature` with the identical call `docs/re/spawn.md`'s own `CreateObject`
+trace uses for its step 2 (`CSWSCreature::Constructor(0x7F000000, 0)`, `0x004F7A10`) — which
+internally registers the object in `CGameObjectArray` (that trace's step 2b). It then calls
+`CSWSCreature::LoadFromTemplate` (`0x005026D0`, that trace's step 4) to load the story blueprint.
+**But it never calls `CSWSCreature::AddToArea` (`0x004FA100`) — `CreateObject`'s own step 9,
+VERIFIED absent from `AddNPC_2`'s and `CSWPartyTable::AddNPC`'s (`0x00564300`, the function
+`AddNPC_2` calls next) disassembly.** The object is real and registered, but was never placed in
+an area.
+
+That distinction turns out to be exactly what breaks the same-pass add. `docs/research/enemy-materialisation.md`
+already recorded, independently, that `CGameObject+0x08` is not a plain type enum: a live,
+in-world creature reads `0x40005` there, while a freshly constructed one reads plain `5`. This
+round's disassembly of `CSWPartyTable::AddMember` (`0x00565625`) shows its own live-body check —
+at `0x0056566A` — does NOT call the generic, flag-blind `CServerExoApp::GetGameObject` walker
+`ResolveServerObject` uses. **It calls the TYPED getter `GetCreatureByGameObjectID` (`0x004AE770`
+-> `0x004B1790`), which re-tests that exact flag bit** — the same object-type trap this project's
+docs already warn every other resolver about (`docs/research/enemy-presence-sync.md`,
+`enemy-materialisation.md`), now found inside a THIRD engine function nobody had disassembled for
+this reason before. Since `AddToArea` is the only place that flag bit gets set and `AddNPC_2` never
+calls it, an object fresh off `AddAvailableNpcByTemplate` can never pass `AddMember`'s check — not
+after one pass, not after a hundred. Failure 9 is not a race to be waited out; it is permanent for
+that specific object.
+
+This also explains the previous round's own live evidence without contradiction: `resolve 0x1`
+(the console command, which per this project's own discipline uses the generic, flag-blind getter)
+found the object "STILL a real, resolvable object" afterward — consistent with it being genuinely
+registered, just never world-placed. And it explains why the very next pass succeeded with a
+DIFFERENT object (`0x13B`): that one came from `SpawnAvailableNpc` (`CSWPartyTable::SpawnNPC`),
+whose entire job is placing a body in the world, so it legitimately carries the flag bit `AddMember`
+checks for.
+
+### Is the first object actually a "leak"? No — it is the off-stage character-sheet cache, by design
+
+`AddNPC_2`'s doc comment (already in the repo from the round that built it) records that it
+populates a per-slot `"AVAILNPC%d"` resource — the exact cache `SpawnAvailableNpc`/`GetNPCObject`
+reads on a later pass to build the real in-world body. NWScript's own `AddAvailableNPCByTemplate`
+is declared `void`: no script ever receives this object id either, which is the strongest evidence
+the engine's own authors never intended it to be treated as an addable body. The object this round
+worried about "orphaning" is not a rendered, in-world duplicate a player could see or an object
+census would count against the world — it is the off-stage record the engine's own two-step
+recruit-then-spawn design requires. Nothing here needed cleaning up; the code needed to stop
+mis-using the object for a purpose it was never built for.
+
+### The fix
+
+`PartyRosterController.Reconcile()` no longer falls through to `AddPartyMemberBySlot` in the same
+pass `AddAvailableNpcByTemplate` runs. A new pure, unit-tested rule,
+`PartyRosterRecruitRule.CanAddImmediately(PartyRosterBodyOrigin)`
+(`src/KotorCoop.Plugin/PartyRosterRecruitRule.cs`), gates the add call for BOTH branches: it
+returns `false` for `RecruitedOffStage` (the branch that just called `AddAvailableNpcByTemplate`)
+and `true` for `LiveInWorld` (an object `ResolveServerObject` already resolved, or one
+`SpawnAvailableNpc` just placed) — so recruiting alone returns without attempting the doomed add,
+and the ordinary "recruited but bodyless" branch (already correct, already used for dismiss/rejoin)
+picks it up on the very next pass exactly as it already did for the self-heal the previous round
+observed, minus the wasted failing dispatch and the misleading failure-9 log line. This is a
+root-cause fix, not a symptom patch: no destroy-the-orphan cleanup pass was added, because the
+"orphan" was never a defect to begin with once the object's real purpose (the off-stage cache) is
+understood; see `PartyRosterRecruitRule`'s own doc comment for the full disassembled chain.
+
+Tests: `PartyRosterRecruitRuleTests` (2 cases — the exact regression this round found, and the
+ordinary spawn-then-add path that must keep working unchanged). `dotnet test tests/KotorCoop.Tests`
+(Release): 1640/1640 passed.
+
+### Live-verification step for the coordinator (rig currently owned by another agent)
+
+Repeat the same two-instance recruit this document's own live-test plan already describes (Carth,
+Endar Spire, `dialogue_recruit_sync=1` on both installs; host runs `console 'recruit 2 carth'` if
+the real conversation is still unreachable from that save, per the previous round's own sanctioned
+substitution), then, in addition to the existing checks:
+
+1. Watch the client's plugin log across the recruit. Expect exactly:
+   `party roster: recruited NPC slot 2 as 0x... from its own template ... - dialogue_recruit_sync;
+   a body will be spawned and added on a later pass`, followed on the NEXT pass by
+   `party roster: spawned NPC slot 2 as 0x... to add them here` and
+   `party roster: added NPC slot 2 (object 0x...) to the party`. **There must be no
+   `party roster: could not add NPC slot 2 (failure 9)` line anywhere in the sequence** — that
+   line's disappearance is the fix working.
+2. On the client, `resolve` the FIRST object id the log names (the one from the "recruited ... as
+   0x..." line) and the SECOND (the one from "spawned ... as 0x..."). Confirm they are two
+   DIFFERENT ids, both still resolvable (the first is expected to remain resolvable — it is the
+   off-stage cache object, not a bug — the second is the one actually seated in the party).
+3. Confirm the object count this recruit adds to the world matches exactly ONE new in-world,
+   visible companion (the second object) — e.g. via an object-count console verb or simply
+   confirming only one Carth model renders/portraits in — not two. This is the concrete "exactly
+   one Carth object exists" check the task that opened this round asked for; per the analysis
+   above the off-stage object was never expected to render or portrait, so this should already
+   pass, but has not been watched for directly before.
+4. Confirm the timing: the "spawned ... to add them here" and "added ... to the party" lines land
+   within one `PartyRosterController` pass of the recruit line (well under a second at
+   `IntervalFrames=30`), so the two-pass design does not introduce a player-visible delay.
+
+If steps 1-4 all pass, this defect is closed and `dialogue_recruit_sync` has one fewer open item
+against defaulting on (the per-slot template mapping for the other eight slots, per the existing
+NEEDS-LIVE list above, remains the only other gate).
