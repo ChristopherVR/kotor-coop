@@ -96,6 +96,25 @@ public sealed class SessionManager(IGameBridge bridge, AgentSettings agentSettin
 
     public string Detail => _detail;
 
+    /// <summary>
+    /// The settings the CURRENT (or most recent) <see cref="Connect"/> used — the same values
+    /// <see cref="Reconnect"/> and <see cref="RejoinAfterLoadAsync"/> already read internally
+    /// (<c>_lastSettings</c>), exposed so a caller that needs the live session's own port and
+    /// (unhashed) password — <see cref="KotorCoop.Agent.CoopCommandDispatcher"/>'s world-serve
+    /// listener for roadmap item 14's rejoin gates — does not have to re-derive or duplicate
+    /// them. Null before the first <see cref="Connect"/> this process.
+    /// </summary>
+    public SessionSettings? CurrentSettings
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _lastSettings;
+            }
+        }
+    }
+
     /// <summary>Optional sink for status changes; surfaced by the console and dashboard.</summary>
     public Action<string>? Log { get; set; }
 

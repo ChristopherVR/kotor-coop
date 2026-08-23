@@ -53,22 +53,43 @@ public enum SaveOrLoadVerdict
 /// by correlating it against the world-load edge <see cref="SerialEdgeWatch"/> exposes.
 ///
 /// THE CORRELATION WINDOW, and why one is needed at all: the two signals do not update in
-/// lockstep. The load edge is written the instant the plugin notices an unannounced world
-/// teardown (PluginHost.OnFrame, every frame); the digest is a re-stat of a file on disk,
-/// cached and refreshed on its own schedule (<c>SaveDigestCache</c>, "up to a 2-second re-stat
-/// interval" per <c>SaveIdentitySettle</c>'s own doc comment) — so a load edge this tick and
-/// the digest catching up to it a tick or two later are the SAME event, not two. A load edge
-/// is therefore remembered for <see cref="CorrelationWindowMs"/> and consumed by the next
-/// digest change that arrives inside it; a digest change with no load edge in the window
-/// (recent or current) is a save.
+/// lockstep, AND — the live-verified round this comment documents — neither signal is
+/// reliably FIRST. The load edge is written the instant the plugin notices an unannounced
+/// world teardown (<c>PluginHost.OnFrame</c>, only once the engine's own multi-step teardown
+/// actually runs); the digest is a re-stat of a file on disk, cached and refreshed on its own
+/// schedule (<c>SaveDigestCache</c>, "up to a 2-second re-stat interval").
 ///
-/// Deliberately NOT the other direction: a load edge that never gets a matching digest change
-/// within the window simply expires unconsumed and produces no verdict at all. This mirrors
-/// this codebase's own documented, accepted gap (session-save.md Phase 1's NEEDS-LIVE item 1):
-/// a genuine Load Game action might not touch the watched save file at all if the engine's own
-/// load path performs no write of its own, in which case there is nothing here to classify —
-/// exactly as true before this class existed as it is after. What THIS class fixes is
-/// classifying the edges that DO produce a digest change; it does not claim to catch every load.
+/// docs/research/session-save.md's round 86 live pass found the ORDER genuinely reverses for
+/// the <c>loadgame</c> console verb's own mechanism: <c>PluginMenuLoader.TryStageSaveAsAutosave</c>
+/// rewrites the watched save file on the AGENT'S OWN THREAD, synchronously, BEFORE it ever
+/// asks the engine to load — so the digest edge routinely lands a full second or more before
+/// the load-serial edge, which only fires once the engine's own teardown (message-box
+/// precondition, <c>DestroyServer</c>+<c>UnloadModule</c>+<c>CreateServer</c>) actually runs.
+/// The ORIGINAL version of this class only ever looked backward — a digest change correlated
+/// against a load edge that had ALREADY happened — so for this reversed ordering the digest
+/// edge was judged (silently, as a plain <see cref="SaveOrLoadVerdict.Save"/> — nothing
+/// downstream reacts differently to <c>Save</c> vs <c>None</c>, which is exactly why this
+/// stayed invisible) and CONSUMED before the load edge it belonged to ever arrived, so the
+/// classifier never produced a <see cref="SaveOrLoadVerdict.Load"/> at all: this is
+/// <c>client_load_rejoin</c>'s round-86 "the classifier never fires" bug, not a missing edge —
+/// both edges fired, in the wrong-for-this-code order.
+///
+/// The fix: correlation is now symmetric. A load edge is remembered for
+/// <see cref="CorrelationWindowMs"/> and consumed by the next digest change inside it (the
+/// original direction, still exactly how a real pause-menu Load — which reads an existing
+/// save rather than staging one — is expected to order the two signals). A digest change with
+/// no load edge pending is provisionally reported as <see cref="SaveOrLoadVerdict.Save"/> —
+/// unchanged from before, and safe because nothing reacts differently to <c>Save</c> than to
+/// <c>None</c> — but ALSO remembered for the same window, so a load edge that arrives LATER
+/// (the <c>loadgame</c> ordering) still upgrades it to <see cref="SaveOrLoadVerdict.Load"/> on
+/// the tick it arrives, even though an earlier tick already reported <c>Save</c> for the same
+/// underlying event.
+///
+/// A load edge that never gets a matching digest change, in EITHER direction, within the
+/// window simply expires unconsumed and produces no verdict at all. This mirrors this
+/// codebase's own documented, accepted gap (session-save.md Phase 1's NEEDS-LIVE item 1): a
+/// genuine Load Game action might not touch the watched save file at all if the engine's own
+/// load path performs no write of its own, in which case there is nothing here to classify.
 /// </summary>
 public sealed class SaveOrLoadClassifier(long correlationWindowMs = SaveOrLoadClassifier.DefaultCorrelationWindowMs)
 {
@@ -80,16 +101,30 @@ public sealed class SaveOrLoadClassifier(long correlationWindowMs = SaveOrLoadCl
     private readonly long _correlationWindowMs = correlationWindowMs;
     private long? _pendingLoadEdgeAtMs;
 
+    /// <summary>An unmatched digest change, remembered so a load edge arriving LATER (the
+    /// <c>loadgame</c> verb's own ordering — see this class's own doc comment) can still
+    /// upgrade what was provisionally reported as a <see cref="SaveOrLoadVerdict.Save"/> into
+    /// a <see cref="SaveOrLoadVerdict.Load"/>.</summary>
+    private long? _pendingDigestEdgeAtMs;
+
     /// <summary>
-    /// Feeds one tick's two raw edges and returns the verdict. <paramref name="loadEdge"/> is
-    /// recorded (refreshing the pending window) regardless of <paramref name="digestChanged"/>;
-    /// a digest change consumes whatever load edge is currently pending, so a later, unrelated
-    /// digest change cannot reuse a stale one.
+    /// Feeds one tick's two raw edges and returns the verdict.
     /// </summary>
     public SaveOrLoadVerdict Observe(long nowMs, bool loadEdge, bool digestChanged)
     {
         if (loadEdge)
         {
+            // A digest change already sitting unmatched, within the window: THIS load edge is
+            // what it was waiting for — upgrade it to Load now, on this tick, even though an
+            // earlier tick already (provisionally, silently) reported it as a Save. Consumes
+            // both pendings, so a later, unrelated edge cannot reuse either one.
+            if (_pendingDigestEdgeAtMs is { } digestAt && nowMs - digestAt <= _correlationWindowMs)
+            {
+                _pendingDigestEdgeAtMs = null;
+                _pendingLoadEdgeAtMs = null;
+                return SaveOrLoadVerdict.Load;
+            }
+
             _pendingLoadEdgeAtMs = nowMs;
         }
 
@@ -98,16 +133,33 @@ public sealed class SaveOrLoadClassifier(long correlationWindowMs = SaveOrLoadCl
             return SaveOrLoadVerdict.None;
         }
 
-        bool withinWindow = _pendingLoadEdgeAtMs is { } at && nowMs - at <= _correlationWindowMs;
+        // A digest change consumes whatever load edge is currently pending, so a later,
+        // unrelated digest change cannot reuse a stale one.
+        bool withinWindow = _pendingLoadEdgeAtMs is { } loadAt && nowMs - loadAt <= _correlationWindowMs;
         _pendingLoadEdgeAtMs = null;
 
-        return withinWindow ? SaveOrLoadVerdict.Load : SaveOrLoadVerdict.Save;
+        if (withinWindow)
+        {
+            _pendingDigestEdgeAtMs = null;
+            return SaveOrLoadVerdict.Load;
+        }
+
+        // No load edge to correlate against YET — report the provisional verdict every other
+        // caller in this codebase already expects (Save, indistinguishable downstream from
+        // None), but remember this edge so a load edge arriving within the window on a LATER
+        // tick can still find it and upgrade the verdict.
+        _pendingDigestEdgeAtMs = nowMs;
+        return SaveOrLoadVerdict.Save;
     }
 
-    /// <summary>Forgets any pending load edge — a fresh connection must not let a load edge
-    /// observed against a PREVIOUS session's baseline correlate with this one's first digest
-    /// reading (which is itself never a "change" at all — see <see cref="SerialEdgeWatch.Observe"/> —
-    /// but Reset keeps the two watches' lifecycles visibly identical rather than relying on
-    /// that alone).</summary>
-    public void Reset() => _pendingLoadEdgeAtMs = null;
+    /// <summary>Forgets any pending load or digest edge — a fresh connection must not let an
+    /// edge observed against a PREVIOUS session's baseline correlate with this one's first
+    /// reading (which is itself never a "change" at all — see <see cref="SerialEdgeWatch.Observe"/>/
+    /// <see cref="SaveIdentityWatch.Observe"/> — but Reset keeps every watch's lifecycle
+    /// visibly identical rather than relying on that alone).</summary>
+    public void Reset()
+    {
+        _pendingLoadEdgeAtMs = null;
+        _pendingDigestEdgeAtMs = null;
+    }
 }

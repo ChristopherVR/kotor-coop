@@ -1512,3 +1512,239 @@ expect to need the same workaround until it is fixed.
 pure live observation. Rig cycled cleanly across three restarts this round (crash-recovery, the
 two-load test, the gates-off test); `Get-Process swkotor,KotorCoop.Agent` empty after the final
 teardown, `auto_start_agent` restored to `1` on both installs.
+
+## Round 87 (2026-08-24): both round-86 bugs root-caused and fixed from static analysis — the
+## rejoin race was never a race, and the classifier's correlation was one-directional; live
+## verification still needed, exact steps below
+
+Task: find and fix the ROOT CAUSE of both `host_load_readopt`'s lost reconnect and
+`client_load_rejoin`'s never-firing classifier, both live-confirmed real in round 86, neither
+fixed. **No live rig access this pass** (another agent owned it) — everything below is static
+code-reading plus `dotnet test`; both fixes are confident enough to ship, but neither has been
+run against the game yet. Live-test steps for a follow-up round are at the end of this entry.
+
+### `host_load_readopt`: not a race — nothing was EVER listening
+
+Tracing `SessionManager.RejoinAfterLoadAsync` → `WorldAdoption.TryAdoptAsync` →
+`WorldTransfer.FetchAsync` back to what serves the OTHER end (`WorldTransfer.ServeAsync`) found
+exactly one production call site: `Program.ServeWorldAsync`, the standalone `agent serve-world`
+CLI verb — its own doc comment already says why: "Standalone rather than folded into `run` on
+purpose, for now." Grepping the whole `src/` tree for `ServeAsync(`/`TcpListener`/
+`AcceptTcpClientAsync` found nothing else. **A live `agent run --host` session — what
+`tools/demo.ps1`, the plugin's `AgentLauncher`, and every real player's session actually run —
+never calls `WorldTransfer.ServeAsync` at all.** `CoopCommandDispatcher`, `SessionManager` and
+`CoopHost` never reference `WorldTransfer` anywhere.
+
+This means round 86's own diagnosis — a race against the ENGINE's
+`CAppManager::DestroyServer`/`CreateServer` rebuild (`docs/research/session-save.md`'s
+`loadgame` disassembly trail) — was a plausible-looking but incomplete read. Those engine calls
+run entirely inside the GAME process's own loopback server, reached through the plugin; they
+have no connection to the AGENT process's own `System.Net.Sockets.TcpListener`. **The real
+cause is simpler: there was never a listener on the other end, at any point in a live host
+session, so `WorldTransfer.FetchAsync`'s connect attempt was refused outright every single
+time — not raced, refused.** No retry or backoff on the client side could ever have closed
+this gap, because retrying a connect against a port nothing binds just produces the same
+refusal again. `host_load_readopt`'s decision logic (the classifier, `RejoinTrigger`,
+`ClientLoadRejoinRule.Decide`) is real and was already proven live-correct in round 86; only
+the network fetch half was missing its other end.
+
+**The fix** (`src/KotorCoop.Session/WorldTransfer.cs`, `src/KotorCoop.Session/SessionManager.cs`,
+`src/KotorCoop.Agent/CoopCommandDispatcher.cs`): the host now actually serves its world for the
+whole life of a hosting session, whenever either rejoin gate is on.
+
+* `WorldTransfer.ServeAsync` gained a provider overload —
+  `ServeAsync(Func<(IReadOnlyList<WorldFile>, uint)> worldProvider, int port, uint passwordHash,
+  Action<string>? log, CancellationToken ct)` — that invokes the provider FRESH on every
+  accepted connection instead of serving one fixed snapshot for the listener's whole lifetime.
+  The original fixed-snapshot overload is now a one-line wrapper (`() => (world, saveIdentity)`)
+  so every existing caller (`agent serve-world`, both test files) is unchanged.
+* `SessionManager` gained a `CurrentSettings` read-only property exposing the same
+  `_lastSettings` field `Reconnect`/`RejoinAfterLoadAsync` already read internally, so a caller
+  outside the class can learn the live session's own port and (unhashed) password without
+  re-deriving them.
+* `CoopCommandDispatcher` gained `MaintainWorldServing()`, called every tick alongside
+  `MaintainSessionSave()`. While `manager.Current is CoopHost` and either
+  `client_load_rejoin`/`host_load_readopt` is on, it starts `WorldTransfer.ServeAsync` ONCE (not
+  restarted around a reload) bound to the SAME port number the co-op session itself bound
+  (`manager.CurrentSettings.Port` — TCP and UDP do not collide on the same port number, and
+  this is the same "same port as the session" convention `WorldTransfer`'s own doc comment
+  already specified), with a provider (`BuildWorldSnapshot`) that reads
+  `SaveDigest.FindSessionSave(gameDirectory)` — the SAME "current session save" resolution
+  `MaintainSessionSave`'s client branch already uses — fresh on every connection. Torn down
+  (cancelled) reactively the tick either the host disconnects or the gate turns off, the same
+  "no hooks, just re-evaluate every tick" style `MaintainSessionSave` already uses.
+
+**Why reading fresh per-connection is stronger than restarting after a reload**, and removes
+the race entirely rather than narrowing its window: the listener starts once, when hosting
+begins, long before any mid-session reload could happen. There is no instant, ever, where a
+rejoining client's fetch can arrive before the listener is ready, because the listener was
+never taken down and brought back up around the reload in the first place — it was already
+running throughout. This is also exactly the "re-served fresh — not the stale copy from
+before" behaviour design doc §4.2 item 2 already specified for the client's own re-adoption
+fetch, now actually implemented rather than assumed.
+
+**Gated, not unconditional**: serving only starts when a gate that could need it is on, because
+it opens a new TCP listener on the session port — a host that never uses either rejoin gate
+should not carry that surface. The host cannot see which gate a given connected client has set
+locally, so it serves whenever EITHER of its own gates is on, matching the "both installs set
+together" convention this feature's own live-test scripts already use.
+
+### `client_load_rejoin`: the classifier's correlation window only ever looked backward
+
+Round 86's own log is the exact clue: `world: unannounced teardown - treating as a load, not a
+transition` fired once (the PLUGIN side — `WorldLoadRule.IsUnannouncedTeardown`,
+`SharedBlock.OffsetWorldLoadSerial` — worked correctly), but no `session-save: starting rejoin
+(OwnLoad)` line ever appeared (the AGENT side — `SaveOrLoadClassifier` — never produced a
+`Load` verdict). The task's own hint ("worth checking whether this is the SAME class of bug
+round 86's own earlier work found") pointed at ordering — and it is, but not
+`_travelAnnounced`/`trans_pending`: it is `SaveOrLoadClassifier.Observe`'s own correlation
+window, which is one-directional.
+
+Tracing exactly how `loadgame <slot>` (the mechanism round 86 used to fire this test) produces
+its two signals: `CoopCommandDispatcher.TriggerMidSessionLoad` → `KotorGameBridge.
+TryRequestMidSessionLoad` → `PluginMenuLoader.TryStageSaveAsAutosave` — a synchronous
+`Directory.Delete` + recreate + file copy, run on the AGENT's own thread, that rewrites
+`saves/000001 - AUTOSAVE/SAVEGAME.sav` BEFORE the engine load is even requested. Only AFTER
+that staging completes does the request reach the shared block, and only several frames/ticks
+later — after the message-box precondition check, then
+`DestroyServer`+`UnloadModule`+`CreateServer` (the `loadgame` disassembly trail earlier in this
+document) — does `PluginHost.OnFrame` actually notice the world epoch fail and bump
+`SharedBlock.OffsetWorldLoadSerial`. So for THIS mechanism, **the digest edge (the file
+rewrite, near-instant) routinely lands a full second or more BEFORE the load-serial edge (the
+engine's own multi-step teardown)** — the reverse of what phase 2's original design assumed (a
+real pause-menu Load, which reads an EXISTING save with no staging rewrite, was expected to
+announce its load-serial edge first, with the digest catching up a tick or two later).
+
+`SaveOrLoadClassifier.Observe` (`src/KotorCoop.Session/WorldLoadWatch.cs`) only ever remembered
+a PENDING LOAD EDGE and matched it against a LATER digest change. Given the reversed ordering
+above: the digest change arrives first, with no load edge pending yet, so it is judged (and
+CONSUMED — `SaveIdentityWatch`'s edge is a one-tick pulse, its baseline updates immediately) as
+a plain `Save` — invisible on screen, since nothing downstream reacts differently to `Save`
+than to `None`. By the time the load-serial edge finally arrives, seconds later, there is no
+digest change left to correlate it against (the digest already settled to its new value
+earlier and will not change again), so `Observe`'s own `if (!digestChanged) return None;` guard
+fires every tick from then on. **The classifier did not fail to fire — it fired once, silently
+misjudged the edge as a Save, and had nothing left to upgrade once the load edge it actually
+belonged to showed up.**
+
+**The fix** (`src/KotorCoop.Session/WorldLoadWatch.cs`): `SaveOrLoadClassifier` now correlates
+in BOTH directions. A digest change with no load edge pending is still provisionally reported
+as `Save` (unchanged — safe, since nothing reacts differently to `Save` than to `None`), but is
+now ALSO remembered (`_pendingDigestEdgeAtMs`) for the same correlation window. A load edge
+arriving on a LATER tick checks for an unmatched pending digest edge FIRST; if one is still
+within the window, it upgrades the verdict to `Load` right then, even though an earlier tick
+already returned `Save` for the same underlying event. The original direction (a load edge
+remembered, matched by a later digest change) is untouched, so a genuine pause-menu Load's
+expected ordering keeps working exactly as before. `Reset()` now forgets both pendings.
+
+Six new tests in `tests/KotorCoop.Tests/WorldLoadWatchTests.cs` cover the new direction
+directly (`ADigestChangeFollowedByALoadEdgeWithinTheWindowIsUpgradedToALoad` — the exact
+`loadgame` shape; `...OutsideTheWindow...IsNotRetroactivelyUpgraded` — an unrelated later load
+must not reclassify a stale save; `ADigestChangeIsConsumedByTheFirstLoadEdgeAndCannotMatchASecondOne`
+and `ResetForgetsAPendingDigestEdgeToo` — no state leaks past a consumed or reset edge) plus a
+regression pin (`TheOriginalLoadThenDigestOrderingStillWorksUnchanged`) confirming the existing
+load-then-digest direction is untouched. All prior `SaveOrLoadClassifierTests` cases still pass
+unmodified.
+
+### Why this does not contradict round 86's own finding that `host_load_readopt`'s remote
+### classifier DID fire correctly
+
+`host_load_readopt` runs the SAME `SaveOrLoadClassifier` logic, but over the WIRE
+(`ObserveRemoteVerdict`, fed by the 1 Hz `WorldDigestPacket`'s `SaveIdentity`+`LoadSerial`
+fields, both read from the SAME packet). The 1-second packet cadence is coarse enough relative
+to the sub-second-to-few-second gap between "file staged" and "load-serial bumped" that the
+host's own two edges plausibly land inside the SAME packet interval, which the ORIGINAL
+one-directional code already classified as a coinciding edge (`Load`) — round 86's host test
+passing once is consistent with, not contrary to, this being a real bug: it was one favourable
+timing roll on a coarse channel, not proof the classifier is order-independent. The client's
+OWN local reads run every ~150 ms directly against the block, fine-grained enough to routinely
+observe the two edges landing seconds apart and in the wrong-for-the-old-code order. The fix is
+a strict superset of the old logic (it only adds a NEW path to reach `Load`; every case that
+already reached `Load` still does, identically — see the regression test above), so it cannot
+regress the host path that already worked.
+
+### Tests
+
+`dotnet test tests/KotorCoop.Tests` (Release): **1670 passed, 0 failed** (1663 baseline + 7 new
+— 6 in `WorldLoadWatchTests.cs`, 2 in `CoopCommandDispatcherTests.cs`, one of which is a
+regression-pin renamed/adjusted from an earlier draft during this pass). New coverage:
+
+* `tests/KotorCoop.Tests/WorldLoadWatchTests.cs` — the six `SaveOrLoadClassifier` cases above.
+* `tests/KotorCoop.Tests/CoopCommandDispatcherTests.cs` —
+  `HostingWithARejoinGateOnServesItsWorldOverWorldTransfer` (a REAL `CoopHost` over a REAL
+  loopback socket pair: hosts with `client_load_rejoin=1` and a fake save directory, then
+  `WorldTransfer.FetchAsync`s against the session's own bound port and confirms the exact bytes
+  round-trip — this is the test that would have caught round 86's bug directly, since it fails
+  immediately if nothing is listening) and `HostingWithBothRejoinGatesOffServesNothing` (the
+  regression check: with neither gate on, a connect attempt against the session port is
+  actively refused, proving the new listener carries no cost for a host that never opted in).
+
+No `SharedBlock`/protocol version touched by either fix — the host-serving fix is entirely
+in-process AGENT-side plumbing (no new wire packet, no new engine call), and the classifier fix
+is a pure state-machine change inside `KotorCoop.Session`. `TransitionMovieTests.
+TheBlockVersionMovedInBothHalves` needed no update and was not touched.
+
+### What is still open, and the exact live-verification steps for a follow-up round
+
+Both fixes are **STATIC — confident, but not yet run against the game.** The follow-up round
+should reuse round 86's own recipe (a genuinely different save via a host-only warp, NOT the
+digest-identical on-disk saves earlier rounds discovered are kept in lockstep by
+`demo.ps1 -Save 1`'s own staging) since that is still the only way to actually exercise these
+gates:
+
+0. **Rebuild and install first.** `.\build.ps1 -Install` on BOTH installs — this pass changed
+   `src/KotorCoop.Session/WorldTransfer.cs`, `SessionManager.cs`, and
+   `src/KotorCoop.Agent/CoopCommandDispatcher.cs`, all of which ship inside the agent
+   executable both `tools/demo.ps1` instances launch; a stale agent would silently retest the
+   OLD (buggy) behaviour. `docs/kotor-coop-demo-does-not-deploy-plugin.md`'s own warning
+   applies here even though this pass touched no plugin (`.dll`) code — `KotorCoop.Agent.exe`
+   still needs rebuilding.
+1. **Fresh rig, both gates on**, `client_load_rejoin=1`/`host_load_readopt=1` in `coop.ini` on
+   BOTH installs (matching this feature's own "set together" convention — see this round's
+   "gated, not unconditional" note above for why the HOST specifically needs its own gate on
+   for the world-serve listener to start at all).
+2. **The message-box precondition trap will recur** exactly as rounds 86 and the round before
+   it describe: `loadgame` refuses with `failure 9` on a fresh all-console session until
+   `msgboxpoke.ps1` (or the equivalent `blockpoke.ps1` byte-poke — chain:
+   `AppManagerPtr(0x7A39FC) -> +4 client -> +4 internal -> +0x40 gui -> +0x98 messageBox -> +0x64
+   byte, bit 0`) sets the bit. Budget for this on the FIRST `loadgame` of the session, both
+   sides.
+3. **`party_follow=0` before any host-only warp** — round 85/86's own workaround for the
+   still-open `0x4AA984` access-violation crash in `PartyFollowController`'s per-frame
+   diagnostics racing a module teardown. Not yet root-caused; expect to need it until it is.
+4. **Produce a genuinely different save**: host-only `warp tar_m10aa` (never an independent
+   client warp), then confirm offline (`tools/kotorfiles.py`) that the resulting
+   `000001 - AUTOSAVE` differs from `000002 - Game1` in `Mod_NextObjId0/1` and/or GIT order —
+   round 86's own check found this reliably produces a real difference even though the module
+   NAME stays `END_M01AA` (the autosave captures the module being LEFT, not entered).
+5. **`client_load_rejoin` (bug 2): fire `loadgame 0` on the CLIENT** while the live session
+   sits in `tar_m10aa`. Expect, within a few seconds of the world settling: the plugin log's
+   `world: unannounced teardown - treating as a load, not a transition` (unchanged from round
+   86 — this side was never broken), followed THIS TIME by `session-save: starting rejoin
+   (OwnLoad)` and `you loaded a save - rejoining the host's world` on the client's own screen —
+   the two lines round 86 confirmed never appeared. Confirm the rejoin actually lands the
+   client back in the HOST's current module (`tar_m10aa`) with the client's own character
+   stats intact (judge by hit points/experience/inventory, never by position —
+   `world-adoption.md` §7's standing rule).
+6. **`host_load_readopt` (bug 1): fire `loadgame 0` on the HOST** instead, same setup. Expect
+   the SAME decision-logic lines round 86 already confirmed
+   (`* host loaded a save - rejoining their world`, `* session-save: starting rejoin
+   (HostReload)`, `* disconnected`, `* world adoption: carried the character from ...`) but
+   THIS TIME followed by `* world adoption: adopted 'tar_m10aa' (N bytes, identity 0x...),
+   carrying the character from ...` and a successful reconnect — NOT round 86's `* world
+   adoption: could not fetch the host's world - ... actively refused it`. Also watch the
+   HOST's own log for the new `world transfer listening on :<port>` line (from
+   `MaintainWorldServing`) appearing shortly after `loadgame`/hosting begins, and confirm it
+   appears ONLY when a rejoin gate is on (repeat with both gates at 0 and confirm the line
+   never appears — the regression check `HostingWithBothRejoinGatesOffServesNothing` already
+   pins offline, but a live confirmation closes the loop).
+7. **Confirm the character survived** on whichever side rejoined, same rule as step 5.
+8. **Gates OFF regression check**: repeat steps 5-6 with both gates at 0. Expect `loadgame` to
+   still complete cleanly (`the world is up`), no crash, no `session-save: starting rejoin`
+   line, and no `world transfer listening` line either — unchanged from round 86's own clean
+   pass through this same check.
+9. **If step 5 or 6 still does not close cleanly**, capture the FULL agent log on both sides
+   (not just the lines this entry predicts) — the two fixes above are static-analysis-confident
+   but the live game is the only real judge, and a residual gap (a THIRD signal-ordering case
+   neither round considered, or a genuinely new failure mode the fix itself introduces) is
+   still possible.

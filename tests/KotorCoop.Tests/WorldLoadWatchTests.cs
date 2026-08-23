@@ -155,4 +155,83 @@ public sealed class SaveOrLoadClassifierTests
 
         Assert.Equal(SaveOrLoadVerdict.Save, verdict);
     }
+
+    // ---- round 86: the `loadgame` verb's REVERSED ordering (digest edge before load edge) --
+
+    [Fact]
+    public void ADigestChangeFollowedByALoadEdgeWithinTheWindowIsUpgradedToALoad()
+    {
+        // The exact shape round 86 found live: `TryStageSaveAsAutosave` rewrites the save
+        // file on the agent's own thread before the engine load is even requested, so the
+        // digest edge routinely arrives BEFORE the load-serial edge for `loadgame`. The first
+        // tick can only honestly report Save (nothing has correlated yet) — but a load edge
+        // arriving later, still inside the window, must retroactively surface as the Load the
+        // caller needs to trigger a rejoin.
+        SaveOrLoadClassifier classifier = new();
+
+        SaveOrLoadVerdict first = classifier.Observe(nowMs: 0, loadEdge: false, digestChanged: true);
+        Assert.Equal(SaveOrLoadVerdict.Save, first);
+
+        SaveOrLoadVerdict second = classifier.Observe(nowMs: 3000, loadEdge: true, digestChanged: false);
+        Assert.Equal(SaveOrLoadVerdict.Load, second);
+    }
+
+    [Fact]
+    public void ADigestChangeFollowedByALoadEdgeOutsideTheWindowIsNotRetroactivelyUpgraded()
+    {
+        SaveOrLoadClassifier classifier = new(correlationWindowMs: 1000);
+
+        SaveOrLoadVerdict first = classifier.Observe(nowMs: 0, loadEdge: false, digestChanged: true);
+        Assert.Equal(SaveOrLoadVerdict.Save, first);
+
+        // Well past the window: an unrelated, later load (or the false-positive an ordinary
+        // peer-follow warp's own load-serial bump could produce) must not retroactively
+        // reclassify a save that has nothing to do with it.
+        SaveOrLoadVerdict second = classifier.Observe(nowMs: 5000, loadEdge: true, digestChanged: false);
+        Assert.Equal(SaveOrLoadVerdict.None, second);
+    }
+
+    [Fact]
+    public void ADigestChangeIsConsumedByTheFirstLoadEdgeAndCannotMatchASecondOne()
+    {
+        SaveOrLoadClassifier classifier = new();
+
+        Assert.Equal(SaveOrLoadVerdict.Save, classifier.Observe(nowMs: 0, loadEdge: false, digestChanged: true));
+        Assert.Equal(SaveOrLoadVerdict.Load, classifier.Observe(nowMs: 1000, loadEdge: true, digestChanged: false));
+
+        // A FRESH digest change afterward, with no load edge pending, is judged independently
+        // — proving the earlier upgrade left no stale "pending digest" state behind that a
+        // later, unrelated digest change could wrongly reuse.
+        SaveOrLoadVerdict third = classifier.Observe(nowMs: 1100, loadEdge: false, digestChanged: true);
+        Assert.Equal(SaveOrLoadVerdict.Save, third);
+    }
+
+    [Fact]
+    public void TheOriginalLoadThenDigestOrderingStillWorksUnchanged()
+    {
+        // Regression guard: the fix must not disturb the direction this class already got
+        // right (a real pause-menu Load reading an EXISTING save, no staging rewrite, is
+        // still expected to announce the load-serial edge before the digest catches up).
+        SaveOrLoadClassifier classifier = new();
+
+        Assert.Equal(SaveOrLoadVerdict.None, classifier.Observe(nowMs: 0, loadEdge: true, digestChanged: false));
+        SaveOrLoadVerdict verdict = classifier.Observe(nowMs: 1500, loadEdge: false, digestChanged: true);
+
+        Assert.Equal(SaveOrLoadVerdict.Load, verdict);
+    }
+
+    [Fact]
+    public void ResetForgetsAPendingDigestEdgeToo()
+    {
+        SaveOrLoadClassifier classifier = new();
+        classifier.Observe(nowMs: 0, loadEdge: false, digestChanged: true);
+
+        classifier.Reset();
+
+        // Without the reset this load edge would have upgraded the forgotten digest change;
+        // with no digest change on this tick it correctly produces nothing instead.
+        SaveOrLoadVerdict verdict = classifier.Observe(nowMs: 100, loadEdge: true, digestChanged: false);
+
+        Assert.Equal(SaveOrLoadVerdict.None, verdict);
+    }
 }
