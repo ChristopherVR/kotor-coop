@@ -44,6 +44,7 @@
     <Compile Include="..\..\src\KotorCoop.Plugin\LogRotation.cs" Link="Plugin\LogRotation.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\PartyFreezeRule.cs" Link="Plugin\PartyFreezeRule.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\PartyTogetherClampRule.cs" Link="Plugin\PartyTogetherClampRule.cs" />
+    <Compile Include="..\..\src\KotorCoop.Plugin\PartyRosterRecruitRule.cs" Link="Plugin\PartyRosterRecruitRule.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\FrameTimeHistogram.cs" Link="Plugin\FrameTimeHistogram.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\PartyCreatureIdentity.cs" Link="Plugin\PartyCreatureIdentity.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\CompanionLocalFightRule.cs" Link="Plugin\CompanionLocalFightRule.cs" />

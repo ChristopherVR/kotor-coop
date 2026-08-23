@@ -45,6 +45,14 @@ namespace KotorCoop.Plugin;
 /// it relies on is cross-checked against only one live data point (slot 2 = Carth) — the
 /// remaining eight need a live check before this defaults on.
 ///
+/// ⚠ RECRUITING TAKES TWO PASSES, DELIBERATELY (found live 2026-08-23,
+/// docs/research/dialogue-consequences.md). <see cref="Odyssey.AddAvailableNpcByTemplate"/>'s
+/// own object is off-stage, not a live in-world body — see <see cref="PartyRosterRecruitRule"/>'s
+/// doc comment for the disassembled reason it can never satisfy AddMember's own live-body check.
+/// <see cref="Reconcile"/> no longer attempts the add in the same pass it recruits: the pass that
+/// sets availability returns, and the very next pass (the ordinary "recruited but bodyless"
+/// branch, already used for dismiss/rejoin) spawns a real body and adds it.
+///
 /// Kill switch: <c>party_roster_sync=0</c> in coop.ini.
 /// </summary>
 internal sealed unsafe class PartyRosterController(SharedBlockView block)
@@ -332,6 +340,7 @@ internal sealed unsafe class PartyRosterController(SharedBlockView block)
 
         int addSlot = LowestSlot(toAdd);
         uint objectId;
+        PartyRosterBodyOrigin origin;
 
         // Not recruited here. Ordinarily the documented boundary of the channel: availability
         // comes from the recruitment conversation running on this instance too, and nothing in
@@ -362,7 +371,14 @@ internal sealed unsafe class PartyRosterController(SharedBlockView block)
             // (SpawnAvailableNpc has nothing to spawn from afterward; see
             // TrySetSlotAvailable's own doc comment for the disassembled root cause). This goes
             // through the real per-slot STORY template instead, which does not depend on the
-            // same resource, and hands back a live object directly — no separate spawn step.
+            // same resource — but its returned object is OFF-STAGE, not a live in-world body
+            // (see PartyRosterRecruitRule's doc comment for the disassembled reason: it is never
+            // AddToArea'd, so it can never pass AddMember's own typed live-body check, not even
+            // on a later pass with the same object id). Live-confirmed 2026-08-23
+            // (docs/research/dialogue-consequences.md): the immediate add used to fail with
+            // failure 9 every time and leave this object behind, unreferenced, while the very
+            // next pass built a SECOND object through the branch below. Do not attempt the add
+            // here — origin below routes it to the rule instead.
             objectId = Odyssey.AddAvailableNpcByTemplate(addSlot);
             if (objectId is 0 or Odyssey.ObjectInvalid)
             {
@@ -373,14 +389,10 @@ internal sealed unsafe class PartyRosterController(SharedBlockView block)
                 return;
             }
 
+            origin = PartyRosterBodyOrigin.RecruitedOffStage;
             PluginHost.Log($"party roster: recruited NPC slot {addSlot} as 0x{objectId:X} from its "
                 + $"own template (peer recruited 0x{hostAvailable:X3}, here 0x{localAvailable:X3}) "
-                + "- dialogue_recruit_sync; adding them to the party now");
-
-            // Deliberately falls through to the add below in the SAME pass — the same reasoning
-            // as the ordinary spawn+add fallthrough further down: a recruited-but-not-yet-in-party
-            // body is an ordinary loose creature until AddPartyMemberBySlot runs, so the window
-            // between the two calls is kept to zero rather than a half second.
+                + "- dialogue_recruit_sync; a body will be spawned and added on a later pass");
         }
         else
         {
@@ -423,6 +435,20 @@ internal sealed unsafe class PartyRosterController(SharedBlockView block)
                 // creature that no longer exists, which is the worse of the two.
                 PluginHost.Log($"party roster: spawned NPC slot {addSlot} as 0x{objectId:X} to add them here");
             }
+
+            // Either the cache already held a resolvable body, or SpawnAvailableNpc just placed
+            // one — both cases have actually been AddToArea'd.
+            origin = PartyRosterBodyOrigin.LiveInWorld;
+        }
+
+        // PartyRosterRecruitRule: only a body that has actually been placed in an area can pass
+        // AddMember's own live-body check — see that rule's doc comment for the disassembled
+        // reason AddAvailableNpcByTemplate's own object can never do this. Recruiting alone is
+        // not an add: the very next pass sees localAvailable's new bit, takes the branch above,
+        // and spawns (or resolves) a real in-world body before reaching this gate again.
+        if (!PartyRosterRecruitRule.CanAddImmediately(origin))
+        {
+            return;
         }
 
         if (Odyssey.AddPartyMemberBySlot(addSlot, objectId, out int addFailure))
