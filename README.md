@@ -44,6 +44,8 @@ off by default or waiting on a live pass; the linked doc always has the dated ev
 | Mod-compatibility mismatch paths | Live-exercised 7 of 8 categories (override, modules, 2da, appearance, save-identity default + strict-refuse, exe) | every observed behavior matched the code exactly — [mod-compatibility.md](docs/research/mod-compatibility.md) round 2026-08-23; module-GIT and globals-catalogue mismatches deliberately not forced, per the doc's own recommendation |
 | Dialogue recruitment sync — duplicate-body defect | Root-caused (an off-stage recruitment cache was being mistaken for an addable party member) and fixed; live-confirmed clean across all four verification steps | [dialogue-consequences.md](docs/research/dialogue-consequences.md); `dialogue_recruit_sync` stays off by default (per-slot template mapping still only confirmed for one of nine companions) |
 | `loadgame` console verb (deterministic mid-session Load, no mouse clicks) | Built and live-confirmed: a real teardown/reload in 3.1s, correct character/party swap, the classifier fires correctly | [session-save.md](docs/research/session-save.md); unblocks future live testing of the mid-session save/load gates below |
+| Mid-session save/load — rejoin gates (`client_load_rejoin`, `host_load_readopt`) | Both bugs from round 86 root-caused, fixed, and now LIVE-CONFIRMED both directions on a two-instance rig — the round-86 "actively refused it" failure is gone entirely | [session-save.md](docs/research/session-save.md) round 87/88; a direct, decisive, zero-regression result, so both gates now ship **ON by default** |
+| Party-follow module-warp crash | Root-caused (the one per-frame controller with no transition-epoch guard) and fixed; LIVE-CONFIRMED: no new access violation, diagnostics resume correctly one frame after a warp | [party-reconciliation.md](docs/research/party-reconciliation.md) round 87/88 |
 | Companion local combat — two-companion drift risk | CONFIRMED clean live: a released companion fought and landed real credited damage while the OTHER, non-released companion stayed within 0.05 units of the host's position throughout, no drift | [party-reconciliation.md](docs/research/party-reconciliation.md) round 85; `companion_local_combat` stays off pending broader testing, not because of this result |
 | Minigames — swoop-race trigger precondition | SOLVED via a new NCS bytecode disassembler: the trigger was never a race-start gate at all — it's an unconditional collectible-flag setter. A `.dlg` sweep across every Taris module then found the real gate is not a single condition script but the payoff of the "Search for Bastila" questline — give Gadon (`GadonThek112`, module `tar_m11aa`) the prototype swoop accelerator, and the conversation's terminal node (`k_ptar_bekrace`) disassembles to a module-transition call naming `tar_m03af`, a dedicated swoop-track module | [minigames.md](docs/research/minigames.md) §13–§14; `Tar_SwoopRace`/`k_ptar_swoop` turned out to be a post-race "you already won" flag, not an entry gate — four rounds of flag-guessing plus one dialogue-hypothesis were chasing the wrong mechanism the whole time |
 
@@ -51,9 +53,8 @@ off by default or waiting on a live pass; the linked doc always has the dated ev
 
 | Area | Status | Blocker |
 | --- | --- | --- |
-| Mid-session save/load — rejoin gates | Round 87 root-caused and fixed both round-86 bugs from static analysis: `host_load_readopt`'s reconnect was never actually racing the host's server rebuild — nothing in a live host session ever served the world for a client to fetch at all, now fixed by serving it for the life of the host session; `client_load_rejoin`'s classifier only correlated its two signals in one direction and silently misjudged the `loadgame` verb's own (reversed) signal order, now correlates both ways | Both gates stay off by default; neither fix has been live-verified yet — [session-save.md](docs/research/session-save.md) round 87 |
 | `party_fast_pump` (companion-position latency) | Tested twice (combat: worse; non-combat: no measurable difference) | OFF by default, real cause of reported lag still open — [lag-audit.md](docs/research/lag-audit.md) |
-| Minigames — swoop racing, now that the real gate is known | The actual race-start path is Gadon's questline conversation (`tar11_gadon112.dlg`, module `tar_m11aa`) ending on `k_ptar_bekrace`, which disassembles to a module transition into `tar_m03af` (a dedicated swoop-track module) once the global boolean `Tar_SwoopEng` is set | never live-tested — [minigames.md](docs/research/minigames.md) §14; needs a save with `Tar_SwoopEng = 1` at a Hidden-Bek-reachable story point, then a live pass talking to `GadonThek112` |
+| Minigames — swoop racing, now that the real gate is known | Live-tested: `Tar_SwoopEng=1` alone was enough to open Gadon's dialogue into the exact six-node chain the disassembly predicted — the flag theory is confirmed correct. But the terminal node's own module-transition action never fired within several minutes of real time; a clean stall, not a crash, position never moving | [minigames.md](docs/research/minigames.md) §14; three unresolved hypotheses recorded for the next pass |
 | Creature liveness reconciliation (a body alive on one screen, dead on the other) | CONFIRMED working live for the first time — a debug `--enemy-census-cap` flag makes the out-of-census case reachable, and the Kill→Destroy correction fires correctly | OFF by default; a separate, still-unfixed `DestroyObject`-scan-freshness issue is untouched by this result — [creature-liveness.md](docs/research/creature-liveness.md) |
 | KOTOR 2 | Untouched | only GOG v1.0.3 addresses are known |
 
@@ -281,9 +282,10 @@ tools/                   RE helpers, demo scripts, the kotor1_0_3 symbol databas
   stopping only 1-3 nodes short, up from round 84's own ~90%); a third, narrower stall at the
   very last waypoint was attempted, live-tested, found to make things WORSE, and shipped off by
   default rather than forced through. A related crash — warping modules while the follow
-  diagnostics run (shipped default) could access-violate the host — is root-caused and fixed
-  (round 87: the controller was the one per-frame system in the codebase with no
-  transition-epoch guard) but not yet live-verified. See
+  diagnostics run (shipped default) could access-violate the host — is root-caused (the
+  controller was the one per-frame system in the codebase with no transition-epoch guard),
+  fixed, and now LIVE-CONFIRMED: no new access violation, diagnostics resume with sane values
+  one frame after the warp. See
   [party-reconciliation.md](docs/research/party-reconciliation.md).
 - **A mirrored companion cannot swing on a client yet**, except for one narrow, off-by-default
   case (`companion_local_combat=1`) that releases a companion standing close enough to both
@@ -323,9 +325,12 @@ tools/                   RE helpers, demo scripts, the kotor1_0_3 symbol databas
   tool existed before) found the entrance trigger is not a race gate at all — just an
   unconditional collectible flag setter — and a full `.dlg` sweep across every Taris module
   found the real gate is a story-quest conversation with Gadon (`tar_m11aa`) whose terminal
-  node disassembles to a call naming a separate module, `tar_m03af`, as its argument — not yet
-  live-confirmed, and in honest tension with the in-place finding above (minigames.md §14.6).
-  Pazaak is unrelated and uncovered. See [minigames.md](docs/research/minigames.md).
+  node disassembles to a call naming a separate module, `tar_m03af`, as its argument. Live-tested:
+  the flag theory checked out exactly (it opens the predicted six-node dialogue chain), but the
+  terminal node's own transition action never actually fired in several minutes of observation —
+  a clean stall, not a crash, still in honest tension with the in-place-minigame finding above
+  (minigames.md §14.6, three unresolved hypotheses recorded). Pazaak is unrelated and uncovered.
+  See [minigames.md](docs/research/minigames.md).
 - **Non-damage combat effects** (stun, slow, frightened, choke, force push/whirlwind) forward
   live, both directions, on by default. Knockdown, Paralyze and Sleep are captured but never
   replayed — their apply-side engine call is still unverified. See
@@ -342,8 +347,10 @@ tools/                   RE helpers, demo scripts, the kotor1_0_3 symbol databas
   for a client to fetch in the first place (only the standalone `agent serve-world` verb did).
   `client_load_rejoin`'s classifier silently discarded its digest-change signal because the
   `loadgame` verb produces it in the opposite order the correlation window assumed. Both
-  root-caused and fixed (round 87); neither gate flips on by default until the fixes are
-  live-verified. See [session-save.md](docs/research/session-save.md).
+  root-caused, fixed, and now LIVE-CONFIRMED both directions on a two-instance rig — correct
+  rejoin sequences, clean module/character convergence, and a clean regression check with both
+  gates off. A direct, decisive, zero-regression result, so both gates now ship **ON by
+  default**. See [session-save.md](docs/research/session-save.md).
 - **Dialogue reward-node consequences** (item grants) are built and forward automatically,
   on by default. Recruitment sync defaults off — an earlier raw availability poke was
   live-confirmed insufficient (the engine had nothing to spawn a body from) and has been
