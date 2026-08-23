@@ -130,7 +130,7 @@ public class CreatureLivenessPumpTests
         public void PublishDialogue(
             bool active, string speakerName, string line,
             string partnerTag = "", uint replySerial = 0, int replyIndex = 0, byte[]? pickLog = null,
-            int nodeIndex = DialogueState.NoNode, uint nodeSerial = 0) { }
+            int nodeIndex = DialogueState.NoNode, uint nodeSerial = 0, bool forced = false) { }
 
         public DialogueState GetDialogue() => DialogueState.Idle;
 

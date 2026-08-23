@@ -164,25 +164,36 @@ client_door_refusal=1
 # case also clean. ON by default.
 transition_announce=1
 
-# Be pulled into a conversation another player starts, instead of clicking the same NPC to
-# join - the seamless successor to the old force_dialogue_party flag (which shipped OFF; see
-# docs/research/shared-state-audit.md's "force_dialogue_party, and why it is OFF" for why).
-# Three settings:
-#   near   (default) - auto-join only when already within dialogue_auto_join_range of the
-#          conversation's NPC, and not in combat, a minigame, or a conversation of your own.
-#          Too far (or busy) shows a "walk over to join" notice instead of doing nothing.
+# Be pulled into an ORDINARY (player-clicked) conversation another player starts, instead of
+# clicking the same NPC to join - the seamless successor to the old force_dialogue_party flag
+# (which shipped OFF; see docs/research/shared-state-audit.md's "force_dialogue_party, and why
+# it is OFF" for why). Three settings:
+#   off    (default, since 2026-08-23) - never auto-pulled into an ordinary conversation; spectate
+#          and click-to-join/walk-over, same as clicking always has. This is the user's own
+#          stated preference: ordinary conversations stay optional, full stop.
+#   near   - auto-join only when already within dialogue_auto_join_range of the conversation's
+#          NPC, and not in combat, a minigame, or a conversation of your own. Too far (or busy)
+#          shows a "walk over to join" notice instead of doing nothing.
 #   always - auto-join regardless of distance; dialogue_join_teleport (below) covers the gap,
 #          the same way a distant click already does.
-#   off    - the old click-only behaviour.
-# Both reasons the old flag stayed off are addressed: "yanked from anywhere in the module" is
-# what `near`'s range gate exists to prevent, and recruitment/dismissal conversations now have a
-# roster channel (dialogue_recruit_sync below) the old flag's own note found missing. Runs
-# symmetrically on every peer - whichever side is NOT talking decides for itself whether to
-# join, using only its own distance/combat/minigame state, regardless of who started it.
-dialogue_auto_join=near
+# NONE of this governs a FORCED conversation - one the vanilla ENGINE ITSELF would run
+# regardless of distance (an ambush, a scripted cutscene: NWScript ActionStartConversation with
+# bIgnoreStartRange=TRUE). A forced conversation auto-joins UNCONDITIONALLY, ignoring this
+# setting entirely (including off), because that is matching behaviour vanilla already forces
+# onto a single-player PC, not inventing a new one - see docs/research/dialogue-sync.md's
+# 2026-08-23 Item 1 for the disassembly and KotorCoop.Plugin.DialogueForceFlagHook for how it is
+# detected. The forced-detection signal itself is NEEDS-LIVE (confirmed by static disasm that it
+# reads the engine's own bIgnoreStartRange bypass flag; not yet confirmed live against a real
+# ambush/forced conversation on the actual game).
+# Recruitment/dismissal conversations have a roster channel (dialogue_recruit_sync below) the old
+# force_dialogue_party flag's own note found missing, so that half of the old concern no longer
+# applies to any of the three settings above. Runs symmetrically on every peer - whichever side
+# is NOT talking decides for itself whether to join, using only its own distance/combat/minigame
+# state, regardless of who started it.
+dialogue_auto_join=off
 
 # The range (game units) dialogue_auto_join=near auto-joins within. Beyond it, the walk-over
-# notice shows instead. Not consulted under always or off.
+# notice shows instead. Not consulted under always, off, or a forced conversation.
 dialogue_auto_join_range=20
 
 # A reward node's SCRIPT only ever runs on the conversation OWNER's instance - the spectator

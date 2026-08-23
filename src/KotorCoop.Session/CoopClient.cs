@@ -362,11 +362,12 @@ public sealed class CoopClient : ICoopSession
     private byte[]? _localDialoguePickLog;
     private int _localDialogueNode = DialogueState.NoNode;
     private uint _localDialogueNodeSerial;
+    private bool _localDialogueForced;
 
     public void PublishDialogue(
         bool active, string speakerName, string line,
         string partnerTag = "", uint replySerial = 0, int replyIndex = 0, byte[]? pickLog = null,
-        int nodeIndex = DialogueState.NoNode, uint nodeSerial = 0)
+        int nodeIndex = DialogueState.NoNode, uint nodeSerial = 0, bool forced = false)
     {
         lock (_gate)
         {
@@ -379,6 +380,7 @@ public sealed class CoopClient : ICoopSession
             _localDialoguePickLog = pickLog;
             _localDialogueNode = nodeIndex;
             _localDialogueNodeSerial = nodeSerial;
+            _localDialogueForced = forced;
         }
     }
 
@@ -1578,6 +1580,7 @@ public sealed class CoopClient : ICoopSession
         byte[]? pickLog;
         int nodeIndex;
         uint nodeSerial;
+        bool forced;
         lock (_gate)
         {
             active = _localDialogueActive;
@@ -1589,13 +1592,14 @@ public sealed class CoopClient : ICoopSession
             pickLog = _localDialoguePickLog;
             nodeIndex = _localDialogueNode;
             nodeSerial = _localDialogueNodeSerial;
+            forced = _localDialogueForced;
         }
 
         int length = PacketCodec.Write(
             _sendBuffer,
             new DialogueRequestPacket(
                 _localPeerId, active, speaker, line, partnerTag, replySerial, replyIndex, pickLog,
-                nodeIndex, nodeSerial));
+                nodeIndex, nodeSerial, forced));
         if (length > 0)
         {
             _channel.Send(_hostEndPoint, _sendBuffer.AsSpan(0, length));

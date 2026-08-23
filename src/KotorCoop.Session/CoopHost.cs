@@ -425,7 +425,7 @@ public sealed class CoopHost : ICoopSession
     public void PublishDialogue(
         bool active, string speakerName, string line,
         string partnerTag = "", uint replySerial = 0, int replyIndex = 0, byte[]? pickLog = null,
-        int nodeIndex = DialogueState.NoNode, uint nodeSerial = 0)
+        int nodeIndex = DialogueState.NoNode, uint nodeSerial = 0, bool forced = false)
     {
         lock (_gate)
         {
@@ -434,7 +434,8 @@ public sealed class CoopHost : ICoopSession
             _dialogue = DialogueArbiter.Apply(
                 _dialogue, HostPeerId, active, speakerName, line, partnerTag, replySerial, replyIndex, pickLog,
                 nodeIndex, nodeSerial,
-                _interactionLocks.HolderOf(_interactionModule, partnerTag ?? string.Empty, SessionClock.NowMs));
+                _interactionLocks.HolderOf(_interactionModule, partnerTag ?? string.Empty, SessionClock.NowMs),
+                forced);
         }
     }
 
@@ -2691,7 +2692,8 @@ public sealed class CoopHost : ICoopSession
                     request.PartnerTag, request.ReplySerial, request.ReplyIndex, request.PickLog,
                     request.NodeIndex, request.NodeSerial,
                     _interactionLocks.HolderOf(
-                        _interactionModule, request.PartnerTag ?? string.Empty, SessionClock.NowMs));
+                        _interactionModule, request.PartnerTag ?? string.Empty, SessionClock.NowMs),
+                    request.Forced);
             }
         }
     }

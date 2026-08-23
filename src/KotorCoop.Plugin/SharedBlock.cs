@@ -2002,6 +2002,32 @@ internal struct SharedBlock
 
     public const int InteractionLockTargetIdStride = 0x04;
 
+    // ---- dialogue forced-conversation bit (version 51, region 0x3F1C..0x3F24, no TotalSize
+    // growth) -------------------------------------------------------------------------------
+    //
+    // docs/research/dialogue-sync.md's 2026-08-23 Item 1: whether the LOCAL/REMOTE conversation
+    // is one the vanilla engine itself forces regardless of distance (an ambush, a scripted
+    // cutscene conversation — NWScript's ActionStartConversation with bIgnoreStartRange=TRUE),
+    // as opposed to an ordinary player-clicked chat. DialogueAutoJoinRule uses this to
+    // auto-join UNCONDITIONALLY, ignoring the configured mode and range, matching what vanilla
+    // would already have forced onto a single-player's PC rather than inventing new behaviour.
+    // Rides in the free tail after the container-lock-target-ids region (0x3F0C + 0x10 = 0x3F1C,
+    // TotalSize is 0x4000, leaving 0xE4 bytes free before this; this region uses 8 of them). No
+    // TotalSize growth, no relayout of anything else.
+
+    /// <summary>Plugin -&gt; agent. Nonzero while the local player's own conversation is one
+    /// the engine itself forced. Latched for the conversation's whole duration (set once, at
+    /// the moment a new local conversation is detected — see
+    /// <see cref="DialogueForceFlagHook"/>) and cleared alongside the partner tag when the
+    /// conversation ends.</summary>
+    public const int OffsetLocalDialogueForced = 0x3F1C;
+
+    /// <summary>Agent -&gt; plugin. Nonzero while the PEER's conversation being followed is
+    /// forced. Only meaningful alongside <see cref="OffsetRemoteDialogueActive"/> — read
+    /// together with <see cref="OffsetRemoteDialoguePartnerTag"/>, which names WHICH
+    /// conversation this bit describes (the session's single arbitrated token).</summary>
+    public const int OffsetRemoteDialogueForced = 0x3F20;
+
     // ---- generic trigger relay (0x3B88..0x3BD8, no TotalSize growth) --------------
     //
     // A GENERIC trigger's OnEnter (a CSWSTrigger whose script starts a cutscene, dialogue or

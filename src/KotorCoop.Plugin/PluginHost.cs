@@ -324,6 +324,19 @@ internal static unsafe class PluginHost
                 Log($"dialogue gate NOT installed: {gateDiagnostic}");
             }
 
+            // Item 1 (docs/research/dialogue-sync.md's 2026-08-23 section): the forced-vs-
+            // ordinary conversation signal DialogueAutoJoinRule needs, so the OTHER player is
+            // only ever auto-pulled into a conversation the vanilla engine itself would have
+            // forced regardless of position — never an ordinary player-clicked chat.
+            if (DialogueForceFlagHook.Install(out string forceFlagDiagnostic))
+            {
+                Log($"dialogue: {forceFlagDiagnostic}");
+            }
+            else
+            {
+                Log($"forced-conversation tap NOT installed: {forceFlagDiagnostic}");
+            }
+
             // The container half of the same one-at-a-time rule — see ContainerUseHook and
             // docs/research/container-sync.md.
             ContainerUseHook.Enabled = PluginConfig.ReadBool("container_locks", true);

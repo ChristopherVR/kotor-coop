@@ -201,8 +201,17 @@ public static class ProtocolConstants
     /// <see cref="InteractionClaimPacket"/> and <see cref="InteractionLock"/> both gain
     /// <c>TargetId</c> (a placeable object id), since containers repeat tags across instances of
     /// the same footlocker where <see cref="InteractionKind.Conversation"/>'s NPC tags do not.
+    /// Version 38: <see cref="DialogueState"/> and <see cref="DialogueRequestPacket"/> gain
+    /// <c>Forced</c> — whether the conversation is one the vanilla engine itself forces
+    /// regardless of distance (an ambush or scripted cutscene, NWScript
+    /// <c>ActionStartConversation</c> with <c>bIgnoreStartRange=TRUE</c>), as opposed to an
+    /// ordinary player-clicked chat (docs/research/dialogue-sync.md's 2026-08-23 Item 1). Before
+    /// this, <c>dialogue_auto_join</c> could not distinguish the two, so pulling the other
+    /// player in automatically for a critical/scripted conversation and doing the same for an
+    /// ordinary chat were the same knob; now the forced case auto-joins unconditionally and the
+    /// knob (defaulting to <c>off</c>) governs only ordinary conversations.
     /// </summary>
-    public const byte Version = 37;
+    public const byte Version = 38;
 
     /// <summary>Journal quest tags are resrefs plus a little slack.</summary>
     public const int MaxJournalTagLength = 32;

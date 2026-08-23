@@ -609,7 +609,8 @@ public sealed record DialogueRequestPacket(
     int ReplyIndex = 0,
     byte[]? PickLog = null,
     int NodeIndex = DialogueState.NoNode,
-    uint NodeSerial = 0);
+    uint NodeSerial = 0,
+    bool Forced = false);
 
 /// <summary>
 /// A peer's in-world content fingerprint, sent both ways once a save is loaded and
