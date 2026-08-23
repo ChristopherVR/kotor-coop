@@ -711,3 +711,50 @@ substitution), then, in addition to the existing checks:
 If steps 1-4 all pass, this defect is closed and `dialogue_recruit_sync` has one fewer open item
 against defaulting on (the per-slot template mapping for the other eight slots, per the existing
 NEEDS-LIVE list above, remains the only other gate).
+
+## Live pass (2026-08-23, live rig round): all four steps confirmed — the fix works exactly as designed
+
+Ran on the two-instance rig, `dialogue_recruit_sync=1` set on both `coop.ini`s (was `0`, the
+shipped default), fresh `END_M01AA` save on both sides. Host recruited via
+`console 'recruit 2 carth'` (the same sanctioned console-fallback substitution the prior live
+pass used — Carth's real dialogue is still unreachable from this save's story point).
+
+**Step 1 — log sequence.** The client's plugin log showed exactly the new sequence, in order,
+79 ms apart, with **no `could not add NPC slot 2 (failure 9)` line anywhere**:
+
+```
+[23:07:48.865] party roster: recruited NPC slot 2 as 0x1 from its own template (peer recruited 0x005, here 0x001) - dialogue_recruit_sync; a body will be spawned and added on a later pass
+[23:07:48.944] party roster: spawned NPC slot 2 as 0x137 to add them here
+[23:07:48.944] party roster: added NPC slot 2 (object 0x137) to the party
+```
+
+**Step 2 — object identity.** `resolve 0x1` and `resolve 0x137` on the client both succeeded and
+resolved to two DIFFERENT addresses (`0x18F90164` and `0x1CEAD660`) — the off-stage cache object
+and the real seated body are both genuinely distinct, live, resolvable objects, exactly as the
+root-cause analysis predicted.
+
+**Step 3 — exactly one visible Carth.** `partystate.ps1` on the client showed slot 2 seated as
+`0x137` (not `0x1`) — the off-stage cache never enters the party table. A `creatures.ps1` scan
+of the client turned up three `carth`-tagged hits: the genuine seated one (`0x1CEAD660`, hp 40,
+xp 6001 — matching `0x137`) plus two more (hp 500, id `0x2`, same position). Those two looked
+like a possible second duplicate at first glance, but running the identical scan against the
+**host** — which never went through `AddAvailableNpcByTemplate`/the off-stage-cache path at all,
+only the plain `recruit` cheat — turned up the **same two hp-500/id-`0x2` ghost hits** and
+nothing else. Since the host's path cannot produce a coop-introduced duplicate, these two are a
+pre-existing `creatures.ps1` scan artifact (most likely the game's own internal party-available
+template bytes matching the vtable scan's pattern, unrelated to anything this fix touches), not
+evidence of a leaked visible body. The client has exactly one genuinely seated, in-world Carth,
+symmetric with the host.
+
+**Step 4 — timing.** 79 ms between the recruit line and the completed add — well under a second,
+under `IntervalFrames=30`'s own budget, no player-visible delay.
+
+**Verdict: this defect is closed.** All four of the coordinator's own checks pass cleanly, with
+no regression and no new defect found. `dialogue_recruit_sync` remains OFF by default in the
+committed `coop.ini.example` — this pass did not flip it on repo-wide, since the per-slot
+template mapping for the other eight slots is still unverified (this document's own long-standing
+NEEDS-LIVE item, unaffected by this round) — but the specific duplicate-body defect that was the
+last known correctness gap against doing so is now confirmed fixed, live, not just by disassembly.
+Both installs' `coop.ini`s were flipped back to `dialogue_recruit_sync=0` after this test,
+restoring the rig to its shipped default — the same undo discipline this task's other
+live-verification rounds use for save/install changes made purely to exercise a test.
