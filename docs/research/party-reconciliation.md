@@ -2451,3 +2451,42 @@ one pre-existing `PortraitController.cs` CA2014 warning is unrelated and untouch
 file (added to `KotorCoop.Tests.csproj`'s direct-compile list alongside `WorldLoadRule.cs`), and the
 only other change is two new fields/one new guard block inside `PartyFollowController.cs`, nothing
 crossing the wire.
+
+## Live-verified (2026-08-24): the round 87 fix closes the warp crash cleanly, one skip window then sane resumption
+
+Followed round 87's own "Live-verification step for whoever has the rig next" exactly, on a fresh
+`build.ps1 -Install` of both installs, `tools/demo.ps1` up on save 1 (Endar Spire, Trask already an
+active follower), `party_follow_pokestep`/`party_follow_advance_destnode` left at their shipped
+defaults (`1`, not disabled). Baseline `tools/crashlog.ps1` showed the historical `0x4AA984` AV from
+round 85 at `05:03:43`, untouched since.
+
+Host-only `console 'warp tar_m10aa'` (never an independent client warp, per this doc's own
+established discipline) while Trask was actively following, at `07:45:13`. Result: **no new AV** —
+`crashlog.ps1` immediately after still shows the same `05:03:43` entry as the most recent, nothing
+newer. Both processes stayed alive and `Responding=True`. The host's own travel field confirmed
+`module 'tar_m10aa'` applied; the client independently reached the same module through the ordinary
+travel-follow channel with no errors in its own plugin log.
+
+The plugin log resolves round 87's own open item 2 (whether one frame of deferral is enough) as a
+non-issue in practice: the last `party follow finelog` line before the transition
+(`07:45:16.987`, creature `0x127`, `pos=(19.35,22.77)`) is immediately followed by
+`flush, before the module is stored` → `travel: moving to module 'tar_m10aa'` →
+`epoch: world unloading; clearing phantom, item, combat and door state` (`07:45:17.031`) → a real
+~1.5s module-load gap with no follow diagnostics at all (the load itself, not a stuck controller) →
+the FIRST post-load finelog line at `07:45:18.803`, now for creature `0x11C` (a fresh object id in
+the new module, as expected), with fully sane, non-garbage values from the very first sample:
+`pos=(104.79,115.22) leaderPos=(103.29,115.92) target=(103.29,115.92)` — no zeros, no huge numbers,
+stable across the next several samples. `PartyFollowTransitionRule`'s single-frame skip is doing
+exactly what round 87 designed it to do: the controller cleanly sits out the one frame where the
+new module's party-table data isn't trustworthy yet, then resumes with real data as soon as it is.
+
+**Verdict: CONFIRMED FIXED, live-verified.** No new access violation, host and client both survived
+the warp, follow diagnostics resumed with sane values on the first frame after the module settled.
+Round 87's open item 1 (which of the two float3 pointers was actually invalid) remains formally
+unresolved without a live debugger break, but is now moot for shipping purposes — the fix defers the
+entire reachable call chain regardless of which pointer was the culprit, and this live pass found no
+residual crash to chase. This closes the round 85/87 thread; no further action needed unless a
+future round finds a NEW crash signature at this same warp site.
+
+No code changed this round — verification only. `dotnet test`: 1674/1674 green throughout
+(unrelated to this fix; no production code touched).
