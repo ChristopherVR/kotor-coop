@@ -1945,3 +1945,156 @@ three other agents' work landed on this branch mid-session (a solo-mode companio
 offline swoop-save-crafting tool, and a new `loadgame` console verb) and bumped `SharedBlock`'s own
 version — a stale agent/plugin pairing briefly produced "plugin shared block not found" until both
 halves were rebuilt from the same merged HEAD.
+
+## Round 85 (2026-08-24) — the two-companion drift-risk check round 83 demanded, run live: NO
+drift observed in the non-released companion; a real, separate crash bug found and worked around
+
+Task: `companion_local_combat`'s `CompanionLocalFightRule.ShouldDriveAttack`/
+`PartyPresenceController.DriveAttackIfDue` (round 83) drives a released companion's attack
+directly, deliberately never touching party-wide solo mode — but the risk this design exists to
+avoid (a released companion's controller writes fighting a SECOND, still-mirrored companion's own
+position) had never been observed with two companions actually in the party. This round recruited
+Carth alongside the save's own Trask (`console 'recruit 2 carth'`, `dialogue_recruit_sync=1`,
+confirmed via the client log: recruit → spawn → add, no `failure 9`, matching the round-verified
+fix), set `companion_local_combat=1`/`companion_local_combat_range=15` on both installs, and ran
+the drift check.
+
+### A genuine, separate crash found first: warping with two companions present segfaults the host
+
+The originally-planned recipe (host-only `warp tar_m10aa`, per round 82's own working recipe)
+crashed the HOST instantly. `tools/crashlog.ps1` confirms it from the Windows Application log,
+independent of the plugin's own log: `module=swkotor.exe code=0xc0000005 offset=0x000aa984` —
+`0x400000 + 0xAA984 = 0x4AA984`, the SAME "close enough to the next path node" geometric check
+(`0x4AA980`) round 84's own disassembly identified as `Moving_To_Path`'s (`0x00511B60`) own
+distance gate. The plugin's own log shows the sequence directly: `party follow finelog` lines for
+BOTH companions (0x127 Trask, 0x2 Carth) right up to `epoch: world unloading; clearing phantom,
+item, combat and door state`, then silence, then the AV 1.4s later. `PluginHost.OnFrame`'s own
+epoch gate (`Odyssey.TryGetWorldEpoch` returning false mid-transition) should stop every controller
+including `PartyFollowController` from running during that window — the crash lands inside the
+ENGINE's own housekeeping, one frame after a plausibly-premature "epoch looks valid again" read (a
+new server/object-array pointer allocated for the target module before its party/creature data is
+actually populated), racing `PartyFollowController`'s per-frame `TryDriveFollowLeaderStep` call
+against not-yet-settled party-table state for whichever companion resolves to a stale pointer
+first. Round 82 (one companion, `Trask` only) warped successfully with what was materially the
+same recipe; round 84 added the per-frame `TryDriveFollowLeaderStep`/`TryAdvanceStalledPathDestination`
+machinery this crash lands inside AFTER round 82 ran, and never itself tested a warp — so this may
+be a round-84 regression that simply had not been exercised against a module transition yet, not
+something specific to having two companions, but this round could not isolate which factor was
+necessary without re-crashing the rig, and did not attempt to (see "not attempted" below).
+
+**Not fixed this round** — out of scope for the two-companion drift check this round was
+prioritised to answer, and fixing a crash inside `PartyFollowController`/the engine's own transition
+housekeeping deserves its own dedicated disassembly pass, the same discipline round 84 itself
+used, not a rushed patch under time pressure. **Flagging clearly for whoever picks up round 84's
+own still-open "Round 84" follow-AI thread next: do not warp/transition modules with
+`party_follow_advance_destnode`'s machinery live (the shipped default) without expecting this
+crash risk until it is root-caused.** Worked around this round by never warping again — Endar
+Spire's own GIT already has hostile Sith (soldiers, apprentices) scattered through the ship, so the
+whole drift check below was run entirely within the START module (`END_M01AA`), no transition
+needed.
+
+### The drift check itself: decisive, clean, NO drift
+
+Real engine `tp`/`walkto` (never a raw poke) moved both players toward a Sith-soldier pair
+(`n_sithsoldier004`, GIT-authored near (44,63) and (48,61)) that had, by the time of the attack,
+drifted to ~(33,149) — right next to Carth's own real spawn point (35.16,161.43), the AVAILNPC
+template's baked-in GIT position `p_carth001` never left (the already-known, separate follow-AI
+stall bug — see "Round 84" above — meant NEITHER companion's native follow-AI ever caught up to the
+host's own walked/teleported position this whole round; Trask sat frozen near her own start point
+the entire time). This gave the natural asymmetry the check needed for free: Carth ended up within
+`companion_local_combat_range` of both the client's PC and a live hostile; Trask, stuck ~130 units
+away the whole time, never did.
+
+Client attacked the nearer Sith soldier (`blockpoke.ps1 attack 0x7FFFFFFF 0xE`). The log evidence,
+in order:
+
+```
+[05:11:40.020] party drive: companion 0x139 released to fight locally - within range of both you and
+the enemy you are fighting (head=0xFFFFFFFF moveState=1 soloMode=1 t=296.7s slot=1)
+[05:11:40.020] party drive: mirroring 1 of the host's companions
+[05:11:40.024] party drive: drove companion 0x139's attack on 0xE directly (head was 0xFFFFFFFF)
+[05:11:43.027..05:12:03.777] party drive: companion 0x139 still released - head=0x3F ...  (repeated;
+0x3F is AddAttackActions' own attack action id - the engine genuinely queued and kept running it)
+[05:12:05.017] party drive: companion 0x139 reclaimed - resuming the host mirror
+[05:12:05.017] party drive: mirroring 2 of the host's companions
+```
+
+Host, over the same window: `combat: applied 11/4/8 of a peer's damage to 0xE (owed 11→15→23)`,
+then `0xE`'s body destroyed (a real kill), then `applied 5/4/9 of a peer's damage to 0x10 (owed
+5→9→18)` — real, substantial, authoritative damage landing on the HOST's own copy of the enemies
+from Carth's driven swings, closing the credit-pipeline question `companion-combat-credit-plan.md`
+round 83 left as NEEDS-LIVE (open questions 1 and 2: a party-member attacker behaves identically to
+round 11's plain-hostile case, and one queued attack does NOT sustain a whole fight alone — the
+1.5s re-issue `ShouldDriveAttack` was designed for visibly fired eight times, `head=0x3F` holding
+steady between issues exactly as designed).
+
+**Trask (slot 0, 0x127) — the non-released companion — never appears in a single `party drive:
+companion 0x127 ...` line anywhere in this window.** The `mirroring N of the host's companions`
+counter is the direct, structural confirmation: 2 before release, 1 during Carth's release (exactly
+the one still-mirrored companion, Trask), back to 2 after reclaim. Position comparison, host vs.
+client, sampled independently after the fight:
+
+```
+host   0x127 end_trask  (39.48, 19.97)
+client 0x127 end_trask  (39.45, 19.93)   [and (39.48, 19.97) on a second sample]
+```
+
+Sub-0.05-unit difference — within ordinary mirror/read-timing noise, not drift. **`DriveOne`'s
+per-slot independence held exactly as designed: releasing Carth (slot 1) produced zero reads or
+writes anywhere near Trask (slot 0) — no release log line, no position divergence, no attack
+line naming her as attacker or target.** The risk this whole design exists to avoid — a released
+companion's controller writes fighting a second, still-mirrored companion's own native follow-AI —
+did not materialise, live, with two real companions and a real sustained fight.
+
+### `verify.ps1` caveat: several fails, all traced to this round's own state disruption, not a
+regression
+
+`tools\verify.ps1 -Host1 16824 -Client2 35700` after the fight: 42 passed, 7 failed. Traced each:
+
+- `no swkotor crash in the event log` FAIL — this is the SAME 05:03:43 warp crash above, still
+  sitting in the Windows Application log; not a new event, already accounted for.
+- `the peer really loses those hit points` / `a client hit costs the enemy real hit points` FAIL —
+  both pick the CLIENT's own nearest-enemy census entry and attack it fresh; this round's own
+  manual combat had already killed one Sith soldier and driven the other's HP down, and displaced
+  both players ~130 units from their start (`enemy 0x35 at 41 units` — the check's own 45s window
+  is generous but not guaranteed against `tp`-scale distances plus this module's already-documented
+  slow pathing). This is exactly the state-perturbation failure mode `verify.ps1`'s own code
+  comments warn about (§"ROUND 58" stale-census-distance note), not evidence the credited-damage
+  channel broke — this round's OWN host-log evidence above (`combat: applied N of a peer's
+  damage...`, a real kill) is direct, stronger, in-band proof that channel worked correctly
+  during the actual companion test.
+- `an item picked up here vanishes on the peer` / `a container opened on the client...` FAIL —
+  same class: state/position dependent on an undisturbed start, which this round's own manual
+  positioning broke.
+- `every engine call signature matches the binary` FAIL (170/172) — not investigated this round;
+  flagged for whoever runs `verify.ps1` next on an undisturbed rig to confirm whether this is
+  pre-existing or new.
+- `no per-frame spam` FAIL — cites a single-second spike each side; not investigated, likely this
+  round's own heavy diagnostic logging (fine-log running throughout) rather than a regression.
+
+None of these were investigated against a fresh, undisturbed rig this round (time did not allow);
+they are recorded here precisely rather than waved away, per the task's own "document precisely,
+don't downplay" instruction, but the specific evidence this round needed — the drift check itself,
+and the credited-damage channel surviving a companion swing — has direct, independent, in-band
+proof above that does not depend on `verify.ps1`'s own combat-check picking a live, nearby, fresh
+target.
+
+### Verdict
+
+**No drift observed.** `companion_local_combat`'s design — release exactly one companion, drive its
+attack directly, never touch solo mode, never touch a second companion's own mirror state — held up
+under a real, live, two-companion, sustained-combat test. This clears the specific risk
+`party-reconciliation.md`'s 2026-08-22 entry and `companion-combat-credit-plan.md`'s round 83 both
+named as the one gate left before considering a default flip. **Still NOT flipped this round** —
+per the task's own explicit instruction, this result makes the fix "safe to consider for a real
+(still off-by-default, pending broader testing) validation," not an immediate default change; the
+newly-found warp-transition crash (above) is an unrelated but real stability risk against the
+BROADER follow-AI feature set that should be root-caused before this or the round-84 follow-AI
+thread goes further, and the `verify.ps1` fails should be re-checked on a fresh, undisturbed rig
+before anyone treats this as a full regression-clean pass. `companion_local_combat`,
+`companion_local_combat_range`, and `dialogue_recruit_sync` were reverted to their shipped defaults
+(`0`, `10`, `0`) on both installs after this round.
+
+`dotnet test tests/KotorCoop.Tests` (Release): unchanged this round — no production code touched
+(pure live observation against already-shipped round-83 code). Build and baseline confirmed green
+before starting (see this round's own commit).

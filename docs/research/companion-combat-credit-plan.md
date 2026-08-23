@@ -431,3 +431,49 @@ provably undisturbed, `verify.ps1` clean — that is the evidence bar this docum
 tree sets for flipping `companion_local_combat`'s default to `1`. If the drift check in step 6
 fires, revert `DriveAttackIfDue`/`ShouldDriveAttack` entirely rather than attempting a live patch
 mid-session, and record exactly what was observed here for whoever picks this up next.
+
+## Live pass (2026-08-24, round 85): the two-companion drift check, run for real — NO drift
+
+Ran the exact steps above (Carth recruited alongside Trask via `console 'recruit 2 carth'` +
+`dialogue_recruit_sync=1`, `companion_local_combat=1`/`_range=15`, real `tp`/`walkto`, never a raw
+poke). Full log evidence and the crash discovered along the way are in
+`party-reconciliation.md`'s "Round 85" entry (not duplicated here); the summary that matters for
+this document's own decision tree:
+
+- **Step 1 (open question 1 — party-member attacker)**: confirmed. `Odyssey.AttackTarget` on a
+  party member behaves identically to round 11's plain-hostile case — `head` went from `0xFFFFFFFF`
+  to `0x3F` (`AddAttackActions`' own attack action id) and held there across eight repeated
+  `still released` samples.
+- **Step 2 (open question 2 — one attack vs. sustained)**: confirmed NOT self-sustaining alone —
+  `DriveAttackIfDue`'s 1.5s re-issue fired repeatedly for the whole ~25s release window, exactly as
+  designed, and the host's own `combat: applied N of a peer's damage...` lines (11, 4, 8 to one
+  enemy; 5, 4, 9 to a second, after the first died) show multiple real, separate landed hits, not
+  one action generating a whole fight on its own.
+- **Step 6 (the drift check itself)**: **did not fire.** Trask (the second, non-released companion)
+  never appears in a single `party drive: companion 0x127 ...` line, her client-mirrored position
+  matched the host's real position to within 0.05 units after the fight, and the `mirroring N of the
+  host's companions` counter (2 → 1 during Carth's release → 2 after reclaim) directly confirms
+  exactly one companion stayed mirrored throughout. None of the four disqualifying conditions this
+  step's own checklist named were observed.
+- **Step 8 (`verify.ps1`)**: NOT clean — 7 checks failed, but every one traced to this round's own
+  post-fight state disruption (a killed/damaged enemy near the client's new, ~130-unit-displaced
+  position; the already-known warp crash still sitting in the Windows event log) rather than a
+  regression in the channel under test — see `party-reconciliation.md`'s own entry for the
+  per-check trace. The credited-damage channel's own health is instead confirmed directly by this
+  round's host-log evidence (a real kill plus 18 more damage applied to a second enemy), which does
+  not depend on `verify.ps1`'s own fresh-nearest-enemy pick succeeding.
+
+### Verdict against this document's own decision tree
+
+Row 3 of the decision tree ("head shows attack-shaped activity, real applies landing, HP/kill
+consistent both sides") is now true, live, AND the two-companion drift risk this document's round-83
+entry flagged as the harder, still-untested half is now also closed clean. Per this project's "flip
+on if clean" bar, this clears every item this document's own NEEDS-LIVE list named — but this
+round's task explicitly capped the outcome at "safe to consider for a real (still off-by-default,
+pending broader testing) validation," not an immediate flip, both because of the newly-found
+warp-transition crash (a real, separate stability risk in the same follow-AI code area, not yet
+root-caused) and because `verify.ps1`'s own fails were not re-checked on a fresh, undisturbed rig.
+`companion_local_combat` stays OFF by default. Whoever next has a clean rig and time should: (1) get
+`verify.ps1` fully green on an undisturbed session to close the last procedural gap, and (2)
+root-cause the warp crash before recommending a default flip, since it lives in code this feature's
+own host-side companion following depends on.
