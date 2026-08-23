@@ -1956,6 +1956,19 @@ internal static unsafe class Odyssey
         // already found twice for creature+0xD0 and record+0x34. Read-only.
         diag.MoveBudget = NativeMethods.IsReadable(followData) ? *(float*)followData : float.NaN;
 
+        // ROUND 89 (2026-08-24, party-reconciliation.md): CSWPartyFollowDataArray::GetPoint's own
+        // disasm (0x00634CC0 -> in-range path at 0x00634D1E: `lea ecx,[esi+esi*4]; lea eax,
+        // [edi+ecx*8]`, i.e. `this + index*40`) settles the recorded-trail-node layout precisely —
+        // node i's position is a plain 12-byte float3 at `followData + i*40`, no indirection, the
+        // SAME pointer arithmetic PathWaitDest itself uses right before its own accept/reject test
+        // (see TryAcceptFinalPathNode's own remarks). Read here, read-only, purely so a live round
+        // can compare this against TargetPoint/PriorPoint above at the exact moment PathWaitDest's
+        // geometric test is rejecting, without needing another disassembly pass first.
+        diag.RecordedDestPoint = diag.CurrentPathNode is >= 0 and < 100
+            && NativeMethods.IsReadable(followData + (diag.CurrentPathNode * 40) + 8)
+            ? *(Vec3*)(followData + (diag.CurrentPathNode * 40))
+            : default;
+
         diag.Valid = true;
         return true;
     }
@@ -1992,6 +2005,12 @@ internal static unsafe class Odyssey
         public uint PartySlot0Id;
         public bool SelfMatchesPartySlot0;
         public float MoveBudget;
+
+        // ROUND 89: see TryGetFollowDiagnostics's own remarks — the recorded trail node at
+        // CurrentPathNode's own index, read directly via CSWPartyFollowDataArray::GetPoint's own
+        // disassembled addressing (followData + index*40), for comparing against TargetPoint/
+        // PriorPoint at the exact moment PathWaitDest's geometric accept/reject test is rejecting.
+        public Vec3 RecordedDestPoint;
     }
 
     /// <summary>
@@ -2771,15 +2790,65 @@ internal static unsafe class Odyssey
     /// better. <see cref="PartyFollowController"/> defaults this OFF
     /// (<c>party_follow_accept_final_node=0</c>) for that reason; the function is kept, named, and
     /// documented as a ruled-out avenue (this project's own established convention — see round
-    /// 80's <c>TryPokeStepAccumulator</c>) rather than deleted. The likely reason forcing phase 3
-    /// alone is insufficient: unlike phase 2's TestDirectLine gate (a pure optimisation shortcut,
-    /// safe to skip), PathWaitDest's own accept/reject test may be the actual mechanism that
-    /// determines whether a real underlying move action gets (re)armed for the next node — jumping
-    /// straight to phase 3 without whatever that test's PASS branch does internally (not traced
-    /// this round; the geometric test's own two operand points were read, but nothing past
-    /// 0x512C09 itself, the "call GetPoint again / arm the next segment" logic phase 3's own entry
-    /// may depend on, was disassembled) may hand Moving_To_Path a segment with nothing real behind
-    /// it to step.
+    /// 80's <c>TryPokeStepAccumulator</c>) rather than deleted.
+    ///
+    /// ROUND 89 (2026-08-24, party-reconciliation.md): round 88's own leading theory above — that
+    /// the accept branch "may do more than just write the phase" — is now DISASSEMBLY-REFUTED, not
+    /// just untraced. Full disassembly of 0x00512C09 onward: <c>pop edi; mov [esi+4],3; mov eax,
+    /// [0x745dbc]; pop esi; pop ebx; add esp,0xc; ret 0x10</c> — <c>[0x745dbc]</c> is DATA (the
+    /// int constant <c>1</c>, confirmed by reading the raw bytes, not a function), loaded into
+    /// <c>eax</c> purely as this function's OWN return value. There is no other field write and no
+    /// call, on EITHER path that reaches 0x512C09 (the unconditional "search advanced past
+    /// CurrentPathNode" branch at 0x512B80, and the geometric-test PASS branch at 0x512C03) — this
+    /// is byte-for-byte what this function already does: <c>*(int*)(record+4) = 3</c>, nothing
+    /// more.
+    ///
+    /// The return value of <c>1</c> IS real and consumed, but by the CALLER, not by anything this
+    /// function itself arms: <c>WalkUpdateLocation_QuickWalk_FollowLeader</c>'s own internal
+    /// dispatch loop (0x0051C955/0x51C95C: <c>ebp = eax</c>, then 0x0051C972:
+    /// <c>cmp ebp,[0x745dbc]; je 0x51C7D0</c>) treats a handler returning exactly <c>1</c> as
+    /// "phase changed, please redispatch immediately" — it loops back to 0x51C7D0 and, subject to
+    /// a per-call frame-time-budget float compare against a global (0x73D700) and the
+    /// <c>attempts&lt;50</c> watchdog, re-enters the SAME 11-entry jump table with the NEW phase
+    /// value and calls that handler too, in the SAME engine call. This is a generic mechanism
+    /// applying to every handler in the switch (each handler that returns 1 gets this same
+    /// same-call cascade), not something unique to PathWaitDest's accept path. Since this function
+    /// pokes <c>record+4</c> from OUTSIDE that dispatcher — and, per
+    /// <see cref="PartyFollowController"/>'s own call order, strictly AFTER this frame's own
+    /// <c>TryDriveFollowLeaderStep</c> call already returned — <c>Moving_To_Path</c>'s handler does
+    /// not get this same-call cascade; it only runs on the FOLLOWING frame's normal dispatch. This
+    /// is a real, disassembly-confirmed difference from the genuine accept path, but is very likely
+    /// NOT what actually causes the disproven cycling: <see cref="TryAdvanceStalledMovingToPath"/>
+    /// and <see cref="TryForceWalkingWhenMovingToPathStalled"/> poke <c>record+4</c> the EXACT same
+    /// way (also from outside the dispatcher, also strictly after that frame's
+    /// <c>TryDriveFollowLeaderStep</c> call, in the same per-companion loop) and are live-verified
+    /// to produce real, sustained motion — a one-frame dispatch deferral evidently is not fatal in
+    /// general.
+    ///
+    /// Sharper, still-unverified hypothesis for why THIS poke specifically fails where the other
+    /// two succeed: PathWaitDest's geometric accept/reject test (0x512B86-0x512C03) may be
+    /// correctly rejecting, not spuriously blocking. It compares the recorded node's own point
+    /// (<see cref="FollowDiag.RecordedDestPoint"/>, added this round, read via
+    /// <c>CSWPartyFollowDataArray::GetPoint</c>'s own disassembled addressing —
+    /// <c>followData + index*40</c>, no indirection) against <c>TargetPoint</c>
+    /// (<c>record+0x28</c>) and <c>PriorPoint</c> (<c>record+0x18</c>) — both of which round 73's
+    /// own finding already established go STALE (frozen, not refreshed by the engine's own
+    /// <c>CSWParty::Update</c>/<c>RecaulateFollowPoint</c>) for exactly a companion parked in this
+    /// stall shape. If the frozen operands make the "has this waypoint been passed" test correctly
+    /// say "no, not yet" (because <c>TargetPoint</c> genuinely has not caught up to where the
+    /// leader has since walked), forcing the accept anyway hands <c>Moving_To_Path</c> a segment
+    /// with no honest remaining distance to walk — which would explain the observed
+    /// 7 -&gt; 3 -&gt; 0 -&gt; 7 cycle (arrive instantly, nothing to do, fall back to FindPath, land
+    /// on the same degenerate node again) better than a missing side effect does, since this round
+    /// confirmed no side effect is being skipped at all. NOT live-tested this round (no rig
+    /// access) — <see cref="FollowDiag.RecordedDestPoint"/> exists so a future live round can read
+    /// it alongside <c>TargetPoint</c>/<c>PriorPoint</c> at the exact stall moment and settle this
+    /// directly, without another disassembly pass.
+    ///
+    /// This function's own behaviour is UNCHANGED this round (still exactly
+    /// <c>*(int*)(record+4) = 3</c>) — the original "missing side effect" premise it was written
+    /// to eventually complete does not exist to complete, so extending the poke itself would be
+    /// building on a disproven premise rather than a confirmed one.
     ///
     /// Returns false when the index does not resolve. <paramref name="wrote"/> reports whether the
     /// poke fired this call. Kill switch (to enable): <c>party_follow_accept_final_node=1</c>
