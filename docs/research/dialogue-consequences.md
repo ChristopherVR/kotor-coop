@@ -466,14 +466,16 @@ are the point, not a defect.
 
 **What is still NEEDS-LIVE, narrowed from "does the flag do anything" to one specific,
 independently checkable fact:** the per-slot NPC-id → template-resref mapping
-(`Odyssey.PartyRosterTemplates`, standard nwscript.nss order: Bastila, Canderous, Carth, HK-47,
+(`PartyRosterTemplateTable`, standard nwscript.nss order: Bastila, Canderous, Carth, HK-47,
 Jolee, Juhani, Mission, T3-M4, Zaalbar). Every resref is individually confirmed to exist in
 `templates.bif` (`docs/re/spawn.md` §4, VERIFIED), and slot 2 = Carth is independently
 live-confirmed (Round 75's own `recruit 2 carth` succeeded, and `ConsoleCommand.ParseRecruit`'s
 comment says the same). The other eight slots are NOT independently re-derived from this repo's
 own decompilation pipeline (no `.dlg`/`.ncs` decompiler wired up here) — a wrong entry would spawn
 the WRONG companion rather than fail outright, which is exactly what the live-test plan below
-checks for directly.
+checks for directly. **UPDATE, round 2026-08-24: this whole paragraph is superseded — see "Round
+(2026-08-24)" below, which re-derives and confirms all nine entries by disassembly of the shipped
+game's own recruit scripts.**
 
 ### Live-test plan
 
@@ -498,8 +500,11 @@ fresh start, no travel). Steps:
    actually look like, and portrait as, Carth — not some other companion? This is the one thing
    this round's static analysis could not settle (only slot 2 = Carth is independently confirmed;
    every other slot's template is unverified against the real `.dlg`/`.ncs` content). If the wrong
-   companion appears, `Odyssey.PartyRosterTemplates`'s ordering is wrong and needs correcting
-   against a real `.ncs` decompile per §4.2 item 2's own original method, not guessed again.
+   companion appears, `PartyRosterTemplateTable`'s ordering is wrong and needs correcting
+   against a real `.ncs` decompile per §4.2 item 2's own original method, not guessed again. (As
+   of the "Round (2026-08-24)" section below, this has now been done statically for all nine
+   slots — this in-game portrait check is the one thing that pass still could not do, since it
+   needs a running game.)
 5. Confirm on B: open the party/character sheet for the new companion — does it have a real
    inventory (not empty), a plausible level/HP, and is it controllable/selectable the way a
    normally-recruited companion is? This exercises the `TransferInventory`/`AddMember` bookkeeping
@@ -551,9 +556,10 @@ Client `partystate.ps1` afterward: `companions 2`, slot 0 = Trask (0x127), slot 
 (`0x13B resolves to 0x1D1859C8 here`). **`dialogue_recruit_sync` genuinely closes the recruitment
 gap this document exists to fix — Carth appears in BOTH players' party after the flag fires,
 confirmed by object resolution, not just a mask bit.** This uses the already-independently-verified
-slot-2-is-Carth mapping (`Odyssey.PartyRosterTemplates`, confirmed live in
-`party-reconciliation.md` round 75) — the other eight slots' template mappings remain unverified,
-exactly as this document already flagged.
+slot-2-is-Carth mapping (`PartyRosterTemplateTable`, confirmed live in
+`party-reconciliation.md` round 75) — the other eight slots' template mappings were unverified at
+the time of this pass; see "Round (2026-08-24)" below, which closes that gap statically (though
+not yet with a second live recruit).
 
 ### A real, newly-found defect in the same pass: the immediate-add-after-recruit fallthrough fails
 and leaks an orphaned duplicate body
@@ -758,3 +764,217 @@ last known correctness gap against doing so is now confirmed fixed, live, not ju
 Both installs' `coop.ini`s were flipped back to `dialogue_recruit_sync=0` after this test,
 restoring the rig to its shipped default — the same undo discipline this task's other
 live-verification rounds use for save/install changes made purely to exercise a test.
+
+## Round (2026-08-24): the other eight slots' templates, independently re-derived by disassembly —
+## and the mapping table split out into a tested, pure lookup class
+
+Task: this document's own long-standing NEEDS-LIVE item — "the per-slot NPC-id → template-resref
+mapping... NOT independently re-derived from this repo's own decompilation pipeline for the other
+eight [slots beyond Carth]" — closed by static analysis this round (no live rig touched; another
+agent owns it). Also generalises the write side properly: `Odyssey.AddAvailableNpcByTemplate` was
+already slot-generic (not a Carth-only special case — `PartyRosterController.Reconcile()` already
+called it with whatever `addSlot` the peer's roster mask names), so no behavioural change was
+needed there; what this round adds is independent verification of the DATA it reads, plus
+splitting that data into its own unit-tested class.
+
+### Method: the shipped game's own recruit scripts, read directly
+
+No live game was touched. Two static techniques, both already established elsewhere in this
+project's research trail, applied together for the first time on this question:
+
+1. **Trace `AddAvailableNPCByTemplate`'s NWScript routine number** — §4.2's own "not yet traced"
+   note, now closed. `CSWVirtualMachineCommands::ExecuteCommandAddAvailableNPCByTemplate` is at
+   `0x0052DCD0` (already known — it is `AddNpcByTemplateFn`'s own caller, per `Odyssey.cs`'s
+   comment on that delegate). `tools/xrefs.py 0x52DCD0` finds exactly ONE address-literal
+   occurrence in `swkotor.exe`, at `0x0054CBC4` — the routine-table population site. Reading the
+   raw bytes there (`tools/disasm.py`-adjacent manual read, since the site sits mid-instruction
+   for capstone's alignment) shows `8b 46 0c c7 80 e4 0a 00 00 d0 dc 52 00`: `mov eax,[esi+0xC]`
+   then `mov dword [eax+0x0AE4], 0x0052DCD0` — the identical "`mov dword [table+OFF],
+   <handler>`" shape §1.1 already used for seven other routines (`min-one-hitpoint.md` and this
+   document's own §1.1 both use it; six of §1.1's own seven table rows reproduce cleanly under
+   `OFF / 4 = routine#`, cross-validating the method again here). `0x0AE4 / 4 = 697` —
+   **`AddAvailableNPCByTemplate` is routine 697.**
+2. **Scan every module's `.ncs` for that routine's ACTION calls, reading the literal arguments.**
+   `tools/kotorfiles.py`'s `RIM`/`ERF` readers opened every `modules/*.rim` (234 files, 10,863
+   distinct `.ncs` resources) in the real GOG install (`D:\Games\swkotor-gog-p2`, read-only — the
+   task's own sanctioned exception to this worktree's no-writes rule). A scratch scanner (not
+   committed — reproducible in under 100 lines from this section) searched each script's raw
+   bytes for the 5-byte ACTION pattern `05 00 02 B9 <argc>` (0x02B9 = 697, same format
+   `min-one-hitpoint.md` and this document's own §1.1 already established:
+   `05 00 <u16 routine> <u8 argc>`), then read the 6 bytes immediately before each hit for a
+   `CONST Int` (`04 03 <i32>`, same shape as `min-one-hitpoint.md`'s own `CONSTI` examples) — the
+   `nNPC` argument, pushed last (right before the call) under NWScript's reverse-declaration-order
+   stack convention, independently confirmed by the `SetMinOneHP(GetFirstPC(), TRUE)` disassembly
+   `min-one-hitpoint.md` already shows (the second-declared argument is pushed FIRST, the
+   first-declared argument pushed immediately before the call). A second, tighter backward scan
+   (60-byte window) for `CONST String` literals (`04 05 <u16 len> <bytes>`) recovers the
+   `sTemplate` argument from the SAME call.
+
+### Result: 46 real hits, every one carrying both fields together, unanimous across every module
+
+The scan found real hits in **32 distinct scripts across 24 modules**. Every single hit's `nNPC`
+integer and `sTemplate` string agree with every other hit for the same companion — no script
+contradicts another — and slot 2 = `p_carth` reproduces this project's own independently
+live-confirmed value (`party-reconciliation.md` round 75). This is materially stronger evidence
+than the prior round's "matches the standard nwscript.nss declaration order": it is the actual
+shipped recruit scripts naming both the slot number and the blueprint resref together, in the
+same call, not an inferred ordering.
+
+| Slot | Companion | Resref | Hits (scripts) | Representative non-cutscene / non-endgame-rejoin script |
+| --- | --- | --- | --- | --- |
+| 0 | Bastila | `p_bastilla` | 15 | `tar_m03aa_s.rim:k_ptar_bastpart`, `tar_m03af_s.rim:k_ptar_bastpart` (Taris) |
+| 1 | Canderous | `p_cand` | 5 (4 spell it `p_cand`; one leftover/dead-code hit in `tar_m02aa_s.rim:k_ptar_davikest` spells it `p_canderous`, a resref that does not exist anywhere in `chitin.key`/the BIFs — see below) | `tar_m08aa_s.rim:k_ptar_candadd` (Taris) |
+| 2 | Carth | `p_carth` | 9 | `tar_m02aa_s.rim:k_ptar_addcarth`, `tar_m02af_s.rim:k_ptar_addcarth` (Taris; the Endar Spire recruit itself is not an ACTION-697 call reachable this way). **Slot LIVE-CONFIRMED** (`party-reconciliation.md` round 75). |
+| 3 | HK-47 | `p_hk47` | 2 | `tat_m17ac_s.rim:k_ptat_hk47add`, `tat_m17ac_s.rim:k_ptat_hk47ship` (Tatooine) |
+| 4 | Jolee | `p_jolee` | 5 | `kas_m24aa_s.rim:k_pkas_joleejoin` (Kashyyyk) |
+| 5 | Juhani | `p_juhani` | 3 | `danm13_s.rim:k_pdan_vandar02` (Dantooine — global `DAN_JUHANI_JOINED` set in the same script) |
+| 6 | Mission | `p_mission` | 2 | `tar_m04aa_s.rim:k_ptar_addmissio` (Taris) |
+| 7 | T3-M4 | `p_t3m4` | 2 | `tar_m02ab_s.rim:k_ptar_addt3m4` (Taris) |
+| 8 | Zaalbar | `p_zaalbar` | 1 | `tar_m05aa_s.rim:k_ptar_addzaal` (Taris) |
+
+**This exactly matches the mapping the code already shipped** (`PartyRosterTemplateTable`, née the
+private array inside `Odyssey.AddAvailableNpcByTemplate` — see "code change" below). No entry
+needed correcting.
+
+The one anomaly, checked and explained rather than ignored: `tar_m02aa_s.rim:k_ptar_davikest`
+(a Davik's-estate-heist-adjacent script) pushes `CONSTI 1` (Canderous's slot) immediately after
+the string `"p_canderous"` — an 11-character resref that a direct `chitin.key --find p_canderous`
+across all 25,836 key entries and every BIF returns **zero** matches for. Since the shipped,
+verified resref is `p_cand` (confirmed against `templates.bif` — see below — and matching the
+other four `AddAvailableNPCByTemplate(1, ...)` hits, all of which spell it correctly), this single
+hit is read as leftover or unreachable script content, not a competing data point.
+
+### Template identity re-confirmed independently, past just "exists in templates.bif"
+
+The prior round's confidence rested on `docs/re/spawn.md` §4's "all nine exist in `templates.bif`"
+— true, but not proof a resref's NAME matches the companion it is assumed to. This round pulled
+each `.utc`'s own `Tag` and `FirstName` GFF fields (`tools/kotorfiles.py gff <resref>.utc --path
+Tag`, resolving the `FirstName` `StrRef` through `dialog.tlk`) and got an exact, unambiguous match
+for all nine — e.g. `p_hk47`'s `Tag` is literally `HK47` and its `FirstName` strref resolves to
+`"HK-47"`; `p_t3m4`'s `Tag` is `T3M4`, name `"T3-M4"`; `p_cand`'s `Tag` is `Cand`, name
+`"Canderous"`:
+
+| Resref | `Tag` | `FirstName` (via `dialog.tlk`) |
+| --- | --- | --- |
+| `p_bastilla` | `Bastila` | `Bastila` |
+| `p_cand` | `Cand` | `Canderous` |
+| `p_carth` | `Carth` | `Carth` |
+| `p_hk47` | `HK47` | `HK-47` |
+| `p_jolee` | `Jolee` | `Jolee` |
+| `p_juhani` | `Juhani` | `Juhani` |
+| `p_mission` | `Mission` | `Mission` |
+| `p_t3m4` | `T3M4` | `T3-M4` |
+| `p_zaalbar` | `Zaalbar` | `Zaalbar` |
+
+### Code change: the mapping split into `PartyRosterTemplateTable`, a small unit-tested class
+
+`Odyssey.AddAvailableNpcByTemplate` was **already slot-generic** before this round — it is not,
+and was never, a Carth-only special case; `PartyRosterController.Reconcile()` already calls it
+with whatever slot the peer's roster mask names. What was missing was independent confidence in
+the DATA (closed above) and a way to unit-test that data at all — the private `string[]
+PartyRosterTemplates` array lived inside `Odyssey.cs`, a `static unsafe` class full of raw
+P/Invoke that cannot run in the test project.
+
+Following the same split this codebase already uses for `PartyRosterRecruitRule` (the decision
+half of the same feature, split out "so it can be unit-tested — the engine call itself does not
+exist in the test runner"), the table now lives in its own file,
+`src/KotorCoop.Plugin/PartyRosterTemplateTable.cs`:
+
+```csharp
+internal static class PartyRosterTemplateTable
+{
+    public const int SlotCount = 9;
+    public static bool TryGetTemplate(int slot, out string resref) { ... }
+}
+```
+
+`Odyssey.AddAvailableNpcByTemplate` now calls `PartyRosterTemplateTable.TryGetTemplate(slot, out
+resref)` in place of its old range-check-then-index; behaviour is identical (same nine strings,
+same order, same out-of-range refusal), but the data is now covered by
+`PartyRosterTemplateTableTests` (`tests/KotorCoop.Tests/PartyRosterTemplateTableTests.cs`,
+compiled into the test project the same way `PartyRosterRecruitRule.cs` already is): all nine
+slot→resref pairs, out-of-range refusal (`-1`, `9`, `100`), `SlotCount == 9`, and no two slots
+sharing a template. `dotnet test tests/KotorCoop.Tests` (Release): **1688/1688 passed** (14 new
+cases; no production behaviour changed, no test removed).
+
+### Confidence summary
+
+| Slot | Companion | Resref | Confidence |
+| --- | --- | --- | --- |
+| 0 | Bastila | `p_bastilla` | Statically confirmed (disassembly, 15 independent script hits) + template identity confirmed (Tag/name). NOT live-tested. |
+| 1 | Canderous | `p_cand` | Statically confirmed (disassembly, 4 clean hits + 1 explained anomaly) + template identity confirmed. NOT live-tested. |
+| 2 | Carth | `p_carth` | **Live-confirmed** (`party-reconciliation.md` round 75 and this document's own live pass) AND statically confirmed (9 hits) AND template identity confirmed. The only slot with an actual two-instance result. |
+| 3 | HK-47 | `p_hk47` | Statically confirmed (disassembly, 2 hits) + template identity confirmed. NOT live-tested. |
+| 4 | Jolee | `p_jolee` | Statically confirmed (disassembly, 5 hits) + template identity confirmed. NOT live-tested. |
+| 5 | Juhani | `p_juhani` | Statically confirmed (disassembly, 3 hits) + template identity confirmed. NOT live-tested. |
+| 6 | Mission | `p_mission` | Statically confirmed (disassembly, 2 hits) + template identity confirmed. NOT live-tested. |
+| 7 | T3-M4 | `p_t3m4` | Statically confirmed (disassembly, 2 hits) + template identity confirmed. NOT live-tested. |
+| 8 | Zaalbar | `p_zaalbar` | Statically confirmed (disassembly, 1 hit) + template identity confirmed. NOT live-tested. |
+
+This is a much stronger evidentiary basis than the prior round's "standard nwscript.nss order,
+not independently re-derived" — every slot now has direct disassembly evidence from the shipped
+game's own scripts, not an assumed convention — but it is still **static analysis, not a live
+result**. `dialogue_recruit_sync` stays OFF by default; per this project's own "flip on if clean"
+bar, that requires live confirmation for the remaining eight slots (or at least a sample beyond
+Carth), which needs the two-instance rig this round did not touch.
+
+### Live-test recipe for the remaining eight companions
+
+Follows the same shape the Carth live-test plan (above) and its live-verification round already
+used: force the same bit onto the wire the peer's `dialogue_recruit_sync` reconciliation reacts
+to, independent of how the recruiting instance itself came to have the companion, then confirm the
+OTHER instance ends up with a correctly-identified, live, resolvable body.
+
+**The console shortcut, and its real constraint.** `console 'recruit <slot> [tag]'`
+(`ConsoleCommand.ParseRecruit`, `CheatController.Recruit`) is the same dev-only primitive used for
+Carth. Two facts about it matter for planning a companion beyond Carth:
+
+- `recruit <slot>` with NO tag only works if that slot was ALREADY recruited at some point on
+  THIS savegame (it reads the `"AVAILNPC%d"` cache `AddNPC_2` populates — see
+  `Odyssey.TrySetSlotAvailable`'s own doc comment) — on a fresh save it will refuse with "spawn
+  failed... no blueprint on a raw availability poke."
+- `recruit <slot> <tag>` falls back to a creature ALREADY PLACED IN THE CURRENT MODULE with that
+  exact `Tag` (the `Tag` column in the table above — e.g. `Cand`, `HK47`, `T3M4`). This means the
+  tester's save must be in (or have already visited and left placed) the module where that
+  companion's body physically exists — the "representative script" column above names it, and
+  since scripts are per-module, the module name itself (`tar_m08aa`, `tat_m17ac`, `kas_m24aa`,
+  `danm13`) is the area to be in.
+
+**Recipe, per companion**, mirroring the Carth recipe's steps 1-6 exactly (both instances on the
+same fresh save at/near the module named below; `dialogue_recruit_sync=1` and
+`party_roster_sync=1` on both `coop.ini`s; HOST recruits, watch CLIENT's log for the
+`recruited NPC slot N ... spawned NPC slot N ... added NPC slot N` sequence within one
+`PartyRosterController` pass; confirm two distinct resolvable object ids on the client per the
+duplicate-body-fix verification steps; confirm portrait/identity, inventory, and faction on the
+client exactly as the Carth recipe's steps 4-6 already describe):
+
+| Companion | Slot | Module to be in | Tag for `recruit <slot> <tag>` | Notes |
+| --- | --- | --- | --- | --- |
+| Bastila | 0 | `tar_m03aa` / `tar_m03af` (Taris) | `Bastila` | Reunion point after the party splits following the Endar Spire crash; also re-added at `danm13` (Dantooine) and the endgame `unk_m44ac` sequence — those are rejoins, not the first recruit, so prefer the Taris module for a "first recruit" test. |
+| Canderous | 1 | `tar_m08aa` (Taris) | `Cand` | |
+| HK-47 | 3 | `tat_m17ac` (Tatooine) | `HK47` | Two scripts in the SAME module (`k_ptat_hk47add`, `k_ptat_hk47ship`) — either placement should work. |
+| Jolee | 4 | `kas_m24aa` (Kashyyyk) | `Jolee` | |
+| Juhani | 5 | `danm13` (Dantooine) | `Juhani` | Same module as one of Bastila's re-adds; if testing both on the same save, recruit Juhani first to avoid ambiguity about which global flag fired. |
+| Mission | 6 | `tar_m04aa` (Taris) | `Mission` | |
+| T3-M4 | 7 | `tar_m02ab` (Taris) | `T3M4` | |
+| Zaalbar | 8 | `tar_m05aa` (Taris) | `Zaalbar` | |
+
+Cheapest reachable next test beyond Carth: five of the eight (Bastila, Canderous, Mission, T3-M4,
+Zaalbar) are all on Taris, reachable from a single save advanced only as far as the Taris chapter
+— no need to reach Kashyyyk or Tatooine for a first additional data point. If even one of these
+five confirms clean (correct portrait, no duplicate-body regression, correct faction), that is a
+second independent data point beyond Carth and a reasonable basis to consider defaulting
+`dialogue_recruit_sync` on, per this project's own "two independently-confirmed slots" bar the
+original design doc set (§4's live-test plan, step 7).
+
+### What could not be determined from the repo
+
+- No live confirmation for slots 0, 1, 3-8 — this round is static analysis only (explicitly
+  sanctioned: another agent owns the live rig).
+- Whether `p_canderous` (the one non-existent resref spotted in `k_ptar_davikest`) is truly dead
+  code or reachable under some condition this pass did not trace — irrelevant to the shipped
+  mapping (`p_cand` is what `AddAvailableNPCByTemplate` is called with everywhere else, and is the
+  only one of the two that exists as a real resource), but flagged rather than silently dropped.
+- The exact Taris/Dantooine/Kashyyyk/Tatooine area names each module resref corresponds to (this
+  round worked at MODULE granularity, which is what `recruit <slot> <tag>` needs — it does not
+  need the specific `.are` display name).
