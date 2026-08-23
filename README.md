@@ -8,6 +8,52 @@ world, the way FromSoftware's Seamless Co-op mod bridges Elden Ring.
 No game file is modified. The plugin installs as a `dinput8.dll` proxy the game loads
 itself; everything else attaches from outside with `OpenProcess`.
 
+## Status at a glance
+
+A scannable index over the detailed bullets below. "Live-verified" means someone watched it
+work on two real GOG instances; "Implemented" means it is built, unit-tested, and either
+off by default or waiting on a live pass; the linked doc always has the dated evidence.
+
+### Synced and working
+
+| Area | Status | Detail |
+| --- | --- | --- |
+| Phantom presence, appearance, walk/run animation | Live-verified, both directions, 0% idle-while-moving | [phantom-locomotion.md](docs/research/phantom-locomotion.md) |
+| Travel — either player leading, announced transitions | Live-verified, ~9x faster follower warp | [transition-smoothness.md](docs/research/transition-smoothness.md) |
+| Doors — either player, both directions | Live-verified | [shared-state-audit.md](docs/research/shared-state-audit.md) §2 round 57 |
+| Story triggers (OnEnter) — either player, both directions | Live-verified, protocol 36 | [trigger-relay.md](docs/research/trigger-relay.md) |
+| Encounters/ambushes — a client walking in fires them for both | Live-verified | see below |
+| Combat — enemy health/death mirror, forwarded damage to your phantom | Live-verified | see below |
+| Combat — a client's own hit lands on the host's real enemy | Live-verified, 4 ways | round 58 |
+| `local_combat` — a mirrored enemy fights a client through that client's own engine, real lethality, real kills, natural aggro | Live-verified, ON by default | rounds 52-55 |
+| Non-damage effects (stun/slow/frightened/choke/forcepush/whirlwind) | Live-verified both directions, ON by default | [effect-sync.md](docs/research/effect-sync.md) |
+| Container/corpse open-close animation + use-lock | Live-verified, ON by default | [container-sync.md](docs/research/container-sync.md) |
+| Dialogue — one conversation at a time, spectate with real lines, late-join adopt | Live-verified | [dialogue-sync.md](docs/research/dialogue-sync.md) |
+| Dialogue — a trigger/cutscene-started conversation, both engines racing to `StartDialog` | Live-verified, lock adopts cleanly | dialogue-sync.md |
+| Dialogue — auto-join is forced-conversation-only, `off` by default for ordinary chat | Negative side live-verified 2026-08-23; forced-conversation positive case still open | dialogue-sync.md |
+| Mid-module movies (a script's own `PlayMovie`) | Live-verified, ON by default | [cinematics.md](docs/research/cinematics.md) §10.9 |
+| Item identity (stack/charges/upgrades) crossing the wire | Implemented; apply path not yet live-verified | [item-identity.md](docs/research/item-identity.md) |
+| Journal/globals merge-upward, including removal and decrease | Live-verified | [quest-sync.md](docs/research/quest-sync.md) |
+| Map pins, minimap arrows, pause-together, downed/revive + spectate camera | Live-verified | — |
+| Control lock-in (client stuck as a companion on connect) | Fixed and live-verified, round 70 | [control-return.md](docs/research/control-return.md) |
+| Session lifecycle — in-game Co-op menu, console connect/reconnect, mod-compat per-channel degrade | Live-verified for the agreeing case | shared-state-audit.md |
+
+### Still needs work
+
+| Area | Status | Blocker |
+| --- | --- | --- |
+| **Companion follow-AI (Trask doesn't walk)** | Real fixes shipped (round 71-75), still doesn't reach "walking" state | needs a live debugger on an async pathfinder cursor — [party-reconciliation.md](docs/research/party-reconciliation.md) |
+| Companion local combat (client's mirrored companion fighting) | Release/reclaim gate verified clean; a landed swing not independently confirmed | OFF by default — party-reconciliation.md |
+| `party_fast_pump` (companion-position latency) | Tested twice (combat: worse; non-combat: no measurable difference) | OFF by default, real cause of reported lag still open — [lag-audit.md](docs/research/lag-audit.md) |
+| Dialogue skip-mid-sentence desync | Instrumented (timestamped node logs both sides), not yet reproduced | blocked on real keyboard/foreground input to the game — [dialogue-skip-desync.md](docs/research/dialogue-skip-desync.md) |
+| Forced-conversation auto-join, positive case | Flag design verified by disassembly + 6 clean negatives | no genuinely-forced trigger found reachable yet — dialogue-sync.md |
+| Minigames (swoop races, forced turret sequences) | Detection + peer-park built | never run in a live two-instance session — [minigames.md](docs/research/minigames.md) |
+| Mid-session save/load (host or client loading a different save) | Phase 1 (client character survives to next session) live-tested; host mid-session load is refused, not re-adopted | [session-save.md](docs/research/session-save.md) |
+| Dialogue recruitment sync | Item grants confirmed by design; recruitment pokes a flag whose sufficiency is unconfirmed | OFF by default — [dialogue-consequences.md](docs/research/dialogue-consequences.md) |
+| Mod-compatibility mismatch paths | Every path unit-tested | never run against a genuine mismatch, only the agreeing case |
+| Creature liveness reconciliation (a body alive on one screen, dead on the other) | Built; every reachable module stays under the 32-slot census that already covers this | agent's own scan doesn't notice a `DestroyObject`ed body — [creature-liveness.md](docs/research/creature-liveness.md) |
+| KOTOR 2 | Untouched | only GOG v1.0.3 addresses are known |
+
 ## What works today
 
 Both players, each in their own full game:
