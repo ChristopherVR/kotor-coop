@@ -736,3 +736,114 @@ session already running (host + one client, both in the same module).
    default), repeat steps 2 and 3: expect ONLY the log line ("session-save: ... verdict... NOT
    acting (gate off)") and no visible effect on either player's game — the phase 1 behaviour
    (client capture, host's legacy refusal if THAT flag is separately on) must be unchanged.
+
+## Phase 2 audit (2026-08-23): a real false positive found and fixed, no other gaps closed
+
+Task: audit whether the load-detection primitive (`WorldLoadRule.IsUnannouncedTeardown`,
+§"Phase 2" above) is wired to the REAL in-game Load menu entry point rather than something
+merely adjacent to it, and assess whether client auto-rejoin's existing scope (already shipped
+in Phase 2, gated OFF) is sound. **No engine RE was done this pass either** — this is a static
+code audit plus one real bug fix and test run; nothing below was run against the game.
+
+### The gap found: `TravelController`'s peer-follow warp also never sets `trans_pending`
+
+`WorldLoadRule.IsUnannouncedTeardown` treats ANY world teardown that `_transitionPending`
+(`trans_pending`) never announced as a Load Game action. Its own doc comment already names the
+one exception the design doc anticipated (a plain save never tears the world down at all) but
+missed a second one that was already sitting in the same file tree: `TravelController.cs`'s own
+doc comment on `TravelToModule` states outright that "a co-op warp like this one never raises
+trans_pending at all" (`TravelController.cs`, the `PublishTransitionAnnounce` remark). That
+controller is not a rare debug path — it is the mechanism that pulls a CLIENT into the module
+the HOST just walked into (and vice versa, "a host being pulled along by a peer"), which fires
+on ordinary, routine module travel any time the two players are not already in the same module
+when one of them takes a door. Before this fix, PluginHost's frame loop had exactly one
+"announced" bit (`_transitionPending`, fed only by the real `trans_pending` byte), so every
+peer-follow warp produced the identical signature — `TryGetWorldEpoch` starts failing while
+`_transitionPending` is false — that a genuine Load Game action produces. Concretely, this means
+`SharedBlock.OffsetWorldLoadSerial` was bumping on ordinary peer-follow travel, not only on real
+loads: harmless while `client_load_rejoin`/`host_load_readopt` are OFF (their own dispatcher
+code only reacts to the classifier's `SaveOrLoadVerdict`, which additionally requires a
+correlated digest change within the 5 s window — see `SaveOrLoadClassifier`, so a bare
+load-serial edge with no accompanying digest change classifies as nothing), but it would have
+produced spurious classifier activity — and, worse, a *misleading* live-test result — the moment
+either gate is turned on for the item 2/3 live-test script above, since ordinary co-op play
+(any host-leads-through-a-door-first moment) would ride the exact same signal the tests are
+trying to isolate to a genuine Load Game action.
+
+**The fix** (`src/KotorCoop.Plugin/PluginHost.cs`): a second "announced" bit, `_travelAnnounced`,
+set the instant a travel request is first seen pending (the same "announce before the teardown"
+timing `_transitionPending` already uses for a real door) and fed into
+`WorldLoadRule.IsUnannouncedTeardown` alongside it (`_transitionPending || _travelAnnounced`).
+Reset at one canonical point — immediately after `TryGetWorldEpoch` succeeds each frame — rather
+than only where `_transitionPending` resets, specifically so a travel request that turns out to
+be a same-module no-op (nothing torn down) cannot leave a stale "announced" flag sitting around
+to mask a LATER, genuinely unannounced load. `WorldLoadRule` itself is unchanged (still the
+one-line pure negation `WorldLoadRuleTests.cs` already pins); the new state lives entirely in
+`PluginHost`'s per-frame bookkeeping, which is not independently unit-testable without a live
+game (consistent with this codebase's existing seam: `WorldLoadRule` is the pure/tested half,
+`PluginHost.OnFrame` is the orchestration around it that only a live pass or the disassembly
+can confirm). `dotnet test` after the fix: 1635 passed, 0 failed (no test needed touching —
+the fix changes PluginHost's unsafe frame loop, which has no existing unit-test seam for this
+specific state, not the pure `WorldLoadRule`/`SaveOrLoadClassifier`/`ClientLoadRejoinRule` layer
+that IS tested).
+
+**What this does NOT close**: the fix removes one *known* false-positive source; it does not
+prove there are no others. The audit checked every call site that can tear the world down
+without going through a real door/trigger (`grep` for `ExecuteLoadModule`/`StartNewModule`/
+`UnloadModule`/`TravelToModule` across `src/`) and found exactly two: `TravelController`
+(fixed above) and `MenuLoadController` (the plugin's own replay of the Load branch, used by
+BOTH the first-join `agent adopt` flow and Phase 2's own `client_load_rejoin`/`host_load_readopt`
+rejoin action). `MenuLoadController`'s own teardown does NOT need the same `_travelAnnounced`
+treatment — traced through `CoopCommandDispatcher.MaintainSessionSave`/`TriggerRejoin`/
+`SessionManager.RejoinAfterLoadAsync`: `RejoinAfterLoadAsync` calls `Disconnect()` BEFORE
+requesting the replay load, which drops `manager.Current` to null for the whole in-flight
+window; `MaintainSessionSave` short-circuits to `_sessionSaveWatch.Reset()` whenever
+`manager.Current` is null, so the classifier is not even polling `WorldLoadSerial`/
+`SaveIdentityDigest` while the rejoin's own replay is what is tearing the world down — and by
+the time `Reconnect()` re-establishes a session, `Reset()` has already re-armed the baseline
+rule, so the rejoin's own load edge is absorbed as "the load that IS the adoption" exactly the
+way the very first join already is (§"Phase 2" above, `ClientLoadRejoinRule`'s own doc comment).
+This is a code-level trace, not a live measurement — it depends on `Reconnect()` actually
+cycling `manager.Current` through a real gap, which the audit did not additionally verify beyond
+reading `SessionManager.cs`.
+
+### Client auto-rejoin scope: already implemented, correctly scoped, nothing further to build
+
+The task that produced this pass asked for an assessment of whether client mid-session-load
+auto-rejoin is implementable by reusing the existing join/reconnect machinery rather than new
+engine surgery. It already is: Phase 2 (§ above, shipped 2026-08-22) did exactly this —
+`SessionManager.RejoinAfterLoadAsync` composes the same two calls `agent adopt`'s first-join
+path already makes (`WorldAdoption.TryAdoptAsync` for the network half,
+`KotorGameBridge.TryRequestAdoptedWorldLoad`/`PluginMenuLoader.TryRequestLoad(adoptedWorld:
+true)` for the local engine half), gated by a pure, tested state machine
+(`ClientLoadRejoinRule`) that swallows duplicate triggers rather than queueing or restarting.
+There is no separate "mid-session load" code path to design — the scope this task asked about
+was already kept clean the first time. What remains is exactly what Phase 2's own NEEDS-LIVE
+list already says: whether `TryRequestAdoptedWorldLoad`'s replay (a MAIN-MENU-ONLY mechanism by
+its own header) does anything at all once fired from an ALREADY-RUNNING session, rather than
+acking-and-no-opping against `Odyssey.HasServer` being true. That is genuinely a live-only
+question — no amount of further static reading resolves it, because it depends on what the
+engine's own `CSWGuiSaveLoad`/`ExecuteLoadModule` code does when re-entered from a state the
+main-menu replay was never observed to run from. This pass did not attempt new RE on that path;
+doing so safely needs the same call-order archaeology `MenuLoadController`'s own header already
+performed for the main-menu case, applied to a mid-session entry instead — out of this pass's
+scope (static audit only, no engine access).
+
+### Updated live-test script — one item added
+
+Everything in the "Live-test script" list above (§"Phase 2 shipped") still applies unchanged.
+Add this item, run BEFORE items 2/3 (so a false positive is caught before it can be blamed on
+the load-menu steps that come after it):
+
+0. **Ordinary peer-follow travel does NOT trip the load detector.** Two real GOG installs, a
+   live co-op session, host and client in the SAME module. Have the HOST walk through an
+   ordinary door first (client not yet at the door), so the client's `TravelController`
+   peer-follow warp fires to pull it along — then repeat with the CLIENT leading and the host
+   following. With `client_load_rejoin=1`/`host_load_readopt=1` on (so the classifier's activity
+   is visible in the log even though nothing should act on it): expect the existing "following
+   the host to '<module>'" log line and normal transition behaviour, and specifically expect
+   NO "you loaded a save" / "host loaded a save" line and no rejoin/reconnect cycle on either
+   side. This is the regression check for the false positive found and fixed in this pass — it
+   was never run live before the fix existed, so it is untested against the real engine, only
+   against the reasoning above (`TravelController.Execute`'s own doc comment, confirmed by
+   reading the code, not by observing a live warp).

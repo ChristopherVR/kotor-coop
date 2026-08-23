@@ -539,6 +539,27 @@ internal static unsafe class PluginHost
     /// <summary>True while the pre-store flush window is open (trans_pending set).</summary>
     private static bool _transitionPending;
 
+    /// <summary>
+    /// True while THIS instance's own <see cref="TravelController"/> warp is in flight — a
+    /// session-commanded module move (a peer being pulled along to follow the host, or the
+    /// host being pulled along by a peer; also the <c>moviewarp</c> debug verb). Round
+    /// (2026-08-23, roadmap item 14 phase 2 audit): <c>TravelController.Execute</c>'s own doc
+    /// comment already says a co-op warp like this "never raises trans_pending at all" — which
+    /// means, unaudited, it produces EXACTLY the same "world torn down with trans_pending never
+    /// having gone true" shape <see cref="WorldLoadRule.IsUnannouncedTeardown"/> was built to
+    /// recognise as a Load Game action. A peer-follow warp is one of the most common teardown
+    /// events in an active session (it fires on ordinary module travel any time a client was not
+    /// already where the host went), so without this flag every such warp misclassifies as an
+    /// unannounced load. Set the moment a travel request is first seen pending (well before
+    /// <c>Odyssey.TravelToModule</c> actually runs, the same "announce before the teardown"
+    /// timing <c>_transitionPending</c> uses for a real door), cleared the one canonical place
+    /// every epoch-valid frame passes through — see the reset immediately after the world-epoch
+    /// gate below — so a request that turns out to be a same-module no-op (no teardown at all)
+    /// does not leave a stale "announced" flag that could mask a LATER, genuinely unannounced
+    /// load.
+    /// </summary>
+    private static bool _travelAnnounced;
+
     // ---- frame-time histogram (docs/research/lag-audit.md) ------------------------------
     //
     // Cheap and off by default: an EWMA-free accumulator (see FrameTimeHistogram's own doc
@@ -713,10 +734,13 @@ internal static unsafe class PluginHost
             if (_epoch != 0)
             {
                 // Roadmap item 14 phase 2's load-detection primitive (see WorldLoadRule.cs):
-                // judged HERE, before _transitionPending is reset below, because that reset is
-                // exactly what would otherwise erase the one fact this decision needs — whether
-                // an area transition was ANNOUNCED before the world it belonged to went away.
-                if (WorldLoadRule.IsUnannouncedTeardown(_transitionPending))
+                // judged HERE, before _transitionPending/_travelAnnounced are reset below,
+                // because that reset is exactly what would otherwise erase the one fact this
+                // decision needs — whether this teardown was ANNOUNCED (a real door/trigger
+                // transition, OR this instance's own TravelController warp — see
+                // _travelAnnounced's own doc comment for why a co-op warp needs the same
+                // treatment as a door) before the world it belonged to went away.
+                if (WorldLoadRule.IsUnannouncedTeardown(_transitionPending || _travelAnnounced))
                 {
                     _view?.PublishWorldLoadObserved();
                     Log("world: unannounced teardown - treating as a load, not a transition");
@@ -724,6 +748,7 @@ internal static unsafe class PluginHost
 
                 _epoch = 0;
                 _transitionPending = false;
+                _travelAnnounced = false;
                 InvalidateAll("world unloading");
             }
 
@@ -732,6 +757,14 @@ internal static unsafe class PluginHost
             PhantomHitHook.WatchLocalPlayer(0);
             return;
         }
+
+        // The world is still readable this frame, so whatever _travelAnnounced was carrying
+        // did not precede a teardown (either no travel was requested, or a travel request
+        // resolved as a same-module no-op with nothing torn down) — consume it here, the one
+        // canonical point every epoch-valid frame passes through, so a stale "announced" flag
+        // can never survive to mask a LATER, genuinely unannounced load. The travel branch
+        // below re-arms it for THIS frame if (and only if) a request is actually pending now.
+        _travelAnnounced = false;
 
         // Every frame, so the agent can adopt the engine's own player instead of trusting
         // a scan that can latch a freed copy (SharedBlock.OffsetEnginePlayerPointer).
@@ -824,6 +857,14 @@ internal static unsafe class PluginHost
 
         if (_travel is { HasPendingRequest: true } travel)
         {
+            // Announce THIS frame, before any flush or the eventual Odyssey.TravelToModule
+            // call — the same "before the teardown, not after" timing _transitionPending uses
+            // for a real door. Re-armed every frame this branch runs (the canonical reset
+            // above already cleared it once this frame if we are only just now discovering the
+            // request), so it stays true across however many flush-only frames this request
+            // spans before Execute() actually fires the warp.
+            _travelAnnounced = true;
+
             // Task 2b (docs/research/transition-smoothness.md): a best-effort fade to black,
             // the instant a travel request is FIRST seen — before the flush below even starts,
             // so it masks the whole wait rather than just the warp. Self-latched inside
