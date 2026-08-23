@@ -748,3 +748,96 @@ round was before its own live pass.
 new build succeeding — this round's changes are additive (`AgentOptions.EnemyCensusCap`,
 `KotorGameBridge`'s new constructor parameter and `_enemyCensusCap` field) and behaviour-neutral
 with the flag unset, so no existing test's expectations moved.
+
+## Live pass (2026-08-23): the cap makes it testable, and the Kill/Destroy dispatch is confirmed
+live for the FIRST time — end to end, exactly as designed
+
+Ran the live-test plan above almost exactly as written. Rig launched with the HOST agent given
+`--enemy-census-cap 5` (via a new `tools/demo.ps1 -Agent1ExtraArgs @('--enemy-census-cap','5')`
+passthrough, added this round — the script had no way to forward extra agent CLI args before;
+additive, empty by default, zero effect on an ordinary `demo.ps1` invocation), CLIENT agent left at
+the default 32. `liveness_sync=1` was already set on both installs from a prior session. Both
+instances warped to `tat_m20aa` (host-only `warp`, client follows — the same travel-follow pattern
+`party-reconciliation.md`'s 2026-08-22 entry already established as the way to avoid an
+independent-warp `[W_SAVE]` mismatch), the same module the 2026-08-22 passes already measured at
+31 confirmed hostiles.
+
+### Step 3 confirmed: the shed is real
+
+`census` on the host read **`OWNER 5 id(s)`** — exactly the `--enemy-census-cap 5` value, confirmed
+working as designed (falls back to the built-in 32 when unset, per this round's own earlier
+design — here it genuinely lowered the truncation). `tools/creatures.ps1` against the host (the
+same uncapped raw vtable scan the 2026-08-22 passes used) still found the full ~31-hostile
+population, confirming the gap between the two — `census`'s capped 5 vs. the raw scan's full
+population — is real and is exactly the population-shed condition item 1 needs.
+
+### Step 4-5: a genuinely out-of-census creature, killed, and the ONLY channel that could correct
+the client is this one
+
+Picked `0x9` (`tat20_09chief_01`, position (15.77, 63.74)) — by a wide margin the single FARTHEST
+hostile from the player's position ((-27.38, 66.76), ~43 units away, versus the nearest hostiles
+at 2-9 units) — as the creature certain to be outside the host's own 5-cap `ReadEnemies` result
+(sorted nearest-first with none in combat yet). Confirmed alive and resolvable on the host first
+(`resolve 0x9` → a real address), then `slay 0x9` on the host (`Odyssey.KillCreature`, HP → 0).
+
+### Result: BOTH the Kill and Destroy dispatch fired correctly, converging the client to match the
+host — the headline this whole document exists to prove, confirmed live for the first time
+
+Host agent log:
+```
+[19:39:14] * liveness: 1 creature(s) newly gone this pass: 0x9
+```
+
+Client PLUGIN log, within the very next scan/reconcile cycle:
+```
+[19:39:13.610] liveness: 0x9 is a corpse on the owner and was still alive here - killing to match
+[19:39:15.623] liveness: 0x9 no longer exists on the owner and still did here - destroying to match (local 0x9)
+```
+
+(The Kill line's timestamp preceding the host's own "newly gone" log line by ~0.4s is a real
+observation, not a contradiction — the owner's OWN scan derives "Dead"/"Gone" from its comparison
+against the LAST scan's state, and `slay` immediately makes the creature resolve as HP-zero/corpse
+on the host well before that scan's own log line is written; the two systems' logging cadences are
+independent, not causally ordered by these particular timestamps.) The client first converged to
+**Dead** (matching the corpse state immediately after `slay`), then — once the owner's own
+`ReadCreatureLiveness` scan derived the corpse as having fully disappeared from the loaded area on
+a later cycle — converged again to **Gone** (destroyed). `resolve 0x9` on the CLIENT afterward
+confirmed genuine, complete destruction: `no target: 0x9 resolves to 0x0 here` — not merely a log
+line, the body is actually gone.
+
+This is the FIRST time, across four prior live passes (2026-08-22 x3, this document's own record),
+that `LivenessReconcileController`'s Kill/Destroy dispatch has fired due to a genuine, real
+divergence the ordinary 32-slot combat census could not have caught on its own — every earlier
+attempt was either confounded by the ordinary census reaching the client first (population ≤ 32,
+so nothing was ever actually shed) or blocked by the separate `DestroyObject`-scan-freshness defect
+the third 2026-08-22 pass found (population-independent, and not implicated here since this was an
+ordinary `slay`, not a `destroyobject`). `--enemy-census-cap` closes exactly the gap it was built
+for.
+
+### Verdict: the reconciliation mechanism itself is proven sound end to end; `liveness_sync` stays
+OFF pending a decision on the flag's own remaining open items
+
+The channel's headline claim — a body alive on one screen and dead/gone on the other gets
+corrected, converging the wrong side to the right one — is now directly, live-confirmed, not
+merely designed and unit-tested. This is a genuinely positive result: three prior live passes
+(2026-08-22) all found real things (the anomaly path, the never-resurrects guarantee, a real
+scan-freshness defect in `EngineGlobals.TryResolveServerObject`/`LiveObjectGate.Confirm` for a
+`DestroyObject`ed body specifically) but never the dispatch itself firing from a genuine
+population-shed divergence; this pass closes that gap. `liveness_sync` is left OFF by default
+regardless, per this project's own bar and for reasons independent of this pass's positive
+result: the `DestroyObject`-scan-freshness defect the third 2026-08-22 pass found is still
+unfixed (this pass's own kill went through the ordinary `slay`/HP-zero path, not `destroyobject`,
+so it does not re-test or resolve that defect), and a flag this document itself has left off
+across four live passes for four different reasons is not flipped on the strength of a fifth pass
+closing only one of them. The concrete remaining blocker for a future round: fix or re-test
+`LiveObjectGate.Confirm` against a genuinely `DestroyObject`ed id now that `--enemy-census-cap`
+gives a cheap, repeatable way to stage the population-shed half of any future test.
+
+### Test suite and build
+
+`dotnet test tests/KotorCoop.Tests` (Release): 1638/1638 passed, unchanged baseline — this pass's
+only production change is additive (`tools/demo.ps1`'s new `-Agent1ExtraArgs`/`-Agent2ExtraArgs`
+passthrough params, empty-array default, zero effect on the ordinary invocation), no C# changes.
+Both plugin builds clean from an earlier point in the same combined session. Rig eventually torn
+down clean (`Get-Process swkotor,KotorCoop.Agent` empty), `auto_start_agent` restored to `1` in
+both GOG installs.

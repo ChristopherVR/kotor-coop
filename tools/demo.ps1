@@ -19,7 +19,13 @@ param(
     [string]$WorkDir = "$env:TEMP\kotorcoop-demo",
     [int]$Save = 1,
     [switch]$Stop,
-    [switch]$SkipLaunch
+    [switch]$SkipLaunch,
+    # Extra raw args appended to instance 1/2's own `agent run` invocation — e.g.
+    # -Agent1ExtraArgs @('--enemy-census-cap','5') to shrink the host's combat-census
+    # truncation for a liveness-reconciliation live test (docs/research/creature-liveness.md).
+    # Empty by default: no effect on the ordinary demo.
+    [string[]]$Agent1ExtraArgs = @(),
+    [string[]]$Agent2ExtraArgs = @()
 )
 
 $ErrorActionPreference = 'Stop'
@@ -232,14 +238,14 @@ function Start-AgentConsole {
 }
 
 Start-AgentConsole -Title "coop agent 1 - $Name1 (host)" -LogPath (Join-Path $WorkDir 'agent1.log') `
-    -AgentArgs @('run', '--pid', $pid1, '--kotor', '--host', '--port', $Port, '--name', $Name1, '--drop-file', $drop1,
-                 '--log', (Join-Path $WorkDir 'agent1.log'))
+    -AgentArgs (@('run', '--pid', $pid1, '--kotor', '--host', '--port', $Port, '--name', $Name1, '--drop-file', $drop1,
+                 '--log', (Join-Path $WorkDir 'agent1.log')) + $Agent1ExtraArgs)
 
 Start-Sleep -Seconds 4
 
 Start-AgentConsole -Title "coop agent 2 - $Name2 (join)" -LogPath (Join-Path $WorkDir 'agent2.log') `
-    -AgentArgs @('run', '--pid', $pid2, '--kotor', '--join', "127.0.0.1:$Port", '--name', $Name2, '--drop-file', $drop2,
-                 '--log', (Join-Path $WorkDir 'agent2.log'))
+    -AgentArgs (@('run', '--pid', $pid2, '--kotor', '--join', "127.0.0.1:$Port", '--name', $Name2, '--drop-file', $drop2,
+                 '--log', (Join-Path $WorkDir 'agent2.log')) + $Agent2ExtraArgs)
 
 Start-Sleep -Seconds 8
 
