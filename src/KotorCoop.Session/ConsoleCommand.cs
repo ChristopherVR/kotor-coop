@@ -345,6 +345,24 @@ public enum CoopCommandKind
     /// polygon (the swoop-track entrance) with no door involved.
     /// </summary>
     WalkTo,
+
+    /// <summary>
+    /// <c>loadgame &lt;slot&gt;</c> — LIVE-TEST PRIMITIVE (2026-08-23,
+    /// docs/research/session-save.md's dated entry). Fires a GENUINE mid-session
+    /// (pause-menu-equivalent) Load Game action, entirely in-process — no mouse clicks, no
+    /// screenshots. <see cref="CoopCommand.Amount"/> is the save slot (0-based,
+    /// most-recent-first, the same ordering <c>PluginMenuLoader.TryResolveSaveDirectory</c>
+    /// and <c>agent -Save N</c> already use). Built because the real pause-menu Load path was
+    /// found blocked by a genuine rig-tooling gap (shot.ps1's black-frame capture combined
+    /// with mouse-click injection not landing on this rig's repositioned windows) rather than
+    /// a code defect — this bypasses that whole class of problem by replaying the engine
+    /// function chain a real click ultimately calls, the same pattern
+    /// <c>skipline</c>/<c>walkto</c>/<c>usedoor</c> already established. Local only: this
+    /// never crosses the network by itself — <c>MaintainSessionSave</c>'s own digest/load-serial
+    /// watch is what notices the load happened and, if the gates are on, drives
+    /// <c>client_load_rejoin</c>/<c>host_load_readopt</c> exactly as it would for a real click.
+    /// </summary>
+    LoadGame,
 }
 
 /// <summary>
@@ -991,6 +1009,18 @@ public static class ConsoleCommand
                 }
 
                 return new CoopCommand(CoopCommandKind.SelectReply, Amount: replySlot);
+
+            // loadgame <slot>  - LIVE-TEST PRIMITIVE (2026-08-23), see CoopCommandKind.LoadGame.
+            case "loadgame":
+                if (rest.Length != 1 || !int.TryParse(rest[0], out int loadSlot) || loadSlot < 0)
+                {
+                    return new CoopCommand(
+                        CoopCommandKind.Invalid,
+                        Error: "loadgame needs one save slot (0-based, most-recent-first), "
+                            + "e.g. loadgame 0");
+                }
+
+                return new CoopCommand(CoopCommandKind.LoadGame, Amount: loadSlot);
 
             case "cheats":
                 return new CoopCommand(CoopCommandKind.Cheats);
@@ -1680,6 +1710,8 @@ public static class ConsoleCommand
         "                      in-process (no OS input); no-op if nothing is playing",
         "  selectreply <slot>  commit a reply slot on your OWNED conversation, in-process",
         "                      (no OS input); test-only navigation helper for skipline",
+        "  loadgame <slot>     fire a GENUINE mid-session Load Game action, in-process (no",
+        "                      clicks); slot is 0-based, most-recent-first",
         "retail console cheats, already co-op-safe (they touch only your game):",
         "  giveitem <resref> | givecredits <n> | addexp <n> | addlevel | heal",
         "  revealmap | infiniteuses | invulnerability | whereami | bright | turbo",

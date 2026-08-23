@@ -1026,3 +1026,238 @@ offsets — everything it reads was already named in `docs/research/ingame-gui-t
 §1.376 and `src/KotorCoop.Plugin/Odyssey.cs`'s `GetInGameGui()`/`AppManagerPtr`. Worth
 promoting to a real `tools/` script (e.g. `guistate.ps1`) for whoever attempts items 2/3 next,
 since it is the one piece of non-visual GUI-state feedback that reliably worked this pass.
+
+## Round (2026-08-23): `loadgame <slot>` — bypass the pause-menu click entirely, per the
+## previous round's own recommendation (b)
+
+Task: find the real engine function chain a click on the in-game pause menu's "Load Game"
+ultimately calls, and expose it as a direct console verb — the SAME "disassemble the click,
+call the function" pattern that already solved `usedoor`/`useplaceable`/`attack`/`applyeffect`/
+`skipline`/`walkto` for this exact class of rig-tooling gap (`docs/research/dialogue-skip-desync.md`
+is the fullest worked example). **No live access this pass** — this is static disassembly and
+build-level verification only, per the task's own constraint (another agent owns the two-instance
+rig). Everything below is a **STATIC RE** claim unless marked NEEDS-LIVE.
+
+### The disassembly trail
+
+Starting point: `CSWGuiSaveLoad::LoadGame 0x006CB0E0` (`tools/kotor1_0_3.db`'s own
+`CSWGuiSaveLoad.LoadGame` row, param_size 4 — one `int` argument that is really a pointer to a
+`CSWGuiSaveLoadEntry`). This is the SAME function `MenuLoadController`'s own header already
+names as the source of its replayed range (0x6CB256..0x6CB3E8) — but that header also says
+"the main-menu autosave branch," which implies there is at least one OTHER branch. There is,
+and it is exactly the one this task needed.
+
+`python tools/disasm.py 0x6CB0E0 0x740` (the function's full span, confirmed by
+`PromptForSaveName`'s own DB row starting immediately after it at 0x6CB820) shows the ENTRY,
+before any of the code `MenuLoadController` already replays, testing a flag on `this`
+(`ecx=ebx`, the `CSWGuiSaveLoad` panel itself, NOT the object `MenuLoadController` calls
+`panel`) at `[this+0x64]` bit 1 (mask 2):
+
+```
+0x006CB101  test byte ptr [ebx + 0x64], 2      ; bFromMainMenu bit
+0x006CB107  jne  0x6cb126                       ; SET (main menu) -> skip the block below
+0x006CB109  mov  eax, [0x7a39fc]                ; appManager
+0x006CB10E  mov  ecx, [eax + 4]                 ; client
+0x006CB111  call 0x5ed690                       ; GetInGameGui(client)
+0x006CB116  mov  eax, [eax + 0x98]              ; the panel's own message-box sub-object
+0x006CB11C  test byte ptr [eax + 0x64], 1       ; that object's own state bit 0
+0x006CB120  je   0x6cb808                        ; CLEAR -> abort, no load at all
+```
+
+Confirmed which bit of `[this+0x64]` this is by disassembling `CSWGuiSaveLoad::Constructor
+0x006CC680` (DB: param_size 12 — three real args past `this`): at `0x6CCACA`,
+`[ebp+0x10]` (the THIRD stack arg — `bFromMainMenu` in `MenuLoadController`'s own call-site
+comment, `SaveLoadCtor(panel, guiManager, 0, 1)`) is shifted left 1 and OR'd into `[esi+0x64]`.
+So `[this+0x64]` bit 1 is literally the constructor argument `MenuLoadController` already
+passes as `1` (main menu) for every load it fires — **this whole entry-point check, and
+everything gated behind it, is retail code `MenuLoadController` has never once exercised**,
+because it always builds the panel with `bFromMainMenu=1`.
+
+`gui+0x98` was identified by disassembling `CGuiInGame::Initialize 0x632860` (the function
+`docs/research/ingame-gui-transition.md` §2 already names as building every in-game panel):
+at `0x632B53`, `[ebx+0x98]` is lazily allocated (`push 0x984`) and constructed via
+`CSWGuiMessageBox::Constructor 0x626df0` (DB row) if still null — i.e. it is **always
+non-null once `CGuiInGame::Initialize` has run**, which mid-session it always has (the current
+session's own world-up already ran it). This is a real retail precondition with unconfirmed
+exact semantics (most likely "no message box is currently blocking input"), replicated
+defensively in the new verb rather than skipped — see `FireMidSessionPhase1`'s own remark.
+
+Past that gate, at `0x6CB126` the code that FirePhase1 already replays begins — but ONE MORE
+`[this+0x64]` bit-1 branch sits inside it, at `0x006CB306..0x006CB331`, INSIDE the very
+autosave branch `MenuLoadController` already reproduces call-for-call:
+
+```
+0x006CB306  mov  al, [ebx + 0x64]
+0x006CB30C  test al, 2
+0x006CB30E  jne  0x6cb329          ; SET (main menu) -> skip straight to CreateServer
+0x006CB310  mov  ecx, [0x7a39fc]   ; appManager
+0x006CB316  call 0x401280          ; CAppManager::DestroyServer(appManager)
+0x006CB31B  mov  edx, [0x7a39fc]
+0x006CB321  mov  ecx, [edx + 4]    ; client
+0x006CB324  call 0x5ed430          ; CClientExoApp::UnloadModule(client)
+0x006CB329  mov  ecx, [0x7a39fc]
+0x006CB331  call 0x401380          ; CAppManager::CreateServer(appManager, 0)  <- FirePhase1's own call
+```
+
+**This is the missing piece, and it is the whole answer to the task's item 3 (does this look
+identical to a real click, from `WorldLoadRule`'s point of view).** `CAppManager::CreateServer
+0x401380`'s OWN disassembly (`0x00401399..0x004013CC`) already tears an EXISTING server down
+(`StopServices 0x4AE900`, `Destructor 0x4AEC70`, `operator delete`, null the pointer) before
+constructing a fresh `CServerExoApp` when `appManager+8` is already nonzero — so `CreateServer`
+alone is technically sufficient to produce a real teardown-and-rebuild even without the extra
+`DestroyServer`/`UnloadModule` call pair. But retail calls them anyway, in this exact order,
+ONLY when `bFromMainMenu` is clear — i.e. **retail's own code treats "server already exists"
+as a real, first-class case with its own extra step**, not an incidental side effect of
+`CreateServer`'s robustness. Replicating BOTH calls, in the SAME order, is what makes the new
+verb's teardown genuinely match retail's OWN mid-session code path bit-for-bit, not merely
+"probably produces an equivalent result" — `CClientExoApp::UnloadModule` in particular is the
+CLIENT-side half `CreateServer` alone would never call (`CreateServer` only ever touches
+`appManager+8`, the SERVER pointer), and it is what makes `GetClientModule(client)` read 0
+afterward instead of a stale pointer `TryPresentWorld`'s own client-module gate could otherwise
+misread as "already ready."
+
+**Does this satisfy `WorldLoadRule.IsUnannouncedTeardown`'s own contract?** Yes, by
+construction: `CreateServer` genuinely destructs the old `CServerExoApp` and constructs a new
+one, so `Odyssey.TryGetWorldEpoch`'s own object-array-pointer half changes exactly the way an
+`UnloadModule`-driven teardown always does (the SAME fact `WorldLoadRule`'s own doc comment
+already cites). And nowhere in this whole call chain — not `DestroyServer`, not
+`UnloadModule`, not `CreateServer`, not any of the load-screen/connect calls
+`MenuLoadController` already reproduces — is `trans_pending` (`CSWSArea`'s scripted-transition
+flag) ever touched; it belongs to a completely different subsystem (`CSWSArea`'s own
+transition bookkeeping), consistent with `WorldLoadRule.IsUnannouncedTeardown`'s own doc
+comment already asserting a Load Game action "goes straight from `CSWGuiSaveLoad`'s LOAD
+branch into `ExecuteLoadModule` with no such precursor." **A `loadgame`-fired teardown and a
+real pause-menu click's teardown are the SAME retail code, not a lookalike** — this is the
+strongest form of "looks identical to `WorldLoadRule`" static analysis can establish without
+running the game.
+
+Also confirmed: `guiManager` (needed for `SaveLoadCtor`'s second argument, `[menu+0x18]` in
+the main-menu path) is available with no main-menu object at all —
+`docs/research/ingame-gui-transition.md` §1.2 already names `[clientInternal+0x274]` as the
+SAME `CSWGuiManager` (`gui_manager`, the object `CSWGuiManager::Update`'s own delete-sweep runs
+against every frame, and `NativeBrowserController` already reads the identical offset). No new
+RE needed for this piece — it was already sitting in this tree's own docs from an earlier,
+unrelated pass.
+
+### What shipped: `loadgame <slot>`
+
+`src/KotorCoop.Plugin/MenuLoadController.cs` gained `FireMidSessionPhase1()`, a near-duplicate
+of the existing `FirePhase1(nint menu)` with exactly the four differences the disassembly
+above found (see the method's own doc comment for the full list: `guiManager` sourced from
+`[clientInternal+0x274]`, the message-box precondition replicated, `DestroyServer`+
+`UnloadModule` inserted at the SAME point retail's own code places them, no main-menu object
+to mark for the delete sweep). `OnFrame`'s existing "a server already exists, the request is
+moot" gate now branches on a new block flag, `SharedBlock.OffsetMenuLoadInSession` (block
+**version 52**, free-tail region 0x3F24..0x3F28, no `TotalSize` growth — half-bumped the usual
+way, `_block->Version = 52` in `PluginHost.cs` and the signature byte in
+`KotorGameBridge.PluginSignature` 0x33 → 0x34, both pinned equal by the existing
+`TransitionMovieTests.TheBlockVersionMovedInBothHalves`/`ItemHarnessTests.TheBlockVersionIsTheSameNumberInBothHalves`):
+when the flag is clear, behaviour is BYTE-FOR-BYTE unchanged from before this pass (every
+existing caller of `PluginMenuLoader.TryRequestLoad` — `agent adopt`, the phase-2 rejoin path —
+passes the new `inSession` parameter's default, `false`); when set, `FireMidSessionPhase1` runs
+instead of the ack-and-moot.
+
+`PluginMenuLoader.TryRequestLoad` (`src/KotorCoop.Memory/`) gained the `inSession` parameter,
+written before the serial (the same ordering rule `adoptedWorld`'s own comment already states —
+everything the plugin reads must already be there when it acts on the bumped serial), and
+ALWAYS written (0 or 1), never left alone, so a stale flag from an earlier mid-session request
+can never leak into a later plain one. `KotorGameBridge` gained
+`TryRequestMidSessionLoad(int slotIndex, out string diagnostic)`: resolves the game's own
+directory from the attached process (the same `Path.GetDirectoryName(process.MainModule?.FileName)`
+pattern used elsewhere in this file), stages the chosen slot over the autosave directory with
+the EXISTING `PluginMenuLoader.TryStageSaveAsAutosave` (zero new file-staging code — this is
+the identical mechanism `agent -Save N`/`SaveLoader` already use), then requests the load with
+`inSession: true`. Polling reuses the EXISTING `TryGetAdoptedWorldLoadStatus` (both requests
+write through the same status fields).
+
+Console wiring, mirroring `skipline`/`walkto`'s own shape exactly: `loadgame <slot>` →
+`ConsoleCommand.Parse` → `CoopCommandKind.LoadGame` (`Amount` = the 0-based, most-recent-first
+slot) → `CoopCommandDispatcher.TriggerMidSessionLoad` (stages + requests, then polls up to 90s
+in the background, the same deadline `TriggerRejoin` already uses and for the same reason — a
+mid-session load goes through the identical connect-grace-then-load-then-present sequence) →
+`KotorGameBridge.TryRequestMidSessionLoad` → `MenuLoadController.FireMidSessionPhase1`. Added
+to `ConsoleCommand.CheatsText`'s listing alongside `skipline`/`selectreply`.
+
+**Deliberately NOT a `CheatKind`/`CheatKinds` entry**, despite the task's own suggestion to
+check that enum for the next free value (it would have been 25). Every existing `CheatKind` is
+a same-frame poke against an already-resolved object — `CheatController.OnFrame` dispatches and
+answers within the one frame the serial changed. A mid-session load cannot be: it needs
+AGENT-SIDE file staging (which slot, which directory, copy it over the autosave slot) before
+the engine call even fires, and then a multi-frame, multi-second state machine after it
+(connect grace, `LoadPCAutoSave`, wait for the world, wait for the client's own module,
+`TryPresentWorld`'s co-op sync hold) — structurally the SAME shape `agent adopt`/the phase-2
+rejoin path already have, and neither of those is a `CheatKind` either. Reusing
+`PluginMenuLoader`'s existing multi-frame, file-touching channel (built for exactly this shape
+of problem, already live-verified end-to-end for the main-menu case — see item 4's "zero GUI
+interaction" result in the round above) is the honest fit; forcing this into `CheatKind`'s
+single-frame model would have meant either blocking the frame on file I/O (never done anywhere
+else in this codebase) or building a SECOND multi-frame state machine parallel to
+`MenuLoadController`'s existing one, duplicating machinery that already exists for the reason
+this document's own "Recommended next step" already named.
+
+### What this pass could NOT verify — everything below needs the live rig
+
+1. **Whether `FireMidSessionPhase1` actually runs without crashing or hanging.** Every call it
+   makes is one `MenuLoadController`'s existing `FirePhase1` already makes successfully
+   live (main-menu case) EXCEPT the two new ones, `DestroyServer`/`UnloadModule` — themselves
+   individually unremarkable (both are two-line teardown functions with the same shape as
+   several other calls this file already makes), but never fired together, in this exact
+   order, from this exact call site, against a real live server.
+2. **The message-box precondition's exact semantics.** The read/branch SHAPE is confirmed by
+   disassembly; whether it is ever actually clear during ordinary play (and therefore whether
+   `loadgame` will spuriously refuse with failure 9 sometimes) is not measured.
+3. **Whether `WorldLoadRule.IsUnannouncedTeardown` actually fires** for a `loadgame`-triggered
+   teardown the way the reasoning above predicts. The STATIC case is as strong as this
+   project's tooling can make it (real retail code, not a lookalike; `trans_pending` provably
+   untouched by grep across the whole call chain) — but `SharedBlock.OffsetWorldLoadSerial`
+   bumping, and `SaveOrLoadClassifier` then correctly classifying it as `Load`, has not been
+   observed.
+4. **End-to-end timing** — whether `TriggerMidSessionLoad`'s 90s deadline is anywhere near the
+   right order of magnitude for a MID-SESSION load (as opposed to the main-menu case, whose
+   live timings are already measured elsewhere in this document).
+5. **Whether the character that lands is the CHOSEN save's character**, not a blank/default
+   one — the exact same class of bug `MenuLoadController`'s own `character-login-chain.md`-referenced
+   history already fixed once for the main-menu case (`AdoptWorldLogin` left CLEAR here, since
+   `loadgame` deliberately does not set it — the intent is "load MY OWN chosen save", the
+   `LoadPrimaryPlayer` flavour, same as a normal in-game Load).
+6. **Whether an already-open pause menu interferes.** `loadgame` bypasses the GUI entirely and
+   was designed assuming the pause menu is CLOSED when it fires (a console command needs no
+   menu open at all) — firing it WHILE the vanilla pause menu is open was not analysed and is
+   not recommended for the first live attempt.
+
+### Live-test steps for a follow-up round
+
+Two real GOG installs, rebuilt plugin/agent on both (`build.ps1 -Install`), block v52/protocol
+unchanged (this pass added no wire packet — the whole mechanism is local, one install at a
+time). Read `docs/live-verification.md`'s standing rules before starting.
+
+0. **Smoke-test in isolation first, single install, no co-op session.** Launch one install,
+   load any save normally (menu click or `agent -Save N`) so a server exists, then
+   `blockpoke.ps1 -ProcId <pid> console 'loadgame 1'` (a DIFFERENT slot than the one currently
+   loaded, so a real module/character change is unambiguous). Watch the plugin log for the new
+   lines this pass added (`menu: tearing down the existing server for a mid-session load`,
+   `menu: creating the server and loopback session (mid-session)`, then the SAME phase-2/3
+   lines `FirePhase1` already produces) and confirm the game actually lands in the SECOND
+   save's module with the SECOND save's character (hit points/experience/inventory — judge by
+   stats, not position, same rule `world-adoption.md` §7 already established). This alone
+   answers NEEDS-LIVE items 1, 2 and 5 without any co-op session in play at all.
+1. **Only once step 0 is clean**, bring up a live co-op session (`tools/demo.ps1`) with
+   `client_load_rejoin=1`/`host_load_readopt=1` on both installs (the SAME gates
+   `docs/research/session-save.md`'s own "Round (2026-08-23)" entry above already uses for
+   items 2/3). On the CLIENT, fire `loadgame <slot>` for a DIFFERENT save than the session's
+   current one. Expect, within a few seconds: `SharedBlock.OffsetWorldLoadSerial` bumps (log or
+   `tools/blockpoke.ps1 ... console 'lagstats'`/a raw block read), the classifier reports a
+   `Load` verdict (NOT a `Save`), "you loaded a save - rejoining the host's world" on the
+   client's own screen, and the SAME rejoin sequence item 2 of the round above already
+   specified. This is NEEDS-LIVE item 3, the single most load-bearing question this pass could
+   not answer.
+2. **Repeat on the HOST** with `loadgame`, `host_load_readopt=1`: expect "host loaded a save -
+   everyone re-joins" on the host and every connected client independently re-adopting, per
+   item 3 of the round above.
+3. **The regression check `loadgame` makes newly possible**: with NEITHER gate on, fire
+   `loadgame` on either side and confirm ONLY the log line changes (world loads, no rejoin
+   activity) — the same "gate off means no visible effect" contract every other gated feature
+   in this codebase already holds to.
+4. **Timing**: note how long `TriggerMidSessionLoad`'s poll actually takes to settle, and
+   whether 90s is comfortably enough — adjust if a live pass finds it isn't (NEEDS-LIVE item
+   4).

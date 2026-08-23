@@ -1107,6 +1107,9 @@ internal sealed unsafe class SharedBlockView(byte* baseAddress)
     /// <summary>Pointer to the null-terminated module name for the menu load (16 bytes).</summary>
     public byte* MenuLoadModule => baseAddress + SharedBlock.OffsetMenuLoadModule;
 
+    /// <summary>Agent -&gt; plugin. See <see cref="SharedBlock.OffsetMenuLoadInSession"/>.</summary>
+    public bool MenuLoadInSession => *U32(SharedBlock.OffsetMenuLoadInSession) != 0;
+
     /// <summary>The details record for browser row <paramref name="index"/> — the world the
     /// host stands in and its party's portrait resrefs. Parallel to
     /// <see cref="BrowserEntry"/>, indexed identically.</summary>

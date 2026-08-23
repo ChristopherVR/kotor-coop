@@ -512,7 +512,12 @@ internal static unsafe class PluginHost
         // 51 = the local/remote dialogue-forced bit at 0x3F1C..0x3F24 — whether this
         //      conversation is one the engine itself forces regardless of range, distinct
         //      from a player's own click — see docs/research/dialogue-sync.md.
-        _block->Version = 51;
+        // 52 = the mid-session-load-request flag at 0x3F24 (the `loadgame` verb) — tells
+        //      MenuLoadController to replay CSWGuiSaveLoad::LoadGame's bFromMainMenu==0
+        //      branch (DestroyServer + UnloadModule before CreateServer, guiManager from
+        //      [clientInternal+0x274]) instead of acking-and-mooting when a server already
+        //      exists — see docs/research/session-save.md's dated entry.
+        _block->Version = 52;
 
         // A guard dword after the version. Magic plus version alone was not selective
         // enough: a scan once matched something else at a lower address and the agent

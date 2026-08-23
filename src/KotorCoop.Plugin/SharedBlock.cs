@@ -2074,6 +2074,32 @@ internal struct SharedBlock
     /// conversation this bit describes (the session's single arbitrated token).</summary>
     public const int OffsetRemoteDialogueForced = 0x3F20;
 
+    // ---- mid-session load request (version 52, region 0x3F24..0x3F28, no TotalSize growth) --
+    //
+    // OffsetMenuLoadSerial's own request only ever worked from the MAIN MENU (no server
+    // exists yet): CSWGuiSaveLoad::LoadGame's bFromMainMenu==0 branch additionally calls
+    // CAppManager::DestroyServer + CClientExoApp::UnloadModule before CreateServer, which the
+    // main-menu-only replay never needed and never did. This flag, set alongside the SAME
+    // OffsetMenuLoadSerial request, tells MenuLoadController to run that extra teardown first
+    // and source guiManager from [clientInternal+0x274] instead of the (nonexistent,
+    // mid-session) main-menu object — see docs/research/session-save.md's dated entry on the
+    // `loadgame` verb for the full disassembly trail. Rides in the free tail after the
+    // dialogue-forced-conversation region (0x3F20 + 4 = 0x3F24, TotalSize is 0x4000, leaving
+    // 0xDC bytes free before this; this region uses 4 of them). No TotalSize growth, no
+    // relayout of anything else.
+
+    /// <summary>Agent -&gt; plugin. Nonzero when the paired <see cref="OffsetMenuLoadSerial"/>
+    /// request should be treated as a genuine MID-SESSION (pause-menu-equivalent) load rather
+    /// than the ordinary main-menu-only replay: <c>MenuLoadController</c> tears the existing
+    /// server down first (<c>CAppManager::DestroyServer</c> + <c>CClientExoApp::UnloadModule</c>
+    /// — exactly what retail's own <c>CSWGuiSaveLoad::LoadGame</c> does before
+    /// <c>CreateServer</c> when NOT called from the main menu) and sources <c>guiManager</c>
+    /// from <c>[clientInternal+0x274]</c> rather than a main-menu object that does not exist
+    /// mid-session. Written alongside <see cref="OffsetMenuLoadSerial"/>, BEFORE it — the same
+    /// "everything the plugin reads must already be there" rule
+    /// <see cref="OffsetAdoptWorldLogin"/>'s own comment states.</summary>
+    public const int OffsetMenuLoadInSession = 0x3F24;
+
     // ---- generic trigger relay (0x3B88..0x3BD8, no TotalSize growth) --------------
     //
     // A GENERIC trigger's OnEnter (a CSWSTrigger whose script starts a cutscene, dialogue or
