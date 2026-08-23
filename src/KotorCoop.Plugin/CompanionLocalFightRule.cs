@@ -73,4 +73,31 @@ internal static class CompanionLocalFightRule
 
         return releasedBefore ? CompanionLocalFightAction.ReclaimAndLog : CompanionLocalFightAction.Mirror;
     }
+
+    /// <summary>
+    /// Whether a released, still-fighting companion's attack should be driven directly this
+    /// pass, via the engine's own <c>ExecuteCommandAttack</c> dispatch (the same one the
+    /// <c>attack</c> console command and <c>TestDriveController</c> already use — live-proven,
+    /// round 11, to queue a real attack and land real damage) — see
+    /// <c>PartyPresenceController.DriveOne</c>'s doc comment for why this exists: solo mode
+    /// (party table +0x190) is confirmed live (round 82) to stop a released companion's own AI
+    /// SCRIPT from ever queuing so much as a move, but a comprehensive static scan of every
+    /// read of that field in swkotor.exe (round 83) found it consumed in exactly six places —
+    /// all GUI/menu code or the script-facing <c>GetSoloMode()</c> nwscript command — none
+    /// anywhere near <c>RunActions</c>, <c>AddAttackAction</c>, or the
+    /// <c>ExecuteCommandAttack</c> path this drives through. A directly-queued attack action is
+    /// never gated on it at all; the block is the party AI script's own choice not to act on
+    /// what <c>GetSoloMode()</c> tells it, not an engine enforcement this needs to fight.
+    ///
+    /// Two conditions, both necessary: the companion's own action-queue head must currently be
+    /// empty (<paramref name="headActionType"/> == -1, <c>Odyssey.GetHeadActionType</c>'s own
+    /// "nothing queued" sentinel) — anything else means a round the engine itself is still
+    /// processing, and re-issuing on top of it would only contest it, not help it — and at
+    /// least <paramref name="minIntervalSeconds"/> must have elapsed since the last attempt, a
+    /// safety throttle against hammering <c>ExecuteCommandAttack</c> every single frame if the
+    /// engine ever silently drops the queue attempt for a reason never observed live.
+    /// </summary>
+    public static bool ShouldDriveAttack(
+        int headActionType, double now, double lastAttemptAt, double minIntervalSeconds)
+        => headActionType == -1 && now - lastAttemptAt >= minIntervalSeconds;
 }

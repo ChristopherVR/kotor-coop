@@ -190,4 +190,45 @@ public class CompanionLocalFightRuleTests
         Assert.Equal(19, mirrored);
         Assert.Equal(19, silent); // twenty clustered frames, minus the one that is the release edge
     }
+
+    // ---- ShouldDriveAttack (round 83: drive the released companion's attack directly rather
+    // than wait on a party AI script solo mode has silenced) ----
+
+    private const double Interval = 1.5;
+
+    [Fact]
+    public void EmptyQueueAndIntervalElapsedDrivesTheAttack()
+    {
+        Assert.True(CompanionLocalFightRule.ShouldDriveAttack(
+            headActionType: -1, now: 10.0, lastAttemptAt: 8.0, Interval));
+    }
+
+    [Fact]
+    public void EmptyQueueButIntervalNotYetElapsedWaits()
+    {
+        Assert.False(CompanionLocalFightRule.ShouldDriveAttack(
+            headActionType: -1, now: 8.5, lastAttemptAt: 8.0, Interval));
+    }
+
+    [Fact]
+    public void ExactlyAtTheIntervalDrivesTheAttack()
+    {
+        Assert.True(CompanionLocalFightRule.ShouldDriveAttack(
+            headActionType: -1, now: 9.5, lastAttemptAt: 8.0, Interval));
+    }
+
+    [Fact]
+    public void AnOccupiedQueueNeverDrivesRegardlessOfTiming()
+    {
+        // 0x3F (63) is ActionAttack's own action id — a round the engine is already processing.
+        Assert.False(CompanionLocalFightRule.ShouldDriveAttack(
+            headActionType: 0x3F, now: 100.0, lastAttemptAt: 0.0, Interval));
+    }
+
+    [Fact]
+    public void TheFirstAttemptAtSessionStartIsNotHeldBackByAZeroTimestamp()
+    {
+        Assert.True(CompanionLocalFightRule.ShouldDriveAttack(
+            headActionType: -1, now: Interval, lastAttemptAt: 0.0, Interval));
+    }
 }

@@ -25,6 +25,14 @@ namespace KotorCoop.Plugin;
 /// already fighting locally — be handed to its own engine AI instead of mirrored, via
 /// <see cref="CompanionLocalFightRule"/>. See docs/research/party-reconciliation.md, dated entry
 /// 2026-08-21, for why the gate is this tight.
+///
+/// ROUND 83: released no longer means "handed to a party AI script that solo mode has silenced
+/// and hoped it acts anyway" — round 82 live-confirmed it never does. Instead the released
+/// companion's attack is driven directly through <see cref="Odyssey.AttackTarget"/> (see
+/// <see cref="DriveAttackIfDue"/>), the same engine call the <c>attack</c> cheat already uses,
+/// which a comprehensive static scan found is never gated on solo mode at all — so this makes
+/// no write to the party-wide flag and carries none of that write's risk to a second, still
+/// mirrored companion. NEEDS-LIVE.
 /// </summary>
 internal sealed unsafe class PartyPresenceController(SharedBlockView block)
 {
@@ -100,6 +108,48 @@ internal sealed unsafe class PartyPresenceController(SharedBlockView block)
     private readonly double[] _lastReleaseDiagAt = new double[SharedBlock.PartyPresenceCapacity];
 
     private int _releaseDiagLogged;
+
+    /// <summary>
+    /// ROUND 83 (static pass, no rig access): a comprehensive scan of every instruction in
+    /// swkotor.exe's .text that reads <see cref="PartyTableSoloMode"/> off the party table
+    /// pointer (every direct call to <c>CServerExoApp::GetPartyTable</c>, 226 sites, followed
+    /// out to a ret or 250 instructions either way) found exactly six read sites: two GUI
+    /// button-state updates (<c>CSWGuiMainInterface::Update</c>,
+    /// <c>CSWGuiInGameSoloModeQuery::SetQueryText</c>), one client-side follow-toggle read
+    /// (<c>CClientExoAppInternal::TogglePartyFollow</c>), one stealth-menu read
+    /// (<c>CSWCCreature::PartyMenuStealth</c>), one temp-death update
+    /// (<c>CServerExoAppInternal::TempDeathUpdate</c>), and the script-facing
+    /// <c>GetSoloMode()</c> nwscript command itself (<c>ExecuteCommandGetSoloMode</c>). NONE of
+    /// them sit anywhere on the path from <c>ExecuteCommandAttack</c> through
+    /// <c>CSWSCreature::AddAttackActions</c>/<c>AddAttackAction</c> to <c>RunActions</c> — the
+    /// exact chain <see cref="Odyssey.AttackTarget"/> already drives, and RunActions' own action
+    /// dispatch never reads party-table state at all (party-reconciliation.md, 2026-07-31: "Trap
+    /// 5" — RunActions never even reads commandable). Read together with round 82's live result
+    /// (a released companion's action-queue head never leaves empty while solo mode holds), the
+    /// conclusion this project's own earlier writing never separated is: solo mode's "companions
+    /// stand still" behaviour is the party AI SCRIPT choosing not to act on what
+    /// <c>GetSoloMode()</c> tells it — an engine-level kill switch nothing here can see, not an
+    /// engine-level GATE on the action queue that a directly-issued action would have to fight.
+    /// Directly queuing an attack for the released companion, exactly the way <c>attack</c>/
+    /// <c>TestDriveController</c> already do for any other creature, therefore never touches
+    /// solo mode at all — no write, no read, no risk to the OTHER, still-mirrored companion's
+    /// own solo-suppressed AI. See docs/research/companion-combat-credit-plan.md's dated
+    /// 2026-08-23 entry for the full scan methodology and every candidate ruled out.
+    ///
+    /// Two conditions gate re-issuing, both in <see cref="CompanionLocalFightRule.ShouldDriveAttack"/>:
+    /// the queue must currently be empty (nothing to contest) and at least
+    /// <see cref="AttackDriveIntervalSeconds"/> must have passed since the last attempt (a
+    /// throttle, not a cadence the engine's own combat-round timing requires — untested live).
+    /// NEEDS-LIVE: this whole mechanism is a disassembly-backed hypothesis, never fired against
+    /// a real fight. <see cref="_companionLocalCombatEnabled"/> keeps it off by default.
+    /// </summary>
+    private const double AttackDriveIntervalSeconds = 1.5;
+
+    private const int AttackDriveMaxLines = 60;
+
+    private readonly double[] _lastAttackDriveAt = new double[SharedBlock.PartyPresenceCapacity];
+
+    private int _attackDriveLogged;
 
     /// <summary>Per slot: is the body currently held Neutral. Tri-state via
     /// <see cref="_factionKnown"/> so the first pass always writes.</summary>
@@ -286,11 +336,13 @@ internal sealed unsafe class PartyPresenceController(SharedBlockView block)
         // that field's own doc comment.
         bool localFightActive = false;
         Vec3 localEnemyPosition = default;
+        uint localEnemyObjectId = 0;
         uint locallyFightingOwnerId = block.LocalCombatExcludedId;
         if (_companionLocalCombatEnabled && locallyFightingOwnerId != 0)
         {
             uint mappedEnemyId = MaterialisedEnemies.ToLocal(locallyFightingOwnerId);
-            nint enemyCreature = Odyssey.ResolveServerObject(mappedEnemyId != 0 ? mappedEnemyId : locallyFightingOwnerId);
+            localEnemyObjectId = mappedEnemyId != 0 ? mappedEnemyId : locallyFightingOwnerId;
+            nint enemyCreature = Odyssey.ResolveServerObject(localEnemyObjectId);
             if (enemyCreature != 0)
             {
                 localEnemyPosition = Odyssey.GetPosition(enemyCreature);
@@ -300,7 +352,7 @@ internal sealed unsafe class PartyPresenceController(SharedBlockView block)
 
         for (int i = 0; i < count; i++)
         {
-            if (DriveOne(i, block.GetPartyPresence(i), now, player, localFightActive, localEnemyPosition))
+            if (DriveOne(i, block.GetPartyPresence(i), now, player, localFightActive, localEnemyPosition, localEnemyObjectId))
             {
                 driven++;
             }
@@ -315,7 +367,7 @@ internal sealed unsafe class PartyPresenceController(SharedBlockView block)
 
     private bool DriveOne(
         int slot, PartyPresenceView member, double now, nint player,
-        bool localFightActive, Vec3 localEnemyPosition)
+        bool localFightActive, Vec3 localEnemyPosition, uint localEnemyObjectId)
     {
         if (member.RosterSlotPlusOne is 0 or > PartyNpcSlots)
         {
@@ -372,9 +424,17 @@ internal sealed unsafe class PartyPresenceController(SharedBlockView block)
 
             case CompanionLocalFightAction.StayReleased:
                 // Hands off entirely, the same handoff EnemyPresenceController's own excluded
-                // enemy gets from DriveOne: no claim, no position/health write, nothing. The
-                // companion's own engine AI is what fights from here.
+                // enemy gets from DriveOne: no claim, no position/health write, nothing except
+                // the direct attack drive below. The companion's own engine AI still owns
+                // movement/facing/animation from here — this only ever queues ONE attack action
+                // through the same engine call the `attack` cheat already uses, and only when
+                // that companion's own queue is empty. See AttackDriveIntervalSeconds' doc.
                 LogReleaseDiagIfDue(objectId, creature, now, slot);
+                if (localFightActive && localEnemyObjectId != 0)
+                {
+                    DriveAttackIfDue(objectId, creature, localEnemyObjectId, now, slot);
+                }
+
                 return false;
 
             case CompanionLocalFightAction.ReclaimAndLog:
@@ -497,6 +557,43 @@ internal sealed unsafe class PartyPresenceController(SharedBlockView block)
         _releaseDiagLogged++;
         PluginHost.Log(
             $"party drive: companion 0x{objectId:X} still released — {ReleaseDiagSnapshot(creature, now, slot)}");
+    }
+
+    /// <summary>
+    /// ROUND 83: drives the released companion's attack directly through
+    /// <see cref="Odyssey.AttackTarget"/> — the engine's own <c>ExecuteCommandAttack</c>, the
+    /// same call the <c>attack</c> console command and <c>TestDriveController</c> already use —
+    /// instead of waiting for the party AI script to queue one, which round 82's live evidence
+    /// says never happens while solo mode holds. See <see cref="AttackDriveIntervalSeconds"/>'s
+    /// doc comment for the disassembly this rests on: nothing on this call's path reads solo
+    /// mode, so this makes no engine write of its own and carries none of the party-wide risk a
+    /// scoped solo-mode release would.
+    ///
+    /// <see cref="CompanionLocalFightRule.ShouldDriveAttack"/> gates the call: only when the
+    /// companion's own action-queue head is empty (nothing to contest) and the per-slot
+    /// throttle has elapsed. NEEDS-LIVE — never fired against a real fight; the log line below
+    /// is deliberately loud (not folded into the quieter release-diag trickle) so a live pass
+    /// can tell at a glance whether the call is even being attempted, separately from whether it
+    /// lands. Capped in total for the same reason <see cref="LogReleaseDiagIfDue"/> is.
+    /// </summary>
+    private void DriveAttackIfDue(uint objectId, nint creature, uint enemyObjectId, double now, int slot)
+    {
+        int headType = Odyssey.GetHeadActionType(creature);
+        if (!CompanionLocalFightRule.ShouldDriveAttack(headType, now, _lastAttackDriveAt[slot], AttackDriveIntervalSeconds))
+        {
+            return;
+        }
+
+        _lastAttackDriveAt[slot] = now;
+
+        bool ok = Odyssey.AttackTarget(objectId, enemyObjectId, out int failure);
+        if (_attackDriveLogged < AttackDriveMaxLines)
+        {
+            _attackDriveLogged++;
+            PluginHost.Log(ok
+                ? $"party drive: drove companion 0x{objectId:X}'s attack on 0x{enemyObjectId:X} directly (head was 0x{headType:X})"
+                : $"party drive: could not drive companion 0x{objectId:X}'s attack on 0x{enemyObjectId:X} (failure {failure}, head was 0x{headType:X})");
+        }
     }
 
     /// <summary>CSWPartyTable+0x190, read fresh every call — the same pointer chain
