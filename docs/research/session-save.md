@@ -847,3 +847,182 @@ the load-menu steps that come after it):
    was never run live before the fix existed, so it is untested against the real engine, only
    against the reasoning above (`TravelController.Execute`'s own doc comment, confirmed by
    reading the code, not by observing a live warp).
+
+## Round (2026-08-23): item 0 confirmed clean both directions; items 2/3's real-menu path
+## blocked by a rig-tooling gap, not a code defect; both gates stay OFF by default
+
+Ran the "Updated live-test script" above against `tools/demo.ps1`, both real GOG installs,
+`client_load_rejoin=1`/`host_load_readopt=1` on both sides. **No engine RE was done this
+pass** — this is a live-test pass only, following the doc's own script. One real gap in the
+project's own tooling was found and is recorded below rather than worked around with a guess.
+
+### Item 0 — CONFIRMED, both directions, no false positive
+
+Fresh `demo.ps1` cold start (save 1, both players spawn together in `END_M01AA`). For each
+direction, one player was teleported to `end_door10` (`tp 47.4172 120.126 0`, the same door
+`transition-smoothness.md`/`cinematics.md` already use) while the other stayed at the spawn
+point (20.0, 22.2), well outside the door's 40 m use-range, then the near player ran
+`usedoor end_door10` — a REAL engine door transition (`trans_pending` goes true), not the
+`warp` cheat.
+
+* **Host leads (Lanik at the door, Malak at spawn).** Host's `usedoor` succeeded
+  (`walking through door 0x4A (0.0m) -> 'end_m01ab'`); client's `TravelController` peer-follow
+  fired (`following Malak to 'end_m01ab' IMMEDIATELY...` — wait, this direction printed
+  `following Malak`, i.e. the HOST's own agent log names the peer it followed FROM; both ended
+  up in `end_m01ab` within ~2 s of each other). Full agent-log grep for `loaded a save`,
+  `rejoining`, `re-joins` across both sides' logs for this run window: zero matches. Plugin-log
+  grep for `unannounced` across both installs for this run window: zero matches (the two hits
+  that DO exist in the host's plugin log predate this run by over an hour, left over from the
+  round that found and fixed the `_travelAnnounced` bug in the first place).
+* **Client leads (Malak at the door, Lanik at spawn) — a full rig restart between directions
+  so the module pair was fresh (`end_m01ab` has no transition door back, per `cinematics.md`,
+  so testing the reverse direction needs a clean START_M01AA-both-players reset, not a
+  same-session flip).** Client's `usedoor` succeeded identically; host's peer-follow warp
+  fired (`following Malak to 'end_m01ab'...`, `host announced transition to 'end_m01ab'...`).
+  Same zero-match grep result for `loaded a save`/`rejoining`/`re-joins`/`unannounced` in the
+  post-transition window on both sides.
+
+The one thing seen in both directions that is expected and harmless: the phase-1
+"session-saved character" capture line fires on the FOLLOWING peer ~1 s after the transition
+lands (KOTOR's own engine autosaves through every module transition, which is exactly the
+digest edge phase 1's own capture watches — this is documented, intended behaviour, not the
+bug under test). **Verdict: the `_travelAnnounced` fix holds. Ordinary peer-follow travel,
+either direction, produces no false "loaded a save" detection.** This is the single most
+load-bearing result of this pass — it means turning either gate on does not risk misfiring on
+routine co-op play, which was the prerequisite for trusting anything else below.
+
+### Items 2/3 — the REAL in-game pause-menu Load path: blocked by a genuine rig-tooling gap
+
+**Attempted, not achieved.** The blocker is `tools/shot.ps1` being confirmed broken (solid
+black — re-verified this pass with a pixel-statistics check, not just eyeballing: a captured
+frame's average/min/max luminance were all exactly 0 across an 800x600 grid sample) combined
+with a SECOND, newly-confirmed problem: **mouse-click input injection does not land on a
+repositioned game window on this rig**, even though the window is genuinely foreground.
+
+What was tried, in order:
+1. Confirmed `Escape` (`tools/sendkey.ps1`) opens the real in-game pause menu — verified two
+   independent ways: `[gui+0x7C]` (`in_game_pause`, the exact pointer `docs/research/
+   ingame-gui-transition.md` §1.376 already documents, read externally via the same
+   `AppManagerPtr = 0x007A39FC` chain `Odyssey.GetInGameGui()` already walks — a read-only
+   probe script, no new RE, no plugin changes) went non-null, AND a held `w` key produced NO
+   position change (`console 'where'` before/after identical) where an unpaused world moves
+   the character every time.
+2. Confirmed KEYBOARD `SendInput` injection genuinely lands on this exact window at this exact
+   moment: with the pause menu closed, holding `w` for 2 s moved the character
+   (49.9,120.3 → 48.3,122.4) — ruling out "no synthetic input reaches this process at all" as
+   the explanation for what follows.
+3. With the pause menu open, probed 36 candidate click positions (`tools/click.ps1`, same
+   `SendInput` mechanism, `GetForegroundWindow()` confirmed matching the target the whole time)
+   spanning almost the full 800x600 client area, including an activation-cycle
+   (minimize/restore, the same DirectInput-reacquire trick `demo.ps1`'s own auto-load retry
+   already uses) partway through. **Zero of the 36 clicks changed `[gui+0x7C]`/`[gui+0x40]` at
+   all.** This reproduces, on live hardware, exactly what `src/KotorCoop.Agent/SaveLoader.cs`'s
+   own doc comment already warns about ("menu input injection is intermittently dead in ways
+   that resisted diagnosis... every mouse message is dropped outright unless the game window is
+   the active one") and what `demo.ps1`'s own header notes ("the game tracks its own cursor
+   from relative DirectInput deltas rather than the OS pointer, so clicks stop landing once a
+   window has been moved") — both windows in this rig ARE repositioned by `demo.ps1` for the
+   side-by-side layout, which is exactly the condition those two notes already flag as
+   unreliable. This is a **pre-existing, independently-documented tooling gap**, not something
+   this pass discovered fresh.
+4. Attempted blind KEYBOARD-only navigation as a fallback (no coordinates needed): `Enter`
+   after `Escape` (assuming default focus on the first button), then repeated `Escape`/
+   `Backspace` to back out. This left the CLIENT instance stuck — walk-blocked, unresponsive to
+   further `Escape`, for the remainder of the attempt — most likely because an un-observed
+   `Enter` landed on the wrong button (a `Quit`-style confirmation is the leading suspect,
+   though unconfirmed) and the resulting sub-panel does not accept `Escape` to cancel. Recovered
+   by a full rig restart (`demo.ps1 -Stop` then a fresh `demo.ps1`) — the host session and the
+   test save were unaffected; nothing was lost. **This is a real finding for whoever picks this
+   up next: do not blind-navigate the vanilla pause menu by keyboard without a working
+   screenshot loop — a wrong guess can wedge the instance in a state `Escape` does not recover
+   from.**
+
+**Recommended next step for whoever picks this up:** either (a) fix `shot.ps1`'s capture path
+(the black-frame symptom is consistent with GDI `BitBlt`/`CopyFromScreen` not seeing this
+DirectX window's contents — a `PrintWindow` with `PW_RENDERFULLCONTENT` or a Windows Graphics
+Capture-based capture would likely succeed where `CopyFromScreen` does not, but this pass did
+not attempt it, per the task's explicit instruction not to chase `shot.ps1`), or (b) do the
+same kind of read-only memory-chain work this pass did for `[gui+0x7C]` one level deeper —
+find the vanilla pause-menu panel's own button/child-control list and its `CSWGuiExtent`
+screen-rect fields (the `CSWGuiExtent`/`CSWGuiControl` concept is already named, for a
+DIFFERENT panel, in `docs/research/native-browser-panel.md`) — which would make the button
+positions computable rather than guessed, and would not need clicking at all if the same
+class also exposes a programmatic "activate" call the way `MenuLoadController` already
+replays the LOAD branch. Neither was attempted this pass (both are new RE, out of scope for a
+live-test-only pass).
+
+**Consequence for the decision rule:** items 2 and 3's own core question — does the detection
+reliably fire from a genuine pause-menu Load action, and does re-adoption/rejoin then work
+end-to-end from that trigger — remains **NEEDS-LIVE**, unchanged from the Phase 2 audit above.
+Item 0's clean result is necessary but not sufficient: it proves the fix does not misfire on
+ordinary play, not that the feature fires correctly when it should.
+
+### Item 4 — the staged-save re-check: strong supporting evidence, not a literal before/after
+### poll, still not fully closed
+
+`docs/research/mod-compatibility.md`'s own NEEDS-LIVE item 4 ("start the agent BEFORE
+adopting, adopt, and confirm the reported identity becomes the host's within a few seconds
+rather than staying the old one") could not be run exactly as scripted there either — that
+needs a live polling agent attached BEFORE the adopt, which this pass's tooling could not
+cleanly interleave with a one-shot `agent adopt` CLI run in the time available. Two pieces of
+real evidence stand in for it:
+
+1. **`agent adopt` end-to-end, live, zero GUI interaction.** `agent launch` (main menu, no
+   save loaded) → `agent serve-world --game-path <install 2> --load-save 1` (served
+   `'000002 - Game1'`, identity `0x155107BD`) → `agent adopt --pid <install 1> --join
+   127.0.0.1:27140 --load-save 1`. Output, verbatim: `world adoption: adopted 'END_M01AA'
+   (654,006 bytes, identity 0x155107BD), carrying the character from '000002 - Game1' (own
+   save)` → `load request 1 sent to the plugin...` → `re-wrote the carried character after the
+   loader cleared it...` → `in world: 'END_M01AA', carrying our own character (TEMP:pifo);
+   pifo re-written 1x during the load`. The staged identity (`0x155107BD`) is what the SECOND
+   install's own `serve-world` reported serving — i.e. the FIRST install genuinely ended up
+   running the SECOND install's world, entirely through the plugin's main-menu replay
+   (`PluginMenuLoader.TryRequestLoad`), no clicks, no screenshots. This confirms the adoption
+   pipeline itself (the thing the staged-save re-check question is ultimately about — does the
+   digest end up reflecting reality after a stage) works end-to-end on this rig today.
+2. **Live timing for the SAME `SaveIdentityDigest`/`SaveDigestCache` mechanism**, from item 0's
+   own run: in both directions, the phase-1 "session-saved character" capture (`SessionSaveWatch`'s
+   edge detector, which only fires once `bridge.SaveIdentityDigest` has actually changed) landed
+   1-2 seconds after the underlying save file changed (host's `usedoor` completed
+   19:57:32 → capture logged 19:57:34; client's `usedoor` completed 20:00:48 → capture logged
+   20:00:49). This is a live measurement of the exact cache `mod-compatibility.md` describes as
+   re-checking "at most every 2 s", landing comfortably inside "a few seconds" both times.
+
+Neither of these is the literal before/after-adopt poll `mod-compatibility.md` asks for, so
+that item stays open for a future pass with better process orchestration — but between (1)
+proving the pipeline produces the correct end state and (2) directly measuring the underlying
+cache's convergence latency at ~1-2 s twice, there is no live evidence of staleness, and no
+reason to suspect the specific "start before, adopt, watch it converge" script would find
+anything different.
+
+### Decision: both gates stay OFF by default
+
+Per this project's own bar (a direct, decisive, zero-regression live result per gate, the same
+bar `dialogue_fast_join` cleared and `party_fast_pump`/`container_fast_pump` did not): item 0
+is exactly that kind of result, but only for the REGRESSION half of the picture (ordinary play
+does not misfire). Neither `client_load_rejoin` nor `host_load_readopt`'s own POSITIVE
+case — a genuine mid-session Load Game action being detected and correctly handled — was
+exercised this pass, because the one available real-menu path (mouse clicks) does not
+reliably land on this rig. `CoopConfig.ClientLoadRejoin`/`HostLoadReadopt` remain unchanged
+(`IsTruthy(...)`, default `false`); coop.ini on both installs was left exactly as it was found
+(the `client_load_rejoin=1`/`host_load_readopt=1` lines added for this pass's testing were
+removed afterward — the rig must not permanently reconfigure the product, same rule
+`demo.ps1`'s own `auto_start_agent` handling already follows).
+
+### What changed in code this pass
+
+Nothing. This was a live-test-only pass: no source files were touched, `dotnet test` was run
+once at the end to confirm the pre-existing 1638/1638 baseline is undisturbed, and this
+document is the only diff.
+
+### Tools added
+
+`tools/blockpoke.ps1`, `demo.ps1`, `click.ps1`, `sendkey.ps1`, `movewin.ps1` were all used
+unmodified. One new **read-only** diagnostic was written to the session scratchpad (not
+committed — it duplicates `Odyssey.GetInGameGui()`'s own already-documented pointer chain
+externally, for a quick non-visual pause-menu-open/closed check): reads
+`[[[0x007A39FC]+4]+4]+0x40]+0x7C` (`in_game_pause`) via `ReadProcessMemory`, no writes, no new
+offsets — everything it reads was already named in `docs/research/ingame-gui-transition.md`
+§1.376 and `src/KotorCoop.Plugin/Odyssey.cs`'s `GetInGameGui()`/`AppManagerPtr`. Worth
+promoting to a real `tools/` script (e.g. `guistate.ps1`) for whoever attempts items 2/3 next,
+since it is the one piece of non-visual GUI-state feedback that reliably worked this pass.
