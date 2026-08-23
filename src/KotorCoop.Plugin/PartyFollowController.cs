@@ -120,8 +120,15 @@ internal sealed unsafe class PartyFollowController(SharedBlockView block)
     /// (rather than periodically zeroing it) was found anywhere in the binary. Kill switch:
     /// <c>party_follow_pokestep=0</c>.</summary>
     private readonly bool _pokeStepAccumulator = PluginConfig.ReadBool("party_follow_pokestep", true);
-    private const int FineLogCap = 4000;
-    private const double FineLogIntervalSeconds = 0.2;
+    private const int FineLogCap = 20000;
+
+    /// <summary>Tightened from 0.2s to 0.04s (round 81, party-reconciliation.md) — round 80's
+    /// own open question was whether Trask's catch-up walk is smooth per-frame motion or a
+    /// coarse multi-node snap, and 0.2s sampling was too coarse to tell the two apart (every
+    /// prior round's samples showed her jump straight from stalled to "already there"). 25Hz
+    /// is fast enough to catch intermediate path nodes during a single walk leg without
+    /// materially growing the log (still capped by <see cref="FineLogCap"/>).</summary>
+    private const double FineLogIntervalSeconds = 0.04;
     private int _fineLogged;
     private readonly double[] _lastFineLogTime = new double[PartyNpcSlots];
 

@@ -1435,6 +1435,85 @@ not settle — whether the resulting motion looks smooth in actual play, or need
 is named precisely above, with a concrete next step, rather than left as a vague "still doesn't
 work."
 
+## Round 81 (2026-08-23) — the smoothness question round 80 left open, settled live: the motion
+IS smooth when it progresses, but the catch-up is not reliably complete — a second, independent
+stall reproduced with the fix already shipped
+
+Round 80's own open item: tighten `FineLogIntervalSeconds` and capture a real walk leg to see
+whether Trask's catch-up reads as smooth per-frame interpolation or a coarse multi-node snap.
+Done this round: `FineLogIntervalSeconds` tightened from 0.2s to 0.04s (25Hz), `FineLogCap` raised
+from 4000 to 20000 so a longer observation window would not silently truncate mid-test.
+
+### Attempt 1: reproduced the OLD "never moves at all" bug, not round 80's success case
+
+First rig cycle: `tp 20 22 -1.3` (round 80's own confirmed-good origin), then `walk 10 15` — the
+exact recipe round 80 reported as working cleanly. This time Trask never moved a single unit.
+`party follow finelog` recorded her position as bit-identical (19.35,22.77) across all 4000 samples
+of a ~160-second window (the fine-log cap itself, at 25Hz) — not a coarse-sampling artifact, an
+exhaustively dense confirmation of zero motion. The reissue diagnostic showed `phase=7`
+(`PathWaitDest`), `pathNode=14`, `writeCursor=17` frozen for the entire window (2+ minutes, well
+past every stall threshold this controller uses) — `pathNode` stuck 3 nodes behind `writeCursor`,
+never advancing, matching this document's own still-open "outer phase-dispatch not being
+re-entered" root cause (rounds 74/75/80) rather than round 80's success. A follow-up real walk
+order to a further point (`walk 5 5`) silently no-opped (`target` in the finelog never moved off
+the first leg's value) — consistent with round 80's own documented flakiness of the `walk` test
+primitive beyond a confirmed-good origin/destination pair.
+
+### Attempt 2: a fresh rig cycle reproduced BOTH outcomes in one run — genuinely smooth motion,
+then the same stall, partway through
+
+Full rig restart (fresh save load, fresh plugin attach), identical `tp 20 22 -1.3` / `walk 10 15`
+recipe. This time Trask genuinely walked: 25Hz samples show a continuous run of intermediate
+positions, e.g. `(19.35,22.77) → (17.74,22.80) → (17.53,22.72) → (17.32,22.65) → ... → (14.59,21.70)
+→ (14.37,21.61) → ... → (11.85,19.04) → (11.82,18.86) → ... → (11.04,16.47)`, each sample roughly
+0.15-0.3 units from the last during the faster leg and 0.02-0.06 units apart during the final
+approach (25Hz sampling, so ~4-7 units/sec and ~0.5-1.5 units/sec respectively) — small, steady,
+monotonically-progressing deltas toward the target the entire time, with `pathNode` and
+`writeCursor` climbing together in lockstep (0→8, then 8→13-16). **This is the direct answer to
+round 80's open question: when the fix is working, the resulting motion is genuine smooth
+per-frame walking, not a teleport or a multi-node snap** — indistinguishable, in the position
+trace, from the leader's own real walk.
+
+She did not, however, complete the catch-up. At `pos=(11.04,16.47)`, 0.81 units from the leader's
+landing spot, motion stopped dead and stayed bit-identical for the rest of the observation window
+(15+ seconds) — `phase=7`, `pathNode=13`, `writeCursor=16`, the identical shape of stall as
+attempt 1, just reached after covering roughly 90% of the distance smoothly first instead of 0%.
+
+### Verdict: round 80's fix is real and its motion is smooth, but the underlying stall it did not
+fully close (rounds 74/75/80's own "phase dispatch not re-entered" gap) is not rare — it
+reproduced in BOTH of this round's two independent attempts, at different points in the walk
+
+Two for two: every observed walk leg this round eventually hit the same `phase=7`,
+`pathNode < writeCursor`, permanently-frozen state — once immediately (0% progress), once after
+~90% of the distance closed smoothly first. This does not contradict round 80's own three
+"reached `CreMoveState=-1` and closed real distance" observations — closing SOME distance and
+closing ALL of it are different claims, and round 80 never checked whether the catch-up actually
+finished, only that motion began. Combined with this round's finding: **the fix produces
+genuinely smooth motion for however much of the walk it manages to run, but whether it completes
+the whole leg or stalls partway (or immediately) is not reliable** — the same still-open
+`WalkUpdateLocation_QuickWalk_FollowLeader` re-entry gap rounds 74/75/80 already named as
+"would need a live debugger to close" remains the honest blocker, now demonstrated to bite even
+with round 80's shipped fix active, on a fresh save, using round 80's own confirmed-good recipe.
+
+**Practical read for what a player would see**: when it works, it looks right — normal walking
+speed, no visible snap. When it does not, the companion silently stops short of the player, by
+anywhere from the full distance down to under a metre, and stays there until the next stall-reissue
+cycle tries again (which this round's data suggests can also stall). Not good enough to call the
+catch-up "smooth-but-coarse" (the earlier framing this task's brief anticipated) — it is smooth
+until an unpredictable point, then simply stops. No fix attempted this round (out of scope: the
+task was observation, and round 80's own fix is untouched); the concrete next step remains what
+rounds 74/75/80 already named — a live debugger single-stepping the per-frame continuation for a
+creature that has entered this specific stalled state.
+
+### Test suite and build
+
+`dotnet test tests/KotorCoop.Tests` (Release): **1638/1638 passed**, unchanged baseline — this
+round's only production change is two tuning constants
+(`PartyFollowController.FineLogIntervalSeconds` 0.2→0.04, `FineLogCap` 4000→20000), neither
+exercised by the (x86 NativeAOT, unreferenced-by-tests) test project. Both plugin builds clean, 0
+warnings 0 errors, across two rebuild/redeploy/relaunch cycles. Rig torn down clean at the end of
+the combined session (see the roadmap-item-4 entry below for the rest of this session's work).
+
 ## 2026-08-23 (static pass, no rig access): a second, previously unexamined candidate for why
 `companion_local_combat`'s swing has never been observed — solo mode itself, not just
 party-presence staleness
