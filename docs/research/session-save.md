@@ -1366,3 +1366,149 @@ code (the `loadgame`/`FireMidSessionPhase1` mechanism built in the round above).
 `coop.ini`s were flipped to `client_load_rejoin=1`/`host_load_readopt=1` for the test and flipped
 back to `0` afterward (shipped defaults), the same undo discipline this document's other rounds
 use. The crafted test save (`000003 - zzz_loadtest`) was deleted after use.
+
+## Live pass (2026-08-24, round 86): the genuinely-different-save case, finally exercised — one
+real bug found in the `host_load_readopt` reconnect, the `client_load_rejoin` path still unfired,
+neither gate flips
+
+Task: get a save that genuinely differs in `SaveIdentityDigest`-relevant ways (module and/or
+`Mod_NextObjId0/1`) — the previous round's own gap — and fire `loadgame` against it with both gates
+on, then off.
+
+### The rig's two on-disk saves were NOT naturally different — checked offline first
+
+Before touching the rig, `tools/kotorfiles.py`-based offline inspection (module resref +
+`Mod_NextObjId0/1` + GIT `ObjectId` list — the exact three inputs `SaveDigest.TryComputeSaveIdentity`
+hashes) found `000001 - AUTOSAVE` and `000002 - Game1` on both installs **digest-identical**: same
+module (`END_M01AA`), same `Mod_NextObjId0=295`/`Mod_NextObjId1=0`, same 217-entry GIT `ObjectId`
+list. This is not a coincidence — `demo.ps1 -Save 1`'s own load path COPIES `Game1` over the
+autosave slot on every launch (`PluginMenuLoader.TryStageSaveAsAutosave`), so the "rig's own two
+saves" the task pointed at are kept in lockstep by construction. **This task's own premise needed
+correcting**, not just confirming: a genuinely different save has to be produced IN-SESSION.
+
+### Producing a genuine difference, and a real crash found doing it (see party-reconciliation.md's
+own "Round 85" entry for the full disassembly-backed account)
+
+A host-only `warp tar_m10aa` (the established discipline — never an independent client warp) is
+the natural way to get a real digest difference, but the SAME warp crashed the host instantly this
+session in an earlier check (access violation at `0x4AA984`, inside the engine's own follow-AI
+geometric check, `PartyFollowController`'s per-frame diagnostic racing the module teardown).
+Worked around here by setting `party_follow=0` (the controller's own full kill switch) before
+warping — the warp then completed cleanly, twice, with no crash. Confirmed offline afterward: the
+freshly-rewritten `000001 - AUTOSAVE` held `Mod_NextObjId0=307` against `Game1`'s `295`, plus a
+reordered `Door List`/`Placeable List` in the GIT — genuinely different, not by module name (both
+still read `END_M01AA` — the autosave fires on LEAVING a module, capturing its state before the
+new one, not the module just entered) but by the object-count and GIT-order inputs the digest
+hashes directly. With the LIVE session sitting in `tar_m10aa` (post-warp) and the on-disk
+`Game1` slot still `END_M01AA`, `loadgame 0` (the only non-autosave slot; `TryResolveSaveDirectory`
+excludes the autosave from its own numbering, a fact this round had to re-derive since the design
+doc's "0-based" note does not spell out the exclusion) is trivially, unambiguously a different-save
+load by every measure at once: module, `Mod_NextObjId0`, and GIT order.
+
+### The message-box precondition trap recurred exactly as the previous round described
+
+`loadgame` refused with `failure 9` on the first attempt of this fresh session, same as before — an
+all-console session never opens a real pause-menu message box, so `CSWGuiMessageBox+0x64` bit 0
+stays clear. The previous round's own scratch `msgboxpoke.ps1` (uncommitted, but still present in
+this session's own scratchpad from that round) set the bit directly; `loadgame` then succeeded on
+retry. **This confirms the previous round's own "honest caveat" is a real, reproducible, every-fresh-
+session cost**, not a one-off — anyone continuing this line of work should expect it and budget for
+the poke (chain: `AppManagerPtr(0x7A39FC) -> +4 client -> +4 internal -> +0x40 gui -> +0x98
+messageBox -> +0x64 byte, bit 0`).
+
+### CLIENT's own load (`client_load_rejoin`, `RejoinTrigger.OwnLoad`): the classifier never
+produced a verdict — no rejoin attempted, the desync self-corrected through an unrelated channel
+
+With both gates on, `loadgame 0` on the CLIENT (while the live session sat in `tar_m10aa`, host and
+client both there via the ordinary travel-follow channel) completed cleanly — `menu: ... the world
+is up and on screen`, and the plugin log's own `world: unannounced teardown - treating as a load,
+not a transition` fired exactly once, confirming `WorldLoadSerial` was bumped correctly. But **no
+`session-save: starting rejoin (OwnLoad)` or `you loaded a save - rejoining the host's world` line
+ever appeared** in the client's own agent log, checked across the whole file, not just the
+immediate window. What actually resynced the client a few seconds later was the ORDINARY,
+pre-existing travel-follow channel (`CoopAgent.cs`'s `following the host to 'tar_m10aa'` /
+`announcing transition to 'tar_m10aa'` — the same mechanism an everyday door transition uses),
+which is a structurally different code path from `ClientLoadRejoinRule`/`SessionManager.
+RejoinAfterLoadAsync` entirely (no `Disconnect()`, no `WorldAdoption.TryAdoptAsync`) — this was
+NOT the gate under test doing its job, it was a coincidence of an unrelated, older mechanism
+already correcting the same symptom.
+
+**Root cause not found this round.** `bridge.SaveIdentityDigest` is read from
+`SaveDigestCache.SaveIdentity`, which re-stats the SAME staged-autosave file `loadgame`'s own
+`TryStageSaveAsAutosave` step rewrites (a `Directory.Delete` + recreate + file copy), gated to at
+most one re-stat per 2 seconds; `SaveOrLoadClassifier`'s own 5-second correlation window is a
+generous margin over that, and the world-load edge and the eventual digest re-stat should both
+land well inside it. Whether the delete+recreate window can produce a transient unreadable-file
+read that `SaveDigest.TryComputeSaveIdentity` silently treats as "unknown" (never updating the
+cached identity, so no "change" is ever seen against the stale cached value) was not checked live
+this round — flagged as the most likely lead for whoever picks this up, alongside directly
+instrumenting `SaveDigestCache`'s own re-stat/hash cycle (currently invisible from outside the
+process; no field publishes it) to see the digest's actual value across the load rather than
+inferring from silence.
+
+### HOST's own load, observed on the CLIENT (`host_load_readopt`, `RejoinTrigger.HostReload`): the
+classifier and trigger DID fire correctly — the reconnect itself then failed on a real timing race
+
+A second pass: `loadgame 0` on the HOST instead (still `tar_m10aa` live, same genuinely-different
+`Game1` target). This time the mechanism fired exactly as designed, on the CLIENT, watching the
+host's digest over the wire:
+
+```
+[05:37:14] * host loaded a save - rejoining their world
+[05:37:14] * session-save: starting rejoin (HostReload)
+[05:37:14] * session-saved character: carried the character from '000001 - AUTOSAVE' ...
+[05:37:15] * disconnected
+[05:37:15] * world adoption: carried the character from '000002 - Game1' (117 fields, module 'END_M01AA')
+[05:37:17] * world adoption: could not fetch the host's world - No connection could be made because
+the target machine actively refused it.
+[05:37:17] * rejoin failed - see the log; reconnect manually if it does not recover
+```
+
+`ObserveRemoteVerdict` correctly classified the host's digest change as a Load (proving the
+classifier itself, the 5-second correlation window, and `RejoinTrigger`/`ClientLoadRejoinRule.Decide`
+all work correctly for the wire-digest path — this is real, positive, decisive evidence the
+MECHANISM's decision logic is sound, not merely a disassembly argument). `TriggerRejoin` started
+`RejoinAfterLoadAsync` exactly once (no double-fire), which disconnected, captured the character,
+and attempted to reconnect to the host to fetch its world for adoption — **and that reconnect was
+actively refused**, a real, newly-found bug: the HOST's own `loadgame` tears its server down and
+rebuilds it (`menu: tearing down the existing server for a mid-session load` ... `creating the
+server and loopback session`), and the client's own rejoin attempt raced ahead of that rebuild
+completing, reaching the host's port before it was listening again. `RejoinAfterLoadAsync`/
+`WorldAdoption.TryAdoptAsync` has no retry or backoff for exactly this window today. The host
+itself recovered fine on its own (`co-op: connected, alone` after the client's disconnect, then
+back to normal once the client reconnects manually) — this is a lost rejoin attempt, not a stuck or
+crashed session, but it means `host_load_readopt` as shipped would strand a real player on a real
+mid-session host reload under this exact timing.
+
+### Gates OFF: clean regression check
+
+Same recipe (fresh rig, host-only warp to `tar_m10aa` with `party_follow=0`, `loadgame 0` on the
+client) with `client_load_rejoin=0`/`host_load_readopt=0`: `loadgame` still completed cleanly
+(`the world is up`), no crash on either side, and — critically — no `session-save: starting
+rejoin` line anywhere in the client's log, only the pre-existing `[W_SAVE]` mismatch banner (which
+predates and is independent of both gates). Confirms the gates being off produces no new behaviour
+and no regression, exactly as expected.
+
+### Verdict
+
+**Neither gate flips.** This round finally produced and used a genuinely different save (unlike
+every prior round's digest-identical crafted copies), which is real progress on the task's own
+open item — but the result is not the clean pass needed to flip a default: `client_load_rejoin`
+(`OwnLoad`) never even attempted a rejoin (classifier verdict never fired, root cause open), and
+`host_load_readopt` (`HostReload`) fired its decision logic correctly but the actual reconnect lost
+a real race against the host's own server rebuild. Both are real, distinct, worth-fixing findings,
+not the same bug twice. `client_load_rejoin`/`host_load_readopt` stay OFF by default (unchanged);
+`party_follow` was reverted to its default (on) and `party_follow_finelog` — found left ON in the
+HOST's `coop.ini` from an earlier round, an un-reverted stray setting — was turned back off as
+routine hygiene, on both installs, after this round.
+
+Also newly on record here, cross-referenced from `party-reconciliation.md`'s own "Round 85" entry:
+a real access-violation crash (`0x4AA984`) when warping modules while `PartyFollowController`'s
+per-frame diagnostics are active (the shipped default) — worked around this round with
+`party_follow=0`, not yet root-caused. Anyone warping the rig for further save/load work should
+expect to need the same workaround until it is fixed.
+
+`dotnet test tests/KotorCoop.Tests` (Release): unchanged this round — no production code touched,
+pure live observation. Rig cycled cleanly across three restarts this round (crash-recovery, the
+two-load test, the gates-off test); `Get-Process swkotor,KotorCoop.Agent` empty after the final
+teardown, `auto_start_agent` restored to `1` on both installs.
