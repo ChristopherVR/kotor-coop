@@ -509,7 +509,10 @@ internal static unsafe class PluginHost
         // 50 = container-lock target ids at 0x3F08..0x3F1C, InteractionKind.Container's own
         //      object-id key parallel to the existing tag-keyed interaction lock region — see
         //      docs/research/container-sync.md.
-        _block->Version = 50;
+        // 51 = the local/remote dialogue-forced bit at 0x3F1C..0x3F24 — whether this
+        //      conversation is one the engine itself forces regardless of range, distinct
+        //      from a player's own click — see docs/research/dialogue-sync.md.
+        _block->Version = 51;
 
         // A guard dword after the version. Magic plus version alone was not selective
         // enough: a scan once matched something else at a lower address and the agent

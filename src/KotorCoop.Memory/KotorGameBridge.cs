@@ -844,10 +844,16 @@ public sealed class KotorGameBridge : IGameBridge
     /// 49 = the world-load edge, roadmap item 14 phase 2's save-vs-load detection primitive,
     /// in the same free gap's remaining tail (0x396C..0x3970; 0x31 = 49). See
     /// docs/research/session-save.md's Phase 2 section.
+    /// 50 = the container-use lock's per-container claim, keyed on object id rather than tag
+    /// (0x32 = 50) — see docs/research/container-sync.md.
+    /// 51 = the local/remote dialogue-forced bit (region 0x3F1C..0x3F24, no TotalSize growth;
+    /// 0x33 = 51) — a conversation the engine itself forces regardless of range, distinct
+    /// from a player's own click. See docs/research/dialogue-sync.md's forced-conversation
+    /// section.
     /// <b>ItemHarnessTests.TheBlockVersionIsTheSameNumberInBothHalves reads both files and
     /// fails the build if they disagree</b> — added with 42, because nothing had ever
     /// enforced the warning above.</summary>
-    public const string PluginSignature = "4B 4F 43 4F 4F 50 30 31 32 00 00 00 01 EE FF C0";
+    public const string PluginSignature = "4B 4F 43 4F 4F 50 30 31 33 00 00 00 01 EE FF C0";
 
     /// <summary>Agent's view of which coop item id occupies each plugin item slot.</summary>
     private readonly uint[] _itemSlotIds = new uint[BlockItemCapacity];

@@ -224,10 +224,11 @@ public class TransitionMovieTests
         // field, 44 the peer-effect channel, 47 the transition-announce channel, 48 the
         // mid-module movie relay region, 49 the world-load edge (roadmap item 14 phase 2),
         // 50 the container-lock target ids (InteractionKind.Container's object-id key,
-        // docs/research/container-sync.md) — 45 and 46 are reserved by other agents working
-        // this tree concurrently) — see the changelog comments beside `_block->Version` and
-        // `PluginSignature` for the full history.
-        Assert.Equal(50, int.Parse(version.Groups[1].Value));
+        // docs/research/container-sync.md), 51 the local/remote dialogue-forced bit
+        // (docs/research/dialogue-sync.md's forced-conversation section) — 45 and 46 are
+        // reserved by other agents working this tree concurrently) — see the changelog
+        // comments beside `_block->Version` and `PluginSignature` for the full history.
+        Assert.Equal(51, int.Parse(version.Groups[1].Value));
     }
 
     private static string RepositoryRoot()
