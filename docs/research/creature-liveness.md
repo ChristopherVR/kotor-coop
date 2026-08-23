@@ -841,3 +841,193 @@ passthrough params, empty-array default, zero effect on the ordinary invocation)
 Both plugin builds clean from an earlier point in the same combined session. Rig eventually torn
 down clean (`Get-Process swkotor,KotorCoop.Agent` empty), `auto_start_agent` restored to `1` in
 both GOG installs.
+
+## Round (2026-08-24) — a genuine disassembly pass at the `DestroyObject`-scan-freshness
+## blocker: the two lookups are STILL byte-identical, a real async mechanism is found underneath
+## `DestroyObject`, and the prior round's own evidence for "still stale after 3 minutes" turns
+## out not to rule out the one confound that matters — no code fix shipped
+
+Task (assigned, no live rig access this round): find and fix why the agent's external scan
+(`EnumerateCreatures()` → `LiveObjectGate.Confirm()`, `EngineGlobals.TryResolveServerObject`)
+does not notice a `DestroyObject`ed body, per the previous round's own closing paragraph naming
+this "the concrete remaining blocker for a future round." Read `LiveObjectGate.Confirm`,
+`EngineGlobals.TryResolveServerObject`, and `Odyssey.ResolveServerObject` in full, then used
+`tools/disasm.py`/`tools/xrefs.py` against the GOG `swkotor.exe` and `tools/kotor1_0_3.db`'s
+symbol table (a SQLite `functions`/`classes`/`offsets` schema this round discovered gives real
+class/method names for addresses, not previously exploited by name in this document) to trace
+what `DestroyObject` actually does to the object array, compared to an ordinary kill.
+
+### What was RE-CONFIRMED, not assumed: the two lookups are still byte-identical
+
+The 2026-08-15 investigation (`enemy-presence-sync.md` §"Root cause 2026-08-15") already proved
+`EngineGlobals.TryResolveServerObject`'s C# transcription of `CGameObjectArray::GetGameObject`
+(0x004D8230) matches the real engine call for a LIVE object. This round re-disassembled the
+whole chain fresh, now with names, to check whether anything differs for a DESTROYED one:
+
+- `CServerExoApp::GetGameObject` (0x004AE750) is a two-instruction thunk
+  (`mov ecx,[ecx+4]; jmp 0x4B1700`) into `CServerExoAppInternal::GetGameObject` (0x004B1700),
+  which reads `[ecx+0x1005C]` (the object array — the exact field
+  `EngineGlobals.TryGetServerObjectArray` reads) and calls `CGameObjectArray::GetGameObject`
+  (0x004D8230) directly, comparing its return byte against `[0x74666C]` (a read-only `.rdata`
+  zero, the not-found sentinel).
+- `CGameObjectArray::GetGameObject` (0x004D8230) is, byte for byte, the bucket-and-chain walk
+  `EngineGlobals.TryLookupObject` already transcribes: `bucket = ((id>>31)&1)<<12 | (id&0xFFF)`,
+  walk `tree[bucket]`'s linked list comparing `entry->id` (offset 0) against `id&0x7FFFFFFF`,
+  return `entry->object` (offset 4) on a hit. **There is no additional flag, generation counter,
+  or liveness check anywhere in this function** — it is a plain hash-table lookup and nothing
+  else. This directly rules out the design brief's own leading hypothesis ("a generation
+  counter, a validity flag... the in-process call has access to a more authoritative live
+  check the external walk does not") for THIS specific function: there is no such extra check
+  for the in-process caller to have that the external one lacks. Both sides read the identical
+  algorithm over the identical physical memory, with no cross-process caching in the way either
+  (`ProcessMemory.TryRead*` are plain `ReadProcessMemory` calls every time — no memoisation
+  layer exists between `EngineGlobals.TryResolveServerObject` and the OS syscall, confirmed by
+  reading `src/KotorCoop.Memory/ProcessMemory.cs` in full).
+
+So the object-array LOOKUP is not, and was never, the place the two sides could disagree. If
+they disagree live, the object array's CONTENT must actually differ at read time, or something
+outside this lookup (the agent's own scan/cache pipeline) must be at fault — not the algorithm.
+
+### NEW this round: `DestroyObject` does not synchronously remove anything from the array
+
+Disassembling the NWScript `DestroyObject` command handler itself (0x0052FF20, reached via
+`Odyssey.DestroyObjectById`'s `ExpectedDestroyObject` dispatch) and its callees, matched against
+`tools/kotor1_0_3.db`'s symbol table, in full:
+
+1. It resolves the target via `GetGameObjectFn` (0x4AE750 — the SAME generic getter this whole
+   document is about) purely to decide whether to set two CLIENT-side cosmetic flags:
+   `CSWSObject::SetDeleteNoFade` (0x4CE920) and `CSWSObject::SetFadeOutTime` (0x4CE8A0). Both
+   were disassembled in full: they call `CServerExoApp::GetPlayerCreatureId` +
+   `CServerExoApp::GetClientObjectByObjectId` to find a CLIENT-side render/party node matching
+   the object's own id and set a flag on IT (falling back to a flag field at `+0x204` on the
+   SERVER object itself if no client node matches). **Neither touches the object's identity
+   fields at `+0x04`/`+0x14`** — the two fields `Odyssey.ResolveServerObject`'s "layout check"
+   probes — which rules out this round's own leading alternative theory (a stale-but-still-
+   linked array entry whose *content* has been invalidated, caught by the in-process layout
+   check the external walk lacks): if the array still held the id at this point, both sides
+   would still agree it resolves, layout check included, since nothing here corrupts `+0x04`.
+2. Unconditionally, it then computes a delay value from `fDelayUntilFade`/`fDelay` and calls
+   `CServerExoApp::GetServerAIMaster` (0x4AED80) followed by `CServerAIMaster::AddEventDeltaTime`
+   (0x4B08D0) — **the object is not deleted here. A delayed event is scheduled into the AI
+   Master's own event queue** (`AddEventDeltaTime` → `CWorldTimer::GetWorldTime` +
+   `CWorldTimer::AddWorldTimes` → `CServerAIMaster::AddEventAbsoluteTime_2`, a classic
+   now-plus-delta scheduler). With `fDelay=0`/`fDelayUntilFade=0` (what `Odyssey.DestroyObjectById`
+   passes for an instant remote-pickup-style destroy), this should fire on the very next AI
+   Master tick, not synchronously inside the `DestroyObject` call itself.
+3. The actual array removal — `CGameObjectArray::Delete` (0x4D81A0, xref-traced and disassembled
+   in full: it properly unlinks the bucket-list entry, either rewriting the bucket head or the
+   previous entry's `next`, then frees the entry struct via `0x6FA390`) — is only ever reached
+   through `CGameObjectArray::Delete_2` (0x4D8290), whose 8 call sites (`tools/xrefs.py 0x4D8290`)
+   resolve, via the symbol table, to real object destructors: `CSWSObject::Destructor` (0x4D02A0),
+   `CSWSModule::Destructor`, `CSWSArea::Destructor`, `CSWCVisualEffect::Destructor`,
+   `CSWCProjectile::Destructor`, plus `CSWSModule::EventHandler`/`CSWCArea::UnloadArea`/
+   `CSWCAreaOfEffectObject::AIUpdate`. **The array entry is removed exactly when, and only when,
+   the C++ object's own destructor runs** — which for a creature happens when the scheduled AI
+   Master event actually fires and frees it, not at the moment `DestroyObject` is called.
+
+This is a genuinely new finding for this document: `DestroyObject` is a two-phase, partly
+asynchronous operation (immediate client-side cosmetic flag, then a scheduled server-side
+delete), not the single synchronous engine call the design brief and prior rounds implicitly
+assumed. It does not, by itself, explain a THREE-MINUTE external staleness — an AI Master event
+queue serviced every server tick should fire a zero-delay event within at most a frame or two,
+which is consistent with the third 2026-08-22 pass's own observation that `resolve 0x3B` showed
+`0x0` "within the same second" the destroy landed — but it does mean the removal is provably
+NOT instantaneous-by-construction, and a live session that wants to settle this needs to account
+for that scheduling step rather than treat `destroyobject` as atomic.
+
+### The layout-check theory, specifically ruled out
+
+`Odyssey.ResolveServerObject`'s in-process "the engine found it, we threw it away" branch
+(added 2026-08-15, `enemy-presence-sync.md` round four) was this round's other leading
+hypothesis for the asymmetry — the plugin re-validates `+0x04`/`+0x14` after a hash hit; the
+external `EngineGlobals.TryResolveServerObject` does not. Given the established fact already on
+record in this document (`LiveObjectGate`'s own doc comment: "`operator delete` does not clear
+the vtable word or the object id that follows it"), this theory is now provably moot for THIS
+specific symptom: if the array still held the entry (delete not yet run), `+0x04` would still
+read the correct id — nothing between `DestroyObject` being called and the object's eventual
+destructor running writes to it (confirmed above: the only two things that run synchronously,
+`SetDeleteNoFade`/`SetFadeOutTime`, do not touch it) — so the layout check would PASS, not fail,
+for exactly as long as the array entry survives. And once the destructor does run,
+`CGameObjectArray::Delete` removes the entry outright, so the raw hash lookup itself returns 0
+and the layout check is never reached. There is no window in which the hash lookup succeeds but
+the layout check would reject it. `Odyssey.ResolveServerObject`'s `resolved to 0x0` result,
+observed live, must therefore mean the raw array lookup itself returned 0 (the array genuinely
+lost the entry) — not a layout mismatch on a still-linked stale entry.
+
+### The real gap: the prior round's own evidence does not rule out its module's population dynamics
+
+Given the array lookup is proven identical and the removal, once it runs, is a clean unlink —
+there is no code-level mechanism by which `EngineGlobals.TryResolveServerObject`, polled
+repeatedly (every ≤250ms via `LiveObjectGate`'s `LiveConfirmMs`, confirmed by re-reading
+`KotorGameBridge.EnumerateCreatures`'s cache-invalidation logic line by line — `_liveCache` is
+unconditionally recomputed at least every 250ms with a FRESH `TryGetServerObjectArray` call, no
+staler layer sits in front of it) should keep returning a STALE, non-zero answer for a body
+whose array entry is truly gone. Re-reading the third 2026-08-22 pass's own transcript with this
+in mind surfaces a methodology gap it did not close: its claim that "0x3B is still counted" after
+three minutes was inferred from ARITHMETIC ON THE AGGREGATE `census` COUNT (`25` before, `24`
+after an unrelated control kill, `25` again three minutes later, "not 23 as it would be if both
+had genuinely dropped") — **it never ran `census 0x3B`, the existing per-id diagnostic
+(`CoopCommandDispatcher.DescribeId`, which calls `KotorGameBridge.TryResolveObjectHere` — the
+EXACT function under scrutiny — directly and reports `array 0x... | array NOT HELD` for that one
+id, unambiguously)**. The aggregate count can climb back to 25 for a reason that has nothing to
+do with 0x3B: `tar_m10aa` (the module that pass used) was never characterised for population
+dynamics the way `tat_m20aa` was in the pass immediately before it (§"the population, measured,
+not inferred" above, which found `tat_m20aa`'s 31 hostiles to be a fixed placement, not a
+proximity-triggered spawn table) — an ambient encounter, a scripted reinforcement, or simply a
+creature crossing back into scan range during three minutes of real time would independently
+explain the count returning to 25 with 0x3B genuinely gone the whole time. The prior round's own
+conclusion is plausible and may well be correct, but as written it cannot distinguish "0x3B is
+still resolvable" from "something else in this uncharacterised module re-populated the count" —
+and this round's disassembly gives no reason to expect the array lookup itself to lie.
+
+### Verdict: no code change shipped — the honest-limitations bar, not a guess dressed as a fix
+
+Per the task's own standard: a fix was not shipped, because no concrete defect was found in
+`LiveObjectGate.Confirm`, `EngineGlobals.TryResolveServerObject`, or `KotorGameBridge`'s caching
+that would produce the reported symptom, and the one candidate difference between the two
+lookups (the in-process layout re-check) was disassembly-ruled-out above as incapable of causing
+it. Shipping a change here (e.g. porting the layout check to the external side anyway "just in
+case") would be exactly the "guess dressed as a change" the 2026-08-15 investigation warned
+against, applied to a theory this round's own evidence already excludes. `dotnet test` was not
+re-run for a code change because none was made; the worktree carries no production diff.
+
+**What a live session needs to check next, precisely, to settle this instead of re-guessing:**
+
+1. Repeat the `destroyobject <id>` staging from the third 2026-08-22 pass, but on a module whose
+   population dynamics are known static first (`tat_m20aa`, already measured at a fixed 31 — see
+   above — rather than the uncharacterised `tar_m10aa`), to remove the respawn/reinforcement
+   confound entirely.
+2. Immediately, and then repeatedly across at least a 3-5 minute window (every 15-30 s is
+   plenty — `_creatureCache`'s own 15 s scan TTL is the loosest link in the chain), run BOTH
+   `census 0x<id>` on the AGENT console (the per-id diagnostic, unambiguous "array 0x... /
+   array NOT HELD") and `resolve 0x<id>` on the PLUGIN console (in-process, same question) side
+   by side, logging both replies with timestamps. This is the direct analogue of
+   `Odyssey.DescribeObjectResolution` (built 2026-08-15 specifically to ask "both questions in
+   one frame, on the game thread" instead of comparing measurements taken seconds and processes
+   apart) — applied here across TWO processes and a multi-minute window, which nothing has done
+   yet for this specific defect.
+3. If `census 0x<id>` and `resolve 0x<id>` ever DISAGREE (one says gone, the other still
+   resolves) at the SAME sampled instant, that is the first genuinely reproducible instance of
+   the defect this document has recorded with an unambiguous per-id signal — record which side
+   lags and for how long, and whether it EVER catches up within the session (self-healing on a
+   later scan) or stays wrong until a module change/reconnect.
+4. If they never disagree once the aggregate-count confound is removed, the defect this
+   document has been chasing across three live passes may not exist as stated — the 2026-08-22
+   finding would then need to be re-attributed to `tar_m10aa`'s own uncharacterised population
+   dynamics, and `LivenessReconcileController`'s Destroy dispatch would be back to merely
+   "not yet independently exercised" (the §"Why 'under the cap' already covers it" gap this
+   document already understands) rather than blocked by a confirmed scan-freshness bug.
+5. Either outcome is useful and should be recorded here with the same rigor as every prior
+   pass — this is the smallest live experiment that can finally tell apart "real defect" from
+   "unexamined module population dynamics," which is what every attempt so far has actually been
+   unable to separate.
+
+### Files (unchanged this round)
+
+No source files were modified. This round's only artifact is this document entry, informed by
+fresh disassembly of `swkotor.exe` (`CServerExoApp::GetGameObject` 0x4AE750,
+`CServerExoAppInternal::GetGameObject` 0x4B1700, `CGameObjectArray::GetGameObject` 0x4D8230,
+`CGameObjectArray::Delete`/`Delete_2` 0x4D81A0/0x4D8290, the `DestroyObject` NWScript command
+handler 0x52FF20-0x530169, `CSWSObject::SetDeleteNoFade`/`SetFadeOutTime` 0x4CE920/0x4CE8A0,
+`CServerAIMaster::AddEventDeltaTime` 0x4B08D0) cross-referenced against `tools/kotor1_0_3.db`'s
+`functions`/`classes`/`offsets` symbol tables via `tools/disasm.py` and `tools/xrefs.py`.
