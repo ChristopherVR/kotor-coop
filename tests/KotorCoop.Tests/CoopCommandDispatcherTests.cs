@@ -352,8 +352,9 @@ public class CoopCommandDispatcherTests
     [Fact]
     public async Task HostingWithBothRejoinGatesOffServesNothing()
     {
-        // The default state, and the regression check: a host that never enabled either gate
-        // must not open a new listener at all.
+        // Both gates default ON since their 2026-08-24 live verification (see CoopConfig's own
+        // doc comments); this is the regression check that a host with BOTH explicitly turned
+        // off does not open a new listener at all.
         string gameDirectory = Path.Combine(
             Path.GetTempPath(), "kotorcoop-worldserve-off-" + Guid.NewGuid().ToString("N"));
         string saveDirectory = Path.Combine(gameDirectory, "saves", "000001 - AUTOSAVE");
@@ -364,7 +365,7 @@ public class CoopCommandDispatcherTests
 
         MenuBridge bridge = new();
         using SessionManager manager = new(bridge, new AgentSettings { PollRate = 30 });
-        CoopConfig config = new(); // both gates default off
+        CoopConfig config = new() { ClientLoadRejoin = false, HostLoadReadopt = false };
         CoopCommandDispatcher dispatcher = new(
             manager, bridge, ProtocolConstants.DefaultPort,
             p => new SessionSettings { PlayerName = "Host", Port = port, TickRate = 30, Password = p },

@@ -230,41 +230,19 @@ public class CoopConfigTests
     }
 
     [Fact]
-    public void ClientLoadRejoinDefaultsOff()
+    public void ClientLoadRejoinDefaultsOn()
     {
-        // Roadmap item 14 phase 2 — see CoopConfig.ClientLoadRejoin's own doc comment for why:
-        // the classification is INFERRED, not live-verified, and the rejoin action reuses
-        // MenuLoadController's main-menu-only replay with no live confirmation it fires
-        // mid-session.
+        // Roadmap item 14 phase 2 — see CoopConfig.ClientLoadRejoin's own doc comment: live-
+        // verified 2026-08-24 (docs/research/session-save.md round 87/88), a direct, decisive,
+        // zero-regression result, the same bar DialogueFastJoin cleared earlier.
         string path = WriteTemp("mode = join");
-
-        try
-        {
-            CoopConfig? c = CoopConfig.TryLoad(path);
-            Assert.NotNull(c);
-            Assert.False(c.ClientLoadRejoin);
-            Assert.False(new CoopConfig().ClientLoadRejoin);
-        }
-        finally
-        {
-            File.Delete(path);
-        }
-    }
-
-    [Fact]
-    public void ClientLoadRejoinCanBeTurnedOn()
-    {
-        string path = WriteTemp("""
-            [coop]
-            mode = join
-            client_load_rejoin = 1
-            """);
 
         try
         {
             CoopConfig? c = CoopConfig.TryLoad(path);
             Assert.NotNull(c);
             Assert.True(c.ClientLoadRejoin);
+            Assert.True(new CoopConfig().ClientLoadRejoin);
         }
         finally
         {
@@ -273,7 +251,28 @@ public class CoopConfigTests
     }
 
     [Fact]
-    public void HostLoadReadoptDefaultsOff()
+    public void ClientLoadRejoinCanBeTurnedOff()
+    {
+        string path = WriteTemp("""
+            [coop]
+            mode = join
+            client_load_rejoin = 0
+            """);
+
+        try
+        {
+            CoopConfig? c = CoopConfig.TryLoad(path);
+            Assert.NotNull(c);
+            Assert.False(c.ClientLoadRejoin);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void HostLoadReadoptDefaultsOn()
     {
         string path = WriteTemp("mode = join");
 
@@ -281,8 +280,8 @@ public class CoopConfigTests
         {
             CoopConfig? c = CoopConfig.TryLoad(path);
             Assert.NotNull(c);
-            Assert.False(c.HostLoadReadopt);
-            Assert.False(new CoopConfig().HostLoadReadopt);
+            Assert.True(c.HostLoadReadopt);
+            Assert.True(new CoopConfig().HostLoadReadopt);
         }
         finally
         {
@@ -291,19 +290,19 @@ public class CoopConfigTests
     }
 
     [Fact]
-    public void HostLoadReadoptCanBeTurnedOn()
+    public void HostLoadReadoptCanBeTurnedOff()
     {
         string path = WriteTemp("""
             [coop]
             mode = host
-            host_load_readopt = 1
+            host_load_readopt = 0
             """);
 
         try
         {
             CoopConfig? c = CoopConfig.TryLoad(path);
             Assert.NotNull(c);
-            Assert.True(c.HostLoadReadopt);
+            Assert.False(c.HostLoadReadopt);
         }
         finally
         {

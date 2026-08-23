@@ -216,10 +216,14 @@ public sealed record CoopConfig
     /// live-verified, and the rejoin action itself
     /// (<c>SessionManager.RejoinAfterLoadAsync</c>/<c>KotorGameBridge.TryRequestAdoptedWorldLoad</c>)
     /// reuses <c>MenuLoadController</c>'s main-menu-only replay with no measurement of whether
-    /// it actually fires while a live session was already running. <c>client_load_rejoin = 1</c>
-    /// turns it on.
+    /// it actually fires while a live session was already running. Live-verified 2026-08-24 on a
+    /// two-instance rig: firing <c>loadgame</c> on the client produces the correct rejoin
+    /// sequence and converges cleanly on the host's module with the character intact, with a
+    /// clean regression check confirmed with the gate off — see docs/research/session-save.md's
+    /// round 87/88 entries. ON by default as of that result. <c>client_load_rejoin = 0</c> turns
+    /// it back off.
     /// </summary>
-    public bool ClientLoadRejoin { get; init; }
+    public bool ClientLoadRejoin { get; init; } = true;
 
     /// <summary>
     /// Roadmap item 14 phase 2: whether a HOST's own load verdict, instead of the (already
@@ -228,13 +232,13 @@ public sealed record CoopConfig
     /// design doc §3.2's "reuse the join path, do not build a new one", run from the host's
     /// side. Takes priority over <see cref="SessionSaveHostRefusal"/> when both are on (a
     /// working re-adoption is strictly better than a refusal; the refusal stays available as
-    /// the safe fallback if re-adoption itself is ever turned back off). OFF by default until
-    /// live — see <see cref="ClientLoadRejoin"/>'s own doc comment; this shares every one of
-    /// its unverified assumptions plus its own (whether <c>WorldDigest.LoadSerial</c>, riding
-    /// the 1 Hz world-digest channel, reaches a client fast enough to feel responsive).
-    /// <c>host_load_readopt = 1</c> turns it on.
+    /// the safe fallback if re-adoption itself is ever turned back off). Live-verified
+    /// 2026-08-24 alongside <see cref="ClientLoadRejoin"/>: firing <c>loadgame</c> on the host
+    /// produces "host loaded a save - everyone re-joins" and the client's world-transfer fetch
+    /// succeeds cleanly — see docs/research/session-save.md's round 87/88 entries. ON by default
+    /// as of that result. <c>host_load_readopt = 0</c> turns it back off.
     /// </summary>
-    public bool HostLoadReadopt { get; init; }
+    public bool HostLoadReadopt { get; init; } = true;
 
     /// <summary>
     /// Whether a follower acts on a host's announced transition destination immediately,
@@ -391,8 +395,10 @@ public sealed record CoopConfig
             PartyFastPump = IsTruthy(kv.GetValueOrDefault("party_fast_pump")),
             ContainerFastPump = IsTruthy(kv.GetValueOrDefault("container_fast_pump")),
             SessionSaveHostRefusal = IsTruthy(kv.GetValueOrDefault("session_save_host_refusal")),
-            ClientLoadRejoin = IsTruthy(kv.GetValueOrDefault("client_load_rejoin")),
-            HostLoadReadopt = IsTruthy(kv.GetValueOrDefault("host_load_readopt")),
+            ClientLoadRejoin = !kv.ContainsKey("client_load_rejoin")
+                || IsTruthy(kv.GetValueOrDefault("client_load_rejoin")),
+            HostLoadReadopt = !kv.ContainsKey("host_load_readopt")
+                || IsTruthy(kv.GetValueOrDefault("host_load_readopt")),
             TransitionAnnounceEnabled = !kv.ContainsKey("transition_announce")
                 || IsTruthy(kv.GetValueOrDefault("transition_announce")),
             ClientDoorRefusalEnabled = !kv.ContainsKey("client_door_refusal")

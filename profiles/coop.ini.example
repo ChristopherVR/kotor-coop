@@ -293,25 +293,22 @@ session_save_host_refusal=0
 # Roadmap item 14 phase 2 (docs/research/session-save.md's Phase 2 section). A CLIENT that
 # loads a save mid-session (the in-game pause menu, not just the main menu) tears its own
 # session down and re-runs world adoption against the host automatically, printing "you loaded
-# a save - rejoining <host>'s world". OFF by default: the save-vs-load classification itself
-# (WorldLoadRule: an unannounced world teardown, i.e. one trans_pending never saw coming, is a
-# load) is INFERRED from engine facts, not measured live, and the rejoin action reuses
-# MenuLoadController's main-menu-only replay with no live confirmation that it actually fires
-# while a session was already running (as opposed to silently no-op'ing). See
-# docs/research/session-save.md's Phase 2 NEEDS-LIVE list before turning this on.
-client_load_rejoin=0
+# a save - rejoining <host>'s world". Live-verified 2026-08-24 on a two-instance rig: firing a
+# real mid-session load produces the correct rejoin sequence and the client converges cleanly
+# on the host's module with its character intact; a clean regression check confirmed nothing
+# fires with the gate off. ON by default as of that result - see docs/research/session-save.md's
+# round 87/88 entries. client_load_rejoin=0 turns it back off.
+client_load_rejoin=1
 
 # The host-side half of the same feature: when the HOST's own load verdict fires, announce
 # "host loaded a save - everyone re-joins" and have every connected client run the SAME rejoin
 # client_load_rejoin gates - instead of the (still available, but now redundant when this is
-# on) session_save_host_refusal disconnect. Shares every one of client_load_rejoin's
-# unverified assumptions, plus its own: whether the host's WorldDigest.LoadSerial (riding the
-# existing 1 Hz world-digest channel) reaches a client fast enough to feel responsive, and
-# whether re-adoption survives a host load that changes which MODULE is loaded (not just the
-# save state within one) - transition-window-races.md's fixes were proven against ordinary
-# module-to-module travel, a similar but unmeasured-for-this-case discontinuity. OFF until a
-# live pass confirms both.
-host_load_readopt=0
+# on) session_save_host_refusal disconnect. Live-verified alongside client_load_rejoin: firing a
+# real mid-session load on the host produces the announce line and the client's world-transfer
+# fetch succeeds cleanly (the round-86 "actively refused it" failure is gone - it turned out to
+# be a missing world-serving listener, not a timing race, now fixed). ON by default as of that
+# result. host_load_readopt=0 turns it back off.
+host_load_readopt=1
 
 # Let the mod own the HUD pause button. The engine's own toggle reads server mask bit 0x02,
 # which is also the focus-loss reason FocusKeeper must keep clearing - so it can pause but
