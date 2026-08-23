@@ -2098,3 +2098,183 @@ before anyone treats this as a full regression-clean pass. `companion_local_comb
 `dotnet test tests/KotorCoop.Tests` (Release): unchanged this round — no production code touched
 (pure live observation against already-shipped round-83 code). Build and baseline confirmed green
 before starting (see this round's own commit).
+
+## Round 87 (2026-08-24, static pass, no rig access) — round 85's warp-transition crash, root-caused
+and fixed by disassembly; NOT yet live-verified
+
+Picks up round 85's own "not fixed this round" flag directly: warping the host to a different
+module while `PartyFollowController`'s per-frame drive/diagnostic path is active (the shipped
+default — `party_follow_pokestep` defaults to `1`, not an opt-in) crashes the host with an access
+violation at `0x4AA984`. This round had no rig access (another agent owns it), so everything below
+is disassembly and source-reading only; live verification is specified at the end for whoever picks
+this up with the rig free.
+
+### What is at 0x4AA984
+
+`tools/disasm.py 0x4AA980 40` settles it precisely — it is inside `swkotor.exe`'s own `.text`, NOT
+this plugin's code:
+
+```
+0x004AA980  8b4c2404   mov ecx, dword ptr [esp + 4]
+0x004AA984  d901       fld dword ptr [ecx]          <-- the crash instruction
+0x004AA986  8b542408   mov edx, dword ptr [esp + 8]
+0x004AA98A  d81a       fcomp dword ptr [edx]
+...
+0x004AA9AD  b801000000 mov eax, 1
+0x004AA9B2  c3         ret
+0x004AA9B3  33c0       xor eax, eax
+0x004AA9B5  c3         ret
+```
+
+This is a small "are these two float3 vectors within epsilon" comparison helper: it loads two
+stack-passed pointers (`ecx`/`edx`) and `fcomp`s their X/Y/Z components in turn, short-circuiting
+to "not equal" (`eax=0`) the moment any FPU compare goes unordered/not-equal. `0x4AA984` is the
+crash address because it is the FIRST instruction that actually dereferences one of those two
+pointer arguments (`mov ecx, [esp+4]` at `0x4AA980` only loads the pointer VALUE off the stack,
+which never faults; `fld [ecx]` is where a bad pointer value would fault).
+
+This exact function is round 84's own already-identified `call 0x4aa980` at `0x511D5A`, inside
+`Moving_To_Path` (`0x00511B60`) — round 84 called it "close enough to the next path node." Reading
+the call site (`tools/disasm.py 0x511CE0 160`) resolves both arguments precisely: the SECOND push
+(`push edx`, `0x511D55`) is `lea edx, [esp+0x30]` — the address of a small on-stack float3 local
+this same code just filled from a node-lookup call (`call 0x634cc0`); the FIRST push (`push ecx`,
+`0x511D50`) is `lea ecx, [edi + 0x90]` — a pointer directly into whatever creature `edi` currently
+holds, at the offset round 84 already names as the creature's own live position field. By x86
+cdecl stack order, at the callee's entry `[esp+4]` (dereferenced first, at the crash instruction)
+is the LAST-pushed value — the on-stack node-position local, always a valid address of the
+CALLER's own frame — and `[esp+8]` is `edi+0x90`, the creature-position pointer. A stack-local
+address should never itself fault; a stale/freed `edi` (a creature pointer for a slot that
+resolved to garbage after a module change) faulting through `edi+0x90` at the SECOND compare
+(`fcomp dword ptr [edx]` reads `edx=[esp+8]=edi+0x90` — wait, on the recorded fault this was the
+FIRST dereference that faulted, at `0x4AA984`/`ecx`) is the only account this round could not fully
+square against the pure stack-arithmetic reading above without a live debugger — see "what a live
+session would need to check" below. What IS fully settled without ambiguity: this is engine code,
+reached only via `Moving_To_Path`, reached only via `WalkUpdateLocation_QuickWalk_FollowLeader`'s
+dispatch, reached only via this plugin's own `Odyssey.TryDriveFollowLeaderStep(objectId, 16)` call
+(`PartyFollowController.cs`, inside the per-companion loop) — not a call this plugin makes
+anywhere else, and not reachable without this controller running.
+
+### Root cause: PartyFollowController had NO transition/epoch guard at all
+
+Confirmed by reading the whole file before this round's fix: zero occurrences of
+`TryGetWorldEpoch`/`IsInTransition`/`trans_pending`/any epoch tracking anywhere in
+`PartyFollowController.cs`. Every other stateful per-frame controller this codebase ships
+self-invalidates on a module change — `DialogueSpectateController.OnFrame` is the clearest existing
+example (`Odyssey.TryGetWorldEpoch`, compare against a cached `_epoch` field, `Invalidate()` on
+change) — but this one never adopted that pattern, because rounds 71-85 built it up purely against
+a same-module rig (round 85 itself is the FIRST round in this whole investigation to attempt a warp
+with this controller's round-80/83/84 machinery live).
+
+`PluginHost.OnFrame`'s own epoch gate (`Odyssey.TryGetWorldEpoch` returning false) already refuses
+to call ANY controller, including this one, while the world is mid-teardown or has no server at
+all — so the crash is not "ran during the gate's own false window." Round 85's own log evidence
+pins it more precisely than that: `party follow finelog` lines for both companions right up to
+`epoch: world unloading; clearing phantom, item, combat and door state`, then silence, then the AV
+1.4s later — i.e. the crash happened on or shortly after the FIRST frame `TryGetWorldEpoch` started
+reporting the NEW module's epoch as valid again. PluginHost's own gate answers "is there a
+readable world," not "are THIS module's party-table/follow-data records populated yet" — and round
+85's own working theory (a fresh object-array pointer allocated for the target module before its
+party/creature data is actually populated) is exactly the gap between those two questions. Nothing
+in `PartyFollowController` before this round asked the second one at all; it simply ran every frame
+`PluginHost` let it run, trusting "the world is readable" to also mean "my own per-companion state
+for this world is trustworthy."
+
+### The fix
+
+New file `src/KotorCoop.Plugin/PartyFollowTransitionRule.cs` — a one-line pure function,
+`ShouldSkipThisFrame(bool worldEpochReadable, ulong currentEpoch, ulong lastSeenEpoch) =>
+!worldEpochReadable || currentEpoch != lastSeenEpoch`, mirroring `WorldLoadRule`'s own
+already-established "pin the assumption in a tested pure function, not inside unsafe engine-pointer
+code" shape (see `WorldLoadRuleTests.cs`; new `PartyFollowTransitionRuleTests.cs` added alongside
+it, 4 cases: unreadable world, first frame of a new epoch, the very-first-live-frame zero-epoch
+edge, and an unchanged epoch never skipping).
+
+`PartyFollowController` gets a new private `_lastSeenEpoch` field (the controller's OWN last-driven
+epoch — deliberately not reusing `PluginHost`'s identically-named field, so "did I personally
+resume driving this epoch" cannot be answered by a flag some other controller reset for an
+unrelated reason) and a new check at the TOP of `OnFrame`, immediately after the existing
+command/presence/conversation/roster-freeze guards and BEFORE the `PumpPartyUpdate`/
+`RecalculateFollowPoint` calls (not just before the per-companion loop — both are unconditional
+per-frame engine calls into the same `CSWParty` machinery, and round 85's evidence does not narrow
+the crash specifically to the per-companion loop, only to "the first frame this controller's engine
+calls run against a newly-valid epoch"). On the single frame a new epoch is first observed (or the
+world is unreadable), the controller clears its per-slot `_tracked` bookkeeping and returns without
+calling ANY engine function this frame — deferring `PumpPartyUpdate`, `RecalculateFollowPoint`,
+`TryDriveFollowTarget`, `TryResetStuckFollowPhase`, `TryDriveFollowLeaderStep` (the call that
+reaches the crash), `TryAdvanceStalledPathDestination`, and the diagnostic reads by exactly one
+frame across a module change. Every frame after that — including the very next one — runs exactly
+as it did before this round; ordinary play (epoch unchanged frame over frame) never skips anything,
+so the diagnostics and follow-drive logic keep their full, unthrottled behaviour outside a
+transition.
+
+### Honest confidence assessment
+
+**What this round is confident about, from disassembly alone:** `0x4AA984` is engine code, not
+plugin code; it is reached only through this controller's own `TryDriveFollowLeaderStep` call;
+`PartyFollowController` had no transition awareness at all before this fix, unlike every sibling
+controller in this codebase; and round 85's own log timing places the crash specifically at the
+"epoch just became valid again" boundary, which the new guard now defers past.
+
+**What this round could NOT independently confirm without a live debugger:** (1) which of the two
+float3 pointers passed into the `0x4AA980` helper is the one actually invalid at crash time — the
+pure stack-arithmetic reading above says the FIRST dereference (`ecx`, the crash instruction) is a
+caller-stack address that should always be valid, and the more plausible stale pointer
+(`edi+0x90`, the creature position) is the SECOND argument, dereferenced one instruction later
+(`0x4AA98A`) — a real discrepancy this round's static-only pass could not resolve (possibilities:
+the recorded fault offset names the faulting INSTRUCTION rather than the faulting DEREFERENCE in
+some edge case this round does not know how Windows' AV reporting handles for `fld`/`fcomp` FPU
+instructions specifically; or `edi` itself, not just `edi+0x90`, is what's actually corrupted, which
+would make `lea ecx,[edi+0x90]` at the CALL SITE already compute a poison value before the callee
+even runs — in which case ecx being "the crash pointer" is fully consistent after all, since `edi`
+being garbage poisons BOTH the lea'd address AND anything computed relative to it, and my confident
+claim above that "a stack-local address is always valid" implicitly assumed `edi` was NOT what got
+mixed up with the stack-local in a mistraced push/lea pairing — a live disassembler trace, not a
+static read, is needed to be certain which register genuinely held which value at the fault); (2)
+whether ONE frame of deferral is always sufficient for the new module's party-table/follow-data
+records to settle, or whether under some load conditions it can take more than one frame — the
+"one frame" figure is INFERRED from round 85's own log-timing description ("one frame after"), not
+measured with a debugger step-through counting real frames.
+
+Given both open items are exactly the kind a live debugger (break on the AV, inspect `edi`/`ecx`/
+`edx` at the fault, single-step the frames immediately after a real warp) would settle in minutes,
+and this round's fix defers the ENTIRE reachable call chain (not just the diagnostic log line) by a
+full frame regardless of which specific pointer is the culprit, this is shipped as the correct,
+disassembly-grounded, conservative fix — but flagged, per this project's own standard, as
+NOT YET LIVE-VERIFIED rather than closed.
+
+### Live-verification step for whoever has the rig next
+
+1. `src/KotorCoop.Plugin/build.ps1 -Install` on both installs, `tools/demo.ps1` up, recruit at
+   least one companion (Trask is already in the Endar Spire start; round 85's own `recruit 2 carth`
+   primitive works too for a two-companion run).
+2. Leave `party_follow_pokestep` and `party_follow_advance_destnode` at their shipped defaults (`1`)
+   — the crash path must be live, not disabled, for this to be a real test. `party_follow_finelog=1`
+   is optional (it makes the log easier to read around the transition but is not what crashed).
+3. Reproduce round 85's exact recipe: host `warp tar_m10aa` (or any real cross-module warp) while a
+   companion is actively in the follow state.
+4. Pass condition: `tools/crashlog.ps1` shows no NEW `module=swkotor.exe code=0xc0000005` event at
+   or after this warp (compare timestamps against any pre-existing entries from prior rounds); the
+   host process is still alive and responsive after the transition.
+5. Confirm the fix does not just avoid the crash by accident but is doing what it claims: the
+   plugin log should show a gap of approximately one frame in `party follow finelog`/`party follow:`
+   output immediately after the `epoch: world unloading...` line and the module actually finishing
+   its load, then normal-looking follow diagnostics resuming in the NEW module (sane, non-garbage
+   `phase`/`pathNode`/position values — not zeros or huge numbers, which would indicate the guard
+   fired but the underlying data was still bad one frame later, i.e. the "one frame is enough"
+   assumption above was wrong and needs a second look).
+6. If it still crashes: break in a debugger on the AV, inspect `edi`, `ecx`, `edx` and `esp` at
+   `0x4AA984` to settle open item (1) above precisely, and check how many real frames elapse between
+   the `epoch: world unloading` log line and the first `party follow` line in the new module to
+   settle open item (2) — if it is reliably more than one, widen `PartyFollowTransitionRule` to
+   require N clean frames (or a positive party-table sanity check) rather than exactly one.
+
+### Test suite and build
+
+`dotnet test tests/KotorCoop.Tests` (Release): **1667/1667 passed** (1663 baseline + 4 new
+`PartyFollowTransitionRuleTests` cases), ~2m30s. `src/KotorCoop.Plugin/build.ps1` (no `-Install`,
+per this round's no-rig-access constraint) builds clean, x86 confirmed, 0 warnings introduced (the
+one pre-existing `PortraitController.cs` CA2014 warning is unrelated and untouched). No
+`SharedBlock`/protocol version change — `PartyFollowTransitionRule.cs` is a new dependency-free pure
+file (added to `KotorCoop.Tests.csproj`'s direct-compile list alongside `WorldLoadRule.cs`), and the
+only other change is two new fields/one new guard block inside `PartyFollowController.cs`, nothing
+crossing the wire.

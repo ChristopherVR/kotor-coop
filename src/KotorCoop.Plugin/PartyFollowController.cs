@@ -144,6 +144,14 @@ internal sealed unsafe class PartyFollowController(SharedBlockView block)
     /// <see cref="Odyssey.PumpPartyUpdate"/> call, or -1 before the first frame.</summary>
     private double _lastUpdateTime = -1;
 
+    /// <summary>ROUND 87 (party-reconciliation.md): see <see cref="PartyFollowTransitionRule"/>'s
+    /// own remarks — the last epoch THIS controller has actually driven follow logic against.
+    /// Starts at 0, which is not a valid epoch (<c>Odyssey.TryGetWorldEpoch</c> hashes a
+    /// non-empty object-array pointer with an FNV seed that never lands on exactly 0 in
+    /// practice), so the very first live frame is deliberately treated the same as a module
+    /// change: skipped once, harmlessly, before driving begins.</summary>
+    private ulong _lastSeenEpoch;
+
     public void OnFrame()
     {
         if (!_enabled || block.Command != SharedBlock.CommandSpawnAndDrive)
@@ -164,6 +172,29 @@ internal sealed unsafe class PartyFollowController(SharedBlockView block)
         // beat) — issuing a follow order over either would fight the thing actually in control.
         if (Odyssey.IsConversationActive || Odyssey.IsPartyRosterFrozen())
         {
+            return;
+        }
+
+        // ROUND 87 (party-reconciliation.md): closes round 85's own "not fixed this round" warp
+        // crash (AV at 0x4AA984, inside the engine's own Moving_To_Path follow continuation —
+        // see PartyFollowTransitionRule's own remarks for the full disassembly-grounded finding).
+        // This must run BEFORE the PumpPartyUpdate/RecalculateFollowPoint calls below, not just
+        // before the per-companion loop — both are unconditional per-frame engine calls into the
+        // same CSWParty machinery, and round 85's own evidence does not narrow the crash to the
+        // per-companion loop specifically, only to "the first frame this controller's engine
+        // calls run against a newly-valid epoch."
+        bool worldEpochReadable = Odyssey.TryGetWorldEpoch(out ulong epoch);
+        if (PartyFollowTransitionRule.ShouldSkipThisFrame(worldEpochReadable, epoch, _lastSeenEpoch))
+        {
+            if (worldEpochReadable)
+            {
+                _lastSeenEpoch = epoch;
+            }
+
+            // Every per-slot tracked position/stall timer belongs to whatever was true before
+            // this module change (or is simply unstarted) — never compare it against the first
+            // real reading the settled frame after this one takes.
+            Array.Clear(_tracked);
             return;
         }
 
