@@ -12115,27 +12115,6 @@ internal static unsafe class Odyssey
         (delegate* unmanaged[Thiscall]<nint, int, byte*, uint>)0x005645F0;
 
     /// <summary>
-    /// K1's nine companion slots are a fixed, game-defined mapping (the <c>NPC_*</c> constants in
-    /// nwscript.nss, identical on both installs since both run the same executable and game
-    /// data) to a fixed party-member blueprint. Order matches the standard nwscript.nss
-    /// declaration order (Bastila, Canderous, Carth, HK-47, Jolee, Juhani, Mission, T3-M4,
-    /// Zaalbar) — cross-checked against this project's own live-confirmed data point
-    /// (docs/research/party-reconciliation.md Round 75: <c>console 'recruit 2 carth'</c>
-    /// succeeded, confirming slot 2 = Carth) and <c>ConsoleCommand.ParseRecruit</c>'s own comment
-    /// ("Carth is slot 2"), but NOT independently re-derived from this repo's own decompilation
-    /// pipeline for the other eight (no .dlg/.ncs decompiler wired up here) — every resref is
-    /// individually confirmed present in <c>templates.bif</c> (docs/re/spawn.md §4, VERIFIED), so
-    /// a wrong mapping would spawn the WRONG companion rather than fail outright, which is
-    /// exactly what a live check must confirm before this is trusted for anything but slot 2. See
-    /// docs/research/dialogue-consequences.md §4.2.
-    /// </summary>
-    private static readonly string[] PartyRosterTemplates =
-    {
-        "p_bastilla", "p_cand", "p_carth", "p_hk47", "p_jolee",
-        "p_juhani", "p_mission", "p_t3m4", "p_zaalbar",
-    };
-
-    /// <summary>
     /// Recruits NPC slot <paramref name="slot"/> the way the engine's own
     /// <c>AddAvailableNPCByTemplate</c> does — <see cref="AddNpcByTemplateFn"/>'s own doc comment
     /// has exactly what this buys over <see cref="TrySetSlotAvailable"/>'s raw poke it replaces
@@ -12164,11 +12143,16 @@ internal static unsafe class Odyssey
     /// never gains the in-world flag bit <c>AddMember</c>'s own typed live-body check requires).
     /// Only <see cref="SpawnAvailableNpc"/> — which reads the off-stage cache this call populates
     /// — produces a body that check will accept.
+    ///
+    /// The slot -&gt; resref mapping itself lives in <see cref="PartyRosterTemplateTable"/> (split
+    /// out so it can be unit-tested) — see that class's own doc comment for the 2026-08-24 round
+    /// that independently re-derived and confirmed all nine entries by disassembly, closing the
+    /// "not independently re-derived... for the other eight" gap this comment used to carry.
     /// </summary>
     public static uint AddAvailableNpcByTemplate(int slot)
     {
         nint table = GetPartyTable();
-        if (table == 0 || slot is < 0 or >= PartyRosterSlots)
+        if (table == 0 || !PartyRosterTemplateTable.TryGetTemplate(slot, out string resref))
         {
             return 0;
         }
@@ -12179,7 +12163,6 @@ internal static unsafe class Odyssey
             exoString[i] = 0;
         }
 
-        string resref = PartyRosterTemplates[slot];
         byte* templateName = stackalloc byte[32];
         int count = resref.Length < 31 ? resref.Length : 31;
         for (int i = 0; i < count; i++)
