@@ -346,13 +346,22 @@ local_combat_range=20
 # correctly, no stranding, matching local_combat's own fight timing exactly - but a companion
 # actually landing a credited swing was not independently confirmed, blocked by a newly-found
 # staleness bug in the party-presence channel (a mirroring client's reported companion position
-# can freeze for minutes at a time) rather than by anything wrong with this gate. A 2026-08-23
-# static pass (no rig access) found a second, previously unexamined candidate for the same
-# unconfirmed swing: solo mode, which a client holds for its whole session regardless of release
-# state, and which two other documents in this project independently describe as stopping
-# companions from FIGHTING, not just following - never tested against a released companion's own
-# combat AI. See docs/research/party-reconciliation.md's dated 2026-08-22 and 2026-08-23 entries,
-# and docs/research/companion-combat-credit-plan.md for the staged live-test plan (not yet run),
+# can freeze for minutes at a time) rather than by anything wrong with this gate. Round 82
+# (2026-08-23) then live-CONFIRMED a second blocker: solo mode (party table +0x190, held for the
+# whole client session) stops a released companion's own AI SCRIPT from ever queuing so much as
+# a move - eleven diagnostic samples across a real sustained fight, action-queue head never once
+# left empty. Round 83 (2026-08-23, static pass) found the fix: a comprehensive scan of every
+# read of that flag in swkotor.exe found solo mode consumed in exactly six places, all GUI/menu
+# code or the script-facing GetSoloMode() nwscript command - none anywhere near RunActions or
+# the ExecuteCommandAttack path the `attack` cheat already drives through live-proven. So the
+# block is the party AI SCRIPT's own choice not to act on what GetSoloMode() tells it, not an
+# engine gate a directly-queued action has to fight. This flag now drives a released companion's
+# attack directly through that same call (PartyPresenceController.DriveAttackIfDue), making no
+# write to solo mode at all - zero risk to a second, still-mirrored companion's own suppressed
+# AI, since nothing about the party-wide flag changes. NEEDS-LIVE: this mechanism has never fired
+# against a real fight. See docs/research/party-reconciliation.md's dated 2026-08-21/22/23
+# entries and docs/research/companion-combat-credit-plan.md's round 82/83 entries for the full
+# evidence trail and the exact live-test steps (including the two-companion drift-risk check)
 # before flipping this on.
 companion_local_combat=0
 

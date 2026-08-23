@@ -1682,3 +1682,61 @@ production code was changed for this round (a pure live observation pass against
 diagnostic `PartyPresenceController` already shipped 2026-08-23). Rig cycled cleanly across this
 round's own restart (needed to pick up the new `companion_local_combat=1`/`_range=15` coop.ini
 values, which `PartyPresenceController`'s readonly fields only read at plugin construction).
+
+## Round 83 (2026-08-23, static pass, no rig access) — the disassembly work round 82 explicitly
+did not do, and a fix candidate that needs no write to solo mode at all
+
+Round 82 named its own gap precisely: "(1) no per-creature equivalent of solo mode is known to
+exist ... this round did no disassembly work to find a narrower lever." This round did that work.
+
+**No per-creature lever exists.** `CSWPartyTable::SetSoloMode` (0x00565500) takes one boolean and
+writes it straight to `[this + 0x190]` — no slot/id parameter in its signature at all. Its
+"turning solo mode off" side effect (0x00563c60) iterates the PC plus every party member and calls
+`CSWSCreature::SetActivity` on each — further confirmation the engine's own model of leaving solo
+mode is whole-party by construction, not something with a per-member switch hiding inside it.
+
+**But solo mode is not actually an engine-level GATE on the action queue.** Every one of the 226
+direct call sites to `GetPartyTable` (0x004AEE70) in swkotor.exe was followed forward (250
+instructions or a `ret`) for a `[reg+0x190]` read. Six total, all GUI/menu code or the
+script-facing `GetSoloMode()` nwscript command itself (full table and addresses in
+`companion-combat-credit-plan.md`'s own round 83 entry — not duplicated here). **None of the six
+are anywhere on the path from `ExecuteCommandAttack` through `AddAttackActions`/`AddAttackAction`
+to `RunActions`** — the chain `Odyssey.AttackTarget` already drives, live-proven round 11 to queue
+a real attack and land real damage. Consistent with this document's own "Trap 5" from 2026-07-31
+(RunActions never even reads `commandable`): the action-queueing/processing pipeline does not
+consult party-table state at all. Solo mode's blocking effect is the party AI SCRIPT choosing not
+to act on `GetSoloMode()`'s answer — not the engine refusing to let an action be queued.
+
+**This makes the round 82 "no live fix attempted" gate moot, not merely satisfiable.** That gate
+was protecting against a WRITE to +0x190 reintroducing a second companion's native follow-AI. A
+fix that never reads OR writes +0x190 — because it bypasses the party AI script's decision point
+entirely, the same way `attack`/`usedoor`/`skipline` already bypass other script-driven mechanisms
+in this project — carries none of that risk by construction: nothing about the party-wide flag
+changes, so there is nothing for a second companion's suppressed AI to escape into.
+
+**Shipped, behind the still-OFF `companion_local_combat` flag**:
+`CompanionLocalFightRule.ShouldDriveAttack` (new pure decision function, unit-tested: fire only
+when the companion's action-queue head reads empty and a 1.5 s per-slot throttle has elapsed) and
+`PartyPresenceController.DriveAttackIfDue` (calls `Odyssey.AttackTarget(companionId,
+localEnemyId, ...)` from the existing `StayReleased` branch, targeting the exact enemy
+`local_combat` is already fighting). No shared-block or protocol change — this is local engine-call
+plumbing on the instance that already released the companion, nothing crosses the wire. Full
+detail, the exact six read sites with addresses, and the complete live-test plan (including the
+two-companion drift-risk check this document's own 2026-08-22 entry demanded before any solo-mode
+work ships) are in `docs/research/companion-combat-credit-plan.md`'s own round 83 entry.
+
+**Still NEEDS-LIVE**, deliberately not claimed as proven: whether `AttackTarget` behaves
+identically when the attacker is a party member (round 11's own live proof used a plain hostile),
+whether one queued attack sustains a whole combat round or needs the repeated re-issue
+`ShouldDriveAttack` is designed for, and — the risk this whole line of work exists to rule out —
+whether a SECOND, still-mirrored companion genuinely stays undisturbed for the length of a real
+fight with two companions present. See the credit-plan document's exact steps before flipping the
+default.
+
+### Test suite and build
+
+`dotnet test tests/KotorCoop.Tests` (Release): **1643/1643 passed** (1638 baseline + 5 new
+`ShouldDriveAttack` cases). Both plugin projects build clean, 0 warnings introduced by this
+round's change (one pre-existing, unrelated `CA2014` warning in `PortraitController.cs`). No rig
+access this round — static disassembly and unit tests only; the NEEDS-LIVE items above are for
+whoever picks up the rig next.

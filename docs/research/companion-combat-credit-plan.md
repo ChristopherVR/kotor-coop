@@ -11,6 +11,27 @@ a scoped per-companion release was not met — see that entry). `companion_local
 The original plan below is left intact as the recipe that was actually followed, for whoever
 picks up the "scoped solo-mode release" design next.
 
+**UPDATE, 2026-08-23 (round 83, static pass, no rig access):** the "scoped solo-mode release next"
+pointer above is superseded, not merely picked up — a comprehensive disassembly scan (every one of
+the 226 call sites to `CServerExoApp::GetPartyTable` in swkotor.exe, followed out to a `ret` or
+250 instructions either way) found exactly six places in the ENTIRE binary that ever read party
+table +0x190 (solo mode): two GUI button-state updates, one client-side follow-toggle read, one
+stealth-menu read, one temp-death update, and the script-facing `GetSoloMode()` nwscript command
+itself. **None of them sit anywhere on the path from `ExecuteCommandAttack` through
+`CSWSCreature::AddAttackActions`/`AddAttackAction` to `RunActions`** — the exact chain
+`Odyssey.AttackTarget` already drives (the same call the `attack` console cheat and
+`TestDriveController` use, live-proven round 11 to queue a real attack and land real damage).
+Solo mode's "companions stand still" behaviour is therefore the party AI SCRIPT's own choice not
+to act on what `GetSoloMode()` tells it — not an engine-level gate on the action queue itself. A
+directly-queued attack action never touches solo mode at all, in either direction: no read, no
+write. That makes the party-wide-write risk the round 82 entry's own "no live fix attempted" gate
+was protecting against **moot** — this fix candidate needs no write to +0x190, so it cannot
+re-enable a second, still-mirrored companion's own solo-suppressed AI, regardless of how many
+companions are in the party. See the round 83 entry appended at the end of this document, and
+`party-reconciliation.md`'s matching dated entry, for the full scan methodology and the
+implementation shipped behind `companion_local_combat` (still OFF by default — this is a
+disassembly-backed hypothesis, not yet live-verified).
+
 ## What this settles, precisely
 
 `companion_local_combat`'s release/reclaim gate is already live-proven clean
@@ -238,3 +259,175 @@ afterward. Revert any coop.ini overrides this pass made (`companion_local_combat
 `companion_local_combat_range`, and `party_fast_pump` if it was tried as a separate leg) back to
 `profiles/coop.ini.example` defaults on both installs unless the pass's own conclusion is to ship
 a changed default.
+
+## Round 83 (2026-08-23, static pass, no rig access) — the engine-call-bypass fix, and why it
+needs no solo-mode write at all
+
+The task authorizing this round asked two questions round 82 left open: (1) is solo mode checked
+per-companion anywhere in the engine, so a narrower lever than the party-wide flag might exist,
+and (2) if not, can the project's own established engine-call-bypass pattern (`usedoor`, `attack`,
+`skipline`, `Odyssey.TryDriveFollowLeaderStep`) drive the released companion's attack directly
+instead of depending on the engine's own AI action-queueing under solo mode.
+
+### Question 1: no per-companion equivalent of solo mode exists
+
+`CSWPartyTable::SetSoloMode` (0x00565500, disassembled) takes exactly one boolean and writes it
+to a single `dword [this + 0x190]` — no NPC-slot or object-id parameter anywhere in its
+signature. It is a party-wide switch, full stop; there is no finer granularity to find. (When
+turning solo mode OFF it also calls a helper at 0x00563c60 that iterates the PC plus every
+`+0x00`-counted party member — `CSWSCreature::SetActivity(this, 1, 0, notify)` on each — which is
+itself further confirmation the engine's own model of "leaving solo mode" is whole-party, not
+per-member: there is no code path in that helper that could be pointed at one companion only.)
+
+### Question 2: where solo mode is actually consumed — six sites, none on the attack path
+
+Every direct call site to `CServerExoApp::GetPartyTable` (0x004AEE70) in swkotor.exe was
+enumerated (`tools/xrefs.py 0x4AEE70`: 226 sites) and each followed forward (250 instructions or
+until `ret`, whichever came first) looking for any instruction reading `[reg + 0x190]` off the
+returned pointer — a full static census of every place in the ENGINE that ever reads solo mode,
+not just the places this project already knew about. It found exactly six:
+
+| Site | Class::Function | What it's for |
+|---|---|---|
+| 0x004B7114 | `CServerExoAppInternal::TempDeathUpdate` | server-side temp-death bookkeeping |
+| 0x00546AFD | `CSWVirtualMachineCommands::ExecuteCommandGetSoloMode` | the `GetSoloMode()` nwscript command itself |
+| 0x005F2A5B | `CClientExoAppInternal::TogglePartyFollow` | client-side follow-toggle read |
+| 0x0060F4C0 | `CSWCCreature::PartyMenuStealth` | stealth radial-menu behaviour |
+| 0x00686CC1 (×2 call sites) | `CSWGuiMainInterface::Update` | solo-mode GUI button state |
+| 0x006C24CF | `CSWGuiInGameSoloModeQuery::SetQueryText` | the "enter solo mode?" dialog's text |
+
+A fully-inlined access (party table's own base offset 0x1B770 + 0x190 = 0x1B900, read directly off
+`CServerExoAppInternal` without going through `GetPartyTable` at all) was also searched for and
+found nowhere in `.text`. **None of the six sites are anywhere near `RunActions`
+(0x0057F4A0), `CSWSCreature::AddAttackActions` (0x004FDE40), `CSWSCombatAttackData`/
+`CSWSCombatRound::AddAttackAction` (0x004D38B0), or `CSWVirtualMachineCommands::
+ExecuteCommandAttack` (0x0052E7F0)** — the whole chain `Odyssey.AttackTarget` already drives, and
+which this project's own `attack` console cheat and `TestDriveController` already use, live-proven
+(round 11) to queue a real attack action and land real, ordered damage on a fresh creature.
+
+Cross-checked against `party-reconciliation.md`'s own earlier "Trap 5" finding (RunActions never
+even reads `commandable`, `+0xE8`) — the pattern is consistent: RunActions processes whatever
+sits in a creature's action queue (`+0xFC`) without asking who queued it or why, and nothing in
+the queueing path itself reads party-table state. `AddAttackActions` (0x004FDE40, disassembled in
+full) does read `commandable` (`+0xE8`) on one of its two branches, bailing out early if it is 0 —
+but a party member's `commandable` is normally 1 and `PartyPresenceController` never touches it on
+a released companion (`StayReleased` hands off "no claim, no position/health write, nothing"), so
+this precondition holds for the companion case exactly as it does for any other creature.
+
+**Conclusion**: solo mode's "companions stand still" behaviour is not an engine-level gate that
+blocks the action queue — it is the party AI SCRIPT's own choice not to act on what
+`GetSoloMode()` tells it (that nwscript command is one of the six read sites; the rest are GUI).
+A directly-queued attack action, issued the exact way `AttackTarget` already does for the player
+or a staged test creature, bypasses that choice entirely without reading or writing solo mode at
+all. This is a materially different, and materially safer, fix than the "scoped solo-mode
+release" round 82 pointed at next: it makes **zero writes** to the party-wide flag, so it cannot
+possibly re-enable a second, still-mirrored companion's own solo-suppressed AI — the exact drift
+risk `party-reconciliation.md`'s 2026-08-22 roster-freeze entry flagged for touching +0x190 at
+all. There is nothing to race, because nothing about +0x190 changes.
+
+### What was shipped
+
+`companion_local_combat` (still OFF by default) now drives a released companion's attack directly:
+
+- `CompanionLocalFightRule.ShouldDriveAttack(headActionType, now, lastAttemptAt,
+  minIntervalSeconds)` — a new pure decision function, unit-tested — is true only when the
+  companion's own action-queue head currently reads `-1` (empty — nothing to contest) AND at
+  least 1.5 s (`PartyPresenceController.AttackDriveIntervalSeconds`) has passed since the last
+  attempt (a throttle against hammering `ExecuteCommandAttack` every frame, not a cadence the
+  engine's own combat-round timing is known to require — this constant is itself untested live).
+- `PartyPresenceController.DriveAttackIfDue`, called from the existing `StayReleased` branch of
+  `DriveOne` (the same branch that already does nothing else — "no claim, no position/health
+  write, nothing" — for a released companion), calls `Odyssey.AttackTarget(companionObjectId,
+  localEnemyObjectId, out failure)` when the rule above says to, targeting the exact enemy
+  `local_combat`'s own exclusion is already fighting (`block.LocalCombatExcludedId`, mapped
+  through `MaterialisedEnemies.ToLocal` — the same resolve `OnFrame` already did to compute
+  `nearEnemy`, threaded through rather than re-resolved).
+- A loud, capped log line either way (`party drive: drove companion 0x.. 's attack on 0x.. directly
+  (head was 0x..)` / `could not drive ... (failure N, head was 0x..)`) — deliberately separate
+  from the quieter release-diag trickle, so a live pass can tell at a glance whether the call is
+  even being attempted.
+- No write to solo mode. No shared-block/protocol change (nothing new crosses the wire; this is
+  entirely local engine-call plumbing on the instance that already released the companion).
+
+`dotnet test tests/KotorCoop.Tests` (Release): **1643/1643 passed** (1638 baseline + 5 new
+`ShouldDriveAttack` cases). Both plugin projects build clean.
+
+### What is still just a hypothesis — NEEDS-LIVE
+
+The disassembly is comprehensive (every solo-mode read site in the binary, the whole
+attack-queueing call chain traced instruction-by-instruction), but nothing here has been run
+against a live game. Three things specifically have never been observed:
+
+1. Whether `Odyssey.AttackTarget` called with a PARTY MEMBER as the attacker (round 11's own live
+   proof used a plain hostile creature) behaves identically — the `commandable` branch in
+   `AddAttackActions` was checked statically and should hold, but "should hold" is not "measured."
+2. Whether one queued attack action is enough to start a self-sustaining combat round (the way it
+   visibly does for a human player clicking attack once) or whether this needs to keep re-issuing
+   once every ~1.5 s for the whole fight to land more than one swing — `ShouldDriveAttack`'s
+   design already handles the latter (re-fires the moment the queue reads empty again) but this is
+   untested against a real multi-round fight.
+3. **The two-companion drift risk this whole investigation exists to avoid** — see the exact live
+   steps below. The static case for "this makes no write to solo mode" is solid, but the task's
+   own bar is a live check, not a disassembly argument, before calling the risk closed.
+
+### Exact live-test steps for the next round (rig required)
+
+Needs a save with **two companions recruited** — Endar Spire's Trask-only party cannot exercise
+the drift risk this fix exists to avoid, because there is no second companion to watch. The
+earliest two-companion point in a fresh game is the Taris apartment/underworld once both a second
+companion (e.g. Mission or Zaalbar) and the story's later party members are recruited; failing an
+early save file being available, stage it by playing forward past Taris to wherever the save
+library already has two companions in the active roster, or recruit a second companion live during
+the pass and take a fresh save afterward for repeatability.
+
+1. `profiles/coop.ini.example` overrides on **both** installs: `local_combat=1` (default),
+   `companion_local_combat=1`, `companion_local_combat_range=15` (same widened value round 82
+   used, for real walking room). Leave everything else at defaults.
+2. `pwsh tools\demo.ps1` with a save that has two companions in the active party (not just
+   available — actually seated, both slots of `partyTable+0x0C` occupied). Confirm both instances
+   connect `shared`.
+3. Identify both process ids (`Get-Process swkotor`).
+4. Walk (real engine movement/`console 'tp'`, never a raw poke — see this document's own §
+   "Working around the party-presence staleness bug") until BOTH companions and the host are
+   standing together, then engage a hostile with the CLIENT's own player exactly as the original
+   recipe above describes, so `local_combat` arms and `companion_local_combat`'s triple-proximity
+   gate releases the ONE companion that is close enough to both the client's player and the enemy.
+   Deliberately position the SECOND companion nearby but not quite in range (or arrange for only
+   one to close proximity first) so the release gate picks exactly one, leaving the other mirrored
+   — this is the scenario the risk is about.
+5. Tail both instances' logs. On the **released** companion, confirm the round 82 diagnostic line
+   now shows real activity: `party drive: drove companion 0x.. 's attack on 0x.. directly (head was
+   0x..)` firing repeatedly (every ~1.5 s while the queue empties), and check whether `head` in the
+   `still released` trickle line now reads something other than `0xFFFFFFFF` shortly after each
+   drive attempt (0x3F/63 — `AddAttackActions`' own attack action id — is the expected value if the
+   engine actually queued it). This is the direct test of open question 1 above.
+6. **The drift check, specifically**: watch the SECOND, still-mirrored companion for the entire
+   window the first one is released. It must stay exactly where `PartyPresenceController.DriveOne`
+   puts it (the host's own reported position, smoothed) — no independent movement, no swings, no
+   attack log lines naming it as either attacker or target. Any of the following would mean the
+   fix's "zero write to solo mode" static claim was wrong in a way this pass did not anticipate
+   (e.g., some other side effect of `AttackTarget`'s VM impersonation touching party-wide engine
+   state) and the fix must be reverted, not patched around:
+   - The second companion's own `party drive: companion 0x.. released ...` log line ever fires
+     (it should never — its own `nearEnemy`/`nearPlayer` gate should keep it mirrored the whole
+     time, but confirm it explicitly).
+   - `tools\partystate.ps1 -ProcId <clientPid>` sampled a few times during the window shows the
+     second companion's position diverging from what the host reports for it (drift).
+   - Any `combat ground-truth:` line names the second (still-mirrored) companion's object id as
+     either attacker or victim.
+   - `tools\verify.ps1 -Host1 <hostPid> -Client2 <clientPid>` after the fight still passes clean on
+     every existing check, not just the companion-specific ones — a regression anywhere else in the
+     party/combat channel is exactly the kind of collateral damage the risk describes.
+7. Compare elapsed fight time / swing count against a companion-local-combat-OFF baseline of the
+   same fight (same enemy, same starting HP) to get at open question 2: did the released
+   companion's swings measurably speed up the kill, corroborating that more than one attack action
+   actually landed, not just the first one.
+8. `tools\verify.ps1` and the existing §3/§4/§5 checks from the original plan above, unchanged —
+   confirm the credited-damage pipeline (already sound by inspection, per round 82) actually fires
+   now that the AI blocker is worked around.
+
+If all of the above comes back clean — released companion visibly attacking, second companion
+provably undisturbed, `verify.ps1` clean — that is the evidence bar this document's own decision
+tree sets for flipping `companion_local_combat`'s default to `1`. If the drift check in step 6
+fires, revert `DriveAttackIfDue`/`ShouldDriveAttack` entirely rather than attempting a live patch
+mid-session, and record exactly what was observed here for whoever picks this up next.
