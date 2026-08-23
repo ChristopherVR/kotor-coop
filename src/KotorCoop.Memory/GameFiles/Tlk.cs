@@ -53,7 +53,10 @@ public sealed class Tlk
         _entriesOffset = BinaryPrimitives.ReadUInt32LittleEndian(data.AsSpan(16, 4));
     }
 
-    public static Tlk Open(string path) => new(File.ReadAllBytes(path));
+    // Not File.ReadAllBytes: swkotor.exe can hold dialog.tlk open with write access it
+    // never uses while it is the game running, which File.ReadAllBytes's default
+    // FileShare.Read cannot share against. See GameFileIo.ReadAllBytes.
+    public static Tlk Open(string path) => new(GameFileIo.ReadAllBytes(path));
 
     public static Tlk Parse(byte[] data) => new(data);
 

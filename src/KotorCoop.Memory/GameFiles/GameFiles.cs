@@ -75,7 +75,10 @@ public sealed class GameFiles : IDisposable
         {
             try
             {
-                data = File.ReadAllBytes(loose);
+                // Not File.ReadAllBytes: the running game can hold this same loose file
+                // open (it resolves it too, override-first, same as us), and its default
+                // FileShare.Read would then be a sharing violation. See GameFileIo.
+                data = GameFileIo.ReadAllBytes(loose);
                 return true;
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)

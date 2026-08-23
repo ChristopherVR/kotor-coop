@@ -256,4 +256,22 @@ internal static class GameFileIo
         stream.ReadExactly(data);
         return data;
     }
+
+    /// <summary>
+    /// Whole-file counterpart to <see cref="ReadSlice"/>, same FileShare.ReadWrite reason:
+    /// <c>File.ReadAllBytes</c> opens with the BCL's default FileShare.Read, which is a
+    /// sharing violation against a handle swkotor.exe holds with write access even though
+    /// it never writes through it — chitin.key, dialog.tlk and a modded Override\*.2da are
+    /// exactly the files a live agent reads while the game that has them open is the one
+    /// being fingerprinted. A test process that never opens the game's own handle cannot
+    /// see this: it is a live-only failure mode, which is why every caller here must go
+    /// through this helper instead of the BCL convenience method.
+    /// </summary>
+    public static byte[] ReadAllBytes(string path)
+    {
+        using FileStream stream = new(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+        byte[] data = new byte[stream.Length];
+        stream.ReadExactly(data);
+        return data;
+    }
 }
