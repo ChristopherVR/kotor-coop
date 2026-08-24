@@ -1031,3 +1031,191 @@ fresh disassembly of `swkotor.exe` (`CServerExoApp::GetGameObject` 0x4AE750,
 handler 0x52FF20-0x530169, `CSWSObject::SetDeleteNoFade`/`SetFadeOutTime` 0x4CE920/0x4CE8A0,
 `CServerAIMaster::AddEventDeltaTime` 0x4B08D0) cross-referenced against `tools/kotor1_0_3.db`'s
 `functions`/`classes`/`offsets` symbol tables via `tools/disasm.py` and `tools/xrefs.py`.
+
+## Round (2026-08-24), continued — a THIRD theory for the scan-freshness gap:
+## `CServerAIMaster::UpdateState`'s event-queue drain is real-time-budgeted, which could make
+## the reported staleness a load-correlated property of the base engine, not a coop-plugin bug —
+## no fix shipped, a paired-sampling probe script built instead
+
+Task (assigned, no live rig access this round, continuing directly from the disassembly pass
+above): the two leading theories for the `DestroyObject`-scan-freshness gap (a stale array
+entry, a missing generation check) are both disassembly-ruled-out per this document's own
+immediately preceding entry. Look specifically for a THIRD mechanism — a timing/ordering issue
+between when an object is destroyed and when the next scan runs — that would not show up as
+either of those two, using the same NCS/x86 disassembly approach plus `tools/kotor1_0_3.db`'s
+symbol table.
+
+### Where the prior round left off, and where this one starts
+
+The prior entry established that `DestroyObject` does not delete anything synchronously — it
+schedules a delayed event via `CServerAIMaster::AddEventDeltaTime` (0x4B08D0), and the actual
+array unlink (`CGameObjectArray::Delete`/`Delete_2`, 0x4D81A0/0x4D8290) only runs when that
+event's target object's own C++ destructor eventually runs. It read `AddEventDeltaTime` itself
+in full but explicitly did NOT read what pops and dispatches events out of the AI Master's queue
+once they are due, writing: "this should fire on the very next AI Master tick, not
+synchronously... which is consistent with the third 2026-08-22 pass's own observation... but it
+does mean the removal is provably NOT instantaneous-by-construction." This round reads that
+missing half: `CServerAIMaster::UpdateState` (0x4B0B70, `tools/kotor1_0_3.db`'s
+`functions` table — the AI Master's own per-tick pump, symbol-confirmed, not inferred from a
+generic vtable slot), disassembled in full (`python tools/disasm.py 0x4B0B70 1600` against the
+GOG `swkotor.exe`).
+
+### What `UpdateState` actually does, established from the disassembly and the symbol table
+
+Every callee below is a *named* hit in `tools/kotor1_0_3.db`, not a guess from calling
+convention alone:
+
+- It reads the current time twice by two different means: `CWorldTimer::GetWorldTime`
+  (0x4ADE40, the game-simulation clock — the same call `AddEventDeltaTime` uses to compute a
+  scheduled delta) for the object-state work, and `CExoTimers::GetHighResolutionTimer`
+  (0x5E9260, a real wall-clock/QPC-style timer) captured before and after a chunk of work, for a
+  budget check — these are two DIFFERENT clocks serving two different purposes in the same
+  function, and conflating them was the risk in reading this function too quickly.
+- **Object-state scan** (0x4B0C20-0x4B0D0B): walks an object list (`ebp = edi+0x40`), resolves
+  each id via the same `CServerExoApp::GetGameObject` (0x4AE750) this whole document is about,
+  checks an HP/priority byte and a state field at `[object+0xA8C]` against several small
+  constants (1, 0x3D, 4, 5, 6), and for one matching case calls `CSWSCreature
+  ::WalkUpdateLocation_QuickWalk` (0x51D9C0, symbol-confirmed) and conditionally writes
+  `[object+0xA8C] = 1`.
+- **Event-queue drain** (0x4B0D11-0x4B0E36): while the AI Master's own event queue
+  (`edi+0x54`) is non-empty AND its head event's scheduled time (checked via `CWorldTimer
+  ::CompareWorldTimes`, 0x4ADFA0, symbol-confirmed — the SAME comparator `AddEventDeltaTime`'s
+  insert uses to keep the queue sorted) is not still in the future, `CExoLinkedListInternal
+  ::RemoveHead` (0x5E9C80, symbol-confirmed) pops it, resolves its target object id via
+  `GetGameObject` again, and either dispatches it (object still resolves — vtable calls through
+  `[vtable+0x78]`/`[vtable+0x28]`/`[vtable+0x20]`, matching handler categories inferred from the
+  earlier `SetDeleteNoFade`/`SetFadeOutTime` context) or, if the object no longer resolves,
+  calls `CServerAIMaster::DeleteEventData` (0x4B0AB0, symbol-confirmed) to discard it. **This is
+  the loop whose dispatch, for a `DestroyObject`-scheduled event, is what actually lets the
+  target's destructor run and `CGameObjectArray::Delete` unlink it** — the mechanism the prior
+  round found but did not trace forward to its consumer.
+- **A real-time budget gates the whole thing.** After the drain loop, the code takes a 64-bit
+  difference of two `GetHighResolutionTimer` samples and compares it against a limit computed
+  earlier in the function (`0x4B0E4A`-`0x4B0E5C`, `0x4B0FDD`-`0x4B0FE3`): if the elapsed WALL-
+  CLOCK time for this call is still under budget, it jumps BACK to the start of the object-state
+  scan (`0x4B0C20`) and repeats — object-state scan, then event-queue drain, then the budget
+  check again — advancing its own internal notion of "now" (re-read via `GetWorldTime`) each
+  pass, until either the queue empties or the budget runs out. The exact numeric limit and its
+  unit are NOT fully pinned down this round — the two operands feeding the comparison are built
+  through a 64-bit multiply/divide pair (`0x6FC710`/`0x6FB030`, both unnamed in the symbol
+  table, confirmed by disassembly to be generic 64-bit `mul`/`div` helpers, not a "clamp"
+  function as an earlier draft reading of this same code mis-typed them) scaling a default of
+  `0x2710` (10000, in whatever the resulting unit is) — but the STRUCTURE (a `GetHighResolutionTimer`
+  before/after pair, subtracted and compared against a stored limit, gating a repeat of exactly
+  the two loops above) is unambiguous from the disassembly regardless of the exact number.
+- **Separately, and unconditionally** (0x4B103B-0x4B117F, after the budgeted while-loop exits):
+  a five-bucket "AI level" scan (`CSWSObject::IsDirtyFlagSet`/`ClearDirtyFlag`/`GetClientObject`,
+  0x4CC220/0x4CC250/0x4CC2B0, all symbol-confirmed) walks every object registered via
+  `CServerAIMaster::AddObject`/`RemoveObject` (0x4B0850/0x4AF3D0, both disassembled this round:
+  `AddObject(level 0..4, object)` files an object into one of five buckets by `object+0x78`,
+  and every creature placed in a module registers into exactly one bucket — this scan's own
+  cost is therefore proportional to the module's total creature count, not just its hostiles).
+
+### The theory this supports, and why it is genuinely a THIRD mechanism
+
+`DestroyObject`'s actual array-unlink depends on the event-queue drain loop above running and
+reaching that specific event before the object's target is asked about again. That loop is
+gated by a real, wall-clock time BUDGET shared with an object-state scan whose cost scales with
+however many objects are in the AI Master's tracked list, and the function's outer scan (the
+unconditional five-bucket dirty/walk-update pass) is a further, unconditional chunk of
+per-call work whose cost scales with the module's total registered creature count. **Under a
+module with enough registered objects, the per-call budget could plausibly be exhausted by the
+object-state scan before the event-queue drain gets a turn (or gets far enough into a deep
+queue) — deferring the actual delete, and therefore the array unlink both `LiveObjectGate
+.Confirm` and the plugin's own `Odyssey.ResolveServerObject` are asking about, for as many
+`UpdateState` calls as it takes for the budget to catch up.** This is not "a stale array entry"
+(the entry is genuinely still linked, correctly, because the destructor genuinely has not run
+yet) and it is not "a missing generation check" (there is nothing to check — both sides read
+the same still-valid entry and correctly agree it resolves). It is a THIRD shape entirely: **the
+underlying event that would make the two sides' answer change has not fired yet, on either
+side, for a reason that is a genuine, load-correlated property of the base engine's own AI
+scheduler** — which would mean the `DestroyObject`-scan-freshness "issue" this document has
+chased across four live passes might not be a scan-freshness bug in this codebase at all, in the
+same sense round 72 found the corpse-vanish mystery to be vanilla engine/content behaviour, not
+a coop-plugin bug.
+
+### Why no fix was shipped
+
+This theory does not point at a defect in `KotorGameBridge`, `LiveObjectGate`, or
+`Odyssey.ResolveServerObject` — all three already read the array correctly and promptly relative
+to whatever the array actually contains (the 2026-08-24 disassembly round already established
+this for the lookup algorithm itself, and this round adds no reason to doubt it). There is also
+no safe, verifiable fix available on this codebase's own side of the boundary: forcing the
+array-unlink ourselves (writing `CGameObjectArray::Delete` behaviour by hand, or nudging the AI
+Master's own event queue) would be exactly the kind of direct engine-internals write this
+project's own rules caution against shipping without a live-verified offset, and there is no
+live rig this round to verify one. Hooking the `DestroyObject` NWScript action dispatch itself
+so THIS codebase's own liveness scan could learn "a destroy was requested" independently of the
+engine's own deferred completion would be a real, bigger architecture change (a new detour point,
+not an existing one) that also cannot be shipped un-verified. Per this project's own bar and the
+task's own instruction not to force a speculative fix: none was written. `dotnet test` was not
+re-run for a source change because none was made to `src/`.
+
+### What was built instead: a paired-sampling probe that can test this theory (and re-run the
+### prior round's own recommended recipe) without a human watching a clock
+
+The 2026-08-24 disassembly round's own closing section proposed the right experiment (paired
+`census 0x<id>`/`resolve 0x<id>` sampling, repeated over a multi-minute window, on a
+population-characterised module) but did not build it — that round shipped no code. This round
+builds it: `tools/liveness-freshness-probe.ps1`, a new script that automates exactly that
+recipe and adds the piece this round's own theory needs to be tested: a `-Label` so the SAME
+recipe can be re-run in modules of different characterised population and the two runs'
+convergence times compared.
+
+- Fires (or accepts an already-staged) `destroyobject <id>`/`slay <id>` on one instance, then on
+  a fixed cadence issues BOTH `census <id>` (the agent's own external-scan diagnostic,
+  `CoopCommandDispatcher.DescribeId` → `KotorGameBridge.TryResolveObjectHere`) and `resolve
+  <id>` (the plugin's in-process diagnostic, `CheatController.Resolve` →
+  `Odyssey.ResolveServerObject`) for the SAME id, logging both with timestamps to a CSV, and
+  flags the instant (if ever) the two disagree — the exact per-id signal the prior round's own
+  methodology critique said was missing (that round's evidence was aggregate `census`-count
+  arithmetic, never a direct `census 0x3B` call).
+- **A real subtlety found and worked around while building this**: `census <id>`'s own console
+  REPLY is not useful for this — `CoopCommandDispatcher.DescribeId` issues the array/scan line
+  via `Reply()` and then IMMEDIATELY issues a second `Reply()` ("listed hp .../not listed in
+  this census") that overwrites it in the single-slot shared-block reply field, per `Reply()`'s
+  own doc comment ("only the last line survives in the block, and all of them survive in the
+  log"). The script reads the array/scan line back from the AGENT's own log file instead
+  (tracking a byte offset so consecutive samples cannot cross-read each other's answers);
+  `resolve <id>`'s console reply has no such problem (`CheatController.Resolve` calls `Answer()`
+  exactly once) and is read directly, matching how every prior live pass in this document
+  actually used it.
+- Also samples the OWNER's plain `census` (no id) each round for population context, so a CSV
+  from a session records the module's own creature count alongside every disagree/agree sample.
+
+Not run live this round (no rig access) — this is tooling built for the NEXT live round, not a
+result. `dotnet test` was not re-run for this either (a `.ps1` addition under `tools/`, no
+`src/` changes); the script's own syntax was checked with PowerShell's parser
+(`[System.Management.Automation.Language.Parser]::ParseFile`, zero errors).
+
+### What the next live round should actually do
+
+1. Run `tools/liveness-freshness-probe.ps1` in `tat_m20aa` (already population-characterised at
+   a fixed 31 hostiles — see the 2026-08-22 entry above) with a `destroyobject`-staged id,
+   sampling for at least 3-5 minutes at a 15s cadence, `-Label tat_m20aa-31pop`.
+2. Run the SAME script, SAME staging (`destroyobject`), in a module confirmed to have a much
+   SMALLER total registered-object count (not just fewer hostiles — the object-state scan and
+   the five-bucket dirty scan this round found both appear to cost proportional to the AI
+   Master's total tracked object count, not just the census's hostile-only view; a corridor or
+   small early-game area with a handful of NPCs is the right shape) — `-Label <module>-lowpop`.
+3. Compare the two CSVs' `firstAgentGone`/`firstPluginGone` summary lines. If the high-population
+   run converges MUCH later than the low-population run (and especially if the low-population
+   run converges within one or two sampling intervals), that is real, load-correlated evidence
+   FOR this round's theory — the "issue" is base-engine AI-scheduler latency, not a coop-plugin
+   scan bug, and this document's remaining open item becomes "document the expected latency and
+   size `LivenessScanIntervalMs`/user expectations around it," not "find and fix a bug."
+4. If both runs converge on essentially the same short timescale regardless of population, this
+   round's own theory is not the (or not the whole) explanation, and the disagreement-flag
+   output (if it ever fires) is the next concrete lead — record either outcome here with the
+   same rigor every prior pass in this document has used.
+5. Independent of the above: if the probe EVER reports a `DISAGREE` sample (census says gone,
+   resolve still resolves, or vice versa, at the same sampled instant), that is the first
+   directly reproducible instance of an actual scan-freshness DEFECT this document has recorded
+   with an unambiguous per-id signal, separate from the load-latency question — chase that first
+   if it appears, since it would mean something IS wrong in the lookup/cache pipeline after all,
+   which this round's disassembly did not find but also cannot fully rule out without live data.
+
+### Files
+
+- `tools/liveness-freshness-probe.ps1` — new, the paired-sampling probe described above. No
+  other files touched; no `src/` changes.
