@@ -559,3 +559,138 @@ scenario now that the follow-AI fix is in place (this pass's own combat check wa
 light, time-limited); a genuinely human-driven (non-scripted) walk/run test, since every A/B this
 project has run for this flag has driven the leader through the `tp`+`walk` console/test-harness
 path rather than real OS input.
+
+## 2026-08-24 — a real per-tick redundant-work source found and fixed by static analysis (no rig
+access this pass); heavier-combat re-check still NEEDS-LIVE, not closed by this change
+
+Task: re-examine `party_fast_pump`'s heavier-combat regression (round 71, above — 53% worse mean
+frame time, ~40% more over-budget frames, `tar_m10aa`'s Vulkar pool) now that the follow-AI fix
+(rounds 80/84/88) has landed, and look specifically for redundant per-companion-per-frame work
+that scales worse under a heavier fight. No live rig access this round — static code analysis and
+a targeted fix only; the actual heavier-combat re-measurement this task exists to eventually
+answer is explicitly **not** attempted here.
+
+### What `party_fast_pump=1` actually changes, precisely
+
+`CoopAgent.PumpParty`/`PumpPartyRoster` (`src/KotorCoop.Session/CoopAgent.cs:571-575`) move off the
+~150 ms `CombatPumpIntervalMs` gate onto every `PumpOnce()` — i.e. every poll tick, which both
+installs' `coop.ini` set to `tick_rate = 60` (~16.7 ms), per this doc's own 2026-08-22 measurement
+section. That is roughly a 9x increase in HOW OFTEN `KotorGameBridge.TryWritePartyMembers` runs on
+the client — the only side that calls it (`PumpParty`'s own doc comment: "Host-authoritative...
+exactly one instance's AI is ever in charge"; the host calls `ReadPartyMembers`/`PublishParty`
+instead, never this path). Each call: one solo-mode byte write (always, correctly — see below),
+then for each of the 4 party-presence slots, up to 9 separate `WriteProcessMemory`-backed field
+writes (`src/KotorCoop.Memory/KotorGameBridge.cs`, `TryWritePartyMembers`'s plugin-block branch) —
+**unconditionally, every call, regardless of whether that slot's data had changed since the
+previous call.**
+
+### Why this is the mechanism, not just "more calls, but each one is cheap"
+
+Round 71's own note (carried into this doc's 2026-08-24 A/B section, "light combat spot-check")
+already says the plain part: *"round 71's own 53%-worse combat frame-time finding was measured
+against a companion that could not move at all (this session's own follow-AI fix postdates it)."*
+Read together with the unconditional-write finding above, this is not a coincidence — it is the
+whole story. A companion whose follow-AI cannot move has an UNCHANGING `PartyMemberState` for the
+entire session: same position, same facing, same animation, same health, same one-shot serial,
+every single pump. At 60 Hz that is up to ~36 field writes/second of **byte-identical data**,
+9x more often than the pre-`party_fast_pump` 150 ms cadence sent the same unchanging bytes. None
+of that work was ever necessary — the block already held the correct value from the write before
+it — and it is pure, avoidable cross-process write traffic landing on the SAME agent thread that
+also runs the enemy census, creature-liveness and phantom-damage scans on the 150 ms combat-pump
+path (this doc's own Table 1/Table 2), sharing CPU and, on Windows, kernel-transition cost with
+whatever the game process itself is doing that frame. A heavier fight is exactly the condition
+with the least spare budget to absorb 9x the necessary write volume: more enemies for
+`EnemyPresenceController`'s own unconditional per-frame scan (this doc's Table 1) to chew through
+on the GAME side, at the same moment the AGENT side is burning cycles re-sending data nothing
+downstream needed re-sent. This reframes round 71's regression from "`party_fast_pump` itself is
+expensive" to "`party_fast_pump` moved a write nobody had made cheap yet onto a 9x faster
+cadence, and the old 150 ms gate was accidentally hiding that cost."
+
+This does **not** mean the regression is fully explained — round 71's fight was staged specifically
+because companions could not move, which is no longer true after rounds 80/84/88, so a companion
+in a REAL heavier fight now genuinely changes position most passes and would not benefit from a
+dirty check nearly as much as round 71's frozen companion did. The fix below removes a real,
+confirmed-redundant cost; it does not by itself prove the heavier-combat case is now clean, which
+is exactly why the re-check below is NEEDS-LIVE, not closed.
+
+### The fix: `PartyPresenceDirtyCheck` — skip a slot's write when nothing changed, never skip
+across a module boundary
+
+`src/KotorCoop.Memory/PartyPresenceDirtyCheck.cs` (new, pure, unit-tested) + the corresponding
+per-slot cache in `KotorGameBridge.TryWritePartyMembers`
+(`_lastWrittenPartyPresence`/`_lastWrittenPartyPresenceCount`/`_partyPresenceModule`): before
+writing a party-presence slot, compare the candidate `PartyMemberState?` (or "empty") against what
+was actually written to that slot last time, and skip the write when they match exactly (position,
+facing, animation, health AND one-shot serial all equal — a fresh swing/parry one-shot always
+forces a write even if everything else is static). The `BlockPartyPresenceCount` scalar gets the
+same treatment — skipped only when both the count and every slot are unchanged.
+
+**The one case content-equality must not be trusted alone**: `PluginHost.Invalidate()` clears the
+shared block's party-presence slots IN-PROCESS on every module unload/epoch change
+(`src/KotorCoop.Plugin/PluginHost.cs`), independent of anything this agent wrote or cached. A
+companion whose reported position happens not to change across a transition (the common case, not
+a rare one) would otherwise leave the block silently at its post-`Invalidate` empty state forever,
+because the agent's own cache would see "unchanged" and skip re-populating it. The fix reads the
+current module every call (`TryReadCurrentModule`, already a cheap, already-used-elsewhere engine
+read — the same pattern `_doorModule`/`_placeableModule`/`_lootModule`/`_encounterModule` already
+use for the identical hazard) and forces an unconditional full rewrite of every slot, plus a reset
+of the whole cache, whenever the module differs from the last call (including "could not be read
+at all," which biases toward an extra write rather than a wrongly-skipped one). The solo-mode byte
+write itself is untouched — still unconditional every call, exactly as before; it was never the
+cost source and re-asserting it constantly is deliberate, not redundant.
+
+### Test suite and build
+
+`dotnet test tests/KotorCoop.Tests` (Release): see this pass's own build log below. New:
+`tests/KotorCoop.Tests/PartyPresenceDirtyCheckTests.cs` — first write is never skipped; identical
+candidate is skipped; both-empty is skipped; a changed position/health/one-shot-serial/slot-index
+is never skipped; identical content still forces a write when `moduleChanged` is true (both the
+occupied and the both-empty case) — the exact hazard the module-boundary override exists to
+prevent. `PartyFastPumpTests` (the existing end-to-end coverage of `party_fast_pump`'s own
+CoopAgent-level cadence) is unaffected: it mocks `IGameBridge` directly, one layer above
+`KotorGameBridge`, so it still asserts one `TryWritePartyMembers` CALL per tick — this change only
+makes what happens INSIDE that call cheaper when nothing changed, never how often the call itself
+happens.
+
+### What this pass explicitly did NOT do
+
+- **Did not re-run round 71's heavier-combat A/B.** No rig access this round. The dirty-check fix
+  above is a real, reasoned, unit-tested optimization targeting a confirmed redundant-work source,
+  but whether it is SUFFICIENT to close the 53%-worse gap under a real, heavier, sustained,
+  multi-enemy fight with companions now genuinely moving (not frozen, unlike round 71's own
+  staging) is unmeasured. A companion that is moving most passes during a real fight will dirty-
+  check as "changed" most passes too, so the win this pass can most confidently claim is for the
+  IDLE/slow-moving stretches of a fight (positioning, waiting between swings), not the swings
+  themselves.
+- **Did not add an enemy-count threshold or any other binary/graceful-degrade throttle.** Considered
+  and rejected: a threshold would need live tuning this pass cannot do blind, and the dirty check
+  above is strictly better where it applies (it costs nothing extra when data IS changing, unlike a
+  cadence throttle that would reintroduce latency exactly when a companion is fighting hardest) —
+  see docs/research/party-reconciliation.md's own "if unsure, do not flip it blind" precedent for
+  why an untuned threshold was not shipped speculatively.
+- **Did not touch the fallback (non-plugin) branch of `TryWritePartyMembers`.** That path writes
+  directly onto resolved creature objects rather than the shared block and is not the one this
+  doc's frame-time measurements (plugin-attached, `frame_stats=1`) exercise; changing it would add
+  risk with no evidence it needs the same fix.
+- **Did not change `party_fast_pump`'s default.** It stays ON, unchanged by this pass — this is an
+  optimization underneath an already-shipped, already-decided flag, not a new A/B result.
+
+### Verification tags (this pass)
+
+- VERIFIED (source, this pass): `PumpParty`/`PumpPartyRoster`'s fast-path cadence and the
+  client-only call site (`CoopAgent.cs`); `TryWritePartyMembers`'s unconditional per-field writes
+  before this fix (`KotorGameBridge.cs`); `PluginHost.Invalidate()` clearing party-presence state
+  in-process on a module change (`PluginHost.cs`); the existing `_doorModule`-style module-cache
+  pattern this fix's own invalidation reuses.
+- VERIFIED (unit test, this pass): `PartyPresenceDirtyCheck`'s decision table, including the
+  module-boundary override.
+- INFERRED, not measured: that round 71's regression is substantially explained by the frozen-
+  companion confound plus this redundant-write mechanism — plausible and consistent with every
+  fact on record, but not proven by a live measurement this pass.
+- NEEDS-LIVE, still open and NOT closed by this pass: round 71's own heavier, sustained multi-
+  enemy combat scenario, re-run with (a) the follow-AI fix in place, as the 2026-08-24 A/B round 3
+  entry's light spot-check already partially did, and (b) this dirty-check fix in place, specifically
+  measuring whether the previously-measured 53%-worse mean frame time / ~40%-more over-budget-frame
+  gap narrows, closes, or persists. `frame_stats=1` on both installs, the same `tar_m10aa` Vulkar-
+  pool recipe round 71 used (or an equivalent heavier multi-enemy fight), long enough to exceed the
+  3-minute target every prior round in this file has fallen short of.

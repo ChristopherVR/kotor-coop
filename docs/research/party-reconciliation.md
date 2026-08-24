@@ -2788,3 +2788,147 @@ does NOT claim the companion walks the full leg end-to-end; it claims a specific
 testable mechanism now exists for whoever has the rig next to confirm or refute round 89's
 hypothesis in one pass, with a shared, tested shape-detection rule backing both the disproven and
 the new candidate fix so they cannot silently drift out of sync with each other again.
+
+## 2026-08-24 (static pass, no rig access) — `companion_local_combat` under MULTIPLE simultaneous
+releases: code review finds the existing per-slot design already safe by construction; no code
+change made; the specific untested scenario is named precisely for the next live pass
+
+Task: round 85 (above) live-verified `companion_local_combat` with exactly ONE companion released
+(Carth) and a SECOND companion present but never released (Trask, stuck out of range the whole
+session) — "no drift observed" was proven for that shape, not for two companions BOTH released at
+once. This pass re-reads `CompanionLocalFightRule.cs` and `PartyPresenceController.cs` end to end
+specifically looking for (a) any state shared ACROSS companion slots that two simultaneous
+releases could contend over, and (b) — the literal question the task asked — any path where two
+different CLIENTS' engines could both claim authority over the same companion. No rig access this
+round; this is a code-level review only, not a live measurement.
+
+### Two simultaneous releases are already possible by the gate's own design, not a new scenario
+
+`PartyPresenceController.OnFrame` computes `localFightActive`/`localEnemyPosition`/
+`localEnemyObjectId` ONCE per pass (`PartyPresenceController.cs:337-351`) because `local_combat`
+itself only ever runs one fight at a time (item 1's own design) — every companion slot in that
+pass's `for` loop is handed the SAME answer to "is there a fight, and where." `DriveOne` then
+applies `CompanionLocalFightRule.Decide` independently per slot, gated on THAT slot's own
+`nearEnemy`/`nearPlayer` distance check (`PartyPresenceController.cs:403-409`). Nothing stops both
+roster slots from independently satisfying the triple-proximity gate in the same pass — the design
+doc's own 2026-08-21 entry already says as much ("with the roster capped at two companions and one
+fight at a time, this is at most both companions... in practice usually zero or one given how
+tight the gate is"). Round 85 measured the "zero or one" case; "both" has never been observed live,
+but it is not a hole in the design — it is an anticipated, intentional outcome (two companions
+ganging up on the one locally-fought enemy) that this pass confirms is wired correctly.
+
+### Per-slot independence, traced field by field: no shared mutable state between two released companions
+
+Every piece of state `DriveOne`/`CompanionLocalFightRule` touch for the release/reclaim/attack-drive
+path is an array indexed by roster slot, sized `SharedBlock.PartyPresenceCapacity` (4), with no
+cross-slot read or write anywhere in the loop body:
+
+- `_released[slot]` — release/reclaim edge state, per slot.
+- `_creature[slot]`/`_trackedId[slot]` — the resolved engine object for that slot, per slot
+  (`Resolve`, `PartyPresenceController.cs:654-675`); one companion's resolve/cache-miss path never
+  touches another's.
+- `_lastAttackDriveAt[slot]` — the 1.5 s attack-reissue throttle (`AttackDriveIntervalSeconds`),
+  per slot; one companion's attack cadence cannot starve or accelerate another's.
+- `_heldNeutral[slot]`/`_factionKnown[slot]` — faction/pin state, per slot
+  (`ApplyCompanionFaction`, `PartyPresenceController.cs:720-745`); the engine call itself
+  (`Odyssey.SetCreatureFaction`) is always addressed by THAT slot's own `objectId`.
+- `_smoother` (`MotionSmoother`) — already sized and indexed per slot; a released companion never
+  reaches `_smoother.Step` at all this pass (`StayReleased` returns before it), so there is nothing
+  for a second release to contend with here either.
+- `Odyssey.AttackTarget(objectId, enemyObjectId, ...)` (`DriveAttackIfDue`,
+  `PartyPresenceController.cs:579-597`) — a single engine call keyed by the ATTACKER's own
+  `objectId`, called once per released slot per pass; two released companions attacking the same
+  `enemyObjectId` in the same pass is two independent calls with two different attacker ids, which
+  is ordinary multi-attacker combat, not a contention the engine or this code needs to arbitrate
+  specially.
+
+The two per-controller (not per-slot) pieces of state — `_releaseDiagLogged`/`_attackDriveLogged`,
+the total-line-count caps on the diagnostic/attack-drive log — are shared across slots, but only
+gate LOG VOLUME (`ReleaseDiagMaxLines`/`AttackDriveMaxLines`, both 60 total). Two companions
+releasing at once will exhaust that shared cap roughly twice as fast and one's diagnostic lines
+could crowd out the other's once the cap is hit — a real but purely cosmetic limitation (less
+visibility into the SECOND companion's state on an unusually long two-companion session), not a
+functional or safety gap. Not changed this pass — raising or per-slotting the caps is a one-line
+change if a live pass finds the log genuinely too sparse with two companions releasing, but there
+is no evidence yet that it is.
+
+### "Two clients' engines both driving the same companion": structurally impossible in this
+project's current architecture, not merely untested
+
+The task asked this literally. Checked directly, not assumed:
+
+- `PartyPresenceController.OnFrame` only does anything once `block.PartyPresenceCount > 0`
+  (`PartyPresenceController.cs:320-324`), and `SharedBlock.PartyPresenceCount`/`PartyPresenceSlots`
+  are populated by exactly one call site: `KotorGameBridge.TryWritePartyMembers`
+  (`src/KotorCoop.Memory/KotorGameBridge.cs`), called from `CoopAgent.PumpParty` in exactly one
+  branch — the `else` (client) branch (`src/KotorCoop.Session/CoopAgent.cs:1368-1395`). The `if
+  (session.IsEnemyAuthority)` (host) branch calls `bridge.ReadPartyMembers()`/
+  `session.PublishParty(...)` instead and never writes the local shared block's party-presence
+  slots at all. `PumpParty`'s own doc comment states the invariant plainly: *"Host-authoritative, so
+  exactly one instance's AI is ever in charge."* On the host, `PartyPresenceController.OnFrame`
+  therefore always sees `count == 0` and returns before `DriveOne` ever runs — the release/attack-
+  drive machinery this whole document is about is dead code on a host instance, by construction,
+  every pass.
+- This project is a strict two-player topology — one host, one client (`docs/research/network-
+  topology.md:190`, "With two players there are no two clients"). There is exactly one process in
+  the whole session that ever runs `PartyPresenceController.DriveOne` with real work to do, so
+  there is no SECOND client instance that could independently satisfy the same triple-proximity
+  gate against the same companion and issue a competing `AttackTarget`/position/faction write.
+  "Two clients both claiming the same companion" is not a race this codebase's current shape can
+  express, not merely a race that has not been observed yet — a THIRD player would need protocol,
+  session-role and `SharedBlock`-slot-capacity changes well outside this task's scope before the
+  question would even become meaningful to ask about `companion_local_combat` specifically.
+- The host's OWN native engine AI (never suppressed on the host, per `PumpParty`'s own comment)
+  and the client's `PartyPresenceController` release/attack-drive path never touch the same
+  memory: they run in two separate `swkotor.exe` processes, each with its own resolved creature
+  object for "the same" companion (same NPC roster slot, same story-level identity, different
+  physical address in two different address spaces). Nothing about releasing the CLIENT's copy to
+  its own engine AI reaches across the process boundary to the HOST's copy, or vice versa — the
+  entire mirror/release design exists specifically to keep those two copies reconciled through the
+  network layer, never through shared memory.
+
+### Verdict: no code change made — the design already generalizes safely to multiple simultaneous releases
+
+Per this task's own instruction ("if the existing design already handles multi-companion release
+safely..., document that clearly instead of inventing unnecessary complexity"): this review found
+exactly that. Every piece of release/reclaim/attack-drive state is already scoped per roster slot
+with no shared mutable state between companions in the functional path, and the literal
+"two clients" framing does not apply to this project's current one-host/one-client architecture at
+all. No speculative locking, no new cross-slot guard, and no config-level cap on simultaneous
+releases were added — there is no gap here for such code to close, and adding it would be exactly
+the kind of unverified complexity this project's own rule (`docs/roadmap-seamless.md`, "verify a
+researched offset live before shipping the write") warns against shipping without a live pass that
+actually exercises the scenario it defends against.
+
+**What remains genuinely open, and is explicitly NOT settled by this code-level pass**: the
+specific live scenario round 85 did not reach — TWO companions simultaneously satisfying the
+triple-proximity gate against the SAME `local_combat` fight, both released and both driving attacks
+in the same window. The code-level reasoning above says this should behave identically to round
+85's single-release case, replayed twice with no interaction — but round 85's own live evidence
+(the "Trask never appears in a single `party drive: companion 0x127...` line... zero reads or
+writes anywhere near Trask" finding) is direct proof for the ONE-released/one-mirrored shape
+specifically, and a second companion actually swinging alongside the first, sharing the shared
+60-line diagnostic/attack-drive log caps and both landing credited hits on the same enemy in the
+same window, has never been observed. `companion_local_combat` stays OFF by default, unchanged —
+this pass does not touch its shipped state.
+
+### Test suite and build
+
+`dotnet test tests/KotorCoop.Tests` (Release): no `companion_local_combat`-related production code
+was changed this pass (a pure code-review/documentation pass); see this session's own combined
+build/test log for the `party_fast_pump` dirty-check change made alongside this entry, which is
+unrelated to `companion_local_combat`.
+
+### What the next live pass should specifically do
+
+Recruit both companions (`dialogue_recruit_sync`, per round 85's own recipe), set
+`companion_local_combat=1`/`companion_local_combat_range` generously enough that BOTH companions'
+host-side positions land within range of the client's player AND the one `local_combat`-excluded
+enemy at the same time (round 85's own asymmetry — one companion's follow-AI never catching up —
+should no longer force a single-companion result now that rounds 80/84/88 fixed the follow stall),
+then confirm: both `party drive: companion 0x... released...` lines appear in the same window; both
+`party drive: drove companion 0x...'s attack on 0x... directly` lines appear; the host's own damage
+ledger (`combat: applied N of a peer's damage to 0x...`) shows credited hits from BOTH companion
+object ids, not just one; and neither companion's position/faction/health reads ever cross-
+contaminate the other's (the same "0.05-unit noise, not drift" check round 85 already ran, applied
+to both slots this time instead of one).
