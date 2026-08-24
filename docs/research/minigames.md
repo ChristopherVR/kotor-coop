@@ -2003,6 +2003,72 @@ Release` on `src/KotorCoop.Memory` (the only project this round's reads touch): 
 0 errors. No `dotnet test` run (no code changed to verify); the last recorded green run remains
 1714/1714 (§17).
 
+## 19. Attempted (2026-08-24, follow-up round): §18.6's own continuous action/position poll through
+the stall window — blocked before the dialogue could even be reached, by a rig-launch regression
+unrelated to the swoop-race investigation itself
+
+Rig access this round (shared with two other fixes landed the same session — see this document's
+sibling entries in `party-reconciliation.md`/`dialogue-consequences.md` for what else this round
+touched). Set out to run §18.6's own recipe exactly: `craft-save --source "...\000002 - Game1"
+--dest "...\000003 - zzz_swoop_test" --bool Tar_SwoopEng` (succeeded, confirmed `Tar_SwoopEng: 0 ->
+1`, identical to §17.0's own recipe), then `demo.ps1` with no `-Save` override so the host
+auto-stages the freshly-crafted save — and built a throwaway diagnostic (`actionpoll.ps1`,
+scratchpad-only, same "one-off is fine" call as `focuspoll.ps1`) that needed no plugin changes at
+all: `SharedBlock.OffsetEnginePlayerPointer` (0x2260) is already published every frame, unconditionally
+(`PluginHost.OnFrame` → `playerView.PublishEnginePlayer`, shipped, not new this round), and
+`Odyssey.GetHeadActionType`'s own three-read pointer chase (`creature+0xFC` → action list → head
+position `+0x08` → node → action type at `+0x00`, valid range 0..0x40) is pure pointer-dereferencing
+with no engine call, so an external `ReadProcessMemory` script can replicate it exactly — the same
+"pure reads, no rig write access needed" shape every prior round in this section used.
+
+### What blocked it
+
+`demo.ps1` (which had already launched and connected two full instances earlier this same session,
+for the `client_load_rejoin`/`ControlReturnController` live tests recorded elsewhere) started failing
+immediately after the crafted save was created, with `instance 1 failed to launch or load` on every
+attempt — five consecutive tries, including full process kills and waits up to a minute between each.
+The underlying cause, run directly rather than through the wrapper: `agent launch --load-save 1 ...`
+reports `plugin load route failed: plugin shared block not found` immediately followed by
+`cannot drive the menu: could not focus the game window (foreground pid is 17176)` — but
+`blockpoke.ps1 -ProcId <pid> state` against the SAME process, seconds later, finds the shared block
+just fine (`version 52`) — the block exists and is readable. What never happens is `frames` advancing
+past `0`, checked repeatedly over more than a minute of real wall-clock time on the last attempt: the
+plugin's own frame hook (the same one every other controller in this document's investigation depends
+on) never ticks at all for this process, even after the window was confirmed visible, non-minimized,
+and `Responding: True`. `foreground pid 17176` resolved to `ShellExperienceHost.exe` with a "New
+notification" — a Windows toast, not a game or tooling process — present identically across every
+failed attempt; system CPU load was near-idle (2%) at the time, ruling out resource contention as the
+cause. This is a NEW failure mode, distinct from every rig limitation this document's own prior
+rounds recorded (§17.3's "cannot force real OS focus", the black-frame screenshot issue, click
+injection not landing) — those all assumed a rendering, responding game window; this round's blocker
+is the frame hook never engaging in the first place, before any of that machinery would even matter.
+
+Three working `demo.ps1` connect+warp cycles ran successfully earlier in this exact session, on this
+exact rig, with the exact same binaries — so this is not a standing rig defect this whole session, it
+appeared partway through. Not chased further: killing the process holding OS foreground focus to test
+the toast-notification theory directly was refused by this session's own tooling permissions as an
+out-of-scope system action, and this item's own priority (`if time remains`) does not license further
+environment debugging at the expense of the two higher-priority items this round's task already
+delivered. The crafted save was deleted (throwaway, same convention as §17.0); `actionpoll.ps1` was
+never run against a live dialogue and is not committed (scratchpad-only, matching `focuspoll.ps1`'s
+own precedent) — its mechanism is recorded here in full so the next round with a working launch can
+use it directly rather than re-deriving it: read `OffsetEnginePlayerPointer` (0x2260) from the shared
+block for the creature pointer, then chase `+0xFC` → `[list]` → `+0x08` → `+0x00` for the action type,
+sampled every few seconds for the full ~5-minute stall window.
+
+### What this changes about the shipping recommendation
+
+Nothing. `minigame_hide_peer` stays default-on; §18.6's own lead (whose delayed-event queue
+`StartNewModule` sits in, and whether it is backed up behind the PC's own commanded
+`ActionMoveToObject`) remains open, unconfirmed and unrefuted, exactly where §18 left it. No
+production code changed this round for the swoop-race investigation specifically (the two fixes this
+session's task delivered — `client_load_rejoin`'s self-heal gate and `ControlReturnController`'s
+warp-transition crash — are unrelated to swoop racing and are recorded in
+`party-reconciliation.md`/`dialogue-consequences.md`, not here). `dotnet test`: 1721/1721 green
+(1720 on the first parallel run plus one known-flaky `TransitionMovieTests.TheBlockVersionMovedInBothHalves`
+that passed cleanly in isolation — a full-suite-parallelism artifact unrelated to this session's
+changes, not a regression).
+
 ## 17. §16.6's own recipe run for real (2026-08-24): the focus-loss hypothesis is directly,
 decisively RULED OUT — `PausesCleared` never moves even once across a five-minute reproduction of
 the exact same stall
