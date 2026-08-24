@@ -2069,6 +2069,101 @@ warp-transition crash — are unrelated to swoop racing and are recorded in
 that passed cleanly in isolation — a full-suite-parallelism artifact unrelated to this session's
 changes, not a regression).
 
+## 20. §18.6's own continuous action-poll finally run for real (2026-08-24, follow-up round) — the
+PC's own action queue is EMPTY throughout the observed stall window (not stuck mid-move), and a
+SEPARATE, decisive new fact surfaces along the way: the escort NPC `racecs0` is supposed to spawn
+never actually exists
+
+Rig access this round, following directly from three other live-confirmations this same session
+(recorded in `party-reconciliation.md`/`dialogue-consequences.md`). The §19 rig regression (frame
+hook never ticking) did NOT recur this round — `demo.ps1` launched cleanly on the first attempt,
+`blockpoke.ps1 state` confirmed the frame counter climbing normally throughout. Ran §18.6's own
+recipe: `craft-save --source "...\000002 - Game1" --dest "...\000003 - zzz_swoop_test" --bool
+Tar_SwoopEng` (`Tar_SwoopEng: 0 -> 1` confirmed), `demo.ps1` with no `-Save` override (host
+auto-staged the freshly-crafted save as newest-by-mtime, exactly §17.0's own recipe), `cheat god 1`
+armed, single `blockpoke.ps1 travel tar_m11aa` (no chaining), `console 'tp 65.0 76.0 0.12'` to land
+next to Gadon, `blockpoke.ps1 talk GadonThek112`. The six-node auto-advancing chain ran node-for-node
+identical to every prior round (`-1 -> 17 -> 18 -> 19 -> 20 -> 21 -> 2`, terminal node published at
+19:30:06.623), and the now-familiar stall reproduced exactly: no `travel:`/`transition:`/`epoch:`
+line for over five minutes, position frozen at the `tp` landing spot the entire time
+(`console 'where'`: `module tar_m11aa at 65.0 76.0 0.0`, unmoved, checked at the end of the window).
+
+### Check 1: the PC's own action-queue head, sampled every 10s from t+56s to t+256s past the
+terminal node
+
+Reused §19's own already-built `actionpoll.ps1` (scratchpad-only, never committed, matching
+`focuspoll.ps1`'s own precedent) unchanged — it replicates `Odyssey.GetHeadActionType`'s exact
+three-read pointer chase (`creature+0xFC` → action list → `[list]` head position → `+0x08` → node →
+`+0x00` action type, valid range 0..0x40) via `ReadProcessMemory` against
+`SharedBlock.OffsetEnginePlayerPointer` (0x2260), the PC's own creature pointer, published every
+frame unconditionally. 20 samples, one every 10 seconds, starting ~56 seconds after the terminal
+node published (the poll script had to be written and launched after the dialogue had already run):
+
+```
+19:31:02  sample 1   creature=0x183931B8  head=0x0  actionType=-1
+19:31:12  sample 2   creature=0x183931B8  head=0x0  actionType=-1
+  ... (identical on every one of the 20 samples through 19:34:12) ...
+```
+
+**`head=0x0` on every single sample, for the full ~200-second observed window.** This is a flat,
+unmoving EMPTY action queue — not a stuck `ActionMoveToObject` that never clears. This directly
+argues AGAINST §18.6's own "PC's queue is where `StartNewModule` is stuck behind" reading, at least
+for the bulk of the stall: if the PC's own commanded walk (`racecs1`'s own `DelayCommand(11.0,
+AssignCommand(GetFirstPC(), ActionMoveToObject(oWaypoint, ...)))`, which fires ~11 real seconds
+after node 18 publishes — around 19:29:54 for this run) ever queued anything, it had already cleared
+— completed, failed, or was never actually queued at all — by the time polling started 68 seconds
+later, and nothing re-queued it for the following 200 seconds. **Honest limitation**: this poll could
+not be started before the dialogue had already run to its terminal node (writing and launching the
+diagnostic takes real time), so the critical ~68-second window immediately after node 18's own
+`DelayCommand(11.0, ...)` would have fired is NOT covered — a walk that queued, ran, and cleared
+inside that gap would look identical to a walk that never queued at all from this data alone. What
+IS settled: whatever happened in that gap, the PC's queue is not the ONGOING blocker for the
+remaining ~85% of a five-minute stall.
+
+### Check 2 (not explicitly asked for by §18.6's own text, but the same round's own creature-scan
+tooling made it free to check): the escort NPC `racecs0` is supposed to `CreateObject` never exists
+
+§18.6 point 2 flagged this exact question as unconfirmed and un-confirmable by any amount of further
+disassembly: "confirm whether `tar11_csbek` (the escort) actually exists in the world during the
+stall". A full `tools/creatures.ps1` sweep of the host, taken during the same stall window (~19:35),
+found **28 CSWSCreature objects in `tar_m11aa`, and NOT ONE of them is `tar11_csbek` or carries any
+Bek-escort-sounding tag beyond the module's own static GIT placements** (`hiddenbek111/112/113/116`,
+`tar11_ambbek0-4`, `zaerdra111`, `gadonthek112`, `tar11_assaultdrd` — every one accounted for by
+`tar_m11aa`'s own ordinary `Creature List`, already confirmed present in §18.4). **The escort was
+never created.** `k_ptar_racecs0.ncs`'s own unconditional `CreateObject(..., "tar11_csbek", <that
+location>, ...)` call (§18.2) either failed silently (NWScript's own convention for a bad argument —
+consistent with `GetLocation(GetObjectByTag("tar11_wpcsbek", 0))` somehow resolving to an unusable
+location, though §18.4 already confirmed that waypoint IS a real GIT placement) or never actually ran
+for a reason this round's evidence does not pin down.
+
+### What this changes: a genuinely new, third candidate mechanism, distinct from anything §15-§19
+raised
+
+If `oEscort` in `racecs1.ncs` (`GetObjectByTag("tar11_csbek", 0)`) resolves to `OBJECT_INVALID`
+because the escort was never created, every subsequent `AssignCommand(oEscort, ...)` call
+(§18.3 points 5-6) silently no-ops per ordinary NWScript behavior — the escort half of the staged
+scene never runs, which is consistent with (but not proof of) a broken precondition somewhere
+upstream of `bekrace`'s own terminal action. This does NOT, by itself, explain why `bekrace`'s own
+BARE `DelayCommand(0.1, StartNewModule(...))` (§16.3, unconditional, no escort reference anywhere in
+that script per §18.5's full disassembly) fails to fire — the two scripts are structurally
+independent action scripts on different dialogue nodes, and nothing in `bekrace.ncs` itself reads
+anything about the escort. But it IS a genuine, previously-unconfirmed content/precondition failure
+in this exact recipe, one layer upstream of the transition call itself, that no round before this one
+had actually checked for directly. Whether `CreateObject` failing here is cause, symptom, or
+coincidence relative to the transition stall is not settled by this round's evidence — flagged
+precisely so the next round does not have to re-discover that the escort is missing, and can instead
+start from "why does `CreateObject('tar11_csbek', ...)` fail" as a sharper, more concrete question
+than anything raised so far.
+
+### What this changes about the shipping recommendation
+
+Nothing. `minigame_hide_peer` stays default-on; co-visible swoop racing is still not shipped and
+still not observed working end to end. No production code changed this round (investigation only).
+The crafted test save was deleted at the end of this round (throwaway artifact, matching every prior
+round's own convention); `000002 - Game1` was never touched. `dotnet test`: 1729/1729 green (full
+suite, this session's own earlier live-verification commit already accounted for the count — no
+additional production code changed by this section).
+
 ## 17. §16.6's own recipe run for real (2026-08-24): the focus-loss hypothesis is directly,
 decisively RULED OUT — `PausesCleared` never moves even once across a five-minute reproduction of
 the exact same stall
