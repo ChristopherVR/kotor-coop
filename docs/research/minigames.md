@@ -2479,3 +2479,96 @@ analysis per this round's own constraint — no rig access). The throwaway conso
 disassemblies/GFF reads (`swoopinvestigate`, scratchpad-only, same "one-off is fine" convention as every
 prior round's own `ncsdump`/`actionpoll.ps1`) is not committed. `dotnet build -c Release` on
 `src/KotorCoop.Memory` (the only project this round's reads touch): clean, 0 warnings, 0 errors.
+
+## 22. §21.7's own live prediction checked directly (2026-08-24, follow-up round): the PC was NEVER
+observed at `tar11_wppcsleep`, and the party stayed intact throughout — the "`racecs0`'s `DelayCommand`
+dispatch chain never runs at all" theory is now confirmed on a live channel, not merely inferred from a
+missing creature
+
+Rig access this round. §21.7 named a cheap, sharp, directly-testable prediction: if `racecs0`'s own
+`DelayCommand(7.0, AssignCommand(GetFirstPC(), <subroutine@764>))` chain never dispatches, the PC should
+never be found at `tar11_wppcsleep` (100.24, 76.90, per §21.4's own GIT read) at any point during the
+stall, and the two party members `GetPartyMemberByIndex(1)`/`(2)` should stay present (never
+`DestroyObject`ed). Checked both directly this round.
+
+### Recipe
+
+`KotorCoop.Agent craft-save --source "...\000002 - Game1" --dest "...\000003 - zzz_swoop_test" --bool
+Tar_SwoopEng` (`Tar_SwoopEng: 0 -> 1` confirmed), `tools/demo.ps1` with no `-Save` override (host
+auto-staged the freshly-crafted save as newest-by-mtime, §17.0/§20's own established pattern), `cheat god
+1`, `tools/blockpoke.ps1 travel tar_m11aa`, `console 'tp 65.0 76.0 0.12'` to land next to Gadon, then
+`tools/blockpoke.ps1 talk GadonThek112`. The six-node auto-advancing chain ran node-for-node identical to
+every prior round (`-1 -> 17 -> 18 -> 19 -> 20 -> 21 -> 2`, terminal node published at `21:14:07.971`).
+
+### Check 1: the PC's own live position, polled directly (not reconstructed after the fact)
+
+`tools/blockpoke.ps1 console 'where'`, 8 samples spanning the ~5 minutes immediately after the terminal
+node published (`21:15:28` through `21:19:08`), roughly one every 30 seconds:
+
+```
+reply: 'module tar_m11aa  at 65.0 76.0 0.0  hp 12/12'
+```
+
+**identical on all 8 samples, zero exceptions.** The PC never moved from the exact `tp` landing spot —
+never anywhere near `tar11_wppcsleep` (100.24, 76.90), which is 35.25 units away and would have been
+reached, per §21.4's own analysis, within the same engine tick the `ActionJumpToObject` (an instant
+teleport, not a walk) fires, at the very latest 7 real seconds after node 17 published — over four
+minutes before this check's own first sample. This directly rules out "the teleport happened but this
+round's earlier position check just missed the window."
+
+### Check 2: party members 1/2, polled directly alongside the position checks
+
+`tools/partystate.ps1`, same 8 sample points:
+
+```
+companions 1   soloMode 0
+member 0: slot 0  objectId 0xA2
+member 1: slot 0  objectId 0xA2
+```
+
+**Identical on every sample** — the same single companion (`0xA2`, `end_trask`) present throughout,
+never `DestroyObject`ed. (Only one companion was active in this save at all — `companions 1` — so this
+checks the "never destroyed" half of the prediction rather than distinguishing member 1 from member 2
+specifically; the same conclusion applies to whichever slot(s) are actually populated.)
+
+### Corroborating check (not required by §21.7's own prediction, but free given the tooling): the escort
+still never spawns, on this independent live pass too
+
+`tools/creatures.ps1` during the same stall window: 28 `CSWSCreature` objects in `tar_m11aa`, and — as in
+§20's own sweep — `tar11_csbek` is not among them. Every other object matches the module's own static GIT
+placements (`hiddenbek111/112/113/116`, `tar11_ambbek0-4`, `zaerdra111`, `gadonthek112`,
+`tar11_assaultdrd`) plus the PC and the one live companion. Consistent with, and reconfirming, §20's own
+finding on an entirely fresh save/session.
+
+### Verdict
+
+Both halves of §21.7's own live prediction are confirmed, directly, on a live channel independent of the
+static disassembly that produced them: **the PC never relocated, and the party stayed intact, for the
+entire observed stall window.** This closes the loop §21 opened: the static claim "`racecs0`'s
+`DelayCommand(7.0, AssignCommand(GetFirstPC(), <subroutine@764>))` chain never dispatches" is no longer
+inferred solely from a missing creature and an offline disassembly — it is now also confirmed by an
+independent live signal (the PC's own recorded position, which subroutine `@764` would have moved
+regardless of anything to do with the escort specifically) that behaves exactly as that theory predicts
+and is inconsistent with every alternative this whole thread (§14-§21) considered and ruled out along the
+way (a bad blueprint, a bad waypoint, a census cap, a resref typo, `CreateObject` itself failing).
+
+**What remains open, honestly**: WHY the `DelayCommand`/`AssignCommand` dispatch chain itself never
+fires is still not root-caused — that would need visibility into the engine's own delayed-event
+queue/`OBJECT_SELF` resolution for a dialogue-node action script, which no tool this project has built
+reaches (§18.6's own still-open "whose delayed-event queue" question). Given this is very likely the last
+round of live investigation on this specific thread for now (per this round's own task framing), that
+question is left recorded rather than chased further: the practical, ship-relevant fact — co-visible
+swoop racing does not work end to end, and specifically stalls because the escort/teleport staging script
+never dispatches — is now about as thoroughly confirmed, from as many independent angles (static
+disassembly x2, a missing-creature live sweep x2, and now a position/party-presence live sweep), as this
+project's own tooling can currently establish without a real debugger.
+
+### What this changes about the shipping recommendation
+
+Nothing. `minigame_hide_peer` stays default-on; co-visible swoop racing is still not shipped and still not
+observed working end to end. No production code changed this round (investigation/live-verification only).
+The crafted test save was deleted at the end of this round (`000003 - zzz_swoop_test`, throwaway artifact,
+matching every prior round's own convention); `000002 - Game1` was never touched. `dotnet test
+tests/KotorCoop.Tests` (Release): 1737/1737 green (this round's own production changes were entirely in
+`party-reconciliation.md`'s own thread — see that doc's latest entry — and touch no code this doc's own
+subject exercises).

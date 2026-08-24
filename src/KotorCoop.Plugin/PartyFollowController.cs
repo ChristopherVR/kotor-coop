@@ -406,7 +406,7 @@ internal sealed unsafe class PartyFollowController(SharedBlockView block)
                 // remarks.
                 if (_advanceStalledDestNodePhase6)
                 {
-                    Odyssey.TryAdvanceStalledPathDestinationPhase6(objectId, out _);
+                    Odyssey.TryAdvanceStalledPathDestinationPhase6(objectId, _fineLogEnabled, out _);
                 }
 
                 // ROUND 88: a third, independent permanent-stall shape — see Odyssey.
@@ -453,7 +453,7 @@ internal sealed unsafe class PartyFollowController(SharedBlockView block)
                 // function's own remarks) — no consecutive-frame gate needed here either.
                 if (_extendFinalNodeTrail)
                 {
-                    Odyssey.TryExtendFinalNodeTrail(objectId, playerPos, out _);
+                    Odyssey.TryExtendFinalNodeTrail(objectId, playerPos, _fineLogEnabled, out _);
                 }
 
                 // ROUND 88: see Odyssey.TryAcceptFinalPathNode's own remarks — track how many

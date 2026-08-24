@@ -2462,9 +2462,18 @@ internal static unsafe class Odyssey
     /// stall shape was actually observed and corrected this call. Kill switch (to enable):
     /// <c>party_follow_advance_destnode_phase6=1</c> (default OFF).
     ///
+    /// <paramref name="logWrites"/> (the caller's own cached <c>party_follow_finelog</c> flag —
+    /// this function reads no config itself, since it runs every frame): when true and a write
+    /// actually fires, logs the exact before/after <c>DestNode</c> repoint directly (round-90
+    /// A/B follow-up — the previous round shipped this function without ANY direct proof it ever
+    /// fires; this closes that gap the cheapest possible way, a single <see cref="PluginHost.Log"/>
+    /// call gated on the write itself, zero cost when the flag is off since the whole body above
+    /// already returns before this point on every non-firing call).
+    ///
     /// MAIN THREAD ONLY.
     /// </summary>
-    public static bool TryAdvanceStalledPathDestinationPhase6(uint companionServerObjectId, out bool wrote)
+    public static bool TryAdvanceStalledPathDestinationPhase6(
+        uint companionServerObjectId, bool logWrites, out bool wrote)
     {
         wrote = false;
 
@@ -2536,6 +2545,15 @@ internal static unsafe class Odyssey
 
         *(int*)(record + 0x34) = newDest;
         wrote = true;
+
+        if (logWrites)
+        {
+            PluginHost.Log(
+                $"party follow phase6advance: 0x{companionServerObjectId:X} fired "
+                + $"phase={phase} pathNode={pathNode} writeCursor={writeCursor} gap={gap} "
+                + $"destNode {destNode} -> {newDest}");
+        }
+
         return true;
     }
 
@@ -3264,9 +3282,19 @@ internal static unsafe class Odyssey
     /// the write-cursor field is not currently readable). Kill switch (to enable):
     /// <c>party_follow_extend_final_node=1</c> (default OFF pending live A/B).
     ///
+    /// <paramref name="logWrites"/> (the caller's own cached <c>party_follow_finelog</c> flag —
+    /// this function reads no config itself, since it runs every frame): when true and the
+    /// synthetic node actually gets written, logs the exact node index/coordinates and the
+    /// before/after write cursor and <c>DestNode</c> directly (round-90 A/B follow-up — the
+    /// previous round shipped this function live-enabled for a full session but could never
+    /// directly attribute the session's own successful leg completion to it firing; this closes
+    /// that gap with a single <see cref="PluginHost.Log"/> call gated on the write itself, zero
+    /// cost when the flag is off).
+    ///
     /// MAIN THREAD ONLY.
     /// </summary>
-    public static bool TryExtendFinalNodeTrail(uint companionServerObjectId, Vec3 leaderPos, out bool wrote)
+    public static bool TryExtendFinalNodeTrail(
+        uint companionServerObjectId, Vec3 leaderPos, bool logWrites, out bool wrote)
     {
         wrote = false;
 
@@ -3338,6 +3366,16 @@ internal static unsafe class Odyssey
         *(int*)(record + 0x34) = newNodeIndex;
 
         wrote = true;
+
+        if (logWrites)
+        {
+            PluginHost.Log(
+                $"party follow extend: 0x{companionServerObjectId:X} fired "
+                + $"phase={phase} pathNode={pathNode} gap={gap} "
+                + $"newNode={newNodeIndex} at ({leaderPos.X:F2},{leaderPos.Y:F2},{leaderPos.Z:F2}) "
+                + $"writeCursor {writeCursor} -> {newWriteCursor} destNode {destNode} -> {newNodeIndex}");
+        }
+
         return true;
     }
 

@@ -3633,3 +3633,197 @@ successful leg completion) with zero crashes, access violations, or plugin-log e
 - `tests/KotorCoop.Tests/FinalNodeGeometryRuleTests.cs` — 8 new tests: `WrapTrailIndex`'s ordinary/
   boundary/wrap cases, and `IsExtendableTerminalStallShape`'s phase-6/phase-7/neither/gap/pathNode
   cases.
+
+## Direct write-logging added and the A/B re-run (2026-08-24, third follow-up round): both
+## `TryExtendFinalNodeTrail` and `TryAdvanceStalledPathDestinationPhase6` are now caught firing,
+## in the act, with exact before/after values — a question the previous round could only bound
+## indirectly — but in every one of three repro attempts this round, real leg completion was
+## blocked by a SEPARATE, already-documented downstream stall, not by either new function failing
+
+The previous entry's own concrete next step was the cheapest possible closer: "log
+`TryExtendFinalNodeTrail`'s and `TryAdvanceStalledPathDestinationPhase6`'s own `wrote` output
+directly... so a future live round can grep for direct, first-person proof of the write firing."
+Built exactly that.
+
+### What was built
+
+Both functions (`src/KotorCoop.Plugin/Odyssey.cs`) gained a `bool logWrites` parameter — the
+caller's own already-cached `party_follow_finelog` flag, so neither function reads config itself
+on a per-frame call — and, immediately after the write that sets `wrote = true`, one
+`PluginHost.Log` call:
+
+* `TryExtendFinalNodeTrail`: `"party follow extend: 0x{id} fired phase={p} pathNode={n} gap={g}
+  newNode={idx} at ({x},{y},{z}) writeCursor {old}->{new} destNode {old}->{new}"` — the synthetic
+  node's own written coordinates (the live leader position at the moment of the write) plus both
+  repointed fields.
+* `TryAdvanceStalledPathDestinationPhase6`: `"party follow phase6advance: 0x{id} fired phase={p}
+  pathNode={n} writeCursor={w} gap={g} destNode {old}->{new}"`.
+
+Both lines are gated on `logWrites` alone (not on the existing finelog per-slot throttle/cap), so
+they print every single time either function actually writes, with zero cost when
+`party_follow_finelog=0` (the shipped default — the guard is checked once, inline, before any
+string formatting). `PartyFollowController.cs`'s two call sites now pass `_fineLogEnabled`
+through. `src/KotorCoop.Plugin/build.ps1` clean on both installs (x86 confirmed), one pre-existing
+unrelated `PortraitController.cs` `CA2014` warning only; `dotnet test tests/KotorCoop.Tests`
+(Release): 1737/1737 green, one run, no isolation reruns needed.
+
+### Live A/B: reproduced round 88's own recipe, on a FRESH rig session (clean finelog budget,
+### clean `_fineLogged` counter) — both functions caught firing directly, three separate times
+
+Rebuilt and reinstalled on both GOG installs, set `party_follow_finelog=1` and both new switches
+to `1` on both `coop.ini`s, brought up `tools/demo.ps1` fresh (a from-scratch launch specifically
+to avoid the previous round's own risk of carried-over log lines from an earlier session sharing
+the same on-disk log — this round's own plugin-load marker, `console interp hooked` at
+`21:30:09.013`/pid 33036, brackets every timestamp cited below). Ran round 88's exact recipe on
+the host: `console 'tp 20 22 -1.3'` then `walk 10 15` (`tools/blockpoke.ps1`).
+
+**Leg 1 — both functions caught firing directly, and real position genuinely advanced ~8+ units,
+before a SEPARATE stall (not either new function) parked the companion short:**
+
+```
+[21:31:05.972] party follow extend: 0x127 fired phase=7 pathNode=1 gap=1 newNode=2 at (19.52,21.83,-1.27) writeCursor 2 -> 3 destNode 1 -> 2
+[21:31:06.026] party follow extend: 0x127 fired phase=7 pathNode=2 gap=1 newNode=3 at (19.39,21.79,-1.27) writeCursor 3 -> 4 destNode 2 -> 3
+[21:31:06.079] party follow extend: 0x127 fired phase=7 pathNode=3 gap=1 newNode=4 at (19.25,21.74,-1.27) writeCursor 4 -> 5 destNode 3 -> 4
+[21:31:06.131] party follow extend: 0x127 fired phase=6 pathNode=4 gap=1 newNode=5 at (19.10,21.68,-1.27) writeCursor 5 -> 6 destNode 4 -> 5
+[21:31:06.182] party follow extend: 0x127 fired phase=6 pathNode=5 gap=1 newNode=6 at (18.93,21.63,-1.27) writeCursor 6 -> 7 destNode 5 -> 6
+```
+
+Five consecutive real fires, `pathNode` genuinely advancing 1→2→3→4→5 and the written coordinate
+genuinely tracking the moving leader frame to frame (not a fixed point) — direct, first-person
+proof `TryExtendFinalNodeTrail` fires exactly as designed, on both phase 6 and phase 7 as its own
+`IsExtendableTerminalStallShape` gate intends. Immediately after, `TryAdvanceStalledPathDestinationPhase6`
+fired 112 times in a tight ~2-3ms-apart burst, parked at the SAME `pathNode=7`, `destNode`
+climbing only as far as the write cursor allowed (`9→11` as the engine's own recorder kept
+appending real nodes underneath):
+
+```
+[21:31:06.462] party follow phase6advance: 0x127 fired phase=6 pathNode=7 writeCursor=10 gap=3 destNode 7 -> 9
+[21:31:06.464] party follow phase6advance: 0x127 fired phase=6 pathNode=7 writeCursor=10 gap=3 destNode 7 -> 9
+[21:31:06.467] party follow phase6advance: 0x127 fired phase=6 pathNode=7 writeCursor=10 gap=3 destNode 7 -> 9
+   ... (109 more, same pathNode=7, destNode climbing to 11 as writeCursor climbs to 12) ...
+[21:31:06.738] party follow phase6advance: 0x127 fired phase=6 pathNode=7 writeCursor=12 gap=5 destNode 7 -> 11
+[21:31:06.741] party follow phase6advance: 0x127 fired phase=6 pathNode=7 writeCursor=12 gap=5 destNode 7 -> 11
+```
+
+This is the SAME "engine re-collapses `DestNode` back to `CurrentPathNode` every tick" mechanism
+this thread's own earlier rounds theorised (round 88's own remarks) — now directly observed, not
+inferred: the write visibly sticks for well under a frame before something resets it, so the
+function re-fires at over 300 Hz. It is not a runaway/unbounded loop, though: the burst resolves.
+The very next finelog sample shows the fight won:
+
+```
+[21:31:07.455] ... phase=1 attempts=0 ... pathNode=7 destNode=11 writeCursor=14 moveState=0 m2pAccum=16
+  pos=(15.33,21.87) leaderPos=(12.82,19.32) ...
+[21:31:10.726] ... phase=2 attempts=0 ... pathNode=16 destNode=16 writeCursor=20 ...
+```
+
+Real, substantial position change: from the first fire's `(19.52,21.83)` to `(15.33,21.87)` three
+seconds later (phase 1, `FindPath` genuinely running, `pathNode` at 7 but climbing) to
+`pathNode=16` by `t+5s` — over 8 real units of genuine walking, directly downstream of the two
+fixes unsticking the FSM. **This is decisive, first-person proof both functions fire and that the
+progress they enable is real** (not merely index bookkeeping) — the exact gap the previous
+round's own verdict ("built, shipped, exercised, but not directly caught in the act") left open.
+
+**But then a THIRD, separate, already-documented stall took over, and held for the rest of the
+observation window**: `phase=2`, `pathNode=destNode=16`, `attempts=0` (never incrementing — the
+same "first visit this cycle" state `TryAdvanceStalledMovingToPath`'s own guard deliberately
+never touches) persisted, position essentially frozen at `(11.34,17.20)` — **~1.55 units short of
+the leader's `(10.78,15.70)`** (`distSqToTarget=2.39`, computed the same way the existing finelog
+line already does) — continuously from `21:31:10.726` through the last sample before the finelog
+line's own 20,000-line-total budget (`FineLogCap`, shared across the whole session, not per
+repro) was exhausted around `21:44:23` — **over 13 minutes continuously parked**, exceeding the
+previous round's own "100+ seconds" citation for this exact shape by an order of magnitude. This
+is round 88's own finding 1 (`phase=2, moveState=0 idle stall... a phase and moveState value
+combination no prior round documents`), not a new failure mode and not something either of this
+round's two functions targets (neither touches phase 2). Neither `party follow extend` nor
+`party follow phase6advance` fired again for the rest of leg 1 — consistent, since
+`IsExtendableTerminalStallShape`/`TryAdvanceStalledPathDestinationPhase6`'s own phase checks
+correctly never match phase 2.
+
+**Leg 2 — a second, independent live sample of `TryExtendFinalNodeTrail` firing, followed by a
+DIFFERENT known-and-flagged blocker (a genuine long-distance pathfinding limit, round 88's own
+finding 2), not the phase-2 stall this time:** re-issuing `walk 10 15` did not unstick the
+phase-2 stall (30+ seconds, no change). Per round 88's own finding 2 ("a large, deliberate
+31-unit teleport broke the `phase=2` deadlock"), issued `console 'tp 40 5 0'`:
+
+```
+[21:40:46.544] party follow extend: 0x127 fired phase=7 pathNode=19 gap=1 newNode=20 at (40.00,5.00,0.00) writeCursor 20 -> 21 destNode 19 -> 20
+[21:40:46.549] party follow extend: 0x127 fired phase=7 pathNode=20 gap=1 newNode=21 at (40.00,5.00,0.00) writeCursor 21 -> 22 destNode 20 -> 21
+```
+
+A second, independent, directly-logged fire — confirming leg 1's result was not a one-off. The
+teleport DID break the phase-2 deadlock exactly as round 88 found, and the companion reached
+`moveState=-1` (genuinely "walking," `m2pAccum=66` — the `Moving_To_Path` handler's own
+accumulator, confirmed actively running) — but then round 88's own finding 2 reproduced exactly
+too: `pathNode=20`/`destNode=21` and `moveState=-1` held unchanged for the rest of this leg's
+observation window (`21:42:58` through `21:44:23`, when the finelog budget ran out) while the
+companion's REAL position stayed frozen at `(10.80,15.77)` — the same "the FSM's own bookkeeping
+keeps ticking while real position never moves at that distance/route" shape round 88 flagged as
+"a genuine pathfinding limit... not a regression from this round's own changes," confirmed again
+this round under a fresh, controlled repro.
+
+**Leg 3**: teleported the leader to `(15.0, 18.0, -1.2)` (closer to the companion's frozen
+position, hoping a short leg would complete cleanly within the remaining live-testing budget).
+No new `party follow extend`/`party follow phase6advance` fires observed over the following
+~3 minutes (the finelog line itself had by then exhausted its budget, so live diagnostic
+visibility was reduced to `console 'where'`/`tools/creatures.ps1` spot checks); the companion had
+not converged on the leader's position by the time this round's live-testing budget ended.
+
+### Verdict: both functions are now directly, decisively confirmed to fire and to produce real
+### progress — but neither alone (nor together) was sufficient for a full leg completion this
+### round, because a DIFFERENT, already-documented stall intervened every time
+
+This round closes the exact gap the previous round's verdict named: **`TryExtendFinalNodeTrail`
+and `TryAdvanceStalledPathDestinationPhase6` are no longer merely "shipped, exercised, not caught
+in the act" — both were caught firing directly, with logged before/after values, across two
+independent repro legs, and the progress that followed each firing was real (multiple real units
+of position change, not just index bookkeeping).** That is a genuine, positive, previously-missing
+fact.
+
+However, **this round's own bar for a default flip — "a direct, decisive, zero-regression live
+A/B" reaching an actual leg completion — was not met**: in all three repro attempts, the
+companion advanced through the exact terminal/phase-6 `gap>=2` shape these two functions target,
+then stalled on a SEPARATE mechanism neither function touches (round 88's own findings 1 and 2,
+both independently reconfirmed this round, not new). Whether flipping the defaults ON would ever
+by itself be *sufficient* for a full leg completion in a repro that does NOT also hit one of those
+two separate blockers is still not established either way — this round's three repro attempts all
+happened to hit one or the other. Per this project's own "leave it off and document precisely what
+you saw" rule for a fix whose evidence, while now genuinely positive, still falls short of a full
+completion: **both switches stay at their default OFF.** `coop.ini party_follow_finelog` and both
+new switches set back to `0` on both installs after this round's testing (code defaults are
+already `0`; nothing to change in `PartyFollowController.cs`).
+
+**Zero regressions observed**: both GOG instances stayed up for the full session (`tasklist`
+confirmed both `swkotor.exe` PIDs alive at the end); the only exceptions in either plugin log are
+the same benign `FIRST-CHANCE exception (0x406D1388)` at the same address every session start has
+shown all day (a normal .NET first-chance notification, not a crash) — no access violations, no
+new unhandled-exception entries, no plugin-log errors.
+
+### Concrete next step for whoever picks this up
+
+The phase=2/`moveState=0`/`attempts=0` idle stall (round 88's finding 1, reconfirmed here for 13+
+continuous minutes) and the "moveState=-1 but real position frozen at long distance" shape (round
+88's finding 2, reconfirmed here) are now the two live blockers standing between these two
+already-working fixes and an actual full leg completion. Neither has its own root-cause
+disassembly yet. A future round could either: (a) chase the phase=2/`attempts=0` handler
+(0x00511860, already disassembled by round 88 for the OTHER phase-2 shape
+`TryAdvanceStalledMovingToPath` targets — `attempts=0` is the branch that fix's own guard
+deliberately skips, "let the engine's own normal path run once," which this data now shows can
+mean "run once and then never again"), or (b) re-run this exact recipe with both switches on but
+choosing a SHORTER leader displacement than either of this round's three attempts (all either
+inherited a pre-existing phase-2 stall or covered 25-31 units) to see whether a short, clean leg
+converges the way round 90's own single successful completion did.
+
+### Test suite and build
+
+`dotnet test tests/KotorCoop.Tests` (Release): 1737/1737 passing, one run, no isolation reruns
+needed. `src/KotorCoop.Plugin/build.ps1 -Install` clean on both GOG installs, x86 confirmed, one
+pre-existing unrelated `CA2014` warning (`PortraitController.cs`) only.
+
+### Files
+
+- `src/KotorCoop.Plugin/Odyssey.cs` — `TryExtendFinalNodeTrail` and
+  `TryAdvanceStalledPathDestinationPhase6` both gained a `bool logWrites` parameter and a
+  `PluginHost.Log` call immediately after their own write, gated on that parameter alone.
+- `src/KotorCoop.Plugin/PartyFollowController.cs` — both call sites now pass `_fineLogEnabled`
+  through; no other behaviour change.
