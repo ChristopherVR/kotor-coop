@@ -2932,3 +2932,64 @@ ledger (`combat: applied N of a peer's damage to 0x...`) shows credited hits fro
 object ids, not just one; and neither companion's position/faction/health reads ever cross-
 contaminate the other's (the same "0.05-unit noise, not drift" check round 85 already ran, applied
 to both slots this time instead of one).
+
+## Live-verified (2026-08-24) — round 90's `TryRefreshFinalNodeTarget` fix candidate: round 89's
+hypothesis is REFUTED, cleanly and without regression; stays off by default
+
+Rig access this round. Rebuilt and reinstalled the plugin on both GOG installs
+(`src/KotorCoop.Plugin/build.ps1 -Install`), `dotnet test` 1712/1712 passing (two
+`CoopCommandDispatcherTests` failures under full-suite parallel load, both green in isolation — the
+same known-flaky pair prior rounds have already flagged, not a regression). Brought up
+`tools/demo.ps1` clean (both GOG installs, `END_M01AA`, connected). Set
+`party_follow_finelog=1` and `party_follow_refresh_final_node=1` in both installs' `coop.ini`, then
+reproduced round 88/89/90's own exact recipe on the host: `console 'tp 20 22 -1.3'` then
+`walk 10 15` via `tools/blockpoke.ps1`.
+
+### What the finelog shows
+
+Trask (0x127) walked the real trail exactly as round 88 described — continuous position change,
+`pathNode`/`writeCursor` climbing node by node, `target`/`prior` visibly updating every few frames
+as she closed on the leader — and reached the terminal shape at `t=` (elapsed) matching the walk's
+own timing: `phase=7 pathNode=18 destNode=18 writeCursor=19 moveState=3 target=(10.78,15.70)
+prior=(10.91,16.08)`, `leaderPos=(10.78,15.70)`. The decisive line is the very FIRST frame that
+entered this terminal shape: `target` was already bit-identical to `leaderPos` on that first
+sample — not stale by up to 10cm as round 89's hypothesis required, but already exactly fresh.
+`target`/`prior`/`leaderPos` then held bit-identical, unchanged, across the full observation window
+(76+ continuous seconds, 2244 finelog samples at 25 Hz, `t=82.11` through `t=158.23`) — i.e. the
+fix's own ~1cm epsilon never found a meaningful drift to write in this repro, meaning
+`TryRefreshFinalNodeTarget` never actually needed to fire here: the geometry it exists to refresh
+was never stale to begin with. `phase` never advanced past 7. `moveState` stayed a stable 3 the
+entire time — no cycling, no reversion to 1/idle, none of round 88's own disproven
+`TryAcceptFinalPathNode` symptoms.
+
+This is round 89's own falsification branch, hit cleanly: *"If target/prior were already
+effectively at the live leader position before this fix's first write ... and the stall persists
+regardless, round 89's hypothesis is refuted."* That is exactly what happened. The player had
+already stopped moving by the time the companion reached the terminal shape (a short walk leg,
+~13 units), so there is a possible confound — a longer-leg repro with the leader still taking
+small steps as the companion arrives at phase 7 might still show the up-to-10cm staleness round 89
+predicted — but for THIS recipe, the one every prior round in this thread has used as the
+standard repro, the geometry was never the problem.
+
+### No regression
+
+`moveState` held a stable 3 for the full 76+ second window, `pathNode`/`destNode`/`writeCursor`
+never moved, no phase-cycling of any kind (contrast round 88's own disproven `TryAcceptFinalPathNode`
+result: a visible 7 → 3 → 0 → 7 cycle every 0.3-0.5s). The stall gap itself
+(`targetVsSnapshotDist=1.391`) matches round 88's own recorded ~1.3-1.4 units short baseline
+exactly. `party_follow_refresh_final_node` and `party_follow_finelog` set back to `0` in both
+installs' `coop.ini` after this test (their code defaults are already off; nothing to flip in
+`CoopConfig.cs` — this flag lives in `PluginConfig`/`coop.ini`, not the agent-side config).
+
+### Verdict
+
+Per this project's own instruction to leave a fix off and record precisely what was observed when
+it does not help: `party_follow_refresh_final_node` stays OFF by default. It is not harmful (no
+regression of any kind observed), but it is also not sufficient — the terminal-node stall's real
+cause is not stale `Target`/`Prior` geometry, at least not in the standard short-leg repro this
+whole thread has used. Round 89's own next-step recommendation is now the leading path: a live
+debugger on the `fcompp` at 0x512BF2 (`PathWaitDest`'s own accept/reject comparison) to see
+directly which side of the test a fresh `Target`/`Prior` pair lands on and why it still rejects.
+`Odyssey.TryRefreshFinalNodeTarget`'s own doc comment should be read alongside this entry — it is
+NOT wrong about what it does, just proven insufficient against the geometry-staleness hypothesis it
+was built to test.

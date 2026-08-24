@@ -2955,23 +2955,29 @@ internal static unsafe class Odyssey
     /// kind of small, silent staleness round 89's own hypothesis needs ruled out before
     /// concluding the geometric test is rejecting correctly rather than merely under-fed.
     ///
-    /// NOT live-tested — no rig access this round. Companion piece to
-    /// <see cref="FollowDiag.RecordedDestPoint"/> (round 89): the intended live-verification
-    /// recipe is to enable this alongside <c>party_follow_finelog=1</c>, reproduce round 88's own
-    /// stall recipe, and read <c>recordedDestPoint=</c>/<c>target=</c>/<c>prior=</c> on the
-    /// finelog line right before and after this fires. If <c>phase</c> then advances past 7 on
-    /// its own (the REAL accept branch committing it, not a forced poke) and <c>CreMoveState</c>
-    /// reaches -1 with real subsequent position change, round 89's hypothesis is confirmed and
-    /// this is the fix. If <c>target</c>/<c>prior</c> were already this fresh before the poke (no
-    /// measurable change from this call) and the stall persists regardless, round 89's hypothesis
-    /// is refuted and the search moves to the <c>fcompp</c> at 0x512BF2 under a live debugger,
-    /// exactly as that round's own verdict names as the next step.
+    /// LIVE-TESTED 2026-08-24 (docs/research/party-reconciliation.md, "round 90's
+    /// TryRefreshFinalNodeTarget fix candidate ... REFUTED"): reproduced round 88's own recipe
+    /// (<c>tp 20 22 -1.3</c>, <c>walk 10 15</c>, END_M01AA) with this and
+    /// <c>party_follow_finelog=1</c> both on. Result: <c>target</c> was ALREADY bit-identical to
+    /// <c>leaderPos</c> on the very first finelog sample after entering the terminal shape — not
+    /// stale by up to 10cm as round 89's hypothesis required — and stayed bit-identical,
+    /// unchanged, for 76+ continuous seconds (2244 samples). This function's own ~1cm epsilon
+    /// therefore never found anything worth writing in that repro: it did not fire, and
+    /// <c>phase</c> never advanced past 7 regardless. Round 89's staleness hypothesis is refuted
+    /// for the standard short-leg repro; the search moves to the <c>fcompp</c> at 0x512BF2 under a
+    /// live debugger, exactly as that round's own verdict named as the next step. No regression
+    /// observed (moveState held a stable 3 the whole time, no phase-cycling) — kept, and left
+    /// default OFF, per this project's own "leave it off and record what was observed" rule for a
+    /// fix that measures insufficient rather than harmful. A longer leg where the leader is still
+    /// taking small steps as the companion arrives at phase 7 was not tried and remains a possible
+    /// confound (see the doc entry for the caveat).
     ///
     /// Returns false when the index does not resolve. <paramref name="wrote"/> reports whether
     /// the refresh actually fired this call (false when not in the terminal shape, or when the
     /// target was already within ~1cm of <paramref name="leaderPos"/> and a write would have been
     /// degenerate). Kill switch (to enable): <c>party_follow_refresh_final_node=1</c> (default
-    /// OFF — no live A/B yet, per this project's own bar).
+    /// OFF — live-tested, measured insufficient against round 89's hypothesis, not a default-flip
+    /// candidate).
     ///
     /// MAIN THREAD ONLY.
     /// </summary>
