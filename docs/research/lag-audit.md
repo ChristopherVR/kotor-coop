@@ -694,3 +694,64 @@ happens.
   gap narrows, closes, or persists. `frame_stats=1` on both installs, the same `tar_m10aa` Vulkar-
   pool recipe round 71 used (or an equivalent heavier multi-enemy fight), long enough to exceed the
   3-minute target every prior round in this file has fallen short of.
+
+## Live-verified (2026-08-24) — round 71's heavier-combat regression re-checked with the follow-AI
+fix AND the dirty-check fix both in place: the regression is GONE, not just narrowed
+
+Rig access this round (plugin rebuilt/reinstalled fresh on both GOG installs first — the dirty-check
+fix above was already merged onto this branch). `party_fast_pump=1` (shipped default,
+unchanged in `coop.ini`), `frame_stats=1` on both installs, round 71's own `tar_m10aa` Vulkar-pool
+recipe: host and client both given a real `attack 0x7FFFFFFF <id>` order against separate,
+live Vulkars (`tools/blockpoke.ps1 attack`), god mode armed on both first so neither instance's
+own PC dying interrupts the window. ~2 minutes of sustained real combat, re-arming fresh attack
+orders against new Vulkars as each one died, to keep the fight going the whole window (three real
+kills recorded — `combat: killed 0x36`/`0x38`/`0x2F on the owner's authority` — real damage
+applied both directions throughout, `combat: applied N of a peer's damage to 0x24`/`0x33`).
+
+### Result: dramatically better than even round 71's own OLD (`=0`) baseline, not just its `=1`
+
+| | Round 71 `=1` (old, pre-fix) | Round 71 `=0` (old, pre-fix) | This round `=1` (both fixes in place) |
+| --- | --- | --- | --- |
+| Host mean frame time (combat) | 9.63 ms | 6.30 ms | **3.62 ms** |
+| Client mean frame time (combat) | 7.15 ms | 5.52 ms | **2.55 ms** |
+| Frames over 33 ms budget (combat window) | 197 host / 217 client | 138 host / 123 client | **0 / 0** |
+
+Twelve consecutive 10-second `frame_stats` samples per instance, spanning the entire sustained
+combat window (damage/kills recorded throughout), averaged directly from the plugin log's own
+periodic lines — the same measurement method round 71 used. Zero frames exceeded the 33 ms budget
+anywhere in the combat window on either instance; the only over-budget frames seen all session
+(one ~162 ms spike on the host, one ~155 ms spike apiece on the client, twice) landed BEFORE combat
+started, during the `travel` warp's own world-load settle — the same "kill/death-event-shaped,
+not combat-shaped" spike pattern round 71 itself already flagged as unrelated to the flag, now
+confirmed to sit outside the fight entirely rather than during it.
+
+This is not merely "the 53%-worse gap closed" — mean frame time during real, sustained,
+multi-Vulkar combat with `party_fast_pump=1` and both fixes in place (3.62/2.55 ms) is now
+noticeably BETTER than round 71's own OLD `=0` numbers (6.30/5.52 ms), which were themselves the
+"good" side of that original regression. Consistent with both fixes' own reasoning: rounds
+80/84/88 gave companions real, continuous follow-AI motion (so a companion's `PartyMemberState`
+genuinely dirties most passes it should, rather than sitting frozen and unable to benefit from
+anything), and the per-tick dirty-check (this same document's own 2026-08-24 entry above) removes
+the specific unconditional-rewrite cost round 71's own frozen-companion staging could not have
+exposed as the real driver. Both explanations were inferred from static reasoning before this
+round; this is the first live measurement that confirms them together, on the exact scenario round
+71 itself used.
+
+### Verdict
+
+Round 71's 53%-worse mean frame time / ~40%-more over-budget-frame regression is **closed**, not
+merely narrowed, once both the follow-AI fix and the dirty-check fix are in place — the combined
+fix set outperforms even the pre-`party_fast_pump` baseline on this exact recipe. `party_fast_pump`
+stays default ON (`e7663c2`/round-90-adjacent flip, unchanged by this pass); nothing here argues
+for reverting it. Per this task's own framing, `party_fast_pump`'s "still needs work" status can be
+considered resolved on the heavier-combat axis specifically — the one open question this whole
+document's `party_fast_pump` thread had left outstanding since round 71.
+
+Not re-run this pass, still open in principle: an even longer (3+ minute) window than the ~2
+minutes this pass used, and a genuinely human-driven (non-scripted) combat session — every A/B for
+this flag, this pass included, has driven combat through the `attack` console/test-harness path
+rather than real OS input, per this document's own long-standing caveat.
+
+### Test suite and build
+
+`dotnet test`: no production code changed this pass (a live-verification run only).
