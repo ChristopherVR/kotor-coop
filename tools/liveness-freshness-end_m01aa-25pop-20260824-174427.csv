@@ -1,0 +1,7 @@
+"ElapsedSec","Timestamp","AgentHeld","PluginHeld","Agreement","OwnerCensusCount","AgentRaw","PluginRaw"
+"0","17:44:30.467","False","False","agree","-1","[17:44:29] * census 0x10: array NOT HELD | scan 0x14068F8C 'sithsoldier'","no target: 0x10 resolves to 0x0 here; chain in the plugin log"
+"10","17:44:40.329","False","False","agree","24","[17:44:38] * census 0x10: array NOT HELD | scan 0x14068F8C 'sithsoldier'","no target: 0x10 resolves to 0x0 here; chain in the plugin log"
+"20","17:44:50.554","False","False","agree","24","[17:44:49] * census 0x10: array NOT HELD | scan 0x14068F8C 'sithsoldier'","no target: 0x10 resolves to 0x0 here; chain in the plugin log"
+"30","17:45:00.587","False","False","agree","-1","[17:44:59] * census 0x10: array NOT HELD | scan 0x14068F8C 'sithsoldier'","no target: 0x10 resolves to 0x0 here; chain in the plugin log"
+"40","17:45:10.328","False","False","agree","24","[17:45:08] * census 0x10: array NOT HELD | scan 0x14068F8C 'sithsoldier'","no target: 0x10 resolves to 0x0 here; chain in the plugin log"
+"50","17:45:20.382","False","False","agree","24","[17:45:19] * census 0x10: array NOT HELD | scan 0x14068F8C 'sithsoldier'","no target: 0x10 resolves to 0x0 here; chain in the plugin log"
