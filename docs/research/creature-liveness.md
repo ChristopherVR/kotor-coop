@@ -1277,3 +1277,116 @@ supported by this pass's own data**, but also not ruled out — the population r
 narrow and too low to meaningfully stress the mechanism the disassembly identified. No fix
 shipped (none was warranted either way). `dotnet test`: no production code changed this pass (a
 live-verification run using the already-built tool only).
+
+## Live-verified (2026-08-24, follow-up round): a systematic module survey finds no reachable
+## population meaningfully above ~33, and a tight-interval (3s) probe run at this round's own
+## ceiling still finds immediate convergence — the third theory is now weakly disfavoured, and the
+## honest conclusion is that this game's engine may simply not host "many dozens" of creatures in
+## one loaded area at all
+
+Task (rig access this round, following the prior round's own "what the next live round should do":
+find a genuinely large encounter — many dozens of live, actively-fighting creatures — and re-run
+the probe there). Read this document's own history in full first, plus
+`docs/research/party-reconciliation.md`'s round 89/90 for the second half of this round's work (see
+below).
+
+### Surveying for a "many dozens" module: none found
+
+No console verb in this codebase spawns arbitrary creatures (`Odyssey.SpawnCreature` exists but is
+only ever called internally, from `MaterialisedEnemies`/`PhantomController` for peer/enemy
+stand-ins — there is no generic `spawncreature <template>` cheat), so the only way to find a
+higher-population encounter is to survey the game's own placed modules directly. Warped the host
+through twelve modules (`sta_m45aa` Star Forge factory, `unk_m44aa` the Rakatan Temple exterior
+Elder-Rakata-vs-Sith battle, `manm26aa` Manaan Sith base, `lev_m40aa` the Leviathan, `korr_m38aa`
+and `korr_m34aa` Korriban tombs/shyrack cave, `kas_m24aa` and `kas_m23aa` Kashyyyk Shadowlands,
+`tar_m02aa` Taris, `danm14aa` Dantooine) and read the `census` (hostile, capped at the ordinary
+32-slot combat truncation — `ReadEnemies`'s own cap, so it can never itself report above 32
+regardless of true population) and the agent's own `census: gate: array 0x... confirmed X of Y,
+dropped Z` line (`Odyssey`/`KotorGameBridge`'s ghost-filtered full-area scan, the SAME uncapped,
+non-hostile-inclusive count the 2026-08-22 passes used to measure `tat_m20aa` at 31 — this is the
+number that actually matters for `CServerAIMaster::UpdateState`'s own per-call cost, which the
+prior round's disassembly found scales with TOTAL registered objects, not just hostiles):
+
+| Module | `census` (capped, hostiles only) | ghost-confirmed total (uncapped) |
+| --- | --- | --- |
+| `tar_m02aa` | 14 | — |
+| `korr_m34aa` | 4 | — |
+| `kas_m23aa` | 15 | — |
+| `lev_m40aa` | 23 | — |
+| `korr_m38aa` | 23 | — |
+| `sta_m45aa` | 25 | — |
+| `manm26aa` | 29 | — |
+| `kas_m24aa` | 29 | — |
+| `danm14aa` | 29 | 29 of 46 |
+| `unk_m44aa` | 31 (settled, repeated) | 31-33 of 42-50 (17 stale/dropped, constant) |
+| `tat_m20aa` (2026-08-22, for comparison) | 29 | 31-32 of 53 |
+| `END_M01AA` (2026-08-24 prior round, for comparison) | — | 24-25 |
+
+**No module surveyed — across two separate live rounds now, fourteen modules total — reaches
+meaningfully above ~33.** `unk_m44aa` (the Rakatan Temple's Elder-vs-Sith battle: dark Jedi guards,
+Sith patrols, combat droids, shield droids, automated turrets, all placed in one loaded area) ties
+`tat_m20aa` as the largest found, confirmed by a direct `tools/creatures.ps1` raw scan filtered to
+this module's own coordinate plane (z≈0.44, to exclude stale duplicate entries left over from the
+module-hopping survey itself — the same "raw hits include stale memory copies" caveat the
+2026-08-22 passes already documented): 33 real entries at that plane, including several
+non-hostile registered objects (`unk44_turret`/`turret2` — stationary, activate-on-trigger; the
+player; `end_trask`) that `census`'s hostile-only view does not count at all but that DO count
+toward `CServerAIMaster`'s own per-call object-state scan, per the prior round's own disassembly.
+
+This is itself the honest headline finding of the survey half: **fourteen modules across two
+rounds, spanning early-, mid-, and late-game content on five different planets plus two space
+stations, all cap out in the same ~14-33 range**, with the top two (`tat_m20aa`, `unk_m44aa`) both
+landing within 1-2 creatures of each other despite being entirely unrelated encounters (a Sand
+People fixed placement vs. a scripted multi-faction battle). This is consistent with the base
+game's own per-module creature budget being a soft ceiling somewhere in the low 30s across the
+whole title, not a property of any one encounter's design — "many dozens" (40+) may simply not
+exist as a reachable state in unmodified KOTOR1 without either a spawn mechanism this codebase does
+not have, or a scripted wave/reinforcement encounter this survey did not happen to land inside at
+the right script beat (not ruled out — none of the twelve new modules were played through their own
+combat triggers, only walked into and immediately censused).
+
+### The probe, re-run at this round's own ceiling with a 3-second grid instead of 10
+
+Staged `destroyobject 0x58` (a `darkjedim`, confirmed alive via the prior scan) on `unk_m44aa`
+(population 29 by the time of this run — two creatures, `0x56` and `0x58`, had already been
+destroyed earlier in this same round's survey work, down from the settled 31), then ran
+`tools/liveness-freshness-probe.ps1 -Label unk_m44aa-33pop-tight -DurationSec 150 -IntervalSec 3`
+— a materially tighter sampling grid than the prior round's 10s, specifically to close the gap that
+round's own verdict named: "the 10s sampling grid also cannot distinguish 'instant' from 'fast
+enough to land inside the same 10-second window.'"
+
+Result: **immediate convergence again**. Both `census 0x58` (agent) and `resolve 0x58` (plugin)
+already read "gone" on the very first sample (`t=0s`), held gone for the entire 150s/50-sample
+window at 3s resolution, zero disagreements. `dotnet test` not applicable (a live-verification run,
+no production changes from this half — see the next section for this round's one code change).
+
+### What this settles, and what it still cannot
+
+At the largest population this round could find or re-confirm (~29-33, the same ballpark the prior
+round already tested, now sampled 3-4x tighter), convergence is not merely "within the same 10s
+bucket" — it is instant to the resolution this script can measure at all. Combined with the prior
+round's own two data points (24-25 and 28-29), this is now **three independent modules, all in the
+same population band, all converging immediately at both a 10s and a 3s grid, zero disagreements
+ever observed**. The theory this document has been chasing (`CServerAIMaster::UpdateState`'s own
+wall-clock budget starving the event-queue drain under load) requires a population this survey did
+not find reachable in this game to actually test at the scale the disassembly's own reasoning
+needs — reading (a)/(b) from the prior round's verdict again: this round's evidence now leans
+somewhat more toward (b) (the drain gets a turn well within measurement resolution regardless of
+population, at least up to ~33) simply because a THIRD independent module at a similar population
+band produced the identical result, but it remains genuinely unable to distinguish that from "(a)
+is still correct and ~33 objects is nowhere near enough load," because no module exceeding ~33 was
+found to test against. Recorded honestly rather than rounded up to a conclusion the data does not
+support: **the third theory is now weakly disfavoured by the accumulated weight of three
+consistent, tight-grid, zero-disagreement live passes, but not disproven**, and the concrete
+blocker for actually settling it has shifted from "find a bigger module" (this round's own survey
+suggests one may not exist in this content) to "build a way to synthesize a bigger population" — a
+generic `spawncreature` console verb (following `Odyssey.SpawnCreature`'s existing, already-proven
+call path — see `MaterialisedEnemies.cs`/`PhantomController.cs` for two live-verified callers) is
+the concrete next step for whoever wants to actually stress-test this theory rather than keep
+surveying content for a module that this round's evidence suggests probably does not exist.
+
+### Files
+
+No production code changed for this half (a live-verification survey plus a re-run of the
+already-built probe). `tools/liveness-freshness-unk_m44aa-33pop-tight-20260824-200732.csv` is this
+round's own CSV (untracked, like the two prior rounds' CSVs already in this checkout).

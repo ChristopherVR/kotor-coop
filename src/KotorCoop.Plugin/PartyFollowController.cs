@@ -453,6 +453,34 @@ internal sealed unsafe class PartyFollowController(SharedBlockView block)
                     float dty = fd.TargetPoint.Y - fd.Snapshot.Y;
                     float targetVsSnapshot = MathF.Sqrt((dtx * dtx) + (dty * dty));
 
+                    // ROUND (2026-08-24): the in-process substitute for "a live debugger on the
+                    // fcompp at 0x512BF2" that round 89/90's own verdict named as the next step.
+                    // Full FPU-stack trace of PathWaitDest's accept/reject test (0x512B86-0x512C03,
+                    // tools/disasm.py 0x512B40 220), instruction by instruction:
+                    //   distSqToTarget = |RecordedDestPoint - TargetPoint|^2   (record+0x28)
+                    //   distSqToPrior  = |RecordedDestPoint - PriorPoint|^2   (record+0x18)
+                    //   fcompp compares ST0=distSqToTarget against ST1=distSqToPrior, pops both;
+                    //   fnstsw ax; test ah,5; jp <reject-return> — the standard unordered-compare
+                    //   idiom. TEST AH,5 reads C0 (ST0<ST1) and C2 (unordered) into PF; PF=1 (jp
+                    //   taken, REJECT) for ST0>=ST1 or unordered; PF=0 (fall through to the
+                    //   phase=3 accept write at 0x512C09) only for ST0<ST1 STRICTLY. I.e. the real
+                    //   engine test accepts iff the recorded node is strictly CLOSER to Target than
+                    //   to Prior. This is a pure computation on fields TryGetFollowDiagnostics
+                    //   already reads every frame (no new engine call, no write) — it directly
+                    //   answers "why does the accept branch never fire" without attaching any
+                    //   debugger to the game's own x86 code.
+                    float dtgx = fd.RecordedDestPoint.X - fd.TargetPoint.X;
+                    float dtgy = fd.RecordedDestPoint.Y - fd.TargetPoint.Y;
+                    float dtgz = fd.RecordedDestPoint.Z - fd.TargetPoint.Z;
+                    float distSqToTarget = (dtgx * dtgx) + (dtgy * dtgy) + (dtgz * dtgz);
+
+                    float dprx = fd.RecordedDestPoint.X - fd.PriorPoint.X;
+                    float dpry = fd.RecordedDestPoint.Y - fd.PriorPoint.Y;
+                    float dprz = fd.RecordedDestPoint.Z - fd.PriorPoint.Z;
+                    float distSqToPrior = (dprx * dprx) + (dpry * dpry) + (dprz * dprz);
+
+                    bool pathWaitDestWouldAccept = distSqToTarget < distSqToPrior;
+
                     // ROUND 83: preStep is target/prior read IMMEDIATELY after our own
                     // TryDriveFollowTarget write, before TryDriveFollowLeaderStep's engine call
                     // runs this same frame — comparing it to fd (read after that engine call)
@@ -484,7 +512,10 @@ internal sealed unsafe class PartyFollowController(SharedBlockView block)
                         // Odyssey.TryAcceptFinalPathNode's own remarks for why this is here (testing
                         // whether PathWaitDest's geometric accept/reject test is correctly rejecting
                         // a stale Target/Prior pair, not spuriously blocking a healthy one).
-                        + $"recordedDestPoint=({fd.RecordedDestPoint.X:F2},{fd.RecordedDestPoint.Y:F2})");
+                        + $"recordedDestPoint=({fd.RecordedDestPoint.X:F2},{fd.RecordedDestPoint.Y:F2}) "
+                        // The computed PathWaitDest verdict — see the derivation comment above.
+                        + $"pathWaitDestAccept={pathWaitDestWouldAccept} "
+                        + $"distSqToTarget={distSqToTarget:F4} distSqToPrior={distSqToPrior:F4}");
                 }
             }
 

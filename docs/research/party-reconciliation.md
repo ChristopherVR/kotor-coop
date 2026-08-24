@@ -3317,3 +3317,142 @@ client's file to match, and the game world both instances are actually playing i
 disturbed.
 
 `dotnet test`: no production code changed this pass (a live-verification run only).
+
+## Live-verified (2026-08-24, follow-up round): the `fcompp` at 0x512BF2, read without a debugger
+## — an in-process diagnostic computes PathWaitDest's own comparison every frame, and the terminal
+## stall's real cause is now directly observed: `Prior` converges onto the terminal node's own
+## recorded position, which makes the accept test require the live leader to stand exactly on a
+## fixed waypoint — a race the leader can essentially never win by continuing to move
+
+Round 89/90's own verdict named the next step precisely: "a live debugger on the `fcompp` at
+0x512BF2 (`PathWaitDest`'s own comparison), to see directly what values are being compared and why
+the accept branch never fires." Checked this session's actual debugger tooling first (per the
+task's own instruction): no `cdb.exe`/`windbg.exe` exists anywhere on this machine — the only
+debugger-adjacent files found are four orphaned DLLs (`dbgcore.dll`, `dbghelp.dll`, `srcsrv.dll`,
+`symsrv.dll`) under `C:\Program Files (x86)\Windows Kits\10\Debuggers\x64`, left by some other SDK
+component's install, with no `cdb.exe`/`windbg.exe` alongside them — the actual "Debugging Tools for
+Windows" package was never installed. Visual Studio 2022 Community IS installed
+(`devenv.exe` exists), but its remote/native debugger is GUI-only and offers no scriptable,
+unattended breakpoint-and-log workflow this harness's automation can drive (confirmed by a brief,
+immediately-aborted `devenv.exe /?` probe, which opened a blocking GUI dialog rather than printing
+to the console — killed rather than pursued). No real debugger-attach tooling is available or
+reasonably set-up-able within this round's budget.
+
+### The substitute: compute the SAME comparison the engine computes, every frame, in-process
+
+Per the task's own steer (and this project's own established pattern this whole session), extended
+`PartyFollowController`'s existing fine-log — which already samples `Odyssey.FollowDiag` including
+round 89's own `RecordedDestPoint` field every frame — with a pure computation on those
+already-captured values, no new engine read or write. Full manual FPU-stack trace of
+`PathWaitDest`'s accept/reject test (`tools/disasm.py 0x512B40 220`, the whole function,
+instruction by instruction, tracking the x87 stack depth through all 20 `fld`/`fsub`/`fmul`/`faddp`
+operations from 0x512B86 through 0x512C03) settles exactly what `fcompp` at 0x512BF2 compares:
+
+```
+distSqToTarget = |RecordedDestPoint - TargetPoint|^2     (record+0x28)
+distSqToPrior  = |RecordedDestPoint - PriorPoint|^2       (record+0x18)
+fcompp compares ST0=distSqToTarget against ST1=distSqToPrior, pops both
+fnstsw ax; test ah,5; jp <reject, return to caller>
+```
+
+`TEST AH,5` reads C0 (set when ST0<ST1) and C2 (set on an unordered/NaN result) into the parity
+flag; `JP` (jump if PF=1) fires — REJECTING, falling back to the "not ready" return at 0x512B70 —
+for `ST0>=ST1` (target no closer, or a tie) or an unordered result, and falls through to the accept
+write (`record+4=3`, phase→3/`Moving_To_Path`, at 0x512C09) only when `ST0<ST1` **strictly**. In
+plain terms: **the real engine test accepts iff the recorded trail node is strictly closer to
+`TargetPoint` than to `PriorPoint`.** This is exactly the comparison round 89's own hypothesis asked
+about, now derived by disassembly rather than guessed, and cheap enough to compute every frame from
+fields already read.
+
+Wired into `PartyFollowController.cs`'s existing finelog write (`src/KotorCoop.Plugin
+/PartyFollowController.cs`): `pathWaitDestAccept`, `distSqToTarget`, `distSqToPrior` appended to the
+existing `party follow finelog` line. No `Odyssey.cs` change, no new memory read, no engine call —
+pure arithmetic on `FollowDiag.RecordedDestPoint`/`TargetPoint`/`PriorPoint`, all three already
+sampled every frame since round 89.
+
+### Live-verified: reproduced round 88's own recipe, and the diagnostic gives a direct, decisive
+### answer — no debugger needed
+
+Rebuilt and reinstalled the plugin on both GOG installs (`src/KotorCoop.Plugin/build.ps1 -Install`),
+brought up `tools/demo.ps1` (`END_M01AA`, both installs), set `party_follow_finelog=1` on both, and
+reproduced round 88/89/90's exact recipe on the host: `console 'tp 20 22 -1.3'` then `walk 10 15`
+(`tools/blockpoke.ps1`). Let Trask (0x127) walk the ~13-unit leg to the terminal stall and sat on
+it for over three minutes (`t=44s` through `t=257s`, 1883 sampled terminal-shape frames at
+`phase=7`, `pathNode==destNode==30`, `writeCursor=31` — the single last recorded trail node, the
+same terminal shape every round in this thread has used).
+
+**The direct answer, read straight off the log rather than inferred:**
+
+```
+[19:58:00.267] ... pathNode=30 destNode=30 writeCursor=31 moveState=3 ... target=(10.78,15.70)
+prior=(10.91,16.09) ... recordedDestPoint=(10.91,16.09)
+pathWaitDestAccept=False distSqToTarget=0.1662 distSqToPrior=0.0000
+```
+
+Across all 1883 terminal-shape samples: `distSqToPrior` ranged `0` to `0.0228` (essentially always
+at or barely above zero) while `distSqToTarget` ranged `0` to `0.1662` (genuinely, persistently
+positive) — `pathWaitDestAccept` read **`False` on every single one of the 1883 samples, zero
+exceptions**, for the full three-minute observation. The test is not failing intermittently or by a
+narrow margin; it is structurally rejecting, every frame, for the entire stall.
+
+**Why, read directly from the numbers**: `RecordedDestPoint` (the terminal trail node's own fixed,
+recorded position) and `PriorPoint` are — for the whole stall — essentially the SAME point
+(`distSqToPrior≈0`), while `TargetPoint` tracks the LIVE leader position, which (confirmed by round
+90, and reconfirmed here — `target` is bit-identical to `leaderPos` on every sample, not stale) sits
+persistently ~0.4 units away (`sqrt(0.1662)≈0.41`) from that fixed node. The accept test, as derived
+above, requires the node to be strictly closer to `Target` than to `Prior` — but once `Prior` has
+converged onto the node's OWN position, that reduces to requiring `Target` to land essentially
+exactly ON the node too (both distances would have to be ~0, and even a tie does not satisfy strict
+`<`). A live, continuously-moving leader essentially never stands at those exact float coordinates,
+so the test cannot pass by ordinary play no matter how long the companion waits: **round 89's own
+"stale geometry" hypothesis is refined, not merely refuted** — round 90 already showed `Target`/
+`Prior` are NOT stale (they update every frame, tracking the leader in real time), but at the very
+last recorded trail node specifically, `Prior` converges onto that fixed node's own coordinates
+(intermediate-node samples earlier in the SAME walk — see below — show `Prior` sitting a genuinely
+different distance away, letting the test pass), which turns the comparison into a race the live,
+moving `Target` can essentially never win.
+
+**Confirmed this is not merely a terminal-node artifact of the read itself**: four samples earlier
+in the SAME walk (`t≈60.36-60.61`, while Trask was still consuming intermediate trail nodes 0→1) DID
+show `pathWaitDestAccept=True` — `distSqToTarget=0.0000`, `distSqToPrior=0.0123` — immediately
+followed, in the very next samples, by `pathNode` genuinely advancing from 0 to 1. The diagnostic
+correctly reports both the passing and failing case within the same session, on the same companion,
+using the exact same computation — direct evidence the derived formula matches the real engine's
+own verdict, not just a plausible guess. Mid-path, `Prior`/`Target` sit at genuinely different
+points (there is a "next" node ahead with its own distinct position for the test to discriminate
+against); at the LAST recorded node, there is no next node — `Target` falls back to the raw live
+leader position instead of a fixed waypoint, and `Prior` has nothing left to be but the node itself.
+
+### Verdict
+
+This is the clean, decisive, in-process answer round 89's own verdict asked a live debugger for —
+obtained without one, using exactly the pattern this project has used successfully all session
+("expose an in-process diagnostic instead of external tooling"). The terminal-node stall's root
+cause is now directly observed, not inferred: **`PathWaitDest`'s accept/reject test, at the specific
+degenerate configuration of "the last recorded trail node," structurally requires the live leader to
+be standing almost exactly on that node's own fixed coordinates — a condition ordinary continuous
+movement essentially never satisfies, because the leader keeps walking past it.** No fix is shipped
+this round (the task was to get the comparison values, not to redesign the FSM); the diagnostic
+(`pathWaitDestAccept`/`distSqToTarget`/`distSqToPrior` in the `party follow finelog` line, gated
+behind the existing `party_follow_finelog=0` default-off switch, zero cost when disabled) is left in
+place for whoever picks up a fix next. Two directions worth naming for that round: (1) extend a
+trail with one more node past the recorded end once the companion nears it, giving the accept test a
+genuine "next point" to discriminate against the way intermediate nodes already have, or (2) once
+this exact terminal shape is detected, drive `Moving_To_Path`/a real walk step directly toward the
+live leader position rather than trying to satisfy `PathWaitDest`'s own node-relative test at all —
+both are real engine-adjacent changes needing their own live A/B, not attempted this round.
+
+`coop.ini party_follow_finelog` set back to `0` on both installs after this test (code default is
+already off; nothing to change in `PartyFollowController.cs`).
+
+### Test suite and build
+
+`dotnet test tests/KotorCoop.Tests` (Release): see this round's combined session log (run once,
+after both this change and the creature-liveness.md item's work — no production changes there).
+`src/KotorCoop.Plugin/build.ps1` clean, x86 confirmed, one pre-existing unrelated `CA2014` warning
+(`PortraitController.cs`) only.
+
+### Files
+
+- `src/KotorCoop.Plugin/PartyFollowController.cs` — `pathWaitDestAccept`/`distSqToTarget`/
+  `distSqToPrior` computed and logged in the existing fine-log line; no other file changed.
