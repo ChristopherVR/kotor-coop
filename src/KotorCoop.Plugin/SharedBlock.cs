@@ -2100,6 +2100,45 @@ internal struct SharedBlock
     /// <see cref="OffsetAdoptWorldLogin"/>'s own comment states.</summary>
     public const int OffsetMenuLoadInSession = 0x3F24;
 
+    // ---- party-roster body identity (version 53, region 0x3F28..0x3F70, no TotalSize growth) -
+    //
+    // docs/research/dialogue-consequences.md's 2026-08-24 "stale mirrored body" entry: a
+    // companion recruited on one instance through the real dialogue path (dialogue_recruit_sync)
+    // used to always be recreated on the peer from scratch (AddAvailableNpcByTemplate +
+    // SpawnAvailableNpc) — even when the peer's own game had ALREADY independently placed the
+    // SAME companion in the world at module load (GIT-identical object id, the same assumption
+    // EnemyPresenceController/MaterialisedEnemies already lean on elsewhere in this project).
+    // That old body was never told it had just become a party member, so it kept standing
+    // exactly where it always was, right next to the freshly spawned (and genuinely party-
+    // seated) duplicate — a second, motionless copy of the same companion.
+    //
+    // These two nine-slot arrays let PartyRosterController check, before ever calling
+    // AddAvailableNpcByTemplate, whether a live body with the SAME id the peer's own party table
+    // already holds for that slot is standing right here too — if so, that body is reused
+    // directly (Odyssey.TrySetSlotAvailable + AddPartyMemberBySlot) and the whole off-stage
+    // recruit + fresh spawn is skipped, so no duplicate is ever created in the first place.
+    //
+    // Rides in the free tail after the mid-session-load-request region (0x3F24 + 4 = 0x3F28,
+    // TotalSize is 0x4000, leaving 0xD8 bytes free before this; this region uses 0x48 of them).
+    // No TotalSize growth, no relayout of anything else. NEEDS-LIVE (see the design doc's own
+    // "flagged, not fixed" note) — nothing about this mechanism has been exercised against the
+    // real GOG install yet.
+
+    /// <summary>Plugin -&gt; agent. This instance's own party-table object id per NPC roster
+    /// slot (party table +0x0C, <see cref="Odyssey.GetPartyRosterObjectId"/>'s own field), 0 for
+    /// a slot not currently in this instance's <see cref="OffsetLocalPartyRoster"/> party mask.
+    /// int[9], one dword per slot, republished every frame alongside the roster masks
+    /// (deliberately a LEVEL, not an edge — the same reasoning <see cref="OffsetLocalPartyRoster"/>'s
+    /// own comment gives).</summary>
+    public const int OffsetLocalPartyRosterObjectIds = 0x3F28;
+
+    /// <summary>Agent -&gt; plugin. The HOST's per-slot object ids, same packing and the same
+    /// "0 = not currently in the host's active party for that slot" convention as
+    /// <see cref="OffsetLocalPartyRosterObjectIds"/>. Only meaningful together with
+    /// <see cref="OffsetHostPartyRoster"/>'s own valid bit — cleared (all zero) whenever that
+    /// word is.</summary>
+    public const int OffsetHostPartyRosterObjectIds = 0x3F4C;
+
     // ---- generic trigger relay (0x3B88..0x3BD8, no TotalSize growth) --------------
     //
     // A GENERIC trigger's OnEnter (a CSWSTrigger whose script starts a cutscene, dialogue or

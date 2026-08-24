@@ -517,7 +517,12 @@ internal static unsafe class PluginHost
         //      branch (DestroyServer + UnloadModule before CreateServer, guiManager from
         //      [clientInternal+0x274]) instead of acking-and-mooting when a server already
         //      exists — see docs/research/session-save.md's dated entry.
-        _block->Version = 52;
+        // 53 = party-roster body identity at 0x3F28..0x3F70 (two nine-slot object-id arrays,
+        //      local and host) — lets a peer recognise its own already-placed, GIT-identical
+        //      copy of a just-recruited companion and reuse it instead of spawning a duplicate
+        //      body next to it. See docs/research/dialogue-consequences.md's 2026-08-24 "stale
+        //      mirrored body" entry. NEEDS-LIVE.
+        _block->Version = 53;
 
         // A guard dword after the version. Magic plus version alone was not selective
         // enough: a scan once matched something else at a lower address and the agent
