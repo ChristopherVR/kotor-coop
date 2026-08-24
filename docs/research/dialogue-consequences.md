@@ -1108,3 +1108,113 @@ existing claims and added one test file.
 `README.md`'s "confirmed for one of nine companions" framing (line 45) is left unchanged — this
 round found nothing that revises it; the eight additional slots are now independently
 STATICALLY re-confirmed twice over, not live-confirmed once.
+
+## Live pass (2026-08-24): a SECOND companion (Zaalbar, slot 8) live-recruited through the REAL
+`dialogue_recruit_sync` network path — the "two independently-confirmed slots" bar is met, but
+`dialogue_recruit_sync` stays OFF pending one new open question this pass surfaced
+
+Rig access this round (plugin rebuilt/reinstalled on both GOG installs first). `dialogue_recruit_sync=1`
+set on both `coop.ini`s. Both instances started fresh on `END_M01AA`/save slot 1 (the only saves on
+this rig are both at the Endar Spire — no further-along Taris save exists, and this rig has no
+working keyboard/mouse input, so a REAL dialogue-triggered recruit, as this task asked for
+"ideally," was not reachable this pass either; the console `recruit <slot> <tag>` fallback was used
+again, same as every prior round).
+
+### Two crashes, then a clean run — `tools/blockpoke.ps1 travel` cross-planet warp
+
+The first two attempts to reach Taris (`travel tar_m08aa` then `travel tar_m05aa` back to back; then,
+after a full rig restart, a single `travel tar_m05aa`) each ended with the CLIENT's `swkotor.exe`
+process exiting entirely during the transition (`agent2.log`: `[resolve] player ...: vtable
+unreadable`, `TryFindPlugin: scan found 0 candidate(s)`, then a clean `session-saved character`
+sidecar and disconnect — the same signature `shared-state-audit.md`'s own item 3 already recorded
+for an un-godded client taking overkill damage). The host's own log showed it entered combat
+(`state IN COMBAT combat [FIGHT in area1 - engaged: you]`) right as the transition announced on
+both failed attempts. A third attempt — full rig restart, `cheat god 1` armed on BOTH instances
+BEFORE the warp, single `travel tar_m05aa` (no intermediate module) — landed both instances
+cleanly on `tar_m05aa`, connected, no crash. Not proven causal (three data points, two different
+variables changed between the failing and succeeding attempt — the double-warp and the missing god
+mode — and `shared-state-audit.md`'s own item 4 already showed a bare single warp CAN succeed
+without god mode), but consistent with the existing "un-godded client + incidental combat" crash
+class, and cheap insurance either way. Worth carrying into future rig work: arm god mode on both
+sides before any debug cross-module warp, and avoid chaining two warps back to back.
+
+### The recipe's own tag assumption was wrong — found and worked around live
+
+`docs/research/dialogue-consequences.md`'s own companion table (above) lists Zaalbar's `recruit
+<slot> <tag>` tag as `Zaalbar`, taken from the base `p_zaalbar` template's `Tag` field
+(independently re-verified against `templates.bif` earlier this same document). **The LIVE, placed
+body in `tar_m05aa` does not use that tag.** `tools/creatures.ps1` (a full live-creature memory
+scan, not a tag-indexed lookup) found him as `id 0x2, tag 'tar05_zaalbar'` — the per-module GIT
+placement's own tag override, not the story blueprint's. `console 'recruit 8 Zaalbar'` refused
+("no creature tagged 'Zaalbar' is here either") on both attempted Taris modules; `console 'recruit
+8 tar05_zaalbar'` succeeded immediately: `NPC slot 8 recruited and added to the party (0x2)`. This
+is worth recording for whoever tries the remaining six companions next — the table's `Tag` column
+is the STORY BLUEPRINT's tag, not necessarily what a specific GIT placement uses; `tools/creatures.ps1`
+against the target module is the reliable way to find the real live tag before assuming the table's
+value works. (This also explains why the earlier `tar_m08aa`/Canderous attempt refused with no
+placed body found at all — `tools/kotorfiles.py creatures tar_m08aa`'s own GIT dump, checked
+separately, lists no `p_cand`/`cand`-named entry; Canderous is very likely a script-spawned
+addition to that module rather than a static GIT placement, unlike Zaalbar.)
+
+### The real `dialogue_recruit_sync` path fired correctly, end to end
+
+Host `plugin.log`: `party roster: local party is now 0x101 (recruited 0x101)`. Client `plugin.log`,
+within the same `PartyRosterController` pass window (191ms total, well under the "one pass" bar
+prior rounds used):
+
+```
+[17:14:22.300] party roster: recruited NPC slot 8 as 0x1 from its own template (peer recruited
+                0x101, here 0x001) - dialogue_recruit_sync; a body will be spawned and added on a
+                later pass
+[17:14:22.388] party roster: spawned NPC slot 8 as 0xF4 to add them here
+[17:14:22.388] party roster: added NPC slot 8 (object 0xF4) to the party
+[17:14:22.391] party drive: companion 0xF4 held neutral and pinned - the host owns its health
+[17:14:22.391] party drive: mirroring 2 of the host's companions
+```
+
+No `party roster: could not add NPC slot 8 (failure 9)` line anywhere in the sequence — the
+duplicate-body FIX (the off-stage cache object never being added directly) held for this slot
+exactly as it held for Carth's. `tools/creatures.ps1` on the client confirms object `0xF4` is a
+genuine, fresh, properly-leveled companion body (`hp 32, xp 6001` — standard companion stats, NOT
+the captive's `hp 8`), correctly identified as Zaalbar (tag `zaalbar`), correctly faction-pinned
+(`held neutral and pinned`). This is a second, independently-confirmed slot beyond Carth: the
+per-slot template mapping (`PartyRosterTemplateTable[8] == p_zaalbar`) is now live-confirmed, not
+just statically re-derived twice.
+
+### One new open question this pass surfaced, not settled: a possible stale mirrored body
+
+`tools/creatures.ps1` on the CLIENT, run again ~10s after the recruit, still shows the PRE-recruit
+captive body too: `object 0x2, tag 'tar05_zaalbar', hp 8, xp 0` — the client's mirrored copy of
+Zaalbar's original placed-in-the-world body, from BEFORE he was recruited, sitting at the exact
+same coordinates as the new party companion (`225.86, 192.24, 29.72`, since the new companion had
+not yet started walking to the leader). This is a DIFFERENT object from the "off-stage cache" the
+existing duplicate-body fix targets (that one, per this document's own root-cause writeup, is never
+placed in the world and never renders) — this is a full, in-world creature object that existed
+BEFORE the recruit and, as far as this pass could determine, was never explicitly destroyed or
+hidden once its "owner" (Zaalbar) became a party member instead of a standalone placed NPC. The
+HOST's own `plugin.log` confirms its own local object `0x2` correctly transitioned to
+`commandable=1 inParty=1 cswPartyIndex=2` (the real, singular Zaalbar, now following) — so this is
+specifically a CLIENT-side question: does its mirrored copy of the pre-recruit body linger,
+unrendered but present in memory (harmless), or does it still render (a real visual duplicate)?
+This pass could not settle it — the rig's own documented limitation applies (`tools/click.ps1`/
+`tools/shot.ps1` both come back solid black, per `shared-state-audit.md`'s own item 1 finding) —
+and it is a genuinely NEW question the Carth-only precedent never surfaced, because Carth's own
+live-test rounds never ran a full `creatures.ps1` sweep looking for a stale copy of his own
+pre-recruit body specifically. Flagged, not fixed, and not assumed either way.
+
+### Verdict: the recruit mechanism itself is now confirmed for two independent slots; `dialogue_recruit_sync` stays OFF, one specific reason
+
+Per this project's own "two independently-confirmed slots" bar, that bar is now met on the
+mechanism's own core question (does the wire bit reach the peer, does the peer build the right
+companion from the right template, does it seat cleanly with the right stats and faction) — Zaalbar
+joins Carth as a second, live, network-path-confirmed slot. `dialogue_recruit_sync` is NOT flipped
+to default ON this pass, for one specific, named reason rather than general caution: the stale-
+mirrored-body question above is new, untested, and could be a real (if likely cosmetic) duplicate-
+body regression specific to companions who are ALSO pre-existing GIT placements — a category
+Carth's own precedent happens to also fall into but was never checked this way. Resolving it needs
+either working screenshot capture in this rig or a live human eyeballing the client's screen right
+after a recruit of a companion who was previously a placed, visible NPC. Recorded precisely so the
+next pass does not have to re-discover it: check whether the client's screen shows one Zaalbar or
+two immediately after a recruit like this one, before defaulting this flag on.
+
+`dotnet test`: no production code changed this pass (a live-verification run only).
