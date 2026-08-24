@@ -2306,3 +2306,176 @@ one surviving hypothesis (§17.6) needs real diagnosis, not a speculative change
 `k_ptar_bekrace.ncs`'s neighbours or any engine hook. `dotnet test`: 1714/1714 green, full suite
 re-run after the rig was stopped (a first attempt while the live agents still held the build output
 open hit MSB3027 file locks, not a real failure — rerunning after `-Stop` fixed it cleanly).
+
+## 21. Static re-verification of §18.2's `CreateObject` trail (2026-08-24, follow-up round) — the
+call is genuinely unconditional and genuinely unreachable-from-content reasons, the 32-cap theory is
+refuted twice over, and a new cross-check (waypoint coordinates against §20's own live position log)
+nails the real failure to one exact link: `racecs0`'s own `DelayCommand(7.0, AssignCommand(GetFirstPC(),
+<subroutine@764>))` chain never dispatching — not `CreateObject` itself, and not anything about the
+escort's own content
+
+No rig access this round (static analysis only, per this round's own task constraint). Re-disassembled
+`k_ptar_racecs0.ncs`, `k_ptar_racecs1.ncs`, and `k_ptar_bekrace.ncs` from scratch — independently pulled
+straight out of the real GOG install's `modules\tar_m11aa_s.rim` and run through `NcsReader.Disassemble`/
+`FindActionCalls` via a fresh throwaway console project (not reusing §18's own project or its output) —
+read `tar11_csbek.utc`'s full field set (not just confirmed its presence), and parsed `tar_m11aa`'s real
+`.git` (found under GFF resref `m11aa`, not `tar_m11aa` — a naive resref guess misses it entirely) for
+both waypoints' exact coordinates and the module's full static object census.
+
+### 21.1 The blueprint resref: exact match, no typo
+
+Every `.utc` in both `tar_m11aa.rim`/`tar_m11aa_s.rim` whose resref contains `bek` was listed directly.
+`tar11_csbek` is present, spelled exactly as `racecs0.ncs`'s own `PushConstant string "tar11_csbek"`
+(offset 1054) pushes it — byte-for-byte, no near-miss (it sits unambiguously apart from
+`tar11_ambbek0-4` and `tar11_hidbek111-118`, none of which could plausibly be a fat-fingered
+substitute). Task item 3's resref-typo concern is closed.
+
+### 21.2 `racecs0.ncs` re-disassembled instruction-by-instruction: confirms §18.2 exactly, this time
+against the FULL jump-target list rather than a prose summary
+
+The full 195-instruction dump, plus every `JumpIfZero`/`JumpIfNonZero`/`Jump`/`JumpToSubroutine` in the
+file listed separately, gives a complete picture:
+
+* **Exactly one conditional jump in the entire file**: `856: JumpIfZero -> 907`, the exit test of the
+  bounded `i <= 8` `RemovePartyMember` loop (§18.2's own finding, now re-confirmed against the raw
+  instruction list, not trusted from prose).
+* **Zero `JumpIfNonZero` anywhere in the file.**
+* Three unconditional `Jump`s (688, 704, 901) and three `JumpToSubroutine`s (13, 627, 710) — all
+  closure/subroutine plumbing (the `main()` trampoline, the `DelayCommand`/`AssignCommand` closure
+  skip-over jumps, and the loop-back jump), none of them gating the `CreateObject` call.
+* The exact call chain from `main()`'s own start to `CreateObject` was walked instruction-by-instruction
+  and matches §18.2's summary exactly: `SetGlobalFadeOut` (673) → the `AssignCommand(GetFirstPC(),
+  <closure B>)` built from `GetFirstPC()` (718, routine 548) + the closure-B state (routine 6, 723) →
+  `DelayCommand(7.0, <that AssignCommand>)` (routine 7, 736) → `ActionPauseConversation`/
+  `ActionWait(8.0)`/`ActionResumeConversation` (741/752/757) → `main()` returns (762). Closure B's own
+  body is nothing but `JumpToSubroutine -> 764` (710) — i.e. **the entire party-removal/teleport/
+  `CreateObject` payload lives inside subroutine `@764`, and subroutine `@764` is reached ONLY by
+  firing this exact `DelayCommand(7.0, AssignCommand(GetFirstPC(), JSR-764))` chain.** Nothing else in
+  `main()` calls it, directly or otherwise.
+* Subroutine `@764` itself (764-1092) re-confirms §18.2's read exactly: the bounded loop (840-901,
+  gated only by the one `JumpIfZero`), two `DestroyObject` calls (933, 964, routine 241),
+  `ClearAllActions` (969, routine 9), `GetObjectByTag("tar11_wppcsleep")` → `ActionJumpToObject`
+  (1005/1010, routine 200/196 — an instant teleport), `GetObjectByTag("tar11_wpcsbek")` →
+  `GetLocation` (1044/1049, routine 200/213), then `CreateObject("tar11_csbek", <that location>,
+  appear-anim=1)` (1075, routine 243, 4 args). **No conditional of any kind between the loop's exit and
+  the `CreateObject` call.** Task item 3's "is the call definitely reached, not gated behind an earlier
+  check" question: yes, statically, unconditionally, exactly as §18.2 already found — this half of the
+  question was already settled and stays settled. The genuinely new material is §21.4 below.
+
+### 21.3 `tar11_csbek.utc`: fields read in full, nothing that could make the engine silently refuse
+the spawn
+
+70 top-level fields read directly (not just "file exists," which is all §18.4 checked). Everything is
+an ordinary, unremarkable NPC blueprint: `FactionID=5` (same family other Bek-tagged NPCs in this
+module use — nothing hostile-to-spawn or reserved-looking), `Appearance_Type=39`, `Race=6`/
+`SubraceIndex=0` (normal human values, not some invalid/reserved index), `Plot=0`, `Min1HP=0`,
+`NoPermDeath=0`, `PartyInteract=0`, `IsPC=0`, `ScriptSpawn=""` (no `OnSpawn` script that could
+self-destruct or otherwise interfere — closes task item 2b's "own scripted OnSpawn" concern directly),
+`HitPoints=18`/`CurrentHitPoints=18`/`MaxHitPoints=21` (sane, positive), a normal `ClassList`/
+`SkillList`/`FeatList`/`ItemList`. Nothing here resembles a template the engine would refuse to
+instantiate. This rules out a bad-blueprint explanation as cleanly as §18.4 already ruled out a
+missing-file explanation.
+
+### 21.4 The waypoint positions, cross-referenced against §20's own live position telemetry — the
+decisive new fact this round adds
+
+`tar_m11aa`'s real `.git` (`WaypointList`, 32 entries) gives exact coordinates:
+
+* `tar11_wppcsleep` = **(100.24, 76.90, 0.0007)**
+* `tar11_wpcsbek` = **(100.89, 60.90, 0.0007)**
+* `GadonThek112`'s own GIT spawn = (63.90, 78.62)
+
+Neither waypoint is degenerate — both have sane positive coordinates, near-zero-but-non-negative Z, and
+real orientation vectors. Task item 2c's "is the waypoint in an unwalkable/degenerate location" concern
+is not supported by anything in the GFF data itself.
+
+But laid next to §20's own recorded live fact — **the PC's position was checked at the end of the
+~5-minute stall window and found unmoved at `65.0, 76.0, 0.0`, the exact `tp` landing spot next to
+Gadon (63.90, 78.62) used to reach the dialogue** — the distances are decisive: `tar11_wppcsleep` is
+**35.25 units** from that landing spot, `tar11_wpcsbek` is **38.94 units** away. Subroutine `@764`'s own
+`ActionJumpToObject` to `tar11_wppcsleep` (§21.2) is an **instant** teleport (routine 196, confirmed not
+a walk) — if it had ever fired, the PC would have relocated 35+ units away within the same engine tick,
+at the latest 7 real seconds after node 17 published (multiple minutes before §20's own end-of-window
+position check). **It did not relocate.** The PC was still sitting exactly where the `tp` command placed
+it, unmoved, for the entire observed window.
+
+This means subroutine `@764` — the party-removal loop, both `DestroyObject` calls, the PC's own
+teleport, AND the `CreateObject` call for the escort — **never ran at all.** This is a stronger, more
+specific claim than §20's own "the escort was never created": §20 established the *effect* (no
+`tar11_csbek` in a creature scan); this round's waypoint-distance cross-check establishes that the
+entire delayed/assigned subroutine carrying that effect never dispatched, using an independent signal
+(the PC's own recorded position, which subroutine `@764` would have moved regardless of anything to do
+with the escort specifically). **`CreateObject`'s own arguments, the blueprint's own fields, and the
+waypoint's own location are therefore very unlikely to be the cause — the call site was never reached
+at runtime, not merely reached-and-refused.**
+
+### 21.5 The 32-creature census-cap methodology-artifact theory: refuted twice over, independent of
+§21.4
+
+Task item 2d asked to check whether a module object-count ceiling could be silently rejecting the
+spawn, specifically flagging this project's own 32-slot combat census (`creature-liveness.md`) as a
+candidate. Two independent problems with this theory, found this round:
+
+1. **Wrong mechanism.** `creature-liveness.md`'s 32-slot census (`CombatController`/`ReadEnemies`) is
+   this project's own **coop plugin's** enemy-sync scan cap — a `SharedBlock` array size limit for
+   what the plugin mirrors to the peer over the network. It has nothing to do with the KOTOR engine's
+   own native `CreateObject` call succeeding or failing; a plugin-side network-sync cap cannot make the
+   base game's own script-driven object creation silently no-op. Conflating the two would be a category
+   error even before checking the numbers.
+2. **The numbers don't line up anyway.** `tar_m11aa`'s static `Creature List` (GIT) has only **14**
+   entries. §20's own live creature sweep during the actual stall found **28** `CSWSCreature` objects
+   total in the module — comfortably under 32 either way, with room to spare for one more. There is no
+   population pressure here for any cap (real or hypothesized) to bind against.
+
+Both readings of task item 2d are closed: this is not a census-cap artifact, crafted-save-methodology
+or otherwise — matching, rather than being an exception to, this session's recurring pattern of ruling
+out exactly this class of artifact.
+
+### 21.6 One more re-verification: `bekrace`'s own terminal `DelayCommand` is confirmed bare (no
+`AssignCommand`), independently re-checked from raw bytecode rather than trusted from §18.6's prose
+
+§18.6 point 1 already flagged that `bekrace`'s own `DelayCommand(0.1, StartNewModule(...))` is not
+wrapped in an `AssignCommand`, unlike every movement action `racecs0`/`racecs1` issue. Re-disassembling
+`bekrace.ncs` from scratch this round confirms it directly: **there is exactly one `StoreState` in the
+entire 280-instruction file** (offset 725, the closure that captures the `StartNewModule` call at 782),
+and **zero calls to routine 6 (`AssignCommand`) anywhere in the file** (the full action-call list has no
+routine-6 entry at all, unlike `racecs0`'s two). This is the same bare-`DelayCommand` shape §21.2/§21.4
+show for `racecs0`'s own first delayed step — worth naming because it means **two separate scripts in
+this exact dialogue (`racecs0`'s node-17 script and `bekrace`'s node-21 script) both use a bare
+`DelayCommand`, and both apparently fail to dispatch**, which is at least consistent with — though this
+round's static evidence cannot prove — a single shared root cause (e.g., whichever object is
+`OBJECT_SELF` for these dialogue-node action scripts having a delayed-event queue that never drains),
+rather than two coincidentally-unrelated failures.
+
+### 21.7 What this changes: the mystery is now sharper and points at one specific, testable link
+
+This round does not resolve why the delayed-event dispatch stalls — that remains a live-only question,
+exactly as §18.6/§19/§20 already said. What it changes:
+
+* The "escort never spawns" finding from §20 is no longer a standalone, unexplained content-precondition
+  mystery. It is now understood to be one symptom of a single earlier failure: `racecs0`'s own
+  `DelayCommand(7.0, AssignCommand(GetFirstPC(), <subroutine@764>))` never dispatching. This is
+  confirmed via an independent channel (waypoint-to-landing-spot distance vs. the PC's own recorded
+  position), not merely inferred from the missing creature.
+* This produces a new, sharper, and CHEAP live prediction for the next round with rig access: **if
+  `racecs0`'s `DelayCommand` chain is truly the stuck link, the PC should NEVER be observed at
+  `tar11_wppcsleep` (100.24, 76.90) at any point during the stall, and the two party members fetched by
+  `GetPartyMemberByIndex(1)`/`(2)` should still be present (never `DestroyObject`ed) throughout.** Both
+  are cheap to check with existing tooling (a position poll — `actionpoll.ps1`'s own read of
+  `SharedBlock.OffsetEnginePlayerPointer` already gets position for free alongside action type; a
+  party-member presence check) and would directly confirm or refute this round's read without first
+  needing to solve the harder "whose `OBJECT_SELF`" question.
+* The 32-creature census-cap theory (task item 2d) and the bad-blueprint/bad-waypoint theories (task
+  items 2b/2c) are now closed, cleanly, by content and coordinate evidence rather than live observation
+  — freeing the next live round to spend its entire budget on the `DelayCommand`/`OBJECT_SELF` dispatch
+  question §18.6 already raised, now narrowed specifically to `racecs0`'s own node-17 script rather than
+  "somewhere in one of three scripts."
+
+### 21.8 What this changes about the shipping recommendation
+
+Nothing. `minigame_hide_peer` stays default-on; co-visible swoop racing is still not shipped and still
+not observed working end to end. No production code changed this round (investigation only, static
+analysis per this round's own constraint — no rig access). The throwaway console project used for these
+disassemblies/GFF reads (`swoopinvestigate`, scratchpad-only, same "one-off is fine" convention as every
+prior round's own `ncsdump`/`actionpoll.ps1`) is not committed. `dotnet build -c Release` on
+`src/KotorCoop.Memory` (the only project this round's reads touch): clean, 0 warnings, 0 errors.
