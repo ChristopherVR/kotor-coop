@@ -978,3 +978,133 @@ original design doc set (§4's live-test plan, step 7).
 - The exact Taris/Dantooine/Kashyyyk/Tatooine area names each module resref corresponds to (this
   round worked at MODULE granularity, which is what `recruit <slot> <tag>` needs — it does not
   need the specific `.are` display name).
+
+## Round (2026-08-24): re-verifying the wiring itself, an independent second cross-check of all
+## nine templates against the real GOG install, and one more unit test tying the two pieces together
+
+Task: confirm — not assume — that the previous round's `PartyRosterTemplateTable` is actually
+consumed by the live recruitment dispatch for all nine slots (not just present as an unused
+table, or silently special-cased to Carth somewhere), independently re-cross-check the eight
+non-Carth resrefs against the real GOG install from a fresh worktree, and strengthen unit
+coverage of the wiring. No live rig touched this round either (worktree-isolated: read-only
+against `D:\Games\swkotor-gog-p2`, no write access, no running game).
+
+### The wiring: confirmed already fully generic, no code change needed
+
+Read `Odyssey.AddAvailableNpcByTemplate` (`src/KotorCoop.Plugin/Odyssey.cs`) and
+`PartyRosterController.Reconcile` (`src/KotorCoop.Plugin/PartyRosterController.cs`) directly
+rather than trusting the prior round's own summary of them:
+
+- `AddAvailableNpcByTemplate(int slot)` calls `PartyRosterTemplateTable.TryGetTemplate(slot, out
+  resref)` unconditionally for whatever `slot` it is passed — no Carth (or any other) special
+  case, no hardcoded fallback resref if the lookup fails (it returns 0/refuses instead).
+- `PartyRosterController.Reconcile()` computes `addSlot = LowestSlot(toAdd)` from the peer's
+  roster bitmask (any of the nine bits, not a fixed one) and — behind `dialogue_recruit_sync`,
+  still OFF by default — calls `Odyssey.AddAvailableNpcByTemplate(addSlot)` with that same
+  variable slot. Nothing between the wire (`PartyRoster`, packet 37) and the engine call narrows
+  this to slot 2.
+
+**Verdict: the full nine-companion table was already wired into the live recruitment path before
+this round started** (done by the "Round (2026-08-24): the other eight slots' templates..."
+section above, which this round's date collides with — that work landed first). No production
+code was changed this round.
+
+### Independent re-cross-check against the real GOG install (`D:\Games\swkotor-gog-p2`, read-only)
+
+This worktree can read the real install directly, so rather than trusting the prior round's
+table of Tag/FirstName values, this round re-ran the same two checks itself from scratch using
+`tools/kotorfiles.py key --find` and `tools/kotorfiles.py gff --path Tag` / `--path FirstName` +
+`tools/kotorfiles.py tlk <strref>`, independently, resref by resref:
+
+| Resref | Exists in `templates.bif` as `.utc`? | `Tag` | `FirstName` (via `dialog.tlk`) | Matches expected companion? |
+| --- | --- | --- | --- | --- |
+| `p_bastilla` | Yes (index 1008) | `Bastila` | `Bastila` (strref 31360) | Yes |
+| `p_cand` | Yes (index 1010) | `Cand` | `Canderous` (strref 26218) | Yes |
+| `p_carth` | Yes (index 1012) | `Carth` | `Carth` (strref 30733) | Yes |
+| `p_hk47` | Yes (index 1014) | `HK47` | `HK-47` (strref 27766) | Yes |
+| `p_jolee` | Yes (index 1016) | `Jolee` | `Jolee` (strref 16771) | Yes |
+| `p_juhani` | Yes (index 1018) | `Juhani` | `Juhani` (strref 16772) | Yes |
+| `p_mission` | Yes (index 1021) | `Mission` | `Mission` (strref 30734) | Yes |
+| `p_t3m4` | Yes (index 1027) | `T3M4` | `T3-M4` (strref 22095) | Yes |
+| `p_zaalbar` | Yes (index 1030) | `Zaalbar` | `Zaalbar` (strref 25891) | Yes |
+
+Also independently re-confirmed: `p_canderous` (the one anomalous string spotted in
+`k_ptar_davikest`) returns **zero** matches against `chitin.key`'s 25,836 entries from this
+round's own separate query — reproducing the prior round's finding that it is not a real
+resource, not merely re-stating it.
+
+**No mismatch found.** All nine resrefs independently re-verified: real, loadable `.utc`
+templates in the shipped GOG install, each one's `Tag` and `FirstName` unambiguously naming the
+companion its slot claims. This is a second, independently-run confirmation of the previous
+round's template-identity table (same method, same tool, freshly executed from this worktree
+against the real install rather than trusted from the doc), not a rubber stamp — every value was
+re-queried from the raw files, not copied from the table above.
+
+### Unit test added: the wiring itself, generalised across all nine slots
+
+The existing `PartyRosterTemplateTableTests` (all nine slots resolve, out-of-range refused,
+`SlotCount == 9`, no duplicate templates) and `PartyRosterRecruitRuleTests` (2 cases, origin-only
+— correctly slot-agnostic, since the immediate-add gate never depended on which companion) each
+already covered their own class in full. What was missing was a test that ties the two together
+the way the actual call chain does, generalised over the slot count rather than asserting only
+the one case the live rig has touched (Carth). Added
+`tests/KotorCoop.Tests/PartyRosterRecruitWiringTests.cs`:
+
+- `EveryOneOfTheNineSlotsResolvesATemplateAndIsGatedTheSameWayCarthIs` — loops
+  `slot in 0..PartyRosterTemplateTable.SlotCount`, asserting every slot both resolves a non-empty
+  template AND is gated identically by `PartyRosterRecruitRule.CanAddImmediately`. A regression
+  that silently narrowed either piece back to a single companion (e.g. an early-return special
+  case for slot 2 introduced by a future change) would fail this test even though the two
+  existing per-class test files would not catch it, since neither asserts the OTHER class's
+  behavior in the same case.
+- `OutOfRangeSlotsAreRefusedBeforeTheRuleEverRuns` — the second independent bounds check
+  `Odyssey.AddAvailableNpcByTemplate` relies on, beyond `PartyRoster.SlotMask`'s own 0-8 bound.
+
+This remains, like everything else in this codebase's coverage of this feature, a test of the
+PURE decision logic only — `Odyssey.AddAvailableNpcByTemplate`'s actual P/Invoke call and
+`PartyRosterController.Reconcile`'s engine-facing branches still have no unit coverage and can't
+get any without the live rig (the class is `internal sealed unsafe`, calling raw function
+pointers into a running `swkotor.exe`). This test is a stronger proxy for "is the wiring generic"
+than the two pre-existing test files individually provide, not a substitute for a live recruit.
+
+`dotnet test tests/KotorCoop.Tests` (Release): **1690/1690 passed** (2 new cases; no production
+code touched, no existing test changed).
+
+### What a live pass still needs, unchanged in substance from the prior round
+
+Static confidence is now about as high as it can get without a live rig — table wired in
+generically (re-confirmed by reading the actual dispatch code, not just the doc describing it),
+all nine templates independently re-verified twice now (two separate rounds, same method,
+against the real install) against two different signals (`Tag` and `FirstName`) each. None of
+this substitutes for what only a running two-instance test can show:
+
+1. **A second live-recruited slot, beyond Carth.** Slot 2 remains the only slot with an actual
+   two-instance result (`party-reconciliation.md` round 75 + this document's own 2026-08-23 live
+   passes). Every other slot's *identity on screen* — does the client's newly-added companion
+   actually look like, portrait as, and voice as the companion its slot claims — has never been
+   observed, only inferred from static resref/Tag/FirstName matching. The recipe and the
+   cheapest-first ordering (five Taris-reachable companions: Bastila, Canderous, Mission, T3-M4,
+   Zaalbar) are already written out in the "Live-test recipe for the remaining eight companions"
+   section above; nothing in this round changes that recipe.
+2. **The same duplicate-body-fix verification steps** (two distinct resolvable object ids, exactly
+   one visible in-world body, sub-second timing) repeated for that second slot — the 2026-08-23
+   live pass only exercised the fix's mechanism for Carth; whether it generalises cleanly to a
+   companion recruited through a genuinely different `.dlg`/script (not the `recruit`
+   console-fallback substitution used for Carth) is untested.
+3. **Ideally, the REAL dialogue conversation** for at least one companion (not the `console
+   'recruit <slot> <tag>'` fallback every live pass so far has used) — every live result to date,
+   including Carth's, went through the console substitution because the test saves used were past
+   or short of the actual recruitment conversation's story point. A real `AddAvailableNPCByTemplate`
+   call fired from an actual `.dlg` reward node has still never been observed end-to-end on the
+   rig, only reproduced via the dev console primitive that calls the same engine functions.
+
+Per this project's own "two independently-confirmed slots" bar (§4's live-test plan, step 7;
+also restated in the previous round), **one clean live recruit of any second companion — ideally
+one of the five Taris-reachable ones — is what would move `dialogue_recruit_sync` from "off,
+static-only" to "a real candidate for default-on."** `dialogue_recruit_sync` stays OFF by default
+in `coop.ini.example`; this round changed no defaults and no production code, only re-verified
+existing claims and added one test file.
+
+`README.md`'s "confirmed for one of nine companions" framing (line 45) is left unchanged — this
+round found nothing that revises it; the eight additional slots are now independently
+STATICALLY re-confirmed twice over, not live-confirmed once.
