@@ -69,6 +69,24 @@ internal sealed unsafe class ControlReturnController(SharedBlockView block)
 
     private bool _handBackLogged;
 
+    /// <summary>Live-found 2026-08-24 (docs/research/party-reconciliation.md): the same
+    /// warp-transition epoch race <see cref="PartyFollowTransitionRule"/> closed for
+    /// <c>PartyFollowController</c> (round 85/87 — an AV inside the engine's own CSWParty
+    /// machinery, one frame after a fresh module epoch reads valid but the new module's party
+    /// data is not necessarily populated yet). This controller's own per-frame engine calls
+    /// (<see cref="Odyssey.GetControlledCreaturePointer"/>/<see cref="Odyssey.SwitchControlToPc"/>,
+    /// both of which walk CSWParty's raw member array exactly like the calls that rule already
+    /// guards) were just as unconditional and just as reachable in that same first frame, and
+    /// had no epoch check at all. Reproduced live, twice in a row, on a rig cross-module warp:
+    /// the client's own plugin log shows the "control: you are driving companion 0x... —
+    /// switch not ready yet, retrying" line as the LAST line before the process silently exits
+    /// (no crash dump, no WER event — a clean exit, not caught as an access violation this
+    /// time, but the same shape: this controller's engine calls firing within ~150ms-1s of
+    /// "epoch: world unloading" for the destination module). See
+    /// <see cref="PartyFollowTransitionRule"/>'s own remarks for the full disassembly-grounded
+    /// finding this reuses verbatim.</summary>
+    private ulong _lastSeenEpoch;
+
     /// <summary>The session ended: drop the budget. Control is the player's again, and the
     /// camera with it — including, deliberately, if they want it back on a companion.</summary>
     public void ReleaseSession()
@@ -83,6 +101,28 @@ internal sealed unsafe class ControlReturnController(SharedBlockView block)
     {
         if (!_enabled)
         {
+            return;
+        }
+
+        // Must run before ANY of this controller's engine calls below, not just the ones the
+        // countdown currently happens to gate — see this rule's own remarks (shared verbatim
+        // with PartyFollowController) for why the dangerous frame is the first one after a
+        // module warp, not a steady-state cadence question.
+        bool worldEpochReadable = Odyssey.TryGetWorldEpoch(out ulong epoch);
+        if (PartyFollowTransitionRule.ShouldSkipThisFrame(worldEpochReadable, epoch, _lastSeenEpoch))
+        {
+            if (worldEpochReadable)
+            {
+                _lastSeenEpoch = epoch;
+            }
+
+            // Whatever this controller's countdown/claim bookkeeping held belongs to the world
+            // that just went away — a stale claimed-id or a mid-countdown from before the warp
+            // must not suppress or skew the first real reading the settled frame after this one
+            // takes.
+            _countdown = 0;
+            _claimLogged = 0;
+            _handBackLogged = false;
             return;
         }
 
