@@ -40,7 +40,7 @@ off by default or waiting on a live pass; the linked doc always has the dated ev
 | Map pins, minimap arrows, pause-together, downed/revive + spectate camera | Live-verified | — |
 | Control lock-in (client stuck as a companion on connect) | Fixed and live-verified, round 70 | [control-return.md](docs/research/control-return.md) |
 | Session lifecycle — in-game Co-op menu, console connect/reconnect, mod-compat per-channel degrade | Live-verified for the agreeing case | shared-state-audit.md |
-| Companion follow-AI (Trask now walks to catch up) | Round 88 resolved round 84's own "`CreMoveState` reverts mid-leg" mystery into three separate engine mechanisms and fixed two of them live — a companion now consumes an entire leg's recorded trail down to its last 1-3 nodes (~1.3-1.4 units short), up from round 84's own ~90%/2.44-units-short best | [party-reconciliation.md](docs/research/party-reconciliation.md); a fourth, narrower stall at the very last waypoint (a geometric accept/reject test, round 88) was attempted, live-disproven, and shipped off by default. Round 90's safer candidate (refresh the test's inputs instead of forcing its output) was itself live-tested and REFUTED — `target`/`prior` were already bit-identical to the leader's position from the very first frame, so the geometry was never stale; the last-node stall remains open with no working fix candidate |
+| Companion follow-AI (Trask now walks to catch up) | Round 88 resolved round 84's own "`CreMoveState` reverts mid-leg" mystery into three separate engine mechanisms and fixed two of them live — a companion now consumes an entire leg's recorded trail down to its last 1-3 nodes (~1.3-1.4 units short), up from round 84's own ~90%/2.44-units-short best | [party-reconciliation.md](docs/research/party-reconciliation.md); a fourth, narrower stall at the very last waypoint was attempted twice more and refuted both times (round 88's forced-output approach, round 90's stale-input-refresh approach). The root cause is now DIRECTLY OBSERVED (not inferred), via an in-process diagnostic standing in for a debugger that isn't available on this machine: the engine's own accept test structurally requires the live leader to stand almost exactly on the terminal node's fixed coordinates, a condition ordinary movement essentially never satisfies. Two new fix candidates were built on that diagnosis (extend the trail with a synthetic node; a second, structurally-identical stall phase found and fixed along the way) but a live A/B was genuinely inconclusive — neither trigger shape was recaptured under direct observation in the rebuilt binary, not negative evidence, just unconfirmed. Both stay off by default |
 | Mod-compatibility mismatch paths | Live-exercised 7 of 8 categories (override, modules, 2da, appearance, save-identity default + strict-refuse, exe) | every observed behavior matched the code exactly — [mod-compatibility.md](docs/research/mod-compatibility.md) round 2026-08-23; module-GIT and globals-catalogue mismatches deliberately not forced, per the doc's own recommendation |
 | Dialogue recruitment sync — duplicate-body defect | Root-caused (an off-stage recruitment cache was being mistaken for an addable party member) and fixed; live-confirmed clean across all four verification steps | [dialogue-consequences.md](docs/research/dialogue-consequences.md); a second companion (Zaalbar) was live-recruited through the real network path 2026-08-24, meeting this project's own "two independently-confirmed slots" bar on the core mechanism |
 | Dialogue recruitment sync — stale pre-recruit body (companions who were also placed NPCs) | Mechanism root-caused by code inspection (GIT-placed NPCs are never mirrored between instances at all — each engine independently spawns the same id from the same module data, so a peer's own placed copy is left standing when its recruit-sync path builds a fresh body instead of reusing it) and a targeted fix implemented + unit-tested (the roster channel now also carries each instance's own party-table object id per slot, letting a peer recognise and reuse its own GIT-identical body first). LIVE-CONFIRMED 2026-08-24: recruiting Zaalbar (also a placed NPC) through the real network path reused object `0x2` directly on the peer — `partystate.ps1` agreed on both instances, and a full creature scan found no second/duplicate body anywhere | [dialogue-consequences.md](docs/research/dialogue-consequences.md); a direct, decisive result, so `dialogue_recruit_sync` now ships **ON by default** |
@@ -290,8 +290,23 @@ tools/                   RE helpers, demo scripts, the kotor1_0_3 symbol databas
   which structurally cannot reproduce round 88's regression. Live-tested, and REFUTED: the
   geometry (`target`/`prior`) was already bit-identical to the leader's position from the very
   first frame entering the stall, so there was never anything stale to refresh — the fix's own
-  write never fired, no regression either. The last-node stall remains open with no working fix
-  candidate. A related crash — warping modules while the follow
+  write never fired, no regression either. A follow-up round got the definitive answer round 89's
+  own verdict asked a live debugger for, without one: no debugger-attach tooling exists on this
+  machine, so an in-process diagnostic was built instead that computes the engine's own accept-test
+  comparison every frame from values already sampled. The result, read directly off 1883 sampled
+  frames across a 3-minute stall: the test rejected on every single one, because the recorded
+  `Prior` point converges onto the terminal node's own fixed coordinates while `Target` tracks the
+  live, continuously-moving leader — reducing the accept condition to "the leader is standing
+  almost exactly on that fixed point," which ordinary movement essentially never satisfies (the
+  same diagnostic correctly reads `True` at intermediate nodes in the same walk, confirming it
+  matches the real engine's own verdict). Two fix candidates were built from that diagnosis —
+  extending the trail with a synthetic node past the terminal one, and a second, structurally
+  identical stall phase found and fixed along the way — but a live A/B across several rebuild
+  cycles never recaptured either trigger shape under direct observation, so the result is honestly
+  inconclusive rather than negative. Both stay off by default (`party_follow_extend_final_node`,
+  `party_follow_advance_destnode_phase6`); the concrete next step is logging the write itself
+  directly rather than inferring it from surrounding state. A related crash — warping modules while
+  the follow
   diagnostics run (shipped default) could access-violate the host — is root-caused (the
   controller was the one per-frame system in the codebase with no transition-epoch guard),
   fixed, and now LIVE-CONFIRMED: no new access violation, diagnostics resume with sane values
