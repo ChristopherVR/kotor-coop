@@ -1217,6 +1217,57 @@ after a recruit of a companion who was previously a placed, visible NPC. Recorde
 next pass does not have to re-discover it: check whether the client's screen shows one Zaalbar or
 two immediately after a recruit like this one, before defaulting this flag on.
 
+## Root cause and fix for the client cross-module-warp crash (2026-08-24, follow-up round)
+
+The "two client crashes during cross-module debug warps" the round above hit and worked around
+(arm `cheat god 1` on both sides, avoid chaining two warps) but did not root-cause: root-caused and
+fixed. Reproduced live on this rig, twice in a row, BOTH with and WITHOUT `cheat god 1` armed —
+ruling out the "un-godded client taking overkill damage" theory `shared-state-audit.md`'s own item 3
+originally proposed for this signature (that theory remains correct for ITS OWN case; it is simply not
+what this one is). Confirmed by polling Windows Event Viewer for several minutes after each crash: NO
+WER 1000 (Application Error) event was ever logged for either reproduction — this is a clean process
+exit, not an access violation caught by the OS's default handler, contrary to this codebase's own usual
+convention that a plugin crash's eip is inside `dinput8.dll` and symbolicatable via `llvm-symbolizer`.
+No crash address was ever available to symbolicate; the root cause was found by log correlation
+instead.
+
+**The evidence**: the client's own `kotorcoop-plugin.log` shows `control: you are driving companion
+0x... — switch not ready yet, retrying` (`ControlReturnController`'s own hand-back-in-progress line) as
+the LAST line before the process silently exits, both times, each within 150ms-1.1s of `epoch: world
+unloading` for the destination module. This line is not rare on its own — it fired 15 times across this
+install's accumulated log with no crash most of those times — but every prior firing happened during
+steady-state play, seconds to minutes after any transition; only the two firings landing within about a
+second of a fresh module epoch crashed.
+
+**Root cause**: `ControlReturnController.OnFrame`'s engine calls (`Odyssey.GetControlledCreaturePointer`/
+`Odyssey.SwitchControlToPc`, which walk `CSWParty`'s raw member array via `FindMemberIndex`/
+`RotateControlToFront`) ran completely unconditionally, with no check against the world-load epoch. This
+is the exact same access-violation class `PartyFollowTransitionRule` (party-reconciliation.md round
+85/87) already closed for `PartyFollowController`: a fresh module epoch can read valid (object-array
+pointer resolved, module name resolved) one frame before the new module's `CSWParty`/party-table data is
+actually populated, and any per-frame controller walking that data unconditionally on that exact frame
+is reachable by the same crash. `ControlReturnController` was simply never given the guard the sibling
+controller already had.
+
+**Fix**: reused `PartyFollowTransitionRule.ShouldSkipThisFrame` verbatim in `ControlReturnController.OnFrame`
+— skip this controller's engine calls entirely on the single frame a new epoch is first observed
+(deferring by exactly one frame, the same discipline the existing rule already documents), clearing the
+countdown/claim bookkeeping so nothing carries a stale companion id across the module change. No new
+pure-function tests needed: the reused rule already has its own full test coverage
+(`PartyFollowTransitionRuleTests`), and `ControlReturnController.OnFrame` itself is `unsafe`/engine-coupled
+and untestable in isolation, exactly like `PartyFollowController.OnFrame` before it.
+
+**Live-verified, decisively**: reproduced the exact trigger condition deliberately rather than waiting for
+luck — switched the client's own control to a party companion via the `leader 0` console primitive, then
+immediately warped the host cross-module before the hand-back could settle on its own. The
+`control: ... switch not ready yet, retrying` line fired 780ms after `epoch: world unloading`, the same
+shape that killed the client twice before this fix (150ms-1.1s window) — and this time the client
+survived cleanly, no crash, no disconnect, both processes still `Responding: True` afterward. Two
+additional plain warps (with and without god mode) also passed clean.
+
+`dotnet test`: 1721/1721 green (one known-flaky `TransitionMovieTests.TheBlockVersionMovedInBothHalves`
+failure under full-suite parallel load, passes cleanly in isolation — unrelated to this change).
+
 ## Round (2026-08-24): the stale-mirrored-body mechanism identified by code inspection, and a
 ## targeted fix shipped against it — NEEDS-LIVE, no rig access this round
 

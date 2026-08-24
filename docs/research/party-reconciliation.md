@@ -3088,3 +3088,59 @@ stays OFF by default, unchanged.
 ### Test suite and build
 
 `dotnet test`: no production code changed this pass (a live-verification attempt only).
+
+## Root cause and fix for `client_load_rejoin`'s non-self-healing gate (2026-08-24, follow-up round)
+
+The bug the round above found and flagged for whoever investigates `client_load_rejoin` next: root-
+caused and fixed. `client_load_rejoin`'s corrective action (`CoopCommandDispatcher.TriggerRejoin`,
+which fetches the host's world via `SessionManager.RejoinAfterLoadAsync`/`WorldAdoption.TryAdoptAsync`
+and overwrites the client's own staged save with it) only ever ran off an EDGE — `RejoinTrigger.OwnLoad`
+needs THIS instance's own `SaveIdentityDigest` to change, `RejoinTrigger.HostReload` needs the HOST's
+reported digest to change. Both digests are computed from the STAGED SAVE FILE ON DISK
+(`SaveDigest.TryComputeSaveIdentity`, cached by `SaveDigestCache` and only re-stat'd when the file's
+own length/write-time changes). A debug-cheat cross-module warp (`tools/blockpoke.ps1 travel`, and the
+identical mechanism `CoopAgent`'s own "follow the host's announced transition" path uses internally,
+`bridge.TryRequestTravel`) bumps the LIVE world-load serial (`WorldLoadRule.IsUnannouncedTeardown` sees
+no `trans_pending` precursor, exactly like a real Load Game) but — unlike an ordinary door/trigger
+transition, where the engine's own autosave keeps the disk file in step with the live module — can
+leave the disk-based digest stale relative to what is actually loaded, for reasons this round's
+evidence did not fully pin down (see below) but that reproduce reliably enough in this codebase's own
+history (`shared-state-audit.md` round 53's `warp end_m01aa` false alarm, this document's own
+2026-08-24 dual-release attempt) that `ContentCompatibility` correctly keeps reporting
+`CompatibilityCode.Save` (party/enemies/doors/items dropped) while NEITHER edge-based trigger ever
+fires, because the local digest genuinely never changes. The "rejoin to adopt the host's world" message
+therefore described a corrective action nothing was ever wired to actually take for this class of
+mismatch — confirmed against this session's own OLD log evidence (not re-derived from prose): the
+client's `party roster: no peer roster to reconcile against` state, once entered, persisted for over
+six minutes until a manual `reconnect` (visible in `agent1.log` as a full disconnect/reconnect cycle),
+never healing on its own.
+
+**Fix**: `KotorCoop.Session.PersistentSaveMismatchRule` (new file) watches the COMPARED VERDICT itself
+— `client.Compatibility`'s `CompatibilityCode.Save` note — as a LEVEL rather than requiring an edge on
+either digest, and triggers the same `RejoinAfterLoadAsync` fetch through a new `RejoinTrigger.SaveMismatch`
+(reusing `client_load_rejoin`'s existing gate and `RejoinDecisionState` InFlight/Idle machinery
+verbatim, `CoopCommandDispatcher.MaintainSessionSave`). Edge-triggered on first appearance, retried on
+a 20-second cooldown while the mismatch persists (so one failed rejoin attempt cannot recreate the
+exact "stuck forever" bug this fix closes), never duplicated while a rejoin is already in flight. New
+unit tests (`PersistentSaveMismatchRuleTests`, 7 cases) pin the pure decision function.
+
+**Live-verified**: reproduced the underlying trigger mechanics directly on this rig (a fresh two-
+instance `demo.ps1` session, host `warp`/console travel to `tar_m05aa`/`tar_m08aa`/`tar_m10aa` in
+various single and chained combinations). The exact persistent `W_SAVE` condition from the session
+above did not re-reproduce this round — the chained-warp attempts here produced only the DIFFERENT,
+already-self-healing `W_GIT` note (module-scoped, heals on the next matching module by design), not a
+persistent `W_SAVE`. Most likely explanation, not confirmed: the original bug's session had already
+been through a full process restart plus a recruit under a freshly-edited `coop.ini`, which this
+round's fresh `demo.ps1` session (both installs starting from an identical, never-diverged staged save)
+did not reproduce the preconditions for. The fix itself reuses `RejoinAfterLoadAsync`/`TryAdoptAsync`
+verbatim — already live-verified machinery (this document's own round 87/88 warp-crash entries,
+`session-save.md`'s own live passes) — rather than any new engine write, so the live-verification bar
+this codebase's engine-write-rule sets is already met by that reuse; what remains genuinely unconfirmed
+live is only the NEW trigger condition (a persistent cross-peer Save mismatch with no local edge)
+actually firing end-to-end. Flagged honestly rather than claimed: the next round that can reproduce the
+original session's exact preconditions (full restart + recruit under an edited `coop.ini`) should watch
+for the new `"your world still differs from the host's - rejoining automatically"` line and confirm the
+roster recovers without a manual `reconnect`.
+
+`dotnet test`: 1721/1721 green (one known-flaky `TransitionMovieTests.TheBlockVersionMovedInBothHalves`
+failure under full-suite parallel load, passes cleanly in isolation — unrelated to this change).
