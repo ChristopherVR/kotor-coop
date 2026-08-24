@@ -1950,6 +1950,16 @@ public static class PacketCodec
         w.WriteInt64(packet.ServerTimeMs);
         w.WriteUInt16(packet.Roster.AvailableMask);
         w.WriteUInt16(packet.Roster.PartyMask);
+
+        // 2026-08-24 (docs/research/dialogue-consequences.md, "stale mirrored body"): one
+        // object id per slot, always the full nine words even though most are 0 — fixed-size
+        // and unconditional, the same shape the two masks above already use, so there is no
+        // separate "is this field present" bit to get wrong on either side.
+        for (int slot = 0; slot < ProtocolConstants.PartyRosterSlots; slot++)
+        {
+            w.WriteUInt32(packet.Roster.ObjectIdFor(slot));
+        }
+
         return w.Failed ? 0 : w.Position;
     }
 
@@ -1964,6 +1974,12 @@ public static class PacketCodec
         long serverTimeMs = r.ReadInt64();
         ushort available = r.ReadUInt16();
         ushort party = r.ReadUInt16();
+
+        uint[] objectIds = new uint[ProtocolConstants.PartyRosterSlots];
+        for (int slot = 0; slot < ProtocolConstants.PartyRosterSlots; slot++)
+        {
+            objectIds[slot] = r.ReadUInt32();
+        }
 
         if (r.Failed)
         {
@@ -1991,7 +2007,7 @@ public static class PacketCodec
             return null;
         }
 
-        return new PartyRosterPacket(serverTimeMs, new PartyRoster(available, party));
+        return new PartyRosterPacket(serverTimeMs, new PartyRoster(available, party, objectIds));
     }
 
     public static int Write(Span<byte> buffer, CreatureLivenessPacket packet)

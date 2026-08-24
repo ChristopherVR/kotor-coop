@@ -723,12 +723,26 @@ public sealed record InteractionLockPacket(
 /// <paramref name="PartyMask"/> = in the ACTIVE party: the at-most-two companions walking
 /// behind the player. Read from party table +0x00 (count, max 2) and +0x04
 /// (<c>int[2]</c> of NPC slot indices — slot indices, NOT object ids).
+///
+/// <paramref name="ObjectIds"/> (2026-08-24, docs/research/dialogue-consequences.md's
+/// "stale mirrored body" entry) = the sender's own party-table object id per slot (party
+/// table +0x0C, <c>int[9]</c>, written only by <c>AddMember</c> — see
+/// <c>Odyssey.GetPartyRosterObjectId</c>'s own doc comment), 0 for a slot not currently in
+/// <paramref name="PartyMask"/>. Object ids are assigned deterministically in GIT order, so
+/// (the same assumption <c>EnemyPresenceController</c>/<c>MaterialisedEnemies</c> already lean
+/// on throughout this project) a companion who was ALSO a placed NPC before recruitment has the
+/// SAME id on every instance that loaded the same save — this is what lets a peer recognise its
+/// own already-placed copy of a just-recruited companion and reuse it instead of spawning a
+/// second, duplicate body next to it. <c>null</c> means the field was never populated (an older
+/// build, or the sender is not currently in party for that slot) — callers must not treat that
+/// as "the id is 0" the way <see cref="ObjectIdFor"/> reports it; 0 either way means "do not
+/// reuse", so no separate check is needed in practice.
 /// </summary>
-public readonly record struct PartyRoster(ushort AvailableMask, ushort PartyMask)
+public readonly record struct PartyRoster(ushort AvailableMask, ushort PartyMask, uint[]? ObjectIds = null)
 {
     /// <summary>Nothing recruited, nobody in the party. What a peer's roster reads as before
     /// the first level has arrived, and what must never be applied as if it were real.</summary>
-    public static readonly PartyRoster Empty = new(0, 0);
+    public static readonly PartyRoster Empty = new(0, 0, null);
 
     /// <summary>Only the nine slots the engine has (<see cref="ProtocolConstants.PartyRosterSlots"/>).
     /// Anything above them is a malformed sender, and is dropped rather than acted on.</summary>
@@ -737,6 +751,42 @@ public readonly record struct PartyRoster(ushort AvailableMask, ushort PartyMask
     public bool IsAvailable(int slot) => (AvailableMask & (1 << slot)) != 0;
 
     public bool IsInParty(int slot) => (PartyMask & (1 << slot)) != 0;
+
+    /// <summary>This roster's own object id for <paramref name="slot"/>, or 0 if unknown, out
+    /// of range, or the slot has no id published (not in this roster's party, or the sender
+    /// predates this field). Never throws on a malformed index — the same defensive shape
+    /// <see cref="IsAvailable"/>/<see cref="IsInParty"/> already use.</summary>
+    public uint ObjectIdFor(int slot) =>
+        ObjectIds is not null && (uint)slot < (uint)ObjectIds.Length ? ObjectIds[slot] : 0;
+
+    /// <summary>
+    /// Hand-written VALUE equality over <see cref="ObjectIds"/>, comparing per slot through
+    /// <see cref="ObjectIdFor"/> rather than letting the record synthesize a reference compare
+    /// on the backing array. Without this, a decoded roster (always a freshly-allocated
+    /// nine-element array, every entry 0 when nothing was published) would never equal a
+    /// hand-built one with <c>ObjectIds: null</c> — same value, different reference — which
+    /// broke <c>PartyRosterRoundTrips</c>/<c>EmptyPartyRosterRoundTrips</c> the moment this
+    /// field was added; <c>null</c> and "all zero" are the same roster.
+    /// </summary>
+    public bool Equals(PartyRoster other) =>
+        AvailableMask == other.AvailableMask
+        && PartyMask == other.PartyMask
+        && ObjectIdsEqual(other);
+
+    public override int GetHashCode() => HashCode.Combine(AvailableMask, PartyMask);
+
+    private bool ObjectIdsEqual(PartyRoster other)
+    {
+        for (int slot = 0; slot < ProtocolConstants.PartyRosterSlots; slot++)
+        {
+            if (ObjectIdFor(slot) != other.ObjectIdFor(slot))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
 
     /// <summary>
     /// Slots this roster has in the party that <paramref name="local"/> does not — the adds a

@@ -1217,4 +1217,139 @@ after a recruit of a companion who was previously a placed, visible NPC. Recorde
 next pass does not have to re-discover it: check whether the client's screen shows one Zaalbar or
 two immediately after a recruit like this one, before defaulting this flag on.
 
+## Round (2026-08-24): the stale-mirrored-body mechanism identified by code inspection, and a
+## targeted fix shipped against it — NEEDS-LIVE, no rig access this round
+
+Code-only pass (isolation worktree, no live rig this round — another agent held the only slot).
+Task: read the previous entry's stale-mirrored-body finding in full, trace the recruitment path
+end to end, confirm or refute the "client's creature-phantom channel never told to despawn the
+pre-recruit NPC" hypothesis, and implement a fix if the mechanism held up.
+
+### What the previous entry's evidence actually said
+
+`tools/creatures.ps1` on the CLIENT, ~10s after a real `dialogue_recruit_sync` recruit of Zaalbar,
+still showed **object `0x2`, tag `tar05_zaalbar`, hp 8, xp 0** — the pre-recruit captive body, at
+the exact spawn coordinates, alongside the genuine new party companion at object `0xF4` (hp 32,
+xp 6001, tag `zaalbar`). The host's own log confirmed ITS OWN object `0x2` correctly transitioned
+to `commandable=1 inParty=1 cswPartyIndex=2` — i.e. on the host, the SAME object that was standing
+in the world became the party member; nothing was destroyed or replaced. The entry explicitly
+flagged this as unconfirmed on-screen (no screenshot capability) and undetermined whether it
+renders or is merely a harmless unrendered duplicate in memory.
+
+### The hypothesis as given, and what tracing the code actually found
+
+The task handed down a specific theory: a separate "creature-phantom mirroring channel" mirrors
+an off-stage NPC's body as an ordinary creature phantom before recruitment, and nothing tells it
+to stop when the recruit lands. **That channel does not exist for this case, and tracing
+`PhantomController.cs` end to end confirms why**: `PhantomController` spawns and drives exactly
+one body PER REMOTE PLAYER (`k_coop_phantom`/`n_commm`, driven by `RemoteView.Position` etc.) — it
+has no concept of an ordinary world NPC at all, recruited or not.
+
+The actual mechanism, read from `PartyRosterController.cs`, `Odyssey.AddAvailableNpcByTemplate`
+and the comment trail across `EnemyPresenceController.cs`/`MaterialisedEnemies.cs` (grep for "GIT
+identical"): **KOTOR's placed NPCs are never mirrored at all**. Both instances load the identical
+save and module data, and the engine assigns object ids deterministically in GIT placement order
+— so a GIT-placed NPC like Zaalbar gets the SAME object id (`0x2`) on every instance that loaded
+the module, independently, with no network traffic involved. This is the exact assumption
+`EnemyPresenceController`'s "GIT-identical creatures" reasoning already relies on for enemies.
+
+The bug is a direct consequence of that architecture, not a missing "stop mirroring" message:
+- On the HOST, the real recruit dialogue's own script converts the EXISTING placed body (`0x2`)
+  into the party member in place — no new object, nothing to clean up.
+- On a peer running `dialogue_recruit_sync`, `PartyRosterController.Reconcile` never sees that
+  conversion happen (only one instance ever runs the recruiting conversation's script). Instead it
+  recruits blind through `Odyssey.AddAvailableNpcByTemplate` (an off-stage character-sheet object)
+  and then, next pass, `Odyssey.SpawnAvailableNpc` — which builds a completely FRESH body at the
+  player's current position. The peer's own GIT-identical copy of the placed NPC (its own object
+  `0x2`, independently spawned when ITS OWN engine loaded the module) is never referenced by any
+  of this and is left standing exactly where it always was.
+
+So this is the SAME defect class the prior round's duplicate-body fix closed
+(`PartyRosterRecruitRule.cs`, "an off-stage recruitment cache mistaken for an addable member") —
+a second engine object built where only one was needed — but on the OPPOSITE side of the
+recruitment: not the host's roster-add plumbing, but the peer's blind fresh-spawn never checking
+whether it already had a GIT-identical body it could reuse instead.
+
+### The fix: broadcast each instance's own party-table object id per slot, and reuse a
+### GIT-identical local body before ever spawning a fresh one
+
+`PartyRosterController.PublishLocalRoster` now also publishes, alongside the existing
+available/party bitmasks, this instance's own party-table object id
+(`Odyssey.GetPartyRosterObjectId`) for every slot currently in its ACTIVE party (0 otherwise —
+the field is only ever meaningfully written by the engine's `AddMember`). This rides the SAME
+roster channel `Reconcile` already consumes every pass, wired through all four layers it
+touches:
+
+- **`SharedBlock.cs`/`SharedBlockView.cs`** (plugin, in-process): two new nine-slot `uint`
+  arrays in the free tail (`0x3F28..0x3F70`, no `TotalSize` growth) — `OffsetLocalPartyRosterObjectIds`
+  / `OffsetHostPartyRosterObjectIds`. `PluginHost._block->Version` and
+  `KotorGameBridge.PluginSignature` both bumped to **53** (kept in lockstep —
+  `ItemHarnessTests.TheBlockVersionIsTheSameNumberInBothHalves` and
+  `TransitionMovieTests.TheBlockVersionMovedInBothHalves` both updated and green).
+- **`KotorCoop.Protocol.PartyRoster`**: a new `uint[]? ObjectIds` field (default `null`,
+  backward-source-compatible with every existing 2-arg call site), `ObjectIdFor(slot)` accessor,
+  and a hand-written `Equals`/`GetHashCode` — the record-synthesized ones would have compared the
+  backing array by REFERENCE, which broke the existing `PartyRosterRoundTrips`/
+  `EmptyPartyRosterRoundTrips` tests the moment a decoded roster's freshly-allocated all-zero
+  array stopped reference-equalling a hand-built roster's `null`. Fixed by treating `null` and
+  "all zero" as the same value (`ObjectIdFor` already returns 0 for both).
+- **`PacketCodec.Write/ReadPartyRoster`**: nine more `uint32`s per `PartyRosterPacket`, always
+  present (36 bytes; `MaxPacketSize` is 1400, no pressure). `CoopHost`/`CoopClient`/`CoopAgent`
+  needed NO changes — they already forward the whole `PartyRoster` value opaquely.
+- **`KotorGameBridge.TryReadLocalPartyRoster`/`WriteHostPartyRoster`** (agent, external memory):
+  reads/writes the same nine-slot arrays at the plugin-block offsets above.
+
+`PartyRosterController.Reconcile`, in the `dialogue_recruit_sync` branch, now checks the peer's
+published object id for the slot BEFORE calling `AddAvailableNpcByTemplate`: if
+`CreatureFinder.FindByObjectId` resolves a live creature under that same id locally, the slot is
+marked available (`Odyssey.TrySetSlotAvailable` — sufficient here specifically because, unlike
+the raw-poke path `party-reconciliation.md` Round 75 already ruled insufficient, nothing
+downstream ever needs the off-stage `SpawnAvailableNpc` cache) and that body is added to the
+party DIRECTLY, in the same pass — no template, no fresh spawn, so no duplicate is ever created.
+The decision itself (`PartyRosterBodyReuseRule.cs`, new file) is split out pure/testable the same
+way `PartyRosterRecruitRule` already is, since the engine calls it gates
+(`CreatureFinder.FindByObjectId`, `Odyssey.TrySetSlotAvailable`) do not exist in the test runner.
+Falls through unchanged to the existing off-stage-recruit-then-spawn path whenever no
+GIT-identical body is found (a companion found via a minigame, a crate, a cutscene reveal — never
+a placed NPC to begin with — or an older peer build that never populated the new field).
+
+### Tests added, `dotnet test` result
+
+- `PartyRosterBodyReuseRuleTests.cs`: the pure reuse decision (0/`ObjectInvalid` never worth a
+  lookup, a lookup miss falls back, and the exact Zaalbar shape — id `0x2`, found locally — is
+  authorised).
+- `PacketCodecTests.PartyRosterObjectIdsRoundTrips` / `ANullObjectIdArrayEqualsAFreshlyDecodedAllZeroOne`:
+  the new wire field survives encode/decode, and the equality fix holds.
+- `TransitionMovieTests.TheBlockVersionMovedInBothHalves` updated to the new version 53.
+
+Full suite (`dotnet test` from repo root) run after every change in this round. Baseline before
+this pass's own edits: 1714 tests, 1713 passing. Bumping the shared-block version to 53 broke
+exactly the one test expected to break (`TransitionMovieTests.TheBlockVersionMovedInBothHalves`'s
+hardcoded "52"), fixed immediately alongside the bump. Final run, including this pass's 8 new
+tests: **1722 total, 1722 passing, 0 failed** (2m56s).
+
+### What this pass could NOT do, and needs a live rig to close
+
+**NEEDS-LIVE, entirely.** Nothing in this round touched a running game — this is a code-only
+pass in an isolation worktree with no rig access. Specifically unverified:
+
+1. That `CreatureFinder.FindByObjectId` genuinely resolves the peer's pre-recruit placed body
+   under the SAME id on this instance for a real two-install session (the GIT-identity assumption
+   this whole fix leans on, already trusted elsewhere in this project, but never exercised through
+   THIS particular call site).
+2. That `Odyssey.TrySetSlotAvailable` followed immediately by `Odyssey.AddPartyMemberBySlot` on a
+   REUSED (not freshly template-spawned) object id actually succeeds end to end through the real
+   engine calls, with no refusal this design did not anticipate.
+3. That the fix actually eliminates the duplicate live — re-run the exact recipe the prior entry
+   used (Zaalbar, `tar_m05aa`, `dialogue_recruit_sync=1` on both installs) and confirm
+   `tools/creatures.ps1` on the client shows ONLY object `0x2` (now `inParty=1`), never a second
+   `0xF4`-style fresh body, and ideally a human eyeballing the client's screen for the one-vs-two
+   question the prior entry could not settle without screenshot capability.
+4. That the new wire field and version bump do not desync an old-plugin/new-agent (or reverse)
+   pairing in a way the version guard does not already catch cleanly.
+
+`dialogue_recruit_sync` stays OFF by default, unchanged by this pass — this fix only changes what
+happens on the path that flag already gates, so there is no live behavioural change until a
+future live pass both confirms this fix and makes its own call on flipping the flag.
+
 `dotnet test`: no production code changed this pass (a live-verification run only).

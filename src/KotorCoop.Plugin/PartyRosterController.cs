@@ -45,6 +45,14 @@ namespace KotorCoop.Plugin;
 /// it relies on is cross-checked against only one live data point (slot 2 = Carth) — the
 /// remaining eight need a live check before this defaults on.
 ///
+/// ⚠ A RECRUITED COMPANION WHO WAS ALSO A PLACED NPC CAN ALREADY BE STANDING HERE (found live
+/// 2026-08-24, Zaalbar/tar_m05aa, docs/research/dialogue-consequences.md's "stale mirrored body"
+/// entry). Before falling back to <see cref="Odyssey.AddAvailableNpcByTemplate"/>,
+/// <see cref="Reconcile"/> checks the peer's own party-table object id for the slot (published
+/// over this SAME channel, GIT-identical to a local body if one exists) and reuses it directly
+/// when a live creature with that id resolves here — no template, no fresh spawn, and no
+/// duplicate left standing where the original body always was. NEEDS-LIVE.
+///
 /// ⚠ RECRUITING TAKES TWO PASSES, DELIBERATELY (found live 2026-08-23,
 /// docs/research/dialogue-consequences.md). <see cref="Odyssey.AddAvailableNpcByTemplate"/>'s
 /// own object is off-stage, not a live in-world body — see <see cref="PartyRosterRecruitRule"/>'s
@@ -115,6 +123,12 @@ internal sealed unsafe class PartyRosterController(SharedBlockView block)
         _lastHostValid = false;
         _countdown = 0;
         block.ClearLocalPartyRoster();
+
+        // A module change reassigns every object id (docs/research/dialogue-consequences.md's
+        // 2026-08-24 "stale mirrored body" entry, the same reasoning the roster mask itself
+        // already follows on the line above) — an id published before the transition means
+        // nothing in the new world and must not survive into it.
+        block.ClearLocalPartyRosterObjectIds();
     }
 
     /// <summary>
@@ -130,6 +144,7 @@ internal sealed unsafe class PartyRosterController(SharedBlockView block)
     public void ReleaseSession()
     {
         block.ClearHostPartyRoster();
+        block.ClearHostPartyRosterObjectIds();
         Invalidate();
         PluginHost.Log("party roster: your party is yours again — nothing left to reconcile against");
     }
@@ -238,10 +253,25 @@ internal sealed unsafe class PartyRosterController(SharedBlockView block)
         if (!Odyssey.TryReadPartyRoster(out uint available, out uint party))
         {
             block.ClearLocalPartyRoster();
+            block.ClearLocalPartyRosterObjectIds();
             return;
         }
 
         block.SetLocalPartyRoster(available, party);
+
+        // docs/research/dialogue-consequences.md's 2026-08-24 "stale mirrored body" entry: one
+        // object id per slot, alongside the masks, so a peer recruiting the same slot can
+        // recognise its own already-placed copy of that companion (GIT-identical id) and reuse
+        // it instead of spawning a duplicate — see Reconcile's own use of the mirror image of
+        // this field. Only ACTIVE party slots have a meaningful id (party table +0x0C is only
+        // ever written by AddMember); a slot this instance has never added — even one it has
+        // recruited but benched — publishes 0, the same "nothing to reuse" value an older build
+        // that never populated this field at all would read as.
+        for (int slot = 0; slot < SharedBlock.PartyRosterSlots; slot++)
+        {
+            bool inParty = (party & (1u << slot)) != 0;
+            block.SetLocalPartyRosterObjectId(slot, inParty ? Odyssey.GetPartyRosterObjectId(slot) : 0);
+        }
 
         if (party != _lastLocalParty)
         {
@@ -366,33 +396,70 @@ internal sealed unsafe class PartyRosterController(SharedBlockView block)
                 return;
             }
 
-            // Odyssey.AddAvailableNpcByTemplate — NOT Odyssey.TrySetSlotAvailable's raw poke,
-            // which docs/research/party-reconciliation.md Round 75 live-confirmed insufficient
-            // (SpawnAvailableNpc has nothing to spawn from afterward; see
-            // TrySetSlotAvailable's own doc comment for the disassembled root cause). This goes
-            // through the real per-slot STORY template instead, which does not depend on the
-            // same resource — but its returned object is OFF-STAGE, not a live in-world body
-            // (see PartyRosterRecruitRule's doc comment for the disassembled reason: it is never
-            // AddToArea'd, so it can never pass AddMember's own typed live-body check, not even
-            // on a later pass with the same object id). Live-confirmed 2026-08-23
-            // (docs/research/dialogue-consequences.md): the immediate add used to fail with
-            // failure 9 every time and leave this object behind, unreferenced, while the very
-            // next pass built a SECOND object through the branch below. Do not attempt the add
-            // here — origin below routes it to the rule instead.
-            objectId = Odyssey.AddAvailableNpcByTemplate(addSlot);
-            if (objectId is 0 or Odyssey.ObjectInvalid)
-            {
-                block.PartyRosterStatus = 200;
-                PluginHost.Log($"party roster: could not recruit NPC slot {addSlot} from its own "
-                    + $"template (peer recruited 0x{hostAvailable:X3}, here 0x{localAvailable:X3}) "
-                    + "- dialogue_recruit_sync's engine call refused; retrying next pass");
-                return;
-            }
+            // BEFORE recruiting off-stage: does this instance already have the PEER's own
+            // pre-recruit body standing in the world? docs/research/dialogue-consequences.md's
+            // 2026-08-24 "stale mirrored body" entry — a companion who was ALSO a placed NPC
+            // (Zaalbar in tar_m05aa, live-confirmed) keeps that placed body untouched on a
+            // peer whose own recruit dialogue never ran, because AddAvailableNpcByTemplate +
+            // SpawnAvailableNpc below always builds a brand-new one instead of reusing it. Object
+            // ids are assigned deterministically in GIT order (the same assumption
+            // EnemyPresenceController/MaterialisedEnemies already lean on throughout this
+            // project), so the peer's own party-table id for this slot — published every frame
+            // over the SAME roster channel this method already reconciles against — is the SAME
+            // id a matching placed body carries HERE too, if one exists. Finding it lets this
+            // pass reuse that body directly (PartyRosterBodyOrigin.LiveInWorld, added in the
+            // SAME pass) instead of ever spawning a second one — closing the duplicate at its
+            // source rather than cleaning one up afterward. NEEDS-LIVE: unexercised against the
+            // real GOG install so far.
+            uint hostBodyId = block.GetHostPartyRosterObjectId(addSlot);
+            nint gitPlacedBody = PartyRosterBodyReuseRule.IsWorthLookingUp(hostBodyId)
+                ? CreatureFinder.FindByObjectId(hostBodyId)
+                : 0;
 
-            origin = PartyRosterBodyOrigin.RecruitedOffStage;
-            PluginHost.Log($"party roster: recruited NPC slot {addSlot} as 0x{objectId:X} from its "
-                + $"own template (peer recruited 0x{hostAvailable:X3}, here 0x{localAvailable:X3}) "
-                + "- dialogue_recruit_sync; a body will be spawned and added on a later pass");
+            if (PartyRosterBodyReuseRule.ShouldReuse(hostBodyId, gitPlacedBody != 0)
+                && Odyssey.TrySetSlotAvailable(addSlot))
+            {
+                // TrySetSlotAvailable's own doc comment calls it insufficient ON ITS OWN — that
+                // finding is about SpawnAvailableNpc having nothing to spawn FROM afterward. It
+                // does not apply here: this pass never calls SpawnAvailableNpc at all, because a
+                // live body was already found by GIT identity. All the raw poke needs to do here
+                // is clear AddMember's own availability gate (party table +0x30), which it does.
+                objectId = hostBodyId;
+                origin = PartyRosterBodyOrigin.LiveInWorld;
+                PluginHost.Log($"party roster: NPC slot {addSlot} recruited - reusing its own "
+                    + $"already-placed body 0x{objectId:X} here (GIT-identical to the peer's "
+                    + "pre-recruit body) instead of spawning a duplicate - dialogue_recruit_sync");
+            }
+            else
+            {
+                // Odyssey.AddAvailableNpcByTemplate — NOT Odyssey.TrySetSlotAvailable's raw poke,
+                // which docs/research/party-reconciliation.md Round 75 live-confirmed insufficient
+                // (SpawnAvailableNpc has nothing to spawn from afterward; see
+                // TrySetSlotAvailable's own doc comment for the disassembled root cause). This goes
+                // through the real per-slot STORY template instead, which does not depend on the
+                // same resource — but its returned object is OFF-STAGE, not a live in-world body
+                // (see PartyRosterRecruitRule's doc comment for the disassembled reason: it is never
+                // AddToArea'd, so it can never pass AddMember's own typed live-body check, not even
+                // on a later pass with the same object id). Live-confirmed 2026-08-23
+                // (docs/research/dialogue-consequences.md): the immediate add used to fail with
+                // failure 9 every time and leave this object behind, unreferenced, while the very
+                // next pass built a SECOND object through the branch below. Do not attempt the add
+                // here — origin below routes it to the rule instead.
+                objectId = Odyssey.AddAvailableNpcByTemplate(addSlot);
+                if (objectId is 0 or Odyssey.ObjectInvalid)
+                {
+                    block.PartyRosterStatus = 200;
+                    PluginHost.Log($"party roster: could not recruit NPC slot {addSlot} from its own "
+                        + $"template (peer recruited 0x{hostAvailable:X3}, here 0x{localAvailable:X3}) "
+                        + "- dialogue_recruit_sync's engine call refused; retrying next pass");
+                    return;
+                }
+
+                origin = PartyRosterBodyOrigin.RecruitedOffStage;
+                PluginHost.Log($"party roster: recruited NPC slot {addSlot} as 0x{objectId:X} from its "
+                    + $"own template (peer recruited 0x{hostAvailable:X3}, here 0x{localAvailable:X3}) "
+                    + "- dialogue_recruit_sync; a body will be spawned and added on a later pass");
+            }
         }
         else
         {

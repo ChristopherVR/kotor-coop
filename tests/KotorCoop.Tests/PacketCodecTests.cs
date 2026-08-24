@@ -1151,6 +1151,45 @@ public class PacketCodecTests
     }
 
     [Fact]
+    public void PartyRosterObjectIdsRoundTrip()
+    {
+        // 2026-08-24 (docs/research/dialogue-consequences.md, "stale mirrored body"): the
+        // per-slot object ids that let a peer recognise its own already-placed copy of a
+        // just-recruited companion. Carth (2) and Zaalbar (8) published; everyone else 0.
+        Span<byte> buffer = stackalloc byte[ProtocolConstants.MaxPacketSize];
+
+        uint[] objectIds = new uint[ProtocolConstants.PartyRosterSlots];
+        objectIds[2] = 0x11D;
+        objectIds[8] = 0x2;
+
+        PartyRosterPacket original = new(
+            4321, new PartyRoster(0b0_0010_0100, 0b0_0010_0100, objectIds));
+
+        int length = PacketCodec.Write(buffer, original);
+        PartyRosterPacket? decoded = PacketCodec.ReadPartyRoster(buffer[..length]);
+
+        Assert.NotNull(decoded);
+        Assert.Equal(original.Roster, decoded.Roster);
+        Assert.Equal(0x11Du, decoded.Roster.ObjectIdFor(2));
+        Assert.Equal(0x2u, decoded.Roster.ObjectIdFor(8));
+        Assert.Equal(0u, decoded.Roster.ObjectIdFor(0));
+    }
+
+    [Fact]
+    public void ANullObjectIdArrayEqualsAFreshlyDecodedAllZeroOne()
+    {
+        // The equality trap this field's addition could easily have reintroduced: a hand-built
+        // roster with ObjectIds: null (nothing published) must compare equal to a decoded
+        // roster, which always allocates a fresh nine-element array of zeros — same value,
+        // different reference. PartyRoster.Equals is hand-written specifically for this.
+        PartyRoster handBuilt = new(0b1, 0b1, ObjectIds: null);
+        PartyRoster allZero = new(0b1, 0b1, new uint[ProtocolConstants.PartyRosterSlots]);
+
+        Assert.Equal(handBuilt, allZero);
+        Assert.True(handBuilt == allZero);
+    }
+
+    [Fact]
     public void EmptyPartyRosterRoundTrips()
     {
         // The Endar Spire before Trask joins is a real, legitimate all-zero roster, and it has

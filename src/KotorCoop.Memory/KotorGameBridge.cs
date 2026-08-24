@@ -818,6 +818,14 @@ public sealed class KotorGameBridge : IGameBridge
     private const uint BlockPartyRosterSlotMask = 0x1FF;
     private const uint BlockPartyRosterValid = 0x8000_0000;
 
+    /// <summary>Party-roster body identity, mirroring SharedBlock version 53
+    /// (0x3F28..0x3F70) — one dword per NPC slot, per direction, 0 = "no live body for that
+    /// slot here". See docs/research/dialogue-consequences.md's 2026-08-24 "stale mirrored
+    /// body" entry.</summary>
+    private const int BlockLocalPartyRosterObjectIds = 0x3F28;
+
+    private const int BlockHostPartyRosterObjectIds = 0x3F4C;
+
     /// <summary>16-byte signature: "KOCOOP01" + version 43 + guard 0xC0FFEE01. The version is
     /// part of the pattern deliberately: an agent must not attach to a plugin whose block
     /// layout it does not know, and a stale pair fails to find each other rather than reading
@@ -855,10 +863,13 @@ public sealed class KotorGameBridge : IGameBridge
     /// bFromMainMenu==0 branch (DestroyServer + UnloadModule before CreateServer) instead of
     /// acking-and-mooting when a server already exists. See docs/research/session-save.md's
     /// dated entry.
+    /// 53 = party-roster body identity at 0x3F28..0x3F70 (no TotalSize growth; 0x35 = 53) — two
+    /// nine-slot object-id arrays, one per direction, alongside the existing roster masks. See
+    /// docs/research/dialogue-consequences.md's 2026-08-24 "stale mirrored body" entry.
     /// <b>ItemHarnessTests.TheBlockVersionIsTheSameNumberInBothHalves reads both files and
     /// fails the build if they disagree</b> — added with 42, because nothing had ever
     /// enforced the warning above.</summary>
-    public const string PluginSignature = "4B 4F 43 4F 4F 50 30 31 34 00 00 00 01 EE FF C0";
+    public const string PluginSignature = "4B 4F 43 4F 4F 50 30 31 35 00 00 00 01 EE FF C0";
 
     /// <summary>Agent's view of which coop item id occupies each plugin item slot.</summary>
     private readonly uint[] _itemSlotIds = new uint[BlockItemCapacity];
@@ -4579,9 +4590,21 @@ public sealed class KotorGameBridge : IGameBridge
             return false;
         }
 
+        // 2026-08-24 (docs/research/dialogue-consequences.md, "stale mirrored body"): one
+        // object id per slot, alongside the masks — see PartyRoster.ObjectIds' own doc comment
+        // for what a peer does with this. A read that fails partway leaves 0s for the rest
+        // (the same "0 = no id" convention the field already carries for an unpopulated slot),
+        // never half a stale value.
+        uint[] objectIds = new uint[ProtocolConstants.PartyRosterSlots];
+        for (int slot = 0; slot < ProtocolConstants.PartyRosterSlots; slot++)
+        {
+            _memory.TryReadUInt32(_pluginBlock + BlockLocalPartyRosterObjectIds + (slot * 4), out objectIds[slot]);
+        }
+
         roster = new PartyRoster(
             (ushort)((packed >> BlockPartyRosterAvailableShift) & BlockPartyRosterSlotMask),
-            (ushort)((packed >> BlockPartyRosterPartyShift) & BlockPartyRosterSlotMask));
+            (ushort)((packed >> BlockPartyRosterPartyShift) & BlockPartyRosterSlotMask),
+            objectIds);
         return true;
     }
 
@@ -4592,6 +4615,11 @@ public sealed class KotorGameBridge : IGameBridge
     /// only one store. Clearing (<paramref name="valid"/> false) writes a plain 0, so the
     /// plugin's "is anybody telling me what the roster should be" test is the same test in both
     /// directions and a disconnected agent stops the reconciliation by doing nothing special.
+    ///
+    /// The per-slot object ids (2026-08-24, docs/research/dialogue-consequences.md) follow the
+    /// same rule as the mask: written every call when <paramref name="valid"/>, zeroed when not
+    /// — <c>PartyRosterController.Reconcile</c> only ever reads them alongside the mask it
+    /// already checked, so there is no separate "these ids are stale" state to invent.
     /// </summary>
     public bool WriteHostPartyRoster(bool valid, PartyRoster roster)
     {
@@ -4606,7 +4634,15 @@ public sealed class KotorGameBridge : IGameBridge
                 | ((roster.PartyMask & BlockPartyRosterSlotMask) << BlockPartyRosterPartyShift)
             : 0u;
 
-        return _memory.TryWrite(_pluginBlock + BlockHostPartyRoster, packed);
+        bool ok = _memory.TryWrite(_pluginBlock + BlockHostPartyRoster, packed);
+
+        for (int slot = 0; slot < ProtocolConstants.PartyRosterSlots; slot++)
+        {
+            uint objectId = valid ? roster.ObjectIdFor(slot) : 0;
+            ok &= _memory.TryWrite(_pluginBlock + BlockHostPartyRosterObjectIds + (slot * 4), objectId);
+        }
+
+        return ok;
     }
 
     /// <summary>
