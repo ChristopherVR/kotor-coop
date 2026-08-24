@@ -51,16 +51,16 @@ off by default or waiting on a live pass; the linked doc always has the dated ev
 | Minigames — swoop-race trigger precondition | SOLVED via a new NCS bytecode disassembler: the trigger was never a race-start gate at all — it's an unconditional collectible-flag setter. A `.dlg` sweep across every Taris module then found the real gate is not a single condition script but the payoff of the "Search for Bastila" questline — give Gadon (`GadonThek112`, module `tar_m11aa`) the prototype swoop accelerator, and the conversation's terminal node (`k_ptar_bekrace`) disassembles to a module-transition call naming `tar_m03af`, a dedicated swoop-track module | [minigames.md](docs/research/minigames.md) §13–§14; `Tar_SwoopRace`/`k_ptar_swoop` turned out to be a post-race "you already won" flag, not an entry gate — four rounds of flag-guessing plus one dialogue-hypothesis were chasing the wrong mechanism the whole time |
 | Companion-mirror lag (`party_fast_pump`) | Two earlier A/Bs found no benefit — both confounded by the companion follow-AI stall bug (a frozen companion has no position lag to reduce). With that bug fixed, a third A/B against a companion genuinely walking/following measured a real, reproduced ~45-55% cut in companion-position lag (median ~160 ms vs ~320-350 ms, host-vs-client position cross-correlation, two independent legs each side), no frame-time regression | [lag-audit.md](docs/research/lag-audit.md) 2026-08-24 entry; a direct, decisive, zero-regression result, so `party_fast_pump` now ships **ON by default** |
 | `party_fast_pump`'s heavier-combat frame-time regression | An earlier round found a real 53% frame-time regression under heavy sustained multi-enemy combat. Root cause found: `TryWritePartyMembers` was rewriting all 4 party-presence slots' full field set unconditionally every poll regardless of whether anything changed. A dirty-check skipping no-op writes (always writing through on a module change) was built, then re-measured live 2026-08-24 against round 71's own heavy-combat recipe: 3.62ms/2.55ms (host/client) mean frame time, zero over-budget frames — better than even the old "good" baseline | [lag-audit.md](docs/research/lag-audit.md) 2026-08-24 entries; regression CLOSED, not just narrowed |
+| Client crash during a cross-module debug warp mid-recruitment-test | Root-caused: `ControlReturnController` was the one sibling per-frame controller that never got the transition-epoch guard `PartyFollowTransitionRule` added for a matching crash class in rounds 85/87. Fixed by reusing that same rule; live-verified by deliberately forcing the exact trigger condition twice in a row — the client survived cleanly both times | [dialogue-consequences.md](docs/research/dialogue-consequences.md) 2026-08-24 entry |
 
 ### Still needs work
 
 | Area | Status | Blocker |
 | --- | --- | --- |
-| Minigames — swoop racing, now that the real gate is known | All four raised hypotheses for the terminal-node transition stall are now eliminated (misread flag, plugin travel interception, focus-loss world-timer pause, cutscene-staging dependency — the last ruled out by a full control-flow disassembly of both staging scripts, which found no blocking wait and no crafted-save gap). A concrete new lead: the terminal `StartNewModule` call is a bare `DelayCommand`, undeterminable from static analysis whose object it queues onto — if it's the PC's own event queue and the PC's own commanded walk to a waypoint never completes, a FIFO-blocked queue would exactly reproduce the stall | [minigames.md](docs/research/minigames.md) §14-§18; next step is a live pass that continuously polls the PC's action state and position through the whole stall window, not just once |
+| Minigames — swoop racing, now that the real gate is known | All four raised hypotheses for the terminal-node transition stall are now eliminated (misread flag, plugin travel interception, focus-loss world-timer pause, cutscene-staging dependency — the last ruled out by a full control-flow disassembly of both staging scripts, which found no blocking wait and no crafted-save gap). A concrete new lead: the terminal `StartNewModule` call is a bare `DelayCommand`, undeterminable from static analysis whose object it queues onto — if it's the PC's own event queue and the PC's own commanded walk to a waypoint never completes, a FIFO-blocked queue would exactly reproduce the stall. A 2026-08-24 attempt to run the continuous-poll live test was blocked before it could start by a NEW, unrelated rig regression: `demo.ps1` began failing partway through the session — the plugin's shared block is present but its frame hook never ticks, a failure mode not seen before | [minigames.md](docs/research/minigames.md) §14-§19; the continuous-poll test itself is built and ready, waiting on the rig regression above to clear |
 | Creature liveness reconciliation (a body alive on one screen, dead on the other) | CONFIRMED working live for the first time — a debug `--enemy-census-cap` flag makes the out-of-census case reachable, and the Kill→Destroy correction fires correctly | OFF by default; a separate, still-unfixed `DestroyObject`-scan-freshness issue is untouched by this result. Two theories (stale array entry, missing generation check) are disassembly-ruled-out; a third (a wall-clock time-budget-gated event drain) was live-probed for the first time 2026-08-24 at 24-29 registered objects and found no support — convergence was immediate in both a high- and moderate-population module, no disagreements — but the population range tested was too narrow/low to stress the mechanism, so the theory isn't ruled out either — [creature-liveness.md](docs/research/creature-liveness.md) |
-| `companion_local_combat` with two companions released at once | Round 85 only ever live-verified one companion released at a time; a code-level review found every field already scoped per roster slot with no cross-slot contention, so this should already generalize safely — a 2026-08-24 live attempt confirmed a single release still works cleanly under a wide range, but hit a separate bug before reaching the two-companion scenario itself (see below) and never completed it | [party-reconciliation.md](docs/research/party-reconciliation.md) 2026-08-24 entries |
-| `client_load_rejoin`'s "different save" gate doesn't self-heal after a debug warp | Found live 2026-08-24 while chasing the item above: after a cross-module debug warp, the gate stopped party-roster sync and stayed stopped rather than recovering on its own | [party-reconciliation.md](docs/research/party-reconciliation.md) 2026-08-24 entry; root cause not yet investigated |
-| Two client crashes hit during cross-module debug warps (recruitment testing) | Found and worked around live 2026-08-24; not yet root-caused | [dialogue-consequences.md](docs/research/dialogue-consequences.md) 2026-08-24 entry |
+| `companion_local_combat` with two companions released at once | Round 85 only ever live-verified one companion released at a time; a code-level review found every field already scoped per roster slot with no cross-slot contention, so this should already generalize safely — a 2026-08-24 live attempt confirmed a single release still works cleanly under a wide range, but hit the rejoin-gate bug below before reaching the two-companion scenario itself; that bug is now fixed, so this is unblocked for the next live pass | [party-reconciliation.md](docs/research/party-reconciliation.md) 2026-08-24 entries |
+| `client_load_rejoin`'s "different save" gate didn't self-heal after a debug warp | Root-caused 2026-08-24: the rejoin trigger depends on an on-disk save-digest edge that a debug-cheat module warp never produces (it changes the live world-load serial but never touches disk), so the corrective rejoin's trigger condition could never fire even though the mismatch kept being detected correctly. Fixed with a new `PersistentSaveMismatchRule` that watches the mismatch as a level instead of an edge, retried on a 20s cooldown, unit-tested | [party-reconciliation.md](docs/research/party-reconciliation.md) 2026-08-24 entry; the exact end-to-end persistent-mismatch precondition didn't reproduce live this round (needs a specific full-restart-plus-recruit history), so the fix itself is NEEDS-LIVE |
 | KOTOR 2 | Untouched | only GOG v1.0.3 addresses are known |
 
 ## What works today
@@ -317,13 +317,20 @@ tools/                   RE helpers, demo scripts, the kotor1_0_3 symbol databas
   a single release still works cleanly under a wide range, but hit a different, newly-found bug
   before reaching the two-companion case: `client_load_rejoin`'s "different save" gate stopped
   party-roster sync after a debug warp and didn't self-heal, blocking the rest of the test. That
-  gate bug is not yet root-caused. Separately, the real cause of an earlier heavier-combat
-  frame-time regression tied to `party_fast_pump` was tracked down and CLOSED: the party-presence
-  writer was rewriting all 4 slots' full field set unconditionally every poll regardless of
-  whether anything changed; a dirty-check skipping no-op writes was built and then live-verified
-  against the same heavy-combat recipe that found the original 53% regression — 3.62ms/2.55ms
-  mean frame time, zero over-budget frames, better than the old "good" baseline. See
-  party-reconciliation.md and [lag-audit.md](docs/research/lag-audit.md).
+  gate bug is now root-caused and fixed — a debug-cheat module warp changes the live world-load
+  serial but never touches disk, so the corrective rejoin's on-disk-digest-edge trigger could
+  never fire even though the mismatch itself kept being detected correctly. A new
+  `PersistentSaveMismatchRule` watches the mismatch as a level instead of an edge, retried on a
+  20s cooldown; built and unit-tested, but the exact end-to-end precondition didn't reproduce live
+  this round (needs a specific full-restart-plus-recruit history), so the fix is NEEDS-LIVE and
+  the two-companion `companion_local_combat` scenario is still open, just unblocked. Separately,
+  the real cause of an earlier heavier-combat frame-time regression tied to `party_fast_pump` was
+  tracked down and CLOSED: the party-presence writer was rewriting all 4 slots' full field set
+  unconditionally every poll regardless of whether anything changed; a dirty-check skipping no-op
+  writes was built and then live-verified against the same heavy-combat recipe that found the
+  original 53% regression — 3.62ms/2.55ms mean frame time, zero over-budget frames, better than
+  the old "good" baseline. See party-reconciliation.md and
+  [lag-audit.md](docs/research/lag-audit.md).
 - **One conversation at a time.** By design, not a bug — it keeps one plot line advancing.
   The other player spectates rather than getting their own copy.
 - **The Endar Spire's command deck floors damage at 1 hp for everyone** — that's KOTOR's own
@@ -365,7 +372,11 @@ tools/                   RE helpers, demo scripts, the kotor1_0_3 symbol databas
   statically — if it queues onto the PC's own event queue and the PC's own commanded walk to a
   waypoint never completes, a FIFO-blocked queue would exactly reproduce the stall; the next live
   pass should continuously poll the PC's action state and position through the whole stall window
-  rather than sampling once. Pazaak is unrelated and uncovered. See
+  rather than sampling once. That continuous-poll test was built and staged 2026-08-24 but blocked
+  before it could run by a new, unrelated rig regression: `demo.ps1` began failing partway through
+  the session — the plugin's shared block is present but its frame hook stops ticking, a failure
+  mode not seen in any prior round. The test itself is ready; it's waiting on that regression to
+  be diagnosed. Pazaak is unrelated and uncovered. See
   [minigames.md](docs/research/minigames.md).
 - **Non-damage combat effects** (stun, slow, frightened, choke, force push/whirlwind, and now
   also knockdown, paralyze, sleep) forward live, both directions, on by default. All nine
@@ -409,15 +420,19 @@ tools/                   RE helpers, demo scripts, the kotor1_0_3 symbol databas
   is now met for the core recruit mechanism. `dialogue_recruit_sync` still stays off by default:
   that same pass surfaced a possibly-stale mirrored copy of Zaalbar's pre-recruit body on the
   client (unconfirmed, screenshot-limited investigation), and two separate client crashes during
-  the cross-module debug warps used to stage the test — neither root-caused yet. A follow-up
-  code-only pass (2026-08-24, no rig access) traced the stale-body mechanism: KOTOR's GIT-placed
-  NPCs are never mirrored between instances at all (each engine independently spawns the same
-  object id from the same module data), so a companion who was ALSO a placed NPC keeps that
-  independently-spawned body standing, untouched, when a peer's `dialogue_recruit_sync` recruit
-  builds a completely fresh one instead of reusing it. A fix is implemented and unit-tested (the
-  roster channel now also carries each instance's own party-table object id per slot, so a peer
-  can recognise and reuse its own GIT-identical body before ever spawning a duplicate) but is
-  itself NEEDS-LIVE — nothing in that pass touched a running game. Alignment is left to diverge
+  the cross-module debug warps used to stage the test. A follow-up code-only pass (2026-08-24, no
+  rig access) traced the stale-body mechanism: KOTOR's GIT-placed NPCs are never mirrored between
+  instances at all (each engine independently spawns the same object id from the same module
+  data), so a companion who was ALSO a placed NPC keeps that independently-spawned body standing,
+  untouched, when a peer's `dialogue_recruit_sync` recruit builds a completely fresh one instead
+  of reusing it. A fix is implemented and unit-tested (the roster channel now also carries each
+  instance's own party-table object id per slot, so a peer can recognise and reuse its own
+  GIT-identical body before ever spawning a duplicate) but is itself NEEDS-LIVE — nothing in that
+  pass touched a running game. Separately, the two client crashes are now root-caused and FIXED:
+  `ControlReturnController` was the one sibling per-frame controller that never got the
+  transition-epoch guard a matching crash class was already fixed with in rounds 85/87 — reusing
+  that same rule fixed it, live-verified by deliberately forcing the exact trigger condition twice
+  in a row, clean survival both times. Alignment is left to diverge
   on purpose (two people making different choices in one story).
   See [dialogue-consequences.md](docs/research/dialogue-consequences.md).
 - **A body left alive on one screen and dead on the other** can be corrected by a liveness
