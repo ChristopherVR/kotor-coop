@@ -40,7 +40,7 @@ off by default or waiting on a live pass; the linked doc always has the dated ev
 | Map pins, minimap arrows, pause-together, downed/revive + spectate camera | Live-verified | — |
 | Control lock-in (client stuck as a companion on connect) | Fixed and live-verified, round 70 | [control-return.md](docs/research/control-return.md) |
 | Session lifecycle — in-game Co-op menu, console connect/reconnect, mod-compat per-channel degrade | Live-verified for the agreeing case | shared-state-audit.md |
-| Companion follow-AI (Trask now walks to catch up) | Round 88 resolved round 84's own "`CreMoveState` reverts mid-leg" mystery into three separate engine mechanisms and fixed two of them live — a companion now consumes an entire leg's recorded trail down to its last 1-3 nodes (~1.3-1.4 units short), up from round 84's own ~90%/2.44-units-short best | [party-reconciliation.md](docs/research/party-reconciliation.md); a fourth, narrower stall at the very last waypoint (a geometric accept/reject test) was attempted, live-disproven, and shipped off by default — not yet closed end-to-end |
+| Companion follow-AI (Trask now walks to catch up) | Round 88 resolved round 84's own "`CreMoveState` reverts mid-leg" mystery into three separate engine mechanisms and fixed two of them live — a companion now consumes an entire leg's recorded trail down to its last 1-3 nodes (~1.3-1.4 units short), up from round 84's own ~90%/2.44-units-short best | [party-reconciliation.md](docs/research/party-reconciliation.md); a fourth, narrower stall at the very last waypoint (a geometric accept/reject test, round 88) was attempted, live-disproven, and shipped off by default. Round 90 built a safer candidate on the same shape — refreshing the test's stale inputs instead of forcing its output, so it can't reproduce round 88's regression — built and unit-tested but not yet live-verified (`party_follow_refresh_final_node=0`) |
 | Mod-compatibility mismatch paths | Live-exercised 7 of 8 categories (override, modules, 2da, appearance, save-identity default + strict-refuse, exe) | every observed behavior matched the code exactly — [mod-compatibility.md](docs/research/mod-compatibility.md) round 2026-08-23; module-GIT and globals-catalogue mismatches deliberately not forced, per the doc's own recommendation |
 | Dialogue recruitment sync — duplicate-body defect | Root-caused (an off-stage recruitment cache was being mistaken for an addable party member) and fixed; live-confirmed clean across all four verification steps | [dialogue-consequences.md](docs/research/dialogue-consequences.md); `dialogue_recruit_sync` stays off by default (per-slot template mapping still only confirmed for one of nine companions) |
 | `loadgame` console verb (deterministic mid-session Load, no mouse clicks) | Built and live-confirmed: a real teardown/reload in 3.1s, correct character/party swap, the classifier fires correctly | [session-save.md](docs/research/session-save.md); unblocks future live testing of the mid-session save/load gates below |
@@ -55,8 +55,9 @@ off by default or waiting on a live pass; the linked doc always has the dated ev
 | Area | Status | Blocker |
 | --- | --- | --- |
 | Minigames — swoop racing, now that the real gate is known | Live-tested twice: `Tar_SwoopEng=1` alone opens Gadon's dialogue into the exact six-node chain the disassembly predicted, both times. The terminal node's own module-transition action still never fires (a clean stall, not a crash, position never moving) — but the leading suspect (KOTOR's own focus-loss world-timer pause) has now been directly, live-disproven: a continuous poll found the pause reason never engages even once across a 5-minute reproduction | [minigames.md](docs/research/minigames.md) §14-§17; one surviving hypothesis of four investigated (the cutscene staging never completing) |
-| Creature liveness reconciliation (a body alive on one screen, dead on the other) | CONFIRMED working live for the first time — a debug `--enemy-census-cap` flag makes the out-of-census case reachable, and the Kill→Destroy correction fires correctly | OFF by default; a separate, still-unfixed `DestroyObject`-scan-freshness issue is untouched by this result — [creature-liveness.md](docs/research/creature-liveness.md) |
-| `party_fast_pump`'s own heavier-combat frame-time check | A light single-enemy combat spot-check showed no regression when the flag was flipped ON, but an earlier round's heavier, sustained multi-enemy fight found a real 53% frame-time regression — measured before the companion follow-AI fix, not yet fully re-run since | Time-limited this pass — [lag-audit.md](docs/research/lag-audit.md) 2026-08-24 entry |
+| Creature liveness reconciliation (a body alive on one screen, dead on the other) | CONFIRMED working live for the first time — a debug `--enemy-census-cap` flag makes the out-of-census case reachable, and the Kill→Destroy correction fires correctly | OFF by default; a separate, still-unfixed `DestroyObject`-scan-freshness issue is untouched by this result. Two theories (stale array entry, missing generation check) are disassembly-ruled-out; a third — `CServerAIMaster::UpdateState`'s delayed-event queue drain is gated by a wall-clock time budget that a busy module could exhaust before reaching an already-due delete — is disassembled but not yet live-tested; no coop-plugin defect found so far, may be vanilla engine scheduling — [creature-liveness.md](docs/research/creature-liveness.md) |
+| `party_fast_pump`'s own heavier-combat frame-time check | A light single-enemy combat spot-check showed no regression when the flag was flipped ON, but an earlier round's heavier, sustained multi-enemy fight found a real 53% frame-time regression — measured before the companion follow-AI fix, and before a since-found real cause: `TryWritePartyMembers` was rewriting all 4 party-presence slots' full field set unconditionally every poll, regardless of whether anything changed. A dirty-check now skips a slot's write when nothing changed (always writing through on a module change) — built and unit-tested, not yet re-measured live | [lag-audit.md](docs/research/lag-audit.md) 2026-08-24 entry |
+| `companion_local_combat` with two companions released at once | Round 85 only ever live-verified one companion released at a time; a code-level review of the release/reclaim/attack-drive state found every field already scoped per roster slot with no cross-slot contention, and confirmed "two clients driving the same companion" is structurally impossible in this project's one-host/one-client architecture — so this should already generalize safely, but a live pass with two companions has never actually been run | [party-reconciliation.md](docs/research/party-reconciliation.md) 2026-08-24 entry |
 | KOTOR 2 | Untouched | only GOG v1.0.3 addresses are known |
 
 ## What works today
@@ -282,7 +283,12 @@ tools/                   RE helpers, demo scripts, the kotor1_0_3 symbol databas
   two are now fixed and live-verified (a companion consumes essentially the whole recorded trail,
   stopping only 1-3 nodes short, up from round 84's own ~90%); a third, narrower stall at the
   very last waypoint was attempted, live-tested, found to make things WORSE, and shipped off by
-  default rather than forced through. A related crash — warping modules while the follow
+  default rather than forced through. Round 90 built a safer candidate on the same stall shape —
+  instead of forcing the terminal state-machine phase directly (round 88's disproven approach),
+  it refreshes the geometric test's stale inputs and lets the unmodified engine code decide,
+  which structurally cannot reproduce round 88's regression. Built and unit-tested, gated off by
+  default pending a live A/B (`party_follow_refresh_final_node=0`). A related crash — warping
+  modules while the follow
   diagnostics run (shipped default) could access-violate the host — is root-caused (the
   controller was the one per-frame system in the codebase with no transition-epoch guard),
   fixed, and now LIVE-CONFIRMED: no new access violation, diagnostics resume with sane values
@@ -298,8 +304,16 @@ tools/                   RE helpers, demo scripts, the kotor1_0_3 symbol databas
   Round 85 ran the fix's own drift-risk check for the first time with two companions live: the
   released companion landed real credited damage while the OTHER, non-released companion held
   within 0.05 units of the host's position the whole time — no drift. `companion_local_combat`
-  stays off pending broader testing, not because of a problem found here. See
-  party-reconciliation.md.
+  stays off pending broader testing, not because of a problem found here. A code review confirmed
+  every piece of release/reclaim/attack-drive state is already scoped per roster slot with no
+  cross-slot contention, and that two clients driving one companion is structurally impossible in
+  this project's one-host/one-client architecture — so two companions released at once should
+  already work safely, but has never actually been live-tested. Separately, the real cause of an
+  earlier heavier-combat frame-time regression tied to `party_fast_pump` was tracked down: the
+  party-presence writer was rewriting all 4 slots' full field set unconditionally every poll
+  regardless of whether anything changed. A dirty-check now skips a no-op write (always writing
+  through on a module change) — built and unit-tested, not yet re-measured live. See
+  party-reconciliation.md and [lag-audit.md](docs/research/lag-audit.md).
 - **One conversation at a time.** By design, not a bug — it keeps one plot line advancing.
   The other player spectates rather than getting their own copy.
 - **The Endar Spire's command deck floors damage at 1 hp for everyone** — that's KOTOR's own
@@ -334,10 +348,15 @@ tools/                   RE helpers, demo scripts, the kotor1_0_3 symbol databas
   the four raised across three rounds remains: the cutscene staging before the transition may never
   actually complete. Pazaak is unrelated and uncovered. See
   [minigames.md](docs/research/minigames.md).
-- **Non-damage combat effects** (stun, slow, frightened, choke, force push/whirlwind) forward
-  live, both directions, on by default. Knockdown, Paralyze and Sleep are captured but never
-  replayed — their apply-side engine call is still unverified. See
-  [effect-sync.md](docs/research/effect-sync.md).
+- **Non-damage combat effects** (stun, slow, frightened, choke, force push/whirlwind, and now
+  also knockdown, paralyze, sleep) forward live, both directions, on by default. All nine
+  allowlisted kinds turned out to already have an apply-side engine call wired end-to-end — an
+  earlier round had shipped the last three (knockdown/paralyze/sleep) but the research doc was
+  never updated to say so, so this had been misreported as an open gap for a full round. Fixed
+  the docs; the actual code needed no change. What's still genuinely open: unlike the other six,
+  knockdown/paralyze/sleep's apply call has never been fired on a running game — its shape
+  matches the six already live-verified constructors exactly, but that's not the same as having
+  run it. See [effect-sync.md](docs/research/effect-sync.md).
 - **Mid-session save/load**: a joiner's progress now survives to the next session (their
   character is captured and preferred on rejoin). The regression check that matters most — does
   an ordinary co-op travel warp ever get misclassified as a Load Game action — is CONFIRMED
@@ -362,15 +381,25 @@ tools/                   RE helpers, demo scripts, the kotor1_0_3 symbol databas
   A duplicate-body defect found in that pass — the primary spawn path could fall through to an
   older mechanism — is root-caused (the "duplicate" was actually the engine's own off-stage
   recruitment cache being mistaken for an addable party member) and fixed, live-confirmed
-  clean. The per-slot companion mapping is confirmed for only one of nine companions so far.
-  Alignment is left to diverge on purpose (two people making different choices in one story).
+  clean. The per-slot template mapping for all nine companions (derived via disassembly) is
+  confirmed already wired generically into the live recruitment path — no Carth special case,
+  no hardcoded fallback — and every one of the 9 resrefs has been independently cross-checked
+  against the real game install's own character templates and dialog table, with no mismatches.
+  Only Carth's actual recruitment has been live-tested end-to-end, though; the other eight are
+  code-verified but not yet live-confirmed. Alignment is left to diverge on purpose (two people
+  making different choices in one story).
   See [dialogue-consequences.md](docs/research/dialogue-consequences.md).
 - **A body left alive on one screen and dead on the other** can be corrected by a liveness
   channel that's now CONFIRMED working live for the first time: a debug-only
   `--enemy-census-cap` agent flag shrinks the 32-creature census on demand, and the
   Kill→Destroy correction fired cleanly in a real out-of-census kill. Off by default; a
   separate, still-unfixed `DestroyObject`-scan-freshness issue from an earlier round is
-  untouched by this result. See [creature-liveness.md](docs/research/creature-liveness.md).
+  untouched by this result. Two theories for that issue (a stale array entry, a missing
+  generation check) are disassembly-ruled-out; a third — the engine's own AI-master event
+  queue that actually unlinks a destroyed body is drained under a wall-clock time budget a busy
+  module could plausibly exhaust before reaching an already-due delete — is disassembled but not
+  yet live-tested, and may turn out to be intentional vanilla engine scheduling rather than a
+  coop-plugin bug. See [creature-liveness.md](docs/research/creature-liveness.md).
 - **Alignment (light/dark) is per-player on purpose** — no sync channel needed. An
   alignment-gated dialogue option reflects whichever player owns the conversation.
 - KOTOR 2 is untouched, and only GOG v1.0.3 addresses are known.
