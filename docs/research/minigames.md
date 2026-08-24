@@ -1784,6 +1784,225 @@ armed for exactly this). `dotnet build -c Release`: clean, 0 warnings, 0 errors,
 fast-forward in §16.0 did not disturb anything. No `dotnet test` run this round (no code changed to
 verify); the last recorded green run remains 1674/1674 (§15).
 
+## 18. §17.6's own "one surviving hypothesis" fully disassembled (2026-08-24, follow-up round) —
+`racecs0`/`racecs1`'s full control flow traced branch-by-branch, every waypoint/NPC/blueprint they
+touch confirmed present in `tar_m11aa`'s real GIT, and hypothesis 4 (cutscene staging blocks the
+transition) is now RULED OUT in both the "genuine engine wait" and "crafted-save methodology gap"
+readings — leaving all four hypotheses ever raised eliminated, and the mystery narrowed to a new,
+concrete, previously-unconsidered question: which object's own delayed-event queue is `StartNewModule`
+actually sitting in, and is that queue stuck behind an unrelated, real `ActionMoveToObject`
+
+No rig access this round (reads only, same constraint as every round in this section except §17).
+Picked up exactly where §17.6 left off: three of four hypotheses eliminated, one survivor
+("`racecs0`/`racecs1`'s waypoint-walk staging may never complete, and the delayed `StartNewModule`
+call may be contingent on it") never actually disassembled past its own action-call list (§16.2
+listed the routines called but explicitly not the branching). This round did exactly that.
+
+### 18.0 Housekeeping and tooling
+
+This worktree was pinned at `1665671` (right before `NcsReader.cs` existed) — reset hard to
+`origin/integration/honest-limitations` (`29567b7`) rather than fast-forwarded, since the local
+branch had no work of its own to preserve. A throwaway console project (not checked into the repo,
+same "one-off is fine" call as §14.1/§16.1) referencing this worktree's own `KotorCoop.Memory.csproj`
+pulled `k_ptar_racecs0.ncs`, `k_ptar_racecs1.ncs`, and `k_ptar_bekrace.ncs` straight out of the real
+GOG install's `modules\tar_m11aa_s.rim`, ran `NcsReader.Disassemble` end to end (every instruction,
+not a sample) plus `FindActionCalls` and an explicit dump of every `JumpIfZero`/`JumpIfNonZero`'s own
+target over each, and separately parsed `tar_m11aa`'s own `.git` (`Gff.Parse`) for its `WaypointList`
+and `Creature List` (field names taken from `SaveDigest.cs`'s own verified `AreaLoadOrder` table, not
+guessed), plus a straight listing of every `.utc` blueprint present in `tar_m11aa_s.rim`/`tar_m11aa.rim`.
+Re-disassembled `k_ptar_bekrace.ncs` too as a cross-check against §16.3's own reading — it matches
+exactly, instruction for instruction, no corrections needed.
+
+### 18.1 The `.dlg` structure re-confirmed directly, not re-derived from §14.3's prose
+
+Dumping `tar11_gadon112.dlg`'s own `EntryList[9]`/`[17]`/`[18]` and `ReplyList[21]` structs (not just
+trusting §14.3's summary) confirms every detail exactly: `EntryList[17].Script = 'k_ptar_racecs0'`
+(Speaker `GadonThek112`, `Quest='tar_bastsearch'`, `QuestEntry=50`), `EntryList[18].Script =
+'k_ptar_racecs1'` (`Listener='Zaerdra111'`, `CameraID=2`), `ReplyList[21].Script = 'k_ptar_bekrace'`
+with an empty `EntriesList` — genuinely the terminal node, ending the conversation. No separate
+`Script2`/`ActionParams` field exists on any of these nodes; each node has exactly one action script,
+confirming the task's premise ("is the terminal node's script a separate .ncs" — no, it is exactly
+`k_ptar_bekrace.ncs`, already the one §14.4/§16 disassembled) and that `racecs0`/`racecs1` are two
+earlier, separate nodes' own action scripts, not helpers `bekrace` itself calls.
+
+### 18.2 `k_ptar_racecs0.ncs` (1094 bytes) traced in full: an instant PC teleport plus an escort spawn,
+both unconditional, and only ONE real branch in the whole file (a closed `RemovePartyMember` loop)
+
+Past the boilerplate global-constant block (twenty ints 0-19, `1100`, and five negated small ints —
+the same "include header full of unused constants" shape §16.3 already saw in `bekrace`) and the
+standard `SaveBp`/`JSR`/`RestoreBp` trampoline, `main()`'s real body (offset 643-1092) runs, in
+order, completely unconditionally except for one closed loop:
+
+1. `SetGlobalFadeOut(0,0,0,1,6)` (routine 720) — fade to black, immediate.
+2. `DelayCommand(7.0, AssignCommand(GetFirstPC(), <subroutine@764>))` (`PushConstant float 7` then
+   routine 7) — 7 real seconds later, the PC is assigned to run the block below.
+3. Immediate (not delayed): `ActionPauseConversation()`, `ActionWait(8.0)`, `ActionResumeConversation()`
+   — a flat, fixed 8-second pause, not an arrival-gated wait.
+4. `main()` returns.
+
+Subroutine `@764` (the body the PC runs 7 seconds later) is the ONE place in this file with a real
+conditional: a loop (`840`-`901`, gated by `JumpIfZero @856 -> 907`) that calls
+`GetPartyMemberByIndex`/`RemovePartyMember` for party slots `0..8` — a closed, always-terminating
+loop with a fixed bound, not a wait. After the loop: `DestroyObject` (routine 241) twice on the two
+earlier-fetched party-member creature objects, `ClearAllActions()`, then:
+
+* `GetObjectByTag("tar11_wppcsleep", 0)` → `ActionJumpToObject(...)` (routine **196**, an instant
+  teleport, not a walk) — **the PC is jumped, not walked, to `tar11_wppcsleep`.**
+* `GetObjectByTag("tar11_wpcsbek", 0)` → `GetLocation(...)` (routine 213) — fetches that waypoint's
+  location as a `Location` value.
+* `CreateObject(..., "tar11_csbek", <that location>, ...)` (routine 243) — spawns a new creature from
+  the **template resref `tar11_csbek`** at `tar11_wpcsbek`'s location. This is the escort NPC racecs1
+  goes on to reference by tag.
+
+Zero `JumpIfZero`/`JumpIfNonZero` anywhere else in the file. No wait-for-arrival, no distance check,
+no retry — the PC's relocation to `tar11_wppcsleep` is an instant teleport that either succeeds or
+silently no-ops (standard NWScript behavior for an invalid object argument), never a blocking wait.
+
+### 18.3 `k_ptar_racecs1.ncs` (1843 bytes) traced in full: three explicit, independently-scheduled
+`ActionMoveToObject` walks (escort→PC, escort→waypoint, PC→waypoint), still zero wait-for-arrival
+anywhere, and the same closed XP-award helper `bekrace` also carries
+
+Same boilerplate constant block and trampoline, then `main()` (643-1089), unconditional except for
+the shared XP-award helper's own closed if/else chain (see below):
+
+1. `GetObjectByTag("tar11_csbek", 0)` → `oEscort` — the creature `racecs0` just spawned.
+2. `GetObjectByTag("tar11_wpcsbek", 0)` → `oWaypoint`.
+3. `JSR @1091` → a small dispatcher that calls subroutine `@1127`: a ~20-way `if`/`else if` chain
+   (offsets `1127`-`1631`, EVERY branch reaching the shared exit at `1631`/`1637` — structurally
+   identical to `bekrace`'s own copy at `838`-`1348`, clearly the same shared/included NWScript
+   function compiled independently into both files) that calls `GiveXPToCreature(GetFirstPC(), n)`
+   for whichever of ~20 known constants the escort's matched value equals, then (`1714`-`1823`) an
+   `SetLocalBoolean` (routine 680) on the escort gated by two more `Equal`/`LogicalOr` checks. This
+   is quest-XP/flag bookkeeping on the escort creature — it always reaches its own exit, never loops,
+   never blocks.
+4. `SetGlobalFadeIn(0,0,0,1,0)` (routine 719) — fade back in, immediate.
+5. **Immediate, un-delayed**: `AssignCommand(oEscort, ActionMoveToObject(GetFirstPC(), FALSE, 1.0))`
+   — the escort is commanded, right now, to walk toward wherever the PC currently is (i.e., toward
+   `tar11_wppcsleep`, where `racecs0`'s delayed teleport put it).
+6. `DelayCommand(10.0, AssignCommand(oEscort, ActionMoveToObject(oWaypoint, FALSE, 1.0)))` — 10 real
+   seconds later, the escort is redirected to walk toward `tar11_wpcsbek` instead.
+7. `DelayCommand(11.0, AssignCommand(GetFirstPC(), ActionMoveToObject(oWaypoint, FALSE, 1.0)))` — 11
+   real seconds later, **the PC itself** is commanded to walk toward `tar11_wpcsbek`. (Both `#6` and
+   `#7`'s inner closures reference the identical stack-relative slot for their move-to target,
+   confirmed by re-reading the raw instruction bytes side by side — both converge on `oWaypoint`,
+   consistent with the dialogue text itself: *"one of the Beks takes you to..."*.)
+8. `DelayCommand(13.0, SetGlobalFadeOut(0,0,0,1,0))` — 13 seconds later, fade to black again.
+9. Immediate, un-delayed: `ActionPauseConversation()`, `ActionWait(14.0)`, `ActionResumeConversation()`
+   — again a flat fixed-duration wait, not arrival-gated.
+
+**This is the decisive finding.** `racecs1` does queue real `ActionMoveToObject` walks — three of
+them, on two different objects (the escort and the PC), all pointed at real, existing content — but
+every one of them is fired via `AssignCommand`/`DelayCommand` with **no code anywhere that later
+checks whether any of these walks actually completed.** There is no `GetDistanceBetween` poll, no
+"has arrived" flag, no loop of any kind conditioned on position. The only "waits" in either
+`racecs0` or `racecs1` are flat, fixed-duration `ActionWait(8.0)`/`ActionWait(14.0)` calls that
+complete on a clock regardless of where anyone in the scene physically is.
+
+### 18.4 Cross-referenced against `tar_m11aa`'s real GIT and blueprint set: everything these two
+scripts touch genuinely exists, unconditionally, independent of quest state
+
+Read directly from `tar_m11aa.git` (`WaypointList`, `Creature List` per `SaveDigest.cs`'s own
+verified field names) and the `.utc` listing of both `tar_m11aa.rim`/`tar_m11aa_s.rim`:
+
+* **`tar11_wppcsleep`** — present, `WaypointList` entry, `TemplateResRef='sw_waypoint001'`.
+* **`tar11_wpcsbek`** — present, `WaypointList` entry, `TemplateResRef='sw_waypoint001'`.
+* **`tar11_csbek`** — NOT a GIT placement (correctly — it's a dynamically-`CreateObject`'d creature,
+  not a static placement) but its **`.utc` blueprint file is physically present** in
+  `tar_m11aa_s.rim`, confirmed by directly listing every `utc` resource in both archives.
+* **`GadonThek112`** / **`Zaerdra111`** — both present as ordinary static `Creature List` entries
+  (`TemplateResRef` `tar11_gadon112`/`tar11_zaerdra111`), matching the dialogue's own `Speaker`/
+  `Listener` fields exactly.
+
+All five are **ordinary, always-present module content** — static GIT placements or a static
+blueprint file, none of them gated behind any prior "Search for Bastila" quest-stage progression
+having spawned or removed anything. **This directly rules out the crafted-save "methodology gap"
+reading of hypothesis 4** the task asked to check for: a save that warps straight to Gadon via
+`craft-save --bool Tar_SwoopEng` does not skip any spawn-dependent object these two scripts need —
+there is nothing quest-stage-conditional here for a crafted save to have missed.
+
+### 18.5 What this settles: all four hypotheses ever raised are now eliminated, and the open
+question is sharper and different in kind from anything asked before
+
+§17.6 framed hypothesis 4 as the sole survivor of four, in the shape "the cutscene staging may never
+actually complete, and the delayed `StartNewModule` call may be contingent on it." Full disassembly
+of both `racecs0` and `racecs1` disproves this in **both readings the task asked to distinguish**:
+
+* **The "genuine engine wait" reading** (a script polls for arrival) — disproven directly: neither
+  file contains any conditional jump outside a closed, bounded loop (§18.2's party-removal loop) or
+  the shared, always-exiting XP-award helper (§18.3 point 3). There is no bytecode anywhere in
+  `racecs0.ncs`, `racecs1.ncs`, or `bekrace.ncs` (re-confirmed instruction-for-instruction against
+  §16.3) that makes `bekrace`'s own `DelayCommand(0.1, StartNewModule(...))` — or anything else —
+  wait on, or even read, whether any `ActionMoveToObject`/`ActionJumpToObject` ever actually
+  completed. The three scripts are independent dialogue-node action scripts; nothing chains them.
+* **The "crafted-save methodology gap" reading** (missing quest-state-dependent content) — disproven
+  by §18.4: every waypoint, NPC, and spawn blueprint either script references is ordinary, always-
+  present module content, not conditionally spawned.
+
+Combined with §16.3 (hypothesis 3, no script-side precondition — reconfirmed this round), §16.2
+(hypothesis 2, `#509` is verified `StartNewModule` — unchanged), and §17.2-17.4 (hypothesis 1,
+focus-loss `CWorldTimer` pause, directly live-disproven) — **every hypothesis raised across this
+entire investigation thread is now eliminated by hard evidence.** The `DelayCommand(0.1,
+StartNewModule(...))` call is scheduled correctly, unconditionally, by a script that is proven (via
+§17.4's own live `node 21 -> 2` log line) to actually run — and it still does not fire within
+multiple, independently-reproduced five-minute windows. This is no longer a "which of four
+hypotheses" question; the mystery is genuinely open at a level none of the four addressed.
+
+### 18.6 The concrete new lead this round's disassembly actually surfaces: whose delayed-event queue
+is `StartNewModule` sitting in, and is that queue backed up behind a real, unrelated, still-in-flight
+`ActionMoveToObject`?
+
+Two structural facts, new this round, point at a specific mechanism worth checking before treating
+this as unexplainable:
+
+1. `bekrace`'s own `DelayCommand(0.1, StartNewModule(...))` call (§16.3, re-confirmed §18.0) is
+   **bare** — not wrapped in an `AssignCommand`, unlike every movement action `racecs0`/`racecs1`
+   issue. A bare `DelayCommand`/action queues onto whatever `OBJECT_SELF` is for that script's own
+   execution context. Static disassembly cannot determine `OBJECT_SELF` for a `.dlg` node's action
+   script — it is implicit engine context, never encoded in the bytecode — so **which object's queue
+   `StartNewModule` actually lands in is unknown** from this round's evidence alone.
+2. `racecs1` unconditionally schedules a **real, unfaked** `AssignCommand(GetFirstPC(),
+   ActionMoveToObject(oWaypoint, FALSE, 1.0))` at +11 real seconds from when node 18 fires (§18.3
+   point 7) — genuinely commanding the PC to walk to `tar11_wpcsbek`. If the PC cannot actually
+   complete that walk for any reason (still dialogue-locked, a walkmesh gap between Gadon's room and
+   the waypoint, or any other pathing failure) and if `OBJECT_SELF` for `bekrace`'s later
+   `DelayCommand` turns out to be the SAME object (the PC) rather than Gadon, an engine whose
+   delayed-event dispatch for one object drains in order behind an earlier, still-incomplete queued
+   action would produce **exactly** the observed signature: scheduled correctly, zero crash, zero
+   position movement, indefinite stall — without needing `CWorldTimer` to be paused (already
+   disproven, §17) and without any script-side fault (§16.3, §18.2, §18.3). This project has
+   independently found, in the completely separate creature-liveness investigation thread, that this
+   engine's own event-queue drain can be a real, time-budget-gated mechanism capable of genuinely
+   starving a later-queued event — offered here only as a suggestive parallel, not as evidence this
+   round confirmed for this specific stall.
+
+Neither fact is confirmable from static analysis; both are cheap, concrete live checks:
+
+* Determine `OBJECT_SELF` for `bekrace`'s reply-node script (e.g. a debug script temporarily added to
+  log `GetTag(OBJECT_SELF)` — not done this round, no write access) or, more simply, **poll the PC's
+  own current action / position continuously (not just once at the midpoint, the way §17.4 did)
+  through the full stall window** — if the PC is found mid-`ActionMoveToObject` toward `tar11_wpcsbek`
+  and never arrives, or arrives and the walk action never clears, that is direct, decisive evidence
+  for this round's new lead, independent of ever resolving `OBJECT_SELF` server-side.
+* Separately confirm whether `tar11_csbek` (the escort) actually exists in the world during the stall
+  and whether it, too, is stuck mid-walk — `racecs0`'s `CreateObject` and `racecs1`'s `AssignCommand`
+  targeting it are both unconditional, so if the escort is missing or motionless, that is itself a
+  live-only fact no amount of further disassembly can surface.
+
+### 18.7 What this changes about the shipping recommendation
+
+Nothing. **`minigame_hide_peer` stays default-on; co-visible swoop racing is still not shipped and
+still not observed working end to end.** What this round adds: `racecs0`/`racecs1` are now fully
+disassembled (not just action-call-listed) and proven correct, unconditional, and referencing only
+real, always-present content — closing off hypothesis 4 in both forms the task asked to distinguish,
+and eliminating the last of the four hypotheses this investigation thread has raised. The open
+question is no longer "which of four known causes" but a new, narrower one (§18.6) that needs a live
+pass watching the PC's own action state through the stall window, not another disassembly pass — no
+further static analysis of these three scripts is likely to add anything beyond what this round
+already extracted. No production code changed this round (investigation only). `dotnet build -c
+Release` on `src/KotorCoop.Memory` (the only project this round's reads touch): clean, 0 warnings,
+0 errors. No `dotnet test` run (no code changed to verify); the last recorded green run remains
+1714/1714 (§17).
+
 ## 17. §16.6's own recipe run for real (2026-08-24): the focus-loss hypothesis is directly,
 decisively RULED OUT — `PausesCleared` never moves even once across a five-minute reproduction of
 the exact same stall
