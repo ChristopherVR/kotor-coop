@@ -173,6 +173,13 @@ public sealed class CoopCommandDispatcher(
     /// <see cref="RejoinPhase.InFlight"/>.</summary>
     private RejoinDecisionState _rejoinState = RejoinDecisionState.Idle;
 
+    /// <summary>See <see cref="PersistentSaveMismatchRule"/> — the level-driven fallback trigger
+    /// for a save mismatch that a debug-cheat module warp produces with no edge on either
+    /// <see cref="RejoinTrigger.OwnLoad"/> or <see cref="RejoinTrigger.HostReload"/>'s own
+    /// signal. Reset alongside <see cref="_rejoinState"/> so a fresh session never inherits a
+    /// cooldown timer started against a previous one.</summary>
+    private MismatchRejoinWatchState _mismatchRejoinState = MismatchRejoinWatchState.Initial;
+
     private Task? _rejoinTask;
 
     /// <summary>The in-flight <c>loadgame</c> poll, if any — see <see cref="TriggerMidSessionLoad"/>.
@@ -1742,6 +1749,7 @@ public sealed class CoopCommandDispatcher(
         {
             _sessionSaveWatch.Reset();
             _rejoinState = RejoinDecisionState.Idle;
+            _mismatchRejoinState = MismatchRejoinWatchState.Initial;
             return;
         }
 
@@ -1802,6 +1810,29 @@ public sealed class CoopCommandDispatcher(
             {
                 Reply("host loaded a save - rejoining their world");
                 TriggerRejoin(RejoinTrigger.HostReload);
+            }
+            else
+            {
+                // Neither classifier saw an EDGE this tick (see PersistentSaveMismatchRule's
+                // own doc comment: a debug-cheat module warp never produces one on either
+                // side's digest). Watch the compared VERDICT itself instead — a level, not an
+                // edge — so a save mismatch that a real Load's edge-based triggers above will
+                // never see still gets the same self-heal action the "rejoin to adopt" message
+                // promises, rather than sitting degraded for the rest of the session.
+                bool saveMismatchNow = client.Compatibility?.Notes
+                    .Any(n => n.Code == CompatibilityCode.Save) ?? false;
+
+                (bool shouldTrigger, MismatchRejoinWatchState nextMismatchState) =
+                    PersistentSaveMismatchRule.Observe(
+                        _mismatchRejoinState, saveMismatchNow,
+                        _rejoinState.Phase == RejoinPhase.InFlight, nowMs);
+                _mismatchRejoinState = nextMismatchState;
+
+                if (shouldTrigger)
+                {
+                    Reply("your world still differs from the host's - rejoining automatically");
+                    TriggerRejoin(RejoinTrigger.SaveMismatch);
+                }
             }
         }
     }
@@ -1927,6 +1958,9 @@ public sealed class CoopCommandDispatcher(
         {
             RejoinTrigger.OwnLoad => ClientLoadRejoinEnabled,
             RejoinTrigger.HostReload => HostLoadReadoptEnabled,
+            // Same gate as OwnLoad: this is still "the client notices its own world is wrong
+            // and fixes it", just via a level (PersistentSaveMismatchRule) instead of an edge.
+            RejoinTrigger.SaveMismatch => ClientLoadRejoinEnabled,
             _ => false,
         };
 

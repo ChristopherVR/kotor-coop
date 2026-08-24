@@ -18,6 +18,15 @@ public enum RejoinTrigger
     /// <c>host_load_readopt</c>). Design doc §3.2: "have every client run the same
     /// auto-rejoin" — this is that reuse, from the other trigger.</summary>
     HostReload,
+
+    /// <summary><see cref="PersistentSaveMismatchRule"/> found the client's compared
+    /// <see cref="KotorCoop.Protocol.CompatibilityVerdict"/> currently carrying a
+    /// <see cref="KotorCoop.Protocol.CompatibilityCode.Save"/> note (party/enemies/doors/items
+    /// dropped for a save-identity mismatch) with no matching EDGE on either the local or the
+    /// host's reported digest — see that rule's own doc comment for why a debug-cheat module
+    /// warp reaches exactly this state and neither <see cref="OwnLoad"/> nor
+    /// <see cref="HostReload"/> ever fires for it.</summary>
+    SaveMismatch,
 }
 
 /// <summary>Where a rejoin attempt is: <see cref="Idle"/> (nothing running, a new trigger is
