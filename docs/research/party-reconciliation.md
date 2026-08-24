@@ -2666,3 +2666,125 @@ purpose-built, zero-risk diagnostic (`FollowDiag.RecordedDestPoint`) already shi
 the very next live pass, rather than requiring yet another disassembly round first. The walk still
 does not complete end-to-end; the honest gap remaining is unchanged in practice (still the very last
 recorded waypoint) but the open question about it is now sharper and directly testable.
+
+## Round 90 (2026-08-24, static pass, no rig access) — a geometry-only fix candidate built on
+round 89's own falsifiable hypothesis: `Odyssey.TryRefreshFinalNodeTarget`, built and unit-tested,
+NOT YET LIVE-VERIFIED
+
+This round had no rig access (another agent held the only live slot). Everything below is
+source-reading and static analysis against round 89's own already-shipped `FollowDiag
+.RecordedDestPoint` diagnostic and its own precise verdict: PathWaitDest's geometric accept/reject
+test at the very last recorded trail node (phase 7, `pathNode == destNode`, `writeCursor - pathNode
+== 1`) may be **correctly rejecting** a stale `TargetPoint`/`PriorPoint` pair, not spuriously
+blocking a healthy one — and round 88's `Odyssey.TryAcceptFinalPathNode`, which forces the test's
+own OUTPUT (`record+4 = 3`) directly, was live-disproven precisely in this shape (a new 7 → 3 → 0 →
+7 cycle, `CreMoveState` settling at 1/idle, zero position change).
+
+### The sharper hypothesis
+
+Round 89 named the next step as reading `recordedDestPoint`/`target`/`prior` together on a live
+finelog line to see which side of the test they land on — but that only tells a future round
+whether the test SHOULD have passed; it does not, on its own, give that companion a path to
+actually pass it. If round 89's own hypothesis is right (`Target`/`Prior` are stale at the exact
+terminal shape), then round 88's fix and round 89's own diagnostic both stop one step short of a
+candidate that could plausibly work: **refresh the test's inputs instead of forcing its output.**
+
+Round 89's own disassembly of 0x512C09 onward (this document's own citation, reread this round)
+already establishes there is nothing else the accept branch does besides `record+4 = 3` — no
+missed side effect to replicate. That means a correctly-implemented geometry refresh, followed by
+letting the UNMODIFIED engine code decide, is strictly narrower than `TryAcceptFinalPathNode`:
+
+- If the geometry was genuinely stale and refreshing it lets the real accept branch fire on the
+  very next natural dispatch, the companion reaches phase 3 through the SAME code path
+  `TryAdvanceStalledMovingToPath`/`TryForceWalkingWhenMovingToPathStalled` already use
+  successfully (round 88) — not a hand-poked phase value from outside the dispatcher.
+- If the geometry was already correct and the stall persists regardless, this changes nothing
+  (the write only fires past a real, meaningful drift — see below) — a clean, low-risk way to
+  falsify round 89's hypothesis without reintroducing round 88's own disproven cycle.
+- It can never itself produce the round-88 cycle, because it never touches `record+4` at all.
+
+### What was built: `Odyssey.TryRefreshFinalNodeTarget`
+
+Detects the exact same terminal shape `TryAcceptFinalPathNode` already detects (phase 7, `pathNode
+== destNode`, `writeCursor - pathNode == 1`, via the same `CSWPartyFollowDataArray` write-cursor
+this document's round 75/89 sections already establish), but instead of writing `record+4`, it
+performs the SAME non-degenerate `Prior`/`Target` write round 83's `Odyssey.TryDriveFollowTarget`
+already ships (`Prior <- the OLD target`, `Target <- the fresh leader position`, `record+0x68 <- 1`
+to arm the dirty-snapshot flag `WalkUpdateLocation_QuickWalk_FollowLeader` itself reads) — but
+bypasses that function's own ~10cm "meaningfully different" throttle, restricted ONLY to this one
+narrow terminal shape. The throttle exists in the general case to avoid stomping the dirty flag
+every frame once a companion is genuinely caught up and walking normally; a companion parked in
+this exact shape is by definition not walking normally, and the residual risk this targets is the
+leader's own final small steps each individually landing under that 10cm threshold, leaving
+`TargetPoint` up to just under 10cm stale relative to the leader's true final rest position — small,
+but exactly the kind of silent staleness round 89's own hypothesis needs ruled out. A ~1cm epsilon
+guards against writing when the target is already fresh (avoiding both a no-op write and a
+degenerate zero-length `Prior`-to-`Target` segment).
+
+The shape-detection and epsilon logic is pulled into a new pure, unit-tested class,
+`FinalNodeGeometryRule` (`src/KotorCoop.Plugin/FinalNodeGeometryRule.cs`), mirroring
+`PartyFollowTransitionRule`/`PartyFreezeRule`/`CompanionLocalFightRule`'s own established pattern
+of keeping the branching logic testable and the raw pointer arithmetic in `Odyssey.cs` thin. Both
+`TryAcceptFinalPathNode` and `TryRefreshFinalNodeTarget` now share the identical terminal-shape
+constant through this rule (they did not before this round; keeping them in sync by hand across two
+independently-edited functions was itself a latent risk this refactor also closes).
+
+Wired into `PartyFollowController.OnFrame`'s existing per-slot loop, called every frame the
+terminal shape holds (no stall-frame counter needed — the function's own epsilon already prevents
+repeat writes once genuinely fresh, unlike `TryAcceptFinalPathNode`'s forced poke, which needs the
+frame-count gate specifically to avoid firing on a single, possibly-still-legitimate visit to phase
+7). Kill switch `party_follow_refresh_final_node=0` (default **off** — no live A/B yet, per this
+project's own bar: a default flips ON only after "a direct, decisive, zero-regression live A/B,"
+which this round could not run).
+
+### Honest status
+
+**NOT live-tested.** This round had no rig access. The intended live-verification recipe (recorded
+in `Odyssey.TryRefreshFinalNodeTarget`'s own doc comment for whoever picks up the rig next):
+
+1. `src/KotorCoop.Plugin/build.ps1 -Install` on both installs, reproduce round 88's own recipe
+   (`tp 20 22 -1.3`, `walk 10 15`, `END_M01AA`) with `party_follow_finelog=1` and
+   `party_follow_refresh_final_node=1` (both `party_follow_accept_final_node` and this flag can be
+   tested independently — they are mutually exclusive in effect but not code-gated against each
+   other, so test one at a time).
+2. Let the companion close the leg down to the terminal stall exactly as round 88 described.
+3. Watch the finelog line: if `phase` advances past 7 on its own shortly after this fix's first
+   write (`target=`/`prior=` visibly changing on the SAME or a following line) and `CreMoveState`
+   reaches -1 with real subsequent position change, round 89's hypothesis is confirmed and this is
+   a real fix — candidate for a default flip after a clean, repeated live A/B.
+4. If `target`/`prior` were already effectively at the live leader position before this fix's first
+   write (no measurable change) and the stall persists regardless, round 89's hypothesis is refuted;
+   the next step is a live debugger on the `fcompp` at 0x512BF2 (PathWaitDest's own comparison),
+   exactly as round 89's own verdict already named.
+5. Either way, confirm no regression against round 88's own baseline: no new phase-cycling, no
+   `CreMoveState` regression, `tools/verify.ps1`'s two party-specific checks still pass clean.
+
+### Test suite and build
+
+`dotnet test tests/KotorCoop.Tests` (Release): **1701/1701 passed** (12 new unit tests in
+`FinalNodeGeometryRuleTests.cs`, exercising the shared shape/epsilon logic in isolation — the
+terminal shape's phase/pathNode/destNode/gap combinations, the epsilon boundary on both sides, and
+that a meaningful drift on either axis alone is enough to trigger a refresh; the baseline going into
+this round was already 1689 — higher than round 89's own recorded 1674 — reflecting commits merged
+onto this branch after round 89 was written but before this round started). `FinalNodeGeometryRule
+.cs` is dependency-free (no `SharedBlockView`, `Odyssey`, or unsafe engine pointers) so it compiles
+directly into the test project alongside its sibling rules, per that project's own established
+convention (`tests/KotorCoop.Tests/KotorCoop.Tests.csproj`'s own comment). `Odyssey
+.TryRefreshFinalNodeTarget` and its `PartyFollowController` wiring are new unsafe engine-pointer
+code, same as every prior round's fix candidates, and are NOT exercised by the (x86 NativeAOT,
+unreferenced-by-tests) plugin test project — they can only be verified live. No build attempted this
+round beyond `dotnet test` (no rig access, and the plugin's own x86 NativeAOT build was not
+re-verified against a live install this round — flagged so whoever runs the live pass rebuilds and
+redeploys before trusting the binary). No `SharedBlock`/protocol version change — everything this
+round touches is plugin-internal.
+
+### Verdict
+
+A fix candidate distinct from round 88's disproven `TryAcceptFinalPathNode` — refreshing the real
+engine test's inputs rather than forcing its output — built directly on round 89's own falsifiable
+hypothesis and its already-shipped diagnostic, fully implemented, unit-tested (12 new tests, 1701/
+1701 total passing), and gated off by default pending the live A/B this round could not run. This
+does NOT claim the companion walks the full leg end-to-end; it claims a specific, code-grounded,
+testable mechanism now exists for whoever has the rig next to confirm or refute round 89's
+hypothesis in one pass, with a shared, tested shape-detection rule backing both the disproven and
+the new candidate fix so they cannot silently drift out of sync with each other again.

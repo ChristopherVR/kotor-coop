@@ -2919,6 +2919,126 @@ internal static unsafe class Odyssey
     }
 
     /// <summary>
+    /// ROUND 90 (2026-08-24, party-reconciliation.md): builds directly on round 89's own
+    /// falsifiable hypothesis — that <c>PathWaitDest</c>'s geometric accept/reject test
+    /// (0x512B86-0x512C03) may be REJECTING CORRECTLY at the very last recorded trail node
+    /// because <c>TargetPoint</c>/<c>PriorPoint</c> (record+0x28/record+0x18) are stale, not
+    /// because the test itself is broken. <see cref="TryAcceptFinalPathNode"/> already tried
+    /// forcing the TEST'S OWN OUTPUT (phase=3) directly and was live-disproven (round 88) — this
+    /// instead refreshes the TEST'S INPUTS and lets the engine's own accept/reject logic decide
+    /// on its own, on the theory that a forced phase bypasses whatever else the real accept path
+    /// might depend on downstream (a possibility round 89's own disassembly could not fully rule
+    /// out — see that function's remarks), while a pure geometry refresh cannot, because it
+    /// changes nothing but the two float triples the real engine code already reads. Round 89's
+    /// own disassembly of 0x512C09 onward found nothing else the accept branch writes besides
+    /// <c>record+4=3</c> itself, so refreshing the INPUTS and letting the REAL branch fire is
+    /// strictly narrower than forcing its output — if the geometry was already correct and the
+    /// stall persists anyway, this changes nothing (round 89's hypothesis is refuted); if the
+    /// geometry was stale, this lets the unmodified engine code reach its own correct phase=3
+    /// (or correctly keep rejecting, if the leader genuinely has not passed this waypoint yet).
+    ///
+    /// Uses the exact same non-degenerate Prior/Target write <see cref="TryDriveFollowTarget"/>
+    /// already ships (round 83) — Prior &lt;- the OLD target, Target &lt;- the fresh leader
+    /// position, never collapsing the two into an identical, direction-less point — but bypasses
+    /// that function's own ~10cm "meaningfully different" gate, and ONLY inside the same narrow
+    /// terminal shape <see cref="TryAcceptFinalPathNode"/> already detects (phase 7,
+    /// <c>pathNode == destNode</c>, <c>writeCursor - pathNode == 1</c>: genuinely the last
+    /// recorded node, nothing further to walk toward). That 10cm gate exists in the general case
+    /// to avoid stomping <c>record+0x68</c> (the dirty-snapshot flag) every frame once a
+    /// companion is genuinely caught up and walking normally (see that function's own remarks) —
+    /// but a companion parked in THIS exact terminal shape is, by definition, not walking
+    /// normally; the residual risk this targets is the leader's own final, small steps each
+    /// individually landing under that 10cm threshold relative to whatever was last written,
+    /// leaving <c>TargetPoint</c> up to just under 10cm behind the leader's true final rest
+    /// position — not the dominant driver of the observed ~1.3-1.4 unit stall gap itself (that
+    /// gap is the COMPANION's distance from the leader, an unrelated quantity), but exactly the
+    /// kind of small, silent staleness round 89's own hypothesis needs ruled out before
+    /// concluding the geometric test is rejecting correctly rather than merely under-fed.
+    ///
+    /// NOT live-tested — no rig access this round. Companion piece to
+    /// <see cref="FollowDiag.RecordedDestPoint"/> (round 89): the intended live-verification
+    /// recipe is to enable this alongside <c>party_follow_finelog=1</c>, reproduce round 88's own
+    /// stall recipe, and read <c>recordedDestPoint=</c>/<c>target=</c>/<c>prior=</c> on the
+    /// finelog line right before and after this fires. If <c>phase</c> then advances past 7 on
+    /// its own (the REAL accept branch committing it, not a forced poke) and <c>CreMoveState</c>
+    /// reaches -1 with real subsequent position change, round 89's hypothesis is confirmed and
+    /// this is the fix. If <c>target</c>/<c>prior</c> were already this fresh before the poke (no
+    /// measurable change from this call) and the stall persists regardless, round 89's hypothesis
+    /// is refuted and the search moves to the <c>fcompp</c> at 0x512BF2 under a live debugger,
+    /// exactly as that round's own verdict names as the next step.
+    ///
+    /// Returns false when the index does not resolve. <paramref name="wrote"/> reports whether
+    /// the refresh actually fired this call (false when not in the terminal shape, or when the
+    /// target was already within ~1cm of <paramref name="leaderPos"/> and a write would have been
+    /// degenerate). Kill switch (to enable): <c>party_follow_refresh_final_node=1</c> (default
+    /// OFF — no live A/B yet, per this project's own bar).
+    ///
+    /// MAIN THREAD ONLY.
+    /// </summary>
+    public static bool TryRefreshFinalNodeTarget(uint companionServerObjectId, Vec3 leaderPos, out bool wrote)
+    {
+        wrote = false;
+
+        nint client = GetClient();
+        if (client == 0)
+        {
+            return false;
+        }
+
+        uint clientObjectId = ServerToClientObjectIdFn(client, companionServerObjectId);
+
+        nint party = GetSWPartyFn(client);
+        if (party == 0)
+        {
+            return false;
+        }
+
+        int index = GetPartyIndexFn(party, clientObjectId);
+        if (index <= 0)
+        {
+            return false;
+        }
+
+        nint record = party + 0x24 + (index * 0x88);
+        int phase = *(int*)(record + 4);
+        int pathNode = *(int*)(record + 0x24);
+        int destNode = *(int*)(record + 0x34);
+
+        nint followData = party + 0x2DC;
+        if (!NativeMethods.IsReadable(followData + 0xFA4))
+        {
+            return true;
+        }
+
+        int writeCursor = *(int*)(followData + 0xFA4);
+        int gap = writeCursor - pathNode;
+        if (gap < 0)
+        {
+            gap += 100;
+        }
+
+        // See FinalNodeGeometryRule's own remarks — the shape/epsilon logic is pulled out to a
+        // pure, unit-tested class shared with TryAcceptFinalPathNode's own shape constant.
+        if (!FinalNodeGeometryRule.IsTerminalStallShape(phase, pathNode, destNode, gap))
+        {
+            return true;
+        }
+
+        Vec3 existingTarget = *(Vec3*)(record + 0x28);
+        if (!FinalNodeGeometryRule.ShouldRefresh(existingTarget.X, existingTarget.Y, leaderPos.X, leaderPos.Y))
+        {
+            return true; // already fresh, or a write here would be degenerate
+        }
+
+        Vec3 oldTarget = existingTarget;
+        *(Vec3*)(record + 0x28) = leaderPos;
+        *(Vec3*)(record + 0x18) = oldTarget;
+        *(int*)(record + 0x68) = 1;
+        wrote = true;
+        return true;
+    }
+
+    /// <summary>
     /// ROUND 73 FALLBACK (per the round's own brief, step 3: "if CSWParty::Update doesn't move
     /// the frozen point either, directly write the follow-target point / cached leader position
     /// fields to the actual current leader position each step"). It does not — see

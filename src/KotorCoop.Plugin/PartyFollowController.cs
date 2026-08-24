@@ -167,6 +167,17 @@ internal sealed unsafe class PartyFollowController(SharedBlockView block)
     private readonly int[] _finalNodeStallFrames = new int[PartyNpcSlots];
     private readonly int[] _lastFinalNodeSeen = new int[PartyNpcSlots];
 
+    /// <summary>ROUND 90 (party-reconciliation.md): see
+    /// Odyssey.TryRefreshFinalNodeTarget's own remarks — builds on round 89's own falsifiable
+    /// hypothesis that PathWaitDest's geometric accept/reject test at the very last recorded
+    /// trail node is correctly rejecting a STALE Target/Prior pair, not spuriously blocking a
+    /// healthy one. Refreshes only the geometry the real engine test reads and lets that
+    /// unmodified test decide, rather than forcing its output the way
+    /// Odyssey.TryAcceptFinalPathNode does. NOT live-tested this round — no rig access. Kill
+    /// switch (to enable): <c>party_follow_refresh_final_node=1</c> (default off).</summary>
+    private readonly bool _refreshFinalNodeTarget =
+        PluginConfig.ReadBool("party_follow_refresh_final_node", false);
+
     /// <summary>How many consecutive frames the exact terminal shape must persist before
     /// Odyssey.TryAcceptFinalPathNode is allowed to fire — enough to rule out a single,
     /// possibly-still-legitimate visit, short enough not to add a perceptible extra pause.</summary>
@@ -391,6 +402,17 @@ internal sealed unsafe class PartyFollowController(SharedBlockView block)
                 if (Odyssey.TryGetMovingToPathAccumulator(objectId, out int currentAccumulator))
                 {
                     _lastMovingToPathAccumulator[slot] = currentAccumulator;
+                }
+
+                // ROUND 90: see Odyssey.TryRefreshFinalNodeTarget's own remarks — a geometry-only
+                // alternative to TryAcceptFinalPathNode below, tried first (when enabled) since it
+                // never forces the engine's own accept/reject test, only its inputs. Called every
+                // frame while the terminal shape holds; the function's own ~1cm epsilon prevents
+                // repeat writes once genuinely fresh, so no stall-frame gating is needed here the
+                // way TryAcceptFinalPathNode's forced poke requires.
+                if (_refreshFinalNodeTarget)
+                {
+                    Odyssey.TryRefreshFinalNodeTarget(objectId, playerPos, out _);
                 }
 
                 // ROUND 88: see Odyssey.TryAcceptFinalPathNode's own remarks — track how many
