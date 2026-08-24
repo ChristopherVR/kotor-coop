@@ -1219,3 +1219,61 @@ result. `dotnet test` was not re-run for this either (a `.ps1` addition under `t
 
 - `tools/liveness-freshness-probe.ps1` — new, the paired-sampling probe described above. No
   other files touched; no `src/` changes.
+
+## Live-verified (2026-08-24) — the probe run for the first time: convergence was IMMEDIATE in
+both a high- and a moderate-population module, at this document's own 10s sampling grid; no
+support found for the load-correlated theory at these population levels, and no disagreement ever
+observed
+
+Rig access this round. Ran `tools/liveness-freshness-probe.ps1` exactly as the prior round's own
+"what the next live round should do" section specified, with one scope reduction for time
+(`-DurationSec 90`/`60` and `-IntervalSec 10` rather than the recommended 3-5 minutes at 15s — a
+shorter first pass, not the full recipe) and a substituted "low-population" module (`END_M01AA`,
+25 registered hostiles per its own `census`, not dramatically lower than `tat_m20aa`'s 28-29 —
+the prior round's own suggestion of "a corridor or small early-game area with a handful of NPCs"
+was not chased further this pass; `END_M01AA`'s own population turned out closer to `tat_m20aa`'s
+than expected).
+
+**`tat_m20aa`** (`-Label tat_m20aa-29pop`, `destroyobject 0x36` staged, population 28-29 across
+the window per the OWNER `census` sampled each round): both `census 0x36` (agent) and
+`resolve 0x36` (plugin) already read "gone" on the VERY FIRST sample, taken immediately after
+staging — `first AGENT reported gone at: 0s`, `first PLUGIN reported gone at: 0s`, zero
+disagreements across 9 samples spanning 80s.
+
+**`END_M01AA`** (`-Label end_m01aa-25pop`, `destroyobject 0x10` staged, population 24-25): same
+result — both sides read "gone" at `t=0s`, zero disagreements across 6 samples spanning 50s.
+
+### What this does and does not settle
+
+At the population levels this pass could reach (24-29 registered objects, both well under
+whatever `CServerAIMaster::UpdateState`'s own real-time budget would need to be exhausted by the
+object-state scan before the event-queue drain gets a turn), the theorized load-correlated delay
+did not manifest at all — convergence was immediate in BOTH modules, not merely faster in the
+lower-population one. This is consistent with two different readings, and this pass cannot
+distinguish them: (a) the theory is correct but 24-29 objects is nowhere near enough load to
+exhaust a ~10,000-unit real-time budget per `UpdateState` call, so a genuinely busy module (many
+times this population, or one with a much deeper AI Master event queue for other reasons) would
+still show it, or (b) the event-queue drain in practice always gets a turn well within this
+script's own 10s sampling grid regardless of population, at least in ordinary play, and the
+staleness this whole document has chased across five live passes now has a different, still
+unfound cause. Neither disagreement (the sharper, DEFECT-shaped signal item 5 of the prior round's
+own plan called out) was ever observed either, in either module — no evidence this pass found of
+an actual scan-freshness bug in the lookup/cache pipeline itself.
+
+**Not settled, and worth naming precisely for whoever picks this up next**: a genuinely high-load
+module (a large encounter, many dozens of live creatures with active AI, not just registered
+corpses/hostiles sitting idle) was not tried — 28-29 is what this session's rig had readily
+available on Tatooine, not a stress case chosen to test the budget theory's own upper bound. The
+10s sampling grid also cannot distinguish "instant" from "fast enough to land inside the same
+10-second window" — a sub-10s delay that this document's own prior passes would have called
+"stale" is invisible to this measurement. A tighter interval (the script supports `-IntervalSec`
+down to whatever cadence the console channel can sustain) against a genuinely large encounter is
+the concrete next step, not a re-run of this same recipe.
+
+### Verdict
+
+The third theory (real-time-budget-gated event drain, load-correlated staleness) is **not
+supported by this pass's own data**, but also not ruled out — the population range tested was too
+narrow and too low to meaningfully stress the mechanism the disassembly identified. No fix
+shipped (none was warranted either way). `dotnet test`: no production code changed this pass (a
+live-verification run using the already-built tool only).
