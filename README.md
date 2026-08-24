@@ -57,8 +57,8 @@ off by default or waiting on a live pass; the linked doc always has the dated ev
 
 | Area | Status | Blocker |
 | --- | --- | --- |
-| Minigames — swoop racing, now that the real gate is known | All four originally-raised hypotheses for the terminal-node transition stall are eliminated. The §19 rig regression (frame hook never ticking) did not recur on a fresh `demo.ps1` launch 2026-08-24, unblocking the continuous action-poll test: the PC's own action queue read EMPTY (`head=0x0`) across ~200 seconds of the stall (not stuck mid-`ActionMoveToObject`), arguing against that specific reading of the FIFO-blocked-queue lead for the bulk of the stall window (an earlier ~68s gap right after the PC's own commanded walk would fire is not covered). A separate, genuinely new fact surfaced along the way: a full creature scan during the stall found the escort NPC `k_ptar_racecs0.ncs` is supposed to `CreateObject` (`tar11_csbek`) was never actually created — a previously-unconfirmed, one-layer-upstream content/precondition failure nobody had checked for directly | [minigames.md](docs/research/minigames.md) §14-§20; the mystery is narrower now — why does `CreateObject('tar11_csbek', ...)` fail — but still open |
-| Creature liveness reconciliation (a body alive on one screen, dead on the other) | CONFIRMED working live for the first time — a debug `--enemy-census-cap` flag makes the out-of-census case reachable, and the Kill→Destroy correction fires correctly | OFF by default; a separate, still-unfixed `DestroyObject`-scan-freshness issue is untouched by this result. Two theories (stale array entry, missing generation check) are disassembly-ruled-out; a third (a wall-clock time-budget-gated event drain) was live-probed for the first time 2026-08-24 at 24-29 registered objects and found no support — convergence was immediate in both a high- and moderate-population module, no disagreements — but the population range tested was too narrow/low to stress the mechanism, so the theory isn't ruled out either — [creature-liveness.md](docs/research/creature-liveness.md) |
+| Minigames — swoop racing, now that the real gate is known | All four originally-raised hypotheses for the terminal-node transition stall are eliminated, and the real mechanism is now understood in detail: the escort NPC and the PC's own teleport both live inside one delayed-dispatch subroutine (`DelayCommand(7.0, AssignCommand(GetFirstPC(), ...))`) that a live position check (2026-08-24) directly confirmed never runs at all — the PC never reaches the target waypoint, the party's other member is never destroyed, the escort never spawns, all exactly as the disassembly predicted, on an independent live channel from the static analysis | [minigames.md](docs/research/minigames.md) §14-§22; genuinely blocked now on why the engine's own `DelayCommand`/`AssignCommand` scheduler never dispatches that call — determining that needs stepping through native engine code with a real debugger, which this project doesn't have access to (checked: no Debugging Tools for Windows installed, Visual Studio's debugger has no scriptable unattended path) |
+| Creature liveness reconciliation (a body alive on one screen, dead on the other) | CONFIRMED working live for the first time — a debug `--enemy-census-cap` flag makes the out-of-census case reachable, and the Kill→Destroy correction fires correctly | OFF by default; a separate, still-unfixed `DestroyObject`-scan-freshness issue is untouched by this result. Two theories (stale array entry, missing generation check) are disassembly-ruled-out; a third (a wall-clock time-budget-gated event drain) was live-probed at three population levels (24-33) across a 14-module survey and found no support each time — convergence was immediate every time, no disagreements — but base-game KOTOR1 turns out not to host "many dozens" of creatures in one loaded area anywhere found so far, so the theory can't be genuinely stress-tested without new tooling (a `spawncreature` debug console verb, not yet built) — [creature-liveness.md](docs/research/creature-liveness.md) |
 | KOTOR 2 | Untouched | only GOG v1.0.3 addresses are known |
 
 ## What works today
@@ -302,11 +302,17 @@ tools/                   RE helpers, demo scripts, the kotor1_0_3 symbol databas
   matches the real engine's own verdict). Two fix candidates were built from that diagnosis —
   extending the trail with a synthetic node past the terminal one, and a second, structurally
   identical stall phase found and fixed along the way — but a live A/B across several rebuild
-  cycles never recaptured either trigger shape under direct observation, so the result is honestly
-  inconclusive rather than negative. Both stay off by default (`party_follow_extend_final_node`,
-  `party_follow_advance_destnode_phase6`); the concrete next step is logging the write itself
-  directly rather than inferring it from surrounding state. A related crash — warping modules while
-  the follow
+  cycles never recaptured either trigger shape under direct observation, so the result was
+  honestly inconclusive rather than negative. A follow-up round added direct write-logging to both
+  functions and caught them BOTH firing live, twice, with exact before/after coordinates logged —
+  and real forward progress resulted (8+ units of genuine walking in one leg). Full end-to-end leg
+  completion still isn't reached, but not because either new fix failed: in every leg tried this
+  round, the companion went on to hit a separate, already-documented stall (round 88's own
+  phase-2/idle and long-distance-pathfinding-limit finding) further down the same walk. Both
+  switches (`party_follow_extend_final_node`, `party_follow_advance_destnode_phase6`) stay off by
+  default — real, confirmed progress on the terminal-node problem specifically, with the remaining
+  gap now being a distinct, already-characterized issue rather than an open mystery. A related
+  crash — warping modules while the follow
   diagnostics run (shipped default) could access-violate the host — is root-caused (the
   controller was the one per-frame system in the codebase with no transition-epoch guard),
   fixed, and now LIVE-CONFIRMED: no new access violation, diagnostics resume with sane values
@@ -380,16 +386,18 @@ tools/                   RE helpers, demo scripts, the kotor1_0_3 symbol databas
   wait exists in the bytecode, and cross-referencing the real module's placement data found no
   crafted-save gap either (every waypoint/NPC the scripts touch is an ordinary static placement,
   none gated on prior quest-stage progression) (§18). All four raised hypotheses are now
-  eliminated. A concrete new lead surfaced from that same disassembly: the terminal
-  `StartNewModule` call is a bare `DelayCommand` whose target object can't be determined
-  statically — if it queues onto the PC's own event queue and the PC's own commanded walk to a
-  waypoint never completes, a FIFO-blocked queue would exactly reproduce the stall; the next live
-  pass should continuously poll the PC's action state and position through the whole stall window
-  rather than sampling once. That continuous-poll test was built and staged 2026-08-24 but blocked
-  before it could run by a new, unrelated rig regression: `demo.ps1` began failing partway through
-  the session — the plugin's shared block is present but its frame hook stops ticking, a failure
-  mode not seen in any prior round. The test itself is ready; it's waiting on that regression to
-  be diagnosed. Pazaak is unrelated and uncovered. See
+  eliminated. Deeper disassembly then found the escort NPC and the PC's own teleport both live
+  inside one delayed-dispatch subroutine reached only via
+  `DelayCommand(7.0, AssignCommand(GetFirstPC(), <subroutine>))` — and a live position check
+  (2026-08-24, independent of the static analysis) directly confirmed that subroutine never runs
+  at all: the PC never reaches the target waypoint, the other party member is never destroyed, and
+  the escort never spawns, all exactly as predicted. The census-cap theory, the bad-blueprint
+  theory, and a bad-waypoint theory were all independently checked and ruled out too. What's left
+  is a genuine, still-unexplained vanilla-engine question: why does the engine's own
+  `DelayCommand`/`AssignCommand` scheduler never dispatch that call? Answering it needs stepping
+  through native engine code with a real debugger — checked this session and found none available
+  (no Debugging Tools for Windows installed; Visual Studio's own debugger has no scriptable,
+  unattended path this harness can drive). Pazaak is unrelated and uncovered. See
   [minigames.md](docs/research/minigames.md).
 - **Non-damage combat effects** (stun, slow, frightened, choke, force push/whirlwind, and now
   also knockdown, paralyze, sleep) forward live, both directions, on by default. All nine
@@ -456,13 +464,16 @@ tools/                   RE helpers, demo scripts, the kotor1_0_3 symbol databas
   untouched by this result. Two theories for that issue (a stale array entry, a missing
   generation check) are disassembly-ruled-out; a third — the engine's own AI-master event
   queue that actually unlinks a destroyed body is drained under a wall-clock time budget a busy
-  module could plausibly exhaust before reaching an already-due delete — was live-probed for the
-  first time 2026-08-24 in a high-population (28-29) and moderate-population (24-25) module:
-  convergence was immediate in both, no disagreements found, no support for the theory at these
-  levels — but the population range tested was too narrow and too low to meaningfully stress the
-  mechanism the disassembly identified, so it isn't ruled out either. May yet turn out to be
-  intentional vanilla engine scheduling rather than a coop-plugin bug; a genuinely large,
-  many-dozen-creature encounter is the concrete next step. See
+  module could plausibly exhaust before reaching an already-due delete — was live-probed at three
+  population levels (24-25, 28-29, and 29-33, the last after surveying 14 different modules
+  including Star Forge, the Rakatan Temple, Manaan and Kashyyyk looking for a bigger one):
+  convergence was immediate every single time, no disagreements ever found. Not ruled out, but now
+  weakly disfavored — and genuinely hard to test further, since base-game KOTOR1 doesn't appear to
+  host "many dozens" of live creatures in one loaded area anywhere in its own content; the concrete
+  next step would need a debug `spawncreature` console verb (the underlying engine primitive
+  already exists and is proven live via other callers, just not exposed as a verb yet) to
+  artificially stress the mechanism beyond what any real module offers. May yet turn out to be
+  intentional vanilla engine scheduling rather than a coop-plugin bug. See
   [creature-liveness.md](docs/research/creature-liveness.md).
 - **Alignment (light/dark) is per-player on purpose** — no sync channel needed. An
   alignment-gated dialogue option reflects whichever player owns the conversation.
