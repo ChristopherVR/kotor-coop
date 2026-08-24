@@ -115,4 +115,76 @@ public sealed class FinalNodeGeometryRuleTests
         Assert.True(FinalNodeGeometryRule.ShouldRefresh(targetX: 0f, targetY: 5f, leaderX: 2f, leaderY: 5f));
         Assert.True(FinalNodeGeometryRule.ShouldRefresh(targetX: 5f, targetY: 0f, leaderX: 5f, leaderY: 2f));
     }
+
+    [Fact]
+    public void AnOrdinaryIndexIsUnchanged()
+    {
+        // Well below the 100-slot boundary — the common case, every frame the terminal shape is
+        // NOT active at index 99.
+        Assert.Equal(31, FinalNodeGeometryRule.WrapTrailIndex(31));
+    }
+
+    [Fact]
+    public void IndexOneHundredWrapsToZero()
+    {
+        // The exact boundary Odyssey.TryExtendFinalNodeTrail hits when the terminal node sits at
+        // the last slot (writeCursor==99, pathNode==98) — the one case a naive "just add one"
+        // caller would silently write past the array's own 100-slot bound.
+        Assert.Equal(0, FinalNodeGeometryRule.WrapTrailIndex(100));
+    }
+
+    [Fact]
+    public void IndexNinetyNineIsStillInRangeAndUnchanged()
+    {
+        // The last valid slot before the wrap — must NOT be treated as needing correction.
+        Assert.Equal(99, FinalNodeGeometryRule.WrapTrailIndex(99));
+    }
+
+    [Fact]
+    public void PhaseSevenIsExtendable()
+    {
+        // The originally-documented shape (round 88/89) — IsExtendableTerminalStallShape must
+        // still recognise it, not just the new phase-6 case.
+        Assert.True(FinalNodeGeometryRule.IsExtendableTerminalStallShape(
+            phase: 7, pathNode: 30, destNode: 30, gap: 1));
+    }
+
+    [Fact]
+    public void PhaseSixIsAlsoExtendable()
+    {
+        // Live finding (2026-08-24 A/B round): phase 6's handler (0x00512A60) is structurally
+        // identical to PathWaitDest (0x00512B40) — same search, same fcompp test, same gap==1
+        // trigger — confirmed by fresh disassembly. TryExtendFinalNodeTrail's own fix mechanism
+        // applies to it unmodified, unlike TryAcceptFinalPathNode/TryRefreshFinalNodeTarget which
+        // stay phase-7-only via IsTerminalStallShape.
+        Assert.True(FinalNodeGeometryRule.IsExtendableTerminalStallShape(
+            phase: 6, pathNode: 32, destNode: 32, gap: 1));
+    }
+
+    [Fact]
+    public void NeitherPhaseSixNorSevenIsNotExtendable()
+    {
+        Assert.False(FinalNodeGeometryRule.IsExtendableTerminalStallShape(
+            phase: 5, pathNode: 30, destNode: 30, gap: 1));
+        Assert.False(FinalNodeGeometryRule.IsExtendableTerminalStallShape(
+            phase: 3, pathNode: 30, destNode: 30, gap: 1));
+    }
+
+    [Fact]
+    public void ExtendableShapeStillRequiresGapOfExactlyOne()
+    {
+        // gap==0 is genuinely caught up; gap>=2 is TryAdvanceStalledPathDestination's own,
+        // already-working shape — this fix candidate must not double-claim either.
+        Assert.False(FinalNodeGeometryRule.IsExtendableTerminalStallShape(
+            phase: 6, pathNode: 32, destNode: 32, gap: 0));
+        Assert.False(FinalNodeGeometryRule.IsExtendableTerminalStallShape(
+            phase: 7, pathNode: 30, destNode: 30, gap: 2));
+    }
+
+    [Fact]
+    public void ExtendableShapeStillRequiresPathNodeEqualsDestNode()
+    {
+        Assert.False(FinalNodeGeometryRule.IsExtendableTerminalStallShape(
+            phase: 6, pathNode: 28, destNode: 32, gap: 5));
+    }
 }

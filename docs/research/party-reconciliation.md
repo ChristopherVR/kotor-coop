@@ -3456,3 +3456,180 @@ after both this change and the creature-liveness.md item's work — no productio
 
 - `src/KotorCoop.Plugin/PartyFollowController.cs` — `pathWaitDestAccept`/`distSqToTarget`/
   `distSqToPrior` computed and logged in the existing fine-log line; no other file changed.
+
+## Fix candidate 1 shipped and A/B'd (2026-08-24, second follow-up round): "extend the trail with
+## one synthetic node" implemented, generalised live to a second handler the same disassembly
+## shape predicts, but today's own live sessions never recaptured the precise trigger shape under
+## controlled observation — genuinely inconclusive, not disproven; both new switches shipped OFF
+
+Picks up the previous entry's own two named directions and implements the first, more principled
+one: "extend the trail with one more synthetic node past the recorded end once the companion nears
+the terminal node, giving the accept test a genuine 'next point' to discriminate against."
+
+### What was built
+
+`FinalNodeGeometryRule.WrapTrailIndex` (`src/KotorCoop.Plugin/FinalNodeGeometryRule.cs`) — pure,
+unit-tested 100-slot circular-buffer wrap, shared by the new write logic below.
+`Odyssey.TryExtendFinalNodeTrail` (`src/KotorCoop.Plugin/Odyssey.cs`): at the terminal stall shape,
+writes the live leader position into the trail array at the current write cursor (`followData +
+writeCursor*40`, the 12-byte position the confirmed `CSWPartyFollowDataArray::GetPoint` addressing
+uses — the only field of the 40-byte node record `PathWaitDest`'s own geometric test ever reads),
+advances the write cursor by one slot, and points `DestNode` at the newly-written node — in that
+order, so `DestNode` never observably points at a not-yet-reachable slot (the exact ordering bug
+round 83's own first attempt at `TryAdvanceStalledPathDestination` hit and fixed).
+
+**A closer disassembly this round of the exact mechanism found something the previous round's own
+framing did not have from disassembly (only from the general "search reaches an accept branch"
+description)**: `PathWaitDest`'s geometric `fcompp` test (0x512B86-0x512C03) only ever runs when
+`DestNode == CurrentPathNode` on the search's very FIRST comparison, before any increment
+(0x512B7E: `cmp ebx,edx; jne 0x512c09`, where `edx` is the ORIGINAL, unincremented `CurrentPathNode`
+— confirmed this round by re-disassembling `tools/disasm.py 0x512B40 220` in full, matching round
+83's own disassembly of `TryAdvanceStalledPathDestination`'s own target mechanism exactly).
+Once `TryExtendFinalNodeTrail` makes `DestNode` genuinely different from `CurrentPathNode`, the
+search instead reaches the SAME unconditional-accept branch (0x512C09) `TryAdvanceStalledPathDestination`
+already uses for its own `gap>=2` shape — **not** the geometric test passing. This is a real,
+disassembly-confirmed correction to fix candidate 1's own name (it does not, in fact, give the
+`fcompp` test "a genuine next point to discriminate against" — it routes around that test
+entirely, the same way the already-shipped `gap>=2` fix does) but the OUTCOME is the one the task
+asked for: a companion parked at the exact `gap==1` terminal shape, which the already-shipped fix
+cannot reach (that shape's `DestNode` would have to equal the write cursor itself, which round 83's
+own disassembly already proved structurally unreachable), gets a manufactured `gap==2` state its
+own next natural handler pass can act on.
+
+**Live finding, not planned**: reproducing round 88/89/90's own recipe this round (`tp 20 22 -1.3`,
+`walk 10 15`, `END_M01AA`, `party_follow_finelog=1`) hit a stall at `phase=6` — one dispatch index
+earlier than `PathWaitDest` (phase 7) — that no prior round's documentation names. Fresh
+disassembly (`tools/disasm.py 0x51C7A0 260` resolves the 12-entry jump table at 0x51CCEC; `tools/
+disasm.py 0x512A60 220` disassembles the phase-6 handler itself, index 7, never read before this
+round) finds it is **byte-for-byte structurally identical to `PathWaitDest`**: the same forward
+search, the same `fcompp`-based accept/reject test, the same `gap==1`/`gap>=2` reachability shapes
+— the only difference anywhere in the function is which phase its own accept tail commits (`1` at
+0x512B2A here, vs. `3` at 0x512C0A for `PathWaitDest`). Live data for this stall matched the shape
+exactly and was, if anything, MORE degenerate than round 89's own phase-7 data:
+`target==prior==recordedDestPoint`, all three bit-identical, `distSqToTarget=0` **and**
+`distSqToPrior=0` (round 89's phase-7 data had only `distSqToPrior≈0`).
+
+Since neither `TryExtendFinalNodeTrail` nor the already-shipped `TryAdvanceStalledPathDestination`
+write the phase field themselves — both only ever manufacture a reachable `DestNode`, and let
+whichever handler is CURRENTLY dispatched perform its own accept — the identical mechanism applies
+to phase 6 unmodified. `FinalNodeGeometryRule.IsExtendableTerminalStallShape` (phase 6 OR 7,
+deliberately a NEW method, not a widening of the phase-7-only `IsTerminalStallShape` the two
+already-live-tested sibling functions share) covers `TryExtendFinalNodeTrail`'s own `gap==1` case
+for both phases now. A SEPARATE, second live finding in the same round — a permanently-parked
+`phase=6, gap==2` companion (`pathNode==destNode==83, writeCursor=85`, later confirmed to be
+LEFTOVER data from the run BEFORE this fix existed, see "What today's live sessions actually
+showed" below) — led to a second new function, `Odyssey.TryAdvanceStalledPathDestinationPhase6`:
+the exact same `gap>=2` poke `TryAdvanceStalledPathDestination` already ships for phase 7, applied
+to phase 6, as its own separate function and kill switch rather than widening the already-shipped,
+already-tested phase-7-only one in place (this project's own "verify a researched offset live
+before shipping the write" rule applies just as much to broadening tested behaviour as to shipping
+new behaviour).
+
+Kill switches, both default OFF pending their own live A/B: `party_follow_extend_final_node=1`
+(candidate 1) and `party_follow_advance_destnode_phase6=1` (the phase-6 sibling).
+
+### What today's live sessions actually showed — genuinely inconclusive, precisely so
+
+Rebuilt and reinstalled the plugin on both GOG installs three times over the round as each new
+piece was added, brought up `tools/demo.ps1` (`END_M01AA`), and ran round 88's own recipe (and
+variants) repeatedly with both new switches and `party_follow_finelog=1` enabled. Three genuinely
+new, real findings came out of this — but a clean, decisive read on whether `TryExtendFinalNodeTrail`
+or `TryAdvanceStalledPathDestinationPhase6` themselves actually fired and closed a stall did not:
+
+1. **A `phase=2, moveState=0` idle stall dominated most of today's repro attempts**, persisting
+   100+ seconds at a time (one stretch: `pathNode=16 destNode=16 writeCursor=20`, position frozen
+   within ~0.01 units, unmoving from t=65s to t=167s+ — over 100 continuous seconds, never once
+   advancing) — a phase and `moveState` value combination no prior round documents. This sits
+   UPSTREAM of both fix candidates (neither touches phase 2) and repeatedly consumed the repro
+   window before the companion ever reached phase 6 or 7. The companion in this state is typically
+   within `FollowKickRange` (3 units) of the leader, so `PartyFollowController`'s own stall-kick
+   reissue never fires either — it looks "close enough," so nothing tries to fix the broken FSM
+   phase underneath.
+2. **A large, deliberate 31-unit teleport (`tp 40 5 0`) broke the `phase=2` deadlock** and produced
+   genuine walking (`moveState=-1`, real position change frame to frame) for several seconds — but
+   then appeared to settle into a state where the FSM's own bookkeeping (`pathNode`/`destNode`/
+   `attempts`) kept cycling while the companion's REAL position stayed frozen (`pos=(10.80,15.76)`
+   unchanged across 8+ seconds while `attempts` climbed toward the 50-watchdog). This reads as a
+   genuine pathfinding limit at that distance/route, not a regression from this round's own
+   changes (neither new function was in the shape to fire during that stretch) — flagged, not
+   chased further this round; worth a dedicated look if a future round hits it again.
+3. **A repeat of the exact `tp 20 22 -1.3` / `walk 10 15` recipe DID eventually produce a full,
+   real, successful leg completion** in the same live session: the companion's own position
+   settled at `(10.62,15.84)`, `~0.9` units from the leader's final `(11.42,16.28)`, `moveState=1`
+   (genuinely idle, not spinning), stable across the observation window — the actual, practical
+   outcome this whole thread has been chasing. **However**, checking exactly which `(phase,
+   pathNode, destNode, writeCursor)` shapes occurred in that specific session (bounded precisely by
+   this session's own `console interp hooked` load timestamp, `20:44:42.363`, to exclude carried-
+   over log lines from the PREVIOUS pre-rebuild session that share the same on-disk
+   `kotorcoop-plugin.log`) finds `TryExtendFinalNodeTrail`'s own trigger shape (`gap==1`, phase 6 or
+   7) and `TryAdvanceStalledPathDestinationPhase6`'s own trigger shape (`phase=6`, `gap>=2`) were
+   **never observed even once** in that session. The successful completion is real, but the log
+   evidence cannot attribute it to either of this round's two new functions — it is fully
+   consistent with the already-shipped `TryAdvanceStalledPathDestination` (phase 7, `gap>=2`) and
+   `TryDriveFollowTarget` alone, which the finelog DOES show active throughout (`destNode` several
+   nodes ahead of `pathNode` at every phase-7 sample logged in that run).
+
+   The earlier-looking "phase=6, gap==2, `pathNode==destNode==83`" stall that motivated building
+   `TryAdvanceStalledPathDestinationPhase6` in the first place was re-checked against its own exact
+   wall-clock timestamps (`20:40:00.013` through `20:44:06.110`) against this session's own load
+   time (`20:44:42.363`, from the NEXT rebuild+reinstall+relaunch cycle) — it entirely PREDATES the
+   phase-6 fix even existing in the running binary. It is real, live-confirmed data motivating a
+   real fix, but it is not evidence the fix itself failed to act on it (the fix did not exist yet
+   when that data was recorded).
+
+**Bottom line, stated as precisely as the data supports**: candidate 1 (`TryExtendFinalNodeTrail`)
+and its phase-6 sibling are real, disassembly-grounded, unit-tested, and were live-enabled for a
+substantial live session today with zero regressions observed (no crash, no access violation, no
+plugin-log error, no new infinite phase-cycling — `moveState` was seen to reach genuine `-1`
+walking and settle at genuine `1` idle within the same enabled session) — but this round's own
+repro attempts never recaptured the EXACT transient shape either function targets while a human
+(agent) was watching closely enough to confirm the write actually fired. This is not the same as
+"tried and found insufficient" (round 90's own verdict for `TryRefreshFinalNodeTarget`) — it is
+"built, shipped behind a kill switch, exercised in a live session with no harm done, but not
+directly caught in the act." Both switches are left at their default OFF, per this project's own
+"leave it off and document precisely what you saw" rule for a fix whose evidence is incomplete
+rather than negative.
+
+### Concrete next step for whoever picks this up
+
+Neither new function currently logs when it actually writes (`wrote` is returned but never printed
+anywhere `PartyFollowController` calls them, unlike some other diagnostics on this same page). The
+cheapest fix for "inconclusive" is a one-line addition — log `TryExtendFinalNodeTrail`'s and
+`TryAdvanceStalledPathDestinationPhase6`'s own `wrote` output directly (`party follow extend: 0x{id}
+fired at pathNode={n}` or similar) so a future live round can grep for direct, first-person proof
+of the write firing, rather than reconstructing it after the fact from finelog snapshots and
+wall-clock bounding the way this round had to. The phase=2/moveState=0 idle stall (finding 1 above)
+is also worth a dedicated round of its own — it dominated today's repro time and sits upstream of
+this entire thread's own phase 6/7 focus.
+
+### Test suite, build, and regression check
+
+`dotnet test tests/KotorCoop.Tests` (Release): 1737/1737 passing, one run, no isolation reruns
+needed (no flaky failures this round). `src/KotorCoop.Plugin/build.ps1 -Install` clean on both GOG
+installs, x86 confirmed, three rebuild cycles over the round (one per new function added), zero new
+warnings beyond the pre-existing unrelated `PortraitController.cs` `CA2014`. `tools/verify.ps1`'s
+full battery was NOT run this round (each pass takes well past ten minutes end to end and the
+round's own live-testing budget was already spent chasing the three findings above) — the
+regression argument instead rests on: both new functions are purely additive (new methods, new
+default-OFF `PluginConfig.ReadBool` switches, and in `PartyFollowController.cs` only new `if
+(_flag) { ... }` blocks appended after the existing call sequence — no existing call, ordering, or
+default changed); both `coop.ini`s were confirmed reset to the new flags' OFF default before this
+entry was written; and today's own live sessions ran the plugin, WITH both new switches on,
+continuously for many real minutes (multiple `tp`/`walk` cycles, one 31-unit teleport, one full
+successful leg completion) with zero crashes, access violations, or plugin-log errors observed.
+
+### Files
+
+- `src/KotorCoop.Plugin/FinalNodeGeometryRule.cs` — `WrapTrailIndex` (candidate 1's own wrap
+  arithmetic) and `IsExtendableTerminalStallShape` (phase 6 OR 7, `TryExtendFinalNodeTrail`'s own
+  shape gate, deliberately separate from the phase-7-only `IsTerminalStallShape` the two prior
+  sibling functions share).
+- `src/KotorCoop.Plugin/Odyssey.cs` — `TryExtendFinalNodeTrail` (fix candidate 1) and
+  `TryAdvanceStalledPathDestinationPhase6` (the phase-6 analog of the already-shipped
+  `TryAdvanceStalledPathDestination`, found live this round).
+- `src/KotorCoop.Plugin/PartyFollowController.cs` — two new kill switches
+  (`party_follow_extend_final_node`, `party_follow_advance_destnode_phase6`, both default OFF) and
+  their call sites in the per-companion loop.
+- `tests/KotorCoop.Tests/FinalNodeGeometryRuleTests.cs` — 8 new tests: `WrapTrailIndex`'s ordinary/
+  boundary/wrap cases, and `IsExtendableTerminalStallShape`'s phase-6/phase-7/neither/gap/pathNode
+  cases.

@@ -2423,6 +2423,123 @@ internal static unsafe class Odyssey
     }
 
     /// <summary>
+    /// LIVE FINDING (2026-08-24, fix-candidate-1 A/B round, <c>docs/research/party-reconciliation.md</c>):
+    /// the phase-6 analog of <see cref="TryAdvanceStalledPathDestination"/> — same fix, same
+    /// mechanism, applied to the handler at 0x00512A60 (dispatch index 7, phase 6) instead of
+    /// <c>PathWaitDest</c> (0x00512B40, phase 7). Discovered live, not planned: this round's own
+    /// A/B repro of fix candidate 1 (<see cref="TryExtendFinalNodeTrail"/>, which targets the
+    /// narrower <c>gap==1</c> terminal shape) found Trask parked PERMANENTLY at
+    /// <c>phase=6, pathNode==destNode==83, writeCursor=85</c> (<c>gap==2</c>) for 3700+ consecutive
+    /// finelog samples, real position frozen — the exact <c>gap&gt;=2</c> shape
+    /// <see cref="TryAdvanceStalledPathDestination"/> already fixes for phase 7, but that function's
+    /// own <c>phase != 7</c> guard refuses to act here.
+    ///
+    /// Fresh disassembly this round (<c>tools/disasm.py 0x512A60 220</c>, cross-checked against
+    /// <c>tools/disasm.py 0x512B40 220</c> instruction-for-instruction) confirms the handler at
+    /// 0x00512A60 is byte-for-byte structurally identical to <c>PathWaitDest</c> in every respect
+    /// this fix depends on: the same forward search from <c>CurrentPathNode</c>, the same
+    /// "<c>DestNode == WriteCursor</c> is structurally unreachable, needs <c>gap&gt;=2</c>" defect
+    /// <see cref="TryAdvanceStalledPathDestination"/>'s own remarks derive for phase 7 (the search's
+    /// "give up" exit at <c>eax==WriteCursor</c> fires one iteration before a re-test against a
+    /// <c>DestNode</c> set to that exact value could happen — identical instruction sequence at
+    /// 0x512A84-0x512A8E vs. phase 7's 0x512B64-0x512B6E) — the only difference anywhere in the
+    /// function is which phase its own unconditional-accept tail commits (1 here, 0x512B2A; 3 for
+    /// PathWaitDest, 0x512C0A).
+    ///
+    /// A deliberately SEPARATE function and kill switch from the already-shipped, phase-7-only
+    /// <see cref="TryAdvanceStalledPathDestination"/> (default ON, live-tested only against phase 7)
+    /// rather than widening that function's own phase check in place — broadening already-shipped,
+    /// already-tested behaviour without its own fresh live A/B would violate this project's own
+    /// "verify a researched offset live before shipping the write" rule just as much as shipping an
+    /// entirely new function untested would.
+    ///
+    /// NOT YET LIVE-TESTED IN ISOLATION as of writing — enabled together with fix candidate 1 in
+    /// the SAME A/B session that found the need for it (this repro could not otherwise reach
+    /// phase 7 at all to test candidate 1 against its own intended shape); see the doc entry this
+    /// round adds for what enabling both together actually produced.
+    ///
+    /// Returns false when the index does not resolve. <paramref name="wrote"/> reports whether the
+    /// stall shape was actually observed and corrected this call. Kill switch (to enable):
+    /// <c>party_follow_advance_destnode_phase6=1</c> (default OFF).
+    ///
+    /// MAIN THREAD ONLY.
+    /// </summary>
+    public static bool TryAdvanceStalledPathDestinationPhase6(uint companionServerObjectId, out bool wrote)
+    {
+        wrote = false;
+
+        nint client = GetClient();
+        if (client == 0)
+        {
+            return false;
+        }
+
+        uint clientObjectId = ServerToClientObjectIdFn(client, companionServerObjectId);
+
+        nint party = GetSWPartyFn(client);
+        if (party == 0)
+        {
+            return false;
+        }
+
+        int index = GetPartyIndexFn(party, clientObjectId);
+        if (index <= 0)
+        {
+            return false;
+        }
+
+        nint record = party + 0x24 + (index * 0x88);
+        int phase = *(int*)(record + 4);
+        if (phase != 6)
+        {
+            return true; // not parked in the stall shape this targets — nothing to do
+        }
+
+        int pathNode = *(int*)(record + 0x24);
+        int destNode = *(int*)(record + 0x34);
+        if (pathNode != destNode)
+        {
+            return true; // DestNode already differs — the phase-6 search can already progress
+        }
+
+        nint followData = party + 0x2DC;
+        if (!NativeMethods.IsReadable(followData + 0xFA4))
+        {
+            return true;
+        }
+
+        int writeCursor = *(int*)(followData + 0xFA4);
+        if (writeCursor == pathNode)
+        {
+            return true; // genuinely nothing new recorded yet — not a stall, just caught up
+        }
+
+        int gap = writeCursor - pathNode;
+        if (gap < 0)
+        {
+            gap += 100;
+        }
+
+        // Same reachability constraint as TryAdvanceStalledPathDestination's own remarks —
+        // DestNode = WriteCursor is unreachable; needs gap >= 2 so DestNode = WriteCursor - 1 is
+        // found by the search before it can give up.
+        if (gap is < 2 or > 90)
+        {
+            return true;
+        }
+
+        int newDest = writeCursor - 1;
+        if (newDest < 0)
+        {
+            newDest += 100;
+        }
+
+        *(int*)(record + 0x34) = newDest;
+        wrote = true;
+        return true;
+    }
+
+    /// <summary>
     /// ROUND 88 (2026-08-24, party-reconciliation.md): a THIRD, independent permanent-stall
     /// shape, found live-reproducing round 84's own "CreMoveState reverts from -1 to 3" recipe
     /// again this round — but the ACTUAL live data showed a DIFFERENT mechanism than round 84
@@ -3040,6 +3157,186 @@ internal static unsafe class Odyssey
         *(Vec3*)(record + 0x28) = leaderPos;
         *(Vec3*)(record + 0x18) = oldTarget;
         *(int*)(record + 0x68) = 1;
+        wrote = true;
+        return true;
+    }
+
+    /// <summary>
+    /// FIX CANDIDATE 1 (2026-08-24 follow-up round, <c>docs/research/party-reconciliation.md</c>'s
+    /// "the <c>fcompp</c> at 0x512BF2, read without a debugger" entry): that round's own
+    /// in-process diagnostic settled — directly observed, not inferred — exactly why
+    /// <c>PathWaitDest</c>'s geometric accept/reject test never resolves at the terminal stall
+    /// shape <see cref="TryAcceptFinalPathNode"/>/<see cref="TryRefreshFinalNodeTarget"/> both
+    /// detect: <c>RecordedDestPoint</c> (the recorded trail node's own FIXED position, looked up at
+    /// <c>CurrentPathNode</c>'s index) has converged onto <c>PriorPoint</c>, while <c>TargetPoint</c>
+    /// tracks the LIVE, continuously-moving leader — the test (strictly <c>|node-Target|² &lt;
+    /// |node-Prior|²</c>) then reduces to requiring the leader to stand almost exactly on that
+    /// fixed node, a race ordinary movement essentially never wins. Both prior fix candidates
+    /// worked around this test's OUTPUT (<see cref="TryAcceptFinalPathNode"/>, forcing phase=3
+    /// directly — live-disproven, round 88) or its INPUTS (<see cref="TryRefreshFinalNodeTarget"/>,
+    /// refreshing Target/Prior — live-measured insufficient, round 90, because Target was already
+    /// bit-identical to the live leader and the test still never passed). This instead gives the
+    /// test a genuinely DIFFERENT node to evaluate, the same shape that already lets every
+    /// INTERMEDIATE trail node pass (round 89's own live data: mid-path samples showed
+    /// <c>pathWaitDestAccept=True</c> because there is a "next" node ahead with its own distinct
+    /// recorded position for the test to discriminate against — see that round's doc entry).
+    ///
+    /// A closer disassembly of the search this round's own PathWaitDest re-read
+    /// (<c>tools/disasm.py 0x00512B40 220</c>, cross-checked instruction-for-instruction against
+    /// round 89's already-verified fcompp derivation) actually finds the fix operates one step
+    /// EARLIER than "let the geometric test pass": the search's very first comparison
+    /// (0x00512B60: <c>cmp eax,ebx</c>, <c>eax</c>=<c>CurrentPathNode</c>, <c>ebx</c>=<c>DestNode</c>)
+    /// is what selects whether the geometric test (0x512B86 onward) runs AT ALL — it only runs when
+    /// <c>DestNode == CurrentPathNode</c> is true on that FIRST comparison, before any increment.
+    /// Once this function makes <c>DestNode</c> genuinely different from <c>CurrentPathNode</c> (by
+    /// appending a new node and pointing <c>DestNode</c> at it), the search instead increments past
+    /// the degenerate first comparison and, on reaching the new <c>DestNode</c>, falls into
+    /// <c>PathWaitDest</c>'s OTHER accept branch (0x512B7E: <c>cmp ebx,edx</c> — the ORIGINAL
+    /// <c>CurrentPathNode</c>, unchanged by the search's own local increment — <c>jne 0x512c09</c>,
+    /// the SAME unconditional <c>phase=3</c> write <see cref="TryAcceptFinalPathNode"/> forces
+    /// directly) WITHOUT the fragile geometric comparison running at all — exactly the mechanism
+    /// round 83's own, already-shipped <see cref="TryAdvanceStalledPathDestination"/> already uses
+    /// for a genuinely different reason (catching a companion up to ALREADY-recorded trail nodes
+    /// the engine's own <c>WaitingForPath</c> handler re-collapsed <c>DestNode</c> away from).
+    /// <see cref="TryAdvanceStalledPathDestination"/> cannot reach the terminal shape itself — its
+    /// own remarks explain <c>DestNode == WriteCursor</c> is structurally UNREACHABLE by the same
+    /// search (the "give up" exit at <c>eax==WriteCursor</c> fires one iteration before a re-test
+    /// against a <c>DestNode</c> set to that exact value ever could), and at the terminal shape
+    /// (<c>gap==1</c>) <c>WriteCursor</c> is the only in-range value <c>DestNode</c> could be set
+    /// to. This function's whole contribution is manufacturing a NEW node so the write cursor
+    /// itself advances past that unreachable value, turning the terminal shape into exactly the
+    /// <c>gap&gt;=2</c>, already-working shape <see cref="TryAdvanceStalledPathDestination"/>
+    /// handles — rather than requiring the geometric test to somehow pass, which is a materially
+    /// different (and, per the above disassembly, unnecessary) mechanism than what candidate 1's
+    /// own name might suggest.
+    ///
+    /// <c>followData</c> (<c>CSWPartyFollowDataArray</c>, embedded at <c>party+0x2DC</c>) is
+    /// PARTY-WIDE, shared across every companion's follow record — not per-member — confirmed by
+    /// <see cref="TryGetFollowDiagnostics"/>'s own round-88 remarks. The new node is written at the
+    /// CURRENT write cursor (the next slot the engine's own recorder — <c>CSWPartyFollowDataArray::
+    /// Reset/SmoothFollowPath/ProcessPoint</c> — has not yet filled), so this never overwrites an
+    /// already-recorded node any OTHER party member's own gap/search might still depend on; bumping
+    /// the cursor only ever grows the amount of available trail, which is harmless for a companion
+    /// further behind (a larger <c>gap</c> for them is the same "more has been recorded" state the
+    /// engine's own recorder already produces during ordinary play). <c>CSWPartyFollowDataArray::
+    /// GetPoint</c>'s own disassembled addressing (<c>followData + index*40</c>, round 89's own
+    /// finding, reconfirmed this round) is the only documented field of a 40-byte node record — the
+    /// 12-byte float3 position at offset 0. Only that Vec3 is written; the remaining 28 bytes of the
+    /// slot are left exactly as the ring buffer's own prior contents leave them (undocumented, and —
+    /// per the disassembly above — never read by the specific accept path this fix exercises, since
+    /// <c>DestNode != CurrentPathNode</c> after this write takes the UNCONDITIONAL accept branch,
+    /// which never calls <c>GetPoint</c> at all for the new node in the same pass; a LATER pass
+    /// reaching the new node via the trivial-match geometric-test path would read only that same
+    /// 12-byte position back, exactly as written here).
+    ///
+    /// Order matters: the array's write cursor (<c>followData+0xFA4</c>) must be advanced BEFORE
+    /// (or atomically alongside, as this function does — both within a single call, well before the
+    /// engine's own next per-frame dispatch) <c>DestNode</c> is set to the new node's index. Setting
+    /// <c>DestNode</c> to a value equal to a STALE (not-yet-advanced) write cursor reproduces round
+    /// 83's own live-disproven first attempt exactly (see <see cref="TryAdvanceStalledPathDestination"/>'s
+    /// own remarks) — this function writes the node, advances the cursor, and only then writes
+    /// <c>DestNode</c>, in that order, so no intermediate state the caller could observe ever has
+    /// <c>DestNode</c> pointing at a not-yet-reachable slot.
+    ///
+    /// Gating: uses <see cref="FinalNodeGeometryRule.IsExtendableTerminalStallShape"/> — phase 6 OR
+    /// phase 7, NOT the narrower phase-7-only <see cref="FinalNodeGeometryRule.IsTerminalStallShape"/>
+    /// <see cref="TryAcceptFinalPathNode"/>/<see cref="TryRefreshFinalNodeTarget"/> both use. See
+    /// that rule's own remarks — a live A/B attempt this round found the planned phase-7 repro
+    /// stalling one phase EARLIER instead, at phase 6, in a handler (0x00512A60) fresh disassembly
+    /// this round found is byte-for-byte structurally identical to <c>PathWaitDest</c> (same search,
+    /// same <c>fcompp</c> test, same <c>gap==1</c> trigger — differing only in which phase its own
+    /// unconditional-accept branch commits). Since this function never writes the phase field
+    /// itself, the identical mechanism applies to both without any extra branching here — only the
+    /// shape gate differs. No consecutive-frame gate (unlike
+    /// <see cref="TryAcceptFinalPathNode"/>'s own <c>FinalNodeStallFrameThreshold</c>): this
+    /// function is naturally self-limiting the same way <see cref="TryRefreshFinalNodeTarget"/> is,
+    /// but through shape rather than epsilon — the moment it writes, <c>DestNode</c> no longer
+    /// equals <c>CurrentPathNode</c>, so <see cref="FinalNodeGeometryRule.IsExtendableTerminalStallShape"/>
+    /// stops matching on every subsequent frame until the engine's own <c>WaitingForPath</c>
+    /// handler re-collapses <c>DestNode</c> back to <c>CurrentPathNode</c> — which only happens on
+    /// a genuine new re-arm of this exact shape, not a runaway repeat write of the same slot.
+    ///
+    /// NOT YET LIVE-TESTED — this round builds and ships the function with its own kill switch
+    /// defaulting OFF pending a live A/B; see the doc entry this round adds for the actual result.
+    ///
+    /// Returns false when the index does not resolve. <paramref name="wrote"/> reports whether the
+    /// synthetic node was actually written this call (false when not in the terminal shape, or when
+    /// the write-cursor field is not currently readable). Kill switch (to enable):
+    /// <c>party_follow_extend_final_node=1</c> (default OFF pending live A/B).
+    ///
+    /// MAIN THREAD ONLY.
+    /// </summary>
+    public static bool TryExtendFinalNodeTrail(uint companionServerObjectId, Vec3 leaderPos, out bool wrote)
+    {
+        wrote = false;
+
+        nint client = GetClient();
+        if (client == 0)
+        {
+            return false;
+        }
+
+        uint clientObjectId = ServerToClientObjectIdFn(client, companionServerObjectId);
+
+        nint party = GetSWPartyFn(client);
+        if (party == 0)
+        {
+            return false;
+        }
+
+        int index = GetPartyIndexFn(party, clientObjectId);
+        if (index <= 0)
+        {
+            return false;
+        }
+
+        nint record = party + 0x24 + (index * 0x88);
+        int phase = *(int*)(record + 4);
+        int pathNode = *(int*)(record + 0x24);
+        int destNode = *(int*)(record + 0x34);
+
+        nint followData = party + 0x2DC;
+        if (!NativeMethods.IsReadable(followData + 0xFA4))
+        {
+            return true;
+        }
+
+        int writeCursor = *(int*)(followData + 0xFA4);
+        int gap = writeCursor - pathNode;
+        if (gap < 0)
+        {
+            gap += 100;
+        }
+
+        // See FinalNodeGeometryRule.IsExtendableTerminalStallShape's own remarks — deliberately
+        // NOT the narrower phase-7-only IsTerminalStallShape the two sibling fix candidates share:
+        // this function's live A/B found the identical structural bug one phase earlier (phase 6,
+        // handler 0x00512A60), and this fix's own mechanism (never writes the phase field) applies
+        // to both unmodified.
+        if (!FinalNodeGeometryRule.IsExtendableTerminalStallShape(phase, pathNode, destNode, gap))
+        {
+            return true;
+        }
+
+        // The new node's own index: the current write cursor is, by definition, the next slot the
+        // engine's own recorder has not yet filled.
+        int newNodeIndex = writeCursor;
+        nint newNodeAddress = followData + (newNodeIndex * 40);
+        if (!NativeMethods.IsReadable(newNodeAddress + 8))
+        {
+            return true; // out-of-range/unmapped slot — should not happen for a valid 0..99
+                          // index into a live followData array, but never write blind.
+        }
+
+        *(Vec3*)newNodeAddress = leaderPos;
+
+        // Advance the shared write cursor BEFORE writing DestNode — see this function's own
+        // remarks for why the order matters (round 83's own live-disproven "DestNode ==
+        // stale-writeCursor" pitfall).
+        int newWriteCursor = FinalNodeGeometryRule.WrapTrailIndex(writeCursor + 1);
+        *(int*)(followData + 0xFA4) = newWriteCursor;
+        *(int*)(record + 0x34) = newNodeIndex;
+
         wrote = true;
         return true;
     }

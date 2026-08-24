@@ -129,6 +129,16 @@ internal sealed unsafe class PartyFollowController(SharedBlockView block)
     /// <c>party_follow_advance_destnode=0</c>.</summary>
     private readonly bool _advanceStalledDestNode = PluginConfig.ReadBool("party_follow_advance_destnode", true);
 
+    /// <summary>LIVE FINDING (2026-08-24, fix-candidate-1 A/B round): see
+    /// Odyssey.TryAdvanceStalledPathDestinationPhase6's own remarks — the phase-6 analog of
+    /// TryAdvanceStalledPathDestination, discovered live when this round's own candidate-1 repro
+    /// found Trask permanently parked at phase 6 (not 7) with gap==2, a shape neither candidate 1
+    /// (gap==1 only) nor the phase-7-only TryAdvanceStalledPathDestination reaches. NOT YET
+    /// LIVE-TESTED IN ISOLATION. Kill switch (to enable): <c>party_follow_advance_destnode_phase6=1</c>
+    /// (default OFF).</summary>
+    private readonly bool _advanceStalledDestNodePhase6 =
+        PluginConfig.ReadBool("party_follow_advance_destnode_phase6", false);
+
     /// <summary>ROUND 88 (party-reconciliation.md): see
     /// Odyssey.TryAdvanceStalledMovingToPath's own remarks — phase 2's own handler
     /// (0x00511860) never commits its "close enough" acceptance (phase -> 3) unless
@@ -177,6 +187,17 @@ internal sealed unsafe class PartyFollowController(SharedBlockView block)
     /// switch (to enable): <c>party_follow_refresh_final_node=1</c> (default off).</summary>
     private readonly bool _refreshFinalNodeTarget =
         PluginConfig.ReadBool("party_follow_refresh_final_node", false);
+
+    /// <summary>FIX CANDIDATE 1 (2026-08-24 follow-up round, party-reconciliation.md): see
+    /// Odyssey.TryExtendFinalNodeTrail's own remarks — appends one synthetic trail node past the
+    /// recorded end once the terminal stall shape is observed, turning it into the same
+    /// already-working <c>gap&gt;=2</c> shape Odyssey.TryAdvanceStalledPathDestination already
+    /// handles, rather than forcing the accept test's output or merely refreshing its inputs.
+    /// NOT YET LIVE-TESTED as of shipping this switch — see the doc entry this round adds for the
+    /// actual A/B result. Kill switch (to enable): <c>party_follow_extend_final_node=1</c> (default
+    /// OFF pending live A/B).</summary>
+    private readonly bool _extendFinalNodeTrail =
+        PluginConfig.ReadBool("party_follow_extend_final_node", false);
 
     /// <summary>How many consecutive frames the exact terminal shape must persist before
     /// Odyssey.TryAcceptFinalPathNode is allowed to fire — enough to rule out a single,
@@ -380,6 +401,14 @@ internal sealed unsafe class PartyFollowController(SharedBlockView block)
                     Odyssey.TryAdvanceStalledPathDestination(objectId, out _);
                 }
 
+                // LIVE FINDING (2026-08-24, fix-candidate-1 A/B round): the phase-6 analog of the
+                // call directly above — see Odyssey.TryAdvanceStalledPathDestinationPhase6's own
+                // remarks.
+                if (_advanceStalledDestNodePhase6)
+                {
+                    Odyssey.TryAdvanceStalledPathDestinationPhase6(objectId, out _);
+                }
+
                 // ROUND 88: a third, independent permanent-stall shape — see Odyssey.
                 // TryAdvanceStalledMovingToPath's own remarks. Called last, after both of the
                 // above, so it only ever acts on whatever phase this frame's earlier calls
@@ -413,6 +442,18 @@ internal sealed unsafe class PartyFollowController(SharedBlockView block)
                 if (_refreshFinalNodeTarget)
                 {
                     Odyssey.TryRefreshFinalNodeTarget(objectId, playerPos, out _);
+                }
+
+                // FIX CANDIDATE 1 (2026-08-24 follow-up round): see
+                // Odyssey.TryExtendFinalNodeTrail's own remarks — appends a synthetic trail node
+                // past the recorded end once the terminal shape is observed, letting
+                // PathWaitDest's own forward search reach the SAME unconditional accept branch
+                // Odyssey.TryAdvanceStalledPathDestination already uses for gap>=2, rather than
+                // requiring its fragile geometric test to pass. Self-limiting via shape (see that
+                // function's own remarks) — no consecutive-frame gate needed here either.
+                if (_extendFinalNodeTrail)
+                {
+                    Odyssey.TryExtendFinalNodeTrail(objectId, playerPos, out _);
                 }
 
                 // ROUND 88: see Odyssey.TryAcceptFinalPathNode's own remarks — track how many
