@@ -5094,6 +5094,17 @@ public sealed class KotorGameBridge : IGameBridge
 
     private bool _partyFrozen;
 
+    // ---- party-presence dirty check (docs/research/lag-audit.md, party_fast_pump entry) ----
+    //
+    // TryWritePartyMembers's own shared-block writes, per slot: what was actually written the
+    // last time a write reached the block (null = nothing yet, or a module change reset it), and
+    // the module name that write happened under. See PartyPresenceDirtyCheck's own doc comment
+    // for why a module change is an unconditional override rather than folded into the content
+    // comparison.
+    private readonly PartyMemberState?[] _lastWrittenPartyPresence = new PartyMemberState?[BlockPartyPresenceCapacity];
+    private uint? _lastWrittenPartyPresenceCount;
+    private string _partyPresenceModule = string.Empty;
+
     public bool SupportsPartySync => _player is not null;
 
     private bool TryGetPartyTable(out nint partyTable)
@@ -5412,14 +5423,40 @@ public sealed class KotorGameBridge : IGameBridge
 
         if (_pluginBlock != 0)
         {
+            // A module change forces every slot below to write unconditionally, even if a
+            // companion's reported state looks byte-identical to what this agent last sent —
+            // PluginHost's own Invalidate() clears the block's party-presence slots in-process on
+            // a load, independent of this agent's own cache. See PartyPresenceDirtyCheck's doc
+            // comment.
+            bool moduleChanged = !TryReadCurrentModule(out string module)
+                || !string.Equals(module, _partyPresenceModule, StringComparison.OrdinalIgnoreCase);
+            if (moduleChanged)
+            {
+                _partyPresenceModule = module;
+                Array.Clear(_lastWrittenPartyPresence);
+                _lastWrittenPartyPresenceCount = null;
+            }
+
             int written = 0;
             for (int i = 0; i < BlockPartyPresenceCapacity; i++)
             {
-                nint slot = _pluginBlock + BlockPartyPresenceSlots + (i * BlockPartyPresenceStride);
+                PartyMemberState? candidate = i < members.Count && members[i].SlotIndex < PartyNpcSlots
+                    ? members[i]
+                    : null;
 
-                if (i < members.Count && members[i].SlotIndex < PartyNpcSlots)
+                if (candidate.HasValue)
                 {
-                    PartyMemberState m = members[i];
+                    written++;
+                }
+
+                if (PartyPresenceDirtyCheck.CanSkipWrite(candidate, _lastWrittenPartyPresence[i], moduleChanged))
+                {
+                    continue;
+                }
+
+                nint slot = _pluginBlock + BlockPartyPresenceSlots + (i * BlockPartyPresenceStride);
+                if (candidate is { } m)
+                {
                     _memory.TryWrite(slot + 0x04, m.Position.X);
                     _memory.TryWrite(slot + 0x08, m.Position.Y);
                     _memory.TryWrite(slot + 0x0C, m.Position.Z);
@@ -5429,15 +5466,21 @@ public sealed class KotorGameBridge : IGameBridge
                     _memory.TryWrite(slot + 0x1C, m.OneShotSerial);
                     _memory.TryWrite(slot + 0x20, (uint)m.OneShotAnimation);
                     _memory.TryWrite(slot + 0x00, (uint)m.SlotIndex + 1);
-                    written++;
                 }
                 else
                 {
                     _memory.TryWrite(slot + 0x00, 0u);
                 }
+
+                _lastWrittenPartyPresence[i] = candidate;
             }
 
-            _memory.TryWrite(_pluginBlock + BlockPartyPresenceCount, (uint)written);
+            if (moduleChanged || _lastWrittenPartyPresenceCount != (uint)written)
+            {
+                _memory.TryWrite(_pluginBlock + BlockPartyPresenceCount, (uint)written);
+                _lastWrittenPartyPresenceCount = (uint)written;
+            }
+
             return written;
         }
 
