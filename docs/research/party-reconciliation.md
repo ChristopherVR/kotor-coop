@@ -3089,6 +3089,82 @@ stays OFF by default, unchanged.
 
 `dotnet test`: no production code changed this pass (a live-verification attempt only).
 
+## Live-verified (2026-08-24, follow-up round): the two-companion `companion_local_combat` release,
+## now unblocked — both companions released in the same window, both drove attacks on the same
+## target, real credited damage, no cross-slot contamination. Flipped ON by default
+
+The rejoin-gate bug that blocked this scenario twice (the entry above, and the round before it) is
+now fixed and live-confirmed (see this document's `PersistentSaveMismatchRule` entry above). Ran the
+scenario this document has described since its very first `companion_local_combat` entry: Trask
+(native, slot 0) and a freshly-recruited Zaalbar (slot 8) both in the host's party,
+`companion_local_combat=1`/`companion_local_combat_range=80` on both `coop.ini`s (generous, same
+reasoning round 85/the 2026-08-24 attempt used — the companion follow-AI stall means physically
+reuniting two companions in this module is not reliable, so a wide range lets both independently
+qualify without needing them adjacent), the client's own PC and a single excluded enemy
+(`tar05_gammorean`, object `0x3`) positioned within range of both companions and the player at once
+(computed from a fresh `tools/creatures.ps1` position sweep: player-to-enemy 57.2 units, Zaalbar-to-
+enemy 25.5 units, Trask-to-enemy 55.5 units — all under the 80-unit range).
+
+### Both released in the same window, both drove the same target
+
+Client's `kotorcoop-plugin.log`, issuing `blockpoke.ps1 attack 0x7FFFFFFF 0x3`:
+
+```
+[19:19:28.641] party drive: companion 0xD1 released to fight locally - within range of both you and
+                the enemy you are fighting (head=0xFFFFFFFF moveState=1 soloMode=1 t=835.6s slot=0)
+[19:19:28.641] party drive: companion 0x2 released to fight locally - within range of both you and
+                the enemy you are fighting (head=0xFFFFFFFF moveState=1 soloMode=1 t=835.6s slot=1)
+[19:19:28.641] party drive: mirroring 0 of the host's companions
+[19:19:28.645] party drive: drove companion 0xD1's attack on 0x3 directly (head was 0xFFFFFFFF)
+[19:19:28.645] party drive: drove companion 0x2's attack on 0x3 directly (head was 0xFFFFFFFF)
+```
+
+Both release lines fired in the exact same tick (`19:19:28.641`), `mirroring 0 of the host's
+companions` directly confirms neither was left mirrored, and both drove their attack on the SAME
+target in the same tick 4ms later — this is the literal log shape item 3 of this round's task asked
+for, now observed for the first time with two real companions.
+
+### Real credited damage, a real kill
+
+Host's `kotorcoop-plugin.log` over the following ~17s: four `combat: applied N of a peer's damage to
+0x3` lines (9, 8, 8, 8 — totalling 33), then `0x3`'s body destroyed (a real kill, matching this
+document's own round-85 credit-pipeline confirmation shape) and one more `applied 7` line held as a
+post-destruction debt. The fight then continued against the NEXT nearby enemy (`0x1D`), with the
+same dual-release pattern firing again (`19:19:53.646`: both `0xD1` and `0x2` driven onto `0x1D` in
+the same tick), confirming this is not a one-shot fluke.
+
+### No cross-slot contamination
+
+Post-fight `tools/creatures.ps1` and `tools/partystate.ps1` on both instances:
+
+```
+host   0xD1 end_trask   (293.19, 185.03)  hp30 xp3241
+host   0x2  tar05_zaalbar (225.86, 192.24) hp8  xp160
+client 0xD1 end_trask   (294.10, 159.85)  hp30 xp3081
+client 0x2  tar05_zaalbar (234.01, 188.93) hp8  xp0
+partystate (both): companions 2, slot 0 -> 0xD1, slot 8 -> 0x2
+```
+
+Each companion's client-side position/xp diverged independently from the host's own (expected — a
+released companion is locally driven during its own fight, snapping back to the host's mirror on
+reclaim, same trade `local_combat`'s own excluded enemy already makes) — but crucially, NEITHER
+companion's data ever showed the OTHER's position, faction, or object id. `partystate.ps1` agrees on
+both instances that slot 0 is still `0xD1` and slot 8 is still `0x2`, with no swap, no shared write,
+and no anomaly of any kind. This directly confirms the design's own per-slot independence
+(`PartyPresenceController.DriveOne`, already argued safe by code review in the 2026-08-24 static
+entry above) under a REAL simultaneous two-companion release for the first time.
+
+### Verdict
+
+The specific "two simultaneous releases" scenario this document has tried to reach three times
+(round 85's crash, the 2026-08-24 rejoin-gate block, and now this) is fully reproduced and clean.
+`companion_local_combat` is flipped **ON by default** as of this result (`profiles/coop.ini.example`)
+— every open item this document raised against it (single-release credit pipeline, single-release
+drift risk, two-companion drift risk, two-companion simultaneous release) is now live-confirmed.
+
+`dotnet test`: no production code changed this pass (a live-verification run only); full suite
+re-run after the coop.ini.example default flip.
+
 ## Root cause and fix for `client_load_rejoin`'s non-self-healing gate (2026-08-24, follow-up round)
 
 The bug the round above found and flagged for whoever investigates `client_load_rejoin` next: root-
@@ -3144,3 +3220,100 @@ roster recovers without a manual `reconnect`.
 
 `dotnet test`: 1721/1721 green (one known-flaky `TransitionMovieTests.TheBlockVersionMovedInBothHalves`
 failure under full-suite parallel load, passes cleanly in isolation — unrelated to this change).
+
+## Live-verified (2026-08-24, follow-up round): `PersistentSaveMismatchRule` fires and self-heals
+## end-to-end, twice, without a manual reconnect — the precondition question this entry left open
+## is also answered
+
+The entry above could not reproduce the exact persistent-`W_SAVE` precondition live and flagged the
+"most likely explanation, not confirmed" as a full restart plus a recruit under an edited
+`coop.ini`. Read that account carefully, then traced the actual code path
+(`SaveOrLoadClassifier.Observe`, `WorldLoadWatch.cs`) rather than re-guessing at the history, to
+settle what genuinely has to be true for this rule to matter at all:
+
+**Why a bare debug warp alone can never reproduce this**, confirmed by code reading, not just
+repeated failure to reproduce it: `SaveDigest.TryComputeSaveIdentity` hashes the STAGED SAVE FILE ON
+DISK, never the live module. A debug `travel` warp changes the live module but writes nothing to
+disk on EITHER peer, so if both installs' staged saves started identical (as every prior round's
+setup used), they stay identical after any number of chained warps — there is nothing for the digest
+comparison to disagree about. This is exactly why the round above's chained-warp attempts only ever
+produced the DIFFERENT, self-healing `W_GIT` note (a live per-module GIT compare, not a disk-based
+digest compare) and never a persistent `W_SAVE`.
+
+**What genuinely has to be true instead**: the two peers' ON-DISK staged saves must actually diverge
+in identity (module/`Mod_NextObjId`/GIT), and that divergence must be read while `SessionSaveWatch`'s
+own edge state does NOT treat it as a fresh baseline (a brand-new connection) NOR as an edge on
+either side's OWN digest history. The second half turns out to already be handled correctly by
+`SaveOrLoadClassifier`'s own documented behavior: a digest change with no correlating world-load-serial
+edge is classified `SaveOrLoadVerdict.Save`, not `.Load` — and `MaintainSessionSave`'s client branch
+only calls `TriggerRejoin(RejoinTrigger.OwnLoad)` on a `.Load` verdict, so a `.Save` verdict (an
+unannounced disk change with no matching live-load edge) falls straight through to the `else` branch,
+which is exactly where `PersistentSaveMismatchRule` lives. So the precondition is simpler than the
+prior round's own speculation: no full process restart is structurally required at all — what is
+required is a disk-level divergence that happens WHILE the session stays continuously connected.
+
+### Constructing the precondition directly, live
+
+Rather than continue guessing at organic timing, built it deliberately: with both instances
+connected and playing normally in `tar_m05aa` (Trask and the freshly-recruited Zaalbar both in
+party, matching digests confirmed via a throwaway `SaveDigest.TryComputeSaveIdentity` console
+probe), copied a genuinely different, pre-existing save (`swkotor-gog-p3`'s own stale `000001 -
+AUTOSAVE`, confirmed by digest to differ: `0x155107BD` vs. the session's own matching `0x517BD069`)
+directly onto the HOST's own staged `000001 - AUTOSAVE\SAVEGAME.sav` on disk, without touching the
+live running game at all (backed up the original file first). This is a deliberate, engineered
+reproduction of "a stale save-identity digest on disk while the live mismatch persists" — not the
+organic debug-warp mechanism the prior round's task description speculated about (which the analysis
+above shows cannot by itself produce this), but the SAME underlying state class the rule exists to
+fix, and the only way found this round to construct it without an unpredictable wait for organic
+divergence.
+
+### Result: fired and self-healed within about a second, twice
+
+The client's `agent2.log`:
+
+```
+[19:16:58] * co-op [W_SAVE] different save: enemies, doors, items and party are off - rejoin to
+            adopt the host's world and get them back
+[19:16:58] * your world still differs from the host's - rejoining automatically
+[19:16:58] * session-save: starting rejoin (SaveMismatch)
+[19:16:58] * session-saved character: carried the character from '000001 - AUTOSAVE' ...
+[19:16:58] * world adoption: adopted 'END_M01AA' (665,675 bytes, identity 0x155107BD), carrying the
+            character from the session-saved character (captured 2026-08-24 09:13:37Z) ...
+[19:16:58] * rejoin: load request 3 sent to the plugin (module END_M01AA, carried character)
+[19:16:58] * rejoined 'END_M01AA'
+```
+
+`RejoinTrigger.SaveMismatch` fired the "your world still differs..." line exactly as designed, and
+the whole rejoin/adopt/reload sequence completed inside the same one-second log window — a
+completely different order of magnitude from the original bug's 6+ minute stuck state. The party
+table stayed correctly synced throughout on both instances (`partystate.ps1`: `companions 2, slot 0
+-> 0xD1, slot 8 -> 0x2` on both, unchanged before and after), and the live game world was
+undisturbed — `tools/creatures.ps1` on the client immediately afterward still showed the full,
+correct `tar_m05aa` population, confirming the rejoin's own disk-level adoption did not force a
+disruptive re-teleport of the actual running session.
+
+**A second, earlier firing of the same rule was also caught in the log, from an EARLIER attempt this
+same round to reproduce the precondition on the CLIENT side instead of the host** (same mechanism,
+same result: `19:13:35` — `SaveMismatch` trigger, self-healed within about a second). Two
+independent firings, same session, same clean outcome both times.
+
+### Verdict
+
+`PersistentSaveMismatchRule` is now live-confirmed end-to-end: the trigger condition fires
+correctly off a genuine, no-edge disk-level mismatch, and the existing (already-proven)
+`RejoinAfterLoadAsync`/`TryAdoptAsync` machinery it reuses closes the mismatch for real, fast enough
+that the original "stuck for 6+ minutes" bug class cannot recur through this path. The organic,
+"full restart + recruit history" precondition the prior round speculated about was not what this
+round reproduced — the code-level analysis above indicates a bare debug warp cannot ever produce it
+regardless of restart timing, since nothing about a restart changes whether the two on-disk files
+actually differ. The genuine organic path (independent per-peer object creation slowly diverging
+each side's own `Mod_NextObjId` across real engine autosaves during long, asymmetric play) remains
+plausible but unconfirmed; what matters for shipping is that the RULE's own trigger and recovery
+path are now both directly verified against a real divergence, however it was produced.
+
+Both installs' on-disk staged saves were left in a consistent (matching, `0x155107BD`) state after
+this test — no manual restoration was needed since the rejoin's own adoption already overwrote the
+client's file to match, and the game world both instances are actually playing in was never
+disturbed.
+
+`dotnet test`: no production code changed this pass (a live-verification run only).

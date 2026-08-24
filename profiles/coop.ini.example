@@ -288,11 +288,17 @@ dialogue_join_teleport=1
 # (Odyssey.AddAvailableNpcByTemplate) instead of only logging "recruitment does not replicate".
 # An earlier build here poked the availability flag directly instead of calling the engine -
 # docs/research/party-reconciliation.md Round 75 live-confirmed that alone is NOT enough (the
-# subsequent spawn has nothing to build from). OFF by default - NEEDS-LIVE:
-# docs/research/dialogue-consequences.md SS4.2's remaining open risk is the per-slot NPC ->
-# template mapping this now calls through, live-confirmed for only one of nine slots so far
-# (slot 2 = Carth).
-dialogue_recruit_sync=0
+# subsequent spawn has nothing to build from). Per-slot template mapping is now live-confirmed
+# for two independent slots (Carth, Zaalbar - docs/research/dialogue-consequences.md). The last
+# open risk - a companion who was ALSO a placed NPC leaving a stale mirrored body on a peer's
+# screen - was root-caused (GIT-placed NPCs are never mirrored between instances; each engine
+# independently spawns the same object id from the same module data) and fixed
+# (PartyRosterBodyReuseRule: reuse the peer's own GIT-identical body instead of spawning a
+# fresh one). Live-verified 2026-08-24: recruiting Zaalbar (also a placed NPC) through the real
+# network path now reuses object id 0x2 directly on the peer - confirmed via partystate.ps1
+# agreeing on both instances (slot 8 -> 0x2) and no second/duplicate object id anywhere in a
+# full creature scan. ON by default as of that result.
+dialogue_recruit_sync=1
 
 # Whether a host's own SessionSaveWatch edge (roadmap item 14 phase 1) actually disconnects
 # the session when it fires. OFF by default - live-verified 2026-08-21 (shared-state-audit.md
@@ -324,6 +330,21 @@ client_load_rejoin=1
 # fetch succeeds cleanly (the round-86 "actively refused it" failure is gone - it turned out to
 # be a missing world-serving listener, not a timing race, now fixed). ON by default as of that
 # result. host_load_readopt=0 turns it back off.
+#
+# client_load_rejoin's own gate also covers a THIRD trigger now: PersistentSaveMismatchRule
+# (2026-08-24) closes a real non-self-healing bug found live - a debug-cheat cross-module warp
+# bumps the live world-load serial but never touches the staged save file on disk, so the two
+# peers' save-identity digests could disagree indefinitely while NEITHER edge-based trigger
+# above (client_load_rejoin's own OwnLoad, host_load_readopt's own HostReload) ever fired,
+# because the disk digest genuinely never changed on either side. The client sat in a
+# "different save, party sync off" state for over six minutes until a manual reconnect, in the
+# session that first found it. The fix watches the compared verdict itself as a LEVEL instead of
+# requiring an edge, retried on a 20 s cooldown while the mismatch persists. Live-verified
+# 2026-08-24 by making the two installs' staged saves genuinely diverge on disk while the live
+# session stayed continuously connected (no reconnect): "your world still differs from the
+# host's - rejoining automatically" fired and the rejoin/adopt/reload sequence completed within
+# about a second, twice, with the party roster fully synced again immediately after - a
+# different order of magnitude from the six-minute stuck bug this closes.
 host_load_readopt=1
 
 # Let the mod own the HUD pause button. The engine's own toggle reads server mask bit 0x02,
@@ -371,12 +392,21 @@ local_combat_range=20
 # engine gate a directly-queued action has to fight. This flag now drives a released companion's
 # attack directly through that same call (PartyPresenceController.DriveAttackIfDue), making no
 # write to solo mode at all - zero risk to a second, still-mirrored companion's own suppressed
-# AI, since nothing about the party-wide flag changes. NEEDS-LIVE: this mechanism has never fired
-# against a real fight. See docs/research/party-reconciliation.md's dated 2026-08-21/22/23
-# entries and docs/research/companion-combat-credit-plan.md's round 82/83 entries for the full
-# evidence trail and the exact live-test steps (including the two-companion drift-risk check)
-# before flipping this on.
-companion_local_combat=0
+# AI, since nothing about the party-wide flag changes. Live-verified single-release with a real
+# credited kill (round 85), then the two-companion drift-risk check (round 85: a released
+# companion fought and landed real credited damage while the OTHER, still-mirrored companion
+# stayed within 0.05 units of the host's position throughout - no drift). The last open item -
+# TWO companions released simultaneously in the same fight - was blocked twice by unrelated bugs
+# (a party-follow warp crash, then client_load_rejoin's non-self-healing gate under a debug
+# warp), both now root-caused and fixed. Live-verified 2026-08-24 with Trask and Zaalbar released
+# together against the same enemy: both "released to fight locally" lines fired in the same
+# tick, both drove their attack on the same target in the same tick, real credited damage killed
+# it, and a full post-fight scan found no cross-slot position/faction contamination (each
+# companion's own position/xp diverged independently, exactly as expected for two separately
+# locally-driven fights - nothing was shared or overwritten between slots). ON by default as of
+# that result. See docs/research/party-reconciliation.md's dated 2026-08-21/22/23/24 entries and
+# docs/research/companion-combat-credit-plan.md's round 82/83 entries for the full evidence trail.
+companion_local_combat=1
 
 # How close a companion's host-driven position must be to BOTH the locally-fighting enemy
 # and this instance's own player (world units) before it may be released. Only read when

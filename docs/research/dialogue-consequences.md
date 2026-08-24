@@ -1404,3 +1404,69 @@ happens on the path that flag already gates, so there is no live behavioural cha
 future live pass both confirms this fix and makes its own call on flipping the flag.
 
 `dotnet test`: no production code changed this pass (a live-verification run only).
+
+## Live pass (2026-08-24, follow-up round): the stale-mirrored-body fix CONFIRMED live —
+## `PartyRosterBodyReuseRule` reuses the GIT-identical body exactly as designed, `dialogue_recruit_sync`
+## flipped ON by default
+
+Rig access this round (plugin/agent rebuilt and reinstalled on both GOG installs first, block
+version 53 confirmed on both). Ran the exact recipe the entry above asked for: both instances
+warped (`tools\blockpoke.ps1 travel tar_m05aa`, `cheat god 1` armed on both first, single warp
+each, no chaining — same discipline dialogue-consequences.md's own prior round found necessary),
+then `console 'recruit 8 tar05_zaalbar'` on the HOST (the same dev-only test primitive every prior
+round in this thread has used in place of real dialogue input, for the same documented reason —
+no working keyboard/mouse injection on this rig).
+
+### The fix fired exactly as designed, both directions
+
+Host `kotorcoop-plugin.log`: `recruit: NPC slot 8 has no blueprint to spawn from (failure 0); using
+already-placed 'tar05_zaalbar' (0x2) instead` → `recruit: added NPC slot 8 (object 0x2) to the
+party`. Client `kotorcoop-plugin.log`, 300ms later:
+
+```
+[19:07:56.266] party roster: NPC slot 8 recruited - reusing its own already-placed body 0x2 here
+                (GIT-identical to the peer's pre-recruit body) instead of spawning a duplicate -
+                dialogue_recruit_sync
+[19:07:56.266] party roster: added NPC slot 8 (object 0x2) to the party
+[19:07:56.271] party roster: local party is now 0x101 (recruited 0x101)
+```
+
+This is the exact new log line `PartyRosterBodyReuseRule` was written to produce, firing for real
+against a live peer for the first time. `tools/partystate.ps1` on both instances agrees exactly:
+`companions 2, member 0: slot 0 objectId 0xD1 (Trask), member 1: slot 8 objectId 0x2 (Zaalbar)` —
+identical object ids on both sides, no manual reconciliation needed.
+
+### No duplicate body anywhere — the specific defect this fix targets is gone
+
+A full `tools/creatures.ps1` sweep of the client (43 creature objects found) turned up exactly ONE
+object tagged `tar05_zaalbar`: `id 0x2`, `hp 8`, `str 13`, `xp 0` — the pre-recruit captive's own
+stats, since the console recruit primitive (like the host's own conversion) adds the existing body
+directly rather than running the recruit dialogue's own stat-boost script effects; this is expected
+and matches the HOST's own object, which shows the identical hp/str/xp. No second Zaalbar body
+exists anywhere in the scan — no `0xF4`-style fresh spawn, no duplicate object id, at any hp/xp
+combination. (The scan tool itself reports every live creature TWICE, at two different memory
+addresses with identical id/tag/position/stats each time — confirmed as a scan-tool artifact, not a
+duplicate-body bug, since it does this uniformly for every creature in the module, Trask and every
+hostile included, not just Zaalbar.)
+
+### Verdict: all four NEEDS-LIVE items from the round above are now answered
+
+1. `CreatureFinder.FindByObjectId` does resolve the peer's pre-recruit placed body under the same
+   id — confirmed directly by the fix's own log line naming it.
+2. `Odyssey.TrySetSlotAvailable` + `Odyssey.AddPartyMemberBySlot` on the REUSED object succeeded
+   end to end with no refusal — `partystate.ps1` shows the reused body correctly seated in slot 8
+   with the party-table's own commandable/in-party bookkeeping intact.
+3. The duplicate is eliminated live — the "one Zaalbar or two" question the previous round could
+   not settle without screenshots is now settled by direct memory scan: one.
+4. No version-guard/desync issue surfaced — both installs ran the same freshly-built plugin/agent
+   (block version 53) this round, so a cross-version pairing was not exercised, but the normal
+   version-mismatch refusal path is unchanged by this fix and was not expected to be at risk.
+
+`dialogue_recruit_sync` is flipped **ON by default** as of this result (`profiles/coop.ini.example`)
+— the core recruit mechanism (two independently-confirmed slots: Carth, Zaalbar) and the
+stale-mirrored-body fix (this round) are both now live-confirmed, closing the one specific,
+named reason the flag was held back.
+
+`dotnet test`: no production code changed this pass (a live-verification run only); full suite
+re-run after the coop.ini.example default flip (no production code touched) — see this round's
+own commit for the count.
