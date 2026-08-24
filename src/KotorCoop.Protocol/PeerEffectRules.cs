@@ -13,16 +13,13 @@ namespace KotorCoop.Protocol;
 /// name, which the receiving side simply never applies (an unmapped kind is a no-op, not a
 /// crash) — annoying, not dangerous.
 ///
-/// ⚠ KNOWN DESYNC (2026-08-22): this copy now maps sub-codes 5/6 (Paralyze/Sleep,
-/// effect-sync.md §7) but <c>PhantomEffectHook.cs</c>'s copy does not yet — that file was out
-/// of scope for the pass that added them (a rig agent owns its detour). Knockdown's CAPTURE
-/// path already worked before this pass (type 20 has no sub-code gate), so it needs no
-/// PhantomEffectHook.cs change and is fully live-testable end to end today. Paralyze/Sleep's
-/// APPLY side (<c>OdysseyEffects.ApplyEffect</c>) works and is locally testable
-/// (<c>applyeffect paralyze/sleep me</c> or an explicit id), but a peer-forwarded live test
-/// (<c>applyeffect paralyze</c> against a phantom) will not be captured until
-/// <c>PhantomEffectHook.cs</c>'s <c>TryMapAllowlist</c> gets the same two <c>case 5</c> /
-/// <c>case 6</c> lines added — that edit is intentionally left for whoever owns that file next.
+/// The desync this comment used to warn about (this copy mapping sub-codes 5/6 one commit
+/// before <c>PhantomEffectHook.cs</c>'s own copy caught up) closed within the same session —
+/// commit <c>5f1975e</c> added the matching <c>case 5</c>/<c>case 6</c> lines to
+/// <c>PhantomEffectHook.cs</c> a minute after this file's §7 constructors landed, effect-sync.md
+/// just never had a follow-up entry recording it (fixed 2026-08-24). Both copies list all nine
+/// allowlist members today, capture and apply alike — see effect-sync.md's dated 2026-08-24
+/// entry for the read-through that confirmed it.
 /// </summary>
 public static class PeerEffectRules
 {

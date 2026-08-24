@@ -774,36 +774,144 @@ of a single-address one. `PeerEffectRules.HasApplyConstructor` now returns `true
 allowlist members; `PeerEffectRules.TryMapAllowlist` now accepts sub-codes 5 (Paralyze) and 6
 (Sleep) in addition to the existing 3/7/8/10.
 
-**Known asymmetry, left deliberately unresolved this pass.** `PhantomEffectHook.cs` (the
-NativeAOT plugin file that actually runs during a live capture) carries its OWN hand-copied
-allowlist, and this pass's task explicitly excluded editing it ("a rig agent owns them").
-Knockdown's `case 20:` entry there ALREADY existed before this pass (its capture path is
-untouched and already proven live, §6: "refused: no apply-side constructor for this kind yet" —
-routing worked, only the constructor was missing), so Knockdown is fully wired end to end by
-this pass alone. Paralyze/Sleep's sub-codes 5/6 are NOT yet in `PhantomEffectHook.cs`'s copy —
-only `PeerEffectRules.cs` (protocol side, used by tests) has them. This means: `applyeffect
-paralyze`/`applyeffect sleep` aimed at `me`/an explicit id (local apply, bypassing capture
-entirely) works today; aimed at a phantom (the full forward/capture/replay test) will NOT be
-captured until `PhantomEffectHook.cs`'s `TryMapAllowlist` gets the matching `case 5:`/`case 6:`
-lines — a two-line change intentionally left for whoever next owns that file.
+**Known asymmetry, left deliberately unresolved this pass — CLOSED the same session (§8).**
+`PhantomEffectHook.cs` (the NativeAOT plugin file that actually runs during a live capture)
+carries its OWN hand-copied allowlist, and this pass's task explicitly excluded editing it ("a
+rig agent owns them"). Knockdown's `case 20:` entry there ALREADY existed before this pass (its
+capture path is untouched and already proven live, §6: "refused: no apply-side constructor for
+this kind yet" — routing worked, only the constructor was missing), so Knockdown was fully wired
+end to end by this pass alone. Paralyze/Sleep's sub-codes 5/6 were NOT yet in
+`PhantomEffectHook.cs`'s copy at the moment this paragraph was first written — only
+`PeerEffectRules.cs` (protocol side, used by tests) had them. **That gap did not survive the
+session**: commit `5f1975e` ("The capture allowlist learns the two sub-codes the constructors
+just named"), one minute after the commit that added this section, added the matching `case 5:`
+/ `case 6:` lines to `PhantomEffectHook.cs`. This document's prose was never updated to say so
+until the 2026-08-24 pass (§8) read the actual file and found both copies already agreed. The
+two-line change described below as "left for whoever next owns that file" was already made —
+nothing left to wire.
 
-### 7.5 Live-test additions (not run this pass — static analysis only)
+### 7.5 Live-test additions (not run this pass — static analysis only) — superseded by §8
 
-The next live pass, per the task's request to describe forward/local additions:
+The next live pass, per the task's request to describe forward/local additions, ORIGINALLY read
+as below. **This was written before §7.4's asymmetry was found (2026-08-24, §8) to have already
+been closed by commit `5f1975e` within the same 2026-08-22 session** — `PhantomEffectHook.cs`
+already maps sub-codes 5/6, so the phantom-aimed rows this section predicted would show "nothing
+captured" are now expected to behave exactly like Knockdown's row: captured, forwarded, and
+applied on the peer. Left below as the historical record of what the doc used to (incorrectly)
+expect; §8 has the corrected staging list.
 
 ```
 applyeffect knockdown              (forward AND reverse should now APPLY — capture already worked)
 applyeffect paralyze  "" 0 0 me    (local-only: proves the constructor; use "me"/an explicit id)
 applyeffect sleep     "" 0 0 me    (local-only, same reason)
-applyeffect paralyze                (aimed at a phantom: EXPECTED to still show nothing captured/
-applyeffect sleep                   forwarded on the OUT ring — PhantomEffectHook.cs gap, §7.4 —
-                                     until that file's allowlist is updated; not a bug in this pass)
+applyeffect paralyze                (aimed at a phantom: ORIGINALLY expected to still show nothing
+applyeffect sleep                   captured/forwarded on the OUT ring — that expectation was
+                                     WRONG, §8: PhantomEffectHook.cs already had the case 5/6
+                                     lines by the end of the 2026-08-22 session)
 ```
 
-`effects` on both sides should show `knockdown` rows behaving exactly like the six kinds §6
-already proved (`captured/forwarded` on the sender, `applied` on the receiver, for both forward
-and reverse). `paralyze`/`sleep` should show an `applied` row ONLY when targeted locally
-(`me`/an explicit id) — a phantom-aimed attempt correctly produces no OUT-ring row at all (not
-even a refusal line, since the capture-side allowlist simply does not recognize the sub-code and
-silently drops it, per `PeerEffectRules.cs`'s own "an unmapped kind is a no-op, not a crash"
-rule) until `PhantomEffectHook.cs` is updated.
+`effects` on both sides should show `knockdown`, `paralyze` and `sleep` rows all behaving exactly
+like the six kinds §6 already proved (`captured/forwarded` on the sender, `applied` on the
+receiver, for both forward and reverse) — see §8 for the corrected staging steps and what still
+needs a live pass to confirm.
+
+---
+
+## 8. This document's own gap closed: a wiring bug that was already fixed, undocumented (2026-08-24)
+
+This session's task was to fix the "Knockdown/Paralyze/Sleep are captured but never applied"
+gap the roadmap still pointed at. Reading this document plus a fresh read-through of the actual
+source (no game run, no memory touched — a code/doc audit only) found that gap had already been
+closed, twice over, inside the 2026-08-22 session that produced §7:
+
+- **Apply-side constructors** (`OdysseyEffects.ApplyEffect`, `src/KotorCoop.Plugin/OdysseyEffects.cs`):
+  all nine allowlist kinds have a real constructor call, including `ApplyComplexEffect` for
+  Knockdown/Paralyze/Sleep (routines 134/148/154 through the shared `ExecuteCommandEffectComplex`
+  handler, §7.2–§7.4) — committed `19a5a63`, unchanged this pass.
+- **Protocol-side allowlist and constructor registry** (`PeerEffectRules.cs`,
+  `src/KotorCoop.Protocol/PeerEffectRules.cs`): `TryMapAllowlist` maps sub-codes 5/6, and
+  `HasApplyConstructor` returns `true` for all nine — committed `19a5a63`, unchanged this pass.
+- **The plugin's own capture-side allowlist** (`PhantomEffectHook.cs`,
+  `src/KotorCoop.Plugin/PhantomEffectHook.cs`) — the piece §7.4 said was "intentionally left for
+  whoever next owns that file" — turned out to have ALREADY been given `case 5:`/`case 6:` by
+  commit `5f1975e` ("The capture allowlist learns the two sub-codes the constructors just
+  named"), timestamped one minute after the commit that added §7's constructors. Nobody
+  ever came back and updated this document's §7.4/§7.5 prose to say so, so the document kept
+  describing a gap that no longer existed in the code — the actual bug this pass fixes is in
+  `effect-sync.md` and in a stale doc-comment in `PeerEffectRules.cs`, not in the plugin.
+
+**What this pass actually changed:**
+
+1. `src/KotorCoop.Protocol/PeerEffectRules.cs` — replaced the "⚠ KNOWN DESYNC (2026-08-22)"
+   doc-comment (which asserted `PhantomEffectHook.cs` was still missing the case 5/6 lines) with
+   an accurate note that the desync closed within the same session, one commit later.
+2. This document's §7.4 and §7.5 — corrected in place (marked superseded rather than deleted, so
+   the historical record of what was believed at the time is preserved) rather than silently
+   rewritten, per this codebase's convention of not editing away a wrong prior conclusion without
+   a trace.
+3. No source-code behavior changed. `OdysseyEffects.cs`, `PhantomEffectHook.cs`,
+   `PeerEffectRules.cs`'s `TryMapAllowlist`/`HasApplyConstructor` bodies, `PeerEffectKind.cs`
+   (both copies) and `CheatController.ApplyEffect` were read in full and are already correct as
+   of `5f1975e`/`19a5a63` — nothing to wire.
+
+**Test coverage — already present, re-verified this pass, no gaps found:**
+
+- `tests/KotorCoop.Tests/PeerEffectRulesTests.cs`: `MapsEveryVerifiedTypeAndSubCode` and
+  `RefusesEverythingNotOnTheAllowlist` cover sub-codes 5/6 by name (Paralyze/Sleep) alongside
+  every other allowlist member; `ApplyConstructorCoverageMatchesEffectSyncMd` and the dedicated
+  `AllNineAllowlistMembersHaveAnApplyConstructor` fact pin all nine kinds — including Knockdown,
+  Paralyze, Sleep — as having a real constructor, so a future regression (someone reverting one
+  of the three §7 cases, in either `PeerEffectRules.cs` or, by proxy, an un-caught drift in
+  `PhantomEffectHook.cs`'s hand-copy) fails a unit test rather than only showing up live.
+- `tests/KotorCoop.Tests/EffectVerbsTests.cs`: `EveryAllowlistKindParsesCaseInsensitively` covers
+  the `applyeffect knockdown|paralyze|sleep` console forms; the dedicated
+  `KnockdownParalyzeAndSleepReachThePluginWithTheRightKind` theory pins the dispatcher routing
+  (parsed line → `CheatRequest` with the right `PeerEffectKind` in `Amount`) for exactly the
+  three kinds this document is about.
+- `OdysseyEffects.cs` and `PhantomEffectHook.cs` themselves remain untested by design — both are
+  `internal static unsafe class`es that poke live engine memory/VM state and cannot run outside
+  a live `swkotor.exe` process, the same reason `PhantomHitHook`/`Odyssey.cs`'s own VM-call code
+  has never had a unit test either. The project's split (unsafe engine code calls into a pure,
+  fully-tested decision layer — `PeerEffectRules.cs`) is exactly the pattern that makes the
+  numeric/routing side of this fully testable while leaving only the engine-call plumbing for a
+  live pass. No test was added for `ApplyComplexEffect`/`TryMapAllowlist`'s plugin-side copy
+  beyond what already existed, because there was nothing new to cover — see NEEDS-LIVE below for
+  what a live pass still owns.
+- `dotnet test` (repo root, all projects): re-run this pass, all green, no regressions. See the
+  commit message for the exact pass/fail counts at the time of this commit.
+
+**NEEDS-LIVE — unchanged from §7, restated so it isn't lost under the doc fix above:**
+
+1. **Knockdown/Paralyze/Sleep have never actually been fired end-to-end on a live game.** §6's
+   live pass covered the six kinds that existed before §7; §7 and this pass are static analysis
+   only ("no game was run, no game function was called," carried forward from this document's
+   own header rule). The `ApplyComplexEffect` call path (§7.4 in `OdysseyEffects.cs`) — pushing
+   the VM stack args, invoking `ExecuteCommandEffectComplex` at the verified routine index, then
+   `ApplyEffectToObject` — has the exact same SHAPE as the six already-live-verified
+   `ApplyZeroParamEffect`/`ApplySlowEffect` calls, but shape-matching a verified pattern is not
+   the same as having run it.
+2. **The routine-index verification itself** (`table[134/148/154] == ExpectedEffectComplex`, the
+   refusal path in `ApplyComplexEffect`) has never been exercised against the live table — if
+   this refuses in practice, `applyeffect knockdown/paralyze/sleep` will log `failure 3` on a
+   real run and that needs to be seen at least once to trust the "safe to invoke with zero pushed
+   arguments" conclusion (§7.2) under real VM state, not just static stack arithmetic.
+3. **Corrected staging steps for the next live pass** (supersedes §7.5's original list, which
+   wrongly expected the phantom-aimed Paralyze/Sleep rows to show nothing captured):
+   ```
+   applyeffect knockdown              (local: me/explicit id — constructor smoke test)
+   applyeffect paralyze
+   applyeffect sleep
+   applyeffect knockdown              (blank target = nearest phantom — the full forward test)
+   applyeffect paralyze
+   applyeffect sleep
+   ```
+   Expected, if §7's static analysis holds: all six local calls APPLY (no more "no apply-side
+   constructor" refusal); all three phantom-aimed calls show `captured/forwarded` in `effects`
+   on the sender and `applied` on the receiver, exactly like the six kinds §6 already proved live
+   — i.e. these three finally join that table with a `Forward`/`Reverse`/`Local` row of their
+   own, closing the one gap §6's table left open.
+4. **The visible animation/pose and "can the target act" questions** §3.3 originally asked for
+   Paralyze/Sleep specifically remain open — naming the sub-codes (§7.3) answered "which routine
+   is which" from static/public-source cross-checks, not "what does it look like when it lands."
+   Worth a look during the same live pass, opportunistically, once `effects` confirms the packet
+   crossed.
