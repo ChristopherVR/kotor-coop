@@ -54,7 +54,7 @@ off by default or waiting on a live pass; the linked doc always has the dated ev
 
 | Area | Status | Blocker |
 | --- | --- | --- |
-| Minigames — swoop racing, now that the real gate is known | Live-tested: `Tar_SwoopEng=1` alone was enough to open Gadon's dialogue into the exact six-node chain the disassembly predicted — the flag theory is confirmed correct. But the terminal node's own module-transition action never fired within several minutes of real time; a clean stall, not a crash, position never moving | [minigames.md](docs/research/minigames.md) §14; three unresolved hypotheses recorded for the next pass |
+| Minigames — swoop racing, now that the real gate is known | Live-tested twice: `Tar_SwoopEng=1` alone opens Gadon's dialogue into the exact six-node chain the disassembly predicted, both times. The terminal node's own module-transition action still never fires (a clean stall, not a crash, position never moving) — but the leading suspect (KOTOR's own focus-loss world-timer pause) has now been directly, live-disproven: a continuous poll found the pause reason never engages even once across a 5-minute reproduction | [minigames.md](docs/research/minigames.md) §14-§17; one surviving hypothesis of four investigated (the cutscene staging never completing) |
 | Creature liveness reconciliation (a body alive on one screen, dead on the other) | CONFIRMED working live for the first time — a debug `--enemy-census-cap` flag makes the out-of-census case reachable, and the Kill→Destroy correction fires correctly | OFF by default; a separate, still-unfixed `DestroyObject`-scan-freshness issue is untouched by this result — [creature-liveness.md](docs/research/creature-liveness.md) |
 | `party_fast_pump`'s own heavier-combat frame-time check | A light single-enemy combat spot-check showed no regression when the flag was flipped ON, but an earlier round's heavier, sustained multi-enemy fight found a real 53% frame-time regression — measured before the companion follow-AI fix, not yet fully re-run since | Time-limited this pass — [lag-audit.md](docs/research/lag-audit.md) 2026-08-24 entry |
 | KOTOR 2 | Untouched | only GOG v1.0.3 addresses are known |
@@ -323,12 +323,17 @@ tools/                   RE helpers, demo scripts, the kotor1_0_3 symbol databas
   tool existed before) found the entrance trigger is not a race gate at all — just an
   unconditional collectible flag setter — and a full `.dlg` sweep across every Taris module
   found the real gate is a story-quest conversation with Gadon (`tar_m11aa`) whose terminal
-  node disassembles to a call naming a separate module, `tar_m03af`, as its argument. Live-tested:
-  the flag theory checked out exactly (it opens the predicted six-node dialogue chain), but the
-  terminal node's own transition action never actually fired in several minutes of observation —
-  a clean stall, not a crash, still in honest tension with the in-place-minigame finding above
-  (minigames.md §14.6, three unresolved hypotheses recorded). Pazaak is unrelated and uncovered.
-  See [minigames.md](docs/research/minigames.md).
+  node disassembles to a call naming a separate module, `tar_m03af`, as its argument. Live-tested
+  twice: the flag theory checks out exactly both times (it opens the predicted six-node dialogue
+  chain), but the terminal node's own transition action never actually fires — a clean stall, not
+  a crash, position never moving. Externally verified the routine really is `StartNewModule` and
+  the script itself schedules it unconditionally with zero preconditions (minigames.md §16), which
+  pointed at KOTOR's own focus-loss world-timer pause as the leading suspect — and then directly
+  disproved that suspect live: a continuous poll of the engine's own pause-reason counter never saw
+  it move even once across a 5-minute reproduction of the exact same stall (§17). One hypothesis of
+  the four raised across three rounds remains: the cutscene staging before the transition may never
+  actually complete. Pazaak is unrelated and uncovered. See
+  [minigames.md](docs/research/minigames.md).
 - **Non-damage combat effects** (stun, slow, frightened, choke, force push/whirlwind) forward
   live, both directions, on by default. Knockdown, Paralyze and Sleep are captured but never
   replayed — their apply-side engine call is still unverified. See

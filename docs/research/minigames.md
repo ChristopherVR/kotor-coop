@@ -1783,3 +1783,146 @@ during a live test rather than in the shipped plugin, which already has `FocusKe
 armed for exactly this). `dotnet build -c Release`: clean, 0 warnings, 0 errors, confirming the
 fast-forward in §16.0 did not disturb anything. No `dotnet test` run this round (no code changed to
 verify); the last recorded green run remains 1674/1674 (§15).
+
+## 17. §16.6's own recipe run for real (2026-08-24): the focus-loss hypothesis is directly,
+decisively RULED OUT — `PausesCleared` never moves even once across a five-minute reproduction of
+the exact same stall
+
+Had the live rig this round. Ran §16.6's own two checks against a fresh build. The answer is
+unambiguous and negative: this round's reproduction of §15's stall happened with the server's
+`PauseReasonUnfocused` bit **never engaged even once**, for the entire observation window — so the
+CWorldTimer-pause mechanism §16 named cannot be what is holding `StartNewModule` back, at least not
+in the way §16 described.
+
+### 17.0 Setup
+
+`build.ps1 -Install` for both installs (fresh — the last install predates this session).
+`craft-save --source "...\000002 - Game1" --dest "...\000003 - zzz_swoop_test" --bool Tar_SwoopEng`
+against the host install's own pristine save, exactly §15's recipe (`Tar_SwoopEng: 0 -> 1`
+confirmed by the tool's own report). `demo.ps1` with no `-Save` override: instance 1 (host)
+auto-staged the freshly-crafted save as slot 1 (newest by mtime) with no extra step; instance 2
+(join) loaded the ordinary `000002 - Game1`, solo and irrelevant to this test, matching §15's own
+host-only scope. `000002 - Game1` itself was never touched (confirmed by directory listing before
+and after); the crafted save was deleted at the end of this round, same "throwaway artifact" call
+§15 made.
+
+### 17.1 A tooling correction for whoever runs this recipe next
+
+§15's prose says `console 'talk GadonThek112'`. That literal string is **not a real console verb**
+— sending it returns the main-menu command list ("unknown command. commands: servers | connect
+..."), confirmed live this round. The actual mechanism is `blockpoke.ps1`'s own **top-level** `talk`
+command (`pwsh tools\blockpoke.ps1 -ProcId <pid> talk <tag>`), which writes a dedicated shared-block
+channel (`0x1D70` tag / `0x1D90` serial) separate from the `console` string channel `warp`/`where`
+use. §15 almost certainly used that and just wrote it in `console '...'` shorthand in the prose;
+flagging this now so a future round copying the literal string does not lose the few minutes this
+one did figuring out why "unknown command" came back.
+
+### 17.2 Check 1 (§16.6): a continuous `PausesCleared`/`KeepAliveUnfocused`/`frames` poll through the
+whole session
+
+A throwaway diagnostic script (`focuspoll.ps1`, scratchpad-only, same `WriteProcessMemory`-free
+read pattern as `blockpoke.ps1`) sampled the host's shared block once a second from before the warp
+through more than five minutes past the terminal dialogue node, logging `KeepAliveUnfocused`
+(`0x268`), `PausesCleared` (`0x26C`), the frame counter (`0x250`), and the true OS foreground window
+(`GetForegroundWindow`) on every sample:
+
+* `KeepAliveUnfocused` read `1` (armed) on every single sample — `Program.cs:526`'s
+  `SetKeepAliveUnfocused(true)` call on agent attach worked as documented.
+* `PausesCleared` read a flat, unmoving **`0`** on every one of ~280 samples across the whole
+  session — before the warp, through the six-node dialogue chain, and for over five minutes past
+  the terminal node. `FocusKeeper` never had reason 0x02 to clear, meaning that reason was **never
+  set** in the first place at any point this round watched.
+* `frames` climbed steadily the entire time (137,971 at the terminal node's `21 -> 2` transition to
+  197,868 four minutes later — roughly 340-350/s, matching `frame-hook.md`'s own "300+ Hz, window
+  not foreground" measurement), proving `PluginHost`'s frame hook — and therefore
+  `FocusKeeper.OnFrame` itself — kept running at full rate throughout, completely unaffected by
+  whatever the OS foreground window was.
+* `GetForegroundWindow()` never once returned either KOTOR instance's own window across ~280
+  samples. The true OS foreground the entire time belonged to an unrelated system window (a
+  "Windows Security" dialog, pid unrelated to either game process or to this round's own tooling).
+
+So the window was, by every external measurement, unfocused for the WHOLE session — more
+thoroughly and for far longer than §16's "console-driven session moves OS focus away" theory even
+needed — and the mechanism that theory blamed never engaged once.
+
+### 17.3 Check 2 (§16.6, the control): could not be performed as designed — this environment cannot
+give the game window real OS foreground at all
+
+Attempted to force the host window into true foreground (to then take it away as the deliberate
+control §16.6 asked for). `SetForegroundWindow` alone returned `false` and did nothing; the standard
+workaround for Windows' own focus-steal prevention (`AttachThreadInput` to the current foreground
+thread, then `BringWindowToTop` + `SetForegroundWindow`) also returned `false` and the foreground
+window never changed. Every attempt failed outright.
+
+This is itself a finding, not a null result: it means this automated/remote test rig **cannot
+exercise a real OS focus TRANSITION on the game window by any means tried**, which is consistent
+with §17.2's `PausesCleared` never moving — WM_ACTIVATEAPP's activate/deactivate pair may never fire
+on this window at all in this environment, rather than firing and being silently mishandled. The
+honest caveat this implies: this round cannot say whether a HUMAN alt-tabbing on a real interactive
+desktop would reproduce §16's proposed pause — only that THIS project's own live-test rig, run
+exactly as §15 and this round both ran it, never touches that pause path, and the stall is not
+explained by it here.
+
+### 17.4 The reproduction itself: node-for-node identical to §15, still no transition after five-plus
+minutes
+
+`talk GadonThek112` opened the same six-node auto-advancing chain §15 and §16 both traced
+(`dialogue-node-pub #1..#6`, node `-1 -> 17 -> 18 -> 19 -> 20 -> 21 -> 2`, 16:35:52.180 to
+16:36:19.249 — about 27 real seconds). The `21 -> 2` sixth line is not new: grepping this same
+install's own accumulated `kotorcoop-plugin.log` found §15's OWN prior run left the identical
+`node 21 -> 2` line at `08:02:05.073`, so this is ordinary, reproducible dialogue-engine behavior on
+this `.dlg`, not an artifact of this round's own approach.
+
+From the terminal node (16:36:18-19) onward: no `travel:`, `transition:`, or `epoch:` line ever
+appeared in the plugin log, across more than **five minutes** of real wall-clock time (a bounded
+`Monitor` watch timed out at 240 s with no match; manual polling continued to 16:41:31, ~5 m 13 s
+total) — noticeably longer than §15's own ~3 m 20 s wait, with the same result. `console 'where'`
+at the midpoint read `module tar_m11aa at 65.0 76.0 0.0` — the exact landing spot from the earlier
+`tp`, unmoved, matching §15's own frozen-position finding exactly. `blockpoke.ps1 ... dialogue` at
+the same midpoint read local speaker/partner/line all EMPTY (`local: partner ''`), confirming the
+ENGINE's own conversation-active flag had genuinely dropped — this is not a stuck-open dialogue UI
+on the coop layer's side.
+
+### 17.5 A second candidate mechanism checked and ruled out this round: the coop plugin's own travel
+machinery does not touch a script-triggered `StartNewModule` at all
+
+Worth recording since it was a real, concrete alternative to "focus loss" this round considered and
+closed rather than leaving open: does the coop layer's own travel/dialogue machinery interfere with
+a NATIVE, script-triggered `StartNewModule()` call, as opposed to the plugin's own `warp` verb
+(which visibly works — it is what staged this very test)? Grepped every reference to
+`ExecuteCommandStartNewModule 0x00544390` and `CServerExoAppInternal::StartNewModule 0x004BA920`
+across the whole Plugin project: every one is a comment or a movie-queue READ
+(`move_to_module_movies`); neither address is ever detoured or hooked. `TravelController.cs` only
+acts on its OWN shared-block travel-request channel (`TravelSerial`/`TravelApplied`, the one `warp`
+and peer-follow use) through a completely different engine path
+(`SetMoveToModuleString`/`SetMoveToModuleStartWaypoint`/`SetMoveToModulePending`) — it has no way to
+see, let alone block, a script's own `StartNewModule()` action call. **Ruled out.**
+
+### 17.6 What this changes: the leading hypothesis flips back to §15's original possibility 1, now the
+sole survivor of four
+
+§16.3 already eliminated §15's possibilities 2 (wrong routine identity — externally verified as
+`StartNewModule`) and 3 (a script-side precondition — the full 1554-byte disassembly found zero
+conditional jumps of any kind). §16 then proposed a 4th candidate, the focus-loss world-timer pause,
+as its leading hypothesis; §17.2-§17.4 above now eliminate that one too, by direct live measurement
+rather than by narrowing. That leaves exactly one of the four hypotheses ever raised across three
+rounds still standing, unchanged from how §15 first stated it: **the cutscene staging
+(`k_ptar_racecs0`/`racecs1`'s `AssignCommand`-driven waypoint walks, per §16.2's own verified call
+list) may never actually complete**, and the delayed `StartNewModule` call — while unconditionally
+scheduled by `k_ptar_bekrace.ncs` itself (§16.3) — may be contingent on something in the engine's
+own state that staging leaves unfinished. This round's own frozen-position observation (§17.4) is
+the same circumstantial signal §15 already had, not new evidence beyond it; nailing this down for
+real needs either a live debugger break at the point `DelayCommand`'s closure is meant to fire, or a
+full disassembly of `racecs0`/`racecs1`'s own control flow (§16.2 listed their action calls but not
+their branching), and this round did not have the budget for either.
+
+### 17.7 What this changes about the shipping recommendation
+
+Nothing. **`minigame_hide_peer` stays default-on; co-visible swoop racing is still not shipped and
+still not observed working end to end.** No production code changed this round — the focus-loss
+countermeasure (`FocusKeeper`) was directly confirmed working exactly as designed (armed, and never
+needed to intervene because its target condition never arose), so there is nothing to fix there; the
+one surviving hypothesis (§17.6) needs real diagnosis, not a speculative change, before touching
+`k_ptar_bekrace.ncs`'s neighbours or any engine hook. `dotnet test`: 1714/1714 green, full suite
+re-run after the rig was stopped (a first attempt while the live agents still held the build output
+open hit MSB3027 file locks, not a real failure — rerunning after `-Stop` fixed it cleanly).
