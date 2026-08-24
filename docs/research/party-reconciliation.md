@@ -2993,3 +2993,98 @@ directly which side of the test a fresh `Target`/`Prior` pair lands on and why i
 `Odyssey.TryRefreshFinalNodeTarget`'s own doc comment should be read alongside this entry — it is
 NOT wrong about what it does, just proven insufficient against the geometry-staleness hypothesis it
 was built to test.
+
+## Attempted (2026-08-24) — `companion_local_combat` under two simultaneous releases: one
+companion confirmed clean and continuous under a generous range, the SECOND companion's own sync
+blocked by a newly-found, separate bug (a debug-warp "different save" stall that does not
+self-heal); the specific two-companion scenario remains unreproduced
+
+Rig access this round, following directly from the Zaalbar recruit in `dialogue-consequences.md`'s
+own 2026-08-24 live pass (same session's rig). `companion_local_combat=1`,
+`companion_local_combat_range=80` (generous, chosen so two companions ~68 units apart would both
+independently land in range of a single player position without needing to physically reunite them
+first — see below) on both `coop.ini`s. Trask (a permanent END_M01AA-native party member, present
+on this save from the very start alongside whichever of the nine recruitable companions gets
+added) and Zaalbar were both in the host's real party.
+
+### Companion follow-AI and the `walk`/`tp` test primitives could not reunite the two companions
+in this module
+
+The host's own leader stayed at the module's entry point (294.7, 184.3); Trask followed closely
+(within ~1.5 units, matching this document's own established follow-AI behavior) but Zaalbar
+never started moving from his recruit position (225.86, 192.24) — roughly 69 units away — even
+after multiple minutes. Repeated `tools/blockpoke.ps1 walk` calls toward Zaalbar's room from the
+leader's start point produced ZERO position change on most attempts, and the ones that did move
+the leader only advanced a few units before stopping — consistent with
+`TestDriveController.HandleWalk`'s own doc comment ("the PC is drive-controlled, so an
+action-queue move may not move it at all") and `shared-state-audit.md`'s own prior finding that
+this primitive is unreliable, now confirmed unreliable specifically across this module's own room
+boundaries (Zaalbar's cage room appears to be pathing-isolated from the main corridor the leader
+starts in, worse than the open corridors every prior follow-AI round tested in). `tp`, as
+documented, strands whichever companion(s) were following at their pre-teleport position entirely
+— confirmed again here (Trask's body stayed bit-identical after the leader `tp`'d 65 units away).
+
+**Workaround used instead of physical reunion**: rather than fight the room's pathing, both
+companions were left where they naturally sat and `companion_local_combat_range` was set generously
+(80) so that a single player position roughly equidistant from both (or, as used here, simply near
+one companion and a hostile, since 80 comfortably covers the ~58-69 unit gaps involved) would put
+both independently in range without needing them physically together. This is a valid substitute
+for the range check itself (the code only ever compares each companion's own position to the
+player and the enemy — see `PartyPresenceController.DriveOne` — never to each other), but it could
+only be exercised for ONE companion this round; see below.
+
+### A second, unrelated, newly-discovered bug blocked the second companion's own roster sync
+
+After the SECOND fresh recruit of Zaalbar this session (needed because `companion_local_combat`
+and its wider range are read once, at plugin construction, from `coop.ini` —
+`PartyPresenceController`'s `_companionLocalCombatEnabled`/range fields are `readonly`, set from
+`PluginConfig.ReadBool`/`ReadFloat` in the field initialiser, NOT re-read per frame, so editing
+`coop.ini` mid-session — as the first attempt at this task did — has NO effect until the plugin
+reloads; a full rig restart was required, confirmed by grep'ing the field declarations directly),
+the client's own `party roster: reconciling against a peer party of 0x001` calls stopped receiving
+updates entirely (`party roster: no peer roster to reconcile against`) shortly after the recruit,
+and never recovered over several more minutes of observation, including a second `travel` re-trigger
+attempt. Both agent logs independently show the same event at the same moment:
+`* co-op [W_SAVE] different save: enemies, doors, items and party are off — rejoin to adopt the
+host's world and get them back`. This is `client_load_rejoin`'s own detection gate firing (it is
+default ON, per `e7663c2`'s own flip and this document's round-87 live-verification) — but,
+contrary to that flag's own design intent, it did NOT self-heal automatically here; the client sat
+in this "different save, party sync off" state for the remainder of the session. Trask's own
+solo release/reclaim cycle (a companion the client had ALREADY resolved before the desync gate
+tripped) kept working perfectly throughout — `party drive: companion 0xD2 released to fight
+locally` fired repeatedly and cleanly, cycling with the enemy's own 25s local-fight timeout, for
+several minutes straight, no cross-contamination, no health/faction/position anomalies. But
+Zaalbar never appeared in the client's roster this session, so the two-companion scenario itself
+was never reached.
+
+This looks like a genuinely different bug from anything this document's `companion_local_combat`
+sections have investigated: it is a `client_load_rejoin`/party-roster-sync interaction specific to
+the debug `travel` cheat (which does not go through the same "everyone reloads the identical save"
+flow a real module transition or reconnect does), not a `companion_local_combat` defect at all.
+Notably, the FIRST recruit this same session (`dialogue-consequences.md`'s own 2026-08-24 entry)
+did NOT hit this — the roster synced cleanly within 191ms that time. The difference between the two
+attempts was timing (the second recruit was issued only ~30s after the travel completed, versus
+several minutes of other activity before the first) — consistent with, but not proof of, a race
+between the desync-gate's own detection and the recruit landing. Not chased further this round
+(out of scope for `companion_local_combat` specifically) — flagged precisely for whoever
+investigates `client_load_rejoin`'s own self-heal path next: it is supposed to recover
+automatically and, at least once, observably did not.
+
+### Verdict: the specific "two simultaneous releases" scenario remains unreproduced; nothing here
+should be read as a `companion_local_combat` finding either way
+
+What WAS confirmed live this round: `companion_local_combat_range` set far above its previous
+maximum tested value (80 vs. round 85's 10) works exactly as the code predicts — a single
+companion 2-3 units from the excluded enemy releases and stays released continuously across
+repeated local-fight cycles, with no new failure mode introduced by the wider range. What was NOT
+confirmed: two companions releasing in the same window, both attack-drive lines in the same
+window, credited hits from both object ids, and the two-companion cross-contamination check —
+round 85's own still-open item stays open. The blocker was a different, newly-found bug in the
+recruit/rejoin path under a debug warp, not anything in `CompanionLocalFightRule` or
+`PartyPresenceController` itself, which continues to look safe by the same per-slot-independent
+construction the 2026-08-24 code-review entry above already established. `companion_local_combat`
+stays OFF by default, unchanged.
+
+### Test suite and build
+
+`dotnet test`: no production code changed this pass (a live-verification attempt only).
