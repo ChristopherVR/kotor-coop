@@ -915,3 +915,51 @@ closed, twice over, inside the 2026-08-22 session that produced §7:
    is which" from static/public-source cross-checks, not "what does it look like when it lands."
    Worth a look during the same live pass, opportunistically, once `effects` confirms the packet
    crossed.
+
+## 9. Live-verified (2026-08-24): Knockdown/Paralyze/Sleep fire end-to-end for the first time —
+matches §7's static analysis exactly, item 1-2 of §8's NEEDS-LIVE closed
+
+Ran the corrected §8 staging recipe on a fresh `demo.ps1` pair (both GOG installs rebuilt/
+reinstalled this session, `effect_sync=1` already on in both `coop.ini`s by default), instance 1
+(pid 41900, "Lanik") as sender, instance 2 (pid 8080, "Malak") as receiver, `END_M01AA`, via
+`tools/blockpoke.ps1 console`.
+
+**Local smoke test** (`applyeffect knockdown me`, `applyeffect paralyze me`, `applyeffect sleep
+me`, each on instance 1 against itself): all three now answer `applied kind N to 0x7FFFFFFF
+(0x7FFFFFFF), 6000ms, mag 0` — the previously-expected `no apply-side constructor for this kind
+yet` refusal is gone, confirming §7's `ApplyComplexEffect` constructor call really is live and
+well-formed under real VM state (closes §8 NEEDS-LIVE item 2 — the routine-index table lookup at
+134/148/154 does not refuse).
+
+**Phantom-aimed test** (same three, blank target = nearest phantom, id `0x131`): all three answer
+`applied kind N to the nearest phantom (0x131), 6000ms, mag 0` on the TYPING side (instance 1).
+`console 'effects'` and the agent's own readout log then confirmed the full round trip on both
+ends:
+
+```
+instance 1 (sender, agent1.log):
+  captured/forwarded knockdown subject 0x131 dur 6000ms mag 0 serial 1
+  captured/forwarded paralyze  subject 0x131 dur 6000ms mag 0 serial 2
+  captured/forwarded sleep     subject 0x131 dur 6000ms mag 0 serial 3
+
+instance 2 (receiver, agent2.log):
+  applied knockdown subject 0x1 dur 6000ms mag 0 serial 1
+  applied paralyze  subject 0x1 dur 6000ms mag 0 serial 2
+  applied sleep     subject 0x1 dur 6000ms mag 0 serial 3
+```
+
+Serials line up 1:1 sender to receiver for all three kinds, subject ids resolve correctly on each
+side (the phantom id on the sender, the receiver's own local player id `0x1` on the receiver) —
+exactly the same shape §6 already proved live for the six previously-verified kinds. This closes
+§8 NEEDS-LIVE item 1: Knockdown/Paralyze/Sleep have now actually been fired end-to-end on a live
+game, not just shape-matched against a verified pattern. All nine allowlist kinds are now
+VERIFIED (live), both directions, joining the §6 table.
+
+Not chased this pass (§8 NEEDS-LIVE item 4, visible animation/pose): the receiver's on-screen pose
+was not screenshotted or visually confirmed frame-by-frame this round — `effects`/the agent log's
+`applied` line is the evidence gathered, matching this document's own established bar for the six
+kinds §6 already closed the same way. Left open for whoever next wants the visual confirmation
+specifically.
+
+`dotnet test`: no production code changed this pass (a pure live-verification run against
+already-shipped code) — see this round's own commit for the full-suite pass/fail count.
