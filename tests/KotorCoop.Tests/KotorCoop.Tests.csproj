@@ -59,6 +59,7 @@
     <Compile Include="..\..\src\KotorCoop.Plugin\SharedBlockView.cs" Link="Plugin\SharedBlockView.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\WorldLoadRule.cs" Link="Plugin\WorldLoadRule.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\PartyFollowTransitionRule.cs" Link="Plugin\PartyFollowTransitionRule.cs" />
+    <Compile Include="..\..\src\KotorCoop.Plugin\FinalNodeGeometryRule.cs" Link="Plugin\FinalNodeGeometryRule.cs" />
   </ItemGroup>
 
   <ItemGroup>
