@@ -1,0 +1,118 @@
+using KotorCoop.Protocol;
+using KotorCoop.Session;
+
+namespace KotorCoop.Agent;
+
+/// <summary>The three per-tick diff announcers: peer joins/leaves, content-compatibility
+/// changes, and the persistent connection indicator.</summary>
+public sealed partial class CoopCommandDispatcher
+{
+    /// <summary>Roster changes become lines on BOTH screens: "Malak joined the game" /
+    /// "Malak left the game" (see <see cref="PeerAnnouncer"/> for why this exists).</summary>
+    private readonly PeerAnnouncer _peerAnnouncer = new();
+
+    /// <summary>Content differences become lines on screen too — see
+    /// <see cref="CompatibilityAnnouncer"/> for why a degradation that is only logged is
+    /// indistinguishable from a bug.</summary>
+    private readonly CompatibilityAnnouncer _compatibilityAnnouncer = new();
+
+    /// <summary>The persistent connection indicator (item 18) — see
+    /// <see cref="ConnectionStatusAnnouncer"/> for why the <c>status</c> console verb was not
+    /// enough on its own.</summary>
+    private readonly ConnectionStatusAnnouncer _connectionAnnouncer = new();
+
+    /// <summary>
+    /// coop.ini's <c>status_toasts</c>, read once and cached rather than reloaded off disk
+    /// every 150 ms tick. <c>null</c> means "not read yet"; the value itself is a plain bool
+    /// once resolved, so there is no third state to confuse with "file absent" — an absent or
+    /// unreadable coop.ini defaults the setting ON, the same default <see cref="CoopConfig"/>
+    /// itself uses.
+    /// </summary>
+    private bool? _statusToastsEnabled;
+
+    private bool StatusToastsEnabled => _statusToastsEnabled ??= loadConfig?.Invoke()?.StatusToasts ?? true;
+
+    /// <summary>Diffs the admitted roster each tick and posts joins/leaves through the same
+    /// trio every reply uses (stdout, console line, chat overlay) — which is what puts the
+    /// line on the HOST's screen when a player is admitted.</summary>
+    private void AnnouncePeerChanges()
+    {
+        if (manager.Current is not { } session)
+        {
+            _peerAnnouncer.Reset();
+            _kotor?.PublishSessionPeerCount(0);
+            return;
+        }
+
+        IReadOnlyList<RemotePeer> peers = session.GetRemotePeers();
+        _peerAnnouncer.Observe(peers, Reply);
+
+        // The seamless-arrival gate's signal: written here, every tick, because THIS loop
+        // never depends on the player resolve — the pump's RemoteCount does, and its 1 Hz
+        // resolve is precisely why the load screen used to drop before the first sync.
+        _kotor?.PublishSessionPeerCount(peers.Count);
+    }
+
+    /// <summary>
+    /// Puts content-compatibility findings on the player's screen, through the same trio
+    /// every reply uses. Without this the per-channel mod policy is invisible where it
+    /// matters: a channel switched off for safety looks exactly like a channel that broke,
+    /// and the one place the verdict was visible — the agent's console readout — is not
+    /// where a player is looking.
+    /// </summary>
+    private void AnnounceCompatibilityChanges()
+    {
+        if (manager.Current is not { } session)
+        {
+            _compatibilityAnnouncer.Reset();
+            return;
+        }
+
+        _compatibilityAnnouncer.Observe(session.Compatibility, Reply);
+    }
+
+    /// <summary>
+    /// The persistent connection indicator (item 18, roadmap-seamless.md): posts
+    /// "co-op: connected, N players" / "reconnecting..." / "connection failed" /
+    /// "disconnected" through the same queued-text path <see cref="AnnounceCompatibilityChanges"/>
+    /// uses, reposted only on change, so a player who is not actively typing <c>status</c> at
+    /// the console still finds out when their partner's link drops.
+    ///
+    /// The compact status byte + peer count also rides <c>SharedBlock.OffsetConnectStatus</c>
+    /// (<see cref="ConnectionSnapshot.Pack"/>) UNCONDITIONALLY, regardless of the
+    /// <c>status_toasts</c> gate below — that gate is about what appears on screen, not about
+    /// whether the block's own state is kept current.
+    /// </summary>
+    private void AnnounceConnectionStatus()
+    {
+        if (manager.Current is not { } session)
+        {
+            _connectionAnnouncer.Reset();
+            _kotor?.SetConnectStatus(new ConnectionSnapshot(ConnectionIndicatorState.Disconnected, 0).Pack());
+            return;
+        }
+
+        SessionStats stats = session.GetStats();
+
+        // manager.Phase distinguishes the FIRST handshake (Connecting) and a refused one
+        // (Failed) from an ordinary live session; within a live session, the live
+        // stats.Connected flag is what actually tells a mid-session drop-and-recover apart
+        // from steady state — manager.Phase stays Connected throughout a blackout, because
+        // that field describes the MANAGED lifecycle, not the tick-by-tick link.
+        ConnectionIndicatorState state = manager.Phase switch
+        {
+            SessionPhase.Connecting => ConnectionIndicatorState.Connecting,
+            SessionPhase.Failed => ConnectionIndicatorState.Failed,
+            SessionPhase.Disconnected => ConnectionIndicatorState.Disconnected,
+            _ => stats.Connected ? ConnectionIndicatorState.Connected : ConnectionIndicatorState.Reconnecting,
+        };
+
+        ConnectionSnapshot snapshot = new(state, stats.PeerCount);
+        _kotor?.SetConnectStatus(snapshot.Pack());
+
+        if (StatusToastsEnabled)
+        {
+            _connectionAnnouncer.Observe(snapshot, Reply);
+        }
+    }
+}

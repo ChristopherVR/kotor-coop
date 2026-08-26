@@ -1,0 +1,339 @@
+namespace KotorCoop.Session;
+
+/// <summary>
+/// The staging-cheat verbs: god, topup, standup, slay, tp, walkto, destroyobject, leader,
+/// recruit, skipline, selectreply, loadgame, and the `cheats` listing itself
+/// (<see cref="CheatsText"/>). See docs/research/console-cheats.md for why this list is short —
+/// KOTOR's own console already ships giveitem/givecredits/addexp/addlevel/revealmap/heal, all
+/// already co-op-correct because they touch only the typist's single-player state.
+/// </summary>
+public static partial class ConsoleCommand
+{
+    // A cheat that only ever applies to your own character REFUSES A TARGET rather than
+    // ignoring one. "god malak" is a reasonable thing for a player to try, and silently
+    // arming their own invulnerability instead would be a lie about what just happened — so
+    // the argument is validated and the message names the rule.
+    private static CoopCommand ParseGod(string[] rest)
+    {
+        if (rest.Length == 0)
+        {
+            return new CoopCommand(CoopCommandKind.God, Amount: -1);
+        }
+
+        return rest[0].ToLowerInvariant() switch
+        {
+            "on" or "1" or "true" or "yes" => new CoopCommand(CoopCommandKind.God, Amount: 1),
+            "off" or "0" or "false" or "no" => new CoopCommand(CoopCommandKind.God, Amount: 0),
+            _ => new CoopCommand(
+                CoopCommandKind.Invalid,
+                Error: "god applies to your own character only - use: god [on|off]"),
+        };
+    }
+
+    private static CoopCommand ParseTopUp(string[] rest)
+    {
+        if (rest.Length == 0)
+        {
+            return new CoopCommand(CoopCommandKind.TopUp);
+        }
+
+        if (!int.TryParse(rest[0], out int hitPoints) || hitPoints <= 0)
+        {
+            return new CoopCommand(
+                CoopCommandKind.Invalid,
+                Error: $"'{rest[0]}' is not a hit-point count - use: topup [n], or topup for full");
+        }
+
+        return new CoopCommand(CoopCommandKind.TopUp, Amount: hitPoints);
+    }
+
+    private static CoopCommand ParseStandUp(string[] rest)
+    {
+        if (rest.Length == 0)
+        {
+            return new CoopCommand(CoopCommandKind.StandUp);
+        }
+
+        if (!int.TryParse(rest[0], out int reviveHitPoints) || reviveHitPoints <= 0)
+        {
+            return new CoopCommand(
+                CoopCommandKind.Invalid,
+                Error: $"'{rest[0]}' is not a hit-point count - use: standup [n]");
+        }
+
+        return new CoopCommand(CoopCommandKind.StandUp, Amount: reviveHitPoints);
+    }
+
+    private static CoopCommand ParseSlay(string[] rest)
+    {
+        if (rest.Length == 0)
+        {
+            // No target: the agent picks the nearest hostile from its own census.
+            return new CoopCommand(CoopCommandKind.Slay);
+        }
+
+        // Aiming this at a person is the mistake worth catching in the parser: the plugin
+        // refuses it too (a phantom and a companion are both recognised there), but a player
+        // who types "slay me" deserves the reason immediately rather than a round trip.
+        if (IsSelfWord(rest[0]))
+        {
+            return new CoopCommand(
+                CoopCommandKind.Invalid,
+                Error: "slay is for enemies - your own character is not a target");
+        }
+
+        if (!IsTargetToken(rest[0]))
+        {
+            return new CoopCommand(
+                CoopCommandKind.Invalid,
+                Error: $"'{rest[0]}' is not a creature tag or object id");
+        }
+
+        return new CoopCommand(CoopCommandKind.Slay, Address: rest[0]);
+    }
+
+    private static CoopCommand ParseTeleport(string[] rest)
+    {
+        if (rest.Length < 2)
+        {
+            return new CoopCommand(
+                CoopCommandKind.Invalid,
+                Error: "tp needs coordinates, e.g. tp 12.5 -30.0 (z optional)");
+        }
+
+        if (!TryParseCoordinate(rest[0], out float x) || !TryParseCoordinate(rest[1], out float y))
+        {
+            return new CoopCommand(
+                CoopCommandKind.Invalid,
+                Error: $"'{rest[0]} {rest[1]}' is not a coordinate pair");
+        }
+
+        float z = 0f;
+        if (rest.Length > 2 && !TryParseCoordinate(rest[2], out z))
+        {
+            return new CoopCommand(CoopCommandKind.Invalid, Error: $"'{rest[2]}' is not a height");
+        }
+
+        return new CoopCommand(CoopCommandKind.Teleport, X: x, Y: y, Z: z);
+    }
+
+    // walkto <x> <y> [z] - LIVE-TEST PRIMITIVE, see CoopCommandKind.WalkTo. Same argument
+    // shape as tp, deliberately, so a live pass can try both at one spot.
+    private static CoopCommand ParseWalkTo(string[] rest)
+    {
+        if (rest.Length < 2)
+        {
+            return new CoopCommand(
+                CoopCommandKind.Invalid,
+                Error: "walkto needs coordinates, e.g. walkto 12.5 -30.0 (z optional)");
+        }
+
+        if (!TryParseCoordinate(rest[0], out float walkX) || !TryParseCoordinate(rest[1], out float walkY))
+        {
+            return new CoopCommand(
+                CoopCommandKind.Invalid,
+                Error: $"'{rest[0]} {rest[1]}' is not a coordinate pair");
+        }
+
+        float walkZ = 0f;
+        if (rest.Length > 2 && !TryParseCoordinate(rest[2], out walkZ))
+        {
+            return new CoopCommand(CoopCommandKind.Invalid, Error: $"'{rest[2]}' is not a height");
+        }
+
+        return new CoopCommand(CoopCommandKind.WalkTo, X: walkX, Y: walkY, Z: walkZ);
+    }
+
+    // destroyobject <id>  - STAGING VERB, see CoopCommandKind.DestroyObject. Object id only,
+    // deliberately: this stages a SPECIFIC creature `census` already named, not a sweep.
+    private static CoopCommand ParseDestroyObject(string[] rest)
+    {
+        if (rest.Length != 1)
+        {
+            return new CoopCommand(
+                CoopCommandKind.Invalid,
+                Error: "destroyobject needs exactly one object id, e.g. destroyobject 0x35");
+        }
+
+        if (IsSelfWord(rest[0]))
+        {
+            return new CoopCommand(
+                CoopCommandKind.Invalid,
+                Error: "destroyobject is for enemies - your own character is not a target");
+        }
+
+        if (!TryParseObjectId(rest[0], out _))
+        {
+            return new CoopCommand(
+                CoopCommandKind.Invalid,
+                Error: $"'{rest[0]}' is not an object id (try 0x35, or '#35')");
+        }
+
+        return new CoopCommand(CoopCommandKind.DestroyObject, Address: rest[0]);
+    }
+
+    // leader <slot|pc>  - DEV-ONLY TEST PRIMITIVE, see CoopCommandKind.Leader.
+    /// <summary>
+    /// Parses <c>leader &lt;slot|pc&gt;</c> — the dev-only control-switch test primitive (see
+    /// <see cref="CoopCommandKind.Leader"/>). <c>slot</c> is a party-roster index 0-8;
+    /// <c>pc</c>/<c>me</c>/<c>self</c> means "back to your own character".
+    /// </summary>
+    private static CoopCommand ParseLeader(string[] rest)
+    {
+        const string usage =
+            "leader <slot|pc>  (slot: party-roster index 0-8, e.g. Trask is slot 0 in "
+            + "end_m01aa; pc: switch back to your own character)";
+
+        if (rest.Length != 1)
+        {
+            return new CoopCommand(CoopCommandKind.Invalid, Error: usage);
+        }
+
+        if (IsSelfWord(rest[0]) || rest[0].Equals("pc", StringComparison.OrdinalIgnoreCase))
+        {
+            return new CoopCommand(CoopCommandKind.Leader, Amount: -1);
+        }
+
+        if (!int.TryParse(rest[0], out int slot) || slot < 0 || slot > 8)
+        {
+            return new CoopCommand(
+                CoopCommandKind.Invalid,
+                Error: $"'{rest[0]}' is not a party-roster slot (0-8) or 'pc' - {usage}");
+        }
+
+        return new CoopCommand(CoopCommandKind.Leader, Amount: slot);
+    }
+
+    // recruit <slot>  - DEV-ONLY TEST PRIMITIVE, see CoopCommandKind.Recruit.
+    /// <summary>
+    /// Parses <c>recruit &lt;slot&gt; [tag]</c> — the dev-only force-into-party test primitive
+    /// (see <see cref="CoopCommandKind.Recruit"/>). <c>slot</c> is a party-roster index 0-8.
+    /// The optional <c>tag</c> is a fallback: if the slot has no availability-linked body
+    /// (<c>SpawnAvailableNPC</c> needs a blueprint association a raw availability poke does not
+    /// carry — see <c>Odyssey.TrySetSlotAvailable</c>'s own NEEDS-LIVE note), the plugin looks
+    /// up an already-placed live creature by this tag instead and adds THAT body.
+    /// </summary>
+    private static CoopCommand ParseRecruit(string[] rest)
+    {
+        const string usage = "recruit <slot> [tag]  (party-roster index 0-8, e.g. Carth is slot 2; "
+            + "tag is a fallback lookup for a body already placed in the module, e.g. p_carth001)";
+
+        if (rest.Length is not (1 or 2))
+        {
+            return new CoopCommand(CoopCommandKind.Invalid, Error: usage);
+        }
+
+        if (!int.TryParse(rest[0], out int slot) || slot < 0 || slot > 8)
+        {
+            return new CoopCommand(
+                CoopCommandKind.Invalid,
+                Error: $"'{rest[0]}' is not a party-roster slot (0-8) - {usage}");
+        }
+
+        string tag = rest.Length == 2 ? rest[1] : string.Empty;
+        return new CoopCommand(CoopCommandKind.Recruit, Amount: slot, Address: tag);
+    }
+
+    // skipline  - LIVE-TEST PRIMITIVE, see CoopCommandKind.SkipLine.
+    private static CoopCommand ParseSkipLine(string[] rest) =>
+        rest.Length > 0
+            ? new CoopCommand(CoopCommandKind.Invalid, Error: "skipline takes no arguments")
+            : new CoopCommand(CoopCommandKind.SkipLine);
+
+    // selectreply <slot>  - LIVE-TEST PRIMITIVE, see CoopCommandKind.SelectReply.
+    private static CoopCommand ParseSelectReply(string[] rest)
+    {
+        if (rest.Length != 1 || !int.TryParse(rest[0], out int replySlot) || replySlot < 0)
+        {
+            return new CoopCommand(
+                CoopCommandKind.Invalid,
+                Error: "selectreply needs one reply slot (0-based), e.g. selectreply 0");
+        }
+
+        return new CoopCommand(CoopCommandKind.SelectReply, Amount: replySlot);
+    }
+
+    // loadgame <slot>  - LIVE-TEST PRIMITIVE, see CoopCommandKind.LoadGame.
+    private static CoopCommand ParseLoadGame(string[] rest)
+    {
+        if (rest.Length != 1 || !int.TryParse(rest[0], out int loadSlot) || loadSlot < 0)
+        {
+            return new CoopCommand(
+                CoopCommandKind.Invalid,
+                Error: "loadgame needs one save slot (0-based, most-recent-first), "
+                    + "e.g. loadgame 0");
+        }
+
+        return new CoopCommand(CoopCommandKind.LoadGame, Amount: loadSlot);
+    }
+
+    private static CoopCommand ParseCheats(string[] rest) => new(CoopCommandKind.Cheats);
+
+    /// <summary>
+    /// The staging-cheat listing. Two halves on purpose: what co-op adds, and what the
+    /// retail console already does correctly in co-op — because the second half is the part
+    /// a player cannot discover on their own and the part we deliberately did not rewrite.
+    /// </summary>
+    public static readonly string[] CheatsText =
+    [
+        "co-op staging cheats (authority-aware):",
+        "  god [on|off]        your damage floors at 1 hp; yours only",
+        "  topup [n]           your hit points to n, or to full",
+        "  standup [n]         stand yourself up out of the downed state",
+        "  slay [tag|id]       kill an enemy; a client routes it to the host",
+        "  destroyobject <id>  destroy a creature outright (Odyssey.DestroyObjectById);",
+        "                      HOST-ONLY, no forward path - refused on a mirroring instance",
+        "  tp <x> <y> [z]      move yourself inside this area",
+        "  walkto <x> <y> [z]  queue a real walk (not a snap) - crosses subarea triggers",
+        "  goto <player>       move yourself to a peer (same module)",
+        "  dropitem <resref>   drop a blueprint; the item channel shares it",
+        "  dropitem 0x131      drop a copy of a LIVE item, carrying its real state",
+        "  items [n]           list live items here: id, resref, holder, stack/charges/upgrades",
+        "  item 0x131          what one item's per-instance state actually reads",
+        "  setitem 0x131 stack=20 charges=3 upgrades=0x5 identified=0",
+        "                      poke those fields, so there is something worth sending",
+        "  giveloot <owner id> <resref> [stack]   give a materialised stand-in its real loot",
+        "  applyeffect <kind> [target] [durationMs] [magnitude]",
+        "                      run a peer-effect constructor (stun/paralyze/knockdown/slow/",
+        "                      frightened/sleep/choke/forcepush/whirlwind); blank target =",
+        "                      nearest phantom. STAGING ONLY, LOCAL APPLY - what the hook",
+        "                      forwards from a peer's phantom is the actual test",
+        "  effects             last 8 captured/forwarded/applied peer effects, with ages",
+        // Listed here because it is the same family — a verb that exists to stage a test —
+        // and discoverability is the point of this listing. It is owned by the network
+        // fault-injection work, which registers its own catalog entry and parser case; this
+        // is only the line that tells a player it is there.
+        "test harness:",
+        "  netsim <off|status|loss <pct>|latency <ms> <jitter>|blackout <s> [in|out|both]>",
+        // ⚠ Listed with the warning attached, because the thing it arranges is not "a video":
+        // a movie parks the game's main thread for its whole length, and for those seconds
+        // the co-op plugin is unreachable rather than idle.
+        "  moviewarp <module> <movie...>   warp WITH a cinematic (the plugin stops for it)",
+        "  moviewarp queue <movie...> | clear | show",
+        // moviewarp only ever writes the TRANSITION queue - a different engine path entirely.
+        // This is the one that fires MoviePlayHook / the mid-module movie relay on demand.
+        "  movieplay <resref>              play a movie mid-module RIGHT NOW (blocks main",
+        "                      thread); fires the mid-module movie relay for a connected peer",
+        // The pair: queue the movie, then make the ENGINE start the transition. Only this
+        // order opens the pre-store flush window a movie might swallow.
+        "  usedoor [tag|id]                walk through a transition door (nearest by default)",
+        "  opendoor [tag|id]               open an ORDINARY door (no transition; nearest by default)",
+        "  useplaceable [tag|id]           use a container/corpse/switch (nearest container by default)",
+        "  closeplaceable [tag|id]         close a container's loot panel (nearest by default)",
+        "  census [id]         what my enemy census holds, and what my own engine says of each id",
+        "  resolve <id>        what the ENGINE knows about one id, in one frame (plugin log has the chain)",
+        "  leader <slot|pc>    dev-only: switch YOUR control to a party-roster companion (0-8)",
+        "                      or back to 'pc'; local only, never crosses the network",
+        "  recruit <slot>      dev-only: force NPC roster slot (0-8) into the local active",
+        "                      party, no dialogue needed; local only, never crosses the network",
+        "  skipline            finish your OWNED conversation's current line/VO right now,",
+        "                      in-process (no OS input); no-op if nothing is playing",
+        "  selectreply <slot>  commit a reply slot on your OWNED conversation, in-process",
+        "                      (no OS input); test-only navigation helper for skipline",
+        "  loadgame <slot>     fire a GENUINE mid-session Load Game action, in-process (no",
+        "                      clicks); slot is 0-based, most-recent-first",
+        "retail console cheats, already co-op-safe (they touch only your game):",
+        "  giveitem <resref> | givecredits <n> | addexp <n> | addlevel | heal",
+        "  revealmap | infiniteuses | invulnerability | whereami | bright | turbo",
+    ];
+}
