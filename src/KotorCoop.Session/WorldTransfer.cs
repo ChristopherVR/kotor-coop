@@ -164,7 +164,7 @@ public static class WorldTransfer
     /// a LIVE, ongoing host session needs (roadmap item 14's <c>host_load_readopt</c>/
     /// <c>client_load_rejoin</c>) and the fixed-snapshot overload above cannot provide.
     ///
-    /// ⚠ WHY THIS EXISTS, and the bug it closes. session-save.md's round 86 live pass found
+    /// ⚠ WHY THIS EXISTS, and the bug it closes. docs/research/session-save.md's live pass found
     /// <c>host_load_readopt</c>'s reconnect "actively refused" — diagnosed at the time as a
     /// race against the ENGINE's own <c>CAppManager::DestroyServer</c>/<c>CreateServer</c>
     /// rebuild. Re-auditing the wiring found a deeper cause: nothing in a live

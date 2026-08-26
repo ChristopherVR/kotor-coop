@@ -49,17 +49,17 @@ public enum SaveOrLoadVerdict
 /// <summary>
 /// Turns "my save-identity digest changed" (already detected by <see cref="SaveIdentityWatch"/>,
 /// which cannot by itself tell a save from a load — KOTOR autosaves through every ordinary
-/// module transition too, shared-state-audit.md round 53's live false-positive) into a verdict,
-/// by correlating it against the world-load edge <see cref="SerialEdgeWatch"/> exposes.
+/// module transition too, docs/research/shared-state-audit.md's live false-positive) into a
+/// verdict, by correlating it against the world-load edge <see cref="SerialEdgeWatch"/> exposes.
 ///
 /// THE CORRELATION WINDOW, and why one is needed at all: the two signals do not update in
-/// lockstep, AND — the live-verified round this comment documents — neither signal is
-/// reliably FIRST. The load edge is written the instant the plugin notices an unannounced
-/// world teardown (<c>PluginHost.OnFrame</c>, only once the engine's own multi-step teardown
-/// actually runs); the digest is a re-stat of a file on disk, cached and refreshed on its own
-/// schedule (<c>SaveDigestCache</c>, "up to a 2-second re-stat interval").
+/// lockstep, AND — a live-verified finding — neither signal is reliably FIRST. The load edge
+/// is written the instant the plugin notices an unannounced world teardown
+/// (<c>PluginHost.OnFrame</c>, only once the engine's own multi-step teardown actually runs);
+/// the digest is a re-stat of a file on disk, cached and refreshed on its own schedule
+/// (<c>SaveDigestCache</c>, "up to a 2-second re-stat interval").
 ///
-/// docs/research/session-save.md's round 86 live pass found the ORDER genuinely reverses for
+/// docs/research/session-save.md's live pass found the ORDER genuinely reverses for
 /// the <c>loadgame</c> console verb's own mechanism: <c>PluginMenuLoader.TryStageSaveAsAutosave</c>
 /// rewrites the watched save file on the AGENT'S OWN THREAD, synchronously, BEFORE it ever
 /// asks the engine to load — so the digest edge routinely lands a full second or more before
@@ -71,8 +71,8 @@ public enum SaveOrLoadVerdict
 /// downstream reacts differently to <c>Save</c> vs <c>None</c>, which is exactly why this
 /// stayed invisible) and CONSUMED before the load edge it belonged to ever arrived, so the
 /// classifier never produced a <see cref="SaveOrLoadVerdict.Load"/> at all: this is
-/// <c>client_load_rejoin</c>'s round-86 "the classifier never fires" bug, not a missing edge —
-/// both edges fired, in the wrong-for-this-code order.
+/// <c>client_load_rejoin</c>'s "the classifier never fires" bug, not a missing edge — both
+/// edges fired, in the wrong-for-this-code order.
 ///
 /// The fix: correlation is now symmetric. A load edge is remembered for
 /// <see cref="CorrelationWindowMs"/> and consumed by the next digest change inside it (the

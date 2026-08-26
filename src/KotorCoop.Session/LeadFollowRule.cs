@@ -2,8 +2,8 @@ namespace KotorCoop.Session;
 
 /// <summary>
 /// coop.ini <c>follow_lead</c>: who may lead an area transition that the OTHER side follows
-/// immediately through the announce channel (docs/research/transition-smoothness.md's dated
-/// 2026-08-22 "Lead-swap" entry). <see cref="Any"/> is the new default — either player's
+/// immediately through the announce channel (docs/research/transition-smoothness.md's
+/// "Lead-swap" entry). <see cref="Any"/> is the new default — either player's
 /// committed door crossing becomes an announce the other follows, mirroring the pre-existing
 /// host-leads/client-follows path symmetrically. <see cref="Host"/> restores exactly today's
 /// behaviour: only the host is ever followed, and <see cref="ClientDoorRefusalRule"/> refuses
@@ -54,7 +54,7 @@ public static class LeadFollowRule
     }
 
     /// <summary>
-    /// The host-only safety gate (design point 2 of the 2026-08-22 lead-swap entry): even an
+    /// The host-only safety gate (design point 2 of the lead-swap entry): even an
     /// eligible client announce must not be acted on while interrupting the host would risk
     /// something the host-authoritative channels depend on. All three inputs are computed fresh
     /// by the caller every tick — see <c>CoopAgent</c>'s own doc comments for exactly what each

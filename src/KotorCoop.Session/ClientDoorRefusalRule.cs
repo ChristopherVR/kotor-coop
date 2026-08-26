@@ -3,8 +3,8 @@ using KotorCoop.Protocol;
 namespace KotorCoop.Session;
 
 /// <summary>
-/// The pure decision behind task 3's client-first-door case
-/// (docs/research/transition-smoothness.md), extended 2026-08-22 for lead-swap: should THIS
+/// The pure decision behind the client-first-door case
+/// (docs/research/transition-smoothness.md), extended for lead-swap: should THIS
 /// instance arm the plugin's refusal of a CLIENT-initiated real door transition right now, and
 /// if so, why?
 ///
