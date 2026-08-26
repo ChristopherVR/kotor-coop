@@ -57,7 +57,23 @@
     <Compile Include="..\..\src\KotorCoop.Plugin\LivenessRule.cs" Link="Plugin\LivenessRule.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\JournalApplyRule.cs" Link="Plugin\JournalApplyRule.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\SharedBlock.cs" Link="Plugin\SharedBlock.cs" />
+    <Compile Include="..\..\src\KotorCoop.Plugin\SharedBlock.Items.cs" Link="Plugin\SharedBlock.Items.cs" />
+    <Compile Include="..\..\src\KotorCoop.Plugin\SharedBlock.Combat.cs" Link="Plugin\SharedBlock.Combat.cs" />
+    <Compile Include="..\..\src\KotorCoop.Plugin\SharedBlock.Party.cs" Link="Plugin\SharedBlock.Party.cs" />
+    <Compile Include="..\..\src\KotorCoop.Plugin\SharedBlock.Session.cs" Link="Plugin\SharedBlock.Session.cs" />
+    <Compile Include="..\..\src\KotorCoop.Plugin\SharedBlock.Dialogue.cs" Link="Plugin\SharedBlock.Dialogue.cs" />
+    <Compile Include="..\..\src\KotorCoop.Plugin\SharedBlock.World.cs" Link="Plugin\SharedBlock.World.cs" />
+    <Compile Include="..\..\src\KotorCoop.Plugin\SharedBlock.Browser.cs" Link="Plugin\SharedBlock.Browser.cs" />
+    <Compile Include="..\..\src\KotorCoop.Plugin\SharedBlock.Cheats.cs" Link="Plugin\SharedBlock.Cheats.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\SharedBlockView.cs" Link="Plugin\SharedBlockView.cs" />
+    <Compile Include="..\..\src\KotorCoop.Plugin\SharedBlockView.Items.cs" Link="Plugin\SharedBlockView.Items.cs" />
+    <Compile Include="..\..\src\KotorCoop.Plugin\SharedBlockView.Combat.cs" Link="Plugin\SharedBlockView.Combat.cs" />
+    <Compile Include="..\..\src\KotorCoop.Plugin\SharedBlockView.World.cs" Link="Plugin\SharedBlockView.World.cs" />
+    <Compile Include="..\..\src\KotorCoop.Plugin\SharedBlockView.Session.cs" Link="Plugin\SharedBlockView.Session.cs" />
+    <Compile Include="..\..\src\KotorCoop.Plugin\SharedBlockView.Cheats.cs" Link="Plugin\SharedBlockView.Cheats.cs" />
+    <Compile Include="..\..\src\KotorCoop.Plugin\SharedBlockView.Browser.cs" Link="Plugin\SharedBlockView.Browser.cs" />
+    <Compile Include="..\..\src\KotorCoop.Plugin\SharedBlockView.Dialogue.cs" Link="Plugin\SharedBlockView.Dialogue.cs" />
+    <Compile Include="..\..\src\KotorCoop.Plugin\SharedBlockView.Party.cs" Link="Plugin\SharedBlockView.Party.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\WorldLoadRule.cs" Link="Plugin\WorldLoadRule.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\PartyFollowTransitionRule.cs" Link="Plugin\PartyFollowTransitionRule.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\FinalNodeGeometryRule.cs" Link="Plugin\FinalNodeGeometryRule.cs" />
