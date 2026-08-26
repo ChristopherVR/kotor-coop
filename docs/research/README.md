@@ -1,42 +1,147 @@
-# Research (2026-07-31)
+# Research
 
-Five parallel deep-dives into the retail GOG binary and game files, feeding the
-"proper co-op experience" build. Each is verified against `swkotor.exe` (GOG, disk ==
-memory) or the symbol DB / game files, not folklore. Nothing in the game install was
-modified.
+68 write-ups behind every feature in the top-level README, plus the reverse-engineering they
+stand on. Each is verified against the retail GOG `swkotor.exe` v1.0.3 (disk == memory, no
+ASLR) or the game files themselves, not folklore.
 
-| File | Topic | Headline |
+## How these docs are organised
+
+Most are **append-only logs**: a doc gets a new dated section every time a round of work
+touches its subject, rather than being rewritten in place, so the history of what was tried
+and what was found stays readable. [shared-state-audit.md](shared-state-audit.md) is the
+**master log** — the place to start for what actually replicates today versus what only
+looks like it does. A doc marked **superseded** is kept for its history even though a later
+doc now owns the subject; do not delete it and do not treat its earlier claims as current.
+Status below is read off each file's own most recent section, not guessed.
+
+Tag legend used inside the docs themselves: **VERIFIED** = read out of the binary or asserted
+by a unit test. **NEEDS-LIVE** = reasoned but not yet observed in a running game — every one
+fails safe. **INFERRED** = a reasonable deduction, not directly proven.
+
+## Presence & movement
+
+| Doc | Subject | Status |
 | --- | --- | --- |
-| [name-plates.md](name-plates.md) | phantom name in the selection band | server write was correct; must ALSO write the client twin (band never re-transmits names). No TLK. |
-| [map-presence.md](map-presence.md) | peer on the map | map reads waypoint position live/frame — a directly-constructed peer-pin waypoint, moved per tick. ~150 lines, no asset. Bonus: shared fog reveal. |
-| [override-surfaces.md](override-surfaces.md) | game files vs plugin | ship `k_coop_phantom.utc` (blanks stock AI, fixes equip profs, sets min1hp/faction); main-menu = hybrid; never ship 2DA/TLK. |
-| [party-reconciliation.md](party-reconciliation.md) | companions drift | ownership split via solo mode + explicit ActionFollowLeader, keyed by NPC slot. Corrects trap 5 (commandable≠stop). Medium, needs live measurement. |
-| [mod-compatibility.md](mod-compatibility.md) | different mods per peer | 20 assumptions (several C); two-phase digest handshake; wire the already-computed globals digest first. **§"What is enforced today" is the current reference**: exact digest inputs, the degradation matrix, and why a save mismatch now DEGRADES (adoption is the recovery) while a refusal is finally carried out instead of silently zeroing everyone's channels. |
-| [connect-flow.md](connect-flow.md) | in-game Connect UI | rebind BTN_WARP; reuse CSWGuiSaveNamePanel as an IP prompt; password stays in coop.ini. |
-| [console-overlay.md](console-overlay.md) | in-game `~` console | retail ships the whole Aurora dev console; enable via EnableCheats and READ the command buffer — no guessed callback ABI, no crash risk. `PrintStringScreenPos 0x0044CCA0` paints reply lines. |
-| [connect-flow.md](connect-flow.md) | in-game Connect UI | achievable — rebind BTN_WARP, reuse CSWGuiSaveNamePanel as an IP prompt (real editbox at panel+0x548); no password masking (keep it in coop.ini). |
-| [enemy-presence-sync.md](enemy-presence-sync.md) | one visible fight, not two private ones | owner streams enemy position/facing/stance (protocol v12); mirror drives its copies with the phantom recipe and disarms local enemy AI per pass. Combat-participation options recorded. **§"Root cause 2026-08-15" is the current reference for id validity**: a vtable scan cannot tell a live creature from the intact bytes of a destroyed one, so the census published ids its own publisher could not resolve (proof: the same id at two addresses in one host dump) and a peer's forwarded damage keyed by one was owed for ever. The agent now confirms every scanned creature through the engine's own `CGameObjectArray` — transcribed from 0x004D8230, id AND address must match — and distrusts itself rather than the world when it confirms nothing. |
-| [client-encounters.md](client-encounters.md) | a CLIENT walking into an ambush | event 0xC is just `[+0x2E0] = enterer; SpawnIfAppropriate` — reproduce it on the host with the peer's phantom. `player_only` (34 of 47 base-game encounters) is the gate. §8's materialisation gap is CLOSED — see enemy-materialisation.md. |
-| [enemy-materialisation.md](enemy-materialisation.md) | the mirror BUILDS an enemy it lacks | no blueprint name survives on a live creature and the tag lies (53/156 encounter entries) — so the census carries appearance+faction and the mirror rebuilds from the phantom recipe, with an ownerId↔localId map. The `+0x08` type-field trap, birth grace, and the fault-proof sweep live here. |
-| [peer-damage-ledger.md](peer-damage-ledger.md) | carrying a peer's contribution to a fight | health was a level the owner's own mirror kept overwriting before it could be sampled — so a peer now sends a cumulative sum of damage DEALT, and the owner spends it as real engine damage. Proves from the instruction stream that re-running the receiver's resistance pipeline is not double-counting (the amounts are pre-resistance; difficulty never applies to an enemy). The kill falls out of the arithmetic. |
-| [world-adoption.md](world-adoption.md) | a joiner plays the HOST's world, with their own character | the save-identity gate could only ever refuse a player who had played alone; adoption makes it pass by construction. The host's save is staged over the autosave slot and the joiner's character is carried in as `Temp\pifo.ifo`, so the engine's own `LoadCharacterFromIFO(-1)` flavour — the one `MenuLoadController` deliberately reroutes AWAY from — becomes the correct path. Measured: a saved PC's `ObjectId` is the `0x7FFFFFFF` sentinel, so nothing can collide. ⚠ §3: a host AUTOSAVE carries a pifo, which would put both players in the same body. |
-| [cinematics.md](cinematics.md) | movies and cutscenes in a co-op session | a movie does not run alongside the game, it REPLACES it: `WaitForMovie 0x005F6F20` spins the main thread until Bink is done, so the server tick never runs and NEITHER plugin frame hook fires — during a cinematic this mod is unreachable, not idle. The lever: `move_to_module_movies` (`CClientExoAppInternal+0x2D8`) is drained by the same `StartNewModule` the co-op warp already goes through, so one `AddMoveToModuleMovie` per name makes a peer's transition play the owner's movie. Skip must NOT be mirrored — it is consumed inside the blocking loop, on both sides. And the canonical case is worse than "the client misses a movie": Endar Spire → Taris routes through the stunt module `STUNT_00`, which the follow logic correctly refuses to enter, so the second player misses `01c`, the whole vision and `01f`, waits alone in a module the story has left, then teleports to Taris. Ships the stall/queue instrumentation the live test reads. |
-| [network-topology.md](network-topology.md) | peer-to-peer, and a host with nobody at the controls | two verdicts. **Keep the star relay**: the transport is already destination-per-send, the host already survives a client rebinding, and the identity + session-id material a hole punch needs is already on the wire (the session id is minted, sent, and thrown away) — but the prize is one hop, at three or more players, and every channel is shaped for one writer. **Dedicated = a parked PC, not headless**: the engine's login chain always manufactures a player and the load handshake waits for two of them, and four `_player is not null` gates mean a PC-less host fails *silently*. 68 host-has-a-human sites enumerated, 24 already graceful; the primary-player role is "lowest live peer id", which join order already gives for free. |
-| [item-identity.md](item-identity.md) | an item that travels is THIS item, not its blueprint | `CreateItemOnFloor` takes a template and nothing else, so a replicated item arrived stock. `SaveItem` 0x0055CCD0 names the five fields that would be lost — stack size, charges, max charges, the upgrade MASK at +0x294, and three bits of +0x288 — and the workbench (0x006C5620) already rebuilds an upgraded weapon by copying exactly those onto a fresh `LoadFromTemplate` body, with no rebuild call after. Upgrades are a bitmask over blueprint-supplied properties tagged `UpgradeType`, so one dword carries them all. Protocol 24, block version 39; "unknown" stays a first-class answer. |
-| [disconnect-reconnect.md](disconnect-reconnect.md) | the link drops, and comes back | killing the agent was the EASY failure — sockets close and both ends get a clean edge. A real drop gives none: sockets stay open, packets vanish, the host expires a peer that still thinks it is connected. A transport fault injector (`coop netsim blackout 10`) makes that shape reproducible, and it found eight bugs, chief among them that a peer gone longer than the timeout came back with a NEW id — which every cumulative channel keys on, so its damage was banked twice, its phantom doubled on third screens, and its earnings were dropped. No protocol change. |
-| [console-cheats.md](console-cheats.md) | console assist + staging cheats | the assist is real and on screen (Tab/cycle/Escape/argument hints/history that survives a restart), and completion now reads the ENGINE's own command table so retail verbs complete too. The 35 retail cheats are LOCAL-ONLY and therefore already co-op-correct — so co-op adds only the verbs whose answer depends on who typed them. `slay` is the one that matters: the owner kills, a mirror spends the kill through the damage ledger. No new engine calls (callaudit unchanged at 122/122). |
-| [client-control-lock.md](client-control-lock.md) | pinning a client to its own PC — and giving it back | the gate is an OBJECT ID (`[[[0x7A39FC]+4]+0x270]+0x24`), so the lock can never crash. Plus the 2026-08-15 half: the swap suppression was a session LEVEL nobody lowered on disconnect, which left `ChangeCharacter` — Tab, every portrait, the death auto-swap — returning immediately for the rest of the process. Teardown is now a named list with the command lowered last, and its falling edge releases every controller in one place. `ControlReturnController` hands the CAMERA back too, which an external id write never could. And the third leak the rig then found: a refused destroy (the script VM mid-call) cleared the slot anyway in all four spawners, so one declined call orphaned a `coop_phantom` in the player's game forever — refusals are retried now, and the drain never ends silently. |
-| [engine-api.md](engine-api.md) | every engine call the plugin makes | the callee's own `ret` immediate IS the argument size, so a declaration can be checked mechanically. Two were wrong; `RemoveFromArea` leaked four bytes of stack per call, which is how a 0xC0000409 fast-fail appears somewhere unrelated. 5,399 DB rows now confirmed against this binary, 310 known bad. `tools/callaudit.py` guards it in verify.ps1. |
-| [minigames.md](minigames.md) | swoop races, turret sequences, Pazaak (roadmap item 8) | `CSWCModule::GetMiniGame` 0x00641980 is `[[module+0x48]+0x264]` — nonzero means a swoop race or forced turret sequence is running; corrects the old "cutscene flag" reading. `PlayerState.FlagInMinigame` rides the existing flags dword (no protocol layout change beyond the version bump); a peer's instance parks their phantom instead of mirroring it, and the minigame player's own instance stops publishing enemy/party presence and applying forwarded damage for the duration. Pazaak is unrelated machinery (`CClientExoAppInternal+0x70`, ordinary GUI panels) and is not detected by this. NEEDS-LIVE. |
-| [control-return.md](control-return.md) | locked onto a companion at connect (2026-08-22 regression) | a client who was already controlling Trask before connecting stayed locked onto him: `PartyRosterController`'s door-transition clamp trims whichever member sits at the END of `CSWParty`'s array, and a pre-connect control switch reorders that array so the END is the PC's own slot instead of a companion's. Fixed by deferring the clamp (`PartyTogetherClampRule`) while the player is still driving a session-owned companion; resumes the instant control-return lands it back on the PC. Live pass (2026-08-22): host-untouched and disconnect-while-on-PC scenarios closed; the regression scenario itself did not converge — `ControlReturnController`'s detection (`GetPlayerCreaturePointer`) traces to a call chain neither of the two safe, documented control-write fields reaches. NEEDS-LIVE, narrowed — `tools/control-return-live.ps1` (now scripted via the dev-only `leader <slot|pc>` verb, no manual step). |
-| [companion-combat-credit-plan.md](companion-combat-credit-plan.md) | does a released companion's swing land as CREDITED damage | staged, not yet run: `companion_local_combat`'s release/reclaim gate is proven clean but the swing itself never observed. Reads the whole release->credit pipeline sound by inspection, but neither of two prior documents' own assumption that solo mode may block a released companion's combat AI (not just follow-AI) was ever tested — ships a read-only diagnostic (`PartyPresenceController`'s per-slot `head`/`moveState`/`soloMode` log line) built to answer that live, cheaply, with an exact staged recipe and decision tree. |
-| [lag-audit.md](lag-audit.md) | "sometimes quite a bit of lag even on localhost" | separates phantom/enemy movement lag (a deliberate interpolation buffer, 150 ms combat-pump + 150 ms mirror-smoother stacking on the companion path, an 80 ms repath-cooldown floor) from frame-time hitching (`EnemyPresenceController`'s ungated every-frame scan was the top suspect; the phantom spawn path is rare but real; no lock exists in `SharedBlock` at all, so a slow agent scan cannot stall a frame that way). Ships `frame_stats` (a plugin-side per-frame histogram) and `lagstats` (an in-game console verb). Measured (2026-08-22): a ~190s connected session found both instances comfortably under budget (2-3 ms mean frame time), with hitches tied to the module-load transition rather than any per-frame controller — `EnemyPresenceController` was NOT gated, since the measured pattern didn't implicate it. `interp_ms` (already coop.ini-configurable) was already live-tuned to 0 in both installs. Shipped `party_fast_pump` to remove one of the two stacked 150 ms companion-mirror windows; its first two A/Bs (2026-08-23) found no benefit, both confounded by the companion follow-AI stall bug of the time (a frozen companion has no position lag to reduce) — a third A/B (2026-08-24), against a companion genuinely walking/following after that bug was fixed, measured a real, reproduced ~45-55% cut in companion-position lag with no regression, and the flag now ships **ON by default**. |
+| [name-plates.md](name-plates.md) | Getting a phantom's name to actually render | Solved, fixed, live-verified |
+| [map-presence.md](map-presence.md) | Peer pins on the M-screen map | Solved, implemented, live-verified |
+| [animation-sync.md](animation-sync.md) | Weapon-draw/flourish/attack animation replication | Superseded by [animation-and-minimap.md](animation-and-minimap.md) |
+| [animation-and-minimap.md](animation-and-minimap.md) | Animation replication + minimap arrow, both bugs | Fixed, live-verified; supersedes animation-sync.md §1.2 |
+| [minimap-peers.md](minimap-peers.md) | A peer's arrow on the minimap (not just the M-screen) | Implemented, live-verified (screenshot), ON by default |
+| [realtime-creature-movement.md](realtime-creature-movement.md) | The per-frame position-drive recipe every mirror channel uses | RE reference; the recipe is live-verified through its callers |
+| [phantom-locomotion.md](phantom-locomotion.md) | Why a phantom slides instead of walking/running | Root-caused, fixed, live-verified, 0% idle-while-moving |
 
-Priority order for implementation (value / risk):
-1. **Name plates client-twin write** — small, closes a wrong claim, verifiable in memory.
-2. **Map presence** — small, no protocol, high visible value.
-3. **k_coop_phantom.utc + shrink MarkAsRemotePlayer** — small, mod-safe, fixes equip risk.
-4. **Mod-compat hardening** — wire the globals digest; failure-code + latch for missing
-   blueprint (#3); clamp appearance rows (#2); exe hash (#5). Medium.
-5. **Digest handshake** — protocol v4, needs the C# game-file readers. Medium-large.
-6. **Party reconciliation** — medium, gated on live solo-mode measurement.
+## Travel & transitions
+
+| Doc | Subject | Status |
+| --- | --- | --- |
+| [transition-window-races.md](transition-window-races.md) | Four crash/desync races found by warping a live pair | Root-caused, fixed; established the project's four safe-write patterns |
+| [transition-smoothness.md](transition-smoothness.md) | Closing the gap between the host's door and the follower's warp | Implemented, live-verified, ~9x faster follower warp, ON by default |
+| [world-adoption.md](world-adoption.md) | A joiner plays the host's world with their own character | Implemented, live-verified (`agent adopt`) |
+| [character-login-chain.md](character-login-chain.md) | Why an in-process load spawns a default-level-0 PC | Root-caused, fixed |
+| [ingame-gui-transition.md](ingame-gui-transition.md) | Why an in-process load never leaves the main menu | Root-caused, fixed |
+| [cinematics.md](cinematics.md) | What a mid-module movie does to a live pair | Implemented, live-verified, ON by default |
+| [session-save.md](session-save.md) | Mid-session save/load: rejoin gates and the `loadgame` verb | Design → implemented, live-verified both directions, ON by default |
+
+## Combat
+
+| Doc | Subject | Status |
+| --- | --- | --- |
+| [combat-participation.md](combat-participation.md) | Making owner-side enemies threaten the phantom safely | Design + implemented, live-verified; some §7 items remain NEEDS-LIVE |
+| [combat-when-apart.md](combat-when-apart.md) | What happens when the two players are not together | Reviewed; encounters-only-fire-for-host gap intentionally NOT fixed (structural) |
+| [enemy-presence-sync.md](enemy-presence-sync.md) | One visible fight instead of two private ones | Design over verified research; implemented, live-verified |
+| [enemy-materialisation.md](enemy-materialisation.md) | Building a mirror body for an enemy the mirror has none for | Implemented, live-verified |
+| [peer-damage-ledger.md](peer-damage-ledger.md) | Carrying a peer's damage as DEALT, not sampled health | Implemented, live-verified |
+| [client-encounters.md](client-encounters.md) | Making a client's own ambush trigger fire for the host | Implemented, live-verified, ON by default |
+| [min-one-hitpoint.md](min-one-hitpoint.md) | Why a player floors at 1 hp and never goes down | Root-caused (KOTOR's own tutorial script); one related stale-GUI bug logged, open |
+| [death-handling.md](death-handling.md) | The death pipeline, control-swap, game-over, revival | RE reference; downed/revive implemented and live-verified elsewhere |
+| [spectate-camera.md](spectate-camera.md) | The camera handoff to a downed player's partner | Implemented, live-verified, ON by default |
+| [creature-liveness.md](creature-liveness.md) | Reconciling a body alive on one screen, dead on the other | Design → live-verified for the first time; OFF by default; one sub-theory open, blocked on a missing `spawncreature` verb |
+| [effect-sync.md](effect-sync.md) | The generic non-damage effect dispatcher | Implemented, live-verified both directions; code default ON, shipped `coop.ini.example` OFF |
+
+## Dialogue
+
+| Doc | Subject | Status |
+| --- | --- | --- |
+| [dialogue-sync.md](dialogue-sync.md) | Synchronizing conversations across two instances | Implemented, live-verified |
+| [dialogue-join-latency.md](dialogue-join-latency.md) | Why a joiner's subtitles lag | Measured; this doc's own A/B found no confirmed improvement (superseded in practice by dialogue-skip-desync.md's decisive case) |
+| [dialogue-skip-desync.md](dialogue-skip-desync.md) | Rapid mid-sentence skip desyncing a peer | Root-caused, fixed, live-verified; `dialogue_fast_join=1` flipped ON the same day |
+| [dialogue-consequences.md](dialogue-consequences.md) | Getting a reward node's effect and a recruit onto the peer | Design → implemented; recruit sync live-confirmed for two companions, code default OFF (shipped ini ON) |
+| [click-to-join-and-vo.md](click-to-join-and-vo.md) | Click-to-join annulment, and a voice-over gag | Both root-caused, fixed |
+| [bark-replay.md](bark-replay.md) | Why replaying an NPC bark crashed the process | Root-caused, fixed, live-verified |
+
+## Party, companions & progression
+
+| Doc | Subject | Status |
+| --- | --- | --- |
+| [party-reconciliation.md](party-reconciliation.md) | Companion follow-AI, drift, and local combat — the master thread | Multiple stalls root-caused and fixed across many rounds; one narrow terminal-node stall remains, fix candidates unconfirmed live, off by default |
+| [client-control-lock.md](client-control-lock.md) | Pinning a client to its own PC, never a shared companion | RE reference; implemented |
+| [control-return.md](control-return.md) | Regression: a client locked onto a companion at connect | Root-caused, fixed, live-verified |
+| [companion-combat-credit-plan.md](companion-combat-credit-plan.md) | Live-test plan: does a released companion's swing land as credited damage? | Run; decisive result on the solo-mode hypothesis; superseded in practice by later party-reconciliation.md rounds |
+| [progression-sync.md](progression-sync.md) | Sharing party gold and character XP/level | Research/design; several policy and GUI-repaint questions remain open, NEEDS-LIVE |
+
+## World state
+
+| Doc | Subject | Status |
+| --- | --- | --- |
+| [placeables-containers.md](placeables-containers.md) | Extending door-style sync to placeables, containers, traps | Design + implemented (unit-tested); NOT live-verified on the two-instance rig |
+| [container-sync.md](container-sync.md) | Container/corpse open-close sync and the use-lock | Implemented, live-verified, ON by default; `container_fast_pump` off pending a live A/B |
+| [item-identity.md](item-identity.md) | What a `CSWSItem` carries that its blueprint does not | Implemented; apply path live-tested via the console item-identity loop |
+| [quest-sync.md](quest-sync.md) | Non-monotonic globals, journal removal, the Lamport-clock fix | Implemented, live-verified, ON by default |
+| [map-reveal.md](map-reveal.md) | Fog-of-war sync around a peer's position | Implemented; pinned VERIFIED by static RE, OFF by default pending a live pass |
+| [trigger-relay.md](trigger-relay.md) | Making a generic trigger's `OnEnter` fire for both players | Implemented, live-verified, protocol 36; code default ON, shipped `coop.ini.example` OFF |
+
+## Session, network, menu & console
+
+| Doc | Subject | Status |
+| --- | --- | --- |
+| [console-overlay.md](console-overlay.md) | The `~` console's buffer/render side | Superseded by [text-render-queued.md](text-render-queued.md) |
+| [text-render-queued.md](text-render-queued.md) | Queued screen text, rendered from the frame hook | RE reference, implemented; supersedes the earlier direct-call rendering approach |
+| [menu-button-runtime.md](menu-button-runtime.md) | Forcing the dormant BTN_WARP visible as the Co-op button | RE reference, implemented, live-verified |
+| [menu-frame-hook.md](menu-frame-hook.md) | The per-frame hook point that fires at the main menu | RE reference, implemented; the real hook menu-button-runtime.md and text-render-queued.md both need at the menu |
+| [console-register.md](console-register.md) | Registering a native `~`-console command | RE reference, implemented |
+| [console-open-safe.md](console-open-safe.md) | Programmatically opening the `~` console | RE reference, implemented |
+| [console-cheats.md](console-cheats.md) | Console assist plus the co-op staging cheats | Implemented, live-verified; missing the `recruit` verb (added after this doc's last verb-table update) |
+| [chat-input-scroll.md](chat-input-scroll.md) | In-game chat input and overlay scrolling | RE reference, implemented |
+| [text-color-alpha.md](text-color-alpha.md) | Screen text with color/alpha | RE reference, implemented |
+| [native-browser-panel.md](native-browser-panel.md) | Repurposing `CSWGuiSaveLoad` as the server browser | RE reference, implemented |
+| [server-browser.md](server-browser.md) | The main-menu scrollable server list | RE reference, implemented |
+| [connect-flow.md](connect-flow.md) | The in-game Connect panel and password entry | Implemented; some on-screen display specifics remain NEEDS-LIVE |
+| [disconnect-reconnect.md](disconnect-reconnect.md) | What happens when the link between two players fails | Implemented; some live-rig specifics remain NEEDS-LIVE |
+| [network-topology.md](network-topology.md) | Peer-to-peer vs. a dedicated host | Reference / design discussion, no build implied |
+| [mouse-cursor-input.md](mouse-cursor-input.md) | Where the engine's mouse cursor lives and how to click | RE reference; one resolution caveat NEEDS-LIVE |
+
+## Engine reverse-engineering
+
+| Doc | Subject | Status |
+| --- | --- | --- |
+| [engine-api.md](engine-api.md) | Every engine function address the plugin calls | RE reference, kept in sync by `tools/callaudit.py` |
+| [override-surfaces.md](override-surfaces.md) | Override/game-file precedence vs. the plugin | RE reference; informs the mod-compatibility rules |
+| [no-re-features.md](no-re-features.md) | What's addable from data-driven/modding surfaces alone, zero new RE | RE reference / scope notes |
+
+## Minigames
+
+| Doc | Subject | Status |
+| --- | --- | --- |
+| [minigames.md](minigames.md) | Swoop races, forced turret sequences, and Pazaak | Swoop-race entry gate found and solved; the terminal transition call is BLOCKED, needs a real debugger this project doesn't have; turret sequence confirmed working as designed |
+
+## Mods
+
+| Doc | Subject | Status |
+| --- | --- | --- |
+| [mod-compatibility.md](mod-compatibility.md) | Mod compatibility audit and the digest-handshake design | Design + implemented; live-exercised 7 of 8 mismatch categories |
+
+## Crashes
+
+| Doc | Subject | Status |
+| --- | --- | --- |
+| [phantom-equip-crash.md](phantom-equip-crash.md) | Access violation in `CExoString::CompareNoCase_2` on equip | Root-caused, fixed; one specific caller left NEEDS-LIVE |
+| [world-up-faction-crash.md](world-up-faction-crash.md) | `GetSingletonParty(null)` crash in the object-update writer | Root-caused, fixed |
+| [travel-map-init-crash.md](travel-map-init-crash.md) | `InitializeMap` crash on a moduleless server | Root-caused, fixed |
+
+## Meta
+
+| Doc | Subject | Status |
+| --- | --- | --- |
+| [shared-state-audit.md](shared-state-audit.md) | What actually replicates, and what only looks like it does | **Master append-only log** — live-verified findings across many rounds |
+| [symmetry.md](symmetry.md) | Auditing that every shared action is symmetric regardless of host/client | Audited; no new asymmetry found, click-to-join symmetry live-verified for all four `dialogue_auto_join` modes |
+| [lag-audit.md](lag-audit.md) | Static + live audit of every per-frame cost and latency budget | `party_fast_pump` shipped ON by default off a measured win; its heavy-combat frame-time regression found and closed |
