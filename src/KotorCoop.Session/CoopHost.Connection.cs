@@ -1,0 +1,320 @@
+using System.Net;
+using KotorCoop.Protocol;
+
+namespace KotorCoop.Session;
+
+/// <summary>
+/// CoopHost peer-connection lifecycle: the Hello handshake and reconnection (including
+/// retired-identity reclaim), per-tick state updates from a peer, liveness pings, and
+/// Bye/timeout departure. See CoopHost.cs for the class's core fields, the tick loop and
+/// the packet-dispatch registry.
+/// </summary>
+public sealed partial class CoopHost
+{
+    private void HandleHello(IPEndPoint from, ReadOnlySpan<byte> span, long now)
+    {
+        if (PacketCodec.ReadHello(span) is not { } hello)
+        {
+            _channel.NoteMalformed();
+            return;
+        }
+
+        // Password gate first — the cheapest reason to turn a stranger away, and the one
+        // the player most wants a clear answer to. An open session (no password) matches
+        // any client, including one that supplies a password.
+        uint required = SessionPassword.Hash(_settings.Password);
+        if (required != SessionPassword.None && hello.PasswordHash != required)
+        {
+            int rejectLength = PacketCodec.Write(_replyBuffer, new RejectPacket("E_PASSWORD: wrong password"));
+            if (rejectLength > 0)
+            {
+                _channel.Send(from, _replyBuffer.AsSpan(0, rejectLength));
+            }
+
+            return;
+        }
+
+        // Content compatibility is judged before admission. A refusal (different exe, or a
+        // different save when that is not allowed) is sent as a typed Reject so the client
+        // stops retrying and can tell the player why, rather than hanging on a silent host.
+        ContentCompatibility.RequireIdenticalSave = _settings.RequireIdenticalSave;
+        CompatibilityVerdict verdict = ContentCompatibility.Compare(_settings.Digest, hello.Digest);
+        _compatibility = verdict;
+
+        if (!verdict.Admitted)
+        {
+            int rejectLength = PacketCodec.Write(_replyBuffer, new RejectPacket(verdict.Summary));
+            if (rejectLength > 0)
+            {
+                _channel.Send(from, _replyBuffer.AsSpan(0, rejectLength));
+            }
+
+            return;
+        }
+
+        uint assignedId;
+        bool freshlyAdmitted = false;
+
+        lock (_gate)
+        {
+            // Match a returning peer by its stable nonce first, then by endpoint. The nonce
+            // is what makes reconnection seamless: a client that dropped and came back —
+            // possibly from a new ephemeral port — reclaims its existing slot (same id,
+            // same name, its phantom never doubled) instead of joining as a stranger while
+            // its old slot lingers until timeout. Hello is also retransmitted until Welcome
+            // lands, so a plain repeat must return the same id too.
+            PeerConnection? existing =
+                _peers.Values.FirstOrDefault(p => p.Nonce == hello.ClientNonce)
+                ?? _peers.Values.FirstOrDefault(p => p.EndPoint.Equals(from));
+
+            if (existing is not null)
+            {
+                existing.LastSeenMs = now;
+                existing.EndPoint = from;
+                existing.InstallVerdict = verdict;
+                assignedId = existing.Id;
+            }
+            else
+            {
+                if (_peers.Count + 1 >= ProtocolConstants.MaxPeers)
+                {
+                    int rejectLength = PacketCodec.Write(_replyBuffer, new RejectPacket("session full"));
+                    if (rejectLength > 0)
+                    {
+                        _channel.Send(from, _replyBuffer.AsSpan(0, rejectLength));
+                    }
+
+                    return;
+                }
+
+                // ⚠ A blackout longer than the peer timeout expires the slot, so by the time
+                // the link is back this is a peer with no live entry — and it MUST NOT be
+                // dealt a fresh id. Reclaim the retired identity if this nonce ever held one.
+                string name;
+                if (_retired.Remove(hello.ClientNonce, out RetiredPeer? previous))
+                {
+                    assignedId = previous.Id;
+
+                    // The id must be the old one; the NAME should be whatever they are
+                    // called now, falling back to what they were called before.
+                    name = string.IsNullOrWhiteSpace(hello.PlayerName) ? previous.Name : hello.PlayerName;
+                }
+                else
+                {
+                    assignedId = _nextPeerId++;
+                    name = string.IsNullOrWhiteSpace(hello.PlayerName) ? $"peer{assignedId}" : hello.PlayerName;
+                }
+
+                _peers[assignedId] = new PeerConnection
+                {
+                    Id = assignedId,
+                    EndPoint = from,
+                    Name = name,
+                    Nonce = hello.ClientNonce,
+                    LastSeenMs = now,
+                    InstallVerdict = verdict,
+                };
+
+                freshlyAdmitted = true;
+            }
+        }
+
+        if (freshlyAdmitted)
+        {
+            // A peer that has been away long enough to lose its live entry has also been away
+            // long enough to miss container-loot removals — the one world channel with no
+            // version tripwire to notice a gap, because a removal is announced once, reliably,
+            // and then never mentioned again. Re-offer everything known so the chests it slept
+            // through are empty in its copy too. Enqueue dedups by (container, item) against
+            // ops already in flight, and every recipient dedups on the pair regardless of who
+            // announced it, so re-offering costs the peers that already have them nothing.
+            ResyncContainerLoot(now);
+
+            // Anything still unacked backed off while there was nobody to send it to; a peer
+            // arriving is the moment to try again rather than 4 seconds later.
+            _lootSender.ResetBackoff();
+
+            // Same reasoning, for materialised-enemy death loot. Item 11(b) closed this pass:
+            // ResyncMaterialisedLoot re-offers the bounded history alongside the ordinary
+            // in-flight resend, so an op that had already fully retired before this peer
+            // reconnected is not lost the way it used to be — see that method's own doc.
+            ResyncMaterialisedLoot(now);
+            _materialisedLootSender.ResetBackoff();
+
+            // Same speed-up, same narrow gap: a dialogue grant still in flight when this peer
+            // reconnects goes out again immediately rather than waiting out a backoff, but one
+            // already fully retired before it came back is not resent.
+            _dialogueGrantSender.ResetBackoff();
+
+            // A returning client's FIRST liveness packet is a full snapshot (every cycle
+            // already is one), so all this needs is to not make them wait out the ordinary
+            // 2-second interval for it — see BroadcastCreatureLiveness.
+            _forceLivenessBroadcast = true;
+        }
+
+        WelcomePacket welcome = new(
+            assignedId, _sessionId, (byte)_settings.TickRate, ProtocolConstants.MaxPeers, _settings.Digest);
+        int length = PacketCodec.Write(_replyBuffer, welcome);
+        if (length > 0)
+        {
+            _channel.Send(from, _replyBuffer.AsSpan(0, length));
+        }
+    }
+
+    private void HandleStateUpdate(IPEndPoint from, ReadOnlySpan<byte> span, long now)
+    {
+        if (PacketCodec.ReadStateUpdate(span) is not { } update)
+        {
+            _channel.NoteMalformed();
+            return;
+        }
+
+        string name;
+
+        lock (_gate)
+        {
+            if (!_peers.TryGetValue(update.PeerId, out PeerConnection? peer))
+            {
+                return;
+            }
+
+            // Endpoints can change (NAT rebinding); trust the latest source address.
+            peer.EndPoint = from;
+            peer.LastState = update.State;
+            peer.LastSeenMs = now;
+            name = peer.Name;
+        }
+
+        _buffer.Push(update.PeerId, name, update.State, now);
+    }
+
+    private void HandlePing(IPEndPoint from, ReadOnlySpan<byte> span, long now)
+    {
+        if (PacketCodec.ReadPing(span) is not { } ping)
+        {
+            _channel.NoteMalformed();
+            return;
+        }
+
+        // ⚠ ONLY A KNOWN PEER GETS AN ANSWER — the same rule every other peer-keyed handler
+        // applies, and here it is what lets a forgotten client find out that it has been
+        // forgotten. A client's whole liveness signal is "am I hearing anything", and after
+        // the host expires a peer it sends that peer nothing: no snapshot, no roster, no
+        // dialogue token. Except a Pong. Answering a stranger's ping refreshed the ghost's
+        // clock once a second forever, so a client whose upstream had failed and recovered
+        // sat there fully connected in its own opinion, streaming an avatar under a peer id
+        // the host discards, visible to nobody. Silence is the message.
+        lock (_gate)
+        {
+            if (!_peers.ContainsKey(ping.PeerId))
+            {
+                return;
+            }
+        }
+
+        int length = PacketCodec.Write(_replyBuffer, new PongPacket(ping.SentTimeMs, now));
+        if (length > 0)
+        {
+            _channel.Send(from, _replyBuffer.AsSpan(0, length));
+        }
+    }
+
+    /// <summary>
+    /// Remembers a departed peer's identity against its nonce. Caller holds <see cref="_gate"/>.
+    ///
+    /// The oldest is dropped once the table is full, which is the only way an identity is ever
+    /// forgotten — a peer whose identity has aged out that far comes back as a new player, and
+    /// the cumulative channels treat it as one (a new peer id is first-sight everywhere, not a
+    /// continuation), so the failure mode of the bound is "loses a contribution", never
+    /// "counts one twice".
+    /// </summary>
+    private void Retire(PeerConnection peer, long nowMs)
+    {
+        _retired[peer.Nonce] = new RetiredPeer(peer.Id, peer.Name, nowMs);
+
+        while (_retired.Count > MaxRetiredPeers)
+        {
+            uint oldest = 0;
+            long oldestAt = long.MaxValue;
+            foreach ((uint nonce, RetiredPeer retired) in _retired)
+            {
+                if (retired.RetiredAtMs < oldestAt)
+                {
+                    oldestAt = retired.RetiredAtMs;
+                    oldest = nonce;
+                }
+            }
+
+            _retired.Remove(oldest);
+        }
+    }
+
+    private void HandleBye(IPEndPoint from, ReadOnlySpan<byte> span, long now)
+    {
+        if (PacketCodec.ReadBye(span) is not { } bye)
+        {
+            return;
+        }
+
+        lock (_gate)
+        {
+            // ⚠ A POLITE DEPARTURE RETIRES THE IDENTITY EXACTLY LIKE A TIMEOUT DOES. This was
+            // contested — the argument against is that the session has announced "so-and-so
+            // left" and everyone tore down accordingly, so resurrecting the id resurrects
+            // state that was deliberately discarded. That premise does not hold here, and the
+            // binary says why.
+            //
+            // WHAT A DEPARTING PLAYER ACTUALLY TEARS DOWN is on THEIR machine:
+            // SessionManager.Disconnect disposes their session and calls ClearCoopState. On
+            // THIS host nothing keyed on their peer id is discarded by the announcement — and
+            // two of the tables that matter are never discarded at all, by design:
+            // _phantomDamageIn (rows are kept deliberately; dropping one walks a monotonic
+            // total backwards) and CoopAgent's PeerDamageLedger, which is scoped to the MODULE
+            // and knows nothing about sessions.
+            //
+            // AND THE DEPARTING PLAYER'S OWN COUNTERS SURVIVE TOO. The running total of damage
+            // they have dealt lives in the plugin's DamageDealtTable, and ClearCoopState does
+            // not touch it (it clears the presence counts, the dialogue flag and the encounter
+            // request — nothing damage-related). The only thing that clears it is
+            // PluginHost.InvalidateAll, which fires on world unload, module change and a
+            // flushed transition — never on a disconnect. Its GENERATION is bumped in the same
+            // place, so it does not move either.
+            //
+            // So a player who quits to the menu and rejoins in the same module reports the SAME
+            // cumulative total under the SAME generation. Deal them a fresh peer id and the
+            // ledger finds no prior row for it, treats all of it as new, and hands the enemy
+            // that player's entire historic contribution a second time — with rule 3 unable to
+            // help, because the generation is exactly what did not change. The third-party
+            // phantom-damage tables double in the same way, and there the victim is a player's
+            // own hit points.
+            //
+            // The invariant is therefore not "clean exit versus dropped link". It is: AN
+            // IDENTITY MUST LIVE AS LONG AS THE COUNTERS KEYED ON IT, and those are scoped to
+            // the module, not to the connection. When a departure really does reset them — a
+            // module change, a restarted agent, a new game — the reset is already announced by
+            // the generation/epoch machinery, and the returning player carries a NEW nonce
+            // anyway (a fresh CoopClient mints one), so nothing is reclaimed and every
+            // cumulative channel correctly treats them as first sight. Which is also why this
+            // line is nearly unreachable in production: only a client object that SURVIVED can
+            // present a nonce that has said Bye, and that is precisely the client whose
+            // counters survived with it. See ByeIdentityTests.
+            if (_peers.TryGetValue(bye.PeerId, out PeerConnection? leaving))
+            {
+                Retire(leaving, SessionClock.NowMs);
+            }
+
+            _peers.Remove(bye.PeerId);
+            ReleaseDialogueIfOwnedBy(bye.PeerId);
+            ForgetPhantomDamageFor(bye.PeerId);
+        }
+
+        // Outside the lock: the store has its own. A departing peer must not keep an NPC
+        // held — the lease would expire it anyway, but a player should not have to wait out
+        // a timeout to talk to someone the last player left mid-sentence.
+        _interactionLocks.Forget(bye.PeerId);
+
+        _buffer.Remove(bye.PeerId);
+        _encounterTriggers.Forget(bye.PeerId);
+        _triggerRelay.Forget(bye.PeerId);
+    }
+}
