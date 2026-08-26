@@ -4,7 +4,7 @@ namespace KotorCoop.Protocol;
 /// Debounces the SAVE-IDENTITY half of a <see cref="WorldDigestComparison"/> so the LAST
 /// stretch of an ordinary module transition does not silence combat.
 ///
-/// WHY THIS EXISTS (round 54, 2026-08-21). <see cref="WorldDigest.Compare"/> now judges a
+/// WHY THIS EXISTS. <see cref="WorldDigest.Compare"/> now judges a
 /// save-identity mismatch only once both peers report the SAME module — see its own doc
 /// comment for why comparing it while they are apart cannot tell "still travelling" from "a
 /// genuinely different save". That gate closes most of the race, but not the tail: the
@@ -18,14 +18,9 @@ namespace KotorCoop.Protocol;
 /// <see cref="ContentCompatibility.ObjectIdKeyed"/> (enemies, doors, ground items, party)
 /// over exactly like a real content-drifted save would.
 ///
-/// Observed live crossing <c>tar_m10aa</c> (docs/research/shared-state-audit.md, round 53):
-/// <c>[W_SAVE] different save: enemies, doors, items and party are off</c> fired on both
-/// instances right after the warp landed and held for several minutes — neither save had
-/// ever visited the module, so the two installs' predicted ids were identical and the
-/// disagreement was purely the crossing's own timing, not real drift. <c>console
-/// 'reconnect'</c> cleared it instantly by forcing a fresh comparison once both sides had
-/// settled — the same recovery this class gives for free, without a player having to know to
-/// ask for it.
+/// Observed live crossing <c>tar_m10aa</c> as a spurious `[W_SAVE]` mismatch that
+/// <c>console 'reconnect'</c> cleared instantly — see docs/research/shared-state-audit.md.
+/// This class gives the same recovery for free, without a player having to know to ask for it.
 ///
 /// THE RULE: honor a save-identity mismatch only once it has been observed continuously for
 /// <see cref="SettleMs"/> milliseconds. Agreement is trusted the instant it is seen — there is

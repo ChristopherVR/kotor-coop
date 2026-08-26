@@ -68,7 +68,7 @@ public enum PacketType : byte
     JournalSnapshot = 21,
 
     // 22 was EnemyReport: a client's SAMPLED view of enemy health, min-merged by the host.
-    // Retired 2026-08-07 for EnemyDamage (32). Health could not say WHO dealt what, and
+    // Retired for EnemyDamage (32). Health could not say WHO dealt what, and
     // sampling it lost most of a lone player's fight — the owner's mirror wrote its own
     // value back onto the client's copy eight times a second, so a hit had to win a race
     // against the next mirror pass to be reported at all (measured: 15 -> 11 hp and then
@@ -238,9 +238,9 @@ public enum PacketType : byte
     ProgressionReport = 38,
 
     // 39 is DELIBERATELY SKIPPED. docs/research/network-topology.md §"the primary player"
-    // reserves it on paper for `PrimaryPlayer`, and three agents in this tree have already
-    // collided on a number that only one of them could see. Taking the next value nobody has
-    // written down costs nothing; PacketTypeTests now fails the build on any duplicate.
+    // reserves it on paper for `PrimaryPlayer` — a number concurrent agents on this tree have
+    // collided on before. Taking the next free value costs nothing; PacketTypeTests fails the
+    // build on any duplicate.
 
     /// <summary>
     /// any -&gt; all, relayed by the host: "the module transition I am about to make plays these
@@ -355,10 +355,9 @@ public enum PacketType : byte
     /// tolerance <see cref="EnemySnapshot"/> already accepts.
     /// </summary>
     CreatureLiveness = 47,
-    // 47 is DELIBERATELY SKIPPED, the same discipline PacketType 39 already established: a
-    // concurrent worktree agent's block-version-45 liveness work claims the number-space
-    // right after this one is likely to collide with, so this pass takes 48 instead of the
-    // next free value. PacketTypeTests fails the build on any duplicate regardless.
+    // Numbering note, same discipline as the 39 skip above: the next type below takes 48
+    // rather than the immediately-following value, to avoid colliding with concurrent work on
+    // this tree. PacketTypeTests fails the build on any duplicate regardless.
 
     /// <summary>
     /// client -&gt; host: "my player is standing inside these GENERIC triggers right now"
@@ -390,11 +389,10 @@ public enum PacketType : byte
     /// lost datagram costs one tick, never a permanently missed fire.
     /// </summary>
     TriggerRelay = 48,
-    // 47 and 48 are DELIBERATELY SKIPPED: reserved by other agents working this tree
-    // concurrently, on branches this worktree cannot see. Same rule as the 39 skip above —
-    // taking the next value nobody here has claimed costs nothing, and
-    // PacketTypeTests-style duplicate checks (see TransitionMovieTests.NoTwoPacketTypesShareANumber)
-    // fail the build on any collision anyway.
+    // 47 (CreatureLiveness above) and 48 (this type) were both picked for the same reason the
+    // 39 skip was: to avoid colliding with concurrent work on this tree. See
+    // TransitionMovieTests.NoTwoPacketTypesShareANumber, which fails the build on any
+    // collision regardless.
 
     /// <summary>
     /// any -&gt; all, relayed by the host: "the module transition I am about to make goes to
@@ -442,7 +440,7 @@ public enum PacketType : byte
     /// UNRELIABLE, like <see cref="TransitionMovies"/>, for the identical reason: a lost
     /// announcement costs one player a cinematic, never a desync — nothing about this channel
     /// is state that has to converge. See docs/research/trigger-relay.md §6 and
-    /// docs/research/cinematics.md's 2026-08-22 section.
+    /// docs/research/cinematics.md.
     /// </summary>
     MidModuleMovie = 50,
 }

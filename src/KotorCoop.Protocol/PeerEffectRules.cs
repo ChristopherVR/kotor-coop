@@ -13,13 +13,10 @@ namespace KotorCoop.Protocol;
 /// name, which the receiving side simply never applies (an unmapped kind is a no-op, not a
 /// crash) — annoying, not dangerous.
 ///
-/// The desync this comment used to warn about (this copy mapping sub-codes 5/6 one commit
-/// before <c>PhantomEffectHook.cs</c>'s own copy caught up) closed within the same session —
-/// commit <c>5f1975e</c> added the matching <c>case 5</c>/<c>case 6</c> lines to
-/// <c>PhantomEffectHook.cs</c> a minute after this file's §7 constructors landed, effect-sync.md
-/// just never had a follow-up entry recording it (fixed 2026-08-24). Both copies list all nine
-/// allowlist members today, capture and apply alike — see effect-sync.md's dated 2026-08-24
-/// entry for the read-through that confirmed it.
+/// The desync this comment used to warn about (this copy briefly ahead of
+/// <c>PhantomEffectHook.cs</c>'s own copy on sub-codes 5/6) has since closed — see
+/// docs/research/effect-sync.md. Both copies list all nine allowlist members today, capture
+/// and apply alike.
 /// </summary>
 public static class PeerEffectRules
 {
@@ -65,8 +62,8 @@ public static class PeerEffectRules
     }
 
     /// <summary>
-    /// Which kinds have a real apply-side constructor today (<c>OdysseyEffects</c>). As of
-    /// effect-sync.md §7 (2026-08-22) that is all nine allowlist members — Knockdown, Paralyze
+    /// Which kinds have a real apply-side constructor today (<c>OdysseyEffects</c>). Per
+    /// effect-sync.md §7 that is all nine allowlist members — Knockdown, Paralyze
     /// and Sleep all route through the shared <c>ExecuteCommandEffectComplex</c> handler at
     /// their own VERIFIED routine numbers (134, 148, 154). Kept here, not just in
     /// <c>OdysseyEffects</c>, so a test can assert the two lists agree without touching

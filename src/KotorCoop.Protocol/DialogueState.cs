@@ -39,7 +39,7 @@ namespace KotorCoop.Protocol;
 /// <see cref="SpeakerName"/> and <see cref="Line"/> remain as a diagnostic read of the
 /// owner's current line.
 ///
-/// <see cref="Forced"/> (2026-08-23, docs/research/dialogue-sync.md's Item 1): whether the
+/// <see cref="Forced"/> (docs/research/dialogue-sync.md's Item 1): whether the
 /// OWNER's conversation is one the vanilla engine itself forces regardless of distance — an
 /// ambush or scripted cutscene conversation, as opposed to an ordinary player-clicked chat.
 /// <c>DialogueAutoJoinRule.ShouldAutoJoin</c> auto-joins UNCONDITIONALLY when this is set,
