@@ -1,0 +1,104 @@
+# Console
+
+Press `~` in-game. Every verb below is parsed in `src/KotorCoop.Session/ConsoleCommand.cs`
+and completes via `src/KotorCoop.Plugin/ConsoleVerbCatalog.cs` (Tab, including the game's own
+retail verbs — `giveitem`, `heal`, `revealmap` and the rest are untouched, since they only
+ever touch the typist's own single-player state). `warp` is the one deliberate exception: the
+co-op layer intercepts it because a module transition has to go through the session (every
+spawned body is flushed before the module unloads, and the peer follows). See
+[console-cheats.md](research/console-cheats.md) for the full authority reasoning, the wire
+format, and the live-verification checklist — this page is the short reference.
+
+## Session and connection
+
+| Verb | Args | Authority | What it does |
+| --- | --- | --- | --- |
+| `connect` / `join` | `<ip\|#n> [password]` | any player | connect to a host |
+| `host` | `[password]` | any player | start hosting |
+| `disconnect` / `dc` / `leave` | — | any player | leave the session |
+| `reconnect` / `rc` | — | any player | reconnect to the last session |
+| `password` / `pw` | `<pw>` | any player | set the password before connecting; never recorded in console history |
+| `say` / `chat` / `msg` | `<message>` | any player | send a line to every player |
+| `status` / `stat` | — | any player | connection state, player count |
+| `lagstats` | — | any player | interpolation delay, real send/recv intervals, agent pump cost |
+| `who` / `peers` | — | any player | list connected peers |
+| `where` | — | any player | print your own coordinates |
+| `servers` / `browse` / `list` | — | any player | list discovered servers |
+| `warp` | `<module> [waypoint]` | any player | **the one shadowed retail verb** — travels through the session so the peer follows, instead of the engine's own unsynced warp |
+| `netsim` / `net` | `off\|status\|loss <pct>\|latency <ms> [jitter]\|blackout <secs> [in\|out\|both]` | any player | fault-injection: simulate loss/latency/an outage |
+| `clear` / `cls` | — | any player | clear the console |
+| `help` / `?` / `commands` | — | any player | list commands |
+
+## Staging cheats (co-op-aware)
+
+Added only where the answer depends on who typed it, or where nothing else reaches the
+scenario. Parsed in `ConsoleCommand`, dispatched by `CoopCommandDispatcher`, executed by
+`CheatController` on the game thread.
+
+| Verb | Args | Authority | What it does |
+| --- | --- | --- | --- |
+| `god` | `[on\|off]` | yours only | pins your own character's damage floor at 1 hp |
+| `topup` | `[hitpoints]` | yours only | heals your own character, clamped to max |
+| `standup` / `getup` | `[hitpoints]` | yours only | stands your own downed body back up |
+| `slay` | `[tag\|id]` (blank = nearest hostile) | **authority split** — see below | kills an enemy: directly if you own it, forwarded through the damage ledger if a peer owns it |
+| `tp` | `<x> <y> [z]` | yours only | teleports your own character (no walkmesh check) |
+| `goto` | `<player\|#n>` | same module only | teleports you to a peer's last known position |
+| `dropitem` | `<resref\|0x131>` | shared by construction | drops a real, clickable item everyone sees; `0x..` drops a copy of a live item with its real stack/charges/upgrades |
+| `destroyobject` / `destroy` | `<id>` | host-only, no forward path | runs the engine's real `DestroyObject` — refuses outright on a mirroring instance instead of forwarding |
+| `items` | `[n]` | read-only, local | lists live items (id, name, holder, identity) in the agent log |
+| `item` | `<0x131>` | read-only, local | reads one item back, for the identity-loop's receiving side |
+| `setitem` | `<0x131> [stack=N] [charges=N] [max=N] [upgrades=0xN] [identified=0\|1]` | yours to stage, local | pokes one live item's identity fields through the real apply call |
+| `giveloot` | `<owner id> <resref> [stack]` | yours to stage, local | gives a materialised enemy's stand-in one item of its real loot |
+| `applyeffect` | `<kind> [target] [durationMs] [magnitude]` | staging only | applies a non-damage effect locally; aimed at a phantom, it also forwards for real |
+| `effects` | — | read-only, local | last 8 captured/applied peer-effect records |
+| `leader` | `<slot\|pc>` | dev-only, local | switches YOUR control to a party-roster companion 0-8, or back to your PC |
+| `recruit` | `<slot> [tag]` | dev-only, local | forces a party-roster slot's NPC into your party (live-test primitive) |
+| `skipline` | — | yours to stage, local | finishes the current dialogue line/VO immediately (conversation owner only) |
+| `selectreply` | `<slot>` | yours to stage, local | commits a reply on your own conversation, like a real click |
+| `loadgame` | `<slot>` | yours only | runs the real engine Load Game path against save slot `<slot>` (0-based, most-recent-first) |
+| `cheats` | — | any player | prints this verb list |
+
+### The `slay` / `destroyobject` authority split
+
+Both verbs run `CheatAuthority.ForSlay` / `ForDestroy` in this order: refuse if the target
+can't be resolved, refuse a player's own character, refuse a peer's phantom, refuse a party
+companion, refuse a plot-flagged creature. What's left depends on
+`SharedBlock.OffsetDamageDealtEnabled` (whether this instance mirrors somebody else's
+enemies):
+
+- **`slay`**, not mirroring → kills it here directly (`KillCreature`, real corpse and loot).
+  Mirroring → forwards `100000` damage through the peer-damage ledger instead of touching the
+  local copy, so the owner's engine produces the real death.
+- **`destroyobject`**, not mirroring → runs `DestroyObject` here. Mirroring → **refuses**
+  outright (`RefuseNotOwner`) — there is no destroy-ledger to forward through; carrying a
+  destroy to a mirroring instance is the [creature-liveness](research/creature-liveness.md)
+  channel's own job.
+
+## Diagnostic and dev primitives
+
+Lower-level probes used to stage or observe a live test; not day-to-day player commands.
+
+| Verb | Args | What it does |
+| --- | --- | --- |
+| `census` | `[id]` | this instance's enemy census, or one creature's entry |
+| `resolve` | `<id>` | what the engine knows about one id |
+| `firescript` | `<id> [fire [270]]` | peeks or fires an object's `+0x260`/`+0x270` event script |
+| `movenear` | `<id>` | snaps a creature near a known hostile (temporary diagnostic) |
+| `walkto` | `<x> <y> [z]` | drives your own character toward coordinates via synthetic input (unlike `tp`'s instant snap; there is no native "walk player here" server message to borrow, so this drives local input instead) |
+| `moviewarp` | `<module> <movie...> \| queue <movie...> \| clear \| show` | stages a movie for the next transition |
+| `usedoor` | `[tag\|id]` (blank = nearest transition door) | uses a door through the engine's own input, like a click |
+| `opendoor` | `[tag\|id]` (blank = nearest door) | opens a door with no transition needed |
+| `useplaceable` | `[tag\|id]` (blank = nearest container) | uses a chest/corpse/switch through the engine's own input |
+| `closeplaceable` | `[tag\|id]` (blank = nearest container) | closes what `useplaceable` opened |
+| `movieplay` | `<resref>` | plays a movie right now (blocks the main thread) |
+
+## Notes
+
+- **Passwords are never recorded.** `password`/`pw` lines (including `/pw` and `coop
+  password`) are dropped from console history on the way in and the way out.
+- **Tab completion covers the engine's own verbs too** — `ConsoleCommandTable` reads the
+  retail command table live, so a mod that registers its own verb completes for free.
+- Every staging cheat that fails says *what it saw* (`"0x2A is a peer's phantom, not an
+  enemy"`, `"no creature tagged 'foo' here"`) rather than silently no-opping — see
+  [console-cheats.md](research/console-cheats.md) for the full detail-string convention and
+  the wire format shared by every cheat.

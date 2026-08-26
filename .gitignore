@@ -12,3 +12,4 @@ profiles/local.*.json
 __pycache__/
 *.pyc
 .claude/worktrees/
+tools/*.csv
