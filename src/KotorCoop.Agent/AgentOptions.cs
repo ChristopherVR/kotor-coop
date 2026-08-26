@@ -553,7 +553,7 @@ public sealed record AgentOptions
           --host               host a session
           --join <host[:port]> join a session
           --port <n>           listen/target port (default 27015)
-          --tick <n>           poll and network rate in Hz (default 20)
+          --tick <n>           poll and network rate in Hz (default 30)
           --read-only          attach without write access
           --no-follow          do not automatically travel to the host's module when
                                joining. By default a client follows the host through

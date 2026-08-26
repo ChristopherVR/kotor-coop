@@ -259,12 +259,10 @@ public sealed record CoopConfig
     /// <summary>
     /// Whether a client's own engine-native door crossing is refused early (before the load
     /// starts) while following the host — docs/research/transition-smoothness.md's client-
-    /// first-door case. OFF by default: the 2026-08-21 live pass could not exercise the
-    /// decisive check (§6.3) at all, because the client instance's own <c>CSWParty</c> hits a
-    /// pre-existing, unrelated party-together gate that refuses every door crossing on a
-    /// client, native or otherwise — see the doc's live-pass section. Set
-    /// <c>client_door_refusal = 1</c> once that blocker is understood and the decisive check
-    /// can actually run.
+    /// first-door case. ON by default (an absent key enables it; <c>client_door_refusal = 0</c>
+    /// disables). The decisive live check (§6.3) has not yet been exercised, because a client's
+    /// own <c>CSWParty</c> hits an unrelated party-together gate first — see the doc's live-pass
+    /// section.
     /// </summary>
     public bool ClientDoorRefusalEnabled { get; init; }
 
