@@ -52,7 +52,7 @@ tests compose.
 | --- | --- |
 | `movewin.ps1` | Moves a process's main window — used to place two instances side by side for one screenshot. |
 | `suspend.ps1` | Suspends or resumes a process, so a minimised second instance stops competing for DirectInput. |
-| `click.ps1` | Clicks (or, with `-HoverOnly`, just hovers) a window at a pixel coordinate. |
+| `click.ps1` | Clicks (or, with `-HoverOnly`, just hovers) a window at a pixel coordinate. *(no header comment — undocumented one-off.)* |
 | `sendkey.ps1` | Sends keystrokes to a window. *(no header comment — undocumented one-off; behaviour inferred from its parameters: `-Keys`, `-HoldMs`, `-GapMs`.)* |
 | `wheel.ps1` | Scrolls the mouse wheel over a window (KOTOR maps it to camera zoom). |
 | `shot.ps1` | Captures a screenshot of a window or the full screen. *(no header comment — undocumented one-off.)* |
@@ -70,8 +70,9 @@ tests compose.
 | `exports.ps1` | Reads a PE file's export table directly from the bytes on disk. *(no header comment — undocumented one-off.)* |
 
 The task brief that asked for this index named six header-less scripts; the actual count in
-this directory is nine (the five above plus `sendkey.ps1`) — all now covered with an inferred
-one-line description in place of a missing header.
+this directory is ten (`checkcands.ps1`, `click.ps1`, `crop.ps1`, `exports.ps1`, `q.py`,
+`sendkey.ps1`, `shot.ps1`, `vmtable.ps1`, `walktest.ps1`, `writetest.ps1`) — all now covered
+with an inferred one-line description in place of a missing header.
 
 ## Offline Python analysis
 
@@ -89,4 +90,4 @@ touch a running game.
 | `globalvars.py` | Reader for KOTOR 1 save-game GFF files, specialised for `GLOBALVARS.res`. |
 | `kotorfiles.py` | Pure-stdlib readers for the Odyssey engine's data formats (KEY/BIF/GFF/2DA/TLK and friends). |
 | `patch_mainmenu.py` | Builds the `Override\mainmenu*.gui` that turns the dormant `BTN_WARP` control into the visible "Coop" button. |
-| `q.py` | Runs an ad-hoc SQL query against `kotor1_0_3.db`. |
+| `q.py` | Runs an ad-hoc SQL query against `kotor1_0_3.db`. *(no header comment — undocumented one-off.)* |

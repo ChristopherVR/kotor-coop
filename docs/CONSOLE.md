@@ -84,6 +84,7 @@ Lower-level probes used to stage or observe a live test; not day-to-day player c
 | `resolve` | `<id>` | what the engine knows about one id |
 | `firescript` | `<id> [fire [270]]` | peeks or fires an object's `+0x260`/`+0x270` event script |
 | `movenear` | `<id>` | snaps a creature near a known hostile (temporary diagnostic) |
+| `walkto` | `<x> <y> [z]` | drives your own character toward coordinates via synthetic input (unlike `tp`'s instant snap; there is no native "walk player here" server message to borrow, so this drives local input instead) |
 | `moviewarp` | `<module> <movie...> \| queue <movie...> \| clear \| show` | stages a movie for the next transition |
 | `usedoor` | `[tag\|id]` (blank = nearest transition door) | uses a door through the engine's own input, like a click |
 | `opendoor` | `[tag\|id]` (blank = nearest door) | opens a door with no transition needed |

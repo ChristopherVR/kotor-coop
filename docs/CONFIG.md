@@ -19,7 +19,7 @@ actually runs with.
 | --- | --- | --- | --- |
 | `mode` | `join` unless `host` | `host` a session or `join` one | [connect-flow.md](research/connect-flow.md) |
 | `host` | `127.0.0.1`, unset | server address to join | [connect-flow.md](research/connect-flow.md) |
-| `port` | `27015` | UDP port | [network-topology.md](research/network-topology.md) |
+| `port` | `27015`⁸ | UDP port | [network-topology.md](research/network-topology.md) |
 | `password` | empty | session password | [connect-flow.md](research/connect-flow.md) |
 | `name` | unset | player/character name shown to peers | — |
 | `server_name` | falls back to `name` | name shown in the server browser | [server-browser.md](research/server-browser.md) |
@@ -133,6 +133,11 @@ listed live-verified elsewhere in this project's own history) and the comment is
 player who installs the packaged release and follows this project's own Quick Start
 ("click Co-op on the main menu") will not see the button until they edit `coop.ini` and set
 `menu_button = 1`.
+⁸ The shipped `coop.ini.example` sets `port = 27140`, not the code's own 27015. Two peers
+using the packaged release without editing `coop.ini` will actually connect on 27140 — that
+is the real shipped default, not 27015. (`CoopConfig.cs`'s own header-comment example also
+shows `port = 27140`, ahead of its own code's 27015 default — the same stale number in two
+places.)
 
 ## CLI flags (`KotorCoop.Agent`, `AgentOptions.cs`)
 
