@@ -3,7 +3,8 @@
 Run the pair, then verify each channel. "Logs" items I can confirm from the agent/plugin
 logs; "Screen" items only you can see. NEEDS-LIVE items are the offsets/values that were
 reasoned but not observed — a wrong one fails safe (no effect or mis-placed text, never a
-crash), so confirming them is the point of this pass.
+crash), so confirming them is the point of this pass. For how to build and run the pieces
+this checklist exercises, see `docs/CONTRIBUTING.md`.
 
 ## Already confirmed live (2026-08-01) — no need to re-verify unless something regresses
 

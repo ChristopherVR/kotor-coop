@@ -2,7 +2,8 @@
 
 The co-op stack is complete and tested. What it needs from your install is a handful of
 memory offsets, because those differ per build and cannot be shipped as constants that are
-trustworthy. This is how to find them.
+trustworthy. This is how to find them. For the codebase these offsets feed into (project
+layout, build/test, code conventions), see `docs/CONTRIBUTING.md`.
 
 ## Why this cannot be shipped pre-filled
 
