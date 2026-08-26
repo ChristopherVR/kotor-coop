@@ -59,25 +59,24 @@ internal static unsafe partial class Odyssey
     private const int TwinAddFireForgetSlot = 0xA0;
 
     /// <summary>
-    /// ROUND 64 X1: <c>CSWCAnimBase::GetAnimationName(u16 id)</c>, animbase vtable +0x40
+    /// <c>CSWCAnimBase::GetAnimationName(u16 id)</c>, animbase vtable +0x40
     /// (0x0069E620, db-confirmed) — the function <c>SetAnimationInternal</c> (animbase
     /// vtable +0xF0, 0x0069E8D0) calls to turn a requested id into the model-row NAME it
     /// actually plays (docs/research/phantom-locomotion.md §10.2). Returns the resolved
-    /// CExoString by value through a hidden first stack argument (static disassembly,
-    /// this round: prologue takes <c>this</c> in ecx, <c>[ebp+8]</c> = output CExoString*,
-    /// <c>[ebp+0xc]</c> = the id as a zero-extended dword; epilogue is <c>ret 8</c>, i.e.
-    /// exactly those two stack args). <see cref="ReadAnimationName"/> wraps the ABI.
+    /// CExoString by value through a hidden first stack argument: prologue takes
+    /// <c>this</c> in ecx, <c>[ebp+8]</c> = output CExoString*, <c>[ebp+0xc]</c> = the id as
+    /// a zero-extended dword; epilogue is <c>ret 8</c>, i.e. exactly those two stack args.
+    /// <see cref="ReadAnimationName"/> wraps the ABI.
     /// </summary>
     private static readonly delegate* unmanaged[Thiscall]<nint, byte*, ushort, nint> GetAnimationNameFn =
         (delegate* unmanaged[Thiscall]<nint, byte*, ushort, nint>)0x0069E620;
 
     /// <summary>
-    /// ROUND 64 X1: calls the real engine name-resolver and reads back what it constructed,
+    /// Calls the real engine name-resolver and reads back what it constructed,
     /// then frees it (<see cref="CExoStringDtorFn"/>, the same destructor
-    /// <see cref="SetControlText"/> already uses, and — independently confirmed this round —
-    /// the exact address (0x005E5C20) <c>GetAnimationName</c>'s own tail calls to destruct its
-    /// internal temporaries) so this can be called repeatedly from a live diagnostic without
-    /// leaking.
+    /// <see cref="SetControlText"/> already uses, and the exact address (0x005E5C20)
+    /// <c>GetAnimationName</c>'s own tail calls to destruct its internal temporaries) so this
+    /// can be called repeatedly from a live diagnostic without leaking.
     ///
     /// Cut at the first null rather than trusted-length, per the CExoString length trap (the
     /// stored length includes the terminating null — see BarkHook.cs/CreatureFinder.cs) — and
@@ -118,7 +117,7 @@ internal static unsafe partial class Odyssey
 
     /// <summary>CSWCAnimBase + this = the model's own resref (CResRef, fixed char[16],
     /// zero-filled — NOT a CExoString). tools/kotor1_0_3.db: CSWCAnimBase.name, offset 44.
-    /// ROUND 64 X1: read for context alongside <see cref="ReadAnimationName"/> — which model
+    /// Read for context alongside <see cref="ReadAnimationName"/> — which model
     /// this animbase's classifiers/name table are actually keyed to.</summary>
     private const int AnimBaseModelName = 0x2C;
 
@@ -143,14 +142,14 @@ internal static unsafe partial class Odyssey
     private const int CreServerAppearanceRow = 0xA60;
 
     /// <summary>
-    /// ROUND 64 X2: CSWCCreature + this = the CLIENT-side cached "desired appearance" row
+    /// CSWCCreature + this = the CLIENT-side cached "desired appearance" row
     /// (ushort). <c>CSWCCreature::ForceAppearanceUpdate</c> (0x00614A30, thiscall, no stack
     /// args — db-confirmed) reads exactly this field, writes it into
     /// <c>this-&gt;appearance-&gt;appearance_info.appearance_id</c> (CSWCCreatureAppearance
     /// +0x18, matching tools/kotor1_0_3.db's CCAppearanceInfo.appearance_id at offset 24
     /// embedded at CSWCCreatureAppearance offset 0), and then calls
     /// <c>CSWCCreature::SetAppearance</c> (0x006134C0, one of ForceAppearanceUpdate's own 7
-    /// live call sites, static disassembly this round) — which itself calls
+    /// live call sites) — which itself calls
     /// <c>CSWCObject::GetAnimBase</c> (0x0063C070, the same <c>[ecx+0x68]</c> accessor
     /// <see cref="TwinAnimBase"/> uses) and the AnimationLooping/AnimationStationary
     /// classifiers, i.e. it touches the animbase, not just server-side bookkeeping.
@@ -162,19 +161,19 @@ internal static unsafe partial class Odyssey
     /// </summary>
     private const int TwinDesiredAppearanceRow = 0x38C;
 
-    /// <summary>ROUND 64 X2: CSWCCreature::ForceAppearanceUpdate(this) — thiscall, no stack
+    /// <summary>CSWCCreature::ForceAppearanceUpdate(this) — thiscall, no stack
     /// args (db-confirmed param_size_bytes=0). See <see cref="TwinDesiredAppearanceRow"/>'s
     /// doc for the call chain this reaches.</summary>
     private static readonly delegate* unmanaged[Thiscall]<nint, void> ForceAppearanceUpdateFn =
         (delegate* unmanaged[Thiscall]<nint, void>)0x00614A30;
 
     /// <summary>
-    /// ROUND 64 X2 FIX: rebuilds the client twin's render-side appearance/model — and, by
+    /// Rebuilds the client twin's render-side appearance/model — and, by
     /// construction (<see cref="TwinDesiredAppearanceRow"/>'s doc), its animbase's model name
     /// table — after a phantom's appearance row is poked directly. <see cref="RebuildAppearance"/>
     /// (server-side, <c>UpdateAppearanceDependantInfo</c>) already ran; this is the CLIENT-side
     /// counterpart the engine's own network appearance-change handler would have triggered, which
-    /// nothing in this codebase called before this round. MAIN THREAD ONLY.
+    /// nothing in this codebase called before this. MAIN THREAD ONLY.
     /// </summary>
     public static void RebuildClientAppearance(nint creature)
     {

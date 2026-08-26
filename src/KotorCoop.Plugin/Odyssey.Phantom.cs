@@ -63,7 +63,7 @@ internal static unsafe partial class Odyssey
     /// While moving, the gait still comes from the measured stream speed — the owner's
     /// field lags it, and a wrong gait reads worse than a wrong stance.
     /// </summary>
-    /// <param name="bisectMask">ROUND 47: 0 (default) is today's unconditional behaviour,
+    /// <param name="bisectMask">0 (default) is today's unconditional behaviour,
     /// unaffected — <see cref="PartyPresenceController"/>'s call never passes anything else.
     /// See the bit table on <see cref="ClaimCreature(nint, bool, uint)"/>.</param>
     public static void DriveEnemy(nint creature, Vec3 position, float facing, float speed, bool moving, uint ownerAnimation, uint bisectMask = 0)
@@ -138,117 +138,36 @@ internal static unsafe partial class Odyssey
                 // — reported from play as "the X animation no longer shows". The engine
                 // restores the looping gait by itself when a one-shot ends, so leaving the
                 // field alone between gait changes costs nothing.
-                // ROUND 61 FIX, call #2 of 2: ClientServerSyncHandler_Position (+0x12C) is the
-                // ONLY function that ever resolves 0x2712/0x2714 into a real, classifier-
-                // approved (AnimationWalking/AnimationRunning) animation and plays it by name —
-                // see TwinPositionSyncSlot's doc. The engine itself calls this on EVERY frame a
-                // moving creature's position dirty bit is set (i.e. continuously while moving),
-                // not once per gait change — DriveBody's bSuppressDirty=1 (the SetPositionFn
-                // call above) has always kept it from firing at all. Calling it only on
-                // GaitChanged (this fix's first live attempt) made walk display CORRECTLY SOME
-                // of the time but not reliably, and run not at all — live-measured evidence
-                // that, like the engine's own re-assertion loop in AnimationUpdate, this needs
-                // to fire every step to stick, not just on the edge. So: every step, not gated
-                // — SUPERSEDED by round 67, see that round's comment on the call site below:
-                // once round 65's twin+0x58 write (also below) neutralises the reassertion by
-                // itself, per-step firing of THIS call became actively harmful (it restarts the
-                // cycle every step — the "stutter" defect) rather than merely redundant, so it
-                // is edge-triggered again, this time correctly.
-                // Its interpolation-step and rate side effects are overwritten by this same
-                // function's unconditional position (above) and rate (below) writes before the
-                // next frame ever reads them.
-                // ROUND 62: the budget arg matters more than "some sane float" — static
-                // disassembly of 0x00611F50 (docs/research/phantom-locomotion.md §9.1) shows
-                // the RUNNING branch (AnimationRunning(want)==true) only reaches the real,
-                // classifier-approved "play by name" step when budget < 0.5 (fcomp against the
-                // constant at 0x0073E9AC, verified live-read as 0.5f). Any budget >= 0.5 —
-                // which is exactly what creature+0xD8 (ObjAnimationBudget) reads live, ~1.0,
-                // per round 60's own measurement — permanently diverts to the
-                // "RunLooksAwful"-branched fallback, which has its own further gates (the
-                // animBase+0xCC flag this same call computes from a SEPARATE, twin+0x210-keyed
-                // comparison) that do not reliably resolve for a body this handler has never
-                // driven before. WALK has no such gate at all (AnimationWalking's branch falls
-                // straight into the shared play tail unconditionally) — this asymmetry is
-                // exactly why round 61 measured walk partially working and run almost never.
-                // We call this handler every step to look like a continuously-moving creature,
-                // not a fresh onset — 0f is the semantically-correct "still moving, not a new
-                // blend" budget for that, and it is what TwinDesiredPositionBudget already uses
-                // for the same reason. Deliberately NOT reusing ObjAnimationBudget here — this
-                // call's budget is unrelated to what TwinAnimationSyncSlot passes below, which
-                // never reaches this gate (see TwinAnimationSyncSlot's doc, round 61 §8.1).
-                // ROUND 65 FIX: neutralise CSWCCreature::AnimationUpdate's own per-frame
-                // re-assertion instead of racing it. Static disassembly this round
-                // (docs/research/phantom-locomotion.md §12) found the exact re-asserter: every
-                // AIUpdate tick that does NOT dispatch to DriveAnimationUpdate/
-                // FollowAnimationUpdate (neither applies to a directly-driven phantom/mirrored
-                // enemy — no drive flag, no follow target) instead calls the DEFAULT
-                // AnimationUpdate (0x0061A980), which — whenever twin+0x48 (TwinCurrentAnimation)
-                // is NOT already AnimationStationary — calls CSWCObject::SetAnimation
-                // (vtable+0x9C) with whatever id GetLoopingAnimation() (0x0063C100, verified a
-                // one-line `return this->+0x58`) returns, UNCONDITIONALLY, every single frame.
-                // twin+0x58 is the symbol db's own `looping_animation` field
-                // (tools/kotor1_0_3.db: CSWCObject+0x058, ushort) and nothing in this codebase
-                // (or, per round 61's own disassembly of TwinAnimationSyncSlot's target, anything
-                // reachable for gait ids AT ALL) ever seeds it with 0x2712/0x2714 — it sits at
-                // whatever idle/pause id it last legitimately held. So every frame our own
-                // TwinPositionSyncSlot call below (or, rarely, some other path) manages to paint
-                // a real walk/run id onto twin+0x48, THIS SAME OR THE VERY NEXT AnimationUpdate
-                // tick reads the stale idle value out of twin+0x58 and reapplies it — and that
-                // reassertion succeeds (unlike a direct walk/run write) because
-                // CSWCObject::SetAnimation gates on AnimationLooping(id), and idle/pause rows
-                // ARE Looping=1 (animations.2da row 6 "pause1": looping=1) while walkSS/runSS are
-                // not (round 62's own finding) — the SAME structural rejection that permanently
-                // blocks a direct walk/run write through this path is, in reverse, exactly what
-                // lets a STALE idle value win the reassertion every time.
+                // twin+0x58 (TwinLoopingAnimation) is written unconditionally every step to
+                // hold our intended gait id. Without this, the engine's own per-frame
+                // reassertion (AnimationUpdate -> GetLoopingAnimation -> SetAnimation) reads
+                // whatever stale idle/pause id twin+0x58 last legitimately held and replays it —
+                // and that replay succeeds where a direct walk/run write does not, because
+                // idle/pause rows are Looping=1 in animations.2da while walkSS/runSS are not, so
+                // CSWCObject::SetAnimation's AnimationLooping gate lets the stale idle through.
+                // Keeping +0x58 synced turns that same reassertion into
+                // SetAnimation(walkSS/runSS, ...), which AnimationLooping rejects, so it becomes
+                // a no-op instead of a guaranteed revert to idle. Full derivation and offsets:
+                // docs/research/phantom-locomotion.md §12.
                 //
-                // The fix: keep twin+0x58 in sync with our own intended gait `want` every step,
-                // the same "every step, not gated" discipline TwinPositionSyncSlot already needed
-                // (see its own doc). Once twin+0x58 holds 0x2712/0x2714 instead of stale idle,
-                // AnimationUpdate's reassertion call becomes `SetAnimation(twin, walkSS/runSS,
-                // ...)` — which AnimationLooping structurally rejects, so the call bails WITHOUT
-                // touching twin+0x48 (round 61 §8.1's own disassembly: "false -> bail, twin+0x48/
-                // +0x58 untouched"). The re-asserter degrades from "guaranteed revert to idle"
-                // to "guaranteed no-op" for exactly the two ids this bug is about — a plain,
-                // verified-offset memory write, no new engine call, no risk to any other
-                // consumer of this field (round 65 xref of GetLoopingAnimation's 8 call sites:
-                // the other 7 are one-shot appearance/equip/network-update paths, not a per-frame
-                // decider, and this is the SAME field DriveBody already relies on AnimationLooping
-                // permanently rejecting for these two ids — see TwinAnimationSyncSlot's doc).
+                // The budget passed to the +0x12C sync call below also matters: static
+                // disassembly (§9.1) shows the running branch only reaches the real "play by
+                // name" step when budget < 0.5 (verified live-read constant at 0x0073E9AC).
+                // 0f is the correct "still moving, not a new blend" budget, matching
+                // TwinDesiredPositionBudget's own use, and is deliberately not the same as
+                // ObjAnimationBudget (unrelated to what TwinAnimationSyncSlot passes below).
                 *(ushort*)(twin + TwinLoopingAnimation) = (ushort)want;
 
-                // ROUND 67 FIX (M1, docs/research/phantom-locomotion.md §13): only invoke
-                // ClientServerSyncHandler_Position (TwinPositionSyncSlot, +0x12C) on a gait
-                // CHANGE, not every drive step. Full disassembly of the call chain this round
-                // (CSWCAnimBase::SetAnimationInternal, 0x0069E8D0, the function +0x12C's walk/
-                // run branch always ends at — §13.2) found NO "already playing this id, skip"
-                // guard anywhere in it: the generic path (0x0069E987, where every gait id
-                // lands, per round 63 §10.2) unconditionally resolves the animation's name and
-                // makes the "play" virtual call (`nameObj_vtable+0x18`) EVERY time it is
-                // reached — regardless of whether the requested id matches what is already
-                // playing. Round 61 §8.5's own comment already noted "its interpolation-step
-                // and rate side effects are overwritten by this same function's unconditional
-                // position and rate writes before the next frame ever reads them" — i.e.
-                // nothing from +0x12C survives to matter except the play call itself. Calling
-                // it every drive step (60 Hz, PhantomController.StepIntervalSeconds) therefore
-                // restarted the walk/run cycle from frame 0 up to 60 times a second — a
-                // structural stutter, not a rare glitch: the exact "you can see the run
-                // animation initiated but it just never looks correct" the round 67 brief
-                // reports, coexisting with round 65's 0% idle-while-moving measurement because
-                // that metric only checks WHICH id is showing, never whether it is playing
-                // smoothly.
-                //
-                // This call is safe to gate on the edge now, in a way it was NOT in round 61
-                // (§8.5: an edge-triggered first attempt measured WORSE render reliability than
-                // per-step, before round 65 existed): round 65's TwinLoopingAnimation write
-                // (immediately above, still unconditional every step) is what keeps
-                // AnimationUpdate's per-frame reassertion a no-op now — that no longer depends
-                // on +0x12C re-firing. Position (TwinDesiredPosition, above) and the playback
-                // rate (TwinAnimationSpeedFactor, below) are also both written unconditionally
-                // every step already, independently of this call. So +0x12C's only remaining
-                // job is the one-time "start playing this cycle" trigger a genuine gait
-                // transition needs — exactly what GaitChanged already tracks for the +0x134
-                // skip/diagnostics below, so the two now share one evaluation instead of the
-                // stateful GaitChanged being called twice.
+                // TwinPositionSyncSlot (ClientServerSyncHandler_Position, +0x12C) is invoked
+                // only on a gait CHANGE, not every drive step: its call chain has no
+                // "already playing this id, skip" guard anywhere, so firing it every step
+                // (60 Hz) restarted the walk/run cycle from frame 0 continuously — a
+                // structural stutter, not a rare glitch. Gating on the edge is safe because
+                // the twin+0x58 write above already keeps AnimationUpdate's per-frame
+                // reassertion a no-op independent of this call firing, and position/rate are
+                // both written unconditionally elsewhere; +0x12C's only remaining job is the
+                // one-time "start playing this cycle" trigger a genuine gait transition needs.
+                // See docs/research/phantom-locomotion.md §13.
                 bool gaitChanged = GaitChanged(creature, want);
 
                 if (gaitChanged)
@@ -256,11 +175,10 @@ internal static unsafe partial class Odyssey
                     var syncPosition =
                         (delegate* unmanaged[Thiscall]<nint, Vec3*, uint, float, void>)(*(nint*)(*(nint*)twin + TwinPositionSyncSlot));
 
-                    // ROUND 62 DIAGNOSTIC (capped): does THIS call's own write to twin+0x48 stick
-                    // for even one instant, or does it never take effect at all? Distinguishes
-                    // "the play step never fires" from "it fires and something else reverts it
-                    // before the next sample" — see phantom-locomotion.md §9.3. Only reachable on
-                    // a gait edge now (round 67), so the cap fills far more slowly than before.
+                    // Capped diagnostic: confirms whether this call's own write to twin+0x48
+                    // sticks even briefly, or is reverted before the next sample can see it —
+                    // see docs/research/phantom-locomotion.md §9.3. Only reachable on a gait
+                    // edge, so the cap fills slowly.
                     bool diag = moving && _syncPositionDiagLogged < 60;
                     ushort before = diag ? *(ushort*)(twin + TwinCurrentAnimation) : (ushort)0;
 
@@ -279,24 +197,15 @@ internal static unsafe partial class Odyssey
 
                 if (gaitChanged)
                 {
-                    // ROUND 63 EXPERIMENT E1 (docs/research/phantom-locomotion.md §10): skip
-                    // this call entirely for Walk/Run. Round 61 §8.1 already proved it never
-                    // PLAYS a gait id (AnimationLooping structurally rejects 0x2712/0x2714 for
-                    // every creature — walking/running are their own animations.2da category,
-                    // so CSWCObject::SetAnimation's own AnimationLooping gate always bails
-                    // before touching twin+0x48/+0x58 for these two ids specifically) — this
-                    // is a provable dead call for Walk/Run, not a guess. The E1 hypothesis was
-                    // that it was worse than dead — that re-touching twin+0x58's cache on the
-                    // SAME edge frame ClientServerSyncHandler_Position (+0x12C, below) seeds it
-                    // stomps that seed before the animbase's per-frame update ever applies it.
-                    // Live-measured this round: skipping it changed nothing (96% idle-while-
-                    // moving, statistically the same as the pre-E1 baseline) — it is not the
-                    // cause, but the call is still proven dead weight for these two ids, so the
-                    // skip stays as a no-behaviour-change cleanup. Idle and DriveEnemy's
-                    // owner-animation branch (which can pass real combat/overlay ids, not just
-                    // the three gait ids) still need this
-                    // entry — see PlayOneShotAnimation/MirrorAnimation, which route through it
-                    // for one-shots — so the skip is scoped to exactly Walk/Run.
+                    // TwinAnimationSyncSlot (+0x134) is proven dead for Walk/Run: AnimationLooping
+                    // structurally rejects 0x2712/0x2714 for every creature (walk/run are not a
+                    // looping animations.2da category), so CSWCObject::SetAnimation's own gate
+                    // always bails before touching twin+0x48/+0x58 for these two ids — confirmed
+                    // live (skipping it changed nothing, 96% idle-while-moving unchanged from
+                    // baseline). It's skipped only for Walk/Run; idle and DriveEnemy's
+                    // owner-animation branch (real combat/overlay ids) still need this entry —
+                    // see PlayOneShotAnimation/MirrorAnimation, which route one-shots through it.
+                    // See docs/research/phantom-locomotion.md §10.
                     if (want != GaitRule.AnimWalk && want != GaitRule.AnimRun)
                     {
                         var syncAnimation =
@@ -304,9 +213,9 @@ internal static unsafe partial class Odyssey
                         syncAnimation(twin, (uint)want, *(float*)(creature + ObjAnimationBudget));
                     }
 
-                    // ⚠ ROUND 60 DIAGNOSTIC (docs/research/phantom-locomotion.md, live pass
-                    // 2026-08-22): +0x134 is confirmed address-correct (live vtable read
-                    // matches docs exactly) and confirmed NOT to stick — 132/133 samples at
+                    // ⚠ DIAGNOSTIC (docs/research/phantom-locomotion.md): +0x134 is confirmed
+                    // address-correct (live vtable read matches docs exactly) and confirmed
+                    // NOT to stick — 132/133 samples at
                     // 40ms cadence during a sustained real run showed server 0xD4 correctly
                     // cycling walk/run, rate nonzero, moveState -1, but twin+0x48 never left
                     // idle. A direct call to this function's own disassembled fallthrough
@@ -331,16 +240,16 @@ internal static unsafe partial class Odyssey
                         int fireForget = AnimationFireAndForgetFn(twin, (ushort)want);
                         int overlay = AnimationOverlayFn(twin, (ushort)want);
 
-                        // ROUND 61: AnimationLooping/FireAndForget/Overlay (above) do NOT gate
-                        // this call — disassembly of ClientServerSyncHandler_Animation
-                        // (0x0060C100) and the plain setter it falls through to
-                        // (CSWCObject::SetAnimation, 0x0063E930) shows the real gate is
-                        // CSWCAnimBase::AnimationExists (animbase vtable +0x50, 0x0069D910),
-                        // which refuses everything while the animbase's own Gob* (+0xB8) is
-                        // null. Probe both directly. Also probe AnimationWalking/Running —
-                        // the predicates ClientServerSyncHandler_Position (the round-61 +0x12C
-                        // fix call, above) actually branches on — to see whether that call is
-                        // even reaching its animbase-vtable+0x54 "play" step for this creature.
+                        // AnimationLooping/FireAndForget/Overlay (above) do NOT gate this call —
+                        // disassembly of ClientServerSyncHandler_Animation (0x0060C100) and the
+                        // plain setter it falls through to (CSWCObject::SetAnimation,
+                        // 0x0063E930) shows the real gate is CSWCAnimBase::AnimationExists
+                        // (animbase vtable +0x50, 0x0069D910), which refuses everything while
+                        // the animbase's own Gob* (+0xB8) is null. Probe both directly. Also
+                        // probe AnimationWalking/Running — the predicates
+                        // ClientServerSyncHandler_Position (the +0x12C call, above) actually
+                        // branches on — to see whether that call is even reaching its
+                        // animbase-vtable+0x54 "play" step for this creature.
                         nint animBaseC = *(nint*)(twin + TwinAnimBase);
                         nint gob = animBaseC == 0 ? 0 : *(nint*)(animBaseC + AnimBaseGob);
                         int exists = animBaseC == 0 ? -1 : AnimationExistsFn(animBaseC, (ushort)want);
@@ -355,14 +264,11 @@ internal static unsafe partial class Odyssey
                             + $"running={running} weaponClass={weaponClassC} runLooksAwful={runLooksAwful}");
                     }
 
-                    // ROUND 64 X1 (docs/research/phantom-locomotion.md §11): the actual
-                    // resolved NAME §10.3 predicted GetAnimationName would substitute idle
-                    // for, ground-truthed instead of inferred from the classifier booleans the
-                    // block above already logs. Capped at 20 PER CREATURE (not global) —
-                    // deliberately its OWN cap (GaitNameLogged), independent of
-                    // _gaitClassLogged: that counter is process-lifetime and a long test
-                    // session exhausts it long before this diagnostic was added, which would
-                    // silently dead-code this one too if it shared the same gate.
+                    // Ground-truths the actual resolved animation NAME rather than inferring it
+                    // from the classifier booleans logged above. Capped at 20 PER CREATURE (its
+                    // own cap, GaitNameLogged, independent of _gaitClassLogged), since that
+                    // counter is process-lifetime and a long session would otherwise exhaust it
+                    // before this diagnostic got a turn. See docs/research/phantom-locomotion.md §11.
                     nint animBase = *(nint*)(twin + TwinAnimBase);
                     int gaitSlot = GaitSlotOf(creature);
                     if (animBase != 0 && gaitSlot >= 0 && GaitNameLogged[gaitSlot] < 20)
@@ -444,11 +350,10 @@ internal static unsafe partial class Odyssey
                 + $"rate {(t == 0 ? 0f : *(float*)(t + TwinAnimationSpeedFactor)):F2}, "
                 + $"my twin 0x{(mine == 0 ? 0 : *(ushort*)(mine + TwinCurrentAnimation)):X} "
                 + $"rate {(mine == 0 ? 0f : *(float*)(mine + TwinAnimationSpeedFactor)):F2}, "
-                // ROUND 67: TwinPositionSyncSlot (+0x12C) invocations across every driven body
-                // in the last interval — the direct call-rate ground truth for the M1 fix (see
-                // docs/research/phantom-locomotion.md §13). Pre-fix this tracked the drive-step
-                // rate (up to ~60/s per body); post-fix it should sit near 0 during sustained
-                // straight-line movement.
+                // TwinPositionSyncSlot (+0x12C) invocations across every driven body in the
+                // last interval — the direct call-rate ground truth for the gait-edge-only fix
+                // (see docs/research/phantom-locomotion.md §13). Should sit near 0 during
+                // sustained straight-line movement.
                 + $"sync12c-calls {syncCalls} in {intervalMs}ms)");
         }
     }
@@ -459,19 +364,17 @@ internal static unsafe partial class Odyssey
 
     private const long GaitLogIntervalMs = 5000;
 
-    /// <summary>Caps the round-60 "gait-class" one-time diagnostic (see DriveBody) so it
+    /// <summary>Caps the "gait-class" one-time diagnostic (see DriveBody) so it
     /// prints a handful of samples across process lifetime, not once per gait change.</summary>
     private static int _gaitClassLogged;
 
-    /// <summary>Caps the round-62 "sync12c" before/after diagnostic (see DriveBody).</summary>
+    /// <summary>Caps the "sync12c" before/after diagnostic (see DriveBody).</summary>
     private static int _syncPositionDiagLogged;
 
-    /// <summary>ROUND 67 (docs/research/phantom-locomotion.md §13): counts every actual
-    /// invocation of TwinPositionSyncSlot (+0x12C), across every driven body, since the last
-    /// time the periodic gait log line reset it. Direct, ground-truth evidence of the fix: a
-    /// pre-fix trace shows this near the driven-body count times the ~60 Hz step rate over the
-    /// log interval (every step re-triggers the play call); post-fix it should sit near zero
-    /// during sustained straight-line movement and only spike on an actual walk/idle/run
+    /// <summary>Counts every invocation of TwinPositionSyncSlot (+0x12C), across every driven
+    /// body, since the last time the periodic gait log line reset it — ground-truth evidence
+    /// for the gait-edge-only fix (see docs/research/phantom-locomotion.md §13). Should sit
+    /// near zero during sustained straight-line movement and only spike on an actual gait
     /// transition.</summary>
     private static int _syncPositionCallCount;
 
@@ -481,7 +384,7 @@ internal static unsafe partial class Odyssey
     private static readonly nint[] GaitCreature = new nint[48];
     private static readonly int[] GaitLast = new int[48];
 
-    /// <summary>ROUND 64 X1: per-creature cap for the "gait-name" diagnostic (see DriveBody) —
+    /// <summary>Per-creature cap for the "gait-name" diagnostic (see DriveBody) —
     /// parallels <see cref="GaitCreature"/> by slot index, so each driven body gets its own
     /// first-20 budget instead of sharing one global counter.</summary>
     private static readonly int[] GaitNameLogged = new int[48];

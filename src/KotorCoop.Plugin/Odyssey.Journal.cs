@@ -59,16 +59,15 @@ internal static unsafe partial class Odyssey
     /// <summary>
     /// CSWPartyTable + this = a POINTER to the CSWSJournal — not the journal itself.
     ///
-    /// ⚠ This cost a live crash (2026-08-06). The plugin passed `partyTable + 0x11C`, the
-    /// ADDRESS OF the pointer, so `CSWSJournal::SetState` walked whatever followed it in
-    /// the party table as an entry array and faulted dereferencing a "tag" of 0xAE37C3BE.
-    /// The engine's own accessor settles it: `CSWPartyTable::GetPartyJournal 0x005633C0`
-    /// is `mov eax,[esi+0x11C]` (VERIFIED), reached from `CSWSCreature::GetJournal
-    /// 0x004EDB00` -> `CServerExoApp::GetPartyTable 0x004AEE70` (`[server+4] + 0x1B770`,
-    /// which confirms the party-table base too).
-    ///
-    /// Verified live after the fix: `*(partyTable + 0x11C)` -> journal whose array list at
-    /// +0 reads { data, size 1, capacity 16 } with entry 0 tagged 'end_attack' state 20.
+    /// ⚠ Passing the ADDRESS OF the pointer (`partyTable + 0x11C`) instead of dereferencing
+    /// it caused a live crash: `CSWSJournal::SetState` walked whatever followed it in the
+    /// party table as an entry array and faulted on a garbage tag. The engine's own accessor
+    /// settles the correct layout: `CSWPartyTable::GetPartyJournal 0x005633C0` is
+    /// `mov eax,[esi+0x11C]` (VERIFIED), reached from `CSWSCreature::GetJournal 0x004EDB00`
+    /// -> `CServerExoApp::GetPartyTable 0x004AEE70` (`[server+4] + 0x1B770`, confirming the
+    /// party-table base too). Verified live after the fix: `*(partyTable + 0x11C)` -> journal
+    /// whose array list at +0 reads { data, size 1, capacity 16 } with entry 0 tagged
+    /// 'end_attack' state 20.
     /// </summary>
     private const int PartyTableJournal = 0x11C;
 
@@ -85,21 +84,15 @@ internal static unsafe partial class Odyssey
     /// already has to, to find the tag) and decides how to reach the target via <see
     /// cref="JournalApplyRule"/>.
     ///
-    /// ⚠ PROTOCOL 31 / live pass 2026-08-22 (docs/research/quest-sync.md): this used to pass
-    /// bOverrideHigher=1 to <c>CSWSJournal::SetState</c> itself for a genuine decrease. Live
-    /// testing found that call reports success and logs the lower number, but a raw probe of
-    /// the journal array's own <c>+0x20</c> state field showed it never actually moved —
-    /// twice, on two independent tags. Disassembly shows the entry-array write inside
-    /// <c>SetState</c> is not conditioned on bOverrideHigher at all (see <see
-    /// cref="JournalApplyRule.RemoveThenAdd"/>'s remarks for the exact instructions read);
-    /// the argument only suppresses a notification send. Exactly which branch inside
-    /// <c>SetState</c> refuses the write for a decrease was not pinned down to one
-    /// instruction — the write is gated behind a per-player loop whose own comparison was not
-    /// fully decompiled. So a decrease is no longer attempted through SetState's override bit
-    /// at all: it composes two ALREADY-LIVE-VERIFIED primitives instead — <see
-    /// cref="RemoveJournalEntry"/>'s <c>CSWSJournal::Destroy</c> (confirmed live 2026-08-22 to
-    /// genuinely shrink the array), followed by a plain add (override=0), which is the same
-    /// path ordinary quest advancement has always used.
+    /// ⚠ <c>CSWSJournal::SetState</c>'s own bOverrideHigher=1 argument is NOT used for a
+    /// genuine decrease: it reports success and logs the lower number, but live probing showed
+    /// the journal array's own <c>+0x20</c> state field never actually moves — the argument
+    /// only suppresses a notification send, and exactly which internal branch refuses the
+    /// write was not pinned down to one instruction. So a decrease is instead realised by
+    /// composing two ALREADY-LIVE-VERIFIED primitives — <see cref="RemoveJournalEntry"/>'s
+    /// <c>CSWSJournal::Destroy</c> (confirmed live to genuinely shrink the array), followed by
+    /// a plain add (override=0), the same path ordinary quest advancement has always used.
+    /// Full investigation: docs/research/quest-sync.md.
     ///
     /// <paramref name="allowDecreaseViaRemove"/> mirrors <c>JournalController</c>'s
     /// <c>journal_remove_sync</c> gate: a decrease fundamentally needs the removal primitive,
@@ -150,13 +143,12 @@ internal static unsafe partial class Odyssey
             return false;
         }
 
-        // ⚠ VALIDATE THE LIST BEFORE HANDING IT TO THE ENGINE. This call crashed live
-        // (2026-08-06): CSWSJournal::SetState walks every existing entry comparing tags,
-        // and it faulted inside CExoString::CompareNoCase_2 at 0x005E6491 — the strlen
-        // over an ENTRY's own tag pointer, reached from the compare at 0x005C5AFF. That is
-        // the signature of a data pointer that is readable but not a journal array: the
-        // walk then dereferences a garbage tag. SetState has no validation of its own, so
-        // the guard has to live here.
+        // ⚠ VALIDATE THE LIST BEFORE HANDING IT TO THE ENGINE. A prior live crash showed why:
+        // CSWSJournal::SetState walks every existing entry comparing tags, and faulted inside
+        // CExoString::CompareNoCase_2 at 0x005E6491 — the strlen over an ENTRY's own tag
+        // pointer, reached from the compare at 0x005C5AFF. That is the signature of a data
+        // pointer that is readable but not a journal array: the walk then dereferences a
+        // garbage tag. SetState has no validation of its own, so the guard has to live here.
         //
         // { SJournalEntry* data; int size; int capacity }, entries 0x3C bytes (the caller's
         // own stride at 0x005C5B11), tag CExoString at +0x18 (its `lea ecx,[eax+edx+0x18]`).
@@ -280,18 +272,14 @@ internal static unsafe partial class Odyssey
     /// <c>journal_remove_sync</c> gate). The call site is <c>CSWSJournal::Destroy</c> at
     /// 0x005C68B0 — found by static disassembly of
     /// <c>ExecuteCommandRemoveJournalQuestEntry</c> (0x0054AF60, the VM wrapper the symbol DB
-    /// names for NWScript routine 368; see docs/research/quest-sync.md's enumeration for how
-    /// the routine number was computed), not by any live probe. The disassembly is
-    /// self-consistent (it walks the server's player list exactly the way
-    /// <see cref="SetJournalState"/>'s own caller chain does, fetches each player's journal
-    /// via <c>CSWSCreature::GetJournal</c> — the same 0x004EDB00 already VERIFIED elsewhere
-    /// in this file — and calls a function whose own `ret 8` matches a one-argument
-    /// thiscall, immediately after pushing the address of a local CExoString tag buffer) but
-    /// the engine's own live crash history around this exact journal pointer chain
-    /// (2026-08-06, see <see cref="SetJournalState"/>'s remarks) is reason enough not to
-    /// ship an unverified call unguarded. The same array-walk validation
-    /// <see cref="SetJournalState"/> uses is applied here for the same reason: a readable
-    /// but non-journal pointer must fail closed, not fault the process.
+    /// names for NWScript routine 368), not by any live probe. The disassembly is
+    /// self-consistent (same player-list walk and <c>CSWSCreature::GetJournal</c> lookup as
+    /// <see cref="SetJournalState"/>'s caller chain, a one-argument thiscall matching its own
+    /// `ret 8`) but this journal pointer chain's live crash history (see
+    /// <see cref="SetJournalState"/>'s remarks) is reason enough not to ship an unverified
+    /// call unguarded — hence the same array-walk validation <see cref="SetJournalState"/>
+    /// uses is applied here: a readable but non-journal pointer must fail closed, not fault
+    /// the process. See docs/research/quest-sync.md for the routine-number derivation.
     ///
     /// MAIN THREAD ONLY.
     /// </summary>

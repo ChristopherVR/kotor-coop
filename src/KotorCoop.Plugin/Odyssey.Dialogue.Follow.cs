@@ -1,4 +1,9 @@
 // Odyssey.Dialogue.Follow.cs - following a peer into and through a dialogue.
+// Owns: opening a conversation a peer started (StartDialogueWith, ActionInitiateDialog/
+// SendPlayerToServerInput_Dialog), locating and reading the live dialogue GUI panel
+// (GetDialoguePanel, the four panel classes/vtables, tag helpers), replaying the owner's reply
+// choice (SelectDialogueReply) while blocking the follower's own clicks, the far-join teleport
+// assist, and cleanup for a conversation shell stuck open (ClearLocalPlayerStuckDialogueAction).
 
 namespace KotorCoop.Plugin;
 
@@ -218,8 +223,8 @@ internal static unsafe partial class Odyssey
             return false;
         }
 
-        // dialogue_join_teleport (default ON since 2026-08-21 — see docs/research/dialogue-join-latency.md
-        // "Far-join live pass"). This is what an automatic join (force_dialogue_party, or the
+        // dialogue_join_teleport (default ON) — see docs/research/dialogue-join-latency.md
+        // "Far-join live pass". This is what an automatic join (force_dialogue_party, or the
         // test hook) has that a real mouse click does not: nobody is driving the PC toward the
         // NPC. Measured live: a joiner left standing 14m away never reaches StartDialog at
         // all — CSWSObject::AIActionDialogObject's own range gate (VERIFIED live at 10.0

@@ -39,20 +39,12 @@ internal static unsafe partial class Odyssey
     /// <summary>
     /// The creature CLIENT INPUT currently drives — CSWParty member[0]
     /// (client-control-lock.md's control gate: <c>[[[0x7A39FC]+4]+0x270]+0x24</c>), which is
-    /// NOT what <see cref="GetPlayerCreaturePointer"/> answers.
-    ///
-    /// Round 70 (2026-08-22, docs/research/control-return.md "Round 70"): both
-    /// <c>ControlReturnController</c> and <c>PartyRosterController.IsControllingRosterCompanion</c>
-    /// used to ask <see cref="GetPlayerCreaturePointer"/> "what is the player driving right
-    /// now" and it structurally cannot answer that — disassembly this round shows it resolves
-    /// a FIXED entry in the server's own connected-players list ("player slot 0") and reads
-    /// that player's registered PC id (<c>player+0x28</c>), a value Tab/`leader`/
-    /// <c>ChangeCharacter</c> never touch. It always resolves the real PC (or nothing), which
-    /// is exactly why neither ever produced a "you are driving companion" claim. This function
-    /// reads the field that DOES move — the same one <see cref="SwitchControlToPartySlot"/>/
-    /// <see cref="SwitchControlToPc"/> locate a member index against — resolved to a server
-    /// object pointer through the SAME safe generic resolver every other id read in this file
-    /// uses (<see cref="ResolveServerObject"/>) rather than a typed/flag-sensitive getter.
+    /// NOT what <see cref="GetPlayerCreaturePointer"/> answers: that resolves a FIXED
+    /// connected-players slot (the real PC, or nothing) and never moves with Tab/`leader`/
+    /// <c>ChangeCharacter</c>. This function instead reads the field that DOES move — the
+    /// same one <see cref="SwitchControlToPartySlot"/>/<see cref="SwitchControlToPc"/> locate a
+    /// member index against — resolved through the same generic resolver every other id read
+    /// in this file uses (<see cref="ResolveServerObject"/>). See docs/research/control-return.md.
     /// </summary>
     public static nint GetControlledCreaturePointer()
     {

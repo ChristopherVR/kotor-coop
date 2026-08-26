@@ -7,45 +7,38 @@ internal static unsafe partial class Odyssey
 {
     // ---- control switch: engine-verified reorder, manually applied -----------------
     //
-    // Round 70 (2026-08-22, docs/research/control-return.md "Round 70"). Rounds 69 and
-    // earlier shipped a raw two-field poke here (member[0]'s id at `party+0x24` plus
-    // `internal+0x20`) that moved INPUT AUTHORITY (live-confirmed) but never reordered
-    // CSWParty's member array — so a client switched THIS way still had the array as
-    // [companion, PC] afterward, exactly the shape `PartyTogetherClampRule` has to defer
-    // around, and `ControlReturnController` still never saw a claim. Root cause, traced this
-    // round: the controller's OWN detection read `Odyssey.GetPlayerCreaturePointer`
-    // (`CServerExoApp::GetPlayerCreature`, 0x004B2820), which disassembles to a chain that
-    // resolves a FIXED entry in the SERVER's own connected-players list ("player slot 0",
-    // found by walking a list at `CServerExoAppInternal+0x10064` for the node whose value
-    // equals 0) and reads THAT PLAYER's own registered PC id (`player+0x28`) — a value
-    // `ChangeCharacter`/Tab/`leader` never touch. It always resolves the real PC (or nothing),
-    // never a companion, by construction — see <see cref="GetControlledCreaturePointer"/> for
-    // the field that actually moves. Fixed below: detection now reads that field instead.
+    // An earlier raw two-field poke (member[0]'s id at `party+0x24` plus `internal+0x20`)
+    // moved INPUT AUTHORITY but never reordered CSWParty's member array, so
+    // `ControlReturnController` still never saw a claim: its own detection reads
+    // `Odyssey.GetPlayerCreaturePointer` (`CServerExoApp::GetPlayerCreature`, 0x004B2820),
+    // which always resolves the SERVER's fixed "player slot 0" entry — the real PC, never a
+    // companion, by construction — not <see cref="GetControlledCreaturePointer"/>, the field
+    // that actually moves. Detection now reads that field instead. Full derivation:
+    // docs/research/control-return.md ("Round 70").
     //
     // ⚠⚠ THE ENGINE'S OWN SWITCH FUNNEL WAS TRIED FIRST AND DID NOT WORK LIVE — NEEDS-LIVE,
     // UNRESOLVED, documented here so nobody re-derives this from scratch.
     // `CClientExoAppInternal::ChangeCharacter` (0x005F6B60) — the function a real Tab press
     // (`ChangeCharacterToNextLivingPartyMember` 0x005EDF80/0x005F7960) and a real portrait
     // click (`CGuiInGame::ChangeCharacter` 0x0062B0F0 → `CClientExoApp::ChangeCharacter`
-    // 0x005EDC30) both fall through to — was fully disassembled this round, and its calling
-    // convention was CONFIRMED against two real call sites via `xrefs.py 0x5F6B60`:
+    // 0x005EDC30) both fall through to — was fully disassembled, and its calling convention
+    // was CONFIRMED against two real call sites via `xrefs.py 0x5F6B60`:
     // `ChangeCharacterToNextLivingPartyMember` pushes exactly `push 0; push -2` (Tab's own
     // "-2 = swap with member[1]" sentinel) and the portrait path pushes a value computed by
-    // `CSWParty::FindMemberIndexById` (0x006349C0, disassembled and confirmed to be exactly
-    // the same bounded array-id-search this file already implements as
-    // <see cref="FindMemberIndex"/>). Calling it from this process — with the EXACT `-2`
-    // sentinel a real Tab press uses, not just a computed index — left CSWParty's member array
-    // completely unchanged in every live test this round ran: `internal+0x4B4` (the flag
-    // `ChangeCharacter` only sets past its own "was this a no-op" short-circuit,
-    // `cmp edi,eax; je` at 0x5F6B91) never moved off 0, meaning `CSWParty::GetControlledCreature`
-    // read the identical pointer before and after `SetControlledCreature` ran, for every
-    // argument tried. `SetControlledCreature`'s own body (0x00635480) was traced far enough to
-    // rule out an index/bounds mistake (the -2 path skips the bounds check entirely and still
-    // did nothing), which points at something failing further in — most likely an exception
-    // inside `SetControlledCreature`'s own SEH frame, silently unwound before the array write,
-    // for a reason this round's tooling (no debugger attach) could not isolate further. A
-    // future round with debugger access should pick this up before trying anything else here;
-    // until then, the switch below reproduces the SAME end state
+    // `CSWParty::FindMemberIndexById` (0x006349C0, confirmed to be exactly the same bounded
+    // array-id-search this file already implements as <see cref="FindMemberIndex"/>). Calling
+    // it from this process — with the EXACT `-2` sentinel a real Tab press uses, not just a
+    // computed index — left CSWParty's member array completely unchanged in every live test:
+    // `internal+0x4B4` (the flag `ChangeCharacter` only sets past its own "was this a no-op"
+    // short-circuit, `cmp edi,eax; je` at 0x5F6B91) never moved off 0, meaning
+    // `CSWParty::GetControlledCreature` read the identical pointer before and after
+    // `SetControlledCreature` ran, for every argument tried. `SetControlledCreature`'s own body
+    // (0x00635480) was traced far enough to rule out an index/bounds mistake (the -2 path
+    // skips the bounds check entirely and still did nothing), which points at something
+    // failing further in — most likely an exception inside `SetControlledCreature`'s own SEH
+    // frame, silently unwound before the array write, for a reason no debugger attach could
+    // isolate further. A future pass with debugger access should pick this up before trying
+    // anything else here; until then, the switch below reproduces the SAME end state
     // (client-control-lock.md: "a real engine control switch reorders the member array so the
     // driven creature becomes member[0]") by direct, id-only writes instead.
     //
@@ -57,8 +50,8 @@ internal static unsafe partial class Odyssey
     // (both wrap the real `CSWCModule::SetCameraFollow`, 0x0063F9D0 — the same call
     // `ChangeCharacter` itself would have made). Every write is id-only — Recipe A
     // (client-control-lock.md): "VERIFIED crash-proof... every consumer resolves it through
-    // the null-safe GetCreatureByGameObjectID" — so this is exactly as safe as round 69's
-    // shipped primitive, just applied to the WHOLE array instead of only member[0].
+    // the null-safe GetCreatureByGameObjectID" — so this is exactly as safe as the primitive it
+    // replaces, just applied to the WHOLE array instead of only member[0].
 
     /// <summary>CSWParty (client-side) + this = member[0]'s client-space object id — the SAME
     /// field <c>GetSWPartyFn</c>/<see cref="SwPartyMemberCount"/>'s struct exposes at +0x00,
@@ -68,12 +61,12 @@ internal static unsafe partial class Odyssey
     private const int SwPartyMember0ClientId = 0x24;
 
     /// <summary>Byte distance between successive <c>CSWPartyMemberData</c> entries
-    /// (client-control-lock.md, confirmed again this round in <c>SetControlledCreature</c>'s
+    /// (client-control-lock.md, confirmed again in <c>SetControlledCreature</c>'s
     /// own <c>imul eax,eax,0x88</c> index arithmetic).</summary>
     private const int SwPartyMemberStride = 0x88;
 
     /// <summary>The "party npc" flag bit a member's client-space id carries while it names a
-    /// companion (round-69 live finding: <c>party.member0.client_object_id</c> read
+    /// companion (live finding: <c>party.member0.client_object_id</c> read
     /// <c>0x80000127</c> for Trask). Masked off before every id comparison in this file so the
     /// same code compares correctly whether the id in hand carries it or not.</summary>
     private const uint ControlPartyNpcFlag = 0x80000000;
@@ -81,7 +74,7 @@ internal static unsafe partial class Odyssey
     /// <summary>CSWParty's own member-array capacity: the PC plus the server table's own
     /// two-companion cap (<c>CSWPartyTable::AddMember</c> refuses at a count of 2,
     /// 0x00565633, cited in <c>PartyRosterController</c>) — three <c>0x88</c>-byte blocks,
-    /// live-confirmed this round (member[2] reads the empty-slot sentinel <c>0x7F000000</c> on
+    /// live-confirmed (member[2] reads the empty-slot sentinel <c>0x7F000000</c> on
     /// a one-companion party).</summary>
     private const int SwPartyMemberCapacity = 3;
 
@@ -135,12 +128,11 @@ internal static unsafe partial class Odyssey
     ///
     /// ID-ONLY (Recipe A, client-control-lock.md: "VERIFIED crash-proof... every consumer
     /// resolves it through the null-safe GetCreatureByGameObjectID"). The per-member "extra"
-    /// field at <c>+0x80</c> — which the real engine ALSO shifts alongside the id, per this
-    /// round's own disassembly of <c>SetControlledCreature</c> — is deliberately left in place:
-    /// round 69's own precedent already accepted "member[0]'s id only, cosmetic desync at
-    /// worst, never a crash risk" for the SAME reason, and adding a second field write here
-    /// would only be trading one round's worth of verification for a cosmetic gain nothing has
-    /// asked for yet.
+    /// field at <c>+0x80</c> — which the real engine ALSO shifts alongside the id, per
+    /// disassembly of <c>SetControlledCreature</c> — is deliberately left in place: the same
+    /// "member[0]'s id only, cosmetic desync at worst, never a crash risk" precedent already
+    /// accepted elsewhere applies here too, and adding a second field write would only trade
+    /// verification effort for a cosmetic gain nothing has asked for yet.
     ///
     /// A no-op when <paramref name="targetIndex"/> is already 0.
     /// </summary>
@@ -172,7 +164,7 @@ internal static unsafe partial class Odyssey
     /// false, touching nothing, when the slot has no spawned body, is not currently a party
     /// member, or there is no client world.
     ///
-    /// ⚠ ROUND 70 LIVE FINDING: on a client with <c>party_together_fix</c> (default ON) this
+    /// ⚠ LIVE FINDING: on a client with <c>party_together_fix</c> (default ON) this
     /// companion's data is very often ALREADY sitting in CSWParty's array (member[1], say) with
     /// its full flagged id (live-confirmed: <c>0x80000127</c> for Trask) — but CSWParty's own
     /// COUNT field has been clamped down to <c>CSWPartyTable</c>'s companions-only count
@@ -209,7 +201,7 @@ internal static unsafe partial class Odyssey
         if (index < 0)
         {
             // Not reachable within the CURRENT (possibly party_together_fix-clamped) count —
-            // but the data may already be sitting past it (round-70 live finding above). Scan
+            // but the data may already be sitting past it (live finding above). Scan
             // the full array before giving up, and if it is there, raise the count to include
             // exactly that one entry. Never lowers it, never invents an id: the entry's own
             // content was already read and matched.
@@ -237,8 +229,8 @@ internal static unsafe partial class Odyssey
     /// The PC's id is read fresh every call, through <see cref="GetClientPlayerCreatureFn"/>
     /// (<c>CClientExoAppInternal::GetPlayerCreature</c>, 0x5F1420 — <c>internal+0x20</c>,
     /// VERIFIED stable across any switch: a real <c>ChangeCharacter</c> never calls
-    /// <c>SetPlayerCreature</c>, client-control-lock.md) — no cross-call cache needed, unlike
-    /// round 69's raw poke. Returns false, touching nothing, when there is no client world, no
+    /// <c>SetPlayerCreature</c>, client-control-lock.md) — no cross-call cache needed. Returns
+    /// false, touching nothing, when there is no client world, no
     /// live party object, or (should not happen — the PC is always a member by construction)
     /// the PC does not currently resolve to a CSWParty member. MAIN THREAD ONLY.</summary>
     public static bool SwitchControlToPc()

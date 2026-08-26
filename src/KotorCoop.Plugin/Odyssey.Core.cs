@@ -50,18 +50,10 @@ internal static unsafe partial class Odyssey
 
     /// <summary>
     /// ActionFollowLeader() — zero NWScript parameters. <c>CSWVirtualMachineCommands::
-    /// ExecuteCommandActionFollowLeader</c>, confirmed by the symbol database and matching
-    /// docs/research/party-reconciliation.md's own citation ("Only ONE site enqueues it").
-    /// ROUND 71: the safe VM-dispatch route into the SAME action <see cref="IsMoveAction"/>'s
-    /// own table comment lists as <c>0x3C PartyFollowLeader</c> (that table read directly off
-    /// the RunActions jump table entry by entry, which is why it is trusted over
-    /// party-reconciliation.md's earlier, unverified "action id 61" (0x3D) guess — see
-    /// <see cref="QueuePartyFollowLeader"/>'s own remarks). Deliberately NOT the raw
-    /// <c>CSWSObject::AddAction 0x004CEA20</c> marshaling call party-reconciliation.md's
-    /// "Recommended design" speculated about: docs/research/dialogue-join-latency.md already
-    /// flagged that call's full push-list typing as unverified and "not safe to ship blind."
-    /// This goes through the identical, already-verified VM path <see cref="AttackTarget"/> and
-    /// <see cref="PickUpItem"/> use instead.
+    /// ExecuteCommandActionFollowLeader</c>, confirmed by the symbol database. Dispatched
+    /// through the same verified VM path <see cref="AttackTarget"/> and <see cref="PickUpItem"/>
+    /// use, deliberately not the raw <c>CSWSObject::AddAction</c> marshaling call. See
+    /// docs/research/party-reconciliation.md for the full action-id verification story.
     /// </summary>
     private const nint ExpectedActionFollowLeader = 0x0052CBE0;
 
@@ -319,23 +311,15 @@ internal static unsafe partial class Odyssey
         return objectId;
     }
 
-    // ---- ROUND 47 BISECTION MASK ------------------------------------------------------
+    // ---- combat bisection mask -------------------------------------------------------
     //
-    // docs/research/shared-state-audit.md §2 rounds 9-46 spent 46 rounds proving WHICH
-    // fields a mirrored-then-excluded creature's round sub-structures stay disarmed despite,
-    // one static-disassembly candidate at a time, and never found the actual cause. Round 47
-    // is the empirical alternative: a dev-only coop.ini bitmask (`local_combat_bisect_mask`,
-    // hex, default 0 = every op below active — today's shipped behaviour) where each bit
-    // DISABLES exactly one distinct engine write/call this plugin performs on a MIRRORED
-    // (not-yet-fighting) creature, so a live A/B pass can narrow which one actually matters
-    // instead of reasoning about it from the disassembly alone. Strictly additive: every call
-    // site below runs its normal op when the corresponding bit is 0, so `local_combat_bisect_mask`
-    // unset reproduces exactly today's behaviour bit for bit. The exclusion/trigger machinery
-    // itself (StartLocalFight's script fire, MaintainLocalFight's dead/disengage/timeout
-    // checks, RestoreClaimState on the handoff frame) is deliberately NOT gated by any bit —
-    // this mask only ever touches the ONGOING per-frame mirror-drive ops that run on a
-    // creature BEFORE it is ever handed to local_combat, which is precisely the "went through
-    // DriveOne even briefly" half of round 46's fact pattern.
+    // A dev-only coop.ini bitmask (`local_combat_bisect_mask`, hex, default 0 = every op
+    // below active — today's shipped behaviour) where each bit DISABLES exactly one distinct
+    // engine write/call this plugin performs on a MIRRORED (not-yet-fighting) creature,
+    // letting a live A/B pass isolate which write actually matters instead of reasoning from
+    // disassembly alone. Strictly additive: every call site below runs its normal op when its
+    // bit is 0, so mask-unset reproduces today's behaviour bit for bit. Full investigation
+    // history and results: docs/research/shared-state-audit.md.
     //
     // Bit  Op                                                        Where
     // 0    ObjCommandable = 1                                        ClaimCreature
@@ -365,7 +349,7 @@ internal static unsafe partial class Odyssey
     public const uint BisectBitDriveTwin = 1u << 9;
     public const uint BisectBitClearPositionDirty = 1u << 10;
 
-    /// <summary>All eleven round-47 bisection bits, for "disable everything but census
+    /// <summary>All eleven DriveOne bisection bits, for "disable everything but census
     /// membership" (run 0 of the bisection protocol).</summary>
     public const uint BisectAllOps =
         BisectBitClaimCommandable | BisectBitClaimActionWipe | BisectBitClaimMovePermit
@@ -373,39 +357,17 @@ internal static unsafe partial class Odyssey
         | BisectBitDriveRunMoveState | BisectBitDriveAnimation | BisectBitDrivePosition
         | BisectBitDriveTwin | BisectBitClearPositionDirty;
 
-    // ---- ROUND 48 EXTENSION ------------------------------------------------------------
+    // ---- health pin/mirror bisection bits ----------------------------------------------
     //
-    // Round 47's own write-up flagged two ops the task brief expected inside the eleven
-    // above and did not find there: the health pin and "any faction hold." Reading
-    // CombatController.cs in full this round found there is in fact NO faction write
-    // anywhere on a mirrored, GIT-identical enemy — round 47's phrasing was imprecise, not
-    // a gap in that round's own table. (PhantomController.ApplyTargetable does hold a
-    // faction, but only on THIS instance's own phantom bodies representing remote peers,
-    // never on a mirrored enemy — irrelevant to a GIT creature like the one this bisection
-    // targets.) What CombatController.Apply genuinely does, every 40 frames, completely
-    // unmasked by round 47 or any round before it: <see cref="SetMinOneHitPoint"/> (the
-    // health pin) and the health-mirror write itself
-    // (<see cref="SetCurrentHitPoints"/>) — both of which DID run, unmasked, in every one
-    // of round 47's trials, including mask=0x7FF ("every DriveOne op off"). That is the
-    // one real difference between round 37's success (never enumerated in the census AT
-    // ALL, so CombatController never touched it even once — <c>BlockEnemyPresenceCount</c>
-    // and <c>BlockEnemyCount</c> are written from the identical truncated list, confirmed
-    // in <c>KotorGameBridge.TryWriteEnemies</c>) and round 47's failure (enumerated, so
-    // both ClaimCreature/DriveOne AND CombatController.Apply were touching it — the
-    // bisection only ever silenced the first). These two bits close that gap.
+    // Extends the mask above to CombatController.Apply's own per-frame writes on a mirrored
+    // enemy: the min-1-hp health pin and the health-mirror write itself. Gated the same way
+    // as the eleven DriveOne bits (read once via EnemyPresenceController.LocalCombatBisectMask,
+    // 0/unset reproduces shipped behaviour bit for bit); a blunt global switch, not
+    // per-creature. Full investigation history: docs/research/shared-state-audit.md.
     //
     // Bit  Op                                                        Where
     // 11   SetMinOneHitPoint(creature, true) (the health pin)        CombatController.Apply
     // 12   SetCurrentHitPoints (the health-mirror write itself)      CombatController.Apply
-    //
-    // Gated the same way as the eleven above: read once via
-    // EnemyPresenceController.LocalCombatBisectMask (the only writer of the ini key), never
-    // gates StartLocalFight/MaintainLocalFight, and 0 (unset) reproduces today's shipped
-    // behaviour bit for bit. CombatController mirrors EVERY census enemy the same way
-    // regardless of whether local_combat is about to engage any particular one of them, so
-    // — like the eleven DriveOne bits — these two are a blunt, global "is the pin/mirror
-    // active at all this session" switch, not a per-creature one; sound for a single-target
-    // bisection rig, which is what this ini key has only ever been used for.
     public const uint BisectBitHealthPin = 1u << 11;
     public const uint BisectBitHealthMirror = 1u << 12;
 
@@ -432,9 +394,9 @@ internal static unsafe partial class Odyssey
     /// position is still driven from the owner every pass, so it stays where the owner says;
     /// what it gains is the ability to finish a combat round.
     /// </summary>
-    /// <param name="bisectMask">ROUND 47: 0 (default) is today's unconditional behaviour,
-    /// unaffected. Any other caller than <c>EnemyPresenceController.DriveOne</c> should never
-    /// pass anything else. See the bit table above.</param>
+    /// <param name="bisectMask">0 (default) is today's unconditional behaviour, unaffected.
+    /// Any other caller than <c>EnemyPresenceController.DriveOne</c> should never pass
+    /// anything else. See the bit table above.</param>
     public static void ClaimCreature(nint creature, bool clearActions, uint bisectMask = 0)
     {
         // Deliberately LEAVES the creature commandable. An earlier version set the
@@ -523,11 +485,11 @@ internal static unsafe partial class Odyssey
     private static readonly delegate* unmanaged[Thiscall]<nint, ushort, int> AnimationLoopingFn =
         (delegate* unmanaged[Thiscall]<nint, ushort, int>)0x0063C300;
 
-    /// <summary>ROUND 61 DIAGNOSTIC: CSWCObject::AnimationWalking(u16) / AnimationRunning(u16)
-    /// — the predicates <c>ClientServerSyncHandler_Position</c> (0x00611F50, vtable +0x12C)
-    /// actually branches on to decide whether to resolve and play a walk/run animation by
-    /// name. Probed to confirm the +0x12C call this pass added is even reaching the
-    /// animbase-vtable+0x54 "play" step for this creature.</summary>
+    /// <summary>DIAGNOSTIC: CSWCObject::AnimationWalking(u16) / AnimationRunning(u16) — the
+    /// predicates <c>ClientServerSyncHandler_Position</c> (0x00611F50, vtable +0x12C)
+    /// branches on to decide whether to resolve and play a walk/run animation by name. Probed
+    /// to confirm the +0x12C call reaches the animbase-vtable+0x54 "play" step for a creature.
+    /// See docs/research/phantom-locomotion.md.</summary>
     private static readonly delegate* unmanaged[Thiscall]<nint, ushort, int> AnimationWalkingFn =
         (delegate* unmanaged[Thiscall]<nint, ushort, int>)0x0063C240;
 
@@ -535,29 +497,14 @@ internal static unsafe partial class Odyssey
         (delegate* unmanaged[Thiscall]<nint, ushort, int>)0x0063C2A0;
 
     /// <summary>
-    /// ROUND 61: <c>CSWCAnimBase::AnimationExists(u16)</c>, animbase vtable +0x50
-    /// (0x0069D910, confirmed by name in tools/kotor1_0_3.db). This — NOT
-    /// AnimationLooping/FireAndForget/Overlay, which round 60 blamed — is the real gate on
-    /// whether a gait id actually plays. Static disassembly of the two functions between the
-    /// sync call and the render field settles it:
-    /// <list type="bullet">
-    /// <item><c>CSWCCreature::ClientServerSyncHandler_Animation</c> (vtable +0x134,
-    /// 0x0060C100 — the entry <see cref="TwinAnimationSyncSlot"/> calls) never calls
-    /// AnimationLooping at all. It only calls AnimationFireAndForget to choose between
-    /// vtable +0xA0 (fire-and-forget path) and vtable +0x9C (the plain setter) — our gait ids
-    /// are not fire-and-forget, so it always takes +0x9C.</item>
-    /// <item><c>CSWCObject::SetAnimation</c> (vtable +0x9C, 0x0063E930 — the "plain setter"
-    /// the file's own comments already knew "does not stick") calls
-    /// <c>animBase-&gt;vtbl[0x50](id)</c> = AnimationExists and returns immediately, WITHOUT
-    /// touching twin+0x48 at all, when it reports false. AnimationExists itself returns false
-    /// immediately if the animbase's own <c>Gob*</c> (tools/kotor1_0_3.db:
-    /// <c>CSWCAnimBase.gob</c>, offset 184 = <see cref="AnimBaseGob"/>) is null — the loaded
-    /// render/scene node — and otherwise resolves the id to a model animation name
-    /// (<c>GetAnimationName</c>, animbase vtable +0x40, 0x0069E620) and asks the Gob whether a
-    /// node with that name exists on the loaded model.</item>
-    /// </list>
-    /// So "the animbase does not classify these ids as playable" (round 60's read of
-    /// AnimationLooping) was the wrong function; THIS is the one that actually decides.
+    /// <c>CSWCAnimBase::AnimationExists(u16)</c>, animbase vtable +0x50 (0x0069D910,
+    /// confirmed by name in tools/kotor1_0_3.db) — NOT AnimationLooping/FireAndForget/Overlay
+    /// — is the real gate on whether a gait id actually plays. <c>SetAnimation</c> (vtable
+    /// +0x9C, 0x0063E930, the "plain setter" that "does not stick") calls this and returns
+    /// immediately without touching twin+0x48 when it reports false; AnimationExists itself
+    /// returns false when the animbase's <c>Gob*</c> (<see cref="AnimBaseGob"/>, the loaded
+    /// render/scene node) is null, or when no node matching the resolved animation name
+    /// exists on the loaded model. Full trace: docs/research/phantom-locomotion.md.
     /// </summary>
     private static readonly delegate* unmanaged[Thiscall]<nint, ushort, int> AnimationExistsFn =
         (delegate* unmanaged[Thiscall]<nint, ushort, int>)0x0069D910;
@@ -598,17 +545,14 @@ internal static unsafe partial class Odyssey
     /// <c>round+0x958 = arg1</c>, in that order, with no branch that skips either store when
     /// arg1 is nonzero.
     ///
-    /// This is the actual missing initiation step, found one round after
-    /// <see cref="AddAttackActionFn"/> was confirmed to append correctly: `round+0x9B0` being
-    /// non-null (VERIFIED live) only means the action is ON the list — `UpdateCombatRoundTimer`
-    /// (<c>0x004FAF20</c>, called unconditionally every tick for every creature, no
-    /// combat-state or mirrored gate at its call site) reads `round+0x958` and, if it's still
-    /// the zero `StartCombatRound` (`0x004D5F70`) itself leaves it at, takes a bare
-    /// `IncrementTimer`-only fallback (`0x004FB0D3`) that never touches the queued action at
-    /// all — that fallback is the actual silent-discard mechanism, not anything inside
-    /// `AddAttackAction`. This call is what the engine's own code makes, in the same function
-    /// that calls `StartCombatRound`, to flip `+0x958` nonzero afterward so the real
-    /// processing branch runs instead.
+    /// `round+0x9B0` being non-null (VERIFIED live) only means an action is ON the list —
+    /// `UpdateCombatRoundTimer` (<c>0x004FAF20</c>, called unconditionally every tick, no
+    /// combat-state or mirrored gate) reads `round+0x958` and, if it is still the zero
+    /// `StartCombatRound` (`0x004D5F70`) leaves it at, takes a bare `IncrementTimer`-only
+    /// fallback (`0x004FB0D3`) that never touches the queued action — the actual
+    /// silent-discard mechanism, not anything inside `AddAttackAction`. This call is what
+    /// flips `+0x958` nonzero so the real processing branch runs instead. Full investigation:
+    /// docs/research/shared-state-audit.md.
     /// </summary>
     private static readonly delegate* unmanaged[Thiscall]<nint, int, int, void> SetRoundTimerActiveFn =
         (delegate* unmanaged[Thiscall]<nint, int, int, void>)0x004D28F0;
@@ -629,30 +573,21 @@ internal static unsafe partial class Odyssey
     /// otherwise, if the CURRENT <c>round+0x960</c> is already positive it ACCUMULATES
     /// (<c>round+0x960 += arg1</c>), else it sets <c>round+0x960 = arg1</c> directly.
     ///
-    /// This is the actual answer to why the previous round's fix (this call was missing
-    /// entirely) still did not work, live-confirmed by disassembling <c>UpdateCombatRoundTimer</c>
-    /// (<c>0x004FAF20</c>) past its <c>round+0x958</c> gate: passing that gate is not enough.
-    /// A SECOND check follows — <c>ebx = round+0x960 - creature+0xCC</c> (creature's own
-    /// current-time-ish field) — and only when that is POSITIVE does the function reach the
-    /// real action-processing call (<c>0x005B8050</c>, via <c>0x004FAFA7</c>-<c>0x004FAFD9</c>).
-    /// When it is not positive (which it never is if <c>round+0x960</c> was left at its
-    /// `StartCombatRound`-zeroed default — <c>StartCombatRound</c> zeroes THIS field too,
-    /// confirmed by reading its full body, so it does not establish it either), the function
-    /// instead takes a shortcut (<c>0x004FAFE3</c> onward) that resolves a leftover
-    /// <c>round+0x9CC</c> target through a chain of vtable validity checks and then calls the
-    /// round-reset helper (<c>0x004D4620</c>, confirmed by <c>fieldwrites.py 0x958</c> and
-    /// cross-referenced via <c>xrefs.py</c> to a call site right where this shortcut ends,
-    /// <c>0x004FB0BA</c>) — which zeroes <c>round+0x958</c> back to 0 along with <c>+0x934</c>,
-    /// <c>+0x944</c>, <c>+0x94c</c>, <c>+0x960</c> and others. This is why the diagnostic
-    /// always read <c>BEFORE=0</c>: not "normal consumption" and not "something else resetting
-    /// it before the gate" as originally framed — the ONLY branch reachable without this call
-    /// is the shortcut that ends in exactly that reset, every time, without ever reaching the
-    /// action-processing call that would change the head action.
+    /// `UpdateCombatRoundTimer` (<c>0x004FAF20</c>) reaches the real action-processing call
+    /// (<c>0x005B8050</c>, via <c>0x004FAFA7</c>-<c>0x004FAFD9</c>) only when a SECOND check
+    /// — <c>ebx = round+0x960 - creature+0xCC</c> — is POSITIVE; this call is what
+    /// establishes `round+0x960`, since `StartCombatRound` zeroes it. Without this call the
+    /// function instead always takes a shortcut (<c>0x004FAFE3</c> onward) that resolves a
+    /// leftover `round+0x9CC` target and calls the round-reset helper
+    /// (<c>0x004D4620</c>), which zeroes `round+0x958` back to 0 along with `+0x934`,
+    /// `+0x944`, `+0x94c`, `+0x960` and others, without ever reaching the action-processing
+    /// call that would change the head action. Full investigation:
+    /// docs/research/shared-state-audit.md.
     /// </summary>
     private static readonly delegate* unmanaged[Thiscall]<nint, int, int, void> SetRoundDelayFn =
         (delegate* unmanaged[Thiscall]<nint, int, int, void>)0x004D2920;
 
-    /// <summary>ROUND 30: bare call to 0x004B4CB0, the real body behind the
+    /// <summary>Bare call to 0x004B4CB0, the real body behind the
     /// 0x4AEA40/0x4B4CB0/0x4AE920/0x4B2AE0 thunk chain 0x5B8050's real processing branch uses
     /// to cross-check its target against "is party slot 0 resolvable." Cdecl, zero real
     /// arguments (confirmed by full disassembly — it never reads a stack argument or uses the

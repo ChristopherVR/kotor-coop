@@ -28,29 +28,17 @@ internal static unsafe partial class Odyssey
     /// True while the creature is downed (temp-dead). Party members only ever reach this
     /// state; a non-party creature simply dies.
     ///
-    /// ⚠ ROUND 57 CRASH FIX: <c>GetDeadTempFn</c> alone is not reliable for this creature.
-    /// GetDeadTemp (0x004EF890) loops the ENGINE's own idea of "the client party" (CSWParty,
-    /// not CSWPartyTable) to decide whether the creature it was called on is a member at all,
-    /// and party-together's own live diagnostic in this exact codebase ("party together:
-    /// CSWParty's own member count read N against CSWPartyTable's M - clamping",
-    /// PartyRosterController.SyncClientPartyTogetherState) is direct, repeated evidence that
-    /// CSWParty can hold a stale count/membership view relative to the table
-    /// <c>party_together_fix</c> corrects against. When the local player's own creature is not
-    /// found as a party member by that stale view, GetDeadTemp silently returns false —
-    /// including inside the ENGINE's OWN internal copy of this same check
+    /// ⚠ <c>GetDeadTempFn</c> alone is not reliable for this creature. GetDeadTemp
+    /// (0x004EF890) loops the ENGINE's own idea of "the client party" (CSWParty, not
+    /// CSWPartyTable) to decide whether the creature it was called on is a member at all,
+    /// and CSWParty can hold a stale count/membership view relative to the table — including
+    /// inside the ENGINE's OWN internal copy of this same check
     /// (CSWSEffectListHandler::OnApplyDamage's already-dead early-out calls the identical
-    /// function), not just here.
-    ///
-    /// Live-reproduced 2026-08-22 (docs/research/shared-state-audit.md round 57): an
-    /// un-godded client at HP -4/12 (already deeply downed by a first forwarded hit) took a
-    /// SECOND forwarded hit while <c>IsDowned</c> — via GetDeadTemp alone — kept reading false;
-    /// <see cref="IncomingDamageController"/>'s "no further damage once downed" guard let the
-    /// second hit through, the engine's own damage pipeline ran it (confirmed live —
-    /// <c>PhantomHitHook</c>'s ground-truth hook logged the hit landing), and the game process
-    /// terminated silently moments later: no CrashProbe FIRST-CHANCE line, no managed
-    /// AppDomain.UnhandledException, no Windows Application-log crash event — deep enough past
-    /// the engine's own "already downed" gate that nothing in this process's crash-reporting
-    /// chain ever ran (see CrashProbe.cs's own native-AOT-fail-fast note).
+    /// function), not just here. When the local player's own creature is not found as a party
+    /// member by that stale view, GetDeadTemp silently returns false and further damage is
+    /// not blocked — live-reproduced as a silent process termination with no crash-reporting
+    /// chain ever running. Full reproduction: docs/research/shared-state-audit.md (round 57).
+    /// See also docs/research/death-handling.md.
     ///
     /// The fix does not depend on knowing exactly why GetDeadTemp misses the lookup: by the
     /// engine's OWN definition a party member's temp-dead state IS "current hit points <= 0"

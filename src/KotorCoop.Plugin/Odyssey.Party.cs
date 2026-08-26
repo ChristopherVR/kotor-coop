@@ -1,4 +1,9 @@
-// Odyssey.Party.cs - the companion roster and follow-stall recovery.
+// Odyssey.Party.cs - the companion roster: CSWPartyTable field offsets, reading the
+// availability/membership masks, and the three NWScript roster routines (AddPartyMember,
+// RemovePartyMember, SpawnAvailableNPC) dispatched the same way the engine's own scripts do.
+// Also the raw availability poke used only by the dev recruit cheat, and the template-based
+// recruit path used by real dialogue-driven recruitment sync.
+// See docs/research/party-reconciliation.md for the full investigation history.
 
 namespace KotorCoop.Plugin;
 
@@ -183,10 +188,10 @@ internal static unsafe partial class Odyssey
     /// same evidence <see cref="PartyAvailable"/>'s own doc comment already cites:
     /// <c>AddMember</c>/<c>RemoveMember</c> testing this exact array for a zero entry). **The
     /// flag ALONE is NOT enough for <see cref="SpawnAvailableNpc"/> to resolve a template
-    /// afterward — LIVE-CONFIRMED, not just NEEDS-LIVE**: docs/research/party-reconciliation.md
-    /// Round 75's <c>CheatKindRecruit</c> dev primitive runs exactly this poke, then
-    /// <see cref="SpawnAvailableNpc"/>, and the spawn refuses every time ("spawn failed, failure
-    /// 0" — a genuine engine refusal, not a plumbing bug). Root cause, from this round's own
+    /// afterward — LIVE-CONFIRMED, not just NEEDS-LIVE**, via the <c>CheatKindRecruit</c> dev
+    /// primitive: it runs exactly this poke, then <see cref="SpawnAvailableNpc"/>, and the spawn
+    /// refuses every time ("spawn failed, failure 0" — a genuine engine refusal, not a plumbing
+    /// bug; full test story in docs/research/party-reconciliation.md). Root cause, from
     /// disassembly of <c>CSWPartyTable::GetNPCObject</c> (0x00564700, <see cref="SpawnAvailableNpc"/>'s
     /// own resolver): when the cached object-id slot (<see cref="PartyObjectIds"/>) still holds
     /// its default sentinel (0x7F000000, OBJECT_INVALID), it rebuilds from a resource literally
@@ -218,7 +223,7 @@ internal static unsafe partial class Odyssey
     }
 
     // CSWPartyTable::AddNPC_2(int nNPC, CExoString* sTemplate) -> object oCreature. VERIFIED by
-    // disassembly this round: CSWVirtualMachineCommands::ExecuteCommandAddAvailableNPCByTemplate
+    // disassembly: CSWVirtualMachineCommands::ExecuteCommandAddAvailableNPCByTemplate
     // (0x0052DCD0, the NWScript AddAvailableNPCByTemplate handler) pops an int then a CExoString
     // (StackPopInteger 0x005D1000, StackPopString 0x005D1080), resolves the party table via
     // CServerExoApp::GetPartyTable (0x004AEE70), and calls exactly this function
@@ -271,9 +276,8 @@ internal static unsafe partial class Odyssey
     /// — produces a body that check will accept.
     ///
     /// The slot -&gt; resref mapping itself lives in <see cref="PartyRosterTemplateTable"/> (split
-    /// out so it can be unit-tested) — see that class's own doc comment for the 2026-08-24 round
-    /// that independently re-derived and confirmed all nine entries by disassembly, closing the
-    /// "not independently re-derived... for the other eight" gap this comment used to carry.
+    /// out so it can be unit-tested); all nine entries are independently re-derived and confirmed
+    /// by disassembly there.
     /// </summary>
     public static uint AddAvailableNpcByTemplate(int slot)
     {

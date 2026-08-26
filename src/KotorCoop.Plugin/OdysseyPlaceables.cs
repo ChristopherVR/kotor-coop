@@ -131,34 +131,26 @@ internal static unsafe class OdysseyPlaceables
 
     // ---- the REAL CloseInventory call, for the closeplaceable staging verb ---------------
     //
-    // LIVE-PASS ADDITION (2026-08-22). `useplaceable` only replicates the network HALF of a
-    // real click (Odyssey.UseObject -> CSWCMessage::SendPlayerToServerInput_UseObject): the
-    // client-side menu wrapper that actually SHOWS the loot panel (CSWCPlaceable::UsePlaceable,
-    // see Odyssey.cs's remarks on SendUseObjectInputFn) is deliberately not replicated, so the
+    // `useplaceable` only replicates the network HALF of a real click
+    // (Odyssey.UseObject -> CSWCMessage::SendPlayerToServerInput_UseObject): the client-side
+    // menu wrapper that actually SHOWS the loot panel (CSWCPlaceable::UsePlaceable, see
+    // Odyssey.cs's remarks on SendUseObjectInputFn) is deliberately not replicated, so the
     // ENGINE's own +0x338 flips to 1 (confirmed live) but no panel appears for an Escape
     // keystroke — or a real player — to close. This is the fix: call CSWSPlaceable::
     // CloseInventory 0x00587560 directly, the same "call the fixed address, no vtable
     // indirection" choice this file already makes for SetAnimation.
     //
     // ⚠ LIVE-CORRECTED: arg1 (`[esp+0x1c]` on entry, matching OpenInventory's own arg1) is NOT
-    // safe as 0. A first attempt at this call passed (0, 0) on the theory that arg2==0's early
-    // `je 0x58762f` branch skips every read of arg1 — true for the player-RESOLVE step
-    // (`call 0x4ae910`, both this and OpenInventory's arg1 reach it the same way), but 0x58762f
-    // is NOT a shortcut to the close animation: it is the SAME unconditional tail every path
-    // through this function falls into (a real close always crosses it too), and that tail
-    // pushes arg1 RAW — unresolved — into a second message dispatch
-    // (`push ebx /* = raw arg1 */; ...; call 0x4aed80; call 0x4b08d0`) BEFORE the close
-    // animation and the `+0x338 = 0` clear that come after it. Live-observed with arg1=0: the
-    // call returned (no crash, the console command replied) but `+0x338` never cleared — this
-    // dispatch call plainly does not tolerate a raw 0 the way OpenInventory's OWN resolved-
-    // player path tolerates an unresolved 0 (which just skips the optional message send there).
-    // Fresh disasm of the real call site, `AIActionUseObject`'s open call at 0x0057EEA3
-    // (`tools/disasm.py 0x57EE80 0x50`), shows exactly what a real click passes for this same
-    // argument: `mov eax,[edi+4]; push eax` — the ACTING CREATURE'S OWN OBJECT ID (the standard
-    // `object + 4` convention this whole plugin already uses for every CSWSObject subclass),
-    // not a sentinel and not a resolved pointer. <see cref="CloseInventoryReal"/> now takes the
-    // closing player's creature pointer and passes ITS OWN OBJECT ID here — live-confirmed this
-    // clears `+0x338` reliably (see docs/research/container-sync.md's live-pass section).
+    // safe as 0 — passing 0 live-disproved silently (the call returns but `+0x338` never
+    // clears), because arg1 is pushed RAW into a second message dispatch
+    // (`push ebx /* = raw arg1 */; ...; call 0x4aed80; call 0x4b08d0`) that a real close always
+    // crosses too, before the close animation and the `+0x338 = 0` clear. Fresh disasm of the
+    // real call site, `AIActionUseObject`'s open call at 0x0057EEA3
+    // (`tools/disasm.py 0x57EE80 0x50`), shows what a real click passes for this argument:
+    // `mov eax,[edi+4]; push eax` — the ACTING CREATURE'S OWN OBJECT ID (the standard
+    // `object + 4` convention this whole plugin already uses for every CSWSObject subclass).
+    // <see cref="CloseInventoryReal"/> passes that instead, and it is live-confirmed to clear
+    // `+0x338` reliably. Full investigation in docs/research/container-sync.md §1.2.
     private static readonly delegate* unmanaged[Thiscall]<nint, uint, int, void> CloseInventoryFn =
         (delegate* unmanaged[Thiscall]<nint, uint, int, void>)0x00587560;
 
@@ -242,13 +234,11 @@ internal static unsafe class OdysseyPlaceables
     /// <summary>
     /// The nearest OPEN placeable to <paramref name="player"/> — <c>closeplaceable</c>'s bare
     /// form. Filters on <c>Odyssey.IsPlaceableOpen</c> rather than <see cref="HasInventory"/>
-    /// deliberately: a live-pass memory probe (2026-08-22) found a real, lootable placeable
-    /// (confirmed by a non-zero item count in its own repository, and by actually opening
-    /// through <c>OpenInventory</c>) reading <c>has_inventory</c> (<c>+0x334</c>) as 0 the whole
-    /// time — that field, inherited from <c>placeables-containers.md</c> and never itself
-    /// live-verified, under-reports containers. "Is it open right now" has no such ambiguity:
-    /// it is the exact field <c>OpenInventory</c>/<c>CloseInventory</c> themselves set and
-    /// clear (§1.2, container-sync.md), so this is unaffected by whatever is wrong with
+    /// deliberately: <c>has_inventory</c> (<c>+0x334</c>) under-reports real containers,
+    /// live-confirmed on a placeable that opened and held items despite reading 0 there (see
+    /// docs/research/container-sync.md). "Is it open right now" has no such ambiguity: it is
+    /// the exact field <c>OpenInventory</c>/<c>CloseInventory</c> themselves set and clear
+    /// (§1.2, container-sync.md), so this is unaffected by whatever is wrong with
     /// <c>has_inventory</c>.
     /// </summary>
     public static nint FindNearestOpenContainer(nint player, out int seen)

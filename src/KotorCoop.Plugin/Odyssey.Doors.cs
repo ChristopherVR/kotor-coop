@@ -197,28 +197,21 @@ internal static unsafe partial class Odyssey
     /// CSWParty::RecaulateFollowPoint 0x006359C0 — <c>__thiscall</c>, NO stack arguments beyond
     /// <c>this</c> (a CSWParty*, see <see cref="GetSWPartyFn"/>).
     ///
-    /// ROUND 72 (docs/research/phantom-locomotion.md, party-reconciliation.md): live-measured
-    /// that a genuinely-owned, genuinely-following companion's own per-member follow-data record
-    /// (<c>CSWParty+0x24+index*0x88</c>) holds a TARGET follow point (<c>record+0x28</c>) frozen
-    /// at wherever the leader stood the moment the module loaded, unmoving no matter how far the
-    /// leader afterward walks — with solo mode confirmed OFF (0) on the host the whole time,
-    /// ruling out the obvious "the party-together freeze is suppressing this too" theory.
+    /// A genuinely-owned, genuinely-following companion's own per-member follow-data record
+    /// (<c>CSWParty+0x24+index*0x88</c>) can hold a TARGET follow point (<c>record+0x28</c>)
+    /// frozen at wherever the leader stood the moment the module loaded, unmoving no matter how
+    /// far the leader afterward walks.
     ///
-    /// ⚠ LIVE-DISPROVEN AS THE FIX, BY ITSELF. Calling this every stall pass (round 72's first
-    /// live attempt) changed the frozen <c>record+0x28</c> value NOT AT ALL, several cycles,
-    /// including immediately after <see cref="TryPokeFollowPriorPosition"/> had just confirmed
-    /// (via the read-back) that <c>record+0x18</c> genuinely held the leader's fresh position at
-    /// the moment this was called. Two theories that reading alone made attractive — "the
-    /// recompute just isn't being called" and "it reads its input from <c>record+0x18</c>" — are
-    /// therefore BOTH wrong, or at minimum incomplete: either this function reads its own
-    /// "leader position" from somewhere else entirely (a candidate found this same round:
-    /// <c>CSWParty::Update</c> 0x00637050 touches a party-level, not per-member, 3-float field at
-    /// <c>this+0x2B0..0x2B8</c> against a GLOBAL cache at <c>0x7A19B0..0x7A19B8</c> that looks
-    /// like the more likely "current leader/camera position" input — or it additionally requires
-    /// some other precondition (a dirty flag, a moved-since-last-check distance) this call's own
-    /// disassembly was not fully traced far enough to identify. NOT called from
-    /// <see cref="PartyFollowController"/>'s shipped stall-handling path as a result — kept here,
-    /// documented, for whoever picks this up next.
+    /// ⚠ LIVE-DISPROVEN AS THE FIX, BY ITSELF. Calling this every stall pass changed the frozen
+    /// <c>record+0x28</c> value not at all, even with <c>record+0x18</c> confirmed (via
+    /// <see cref="TryPokeFollowPriorPosition"/>'s own read-back) to genuinely hold the leader's
+    /// fresh position at the moment this was called — so this function does not read its "leader
+    /// position" input from <c>record+0x18</c> alone. The confirmed mechanism turned out to be
+    /// <c>CSWParty::Update</c> (0x00637050, see <see cref="PartyUpdateFn"/>'s own remarks), which
+    /// refreshes the party-level reference position this function actually reads; calling
+    /// <c>RecaulateFollowPoint</c> without calling <c>CSWParty::Update</c> first is a no-op for
+    /// that reason. NOT called from <see cref="PartyFollowController"/>'s shipped stall-handling
+    /// path. See docs/research/phantom-locomotion.md and party-reconciliation.md.
     /// </summary>
     private static readonly delegate* unmanaged[Thiscall]<nint, void> RecalculateFollowPointFn =
         (delegate* unmanaged[Thiscall]<nint, void>)0x006359C0;
