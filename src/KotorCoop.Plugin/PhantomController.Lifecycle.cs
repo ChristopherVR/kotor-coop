@@ -91,6 +91,7 @@ internal sealed unsafe partial class PhantomController
         {
             PluginHost.Log($"{reason}: destroyed phantom 0x{objectId:X} (slot {slot})");
             ClearSlot(slot);
+            PluginEvents.RaisePeerSlotDestroyed(slot, objectId);
             return true;
         }
 
@@ -106,6 +107,7 @@ internal sealed unsafe partial class PhantomController
             + $"failure {failure}) after {MaxDestroyAttempts} attempts — the body is LEFT "
             + "STANDING and a save would bake it into the module");
         ClearSlot(slot);
+        PluginEvents.RaisePeerSlotDestroyed(slot, objectId);
         return true;
     }
 
@@ -256,5 +258,6 @@ internal sealed unsafe partial class PhantomController
         PluginHost.Log(
             $"spawned phantom in slot {slot}: id 0x{objectId:X} at 0x{creature:X} "
             + $"({spawnPosition.X:F2}, {spawnPosition.Y:F2}, {spawnPosition.Z:F2})");
+        PluginEvents.RaisePeerSlotSpawned(slot, objectId);
     }
 }

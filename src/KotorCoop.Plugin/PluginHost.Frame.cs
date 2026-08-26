@@ -1,0 +1,479 @@
+namespace KotorCoop.Plugin;
+
+// The two per-frame schedules: MenuFrame (MainLoopHook, fires at the main menu too) and
+// OnFrame (FrameHook/SwapBuffers, dormant at the menu and during a cinematic). Each call
+// below is in a hand-picked order — the short comment on a call says WHY it has to come
+// before or after its neighbour. This is deliberately not a generic "list of controllers to
+// iterate": the order is the point, and a comment that explains it is worth more here than
+// anywhere else in the plugin.
+internal static unsafe partial class PluginHost
+{
+    /// <summary>World identity last frame; 0 = no stable world was seen.</summary>
+    private static ulong _epoch;
+
+    /// <summary>True while the pre-store flush window is open (trans_pending set).</summary>
+    private static bool _transitionPending;
+
+    /// <summary>
+    /// True while THIS instance's own <see cref="TravelController"/> warp is in flight — a
+    /// session-commanded module move (a peer being pulled along to follow the host, or the
+    /// host being pulled along by a peer; also the <c>moviewarp</c> debug verb). Round
+    /// (2026-08-23, roadmap item 14 phase 2 audit): <c>TravelController.Execute</c>'s own doc
+    /// comment already says a co-op warp like this "never raises trans_pending at all" — which
+    /// means, unaudited, it produces EXACTLY the same "world torn down with trans_pending never
+    /// having gone true" shape <see cref="WorldLoadRule.IsUnannouncedTeardown"/> was built to
+    /// recognise as a Load Game action. A peer-follow warp is one of the most common teardown
+    /// events in an active session (it fires on ordinary module travel any time a client was not
+    /// already where the host went), so without this flag every such warp misclassifies as an
+    /// unannounced load. Set the moment a travel request is first seen pending (well before
+    /// <c>Odyssey.TravelToModule</c> actually runs, the same "announce before the teardown"
+    /// timing <c>_transitionPending</c> uses for a real door), cleared the one canonical place
+    /// every epoch-valid frame passes through — see the reset immediately after the world-epoch
+    /// gate below — so a request that turns out to be a same-module no-op (no teardown at all)
+    /// does not leave a stale "announced" flag that could mask a LATER, genuinely unannounced
+    /// load.
+    /// </summary>
+    private static bool _travelAnnounced;
+
+    // ---- frame-time histogram (docs/research/lag-audit.md) ------------------------------
+    //
+    // Cheap and off by default: an EWMA-free accumulator (see FrameTimeHistogram's own doc
+    // comment for why not an EWMA) fed one delta per SwapBuffers callback — i.e. once per
+    // rendered frame, the same cadence a hitch is actually felt at — and flushed to the log
+    // every ~10 s so a live round can measure frame-time hitching instead of guessing at it.
+    // `coop.ini frame_stats=1`.
+
+    private static readonly bool _frameStatsEnabled = PluginConfig.ReadBool("frame_stats", false);
+
+    /// <summary>A frame slower than this counts as a "hitch" in the flushed summary. 33 ms is
+    /// one dropped frame at 30 fps / two at 60 fps — coarse enough to ignore ordinary jitter,
+    /// fine enough to catch a stall a player would notice.</summary>
+    private const double FrameHitchThresholdMs = 33.0;
+
+    private const long FrameStatsFlushIntervalMs = 10_000;
+
+    private static FrameTimeHistogram _frameStats;
+    private static long _frameStatsLastTicks;
+    private static long _frameStatsLastFlushMs;
+
+    /// <summary>Called once per SwapBuffers, before anything else in <see cref="OnFrame"/> —
+    /// so a stall inside a world controller is attributed to the frame it happened in, not the
+    /// next one this ships a frame late relative to.</summary>
+    private static void RecordFrameTime()
+    {
+        long nowTicks = System.Diagnostics.Stopwatch.GetTimestamp();
+
+        if (_frameStatsLastTicks != 0)
+        {
+            double deltaMs = (nowTicks - _frameStatsLastTicks) * 1000.0
+                / System.Diagnostics.Stopwatch.Frequency;
+            _frameStats.Add(deltaMs, FrameHitchThresholdMs);
+        }
+
+        _frameStatsLastTicks = nowTicks;
+
+        long nowMs = Environment.TickCount64;
+        if (_frameStatsLastFlushMs == 0)
+        {
+            _frameStatsLastFlushMs = nowMs;
+            return;
+        }
+
+        if (nowMs - _frameStatsLastFlushMs < FrameStatsFlushIntervalMs || !_frameStats.HasSamples)
+        {
+            return;
+        }
+
+        FrameTimeSnapshot snap = _frameStats.Snapshot();
+        Log($"frame stats: {snap.SampleCount} frames, {snap.AverageMs:F2} ms average, "
+            + $"{snap.MaxMs:F1} ms worst, {snap.OverThresholdCount} over {FrameHitchThresholdMs:F0} ms");
+        _frameStats.Reset();
+        _frameStatsLastFlushMs = nowMs;
+    }
+
+    /// <summary>
+    /// Per-frame callback from <see cref="MainLoopHook"/>, which — unlike the SwapBuffers
+    /// <see cref="FrameHook"/> — also fires at the main menu (behind the menu movie the swap hook
+    /// is dormant). Used only to keep the Co-op menu button un-hidden and bound.
+    /// </summary>
+    private static void MenuFrame()
+    {
+        // FIRST, before anything else here: this is the pre-MainLoop point §10.9 verified is
+        // safe to call CClientExoApp::PlayMovie from (docs/research/cinematics.md) — outside
+        // the script VM's own call, but also outside render and outside SwapBuffers, unlike the
+        // SwapBuffers-nested OnFrame below where §10.8 found the indefinite hang. Blocks for the
+        // length of the film when something is armed; everything below simply runs a frame late
+        // on that (rare) occasion, same as it already does across a real transition's own stall.
+        PendingMoviePlay.RunIfArmed();
+
+        // First of all, and on THIS hook rather than OnFrame: a pre-rendered movie blocks the
+        // main thread inside WaitForMovie, so the SwapBuffers callback cannot fire during one
+        // and the only evidence a cinematic played is the gap it leaves between two of these
+        // callbacks. Measuring it here brackets exactly the client tick, the server tick and
+        // the present. See docs/research/cinematics.md.
+        CinematicWatch.OnFrame(_view);
+
+        // Next, and unconditionally: whether the agent is even still talking to us has
+        // nothing to do with menu/world state, and both failure modes it reports can happen
+        // before the player has picked anything (a dead auto-start, a hung agent while still
+        // sitting at the menu). This hook is the one guaranteed to run there — the
+        // SwapBuffers hook (OnFrame below) is dormant behind the main-menu movie.
+        _agentLiveness?.OnFrame();
+
+        // The native browser first: its IsOpen gate tells the others the main-menu object
+        // is currently freed (a shown child panel reclaims the menu until close rebuilds it).
+        _nativeBrowser?.OnFrame();
+        _connectMenu?.OnFrame();
+        _browser?.OnFrame();
+
+        // The menu-load replay lives HERE, not on the SwapBuffers hook: at the main menu the
+        // back-buffer swap is movie-gated and never fires (measured live: the frame counter
+        // stays 0 at a settled menu), so a load request serviced from OnFrame sat forever.
+        // MainLoop fires at the menu and in-world alike, on the same game thread.
+        _menuLoad?.OnFrame();
+
+        // A locked server's password prompt. Here rather than on the swap hook for the same
+        // reason the menu-load replay is: the ask lands while the player is at the main menu,
+        // having just pressed Connect in the browser, where the swap hook does not fire. It is
+        // a no-op unless the agent has bumped the request serial.
+        _passwordPrompt?.OnFrame();
+
+        // Insurance for the seamless-arrival hold: the world pipeline (phantom spawn, the
+        // very thing the hold waits for) lives on the SwapBuffers hook, and if the load
+        // screen renders the way the menu movie does, that hook is dormant — the phantom
+        // could never spawn and every hold would run to its deadline. So while the hold is
+        // active and the swap counter is visibly stalled, drive the pipeline from here at
+        // ~10 Hz (30 MainLoop ticks ≈ 100 ms). Its own epoch gate keeps it safe: the hold
+        // only starts after the module and player creature exist.
+        if (_menuLoad is { HoldingPresentation: true })
+        {
+            if (FrameHook.FrameCount == _heldFrameSample && ++_heldStallTicks >= 30)
+            {
+                _heldStallTicks = 0;
+                OnFrame();
+            }
+            else if (FrameHook.FrameCount != _heldFrameSample)
+            {
+                _heldFrameSample = FrameHook.FrameCount;
+                _heldStallTicks = 0;
+            }
+        }
+
+        // Console history/completion follows the ~ console itself, which opens at the menu
+        // AND in-world — so it lives on this hook, not the (menu-dormant) SwapBuffers one.
+        _consoleAssist?.OnFrame();
+    }
+
+    private static void OnFrame()
+    {
+        // Before absolutely everything else: whatever this frame is about to spend its time
+        // on, the delta since the LAST callback already happened and belongs to the frame
+        // that just finished, not to whatever runs next.
+        if (_frameStatsEnabled)
+        {
+            RecordFrameTime();
+        }
+
+        // Before the epoch gate, deliberately: these run at the main menu too, which is exactly
+        // where the gate returns early (no server) — the Enter chat prompt and the chat
+        // overlay. (The Co-op button, browsers and menu-load run on MainLoopHook — the swap
+        // hook is dormant at the menu; the ~ console routes through FuncInterpHook.)
+        _chatInput?.OnFrame();
+        _chatOverlay?.OnFrame();
+
+        // Before the epoch gate, and before anything else touches the world: during a module
+        // transition there is a frame in which the server's module is destroyed but the
+        // client still holds one, and the engine's own map init dereferences the server
+        // module every frame without a null check. Closing the client's world here is what
+        // the engine's dump-player handler would do a frame later — see
+        // docs/research/travel-map-init-crash.md.
+        if (Odyssey.CloseClientWorldIfServerModuleGone())
+        {
+            Log("transition: closed the client world ahead of the map init");
+            PluginEvents.RaiseServerModuleGone();
+        }
+
+        if (!Odyssey.TryGetWorldEpoch(out ulong epoch))
+        {
+            // No world, or a transition mid-flight. Drop everything now, so nothing runs
+            // against freed objects on the first frame of the new module.
+            if (_epoch != 0)
+            {
+                // Roadmap item 14 phase 2's load-detection primitive (see WorldLoadRule.cs):
+                // judged HERE, before _transitionPending/_travelAnnounced are reset below,
+                // because that reset is exactly what would otherwise erase the one fact this
+                // decision needs — whether this teardown was ANNOUNCED (a real door/trigger
+                // transition, OR this instance's own TravelController warp — see
+                // _travelAnnounced's own doc comment for why a co-op warp needs the same
+                // treatment as a door) before the world it belonged to went away.
+                if (WorldLoadRule.IsUnannouncedTeardown(_transitionPending || _travelAnnounced))
+                {
+                    _view?.PublishWorldLoadObserved();
+                    Log("world: unannounced teardown - treating as a load, not a transition");
+                    PluginEvents.RaiseWorldLoadObserved();
+                }
+
+                _epoch = 0;
+                _transitionPending = false;
+                _travelAnnounced = false;
+                InvalidateAll("world unloading");
+            }
+
+            // The agent must not adopt a pointer into a world that no longer exists.
+            _view?.PublishEnginePlayer(0, 0);
+            PhantomHitHook.WatchLocalPlayer(0);
+            return;
+        }
+
+        // The world is still readable this frame, so whatever _travelAnnounced was carrying
+        // did not precede a teardown (either no travel was requested, or a travel request
+        // resolved as a same-module no-op with nothing torn down) — consume it here, the one
+        // canonical point every epoch-valid frame passes through, so a stale "announced" flag
+        // can never survive to mask a LATER, genuinely unannounced load. The travel branch
+        // below re-arms it for THIS frame if (and only if) a request is actually pending now.
+        _travelAnnounced = false;
+
+        // Every frame, so the agent can adopt the engine's own player instead of trusting
+        // a scan that can latch a freed copy (SharedBlock.OffsetEnginePlayerPointer).
+        if (_view is { } playerView)
+        {
+            nint enginePlayer = Odyssey.GetPlayerCreaturePointer();
+            uint enginePlayerId = enginePlayer != 0 ? *(uint*)(enginePlayer + 0x04) : 0;
+            playerView.PublishEnginePlayer(enginePlayer, enginePlayerId);
+
+            // ROUND 52: same fresh read, handed to the damage hook so it can recognise a hit
+            // landing on the LOCAL PC without an engine call inside the hook itself. See
+            // PhantomHitHook.WatchLocalPlayer's own doc comment.
+            PhantomHitHook.WatchLocalPlayer(enginePlayerId);
+        }
+
+        if (epoch != _epoch)
+        {
+            if (_epoch != 0)
+            {
+                InvalidateAll("module changed");
+            }
+
+            _epoch = epoch;
+            _transitionPending = false;
+        }
+
+        // Focus first: the others do nothing useful in a paused world.
+        _focus?.OnFrame();
+
+        // Before either transition branch below, because both of them `return`: a staged
+        // cinematic that nothing came to collect has to expire and SAY so. An arm left
+        // sitting would attach a movie — and the multi-second main-thread stall that comes
+        // with it — to whatever transition happened next, with nothing in the log connecting
+        // the two. See docs/research/cinematics.md §7.
+        if (TravelController.StagedMovies.Expire(Environment.TickCount64, out string expired))
+        {
+            Log($"cinematic: {expired}");
+        }
+
+        if (Odyssey.IsAreaTransitionPending())
+        {
+            // Pre-store flush: StoreCurrentModule serialises every non-party creature and
+            // item on the way out, so anything the plugin spawned must be gone before the
+            // area is stored or it becomes a permanent resident of the saved module. One
+            // destroy per frame; the window is ~150 frames and there are at most 16 bodies.
+            if (!_transitionPending)
+            {
+                _transitionPending = true;
+                Log("area transition pending: flushing spawned objects before the module is stored");
+                PluginEvents.RaiseModuleTransitionStarted();
+
+                // "Announced transitions" (docs/research/transition-smoothness.md): this is
+                // the earliest point ANY instance can see a real, engine-native door
+                // transition beginning — before the load starts, before the fade finishes.
+                // Resolve where it is headed (or refuse it, if this is a client with the
+                // door-refusal watch armed) while the door that fired is still the nearest
+                // linked one, which is only true on this exact edge.
+                if (_view is { } announceView)
+                {
+                    TransitionAnnounceWatch.OnTransitionBegan(announceView);
+                }
+            }
+
+            if (_controller is { } phantoms && phantoms.FlushOneBody())
+            {
+                return;
+            }
+
+            if (_items is { } items && items.FlushOneBody())
+            {
+                return;
+            }
+
+            if (MaterialisedEnemies.FlushOneBody())
+            {
+                return;
+            }
+
+            _mapMarkers?.FlushOneBody();
+            return;
+        }
+
+        if (_transitionPending)
+        {
+            // The pending flag cleared without the module changing (an aborted or
+            // cancelled transition). The flush destroyed real bodies, so reset state and
+            // let the controllers rebuild them.
+            _transitionPending = false;
+            InvalidateAll("transition flushed but not taken");
+        }
+
+        if (_travel is { HasPendingRequest: true } travel)
+        {
+            // Announce THIS frame, before any flush or the eventual Odyssey.TravelToModule
+            // call — the same "before the teardown, not after" timing _transitionPending uses
+            // for a real door. Re-armed every frame this branch runs (the canonical reset
+            // above already cleared it once this frame if we are only just now discovering the
+            // request), so it stays true across however many flush-only frames this request
+            // spans before Execute() actually fires the warp.
+            _travelAnnounced = true;
+
+            // Task 2b (docs/research/transition-smoothness.md): a best-effort fade to black,
+            // the instant a travel request is FIRST seen — before the flush below even starts,
+            // so it masks the whole wait rather than just the warp. Self-latched inside
+            // MaybeStartFade (one call per serial); a no-op every other frame this branch runs.
+            travel.MaybeStartFade();
+
+            // A session-commanded module move. Same rule as a door transition: everything
+            // this plugin spawned must be gone before the outgoing area is stored, or it
+            // becomes a permanent resident of the saved module. One destroy per frame
+            // until clean, then the warp itself.
+            if (_controller is { } phantoms && phantoms.FlushOneBody())
+            {
+                return;
+            }
+
+            if (_items is { } items && items.FlushOneBody())
+            {
+                return;
+            }
+
+            if (MaterialisedEnemies.FlushOneBody())
+            {
+                return;
+            }
+
+            if (_mapMarkers is { } markers && markers.FlushOneBody())
+            {
+                return;
+            }
+
+            travel.Execute();
+            return;
+        }
+
+        // Publish whatever one-shot animation the hook caught since the last frame, so the
+        // agent can ship it with this tick's state.
+        if (_view is { } view)
+        {
+            if (AnimationHook.Sequence != view.LocalOneShotSerial)
+            {
+                view.LocalOneShotAnim = AnimationHook.LastAnimation;
+                view.LocalOneShotSerial = AnimationHook.Sequence;
+            }
+
+            // And every other creature's, for the enemy channel: the owning agent matches
+            // these ids against its census and streams the swings with the presence tick.
+            for (int i = 0; i < SharedBlock.EnemyOneShotCapacity; i++)
+            {
+                AnimationHook.ReadCreatureSlot(i, out uint id, out uint anim, out uint serial);
+                view.SetEnemyOneShot(i, id, anim, serial);
+            }
+        }
+
+        // Before every world controller: if the session ended since the last frame, undo what
+        // it did to this game before anything acts on the cleared block (most importantly,
+        // before PhantomController starts destroying the bodies the camera may be following).
+        PumpSessionLifecycle();
+
+        // Immediately after it, and before any world controller: destroy the bodies the
+        // session spawned. Armed by the release above and re-run every frame until clean,
+        // because the engine declines a destroy while the script VM is mid-call.
+        DrainSessionSpawns();
+
+        // Death first among the world controllers: a downed player must be published (and a
+        // pending revive applied) before the phantom/combat passes read the same creature.
+        _death?.OnFrame();
+
+        // Read-only, no ordering dependency on anything else here: the local per-frame
+        // minigame read (swoop/turret), logged on its own edges. The agent reads the same
+        // pointer chain independently for the wire flag (see MinigameController's remarks).
+        MinigameController.OnFrame();
+
+        // Right after death, on the state it just published: a downed player's camera
+        // follows a living peer instead of their own corpse.
+        _spectate?.OnFrame();
+
+        _controller?.OnFrame();
+        _items?.OnFrame();
+        _combat?.OnFrame();
+        _liveness?.OnFrame();
+
+        // After the combat pass so a death applied this frame is respected (the presence
+        // slot's dead flag and the kill both come from the same owner tick).
+        _enemyPresence?.OnFrame();
+        Odyssey.TickFireScriptWatch(Log);
+        _partyPresence?.OnFrame();
+
+        // ROUND 71: re-arms real follow-AI on a genuinely-owned, idle companion — see
+        // PartyFollowController's own class comment for why this backs off the instant
+        // PartyPresenceController is actively mirroring instead (a client's companions).
+        _partyFollow?.OnFrame();
+
+        // After the companion mirror, not before: reconciling the roster can spawn a companion
+        // body, and it should be driven by the mirror on the NEXT frame with the block already
+        // read rather than half-way through this one.
+        _partyRoster?.OnFrame();
+
+        // After death handling has published whether we are down, so damage that would
+        // arrive on an already-downed player is skipped rather than fighting the revive.
+        _incomingDamage?.OnFrame();
+        _peerEffects?.OnFrame();
+
+        // After the presence passes, so the watch tests the position the player is actually
+        // standing at this frame, and so a fired encounter's spawns are already in the
+        // owner's census by the next pump.
+        _encounters?.OnFrame();
+        _triggerRelay?.OnFrame();
+        _movieRelay?.OnFrame();
+
+        // After the combat pass, so the enemy the owner has just killed is already off the
+        // dealt ledger before this publishes it — and so a peer's damage lands on a copy
+        // whose health the mirror has already brought up to date this frame.
+        _peerDamage?.OnFrame();
+
+        _doors?.OnFrame();
+        _placeables?.OnFrame();
+        _loot?.OnFrame();
+        _pause?.OnFrame();
+        _combatState?.OnFrame();
+        _pauseKey?.OnFrame();
+        _journal?.OnFrame();
+        _mapMarkers?.OnFrame();
+        _mapReveal?.OnFrame();
+        _portraits?.OnFrame();
+        _barks?.OnFrame();
+        _interactionLocks?.OnFrame();
+
+        // After the companion mirror and the portraits, because it decides what the player is
+        // driving and where the camera points from the state those two have just settled.
+        _controlReturn?.OnFrame();
+
+        // Read-only: publishes the owner's current conversation line for the other player to
+        // spectate. Runs in-world only (a conversation needs a live server + GUI).
+        _dialogueSpectate?.OnFrame();
+
+        // Test hooks last, so a driven conversation is opened against fully-updated state.
+        _testDrive?.OnFrame();
+
+        // And the staging cheats after them, for the same reason: a slay measures the
+        // phantom table, the party roster and the mirror's pin, all of which this frame's
+        // passes have just brought up to date.
+        _cheats?.OnFrame();
+    }
+}

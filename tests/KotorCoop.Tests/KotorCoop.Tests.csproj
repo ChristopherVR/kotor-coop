@@ -77,6 +77,7 @@
     <Compile Include="..\..\src\KotorCoop.Plugin\WorldLoadRule.cs" Link="Plugin\WorldLoadRule.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\PartyFollowTransitionRule.cs" Link="Plugin\PartyFollowTransitionRule.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\FinalNodeGeometryRule.cs" Link="Plugin\FinalNodeGeometryRule.cs" />
+    <Compile Include="..\..\src\KotorCoop.Plugin\PluginEvents.cs" Link="Plugin\PluginEvents.cs" />
   </ItemGroup>
 
   <ItemGroup>

@@ -305,6 +305,8 @@ internal sealed unsafe class DialogueSpectateController(SharedBlockView block)
                 {
                     *(uint*)block.LocalDialoguePick(i) = 0;
                 }
+
+                PluginEvents.RaiseDialogueEnded();
             }
 
             return;
@@ -319,6 +321,7 @@ internal sealed unsafe class DialogueSpectateController(SharedBlockView block)
         {
             _localForced = DialogueGateHook.LastStartForced;
             block.LocalDialogueForced = _localForced;
+            PluginEvents.RaiseDialogueStarted();
         }
 
         _hadDialogue = true;
