@@ -913,6 +913,7 @@ internal sealed unsafe partial class EnemyPresenceController(SharedBlockView blo
         PluginHost.Log(
             $"local combat: 0x{ownerId:X} pulled out of the census to fight for real "
             + $"(timeout {LocalCombatTimeoutSeconds:F0}s)");
+        PluginEvents.RaiseLocalCombatEngagementChanged(true, ownerId);
     }
 
     /// <summary>
@@ -977,6 +978,7 @@ internal sealed unsafe partial class EnemyPresenceController(SharedBlockView blo
         {
             string reason = dead ? "dead or gone" : disengaged ? "player disengaged" : "timed out";
             PluginHost.Log($"local combat: 0x{_locallyFightingId:X} fight ended ({reason}), rejoining the census");
+            PluginEvents.RaiseLocalCombatEngagementChanged(false, _locallyFightingId);
             _locallyFightingId = 0;
 
             // So the NEXT fight's excluded id — always a different id, StartLocalFight only
