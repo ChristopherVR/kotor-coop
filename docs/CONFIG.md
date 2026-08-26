@@ -79,7 +79,7 @@ always sets it (`=1`), so this never surfaces in practice.
 | `activate_render_on_start` | ON | force-activate rendering when the plugin starts | — |
 | `phantom_targetable` | ON | let enemies target a peer's phantom | [combat-participation.md](research/combat-participation.md) |
 | `interaction_locks` | ON | container/corpse open-close animation + use-lock | [container-sync.md](research/container-sync.md) |
-| `dialogue_auto_join` | `off` (mode: off/near/always) | auto-pull the other player into a forced conversation | [dialogue-sync.md](research/dialogue-sync.md) |
+| `dialogue_auto_join` | `off` (mode: off/near/always) | auto-pull the other player into an ORDINARY conversation you start (`near`/`always`); a FORCED conversation — an ambush, a scripted cutscene — always auto-joins regardless of this setting | [dialogue-sync.md](research/dialogue-sync.md) |
 | `dialogue_auto_join_range` | `20` | distance for `near` auto-join mode | [dialogue-sync.md](research/dialogue-sync.md) |
 | `journal_remove_sync` | ON | replicate a journal entry's removal | [quest-sync.md](research/quest-sync.md) |
 | `liveness_sync` | OFF | reconcile a body alive on one screen, dead on the other | [creature-liveness.md](research/creature-liveness.md) |

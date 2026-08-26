@@ -194,8 +194,7 @@ tools/                   RE helpers, demo scripts, the kotor1_0_3 symbol databas
 - [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) — common problems and their causes.
 - [docs/live-verification.md](docs/live-verification.md) — the two-instance checklist that
   turns "built" into "live-verified" here.
-- [docs/FINDING-OFFSETS.md](docs/FINDING-OFFSETS.md) and [docs/re/](docs/re/) — how the
-  engine addresses were found, and the core RE (movement, object model, rendering, frame
-  hook, spawning) independent of any one feature.
+- [docs/FINDING-OFFSETS.md](docs/FINDING-OFFSETS.md) and [docs/re/](docs/re/) — how engine
+  addresses were found, and the core RE (movement, object model, rendering, frame hook, spawn) independent of any one feature.
 - [docs/research/README.md](docs/research/README.md) — the full per-feature research index.
 - [tools/README.md](tools/README.md) — what every helper script in `tools/` does.
