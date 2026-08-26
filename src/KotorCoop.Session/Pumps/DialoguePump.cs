@@ -1,0 +1,315 @@
+using KotorCoop.Memory;
+using KotorCoop.Protocol;
+
+namespace KotorCoop.Session.Pumps;
+
+/// <summary>
+/// Publishes whether the local player is in a conversation (so the session can hold a single
+/// arbitrated dialogue token) together with the spectate payload, follows a peer's owned
+/// conversation on this player's overlay, and diffs the local PC's inventory across a
+/// conversation this instance owns to catch reward items for the dialogue-item-sync channel.
+/// See docs/research/dialogue-sync.md, docs/research/dialogue-join-latency.md and
+/// docs/research/dialogue-consequences.md §3.
+/// </summary>
+internal sealed class DialoguePump(IGameBridge bridge, ICoopSession session, AgentSettings settings, Action<string> log)
+{
+    /// <summary>Token serial of the last dialogue line surfaced to the local overlay, so a
+    /// peer's line is posted once per line rather than every tick.</summary>
+    private uint _lastSpectateSerial;
+
+    /// <summary>When the local player was last genuinely in a conversation, and who with —
+    /// held across the engine's between-entries flicker (see PumpDialogue).</summary>
+    private long _dialogueLastActiveMs;
+    private string _dialogueHeldPartnerTag = string.Empty;
+
+    /// <summary>The last node the local conversation was really on, held across the engine's
+    /// between-entries flicker so a line change does not read as "position unknown".</summary>
+    private int _dialogueHeldNode = DialogueState.NoNode;
+
+    private uint _dialogueHeldNodeSerial;
+
+    /// <summary>The local conversation's forced-ness, held across the same flicker as the
+    /// partner tag/node above.</summary>
+    private bool _dialogueHeldForced;
+
+    /// <summary>
+    /// Governs PumpDialogue's work on the <see cref="AgentSettings.DialogueFastJoin"/> path:
+    /// a genuine change (a new line, a new node, the conversation starting/ending, the peer's
+    /// token moving) is acted on the very next poll tick, and an unchanged read is not
+    /// re-published every tick just because the tick loop ran — see
+    /// <see cref="KotorCoop.Protocol.DialogueTickGate"/>. The heartbeat matches the legacy
+    /// cadence this replaces, so a late joiner or a lost packet still converges no slower than
+    /// it always did.
+    /// </summary>
+    private readonly DialogueTickGate _dialogueTickGate = new(heartbeatIntervalMs: 150);
+
+    /// <summary>
+    /// How long a conversation may read inactive before it is reported over.
+    ///
+    /// 300ms, an order of magnitude past a real between-entries flicker (the frame hook runs
+    /// at ~300 Hz, so "a few frames" is on the order of 10-20ms). Live-measured: a followed
+    /// conversation's real close-to-census-unfreeze gap dropped from ~2.7s (at the old 1500ms
+    /// value) to ~0.8-1.4s at this value; a separate isolation test at 50ms showed no further
+    /// improvement (the remaining time is the pre-existing ~150ms×2 wire/pump cadence this
+    /// debounce sits on top of, not the debounce itself) — see docs/research/dialogue-sync.md
+    /// and docs/research/shared-state-audit.md.
+    /// </summary>
+    private const long DialogueLingerMs = 300;
+
+    /// <summary>The last value logged for <see cref="IGameBridge.IsInDialogue"/> on THIS
+    /// instance. Null before the first read, so the very first poll never logs a spurious
+    /// "edge" against nothing.</summary>
+    private bool? _lastLoggedIsInDialogue;
+
+    /// <summary>
+    /// Edge-triggered log of <see cref="IGameBridge.IsInDialogue"/> on THIS instance, every poll
+    /// tick — no cadence gate of its own, called ahead of every other pump so the logged edge
+    /// is as close to the engine's own true transition as this process can see. On the enemy
+    /// authority (the host) this is the exact flag the enemy census gates on
+    /// (<c>!bridge.IsInDialogue &amp;&amp; !bridge.IsInMinigame</c>), so a transition logged
+    /// here IS the census unfreezing (or freezing). See docs/research/shared-state-audit.md.
+    /// </summary>
+    public void LogHostDialogueEdge()
+    {
+        bool nowInDialogue = bridge.IsInDialogue;
+        if (_lastLoggedIsInDialogue == nowInDialogue)
+        {
+            return;
+        }
+
+        bool firstRead = _lastLoggedIsInDialogue is null;
+        _lastLoggedIsInDialogue = nowInDialogue;
+        if (firstRead)
+        {
+            return; // nothing to call an edge against yet
+        }
+
+        DialogueState token = session.GetDialogue();
+        string role = session.IsEnemyAuthority ? "host" : "client";
+        log($"dialogue-gate: {role} bridge.IsInDialogue {!nowInDialogue} -> {nowInDialogue} at "
+            + $"{Environment.TickCount64} (followingPeer="
+            + $"{token.IsHeldByAnotherThan(session.LocalPeerId)}, tokenActive={token.Active}, "
+            + $"tokenSerial={token.Serial})");
+    }
+
+    public void PumpDialogue(in PlayerState local, SessionCapabilities caps)
+    {
+        if ((caps & SessionCapabilities.Dialogue) == 0)
+        {
+            return;
+        }
+
+        // What the local player is hearing and doing, straight from the plugin's read.
+        bridge.TryReadLocalDialogue(out string speaker, out string line);
+        bridge.TryReadLocalDialogueFollow(
+            out string partnerTag, out uint replySerial, out int replyIndex, out byte[] pickLog,
+            out int nodeIndex, out uint nodeSerial, out bool localForced);
+
+        // Who owns a conversation right now, from the last broadcast. Read FIRST because it
+        // gates the local claim below.
+        DialogueState token = session.GetDialogue();
+        bool followingPeer = token.IsHeldByAnotherThan(session.LocalPeerId);
+
+        // ⚠ A follower's conversation is NOT a claim. While this instance follows a peer's
+        // conversation, its own client is genuinely "in a conversation" — the copy we
+        // opened. Publishing that as a claim made the roles flip at the end: the owner
+        // released, the follower's still-open copy grabbed the token, and the former owner
+        // dutifully started following its own conversation back — the follow/close ping-pong
+        // in the logs.
+        bool rawInDialogue = local.IsInDialogue && !followingPeer;
+
+        // ⚠ DEBOUNCED, because the engine's "conversation active" flag flickers off for a
+        // few frames between entries. Publishing those gaps released and re-granted the
+        // token several times inside one conversation, and the spectator tore its copy down
+        // and reopened it on every flicker. A conversation is only reported over once it
+        // has been gone for a moment; the partner tag is held through the gaps too.
+        long nowMs = Environment.TickCount64;
+        if (rawInDialogue)
+        {
+            _dialogueLastActiveMs = nowMs;
+            if (partnerTag.Length > 0)
+            {
+                _dialogueHeldPartnerTag = partnerTag;
+            }
+
+            // ⚠ The NODE is held across the flicker for the same reason as the tag, and it
+            // matters more. The engine drops its "conversation active" flag for a few frames
+            // BETWEEN ENTRIES, and during that gap the plugin reads no conversation and
+            // publishes -1. Letting that reach the wire would tell the follower "I no longer
+            // know where I am" on every single line change — precisely at the moment the
+            // owner has just moved to a new node and the follower most needs to be sent
+            // there. Hold the last real node instead; the serial only advances when the node
+            // genuinely changed, so holding cannot re-drive anything.
+            if (nodeIndex >= 0)
+            {
+                _dialogueHeldNode = nodeIndex;
+                _dialogueHeldNodeSerial = nodeSerial;
+            }
+
+            // The plugin latches this for the whole conversation (set once, at its own start
+            // edge), so it never needs a "only hold a real value" guard the way the tag/node
+            // above do — it is simply carried the same way.
+            _dialogueHeldForced = localForced;
+        }
+
+        bool active = rawInDialogue
+            || (_dialogueLastActiveMs > 0 && (nowMs - _dialogueLastActiveMs) < DialogueLingerMs);
+        if (!active)
+        {
+            _dialogueHeldPartnerTag = string.Empty;
+            _dialogueHeldNode = DialogueState.NoNode;
+            _dialogueHeldNodeSerial = 0;
+            _dialogueHeldForced = false;
+        }
+
+        // ⚠ THE DEBOUNCE ABOVE ALWAYS RUNS, EVEN WHEN THE GATE BELOW SAYS "NOTHING TO DO".
+        // _dialogueLastActiveMs/_dialogueHeldPartnerTag/_dialogueHeldNode are this instance's
+        // own bookkeeping and must track the engine every tick regardless of whether anything
+        // is published this tick, or the linger window would be measured against a stale
+        // sample instead of the clock it is supposed to run on.
+        //
+        // On the fast path, an UNCHANGED fingerprint before the heartbeat is due costs nothing
+        // beyond the reads already taken above — see DialogueTickGate. Off the fast path this
+        // is a no-op (the flag guards it), so the legacy cadence in PumpOnce is the only gate
+        // and turning dialogue_fast_join off is a true rollback.
+        if (settings.DialogueFastJoin)
+        {
+            long fingerprint = HashCode.Combine(
+                active, speaker, line, active ? _dialogueHeldPartnerTag : string.Empty,
+                replySerial, replyIndex, active ? _dialogueHeldNode : DialogueState.NoNode);
+            fingerprint = HashCode.Combine(
+                fingerprint, active ? _dialogueHeldNodeSerial : 0u, followingPeer,
+                token.Serial, token.NodeSerial, token.ReplySerial, active && _dialogueHeldForced);
+
+            if (!_dialogueTickGate.ShouldPump(nowMs, fingerprint))
+            {
+                return;
+            }
+        }
+
+        session.PublishDialogue(
+            active, speaker, line,
+            active ? _dialogueHeldPartnerTag : string.Empty, replySerial, replyIndex, pickLog,
+            active ? _dialogueHeldNode : DialogueState.NoNode,
+            active ? _dialogueHeldNodeSerial : 0,
+            active && _dialogueHeldForced);
+
+        // The item-grant channel needs "do WE own an active conversation right now", which is
+        // exactly what `active` already means (debounced across the engine's between-entries
+        // flicker) — computed once here rather than re-derived, so the two never drift apart.
+        PumpDialogueItemGrants(active, active ? _dialogueHeldPartnerTag : string.Empty);
+
+        // The other direction: when a peer owns a conversation, hand the plugin who they are
+        // talking to and which reply they last picked, so this instance runs the SAME
+        // conversation in the game's own dialogue UI and follows it. Written every tick
+        // rather than on the serial edge — the plugin is level-triggered on these fields and
+        // a dropped edge would strand a spectator outside the conversation.
+        bridge.WriteRemoteDialogue(
+            followingPeer,
+            followingPeer ? token.PartnerTag : string.Empty,
+            followingPeer ? token.ReplySerial : 0,
+            followingPeer ? token.ReplyIndex : 0,
+            followingPeer ? token.PickLog : null,
+            followingPeer ? token.NodeIndex : DialogueState.NoNode,
+            followingPeer ? token.NodeSerial : 0,
+            followingPeer && token.Forced);
+
+        _lastSpectateSerial = token.Serial;
+    }
+
+    /// <summary>Resref counts of the local PC's inventory the last time
+    /// <see cref="PumpDialogueItemGrants"/> sampled it, for the diff against the next sample.
+    /// Empty means "no baseline yet" (conversation just started, or sampling is off).</summary>
+    private List<(string Resref, ItemIdentity Identity)> _dialogueGrantBaseline = [];
+
+    private bool _dialogueGrantOwning;
+
+    private long _dialogueGrantLastSampleMs;
+
+    /// <summary>How often the PC's inventory is actually re-swept while a conversation runs.
+    /// <see cref="IGameBridge.ReadPossessedItems"/>'s own doc warns it is a full world memory
+    /// sweep, "not free" — this is independent of, and much slower than, the combat-cadence
+    /// tick <see cref="PumpDialogue"/> (and therefore this method) rides on, so a long
+    /// conversation that grants mid-way is still caught without sweeping every ~150 ms.
+    /// </summary>
+    private const long DialogueGrantSampleIntervalMs = 1000;
+
+    /// <summary>Single-element set handed to <see cref="IGameBridge.ReadPossessedItems"/> every
+    /// sample. A field rather than a fresh allocation per call — the method is on a cadence
+    /// hot enough for that to matter over a long conversation.</summary>
+    private static readonly HashSet<uint> LocalPlayerIdSet = [AgentWellKnownIds.LocalPlayerObjectId];
+
+    /// <summary>
+    /// Diffs the local PC's possessed items across the window this instance owns a
+    /// conversation, and publishes whatever appeared as a dialogue grant —
+    /// docs/research/dialogue-consequences.md §3.2. Sampled at conversation start, every
+    /// <see cref="DialogueGrantSampleIntervalMs"/> while it continues, and once more at the
+    /// end, so a reward mid-conversation is caught rather than only a reward on the final node.
+    ///
+    /// ⚠ ONLY WHILE THIS INSTANCE OWNS THE CONVERSATION. A spectator never runs
+    /// <c>HandleReply</c>, so its own inventory cannot have changed from the conversation —
+    /// diffing there would be noise at best, and at worst would double-detect the owner's own
+    /// grant once it arrives back over the wire (which <see cref="ICoopSession.DrainDialogueGrants"/>
+    /// already filters by origin, but there is no reason to also generate the false positive).
+    /// </summary>
+    private void PumpDialogueItemGrants(bool ownsActiveConversation, string partnerTag)
+    {
+        if (!settings.DialogueItemSync)
+        {
+            return;
+        }
+
+        if (!ownsActiveConversation)
+        {
+            if (_dialogueGrantOwning)
+            {
+                // The conversation just ended: one last diff so a reward on the FINAL node
+                // (the common case — most reward scripts run on the closing entry) is caught,
+                // then the baseline is cleared so the next conversation starts fresh.
+                SampleAndPublishDialogueGrant(partnerTag);
+            }
+
+            _dialogueGrantOwning = false;
+            _dialogueGrantBaseline = [];
+            return;
+        }
+
+        if (!_dialogueGrantOwning)
+        {
+            // Just started owning a conversation: snapshot now, publish nothing yet (there is
+            // nothing to diff against on the very first sample).
+            _dialogueGrantOwning = true;
+            _dialogueGrantLastSampleMs = Environment.TickCount64;
+            _dialogueGrantBaseline = [.. bridge.ReadPossessedItems(LocalPlayerIdSet)
+                .Select(i => (i.Resref, i.Identity))];
+            return;
+        }
+
+        long nowMs = Environment.TickCount64;
+        if (nowMs - _dialogueGrantLastSampleMs < DialogueGrantSampleIntervalMs)
+        {
+            return;
+        }
+
+        _dialogueGrantLastSampleMs = nowMs;
+        SampleAndPublishDialogueGrant(partnerTag);
+    }
+
+    private void SampleAndPublishDialogueGrant(string partnerTag)
+    {
+        List<(string Resref, ItemIdentity Identity)> after =
+            [.. bridge.ReadPossessedItems(LocalPlayerIdSet).Select(i => (i.Resref, i.Identity))];
+
+        List<MaterialisedLootItem> gained = DialogueItemDiff.Compute(_dialogueGrantBaseline, after);
+        _dialogueGrantBaseline = after;
+
+        if (gained.Count == 0)
+        {
+            return;
+        }
+
+        log($"dialogue grant: {gained.Count} new item(s) in the local speaker's inventory "
+            + $"('{partnerTag}'): {string.Join(", ", gained.Select(i => i.Resref))}");
+        session.PublishDialogueGrant(partnerTag, gained);
+    }
+}
