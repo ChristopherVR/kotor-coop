@@ -22,11 +22,10 @@ namespace KotorCoop.Session;
 ///   minigame_hide_peer = 1   ; park a peer's phantom while they swoop-race/man a turret
 ///   minigame_spectate = 0    ; watch a racing/turret peer instead (not yet wired)
 ///   transition_announce = 1    ; race a follow ahead of the settle debounce (default ON,
-///                               ; live-verified 2026-08-21 - docs/research/transition-smoothness.md)
+///                               ; live-verified - docs/research/transition-smoothness.md)
 ///   client_door_refusal = 1    ; refuse a client's own premature door crossing (default ON,
-///                               ; live-verified 2026-08-22 once the party-gate defect that had
-///                               ; blocked the decisive check was root-caused and fixed - see
-///                               ; the same doc's 2026-08-22 live-pass section)
+///                               ; live-verified - docs/research/transition-smoothness.md's
+///                               ; live-pass section)
 /// </code>
 /// </summary>
 public sealed record CoopConfig
@@ -149,12 +148,11 @@ public sealed record CoopConfig
     /// Whether the dialogue channel is pumped on the agent's real-time (per-poll-tick) path
     /// instead of the ~150 ms combat cadence, and whether an unchanged read is deduped against
     /// a resend rather than republished on a fixed timer — docs/research/dialogue-join-latency.md
-    /// has the measured before/after. Default ON since 2026-08-23: docs/research/dialogue-skip-
-    /// desync.md's live A/B on the exact skip-desync repro found the 150 ms cadence genuinely
-    /// DROPS content (a rapid-skip burst delivered only the first and last node; the
-    /// intermediate lines never reached the follower at all), while the fast path caught every
-    /// node with zero coalescing on the identical burst. <c>dialogue_fast_join = 0</c> reverts
-    /// to the old cadence.
+    /// has the measured before/after. ON by default: the 150 ms cadence was found to genuinely
+    /// DROP content on a rapid-skip burst (only the first and last node arrived; intermediate
+    /// lines never reached the follower), while the fast path caught every node with zero
+    /// coalescing — see docs/research/dialogue-skip-desync.md's live A/B.
+    /// <c>dialogue_fast_join = 0</c> reverts to the old cadence.
     /// </summary>
     public bool DialogueFastJoin { get; init; } = true;
 
@@ -165,28 +163,26 @@ public sealed record CoopConfig
     /// configured 150 ms windows (this pump, then <c>PartyPresenceController</c>'s own
     /// <c>mirror_smooth_ms</c> smoother) stack back to back on the companion-mirror path,
     /// docs/research/lag-audit.md's suspect #2 for it reading "laggier" than a peer's own
-    /// avatar. Two earlier live A/Bs (2026-08-23, combat and non-combat) found no benefit or a
-    /// regression — both were confounded by the companion follow-AI stall bug of the time: a
-    /// companion that never moves has no position lag to reduce. With that bug fixed
-    /// (rounds 80/84/88), a third A/B against a companion genuinely walking/following
-    /// (2026-08-24, docs/research/lag-audit.md's own dated entry) measured a real, reproduced
-    /// ~45-55% cut in companion-position lag (median ~160 ms vs ~320-350 ms across two
-    /// independent legs each) with no frame-time regression in either a non-combat or a light
-    /// combat check. ON by default since that result. <c>party_fast_pump = 0</c> reverts to the
-    /// old cadence.
+    /// avatar. Earlier A/Bs were confounded by the companion follow-AI stall bug of the time
+    /// (a companion that never moves has no position lag to reduce); once that bug was fixed, a
+    /// live A/B against a companion genuinely walking/following measured a real, reproduced
+    /// ~45-55% cut in companion-position lag with no frame-time regression — see
+    /// docs/research/lag-audit.md. ON by default since that result. <c>party_fast_pump = 0</c>
+    /// reverts to the old cadence.
     /// </summary>
     public bool PartyFastPump { get; init; } = true;
 
     /// <summary>
     /// Whether <c>PumpPlaceables</c> (the DURABLE container/door open-or-locked STATE — what
-    /// keeps a closed container looking closed rather than getting reasserted open, the
-    /// round-66 <c>ContainerCloseHook</c> fix) is pumped on the agent's real-time (per-poll-tick)
-    /// path instead of the ~1000 ms heavy-world-state cadence. <c>PumpInteractionLocks</c> (the
-    /// open/close ANIMATION and the use-lock itself) already rides the ~150 ms combat cadence, so
-    /// before this flag a close could take 1-2+ seconds end to end: the animation and the lock
-    /// released quickly, but the state that actually keeps the container shut for a peer lagged a
-    /// full heavy-pass cycle behind it — live-confirmed 2026-08-23 (docs/research/container-sync.md),
-    /// matching the "very big delay... closing biggest" report. Same rollout shape as
+    /// keeps a closed container looking closed rather than getting reasserted open, see the
+    /// <c>ContainerCloseHook</c> fix in docs/research/container-sync.md) is pumped on the
+    /// agent's real-time (per-poll-tick) path instead of the ~1000 ms heavy-world-state cadence.
+    /// <c>PumpInteractionLocks</c> (the open/close ANIMATION and the use-lock itself) already
+    /// rides the ~150 ms combat cadence, so before this flag a close could take 1-2+ seconds end
+    /// to end: the animation and the lock released quickly, but the state that actually keeps
+    /// the container shut for a peer lagged a full heavy-pass cycle behind it — live-confirmed,
+    /// matching the "very big delay... closing biggest" report; see
+    /// docs/research/container-sync.md. Same rollout shape as
     /// <see cref="DialogueFastJoin"/>/<see cref="PartyFastPump"/>: OFF by default so a live A/B
     /// pass can compare it against the existing cadence. <c>container_fast_pump = 1</c> turns it
     /// on. Door/placeable state for an object nobody has recently touched is unaffected either
@@ -198,7 +194,7 @@ public sealed record CoopConfig
     /// <summary>
     /// Whether the agent's <c>SessionSaveWatch</c>'s host-side edge (roadmap item
     /// 14 phase 1, design §3.2 item 5) actually tears the session down when it fires. OFF by
-    /// default — live-verified 2026-08-21 (shared-state-audit.md §2 round 53) to false-positive
+    /// default — live-verified (docs/research/shared-state-audit.md §2) to false-positive
     /// on an ORDINARY module transition, not only on a genuine "Load Game to a different save"
     /// action: KOTOR's own engine autosaves on every module load, which rewrites the exact save
     /// directory <see cref="KotorCoop.Memory.SaveDigest.FindSessionSave"/> is watching, so
@@ -222,12 +218,11 @@ public sealed record CoopConfig
     /// live-verified, and the rejoin action itself
     /// (<c>SessionManager.RejoinAfterLoadAsync</c>/<c>KotorGameBridge.TryRequestAdoptedWorldLoad</c>)
     /// reuses <c>MenuLoadController</c>'s main-menu-only replay with no measurement of whether
-    /// it actually fires while a live session was already running. Live-verified 2026-08-24 on a
+    /// it actually fires while a live session was already running. Live-verified on a
     /// two-instance rig: firing <c>loadgame</c> on the client produces the correct rejoin
     /// sequence and converges cleanly on the host's module with the character intact, with a
-    /// clean regression check confirmed with the gate off — see docs/research/session-save.md's
-    /// round 87/88 entries. ON by default as of that result. <c>client_load_rejoin = 0</c> turns
-    /// it back off.
+    /// clean regression check confirmed with the gate off — see docs/research/session-save.md.
+    /// ON by default as of that result. <c>client_load_rejoin = 0</c> turns it back off.
     /// </summary>
     public bool ClientLoadRejoin { get; init; } = true;
 
@@ -238,11 +233,11 @@ public sealed record CoopConfig
     /// design doc §3.2's "reuse the join path, do not build a new one", run from the host's
     /// side. Takes priority over <see cref="SessionSaveHostRefusal"/> when both are on (a
     /// working re-adoption is strictly better than a refusal; the refusal stays available as
-    /// the safe fallback if re-adoption itself is ever turned back off). Live-verified
-    /// 2026-08-24 alongside <see cref="ClientLoadRejoin"/>: firing <c>loadgame</c> on the host
-    /// produces "host loaded a save - everyone re-joins" and the client's world-transfer fetch
-    /// succeeds cleanly — see docs/research/session-save.md's round 87/88 entries. ON by default
-    /// as of that result. <c>host_load_readopt = 0</c> turns it back off.
+    /// the safe fallback if re-adoption itself is ever turned back off). Live-verified alongside
+    /// <see cref="ClientLoadRejoin"/>: firing <c>loadgame</c> on the host produces "host loaded a
+    /// save - everyone re-joins" and the client's world-transfer fetch succeeds cleanly — see
+    /// docs/research/session-save.md. ON by default as of that result.
+    /// <c>host_load_readopt = 0</c> turns it back off.
     /// </summary>
     public bool HostLoadReadopt { get; init; } = true;
 
@@ -250,9 +245,9 @@ public sealed record CoopConfig
     /// Whether a follower acts on a host's announced transition destination immediately,
     /// instead of waiting for the host's published module to change and the module-settle
     /// debounce to elapse — docs/research/transition-smoothness.md. ON by default:
-    /// live-verified 2026-08-21 (Interval A dropped from ~1.6 s to ~180 ms on a bare
-    /// end_m01aa -> end_m01ab door crossing, and the movie-carrying case was also exercised
-    /// with no regression). Set <c>transition_announce = 0</c> to opt out.
+    /// live-verified (Interval A dropped from ~1.6 s to ~180 ms on a bare end_m01aa ->
+    /// end_m01ab door crossing, and the movie-carrying case was also exercised with no
+    /// regression). Set <c>transition_announce = 0</c> to opt out.
     /// </summary>
     public bool TransitionAnnounceEnabled { get; init; }
 
@@ -268,7 +263,7 @@ public sealed record CoopConfig
 
     /// <summary>
     /// Who may lead an area transition that the OTHER side follows immediately via the announce
-    /// channel — docs/research/transition-smoothness.md's 2026-08-22 "Lead-swap" entry. coop.ini
+    /// channel — docs/research/transition-smoothness.md's "Lead-swap" entry. coop.ini
     /// <c>follow_lead</c>: <c>any</c> (the default) lets either player's committed door crossing
     /// become an announce the other follows, mirroring the pre-existing host-leads path
     /// symmetrically, gated by <see cref="KotorCoop.Session.LeadFollowRule"/> so the host is
@@ -282,8 +277,7 @@ public sealed record CoopConfig
     /// Relays a mid-module <c>PlayMovie</c> call (no transition involved) to peers, and acts
     /// on one a peer announces. Off by default, live-verification pending — the same posture
     /// <c>PeerEffect</c> and <c>CreatureLiveness</c> shipped with. coop.ini <c>movie_relay</c>.
-    /// See docs/research/trigger-relay.md §6 and docs/research/cinematics.md's 2026-08-22
-    /// section.
+    /// See docs/research/trigger-relay.md §6 and docs/research/cinematics.md.
     /// </summary>
     public bool MovieRelayEnabled { get; init; }
 

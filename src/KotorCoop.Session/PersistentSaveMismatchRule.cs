@@ -11,7 +11,7 @@ public readonly record struct MismatchRejoinWatchState(bool WasMismatched, long?
 
 /// <summary>
 /// Closes the gap <c>client_load_rejoin</c> (<see cref="ClientLoadRejoinRule"/>) left open,
-/// found live 2026-08-24 (docs/research/party-reconciliation.md's "Attempted... two simultaneous
+/// found live (docs/research/party-reconciliation.md's "Attempted... two simultaneous
 /// releases" entry): a debug-cheat cross-module warp (<c>tools/blockpoke.ps1 travel</c>, and
 /// anything else that moves the engine to a new module without going through a real Save/Load)
 /// bumps the LIVE world-load serial (<c>WorldLoadRule.IsUnannouncedTeardown</c> sees no
