@@ -57,7 +57,7 @@ public readonly record struct WorldDigest(
     /// module change as a mod difference. That same rule is what restores the id-keyed
     /// channels when the pair walks into a module whose GITs agree.
     ///
-    /// ⚠ SAVE IDENTITY GETS THE SAME GATE, AND FOR THE SAME REASON (round 54, 2026-08-21).
+    /// ⚠ SAVE IDENTITY GETS THE SAME GATE, AND FOR THE SAME REASON.
     /// <c>SaveDigest.TryComputeSaveIdentity</c> hashes the module the save is CURRENTLY
     /// standing in alongside the id-dealing state, so it legitimately changes the instant
     /// each side's own engine autosaves into a new module — and the two peers never do that
@@ -68,12 +68,12 @@ public readonly record struct WorldDigest(
     /// while apart: the id-keyed channels it guards (enemies, doors, ground items, party)
     /// are already scoped to the module each peer is currently in, so there is nothing for a
     /// save-identity verdict to protect until the two are standing in the same one anyway.
-    /// Measured live crossing <c>tar_m10aa</c> (docs/research/shared-state-audit.md §2,
-    /// round 53): a `[W_SAVE]` false alarm fired and held for several minutes purely because
-    /// the client's own follow-transition took longer than the host's to land and autosave.
-    /// A residual few seconds of same-module timing lag past this gate (each side's digest
-    /// cache re-stats on its own schedule) is smoothed by <see cref="SaveIdentitySettle"/>,
-    /// which the caller applies to this comparison's <see cref="WorldDigestComparison.SaveIdentityMismatch"/>.
+    /// Measured live crossing <c>tar_m10aa</c> as a `[W_SAVE]` false alarm caused purely by
+    /// timing lag between the two sides' follow-transitions — see
+    /// docs/research/shared-state-audit.md §2. A residual few seconds of same-module timing
+    /// lag past this gate (each side's digest cache re-stats on its own schedule) is smoothed
+    /// by <see cref="SaveIdentitySettle"/>, which the caller applies to this comparison's
+    /// <see cref="WorldDigestComparison.SaveIdentityMismatch"/>.
     /// </summary>
     public static WorldDigestComparison Compare(in WorldDigest local, in WorldDigest remote)
     {

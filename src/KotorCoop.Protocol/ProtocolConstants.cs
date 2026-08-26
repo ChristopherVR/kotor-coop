@@ -5,7 +5,11 @@ public static class ProtocolConstants
     /// <summary>Two byte magic ('K','C') so stray traffic on the port is discarded cheaply.</summary>
     public const ushort Magic = 0x4B43;
 
-    /// <summary>Bumped on any wire-format change. Mismatched peers are rejected at Hello.
+    /// <summary>
+    /// Bumped on any wire-format change. Mismatched peers are rejected at Hello. One line per
+    /// version below — see the cited docs/research/*.md file for the full rationale behind any
+    /// entry that has one; the rest are self-contained.
+    ///
     /// Version 3: PlayerState flags dword, journal channel, client enemy reports.
     /// Version 4: content digest on Hello/Welcome for mod-compatibility handshaking.
     /// Version 5: session password hash on Hello; party-member snapshot channel.
@@ -15,201 +19,77 @@ public static class ProtocolConstants
     /// Version 9: world digest carries save identity + per-module GIT digest.
     /// Version 10: dialogue token carries the partner tag and the owner's reply picks, so a
     /// spectator runs the same conversation in the game's own UI instead of reading a
-    /// transcript; the spectate line grew past the shared string cap.
-    /// Version 11: the dialogue token carries the owner's pick LOG (each pick stamped with
-    /// the line it was made on) so a spectator replays picks on the right node and a late
-    /// joiner catches up.
-    /// Version 12: the enemy snapshot carries presence (position, facing, animation, and
-    /// per-enemy one-shot swings) so a mirroring instance drives its copies to match the
-    /// owner's fight instead of running a private one. Reports still carry health alone.
-    /// Version 13: the snapshot includes PLOT creatures (cutscene actors) with a plot flag
-    /// — presence-only, exempt from the combat half — so scripted scenes play out
-    /// identically on both screens.
-    /// Version 14: the enemy snapshot carries the MODULE its object ids were read in, so a
-    /// peer somewhere else drops it instead of writing the owner's healths and positions
-    /// onto whatever local creatures happen to share those ids. The report direction has
-    /// always carried its module; this is the same guard the other way.
-    /// Version 15: peer slots are STICKY per peer id rather than positional, and a relayed
-    /// phantom-damage report carries the ORIGINATOR's peer id rather than the relaying
-    /// host's — with three or more players the positional scheme billed the wrong person
-    /// and a leaver's slot handed their body, gear and damage total to a survivor.
-    /// Version 16: EncounterTrigger — a client reports the encounters it is standing inside
-    /// and the host's engine does the spawn. A client's own encounters are disarmed (an
-    /// encounter spawn there would advance that instance's object-id counter, which every
-    /// other channel keys on), so before this a joiner could walk into an ambush and nothing
-    /// happened until the host walked in too.
-    /// Version 17: the peer direction stops reporting enemy HEALTH and reports DAMAGE DEALT
-    /// instead (EnemyDamage 33 replaces EnemyReport 22). Health was a sample the owner's
-    /// mirror could overwrite before it was ever read, and it could not say who dealt what;
-    /// a cumulative sum of damage is monotonic, order-independent and un-eraseable.
-    /// Version 18: EnemyState carries the appearance.2da row and repute.2da faction id, so
-    /// a mirror can MATERIALISE an enemy that exists only in the owner's instance (an
-    /// encounter or script spawn) — before this such an enemy was invisible on the mirror
-    /// while still able to hurt its player through the phantom.
-    /// Version 19: Bark (34) — the one-line NPC bubbles that never touch the dialogue system
-    /// and so reached no other channel at all.
-    /// Version 20: InteractionClaim (35) / InteractionLock (36) — a per-object lock the
-    /// object's OWNER honours. Ownership was one-directional (shared-state-audit §4): a
-    /// client could open a conversation with a host-owned NPC and the host's AI, never told,
-    /// kept walking him around. Shaped as a LEASE so a client that dies mid-conversation
-    /// cannot strand the NPC.
-    /// Version 21: DialogueState carries the owner's NODE — the index of the dialogue entry
-    /// on screen — and the follower is driven onto that entry instead of replaying the reply
-    /// SLOT the owner pressed. Slot replay can never converge: which entry a conversation
-    /// starts on, which replies are offered, and where a reply leads are all decided by
-    /// scripts that run separately on each instance, so a slot does not name the same branch
-    /// on two machines. The pick fields stay on the wire as a diagnostic.
-    /// Version 22: PartyRoster (37) — the host's nine companion slots as two masks
-    /// (available, in-party), broadcast as a LEVEL. AddPartyMember / RemovePartyMember had no
-    /// channel at all, so a conversation that recruited or dismissed a companion left the two
-    /// instances holding different rosters — and the roster is the key the whole companion
-    /// channel resolves companions by.
-    /// Version 23: ProgressionReport (38) — the peer direction of the progression channel,
-    /// which had none. The host published absolute gold and XP and every client OVERWROTE its
-    /// own with them, so a client's plot XP was erased within a tick and a client could not
-    /// spend gold at all (the host's value restored it). Gold now travels as a cumulative
-    /// earned/spent LEDGER the host spends against its own party table — the balance cannot be
-    /// merged, but "this peer has taken 250 out of the purse" can — while XP travels as an
-    /// absolute merged by max, because both engines already grant kill XP independently and a
-    /// delta would count every kill twice.
-    /// Version 24: a ground item carries its IDENTITY (stack size, charges, max charges,
-    /// installed-upgrade mask, and the identified/stolen/non-equippable bits) and not just
-    /// its blueprint resref. Before this the receiving instance re-created a pristine stock
-    /// item, so a half-spent stack of twenty arrived as one fresh one and an upgraded
-    /// lightsaber arrived with its upgrades stripped. A zeroed identity still means
-    /// "unknown", which is what the harness sends and what the receiver leaves alone.
-    /// Version 25: TransitionMovies (40) — the movies a transition is about to play,
-    /// announced before it happens so a follower's own transition plays them too. The
-    /// follower was never gated; its move-to-module queue was simply empty, so it loaded
-    /// straight in while the owner's main thread was gone for 7,407 ms playing 01c. Packet
-    /// type 39 is deliberately skipped: network-topology.md reserves it on paper.
-    /// Version 26: PlayerState carries FlagInMinigame — set while the engine's own
-    /// CSWCModule::GetMiniGame is non-null (a swoop race or a forced turret sequence). A
-    /// peer's instance parks that phantom instead of mirroring it, and the minigame
-    /// player's own instance stops applying forwarded damage for the duration; see
-    /// docs/research/minigames.md.</summary>
-    /// Version 27: the world snapshot carries a content DIGEST beside each of the flag, item
-    /// and journal version counters, plus a version and digest for container loot, which had
-    /// neither. A version counter alone counts local CHANGES, not content: two stores that
-    /// diverged by the same number of changes during an outage tie and never ask for a
-    /// resync (docs/research/disconnect-reconnect.md §4.1). The digest is an
-    /// order-independent fingerprint of what is actually held (KotorCoop.Session.EntryDigest),
-    /// so it catches that tie. LootSyncRequest (43) is new for the same reason §4.8 flags:
-    /// container loot was retransmit-only with no tripwire of its own, so a straggler under
-    /// sustained loss had nothing behind it but the retransmit.
-    /// Version 28: PeerEffect (44) — non-damage combat effects (stun, paralyze, knockdown,
-    /// slow, frightened, sleep, choke, Force push/whirlwind) landing on a peer's phantom,
-    /// forwarded to that peer's real character. The non-damage sibling of PhantomDamage, which
-    /// only ever carried plain damage; before this a Force-Stun on a peer's phantom left them
-    /// free to act on their own screen. Gated OFF by default (coop.ini effect_sync) until
-    /// live-verified — see docs/research/effect-sync.md.
-    /// Version 29: DialogueGrant (45) / DialogueGrantAck (46) — a reward node's SCRIPT only
-    /// ever ran on the conversation OWNER's instance (docs/research/dialogue-sync.md's Layer
-    /// 1/2 gets conversations to look the same on both screens, but never runs HandleReply on
-    /// the spectating side), so an item placed into the speaker's inventory landed on one
-    /// screen only. Reliable and symmetric like ContainerLoot: whichever peer owns the
-    /// conversation reports the net-new items, the host relays to everyone else under the
-    /// SAME (origin, sequence) identity, and a receiver gives them through the existing
-    /// giveloot cheat channel.
-    /// Version 30: CreatureLiveness (47) — every creature the host's engine currently knows
-    /// about in the loaded area, not just the 32-slot combat census EnemySnapshot carries, so
-    /// a mirroring peer can notice a body left alive on one side and dead or destroyed on the
-    /// other (a creature beyond the census cap, killed by a script, or killed while the peers
-    /// were apart) and reconcile it. See docs/research/creature-liveness.md. Gated off by
-    /// default (coop.ini liveness_sync) until live-verified.
-    /// Version 31: FlagOpPacket/FlagSnapshotPacket and JournalOpPacket/JournalSnapshotPacket
-    /// each carry a Serial (and the journal op/entry a Removed bit) alongside the existing
-    /// OriginPeerId. Both EventFlagStore and JournalStore stop merging by "existing value
-    /// wins ties, higher value wins otherwise" — a policy that silently refuses any
-    /// legitimate DECREASE (a kill counter ticking down, a boolean cleared back to false,
-    /// `RemoveJournalQuestEntry`, a journal stage explicitly pushed back down) forever, and
-    /// on the apply-back path actively fights the local engine's own write every tick (see
-    /// docs/research/quest-sync.md). The new policy is a per-key Lamport clock: each
-    /// instance stamps its own local changes with its own ever-increasing serial, a
-    /// receiver adopts an incoming entry only when its (Serial, OriginPeerId) is strictly
-    /// newer (ties favour the lower peer id, i.e. the host), and receiving ANY serial —
-    /// win or lose — advances the local clock past it, so a later genuine local change is
-    /// guaranteed to out-rank anything already observed. This keeps every safety property
-    /// the old max-merge had (order-independent, idempotent, a stale replay can never
-    /// regress a newer value) while finally letting the state go DOWN when that is what
-    /// really happened.
-    /// Version 32: TriggerRelay (48) — a client reports which GENERIC triggers (a
-    /// CSWSTrigger whose OnEnter starts a cutscene/dialogue/scripted event) it is standing
-    /// inside, the same shape as EncounterTrigger, and the host fires the same OnEnter script
-    /// against that peer's phantom so the host's own object-id counter stays in lockstep with
-    /// whatever the client's OnEnter script created or destroyed. The host also broadcasts
-    /// which trigger ids it has already fired per module, so a client's watch stops
-    /// re-reporting ones the host has already handled. See docs/research/trigger-relay.md.
-    /// Gated OFF by default (coop.ini trigger_relay) until live-verified, like PeerEffect
-    /// before it — this channel has no engine-level one-shot flag to lean on the way
-    /// encounters do, so its idempotence is entirely this pass's own bookkeeping.
-    /// Version 33: TransitionAnnounce (49) — the destination module and entry waypoint of a
-    /// transition this instance's engine has just COMMITTED to, sent before the load starts
-    /// rather than after the mover's published module changes. Before this, a follower only
-    /// learned a transition had happened once the mover's PlayerState.Module actually updated
-    /// — which, for a movie-carrying transition, can lag by the whole length of the film (the
-    /// mover's main thread is inside WaitForMovie and publishes nothing) — plus the follow
-    /// logic's own multi-second settle debounce. The announce lets a follower start its own
-    /// warp the instant the mover's load begins, so both loading screens overlap instead of
-    /// running back to back. Unreliable like TransitionMovies (39, 47 and 48 stay reserved for
-    /// the same reason 39 already was): a lost announcement costs the smoother handoff, never
-    /// consistency, because the pre-existing host-module-based follow is the fallback whenever
-    /// no announcement arrives at all. See docs/research/transition-smoothness.md.
-    /// Version 34: MidModuleMovie (50) — a script's own <c>PlayMovie</c> call with NO
-    /// transition involved (the Leviathan capture, the Star Forge arrival, the Taris
-    /// bombardment, the Dantooine vision), captured by the plugin's new <c>MoviePlayHook</c>
-    /// and relayed the same way TransitionMovies is. Before this, MovieRelayQueue's pure
-    /// PlayNow/Defer/Ignore decision existed and changed nothing: nothing captured WHICH movie
-    /// a mid-module PlayMovie call played (docs/research/trigger-relay.md §6). Gated OFF by
-    /// default (coop.ini <c>movie_relay</c>) until live-verified, like PeerEffect and
-    /// CreatureLiveness before it. See docs/research/cinematics.md's 2026-08-22 section.
-    /// Version 35: WorldDigestPacket gains LoadSerial (roadmap item 14 phase 2,
-    /// docs/research/session-save.md's Phase 2 section) — the sender's own count of world
-    /// teardowns its plugin judged UNANNOUNCED (a Load Game action, not an ordinary module
-    /// transition), riding the existing 1 Hz world-digest channel rather than a new packet.
-    /// Lets a receiver classify a PEER's SaveIdentity change as a save or a load the same way
-    /// each side already classifies its own (<c>KotorCoop.Session.SaveOrLoadClassifier</c>),
-    /// which is what host-mid-session-load re-adoption (coop.ini <c>host_load_readopt</c>)
-    /// needs to tell "the host saved" apart from "the host loaded a different save" without a
-    /// dedicated broadcast packet. Gated OFF by default, like every roadmap-14-phase-2 action,
-    /// until live-verified.
-    /// Version 36: <see cref="TriggerRelayPacket"/> gains <c>NativeFiredIds</c> /
-    /// <c>NativeFiredOriginPeerIds</c> — the reverse direction docs/research/trigger-relay.md's
-    /// symmetry pass closes. Before this, only a CLIENT's own presence in a generic trigger
-    /// ever reached the other instance (via <c>TriggerIds</c>, fired by the HOST alone); the
-    /// HOST's own real character walking through the identical trigger was invisible to this
-    /// whole channel — nothing told a client to also run the OnEnter against the host's
-    /// phantom. A new native-fire detour (<c>TriggerFireHook</c>, on
-    /// <c>CSWSTrigger::EventHandler</c>'s generic-script RunScript call site) observes any
-    /// instance's own engine firing a trigger for its own real PC; the allowlisted, eligible
-    /// result is reported peer-&gt;host in <c>NativeFiredIds</c> and merged into the SAME
-    /// per-module fired-set <c>TriggerRelayStore</c> already keeps, so the two directions can
-    /// never double-fire the same trigger. The host rebroadcasts every known native fire with
-    /// its origin peer in <c>NativeFiredIds</c>/<c>NativeFiredOriginPeerIds</c> (host-&gt;all);
-    /// every OTHER peer fires the trigger locally against the origin's phantom, through the
-    /// SAME <c>TriggerRelayController.HandleRequests</c>/<c>OdysseyTriggers.FireTrigger</c>
-    /// path the host already used for a client's report — now reachable from any instance.
-    /// Still under <c>trigger_relay</c> (default ON).
+    /// transcript.
+    /// Version 11: dialogue token carries the owner's full pick LOG so a late joiner catches up.
+    /// Version 12: enemy snapshot carries presence (position, facing, animation, one-shots) so
+    /// a mirroring instance drives its copies to match the owner's fight.
+    /// Version 13: enemy snapshot includes PLOT (cutscene) creatures, presence-only.
+    /// Version 14: enemy snapshot carries the MODULE its ids were read in, so a peer elsewhere
+    /// drops it instead of misapplying it to local creatures sharing those ids.
+    /// Version 15: peer slots are STICKY per peer id, and a relayed phantom-damage report
+    /// carries the true ORIGINATOR's peer id rather than the relaying host's.
+    /// Version 16: EncounterTrigger — a client reports the encounters it stands inside; the
+    /// host's engine (never the client's, whose own encounters stay disarmed) does the spawn.
+    /// Version 17: the peer direction reports DAMAGE DEALT (EnemyDamage 33) instead of sampled
+    /// health, which the owner's own mirror could overwrite before it was ever read.
+    /// Version 18: EnemyState carries appearance/faction so a mirror can MATERIALISE an enemy
+    /// that exists only in the owner's instance (an encounter or script spawn).
+    /// Version 19: Bark (34) — one-line NPC bubbles, which never touch the dialogue system.
+    /// Version 20: InteractionClaim (35) / InteractionLock (36) — a per-object LEASE the
+    /// object's owner honours, so a client's conversation with a host-owned NPC stops the
+    /// host's own AI from walking it away mid-scene.
+    /// Version 21: DialogueState carries the owner's NODE index; a follower is driven onto that
+    /// entry rather than replaying the reply SLOT, which two instances' independent scripts can
+    /// resolve to different branches.
+    /// Version 22: PartyRoster (37) — the host's nine companion slots as two masks, so a
+    /// recruit/dismiss conversation on one instance keeps both rosters in sync.
+    /// Version 23: ProgressionReport (38) — the peer's contribution: gold as a cumulative
+    /// earned/spent LEDGER (a balance cannot be merged), XP as an absolute merged by max (both
+    /// engines already grant kill XP independently, so a delta would double-count).
+    /// Version 24: a ground item carries per-instance IDENTITY (stack/charges/upgrades/flags)
+    /// instead of respawning as a pristine blueprint copy on pickup.
+    /// Version 25: TransitionMovies (40) — pre-announces a transition's movie queue so a
+    /// follower's own (otherwise-empty) queue plays them too.
+    /// Version 26: PlayerState carries FlagInMinigame so a peer's instance parks the phantom and
+    /// stops applying forwarded damage during a swoop race/turret sequence. See
+    /// docs/research/minigames.md.
+    /// Version 27: the world snapshot carries a content DIGEST per store (flag/item/journal/
+    /// loot) beside its version counter, catching a same-count-but-different-content tie a bare
+    /// counter misses. See docs/research/disconnect-reconnect.md §4.1/§4.8.
+    /// Version 28: PeerEffect (44) — non-damage combat effects on a phantom, forwarded to the
+    /// real character. Off by default until live-verified. See docs/research/effect-sync.md.
+    /// Version 29: DialogueGrant (45) / DialogueGrantAck (46) — relays a reward node's item/
+    /// companion grant to the spectating side, whose own HandleReply never ran. See
+    /// docs/research/dialogue-sync.md.
+    /// Version 30: CreatureLiveness (47) — every creature the host knows about, not just the
+    /// combat census, so a mirror can reconcile a body left alive on one side and gone on the
+    /// other. Off by default until live-verified. See docs/research/creature-liveness.md.
+    /// Version 31: flag/journal ops carry a per-key Lamport Serial (plus a journal Removed bit)
+    /// so a legitimate DECREASE is no longer refused forever by max-merge. See
+    /// docs/research/quest-sync.md.
+    /// Version 32: TriggerRelay (48) — a client reports the generic triggers it stands in; the
+    /// host fires them so its own object-id counter stays in lockstep. Off by default until
+    /// live-verified. See docs/research/trigger-relay.md.
+    /// Version 33: TransitionAnnounce (49) — destination + waypoint announced before a
+    /// transition's load starts, so a follower's own warp overlaps instead of trailing. See
+    /// docs/research/transition-smoothness.md.
+    /// Version 34: MidModuleMovie (50) — a script's own <c>PlayMovie</c> with no transition,
+    /// relayed the same way TransitionMovies is. Off by default until live-verified. See
+    /// docs/research/trigger-relay.md §6.
+    /// Version 35: WorldDigestPacket gains LoadSerial, so a receiver can classify a peer's
+    /// SaveIdentity change as a save or a load. Off by default until live-verified. See
+    /// docs/research/session-save.md.
+    /// Version 36: <see cref="TriggerRelayPacket"/> gains <c>NativeFiredIds</c>/
+    /// <c>NativeFiredOriginPeerIds</c> — the reverse direction, so the HOST's own native trigger
+    /// fires reach clients too, not just a client's presence reaching the host. See
+    /// docs/research/trigger-relay.md.
     /// Version 37: <see cref="InteractionKind.Container"/> — a container/corpse joins the
-    /// per-object interaction lock (docs/research/container-sync.md), so a player using a
-    /// shared chest is refused inside the engine while a peer already has it open (the same
-    /// "one at a time" rule <see cref="InteractionKind.Conversation"/> already enforces), and
-    /// every OTHER instance plays the container's open animation on its own copy the moment the
-    /// claim appears, and the close animation the moment the lease ends. Before this, only the
-    /// opener's own screen ever showed the panel open, nothing closed it for the other side, and
-    /// nothing stopped a second player from opening the same container mid-loot.
-    /// <see cref="InteractionClaimPacket"/> and <see cref="InteractionLock"/> both gain
-    /// <c>TargetId</c> (a placeable object id), since containers repeat tags across instances of
-    /// the same footlocker where <see cref="InteractionKind.Conversation"/>'s NPC tags do not.
+    /// interaction lock, keyed by <c>TargetId</c> rather than <c>Tag</c> since placeables repeat
+    /// tags across instances. See docs/research/container-sync.md.
     /// Version 38: <see cref="DialogueState"/> and <see cref="DialogueRequestPacket"/> gain
-    /// <c>Forced</c> — whether the conversation is one the vanilla engine itself forces
-    /// regardless of distance (an ambush or scripted cutscene, NWScript
-    /// <c>ActionStartConversation</c> with <c>bIgnoreStartRange=TRUE</c>), as opposed to an
-    /// ordinary player-clicked chat (docs/research/dialogue-sync.md's 2026-08-23 Item 1). Before
-    /// this, <c>dialogue_auto_join</c> could not distinguish the two, so pulling the other
-    /// player in automatically for a critical/scripted conversation and doing the same for an
-    /// ordinary chat were the same knob; now the forced case auto-joins unconditionally and the
-    /// knob (defaulting to <c>off</c>) governs only ordinary conversations.
+    /// <c>Forced</c>, so <c>dialogue_auto_join</c> can tell an engine-forced conversation (an
+    /// ambush, a scripted cutscene) from an ordinary player-clicked chat. See
+    /// docs/research/dialogue-sync.md's Item 1.
     /// </summary>
     public const byte Version = 38;
 
