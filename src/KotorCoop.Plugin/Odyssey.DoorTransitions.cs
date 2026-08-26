@@ -6,6 +6,14 @@ namespace KotorCoop.Plugin;
 
 internal static unsafe partial class Odyssey
 {
+    /// <summary>
+    /// Calls the engine's own <c>CSWParty::RecaulateFollowPoint</c> — see
+    /// <see cref="RecalculateFollowPointFn"/>'s own remarks for what this was tried for and why
+    /// it is NOT part of the shipped follow-reissue path. No-ops (returns false) when there is no
+    /// client/party object to call it on.
+    ///
+    /// MAIN THREAD ONLY.
+    /// </summary>
     public static bool RecalculateFollowPoint()
     {
         nint client = GetClient();

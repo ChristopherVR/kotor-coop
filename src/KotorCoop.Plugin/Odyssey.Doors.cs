@@ -216,14 +216,7 @@ internal static unsafe partial class Odyssey
     private static readonly delegate* unmanaged[Thiscall]<nint, void> RecalculateFollowPointFn =
         (delegate* unmanaged[Thiscall]<nint, void>)0x006359C0;
 
-    /// <summary>
-    /// Calls the engine's own <c>CSWParty::RecaulateFollowPoint</c> — see
-    /// <see cref="RecalculateFollowPointFn"/>'s own remarks for what this was tried for and why
-    /// it is NOT part of the shipped follow-reissue path. No-ops (returns false) when there is no
-    /// client/party object to call it on.
-    ///
-    /// MAIN THREAD ONLY.
-    /// </summary>
+    /// <summary>True when this door is a module transition, by the engine's own definition.</summary>
     public static bool DoorIsLinked(nint door) => door != 0 && DoorGetIsLinkedFn(door) != 0;
 
     /// <summary>The raw <c>linked_to_flags</c> byte, for an answer that says what it saw
