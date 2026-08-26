@@ -118,6 +118,27 @@ public sealed class SessionManager(IGameBridge bridge, AgentSettings agentSettin
     /// <summary>Optional sink for status changes; surfaced by the console and dashboard.</summary>
     public Action<string>? Log { get; set; }
 
+    /// <summary>Fires whenever <see cref="Phase"/> actually changes (Idle/Connecting/Connected/
+    /// Disconnected/Failed) — raised synchronously, wherever the transition already happens
+    /// today (<see cref="Connect"/>, <see cref="Disconnect"/>, <see cref="Poll"/>,
+    /// <see cref="TimeoutConnect"/>/<see cref="Fail"/>), through the shared <see cref="SetPhase"/>
+    /// helper. Additive: no existing phase logic moved onto this, only a notification layered
+    /// on top of it.</summary>
+    public event Action<SessionPhase, SessionPhase>? PhaseChanged;
+
+    /// <summary>Sets <see cref="_phase"/> and raises <see cref="PhaseChanged"/> when the value
+    /// actually differs — the single place every "_phase = ..." assignment in this class goes
+    /// through, so the event can never miss a transition or double-fire a no-op one.</summary>
+    private void SetPhase(SessionPhase phase)
+    {
+        SessionPhase previous = _phase;
+        _phase = phase;
+        if (previous != phase)
+        {
+            PhaseChanged?.Invoke(previous, phase);
+        }
+    }
+
     /// <summary>
     /// Fires immediately before a live session is torn down — a clean disconnect, a
     /// reconnect's implicit teardown, or a fresh <see cref="Connect"/> replacing one already
@@ -206,7 +227,7 @@ public sealed class SessionManager(IGameBridge bridge, AgentSettings agentSettin
                 ? 0
                 : SessionClock.NowMs + Math.Max(1, settings.ConnectTimeoutMs);
 
-            _phase = SessionPhase.Connecting;
+            SetPhase(SessionPhase.Connecting);
             _detail = host ? $"hosting on port {settings.Port}" : $"connecting to {endpoint}";
             Log?.Invoke(_detail);
         }
@@ -281,7 +302,7 @@ public sealed class SessionManager(IGameBridge bridge, AgentSettings agentSettin
         }
 
         _connectDeadlineMs = 0;
-        _phase = SessionPhase.Disconnected;
+        SetPhase(SessionPhase.Disconnected);
         _detail = "disconnected";
         Log?.Invoke(_detail);
     }
@@ -431,18 +452,18 @@ public sealed class SessionManager(IGameBridge bridge, AgentSettings agentSettin
         if (stats.Connected)
         {
             _connectDeadlineMs = 0;
-            _phase = SessionPhase.Connected;
+            SetPhase(SessionPhase.Connected);
             _detail = stats.Status;
         }
         else if (stats.Status.Contains("rejected", StringComparison.OrdinalIgnoreCase))
         {
             _connectDeadlineMs = 0;
-            _phase = SessionPhase.Failed;
+            SetPhase(SessionPhase.Failed);
             _detail = stats.Status;
         }
         else
         {
-            _phase = SessionPhase.Connecting;
+            SetPhase(SessionPhase.Connecting);
             _detail = stats.Status;
         }
     }
@@ -453,7 +474,7 @@ public sealed class SessionManager(IGameBridge bridge, AgentSettings agentSettin
     /// timeout — which must not read as the same "Failed" state a wrong password does.</summary>
     private void Fail(string reason, SessionPhase phase = SessionPhase.Failed)
     {
-        _phase = phase;
+        SetPhase(phase);
         _detail = reason;
         Log?.Invoke(reason);
     }
