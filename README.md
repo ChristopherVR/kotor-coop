@@ -106,7 +106,7 @@ pwsh tools\demo.ps1 -Stop    # shut everything down
 ```
 
 Driving the agent by hand instead of through `demo.ps1`, and `KotorCoop.MockGame` (a
-stand-in process for testing without KOTOR): [see CONTRIBUTING.md].
+stand-in process for testing without KOTOR): see [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md).
 
 ## Console
 
@@ -188,7 +188,8 @@ tools/                   RE helpers, demo scripts, the kotor1_0_3 symbol databas
 ## Documentation map
 
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — the design and why it looks like this.
-- [see CONTRIBUTING.md] — how to build, test and submit changes.
+- [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md) — prerequisites, build, test, the live rig,
+  repo layout, code conventions, and how to add a feature end-to-end.
 - [docs/CONFIG.md](docs/CONFIG.md) — every `coop.ini` key and CLI flag, with defaults.
 - [docs/CONSOLE.md](docs/CONSOLE.md) — every in-game console verb.
 - [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) — common problems and their causes.
