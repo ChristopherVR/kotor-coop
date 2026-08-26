@@ -1,5 +1,7 @@
 using System.Text;
 
+using static KotorCoop.Plugin.Vec3;
+
 namespace KotorCoop.Plugin;
 
 /// <summary>
@@ -148,11 +150,4 @@ internal static unsafe class TransitionAnnounceWatch
             : "door-refusal: could not resolve the area to clear trans_pending");
     }
 
-    private static float Distance(Vec3 a, Vec3 b)
-    {
-        float dx = a.X - b.X;
-        float dy = a.Y - b.Y;
-        float dz = a.Z - b.Z;
-        return MathF.Sqrt((dx * dx) + (dy * dy) + (dz * dz));
-    }
 }
