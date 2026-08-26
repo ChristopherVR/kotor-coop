@@ -290,7 +290,7 @@ internal static unsafe partial class Odyssey
     /// docs/research/dialogue-skip-desync.md's earlier rounds could never reach because
     /// injected OS input never lands on this game. No OS input is involved here at all.
     ///
-    /// VERIFIED by disassembly, round 2026-08-23:
+    /// Verified by disassembly:
     ///
     ///   * <c>CSWGuiDialog::HandleInputEvent 0x006A7230</c> is the panel's own input router.
     ///     Its case for event codes 0x27/0x2D (Enter and the click-equivalent — the SAME case
@@ -320,9 +320,8 @@ internal static unsafe partial class Odyssey
     ///     normal-completion branch makes) and returns 0 ("not delayed") instead of 1 — which
     ///     is precisely what lets the next <c>UpdateDialog</c> tick's own
     ///     <c>SendDialogEntry</c> call proceed to the NEXT entry, as if the VO had simply
-    ///     finished on its own. This is hypothesis (a) from the task brief, confirmed rather
-    ///     than assumed: a flag the per-tick driver checks, not a raw call and not a timer
-    ///     zero.
+    ///     finished on its own. Confirmed rather than assumed: a flag the per-tick driver
+    ///     checks, not a raw call and not a timer zero.
     ///
     /// Writing the flag directly on the ALREADY-RESOLVED, ALREADY-VTABLE-VERIFIED owner
     /// <see cref="TryGetActiveDialogue"/> hands back is deliberately smaller than replaying

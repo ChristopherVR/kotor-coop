@@ -2,7 +2,7 @@ namespace KotorCoop.Plugin;
 
 /// <summary>
 /// The immediate-play half of the mid-module movie relay (docs/research/trigger-relay.md §6,
-/// docs/research/cinematics.md's 2026-08-22 section): calling
+/// docs/research/cinematics.md): calling
 /// <c>CClientExoApp::PlayMovie 0x005EDB30</c> directly, on the SAME engine entry
 /// <see cref="MoviePlayHook"/> watches, so a peer's own <c>PlayMovie</c> call is REPRODUCED,
 /// not approximated by some other route into the movie player.
@@ -73,7 +73,7 @@ internal static unsafe class OdysseyMovies
     /// <c>Odyssey.QueueTransitionMovie</c>, because <c>PlayMovieFn</c> does not hand its return
     /// value back through the thunk in any form this binding could read (§ see the doc above).
     ///
-    /// ⚠⚠ CALL-SITE SENSITIVE (root-caused 2026-08-22, docs/research/cinematics.md §10.8–§10.9).
+    /// ⚠⚠ CALL-SITE SENSITIVE (docs/research/cinematics.md §10.8–§10.9).
     /// Calling this from <see cref="PluginHost.OnFrame"/> — the <see cref="FrameHook"/> callback,
     /// nested inside the hooked <c>GDI32!SwapBuffers</c> IAT slot, itself called AFTER both
     /// <c>CClientExoApp::MainLoop</c> and <c>CServerExoApp::MainLoop</c> have already run for the

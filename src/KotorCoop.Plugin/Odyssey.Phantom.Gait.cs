@@ -1,4 +1,10 @@
 // Odyssey.Phantom.Gait.cs - gait/facing/animation helpers used while driving a phantom.
+// Owns: per-creature gait-change memory and walk/run hysteresis (GaitChanged,
+// AdvanceGaitHysteresis, ForgetGait); the twin/animbase vtable-slot and field offsets the gait
+// write path depends on (TwinLoopingAnimation, TwinAnimationSyncSlot, TwinPositionSyncSlot,
+// TwinAnimationSpeedFactor); and the walkmesh-aware step helpers (SetFacing, SetAnimation,
+// StepToward) used outside the real-time phantom drive path. See DriveBody in
+// Odyssey.Phantom.cs for where most of these offsets are actually consumed.
 
 namespace KotorCoop.Plugin;
 
@@ -33,7 +39,7 @@ internal static unsafe partial class Odyssey
         return true;
     }
 
-    /// <summary>ROUND 64 X1: the slot <see cref="GaitCreature"/> is holding this creature in,
+    /// <summary>The slot <see cref="GaitCreature"/> is holding this creature in,
     /// or -1. Only meaningful right after <see cref="GaitChanged"/> returned true for the same
     /// creature (which guarantees a slot exists).</summary>
     private static int GaitSlotOf(nint creature)
@@ -74,12 +80,12 @@ internal static unsafe partial class Odyssey
         }
     }
 
-    /// <summary>ROUND 68 (docs/research/phantom-locomotion.md §14): per-driven-creature
-    /// walk/run hysteresis memory, parallel to but separate from GaitCreature/GaitLast — those
-    /// only populate once a client twin has been read inside DriveBody (see the ClientTwin
-    /// gate above GaitChanged's call site), while this must exist from the very first drive
-    /// step so the idle-dwell accumulator starts counting immediately rather than after the
-    /// first twin-bearing frame.</summary>
+    /// <summary>Per-driven-creature walk/run hysteresis memory, parallel to but separate from
+    /// GaitCreature/GaitLast — those only populate once a client twin has been read inside
+    /// DriveBody (see the ClientTwin gate above GaitChanged's call site), while this must exist
+    /// from the very first drive step so the idle-dwell accumulator starts counting immediately
+    /// rather than after the first twin-bearing frame. See docs/research/phantom-locomotion.md
+    /// §14.</summary>
     private static readonly nint[] GaitHysteresisCreature = new nint[48];
 
     /// <summary>Seconds this creature's speed has been continuously under
@@ -115,7 +121,7 @@ internal static unsafe partial class Odyssey
     }
 
     /// <summary>
-    /// Reads and advances a driven creature's round-68 hysteresis memory for this step:
+    /// Reads and advances a driven creature's hysteresis memory for this step:
     /// whether it was previously classified as running — from GaitLast, which only changes on
     /// an actual reissue (the last gait genuinely asserted to the engine), not a value
     /// computed and then discarded on an early return — and the updated "seconds continuously
@@ -145,10 +151,10 @@ internal static unsafe partial class Odyssey
     private const int TwinCurrentAnimation = 0x48;
 
     /// <summary>
-    /// ROUND 65: CSWCObject + this = <c>looping_animation</c> (u16), the symbol db's own field
+    /// CSWCObject + this = <c>looping_animation</c> (u16), the symbol db's own field
     /// name for tools/kotor1_0_3.db's CSWCObject offset table. This is exactly what
-    /// <c>CSWCObject::GetLoopingAnimation</c> (0x0063C100, verified live-disassembled this
-    /// round: <c>mov ax,[ecx+0x58]; ret</c>, a one-line getter of this field and nothing else)
+    /// <c>CSWCObject::GetLoopingAnimation</c> (0x0063C100, verified live-disassembled:
+    /// <c>mov ax,[ecx+0x58]; ret</c>, a one-line getter of this field and nothing else)
     /// returns, and it is what <c>CSWCCreature::AnimationUpdate</c>'s per-frame re-assertion
     /// reads and reapplies via <c>SetAnimation</c> (vtable +0x9C) whenever
     /// <see cref="TwinCurrentAnimation"/> is not already "stationary" — see the write site in
@@ -165,7 +171,7 @@ internal static unsafe partial class Odyssey
     private const int TwinAnimationSyncSlot = 0x134;
 
     /// <summary>
-    /// ROUND 61 FIX: CSWCObject vtable +0x12C = ClientServerSyncHandler_Position(Vector*
+    /// CSWCObject vtable +0x12C = ClientServerSyncHandler_Position(Vector*
     /// desiredPos, uint serverAnimId, float budget), ret 0xC — 0x00611F50, the entry the
     /// engine's server→client dirty-push calls for the POSITION bit (dirty bit 1), which
     /// DriveBody has always deliberately suppressed (see the comment on
@@ -173,33 +179,31 @@ internal static unsafe partial class Odyssey
     /// step and its <c>ComputeSpeedFactor</c> re-derivation return 0.0 for a waypoint-less
     /// phantom — the historical "flying" bug.
     ///
-    /// What that suppression ALSO threw out, undiscovered until this pass: static
-    /// disassembly of 0x00611F50 shows it is the ONLY place in the engine that calls
-    /// <c>CSWCObject::AnimationWalking</c> (0x0063C240) / <c>AnimationRunning</c> (0x0063C2A0)
-    /// against the SERVER's animation id (the third arg) and, on a match, resolves and plays
-    /// the walk/run animation BY NAME through the "Walking"/"Running" columns of
-    /// animations.2da — a completely different mechanism from
-    /// <see cref="TwinAnimationSyncSlot"/>'s id-based <c>AnimationLooping</c> gate, which
-    /// (ROUND 61, see <see cref="AnimationExistsFn"/>'s doc) structurally rejects gait ids for
-    /// every creature: <c>animations.2da</c> rows 338 "walkSS" and 345 "runSS" (what
-    /// <c>ServerToClientAnimation</c> resolves 0x2712/0x2714 to for weapon class 2, live-
-    /// confirmed) both have <c>Looping = 0</c> — walking/running are their own 2DA category,
-    /// never "looping". <c>CSWCCreature::AnimationUpdate</c> (0x0061A980) never selects a new
-    /// gait itself; it only re-asserts whatever is already cached at twin+0x58 each frame, so
-    /// if nothing ever seeds that cache with the walk/run row, nothing ever will — exactly the
-    /// "moves in sync but slides" symptom, on every driven body, always.
+    /// That suppression also throws out its other job: static disassembly of 0x00611F50 shows
+    /// it is the ONLY place in the engine that calls <c>CSWCObject::AnimationWalking</c>
+    /// (0x0063C240) / <c>AnimationRunning</c> (0x0063C2A0) against the SERVER's animation id
+    /// (the third arg) and, on a match, resolves and plays the walk/run animation BY NAME
+    /// through the "Walking"/"Running" columns of animations.2da — a completely different
+    /// mechanism from <see cref="TwinAnimationSyncSlot"/>'s id-based <c>AnimationLooping</c>
+    /// gate, which structurally rejects gait ids for every creature (see
+    /// <see cref="AnimationExistsFn"/>'s doc): <c>animations.2da</c> rows 338 "walkSS" and 345
+    /// "runSS" (what <c>ServerToClientAnimation</c> resolves 0x2712/0x2714 to for weapon class
+    /// 2, live-confirmed) both have <c>Looping = 0</c> — walking/running are their own 2DA
+    /// category, never "looping". <c>CSWCCreature::AnimationUpdate</c> (0x0061A980) never
+    /// selects a new gait itself; it only re-asserts whatever is already cached at twin+0x58
+    /// each frame, so if nothing ever seeds that cache with the walk/run row, nothing ever will
+    /// — exactly the "moves in sync but slides" symptom, on every driven body, always.
     ///
     /// Calling this handler ourselves — with our OWN position/id/budget, immediately followed
     /// by the SAME authoritative twin+0x1DC/+0x1E8/+0x1F8 overwrites <see cref="DriveBody"/>
     /// already performs every step — lets its internal AnimationWalking/Running dispatch run
     /// while the bad interpolation/rate side effects it also produces are overwritten before
-    /// the next frame ever reads them. NEEDS-LIVE verification that this actually plays the
-    /// gait (see docs/research/phantom-locomotion.md round 61).
+    /// the next frame ever reads them. See docs/research/phantom-locomotion.md §8.
     /// </summary>
     private const int TwinPositionSyncSlot = 0x12C;
 
     /// <summary>
-    /// ROUND 62: the budget passed to <see cref="TwinPositionSyncSlot"/>'s call specifically —
+    /// The budget passed to <see cref="TwinPositionSyncSlot"/>'s call specifically —
     /// NOT <see cref="ObjAnimationBudget"/> (which reads ~1.0 live and permanently fails the
     /// run-branch's budget &lt; 0.5 gate at 0x0073E9AC, docs/research/phantom-locomotion.md
     /// §9.1/§9.2). 0f matches every other "this is a snap/continuous update, not a fresh

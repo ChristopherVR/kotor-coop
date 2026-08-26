@@ -470,12 +470,11 @@ internal static unsafe partial class Odyssey
 
     // CClientExoApp::SetPauseState(int, int, int) — THREE arguments, not two. ⚠ DO NOT CALL.
     //
-    // The recorded reason not to call it was that its tail walks a notify list only valid on
-    // the engine's own call path, after it crashed both instances at 0x5E9BC9 (2026-08-01).
-    // That explanation was incomplete: the declaration was also WRONG. The implementation
-    // (0x005ED650 is a thunk to 0x005F7FA0) ends in `ret 0xc` at 0x005F8285 and reads a third
-    // argument at 0x005F822A, so the two-argument call left the stack skewed by four bytes
-    // every time — reason enough on its own for a crash somewhere else entirely.
+    // Its tail walks a notify list only valid on the engine's own call path, and crashes both
+    // instances when called off it. The two-argument signature this was once declared with was
+    // also WRONG: the implementation (0x005ED650 is a thunk to 0x005F7FA0) ends in `ret 0xc` at
+    // 0x005F8285 and reads a third argument at 0x005F822A, so a two-argument call also leaves
+    // the stack skewed by four bytes every time. See docs/research/engine-api.md.
     //
     // Left uncalled, but now declared honestly, because a signature kept "for documentation"
     // that documents the wrong thing is worse than none. SetPlayerPause assembles the client
@@ -528,14 +527,13 @@ internal static unsafe partial class Odyssey
             SetPauseStateFn(server, PauseReasonPlayer, value);
         }
 
-        // The CLIENT half must NOT go through CClientExoApp::SetPauseState. Measured live
-        // (2026-08-01): a direct call crashes in the notify walk at its tail
-        // (0x5F8240..0x5F825C), which iterates a list that is only valid on the engine's
-        // own call path — both instances died at 0x5E9BC9 within 65 ms of each other when
-        // the space handler here and the mirror on the peer used it. Everything that call
-        // maintains is individually safe with a verified body, so assemble it by hand:
-        // the mask byte is a plain flag, the world-timer pause is a one-field function,
-        // and the banner/GUI belief has its own setter.
+        // The CLIENT half must NOT go through CClientExoApp::SetPauseState: a direct call
+        // crashes in the notify walk at its tail (0x5F8240..0x5F825C), which iterates a list
+        // only valid on the engine's own call path (both instances died at 0x5E9BC9 live — see
+        // docs/research/engine-api.md). Everything that call maintains is individually safe
+        // with a verified body, so assemble it by hand: the mask byte is a plain flag, the
+        // world-timer pause is a one-field function, and the banner/GUI belief has its own
+        // setter.
         nint clientInternal = GetClient() == 0 ? 0 : Deref(GetClient() + AppClientOffset);
         if (clientInternal != 0)
         {

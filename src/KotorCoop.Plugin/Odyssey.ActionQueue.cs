@@ -89,9 +89,9 @@ internal static unsafe partial class Odyssey
     /// comment above: 0x0B PhysicalAttacks, 0x3E Combat, 0x0E CastSpell, 0x31 CounterSpell,
     /// 0x0F WaitForEndOfRound.
     ///
-    /// ⚠ ROUND 51/52: NOT ground truth for "is a real fight in progress." Rounds 9-50 used
-    /// this as the sole signal for that question via the `firescript watch` diagnostic log
-    /// (Odyssey.TickFireScriptWatch); round 51 measured it read False on 0 of 6000 sampled
+    /// ⚠ NOT ground truth for "is a real fight in progress." This was used as the sole signal
+    /// for that question via the `firescript watch` diagnostic log
+    /// (Odyssey.TickFireScriptWatch); live testing measured it read False on 0 of 6000 sampled
     /// frames across three trials where the player's own HP independently, verifiably fell
     /// (docs/research/shared-state-audit.md §2, round 51). This tests the action-QUEUE head
     /// (RunActions' dispatch), which is a different state machine from the actual per-round
@@ -99,8 +99,8 @@ internal static unsafe partial class Odyssey
     /// so a creature can be genuinely landing hits with a head action outside this list the
     /// whole time. Still correct for its ORIGINAL, narrower purpose — "don't stack a second
     /// queued attack behind one already at the head" — which is why it stays here rather
-    /// than being deleted outright. Round 52 replaced it as a ground-truth signal with
-    /// PhantomHitHook's own damage-choke-point log ("combat ground-truth:").</summary>
+    /// than being deleted outright. PhantomHitHook's own damage-choke-point log ("combat
+    /// ground-truth:") is the real ground-truth signal now.</summary>
     private static bool IsFightAction(int type) =>
         type is 0x0B or 0x3E or 0x0E or 0x31 or 0x0F;
 
@@ -155,14 +155,14 @@ internal static unsafe partial class Odyssey
 
     /// <summary>CSWSCreature + this = a per-creature "path info" sub-object — VERIFIED
     /// elsewhere in this file (the range-diagnostic reading creature+0x90 vs. this+0x08 as
-    /// "personal-space radius", <c>attackerPathInfo</c>/<c>playerPathInfo</c>) and, this
-    /// round, disassembled as the SAME pointer <c>AIActionPhysicalAttacks</c> (0x005BBBF0)
+    /// "personal-space radius", <c>attackerPathInfo</c>/<c>playerPathInfo</c>) and
+    /// disassembled as the SAME pointer <c>AIActionPhysicalAttacks</c> (0x005BBBF0)
     /// reads at its own entry (<c>mov eax,[esi+0x340]</c>) before touching anything about the
     /// attack itself.</summary>
     private const int CrePathInfo = 0x340;
 
     /// <summary>(creature+0x340) + this = the path-info sub-object's own cached "last enemy"
-    /// id. ROUND 46, disassembled: <c>CSWSObject::ClearAllActions</c> (0x004CCD80) writes
+    /// id. Disassembly of <c>CSWSObject::ClearAllActions</c> (0x004CCD80) found it writes
     /// <see cref="ObjectInvalid"/> here (0x004CCE92) every time its FULL body runs (whenever
     /// the head action is a move-class action — the common case for a body this controller
     /// force-overwrites every frame), immediately followed by zeroing a 12-byte Vec3 at
@@ -176,7 +176,7 @@ internal static unsafe partial class Odyssey
     /// tested live: see docs/research/shared-state-audit.md §2, round 46).</summary>
     private const int PathInfoLastEnemyId = 0x254;
 
-    /// <summary>CSWSCreature + this — an undocumented field until this round: ROUND 46's full
+    /// <summary>CSWSCreature + this — an undocumented field: full
     /// disassembly of <c>ClearAllActions</c> found it written to <see cref="ObjectInvalid"/>
     /// (0x004CCE7F) in the same unconditional tail as <see cref="PathInfoLastEnemyId"/> above,
     /// on the creature itself rather than the path-info sub-object. Named for what the write
@@ -185,7 +185,7 @@ internal static unsafe partial class Odyssey
     private const int CreLastAttackTarget = 0x508;
 
     /// <summary>
-    /// ROUND 46: the state a creature's own AI needs back in the engine's own hands when it
+    /// The state a creature's own AI needs back in the engine's own hands when it
     /// is handed a real fight — <see cref="ObjCommandable"/>, the full
     /// <see cref="CreMovePermitted"/> dword (not just the two bits <see cref="ClaimCreature"/>
     /// ORs on), <see cref="CreRunFlag"/>, <see cref="CreMoveState"/>, and the two target-cache
@@ -494,8 +494,8 @@ internal static unsafe partial class Odyssey
     ///
     /// Not a replacement for the engine's own call — it exists so the plugin can ask the
     /// SAME QUESTION THE AGENT ASKS, in the same frame as the engine's answer, and print both.
-    /// Two lookups that must be identical disagreed live on 2026-08-15; every previous attempt
-    /// to settle it compared measurements taken seconds and processes apart.
+    /// Two lookups that must be identical were once found to disagree live; every previous
+    /// attempt to settle it compared measurements taken seconds and processes apart.
     /// </summary>
     private static nint WalkObjectArray(nint objectArray, uint objectId)
     {

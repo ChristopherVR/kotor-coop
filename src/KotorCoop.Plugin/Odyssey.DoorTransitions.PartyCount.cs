@@ -16,20 +16,18 @@ internal static unsafe partial class Odyssey
         (delegate* unmanaged[Thiscall]<nint, uint, nint>)0x005ED5B0;
 
     /// <summary>
-    /// ROUND 73 DIAGNOSTIC: direct visibility into the PARTY-LEVEL fields
-    /// <c>CSWParty::Update</c> itself reads and writes, to tell "the function isn't running"
-    /// apart from "it runs but its own leader lookup or position offset isn't what this round's
-    /// disasm assumed": <c>party+0x24</c> (the leader record's own stored CLIENT object id),
-    /// <c>party+0x2B0..0x2B8</c> (the reference position the function refreshes from the
-    /// leader), and <c>party+0x2BC</c> (the elapsed-time accumulator its first three
-    /// instructions maintain — a monotonically increasing value while
-    /// <see cref="PumpPartyUpdate"/> is genuinely being called each frame, regardless of
-    /// whether anything else in the function's body does what this round's disasm expects).
-    /// Also resolves the leader id through <see cref="GetCreatureByClientIdFn"/> — the SAME
-    /// call the function itself makes — and reads that creature's <c>+0x24/+0x28/+0x2C</c>,
-    /// the exact offsets <c>CSWParty::Update</c> subtracts from <c>party+0x2B0..0x2B8</c> (NOT
-    /// necessarily the same as <c>CSWSObject</c>'s usual <c>+0x90</c> world-position field —
-    /// this round's live data is what settles whether they agree).
+    /// Direct visibility into the PARTY-LEVEL fields <c>CSWParty::Update</c> itself reads and
+    /// writes, to tell "the function isn't running" apart from "it runs but its own leader lookup
+    /// or position offset differs from what was assumed": <c>party+0x24</c> (the leader record's
+    /// own stored CLIENT object id), <c>party+0x2B0..0x2B8</c> (the reference position the
+    /// function refreshes from the leader), and <c>party+0x2BC</c> (the elapsed-time accumulator
+    /// its first three instructions maintain — a monotonically increasing value while
+    /// <see cref="PumpPartyUpdate"/> is genuinely being called each frame). Also resolves the
+    /// leader id through <see cref="GetCreatureByClientIdFn"/> — the SAME call the function
+    /// itself makes — and reads that creature's <c>+0x24/+0x28/+0x2C</c>, the exact offsets
+    /// <c>CSWParty::Update</c> subtracts from <c>party+0x2B0..0x2B8</c> (not necessarily the same
+    /// as <c>CSWSObject</c>'s usual <c>+0x90</c> world-position field). See
+    /// docs/research/party-reconciliation.md.
     /// </summary>
     public static bool TryGetPartyReferenceState(out PartyRefState state)
     {

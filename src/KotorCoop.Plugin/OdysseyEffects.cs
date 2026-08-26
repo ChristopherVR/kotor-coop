@@ -16,25 +16,18 @@ namespace KotorCoop.Plugin;
 /// <c>PeerEffectRules</c>' allowlist rather than referencing it (NativeAOT plugin code cannot
 /// reference either <c>Odyssey</c>'s private members or <c>KotorCoop.Protocol</c>).
 ///
-/// Knockdown, Paralyze and Sleep (2026-08-22 addendum, effect-sync.md §7): all three ARE now
-/// named and constructible. The prior pass could not recover <c>ExecuteCommandEffectComplex</c>'s
-/// (<c>0x005313F0</c>) full parameter list, but a fresh disassembly of
-/// <c>CSWVirtualMachineCommands::InitializeCommands</c>' table-population code shows this ONE
-/// shared handler is registered at OVER TWENTY routine numbers (a compiler CSE reusing one
-/// preloaded register across many <c>mov [table+off], eax</c> stores — invisible to a raw
-/// address-literal scan, which is why the prior pass only found 2 of them). Cross-checked
-/// against a K1 <c>nwscript.nss</c>'s declaration order (VERIFIED 5-for-5 against independent
-/// anchors: <c>GetFirstPC</c>=548, <c>SetMinOneHP</c>=716, <c>CreateObject</c>=243,
-/// <c>EffectAssuredHit</c>=51, <c>EffectAssuredDeflection</c>=252 — the same two routine numbers
-/// the prior pass's scan DID find), the routine numbers for our three targets are
-/// <c>EffectKnockdown</c>=134, <c>EffectParalyze</c>=148, <c>EffectSleep</c>=154 — and stack
-/// arithmetic on the handler's own prologue confirms it reads the CALLING routine number
-/// (not a popped script argument) as its dispatch key, so each of these is safe to invoke with
-/// zero pushed script arguments, exactly like the zero-param constructors below. All zero
-/// declared params, VERIFIED (K1 nwscript.nss: <c>EffectKnockdown()</c>, <c>EffectParalyze()</c>,
-/// <c>EffectSleep()</c>). See <see cref="ApplyComplexEffect"/> for why <c>FindRoutine</c> (a
-/// first-match linear scan) cannot be reused here — it would resolve to routine 51
-/// (<c>EffectAssuredHit</c>) for all three, which is wrong.
+/// Knockdown, Paralyze and Sleep are named and constructible through the SAME native handler,
+/// <c>ExecuteCommandEffectComplex</c> (<c>0x005313F0</c>), which is registered at over twenty
+/// routine numbers in the VM's command table (a compiler CSE reusing one preloaded register
+/// across many <c>mov [table+off], eax</c> stores — invisible to a raw address-literal scan).
+/// Their routine numbers — <c>EffectKnockdown</c>=134, <c>EffectParalyze</c>=148,
+/// <c>EffectSleep</c>=154 — are VERIFIED against K1 <c>nwscript.nss</c>'s declaration order;
+/// stack arithmetic on the handler's own prologue confirms it reads the CALLING routine number
+/// (not a popped script argument) as its dispatch key, so each is safe to invoke with zero
+/// pushed script arguments, exactly like the zero-param constructors below. See
+/// <see cref="ApplyComplexEffect"/> for why <c>FindRoutine</c>'s first-match linear scan cannot
+/// be reused here — it would resolve to routine 51 (<c>EffectAssuredHit</c>) for all three,
+/// which is wrong. Full verification: docs/research/effect-sync.md §7.
 ///
 /// MAIN THREAD ONLY, same as every other VM-dispatching call in this codebase.
 /// </summary>
@@ -66,7 +59,7 @@ internal static unsafe class OdysseyEffects
     private const nint ExpectedEffectMovementSpeedDecrease = 0x005332E0; // 1 param (int percent) — "Slow"
 
     /// <summary>The shared "complex effect" handler — one C++ function registered at over
-    /// twenty routine numbers in the VM's command table (effect-sync.md §7, 2026-08-22).
+    /// twenty routine numbers in the VM's command table (docs/research/effect-sync.md §7).
     /// Dispatches on the CALLING routine number (read from its own arg1, VERIFIED via stack
     /// arithmetic on its prologue), not a popped script argument.</summary>
     private const nint ExpectedEffectComplex = 0x005313F0;

@@ -1,4 +1,9 @@
 // Odyssey.Dialogue.Spectate.cs - spectating a peer's in-progress dialogue.
+// Owns: locating the live in-game GUI/HUD and the "conversation active" flag
+// (GetInGameGui, GetMainInterface, ConversationLive, IsConversationActive), the CSWSDialog/
+// CGuiInGame field offsets that back node sync and spectate reads, and the read-only dialogue
+// history ring reader (TryReadActiveDialogue) used to show a spectator what line is on screen.
+// Read-only, main-thread; no reply suppression is implemented here (spectate only).
 
 namespace KotorCoop.Plugin;
 
@@ -149,8 +154,8 @@ internal static unsafe partial class Odyssey
     /// MAIN THREAD ONLY.
     /// </summary>
     // The read surface is CGuiInGame's own dialogue HISTORY ring — the log every displayed
-    // line is appended to. Located live (2026-08-01) by finding the on-screen sentence in
-    // the heap and walking back to who held it:
+    // line is appended to. Located live by finding the on-screen sentence in
+    // the heap and walking back to who held it (docs/research/dialogue-sync.md):
     //
     //   gui + 0x1040  capacity (reads 0x40 = 64)
     //   gui + 0x1054  first record; stride 0x10

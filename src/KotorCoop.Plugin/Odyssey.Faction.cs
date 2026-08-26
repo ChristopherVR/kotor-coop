@@ -141,21 +141,15 @@ internal static unsafe partial class Odyssey
     {
         failure = 0;
 
-        // CONFIRMED LIVE (round 11): this dispatches through the exact same ExecuteCommandAttack
-        // -> AddAttackActions -> AddAttackAction chain QueueAttackAction's own investigation
-        // mapped, and neither of AddAttackActions's two preamble helpers (0x004D3770/0x004D37E0)
-        // calls SetRoundTimerActiveFn or SetRoundDelayFn (confirmed: neither address appears in
-        // either function's xref list) — so a creature that has never had a round started the
-        // way the engine's own AI decision code does it hits the identical silent-discard
-        // UpdateCombatRoundTimer's round+0x958/+0x960 gates produce for QueueAttackAction before
-        // that fix. This is not a separate blocker from local_combat's own failure; it is the
-        // SAME missing precondition, reached through a different call path. Applying it here,
-        // exactly as QueueAttackAction does, took a genuinely fresh sithsoldier (round+0x958 and
-        // +0x960 both read 0 immediately before this call) from inert to a real fight: it closed
-        // distance and landed actual damage (12 hp -> 8 hp -> 1 hp across two ordered attacks),
-        // confirmed via `where` on the player and `creatures.ps1` on the attacker, not inferred.
-        // This also restores AttackTarget as a working staging tool for the rest of this
-        // investigation's test battery, which round 10 found broken by the same root cause.
+        // CONFIRMED LIVE (round 11): dispatches through the same ExecuteCommandAttack ->
+        // AddAttackActions -> AddAttackAction chain as QueueAttackAction, and needs the same
+        // round-timer arm (SetRoundTimerActiveFn/SetRoundDelayFn) since neither of
+        // AddAttackActions's two preamble helpers (0x004D3770/0x004D37E0) ever calls them —
+        // without it, a creature that never had a round started the AI's own way hits the same
+        // silent-discard gates QueueAttackAction hits. Applying it here took a genuinely fresh
+        // sithsoldier from inert to a real fight, landing actual damage (12 hp -> 8 hp -> 1 hp
+        // across two ordered attacks, confirmed via `where`/`creatures.ps1`, not inferred). See
+        // docs/research/shared-state-audit.md (round 10/11).
         nint attackerServer = GetServer();
         if (attackerServer != 0 && attackerObjectId != 0)
         {
@@ -240,10 +234,11 @@ internal static unsafe partial class Odyssey
     }
 
     /// <summary>
-    /// ROUND 58 DIAGNOSTIC: everything the "attack armed but never swings" investigation
-    /// (shared-state-audit.md round 56/57) needs to watch on ONE creature, read together so
-    /// the caller does not need <see cref="CreCombatRound"/>'s own private offset. Read-only,
-    /// MAIN THREAD ONLY, safe to call every frame — no engine calls, just field reads.
+    /// Everything the "attack armed but never swings" investigation
+    /// (docs/research/shared-state-audit.md, round 56-59) needs to watch on ONE creature,
+    /// read together so the caller does not need <see cref="CreCombatRound"/>'s own private
+    /// offset. Read-only, MAIN THREAD ONLY, safe to call every frame — no engine calls, just
+    /// field reads.
     /// </summary>
     public static void GetAttackDiagnostics(
         nint creature, out int commandable, out int movePermitted, out int headAction,
@@ -358,8 +353,7 @@ internal static unsafe partial class Odyssey
     /// follow-AI (paths, formation slot, gait, animation) takes over from here — exactly what
     /// a recruiting conversation's own ending script fires in single-player.
     ///
-    /// ROUND 71 (2026-08-23), docs/research/party-reconciliation.md, shared-state-audit.md
-    /// round 68/71: built for <see cref="PartyFollowController"/>. Live-confirmed necessary —
+    /// Built for <see cref="PartyFollowController"/>. Live-confirmed necessary —
     /// Trask recruited (via a real dialogue, or already recruited by a loaded save) sat with a
     /// genuinely EMPTY action queue (<c>+0xFC</c> head type <c>0xFFFFFFFF</c>) and
     /// <c>+0xA8C</c> (the follow state <c>AIActionPartyFollowLeader</c> itself sets to 3 while
@@ -367,6 +361,8 @@ internal static unsafe partial class Odyssey
     /// The one-time in-party positioning a recruit script or a save's own load leaves behind is
     /// not a standing behaviour; nothing in retail re-arms it on an idle queue by itself
     /// (contrary to this project's earlier assumption that a companion's own heartbeat would).
+    /// See docs/research/party-reconciliation.md and docs/research/shared-state-audit.md
+    /// (round 68/71).
     ///
     /// Same VM-caller-redirect shape as <see cref="AttackTarget"/>/<see cref="PickUpItem"/>:
     /// OBJECT_SELF becomes the companion for the one dispatch, restored after. No stack push —

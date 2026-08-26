@@ -135,7 +135,7 @@ internal static unsafe partial class Odyssey
     /// deliberately does nothing when the id is not a live item — a wrong write into a
     /// stranger's object is far worse than a stock item — but "did nothing" and "is broken"
     /// look identical from outside, and that ambiguity is exactly what left the whole apply
-    /// path unverified through a live pass (docs/live-verification.md, 2026-08-15). A guard
+    /// path unverified through a live pass (docs/live-verification.md). A guard
     /// that fails safe still has to say what it saw.
     /// </summary>
     public static string LastItemResolveNote = string.Empty;
@@ -240,7 +240,7 @@ internal static unsafe partial class Odyssey
         /// (0x00553189). All 557 item blueprints in the base game declare a Tag, so an empty
         /// one is not something a real load produces.
         ///
-        /// Measured live 2026-08-15: a drop of `g_w_blstrpstl01` — a typo, the real ones are
+        /// Measured live: a drop of `g_w_blstrpstl01` — a typo, the real ones are
         /// `g_w_blstrpstl001`..`010` — produced object 0x131 with no tag, 50 charges, an
         /// uninitialised MaxCharges of 1768092, stack 1 and no upgrades. Exactly this.
         /// </summary>

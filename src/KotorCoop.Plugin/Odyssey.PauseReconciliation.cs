@@ -1,4 +1,9 @@
-// Odyssey.PauseReconciliation.cs - reconciling client/server world-timer pause state.
+// Odyssey.PauseReconciliation.cs - reconciling client/server world-timer pause state against
+// the pause-reason masks and the GUI's own pause belief, plus a handful of unrelated NWScript
+// dispatch helpers that ended up in this split (spawning/destroying floor items, and the
+// phantom/materialised-enemy faction and damage-immunity setup shared by remote-player and
+// remote-enemy stand-in bodies).
+// See docs/research/shared-state-audit.md for the pause reconciler's measured investigation.
 
 namespace KotorCoop.Plugin;
 
@@ -60,17 +65,11 @@ internal static unsafe partial class Odyssey
 
         // ⚠ THE BANNER IS THE ENGINE'S OWN INTENT, AND IT WINS.
         //
-        // Measured 2026-08-11, and it is the whole reason the pause button looked dead:
-        // the engine's own pause paths (the space handler, the HUD button) move the GUI
-        // belief and the world timers but DO NOT SET A MASK BIT. This reconciler used to
-        // read that as "stranded holders" and tear the banner down within ~60 ms —
-        //
-        //     .600  reconciler UNPAUSED (banner) — no mask held a bit (server 0x00, client 0x00)
-        //     .744  space fallback -> paused
-        //
-        // — so pressing space only ever worked because PauseKeyController re-paused it 200 ms
-        // later, and clicking the HUD button, which has no such fallback, did nothing at all.
-        // We had reinvented the very bug PauseSanityPatch exists to delete, on our own side.
+        // The engine's own pause paths (the space handler, the HUD button) move the GUI
+        // belief and the world timers but DO NOT SET A MASK BIT. Tearing the banner down
+        // whenever a mask disagreed with it reinvented the very bug PauseSanityPatch exists
+        // to delete, on our own side — full measured timeline in
+        // docs/research/shared-state-audit.md.
         //
         // So when the masks and the banner disagree, ADOPT the banner instead of cancelling
         // it: write the mask the engine forgot. That turns an engine pause into a real,
