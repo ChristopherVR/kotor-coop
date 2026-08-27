@@ -1470,3 +1470,133 @@ named reason the flag was held back.
 `dotnet test`: no production code changed this pass (a live-verification run only); full suite
 re-run after the coop.ini.example default flip (no production code touched) — see this round's
 own commit for the count.
+
+## Round (2026-08-27): script-item-sync — items granted OUTSIDE any conversation, behind
+## `script_item_sync=0` (OFF, NEEDS-LIVE)
+
+`dialogue_item_sync` (§3, "Shipped" above) only ever diffs the local PC's inventory while THIS
+instance owns a conversation (`DialoguePump.PumpDialogueItemGrants`, gated on the debounced
+`active` flag `PumpDialogue` already computes). Most K1 quest items are never granted that way —
+an OnEnter trigger, an OnDeath script, a cutscene, or a heartbeat script calls
+`CreateItemOnObject`/`GiveItem` straight into the PC's inventory with no conversation token
+involved at all, and every one of those landed on one screen only, exactly the way an in-dialogue
+grant did before §3 shipped. This round closes that specific gap with a second, always-on-when-
+enabled pump, deliberately kept separate from `DialoguePump` rather than folding into it — the
+two windows (in-conversation vs. everything else) are mutually exclusive by construction, and
+keeping them in two files keeps each one's "whose job is this sample" question answerable by
+which file it is in.
+
+### What shipped
+
+- **`KotorCoop.Protocol.RecentlySyncedItems`** (`src/KotorCoop.Protocol/RecentlySyncedItems.cs`):
+  a short-lived (5 s default), resref-keyed, consume-on-match budget. This is the load-bearing
+  piece — without it, an ordinary ground pickup, a chest looted, a corpse looted, a peer's own
+  grant arriving over the wire, or a human's own `giveloot` at the console would ALL look
+  identical to a script grant from a bare possessed-items diff (`ReadPossessedItems` carries no
+  object id across two sweeps — see `DialogueItemDiff`'s own remarks — so "a new row of resref X
+  appeared" is genuinely all the sweep can say). Every already-synced path records one unit of
+  budget the instant it knows a new row is about to land; the script-item diff consumes one unit
+  per already-accounted-for row instead of re-reporting it.
+- **`KotorCoop.Protocol.ScriptItemGrantRule`**: the pure decision (baseline, current sample,
+  rebaseline-only flag, the ledger, now) -> (rows to publish, next baseline). Reuses
+  `DialogueItemDiff.Compute` for the actual row-count diff — identical stack-growth/stack-
+  shrink/multiple-distinct-grants behaviour to the dialogue channel, on purpose.
+- **`KotorCoop.Session.Pumps.ScriptItemGrantPump`**: samples `IGameBridge.ReadPossessedItems`
+  for the local player on its own ~1 s cadence (`AgentSettings.ScriptItemGrantSampleIntervalMs`,
+  independent of `HeavyPumpIntervalMs` for the same reason `DialogueGrantSampleIntervalMs` is)
+  whenever `DialoguePump.IsOwningConversation` is false, and publishes through the SAME
+  `session.PublishDialogueGrant`/give-loot cheat channel §3 already built, with an empty partner
+  tag (there is no conversation to name). Called from `CoopAgent.PumpOnce` every tick, gated on
+  the `SessionCapabilities.Dialogue` capability the wire channel already needs.
+- **Baseline coordination, without a hand-off value.** The task framing was "the dialogue pump's
+  post-conversation snapshot must become this pump's baseline, and vice versa." Built instead:
+  both pumps independently take a FRESH `ReadPossessedItems` read exactly at the moment they
+  start owning the window (`DialoguePump` already did this on conversation start; `ScriptItemGrantPump`
+  now does the same thing on the falling edge of `IsOwningConversation`, via a `rebaselineOnly`
+  sample that diffs against nothing and just adopts `current`). Two independent fresh reads of the
+  SAME live game state at the SAME instant are the same baseline by construction — this needs no
+  reference from one pump to the other's internal field, and cannot drift even if a call is
+  missed on either side, which a literal hand-off value could.
+- **Suppression ledger feed points** (`RecentlySyncedItems.Record`, one unit each, resref
+  resolved as close to the write as possible):
+  - Ground-item pickup: `WorldStatePump.PumpItems`, resolving the resref via
+    `session.Items.TryGet` BEFORE `session.RemoveItem` clears the entry.
+  - Container/corpse loot: `LootPump.PumpContainerLoot`, resolving the resref via a NEW
+    `IItemBridge.TryGetItemResref(uint, out string)` default-interface member (mirrors the
+    existing `KotorGameBridge.TryGetItemResref` the `item`/`giveloot` staging verbs already use,
+    cache-only — no forced sweep on this hot a path). Best-effort: a resref that cannot be
+    resolved (an untagged body, a mod whose tag-as-resref proxy does not hold — see
+    `KotorGameBridge.TryGetItemResref`'s own remarks) simply cannot be suppressed for that one
+    removal, which costs an occasional unsuppressed false-positive report, never a wrong write.
+  - A peer's own dialogue or script grant, applied here via the give-loot cheat channel:
+    `LootPump.PumpMaterialisedLoot`, while draining `session.DrainDialogueGrants()` — before the
+    item ever reaches the automatic-give queue.
+  - A human's own `giveloot` targeting the local player: `CoopCommandDispatcher.GiveLoot` calls
+    the new `CoopAgent.NoteLocalItemGiven(targetObjectId, resref)`, a no-op for any other target.
+    (`dropitem` needs no suppression — `CheatController.DropItem`'s own doc confirms it spawns on
+    the FLOOR, never in the inventory, on purpose.)
+- **coop.ini `script_item_sync`** (agent-side, `CoopConfig.ScriptItemSync` / `AgentSettings.ScriptItemSync`),
+  **OFF by default** — unlike every other item channel in this codebase, a false positive here
+  (an ordinary pickup misread as a script grant) mints a REAL duplicate item on the peer's
+  engine, not a cosmetic desync, so it stays opt-in until the suppression ledger has been proven
+  against a live rig. Documented in `profiles/coop.ini.example` and `docs/CONFIG.md`.
+
+### Tests
+
+All pure/unit, no live game: `RecentlySyncedItemsTests` (9 cases — record/consume, expiry,
+cross-resref isolation, zero/negative/empty no-ops, `Clear`, case-insensitive match);
+`ScriptItemGrantRuleTests` (10 cases — script grant detected with no ledger match; suppressed by
+a ground-pickup-shaped ledger entry; suppressed by a container-loot-shaped entry; suppressed by a
+peer-grant-shaped entry; suppressed by a manual-giveloot-shaped entry; a second copy beyond the
+ledger's one-unit budget still reported; `rebaselineOnly` reports nothing and adopts `current`;
+stack growth inherited from `DialogueItemDiff` is still not a grant; a ledger entry for an
+unrelated resref does not cross-suppress); `ScriptItemGrantPumpTests` (6 cases, through a full
+`CoopAgent` the way `MaterialisedLootPumpTests` already does — off by default publishes nothing;
+the first sample seeds the baseline silently; a genuine grant between two samples is detected and
+published; nothing is sampled or published while a conversation is owned; the sample right after
+a conversation ends rebaselines instead of reporting what the conversation itself granted; a
+module change resets the baseline silently). `AgentSettings.ScriptItemGrantSampleIntervalMs` is
+the same testability knob `CombatPumpIntervalMs`/`HeavyPumpIntervalMs` already are — zeroed in
+every pump test so a diff is observed on the very next call rather than waiting on a real clock;
+the one test that depends on `DialoguePump`'s own 300 ms between-entries debounce
+(`DialogueLingerMs`) sleeps past it for real, the same pattern `CreatureLivenessPumpTests` already
+uses for its own debounce window.
+
+Full suite: see the commit this section ships with.
+
+### NEEDS-LIVE — nothing in this round has been run against the real game
+
+1. **The core claim itself**: that a script-created item (not a dialogue reward, not a pickup)
+   actually surfaces as a new row from `ReadPossessedItems` on the OWNER's instance, and that the
+   give-loot cheat channel applies it cleanly on the PEER's instance, exactly as §3's dialogue
+   channel was already confirmed to do for the in-conversation case (§3's own NEEDS-LIVE list —
+   never itself closed by a later round in this file, so this item is doubly unverified).
+2. **The suppression ledger under real timing**, one sub-case per feed point:
+   - Ground pickup: walk over a dropped item, confirm no `DialogueGrantPacket` is sent for it.
+   - Container/corpse loot: loot a chest (or a slain enemy's corpse — the same `CollectContainerLootRemovals`
+     path) and confirm the same. This is the sub-case most likely to fail live: `TryGetItemResref`'s
+     tag-as-resref proxy is a heuristic ("works for base-game items... a mod that tags items
+     differently breaks it" — the method's own doc), so a modded item could slip past the
+     suppression ledger unresolved and get double-reported. Base-game items first.
+   - A peer's grant arriving via giveloot while this instance is mid-sample: fire a dialogue
+     grant from peer A, confirm peer B's own `ScriptItemGrantPump` does not re-broadcast it.
+   - A manual `giveloot 0x7FFFFFFF <resref>` at the console: confirm no re-broadcast.
+3. **The baseline hand-off at conversation start/end**, live: start a conversation with a reward
+   node, let it grant an item, end the conversation, and confirm `ScriptItemGrantPump`'s very
+   next sample does NOT re-report what `DialoguePump` already sent.
+4. **A concrete positive repro** for item 1. Two candidates, neither exercised this round:
+   - `firescript` (`docs/CONSOLE.md`) fires an object's own `+0x260`/`+0x270` event script
+     directly — the only console primitive in this codebase that can trigger an arbitrary
+     script without scripted player input. Needs a live probe to find an object whose event
+     script actually calls `CreateItemOnObject`/`GiveItem` (none confirmed by this round; §1's
+     own scan of the repo's `.dlg` files does not cover module-level `.utc`/`.uti`/`.git`
+     OnEnter/OnDeath/heartbeat scripts at all — that inventory has not been taken).
+   - The Endar Spire (`end_m01aa`) is the standing suggestion for a natural repro (Trask's
+     starting equipment, an OnEnter-triggered area) but the specific script/item was NOT
+     identified or confirmed against the real game files this round — treat it as a lead, not a
+     verified test case, until someone actually reads `end_m01aa`'s `.git`/module scripts against
+     `tools/kotorfiles.py` the way §1 did for `.dlg` files.
+5. Whether the `SessionCapabilities.Dialogue` gate (reused rather than adding a new capability
+   bit, per this pass's own constraint not to touch `ProtocolConstants.Version`) is the right
+   capability to ride — it has never been exercised for a script-outside-dialogue grant, only for
+   the conversation-token channel it was designed around.

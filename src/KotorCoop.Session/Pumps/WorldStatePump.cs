@@ -10,7 +10,9 @@ namespace KotorCoop.Session.Pumps;
 /// class because none of them share state with each other, only with the bridge and session
 /// they already take as collaborators.
 /// </summary>
-internal sealed class WorldStatePump(IGameBridge bridge, ICoopSession session, AgentSettings settings)
+internal sealed class WorldStatePump(
+    IGameBridge bridge, ICoopSession session, AgentSettings settings,
+    RecentlySyncedItems recentlySyncedItems)
 {
     /// <summary>
     /// Claims whatever the local player is interacting with, and hands back every lock anyone
@@ -217,6 +219,17 @@ internal sealed class WorldStatePump(IGameBridge bridge, ICoopSession session, A
 
         foreach (uint itemId in bridge.CollectVanishedItems())
         {
+            // ⚠ Looked up BEFORE RemoveItem, which is what actually removes the entry from
+            // session.Items — the resref feeds ScriptItemGrantPump's suppression ledger
+            // (docs/research/dialogue-consequences.md's script-item-sync section) so a ground
+            // pickup landing in the local PC's inventory this same tick is not re-reported as
+            // a script grant. A miss (the store no longer has the id for some reason) simply
+            // means nothing is recorded — RemoveItem below is unaffected either way.
+            if (session.Items.TryGet(itemId, out GroundItem? picked) && picked is not null)
+            {
+                recentlySyncedItems.Record(picked.Resref, 1, Environment.TickCount64);
+            }
+
             session.RemoveItem(itemId);
         }
     }

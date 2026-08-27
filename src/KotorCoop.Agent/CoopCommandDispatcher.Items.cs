@@ -253,6 +253,14 @@ public sealed partial class CoopCommandDispatcher
             return;
         }
 
+        // A human typing this against the local-player sentinel is exactly the same shape of
+        // write as the automatic drain below (DrainAutomaticLoot) — one fresh row about to
+        // land in the local PC's own inventory. Feeding it into the same suppression ledger
+        // keeps ScriptItemGrantPump's sweep from mistaking a manual test give for a script
+        // grant. A no-op for any other target (a materialised enemy's stand-in never touches
+        // the PC's inventory) — see CoopAgent.NoteLocalItemGiven's own doc.
+        manager.Agent?.NoteLocalItemGiven(ownerId, resref);
+
         SendCheat(new CheatRequest(
             CheatKinds.GiveLoot,
             Target: ownerId,

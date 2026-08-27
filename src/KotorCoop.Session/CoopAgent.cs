@@ -63,6 +63,18 @@ public sealed class CoopAgent
     private readonly PausePump _pausePump;
     private readonly DeathPump _deathPump;
     private readonly WorldStatePump _worldStatePump;
+    private readonly ScriptItemGrantPump _scriptItemGrantPump;
+
+    /// <summary>
+    /// The suppression ledger shared by every pump that can put a new row into the local PC's
+    /// inventory through a channel OTHER than a script — ground-item pickup
+    /// (<see cref="WorldStatePump"/>), container/corpse loot and a peer's grant applied via
+    /// giveloot (<see cref="LootPump"/>), and a human's own <c>giveloot</c>
+    /// (<see cref="NoteLocalItemGiven"/>). <see cref="ScriptItemGrantPump"/> is the only
+    /// consumer. See <see cref="RecentlySyncedItems"/>'s own doc for why this is keyed by
+    /// resref, not by object id or channel.
+    /// </summary>
+    private readonly RecentlySyncedItems _recentlySyncedItems = new();
 
     public CoopAgent(IGameBridge bridge, ICoopSession session, AgentSettings settings)
     {
@@ -74,7 +86,7 @@ public sealed class CoopAgent
 
         _barkPump = new BarkPump(bridge, session);
         _transitionPump = new TransitionPump(bridge, session, settings, _log);
-        _lootPump = new LootPump(bridge, session, _log);
+        _lootPump = new LootPump(bridge, session, _recentlySyncedItems, _log);
         _dialoguePump = new DialoguePump(bridge, session, settings, _log);
         _partyPump = new PartyPump(bridge, session, settings, _log);
 
@@ -85,7 +97,8 @@ public sealed class CoopAgent
         _livenessPump = new LivenessPump(bridge, session, _log);
         _pausePump = new PausePump(bridge, settings, _log);
         _deathPump = new DeathPump(bridge, session, _log);
-        _worldStatePump = new WorldStatePump(bridge, session, settings);
+        _worldStatePump = new WorldStatePump(bridge, session, settings, _recentlySyncedItems);
+        _scriptItemGrantPump = new ScriptItemGrantPump(bridge, session, settings, _recentlySyncedItems, _log);
     }
 
     public IGameBridge Bridge => _bridge;
@@ -458,6 +471,18 @@ public sealed class CoopAgent
             _partyPump.PumpPartyRoster(caps);
         }
 
+        // Script-item grants: called every tick, same as the two fast-path calls above, so it
+        // always reads _dialoguePump.IsOwningConversation as of THIS tick regardless of which
+        // of the two branches above (or below, on the legacy cadence) last updated it. Cheap
+        // when off (settings.ScriptItemSync) or between its own ~1s samples — see the pump's
+        // own doc for why it is not itself tied to HeavyPumpIntervalMs. Rides the same
+        // Dialogue capability the grant wire (DialogueGrantPacket) already needs, since a mod
+        // difference that would corrupt one grant channel would corrupt the other identically.
+        if ((caps & SessionCapabilities.Dialogue) != 0)
+        {
+            _scriptItemGrantPump.PumpScriptItemGrants(local.Module, _dialoguePump.IsOwningConversation);
+        }
+
         // --- heavy world-state path ------------------------------------------------------
         //
         // The syncs below scan the game's memory for creatures, items and doors. One pass
@@ -571,6 +596,31 @@ public sealed class CoopAgent
     public bool TryDequeuePendingLoot(out PendingMaterialisedLootGive next)
     {
         return _lootPump.TryDequeuePendingLoot(out next);
+    }
+
+    /// <summary>
+    /// Records that a <c>giveloot</c> targeting THIS instance's own local player is about to
+    /// add <paramref name="resref"/> to the PC's inventory — called by
+    /// <c>CoopCommandDispatcher.GiveLoot</c> (the human-typed console verb; the automatic
+    /// drain already feeds the SAME ledger from <see cref="LootPump.PumpMaterialisedLoot"/>,
+    /// since it queues through the identical give-loot channel). A no-op for any other target
+    /// (a materialised enemy's stand-in): only a give that lands in the PC's own inventory can
+    /// ever collide with <see cref="ScriptItemGrantPump"/>'s sweep of it.
+    ///
+    /// Always ONE unit of budget, never the requested stack size: <c>CheatController.GiveLoot</c>
+    /// (docs/research/dialogue-consequences.md §3) mints a single fresh item object per call —
+    /// the stack argument sets that one object's <see cref="ItemIdentity.StackSize"/> field, it
+    /// does not create several rows — and <see cref="RecentlySyncedItems"/>/<see cref="DialogueItemDiff"/>
+    /// both count rows, exactly like every other feed into this ledger.
+    /// </summary>
+    public void NoteLocalItemGiven(uint targetObjectId, string resref)
+    {
+        if (targetObjectId != AgentWellKnownIds.LocalPlayerObjectId)
+        {
+            return;
+        }
+
+        _recentlySyncedItems.Record(resref, 1, Environment.TickCount64);
     }
 
     /// <summary>

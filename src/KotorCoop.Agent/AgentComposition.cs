@@ -103,6 +103,7 @@ internal static class AgentComposition
             SyncPause = config?.PauseSync ?? true,
             HidePeersInMinigame = config?.HidePeersInMinigame ?? true,
             DialogueItemSync = config?.DialogueItemSync ?? true,
+            ScriptItemSync = config?.ScriptItemSync ?? false,
             DialogueFastJoin = config?.DialogueFastJoin ?? true,
             PartyFastPump = config?.PartyFastPump ?? true,
             ContainerFastPump = config?.ContainerFastPump ?? false,
