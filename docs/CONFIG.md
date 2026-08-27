@@ -205,10 +205,10 @@ for the first time (a real Pazaak hand started via the `pazaak` console verb): t
 latched, the peer's phantom parked, and the "in a minigame - waiting" HUD toast all fired
 correctly, and a real bug (the plugin-side edge detector's own pointer-shape guard rejected the
 field's actual bare-`1`/`0` values) was found and fixed. `pazaak_detect` was flipped to `1` (ON)
-in both `PluginConfig.ReadBool`'s fallback and `profiles/coop.ini.example` as a result — the
-previous paragraph's "both default OFF" history describes the pre-2026-08-28 state; ending a
-hand while it is "running" (e.g. via a module transition) still does not clear the flag and
-remains NEEDS-LIVE, see `minigames.md`'s 2026-08-28 entry.
+in both `PluginConfig.ReadBool`'s fallback and `profiles/coop.ini.example` as a result — before
+this fix both readers defaulted OFF and the shipped file left it at `0`. Ending a hand while it
+is "running" (e.g. via a module transition) still does not clear the flag and remains NEEDS-LIVE,
+see `minigames.md`'s 2026-08-28 entry.
 ¹⁰ Live-verified 2026-08-27: the engine call fires correctly, follows a peer's real position,
 survives a module transition with no crash, and costs nothing measurable in frame time. Flipped
 ON in both `PluginConfig.ReadBool`'s own fallback and `profiles/coop.ini.example`. The exact
@@ -221,15 +221,6 @@ line is absent — even though `PluginConfig`'s real gate stays ON. `map_reveal_
 nine host-adopted keys (see "Behaviour-flag negotiation" above), so a HOST who deletes just that
 one line advertises OFF in the digest while its own plugin keeps running the channel ON — a real
 negotiation mismatch, not just a doc gap.
-⁹ (continued) A 2026-08-28 live pass ran the positive path for the first time (a real Pazaak
-hand started via the `pazaak` console verb): the wire flag latched, the peer's phantom parked,
-and the "in a minigame - waiting" HUD toast all fired correctly, and a real bug (the plugin-side
-edge detector's own pointer-shape guard rejected the field's actual bare-`1`/`0` values) was
-found and fixed. `pazaak_detect` was flipped to `1` (ON) in both `PluginConfig.ReadBool`'s
-fallback and `profiles/coop.ini.example` as a result — the "both default OFF" sentence above
-describes the pre-2026-08-28 state; ending a hand while it is "running" (e.g. via a module
-transition) still does not clear the flag and remains NEEDS-LIVE, see `minigames.md`'s
-2026-08-28 entry.
 ¹¹ `solo_segment_spectate` is read TWICE off the same key, by two independent readers, the same
 split `pazaak_detect`⁹ and `movie_relay`² already use: `CoopConfig.SoloSegmentSpectateEnabled`
 (agent side) is what makes `CoopAgent.PumpOnce`'s own peer-visibility filter hide every remote
