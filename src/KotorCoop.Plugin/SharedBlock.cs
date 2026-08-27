@@ -766,4 +766,22 @@ internal partial struct SharedBlock
     /// ⚠ 37, because 7-36 are taken. Take the next FREE number.
     /// </summary>
     public const uint CheatKindPartySelectOk = 37;
+
+    /// <summary>
+    /// LIVE-TEST/DIAGNOSTIC PRIMITIVE (2026-08-28, docs/research/combat-participation.md §10's
+    /// own ranked follow-up list, item 1): reads the engine's own hostility verdict for one
+    /// creature pairing, read-only, no engine write. <c>CheatTarget</c> is the creature to
+    /// query (0 = local player); <c>CheatAmount</c> is the "versus" id (0 = local player).
+    /// Reports <c>CSWSObject::GetAIStateReputation</c> (0x0057CD90,
+    /// <see cref="Odyssey.GetAIStateReputation"/>, the SAME call
+    /// <c>EnemyPresenceController.SelectImmediateCandidate</c> already gates local-fight
+    /// candidacy on) in both directions, plus the raw <c>CSWSCreatureStats::faction_id</c> dword
+    /// at <c>stats+0x78</c> for each side — built specifically to settle round 89's own open
+    /// question ("does the client's own local player read hostile to a GIT-identical Sith
+    /// trooper the way the host's does") without needing to add ad-hoc logging to
+    /// <c>EnemyPresenceController</c> itself.
+    ///
+    /// ⚠ 38, because 7-37 are taken. Take the next FREE number.
+    /// </summary>
+    public const uint CheatKindFaction = 38;
 }

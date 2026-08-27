@@ -500,6 +500,17 @@ public enum CoopCommandKind
     /// <c>ok</c>. Local only.
     /// </summary>
     PartySelectOk,
+
+    /// <summary>
+    /// <c>faction &lt;id|me&gt; [vsId|me]</c> — LIVE-TEST/DIAGNOSTIC PRIMITIVE
+    /// (docs/research/combat-participation.md §10). Read-only: reports the engine's own
+    /// <c>GetAIStateReputation</c> verdict (both directions) plus each side's raw
+    /// <c>CSWSCreatureStats::faction_id</c> dword for the named pairing.
+    /// <see cref="CoopCommand.Address"/> is the object to query (or <c>me</c>);
+    /// <see cref="CoopCommand.Amount"/> carries the "versus" id (0/omitted = local player,
+    /// since a signed int has no room for a second id/`me` token). Local only.
+    /// </summary>
+    Faction,
 }
 
 /// <summary>
@@ -697,6 +708,7 @@ public static partial class ConsoleCommand
         new(["pazaak"], ParsePazaak),
         new(["openstore"], ParseOpenStore),
         new(["partyselect"], ParsePartySelect),
+        new(["faction"], ParseFaction),
         new(["cheats"], ParseCheats),
     ];
 
