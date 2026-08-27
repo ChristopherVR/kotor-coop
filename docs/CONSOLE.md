@@ -58,6 +58,7 @@ scenario. Parsed in `ConsoleCommand`, dispatched by `CoopCommandDispatcher`, exe
 | `loadgame` | `<slot>` | yours only | runs the real engine Load Game path against save slot `<slot>` (0-based, most-recent-first) |
 | `quittomenu` | — | yours only, local only | tears THIS instance down to the main menu through the engine's own `ShutDownToMainMenu` — the same call a real "Quit Game → Yes" click reaches; built to exercise the Away flag without click-navigating the pause menu (blockpoke-only, see docs/research/disconnect-reconnect.md §9) |
 | `scriptgive` | `<resref> [stack]` | yours only, local only | gives an item straight into your own inventory with NO suppression-ledger entry, simulating an untracked script (OnEnter/OnDeath/heartbeat) grant to test `script_item_sync` (blockpoke-only, see docs/research/dialogue-consequences.md) |
+| `loottake` | `[tag\|id]` (blank = nearest container) | yours only, local only | removes a container/corpse's first item through the real engine `RemoveItem` call and gives an equivalent copy to you — reproduces a genuine container/corpse take (both a real removal and a real new inventory row) for `script_item_sync`'s container/corpse-loot control, since no injected click can drive the container GUI (blockpoke-only, see docs/research/dialogue-consequences.md) |
 | `cheats` | — | any player | prints this verb list |
 
 ### The `slay` / `destroyobject` authority split

@@ -356,6 +356,83 @@ internal static unsafe partial class Odyssey
         return true;
     }
 
+    /// <summary>
+    /// LIVE-TEST PRIMITIVE (docs/research/dialogue-consequences.md's script-item-sync round,
+    /// Controls 2/3 — <c>CheatKindLootTake</c>). Finds the FIRST item id in
+    /// <paramref name="placeable"/>'s repository, reads its Tag (the same resref proxy
+    /// <c>TryGetItemResref</c> already relies on agent-side, cut at the first null per the
+    /// project's own CExoString length trap) into <paramref name="tagDest"/> BEFORE removing —
+    /// <see cref="RemoveContainerItem"/>'s underlying <c>RemoveItem</c> call deletes the object,
+    /// so the tag has to be captured while it still exists — then removes it via the same real
+    /// <c>RemoveItem</c> primitive <see cref="RemoveContainerItem"/> already uses. This is what
+    /// makes the container's next <c>CollectContainerLootRemovals</c> scan see a genuine
+    /// removal, exactly as a real take would produce; the caller
+    /// (<c>CheatController.World.LootTake</c>) separately gives the same tag to the player,
+    /// reproducing the other half. Returns false with nothing touched when the container is
+    /// empty or its first item has no readable tag (nothing safe to give back).
+    ///
+    /// MAIN THREAD ONLY.
+    /// </summary>
+    internal static bool TryTakeFirstContainerItem(
+        nint placeable, byte* tagDest, int tagCap, out uint itemId, out int tagLength)
+    {
+        itemId = 0;
+        tagLength = 0;
+
+        if (placeable == 0)
+        {
+            return false;
+        }
+
+        nint repo = *(nint*)(placeable + PlaceableRepository);
+        if (repo == 0)
+        {
+            return false;
+        }
+
+        int count = *(int*)(repo + RepositoryItemCount);
+        nint ids = *(nint*)(repo + RepositoryItemArray);
+        if (ids == 0 || count is <= 0 or > 4096)
+        {
+            return false;
+        }
+
+        uint firstId = *(uint*)ids;
+        if (firstId is 0 or ObjectInvalid)
+        {
+            return false;
+        }
+
+        nint item = ResolveItemBase(firstId);
+        if (item == 0)
+        {
+            return false;
+        }
+
+        nint text = *(nint*)(item + ItemTag);
+        uint length = *(uint*)(item + ItemTag + 4);
+        if (text != 0 && length != 0)
+        {
+            byte* tagBytes = (byte*)text;
+            int cap = Math.Min((int)length, tagCap);
+            while (tagLength < cap && tagBytes[tagLength] != 0)
+            {
+                tagDest[tagLength] = tagBytes[tagLength];
+                tagLength++;
+            }
+        }
+
+        if (tagLength == 0)
+        {
+            LastItemResolveNote = $"0x{firstId:X} in this container has no readable tag";
+            return false;
+        }
+
+        itemId = firstId;
+        PlaceableRemoveItemFn(placeable, item);
+        return true;
+    }
+
     // ---- item identity ---------------------------------------------------------------
     //
     // Everything that is true of ONE item rather than of its blueprint. CreateItemOnFloor
