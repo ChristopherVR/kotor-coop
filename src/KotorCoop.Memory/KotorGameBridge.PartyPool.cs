@@ -113,4 +113,16 @@ public sealed partial class KotorGameBridge
         totals = _partyPoolLastScan;
         return true;
     }
+
+    /// <summary>See the interface doc (<see cref="IPartyPoolBridge.InvalidatePartyPoolScanCache"/>).
+    /// Resets the throttle deadline so the very next <see cref="TryScanPartyPoolTotals"/> call
+    /// bypasses <see cref="_partyPoolLastScan"/> and reads the repository fresh, regardless of
+    /// how recently the last real sweep ran. Does not touch <see cref="_partyPoolLastScan"/>
+    /// itself or <see cref="_partyPoolEverScanned"/> — a caller that invalidates without ever
+    /// following up with a scan still gets the last good snapshot, exactly like today, just no
+    /// longer stale on the NEXT ask.</summary>
+    public void InvalidatePartyPoolScanCache()
+    {
+        _nextPartyPoolScanTicks = 0;
+    }
 }

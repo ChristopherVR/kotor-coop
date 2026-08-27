@@ -1194,3 +1194,119 @@ unchanged). §12's own C# fix may well be correct, but it cannot be confirmed li
 underlying native insert/search disagreement in §13.1-§13.2 stands — a wire-level "no under-count"
 test is meaningless when the local engine already loses track of its own inserts within a couple
 of seconds, independent of any sync code. No source changes this round; live-verification only.
+
+## 14. 2026-08-28, round 6 — two independently-diagnosable freshness bugs from §13 fixed
+## (AGENT scan-cache staleness, PLUGIN resref-vs-Tag match precedence); NO RIG this round, so the
+## live re-test §13 called for is NOT run — stays OFF, both fixes NEEDS-LIVE
+
+§13 left two candidate causes on the table for "a freshly-inserted pool item is not reliably
+found by the very next `poolremove`/scan": a NATIVE-side repository-plumbing defect (§13.3's own
+leading hypothesis, still open — see below) and, independently, two narrower freshness bugs each
+worth fixing on their own merits regardless of which native explanation eventually proves out.
+This round fixes those two; no live rig was available to run §13's own closing "concrete
+next-step" (pasting `ResolvePartyPoolRepo()`'s pointer and the repo's item-count field around one
+`pooladd` call) or the live re-test this task asked for (`pooladd` ×3 rapid → 3 detected;
+`pooladd` then `poolremove` → found) — both remain **NEEDS-LIVE**.
+
+### 14.1 AGENT-side: the bridge's own scan cache could mask a second rapid change behind an
+### already-stale window
+
+`KotorGameBridge.PartyPool.cs`'s `TryScanPartyPoolTotals` throttles a genuine repository walk to
+once per `PartyPoolScanIntervalMs` (1000ms), returning the last snapshot on every call inside that
+window — cheap and correct for a caller that only needs "recent enough." The bug: once any real
+(non-cached) scan ran, the cache re-armed a FULL fresh window from that scan's own timestamp
+regardless of whether anything had actually changed since the LAST scan before it. A second
+genuine local change landing shortly after a first was detected could land inside a window a
+merely-confirming scan had just re-armed, reading as stale until the window ran out again — the
+freshness bugs sit ON TOP of §9-§12's own detection-logic fixes, not instead of them.
+
+**Fix.** `IPartyPoolBridge` gets a new default-no-op member,
+`InvalidatePartyPoolScanCache()` (`src/KotorCoop.Memory/IPartyPoolBridge.cs`), implemented by
+`KotorGameBridge.PartyPool.cs` as `_nextPartyPoolScanTicks = 0` — forces the very next
+`TryScanPartyPoolTotals` call to bypass the throttle. `Pumps/PartyPoolPump.cs` calls it in two
+places: inside `PublishDetected` (every step-1 detection, ordinary or pending-excess) and right
+after step 2 enqueues a reconcile apply — both are moments the pump has concrete reason to expect
+the engine is about to look different again. A scan this cheap (a linked-list walk over a few
+dozen items' worth of `ReadProcessMemory` calls — the same order of magnitude as
+`ContainerLoot`'s own 1Hz sweep) affords running more often than its nominal throttle whenever the
+pump has a specific reason to ask again.
+
+**Test** (`tests/KotorCoop.Tests/PartyPoolLoopbackTests.cs`,
+`ASecondRapidLocalChangeIsNotMaskedBehindTheRestOfAnAlreadyStaleScanWindow`): a new
+`ThrottledFakeBridge` reproduces the real cache/throttle mechanism exactly, but driven by a
+test-controlled `Clock` field instead of `Environment.TickCount64`/a real timer — fully
+deterministic, no `Task.Delay`, no risk of a background pump tick consuming the fix's one-shot
+invalidation before the test can observe it (a real-timing version of this scenario was tried
+first and rejected for exactly that race). Sequence: baseline scan at clock 0; a first deposit
+observed at clock 1000 (past the cache's own natural window, so this part is unaffected by the
+fix); a SECOND deposit at clock 1001 — one tick later, nowhere near another full window. **Verified
+this is a genuine regression pin**: with the two `InvalidatePartyPoolScanCache()` calls in
+`PartyPoolPump.cs` temporarily commented out, the test fails (`Expected: 2, Actual: 1` — the exact
+"three inserts read as one" shape); restored, it passes.
+
+### 14.2 PLUGIN-side: `RemovePartyPoolStack` trusted Tag alone, which §13.2 already showed can
+### disagree with the object even while a THIRD reader confirms it
+
+`Odyssey.PartyPool.cs`'s `RemovePartyPoolStack` matched candidates purely by
+`TagEqualsIgnoreCase` before this round. §13.2's own live evidence is worth restating precisely:
+`item 0xE7` (an unrelated, independent read primitive) confirmed the freshly-inserted item was
+live and "correctly tagged" in the SAME breath `RemovePartyPoolStack`'s own Tag-based walk
+reported "no matching stack found" — i.e. by the time a THIRD reader looked, Tag read back fine,
+yet the search still missed it. That specific observation does not, by itself, prove Tag was ever
+literally empty at removal time (§13.3 leaves the two live hypotheses as native repo-plumbing
+issues, not a Tag-content issue) — but it does establish that Tag alone is not a reliable enough
+signal to gate a removal on, immediately after an insert, whatever the deeper mechanism turns out
+to be.
+
+**Fix.** New pure, portable file `src/KotorCoop.Plugin/PartyPoolStackMatcher.cs` (added to
+`KotorCoop.Tests.csproj`'s compile-include list, per this repo's "plugin pure arithmetic" testing
+convention) holds the precedence rule: `Matches(spawnRingResref, targetResref, tagMatches)` trusts
+`spawnRingResref` — what `ItemTemplateSpawnHook` itself captured for that item's object id at the
+exact moment `CreateItemOnObject` built it (the same VM command `AddItemToPartyPool`'s own
+`GiveItemToInventory` call routes through, so a party-pool deposit is always captured) —
+whenever the ring has an answer at all, and falls back to `tagMatches` only when it does not
+(evicted by `ItemTemplateSpawnHook.Capacity` (16) more recent spawns, a module change cleared it,
+or the item predates this plugin session). `ItemTemplateSpawnHook.cs` gained `TryGetResRef(uint
+objectId)`, searching the ring newest-first and trimming at the first NUL, the same discipline
+`TagEqualsIgnoreCase` already uses. `RemovePartyPoolStack`'s per-candidate loop now computes both
+signals and calls `PartyPoolStackMatcher.Matches` instead of checking Tag alone.
+
+**Test** (`tests/KotorCoop.Tests/PartyPoolTests.cs`, four `[Fact]`s): `SpawnRingMatchIsTrusted`,
+`SpawnRingDisagreementOverridesATagMatch` (the load-bearing one — a Tag match is deliberately
+overridden by a ring mismatch, the precise shape needed if Tag content is ever the actual
+divergent field), `SpawnRingComparisonIsCaseInsensitive`, `NoRingEntryFallsBackToTag`.
+
+**What this fix does NOT address.** If §13.3's hypothesis 1 is the real mechanism —
+`RepositoryInsertItemFn(repo, item, -1)` not updating whatever `item_count`/`items_list` field
+`RemovePartyPoolStack`'s own `count`/`ids` read walks — then the freshly-inserted item's id is
+never even IN the `snapshot` this loop iterates, and no amount of match-precedence improvement
+inside the loop can find an id that was never offered to it. This round's fix improves matching
+once a candidate id is present to examine; it does not touch `ResolvePartyPoolRepo()` or the
+repository's own count/array fields, which §13.3's closing paragraph already flagged as the next
+round's real target. Framed the way this task's own hypothesis did (Tag being empty/unreliable at
+insert time, or a resref-cache mismatch) — this fix covers that shape. Framed the way §13.3's own
+live evidence leans (a native repository-visibility gap) — this fix is necessary-but-maybe-not-
+sufficient, and only a live pass with the "two lookups, one frame" `ResolvePartyPoolRepo`/count
+dump §13.3 asked for will tell which.
+
+### 14.3 Build/test evidence this round
+
+`dotnet build KotorCoop.slnx -warnaserror`: clean, 0 warnings/errors. `pwsh
+src/KotorCoop.Plugin/build.ps1 -WarnAsError`: clean NativeAOT win-x86 build. `dotnet test
+tests/KotorCoop.Tests --no-build --filter "FullyQualifiedName~PartyPool"`: 39/39 passed (30
+pre-existing + 1 new cache test + 4 new matcher tests + 4 new tests overall counted against the
+pre-round baseline). Full `dotnet test KotorCoop.slnx` run for this round's regression sweep —
+see the repo's own commit history for the exact pass/fail count logged alongside this entry.
+
+### 14.4 Verdict
+
+`party_pool_sync` stays OFF — unchanged this round. Both fixes are believed correct for what they
+individually cover (each has its own deterministic regression test, and each was verified to
+actually fail without its fix — see §14.1/§14.2's own "verified this is a genuine regression pin"
+notes) but **NEEDS-LIVE**: no rig was available this round to run either §13's own native-layer
+diagnostic step or the live re-test this task asked for. The next round with a rig should run
+BOTH: §13's "two lookups, one frame" `ResolvePartyPoolRepo`/count-field dump around one `pooladd`
+(still the open question this round could not touch), and then, only once that native question is
+answered, the `pooladd`×3-rapid / `pooladd`-then-`poolremove` re-test — since a native
+repository-visibility gap, if that is what §13.3 turns out to be, would still fail the live
+re-test regardless of how correct this round's two C#/plugin-side fixes are.

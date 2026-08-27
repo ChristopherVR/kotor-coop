@@ -25,4 +25,21 @@ public interface IPartyPoolBridge
         totals = new Dictionary<PartyPoolStackKey, int>();
         return false;
     }
+
+    /// <summary>
+    /// Forces the NEXT <see cref="TryScanPartyPoolTotals"/> call to perform a genuine engine
+    /// read rather than serving whatever the internal throttle cached — called by
+    /// <c>Pumps.PartyPoolPump</c> the moment it either applies (queues a reconcile) or detects
+    /// (publishes a step-1 local change) anything on this channel, so a second rapid change to
+    /// the SAME key is never masked behind the REST of an already-stale scan window (see
+    /// docs/research/party-pool-sync.md §14). A scan this cheap (a linked-list walk over a few
+    /// dozen items) can afford to run more often than its throttle nominally allows whenever the
+    /// pump has a concrete reason to believe something just moved.
+    ///
+    /// Default no-op: a bridge with no scan cache of its own (a test fake with no throttling, or
+    /// one that has not implemented party-pool support at all) has nothing to invalidate.
+    /// </summary>
+    void InvalidatePartyPoolScanCache()
+    {
+    }
 }

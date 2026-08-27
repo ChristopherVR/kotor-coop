@@ -1,5 +1,6 @@
 // Odyssey.PartyPool.cs - the shared party item pool (CSWPartyTable+0x118's CItemRepository).
 // See docs/research/party-pool-sync.md for the full research this implements.
+using System.Text;
 
 namespace KotorCoop.Plugin;
 
@@ -319,6 +320,12 @@ internal static unsafe partial class Odyssey
             snapshot[i] = *(uint*)(ids + (nint)(i * 4));
         }
 
+        // Built once, not per candidate — see PartyPoolStackMatcher's own remarks for why the
+        // spawn ring (a point-in-time capture, immune to a just-inserted item's still-settling
+        // Tag) is the primary match signal and Tag only a fallback when the ring knows nothing
+        // about a given item's id.
+        string targetResref = Encoding.ASCII.GetString(resrefAscii, resrefLength);
+
         foreach (uint id in snapshot)
         {
             if (removed >= countToRemove)
@@ -327,7 +334,14 @@ internal static unsafe partial class Odyssey
             }
 
             nint item = ResolveItemBase(id);
-            if (item == 0 || !TagEqualsIgnoreCase(item, resrefAscii, resrefLength))
+            if (item == 0)
+            {
+                continue;
+            }
+
+            string? spawnRingResref = ItemTemplateSpawnHook.TryGetResRef(id);
+            bool tagMatches = TagEqualsIgnoreCase(item, resrefAscii, resrefLength);
+            if (!PartyPoolStackMatcher.Matches(spawnRingResref, targetResref, tagMatches))
             {
                 continue;
             }
