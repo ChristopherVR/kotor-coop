@@ -385,6 +385,49 @@ public enum CoopCommandKind
     /// Local only.
     /// </summary>
     LootTake,
+
+    /// <summary>
+    /// <c>pooladd &lt;resref&gt; [stack]</c> — LIVE-TEST PRIMITIVE (docs/research/party-pool-sync.md).
+    /// Adds a resref stack straight to the shared party item pool through the engine's own
+    /// <c>CItemRepository::InsertItem</c> — a human-driven use of the exact same
+    /// <c>CheatKinds.PartyPoolAdd</c> channel <c>CoopCommandDispatcher.DrainAutomaticPartyPool</c>
+    /// already uses to apply an incoming peer's pool change. <see cref="CoopCommand.Address"/> is
+    /// the resref, <see cref="CoopCommand.Amount"/> the stack size (default 1). Local only — the
+    /// party-pool sync channel is what carries the resulting change to a peer, this verb only
+    /// stages the local half.
+    /// </summary>
+    PoolAdd,
+
+    /// <summary>
+    /// <c>poolremove &lt;resref&gt; [stack]</c> — LIVE-TEST PRIMITIVE (docs/research/party-pool-sync.md).
+    /// Removes a resref stack from the shared party item pool through the engine's own
+    /// <c>CItemRepository::RemoveItem</c>, the removal counterpart to <see cref="PoolAdd"/>.
+    /// <see cref="CoopCommand.Address"/> is the resref, <see cref="CoopCommand.Amount"/> the stack
+    /// size (default 1). Local only.
+    /// </summary>
+    PoolRemove,
+
+    /// <summary>
+    /// <c>grantxp &lt;id|me&gt; &lt;amount&gt;</c> — LIVE-TEST PRIMITIVE
+    /// (docs/research/companion-state-sync.md's live test plan §5). Adds a signed XP delta to
+    /// the named creature's <c>CSWSCreatureStats::experience</c>, simulating a script-granted
+    /// award aimed at one creature (a companion or the local player) for testing
+    /// <c>companion_xp_sync</c>'s merge. <see cref="CoopCommand.Address"/> is the object id (or
+    /// <c>me</c> for the local player), <see cref="CoopCommand.Amount"/> the signed delta. Local
+    /// only.
+    /// </summary>
+    GrantXp,
+
+    /// <summary>
+    /// <c>equip &lt;id|me&gt; &lt;resref&gt; [slot]</c> — LIVE-TEST PRIMITIVE
+    /// (docs/research/companion-state-sync.md's live test plan §5). Re-equips the named creature
+    /// with a real item through <c>Odyssey.EquipItemFromTemplate</c>, for testing
+    /// <c>companion_gear_sync</c> against a live companion body. <see cref="CoopCommand.Address"/>
+    /// is the object id (or <c>me</c>), <see cref="CoopCommand.Password"/> the resref,
+    /// <see cref="CoopCommand.Amount"/> the NWScript inventory slot (1 body, 4 right weapon,
+    /// 5 left weapon; 0/omitted defaults to the right-weapon slot). Local only.
+    /// </summary>
+    Equip,
 }
 
 /// <summary>
@@ -572,6 +615,10 @@ public static partial class ConsoleCommand
         new(["quittomenu"], ParseQuitToMenu),
         new(["scriptgive"], ParseScriptGive),
         new(["loottake"], ParseLootTake),
+        new(["pooladd"], ParsePoolAdd),
+        new(["poolremove"], ParsePoolRemove),
+        new(["grantxp"], ParseGrantXp),
+        new(["equip"], ParseEquip),
         new(["cheats"], ParseCheats),
     ];
 

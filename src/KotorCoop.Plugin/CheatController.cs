@@ -214,6 +214,14 @@ internal sealed unsafe partial class CheatController(SharedBlockView block)
                 LootTake(player);
                 break;
 
+            case SharedBlock.CheatKindGrantXp:
+                GrantXp(playerId);
+                break;
+
+            case SharedBlock.CheatKindEquip:
+                Equip();
+                break;
+
             default:
                 Answer(SharedBlock.CheatStatusRefused, $"unknown cheat kind {kind}");
                 break;

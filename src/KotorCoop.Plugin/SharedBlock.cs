@@ -629,4 +629,35 @@ internal partial struct SharedBlock
     /// </summary>
     public const uint CheatKindLootTake = 29;
 
+    /// <summary>
+    /// LIVE-TEST PRIMITIVE (2026-08-27, docs/research/companion-state-sync.md's live test plan
+    /// §5): pokes <c>CSWSCreatureStats::experience</c> (<c>creature+0xA74</c> then <c>+0x068</c>,
+    /// the same offset chain <c>progression-sync.md</c>/<c>companion-state-sync.md</c> already
+    /// verified) on the creature named by <c>CheatTarget</c> by adding <c>CheatAmount</c>
+    /// (signed) to its current experience, clamped at 0 — simulating exactly what a
+    /// conversation/stealth-award/<c>GivePlotXP</c> script grant aimed at one creature only
+    /// looks like to <c>companion_xp_sync</c>'s merge, which this codebase otherwise has no way
+    /// to trigger on demand against a companion body specifically (kill XP already agrees
+    /// without the channel per that doc's §1.2). <c>CheatTarget</c> = 0 means the local player.
+    ///
+    /// ⚠ 30, because 7-29 are taken. Take the next FREE number.
+    /// </summary>
+    public const uint CheatKindGrantXp = 30;
+
+    /// <summary>
+    /// LIVE-TEST PRIMITIVE (2026-08-27, docs/research/companion-state-sync.md's live test plan
+    /// §5): re-equips the creature named by <c>CheatTarget</c> with a real item, through
+    /// <c>Odyssey.EquipItemFromTemplate</c> — the exact call the phantom equipment channel
+    /// already ships and live-verified, aimed at an ordinary party-roster companion body
+    /// instead, which that doc names as the one untested case (the call takes a bare object id
+    /// and never inspects what kind of body it is). <c>CheatText</c> is the resref,
+    /// <c>CheatAmount</c> the NWScript inventory slot (1 = body, 4 = right weapon,
+    /// 5 = left weapon — <c>Odyssey.InventorySlotBody/RightWeapon/LeftWeapon</c>; blank/0
+    /// defaults to the right-weapon slot, the visible, easy-to-confirm case the live test plan
+    /// actually asks for). <c>CheatTarget</c> = 0 means the local player.
+    ///
+    /// ⚠ 31, because 7-30 are taken. Take the next FREE number.
+    /// </summary>
+    public const uint CheatKindEquip = 31;
+
 }

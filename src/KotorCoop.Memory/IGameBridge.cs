@@ -268,6 +268,26 @@ public static class CheatKinds
     /// ⚠ 29 is the highest number taken now. Take the next FREE one for a new verb.
     /// </summary>
     public const uint LootTake = 29;
+
+    /// <summary>
+    /// LIVE-TEST PRIMITIVE (docs/research/companion-state-sync.md's live test plan §5): adds
+    /// <c>Amount</c> (signed) to <c>CSWSCreatureStats::experience</c> on the creature named by
+    /// <c>Target</c> (0 = local player), clamped at 0 — simulates a script-granted XP award
+    /// aimed at one creature only, testing <c>companion_xp_sync</c>'s merge. See
+    /// SharedBlock.CheatKindGrantXp.
+    /// </summary>
+    public const uint GrantXp = 30;
+
+    /// <summary>
+    /// LIVE-TEST PRIMITIVE (docs/research/companion-state-sync.md's live test plan §5):
+    /// re-equips the creature named by <c>Target</c> (0 = local player) with <c>Text</c> (a
+    /// resref) into inventory slot <c>Amount</c> (1 = body, 4 = right weapon, 5 = left weapon;
+    /// 0/default = right weapon), through <c>Odyssey.EquipItemFromTemplate</c>. See
+    /// SharedBlock.CheatKindEquip.
+    ///
+    /// ⚠ 31 is the highest number taken now. Take the next FREE one for a new verb.
+    /// </summary>
+    public const uint Equip = 31;
 }
 
 /// <summary>
