@@ -30,7 +30,7 @@ attaches from outside with `OpenProcess`.
 | Minigames — Pazaak detection, "waiting" notice | Built, not live-verified (`pazaak_detect` off) | [minigames.md](docs/research/minigames.md) |
 | Creature liveness reconciliation | Off by default, open | [creature-liveness.md](docs/research/creature-liveness.md) |
 | Peer at the main menu (`FlagAway`), persistent connection indicator, protocol-mismatch reject | Built 2026-08-27, not live-verified | [disconnect-reconnect.md](docs/research/disconnect-reconnect.md), [connect-flow.md](docs/research/connect-flow.md) |
-| Script-granted items outside dialogue (`script_item_sync`) | Built, off until live-verified | [dialogue-consequences.md](docs/research/dialogue-consequences.md) |
+| Script-granted items outside dialogue (`script_item_sync`) | Built, live-verified, ON by default | [dialogue-consequences.md](docs/research/dialogue-consequences.md) |
 | Companion experience and equipment (`companion_xp_sync`, `companion_gear_sync`) | Built, off until live-verified | [companion-state-sync.md](docs/research/companion-state-sync.md) |
 | Shared party item pool (`party_pool_sync`) | Built, off until live-verified | [party-pool-sync.md](docs/research/party-pool-sync.md) |
 | Fog-of-war reveal (`map_reveal_sync`) | Live-verified, on by default | [map-reveal.md](docs/research/map-reveal.md) |

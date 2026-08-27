@@ -57,7 +57,7 @@ actually runs with.
 | `connect_timeout_ms` | `0` (keeps the built-in 15000) | ms a connect attempt waits before giving up | [connect-flow.md](research/connect-flow.md) |
 | `status_toasts` | ON | the persistent connection indicator | [disconnect-reconnect.md](research/disconnect-reconnect.md) |
 | `dialogue_item_sync` | ON | forward a reward node's item grant to the other player | [dialogue-consequences.md](research/dialogue-consequences.md) |
-| `script_item_sync` | OFF | forward a script (OnEnter/OnDeath/heartbeat, outside any conversation) item grant to the other player | [dialogue-consequences.md](research/dialogue-consequences.md) |
+| `script_item_sync` | ON | forward a script (OnEnter/OnDeath/heartbeat, outside any conversation) item grant to the other player | [dialogue-consequences.md](research/dialogue-consequences.md) |
 | `dialogue_fast_join` | ON | pump the dialogue channel on the real-time path, not the 150ms cadence | [dialogue-skip-desync.md](research/dialogue-skip-desync.md) |
 | `party_fast_pump` | ON | pump the party channel on the real-time path | [lag-audit.md](research/lag-audit.md) |
 | `container_fast_pump` | OFF | pump placeable open/lock state on the real-time path | [container-sync.md](research/container-sync.md) |

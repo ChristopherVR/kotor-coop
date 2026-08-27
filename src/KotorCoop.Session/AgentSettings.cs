@@ -110,15 +110,18 @@ public sealed record AgentSettings
     /// whenever this instance is NOT in a conversation and forwards whatever a script (an
     /// OnEnter trigger, an OnDeath script, a cutscene, a heartbeat script) just placed into it
     /// — the gap <see cref="DialogueItemSync"/> leaves, since that channel only ever diffs
-    /// while THIS instance owns a conversation. coop.ini <c>script_item_sync</c>. OFF by
-    /// default, live-verification pending — docs/research/dialogue-consequences.md's
-    /// script-item-sync section has the design and the concrete live test plan; unlike every
-    /// other item channel here, a false positive on this one (an ordinary ground/container
-    /// pickup misread as a script grant) mints a real duplicate item on the peer's engine, not
-    /// just a cosmetic desync, so it stays opt-in until the suppression ledger has been proven
-    /// against a live rig.
+    /// while THIS instance owns a conversation. coop.ini <c>script_item_sync</c>. ON by default
+    /// since 2026-08-27 — docs/research/dialogue-consequences.md's script-item-sync section has
+    /// the design and the live-test results: all three required controls (a genuine script
+    /// grant, a manual local giveloot, and container/corpse loot — the one that actually failed
+    /// on its first live run and needed a real fix, see <see cref="CoopAgent.PumpOnce"/>'s
+    /// remarks next to its <c>PumpContainerLoot</c> call) are now live-confirmed suppressed
+    /// correctly. Unlike every other item channel here, a false positive on this one (an
+    /// ordinary ground/container pickup misread as a script grant) would mint a real duplicate
+    /// item on the peer's engine, not just a cosmetic desync — which is exactly what the
+    /// suppression ledger and its live controls exist to rule out before defaulting this on.
     /// </summary>
-    public bool ScriptItemSync { get; init; }
+    public bool ScriptItemSync { get; init; } = true;
 
     /// <summary>How often <see cref="Pumps.ScriptItemGrantPump"/> re-samples the local PC's
     /// inventory once it has a baseline, in milliseconds — independent of

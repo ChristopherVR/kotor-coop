@@ -309,12 +309,13 @@ dialogue_item_sync=1
 # This samples the local PC's inventory whenever this instance is not in a conversation and
 # forwards whatever a script placed into it through the same giveloot channel, with a
 # suppression ledger fed by the ground-item, container/corpse-loot and peer-grant channels so
-# an ordinary pickup is never mistaken for a script grant. OFF by default,
-# live-verification pending - docs/research/dialogue-consequences.md's script-item-sync
-# section has the design and the live test plan. Unlike the other item channels, a false
-# positive here mints a real duplicate item on the peer's engine rather than a cosmetic
-# desync, so it stays opt-in until proven on the live rig.
-script_item_sync=0
+# an ordinary pickup is never mistaken for a script grant. ON by default since 2026-08-27 -
+# docs/research/dialogue-consequences.md's script-item-sync section has the design and the
+# live-test results: all three required controls (a genuine script grant, a manual local
+# giveloot, and container/corpse loot - the one that actually double-reported on its first
+# live run and needed a real ordering fix in CoopAgent.PumpOnce) are now live-confirmed
+# suppressed correctly.
+script_item_sync=1
 
 # Moves the dialogue channel (who is talking to whom, which line, which node) off the agent's
 # ~150 ms combat cadence onto its real-time per-poll-tick path, event-driven on change rather
