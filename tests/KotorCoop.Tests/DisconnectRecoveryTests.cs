@@ -112,6 +112,66 @@ public class DisconnectRecoveryTests
     }
 
     /// <summary>
+    /// SessionStats.Reconnecting (docs/research/connect-flow.md's 2026-08-27 live finding,
+    /// ConnectionPhaseMapping): the live flag the connection indicator now checks ahead of the
+    /// coarser SessionPhase to actually reach ConnectionIndicatorState.Reconnecting. Real
+    /// sockets, a real blackout past the peer timeout — the exact trigger the design names —
+    /// rather than a fake bridge, since this is CoopClient's own bookkeeping being proven, not
+    /// a pure rule.
+    /// </summary>
+    [Fact]
+    public async Task TheClientsReconnectingFlagLatchesOnTimeoutAndClearsOnRejoin()
+    {
+        using CoopHost host = new(new SessionSettings { PlayerName = "Revan", Port = 0, TickRate = 30 });
+        using CoopClient client = new(
+            new SessionSettings { PlayerName = "Malak", TickRate = 30 },
+            new IPEndPoint(IPAddress.Loopback, host.ListenEndPoint.Port));
+
+        using CancellationTokenSource cts = new(TimeSpan.FromSeconds(60));
+        Task hostTask = host.RunAsync(cts.Token);
+        Task clientTask = client.RunAsync(cts.Token);
+
+        void Publish()
+        {
+            host.PublishLocalState(Somewhere);
+            client.PublishLocalState(Somewhere);
+        }
+
+        Assert.True(await WaitForAsync(() => client.IsConnected, Timeout, Publish));
+
+        // Connected and steady: neither side is reconnecting, and the host never is regardless.
+        Assert.False(client.GetStats().Reconnecting);
+        Assert.False(host.GetStats().Reconnecting);
+
+        client.Network.StartBlackout(10_000);
+
+        // The moment the client gives up and starts re-Helloing (ForgetSession), Reconnecting
+        // latches — in the SAME tick IsConnected goes false, which is the invariant
+        // ConnectionPhaseMapping's fallback arm relies on.
+        Assert.True(
+            await WaitForAsync(
+                () => !client.IsConnected && client.GetStats().Reconnecting,
+                TimeSpan.FromSeconds(10),
+                Publish),
+            "the client never latched Reconnecting when it gave up on the link");
+
+        // The host has no idea this is happening to a specific peer's identity — only the
+        // count moves.
+        Assert.False(host.GetStats().Reconnecting);
+
+        // Heals: a fresh Welcome clears it on the very tick the peer id is reassigned.
+        Assert.True(
+            await WaitForAsync(
+                () => client.IsConnected && !client.GetStats().Reconnecting,
+                Timeout,
+                Publish),
+            "the client never cleared Reconnecting after rejoining");
+
+        await cts.CancelAsync();
+        await Task.WhenAll(hostTask, clientTask);
+    }
+
+    /// <summary>
     /// Everything reliable that happened on either side while the link was down has to be
     /// there afterwards: flags and journal in both directions, a ground item and a container
     /// removal from the host. The container removal is the one with no version tripwire — it

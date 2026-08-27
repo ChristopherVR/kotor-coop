@@ -4,6 +4,19 @@ public sealed record SessionStats
 {
     public bool Connected { get; init; }
 
+    /// <summary>
+    /// CLIENT ONLY: true after the peer timeout has been given up on and this session is
+    /// re-Hello-ing the SAME nonce to reclaim its identity — <c>CoopClient._reconnecting</c>,
+    /// set the instant <c>ForgetSession</c> runs and cleared the instant a fresh Welcome
+    /// answers. Always false for a host, which has no single link of its own to lose (an
+    /// individual peer dropping only ever moves <see cref="PeerCount"/> — see
+    /// docs/research/connect-flow.md's 2026-08-27 live pass). Distinct from <see cref="Connected"/>
+    /// being merely false: a brand-new, never-yet-connected client is also not Connected, but
+    /// is not Reconnecting either — see <c>ConnectionPhaseMapping</c>, the consumer this exists
+    /// for.
+    /// </summary>
+    public bool Reconnecting { get; init; }
+
     public uint LocalPeerId { get; init; }
 
     public int PeerCount { get; init; }

@@ -205,6 +205,7 @@ public sealed partial class CoopClient : ICoopSession
         return new SessionStats
         {
             Connected = IsConnected,
+            Reconnecting = _reconnecting,
             LocalPeerId = _localPeerId,
             PeerCount = _buffer.PeerCount,
             RoundTripMs = _roundTripMs,
