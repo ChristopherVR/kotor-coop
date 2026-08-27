@@ -31,7 +31,7 @@ attaches from outside with `OpenProcess`.
 | Creature liveness reconciliation | Off by default, open | [creature-liveness.md](docs/research/creature-liveness.md) |
 | Peer at the main menu (`FlagAway`), persistent connection indicator, protocol-mismatch reject | Built 2026-08-27, not live-verified | [disconnect-reconnect.md](docs/research/disconnect-reconnect.md), [connect-flow.md](docs/research/connect-flow.md) |
 | Script-granted items outside dialogue (`script_item_sync`) | Built, off until live-verified | [dialogue-consequences.md](docs/research/dialogue-consequences.md) |
-| Fog-of-war reveal (`map_reveal_sync`) | Built, off until live-verified | [map-reveal.md](docs/research/map-reveal.md) |
+| Fog-of-war reveal (`map_reveal_sync`) | Live-verified, on by default | [map-reveal.md](docs/research/map-reveal.md) |
 
 "Live-verified" means watched working on two real GOG instances; "Off by default" means built
 and unit-tested but not shipped enabled. See "Honest limitations" below and `docs/research/`

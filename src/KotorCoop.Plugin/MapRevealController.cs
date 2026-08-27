@@ -12,12 +12,15 @@ namespace KotorCoop.Plugin;
 /// <see cref="MapRevealRule"/> so a peer standing still does not re-fire the call forever.
 ///
 /// The engine call is pinned VERIFIED by static RE (symbol database + disassembly + two real
-/// callers agreeing on the signature — docs/research/map-reveal.md) but has never run against
-/// the live game, so it stays behind <c>coop.ini map_reveal_sync</c>, OFF by default, the same
-/// "OFF until live-verified" treatment <c>effect_sync</c> and <c>dialog_state_watch</c> get.
-/// A wrong pointer chain is a logged no-op (<see cref="TryGetAreaMap"/> below), never a crash
-/// — deliberately re-derived independently of <c>Odyssey.cs</c> rather than reusing its
-/// private <c>GetAreaMap()</c>, per this pass's file ownership.
+/// callers agreeing on the signature — docs/research/map-reveal.md) and now also LIVE-VERIFIED
+/// (2026-08-27, docs/research/map-reveal.md "Live pass"): fired correctly on connect, followed
+/// a peer's real position change, survived a module transition cleanly (re-resolved the new
+/// module's area map with no crash and no "no area map yet" fallback), and cost nothing
+/// measurable in frame time. Default flipped ON — behind <c>coop.ini map_reveal_sync</c> still,
+/// so a player can opt out. A wrong pointer chain remains a logged no-op
+/// (<see cref="TryGetAreaMap"/> below), never a crash — deliberately re-derived independently
+/// of <c>Odyssey.cs</c> rather than reusing its private <c>GetAreaMap()</c>, per this pass's
+/// file ownership.
 ///
 /// MAIN THREAD ONLY — <c>OnFrame</c> must run from the same frame hook every other engine-
 /// calling controller here does.
@@ -113,7 +116,7 @@ internal sealed unsafe class MapRevealController(SharedBlockView block)
     private readonly long[] _lastRevealedAtMs = new long[SharedBlock.SlotCapacity];
     private readonly Vec3[] _lastRevealedPosition = new Vec3[SharedBlock.SlotCapacity];
 
-    private readonly bool _enabled = PluginConfig.ReadBool("map_reveal_sync", false);
+    private readonly bool _enabled = PluginConfig.ReadBool("map_reveal_sync", true);
 
     private int _loggedFailures;
     private int _loggedReveals;

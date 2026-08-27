@@ -511,12 +511,13 @@ effect_sync=1
 # 19) - so ground your partner already walked does not stay black just because you never
 # stood on it. No new wire: it reuses the peer position MapMarkerController/MinimapPeerHook
 # already read, throttled to a few times a second and only when the peer has actually moved
-# (see MapRevealRule). The engine call (CSWSAreaMap::SetWorldPointExplored) is pinned
-# VERIFIED by static RE - symbol database, disassembly and two real engine callers agreeing
-# on the exact signature - but has never run against the live game, so it is OFF by default
-# until a live pass confirms it clears fog on the M-screen with no cost. See
-# docs/research/map-reveal.md.
-map_reveal_sync=0
+# (see MapRevealRule). The engine call (CSWSAreaMap::SetWorldPointExplored) is pinned VERIFIED
+# by static RE - symbol database, disassembly and two real engine callers agreeing on the
+# exact signature - and live-verified 2026-08-27: fires correctly, follows a peer's real
+# position, survives a module transition with no crash, negligible frame cost. Default ON;
+# the exact on-screen M-key appearance was not visually confirmed (screenshot tooling broken
+# on the rig). See docs/research/map-reveal.md.
+map_reveal_sync=1
 
 # Reconcile a body left alive on one instance and dead or destroyed on another - a creature
 # beyond the 32-slot combat census, killed by a script (DestroyObject, a cutscene death,

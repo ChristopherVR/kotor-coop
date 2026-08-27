@@ -87,7 +87,7 @@ fails safe. **INFERRED** = a reasonable deduction, not directly proven.
 | [container-sync.md](container-sync.md) | Container/corpse open-close sync and the use-lock | Implemented, live-verified, ON by default; `container_fast_pump` off pending a live A/B |
 | [item-identity.md](item-identity.md) | What a `CSWSItem` carries that its blueprint does not | Implemented; apply path live-tested via the console item-identity loop |
 | [quest-sync.md](quest-sync.md) | Non-monotonic globals, journal removal, the Lamport-clock fix | Implemented, live-verified, ON by default |
-| [map-reveal.md](map-reveal.md) | Fog-of-war sync around a peer's position | Implemented; pinned VERIFIED by static RE, OFF by default pending a live pass |
+| [map-reveal.md](map-reveal.md) | Fog-of-war sync around a peer's position | Implemented; live-verified 2026-08-27 (engine call, peer tracking, transition survival, frame cost), default ON. On-screen M-key appearance unconfirmed (screenshot tooling broken) |
 | [trigger-relay.md](trigger-relay.md) | Making a generic trigger's `OnEnter` fire for both players | Implemented, live-verified, protocol 36; ON by default in code and (since 2026-08-27) in the shipped `coop.ini.example` |
 
 ## Session, network, menu & console
