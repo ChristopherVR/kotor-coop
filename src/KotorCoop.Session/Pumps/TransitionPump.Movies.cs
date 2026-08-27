@@ -11,7 +11,9 @@ internal sealed partial class TransitionPump
 {
     public void PumpMidModuleMovies(in PlayerState local)
     {
-        if (!settings.MovieRelayEnabled)
+        // A client adopts the host's movie_relay at runtime when they differ —
+        // docs/research/mod-compatibility.md's "Behaviour-flag negotiation".
+        if (!(session.Overrides.MovieRelay ?? settings.MovieRelayEnabled))
         {
             return;
         }

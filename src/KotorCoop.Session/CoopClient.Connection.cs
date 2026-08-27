@@ -58,7 +58,7 @@ public sealed partial class CoopClient
             _sendBuffer,
             new HelloPacket(
                 _settings.PlayerName, module, _nonce, _settings.Digest,
-                SessionPassword.Hash(_settings.Password)));
+                SessionPassword.Hash(_settings.Password), _settings.Behaviour));
         if (length > 0)
         {
             _channel.Send(_hostEndPoint, _sendBuffer.AsSpan(0, length));
@@ -124,6 +124,11 @@ public sealed partial class CoopClient
             // against any more.
             _saveSettle.Reset();
             RefineCompatibility();
+
+            // Behaviour-flag negotiation (docs/roadmap-seamless.md Tier 1 item 7): compare
+            // coop.ini/CLI flags against the host's own Welcome digest, warn on every
+            // difference, and adopt the host's value for the channels it drives.
+            ApplyBehaviourComparison(welcome.Behaviour);
 
             // Adopt the host's tick rate rather than blindly running our own — see
             // WelcomePacket.TickRate's doc for why the two settings can legitimately

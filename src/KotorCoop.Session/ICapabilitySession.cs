@@ -30,6 +30,24 @@ public interface ICapabilitySession
     CompatibilityVerdict? Compatibility { get; }
 
     /// <summary>
+    /// The behaviour-flag (coop.ini/CLI) comparison against the most recently evaluated peer —
+    /// docs/roadmap-seamless.md Tier 1 item 7. Null until a peer's <see
+    /// cref="KotorCoop.Protocol.BehaviourDigest"/> has been compared (a host: on its first
+    /// Hello; a client: on Welcome). Unlike <see cref="Compatibility"/> this never refuses or
+    /// degrades anything — every finding is a warning, surfaced the same way a content
+    /// mismatch is (see <c>BehaviourAnnouncer</c>).
+    /// </summary>
+    BehaviourComparisonResult? BehaviourWarnings => null;
+
+    /// <summary>
+    /// Runtime overrides this session adopted for host-authoritative behaviour keys that
+    /// differed from the host's — see <see cref="SessionOverrides"/>. A host always returns
+    /// <see cref="SessionOverrides.None"/>: it is authoritative by definition and never adopts
+    /// anything from a peer.
+    /// </summary>
+    SessionOverrides Overrides => SessionOverrides.None;
+
+    /// <summary>
     /// Roadmap item 14 phase 2: the raw <see cref="WorldDigest"/> most recently received from
     /// "the" remote peer — meaningful on a <c>CoopClient</c> (the host), where it drives
     /// <c>host_load_readopt</c>'s classifier; a host has many peers and no single "the remote",

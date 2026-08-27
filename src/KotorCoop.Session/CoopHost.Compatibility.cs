@@ -13,6 +13,15 @@ public sealed partial class CoopHost
     private CompatibilityVerdict? _compatibility;
     private WorldDigest _localWorld = WorldDigest.Empty;
 
+    /// <summary>The behaviour-flag comparison against the most recently seen Hello — see
+    /// <see cref="ICapabilitySession.BehaviourWarnings"/>. A host never adopts anything
+    /// (<see cref="Overrides"/> always <see cref="SessionOverrides.None"/>): this is purely
+    /// informational, the same "warn, never act" role <see cref="Compatibility"/> plays for a
+    /// content mismatch this host chooses not to refuse.</summary>
+    private BehaviourComparisonResult? _behaviourComparison;
+
+    public BehaviourComparisonResult? BehaviourWarnings => _behaviourComparison;
+
     public void PublishWorldDigest(in WorldDigest digest) => _localWorld = digest;
 
     /// <summary>

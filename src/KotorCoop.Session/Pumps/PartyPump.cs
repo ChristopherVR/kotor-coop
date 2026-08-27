@@ -19,7 +19,12 @@ internal sealed class PartyPump(IGameBridge bridge, ICoopSession session, AgentS
     /// </summary>
     public void PumpParty(SessionCapabilities caps)
     {
-        if (!settings.SyncParty || !bridge.SupportsPartySync || (caps & SessionCapabilities.Party) == 0)
+        // session.Overrides.PartySync: a client that negotiated a different party_sync than
+        // the host adopts the host's value at runtime — docs/research/mod-compatibility.md's
+        // "Behaviour-flag negotiation" — rather than keep reconciling (or not) against its own
+        // local coop.ini/CLI setting.
+        bool syncParty = session.Overrides.PartySync ?? settings.SyncParty;
+        if (!syncParty || !bridge.SupportsPartySync || (caps & SessionCapabilities.Party) == 0)
         {
             return;
         }
@@ -82,7 +87,7 @@ internal sealed class PartyPump(IGameBridge bridge, ICoopSession session, AgentS
         // what `CoopClient.TryGetPartyRoster`'s own doc comment already says the reader wants
         // ("deliberately NOT aged out... a stale one is still the last thing the host said").
         // See docs/research/party-reconciliation.md.
-        if (!settings.SyncParty || (caps & SessionCapabilities.Party) == 0)
+        if (!(session.Overrides.PartySync ?? settings.SyncParty) || (caps & SessionCapabilities.Party) == 0)
         {
             // ⚠ CLEAR ON THE WAY OUT, do not just stop writing. A level the plugin is still
             // holding from before the channel was disabled would keep being reconciled against

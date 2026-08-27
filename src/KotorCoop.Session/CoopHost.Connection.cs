@@ -64,6 +64,12 @@ public sealed partial class CoopHost
         CompatibilityVerdict verdict = ContentCompatibility.Compare(_settings.Digest, hello.Digest);
         _compatibility = verdict;
 
+        // Behaviour-flag negotiation (docs/roadmap-seamless.md Tier 1 item 7): unlike content,
+        // never refuses or degrades — a peer's coop.ini/CLI differing from this host's is
+        // never a reason to reject the join. Computed here (rather than only once the peer is
+        // admitted) so a rejected Hello still leaves a comparison to look at on the dashboard.
+        _behaviourComparison = BehaviourCompatibility.Compare(_settings.Behaviour, hello.Behaviour);
+
         if (!verdict.Admitted)
         {
             int rejectLength = PacketCodec.Write(_replyBuffer, new RejectPacket(verdict.Summary));
@@ -176,7 +182,8 @@ public sealed partial class CoopHost
         }
 
         WelcomePacket welcome = new(
-            assignedId, _sessionId, (byte)_settings.TickRate, ProtocolConstants.MaxPeers, _settings.Digest);
+            assignedId, _sessionId, (byte)_settings.TickRate, ProtocolConstants.MaxPeers, _settings.Digest,
+            _settings.Behaviour);
         int length = PacketCodec.Write(_replyBuffer, welcome);
         if (length > 0)
         {

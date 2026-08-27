@@ -181,12 +181,85 @@ public class PacketCodecTests
     public void HelloRoundTrips()
     {
         Span<byte> buffer = stackalloc byte[ProtocolConstants.MaxPacketSize];
-        HelloPacket original = new("Revan", "end_m01aa", 12345, ContentDigest.Unknown, 0xABCD);
+
+        // Behaviour must be built through BehaviourDigest.Compute/FromFields (never the bare
+        // `default` a HelloPacket falls back to when unspecified) for round-trip equality to
+        // hold — Hash is RECOMPUTED on read (BehaviourDigest.FromFields), so a digest whose
+        // Hash was never derived from its own Flags/InterpolationMs/FollowLead in the first
+        // place (as `default`'s all-zero Hash is not, once FollowLead's null->"any"
+        // normalisation is applied) legitimately does not decode back to itself. See
+        // BehaviourDigestTests for that normalisation on its own.
+        HelloPacket original = new(
+            "Revan", "end_m01aa", 12345, ContentDigest.Unknown, 0xABCD, BehaviourDigest.Default);
 
         int length = PacketCodec.Write(buffer, original);
         Assert.True(length > 0);
 
         HelloPacket? decoded = PacketCodec.ReadHello(buffer[..length]);
+        Assert.Equal(original, decoded);
+    }
+
+    [Fact]
+    public void HelloCarriesTheBehaviourDigest()
+    {
+        Span<byte> buffer = stackalloc byte[ProtocolConstants.MaxPacketSize];
+        BehaviourDigest behaviour = BehaviourDigest.Compute(
+            localCombat: true, companionLocalCombat: false, partyFastPump: true, partySync: false,
+            clientDoorRefusal: true, transitionAnnounce: false, clientLoadRejoin: true, hostLoadReadopt: true,
+            effectSync: false, triggerRelay: true, clientEncounters: true, dialogueItemSync: true,
+            dialogueRecruitSync: false, scriptItemSync: true, movieRelay: false, livenessSync: false,
+            mapRevealSync: true, requireIdenticalSave: false, interpolationMs: 120, followLead: "host");
+
+        HelloPacket original = new(
+            "Revan", "end_m01aa", 12345, ContentDigest.Unknown, 0xABCD, behaviour);
+
+        int length = PacketCodec.Write(buffer, original);
+        HelloPacket? decoded = PacketCodec.ReadHello(buffer[..length]);
+
+        Assert.NotNull(decoded);
+        Assert.Equal(behaviour.Flags, decoded.Behaviour.Flags);
+        Assert.Equal(120, decoded.Behaviour.InterpolationMs);
+        Assert.Equal("host", decoded.Behaviour.FollowLead);
+        Assert.Equal(behaviour.Hash, decoded.Behaviour.Hash);
+    }
+
+    [Fact]
+    public void WelcomeCarriesTheBehaviourDigest()
+    {
+        Span<byte> buffer = stackalloc byte[ProtocolConstants.MaxPacketSize];
+        BehaviourDigest behaviour = BehaviourDigest.Compute(
+            localCombat: false, companionLocalCombat: true, partyFastPump: false, partySync: true,
+            clientDoorRefusal: false, transitionAnnounce: true, clientLoadRejoin: false, hostLoadReadopt: false,
+            effectSync: true, triggerRelay: false, clientEncounters: false, dialogueItemSync: false,
+            dialogueRecruitSync: true, scriptItemSync: false, movieRelay: true, livenessSync: true,
+            mapRevealSync: false, requireIdenticalSave: true, interpolationMs: 40, followLead: "any");
+
+        WelcomePacket original = new(3, 999, 30, 8, ContentDigest.Unknown, behaviour);
+
+        int length = PacketCodec.Write(buffer, original);
+        Assert.True(length > 0);
+
+        WelcomePacket? decoded = PacketCodec.ReadWelcome(buffer[..length]);
+
+        Assert.NotNull(decoded);
+        Assert.Equal(original.AssignedPeerId, decoded.AssignedPeerId);
+        Assert.Equal(original.SessionId, decoded.SessionId);
+        Assert.Equal(original.TickRate, decoded.TickRate);
+        Assert.Equal(behaviour.Flags, decoded.Behaviour.Flags);
+        Assert.Equal(40, decoded.Behaviour.InterpolationMs);
+        Assert.Equal("any", decoded.Behaviour.FollowLead);
+        Assert.Equal(behaviour.Hash, decoded.Behaviour.Hash);
+    }
+
+    [Fact]
+    public void WelcomeWithDefaultBehaviourRoundTrips()
+    {
+        Span<byte> buffer = stackalloc byte[ProtocolConstants.MaxPacketSize];
+        WelcomePacket original = new(1, 42, 30, 8, ContentDigest.Unknown, BehaviourDigest.Default);
+
+        int length = PacketCodec.Write(buffer, original);
+        WelcomePacket? decoded = PacketCodec.ReadWelcome(buffer[..length]);
+
         Assert.Equal(original, decoded);
     }
 
