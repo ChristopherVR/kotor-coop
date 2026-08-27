@@ -548,4 +548,24 @@ internal partial struct SharedBlock
     /// </summary>
     public const uint CheatKindWalkTo = 24;
 
+    /// <summary>
+    /// LIVE-TEST PRIMITIVE (2026-08-27, docs/research/disconnect-reconnect.md §9): tears the
+    /// world down and shows the main menu, through
+    /// <c>CClientExoAppInternal::ShutDownToMainMenu</c> (0x005FCBD0) — the SAME function
+    /// <c>CClientExoAppInternal::StallServerCode</c> (0x00602CDE) calls once
+    /// <c>CSWGuiInGameOptions::ReallyQuit</c>'s <c>SetEndGamePending(1,0,1)</c> is noticed on a
+    /// later frame, i.e. exactly what a real "Quit Game -&gt; Yes" click ultimately reaches.
+    /// Built because reaching a genuine "no player object at all" state (the Away flag's third
+    /// shape — main menu / load screen / character-export screen) by navigating the vanilla
+    /// pause menu with injected mouse clicks is a documented dead end on a demo.ps1-repositioned
+    /// window (docs/research/session-save.md's "Attempted, not achieved" section: 36 candidate
+    /// clicks, zero landed, and blind keyboard navigation once wedged an instance requiring a
+    /// full rig restart). Calling the engine function directly, the same way <c>usedoor</c>/
+    /// <c>skipline</c> route around missing OS input, needs no coordinates and cannot wedge
+    /// anything. Takes no arguments; local only, never crosses the network.
+    ///
+    /// ⚠ 25, because 7-24 are taken. Take the next FREE number.
+    /// </summary>
+    public const uint CheatKindQuitToMenu = 25;
+
 }

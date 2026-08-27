@@ -201,6 +201,20 @@ public static class CheatKinds
     /// CheatKindSyncTests.NoTwoCheatKindsShareANumber will fail the build on a collision.
     /// </summary>
     public const uint WalkTo = 24;
+
+    /// <summary>
+    /// LIVE-TEST PRIMITIVE (2026-08-27, docs/research/disconnect-reconnect.md §9): tears the
+    /// world down and shows the main menu, via the engine's own
+    /// <c>CClientExoAppInternal::ShutDownToMainMenu</c> — the same function a real "Quit Game
+    /// -&gt; Yes" click reaches. Built to exercise the Away flag's third shape (no player object
+    /// at all) without navigating the vanilla pause menu by mouse, which a prior round found
+    /// does not land clicks on a demo.ps1-repositioned window and once wedged an instance via
+    /// blind keyboard navigation (docs/research/session-save.md). See
+    /// <c>SharedBlock.CheatKindQuitToMenu</c>. Takes no arguments; local only.
+    ///
+    /// ⚠ 25 is the highest number taken now. Take the next FREE one for a new verb.
+    /// </summary>
+    public const uint QuitToMenu = 25;
 }
 
 /// <summary>

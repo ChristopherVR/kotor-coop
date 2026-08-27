@@ -252,6 +252,7 @@ public sealed partial class CoopCommandDispatcher(
         [CoopCommandKind.SkipLine] = _ => SendCheat(new CheatRequest(CheatKinds.SkipLine)),
         [CoopCommandKind.SelectReply] = c => SendCheat(new CheatRequest(CheatKinds.SelectReply, Amount: c.Amount)),
         [CoopCommandKind.LoadGame] = c => TriggerMidSessionLoad(c.Amount),
+        [CoopCommandKind.QuitToMenu] = _ => SendCheat(new CheatRequest(CheatKinds.QuitToMenu)),
         [CoopCommandKind.Cheats] = CheatsCommand,
     };
 

@@ -194,6 +194,10 @@ internal sealed unsafe partial class CheatController(SharedBlockView block)
                 WalkTo(playerId);
                 break;
 
+            case SharedBlock.CheatKindQuitToMenu:
+                QuitToMenu();
+                break;
+
             default:
                 Answer(SharedBlock.CheatStatusRefused, $"unknown cheat kind {kind}");
                 break;

@@ -344,6 +344,19 @@ public enum CoopCommandKind
     /// <c>client_load_rejoin</c>/<c>host_load_readopt</c> exactly as it would for a real click.
     /// </summary>
     LoadGame,
+
+    /// <summary>
+    /// <c>quittomenu</c> — LIVE-TEST PRIMITIVE (docs/research/disconnect-reconnect.md §9).
+    /// Tears THIS instance's world down and shows the main menu, through the engine's own
+    /// <c>CClientExoAppInternal::ShutDownToMainMenu</c> — the same function a real "Quit Game
+    /// -&gt; Yes" click ultimately reaches. Built for exactly the reason <c>loadgame</c> was:
+    /// docs/research/session-save.md measured zero of 36 candidate clicks landing on a
+    /// demo.ps1-repositioned window, and a blind keyboard-only navigation attempt wedged an
+    /// instance badly enough to need a full rig restart. Exercises the Away flag's third shape
+    /// (agent alive, no player object) without any of that risk. Takes no arguments. Local
+    /// only: this never crosses the network by itself.
+    /// </summary>
+    QuitToMenu,
 }
 
 /// <summary>
@@ -528,6 +541,7 @@ public static partial class ConsoleCommand
         new(["skipline"], ParseSkipLine),
         new(["selectreply"], ParseSelectReply),
         new(["loadgame"], ParseLoadGame),
+        new(["quittomenu"], ParseQuitToMenu),
         new(["cheats"], ParseCheats),
     ];
 
