@@ -1222,3 +1222,25 @@ not rediscover them.
 `profiles/coop.ini.example`'s `store_sync=0` default is unchanged. `dotnet build
 KotorCoop.slnx -warnaserror`, `src/KotorCoop.Plugin/build.ps1 -WarnAsError`, `dotnet test`
 (2355/2355): all clean after each of the three fixes.
+
+## Rig pass (2026-08-28): `solo_segment_spectate` — `startdialog` reaches the Bastila
+## conversation for the first time, roster wipe still not observed
+
+Task: `solo_segment_spectate=1` both, `warp sta_m45ac` both, trigger `k_sta_bastila.dlg` via
+`startdialog sta_invis_bast_conv k_sta_bastila`, confirm the roster wipe/phantom hide/input
+lock/camera follow/toast, flip ON if clean.
+
+**Not flipped ON.** Full detail in `docs/research/star-forge-finale.md`'s own 2026-08-28 live
+pass. The tag form refused every time (`sta_invis_bast_conv` turned out to be a PLACEABLE,
+object id `0xAA` — confirmed live via `useplaceable` — and `startdialog`'s NPC resolution is
+creature-only); `startdialog 0xAA k_sta_bastila` (by id) DID work, reaching a real
+`StartDialog` twice and advancing through several `selectreply`-driven nodes (as far as node
+61/83 one attempt, node 52/83 responsive on the other) — the first time any live pass on this
+doc's history has gotten the conversation running at all. `partystate.ps1`, polled after every
+advance across 15+ tries, never showed a roster drop (`companions 1` throughout on the host).
+Which node calls `k_psta_door.ncs` (the script string-found inside the `.dlg` in a prior round)
+remains unresolved — this pass's blind "always pick reply slot 0" has no visibility into what
+each reply actually says. Concrete next step recorded in `star-forge-finale.md`: a `.dlg`-node
+script-walker, or live-capturing each node's reply text via the `CSWGuiDialog` panel fields
+`dialogue-sync.md` already documents. No crash; both processes stayed healthy throughout.
+`solo_segment_spectate` stays at its default OFF.

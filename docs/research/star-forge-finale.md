@@ -719,3 +719,100 @@ confirmed identical to the fresh build) and `dotnet build KotorCoop.slnx -warnas
 clean — no source changed this pass, static RE (`tools/kotorfiles.py`) plus a live rig session
 only.
 `dotnet test tests/KotorCoop.Tests --no-build`: 2339/2339 passing (unchanged).
+
+## Live pass (2026-08-28): `startdialog` reaches `sta_invis_bast_conv` for the first time —
+
+## `sta_invis_bast_conv` is a PLACEABLE, not a creature; the roster wipe still did not fire
+
+Task: `solo_segment_spectate=1` on both, `warp sta_m45ac` both,
+`startdialog sta_invis_bast_conv k_sta_bastila` on the host — now buildable, since
+`dialogue-sync.md`'s own 2026-08-28 addendum shipped the `startdialog` verb after this doc's
+prior rounds were written. Confirm the roster wipe fires, the client's phantom hides, input
+locks, camera follows, toast fires; flip ON if clean.
+
+**Not flipped ON — the detection precondition (a roster drop) still never fired**, but this pass
+adds one genuinely new, load-bearing fact and reaches further into the conversation than any
+prior round.
+
+### `sta_invis_bast_conv` found and resolved directly — it is a PLACEABLE (object id `0xAA`),
+
+### which is WHY `startdialog <tag>` could never find it
+
+`startdialog sta_invis_bast_conv k_sta_bastila` refused every time with `no npc tagged
+'sta_invis_bast_conv' found here` — expected, since `startdialog`'s own NPC resolution
+(`CreatureFinder.FindByTag`, per `dialogue-sync.md`'s own addendum) only sweeps for the
+`CSWSCreature` vtable. A one-line diagnostic settled what three prior rounds of this doc left
+as an open question ("does `k_psta_init_bast.ncs` create/reposition this object at all"): after
+`opendoor k45_door_bast1` + `walkto` (not `tp`, matching this doc's own prior finding that a
+teleport skips the boundary-crossing OnEnter check) into `k45_init_bastila`'s own trigger
+coordinates, `useplaceable sta_invis_bast_conv` answered `refused: placeable 0xAA
+('sta_invis_bast_conv') is 32.6m away, too far to use` — **the object exists, is a placeable,
+and its own object id is `0xAA`.** This closes the prior round's own hypothesis (a) vs (b)
+question in favour of (a): `k_psta_init_bast.ncs` does place/reposition
+`sta_invis_bast_conv` as promised, it is simply not a creature type, and no console primitive
+in this codebase resolves a placeable by tag for `startdialog`'s own purpose (only
+`useplaceable`/`opendoor`-shaped verbs, via `FindPlaceableByTag`, do).
+
+### `startdialog 0xAA k_sta_bastila` (by object id) DOES reach `StartDialog`, twice, live
+
+Since `startdialog` also accepts a numeric id (`ConsoleCommand.Cheats.cs`'s own
+numeric-vs-tag split), `startdialog 0xAA k_sta_bastila` was tried instead of the tag form —
+**and succeeded**, twice in the same session: `startdialog: ActionStartConversation queued on
+the player, targeting 0xAA (dlg 'k_sta_bastila')` immediately followed by
+`dialogue: engine reached StartDialog (1 so far, forced=False)` and a
+`dialogue-node-pub: #1 node -1 -> 61` line — the queued action genuinely drove the player
+(`party follow` diagnostics show it walking toward the placeable, ~20m over several seconds)
+and started the real conversation, landing on entry node 61/83. A second `startdialog 0xAA
+k_sta_bastila` call later the same session (after the first conversation appeared to end with no
+observed `RemovePartyMember`-shaped effect) again reached `StartDialog`, this time visibly
+responsive to `skipline`/`selectreply 0` (`skip requested at node 52/83`, `reply slot 0
+committed`) for several more exchanges.
+
+### The roster wipe: NOT observed, across 15+ reply advances this round
+
+`tools/partystate.ps1` was polled after every `selectreply 0` across both attempts —
+`companions 1  soloMode 0` on the HOST, unchanged, every single sample, including immediately
+after the conversation reached its highest observed node (61) and after 15 further advance
+attempts on the second run (most of which read `refused: reply slot 0 not available (no
+conversation, or out of range)`, meaning the conversation had already gone quiet again between
+polls — consistent with either a short auto-advancing narration stretch, or the conversation
+naturally ending and (per `dialogue-sync.md`'s own "adopt" mechanic) not being re-entered by
+`startdialog`'s own second call in quite the way a fresh `StartDialog` reach would suggest).
+**Whether `k_sta_bastila.dlg`'s own node-action reference to `k_psta_door.ncs` (found by string
+sweep in the prior round, never resolved to a specific node) sits on a branch this pass's blind
+`selectreply 0` spam never selected, or requires plot-flag state this staged scenario does not
+have (`STA_BASTILA_DEAD`/other globals never set here), remains genuinely unresolved** — this
+pass could drive the conversation but had no visibility into what each reply option's TEXT was,
+so "always pick slot 0" is a blind guess at the affirmative/continue path, not a targeted choice.
+
+### One incidental, unexplained asymmetry: `soloMode` differed between host and client
+
+Read on both instances via `partystate.ps1` at the same point in the session (after the second
+`startdialog` attempt): HOST `soloMode 0`, CLIENT `soloMode 1` (`companions 1` unchanged on
+both — no roster drop on either side). Not chased further this pass — could be a pre-existing
+per-save/per-module difference in how the two players' own solo-mode flags were seeded on
+arrival at `sta_m45ac` (unrelated to `solo_segment_spectate`, which the host log never showed
+engaging — no `solo segment: began` line on either side), or a genuine and previously-unnoticed
+asymmetry worth a future round's attention if `solo_segment_spectate` work resumes.
+
+### Verdict: `solo_segment_spectate` stays OFF — the precondition is now closer than ever but
+
+### still not reached; the concrete next step is narrower than any prior round's
+
+The good news this pass leaves behind: `startdialog` by object id is a working, repeatable way
+to reach `k_sta_bastila.dlg`'s `StartDialog` without a real mouse click, closing the "no way to
+force this conversation" gap every prior round of this doc named. The bad news: reaching
+`StartDialog` is not the same as reaching the specific node that calls `k_psta_door.ncs`, and
+this pass's blind reply-advancing did not find it. **Concrete next step, sharper than any prior
+round's**: either build the `.dlg`-node script-walker `docs/research/star-forge-finale.md`'s own
+prior round already named (reading `DialogList`/`ReplyList`'s `Script`/`Script2` GFF fields
+directly, now that the conversation is reachable and drivable by object id, so a script-walker's
+findings could be checked against a REAL running conversation instead of only static data), or
+capture each node's reply TEXT live (via the `CSWGuiDialog` panel fields `dialogue-sync.md`'s
+own §2 already documents, `panel+0x1970[]`/`+0x6C`) so a future round can choose replies by
+their actual content instead of always picking slot 0.
+
+Both processes stayed healthy throughout (`Get-Process swkotor` — `Responding=True` on both,
+confirmed after the session). No crash. `dotnet build KotorCoop.slnx -warnaserror` and
+`src/KotorCoop.Plugin/build.ps1 -WarnAsError`: both clean — no source changed this pass, live
+rig session only.
