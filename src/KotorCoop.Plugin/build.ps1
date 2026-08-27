@@ -77,11 +77,19 @@ if (-not (Test-Path $GameDir)) { throw "game directory not found: $GameDir" }
 # tools/demo.ps1 launches by hand, so the rig and the auto-started agent never differ.
 $agentProject = Join-Path (Split-Path $projectDir -Parent) 'KotorCoop.Agent'
 Push-Location $agentProject
+# devenv.ps1 (imported above for link.exe/vswhere.exe) sets $env:Platform = 'x86' as part of
+# vcvarsall's environment dump. dotnet/MSBuild treats a `Platform` env var as an implicit
+# `-p:Platform=x86` override, which redirects THIS build's output to `bin\x86\Debug\...`
+# instead of the plain `bin\Debug\...` the check below (and demo.ps1/tools/*) expect — a
+# silent path mismatch, not a build failure. Clear it only around this one dotnet call.
+$savedPlatform = $env:Platform
+Remove-Item Env:\Platform -ErrorAction SilentlyContinue
 try {
     dotnet build -v q --nologo
     if ($LASTEXITCODE -ne 0) { throw "agent build failed with exit code $LASTEXITCODE" }
 }
 finally {
+    if ($null -ne $savedPlatform) { $env:Platform = $savedPlatform }
     Pop-Location
 }
 
