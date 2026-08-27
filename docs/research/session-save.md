@@ -1949,3 +1949,42 @@ least once more, ideally by a different session, would raise confidence before t
 Build: `dotnet build -warnaserror` clean, native plugin `-WarnAsError` clean, `dotnet test`
 2331/2331 (`CoopCommandDispatcherTests` reran standalone 8/8 after a full-suite run flaked it on
 the documented UDP-port contention, not a real failure).
+
+## Live re-verification (2026-08-28): a THIRD independent clean run — "CONFIRMED FIXED" restored
+
+Task: one more independent pass of round-87's exact recipe, on a fresh rig (`demo.ps1 -Save 1`,
+fresh `build.ps1 -Install` on both installs, no manual state carried over from any prior round),
+to clear the "not fully closed" bar the previous round's own two-clean-runs discipline set.
+
+**Recipe run, exact**: on a live host+client session both in `END_M01AA`, host-only `warp
+tar_m10aa` (confirmed landed via `where`), `partyselect ok` (primes the message-box precondition
+bit — a no-op here since it was already clear, logged as `partyselect ok: confirmed`), then
+`loadgame 0`. `loadgame 0` resolved to the `000001 - AUTOSAVE` slot (`END_M01AA`, 117 fields —
+the save-slot-off-by-one quirk this doc's own memory note already documents, not a new finding),
+not the fresher `tar_m10aa` autosave — an artifact of this rig's own save history, not of the
+mechanism being tested.
+
+**Result, read from the AGENT logs (not the plugin log, per the previous round's own corrected
+lesson)**:
+
+* Host: `session-save: host-side load verdict - announcing re-adoption` -> `host loaded a save -
+  everyone re-joins`.
+* Client: `world adoption: session-saved character not used - the session-saved character was
+  captured against a different host save` -> `rejoin: load request 3 sent to the plugin (module
+  END_M01AA, carried character)` -> `rejoined 'END_M01AA'`.
+
+Both `swkotor.exe` processes stayed `Responding=True` throughout (`Get-Process swkotor` polled
+during and after), landed on the identical module (`where` on both sides: `module END_M01AA`,
+both `hp 12/12`), no stall-diag line, no hang, no vanish.
+
+**This is the THIRD independent clean run** (two by the previous round's fix entry, one here),
+clearing the "two-independent-runs bar" that round's own regression report set before trusting
+"CONFIRMED FIXED" language again. **Verdict: CONFIRMED FIXED.** The dangling-pointer write-storm
+root cause (galaxy-map-and-party-select.md's 2026-08-28 fix entry) is the correct explanation for
+this regression; no further live passes are needed to close this specific item, though a future
+round hitting the identical symptom again should re-open this doc rather than assume a new cause.
+
+Build: `dotnet build -warnaserror` clean, native plugin `-WarnAsError` clean, `dotnet test`
+2339/2339 (this same session; see `galaxy-map-and-party-select.md`'s own 2026-08-28 entry for the
+STUNT_00 crash's own independent third-party confirmation and the new `faction` diagnostic verb
+this session also built).
