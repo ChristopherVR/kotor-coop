@@ -27,6 +27,9 @@ internal static class Program
                 AgentCommand.Adopt => await AdoptCommand.RunAsync(options).ConfigureAwait(false),
                 AgentCommand.CraftSave => CraftSaveCommand.Run(options),
                 AgentCommand.Run => await RunCommand.RunAsync(options).ConfigureAwait(false),
+                AgentCommand.Install => InstallCommand.Install(options),
+                AgentCommand.Uninstall => InstallCommand.Uninstall(options),
+                AgentCommand.Setup => InstallCommand.Setup(),
                 _ => Help(),
             };
         }

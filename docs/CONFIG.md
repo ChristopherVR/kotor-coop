@@ -158,7 +158,7 @@ others are setup, discovery or offline utilities. `agent` with no arguments prin
 | `--port <n>` | `27015` | listen/target port | `run` |
 | `--tick <n>` | `30`⁶ | poll and network rate, Hz, clamped 1-60 | `run` |
 | `--read-only` | off | attach without write access | `run` |
-| `--game-path <path>` | Steam path | game executable | `launch` |
+| `--game-path <path>` | `C:\GOG Games\Star Wars KOTOR (GOG)\swkotor.exe` | game executable (or directory, for `install`/`uninstall`, which auto-detect the GOG install when omitted) | `launch`, `install`, `uninstall` |
 | `--windowed` | off | set `FullScreen=0` in `swkotor.ini` first (backed up) | `launch` |
 | `--via-steam` | off | launch via `steam://rungameid/32370` instead of the exe | `launch` |
 | `--instance <n>` | `1` | co-op instance number, clamped 1-9 (mutex renamed for 2+) | `launch` |

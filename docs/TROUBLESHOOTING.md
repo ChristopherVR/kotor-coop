@@ -21,11 +21,13 @@ The plugin did not load. `dinput8.dll` must sit in the same directory as `swkoto
 
 ## Another mod already uses `dinput8.dll` (ReShade, an ASI loader, ...)
 
-`install.ps1` refuses to overwrite a `dinput8.dll` it does not recognise as its own. Install
-with `-Chain`: the small `KotorCoop.Loader` wrapper becomes `dinput8.dll`, the plugin is
-installed as `KotorCoop.Plugin.dll`, the other mod is renamed `dinput8.prev.dll`, and
-`dinput8.chain` lists all of them in load order (edit it by hand to add more; `-Load a.dll`
-does the same). The game's DirectInput calls go to the first proxy in the list (ours), which
+The installer refuses to overwrite a `dinput8.dll` it does not recognise as its own (the
+double-click setup asks; `KotorCoop.Agent.exe install` and `install.ps1` need `--chain`/
+`-Chain` or `--force`). In chain mode the small `KotorCoop.Loader` wrapper becomes
+`dinput8.dll`, the plugin is installed as `KotorCoop.Plugin.dll`, the other mod is renamed
+`dinput8.prev.dll`, and `dinput8.chain` lists all of them in load order (edit it by hand to
+add more; `--load a.dll` does the same). Extracting the zip straight over the other mod
+overwrites it — the package README says how to recover by hand. The game's DirectInput calls go to the first proxy in the list (ours), which
 forwards to the next entry, and so on to the system DLL — so a proxy that always loads the
 system DLL itself must be the last proxy. `coop.ini`'s `dinput8_next = <file>` forces the
 plugin's next hop regardless of the list. `-Uninstall` puts the other mod back under its
@@ -76,10 +78,11 @@ shipped `coop.ini.example` turns it on) — see
 
 ## A feature that "should" be on isn't doing anything
 
-Several `coop.ini` keys default OFF in the code but ON in the shipped example file, and at
-least two (`effect_sync`, `trigger_relay`) default ON in the code but are shipped OFF in the
-example — see the footnotes in [CONFIG.md](CONFIG.md) for the full list. Check your actual
-`coop.ini` against that table rather than assuming either side's "default" applies.
+Two `coop.ini` keys (`companion_local_combat`, `dialogue_recruit_sync`) default OFF in the
+code but ON in the shipped file, and a `coop.ini` installed before 2026-08-27 shipped
+`effect_sync`, `trigger_relay` and `menu_button` OFF — see the footnotes in
+[CONFIG.md](CONFIG.md). The installer never overwrites an existing `coop.ini`, so check your
+actual file against that table rather than assuming either side's "default" applies.
 
 ## Companion stalls partway through a leg while following
 

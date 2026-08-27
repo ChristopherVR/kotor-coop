@@ -90,25 +90,22 @@ if (-not (Test-Path (Join-Path $agentBin 'KotorCoop.Agent.exe'))) {
     throw "agent build succeeded but KotorCoop.Agent.exe not found in $agentBin"
 }
 
-# One code path for "put these files into a game directory": the same installer the
-# packaged zip ships, pointed at a staging layout that mirrors the package.
+# One code path for "put these files into a game directory": the agent's own installer
+# (PackageInstaller.cs), run from a staging tree laid out exactly like the release zip.
 $staging = Join-Path $env:TEMP 'kotorcoop-dev-install'
 if (Test-Path $staging) { Remove-Item $staging -Recurse -Force }
-New-Item -ItemType Directory -Path (Join-Path $staging 'plugin') | Out-Null
-New-Item -ItemType Directory -Path (Join-Path $staging 'agent') | Out-Null
-Copy-Item $built.FullName (Join-Path $staging 'plugin\dinput8.dll')
-Copy-Item (Join-Path $agentBin '*') (Join-Path $staging 'agent') -Recurse -Force
-Copy-Item (Join-Path $repo 'profiles\override') (Join-Path $staging 'override') -Recurse
+New-Item -ItemType Directory -Path (Join-Path $staging 'Override') | Out-Null
+Copy-Item $built.FullName (Join-Path $staging 'dinput8.dll')
+Get-ChildItem $agentBin -File -Filter 'KotorCoop.*' | Copy-Item -Destination $staging
+Get-ChildItem (Join-Path $repo 'profiles\override') -File -Filter 'k_coop_*' | Copy-Item -Destination (Join-Path $staging 'Override')
 Copy-Item (Join-Path $repo 'profiles\coop.ini.example') (Join-Path $staging 'coop.ini')
 
 $loaderDll = Join-Path $repo 'src\KotorCoop.Loader\bin\dinput8.dll'
 if (Test-Path $loaderDll) {
-    New-Item -ItemType Directory -Path (Join-Path $staging 'loader') | Out-Null
-    Copy-Item $loaderDll (Join-Path $staging 'loader\dinput8.dll')
+    New-Item -ItemType Directory -Path (Join-Path $staging 'chain-loader') | Out-Null
+    Copy-Item $loaderDll (Join-Path $staging 'chain-loader\dinput8.dll')
 }
 
-Copy-Item (Join-Path $repo 'tools\install.ps1') (Join-Path $staging 'install.ps1')
-
-& (Join-Path $staging 'install.ps1') -GameDir $GameDir
-if ($LASTEXITCODE -ne 0 -and $null -ne $LASTEXITCODE) { throw "install failed with exit code $LASTEXITCODE" }
+& (Join-Path $staging 'KotorCoop.Agent.exe') install --from $staging --game-path $GameDir
+if ($LASTEXITCODE -ne 0) { throw "install failed with exit code $LASTEXITCODE" }
 Remove-Item $staging -Recurse -Force

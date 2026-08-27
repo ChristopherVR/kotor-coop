@@ -22,6 +22,15 @@ public enum AgentCommand
     /// <summary>Adopt a host's world and load it carrying this install's own character.</summary>
     Adopt,
 
+    /// <summary>Put an extracted package into a game directory (PackageInstaller).</summary>
+    Install,
+
+    /// <summary>Remove what Install placed.</summary>
+    Uninstall,
+
+    /// <summary>No arguments at all: the double-click experience - find the game, install, launch.</summary>
+    Setup,
+
     /// <summary>Offline save-crafting utility: an additive copy of a save directory with
     /// named global booleans/numbers forced to a value. See docs/research/minigames.md §11
     /// and <see cref="KotorCoop.Memory.GlobalFlagCraft"/>.</summary>
@@ -171,8 +180,25 @@ public sealed record AgentOptions
     /// </summary>
     public bool MenuConnect { get; init; }
 
+    /// <summary>The supported build: DRM-free GOG (see README: Requirements).</summary>
     public const string DefaultGamePath =
-        @"C:\Program Files (x86)\Steam\steamapps\common\swkotor\swkotor.exe";
+        @"C:\GOG Games\Star Wars KOTOR (GOG)\swkotor.exe";
+
+    /// <summary>Whether --game-path was given, for verbs that would rather detect the install
+    /// than assume the default.</summary>
+    public bool HasGamePath { get; init; }
+
+    /// <summary>install: the extracted package to copy from (default: the agent's own directory).</summary>
+    public string? PackageDirectory { get; init; }
+
+    /// <summary>install: chain mode (keep a foreign dinput8.dll behind the loader).</summary>
+    public bool Chain { get; init; }
+
+    /// <summary>install: extra DLLs appended to dinput8.chain (implies chain mode).</summary>
+    public IReadOnlyList<string> ChainLoad { get; init; } = [];
+
+    /// <summary>install: overwrite a foreign dinput8.dll instead of refusing.</summary>
+    public bool Force { get; init; }
 
     /// <summary>Steam app id for Knights of the Old Republic.</summary>
     public const int SteamAppId = 32370;
@@ -181,7 +207,7 @@ public sealed record AgentOptions
     {
         if (args.Length == 0)
         {
-            return new AgentOptions { Command = AgentCommand.Help };
+            return new AgentOptions { Command = AgentCommand.Setup };
         }
 
         AgentCommand command = args[0].ToLowerInvariant() switch
@@ -198,6 +224,9 @@ public sealed record AgentOptions
             "serve-world" => AgentCommand.ServeWorld,
             "adopt" => AgentCommand.Adopt,
             "craft-save" => AgentCommand.CraftSave,
+            "install" => AgentCommand.Install,
+            "uninstall" => AgentCommand.Uninstall,
+            "setup" => AgentCommand.Setup,
             _ => AgentCommand.Help,
         };
 
@@ -217,6 +246,11 @@ public sealed record AgentOptions
         bool readOnly = false;
         bool wait = false;
         string gamePath = DefaultGamePath;
+        bool hasGamePath = false;
+        string? packageDirectory = null;
+        bool chain = false;
+        List<string> chainLoad = [];
+        bool force = false;
         bool windowed = false;
         bool viaSteam = false;
         int instance = 1;
@@ -289,10 +323,27 @@ public sealed record AgentOptions
 
                 case "--game-path":
                     gamePath = Next() ?? gamePath;
+                    hasGamePath = true;
                     break;
 
                 case "--windowed":
                     windowed = true;
+                    break;
+
+                case "--from":
+                    packageDirectory = Next();
+                    break;
+
+                case "--chain":
+                    chain = true;
+                    break;
+
+                case "--load":
+                    chainLoad.AddRange((Next() ?? string.Empty).Split([';', ','], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries));
+                    break;
+
+                case "--force":
+                    force = true;
                     break;
 
                 case "--via-steam":
@@ -428,6 +479,11 @@ public sealed record AgentOptions
             Wait = wait,
             GamePath = gamePath,
             Windowed = windowed,
+            HasGamePath = hasGamePath,
+            PackageDirectory = packageDirectory,
+            Chain = chain,
+            ChainLoad = chainLoad,
+            Force = force,
             ViaSteam = viaSteam,
             Instance = instance,
             LoadSave = loadSave,
@@ -488,6 +544,14 @@ public sealed record AgentOptions
 
         COMMANDS
 
+          (none)    Setup: find the GOG install, copy the package in, offer to launch.
+                    What double-clicking KotorCoop.Agent.exe in an extracted zip does.
+          install   Copy the package (--from <dir>, default: beside this exe) into the game
+                    directory (--game-path <dir>, default: auto-detect). --chain keeps a
+                    foreign dinput8.dll behind the chain loader; --load a.dll,b.asi adds
+                    entries to dinput8.chain; --force overwrites a foreign dinput8.dll.
+          uninstall Remove what install placed (--game-path); keeps coop.ini, restores a
+                    kept dinput8.dll. Run from the extracted zip, not the game directory.
           launch    Start KOTOR (optionally windowed) and wait for it to come up.
           load      Drive an already-running instance from the main menu into a save.
                     Separate from launch so several instances can be started first and

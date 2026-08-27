@@ -36,8 +36,11 @@ pwsh src\KotorCoop.Plugin\build.ps1 -Install -GameDir 'D:\Games\swkotor-gog-p2' 
 `-GameDir` defaults to `C:\GOG Games\Star Wars KOTOR (GOG)`. Without `-Install` it only
 builds `dinput8.dll`; with it, the plugin, a freshly built (Debug) agent, the `k_coop_`
 override assets and a `coop.ini` template (only if none exists) all go into the game
-directory through the same `tools/install.ps1` the packaged zip ships — there is no separate
-"copy the agent" step any more. `demo.ps1` itself does **not** deploy the plugin, so run this
+directory through the agent's own installer (`KotorCoop.Agent.exe install`,
+`src/KotorCoop.Agent/PackageInstaller.cs`) — the same code the packaged zip's double-click
+setup and `install.ps1` use, so there is one install implementation and no separate "copy the
+agent" step. The zip itself is a game-directory image (`tools/package.ps1` documents the
+layout): extracting it into the game folder is a complete install. `demo.ps1` itself does **not** deploy the plugin, so run this
 for every game copy the rig uses before trusting a live result. `-Uninstall` removes what
 `-Install` placed (and only that: the installer recognises its own `dinput8.dll` by a marker
 and leaves any other mod's alone). `-WarnAsError` turns compiler/analyzer warnings into

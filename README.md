@@ -78,30 +78,29 @@ module's object-id-keyed channels, a different save asks you to rejoin (or refus
 
 Download `kotor-coop-<version>.zip` from the
 [releases page](https://github.com/ChristopherVR/kotor-coop/releases) — a tagged release, or
-`latest`, which is rebuilt from every push to `main` that passes build and test — extract it
-anywhere, and install it into your GOG game directory:
+`latest`, rebuilt from every push to `main` that passes build and test. The zip is a
+game-folder image, so either:
 
-```powershell
-pwsh .\install.ps1 -GameDir 'C:\GOG Games\Star Wars KOTOR (GOG)'
-```
+- **extract it straight into the folder that contains `swkotor.exe`** and start the game, or
+- extract it anywhere and **double-click `KotorCoop.Agent.exe`** — it finds the GOG install
+  (or asks), copies everything in, and offers to launch.
 
-That's the plugin, the agent, the co-op override files and a `coop.ini` template in place in
-one step; `-Uninstall` takes them back out and never touches your `coop.ini`. The zip's own
-`README.md` walks through play, configuration and troubleshooting without needing this repo.
-
-Then just play: launch KOTOR, click **Co-op** on the main menu, and one of you presses
-**Host** while the other picks that server and presses **Connect**. Everything else lives in
-`coop.ini` — see [docs/CONFIG.md](docs/CONFIG.md).
+No scripts, nothing to configure. Launch KOTOR, click **Co-op** on the main menu, and one of
+you presses **Host** while the other picks that server and presses **Connect**. The game
+starts the agent itself in the background. Everything optional lives in `coop.ini`
+([docs/CONFIG.md](docs/CONFIG.md)); the zip's own `README.md` covers play, configuration and
+troubleshooting without needing this repo. Command-line equivalents:
+`KotorCoop.Agent.exe install|uninstall --game-path <dir>` or `install.ps1`.
 
 ### Sharing `dinput8.dll` with another mod
 
 Only one file can be called `dinput8.dll`. If another mod already owns it (ReShade, an ASI
-loader, a widescreen fix), `install.ps1` refuses rather than overwrite it and offers chain
-mode:
+loader, a widescreen fix), the setup notices and offers to keep it (the command line refuses
+unless told `--chain` or `--force`):
 
 ```powershell
-pwsh .\install.ps1 -GameDir '...' -Chain                          # keep the other mod
-pwsh .\install.ps1 -GameDir '...' -Chain -Load ReShade32.dll,x.asi # and load extra DLLs too
+KotorCoop.Agent.exe install --game-path '...' --chain                        # keep the other mod
+KotorCoop.Agent.exe install --game-path '...' --chain --load ReShade32.dll   # and load extra DLLs
 ```
 
 Chain mode installs the [`KotorCoop.Loader`](src/KotorCoop.Loader/dinput8_loader.c) wrapper —
@@ -109,7 +108,7 @@ Chain mode installs the [`KotorCoop.Loader`](src/KotorCoop.Loader/dinput8_loader
 the other mod to `dinput8.prev.dll`, and writes a `dinput8.chain` list. The loader loads every
 entry and forwards the game's DirectInput calls to the first proxy (ours); the plugin forwards
 to the entry after itself, and the last one reaches Windows' real `dinput8.dll`.
-`coop.ini`'s `dinput8_next` overrides the plugin's next hop explicitly. `-Uninstall` restores
+`coop.ini`'s `dinput8_next` overrides the plugin's next hop explicitly. `uninstall` restores
 the other mod under its original name.
 
 ## Building from source

@@ -19,8 +19,8 @@ port = 27140
 ; Session password. Empty = open session. A host admits only clients that match.
 password =
 
-; Name shown to the other players. Optional.
-name = Malak
+; Name shown to the other players. Optional: blank = a generated "playerNNN".
+name =
 
 ; Show the main-menu "Co-op" button (Host / Connect / server browser). Live-verified; set 0
 ; to hide it and connect from the ~ console instead.
