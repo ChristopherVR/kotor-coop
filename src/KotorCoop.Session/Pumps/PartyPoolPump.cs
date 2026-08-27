@@ -27,6 +27,28 @@ namespace KotorCoop.Session.Pumps;
 /// engine's own total "jump" and step 1 would misread the pump's OWN application as a fresh
 /// local action and re-publish it right back onto the wire.
 ///
+/// ⚠ ROOT CAUSE 2, THE DEPOSITING-SIDE DUPLICATE (2026-08-28, docs/research/party-pool-sync.md
+/// §9-§10). The guard above only ever protected step 2's OWN queued applies — a key step 1
+/// itself just detected and published had NO equivalent protection at all, on either side of
+/// the host/client symmetry the class remarks above describe. That asymmetry is real: a
+/// HOST-originated deposit reaches the engine through the single-slot staging-cheat channel
+/// (<c>pooladd</c>, or a GUI drag) exactly like any other local action, but UNLIKE a queued
+/// automatic apply, step 1's own publish left the key instantly eligible for re-detection on
+/// the very next tick — so if a fresh engine scan ever transiently disagreed with what was just
+/// published (a stale scan-cache read, an item whose resref briefly failed to resolve, or any
+/// other momentary engine-read inconsistency — see docs/research/party-pool-sync.md's own
+/// KotorGameBridge.PartyPool.cs 1-second scan-cache remarks), step 1 would misread its OWN
+/// recent local action as a FURTHER genuine change and republish it — which, relayed to a peer
+/// and reconciled back, is exactly the shape of a double apply. Fixed the same way root cause 1
+/// was: a key step 1 just published now also lands in <c>_pendingApplyTarget</c> (via
+/// <c>_localDetectExpiry</c>, released either once a fresh scan reconfirms the value OR after
+/// <see cref="LocalDetectGraceMs"/> elapses — NOT held indefinitely like step 2's own entries,
+/// because unlike a queued apply this instance is IN THE PROCESS of making true, a step-1
+/// detection is already true; the grace window exists only to smooth over one scan-cache cycle's
+/// worth of transient noise, not to wait for anything to "land" — an indefinite hold here would
+/// permanently swallow a genuine second local action, e.g. a player who deposits then
+/// immediately withdraws the same stack).
+///
 /// See docs/research/party-pool-sync.md for the full design and the engine-call chain the
 /// queued applies eventually run through.
 /// </summary>
@@ -50,6 +72,18 @@ internal sealed class PartyPoolPump(IGameBridge bridge, ICoopSession session, Ac
     /// mapped to the engine total that apply is expected to produce once it lands. A key stays
     /// here — excluded from BOTH steps — until a fresh scan confirms that value.</summary>
     private readonly Dictionary<PartyPoolStackKey, int> _pendingApplyTarget = [];
+
+    /// <summary>How long a key step 1 just detected-and-published stays in
+    /// <see cref="_pendingApplyTarget"/> even if a later scan disagrees with it — root cause 2's
+    /// fix, see the class remarks. Only entries ORIGINATED by step 1 get a deadline here; step
+    /// 2's own queued-apply entries are absent from this dictionary and keep waiting
+    /// indefinitely for a matching scan, unchanged from before this fix. Generous relative to
+    /// <c>KotorGameBridge.PartyPool.cs</c>'s own 1-second scan-cache — long enough to absorb one
+    /// full stale-cache cycle, short enough that a genuine second local change on the same key
+    /// (deposit then immediately withdraw) is never swallowed for long.</summary>
+    private const long LocalDetectGraceMs = 2000;
+
+    private readonly Dictionary<PartyPoolStackKey, long> _localDetectExpiry = [];
 
     private bool _baselined;
 
@@ -94,26 +128,41 @@ internal sealed class PartyPoolPump(IGameBridge bridge, ICoopSession session, Ac
         Dictionary<PartyPoolStackKey, int> prevForDetect = Without(_lastScan, _pendingApplyTarget.Keys);
         Dictionary<PartyPoolStackKey, int> engineForDetect = Without(engine, _pendingApplyTarget.Keys);
 
+        // Staged, not applied to _pendingApplyTarget yet — see the "resolve applies that have
+        // landed" block below for why this has to wait until AFTER that block runs: registering
+        // a key here immediately would let this SAME tick's landed-check see it (target already
+        // equal to the just-scanned value) and release it right back out before step 2 ever gets
+        // a chance to see it excluded, which is exactly the protection root cause 2's fix needs.
+        List<(PartyPoolStackKey Key, int Value)>? justDetected = null;
+
         foreach (PartyPoolDiffRule.Delta delta in PartyPoolDiffRule.Diff(prevForDetect, engineForDetect))
         {
             log($"party pool: local {delta.Kind.ToString().ToLowerInvariant()} of {delta.Count}x "
                 + $"'{delta.Key.Resref}' detected, publishing");
             session.PublishPartyPoolOp(delta.Kind, delta.Key, delta.Count);
+            (justDetected ??= []).Add((delta.Key, engineForDetect.GetValueOrDefault(delta.Key)));
         }
 
         _lastScan = new Dictionary<PartyPoolStackKey, int>(engine);
+
+        long nowMs = Environment.TickCount64;
 
         // Resolve applies that have landed, now that step 1 has safely run against a baseline
         // that still excluded them: a key whose fresh scan value now matches what its queued
         // apply was supposed to produce is done, and rejoins ordinary tracking starting NEXT
         // tick (_lastScan above already reflects the landed value, so next tick's diff sees no
-        // change).
+        // change). A step-1-originated entry (present in _localDetectExpiry) ALSO releases once
+        // its grace window elapses, even without a matching scan — see LocalDetectGraceMs's own
+        // remarks for why an indefinite hold would be wrong here specifically.
         if (_pendingApplyTarget.Count > 0)
         {
             List<PartyPoolStackKey>? landed = null;
             foreach ((PartyPoolStackKey key, int target) in _pendingApplyTarget)
             {
-                if (engine.GetValueOrDefault(key) == target)
+                bool confirmed = engine.GetValueOrDefault(key) == target;
+                bool expired = _localDetectExpiry.TryGetValue(key, out long expiry) && nowMs >= expiry;
+
+                if (confirmed || expired)
                 {
                     (landed ??= []).Add(key);
                 }
@@ -124,7 +173,19 @@ internal sealed class PartyPoolPump(IGameBridge bridge, ICoopSession session, Ac
                 foreach (PartyPoolStackKey key in landed)
                 {
                     _pendingApplyTarget.Remove(key);
+                    _localDetectExpiry.Remove(key);
                 }
+            }
+        }
+
+        // Now safe to register this tick's own fresh detections — AFTER the landed-check above,
+        // so they cannot resolve themselves on the very tick they were published.
+        if (justDetected is not null)
+        {
+            foreach ((PartyPoolStackKey key, int value) in justDetected)
+            {
+                _pendingApplyTarget[key] = value;
+                _localDetectExpiry[key] = nowMs + LocalDetectGraceMs;
             }
         }
 

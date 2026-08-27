@@ -716,3 +716,148 @@ a strong hypothesis but not a confirmed one.
 `dotnet build KotorCoop.slnx -warnaserror` and `src/KotorCoop.Plugin/build.ps1 -WarnAsError`:
 both clean (no code changed this round). `dotnet test tests/KotorCoop.Tests --no-build`:
 2339/2339 passing (unchanged).
+
+## 10. 2026-08-28, round 4 — root cause 2 fixed: step 1's own detections had no protection
+## against a transient scan disagreement; a fourth attempt still could not force the exact live
+## symptom through pure timing
+
+This pass merged §9's own fresh live reproduction (the depositing-side duplicate, on the HOST's
+own log, 1.34s apart, asymmetric against test 3's clean client-originated deposit in the SAME
+session) and picked up exactly where it left off: "add direct instrumentation... to catch the
+race in the act" and "watch whether the HOST's plugin log shows `CheatKinds.PartyPoolAdd`...
+processed twice for what was, on the wire, a single relayed op." No rig this round either — the
+brief was to reproduce it in `PartyPoolLoopbackTests.cs` and fix it there.
+
+### 10.1 What was ruled out, again, more rigorously than §8's own attempt
+
+§8's own closing paragraph named the one thing its harness could not exercise: "the native
+plugin round trip itself... under genuine game-frame timing — the one difference between a
+`pooladd` console deposit and an ordinary GUI drag this round could reason about but not run."
+Re-reading `PartyPoolLoopbackTests.cs`'s existing `AgentLoop` this round found a SECOND gap
+alongside that one, never named before: its cheat-round-trip simulation ran INSIDE THE SAME
+loop iteration as `Agent.PumpOnce()` — one thread, strict ordering, every tick. Production is
+not that: `CoopAgent.RunAsync` (drives `PartyPoolPump.Pump()`) and
+`CoopCommandDispatcher.RunAsync` (drives `pooladd`/`DrainAutomaticPartyPool` through the
+single-slot cheat channel) are two independently-scheduled `async` loops with no shared
+synchronization context (`AgentComposition.cs`'s `dispatcher.RunAsync`,
+`SessionManager.cs`'s `agent.RunAsync` — separate `Task`s, not one loop calling the other). A
+race between step 1/step 2 and the cheat drain was structurally impossible to observe in the
+old single-loop harness, regardless of timing.
+
+This round closed that gap: `PartyPoolLoopbackTests.cs` gained a `DispatcherLoop` — the SAME
+single-slot arbitrated cheat simulation `AgentLoop` already had, but running as a genuinely
+separate `Task`, polled every 150ms (matching `CoopCommandDispatcher.RunAsync`'s real cadence),
+racing freely against `AgentLoop`'s own tick loop. `AgentLoop` itself gained an `autoDrain: false`
+mode so it does nothing but `PumpOnce()` when a `DispatcherLoop` owns the cheat channel instead
+— exactly `CoopAgent.RunAsync`'s real shape, which never drains `_pendingApplies` itself.
+
+`HostOriginatedPoolAddThroughTheRealCheatChannelDoesNotDoubleApply` (new) drives a HOST-issued
+`pooladd` through this genuinely-separated-threads rig, at PRODUCTION timing values (both the
+bridge scan-cache and `HeavyPumpIntervalMs` at the real 1000ms — the exact ratio §8's own
+"production ratio" experiment used) — the missing ingredient there was the single combined loop,
+not the timing, so this round fixed that specifically. Run repeatedly (multiple manual passes,
+both at production timing and at a compressed/stress timing matching §8's own worst-case
+config): **still clean every time — no double observed.** This is now a FOURTH independent
+negative result against forcing the exact live symptom (a duplicate `CheatKinds.PartyPoolAdd`
+submission on the ORIGINATING side) through anything reachable from pure C# timing alone, even
+with the one remaining structural gap between the test harness and production (separate threads)
+finally closed. Static tracing over the same ground reached the same wall analytically: on a
+`CoopHost`, `PublishPartyPoolOp` calls `PartyPoolStore.Record` SYNCHRONOUSLY (a `Lock`-protected,
+same-call-stack mutation — see `PartyPoolStore.cs`), so within any SINGLE `PartyPoolPump.Pump()`
+tick, step 2's read of `session.PartyPoolTotals` always already reflects step 1's own publish
+from earlier in that SAME call — the two literally cannot disagree with each other on a single
+thread, for a single-peer, single-key, host-only-deposits scenario, no matter how the cheat round
+trip's OWN timing is shifted. The kept test is real regression coverage for this now-rigorously-
+tested rig shape either way, and it stays in the suite.
+
+**Conclusion carried forward, now on stronger evidence: whatever the live round observed is not**
+**reachable by racing this codebase's own async loops against each other at ANY timing** — it
+must be either genuinely native (the plugin's own frame-timing, `Odyssey.AddItemToPartyPool`'s
+spawn-then-transfer sequence, or the shared-block cheat-serial handshake under real game-frame
+scheduling — none of which a loopback test can drive) or something narrower this round still did
+not find.
+
+### 10.2 A real, adjacent structural gap found and fixed anyway
+
+Re-reading `PartyPoolPump.cs`'s own two-layer echo-suppression design (the class's own doc
+comment) against the task's own candidate (c) — "the suppression that prevents 'my own apply
+looks like a local action' is keyed on the CLIENT path only" — surfaced a genuine asymmetry,
+independent of whichever native mechanism eventually explains the live symptom:
+
+`_pendingApplyTarget` (root cause 1's own fix) protects a key ONLY while step 2's own QUEUED
+apply is in flight — a peer's op this instance still owes its engine. A key step 1 ITSELF just
+detected and published (a genuine local action — a GUI drag, or a `pooladd` cheat's own landed
+effect) got NO equivalent protection at all: the very next tick, it was immediately eligible for
+re-detection again. Ordinarily harmless, since a real engine value does not spontaneously change
+— but if a fresh scan ever transiently DISAGREED with what step 1 just published (a stale
+scan-cache read still in its 1-second window, an item whose resref failed to resolve for one
+scan and recovered the next — see `KotorGameBridge.PartyPool.cs`'s own remarks on both), step 1
+would misread its OWN recent local action as a FURTHER genuine change and republish it — the
+exact "republish my own recent local action" shape root cause 1 already named for a different
+trigger (a landed AUTOMATIC apply, not a step-1 DETECTED one).
+
+**Fix** (`PartyPoolPump.cs`): a key step 1 detects and publishes now ALSO lands in
+`_pendingApplyTarget`, guarded by a new `_localDetectExpiry` deadline
+(`LocalDetectGraceMs = 2000`, twice the bridge's own 1-second scan-cache window). Unlike step 2's
+own entries — which wait INDEFINITELY for a matching scan, because a queued apply really is a
+fact this instance is still in the process of making true — a step-1 entry is released either
+once a fresh scan reconfirms the value (the common, fast path) OR once the grace window elapses,
+REGARDLESS of what the scan shows by then. The indefinite-wait shape root cause 1 used would have
+been WRONG here specifically: it would permanently swallow a genuine second local change on the
+same key (a player who deposits, then immediately withdraws the same stack, would never have the
+withdrawal detected — the "safe no-op forever" failure this codebase's own engine-write rules
+warn about). The new entries are staged during step 1's own loop but only actually registered
+into `_pendingApplyTarget` AFTER the existing "resolve applies that have landed" block runs (see
+the new `justDetected` staging list in `Pump()`) — registering them earlier would let that SAME
+tick's landed-check see a trivially-matching target and release the key right back out before
+step 2 ever saw it excluded, defeating the whole point.
+
+### 10.3 Regression coverage — one timing-based, one fully deterministic
+
+`HostOriginatedPoolAddThroughTheRealCheatChannelDoesNotDoubleApply` (§10.1) exercises the real,
+timing-dependent rig end to end; it did not fail before or after this fix (per §10.1, the
+mechanism it targets was never reachable this way), but it is kept as the strongest available
+loopback coverage of the live scenario's shape.
+
+`AStepOneDetectedLocalChangeSurvivesATransientScanGlitchWithoutChurning` (new) isolates §10.2's
+specific mechanism with a fully scripted, deterministic bridge (`ScriptedBridge` — no wall clock,
+no randomness, no thread races: each `PartyPoolPump.Pump()` tick is driven by the NEXT entry in
+an explicit scan sequence). The script: a host deposit lands and is detected once (0→3), the
+next two scans transiently disagree with what was just published (3→0→0 — standing in for ANY
+momentary engine-read inconsistency after a local detection), then recovers (0→3→3).
+
+**Verified failing against a reverted copy of this fix** (`git stash` the `PartyPoolPump.cs`
+change, keep the test): step 1 misreads the glitch as two FURTHER genuine local changes (a real
+Remove then a real Add) — `PartyPoolStore.Version` ends at 3 instead of 1, and the other five
+pre-existing `PartyPoolLoopbackTests` all still pass unchanged (confirming root cause 1's own fix
+is untouched and this is a distinct regression pin, not a duplicate of it).
+
+**Passing with the fix restored**: `Version` stays 1, `PartyPoolTotals[Blaster]` stays 3
+throughout the glitch — the transient disagreement is absorbed as noise instead of being
+republished, exactly root cause 2's fix's job.
+
+### 10.4 Verdict
+
+`party_pool_sync` stays OFF (`AgentSettings.PartyPoolSyncEnabled` still defaults false; this
+pass did not touch the default). The specific live symptom §9 recorded (a duplicate
+`CheatKinds.PartyPoolAdd` submission on the host's own log) was, for a FOURTH time, not
+reproducible through pure C# timing manipulation of this codebase's own async loops — the
+evidence now leans more strongly toward a native-layer trigger than before. This pass instead
+found and closed a real, adjacent structural gap in `PartyPoolPump`'s own echo-suppression
+design (step 1's detections had no protection against a transient scan disagreement that step
+2's queued applies already had) — a defensible hardening either way, and, if the native trigger
+does turn out to be exactly the kind of transient engine-scan inconsistency this fix anticipates
+(a stale scan-cache read, a resref-resolution miss on a freshly-spawned item — both genuinely
+possible per `KotorGameBridge.PartyPool.cs`'s own documented behaviour), this fix closes it too.
+
+**Next live-test step, unchanged in spirit from §8's own closing paragraph**: re-run §9's exact
+`pooladd` reproduction on a rig with `party_pool_sync=1`, watching the HOST's own plugin log for
+a duplicate `CheatKinds.PartyPoolAdd`. If it recurs even with this fix in place, the trigger is
+confirmed native (the plugin's own frame timing or the shared-block cheat-serial handshake under
+real game-frame scheduling) and this fix, while still a legitimate hardening, is not the whole
+answer; if it does not recur, this fix — or the combination of it and root cause 1's earlier one
+— was sufficient.
+
+`dotnet build KotorCoop.slnx -warnaserror`: clean. `dotnet test tests/KotorCoop.Tests --no-build
+--filter "FullyQualifiedName~PartyPool"`: 30/30 passing (up from the pre-existing suite plus the
+two new tests this round added).
