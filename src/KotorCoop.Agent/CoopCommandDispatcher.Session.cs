@@ -165,6 +165,14 @@ public sealed partial class CoopCommandDispatcher
         Reply($"  send intervals (ms, oldest first): {FormatIntervals(stats.RecentSendIntervalsMs)}");
         Reply($"  recv intervals (ms, oldest first): {FormatIntervals(stats.RecentRecvIntervalsMs)}");
 
+        // Host only (see SessionStats.WorldSnapshotPagesSent) - a client never sends this
+        // packet, so 0 there just means "not the host", not "nothing is happening".
+        if (stats.WorldSnapshotPagesSent > 0)
+        {
+            Reply($"  world snapshot pages sent: {stats.WorldSnapshotPagesSent} "
+                + "(more than one per tick means the lobby is paging, not dropping)");
+        }
+
         if (manager.Agent is { } agent)
         {
             Reply($"  agent pump: {agent.PumpAverageMs:F1} ms average, {agent.PumpPeakMs:F1} ms peak "

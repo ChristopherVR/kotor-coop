@@ -148,4 +148,4 @@ fails safe. **INFERRED** = a reasonable deduction, not directly proven.
 | --- | --- | --- |
 | [shared-state-audit.md](shared-state-audit.md) | What actually replicates, and what only looks like it does | **Master append-only log** — live-verified findings across many rounds |
 | [symmetry.md](symmetry.md) | Auditing that every shared action is symmetric regardless of host/client | Audited; no new asymmetry found, click-to-join symmetry live-verified for all four `dialogue_auto_join` modes |
-| [lag-audit.md](lag-audit.md) | Static + live audit of every per-frame cost and latency budget | `party_fast_pump` shipped ON by default off a measured win; its heavy-combat frame-time regression found and closed |
+| [lag-audit.md](lag-audit.md) | Static + live audit of every per-frame cost and latency budget | `party_fast_pump` shipped ON by default off a measured win, its heavy-combat frame-time regression found and closed; `WorldSnapshotPacket` now pages a full lobby across several datagrams instead of silently dropping the whole tick (protocol v43), loopback-verified for 8 peers, NEEDS-LIVE against real `swkotor.exe` |

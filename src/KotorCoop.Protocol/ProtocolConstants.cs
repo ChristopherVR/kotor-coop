@@ -112,8 +112,16 @@ public static class ProtocolConstants
     /// Version 42: <see cref="PacketType.PartyPoolOp"/> (53) / <see cref="PacketType.PartyPoolAck"/>
     /// (54) / <see cref="PacketType.PartyPoolSyncRequest"/> (55) — the shared party item-pool
     /// channel (<c>party_pool_sync</c>, default OFF, NEEDS-LIVE). See docs/research/party-pool-sync.md.
+    ///
+    /// Version 43: <see cref="WorldSnapshotPacket"/> gains <c>PageIndex</c>/<c>PageCount</c> —
+    /// a full lobby's aggregate entry size that would overrun <see cref="MaxPacketSize"/> now
+    /// degrades to several datagrams per tick (graceful pagination, like
+    /// <see cref="PacketType.CreatureLiveness"/> already does for its own wider publish)
+    /// instead of being silently dropped whole; the flag/item/journal/loot version+digest
+    /// tripwires ride on page 0 only, so a later page costs fewer bytes. See
+    /// docs/research/lag-audit.md's 2026-08-27 entry.
     /// </summary>
-    public const byte Version = 42;
+    public const byte Version = 43;
 
     /// <summary>Journal quest tags are resrefs plus a little slack.</summary>
     public const int MaxJournalTagLength = 32;
@@ -174,6 +182,19 @@ public static class ProtocolConstants
     /// <see cref="CreatureLivenessPacket.PageIndex"/>.
     /// </summary>
     public const int MaxCreatureLivenessEntries = 96;
+
+    /// <summary>
+    /// Peer entries per <see cref="WorldSnapshotPacket"/> page. Each entry is up to 152 bytes
+    /// (id + a <see cref="MaxNameLength"/> name + a <c>PlayerState</c> whose module and three
+    /// equipment resrefs are all at their caps), and page 0 additionally carries the
+    /// flag/item/journal/loot version+digest tripwires (which ride on page 0 only — see
+    /// <see cref="WorldSnapshotPacket"/>'s remarks), so 5 is sized against page 0's own
+    /// tighter budget rather than a later page's roomier one — the fit is asserted by a test
+    /// rather than by this arithmetic alone. A full <see cref="MaxPeers"/> lobby needs at most
+    /// two pages this way, comfortably inside <see cref="WorldSnapshotPacket.MaxPages"/>. See
+    /// docs/research/lag-audit.md's 2026-08-27 entry.
+    /// </summary>
+    public const int MaxSnapshotEntriesPerPage = 5;
 
     /// <summary>Party companions the host replicates. KOTOR allows two active at once; a
     /// little headroom costs nothing.</summary>
@@ -260,6 +281,15 @@ public static class ProtocolConstants
     /// the whole snapshot was dropped. The guard test claimed to prove otherwise while
     /// quietly measuring a state with no equipment; see FullPeerSnapshotFitsInOneDatagram.
     /// Nothing on the wire encodes this value, so it is a buffer size and nothing more.
+    ///
+    /// 2026-08-27: raising the cap only ever bought back one growth cycle — the next field
+    /// added to <c>PlayerState</c>, <c>MaxNameLength</c>, or <see cref="MaxPeers"/> itself
+    /// would have reopened the identical silent-drop failure. <see cref="WorldSnapshotPacket"/>
+    /// now pages instead (<see cref="MaxSnapshotEntriesPerPage"/>,
+    /// <see cref="WorldSnapshotPacket.MaxPages"/>), the same fix already shipped for
+    /// <see cref="PacketType.CreatureLiveness"/>'s wider publish, so a future overrun degrades
+    /// to more datagrams per tick rather than reopening this bug. See
+    /// docs/research/lag-audit.md.
     /// </summary>
     public const int MaxPacketSize = 1400;
 
