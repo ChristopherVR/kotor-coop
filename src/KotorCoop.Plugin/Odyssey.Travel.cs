@@ -125,6 +125,124 @@ internal static unsafe partial class Odyssey
         return true;
     }
 
+    // ---- reading the move-to-module funnel back (docs/research/transition-smoothness.md,
+    // 2026-08-27) ---------------------------------------------------------------------------
+    //
+    // Everything above this point in the section only WRITES +0x10080/+0x10084/+0x1008C — the
+    // door path (CSWSDoor::EventHandler) and every NWScript StartNewModule() call (galaxy-map
+    // legs, Leviathan capture, Star Forge stages, the Ebon Hawk exit corridor's own dispatch)
+    // ALSO write them, through the identical three engine calls, so reading them back is a
+    // single detection point for every one of those transition kinds at once — not just the
+    // ones the plugin's own TravelToModule above issues.
+    //
+    // VERIFIED this pass, all three by disassembly (tools/xrefs.py, tools/disasm.py against the
+    // GOG v1.0.3 image):
+    //   * SetMoveToModulePending (0x004AECC0): `mov dword ptr [ecx.internal+0x10080], ecx.arg`
+    //     — a plain dword at CServerExoAppInternal+0x10080.
+    //   * SetMoveToModuleString (0x004AECD0): `ecx = ecx.internal + 0x10084; jmp CExoString::
+    //     operator= (0x005E5C50)` — an EMBEDDED CExoString (assigned by value, not a pointer)
+    //     at +0x10084.
+    //   * SetMoveToModuleStartWaypoint (0x004AED30): identical shape, `+ 0x1008C`.
+    //   * xrefs.py on SetMoveToModulePendingFn (0x4AECC0) finds SIX call sites, not the "one
+    //     funnel" the design doc's headline suggested for the WRITE side —
+    //     CSWSDoor::EventHandler (the door path _transitionPending already watches),
+    //     CSWVirtualMachineCommands::ExecuteCommandStartNewModule (every NWScript
+    //     StartNewModule() — both galaxy-map legs, Leviathan capture, Star Forge, any mod
+    //     content), CSWSArea::EventHandler and CSWSTrigger::EventHandler (native area/trigger-
+    //     driven transitions with no NWScript call in between — not previously documented),
+    //     and Global::warp / CSWGuiLoadModuleDebugMenu::OnModulePicked (both debug-only). The
+    //     READ side is still the single funnel the design doc needed: every one of those six
+    //     writers converges on these same three fields, so one poll covers all of them.
+    //   * StartNewModule itself (0x4BA920, the function that DRAINS the funnel) still has
+    //     exactly one call site (0x4BAD93) — re-confirmed, unchanged from the design doc.
+
+    /// <summary>CServerExoAppInternal + this = the move-to-module-pending dword. Nonzero once
+    /// ANY of the six writers above has committed to a transition.</summary>
+    private const int ServerMoveToModulePending = 0x10080;
+
+    /// <summary>CServerExoAppInternal + this = the destination module, an EMBEDDED CExoString
+    /// (char* at +0, length at +4 — length includes the terminator, see the CExoString length
+    /// trap; <see cref="ReadExoString"/> already cuts at the first null).</summary>
+    private const int ServerMoveToModuleDestination = 0x10084;
+
+    /// <summary>CServerExoAppInternal + this = the entry waypoint tag, same embedded-CExoString
+    /// shape as <see cref="ServerMoveToModuleDestination"/>, 8 bytes later.</summary>
+    private const int ServerMoveToModuleStartWaypoint = 0x1008C;
+
+    /// <summary>
+    /// True while the engine has committed to a move-to-module transition of ANY kind — a real
+    /// door, a script's <c>StartNewModule()</c> (galaxy map, Leviathan capture, Star Forge, ...),
+    /// a native area/trigger-driven transition, or a debug verb. A plain dword read, as cheap
+    /// as <see cref="IsAreaTransitionPending"/>, safe to call every frame.
+    /// </summary>
+    public static bool IsMoveToModulePending()
+    {
+        nint server = GetServer();
+        if (server == 0)
+        {
+            return false;
+        }
+
+        nint internalServer = Deref(server + AppServerOffsetInternal);
+        return internalServer != 0 && *(int*)(internalServer + ServerMoveToModulePending) != 0;
+    }
+
+    /// <summary>
+    /// Copies the pending transition's destination module resref. Returns bytes written, 0 on
+    /// any failure (no server, garbage pointer, oversized length) — the same fail-safe shape
+    /// <see cref="ReadExoString"/> already gives the door reader, so a bad read here degrades to
+    /// "no announce", never a bogus one.
+    /// </summary>
+    public static int ReadMoveToModuleDestination(byte* destination, int capacity)
+    {
+        nint internalServer = MoveToModuleInternalServer();
+        return internalServer == 0
+            ? 0
+            : ReadExoString(internalServer + ServerMoveToModuleDestination, destination, capacity);
+    }
+
+    /// <summary>Copies the pending transition's entry waypoint tag. Same fail-safe shape as
+    /// <see cref="ReadMoveToModuleDestination"/>; an empty result means "no waypoint carried",
+    /// not a failure — the follow already falls back to the destination module's default entry
+    /// for that case, the same way it does for a plain <c>warp</c>.</summary>
+    public static int ReadMoveToModuleStartWaypoint(byte* destination, int capacity)
+    {
+        nint internalServer = MoveToModuleInternalServer();
+        return internalServer == 0
+            ? 0
+            : ReadExoString(internalServer + ServerMoveToModuleStartWaypoint, destination, capacity);
+    }
+
+    /// <summary>
+    /// Copies the CURRENTLY LOADED module's own resref — the transition's SOURCE, not its
+    /// destination. Used only to classify a scripted transition as a galaxy-map departure
+    /// (both legs originate from inside an Ebon Hawk instance,
+    /// docs/research/galaxy-map-and-party-select.md §1.3) — diagnostic, never a decision input.
+    /// </summary>
+    public static int ReadCurrentModuleName(byte* destination, int capacity)
+    {
+        nint server = GetServer();
+        if (server == 0)
+        {
+            return 0;
+        }
+
+        nint internalServer = Deref(server + AppServerOffsetInternal);
+        if (internalServer == 0)
+        {
+            return 0;
+        }
+
+        nint serverInfo = Deref(internalServer + ServerInfoOffset);
+        return serverInfo == 0 ? 0 : ReadExoString(serverInfo + ServerInfoModuleName, destination, capacity);
+    }
+
+    private static nint MoveToModuleInternalServer()
+    {
+        nint server = GetServer();
+        return server == 0 ? 0 : Deref(server + AppServerOffsetInternal);
+    }
+
     /// <summary>
     /// True when the server can hand back a player creature, which is the cheapest
     /// "are we actually in a world" test available.

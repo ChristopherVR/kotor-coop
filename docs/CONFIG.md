@@ -141,6 +141,7 @@ entirely; both now default ON, matching each other and the shipped file's explic
 | `hide_party_portraits` | ON | hide companion portraits (control lock) | [client-control-lock.md](research/client-control-lock.md) |
 | `spectate_on_down` | ON | hand the camera to a partner while downed | [spectate-camera.md](research/spectate-camera.md) |
 | `transition_announce_fade` | OFF | fade during an announced transition | [transition-smoothness.md](research/transition-smoothness.md) |
+| `transition_announce_scripted` | ON | also announce non-door transitions (galaxy-map departures, Leviathan/Star Forge stage changes, any other scripted `StartNewModule()`) through the same channel, tagged `Script`/`GalaxyMap` for the log only (NEEDS-LIVE) | [transition-smoothness.md](research/transition-smoothness.md) §11 |
 | `trigger_relay` | ON⁵ | relay a generic trigger's `OnEnter` to peers | [trigger-relay.md](research/trigger-relay.md) |
 | `trigger_relay_patterns` | `k_p*_*` | comma-separated globs matched against a trigger's OnEnter script | [trigger-relay.md](research/trigger-relay.md) |
 | `dialogue_join_teleport` | ON | teleport a late joiner into a conversation instead of walking | [dialogue-join-latency.md](research/dialogue-join-latency.md) |

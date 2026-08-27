@@ -39,6 +39,28 @@ internal sealed unsafe class TravelController(SharedBlockView block)
     public bool HasPendingRequest => block.TravelSerial != block.TravelApplied;
 
     /// <summary>
+    /// True from the moment THIS instance's own commanded warp (<see cref="Execute"/> below)
+    /// successfully calls <c>Odyssey.TravelToModule</c> until <c>PluginHost</c> resets it at the
+    /// same two points it resets <c>_transitionPending</c>/<c>_travelAnnounced</c> (world torn
+    /// down, or a fresh epoch observed). Exists for one reason: the scripted-transition watch
+    /// (docs/research/transition-smoothness.md, 2026-08-27) polls
+    /// <c>Odyssey.IsMoveToModulePending()</c> on frames AFTER this method has already returned
+    /// (that field only rises once <see cref="Execute"/> calls <c>TravelToModule</c>, which is
+    /// the LAST thing this method does before returning) — so a single-frame flag like
+    /// <c>PluginHost._travelAnnounced</c> (reset every epoch-valid frame, re-armed only while
+    /// <see cref="HasPendingRequest"/> is still true) has already gone false again by the frame
+    /// the scripted watch would observe the pending flag. This one is set exactly when
+    /// <c>Odyssey.TravelToModule</c> succeeds and stays true across that gap, so the scripted
+    /// watch never re-announces (with the wrong kind, on top of a request this class already
+    /// announced explicitly, §3.2) a warp this instance issued on the session's own authority.
+    /// </summary>
+    public bool OwnWarpPending { get; private set; }
+
+    /// <summary>Called by <c>PluginHost</c> at the same two points it resets
+    /// <c>_transitionPending</c>/<c>_travelAnnounced</c>.</summary>
+    public void ClearOwnWarpPending() => OwnWarpPending = false;
+
+    /// <summary>
     /// Task 2b (docs/research/transition-smoothness.md): the serial <see cref="MaybeStartFade"/>
     /// has already faded for, so a pending request that spans several frames of flush is faded
     /// exactly once rather than restarted every frame.
@@ -164,6 +186,11 @@ internal sealed unsafe class TravelController(SharedBlockView block)
         block.PublishTransitionAnnounce(name, waypointName);
 
         bool ok = Odyssey.TravelToModule(module, length, waypoint, waypointLength, out int failure);
+        if (ok)
+        {
+            OwnWarpPending = true;
+        }
+
         block.TravelStatus = ok ? 0 : failure;
         block.TravelApplied = serial;
 

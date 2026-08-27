@@ -246,6 +246,15 @@ client_door_refusal=1
 # case also clean. ON by default.
 transition_announce=1
 
+# Also announce a NON-door transition the same way: an NWScript StartNewModule() call (both
+# galaxy-map departure legs, the Leviathan capture, Star Forge stage changes), a native
+# area/trigger-driven transition, or a debug verb. Layered UNDER transition_announce above -
+# both must be on for a scripted announce to actually reach a peer. Reads are guarded the same
+# way the door reader already is (a bad read publishes nothing, never a bogus destination), so
+# this ships ON by default; the read itself is not yet live-verified for a real galaxy-map trip
+# - see docs/research/transition-smoothness.md SS11's NEEDS-LIVE list.
+transition_announce_scripted=1
+
 # Who may LEAD a transition the other player follows via transition_announce above: `any`
 # (the default) lets either player's committed door crossing become an announce the other
 # follows; `host` restores the older, strictly one-directional behaviour where only the host

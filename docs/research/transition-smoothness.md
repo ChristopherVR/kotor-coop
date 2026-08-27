@@ -1024,3 +1024,198 @@ a new opt-in surface).
   today's whole rig (and every other feature this codebase ships) is validated at exactly two
   peers, so this is a documented gap consistent with the project's existing scope, not a new one
   introduced here.
+
+## 11. The announce-edge extension (2026-08-27) — galaxy map, and every other non-door `StartNewModule()`
+
+`docs/research/galaxy-map-and-party-select.md`'s own §1.4/§4 item 1 named the gap this section
+closes: everything above this line only ever watches the door-specific `trans_pending` rising
+edge, so a galaxy-map departure (either of its two legs), a Leviathan capture, a Star Forge
+stage change, or any other scripted `StartNewModule()` call was never announced at all — a
+follower only ever found out once the leader's *published* module actually changed, the full
+5.6-5.8 s+ latency §1 measured for a bare door, twice in a row for a galaxy-map trip.
+
+### 11.1 Re-verification of the funnel — VERIFIED, refines the design doc's own headline
+
+The design doc's headline claimed `CServerExoAppInternal::StartNewModule 0x004BA920` was fed by
+"a single pending-transition funnel." Re-disassembled this pass (`tools/xrefs.py`,
+`tools/disasm.py`, GOG v1.0.3):
+
+* **`StartNewModule` itself (the DRAIN) still has exactly one call site** — `0x004BAD93`,
+  unchanged, re-confirmed. This part of the headline holds exactly as written.
+* **The field it drains (the WRITE side) does NOT have a single writer.** `SetMoveToModulePending`
+  (`0x004AECC0`) has **six** call sites, not one:
+
+  | Call site | Function | What it is |
+  | --- | --- | --- |
+  | `0x0058C192` | `CSWSDoor::EventHandler` | the door path `_transitionPending` already watches |
+  | `0x0054457A` | `CSWVirtualMachineCommands::ExecuteCommandStartNewModule` | every NWScript `StartNewModule()` call — both galaxy-map legs, Leviathan capture, Star Forge stages, any mod content |
+  | `0x0050DA04` | `CSWSArea::EventHandler` | a native area-driven transition — not previously documented in this codebase |
+  | `0x0058F2CD` | `CSWSTrigger::EventHandler` | a native trigger-driven transition with no NWScript call in between — not previously documented |
+  | `0x0060B004` | `Global::warp` | the engine's own built-in debug cheat |
+  | `0x006CFA3D` | `CSWGuiLoadModuleDebugMenu::OnModulePicked` | the debug module-load menu |
+
+  So "single funnel" is true of the READ side (one field, one drain function) but was never
+  true of the WRITE side — this section's fix reads the field back, which is exactly why it
+  still covers all six writers with one poll, but the earlier "single call site" framing is
+  corrected here rather than repeated.
+* **The three fields' offsets and shapes — VERIFIED by disassembling the setters themselves**,
+  not inferred from their names:
+  * `SetMoveToModulePending` (`0x004AECC0`): `mov dword ptr [ecx.internal+0x10080], ecx.arg` —
+    a plain dword.
+  * `SetMoveToModuleString` (`0x004AECD0`): `ecx = ecx.internal + 0x10084; jmp CExoString::
+    operator= (0x005E5C50)` — an EMBEDDED `CExoString` (assigned by value), not a pointer.
+  * `SetMoveToModuleStartWaypoint` (`0x004AED30`): identical shape, `+ 0x1008C`.
+* **A door ALSO raises this same field**, confirming `DoorUse.cs`'s own pre-existing doc
+  comment rather than a new finding: phase 2 of a door crossing (when the 0.5 s fade completes)
+  calls the identical `SetMoveToModulePending`/`SetMoveToModuleString`/
+  `SetMoveToModuleStartWaypoint` triple, then `SetTransitionPending(0, 0)`. A rising edge on
+  this field is therefore NOT door-exclusive evidence — §11.2 below is the de-dup this implies.
+
+### 11.2 The plugin-side read and its de-dup — VERIFIED signature, NEEDS-LIVE the timing claim
+
+`Odyssey.Travel.cs` gains `IsMoveToModulePending()`, `ReadMoveToModuleDestination`,
+`ReadMoveToModuleStartWaypoint` (all guarded the identical way the door's own `ReadExoString`
+already is — a bad pointer or an out-of-range length returns 0/empty, never garbage) and
+`ReadCurrentModuleName` (the SOURCE module, for the kind heuristic below, §11.3).
+
+`PluginHost.OnFrame` polls `Odyssey.IsMoveToModulePending()` on a rising edge, placed after the
+existing door (`trans_pending`) block and its "aborted transition" check, and before the
+`_travel` (co-op-commanded warp) block. It fires `TransitionAnnounceWatch
+.OnScriptedTransitionBegan` only when BOTH of the following hold, avoiding a duplicate/
+misleading announce for a crossing another path already announced:
+
+* **`!_doorTransitionAnnouncedThisEpoch`** — a new flag set the instant the door watch fires,
+  reset at the same two points `_transitionPending`/`_travelAnnounced` already reset (world
+  torn down, or a fresh epoch observed). Given §11.1's finding that a door ALSO raises this
+  field (later, once its fade completes), this is what stops a real door crossing from getting
+  a second, misleadingly-"Script"-tagged announce for the same crossing.
+* **`!TravelController.OwnWarpPending`** — a new flag on `TravelController`, set the instant its
+  own `Execute()` successfully calls `Odyssey.TravelToModule` (a co-op-commanded warp: a peer
+  being pulled along, or the `moviewarp` debug verb), reset at the same two points. This is
+  deliberately NOT `PluginHost._travelAnnounced` (already used for the same "is this our own
+  co-op warp" question by `WorldLoadRule`): that flag is single-frame — reset every epoch-valid
+  frame, re-armed only while `HasPendingRequest` is still true — and `Odyssey.TravelToModule`
+  is the LAST thing `Execute()` does before an unconditional `return`, so by the time
+  `IsMoveToModulePending()` is ever observed true for a co-op warp, at least one frame has
+  passed and `_travelAnnounced` has already gone false again. `OwnWarpPending` was added
+  specifically to survive that gap — `TravelController.Execute` already publishes this exact
+  announce explicitly (§3.2), so without this gate a co-op warp would get a second, redundant
+  publish tagged the wrong kind.
+
+**VERIFIED**: the gate logic itself, and that neither flag can leak past an epoch reset (both
+are cleared at the identical two points `_transitionPending` is, by inspection). **NEEDS-LIVE**:
+whether a real door crossing's own timing ever produces a frame where `_transitionPending`
+reads false, `move_to_module_pending` reads true, AND the epoch is still valid — the analysis
+in this section (and the complete absence of any `transition flushed but not taken` line in
+§9.2's clean, successful door-crossing log) suggests the door's phase-2 handler and the
+`StartNewModule` drain collapse into the same frame in practice, so this window may never
+actually open — but `_doorTransitionAnnouncedThisEpoch` is a cheap, unconditional guard against
+it regardless of whether the window is real. Even a failure of this specific gate degrades to a
+harmless redundant announce (§10.4 already establishes this live, for the lead-swap echo case),
+never a wrong destination or a crash.
+
+### 11.3 Kind tagging — diagnostic only, deliberately not carried on the wire
+
+`TransitionAnnounceKind` (`src/KotorCoop.Plugin/TransitionAnnounceKind.cs`, new, pure, added to
+`KotorCoop.Tests.csproj`'s compile-include list): `Door` (the pre-existing watch),
+`Script` (the new funnel read, source unclassified), `GalaxyMap` (a `Script` transition whose
+SOURCE module — read via the new `ReadCurrentModuleName`, not the destination — exactly
+matches one of the three Ebon Hawk instance resrefs `ebo_m12aa`/`ebo_m40aa`/`ebo_m41aa`
+`galaxy-map-and-party-select.md` §1.3 traced both departure legs originating from).
+
+**This never crosses the wire and never touches `SharedBlock`.** `TransitionAnnounceRule.Decide`
+and `LeadFollowRule.DecideHostFollow` take no kind parameter and never will — an announced
+destination is "earlier information, never a different set of rules" regardless of which of the
+six writers raised it (§3.3's own framing, unchanged). The kind is computed and logged
+plugin-side only (`announce: scripted transition beginning (GalaxyMap) -> '...'`), purely so a
+live pass can tell what actually fired at a glance. `SharedBlock.Version` stays at 53 and
+`ProtocolConstants.Version` stays at 40 — no new field, no wire change, nothing for the
+version-collision hazard `docs/CONTRIBUTING.md` warns about.
+
+**INFERRED, explicitly**: the `GalaxyMap` classification is a source-module heuristic, not an
+engine-native distinction — nothing in `CServerExoAppInternal`'s own state says "this
+transition came from the galaxy map." It will also tag a hypothetical future non-galaxy-map
+script transition that happens to depart from inside one of those three modules as `GalaxyMap`;
+given this doc's own tracing found no other scripted departure point inside an Ebon Hawk
+instance, this is treated as an acceptable, diagnostic-only approximation, not shipped as a
+decision input anywhere.
+
+**Refusal is explicitly out of scope for a scripted transition.** `TransitionAnnounceWatch
+.OnScriptedTransitionBegan` never checks `ClientDoorRefusalArmed`: a script-driven transition
+never raises `trans_pending`, so there is no fade window to intercept and no known engine call
+that cancels a `StartNewModule()` already mid-flight the way `TryClearTransitionPending` does
+for a door (§4.1/§9.3). A client whose OWN scripted transition begins while armed proceeds
+un-refused today — a documented gap, not attempted this pass.
+
+### 11.4 The flag: `transition_announce_scripted`, default ON
+
+Plugin-side only (`PluginConfig.ReadBool`, mirroring `transition_announce_fade`'s exact
+pattern) — gates ONLY whether the plugin ever calls `Odyssey.IsMoveToModulePending()` /
+`OnScriptedTransitionBegan` at all. Layered UNDER the pre-existing agent-side
+`transition_announce` relay gate, not a replacement for it: both must be on for a scripted
+announce to reach a peer, matching the base channel's own "the plugin always writes, the agent
+decides whether to relay" split (§3.3).
+
+**Default ON**, per the task's own decision rule ("default ON only if the read is guarded and a
+bad read degrades to 'no announce'; otherwise OFF"): every new read is guarded identically to
+the door reader's own proven-safe shape (a bad pointer or an out-of-range length returns 0/empty
+and nothing is published — `ReadExoString`'s existing contract, reused verbatim), and the
+worst-case failure of the whole feature — the funnel never fires, or fires and is silently
+dropped by a gate — is "no speedup for that one transition," identical to today's behaviour with
+the flag off. The pre-existing slow-path follow (module-diff based) is completely unmodified and
+still catches every transition this edge might miss.
+
+### 11.5 What follows the announce — unchanged, confirmed by re-reading
+
+The follower's own consumption (`TransitionAnnounceRule.Decide` → `TryFollowAnnouncedTransition`
+→ `bridge.TryRequestTravel(announce.Module, announce.Waypoint, movies)`) needed NO changes: it
+already forwards `announce.Waypoint` as-is, and `TryRequestTravel`/`Odyssey.TravelToModule`
+already treat an empty waypoint as "use the destination module's own default entry" (the exact
+behaviour a plain `warp` with no waypoint already gets, `Odyssey.TravelToModule`'s own
+`waypointLength > 0 ? ... : 0` branch). So "if the waypoint is missing, fall back to the
+module's default entry" — the task's own requirement — was already true of the channel before
+this pass; the scripted watch only had to populate the SAME two fields the door watch and
+`TravelController.Execute` already do, through the same `PublishTransitionAnnounce(module,
+waypoint)` call, which is exactly what §11.2 does.
+
+### 11.6 Files changed
+
+* `src/KotorCoop.Plugin/Odyssey.Travel.cs` — the four new reads (§11.2).
+* `src/KotorCoop.Plugin/TransitionAnnounceKind.cs` (new) — the kind enum + pure classifier.
+* `src/KotorCoop.Plugin/TransitionAnnounceWatch.cs` — `OnScriptedTransitionBegan`.
+* `src/KotorCoop.Plugin/TravelController.cs` — `OwnWarpPending`/`ClearOwnWarpPending`.
+* `src/KotorCoop.Plugin/PluginHost.Frame.cs` — the new watch, its two gating flags, and the
+  `transition_announce_scripted` read.
+* `tests/KotorCoop.Tests/TransitionAnnounceKindTests.cs` (new), `KotorCoop.Tests.csproj`
+  (compile-include for `TransitionAnnounceKind.cs`).
+* `docs/CONFIG.md`, `profiles/coop.ini.example`, `docs/roadmap-seamless.md` (item 18).
+
+### 11.7 What remains — NEEDS-LIVE
+
+1. **The galaxy-map live pass** (`galaxy-map-and-party-select.md` §4 item 5's own script): from
+   an Ebon Hawk save, one instance picks a planet on the galaxy map; confirm the OTHER instance's
+   agent log shows `host announced transition to '<ebo_mXXaa>'` (leg 1, kind `GalaxyMap`) before
+   the leader's own published module changes, then — after walking the exit corridor —
+   `host announced transition to '<planet module>'` (leg 2, also kind `GalaxyMap` by the source-
+   module heuristic) before the leader's own module changes again. Confirm both legs' follower
+   `travel:` lines land within about one agent tick of each announce, the same order-of-magnitude
+   improvement §6.2/§10.5 measured for a door.
+2. **A scripted, non-galaxy-map transition**: the Endar Spire escape pod at the end of
+   `end_m01ab` (a `warp`-free, plot-triggered `StartNewModule()`, no galaxy map involved) —
+   confirm the plugin log shows `announce: scripted transition beginning (Script) -> '...'` and
+   the other instance follows immediately, the same shape as item 1 but exercising the `Script`
+   (not `GalaxyMap`) tag and a transition with no Ebon Hawk source module at all.
+3. **The de-dup gate's own timing claim** (§11.2's NEEDS-LIVE item): confirm a real door crossing
+   never produces a spurious second `Script`-tagged announce — grep the plugin log across a
+   normal door crossing for a `scripted transition beginning` line; there should be none.
+4. **Whether the six writers found in §11.1 actually fire live** for the cases this doc has not
+   directly observed — `CSWSArea::EventHandler` and `CSWSTrigger::EventHandler` in particular
+   (native area/trigger-driven transitions) have no confirmed live trigger in this codebase's
+   own research; if either fires for something this pass has not anticipated, the scripted
+   watch should still catch it (it reads the field, not a specific caller), but the CLAIM that
+   it does is unverified until observed.
+5. **Movies riding a galaxy-map leg 1 announce**: `CinematicWatch`'s own poll (§1's "already
+   relayed today, verified by reading the poll") is unrelated to and unaffected by this section's
+   change, but a combined live pass (item 1 above) is the first chance to confirm both the
+   announce and the movie relay fire together correctly for a REAL galaxy-map departure, not
+   just the synthetic `moviewarp` staging prior passes used.

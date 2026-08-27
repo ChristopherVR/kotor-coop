@@ -108,6 +108,53 @@ internal static unsafe class TransitionAnnounceWatch
             + (waypoint.Length > 0 ? $" at waypoint '{waypoint}'" : string.Empty));
     }
 
+    /// <summary>
+    /// The scripted-funnel sibling of <see cref="OnTransitionBegan"/> (docs/research/
+    /// transition-smoothness.md, 2026-08-27): runs on the rising edge of
+    /// <c>Odyssey.IsMoveToModulePending()</c> — the field EVERY <c>StartNewModule()</c> call
+    /// writes, not just a door's — for a transition the door watch never saw (a galaxy-map
+    /// departure, a Leviathan/Star Forge stage change, a native trigger-driven transition, or a
+    /// debug verb). The caller (<c>PluginHost.OnFrame</c>) already guarantees this only runs
+    /// when no door transition is in flight this epoch and this instance's own
+    /// <see cref="TravelController"/> did not raise the flag itself — see that caller's own
+    /// comments for exactly what guards it.
+    ///
+    /// UNLIKE the door watch, this cannot attempt a client-door-style refusal: a script-driven
+    /// transition never raises <c>trans_pending</c>, so there is no fade window to intercept and
+    /// no known engine call that cancels a <c>StartNewModule()</c> already mid-flight — refusing
+    /// a scripted transition is out of scope for this pass (docs/research/
+    /// transition-smoothness.md's dated section, "what remains").
+    /// </summary>
+    public static void OnScriptedTransitionBegan(SharedBlockView view)
+    {
+        byte* moduleBuf = stackalloc byte[SharedBlock.TravelNameLength];
+        int moduleLength = Odyssey.ReadMoveToModuleDestination(moduleBuf, SharedBlock.TravelNameLength);
+        if (moduleLength <= 0)
+        {
+            PluginHost.Log(
+                "announce: scripted transition pending but the destination module could not be "
+                + "read - the fallback module-change detection will still carry the follow");
+            return;
+        }
+
+        byte* waypointBuf = stackalloc byte[SharedBlock.TravelNameLength];
+        int waypointLength = Odyssey.ReadMoveToModuleStartWaypoint(waypointBuf, SharedBlock.TravelNameLength);
+
+        byte* sourceBuf = stackalloc byte[SharedBlock.TravelNameLength];
+        int sourceLength = Odyssey.ReadCurrentModuleName(sourceBuf, SharedBlock.TravelNameLength);
+
+        string module = Encoding.ASCII.GetString(moduleBuf, moduleLength);
+        string waypoint = waypointLength > 0 ? Encoding.ASCII.GetString(waypointBuf, waypointLength) : string.Empty;
+        string source = sourceLength > 0 ? Encoding.ASCII.GetString(sourceBuf, sourceLength) : string.Empty;
+
+        TransitionAnnounceKind kind = TransitionAnnounceKindClassifier.Classify(source);
+
+        view.PublishTransitionAnnounce(module, waypoint);
+        PluginHost.Log(
+            $"announce: scripted transition beginning ({kind}) -> '{module}'"
+            + (waypoint.Length > 0 ? $" at waypoint '{waypoint}'" : string.Empty));
+    }
+
     /// <summary>Mirrors <c>KotorCoop.Protocol.ClientDoorRefusalReason.HostBusy</c> by value —
     /// see <see cref="SharedBlockView.ClientDoorRefusalReason"/> for why this cannot be a shared
     /// enum type.</summary>
