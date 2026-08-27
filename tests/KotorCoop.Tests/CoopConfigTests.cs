@@ -182,6 +182,21 @@ public class CoopConfigTests
             // The persistent connection indicator (item 18) defaults on too, the same rule
             // menu_button and chat_overlay already follow: absent key means ON.
             Assert.True(c.StatusToasts);
+
+            // companion_xp_sync defaults ON (docs/research/companion-state-sync.md §6,
+            // live-verified 2026-08-27) — through TryLoad's real ini-parsing path, not just
+            // the CoopConfig record's own bare-constructor default: an existing player's
+            // coop.ini from before this flag existed has no line for it at all (the installer
+            // never rewrites an existing coop.ini), so an absent key is the common case this
+            // must get right, not an edge case.
+            Assert.True(c.CompanionXpSync);
+
+            // script_item_sync defaults ON the same way (c3c50b8 flipped the property default
+            // but this line's ini-parse still read a missing key as OFF — the identical bug
+            // class companion_xp_sync above was fixed for). An existing player's coop.ini from
+            // before this flag existed has no line for it at all, so absent-means-ON is the
+            // common case here too, not an edge case.
+            Assert.True(c.ScriptItemSync);
         }
         finally
         {

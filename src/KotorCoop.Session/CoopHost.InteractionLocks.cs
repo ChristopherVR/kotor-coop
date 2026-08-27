@@ -140,7 +140,7 @@ public sealed partial class CoopHost
 
         bool granted = _interactionLocks.Claim(claim, SessionClock.NowMs);
 
-        // An explicit arbitration request (RequestSerial != 0, TODO(version)) gets an
+        // An explicit arbitration request (RequestSerial != 0, protocol version 44) gets an
         // immediate, UNICAST answer instead of waiting for the requester to notice its claim
         // did or did not land on the next InteractionLockPacket broadcast — see
         // docs/research/container-sync.md's container_lock_arbitration section. The ordinary
