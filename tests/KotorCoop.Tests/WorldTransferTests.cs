@@ -135,7 +135,7 @@ public sealed class WorldTransferTests : IDisposable
     {
         int port = await ServeAsync([new("SAVEGAME.sav", Bytes(16, seed: 1))], SessionPassword.Hash("secret"));
 
-        InvalidDataException error = await Assert.ThrowsAsync<InvalidDataException>(
+        WorldTransferRefusedException error = await Assert.ThrowsAsync<WorldTransferRefusedException>(
             () => WorldTransfer.FetchAsync(Local(port), SessionPassword.Hash("guess"), _cts.Token));
 
         Assert.Contains("password", error.Message, StringComparison.OrdinalIgnoreCase);
@@ -146,10 +146,35 @@ public sealed class WorldTransferTests : IDisposable
     {
         int port = await ServeAsync([], SessionPassword.None);
 
-        InvalidDataException error = await Assert.ThrowsAsync<InvalidDataException>(
+        WorldTransferRefusedException error = await Assert.ThrowsAsync<WorldTransferRefusedException>(
             () => WorldTransfer.FetchAsync(Local(port), SessionPassword.None, _cts.Token));
 
         Assert.Contains("no world", error.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task AHostWithNoWorldIsDistinguishableFromEveryOtherRefusal()
+    {
+        // WorldAdoption needs to react differently to "the host has nothing to serve yet"
+        // (the first-time-host UX gap) than to a version/password mismatch or a bug — this is
+        // what makes that distinction possible without parsing the message text.
+        int port = await ServeAsync([], SessionPassword.None);
+
+        WorldTransferRefusedException error = await Assert.ThrowsAsync<WorldTransferRefusedException>(
+            () => WorldTransfer.FetchAsync(Local(port), SessionPassword.None, _cts.Token));
+
+        Assert.True(error.NoWorldAvailable);
+    }
+
+    [Fact]
+    public async Task TheWrongPasswordIsNotFlaggedAsNoWorldAvailable()
+    {
+        int port = await ServeAsync([new("SAVEGAME.sav", Bytes(16, seed: 1))], SessionPassword.Hash("secret"));
+
+        WorldTransferRefusedException error = await Assert.ThrowsAsync<WorldTransferRefusedException>(
+            () => WorldTransfer.FetchAsync(Local(port), SessionPassword.Hash("guess"), _cts.Token));
+
+        Assert.False(error.NoWorldAvailable);
     }
 
     [Fact]

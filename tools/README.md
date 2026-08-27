@@ -13,7 +13,8 @@ game files — no running game needed.
 | `demo3.ps1` | The same, for three instances (one host, two joiners) — exercises peer-list and slot-table paths two players can't. |
 | `verify.ps1` | Runs the full co-op verification battery against a live `demo.ps1` session and prints PASS/FAIL per feature. |
 | `verify3.ps1` | The three-player battery, against `demo3.ps1` — checks only two players could not fail. |
-| `install.ps1` | Thin PowerShell wrapper over `KotorCoop.Agent.exe install`/`uninstall` (`src/KotorCoop.Agent/PackageInstaller.cs`), shipped in the zip for command-line installs; `-Chain`/`-Load`/`-Force`/`-Uninstall` map to the agent's flags. Players don't need it: the zip is a game-folder image and double-clicking the agent runs the setup. |
+| `install.ps1` | Thin PowerShell wrapper over `KotorCoop.Agent.exe install`/`uninstall` (`src/KotorCoop.Agent/PackageInstaller.cs`), shipped in the zip for command-line installs; `-Chain`/`-Load`/`-Force`/`-Uninstall` map to the agent's flags. Players don't need it: the zip is a game-folder image and double-clicking the agent runs the setup. Also: `-UpdateDefaults` (warns, or with the flag rewrites, `coop.ini` keys whose shipped default changed since an older install — see `CoopIniDefaults.ps1` below) and `-EnableCrashDumps`/`-DisableCrashDumps` (turns Windows Error Reporting local minidumps for `swkotor.exe` on/off; needs an elevated shell). |
+| `CoopIniDefaults.ps1` | Dot-sourced by `install.ps1`, not run directly: the pure parsing/decision logic behind `-UpdateDefaults` — `ConvertFrom-CoopIni` (parse a `coop.ini`-shaped file), `Get-CoopIniDrift` (which keys still hold an old shipped default, and which shipped keys are entirely absent), `Update-CoopIniDefaults` (rewrite just the drifted lines in place). No side effects when dot-sourced, so it can be exercised on its own — see "Manual verification" below. |
 | `package.ps1` | Builds the release zip as a game-directory image (plugin as `dinput8.dll`, agent, `coop.ini`, `Override\k_coop_*`, `chain-loader\dinput8.dll`, README, `install.ps1`). `-WarnAsError` is what CI runs. |
 | `package-README.md` | Not a script: the README staged into the release zip, with `{{VERSION}}` filled in by `package.ps1`. |
 | `session.ps1` | An earlier two-instance launcher with the same shape as `demo.ps1`. `demo3.ps1` still calls it "the recipe that survives repetition" for its own instance-1 launch. **Note:** `verify.ps1`'s own header comment says it assumes `session.ps1` brought the rig up, but the rest of that file consistently references `demo.ps1` (its `--drop-file` convention, its starting save/footlocker) — that one header line looks stale. |
@@ -92,3 +93,40 @@ touch a running game.
 | `kotorfiles.py` | Pure-stdlib readers for the Odyssey engine's data formats (KEY/BIF/GFF/2DA/TLK and friends). |
 | `patch_mainmenu.py` | Builds the `Override\mainmenu*.gui` that turns the dormant `BTN_WARP` control into the visible "Coop" button. |
 | `q.py` | Runs an ad-hoc SQL query against `kotor1_0_3.db`. *(no header comment — undocumented one-off.)* |
+
+## Manual verification: `CoopIniDefaults.ps1`
+
+This repo has no Pester harness, so `-UpdateDefaults`'s decision logic (`CoopIniDefaults.ps1`)
+is checked by hand rather than by an automated PowerShell test suite. It has no side effects
+when dot-sourced — dot-source it and call the functions directly against a scratch file:
+
+```powershell
+. tools\CoopIniDefaults.ps1
+
+# A synthetic pre-2026-08-27 coop.ini: menu_button still holds the OLD default.
+@"
+[coop]
+mode = join
+menu_button = 0
+"@ | Set-Content 'scratch-coop.ini'
+
+$player   = ConvertFrom-CoopIni -Path 'scratch-coop.ini'
+$shipped  = ConvertFrom-CoopIni -Path 'profiles\coop.ini.example'
+$drift    = Get-CoopIniDrift -PlayerIni $player -ReferenceIni $shipped
+
+$drift.Drifted.Key       # -> menu_button (still 0; effect_sync/trigger_relay are simply
+                          #    absent from the synthetic file, so they show up in MissingKeys
+                          #    instead of Drifted — only an explicit OLD value counts as drift)
+$drift.MissingKeys.Count # -> every other key the shipped file sets that the synthetic file doesn't
+
+Update-CoopIniDefaults -Path 'scratch-coop.ini' -Drifted $drift.Drifted
+Get-Content 'scratch-coop.ini'   # menu_button = 1, every other line byte-identical, same order
+
+Remove-Item 'scratch-coop.ini'
+```
+
+Re-run this after editing `$script:CoopIniDriftedDefaults` (adding a newly-changed key) or the
+parsing logic — both are plain functions with no game, process or registry dependency, so the
+check above is quick and fully offline. `install.ps1` itself calls these same functions after a
+real install; verifying them here is equivalent to verifying that code path without needing a
+game directory or an old `coop.ini` on disk.

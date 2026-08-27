@@ -105,6 +105,7 @@ public sealed partial class CoopCommandDispatcher(
                     AnnouncePeerChanges();
                     AnnounceCompatibilityChanges();
                     AnnounceConnectionStatus();
+                    AnnounceHostSaveAvailability();
                     MaintainSessionSave();
                     MaintainWorldServing();
                     DrainChat();

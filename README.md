@@ -236,6 +236,11 @@ tools/                   package/install scripts, demo rig, RE helpers, the koto
 - **The Endar Spire's command deck floors damage at 1 hp for everyone** — KOTOR's own tutorial
   script, not this mod ([min-one-hitpoint.md](docs/research/min-one-hitpoint.md)). Enemies
   target purely by proximity; alignment is per-player by design, no sync channel needed.
+- **No gamepad/controller support.** Mouse and keyboard are assumed throughout the co-op-
+  specific UI: the in-game server browser, the password entry box and the `~` console all take
+  typed/clicked input only, with no controller navigation or button-glyph prompts. This is a
+  co-op-added limitation, not a change to the base game's own (also mouse/keyboard-oriented)
+  controls.
 
 ## Documentation map
 

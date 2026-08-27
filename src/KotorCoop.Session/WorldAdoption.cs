@@ -116,8 +116,20 @@ public static class WorldAdoption
         {
             fetched = await WorldTransfer.FetchAsync(host, passwordHash, cancellationToken).ConfigureAwait(false);
         }
-        catch (Exception ex) when (ex is InvalidDataException or IOException
-            or System.Net.Sockets.SocketException)
+        catch (WorldTransferRefusedException ex) when (ex.NoWorldAvailable)
+        {
+            // The single most common first-time-host mistake: Host pressed before ever
+            // saving. Distinct from every other refusal/transport failure below — this is
+            // not a bug, a version mismatch or a wrong password, and burying it as "could not
+            // fetch the host's world — world transfer: the host has no world to send yet"
+            // reads exactly like one. See WorldTransferRefusedException's own doc comment.
+            log?.Invoke(
+                "world adoption: host has no save to share yet - ask them to save once "
+                + "(or reach the first autosave) and try again");
+            return null;
+        }
+        catch (Exception ex) when (ex is WorldTransferRefusedException or InvalidDataException
+            or IOException or System.Net.Sockets.SocketException)
         {
             log?.Invoke($"world adoption: could not fetch the host's world — {ex.Message}");
             return null;

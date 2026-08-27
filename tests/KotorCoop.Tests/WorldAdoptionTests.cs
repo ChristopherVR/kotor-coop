@@ -283,6 +283,25 @@ public sealed class WorldAdoptionTests : IDisposable
     }
 
     [Fact]
+    public async Task AHostWithNoSaveIsReportedClearlyNotAsAGenericFetchFailure()
+    {
+        // The first-time-host UX gap: pressing Host before ever saving must not read like a
+        // network bug or a version mismatch to the joiner - see WorldTransferRefusedException.
+        string joinerSave = BuildSave("end_m01aa", 0x127, "Yasuko Kaar", [(2u, "n_trask")]);
+        string joinerGame = BuildGameDirectory();
+
+        int port = await ServeAsync([]);
+
+        List<string> log = [];
+        Assert.Null(await WorldAdoption.TryAdoptAsync(
+            joinerGame, joinerSave, Local(port), SessionPassword.None,
+            expectedSaveIdentity: 0, log.Add, _cts.Token));
+
+        Assert.Contains(log, line => line.Contains("no save to share yet"));
+        Assert.DoesNotContain(log, line => line.Contains("could not fetch"));
+    }
+
+    [Fact]
     public async Task AnUnreachableHostIsADiagnosticNotACrash()
     {
         string joinerSave = BuildSave("end_m01aa", 0x127, "Yasuko Kaar", [(2u, "n_trask")]);

@@ -1,10 +1,11 @@
+using KotorCoop.Memory;
 using KotorCoop.Protocol;
 using KotorCoop.Session;
 
 namespace KotorCoop.Agent;
 
-/// <summary>The three per-tick diff announcers: peer joins/leaves, content-compatibility
-/// changes, and the persistent connection indicator.</summary>
+/// <summary>The per-tick diff announcers: peer joins/leaves, content-compatibility changes,
+/// the persistent connection indicator, and whether a hosting player has a save to share.</summary>
 public sealed partial class CoopCommandDispatcher
 {
     /// <summary>Roster changes become lines on BOTH screens: "Malak joined the game" /
@@ -30,6 +31,10 @@ public sealed partial class CoopCommandDispatcher
     /// <see cref="ConnectionStatusAnnouncer"/> for why the <c>status</c> console verb was not
     /// enough on its own.</summary>
     private readonly ConnectionStatusAnnouncer _connectionAnnouncer = new();
+
+    /// <summary>Whether a hosting player has anything to share yet — see
+    /// <see cref="HostSaveAnnouncer"/> for the silent-no-op it closes.</summary>
+    private readonly HostSaveAnnouncer _hostSaveAnnouncer = new();
 
     /// <summary>
     /// coop.ini's <c>status_toasts</c>, read once and cached rather than reloaded off disk
@@ -128,5 +133,26 @@ public sealed partial class CoopCommandDispatcher
         {
             _connectionAnnouncer.Observe(snapshot, Reply);
         }
+    }
+
+    /// <summary>
+    /// Tells a HOST whether they currently have a save to share — see
+    /// <see cref="HostSaveAnnouncer"/>. Unconditional (not gated by <see cref="StatusToastsEnabled"/>):
+    /// this is actionable onboarding information, not a toast a new player would know to
+    /// re-enable, and its silence is exactly the bug it exists to close.
+    /// </summary>
+    private void AnnounceHostSaveAvailability()
+    {
+        if (manager.Current is not CoopHost || string.IsNullOrEmpty(gameDirectory))
+        {
+            _hostSaveAnnouncer.Reset();
+            return;
+        }
+
+        string? saveDirectory = SaveDigest.FindSessionSave(gameDirectory);
+        _hostSaveAnnouncer.Observe(
+            saveDirectory is not null,
+            saveDirectory is not null ? Path.GetFileName(saveDirectory) : null,
+            Reply);
     }
 }
