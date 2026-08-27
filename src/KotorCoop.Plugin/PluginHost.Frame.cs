@@ -35,6 +35,35 @@ internal static unsafe partial class PluginHost
     /// </summary>
     private static bool _travelAnnounced;
 
+    /// <summary>
+    /// True once a Door-kind announce (<see cref="TransitionAnnounceWatch.OnTransitionBegan"/>)
+    /// has fired since the last epoch reset — the scripted-funnel watch below gates on this so
+    /// a door crossing, which per <c>DoorUse.cs</c>'s own doc comment ALSO raises
+    /// <c>move_to_module_pending</c> once its fade completes (the identical three engine calls,
+    /// just later), never gets a second, misleadingly-tagged "Script" announce for the same
+    /// crossing. Reset at the same two points <see cref="_transitionPending"/> is.
+    /// </summary>
+    private static bool _doorTransitionAnnouncedThisEpoch;
+
+    /// <summary>Rising-edge tracker for <c>Odyssey.IsMoveToModulePending()</c> — see the
+    /// scripted-transition-watch call site below for the full gating story. Reset at the same
+    /// two points <see cref="_transitionPending"/> is.</summary>
+    private static bool _moveToModulePendingSeen;
+
+    /// <summary>
+    /// coop.ini <c>transition_announce_scripted</c> (docs/research/transition-smoothness.md,
+    /// 2026-08-27) — gates ONLY whether the plugin ever calls
+    /// <c>Odyssey.IsMoveToModulePending()</c>/<c>TransitionAnnounceWatch.OnScriptedTransitionBegan</c>
+    /// at all; off, nothing new is read and nothing new touches the shared block. Layered UNDER
+    /// the pre-existing <c>transition_announce</c> agent-side relay gate, not a replacement for
+    /// it: both must be on for a scripted announce to actually reach a peer. Default ON — every
+    /// read behind it is guarded the same way the door reader already is (a bad/garbage read
+    /// returns 0 length and nothing is published), so the worst case of this being wrong is "no
+    /// announce for that one transition", never a bogus one or a crash.
+    /// </summary>
+    private static readonly bool _transitionAnnounceScriptedEnabled =
+        PluginConfig.ReadBool("transition_announce_scripted", true);
+
     // ---- frame-time histogram (docs/research/lag-audit.md) ------------------------------
     //
     // Cheap and off by default: an EWMA-free accumulator (see FrameTimeHistogram's own doc
@@ -221,6 +250,9 @@ internal static unsafe partial class PluginHost
                 _epoch = 0;
                 _transitionPending = false;
                 _travelAnnounced = false;
+                _doorTransitionAnnouncedThisEpoch = false;
+                _moveToModulePendingSeen = false;
+                _travel?.ClearOwnWarpPending();
                 InvalidateAll("world unloading");
             }
 
@@ -261,6 +293,9 @@ internal static unsafe partial class PluginHost
 
             _epoch = epoch;
             _transitionPending = false;
+            _doorTransitionAnnouncedThisEpoch = false;
+            _moveToModulePendingSeen = false;
+            _travel?.ClearOwnWarpPending();
         }
 
         // Focus first: the others do nothing useful in a paused world.
@@ -296,6 +331,7 @@ internal static unsafe partial class PluginHost
                 // linked one, which is only true on this exact edge.
                 if (_view is { } announceView)
                 {
+                    _doorTransitionAnnouncedThisEpoch = true;
                     TransitionAnnounceWatch.OnTransitionBegan(announceView);
                 }
             }
@@ -326,6 +362,49 @@ internal static unsafe partial class PluginHost
             // let the controllers rebuild them.
             _transitionPending = false;
             InvalidateAll("transition flushed but not taken");
+        }
+
+        // "Announced transitions", the scripted-funnel edge (docs/research/
+        // transition-smoothness.md, 2026-08-27): the rising edge of
+        // Odyssey.IsMoveToModulePending() catches every StartNewModule() call this frame's own
+        // door check above did NOT (a galaxy-map departure, a Leviathan/Star Forge stage
+        // change, a native trigger-driven transition, a debug verb) — see Odyssey.Travel.cs's
+        // own comment for the six writers that converge on this one field.
+        //
+        // Placed here, AFTER the door block and BEFORE the _travel block below, on purpose:
+        //   * A door crossing already returned early above while trans_pending was true, so by
+        //     the time this line runs for that crossing, _doorTransitionAnnouncedThisEpoch is
+        //     already true - skip, the door watch already published the same destination.
+        //   * A co-op-commanded warp (TravelController.Execute, below) has not run yet THIS
+        //     frame - Odyssey.TravelToModule has not been called, so IsMoveToModulePending()
+        //     still reads false here regardless of ordering. On the FRAME Execute() actually
+        //     runs, it is the last thing that method does before an unconditional `return`, so
+        //     this line is never reached that frame either. Only on a LATER frame (once the
+        //     field is observed true for the first time) does this run - by then
+        //     TravelController.OwnWarpPending is already true (set the instant TravelToModule
+        //     succeeded), so the skip below still holds even though PluginHost's own
+        //     single-frame _travelAnnounced has already reset to false again.
+        if (_transitionAnnounceScriptedEnabled)
+        {
+            bool moveToModulePending = Odyssey.IsMoveToModulePending();
+            if (moveToModulePending)
+            {
+                if (!_moveToModulePendingSeen)
+                {
+                    _moveToModulePendingSeen = true;
+
+                    if (!_doorTransitionAnnouncedThisEpoch
+                        && !(_travel?.OwnWarpPending ?? false)
+                        && _view is { } scriptedAnnounceView)
+                    {
+                        TransitionAnnounceWatch.OnScriptedTransitionBegan(scriptedAnnounceView);
+                    }
+                }
+            }
+            else
+            {
+                _moveToModulePendingSeen = false;
+            }
         }
 
         if (_travel is { HasPendingRequest: true } travel)

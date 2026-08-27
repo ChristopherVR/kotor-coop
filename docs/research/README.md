@@ -35,7 +35,7 @@ fails safe. **INFERRED** = a reasonable deduction, not directly proven.
 | Doc | Subject | Status |
 | --- | --- | --- |
 | [transition-window-races.md](transition-window-races.md) | Four crash/desync races found by warping a live pair | Root-caused, fixed; established the project's four safe-write patterns |
-| [transition-smoothness.md](transition-smoothness.md) | Closing the gap between the host's door and the follower's warp | Implemented, live-verified, ~9x faster follower warp, ON by default |
+| [transition-smoothness.md](transition-smoothness.md) | Closing the gap between the host's door and the follower's warp | Door path implemented, live-verified, ~9x faster follower warp, ON by default; §11 extends the announce to every non-door `StartNewModule()` (galaxy map, Leviathan, Star Forge), ON by default, NEEDS-LIVE |
 | [world-adoption.md](world-adoption.md) | A joiner plays the host's world with their own character | Implemented, live-verified (`agent adopt`) |
 | [character-login-chain.md](character-login-chain.md) | Why an in-process load spawns a default-level-0 PC | Root-caused, fixed |
 | [ingame-gui-transition.md](ingame-gui-transition.md) | Why an in-process load never leaves the main menu | Root-caused, fixed |
