@@ -602,7 +602,7 @@ companion_gear_sync=0
 effect_sync=1
 
 # Reveal fog-of-war on this instance's map around each remote peer's position (roadmap item
-# 19) - so ground your partner already walked does not stay black just because you never
+# 8) - so ground your partner already walked does not stay black just because you never
 # stood on it. No new wire: it reuses the peer position MapMarkerController/MinimapPeerHook
 # already read, throttled to a few times a second and only when the peer has actually moved
 # (see MapRevealRule). The engine call (CSWSAreaMap::SetWorldPointExplored) is pinned VERIFIED
