@@ -130,25 +130,45 @@ public class ContainerLockArbitrationTests
         uint loserSerial = FirstRequestSerial;
         bool loserEventuallyGranted = false;
 
+        //
+        // ⚠ CHECK BEFORE YOU RE-SEND. TryGetLockResponse holds only the single MOST RECENT
+        // answer (CoopClient._lastLockResponseSerial/_lastLockResponseGranted — one slot, not
+        // a queue), and a real round trip here is sub-millisecond over loopback. A loop that
+        // advances loserSerial and fires the next request BEFORE inspecting the answer to the
+        // one it just sent checks a serial that cannot possibly have replied yet — and by the
+        // time the NEXT poll runs, that request has itself been superseded by another, so the
+        // one answer that already landed (the previous serial's, sitting in that single slot)
+        // is silently overwritten and never read. The loop can then only ever pass through a
+        // rare scheduler race (a stall between send and check lets a reply land in time) —
+        // exactly why adding a Console.Error.WriteLine near the send, or the test host's own
+        // verbose logging, made it "pass every time": both perturb thread scheduling enough to
+        // let that race land, not because either changes anything about correctness.
         Assert.True(
             await WaitForAsync(
                 () =>
                 {
-                    if (loser.TryGetLockResponse(loserSerial, out bool granted) && granted)
+                    if (!loser.TryGetLockResponse(loserSerial, out bool granted))
+                    {
+                        // No answer to the outstanding request yet — do not overwrite it with
+                        // a new one; just keep waiting for it.
+                        return false;
+                    }
+
+                    if (granted)
                     {
                         loserEventuallyGranted = true;
                         return true;
                     }
 
+                    // Denied — now that we have actually seen that answer, retry with a fresh
+                    // serial, the same behaviour the plugin's own ContainerLockArbiter drives
+                    // on a fresh click.
+                    loserSerial++;
+                    loser.RequestContainerLock(Module, TargetId, loserSerial);
                     return false;
                 },
                 Timeout,
-                () =>
-                {
-                    Publish();
-                    loserSerial++;
-                    loser.RequestContainerLock(Module, TargetId, loserSerial);
-                }),
+                Publish),
             "the loser must be grantable once the winner releases");
 
         Assert.True(loserEventuallyGranted);
