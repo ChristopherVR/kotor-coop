@@ -197,6 +197,17 @@ public class CoopConfigTests
             // before this flag existed has no line for it at all, so absent-means-ON is the
             // common case here too, not an edge case.
             Assert.True(c.ScriptItemSync);
+
+            // Same bug class again, found while fixing the two above: TransitionAnnounceEnabled/
+            // ClientDoorRefusalEnabled/MovieRelayEnabled are all documented "ON by default (an
+            // absent key enables it)" and their ini-parse here already used the correct
+            // absent-key-means-ON idiom, but AgentComposition.cs's own `config?.X ?? false`
+            // fallback for "no coop.ini file at all" still landed on OFF — the identical
+            // documented-vs-actual mismatch, one layer further out. Fixed alongside the record's
+            // own bare-constructor default (both now `= true` / `?? true`).
+            Assert.True(c.TransitionAnnounceEnabled);
+            Assert.True(c.ClientDoorRefusalEnabled);
+            Assert.True(c.MovieRelayEnabled);
         }
         finally
         {

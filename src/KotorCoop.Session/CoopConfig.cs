@@ -297,7 +297,7 @@ public sealed record CoopConfig
     /// end_m01ab door crossing, and the movie-carrying case was also exercised with no
     /// regression). Set <c>transition_announce = 0</c> to opt out.
     /// </summary>
-    public bool TransitionAnnounceEnabled { get; init; }
+    public bool TransitionAnnounceEnabled { get; init; } = true;
 
     /// <summary>
     /// Whether a client's own engine-native door crossing is refused early (before the load
@@ -307,7 +307,7 @@ public sealed record CoopConfig
     /// own <c>CSWParty</c> hits an unrelated party-together gate first — see the doc's live-pass
     /// section.
     /// </summary>
-    public bool ClientDoorRefusalEnabled { get; init; }
+    public bool ClientDoorRefusalEnabled { get; init; } = true;
 
     /// <summary>
     /// Who may lead an area transition that the OTHER side follows immediately via the announce
@@ -329,7 +329,7 @@ public sealed record CoopConfig
     /// both the play-now and defer paths. coop.ini <c>movie_relay</c>. See
     /// docs/research/trigger-relay.md §6 and docs/research/cinematics.md.
     /// </summary>
-    public bool MovieRelayEnabled { get; init; }
+    public bool MovieRelayEnabled { get; init; } = true;
 
     /// <summary>
     /// coop.ini <c>stun_servers</c> (roadmap item 24, "public address discovery"): comma-
