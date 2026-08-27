@@ -65,11 +65,25 @@ internal static unsafe partial class Odyssey
 
     /// <summary>Resolves a store's repository pointer by object id. Returns 0 (with
     /// <see cref="LastStoreNote"/> set) when there is no server, or the id does not resolve to a
-    /// live store.</summary>
+    /// live store.
+    ///
+    /// BUG FIX (2026-08-28, live-found): this used to return <c>store + StoreItemRepo</c> — the
+    /// ADDRESS of the <c>item_list</c> pointer FIELD, not the <c>CItemRepository*</c> VALUE that
+    /// field holds. `docs/research/store-sync.md` §1.1 documents `item_list` as a pointer type
+    /// (<c>CItemRepository *</c>), the same shape `Odyssey.Items.cs`'s container resolve
+    /// (`*(nint*)(placeable + PlaceableRepository)`) already dereferences correctly — the store
+    /// path was the one place in this file that took the field's address instead of its value.
+    /// Silent in every prior pass because nothing had exercised a store buy/sell live yet
+    /// (`store-sync.md`'s own "Live pass" — items 2-4 never reached): every repo consumer
+    /// (`InsertItemIntoStore`, `RemoveStoreStack`, `BuyFromStore`/`SellToStore`'s
+    /// `FindFirstMatchingItem`) read `count`/`ids` from garbage bytes past the real
+    /// `CSWSStore` struct tail, tripped the `count &lt;= 0 or &gt; 4096` guard, and failed safe
+    /// with "no stock matching"/"store is empty" instead of finding anything — never a crash,
+    /// which is exactly why it went unnoticed until a live `buy` actually walked the array.</summary>
     private static nint ResolveStoreRepo(uint storeObjectId)
     {
         nint store = ResolveStoreBase(storeObjectId);
-        return store == 0 ? 0 : store + StoreItemRepo;
+        return store == 0 ? 0 : *(nint*)(store + StoreItemRepo);
     }
 
     /// <summary>

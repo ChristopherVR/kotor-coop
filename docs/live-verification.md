@@ -1193,3 +1193,130 @@ byte-identical deploys), both `coop.ini`s reset from `profiles/coop.ini.example`
 `companion_gear_sync` stays OFF — see `companion-state-sync.md` §10.5 for the verdict and the
 concrete next step (capture `EquipItemFn`'s real return value on a weapon-slot call that
 reports success but does not land).
+
+## Rig pass (2026-08-28): `store_sync` — three narrow bugs found and fixed, a fourth critical
+## defect found and left open
+
+Task: run `store-sync.md`'s own queue item 1 (`warp tar_m02aa` both, `openstore Larrim_Store`,
+`buy`/`sell` a finite item, confirm the client's copy reconciles, no double gold charge, an
+infinite-stock buy replicates nothing), flip `store_sync` ON if clean.
+
+**Not flipped ON.** Full detail in `docs/research/store-sync.md`'s own 2026-08-28 "Live pass"
+section. Summary:
+
+| # | Bug | Status |
+| --- | --- | --- |
+| 1 | `Odyssey.Store.cs`'s `ResolveStoreRepo` returned the `item_list` FIELD's address, not the pointer VALUE it holds — every store repo consumer (insert/remove/buy/sell) silently failed to find any matching stock | **FIXED** |
+| 2 | `KotorGameBridge.Store.cs`'s `TryReadStoreRepo` made the identical mistake, independently, on the agent-side reader `StorePump` depends on | **FIXED** |
+| 3 | `KotorGameBridge.Store.cs`'s `StoreGuiObjectId` read panel `+0x227C` (the PC's id) instead of `+0x2278` (the store's id) — a stale mirror of a field this doc's own earlier "Root cause and fix" pass had already corrected on the PLUGIN side but never carried over to the agent side | **FIXED** |
+| 4 | With 1-3 fixed, `StorePump` finally ran end to end — and immediately wiped a store's ENTIRE stock on both instances the moment each opened it, with NO buy/sell ever issued (a virgin store's local baseline is diffed against an empty wire-side "desired" total, and "nobody has told me" reads as "should be zero") | **OPEN, CRITICAL** — see store-sync.md for why the obvious fix is not safe to rush |
+
+Also found live: `tar_m02aa`'s ambient "duros" NPC drags a nearby player into a
+conversation → Taris swoop-registration → native party-select-screen cascade (blocks
+`openstore`'s modal-screen gate); and a `tp <x> <y> 0` with an explicit `z=0` landed a player
+below the walkmesh, producing a "party is down" fall-death and a crash on the next warp while
+downed — a known-poison transition (`tp`'s own doc string: "no walkmesh check"), not a
+`store_sync` defect. Both recorded in `store-sync.md`'s own live pass so the next round does
+not rediscover them.
+
+`profiles/coop.ini.example`'s `store_sync=0` default is unchanged. `dotnet build
+KotorCoop.slnx -warnaserror`, `src/KotorCoop.Plugin/build.ps1 -WarnAsError`, `dotnet test`
+(2355/2355): all clean after each of the three fixes.
+
+## Rig pass (2026-08-28): `solo_segment_spectate` — `startdialog` reaches the Bastila
+## conversation for the first time, roster wipe still not observed
+
+Task: `solo_segment_spectate=1` both, `warp sta_m45ac` both, trigger `k_sta_bastila.dlg` via
+`startdialog sta_invis_bast_conv k_sta_bastila`, confirm the roster wipe/phantom hide/input
+lock/camera follow/toast, flip ON if clean.
+
+**Not flipped ON.** Full detail in `docs/research/star-forge-finale.md`'s own 2026-08-28 live
+pass. The tag form refused every time (`sta_invis_bast_conv` turned out to be a PLACEABLE,
+object id `0xAA` — confirmed live via `useplaceable` — and `startdialog`'s NPC resolution is
+creature-only); `startdialog 0xAA k_sta_bastila` (by id) DID work, reaching a real
+`StartDialog` twice and advancing through several `selectreply`-driven nodes (as far as node
+61/83 one attempt, node 52/83 responsive on the other) — the first time any live pass on this
+doc's history has gotten the conversation running at all. `partystate.ps1`, polled after every
+advance across 15+ tries, never showed a roster drop (`companions 1` throughout on the host).
+Which node calls `k_psta_door.ncs` (the script string-found inside the `.dlg` in a prior round)
+remains unresolved — this pass's blind "always pick reply slot 0" has no visibility into what
+each reply actually says. Concrete next step recorded in `star-forge-finale.md`: a `.dlg`-node
+script-walker, or live-capturing each node's reply text via the `CSWGuiDialog` panel fields
+`dialogue-sync.md` already documents. No crash; both processes stayed healthy throughout.
+`solo_segment_spectate` stays at its default OFF.
+
+## Rig pass (2026-08-28): behaviour-override plugin bridge — `map_reveal_sync`/`effect_sync`
+
+## both PASS
+
+Task: `docs/research/mod-compatibility.md`'s ⚠ NEEDS-LIVE item 3. Set `map_reveal_sync=0`
+and `effect_sync=0` on the CLIENT only (host stays default `1` for both). Confirm the client's
+plugin log shows the adoption line and the behaviour genuinely changes at runtime.
+
+**Both PASS.** Client log, immediately on connect:
+`behaviour: adopted host's effect_sync=1 (local coop.ini says 0)` and
+`behaviour: adopted host's map_reveal_sync=1 (local coop.ini says 0)`. Behaviour, not just the
+log line: moving the host produced a matching fresh `map reveal: slot 0 revealed at ...` on
+the CLIENT tracking the host's new position; `applyeffect 1` on the host produced
+`effect: applied kind 1 from peer 0x1` on the client. No crash. Full detail in
+`docs/research/mod-compatibility.md`'s 2026-08-28 "Live-verified" section.
+`trigger_relay`/`liveness_sync`/`dialogue_recruit_sync` (the other three of the five bridged
+keys) remain untested live.
+
+## Rig pass (2026-08-28): `party_pool_sync` host-side dup re-test — the duplicate never
+
+## recurred, but a NEW, opposite defect found (rapid same-resref deposits under-count)
+
+Task: `docs/research/party-pool-sync.md` §10's own next step — re-run the `pooladd` reproduction with
+`party_pool_sync=1` live, watching for a duplicate `CheatKinds.PartyPoolAdd`. `pooladd
+g_w_thermldet01` x3 on the host, x3 on the client (isolated from `script_item_sync`/
+`dialogue_item_sync` the same way the `store_sync` round was, after the first attempt showed
+identical cross-channel contamination).
+
+**Not flipped ON.** The specific duplicate-apply symptom did not recur (a fifth negative
+result). But neither side converged to +6: the HOST ended with exactly 3 (its own 3 local
+calls; zero of the client's 3 ever arrived), the CLIENT ended with 4 (1 relayed from the host
+plus its own 3 local calls' worth of real local effect, but only that one relay was ever
+detected/published — none of the client's own 3 were). Root cause, read from
+`PartyPoolPump.cs`: the SAME `_pendingApplyTarget` exclusion mechanism §10's own "root cause
+2" fix added to stop a transient scan glitch from being misread as a real change also excludes
+a SECOND, genuinely real, rapid local change to the same key — both a bounded 2-second grace
+window (step 1) and an unbounded lockout when a landed relay's own pending entry never
+re-matches because a further local deposit keeps moving the engine total (step 2, no expiry at
+all). Full root-cause detail and the concrete fix direction (track a covered QUANTITY per key,
+not a single target value) in `docs/research/party-pool-sync.md`'s new §11. No crash, both
+processes healthy throughout. `party_pool_sync` stays at its default OFF.
+
+## Rig pass (2026-08-28): item 5 — `verify.ps1` baseline, full test suite, native build
+
+Task: `verify.ps1` against a fresh session, compared to the documented 40-42/7-9 baseline;
+full `dotnet test`; both native builds.
+
+**`verify.ps1`, against a freshly-connected, untouched session** (`coop.ini` reset to
+`profiles/coop.ini.example` defaults on both installs): **41 passed, 8 failed.** Seven of the
+eight failures match the long-standing documented baseline exactly (`phantom damageable, not a
+sink`; `the peer really loses those hit points`; `a downed player is reported to the agent`;
+`the co-op revive stands the player back up`; `every engine call signature matches the binary`
+(187/189); `a container opened on the client is held and shown open on the host`; `no
+per-frame spam`). One substitution from the baseline set: `a client hit costs the enemy real
+hit points` (normally a baseline failure) PASSED this run, while `an item picked up here
+vanishes on the peer` (normally passing) FAILED. A second `verify.ps1` run immediately after,
+reusing the SAME session (not a fresh one), came back **40 passed, 9 failed** with yet another
+different substitution set (the item-pickup check flipped back to PASS, several
+combat/dialogue/interaction-lock checks flipped to FAIL instead) — confirming the single
+substitution in the first run is ordinary run-to-run/session-history timing flakiness in this
+environment, not a regression: `docs/CONTRIBUTING.md` already documents two of `verify.ps1`'s
+own checks as environment-flaky, and this doc's own prior rounds record the identical pattern
+(a re-run against a non-fresh session produces a materially different failure set than a fresh
+one). Squarely inside the documented 40-42/7-9 range; no regression.
+
+**Full test suite**: `dotnet test tests/KotorCoop.Tests --no-build` — **2355 passed, 0 failed**
+(run after all code changes this session — the three `store_sync` bug fixes — had already
+landed).
+
+**Native builds**: `dotnet build KotorCoop.slnx -warnaserror` and
+`src/KotorCoop.Plugin/build.ps1 -WarnAsError` — both clean, 0 warnings, 0 errors.
+
+No crash on either instance across the whole session's several rig rounds (`store_sync`,
+`solo_segment_spectate`, the behaviour-override bridge, `party_pool_sync`, and this baseline
+pass). This closes the task's item 5.

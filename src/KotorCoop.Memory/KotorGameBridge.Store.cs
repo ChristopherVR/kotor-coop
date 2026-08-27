@@ -31,10 +31,27 @@ public sealed partial class KotorGameBridge
     /// <c>HideStoreGui 0x0062E4A0</c> — docs/research/store-sync.md §1.3.</summary>
     private const int InGameGuiStorePanel = 0x84;
 
-    /// <summary>CSWGuiStore + this = the currently-open store's object id. VERIFIED fresh
-    /// disassembly of <c>CSWGuiStore::PopulateStore 0x006C0610</c> — docs/research/
-    /// store-sync.md §1.2.</summary>
-    private const int StoreGuiObjectId = 0x227C;
+    /// <summary>CSWGuiStore + this = the currently-open store's object id.
+    ///
+    /// BUG FIX (2026-08-28, live-found): this was <c>0x227C</c> — the field §1.2's ORIGINAL
+    /// disassembly of <c>CSWGuiStore::PopulateStore</c> attributed to the store id. docs/
+    /// research/store-sync.md's own later "Root cause and fix" pass (the `ShowStoreGui`
+    /// argument-count fix) corrected this for the PLUGIN side
+    /// (<c>Odyssey.Store.cs</c>'s <c>StorePanelObjectIdOffset</c>): <c>ShowStoreGui</c> writes
+    /// its FIRST argument (the store id) to panel <c>+0x2278</c>, and its SECOND argument (the
+    /// shopping PC's id) to <c>+0x227C</c> — the two were swapped from what the original
+    /// disassembly guessed. This agent-side mirror was never updated to match, so it kept
+    /// reading the PC's own object id here instead of the store's — <c>TryReadStoreRepo</c>
+    /// then searched for a `CSWSStore` whose id equalled the PLAYER's id, always failed to
+    /// match, and <c>TryScanOpenStore</c> silently reported "no store open" even with a real
+    /// store GUI on screen. This is exactly the cross-process mirror-sync hazard
+    /// docs/CONTRIBUTING.md's "Adding a feature end-to-end" step 5 warns about ("the two are
+    /// transcribed by hand and a mismatch is a silent 'plugin not found'") — live-confirmed as
+    /// the actual root cause of `store_sync` never detecting a single local buy/sell across a
+    /// live two-instance session (no `store: local ... detected` log line, ever, on either
+    /// side, even after the other two independently-found repo-pointer dereference bugs in
+    /// this same file and in <c>Odyssey.Store.cs</c> were already fixed).</summary>
+    private const int StoreGuiObjectId = 0x2278;
 
     /// <summary>CSWSStore + this = CItemRepository* — the SAME class the party pool and every
     /// placeable's container use (<c>items_list</c>/<c>item_count</c> at the repository's own
@@ -170,6 +187,19 @@ public sealed partial class KotorGameBridge
     ///
     /// Throttled with the rest of this file's scan — a store vtable sweep is not free either,
     /// and this is only ever asked for once per <see cref="TryScanOpenStore"/> call.
+    ///
+    /// BUG FIX (2026-08-28, live-found): this used to set <c>repo = address + StoreItemRepo</c> —
+    /// the ADDRESS of the <c>item_list</c> pointer FIELD, not the <c>CItemRepository*</c> VALUE
+    /// that field holds (<c>item_list</c> is documented as a pointer type, docs/research/
+    /// store-sync.md §1.1). The exact same mistake was independently made in the plugin's own
+    /// <c>Odyssey.Store.cs</c>'s <c>ResolveStoreRepo</c> — see that fix's own comment for the
+    /// full story. Here the effect was total silence rather than a refusal message: every
+    /// subsequent <c>count</c>/<c>ids</c> read in <see cref="TryScanOpenStore"/> landed on
+    /// garbage past the real <c>CSWSStore</c> struct tail, tripped the
+    /// <c>count &lt; 0 or &gt; 4096</c>/<c>ids == 0</c> guards, and made <c>TryScanOpenStore</c>
+    /// behave as if no store were ever open — so <c>StorePump</c>'s step 1 never even entered
+    /// its detect branch, live-confirmed against a real `buy` (no `store: local ... detected`
+    /// log line on either side, ever, across a live two-instance session).
     /// </summary>
     private bool TryReadStoreRepo(uint storeObjectId, out nint repo)
     {
@@ -187,8 +217,7 @@ public sealed partial class KotorGameBridge
             // VERIFIED against the symbol database, not by analogy with the item shape.
             if (_memory.TryReadUInt32(address + 0x04, out uint id) && id == storeObjectId)
             {
-                repo = address + StoreItemRepo;
-                return true;
+                return _memory.TryReadPointer(address + StoreItemRepo, out repo) && repo != 0;
             }
         }
 
