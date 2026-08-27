@@ -322,13 +322,23 @@ public sealed partial class KotorGameBridge
     /// cache read that cannot populate itself, and a caller that reached for it first is
     /// how an id the sweep had simply never seen came back as "not an item here" for ever.
     ///
-    /// The resref is really the item's TAG, cut and lowercased. That is a proxy and it is
-    /// worth naming as one: a live CSWSItem does not retain its template name at all
+    /// 2026-08-28: this now answers with the REAL resref first when this session happens to
+    /// know it (an item we ourselves told the plugin to spawn — see
+    /// KotorGameBridge.GroundItems.cs's <c>_spawnedItemResrefs</c>), falling back to the item's
+    /// TAG, cut and lowercased, only when we do not. The tag is still only a proxy and it is
+    /// still worth naming as one: a live CSWSItem does not retain its template name at all
     /// (CSWSItem::SaveItem 0x0055CCD0 writes BaseItem and the property list, never a
-    /// TemplateResRef — an item is rebuilt from its own fields, not from its blueprint). For
-    /// base-game items the tag IS the resref in upper case ("G_W_BLSTRPSTL001"), which is
-    /// what makes the proxy work; a mod that tags items differently breaks it, in the same
-    /// way and for the same reason every other blueprint-keyed channel here breaks.
+    /// TemplateResRef — an item is rebuilt from its own fields, not from its blueprint; confirmed
+    /// again this pass — no CSWSItem/CGameObject/CSWSObject field or accessor in
+    /// tools/kotor1_0_3.db names a template resref, and CSWSItem::LoadFromTemplate 0x005608B0
+    /// only ever uses the incoming name to open the GFF resource, never to write it into the
+    /// object). For base-game items the tag IS the resref in upper case ("G_W_BLSTRPSTL001"),
+    /// which is what makes the proxy work most of the time; a stock KOTOR 1 quest item's tag can
+    /// still genuinely diverge from its resref (docs/research/playthrough-endar-spire.md's
+    /// live-confirmed `k_computer_spike` / `g_i_progspike01`), which is exactly the case the new
+    /// authoritative lookup does NOT cover — it only ever knows a resref for a body THIS SESSION
+    /// spawned, never one a vanilla script created on its own. See
+    /// docs/research/item-identity.md §12 for the 2026-08-28 write-up.
     /// </summary>
     /// <summary>The <see cref="IItemBridge"/> member: same lookup, cache-only (no forced
     /// sweep) — a pump resolving a container/corpse-loot removal's resref runs every tick
@@ -339,6 +349,22 @@ public sealed partial class KotorGameBridge
 
     public bool TryGetItemResref(uint itemObjectId, out string resref, bool force = false)
     {
+        // The REAL blueprint resref, when we happen to know it: an item this session itself
+        // told the plugin to spawn onto the floor (KotorGameBridge.GroundItems.cs's
+        // _spawnedItemResrefs, learned in CollectVanishedItems the moment the slot first
+        // reported the body alive). Checked BEFORE the tag cache on purpose — Tag is only ever
+        // an approximation of the resref (base-game blueprints set Tag = resref uppercased, but
+        // a stock KOTOR 1 quest item's Tag can genuinely diverge; see
+        // docs/research/item-identity.md §8.2 and docs/research/playthrough-endar-spire.md's
+        // live-confirmed `k_computer_spike` / `g_i_progspike01`), while this fact came from a
+        // write WE made, never from an inference. "Keep Tag as a fallback only when the resref
+        // is empty" is exactly this ordering.
+        if (_spawnedItemResrefs.TryGetValue(itemObjectId, out string? spawned))
+        {
+            resref = spawned;
+            return true;
+        }
+
         if (_itemTags.TryGetValue(itemObjectId, out string? cached))
         {
             resref = cached;
