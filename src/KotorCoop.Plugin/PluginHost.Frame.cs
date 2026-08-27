@@ -410,6 +410,12 @@ internal static unsafe partial class PluginHost
         _spectate?.OnFrame();
 
         _controller?.OnFrame();
+
+        // Right after the phantom drive, on the block reads/slot state it just processed:
+        // the "waiting" notice reads the same RemoteView per slot, purely to decide whether
+        // to show a line — it never drives, spawns or destroys anything itself.
+        _minigameNotice?.OnFrame();
+
         _items?.OnFrame();
         _combat?.OnFrame();
         _liveness?.OnFrame();

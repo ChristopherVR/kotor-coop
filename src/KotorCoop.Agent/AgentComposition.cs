@@ -196,6 +196,16 @@ internal static class AgentComposition
         // moment a session is up.
         ApplyChatOverlayConfig(bridge, memory.ProcessId);
 
+        // pazaak_detect (docs/research/minigames.md, item 8 task 1): NEEDS-LIVE, off unless
+        // coop.ini opts in. This is what actually makes KotorGameBridge.IsInMinigame — and
+        // therefore the PlayerState.FlagInMinigame wire bit peers park on — true for a
+        // Pazaak hand; setting the plugin's own pazaak_detect key only affects that
+        // process's local log/HUD state, not this instance's outgoing flag.
+        if (bridge is KotorGameBridge pazaakBridge)
+        {
+            pazaakBridge.PazaakDetectEnabled = config?.PazaakDetect ?? false;
+        }
+
         // One-time startup for the in-game surfaces. Only the KOTOR bridge exposes the
         // plugin block the Co-op button lives in; the enable write also snapshots the
         // request serial so a stale press never fires on the first poll.
