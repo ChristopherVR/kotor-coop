@@ -21,6 +21,31 @@ public readonly record struct WorldFile(string Name, byte[] Data);
 public readonly record struct FetchedWorld(IReadOnlyList<WorldFile> Files, uint SaveIdentity);
 
 /// <summary>
+/// A refusal the HOST sent back at the very start of a transfer (the framing exchange), as
+/// opposed to a transport failure that happens some other way (a truncated stream, an
+/// unreachable address). Every prior version threw a bare <see cref="InvalidDataException"/>
+/// with only a message, so a caller could not tell "the host has nothing to serve yet" — the
+/// single most common first-time-host mistake (Host pressed before ever saving) — apart from
+/// "we speak different framing versions" or "wrong password" without parsing that message's
+/// text. <see cref="NoWorldAvailable"/> makes that one case distinguishable in code.
+///
+/// Derives from <see cref="Exception"/>, not <see cref="InvalidDataException"/> — the latter is
+/// sealed in .NET — so every catch site that used to list <c>InvalidDataException</c> for a
+/// transfer refusal now also lists this type explicitly (see
+/// <see cref="WorldAdoption.TryAdoptAsync(string,string,System.Net.IPEndPoint,uint,uint,Action{string}?,CancellationToken)"/>'s
+/// two catch clauses).
+/// </summary>
+public sealed class WorldTransferRefusedException(string message, bool noWorldAvailable)
+    : Exception(message)
+{
+    /// <summary>True when the host answered <c>StatusNoWorld</c>: it has no session save to
+    /// serve (no manual save yet, and no autosave), not a version mismatch, a bad password or
+    /// a bug. See <see cref="WorldAdoption.TryAdoptAsync(string,string,System.Net.IPEndPoint,uint,uint,Action{string}?,CancellationToken)"/>'s
+    /// catch of this flag for the player-facing message it produces.</summary>
+    public bool NoWorldAvailable { get; } = noWorldAvailable;
+}
+
+/// <summary>
 /// Ships the host's world to a joining player: the save directory itself, over TCP, beside
 /// the UDP session.
 ///
@@ -324,13 +349,15 @@ public static class WorldTransfer
 
         if (header[3] != StatusOk)
         {
-            throw new InvalidDataException(header[3] switch
-            {
-                StatusBadVersion => "world transfer: the host runs a different transfer version",
-                StatusBadPassword => "world transfer: wrong password",
-                StatusNoWorld => "world transfer: the host has no world to send yet",
-                _ => $"world transfer: refused (status {header[3]})",
-            });
+            throw new WorldTransferRefusedException(
+                header[3] switch
+                {
+                    StatusBadVersion => "world transfer: the host runs a different transfer version",
+                    StatusBadPassword => "world transfer: wrong password",
+                    StatusNoWorld => "world transfer: the host has no world to send yet",
+                    _ => $"world transfer: refused (status {header[3]})",
+                },
+                noWorldAvailable: header[3] == StatusNoWorld);
         }
 
         byte[] countBytes = new byte[2];

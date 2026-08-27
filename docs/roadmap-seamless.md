@@ -60,6 +60,7 @@ time; everything else builds and unit-tests in parallel.
 | 17 | **`combat_state_sync` is superseded** by `local_combat` (engine re-derives the in-combat dword in 0–2 ms); a client fighting only mirrored enemies gets no combat music/auto-pause. | Decision needed — retire the flag or document |
 | 18 | **Galaxy map / pre-departure party-select** have zero co-op awareness; each instance runs the vanilla UI locally. | Decision needed |
 | 19 | **3+ peers** are architecturally supported (`MaxPeers=8`) but every live round has been two instances. | 🎮 L |
+| 25 | **No gamepad/controller support.** The co-op-specific UI (server browser, password entry, the `~` console) is mouse/keyboard only, same as the rest of this project's own input surfaces (in-game menu automation, live probes). Now stated plainly in README.md/package-README.md. | By design — document, no fix planned |
 
 ## Tier 3 — needs new reverse-engineering
 

@@ -42,6 +42,9 @@ Only one conversation runs at a time — the other player watches it live. If yo
 goes to the main menu their character disappears and a line says so; a one-line status in
 the top-left always shows the connection state.
 
+**No gamepad/controller support.** The server browser, the password box and the `~` console
+all assume mouse and keyboard; a controller can't navigate them.
+
 ## Requirements
 
 - Windows, and the **.NET 10 runtime** (Windows offers to install it the first time
@@ -128,7 +131,11 @@ player's helper. Clients talk only to the host.
 
 ## Something is wrong
 
-- **No Co-op button:** `menu_button = 1` in `coop.ini`.
+- **No Co-op button:** `menu_button = 1` in `coop.ini`. Upgrading over an install from before
+  2026-08-27 keeps that file's OLD default (`0`) because `coop.ini` is never overwritten —
+  `install.ps1` now warns about this after every install and `install.ps1 -GameDir '...'
+  -UpdateDefaults` rewrites just that line (and the other defaults that changed the same day,
+  `effect_sync`/`trigger_relay`) without touching anything else in the file.
 - **Partner never appears / "no reply from host":** ports must match and the host's UDP port
   must be open; passwords must match exactly.
 - **Nothing happens at all:** look for `kotorcoop-plugin.log` beside the game. If it does
@@ -136,5 +143,17 @@ player's helper. Clients talk only to the host.
   `swkotor.exe` (read `dinput8-chain.log` if you use the chain loader).
 - **Second instance on one machine exits immediately:** start it through the helper (see
   Requirements), which renames the game's single-instance mutex.
+- **The game crashed and you want to report it:** `kotorcoop-plugin.log`'s last lines are the
+  first thing to attach. For a crash the log itself can't explain (the game just vanishes,
+  nothing after "FATAL"), turn on Windows' own crash dumps for `swkotor.exe`:
+  ```powershell
+  # from an Administrator PowerShell, in the extracted package folder:
+  .\install.ps1 -GameDir 'C:\GOG Games\Star Wars KOTOR (GOG)' -EnableCrashDumps
+  ```
+  This needs elevation (a plain PowerShell gets a clear error naming the reason) because it
+  writes a machine-wide Windows Error Reporting setting, not a per-game file. The next crash
+  leaves a `.dmp` file in `<game folder>\crashdumps` (or wherever `-DumpFolder` pointed) —
+  attach that to a bug report. Turn it back off with
+  `.\install.ps1 -GameDir '...' -DisableCrashDumps`; it does not undo itself automatically.
 
 Full documentation, source and issue tracker: https://github.com/ChristopherVR/kotor-coop

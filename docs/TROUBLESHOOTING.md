@@ -13,6 +13,14 @@ overwrites an existing `coop.ini`, so an upgraded install keeps the old value. S
 `menu_button = 1`. If it is set and the button is still missing, the plugin never loaded:
 see the next two sections.
 
+`tools/install.ps1` now catches this automatically: every plain install run (not just
+`-Uninstall`) diffs the existing `coop.ini` against the table of keys whose shipped default
+changed (`menu_button`, `effect_sync`, `trigger_relay` — the same three CONFIG.md's footnotes
+4/5/7 describe) and warns by name when the old value is still there — a dry run by default, so
+nothing is written unless you pass `-UpdateDefaults`, which rewrites just those lines in place
+(order, comments and every other line untouched). See `tools/CoopIniDefaults.ps1` and
+`tools/README.md`'s "Manual verification" section for the decision logic itself.
+
 ## Nothing happens at all — no `kotorcoop-plugin.log` beside the game
 
 The plugin did not load. `dinput8.dll` must sit in the same directory as `swkotor.exe`
@@ -119,6 +127,27 @@ where this file can grow past the cap before the next relaunch.
 The `--log` file `tools/demo.ps1`/`verify.ps1` point the agent at directly (`agent1.log`,
 `agent2.log` under `$env:TEMP\kotorcoop-demo\`) is a plain scratch file the agent writes with
 its own `File.AppendAllText`, and rotates the same once-at-launch way as the other two.
+
+## The game crashed and the plugin log doesn't explain why
+
+`kotorcoop-plugin.log` covers access violations and managed exceptions inside the plugin
+(`CrashProbe`), but a .NET NativeAOT fail-fast (`RaiseFailFastException`/`__fastfail`) bypasses
+every user-mode handler — the process is just gone, log ending mid-sentence, with no trace of
+why. Windows' own Error Reporting can capture a minidump for the NEXT crash, but it needs to be
+turned on first (off by default, machine-wide): from an **Administrator** PowerShell, in the
+extracted package folder,
+
+```powershell
+.\install.ps1 -GameDir 'C:\GOG Games\Star Wars KOTOR (GOG)' -EnableCrashDumps
+```
+
+A non-elevated shell gets a clear error naming the reason (the setting lives under
+`HKEY_LOCAL_MACHINE`) rather than silently doing nothing. The next crash leaves a `.dmp` file
+under `<game folder>\crashdumps` (override with `-DumpFolder <path>`), capped at the 10 most
+recent (~200 MB each — a 32-bit game's full dump). Turn it back off with
+`install.ps1 -GameDir '...' -DisableCrashDumps`; it does not expire or undo itself. The
+dev-only `tools/crashlog.ps1 -EnableDumps` does the identical registry write for a hardcoded
+dev dump folder — the two are equivalent, just aimed at different audiences.
 
 ## Where to look next
 
