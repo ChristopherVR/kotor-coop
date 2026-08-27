@@ -152,6 +152,21 @@ The `--log` file `tools/demo.ps1`/`verify.ps1` point the agent at directly (`age
 `agent2.log` under `$env:TEMP\kotorcoop-demo\`) is a plain scratch file the agent writes with
 its own `File.AppendAllText`, and rotates the same once-at-launch way as the other two.
 
+## A partner's game crashes roughly 12 seconds after a scripted module transition
+
+This was a real, 100%-reproducible bug on builds up to 2026-08-27: `PartySelectSuppressionController`
+re-detected and re-tore-down the same stale party-selection panel address hundreds of times a
+second for the life of a session, a write storm through a dangling pointer that could corrupt
+whatever heap block a module load later reallocated at that address — a module load being
+exactly the moment a crash like this fires. Root-caused and fixed 2026-08-28 (touch a given
+panel address at most once per module instead of every frame forever); confirmed clean across
+three independent live re-verifications, including the exact STUNT_00 escape-pod crash this bug
+also caused. **If you hit this on an older build, the fix is to upgrade** — reinstall from a
+current release or rebuild from `main` (`build.ps1 -Install`); there is no `coop.ini` workaround,
+since the bug was in the plugin's own panel-suppression code, not a config default. See
+[session-save.md](research/session-save.md) and
+[galaxy-map-and-party-select.md](research/galaxy-map-and-party-select.md)'s 2026-08-28 entries.
+
 ## The game crashed and the plugin log doesn't explain why
 
 `kotorcoop-plugin.log` covers access violations and managed exceptions inside the plugin

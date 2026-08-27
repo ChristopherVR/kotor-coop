@@ -17,28 +17,29 @@ attaches from outside with `OpenProcess`.
 | --- | --- | --- |
 | Presence, appearance, animation, minimap | Live-verified | [phantom-locomotion.md](docs/research/phantom-locomotion.md) |
 | Travel — transitions, doors, triggers | Live-verified | [transition-smoothness.md](docs/research/transition-smoothness.md) |
-| Combat — mirrored enemies, damage, effects | Live-verified | [combat-participation.md](docs/research/combat-participation.md) |
-| World state — containers, items, journal | Live-verified | [shared-state-audit.md](docs/research/shared-state-audit.md) |
+| Combat — mirrored enemies, damage, effects | Live-verified (a reported "client can't hit an Endar Spire Sith" was root-caused 2026-08-28 to that creature starting in a FRIENDLY faction — not a co-op defect) | [combat-participation.md](docs/research/combat-participation.md) |
+| World state — containers, items, journal | Live-verified (container-lock arbitration confirmed correct AND fast-path-fixed at a 1000ms budget; `ItemTemplateSpawnHook` confirmed live end to end, 2026-08-28) | [shared-state-audit.md](docs/research/shared-state-audit.md) |
 | Dialogue — spectate, late-join, skip-fix | Live-verified | [dialogue-sync.md](docs/research/dialogue-sync.md) |
 | Dialogue recruitment sync | Live-verified for two companions; one fix unconfirmed | [dialogue-consequences.md](docs/research/dialogue-consequences.md) |
-| Session lifecycle — menu, connect, save/load rejoin | Live-verified; the 2026-08-28 `host_load_readopt` regression is confirmed fixed (three independent clean re-verifications) | [session-save.md](docs/research/session-save.md) |
-| Companion follow-AI | Live-verified, one known stall left | [party-reconciliation.md](docs/research/party-reconciliation.md) |
+| Session lifecycle — menu, connect, save/load rejoin | Live-verified; the `host_load_readopt` regression and the STUNT_00 escape-pod crash are both CLOSED — same root cause, a dangling-pointer write storm in `PartySelectSuppressionController`, fixed 2026-08-27 and reconfirmed clean across three independent live re-verifications (last 2026-08-28) | [session-save.md](docs/research/session-save.md), [galaxy-map-and-party-select.md](docs/research/galaxy-map-and-party-select.md) |
+| Three-peer sessions (3+ players) | Live-verified — `demo3.ps1`/`verify3.ps1`, 34/34 checks passed, chat/phantoms/hit-tables all agreeing across three instances | [live-verification.md](docs/live-verification.md) |
+| Companion follow-AI | Live-verified, one known stall left (A/B on two fix candidates reconfirmed inconclusive a fourth time, 2026-08-28; stays off) | [party-reconciliation.md](docs/research/party-reconciliation.md) |
 | Companion local combat | Narrow case live-verified | [party-reconciliation.md](docs/research/party-reconciliation.md) |
 | Mod compatibility | Live-verified for most mismatch categories | [mod-compatibility.md](docs/research/mod-compatibility.md) |
 | Sharing `dinput8.dll` with another mod | Live-verified (chain loader) | [src/KotorCoop.Loader](src/KotorCoop.Loader/dinput8_loader.c) |
 | Minigames — swoop race | Blocked, needs a debugger | [minigames.md](docs/research/minigames.md) |
-| Minigames — Pazaak detection, "waiting" notice | Live-verified clean 2026-08-28 (`pazaak_detect` stays off by default) | [minigames.md](docs/research/minigames.md) |
+| Minigames — Pazaak detection, "waiting" notice | Live-verified 2026-08-28 (a range-guard bug that silenced detection was found and fixed); `pazaak_detect` flipped ON by default | [minigames.md](docs/research/minigames.md) |
 | Creature liveness reconciliation | Off by default, open | [creature-liveness.md](docs/research/creature-liveness.md) |
 | Peer-away detection (`FlagAway`) when a partner quits to the main menu | Live-verified 2026-08-27 (an initial pass failed; the fix landed and re-verified the same day) | [disconnect-reconnect.md](docs/research/disconnect-reconnect.md) |
 | Persistent connection indicator | Live-verified 2026-08-27 (partial — data path confirmed, on-screen render unconfirmed) | [connect-flow.md](docs/research/connect-flow.md) |
 | Protocol-version-mismatch reject (`E_PROTO`) | Built, not live-verified | [connect-flow.md](docs/research/connect-flow.md) |
 | Script-granted items outside dialogue (`script_item_sync`) | Built, live-verified, ON by default | [dialogue-consequences.md](docs/research/dialogue-consequences.md) |
 | Companion experience (`companion_xp_sync`) | Live-verified, ON by default | [companion-state-sync.md](docs/research/companion-state-sync.md) |
-| Companion equipment (`companion_gear_sync`) | Live-verified FAILURE, stays off | [companion-state-sync.md](docs/research/companion-state-sync.md) |
-| Shared party item pool (`party_pool_sync`) | Live-verified, one bug fixed, one open — stays off | [party-pool-sync.md](docs/research/party-pool-sync.md) |
-| Merchant store stock (`store_sync`) | Stays off — a 2026-08-28 live pass found a real engine crash reachable through the same GUI code path | [store-sync.md](docs/research/store-sync.md) |
+| Companion equipment (`companion_gear_sync`) | Root-caused and fixed 2026-08-28 (the equip queue was never armed for a live party member; the fix bypasses the queue entirely) — NEEDS-LIVE, stays off | [companion-state-sync.md](docs/research/companion-state-sync.md) |
+| Shared party item pool (`party_pool_sync`) | Live-verified, one bug fixed; a second (the depositing side — reproduced 2026-08-28 on the host's own deposit, not on a client's) is still open — stays off | [party-pool-sync.md](docs/research/party-pool-sync.md) |
+| Merchant store stock (`store_sync`) | Stays off — the 2026-08-28 `PopulateStoreItemListBox` crash is root-caused and fixed (`ShowStoreGui` was missing two arguments) — NEEDS-LIVE | [store-sync.md](docs/research/store-sync.md) |
 | Fog-of-war reveal (`map_reveal_sync`) | Live-verified, on by default | [map-reveal.md](docs/research/map-reveal.md) |
-| Star Forge finale — Bastila/Malak duel spectate (`solo_segment_spectate`) | Built, off until live-verified | [star-forge-finale.md](docs/research/star-forge-finale.md) |
+| Star Forge finale — Bastila/Malak duel spectate (`solo_segment_spectate`) | Built, off — a 2026-08-28 live pass opened the real door but never reached the detection precondition (the roster wipe fires from the Bastila dialogue, not the door), so the spectate machinery is still unexercised | [star-forge-finale.md](docs/research/star-forge-finale.md) |
 | Internet play — public address discovery (STUN), UPnP port mapping | Built, unit-tested, not live-verified against a real router; no relay/hole-punching | [network-topology.md](docs/research/network-topology.md) |
 
 "Live-verified" means watched working on two real GOG instances; "Off by default" means built
@@ -190,19 +191,19 @@ tools/                   package/install scripts, demo rig, RE helpers, the koto
 - **Only the host can switch party character.** Companions are driven by the host's own AI and
   mirrored to everyone else; control returns to your own character automatically on connect
   (`control_return=0` opts out). See [control-return.md](docs/research/control-return.md).
-- **Companion follow-AI still stalls at the last waypoint of a leg**, a narrow case with two
-  unconfirmed fix candidates, both off by default. See
-  [party-reconciliation.md](docs/research/party-reconciliation.md).
+- **Companion follow-AI still stalls at the last waypoint of a leg** — two fix candidates make
+  progress but neither closes it (A/B reconfirmed inconclusive a fourth time, 2026-08-28); both
+  stay off by default. See [party-reconciliation.md](docs/research/party-reconciliation.md).
 - **A mirrored companion can't fight for a client** except through `companion_local_combat`
   (on by default), which releases a companion standing close enough to both players and the
   enemy to its own engine AI. See [party-reconciliation.md](docs/research/party-reconciliation.md).
 - **One conversation at a time**, by design — the other player spectates rather than getting
   a separate copy.
 - **Companion experience sync is live-verified and on by default** (`companion_xp_sync`).
-  **Equipment sync (`companion_gear_sync`) stays off — a real bug**: re-equipping a companion
-  lands the item on the local PLAYER instead. **Dialogue recruitment sync is live-confirmed for
-  two companions** (`dialogue_recruit_sync`, on by default); a fix for a stale pre-recruit body
-  is implemented but not yet confirmed live. See [companion-state-sync.md](docs/research/companion-state-sync.md)
+  **Equipment sync (`companion_gear_sync`) stays off** — root-caused and fixed (see the status
+  table above), NEEDS-LIVE. **Dialogue recruitment sync is live-confirmed for two companions**
+  (`dialogue_recruit_sync`, on by default); a fix for a stale pre-recruit body is implemented but
+  not yet confirmed live. See [companion-state-sync.md](docs/research/companion-state-sync.md)
   and [dialogue-consequences.md](docs/research/dialogue-consequences.md).
 - **Mod-compatibility mismatch handling is live-verified for most categories**, but
   module-GIT/globals-catalogue mismatches are unforced in testing and a same-resref,
@@ -213,28 +214,19 @@ tools/                   package/install scripts, demo rig, RE helpers, the koto
 - **Creature liveness reconciliation** (a body alive on one screen, dead on the other) ships
   off by default; the correction mechanism works, a freshness theory is unconfirmed. See
   [creature-liveness.md](docs/research/creature-liveness.md).
-- **Host save-reload re-adopt (`host_load_readopt`) previously lost or hung the client** on a
-  2026-08-28 build — root-caused to an unrelated dangling-pointer write storm in
-  `PartySelectSuppressionController`, fixed the same day, and confirmed clean across three
-  independent live re-verifications (the last one 2026-08-28). See
-  [session-save.md](docs/research/session-save.md)'s 2026-08-28 entries.
 - **Chain mode serialises `dinput8` proxies, it doesn't merge them** — a proxy that always
   loads the system DLL itself must be last in `dinput8.chain`; "load me" DLLs (`.asi`) go anywhere.
 - **Each player really fights one enemy at a time.** `local_combat` hands a client exactly one
   hostile to its own engine at a time; every other engaged enemy stays mirrored (damage still
-  lands), and the damage wire names only the last attacker. See
-  [combat-participation.md](docs/research/combat-participation.md).
-- **The party's shared item pool syncs, but a live-verified bug keeps it off by default**
-  (`party_pool_sync`): one double-apply bug was fixed, a second (on the depositing side) is
-  NOT yet, so gear moved into the pool can land doubled. See [party-pool-sync.md](docs/research/party-pool-sync.md).
+  lands), and the damage wire names only the last attacker. See [combat-participation.md](docs/research/combat-participation.md).
+- **The party's shared item pool syncs, but a live-verified double-apply bug keeps it off by
+  default** (`party_pool_sync`, one fixed, one open on the depositing side — status table above).
 - **The Star Forge's Bastila and Malak duels spectate, but off by default and unproven live**
   (`solo_segment_spectate`): parks the other player's input/camera on the fight instead of a
-  second combatant wandering into a duel the base game designed for one; the input lock hasn't
-  been watched stop a real WASD press yet. See [star-forge-finale.md](docs/research/star-forge-finale.md).
-- **The shared merchant store channel (`store_sync`) is built but stays off** — a 2026-08-28 live
-  pass found a real, reproducible engine crash inside `CSWGuiStore::PopulateStoreItemListBox`
-  reachable through the same store-opening code path this channel shares; not yet root-caused or
-  fixed. See [store-sync.md](docs/research/store-sync.md)'s 2026-08-28 entry.
+  second combatant wandering in. The detection precondition itself has not yet been reached
+  live (see the status table above), so the input lock hasn't been watched stop a real press.
+- **The shared merchant store channel (`store_sync`) is built but stays off** — a real engine
+  crash was found, root-caused and fixed (see the status table above); the fix is NEEDS-LIVE.
 - **`coop.ini` divergence is negotiated, not silent.** Every behaviour flag rides a digest
   compared at join; a difference always warns on both screens (`W_CFG`), and nine
   host-authoritative keys are additionally adopted by a disagreeing client at runtime. See

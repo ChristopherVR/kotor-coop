@@ -117,6 +117,40 @@ logs over a screenshot.
 Logs land in `%TEMP%\kotorcoop-demo\agent1.log` / `agent2.log` and
 `<gamedir>\kotorcoop-plugin.log`.
 
+## Bring up three instances
+
+`demo3.ps1`/`verify3.ps1` are the three-player variants of `demo.ps1`/`verify.ps1` — one host,
+two joiners — for exercising peer-list/slot-table paths two instances can't (`tools/README.md`
+indexes both). Same shape as the two-instance rig:
+
+```powershell
+pwsh tools\demo3.ps1              # launches all three, loads saves, connects both joiners
+pwsh tools\verify3.ps1            # PASS/FAIL battery against the live trio
+pwsh tools\demo3.ps1 -Stop        # tear down
+```
+
+⚠ **The trap that ate a whole session (2026-08-27/28): `build.ps1 -Install` (or `demo.ps1`)
+does not touch a game directory it was never pointed at.** A third game directory created once
+by `-CreateGame3` and never rebuilt into again keeps running whatever plugin build happened to
+be installed the day it was created — in the round that found this, `D:\Games\swkotor-gog-p3`'s
+`dinput8.dll` was three weeks stale (2026-08-07 vs. the other two installs' same-day build) and
+instance 3's own menu auto-load failed across four full relaunch cycles, misread at first as a
+code regression in the input-injection path. It wasn't — reinstalling fixed it outright:
+
+```powershell
+pwsh src\KotorCoop.Plugin\build.ps1 -WarnAsError -Install -GameDir 'D:\Games\swkotor-gog-p3'
+```
+
+**Reinstall the plugin into EVERY game directory the rig uses, every time, not just the first
+two** — `docs/CONTRIBUTING.md`'s "run this for every game copy the rig uses" rule applies with
+the same force to a third (or Nth) directory as it does to the second; nothing about `demo3.ps1`
+deploys the plugin either, exactly like `demo.ps1`. Confirmed clean afterward: all three
+instances came up first try (no retries logged), `verify3.ps1` scored **34/34** (three agents,
+two remote peers on every instance with distinct ids, two phantoms alive on every instance, hit
+tables agreeing, no faults, no crash in the event log), and a chat line from the host reached
+both joiners' overlays. See this doc's own "Rig pass (2026-08-27, round 2)" and "2026-08-28 —
+`demo3.ps1` three-peer" sections below for the full recipe and readings.
+
 ## Connectivity & phantoms (Logs + Screen)
 - agent1.log/agent2.log: `session ... connected`, `peers 1`, non-zero `rx`/`tx`.
 - plugin log: `agent reports 1 remote peer(s)`, `1 phantom(s) alive`.

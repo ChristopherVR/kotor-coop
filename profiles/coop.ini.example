@@ -410,11 +410,13 @@ container_fast_pump=0
 # is KNOWN to hold is DEFERRED - the local open is swallowed exactly like a peer-held refusal -
 # while the plugin asks the host to arbitrate the SAME InteractionLockStore.Claim decision
 # synchronously; the loser's panel never opens and "<name> is looting that" appears instead.
-# ON by default because the fallback FAILS SAFE: if the host does not answer within 300ms (a
+# ON by default because the fallback FAILS SAFE: if the host does not answer within 1000ms (a
 # lost request/response, or an old build on the other end that never replies), the deferred
-# click simply proceeds exactly as it did before this flag existed - see
-# docs/research/container-sync.md's container_lock_arbitration section for the measured
-# request/response latency this timeout is sized against. Meaningless when container_locks=0.
+# click simply proceeds exactly as it did before this flag existed - raised from an original
+# 300ms 2026-08-28 after a live pass showed the real plugin -> agent -> host round trip never
+# fit that budget - see docs/research/container-sync.md's container_lock_arbitration section
+# for the measured request/response latency this timeout is sized against, now live-confirmed
+# to resolve inside it. Meaningless when container_locks=0.
 container_lock_arbitration=1
 
 # The DISTANCE half of the join-latency report, not the cadence half above: a joiner who is not

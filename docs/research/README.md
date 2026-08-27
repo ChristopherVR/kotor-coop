@@ -40,15 +40,15 @@ fails safe. **INFERRED** = a reasonable deduction, not directly proven.
 | [character-login-chain.md](character-login-chain.md) | Why an in-process load spawns a default-level-0 PC | Root-caused, fixed |
 | [ingame-gui-transition.md](ingame-gui-transition.md) | Why an in-process load never leaves the main menu | Root-caused, fixed |
 | [cinematics.md](cinematics.md) | What a mid-module movie does to a live pair | Implemented, live-verified, ON by default |
-| [session-save.md](session-save.md) | Mid-session save/load: rejoin gates and the `loadgame` verb | ON by default; the 2026-08-28 `host_load_readopt` regression (root-caused to the `PartySelectSuppressionController` write storm) is CONFIRMED FIXED as of a 2026-08-28 third independent clean live re-verification |
-| [galaxy-map-and-party-select.md](galaxy-map-and-party-select.md) | Galaxy map travel and the pre-departure party-select screen (roadmap Tier 2 #18) | Party-select suppression shipped (`party_select_host_only`, default ON); the write-storm fix (~500 writes/sec through a stale `CGuiInGame+0x78`) is live-confirmed clean; the STUNT_00 engine crash (`0x40D386`) is CONFIRMED NOT REPRODUCIBLE as of a 2026-08-28 live pass, 3/3 fresh-session runs clean — regression CLOSED |
-| [star-forge-finale.md](star-forge-finale.md) | Lehon through the Star Forge and both endings: every forced solo/party-split beat, the Malak drain mechanic | RE coverage complete; the headline gap (Bastila/Malak duel co-op behaviour) is decided and BUILT as `solo_segment_spectate` (§8), default OFF, NEEDS-LIVE — everything else stays NEEDS-LIVE throughout |
+| [session-save.md](session-save.md) | Mid-session save/load: rejoin gates and the `loadgame` verb | ON by default; the `host_load_readopt` regression and the STUNT_00 escape-pod crash share one root cause — a dangling-pointer write storm in `PartySelectSuppressionController` (re-detecting and re-tearing-down the same stale panel address hundreds of times a second). Fixed 2026-08-28; host-loadgame → client-re-adopt is DIRECTLY live-verified working post-fix, and the STUNT_00 crash did not reproduce across two further attempts (pre- and post-fix) on top of an earlier 3/3 clean run — both regressions CLOSED |
+| [galaxy-map-and-party-select.md](galaxy-map-and-party-select.md) | Galaxy map travel and the pre-departure party-select screen (roadmap Tier 2 #18) | Party-select suppression shipped (`party_select_host_only`, default ON). The `CGuiInGame+0x78` always-non-null finding was root-caused 2026-08-28 as a real dangling-pointer write storm (70,000+ suppress/sweep pairs in under 8 minutes) and fixed by touching a panel at most once per module; the same fix closes the STUNT_00 escape-pod crash (`0x40D386`) — see session-save.md's row |
+| [star-forge-finale.md](star-forge-finale.md) | Lehon through the Star Forge and both endings: every forced solo/party-split beat, the Malak drain mechanic | RE coverage complete; the headline gap (Bastila/Malak duel co-op behaviour) is decided and BUILT as `solo_segment_spectate` (§8), default OFF, NEEDS-LIVE. A 2026-08-28 live pass opened `k45_door_bast1` for real (a genuine `OnOpen` engine call) but the roster never wiped — the trigger actually lives inside the Bastila `.dlg`, not the door, correcting §3.3's own citation; the detection precondition itself is still unreached |
 
 ## Combat
 
 | Doc | Subject | Status |
 | --- | --- | --- |
-| [combat-participation.md](combat-participation.md) | Making owner-side enemies threaten the phantom safely | Design + implemented, live-verified; some §7 items remain NEEDS-LIVE |
+| [combat-participation.md](combat-participation.md) | Making owner-side enemies threaten the phantom safely | Design + implemented, live-verified; some §7 items remain NEEDS-LIVE. §10 (2026-08-28) root-caused the "client can't hit an Endar Spire Sith" report with exact `faction`-verb reads: `end_sith2` genuinely starts in a FRIENDLY faction — not a client/host asymmetry, not a co-op bug |
 | [combat-when-apart.md](combat-when-apart.md) | What happens when the two players are not together | Reviewed; encounters-only-fire-for-host gap intentionally NOT fixed (structural) |
 | [enemy-presence-sync.md](enemy-presence-sync.md) | One visible fight instead of two private ones | Design over verified research; implemented, live-verified |
 | [enemy-materialisation.md](enemy-materialisation.md) | Building a mirror body for an enemy the mirror has none for | Implemented, live-verified |
@@ -75,25 +75,25 @@ fails safe. **INFERRED** = a reasonable deduction, not directly proven.
 
 | Doc | Subject | Status |
 | --- | --- | --- |
-| [party-reconciliation.md](party-reconciliation.md) | Companion follow-AI, drift, and local combat — the master thread | Multiple stalls root-caused and fixed across many rounds; one narrow terminal-node stall remains, fix candidates unconfirmed live, off by default |
+| [party-reconciliation.md](party-reconciliation.md) | Companion follow-AI, drift, and local combat — the master thread | Multiple stalls root-caused and fixed across many rounds; one narrow terminal-node stall remains — a live A/B on two fix candidates reconfirmed the same inconclusive result a fourth time, 2026-08-28, both stay off by default |
 | [client-control-lock.md](client-control-lock.md) | Pinning a client to its own PC, never a shared companion | RE reference; implemented |
 | [control-return.md](control-return.md) | Regression: a client locked onto a companion at connect | Root-caused, fixed, live-verified |
 | [companion-combat-credit-plan.md](companion-combat-credit-plan.md) | Live-test plan: does a released companion's swing land as credited damage? | Run; decisive result on the solo-mode hypothesis; superseded in practice by later party-reconciliation.md rounds |
 | [progression-sync.md](progression-sync.md) | Sharing party gold and character XP/level | Gold convergence live-verified 2026-08-27, ON by default; GUI-repaint/policy questions remain open |
-| [companion-state-sync.md](companion-state-sync.md) | Per-companion experience and equipment (roadmap items 11/12) | Live-verified 2026-08-27: `companion_xp_sync` PASS, ON by default; `companion_gear_sync` FAILED (real bug — equip lands on the player, not the companion), stays OFF |
-| [party-pool-sync.md](party-pool-sync.md) | Syncing the shared party item pool (`CSWPartyTable+0x118`) | Live-verified 2026-08-27: one real double-apply bug found and fixed, a second found and open; `party_pool_sync` stays OFF |
+| [companion-state-sync.md](companion-state-sync.md) | Per-companion experience and equipment (roadmap items 11/12) | Live-verified 2026-08-27: `companion_xp_sync` PASS, ON by default; `companion_gear_sync` FAILED (equip lands on the player, not the companion) — root-caused 2026-08-28 (the equip action was queued into a combat round nothing ever arms) and fixed by calling the engine's equip primitive directly; NEEDS-LIVE, stays OFF |
+| [party-pool-sync.md](party-pool-sync.md) | Syncing the shared party item pool (`CSWPartyTable+0x118`) | Live-verified 2026-08-27: one real double-apply bug found and fixed; a second, on the depositing side, was reproduced directly 2026-08-28 (asymmetric — fired on a host's own console deposit, not on the client's, in the same session); `party_pool_sync` stays OFF |
 
 ## World state
 
 | Doc | Subject | Status |
 | --- | --- | --- |
 | [placeables-containers.md](placeables-containers.md) | Extending door-style sync to placeables, containers, traps | Design + implemented (unit-tested); NOT live-verified on the two-instance rig |
-| [container-sync.md](container-sync.md) | Container/corpse open-close sync and the use-lock | Implemented, live-verified, ON by default; `container_fast_pump` off pending a live A/B; `container_lock_arbitration` (closes the container-loot race) live-verified 2026-08-28: correct outcome (exactly one winner) confirmed, ON by default; A/B against `=0` reproduces the old race live; a real latency bug found in the fast-path request/response itself (always times out on this rig, falls back to the older mechanism, which still wins) — see the doc own 2026-08-28 entry |
+| [container-sync.md](container-sync.md) | Container/corpse open-close sync and the use-lock | Implemented, live-verified, ON by default; `container_fast_pump` off pending a live A/B; `container_lock_arbitration` (closes the container-loot race) live-verified 2026-08-28: correct outcome (exactly one winner) confirmed, ON by default; A/B against `=0` reproduces the old race live. A 2026-08-28 pass found the fast-path request/response itself always timing out at 300ms (falling back to the older, still-correct mechanism); raising the budget to 1000ms was re-verified the same day to resolve through the fast path with no fallback — no follow-up item remains |
 | [item-identity.md](item-identity.md) | What a `CSWSItem` carries that its blueprint does not | Implemented; apply path live-tested via the console item-identity loop; §13's item-template-spawn ring (closes the `k_computer_spike`/`g_i_progspike01` gap) is CONFIRMED WORKING end to end as of a 2026-08-28 live pass |
 | [quest-sync.md](quest-sync.md) | Non-monotonic globals, journal removal, the Lamport-clock fix | Implemented, live-verified, ON by default |
 | [map-reveal.md](map-reveal.md) | Fog-of-war sync around a peer's position | Implemented; live-verified 2026-08-27 (engine call, peer tracking, transition survival, frame cost), default ON. On-screen M-key appearance unconfirmed (screenshot tooling broken) |
 | [trigger-relay.md](trigger-relay.md) | Making a generic trigger's `OnEnter` fire for both players | Implemented, live-verified, protocol 36; ON by default in code and (since 2026-08-27) in the shipped `coop.ini.example` |
-| [store-sync.md](store-sync.md) | Syncing merchant store stock (`CSWSStore+0x230`) both ways, roadmap item 20 | RE'd and built 2026-08-27 (`store_sync`, OFF by default, unchanged); a 2026-08-28 live pass using `openstore` found a NEW, real engine crash inside `CSWGuiStore::PopulateStoreItemListBox` (0x6C1872) — not fixed, both `openstore` and `store_sync` should be treated as unsafe until traced |
+| [store-sync.md](store-sync.md) | Syncing merchant store stock (`CSWSStore+0x230`) both ways, roadmap item 20 | RE'd and built 2026-08-27 (`store_sync`, OFF by default, unchanged); a 2026-08-28 live pass using `openstore` found a real engine crash inside `CSWGuiStore::PopulateStoreItemListBox` — root-caused the same day (`ShowStoreGui` takes the store and PC object ids, not `this`-only, `ret 8`) and fixed; NEEDS-LIVE re-test before `openstore`/`store_sync` are safe to call again |
 
 ## Session, network, menu & console
 
@@ -127,7 +127,7 @@ fails safe. **INFERRED** = a reasonable deduction, not directly proven.
 
 | Doc | Subject | Status |
 | --- | --- | --- |
-| [minigames.md](minigames.md) | Swoop races, forced turret sequences, and Pazaak | Swoop-race entry gate found and solved; the terminal transition call is BLOCKED, needs a real debugger this project doesn't have; turret sequence confirmed working as designed. `pazaak_detect` live-verified 2026-08-27 as negative-only (no false positives over ~1 min in a cantina); positive path (an actual hand) still unrun — stays OFF |
+| [minigames.md](minigames.md) | Swoop races, forced turret sequences, and Pazaak | Swoop-race entry gate found and solved; the terminal transition call is BLOCKED, needs a real debugger this project doesn't have; turret sequence confirmed working as designed. `pazaak_detect` live-verified 2026-08-28: latch/park/toast all PASS on a real hand, a real edge-detector bug (rejecting the field's bare-`1` value) found and fixed — flipped ON by default; ending a hand mid-session still doesn't clear the flag, NEEDS-LIVE |
 
 ## Mods
 
