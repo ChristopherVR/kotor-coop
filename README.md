@@ -21,13 +21,13 @@ attaches from outside with `OpenProcess`.
 | World state — containers, items, journal | Live-verified | [shared-state-audit.md](docs/research/shared-state-audit.md) |
 | Dialogue — spectate, late-join, skip-fix | Live-verified | [dialogue-sync.md](docs/research/dialogue-sync.md) |
 | Dialogue recruitment sync | Live-verified for two companions; one fix unconfirmed | [dialogue-consequences.md](docs/research/dialogue-consequences.md) |
-| Session lifecycle — menu, connect, save/load rejoin | Live-verified; `host_load_readopt` has a known live regression (2026-08-28) | [session-save.md](docs/research/session-save.md) |
+| Session lifecycle — menu, connect, save/load rejoin | Live-verified; the 2026-08-28 `host_load_readopt` regression is confirmed fixed (three independent clean re-verifications) | [session-save.md](docs/research/session-save.md) |
 | Companion follow-AI | Live-verified, one known stall left | [party-reconciliation.md](docs/research/party-reconciliation.md) |
 | Companion local combat | Narrow case live-verified | [party-reconciliation.md](docs/research/party-reconciliation.md) |
 | Mod compatibility | Live-verified for most mismatch categories | [mod-compatibility.md](docs/research/mod-compatibility.md) |
 | Sharing `dinput8.dll` with another mod | Live-verified (chain loader) | [src/KotorCoop.Loader](src/KotorCoop.Loader/dinput8_loader.c) |
 | Minigames — swoop race | Blocked, needs a debugger | [minigames.md](docs/research/minigames.md) |
-| Minigames — Pazaak detection, "waiting" notice | Built, not live-verified (`pazaak_detect` off) | [minigames.md](docs/research/minigames.md) |
+| Minigames — Pazaak detection, "waiting" notice | Live-verified clean 2026-08-28 (`pazaak_detect` stays off by default) | [minigames.md](docs/research/minigames.md) |
 | Creature liveness reconciliation | Off by default, open | [creature-liveness.md](docs/research/creature-liveness.md) |
 | Peer-away detection (`FlagAway`) when a partner quits to the main menu | Live-verified 2026-08-27 (an initial pass failed; the fix landed and re-verified the same day) | [disconnect-reconnect.md](docs/research/disconnect-reconnect.md) |
 | Persistent connection indicator | Live-verified 2026-08-27 (partial — data path confirmed, on-screen render unconfirmed) | [connect-flow.md](docs/research/connect-flow.md) |
@@ -36,7 +36,7 @@ attaches from outside with `OpenProcess`.
 | Companion experience (`companion_xp_sync`) | Live-verified, ON by default | [companion-state-sync.md](docs/research/companion-state-sync.md) |
 | Companion equipment (`companion_gear_sync`) | Live-verified FAILURE, stays off | [companion-state-sync.md](docs/research/companion-state-sync.md) |
 | Shared party item pool (`party_pool_sync`) | Live-verified, one bug fixed, one open — stays off | [party-pool-sync.md](docs/research/party-pool-sync.md) |
-| Merchant store stock (`store_sync`) | Built, not live-verified — stays off | [store-sync.md](docs/research/store-sync.md) |
+| Merchant store stock (`store_sync`) | Stays off — a 2026-08-28 live pass found a real engine crash reachable through the same GUI code path | [store-sync.md](docs/research/store-sync.md) |
 | Fog-of-war reveal (`map_reveal_sync`) | Live-verified, on by default | [map-reveal.md](docs/research/map-reveal.md) |
 | Star Forge finale — Bastila/Malak duel spectate (`solo_segment_spectate`) | Built, off until live-verified | [star-forge-finale.md](docs/research/star-forge-finale.md) |
 | Internet play — public address discovery (STUN), UPnP port mapping | Built, unit-tested, not live-verified against a real router; no relay/hole-punching | [network-topology.md](docs/research/network-topology.md) |
@@ -213,12 +213,11 @@ tools/                   package/install scripts, demo rig, RE helpers, the koto
 - **Creature liveness reconciliation** (a body alive on one screen, dead on the other) ships
   off by default; the correction mechanism works, a freshness theory is unconfirmed. See
   [creature-liveness.md](docs/research/creature-liveness.md).
-- **Host save-reload re-adopt (`host_load_readopt`) can lose or hang the client.** Shipped ON by
-  default after a clean 2026-08-24 live pass; a 2026-08-28 re-test on a later build reproduced a
-  failure twice (once the client's own game process disappeared mid-rejoin, once it hung
-  indefinitely) against the exact same recipe that passed cleanly before. Not yet root-caused or
-  reverted — see [session-save.md](docs/research/session-save.md)'s 2026-08-28 entry before relying
-  on this feature.
+- **Host save-reload re-adopt (`host_load_readopt`) previously lost or hung the client** on a
+  2026-08-28 build — root-caused to an unrelated dangling-pointer write storm in
+  `PartySelectSuppressionController`, fixed the same day, and confirmed clean across three
+  independent live re-verifications (the last one 2026-08-28). See
+  [session-save.md](docs/research/session-save.md)'s 2026-08-28 entries.
 - **Chain mode serialises `dinput8` proxies, it doesn't merge them** — a proxy that always
   loads the system DLL itself must be last in `dinput8.chain`; "load me" DLLs (`.asi`) go anywhere.
 - **Each player really fights one enemy at a time.** `local_combat` hands a client exactly one
@@ -232,9 +231,10 @@ tools/                   package/install scripts, demo rig, RE helpers, the koto
   (`solo_segment_spectate`): parks the other player's input/camera on the fight instead of a
   second combatant wandering into a duel the base game designed for one; the input lock hasn't
   been watched stop a real WASD press yet. See [star-forge-finale.md](docs/research/star-forge-finale.md).
-- **The shared merchant store channel (`store_sync`) is built but stays off** — researched and
-  unit-tested, not yet watched land against a real store. See
-  [store-sync.md](docs/research/store-sync.md).
+- **The shared merchant store channel (`store_sync`) is built but stays off** — a 2026-08-28 live
+  pass found a real, reproducible engine crash inside `CSWGuiStore::PopulateStoreItemListBox`
+  reachable through the same store-opening code path this channel shares; not yet root-caused or
+  fixed. See [store-sync.md](docs/research/store-sync.md)'s 2026-08-28 entry.
 - **`coop.ini` divergence is negotiated, not silent.** Every behaviour flag rides a digest
   compared at join; a difference always warns on both screens (`W_CFG`), and nine
   host-authoritative keys are additionally adopted by a disagreeing client at runtime. See
