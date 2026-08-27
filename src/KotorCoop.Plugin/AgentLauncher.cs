@@ -225,6 +225,17 @@ internal static unsafe class AgentLauncher
             StartupInfo startup = default;
             startup.Cb = sizeof(StartupInfo);
 
+            // ⚠ LIMITATION: kotorcoop-agent.log only rotates HERE, right before the handle
+            // below is opened — never mid-session, from either side. This is a raw inherited
+            // OS file handle, not something the child reopens itself: the agent's own
+            // Console.Out (AgentDashboard's IsOutputRedirected path) writes straight through
+            // it, so there is no File.Move the agent could safely perform on a path a live
+            // handle already has open — Windows does not require the handle to be closed
+            // first, but the agent has no way to also swap what Console.Out itself is backed
+            // by mid-process. The plugin cannot rotate it either: RotateLogFilesOverCap skips
+            // this file by name for exactly this reason. A very long single agent session
+            // (the plugin normally only relaunches it on a crash/hang) is therefore uncapped
+            // until the next relaunch. See docs/TROUBLESHOOTING.md's log-growth section.
             bool haveLog = log != InvalidHandle && log != 0;
             if (haveLog)
             {

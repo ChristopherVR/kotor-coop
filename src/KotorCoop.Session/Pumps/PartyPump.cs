@@ -29,7 +29,10 @@ internal sealed class PartyPump(IGameBridge bridge, ICoopSession session, AgentS
             // Hold the last snapshot rather than publishing while the host itself is in a
             // minigame — same reasoning as PumpEnemies: whatever the engine reports for the
             // companions during a swoop/turret sequence is not the shared-world party.
-            if (bridge.IsInMinigame)
+            // MinigameRule.ShouldSuppressPresencePublish covers the enemy AND party census
+            // alike (see its doc comment) and ignores both of its toggles by design, so a
+            // default instance answers it correctly.
+            if (default(MinigameRule).ShouldSuppressPresencePublish(bridge.IsInMinigame))
             {
                 return;
             }

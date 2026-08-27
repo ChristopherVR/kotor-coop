@@ -32,7 +32,10 @@ namespace KotorCoop.Plugin;
 /// <see cref="DriveAttackIfDue"/>), the same engine call the <c>attack</c> cheat already uses,
 /// which a comprehensive static scan found is never gated on solo mode at all — so this makes
 /// no write to the party-wide flag and carries none of that write's risk to a second, still
-/// mirrored companion. NEEDS-LIVE.
+/// mirrored companion. Live-verified 2026-08-24 (docs/research/party-reconciliation.md's
+/// "two-companion `companion_local_combat` release... Flipped ON by default" entry): two
+/// companions released in the same window, both drove attacks on the same target, real
+/// credited kills, no cross-slot contamination.
 /// </summary>
 internal sealed unsafe class PartyPresenceController(SharedBlockView block)
 {
@@ -571,10 +574,14 @@ internal sealed unsafe class PartyPresenceController(SharedBlockView block)
     ///
     /// <see cref="CompanionLocalFightRule.ShouldDriveAttack"/> gates the call: only when the
     /// companion's own action-queue head is empty (nothing to contest) and the per-slot
-    /// throttle has elapsed. NEEDS-LIVE — never fired against a real fight; the log line below
-    /// is deliberately loud (not folded into the quieter release-diag trickle) so a live pass
-    /// can tell at a glance whether the call is even being attempted, separately from whether it
-    /// lands. Capped in total for the same reason <see cref="LogReleaseDiagIfDue"/> is.
+    /// throttle has elapsed. Live-verified 2026-08-24 against a real two-companion fight
+    /// (docs/research/party-reconciliation.md's "two-companion `companion_local_combat`
+    /// release... Flipped ON by default" entry) — both companions' release lines fired in the
+    /// same tick and both drove their attack on the same target 4ms later, with real credited
+    /// damage and a real kill following. The log line below is deliberately loud (not folded
+    /// into the quieter release-diag trickle) so a live pass can tell at a glance whether the
+    /// call is even being attempted, separately from whether it lands. Capped in total for the
+    /// same reason <see cref="LogReleaseDiagIfDue"/> is.
     /// </summary>
     private void DriveAttackIfDue(uint objectId, nint creature, uint enemyObjectId, double now, int slot)
     {

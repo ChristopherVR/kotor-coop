@@ -25,6 +25,19 @@ internal static unsafe partial class PluginHost
     private static bool _started;
     private static string _logPath = "kotorcoop-plugin.log";
 
+    /// <summary>Guards every write AND every rotate against "kotorcoop-*.log": <see cref="Log"/>
+    /// does a <see cref="File.AppendAllText(string,string)"/>, <see cref="RotateLogsIfNeeded"/>
+    /// and <see cref="RotateLogsIfNeededMidSession"/> do a <see cref="File.Move(string,string,bool)"/>
+    /// on the same paths, and interleaving an append with a rename could either lose the line
+    /// (written to the path just as it is renamed out from under it) or resurrect it into the
+    /// freshly-rotated file. Startup rotation takes this lock too even though nothing can be
+    /// contending for it yet, so the discipline never has an exception.</summary>
+    private static readonly object LogFileGate = new();
+
+    /// <summary>Set by <see cref="RotateLogsIfNeededMidSession"/>; 0 until the worker loop's
+    /// first pass. See <see cref="LogRotation.ShouldCheckPeriodically"/>.</summary>
+    private static long _lastPeriodicLogCheckMs;
+
     /// <summary>Per-subsystem logs are this + channel + ".log" (see <see cref="Log"/>).</summary>
     private static string _channelPathPrefix = "kotorcoop-";
     private static SharedBlock* _block;
@@ -345,6 +358,10 @@ internal static unsafe partial class PluginHost
                 // a record behind; this is where that record becomes words.
                 CrashProbe.DrainReports();
 
+                // Throttled internally to ~once per LogRotation.PeriodicCheckIntervalMs; a
+                // no-op call on every other pass through this ~16ms loop.
+                RotateLogsIfNeededMidSession();
+
                 if (_view is { } view)
                 {
                     uint remotes = view.RemoteCount;
@@ -455,11 +472,19 @@ internal static unsafe partial class PluginHost
         {
             string line = $"[{DateTime.Now:HH:mm:ss.fff}] {message}{Environment.NewLine}";
 
-            // The combined file stays the timeline: it is what you read when the question is
-            // "what happened around 14:48", and what verify.ps1 and every existing note
-            // grep. The split files are for reading ONE subsystem end to end.
-            File.AppendAllText(_logPath, line, Encoding.ASCII);
-            File.AppendAllText(_channelPathPrefix + ChannelFor(message) + ".log", line, Encoding.ASCII);
+            // Same lock RotateLogsIfNeeded/RotateLogsIfNeededMidSession take around their
+            // File.Move: without it, a rotate racing this append could lose the line or
+            // write it into the file the rotate is in the middle of renaming away. See
+            // LogFileGate's doc comment.
+            lock (LogFileGate)
+            {
+                // The combined file stays the timeline: it is what you read when the
+                // question is "what happened around 14:48", and what verify.ps1 and every
+                // existing note grep. The split files are for reading ONE subsystem end to
+                // end.
+                File.AppendAllText(_logPath, line, Encoding.ASCII);
+                File.AppendAllText(_channelPathPrefix + ChannelFor(message) + ".log", line, Encoding.ASCII);
+            }
         }
         catch
         {
@@ -475,41 +500,104 @@ internal static unsafe partial class PluginHost
     /// fresh session starts a clean file. A file at or under the cap is left alone —
     /// sessions keep concatenating into it until it next crosses the line.
     ///
-    /// Runs once, here, before <see cref="Log"/> is ever called: rotating mid-session would
-    /// pull the file out from under a live tail (tools/verify.ps1 and friends).
-    ///
-    /// Skips "kotorcoop-agent.log" on purpose — that file belongs to the agent process
-    /// AgentLauncher spawns, and it rotates it itself right before opening it (see
-    /// AgentLauncher.RotateAgentLogIfNeeded), not as part of this directory-wide sweep.
+    /// Called once, here, before <see cref="Log"/> is ever called — nothing else can be
+    /// contending for <see cref="LogFileGate"/> yet, this just establishes the discipline the
+    /// mid-session sweep (<see cref="RotateLogsIfNeededMidSession"/>) relies on for the rest
+    /// of the session.
     /// </summary>
     private static void RotateLogsIfNeeded(string directory)
     {
         try
         {
-            long cap = LogRotation.CapBytes(PluginConfig.ReadInt("log_max_mb", LogRotation.DefaultCapMb));
-
-            foreach (string path in Directory.EnumerateFiles(directory, "kotorcoop-*.log"))
+            lock (LogFileGate)
             {
-                string name = Path.GetFileName(path);
-                if (name.EndsWith(".1.log", StringComparison.OrdinalIgnoreCase)
-                    || name.Equals("kotorcoop-agent.log", StringComparison.OrdinalIgnoreCase))
-                {
-                    continue;
-                }
-
-                FileInfo info = new(path);
-                if (!info.Exists || !LogRotation.ShouldRotate(info.Length, cap))
-                {
-                    continue;
-                }
-
-                File.Move(path, LogRotation.RotatedPath(path), overwrite: true);
+                RotateLogFilesOverCap(directory);
             }
         }
         catch
         {
             // Best-effort, same as Log() itself: a rotation failure must not stop the
             // plugin from starting, it just means this session's log grows a bit more.
+        }
+    }
+
+    /// <summary>
+    /// The periodic sibling of <see cref="RotateLogsIfNeeded"/>, called from
+    /// <see cref="WorkerLoop"/> roughly every <see cref="LogRotation.PeriodicCheckIntervalMs"/>
+    /// (see <see cref="LogRotation.ShouldCheckPeriodically"/>) so a session that runs long
+    /// enough to cross <c>log_max_mb</c> on its own is capped before the NEXT process start
+    /// rather than only then — a live test rig's combined log once reached 170 MB across 158
+    /// sessions specifically because rotation only ran at startup.
+    ///
+    /// Safe to run mid-session, unlike a naive move: it takes the exact same
+    /// <see cref="LogFileGate"/> lock <see cref="Log"/> takes around its
+    /// <see cref="File.AppendAllText(string,string)"/> calls, so a rotate here can never
+    /// interleave with an in-flight write to the same path. A tool tailing the file externally
+    /// (tools/verify.ps1) can still observe the rename as a gap, but that risk is accepted in
+    /// exchange for a session that no longer grows unbounded between restarts.
+    /// </summary>
+    private static void RotateLogsIfNeededMidSession()
+    {
+        long now = Environment.TickCount64;
+        if (!LogRotation.ShouldCheckPeriodically(_lastPeriodicLogCheckMs, now, LogRotation.PeriodicCheckIntervalMs))
+        {
+            return;
+        }
+
+        _lastPeriodicLogCheckMs = now;
+
+        try
+        {
+            string? directory = Path.GetDirectoryName(_logPath);
+            if (string.IsNullOrEmpty(directory))
+            {
+                return;
+            }
+
+            lock (LogFileGate)
+            {
+                RotateLogFilesOverCap(directory);
+            }
+        }
+        catch
+        {
+            // Best-effort, same as Log() itself.
+        }
+    }
+
+    /// <summary>
+    /// The actual sweep shared by <see cref="RotateLogsIfNeeded"/> (once, at startup) and
+    /// <see cref="RotateLogsIfNeededMidSession"/> (periodically, during play): every
+    /// "kotorcoop-*.log" over cap becomes its "*.1.log" sibling, overwriting whatever was
+    /// there, so exactly one prior generation's tail survives. Callers must already hold
+    /// <see cref="LogFileGate"/>.
+    ///
+    /// Skips "kotorcoop-agent.log" on purpose — that file belongs to the agent process
+    /// AgentLauncher spawns, and it rotates it itself right before opening it (see
+    /// AgentLauncher.RotateAgentLogIfNeeded), not as part of this directory-wide sweep. It
+    /// cannot be rotated mid-session by either side: see the comment on
+    /// AgentLauncher.Launch's StartupInfo.StdOutput assignment.
+    /// </summary>
+    private static void RotateLogFilesOverCap(string directory)
+    {
+        long cap = LogRotation.CapBytes(PluginConfig.ReadInt("log_max_mb", LogRotation.DefaultCapMb));
+
+        foreach (string path in Directory.EnumerateFiles(directory, "kotorcoop-*.log"))
+        {
+            string name = Path.GetFileName(path);
+            if (name.EndsWith(".1.log", StringComparison.OrdinalIgnoreCase)
+                || name.Equals("kotorcoop-agent.log", StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            FileInfo info = new(path);
+            if (!info.Exists || !LogRotation.ShouldRotate(info.Length, cap))
+            {
+                continue;
+            }
+
+            File.Move(path, LogRotation.RotatedPath(path), overwrite: true);
         }
     }
 }

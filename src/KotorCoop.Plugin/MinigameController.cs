@@ -25,7 +25,7 @@ namespace KotorCoop.Plugin;
 /// <c>KotorGameBridge.IsInMinigame</c> (agent side) reads independently through the same
 /// pointer chain via <c>EngineGlobals.TryIsInMiniGame</c>, and applied in
 /// <c>CoopAgent.cs</c> (peer filter, <c>PumpEnemies</c>, <c>PumpParty</c>,
-/// <c>PumpPhantomDamage</c>) using <see cref="MinigameRule"/>. This class exists so the
+/// <c>PumpPhantomDamage</c>) using <c>KotorCoop.Protocol.MinigameRule</c>. This class exists so the
 /// transition is visible in the plugin's own log the instant it happens, independent of the
 /// agent's poll cadence, and so any future plugin-side consumer (a HUD indicator, the
 /// spectate hookup left as a next step) has a ready per-frame read to build on.

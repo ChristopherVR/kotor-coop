@@ -33,6 +33,25 @@ internal static class LogRotation
     public static bool ShouldRotate(long existingSizeBytes, long capBytes) =>
         existingSizeBytes > capBytes;
 
+    /// <summary>How often PluginHost.WorkerLoop re-checks log sizes once the game is running
+    /// (see PluginHost.RotateLogsIfNeededMidSession). A long-running session used to only
+    /// ever rotate at the NEXT process start, so a single session that outlived the cap grew
+    /// unbounded until then; this is the period that caps it without the worker's ~16ms loop
+    /// stat-ing every "kotorcoop-*.log" file every tick.</summary>
+    public const int PeriodicCheckIntervalMs = 30_000;
+
+    /// <summary>True once at least <paramref name="intervalMs"/> has elapsed since the last
+    /// periodic check — the timing half of the mid-session decision, kept separate from
+    /// <see cref="ShouldRotate"/> (the size half) so a caller can test "is it time to even
+    /// look at the files" without touching the filesystem. <paramref name="nowMs"/> and
+    /// <paramref name="lastCheckMs"/> are expected to come from the same monotonic clock
+    /// (<c>Environment.TickCount64</c>); a <paramref name="lastCheckMs"/> of 0 (nothing
+    /// checked yet this session) is due the moment <paramref name="nowMs"/> itself reaches
+    /// <paramref name="intervalMs"/> — <c>TickCount64</c> is process-uptime-scaled, not
+    /// zero-based, so in practice that is already true the first time this runs.</summary>
+    public static bool ShouldCheckPeriodically(long lastCheckMs, long nowMs, long intervalMs) =>
+        nowMs - lastCheckMs >= intervalMs;
+
     /// <summary>The ".1.log" sibling for a "*.log" path, preserving everything before the
     /// final ".log" — "kotorcoop-plugin.log" becomes "kotorcoop-plugin.1.log", keeping the
     /// per-channel scheme (see PluginHost.ChannelFor). A path that does not end in ".log" is

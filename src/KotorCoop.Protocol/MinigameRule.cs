@@ -1,4 +1,4 @@
-namespace KotorCoop.Plugin;
+namespace KotorCoop.Protocol;
 
 /// <summary>
 /// The decision half of minigame gating (swoop races, forced turret sequences), separated
@@ -15,8 +15,14 @@ namespace KotorCoop.Plugin;
 /// coop.ini once per session and every call site needs both — <c>Decide</c> methods that
 /// took the toggle as a parameter every time read fine here but drift wherever a caller
 /// forgets one, which a config object at the call site cannot do.
+///
+/// Lives in <c>KotorCoop.Protocol</c> rather than <c>KotorCoop.Plugin</c> because its actual
+/// callers — <c>CoopAgent.cs</c>'s peer filter and the <c>CombatPump</c>/<c>PartyPump</c>
+/// classes in <c>KotorCoop.Session</c> — cannot reference the NativeAOT plugin assembly; this
+/// is the same "shared rule, shared project" shape as <see cref="ContainerUseRule"/> and
+/// <see cref="DialogueAutoJoinRule"/>.
 /// </summary>
-internal readonly record struct MinigameRule(bool HidePeersEnabled, bool SpectateEnabled)
+public readonly record struct MinigameRule(bool HidePeersEnabled, bool SpectateEnabled)
 {
     /// <summary>
     /// Should THIS peer's phantom be parked (hidden, not driven) the same way a peer in a

@@ -300,9 +300,10 @@ public sealed class CoopAgent
         // Module string still names it — same "park, do not mirror" treatment as the module
         // filter above, and the same idiom: simply absent from what TryWriteRemotePeers
         // writes, which is what already deactivates a slot for a peer elsewhere. See
-        // PlayerState.FlagInMinigame and docs/research/minigames.md.
+        // PlayerState.FlagInMinigame, MinigameRule.ShouldHidePeer and docs/research/minigames.md.
+        MinigameRule minigameRule = new(HidePeersEnabled: _settings.HidePeersInMinigame, SpectateEnabled: false);
         visible = _settings.HidePeersInMinigame
-            ? [.. visible.Where(p => !p.State.IsInMinigame)]
+            ? [.. visible.Where(p => !minigameRule.ShouldHidePeer(p.State.IsInMinigame))]
             : visible;
 
         // Mask the per-avatar fields a mod mismatch makes unsafe BEFORE they reach the

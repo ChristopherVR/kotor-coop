@@ -91,7 +91,9 @@ internal sealed partial class CombatPump
             // during a swoop race or a turret sequence is not the shared-world fight, and
             // publishing it would send every peer's mirror chasing a fight that is not
             // happening. See PlayerState.FlagInMinigame and docs/research/minigames.md.
-            if (!bridge.IsInDialogue && !bridge.IsInMinigame)
+            // MinigameRule.ShouldSuppressPresencePublish ignores both of its toggles by
+            // design (see MinigameRuleTests) so a default instance answers it correctly.
+            if (!bridge.IsInDialogue && !default(MinigameRule).ShouldSuppressPresencePublish(bridge.IsInMinigame))
             {
                 List<EnemyState> ownedEnemies = bridge.ReadEnemies(otherPlayers);
                 session.PublishEnemies(censusModule, ownedEnemies);

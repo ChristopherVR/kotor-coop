@@ -477,3 +477,5 @@ root-caused) and because `verify.ps1`'s own fails were not re-checked on a fresh
 `verify.ps1` fully green on an undisturbed session to close the last procedural gap, and (2)
 root-cause the warp crash before recommending a default flip, since it lives in code this feature's
 own host-side companion following depends on.
+
+2026-08-24 follow-up: the flag was flipped ON by default later the same day — see docs/research/party-reconciliation.md's "two-companion `companion_local_combat` release... Flipped ON by default" entry.
