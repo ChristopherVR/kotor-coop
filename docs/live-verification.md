@@ -1286,3 +1286,37 @@ re-matches because a further local deposit keeps moving the engine total (step 2
 all). Full root-cause detail and the concrete fix direction (track a covered QUANTITY per key,
 not a single target value) in `docs/research/party-pool-sync.md`'s new §11. No crash, both
 processes healthy throughout. `party_pool_sync` stays at its default OFF.
+
+## Rig pass (2026-08-28): item 5 — `verify.ps1` baseline, full test suite, native build
+
+Task: `verify.ps1` against a fresh session, compared to the documented 40-42/7-9 baseline;
+full `dotnet test`; both native builds.
+
+**`verify.ps1`, against a freshly-connected, untouched session** (`coop.ini` reset to
+`profiles/coop.ini.example` defaults on both installs): **41 passed, 8 failed.** Seven of the
+eight failures match the long-standing documented baseline exactly (`phantom damageable, not a
+sink`; `the peer really loses those hit points`; `a downed player is reported to the agent`;
+`the co-op revive stands the player back up`; `every engine call signature matches the binary`
+(187/189); `a container opened on the client is held and shown open on the host`; `no
+per-frame spam`). One substitution from the baseline set: `a client hit costs the enemy real
+hit points` (normally a baseline failure) PASSED this run, while `an item picked up here
+vanishes on the peer` (normally passing) FAILED. A second `verify.ps1` run immediately after,
+reusing the SAME session (not a fresh one), came back **40 passed, 9 failed** with yet another
+different substitution set (the item-pickup check flipped back to PASS, several
+combat/dialogue/interaction-lock checks flipped to FAIL instead) — confirming the single
+substitution in the first run is ordinary run-to-run/session-history timing flakiness in this
+environment, not a regression: `docs/CONTRIBUTING.md` already documents two of `verify.ps1`'s
+own checks as environment-flaky, and this doc's own prior rounds record the identical pattern
+(a re-run against a non-fresh session produces a materially different failure set than a fresh
+one). Squarely inside the documented 40-42/7-9 range; no regression.
+
+**Full test suite**: `dotnet test tests/KotorCoop.Tests --no-build` — **2355 passed, 0 failed**
+(run after all code changes this session — the three `store_sync` bug fixes — had already
+landed).
+
+**Native builds**: `dotnet build KotorCoop.slnx -warnaserror` and
+`src/KotorCoop.Plugin/build.ps1 -WarnAsError` — both clean, 0 warnings, 0 errors.
+
+No crash on either instance across the whole session's several rig rounds (`store_sync`,
+`solo_segment_spectate`, the behaviour-override bridge, `party_pool_sync`, and this baseline
+pass). This closes the task's item 5.
