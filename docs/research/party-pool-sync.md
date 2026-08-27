@@ -861,3 +861,111 @@ answer; if it does not recur, this fix — or the combination of it and root cau
 `dotnet build KotorCoop.slnx -warnaserror`: clean. `dotnet test tests/KotorCoop.Tests --no-build
 --filter "FullyQualifiedName~PartyPool"`: 30/30 passing (up from the pre-existing suite plus the
 two new tests this round added).
+
+## 11. 2026-08-28, live pass — re-tested with `pooladd`: no duplicate, but a NEW, opposite
+
+## defect found — rapid same-resref deposits UNDER-count on the wire, and a landed relay can
+
+## permanently lock a key out of further detection
+
+Task: §10.4's own "next live-test step" — re-run §9's `pooladd` reproduction on a rig with
+`party_pool_sync=1`, watching for a duplicate `CheatKinds.PartyPoolAdd`. Two-instance rig,
+`store-sync.md`-style isolation (`script_item_sync=0`/`dialogue_item_sync=0` on both, so
+`pooladd`'s own `GiveItemToInventory` call is not ALSO picked up by the unrelated
+script-item-grant channel as an "untracked" item and double-replicated through a completely
+different mechanism — confirmed as real cross-channel noise on the FIRST, non-isolated attempt
+this round, matching the identical contamination `store-sync.md`'s own 2026-08-28 pass found for
+`buy`). `pooladd g_w_thermldet01` x3 on the HOST, then x3 on the CLIENT, each round issued back
+to back over `blockpoke.ps1 -ProcId <pid> console 'pooladd g_w_thermldet01'`.
+
+**The specific symptom §9/§10 chased (a duplicate `CheatKinds.PartyPoolAdd` on the originating
+side) did not recur** — consistent with §10's own four independent negative results. **But the
+totals never converged to +6 on either side, which the task's own bar ("both pools show exactly
++6, no doubles in either log") fails just as hard as a duplicate would have.** Final tally, both
+sides stable for 25+ seconds with no further change:
+
+- **HOST**: exactly 3 `added 'g_w_thermldet01' x1 to the party pool` lines — matching its own 3
+  local `pooladd` calls. **Zero** of the client's 3 deposits ever arrived.
+- **CLIENT**: exactly 4 `added` lines — 1 relayed from the host, plus its own 3 local calls'
+  worth of LOCAL engine effect (all 3 genuinely landed in the client's own inventory — `pooladd`
+  is a local engine primitive, not itself a wire call). But only **one** `party pool: local add
+  ... detected, publishing` line ever appeared, on the HOST, for its OWN first deposit — the
+  client's log shows **zero** `local add ... detected` lines for any of ITS 3 deposits, despite
+  all 3 genuinely happening.
+
+### Root cause, read from `PartyPoolPump.cs`'s own step 1/step 2 exclusion logic (VERIFIED,
+
+### code read, not merely inferred from the log pattern)
+
+Two related but distinct mechanisms, both already present in the shipped code:
+
+1. **Step 1's own key exclusion has no headroom for a SECOND genuine change to the same key
+   inside the grace window.** `engineForDetect = Without(engine, _pendingApplyTarget.Keys)`
+   (line ~127) excludes ANY key currently in `_pendingApplyTarget` from step 1's diff entirely —
+   by design, per §10.2's own fix, so a transient scan glitch right after a detection is not
+   misread as a further genuine change. But `_pendingApplyTarget` cannot distinguish "a glitch"
+   from "a second REAL deposit of the same resref 800ms later" — both look identical from
+   inside the pump (a key already pending, seeing yet another local change before its own grace
+   window or scan-confirmation clears it). Three `pooladd` calls issued back-to-back over
+   `blockpoke.ps1` land well inside `LocalDetectGraceMs`'s 2000ms window, so calls 2 and 3 are
+   invisible to step 1 — their local effect is real (the item is genuinely in the engine's own
+   party inventory, confirmed by the console's own `added 'X' x1` reply after every single
+   call), but nothing about them ever reaches `session.PublishPartyPoolOp`, so the OTHER
+   instance never hears about them at all.
+
+2. **A step-2-originated pending entry (an APPLIED relay, not a local detection) has NO
+   expiry, and — critically — nothing re-arms it if the local engine total keeps moving
+   further while it waits.** The client's ONE received-and-applied relay (the host's first
+   deposit) registers `_pendingApplyTarget[key] = target` in the RECONCILE block (`step 2`,
+   below the excerpt quoted in §10.2), which — unlike a step-1 detection — is never given a
+   `_localDetectExpiry` entry (that dictionary is populated ONLY from `justDetected`, i.e. only
+   for step-1's own local-change branch). Per the class's own doc comment, a step-2 entry "wait
+   INDEFINITELY for a matching scan... a queued apply really is a fact this instance is still in
+   the process of making true" — correct when nothing else is touching that key, but if the
+   LOCAL PLAYER ALSO deposits more of the same resref while that relay is still pending (exactly
+   this round's own scenario: the client's 3 `pooladd` calls landed seconds after receiving the
+   host's relayed deposit), the engine's own total keeps moving further away from the ORIGINAL
+   `target` the pending entry is still waiting to see — so it can never "land," and the key
+   stays excluded from BOTH step 1 (further local changes invisible) and step 2 (further
+   reconcile toward the merged truth also skipped) for as long as that mismatch persists, which
+   in the general case is indefinitely.
+
+**These are two independent-but-compounding gaps in the SAME exclusion mechanism** — the first
+purely a timing/grace-window question (real but bounded, 2 seconds), the second a genuinely
+unbounded lockout with no timeout at all. Both trade the ORIGINAL bug (a duplicate) for the
+opposite one (silent data loss / a permanently stuck key), because both mechanisms treat "this
+key is currently in flight" as a single boolean with no notion of "how many DISTINCT local
+events does this cover" — the party pool's own multiset semantics (§2.1: "a store's stock
+genuinely goes up... repeatedly, by either player, so a one-way ratchet is wrong here too," the
+identical reasoning this doc's own §2 already gives for the party pool) is exactly the shape
+that breaks a single-pending-value model the moment two real events land close together.
+
+### Not fixed this pass — same discipline as `store-sync.md`'s bug 4
+
+This is a live-time-pressure judgement call, made the same way `store-sync.md`'s bug 4 was left
+open this same round: the safe fix needs the exclusion mechanism to track "how much of this
+key's movement is ALREADY accounted for by an in-flight op" as a quantity, not "is this key
+currently touched at all" as a boolean — a real design change to `_pendingApplyTarget`'s own
+shape, not a one-line patch, and this codebase's own engine-write discipline (verify a
+researched offset/design live before shipping) argues against guessing at it without a
+follow-up live re-verification loop this pass did not have budget for.
+
+### Verdict
+
+`party_pool_sync` stays OFF (`AgentSettings.PartyPoolSyncEnabled`/`profiles/coop.ini.example`
+unchanged, still default `false`/`0`). §9/§10's own duplicate-apply symptom is, for a fifth time
+(four prior negative results in §10.1 plus this round), NOT what a live rig reproduces — but
+this round found a real, live-confirmed, DIFFERENT defect in the exact same exclusion mechanism
+those four rounds were all defending: rapid same-key local changes silently fail to replicate,
+and a landed relay racing a further local deposit of the same resref can lock that key out of
+sync indefinitely. **Concrete next step**: redesign `_pendingApplyTarget` to hold a covered
+QUANTITY per key (how much of the key's current total this instance believes is already
+accounted for by in-flight/just-applied ops) rather than a single target value, so a NEW local
+change past that quantity is still detected even while an earlier one for the same key is still
+settling — then re-run this exact `pooladd x3`/`pooladd x3` reproduction to confirm both sides
+converge to +6 with no drops and no doubles.
+
+Both `swkotor.exe` processes stayed healthy (`Get-Process`, `Responding=True`) throughout and
+after. No crash. `dotnet build KotorCoop.slnx -warnaserror` and
+`src/KotorCoop.Plugin/build.ps1 -WarnAsError`: both clean — no source changed this pass, a live
+rig session only.

@@ -1262,3 +1262,27 @@ the CLIENT tracking the host's new position; `applyeffect 1` on the host produce
 `docs/research/mod-compatibility.md`'s 2026-08-28 "Live-verified" section.
 `trigger_relay`/`liveness_sync`/`dialogue_recruit_sync` (the other three of the five bridged
 keys) remain untested live.
+
+## Rig pass (2026-08-28): `party_pool_sync` host-side dup re-test — the duplicate never
+
+## recurred, but a NEW, opposite defect found (rapid same-resref deposits under-count)
+
+Task: `docs/research/party-pool-sync.md` §10's own next step — re-run the `pooladd` reproduction with
+`party_pool_sync=1` live, watching for a duplicate `CheatKinds.PartyPoolAdd`. `pooladd
+g_w_thermldet01` x3 on the host, x3 on the client (isolated from `script_item_sync`/
+`dialogue_item_sync` the same way the `store_sync` round was, after the first attempt showed
+identical cross-channel contamination).
+
+**Not flipped ON.** The specific duplicate-apply symptom did not recur (a fifth negative
+result). But neither side converged to +6: the HOST ended with exactly 3 (its own 3 local
+calls; zero of the client's 3 ever arrived), the CLIENT ended with 4 (1 relayed from the host
+plus its own 3 local calls' worth of real local effect, but only that one relay was ever
+detected/published — none of the client's own 3 were). Root cause, read from
+`PartyPoolPump.cs`: the SAME `_pendingApplyTarget` exclusion mechanism §10's own "root cause
+2" fix added to stop a transient scan glitch from being misread as a real change also excludes
+a SECOND, genuinely real, rapid local change to the same key — both a bounded 2-second grace
+window (step 1) and an unbounded lockout when a landed relay's own pending entry never
+re-matches because a further local deposit keeps moving the engine total (step 2, no expiry at
+all). Full root-cause detail and the concrete fix direction (track a covered QUANTITY per key,
+not a single target value) in `docs/research/party-pool-sync.md`'s new §11. No crash, both
+processes healthy throughout. `party_pool_sync` stays at its default OFF.
