@@ -1088,3 +1088,54 @@ specific to the item that exposed it:
 five new verbs). The one `CoopCommandDispatcherTests` UDP-port flake (documented in
 CONTRIBUTING.md) reproduced once, during a test run launched in parallel with a rig relaunch,
 and cleared on a solo rerun of that class alone.
+
+## 2026-08-28 — `demo3.ps1` three-peer: item 8's own auto-load failure was a stale plugin
+## build in the third game directory, not the code
+
+Item 8 above (2026-08-27) reported instance 3's menu auto-load failing across 4 full
+relaunch cycles and being abandoned. This round picked that up directly. Before touching
+`demo3.ps1` itself, a quick check of the third game directory's own `dinput8.dll` found it
+dated **2026-08-07** (1,319,936 bytes) against the other two installs' freshly-built
+**2026-08-28** copy (2,019,840 bytes) — game directory 3 (`D:\Games\swkotor-gog-p3`, created
+once by an earlier `-CreateGame3` robocopy and never touched again) had simply never had the
+plugin reinstalled since, so instance 3 was launching with three weeks of this project's own
+fixes missing, including whatever earlier changes made the two-instance menu-load path
+reliable in the first place.
+
+**Fix: `src/KotorCoop.Plugin/build.ps1 -WarnAsError -Install -GameDir 'D:\Games\swkotor-gog-p3'`**
+— nothing else. Reset all three `coop.ini`s to `profiles/coop.ini.example`, cleared all three
+plugin logs, then `pwsh tools\demo3.ps1` end to end with no retries logged for any instance —
+all three came up first try. `pwsh tools\verify3.ps1` immediately after: **34/34 passed**
+(three agents, two remote peers on every instance with distinct ids, two phantoms alive on
+every instance, hit tables agreeing, no faults logged, no crash in the event log, all three
+plugins driving). `say hello from three-peer smoke test` on the host reached both peers'
+chat overlays (confirmed via both `agent2.log`/`agent3.log`, `* Lanik: hello from
+three-peer smoke test`).
+
+**The door-transition leg of the smoke test hit a different, pre-existing, non-regression
+limitation, not a bug**: `warp end_m01ab` moved all three together cleanly (`where` on every
+instance agreed on the new module and position), but `end_m01ab`'s own native `OnEnter`
+trigger starts a forced, non-forced-conversation-flag NWScript dialogue
+(`dialogue: engine reached StartDialog (1 so far, forced=False)`) — the vanilla
+Trask-introduction scene — which held the main thread for the rest of this round's
+observation window (`WARNING: frame hook installed but has not fired for ~2s`, repeating;
+`skipline`/`selectreply` both refused with *"the game never answered that... cheats run on
+the game's frame"*, since the frame hook genuinely was not ticking). This is the same
+"needs a person playing" class of gap `docs/research/minigames.md` §9.3/§10 and this
+project's own repeated prior findings already document for interactive dialogue content —
+not new, and not specific to a third peer. **No crash**: all three `swkotor.exe` and all
+three `KotorCoop.Agent.exe` processes stayed alive and were confirmed via
+`Get-Process`/the Windows event log throughout, including after the stuck window persisted
+for several minutes; two of the three windows simply stopped pumping Windows messages
+(`Responding=False`) while the native dialogue held the thread, exactly as the plugin's own
+log line predicts. `demo3.ps1 -Stop` tore everything down cleanly afterward.
+
+**Verdict**: item 8's "menu auto-load failing" finding is closed — it was a stale binary in
+one of the three game directories, not a code defect, and not worth a code change. The
+3-minute door-transition smoke test could not be completed to a fresh, cutscene-free module
+this round (every warp target tried either needed the same stuck-dialogue workaround or was
+not attempted for time) — the three-peer session itself (connect, chat, phantom mirroring,
+one clean same-frame module transition) is confirmed healthy; a longer soak with a
+cutscene-free warp target is the concrete next step for whoever needs the full 3-minute
+figure. `dotnet build KotorCoop.slnx -warnaserror` and `src/KotorCoop.Plugin/build.ps1
+-WarnAsError`: both clean (no source changed this round — a rig/install-hygiene fix only).
