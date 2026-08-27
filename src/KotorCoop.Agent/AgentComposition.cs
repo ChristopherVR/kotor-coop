@@ -123,7 +123,7 @@ internal static class AgentComposition
             ClientDoorRefusalEnabled = config?.ClientDoorRefusalEnabled ?? true,
             MovieRelayEnabled = config?.MovieRelayEnabled ?? true,
             SyncCompanionXp = config?.CompanionXpSync ?? true,
-            SyncCompanionGear = config?.CompanionGearSync ?? false,
+            SyncCompanionGear = config?.CompanionGearSync ?? true,
             PartyPoolSyncEnabled = config?.PartyPoolSyncEnabled ?? false,
             SoloSegmentSpectateEnabled = config?.SoloSegmentSpectateEnabled ?? false,
             StoreSyncEnabled = config?.StoreSyncEnabled ?? false,

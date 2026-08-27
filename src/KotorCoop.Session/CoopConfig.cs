@@ -403,11 +403,12 @@ public sealed record CoopConfig
     /// <summary>
     /// Whether a client dresses its own copy of a host-driven companion in that companion's
     /// real equipped gear — see
-    /// <see cref="KotorCoop.Session.AgentSettings.SyncCompanionGear"/>. OFF by default,
-    /// NEEDS-LIVE (docs/research/companion-state-sync.md). <c>companion_gear_sync = 1</c> turns
-    /// it on.
+    /// <see cref="KotorCoop.Session.AgentSettings.SyncCompanionGear"/>. Live-verified
+    /// 2026-08-28, default ON (docs/research/companion-state-sync.md §12: the bit-flag
+    /// weapon-slot fix and connect-time/mid-session propagation both confirmed clean, all four
+    /// slots, sub-3s latency). <c>companion_gear_sync = 0</c> turns it off.
     /// </summary>
-    public bool CompanionGearSync { get; init; }
+    public bool CompanionGearSync { get; init; } = true;
     /// <summary>
     /// Syncs the shared party item pool (<c>CSWPartyTable+0x118</c>) both ways. OFF by default
     /// (coop.ini <c>party_pool_sync = 1</c> turns it on) — the offset chain and the engine
@@ -590,7 +591,8 @@ public sealed record CoopConfig
 
             CompanionXpSync = !kv.ContainsKey("companion_xp_sync")
                 || IsTruthy(kv.GetValueOrDefault("companion_xp_sync")),
-            CompanionGearSync = IsTruthy(kv.GetValueOrDefault("companion_gear_sync")),
+            CompanionGearSync = !kv.ContainsKey("companion_gear_sync")
+                || IsTruthy(kv.GetValueOrDefault("companion_gear_sync")),
             PartyPoolSyncEnabled = IsTruthy(kv.GetValueOrDefault("party_pool_sync")),
             SoloSegmentSpectateEnabled = IsTruthy(kv.GetValueOrDefault("solo_segment_spectate")),
             StoreSyncEnabled = IsTruthy(kv.GetValueOrDefault("store_sync")),

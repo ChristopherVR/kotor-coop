@@ -57,14 +57,15 @@ internal sealed unsafe class PartyPresenceController(SharedBlockView block)
 
     private readonly Stopwatch _clock = Stopwatch.StartNew();
 
-    // ---- roadmap item 12: companion equipment (docs/research/companion-state-sync.md,
-    // 2026-08-27). OFF by default, NEEDS-LIVE — the same escape-hatch discipline every other
+    // ---- roadmap item 11: companion equipment (docs/research/companion-state-sync.md).
+    // Live-verified 2026-08-28 (§12): both weapon slots and the body slot confirmed working,
+    // mid-session propagation under 3s. Default ON, same escape-hatch discipline every other
     // engine-write feature in this file follows. Dresses a mirrored companion in the gear the
-    // HOST publishes (see OffsetCompanionEquipSlots' own comment), through the identical
-    // Odyssey.EquipItemFromTemplate path PhantomController.ApplyEquipment already uses for a
-    // peer's phantom.
+    // HOST publishes (see OffsetCompanionEquipSlots' own comment), through
+    // Odyssey.EquipItemFromTemplateDirect (§7's fix — PhantomController.ApplyEquipment still
+    // uses the older EquipItemFromTemplate for a peer's phantom, unchanged).
 
-    private readonly bool _companionGearSyncEnabled = PluginConfig.ReadBool("companion_gear_sync", false);
+    private readonly bool _companionGearSyncEnabled = PluginConfig.ReadBool("companion_gear_sync", true);
 
     private readonly uint[,] _appliedEquip = new uint[SharedBlock.PartyPresenceCapacity, SharedBlock.EquipCount];
 

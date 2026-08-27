@@ -245,12 +245,14 @@ public sealed record AgentSettings
 
     /// <summary>
     /// When true, a client dresses its own copy of a host-driven companion in that companion's
-    /// REAL equipped gear (body armor, right weapon, left weapon) through the same
-    /// <c>Odyssey.EquipItemFromTemplate</c> path the phantom equipment channel already uses.
-    /// OFF by default, NEEDS-LIVE — see docs/research/companion-state-sync.md. coop.ini
-    /// <c>companion_gear_sync</c>.
+    /// REAL equipped gear (body armor, right weapon, left weapon) through
+    /// <c>Odyssey.EquipItemFromTemplateDirect</c> (the same primitive the phantom equipment
+    /// channel's queued path was replaced by for a live party member — see
+    /// docs/research/companion-state-sync.md §7). Live-verified 2026-08-28 (§12): both weapon
+    /// slots and the body slot all confirmed working, mid-session propagation under 3s. Default
+    /// ON. coop.ini <c>companion_gear_sync</c>.
     /// </summary>
-    public bool SyncCompanionGear { get; init; }
+    public bool SyncCompanionGear { get; init; } = true;
     /// When true, <see cref="Pumps.PartyPoolPump"/> runs on the heavy pass: syncing the shared
     /// party item pool (<c>CSWPartyTable+0x118</c>) both ways — detecting a local player's own
     /// deposit/withdrawal and applying a peer's, through the staging-cheat channel. Off by

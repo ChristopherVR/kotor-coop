@@ -493,18 +493,20 @@ public sealed class CompanionStateSyncTests
     }
 
     [Fact]
-    public void CompanionGearSyncOffByDefault()
+    public void CompanionGearSyncOnByDefault()
     {
-        // Live-verified 2026-08-27: a real bug (the re-equip lands on the local player, not
-        // the companion) keeps this OFF — see docs/research/companion-state-sync.md §6.
-        Assert.False(new AgentSettings().SyncCompanionGear);
+        // Live-verified 2026-08-28 (docs/research/companion-state-sync.md §12): the original
+        // "lands on the player" failure (§6) and the later weapon-slot bit-flag encoding bug
+        // (§11) are both fixed; all three slots (body, right weapon, left weapon) and
+        // mid-session propagation to the client (under 3s) are confirmed live.
+        Assert.True(new AgentSettings().SyncCompanionGear);
     }
 
     [Fact]
-    public void CoopConfigDefaultsCompanionXpOnGearOff()
+    public void CoopConfigDefaultsCompanionXpAndGearOn()
     {
         Assert.True(new CoopConfig().CompanionXpSync);
-        Assert.False(new CoopConfig().CompanionGearSync);
+        Assert.True(new CoopConfig().CompanionGearSync);
     }
 
     [Fact]
