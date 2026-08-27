@@ -895,3 +895,77 @@ would hit this SAME crash regardless of who or what confirms the party-select sc
    item 1 as a known gap: the announce watch needs to run BEFORE the movie starts blocking frames,
    or read the edge from a source that survives the blocked window, not "the next frame that gets
    to run."
+
+## Fix (2026-08-28): the `CGuiInGame+0x78` always-non-null finding was a real bug — a dangling-pointer write storm, fixed
+
+Task: bisect two regressions between `c9d08bb` and `395f5cc` (the STUNT_00 crash above, and a
+separate host-`loadgame`/client-re-adopt regression, `session-save.md`). This entry covers what
+the live rig found and fixed for item 2 of the previous section's own ranked list.
+
+**Root cause identified.** The previous round's own finding — `CGuiInGame+0x78` reading as a
+live, vtable-matched `CSWGuiPartySelection*` from the first frame after a save load and never
+going null again — was flagged but not root-caused. This round confirmed it live is a REAL,
+severe bug, not a benign detection quirk: on a fresh two-instance rig, the CLIENT's own
+`kotorcoop-general.log` recorded **70,000+ `party-select: client copy suppressed` /
+`client copy swept away` line pairs in under 8 minutes** — roughly 500 PER SECOND, far faster
+than the render frame rate, proving `PartySelectSuppressionController` was re-detecting and
+re-tearing-down the IDENTICAL address every single pass, not a freshly (re)opened screen.
+`CGuiInGame+0x78` is never nulled by anything after this controller's own synthetic teardown (the
+`panel+0x44 = (…&~0x300)|0x400` sweep-delete idiom `native-browser-panel.md` proves for a
+DIFFERENT panel class), so every subsequent frame's raw pointer walk re-reads the same
+now-freed-or-never-really-reopened address, finds its vtable header still intact, and writes
+`panel+0x44` through it again — a write through a stale pointer, hundreds of times a second,
+for the whole life of a client session. This is exactly the kind of bug that can corrupt whatever
+heap block has since been reallocated at that address, and a module load — precisely when the
+STUNT_00 crash and the host-`loadgame` regression both fire — churns the heap harder than almost
+anything else in the game, making a module-transition-timed corruption from this write storm a
+very plausible unifying explanation for both regressions.
+
+**The fix**, `src/KotorCoop.Plugin/PartySelectSuppressionRule.cs`
+(`IsAlreadyHandled`)/`PartySelectSuppressionController.cs` (`_lastHandledPanel`): touch a given
+panel address AT MOST ONCE per module/session. The address is remembered until `Invalidate()`
+clears it on a module change or session end — the same boundary every other cached pointer in
+this controller already resets on — so a genuinely new panel after a module change still gets
+suppressed exactly as before, and the runaway re-detection of the identical stale address does
+not. Costs nothing, cannot make the feature worse. 3 new pure tests
+(`PartySelectSuppressionRuleTests.cs`).
+
+**Live-verified the fix directly.** Same rig, same client: after the fix, the entire session
+produced exactly ONE `suppressed`/`swept away` pair total, not 70,000+. `dotnet test`: 2331/2331
+(the two `CoopCommandDispatcherTests` failures on a full-suite run were the documented UDP-port
+flake — the class alone was rerun standalone and passed 8/8).
+
+**STUNT_00 crash: not reproduced this round, before OR after the fix.** The exact documented
+recipe (host-only `warp end_m01ab`, `tp`/`useplaceable end_pod`, `selectreply 0`, ride STUNT_00
+into its destination module, watch the ~11.7s window past the `StartDialog(3, forced=False)`/
+`node -1 -> 2` line the previous round pinned the crash to) was run twice — once against the
+UNFIXED code, once against the fixed code — and both times the game played on cleanly past the
+crash window with no access violation, the dialogue advancing through more nodes than the
+previous round's report described before settling into `tar_m10aa`/Taris. Given the write-storm
+bug above is real, severe, and now fixed regardless, and the previous round's own crash was only
+observed twice with no isolation of WHY it was timing-sensitive, this is recorded as "could not
+re-reproduce, root cause plausible but not confirmed" rather than "fixed and verified" — an honest
+gap, not a claim.
+
+**Host-`loadgame` -> client-re-adopt: DIRECTLY live-verified working, post-fix.** With the fix
+deployed, `warp tar_m10aa` on the host, `partyselect ok` (message-box precondition), then
+`loadgame 0` on the host produced the full expected sequence in the AGENT's own log (not the
+plugin log — a mistake this round's own first attempts made, costing real time): host
+`session-save: host-side load verdict - announcing re-adoption` / `host loaded a save - everyone
+re-joins`, and the CLIENT's own agent log showed a clean `host loaded a save - rejoining their
+world` -> `session-save: starting rejoin (HostReload)` -> `rejoin: load request N sent to the
+plugin` -> `rejoined 'END_M01AA'` with NO stall, NO hang, NO vanish — both `swkotor.exe`
+processes stayed `Responding=True` throughout. This matches round 87's own CLEAN pass, not the
+regression `session-save.md`'s 2026-08-28 entry recorded. See that doc's own dated section for
+the full recipe and this same finding recorded from the session-save side.
+
+**Files changed**: `src/KotorCoop.Plugin/PartySelectSuppressionRule.cs`,
+`src/KotorCoop.Plugin/PartySelectSuppressionController.cs`,
+`tests/KotorCoop.Tests/PartySelectSuppressionRuleTests.cs`.
+
+**Open**: the STUNT_00 crash's true root cause is still unconfirmed (NEEDS-LIVE — a third
+reproduction attempt, ideally on a fresh rig with no prior manual state manipulation, would raise
+confidence either way). `ItemTemplateSpawnHook`'s mid-function splice (the task's other prime
+suspect) was read closely this round and its register/flag/stack-slot handling all check out
+against the disassembly cited in its own class remarks — no bug found there by static review, but
+it was not exercised live this round.
