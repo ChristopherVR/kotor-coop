@@ -71,6 +71,13 @@ minigame_spectate = 0
 
 status_toasts = 1
 
+; A separate, ALWAYS-ON one-line summary ("co-op: connected, 2 players" / "reconnecting..." /
+; "connection failed"), drawn continuously near the top of the screen rather than posted only
+; on change like the toast above - for a player who was not looking when the toast appeared.
+; Shows nothing while idle (no session attempted). Plugin-side key, read independently of
+; status_toasts; either can be turned off without affecting the other.
+status_indicator = 1
+
 ; --- mirroring a world you do not own ---------------------------------------------
 
 ; Build a local stand-in for an enemy that exists only in the enemy owner's instance

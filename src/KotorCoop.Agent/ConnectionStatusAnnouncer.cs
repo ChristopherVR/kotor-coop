@@ -33,6 +33,29 @@ public readonly record struct ConnectionSnapshot(ConnectionIndicatorState State,
     /// docs/research/connect-flow.md's 2026-08-21 note.
     /// </summary>
     public uint Pack() => (byte)State | ((uint)Math.Clamp(PeerCount, 0, 255) << 8);
+
+    /// <summary>
+    /// The inverse of <see cref="Pack"/>: state from the low byte, peer count from the next
+    /// byte up. Added for item 18's on-screen indicator (2026-08-27) — the plugin-side render
+    /// controller cannot reference this type (a NativeAOT win-x86 DLL cannot reference the
+    /// agent's assemblies; see <c>ConnectionIndicatorRule</c> in <c>KotorCoop.Plugin</c>,
+    /// which duplicates this exact bit layout by value instead), but this in-process side of
+    /// the round trip is worth pinning on its own so a future change to <see cref="Pack"/>
+    /// cannot silently drift from its own inverse. An unrecognised low byte decodes to
+    /// <see cref="ConnectionIndicatorState.Disconnected"/> rather than throwing — the two
+    /// spare high bytes and any not-yet-defined state value are simply not expected to appear
+    /// on a block this same process wrote.
+    /// </summary>
+    public static ConnectionSnapshot Unpack(uint packed)
+    {
+        byte state = (byte)(packed & 0xFF);
+        int peerCount = (int)((packed >> 8) & 0xFF);
+        ConnectionIndicatorState indicatorState = Enum.IsDefined((ConnectionIndicatorState)state)
+            ? (ConnectionIndicatorState)state
+            : ConnectionIndicatorState.Disconnected;
+
+        return new ConnectionSnapshot(indicatorState, peerCount);
+    }
 }
 
 /// <summary>
