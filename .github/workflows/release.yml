@@ -70,17 +70,46 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           zip=$(ls dist/kotor-coop-*.zip | head -n1)
+          name=$(basename "$zip")
           ref='${{ steps.what.outputs.ref }}'
           sha='${{ steps.what.outputs.sha }}'
+          kind='${{ steps.what.outputs.kind }}'
+          size=$(du -k "$zip" | cut -f1)
+          sha256=$(sha256sum "$zip" | cut -d' ' -f1)
+          tag=$([ "$kind" = tag ] && echo "$ref" || echo latest)
+          url="https://github.com/${{ github.repository }}/releases/download/$tag/$name"
 
-          if [ '${{ steps.what.outputs.kind }}' = tag ]; then
-            gh release create "$ref" "$zip" --title "$ref" --generate-notes --verify-tag
+          # The notes lead with the one thing a visitor is here for: the zip, a direct link
+          # to it, and how to install it. GitHub lists assets below the notes, but nothing
+          # there says which file is the build or what to do with it.
+          {
+            echo "## Download"
+            echo
+            echo "**[$name]($url)** — ${size} KB, ready to install. No SDK or toolchain needed."
+            echo
+            echo '```powershell'
+            echo "# extract the zip, then from inside it:"
+            echo "pwsh .\\install.ps1 -GameDir 'C:\\GOG Games\\Star Wars KOTOR (GOG)'"
+            echo '```'
+            echo
+            echo "Contains the plugin (\`dinput8.dll\`), the chain loader, the agent, the override assets, \`coop.ini\`, \`install.ps1\` and a README that covers install, play, sharing \`dinput8.dll\` with another mod, and troubleshooting."
+            echo
+            echo "SHA-256 \`$sha256\` · built by CI run [${{ steps.what.outputs.run_id }}](https://github.com/${{ github.repository }}/actions/runs/${{ steps.what.outputs.run_id }}) from \`${sha:0:7}\`."
+            echo
+            if [ "$kind" = latest ]; then
+              echo "> Rolling build of \`main\`: every push that passes build + test replaces this release. Tagged releases are the stable ones."
+              echo
+            fi
+          } > notes.md
+
+          if [ "$kind" = tag ]; then
+            # --generate-notes appends the auto-generated changelog after --notes-file.
+            gh release create "$ref" "$zip" --title "$ref" --notes-file notes.md --generate-notes --verify-tag
           else
             # One rolling pre-release that always points at the newest green main build.
             # Delete + recreate rather than upload --clobber so the tag moves to the new sha
             # and the notes say which commit it is.
             gh release delete latest --yes --cleanup-tag 2>/dev/null || true
             gh release create latest "$zip" --prerelease --target "$sha" \
-              --title "latest (main @ ${sha:0:7})" \
-              --notes "Rolling build of \`main\` at $sha, from CI run ${{ steps.what.outputs.run_id }}. Every push that passes build + test replaces this release. Tagged releases are the stable ones. See README.md inside the zip."
+              --title "latest (main @ ${sha:0:7})" --notes-file notes.md
           fi
