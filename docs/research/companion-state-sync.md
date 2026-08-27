@@ -845,3 +845,135 @@ steps 1-4) is unchanged and still what the next rig pass should run, extended wi
 both clean. `dotnet test tests/KotorCoop.Tests --no-build`: **2352 passed, 0 failed**, including
 this round's 10 new tests (3 wire-codec boundary cases, 3 fixed-width-block boundary cases
 against a real external process, 3 cache-precedence unit tests, 1 loopback test).
+
+---
+
+## 10. Live pass (2026-08-28, rig round): §9's two fixes CONFIRMED for the BODY slot — a
+## THIRD, distinct bug found for WEAPON slots, upstream of everything §7-9 fixed
+
+Two-instance rig (`tools/demo.ps1`, `END_M01AA`, Trask confirmed live object id `0x127` on both
+instances via `partystate.ps1`), both installs freshly `build.ps1 -Install -WarnAsError`ed
+(deployed `dinput8.dll` hash-confirmed byte-identical to the fresh build on both sides), both
+`coop.ini`s reset from `profiles/coop.ini.example` with `companion_gear_sync=1` written in before
+launch. `dotnet build KotorCoop.slnx -warnaserror`, `src/KotorCoop.Plugin/build.ps1 -WarnAsError`
+and `dotnet test tests/KotorCoop.Tests --no-build` (2352/2352) all clean before the rig came up.
+
+### 10.1 Item 1 (§9's fixes): the 16-character resref — PASS, live-confirmed both ways
+
+`equip 0x127 g_w_blstrpstl001 4` on the HOST: plugin log read `equip: 'g_w_blstrpstl001'
+equipped on 0x127 slot 4` — the full 16 characters, not the `g_w_blstrpstl00` truncation §8
+found. The CLIENT's connect-time seed for this exact resref (Trask's real starting sidearm)
+showed the full name too: `party drive: companion 0x127 equips g_w_blstrpstl001 (slot 4)`.
+`scriptgive g_w_blstrpstl001` on the CLIENT, then waiting for `script_item_sync` to forward it:
+the HOST's agent log read `materialised loot: submitting 'g_w_blstrpstl001' for target
+0x7FFFFFFF through the giveloot channel` — full 16 characters, confirming the peer receives the
+untruncated name too. `TryWriteAsciiString`'s fix (§9.1) is live-confirmed on both the
+shared-block and wire paths.
+
+### 10.2 Item 2 (§9's fixes): mid-session propagation — the BODY slot is clean; the WEAPON
+### slots are blocked by a THIRD bug, distinct from and upstream of §7-9's fixes
+
+**Body slot: PASS, clean, fast.** `equip 0x127 g_a_class4001 1` then `equip 0x127 g_a_class5001
+1` on the HOST, ~5s apart. Both reached the CLIENT's log as a genuine `party drive: companion
+0x127 equips ...` line, measured host-call-to-client-log latency **925 ms** and **235 ms**
+respectively — well under the "a few seconds" bar §9.3's test plan set. This is the first live
+confirmation that §9.1/§9.2's fixes (the `TryWriteAsciiString` full-width write and
+`ReadEquippedResref`'s spawn-cache-first read with the corrected drain ordering) actually close
+the propagation gap §8 found, for a slot where the underlying engine state genuinely changes.
+
+**Weapon slots: BLOCKED — but not by anything §7-9 touched.** `equip 0x127 g_w_vbrdblswd01 4`,
+then `g_w_shortswrd01 4`, then `g_w_lghtsbr01 4` (right weapon, nwscript slot 4 → internal slot
+5) each reported success in the plugin log (`equip: '...' equipped on 0x127 slot 4`) but the
+CLIENT never showed a new `party drive` line for any of them, reproducing §8's original
+symptom. This round did NOT stop at "the cache/wire pipeline is still broken" — it read the
+HOST's own `CSWInventory` slot directly (creature `+0xA2C` → inventory pointer → `+0x14` for
+right weapon), bypassing every agent-side cache, and found:
+
+- Right-weapon slot (`+0x14`) held object id `0x129` (the FIRST of the four equip calls made
+  this round) through all three SUBSEQUENT calls — the slot's raw content never changed, despite
+  each call logging success with a different resref and a different freshly-created item
+  (confirmed alive and `held by 0x127` via `items 60`, i.e. `GiveItemToInventory`'s half
+  genuinely worked every time).
+- Left-weapon slot (`+0x18`) stayed `0x0` (empty) even after its OWN first-ever equip call
+  (`equip 0x127 g_w_lghtsbr02 5`) reported success — so this is not "works once per slot then
+  gets stuck"; the left slot's very first write never landed at all.
+- Body slot (`+0x08`), by contrast, was independently re-equipped twice in a row this same
+  session (`0x128 → 0x134 → 0x135`, both changes landing immediately) with zero failures.
+
+**Root cause not isolated this round — a real engine-call defect, not a cache/wire issue.**
+`EquipItemFromTemplateDirect` (`src/KotorCoop.Plugin/Odyssey.Equipment.cs:305-343`) calls
+`EquipItemFn(creature, internalSlot, item, 1, 0, 0)` (`CSWSCreature::EquipItem`, `0x004FEB90`)
+and **never checks its return value** (the delegate is typed to return `int`; the call site at
+line 341 discards it and the function unconditionally returns `true`) — so a refusal inside the
+engine's own `CanEquipWeapon` (or wherever the real gate lives) is completely invisible to this
+codebase; every equip verb, log line and the propagation pipeline all believe the call
+succeeded regardless. `EquipSlotMap`'s own doc comment already flagged the weapon internal-slot
+values (5/6) as "NOT independently found at a clean, single-value call site... INFERRED from
+the verified offset arithmetic only, NEEDS-LIVE" — this round's live evidence is consistent with
+either that mapping being wrong for weapons specifically, or (more likely, since the FIRST
+right-weapon call this round DID land) with `CanEquipWeapon`/an equivalent internal gate
+genuinely refusing a weapon swap under some condition this round did not isolate (proficiency,
+a "busy" state, or something about the slot already holding a non-stock item) while never
+refusing a body/armor swap. **Distinguishing between these needs the one thing this round could
+not do live: read `EquipItemFn`'s actual return value** — either a debugger breakpoint on
+`0x004FEB90`'s `ret`, or (cheaper) a one-line code change to capture and log it, the same
+"add a throwaway diagnostic" technique `minigames.md`'s 2026-08-28 round used for its own
+range-guard bug.
+
+**This finding supersedes §8's leading theory.** §8/§9 assumed the propagation gap was entirely
+in the resref-cache/wire pipeline (§9.1/§9.2's fixes), and this round's body-slot result proves
+that pipeline genuinely does work once fixed. But for weapon slots specifically, the HOST's own
+live engine state never changes past the first attempt (or, for a slot that starts empty, never
+changes at all) — no amount of cache/wire correctness can propagate a change that never happened
+on the authoritative side. The two bugs are independent: §9 fixed a real bug in the read/wire
+path (confirmed here for body), and this round found a second, real bug in the write/apply path
+that is specific to weapon slots and was never exercised by §8's own three-slot live pass (§6.4
+used `g_w_lghtsbr01`/`g_a_class4001`/`g_w_lghtsbr02` but each was equipped to a FRESH creature
+that had never been touched by this primitive before in that pass — a single first-touch per
+slot, exactly the case this round shows still works).
+
+### 10.3 Item 3 (release interaction): not completed — pre-existing follow-AI stall, not a new
+### finding
+
+Staged `companion_local_combat=1` (default ON) by teleporting the CLIENT player ~120 units to a
+cluster of hostiles and ordering one to attack (`attack 0xE 0x7FFFFFFF`). `local_combat`'s own
+exclusion mechanism engaged correctly and was observed twice (`local_combat: fighting 0xE, 1
+other hostile deferred (mirrored)`, then `local_combat: fighting 0x10, 1 other hostile deferred
+(mirrored)` after the first target died/disengaged) — the PLAYER-side half of this feature is
+healthy. But `creatures.ps1` confirmed Trask's mirrored position on the client never moved from
+his spawn point (`19.35, 22.77`) through the whole ~30s window, so he was never within
+`companion_local_combat_range` (10 units) of the fight and no `party drive: companion 0x127
+released to fight locally` line ever appeared. This is the companion follow-AI's own
+already-documented terminal-stall behaviour (`docs/research/party-reconciliation.md`), not a new
+regression, and not something this round's time budget could route around (no hostile spawns
+naturally within release range of Trask's own position in this save). Given the weapon-slot bug
+in §10.2 also means a "released companion attacks with the re-equipped weapon" scenario has no
+re-equipped weapon to check yet, this item is deferred rather than forced.
+
+### 10.4 Item 4: verify.ps1 baseline, full test suite, native build
+
+`pwsh tools\verify.ps1` against a freshly-connected session (no warps/tp beyond the item 3
+probe above, run last): **41 passed, 8 failed** — the failing checks (`phantom damageable, not a
+sink`; `the peer really loses those hit points`; `a client hit costs the enemy real hit points`;
+`a downed player is reported to the agent`; `the co-op revive stands the player back up`; `every
+engine call signature matches the binary`; `a container opened on the client is held and shown
+open on the host`; `no per-frame spam`) match `docs/live-verification.md`'s documented
+40-42/7-9 baseline exactly, both in count and in which specific checks fail — no regression.
+`dotnet test tests/KotorCoop.Tests --no-build`: **2352 passed, 0 failed** (run twice this round,
+once before the rig and once — via the background test run — overlapping the rig's own build;
+both green). `dotnet build KotorCoop.slnx -warnaserror` and `src/KotorCoop.Plugin/build.ps1
+-WarnAsError`: both clean, no source changed this round (a live-verification and root-cause
+round only).
+
+### 10.5 Verdict: `companion_gear_sync` stays OFF
+
+§9's fixes are now live-confirmed correct (body slot, full round trip, fast). The channel as a
+whole is still not safe to ship: a weapon re-equip — the more common real-world case (a looted
+blaster, a workbench upgrade) than a body/armor swap — silently fails to reach even the HOST's
+own engine state past the first attempt, for a reason this round narrowed to `EquipItemFn`'s
+unchecked return value but did not fully root-cause. `companion_gear_sync` stays at its existing
+default (`0`, OFF) in `coop.ini`/`AgentSettings`/`CoopConfig`/`profiles/coop.ini.example`/
+`docs/CONFIG.md` — no default was flipped this round. **Next step for whoever picks this up**:
+capture `EquipItemFn`'s real return value (a one-line diagnostic log is enough) on a weapon-slot
+call that reports success but does not land, and follow whatever non-zero code comes back into
+`CanEquipWeapon`'s own disassembly (`0x5A4950`) rather than guessing further.

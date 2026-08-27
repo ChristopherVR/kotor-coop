@@ -1173,3 +1173,23 @@ one clean same-frame module transition) is confirmed healthy; a longer soak with
 cutscene-free warp target is the concrete next step for whoever needs the full 3-minute
 figure. `dotnet build KotorCoop.slnx -warnaserror` and `src/KotorCoop.Plugin/build.ps1
 -WarnAsError`: both clean (no source changed this round — a rig/install-hygiene fix only).
+
+## Rig pass (2026-08-28): companion gear sync re-test — body slot confirmed, weapon slot's
+## own new bug found
+
+Full item queue: the 16-character resref fix, mid-session gear propagation, a
+`companion_local_combat` release check, and `verify.ps1`/full test suite/native build against
+the baseline. Both installs freshly `build.ps1 -Install -WarnAsError`ed (hash-confirmed
+byte-identical deploys), both `coop.ini`s reset from `profiles/coop.ini.example` with
+`companion_gear_sync=1` for this round.
+
+| # | Item | Result | Detail |
+| --- | --- | --- | --- |
+| 1 | 16-char resref (`equip`/`scriptgive`) | **PASS**, both directions | `companion-state-sync.md` §10.1 |
+| 2 | Mid-session gear propagation | **Body slot PASS** (925 ms / 235 ms latency); **weapon slot BLOCKED** by a newly-found, unrelated engine-call bug (`EquipItemFn`'s return value is never checked; the raw `CSWInventory` weapon slot does not update past the first equip call) | `companion-state-sync.md` §10.2 |
+| 3 | `companion_local_combat` release with re-equipped gear | **Not completed** — the companion follow-AI's pre-existing terminal stall kept Trask from ever reaching the staged fight; the player-side exclusion mechanism itself worked correctly | `companion-state-sync.md` §10.3 |
+| 4 | `verify.ps1` baseline / full suite / native build | **PASS** — 41/8 verify.ps1 result matches the documented baseline exactly (same specific checks fail); `dotnet test` 2352/2352; both native builds clean | `companion-state-sync.md` §10.4 |
+
+`companion_gear_sync` stays OFF — see `companion-state-sync.md` §10.5 for the verdict and the
+concrete next step (capture `EquipItemFn`'s real return value on a weapon-slot call that
+reports success but does not land).

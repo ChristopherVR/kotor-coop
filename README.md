@@ -35,7 +35,7 @@ attaches from outside with `OpenProcess`.
 | Protocol-version-mismatch reject (`E_PROTO`) | Built, not live-verified | [connect-flow.md](docs/research/connect-flow.md) |
 | Script-granted items outside dialogue (`script_item_sync`) | Built, live-verified, ON by default | [dialogue-consequences.md](docs/research/dialogue-consequences.md) |
 | Companion experience (`companion_xp_sync`) | Live-verified, ON by default | [companion-state-sync.md](docs/research/companion-state-sync.md) |
-| Companion equipment (`companion_gear_sync`) | Root-caused and fixed 2026-08-28 (the equip queue was never armed for a live party member; the fix bypasses the queue entirely) — NEEDS-LIVE, stays off | [companion-state-sync.md](docs/research/companion-state-sync.md) |
+| Companion equipment (`companion_gear_sync`) | Body-slot re-equip live-confirmed 2026-08-28 (925 ms/235 ms propagation); weapon-slot re-equip blocked by a newly-found engine-call bug the same round — stays off | [companion-state-sync.md](docs/research/companion-state-sync.md) |
 | Shared party item pool (`party_pool_sync`) | Live-verified, one bug fixed; a second (the depositing side — reproduced 2026-08-28 on the host's own deposit, not on a client's) is still open — stays off | [party-pool-sync.md](docs/research/party-pool-sync.md) |
 | Merchant store stock (`store_sync`) | Stays off — the 2026-08-28 `PopulateStoreItemListBox` crash is root-caused and fixed (`ShowStoreGui` was missing two arguments) — NEEDS-LIVE | [store-sync.md](docs/research/store-sync.md) |
 | Fog-of-war reveal (`map_reveal_sync`) | Live-verified, on by default | [map-reveal.md](docs/research/map-reveal.md) |
@@ -200,8 +200,9 @@ tools/                   package/install scripts, demo rig, RE helpers, the koto
 - **One conversation at a time**, by design — the other player spectates rather than getting
   a separate copy.
 - **Companion experience sync is live-verified and on by default** (`companion_xp_sync`).
-  **Equipment sync (`companion_gear_sync`) stays off** — root-caused and fixed (see the status
-  table above), NEEDS-LIVE. **Dialogue recruitment sync is live-confirmed for two companions**
+  **Equipment sync (`companion_gear_sync`) stays off** — the body slot is live-confirmed working
+  (see the status table above), but a weapon re-equip still doesn't reach even the host's own
+  engine state past the first attempt. **Dialogue recruitment sync is live-confirmed for two companions**
   (`dialogue_recruit_sync`, on by default); a fix for a stale pre-recruit body is implemented but
   not yet confirmed live. See [companion-state-sync.md](docs/research/companion-state-sync.md)
   and [dialogue-consequences.md](docs/research/dialogue-consequences.md).
