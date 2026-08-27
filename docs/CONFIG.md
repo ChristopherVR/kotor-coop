@@ -46,14 +46,15 @@ actually runs with.
 | `transition_announce` | ON | a follower acts on an announced transition immediately | [transition-smoothness.md](research/transition-smoothness.md) |
 | `client_door_refusal` | ON¹ | refuse a client's own premature door crossing while following | [transition-smoothness.md](research/transition-smoothness.md) |
 | `follow_lead` | `any` | who may lead a transition the other follows: `any` or `host` | [transition-smoothness.md](research/transition-smoothness.md) |
-| `movie_relay` | OFF² | relay a mid-module `PlayMovie` to peers (agent's own copy) | [cinematics.md](research/cinematics.md) |
+| `movie_relay` | ON² | relay a mid-module `PlayMovie` to peers (agent's own copy) | [cinematics.md](research/cinematics.md) |
 
-¹ The property's own C# doc comment claims this is OFF by default; the actual parse logic
-(`!ContainsKey(...) || IsTruthy(...)`) defaults it ON, matching the shipped
-`coop.ini.example`. The comment is stale.
-² The plugin reads the same key independently and defaults it ON (see below) — the two
-readers disagree only if `movie_relay` is removed from `coop.ini` entirely. The shipped file
-always sets it (`=1`), so this never surfaces in practice.
+¹ The property's own C# doc comment used to claim this was OFF by default while the actual
+parse logic (`!ContainsKey(...) || IsTruthy(...)`) already defaulted it ON, matching the
+shipped `coop.ini.example`; the comment has since been corrected to say ON.
+² The plugin reads the same key independently and also defaults it ON (see below). Until this
+was fixed, the agent's own copy (`CoopConfig.MovieRelayEnabled`) defaulted OFF when the key was
+absent, so the two readers disagreed the moment `movie_relay` was removed from `coop.ini`
+entirely; both now default ON, matching each other and the shipped file's explicit `=1`.
 
 ## Plugin-side keys (`PluginConfig.cs` + per-controller reads)
 
@@ -136,9 +137,9 @@ long after it had been verified; it now ships `=1`. An upgraded install with an 
 `coop.ini` still needs `menu_button = 1` set by hand (see TROUBLESHOOTING.md).
 ⁸ The shipped `coop.ini.example` sets `port = 27140`, not the code's own 27015. Two peers
 using the packaged release without editing `coop.ini` will actually connect on 27140 — that
-is the real shipped default, not 27015. (`CoopConfig.cs`'s own header-comment example also
-shows `port = 27140`, ahead of its own code's 27015 default — the same stale number in two
-places.)
+is the real shipped default, not 27015. `CoopConfig.cs`'s own header-comment example also
+shows `port = 27140` (it is illustrating the shipped file, not the code fallback), and now
+says so explicitly alongside it rather than leaving the 27015/27140 gap unexplained.
 
 ## CLI flags (`KotorCoop.Agent`, `AgentOptions.cs`)
 
@@ -155,8 +156,8 @@ others are setup, discovery or offline utilities. `agent` with no arguments prin
 | `--name <text>` | `player<random>` | player name shown to peers | `run` |
 | `--host` | off | host a session | `run` |
 | `--join <host[:port]>` | off | join a session | `run` |
-| `--port <n>` | `27015` | listen/target port | `run` |
-| `--tick <n>` | `30`⁶ | poll and network rate, Hz, clamped 1-60 | `run` |
+| `--port <n>` | `27015`⁶ | listen/target port | `run` |
+| `--tick <n>` | `30` | poll and network rate, Hz, clamped 1-60 | `run` |
 | `--read-only` | off | attach without write access | `run` |
 | `--game-path <path>` | Steam path | game executable | `launch` |
 | `--windowed` | off | set `FullScreen=0` in `swkotor.ini` first (backed up) | `launch` |
@@ -182,5 +183,11 @@ others are setup, discovery or offline utilities. `agent` with no arguments prin
 | `--bool <NAME[=0\|1]>` | none, repeatable | force a global boolean; bare `NAME` means `=1` | `craft-save` |
 | `--number <NAME=N>` | none, repeatable | force a global number, -128..127 | `craft-save` |
 
-⁶ The CLI's own `--tick` help text says "(default 20)" — that is stale; the actual default is
-`ProtocolConstants.DefaultTickRate = 30`.
+⁶ Applies to a scripted `--host`/`--join` run with no `--port`. An auto-started (`--menu`)
+session instead takes its port from `coop.ini`'s own `port` key when `--port` was not passed
+(`AgentOptions.PortExplicit` tracks whether the flag was actually given, since `27015` is also
+a value someone could type on purpose) — before this was fixed, `--menu` runs silently ignored
+`coop.ini`'s `port =` line and always bound `27015`. An explicit `--port` always wins over
+`coop.ini`, the same as every other CLI-vs-`coop.ini` precedence in this doc. (The CLI's own
+`--tick` help text used to say "(default 20)", stale against the actual
+`ProtocolConstants.DefaultTickRate = 30` default; that has since been corrected too.)

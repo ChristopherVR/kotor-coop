@@ -51,6 +51,13 @@ public sealed record AgentOptions
 
     public int Port { get; init; } = ProtocolConstants.DefaultPort;
 
+    /// <summary>Whether <c>--port</c> was actually passed on the command line, as opposed to
+    /// <see cref="Port"/> merely holding its <see cref="ProtocolConstants.DefaultPort"/>
+    /// default. A menu-driven (<c>--menu</c>) session takes its port from <c>coop.ini</c> when
+    /// this is false, so "the CLI said nothing" has to be distinguishable from "the CLI said
+    /// 27015" — see <c>AgentComposition.Compose</c>.</summary>
+    public bool PortExplicit { get; init; }
+
     public IPEndPoint? HostEndPoint { get; init; }
 
     public int TickRate { get; init; } = ProtocolConstants.DefaultTickRate;
@@ -212,6 +219,7 @@ public sealed record AgentOptions
         string name = $"player{Random.Shared.Next(100, 999)}";
         CoopMode mode = CoopMode.None;
         int port = ProtocolConstants.DefaultPort;
+        bool portExplicit = false;
         IPEndPoint? hostEndPoint = null;
         int tickRate = ProtocolConstants.DefaultTickRate;
         bool readOnly = false;
@@ -273,6 +281,7 @@ public sealed record AgentOptions
 
                 case "--port":
                     port = int.TryParse(Next(), out int parsedPort) ? parsedPort : port;
+                    portExplicit = true;
                     break;
 
                 case "--tick":
@@ -408,7 +417,10 @@ public sealed record AgentOptions
             }
         }
 
-        if (mode == CoopMode.Join && hostEndPoint is not null && port != ProtocolConstants.DefaultPort)
+        // An explicit --port always overrides whatever port --join <host[:port]> itself
+        // carried — checked against PortExplicit rather than "port != DefaultPort" so that
+        // `--join host --port 27015` (explicitly asking for the default) still overrides too.
+        if (mode == CoopMode.Join && hostEndPoint is not null && portExplicit)
         {
             hostEndPoint = new IPEndPoint(hostEndPoint.Address, port);
         }
@@ -422,6 +434,7 @@ public sealed record AgentOptions
             Name = name,
             Mode = mode,
             Port = port,
+            PortExplicit = portExplicit,
             HostEndPoint = hostEndPoint,
             TickRate = tickRate,
             ReadOnlyAttach = readOnly,
@@ -552,7 +565,9 @@ public sealed record AgentOptions
           --name <text>        player name shown to peers
           --host               host a session
           --join <host[:port]> join a session
-          --port <n>           listen/target port (default 27015)
+          --port <n>           listen/target port (default 27015; a --menu session takes the
+                               port from coop.ini's own `port` key instead when this is
+                               omitted)
           --tick <n>           poll and network rate in Hz (default 30)
           --read-only          attach without write access
           --no-follow          do not automatically travel to the host's module when

@@ -93,6 +93,18 @@ internal static class AgentComposition
             Console.WriteLine($"tuning: {tickRate} Hz, {interpolationMs} ms interpolation (from coop.ini)");
         }
 
+        // coop.ini's own `port` wins when the CLI did not explicitly say --port: without this,
+        // an auto-started (--menu) agent hosted or dialled on the CLI's silent 27015 default no
+        // matter what coop.ini said, so a session tuned via coop.ini's `port = 27140` (the
+        // shipped example) never actually took effect. An explicit --port always wins, matching
+        // the same "CLI beats coop.ini" rule the password already follows.
+        int effectivePort = options.PortExplicit ? options.Port : config?.Port ?? options.Port;
+
+        if (effectivePort != options.Port)
+        {
+            Console.WriteLine($"port: {effectivePort} (from coop.ini)");
+        }
+
         AgentSettings agentSettings = new()
         {
             PollRate = tickRate,
@@ -159,7 +171,7 @@ internal static class AgentComposition
         {
             PlayerName = effectiveName,
             ServerName = config?.ServerName ?? string.Empty,
-            Port = options.Port,
+            Port = effectivePort,
             TickRate = tickRate,
             InterpolationDelayMs = interpolationMs,
             Digest = digest,
@@ -180,7 +192,7 @@ internal static class AgentComposition
         CoopCommandDispatcher dispatcher = new(
             manager,
             bridge,
-            options.Port,
+            effectivePort,
             SettingsFor,
             loadConfig: () => TryLoadCoopConfig(memory.ProcessId),
             menuAutoLoad: () => _ = Task.Run(() => LoadIntoTheWorld(memory), cts.Token),

@@ -22,9 +22,28 @@ password =
 ; Name shown to the other players. Optional.
 name = Malak
 
+; Name shown for this session in the server browser. Falls back to the `name` above when
+; unset (commented out).
+# server_name =
+
 ; Show the main-menu "Co-op" button (Host / Connect / server browser). Live-verified; set 0
 ; to hide it and connect from the ~ console instead.
 menu_button = 1
+
+; --- connection and network tuning -------------------------------------------------
+
+; How long (ms) a connect attempt waits for any reply before giving up. 0 or unset keeps the
+; built-in 15000.
+# connect_timeout_ms = 0
+
+; State send rate in Hz, clamped 5-120. 0 or unset keeps the agent's own built-in rate (30 Hz,
+; ProtocolConstants.DefaultTickRate).
+# tick_rate = 0
+
+; How far in the past peers are rendered, in milliseconds, clamped 0-500. 0 = no buffer, show
+; the newest position immediately; a negative value (the unset default) keeps the built-in
+; delay (80 ms).
+# interp_ms = -1
 
 ; --- in-game chat overlay ---------------------------------------------------------
 ; An always-on, unobtrusive readout of chat (say <msg> in the ~ console). Lines fade out
@@ -138,6 +157,27 @@ interaction_locks=1
 # fixes the party seat, which is what a partial or aborted conversation gets wrong.
 party_roster_sync=1
 
+# --- companion follow-AI fix candidates (unverified) --------------------------------
+# Two candidate fixes for the companion follow-AI's terminal-stall shape
+# (docs/research/party-reconciliation.md). Both default OFF; neither has cleared this
+# project's own bar for a default flip yet - a direct, decisive, zero-regression live A/B
+# reaching an actual completed leg. Safe to enable for testing (no regression has been
+# observed with either on), but leave them off for an ordinary session until one does.
+
+# Refreshes the geometry the engine's own final-path-node accept/reject test reads, rather
+# than forcing the test's output. Round 90 live-tested this and found it insufficient by
+# itself: the refreshed geometry did not change the engine's own verdict in the repro tried.
+# Stays OFF by default - live-refuted (no effect), not merely untested.
+party_follow_refresh_final_node=0
+
+# Appends one synthetic trail node past the recorded end at the terminal stall shape, so the
+# already-working "gap>=2" advance path handles it. Later rounds caught this firing directly
+# with logged before/after values and real position progress following - but neither this nor
+# its phase-6 sibling alone was ever sufficient for a full leg completion in the repros tried
+# (a SEPARATE, already-documented stall intervened every time). Unconfirmed as a full fix;
+# stays OFF by default pending a repro that isolates it from that other blocker.
+party_follow_extend_final_node=0
+
 # The client-door root cause fix (docs/research/party-reconciliation.md, transition-smoothness.md
 # SS8.5): CSWParty - the CLIENT-SIDE struct CSWParty::IsPartyTogether actually reads, a different
 # structure from CSWPartyTable above - can hold a stale, higher member count after a roster
@@ -170,6 +210,13 @@ client_door_refusal=1
 # (docs/research/transition-smoothness.md SS8): ~9x latency drop, no regression, movie-carrying
 # case also clean. ON by default.
 transition_announce=1
+
+# Who may LEAD a transition the other player follows via transition_announce above: `any`
+# (the default) lets either player's committed door crossing become an announce the other
+# follows; `host` restores the older, strictly one-directional behaviour where only the host
+# is ever followed and client_door_refusal above refuses every premature client crossing. See
+# docs/research/transition-smoothness.md's "Lead-swap" entry.
+# follow_lead = any
 
 # Be pulled into an ORDINARY (player-clicked) conversation another player starts, instead of
 # clicking the same NPC to join - the seamless successor to the old force_dialogue_party flag
@@ -468,6 +515,18 @@ liveness_sync=0
 # acknowledged (the session-level tracking is correct either way) but the LOCAL engine's own
 # journal UI keeps showing an entry a peer no longer has.
 journal_remove_sync=1
+
+# Let a CLIENT's own encounter trigger actually fire the encounter, instead of doing nothing
+# until the host happens to walk over the same trigger. Every peer that does not own enemies
+# has its own encounters switched off (a spawn there would advance that instance's object-id
+# counter and break the id identity the enemy/item/door/placeable channels all key on), so
+# without this a client walking over an ambush trigger got nothing at all. The client instead
+# publishes which encounter polygon(s) it is standing inside; the owner runs the engine's own
+# eligibility check with that client's PHANTOM standing in for the player who walked in, and
+# lets the engine itself spawn - one engine ever spawns, so ids stay identical. See
+# docs/research/client-encounters.md. ON by default.
+client_encounters=1
+
 # Relay a GENERIC trigger's OnEnter (a CSWSTrigger whose script starts a cutscene, dialogue or
 # scripted event - the classic "walk into the room, the scene starts") so the enemy owner's
 # engine also runs it, keeping its object-id counter in lockstep with whatever the script
