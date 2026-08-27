@@ -528,6 +528,9 @@ internal static unsafe partial class PluginHost
         // After the roster reconciliation: this reads the SAME live party-table roster pass
         // just settled, so it never judges a drop against a mid-reconcile transient count.
         _soloSegment?.OnFrame();
+        // After the roster poll, not before: suppression only decides whether to close the
+        // client's own screen, and never blocks the reconcile pass above from converging.
+        _partySelectSuppression?.OnFrame();
 
         // After death handling has published whether we are down, so damage that would
         // arrive on an already-downed player is skipped rather than fighting the revive.
