@@ -68,7 +68,7 @@ entirely; both now default ON, matching each other and the shipped file's explic
 | `status_indicator` | ON | persistent on-screen connection summary (separate from the agent's `status_toasts`) | [connect-flow.md](research/connect-flow.md) |
 | `bark_replay` | ON | replay a peer's captured NPC bark line | [bark-replay.md](research/bark-replay.md) |
 | `bark_sync` | ON | capture and publish this instance's own barks | [bark-replay.md](research/bark-replay.md) |
-| `combat_state_sync` | OFF | (diagnostic) mirror raw combat-state bits | [combat-participation.md](research/combat-participation.md) |
+| `combat_state_sync` | OFF | RETIRED 2026-08-27 (no-op, kept only so the key still parses) — see [combat-participation.md](research/combat-participation.md)'s dated section | [combat-participation.md](research/combat-participation.md) |
 | `control_return` | ON | return control to your own character on connect | [control-return.md](research/control-return.md) |
 | `client_encounters` | ON | a client's own encounter trigger fires it on the host too | [client-encounters.md](research/client-encounters.md) |
 | `enemy_drive` | ON | drive a mirrored enemy copy to the owner's live position | [enemy-presence-sync.md](research/enemy-presence-sync.md) |
@@ -81,6 +81,7 @@ entirely; both now default ON, matching each other and the shipped file's explic
 | `local_combat_engage_range` | `11` | engage distance for a released local-combat enemy | — |
 | `local_combat_timeout_s` | `25` | seconds before a released enemy reclaims to the mirror | — |
 | `local_combat_targeting_us_fresh_s` | `2` | freshness window for targeting data, seconds | — |
+| `local_combat_deferred_notice` | ON | HUD line for other hostiles waiting on the one local-combat exclusion slot | [combat-participation.md](research/combat-participation.md) |
 | `activate_render_on_start` | ON | force-activate rendering when the plugin starts | — |
 | `phantom_targetable` | ON | let enemies target a peer's phantom | [combat-participation.md](research/combat-participation.md) |
 | `interaction_locks` | ON | container/corpse open-close animation + use-lock | [container-sync.md](research/container-sync.md) |

@@ -702,3 +702,64 @@ factions: 0 PLAYER · 5 Neutral (repute.2da; Handoff 7.4)
   save-pollution and player-faction-member-list side effects of `AddMember`.
 - **NEEDS-LIVE**: everything in §7. Nothing in this design should be built before items
   1–2 (flip and release) are measured, and nothing should ship before item 2 has soaked.
+
+---
+
+## 9. `combat_state_sync` retired (2026-08-27, roadmap-seamless.md Tier 2 item 17)
+
+Re-investigated once more, per this item's own instruction, whether a cheaper surface than the
+raw `CSWSCreature+0x4E0` dword poke exists for "this client's engine is genuinely in combat."
+Two questions, both answered.
+
+**Does `local_combat`'s own release path already set it for the excluded creature?** No, and it
+does not need to: `MaintainLocalFight`'s three release paths (dead/gone, disengaged, timed out)
+only ever clear `_locallyFightingId` and the census exclusion — they never touch `+0x4E0`
+directly, on purpose. They do not need to, because arming the fight in the first place
+(`StartLocalFight` → `Odyssey.FireCreatureScriptSlot0x260`) already gives the local player's own
+engine a REAL combat round against a REAL attacker, and the field is derived from that, not from
+anything this codebase writes.
+
+**Does the engine expose a cheaper `EnterCombat`/`SetCombatMode`-style routine `tools/kotor1_0_3.db`
+names?** Searched via `tools/q.py func` for `Combat`, `EnterCombat`, `SetCombatMode`,
+`ActionAttack` and `DetermineCombat`. Nothing named `EnterCombat` or `DetermineCombat*` exists in
+the database at all. `CSWSCreature::SetCombatMode` (`0x0050EE80`) does exist and IS called
+elsewhere in this codebase (`combat-participation.md` §1.3's own acquisition-failure path,
+`SetCombatMode(this, 0, 1)` — "stand down") — disassembled fresh for this item
+(`tools/disasm.py 0x0050EE80`) and confirmed it is the WEAPON-DRAW/animation-mode switch (reads
+the equipped item at `this+0xA2C` slot `0x10`, dispatches on a small mode enum 0/1/5/6/…), an
+entirely different field from `+0x4E0` — **not** a cheaper in-combat setter, just a
+same-named-sounding function for a different concept. No alternative engine call exists;
+`SetCombatState`/the raw dword write were always the only two writers of `+0x4E0`
+(`SetCombatState` itself, and the second writer inside `ProcessPendingCombatActions` at
+`0x004F7C0E` §8 already documents), and the second one is exactly the DERIVED write this section
+has always said cannot be asserted from outside.
+
+**The real fix — described in `CombatStateController`'s own doc comment since it was written —
+has since shipped and is live-verified to work, with zero help from `combat_state_sync`.**
+`docs/research/shared-state-audit.md` round 39 (2026-08-21) is `local_combat`: pull the one
+genuinely engaging enemy out of the census and fire its own event script through the engine's
+real dispatcher, so the creature runs an actual native combat round against the local player
+instead of a puppet with no reason to fight. Round 52 (same document, same day) is the direct
+proof this item asked for: with `combat_state_sync` never enabled in that session, a live
+two-instance test recorded
+
+    combat: absorbed 2 forwarded damage in total, attributed to mirrored enemies we are
+      driving (last attacker 0x3B); this engine says in-combat=True
+    combat ground-truth: local PC took 2 damage, attacker=0x3B (the currently
+      locally-fighting creature (StartLocalFight's own id))
+
+— `Odyssey.IsPlayerInCombat` reading true on the CLIENT's own engine, purely as a side effect of
+`local_combat`'s real fight already running, confirmed against a ground-truth damage hook (not
+inferred from HP). This is exactly the "does the client's own `+0x4E0` in-combat flag rise as a
+result" question §7 left open, and it is now answered: yes, by the mechanism this section always
+said was the real fix, with no poke involved.
+
+**Decision: retired, not fixed.** `combat_state_sync` is now a no-op — `CombatStateController`
+performs no engine call and holds no state; it exists only so the key keeps parsing without a
+config-loader error, and logs one deprecation line the first frame it is found set. The dword
+write it used to perform (`Odyssey.SetPlayerCombatState`, `SetCombatStateFn` at `0x004F2610`) is
+kept, unused, documented, in case a future round needs the raw setter again for something other
+than "hold the field on a timer" — the same precedent `Odyssey.QueueAttackAction` set when IT was
+retired by the same round 39. `IsPlayerInCombat` (the READ side, `+0x4E0`) is unaffected and stays
+in active use by `IncomingDamageController`'s own watchdog log — this decision only retires the
+WRITE side.
