@@ -205,4 +205,118 @@ public static partial class ConsoleCommand
 
         return new CoopCommand(CoopCommandKind.ScriptGive, Address: rest[0], Amount: stack);
     }
+
+    // pooladd <resref> [stack]  - LIVE-TEST PRIMITIVE, see CoopCommandKind.PoolAdd.
+    // Same shape as scriptgive: a bare resref/stack, always the shared party pool.
+    private static CoopCommand ParsePoolAdd(string[] rest)
+    {
+        if (rest.Length < 1 || !IsResRef(rest[0], maxLength: 31))
+        {
+            return new CoopCommand(
+                CoopCommandKind.Invalid,
+                Error: "pooladd needs a resref, e.g. pooladd g_w_blstrpstl001 [stack]");
+        }
+
+        int stack = 1;
+        if (rest.Length > 1 && (!int.TryParse(rest[1], out stack) || stack <= 0))
+        {
+            return new CoopCommand(
+                CoopCommandKind.Invalid, Error: $"stack '{rest[1]}' is not a positive number");
+        }
+
+        return new CoopCommand(CoopCommandKind.PoolAdd, Address: rest[0], Amount: stack);
+    }
+
+    // poolremove <resref> [stack]  - LIVE-TEST PRIMITIVE, see CoopCommandKind.PoolRemove.
+    private static CoopCommand ParsePoolRemove(string[] rest)
+    {
+        if (rest.Length < 1 || !IsResRef(rest[0], maxLength: 31))
+        {
+            return new CoopCommand(
+                CoopCommandKind.Invalid,
+                Error: "poolremove needs a resref, e.g. poolremove g_w_blstrpstl001 [stack]");
+        }
+
+        int stack = 1;
+        if (rest.Length > 1 && (!int.TryParse(rest[1], out stack) || stack <= 0))
+        {
+            return new CoopCommand(
+                CoopCommandKind.Invalid, Error: $"stack '{rest[1]}' is not a positive number");
+        }
+
+        return new CoopCommand(CoopCommandKind.PoolRemove, Address: rest[0], Amount: stack);
+    }
+
+    // grantxp <id|me> <amount>  - LIVE-TEST PRIMITIVE, see CoopCommandKind.GrantXp.
+    private static CoopCommand ParseGrantXp(string[] rest)
+    {
+        const string usage = "grantxp <id|me> <amount>  e.g. grantxp me 500, or grantxp 0x42 -100";
+
+        if (rest.Length != 2)
+        {
+            return new CoopCommand(CoopCommandKind.Invalid, Error: usage);
+        }
+
+        string token = IsSelfWord(rest[0]) ? "0" : rest[0];
+        if (!TryParseObjectId(token, out _))
+        {
+            return new CoopCommand(
+                CoopCommandKind.Invalid, Error: $"'{rest[0]}' is not an object id or 'me' - {usage}");
+        }
+
+        if (!int.TryParse(rest[1], out int amount))
+        {
+            return new CoopCommand(
+                CoopCommandKind.Invalid, Error: $"'{rest[1]}' is not a signed xp amount - {usage}");
+        }
+
+        return new CoopCommand(CoopCommandKind.GrantXp, Address: token, Amount: amount);
+    }
+
+    // equip <id|me> <resref> [slot]  - LIVE-TEST PRIMITIVE, see CoopCommandKind.Equip.
+    private static CoopCommand ParseEquip(string[] rest)
+    {
+        const string usage = "equip <id|me> <resref> [slot]  slot: 1 body, 4 right weapon "
+            + "(default), 5 left weapon - e.g. equip 0x42 g_w_dblsbr01 4";
+
+        if (rest.Length is < 2 or > 3)
+        {
+            return new CoopCommand(CoopCommandKind.Invalid, Error: usage);
+        }
+
+        string token = IsSelfWord(rest[0]) ? "0" : rest[0];
+        if (!TryParseObjectId(token, out _))
+        {
+            return new CoopCommand(
+                CoopCommandKind.Invalid, Error: $"'{rest[0]}' is not an object id or 'me' - {usage}");
+        }
+
+        if (!IsResRef(rest[1], maxLength: 31))
+        {
+            return new CoopCommand(
+                CoopCommandKind.Invalid, Error: $"'{rest[1]}' is not a resref - {usage}");
+        }
+
+        int slot = 0;
+        if (rest.Length == 3 && (!int.TryParse(rest[2], out slot) || slot <= 0))
+        {
+            return new CoopCommand(
+                CoopCommandKind.Invalid, Error: $"'{rest[2]}' is not a valid inventory slot - {usage}");
+        }
+
+        return new CoopCommand(CoopCommandKind.Equip, Address: token, Password: rest[1], Amount: slot);
+    }
+
+    // grantgold <amount>  - LIVE-TEST PRIMITIVE, see CoopCommandKind.GrantGold.
+    private static CoopCommand ParseGrantGold(string[] rest)
+    {
+        if (rest.Length != 1 || !int.TryParse(rest[0], out int amount))
+        {
+            return new CoopCommand(
+                CoopCommandKind.Invalid,
+                Error: "grantgold needs one signed amount, e.g. grantgold 500 or grantgold -200");
+        }
+
+        return new CoopCommand(CoopCommandKind.GrantGold, Amount: amount);
+    }
 }

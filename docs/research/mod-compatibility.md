@@ -831,3 +831,61 @@ pass yet.
    liveness reconciliation starts/stops killing bodies to match; a peer's extra companion
    starts/stops recruiting locally) — not just that the SharedBlock dwords round-trip, which
    only unit tests have exercised so far.
+
+## Live-verified 2026-08-27
+
+Item 1 above (`effect_sync` was the doc's suggested key; `party_sync`/`interp_ms` were used
+instead, since both are already live-consulted — see the table below). Two-instance rig
+(`tools/demo.ps1`), Player2 (`D:\Games\swkotor-gog-p2`) launched as `--no-party-sync` (the
+client) with `interp_ms = 120` in its `coop.ini` against the host's default `interp_ms = 0`
+and default (on) `party_sync`.
+
+**Both dashboards showed both `W_CFG` lines**, agent1.log and agent2.log identically:
+
+```
+* co-op [W_CFG] party_sync host=1 you=0
+* co-op [W_CFG] interp_ms host=0 you=120
+```
+
+**The client's own `[coop] adopted host's party_sync` line could not be captured this
+session** — it goes to `Console.Error` on the actual OS console window
+(`CoopClient.ApplyBehaviourComparison`, not `AgentDashboard`'s own `--log` file, which only
+receives the announcer trio's lines), and this environment's `pwsh -NoExit` agent consoles
+render with no `MainWindowHandle` (`Get-Process pwsh | select MainWindowTitle` came back
+empty for every agent console pid), so neither `movewin.ps1`'s API nor `shot.ps1`'s
+screenshot could reach them. Not a product bug — an environment gap in this specific
+non-interactive session — worth a note for whoever automates this check next (route
+`Console.Error` into the `--log` file too, or add the adoption line to the announcer trio
+instead of a bare `Console.Error.WriteLine`, so it is capturable the same way the `W_CFG`
+lines already are).
+
+**What the log line would have only claimed, `partystate.ps1` measured directly instead — the
+stronger check.** `party_sync` is host-authoritative (see the table above): a client that
+disagrees adopts the host's value at runtime. Read both instances' party tables:
+
+```
+pid <host>    partyTable 0x18C80778   companions 1   soloMode 0
+pid <client>  partyTable 0x188B0778   companions 1   soloMode 1
+```
+
+`soloMode` on the CLIENT is the tell — a client only ever sets solo mode while it is actively
+mirroring the host's party (`docs/research/party-reconciliation.md`), so this is exactly the
+behaviour `party_sync` gates, genuinely running on the client, DESPITE its own `coop.ini`/CLI
+saying not to. `interp_ms` is not host-authoritative (a warning-only key, per the policy
+above), so there was nothing further to check for it beyond the `W_CFG` line already shown.
+
+**Negative control (identical configs → no warning)**: not re-run live this session — already
+covered by `BehaviourNegotiationTests.IdenticalBehaviourProducesNoWarningsAndNoOverrides`
+(real loopback UDP, both `CoopHost`/`CoopClient` sides asserted empty), which is pure protocol
+logic with no game-state dependency, so a live re-run would not exercise anything the unit
+test does not already cover.
+
+**Item 2's live-authoritative-gate check** was exercised for `party_sync` specifically (above,
+`soloMode`) rather than `script_item_sync`/`dialogue_item_sync`/`movie_relay` — those three
+would need their own scenario staging (a script grant, a dialogue reward, a mid-module movie)
+on top of a coop.ini divergence, not attempted this round. Item 3 (the five-key plugin-bridge
+gap) also not attempted this round.
+
+**Verdict: PASS** for the negotiation/announce/adopt mechanism itself — both `W_CFG` lines
+appear on both screens for a real divergence, and the host-authoritative adoption genuinely
+changes engine behaviour on the client, not just an `Overrides` field.

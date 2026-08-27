@@ -369,3 +369,66 @@ companion, per `party-reconciliation.md`'s own recipe):
    different local equipment than the host's real one, confirm the CLIENT never overwrites the
    HOST's copy — `party drive: companion 0x... equips ...` should only ever appear in the
    CLIENT's log, never the host's, for this companion.
+
+## 6. Live-verified 2026-08-27
+
+Two-instance rig (`tools/demo.ps1`), `end_m01aa`, both `coop.ini`s carrying
+`companion_xp_sync=1`. A new pair of dev-only staging cheats was built to reach this test at
+all — `grantxp <id|me> <amount>` (pokes `CSWSCreatureStats::experience` on any creature,
+simulating a script-granted award) and `equip <id|me> <resref> [slot]` (calls
+`Odyssey.EquipItemFromTemplate` on any creature) — see `docs/CONSOLE.md`. Trask (party-roster
+slot 0, live object id `0x127` on both instances — the same save loaded both sides) was the
+test companion.
+
+### Companion XP — PASS
+
+`grantxp 0x127 0` (a zero-delta read) confirmed both instances already agreed at a 3081 XP
+baseline. §1.2's "kill XP already agrees without the channel" theory was **not exercised**:
+`slay` (the only kill primitive this codebase has) calls `Odyssey.KillCreature` directly and
+produced no XP change at all on either side — real kill-XP grants run through the game's own
+combat/death scripts, which a direct engine kill bypasses, so this specific claim is still
+INFERRED, not measured, and no automated primitive in this codebase can reach it (a real
+combat kill is not currently stageable without playing the fight by hand).
+
+The channel's actual purpose — a script-granted award converging — is a clean pass:
+
+1. `grantxp 0x127 500` on the HOST → host reads 3081 → 3581.
+2. Within 2 s, the CLIENT independently read 3581 → 3581 (converged, no action taken there).
+3. `grantxp 0x127 300` on the CLIENT → client reads 3581 → 3881.
+4. Within 2 s, the HOST converged to 3881 (not reverted to its own 3581) — `max(host,
+   client)`, exactly as designed. Both sides confirmed at 3881 afterward.
+
+**`companion_xp_sync` default flipped ON** (`coop.ini`/`AgentSettings`/`CoopConfig`/
+`profiles/coop.ini.example`/`docs/CONFIG.md`) on the strength of this pass — the merge logic
+was already unit-tested and the live pass confirms it converges correctly in both directions
+within one heavy-pump cycle. The kill-XP claim (§1.2) remains open and does not block this,
+since the channel does not need it to be true — it only needs script-granted XP to converge,
+which it does.
+
+### Companion equipment — FAILED, real bug found (not fixed)
+
+Enabling `companion_gear_sync=1` and running `equip 0x127 g_w_lghtsbr01 4` on the HOST found a
+genuine bug, not the "expected to work identically, never observed" gap §2.2 predicted:
+
+**The item does not land on the companion at all — it lands on the LOCAL PLAYER.** `items`
+showed `0xA g_w_lghtsbr01 held by 0x9`, and `resolve 0x9` confirmed `0x9` is the PC (vtable
+`0x7470C8`, the exact PC-identification signature `progression-sync.md` uses), not `0x127`
+(Trask). `EquipItemFromTemplate`'s caller-object redirect
+(`ImplHasCallerObject`/`ImplCallerObjectId`, set to the target and restored in a `finally`
+immediately after the call returns) is verified live for a PHANTOM, but a live,
+AI-active party member appears not to honour it the same way — the leading hypothesis,
+**not confirmed**, is that `ActionEquipItem` QUEUES the actual equip rather than running it
+synchronously despite `bInstant=1`, so by the time the queued action actually executes (a
+later frame), the redirect has already been reverted to whatever the ordinary caller context
+is (the local player). Waited over a minute in the client's plugin log for any
+`party drive: companion 0x127 equips ...` line — none ever appeared, consistent with the item
+never having reached the companion's inventory in the first place.
+
+**`companion_gear_sync` stays OFF.** Shipping it as-is would silently hand a re-equipped
+companion's gear to the PLAYER instead — a visible, confusing bug (the player's own weapon
+changes for no reason the player did), worse than the shipped "stale companion gear" gap it
+was meant to close. This needs real RE work (confirming or refuting the action-queue
+hypothesis, likely against `CSWSObject::AddAction`/the action-queue drain, not attempted this
+round) before it can be tried again. Left for a future round; `companion-state-sync.md` §2.2's
+"NEEDS-LIVE for a companion body specifically" is now a confirmed live FAILURE, not an open
+question.

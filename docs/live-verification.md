@@ -1044,3 +1044,47 @@ opened on the client is held and shown open on the host`; `no per-frame spam`) r
 identically in character on both runs. No regression from this session's changes.
 `dotnet test tests/KotorCoop.Tests`: 1980/1980 green throughout (the one `CoopCommandDispatcherTests`
 UDP-port flake noted in CONTRIBUTING.md reproduced once and cleared on a solo rerun).
+
+## Rig pass (2026-08-27, round 2): behaviour-flag negotiation, companion state, party pool, transition de-dup, progression, three-peer smoke
+
+Five new dev-only console verbs were built to reach scenarios no existing primitive could
+stage, following the same pattern `quittomenu`/`scriptgive`/`loottake` already established:
+`pooladd`/`poolremove <resref> [stack]` (party pool, reusing the existing engine-side
+`CheatKinds.PartyPoolAdd/Remove`), `grantxp <id|me> <amount>` (pokes a creature's XP directly),
+`equip <id|me> <resref> [slot]` (calls `Odyssey.EquipItemFromTemplate` on any creature), and
+`grantgold <amount>` (a pure agent-side field read/write, no plugin round trip — reuses
+`KotorGameBridge.TryReadProgression`/`TryWriteProgression` directly). See `docs/CONSOLE.md`.
+
+| # | Item | Result | Detail |
+| --- | --- | --- | --- |
+| 1 | Behaviour-flag negotiation | **PASS** | `mod-compatibility.md` "Live-verified 2026-08-27" |
+| 2 | `companion_xp_sync` | **PASS, default flipped ON** | `companion-state-sync.md` §6 |
+| 3 | `companion_gear_sync` | **FAILED — real bug found** (equip lands on the player, not the companion), stays OFF | `companion-state-sync.md` §6 |
+| 4 | `party_pool_sync` | **FAILED — two bugs found, one fixed, one open**, stays OFF | `party-pool-sync.md` §7 |
+| 5 | Scripted-transition announce (de-dup only) | **PASS** for the de-dup gate on a real door crossing; galaxy-map/escape-pod legs not reached | `transition-smoothness.md` §12 |
+| 6 | Pazaak positive | **Not attempted** — no console primitive exists to start a real hand, and building one needs new RE this round did not budget for | `docs/research/minigames.md` §23 unchanged |
+| 7 | Progression vs vendor (gold sync) | **PASS**, both directions, first live pass for this channel | `progression-sync.md` "Live-verified 2026-08-27" |
+| 8 | `demo3.ps1` three-peer smoke | **Attempted, blocked** — instance 3's menu-input auto-load failed across 4 full relaunch cycles (20 retries) in this session; stopped rather than exhaust the fifth. Not a code regression: the same class of input-injection fragility this repo already documents for two-instance sessions, apparently worse for a third. Not re-attempted. | — |
+
+Two real, previously-unknown bugs were found and one was fixed along the way, neither
+specific to the item that exposed it:
+
+- **`KotorGameBridge.Items.cs`'s item-tag cache permanently blacklisted a missed lookup**
+  instead of retrying it on the next scheduled rebuild as its own doc comment claimed — found
+  while testing `companion_gear_sync` (a freshly-created item's id missed once, before the
+  periodic scan caught it, and was then stranded for the rest of the session). **Fixed** —
+  see the commit removing `_itemTagMisses`. This affects every equipped-gear read in the
+  codebase (the PC's own equipment channel, the phantom equipment channel, and companion gear
+  alike), not just the companion path that exposed it.
+- **`PartyPoolPump`'s landed-apply resolution ran before its own local-action detection**,
+  letting the pump misdetect its own just-landed automatic apply as a fresh local player
+  action and republish it — every party-pool deposit/withdrawal was silently doubled.
+  **Fixed** for the receiving-side case (confirmed live, re-tested clean); a second, distinct
+  doubling on the depositing side remains open (see `party-pool-sync.md` §7).
+
+`dotnet test tests/KotorCoop.Tests`: 2114/2114 green after every code change in this round
+(the plugin build — `src/KotorCoop.Plugin/build.ps1 -WarnAsError` — also clean throughout;
+`SharedBlock.Version` stayed at 54, no shared-block layout change was needed for any of the
+five new verbs). The one `CoopCommandDispatcherTests` UDP-port flake (documented in
+CONTRIBUTING.md) reproduced once, during a test run launched in parallel with a rig relaunch,
+and cleared on a solo rerun of that class alone.

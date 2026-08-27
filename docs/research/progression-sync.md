@@ -308,4 +308,30 @@ already solved for the party channel.
 - Policy: mirror host PC XP absolutely (identical levels) vs. let each player level
   independently (divergent sheets from the same XP number)?
 - Companion XP: verify each companion's `stats+0x068` tracks the pool as expected before
-  keying a per-slot companion-XP mirror.
+  keying a per-slot companion-XP mirror. **Done — see companion-state-sync.md §6.**
+
+## Live-verified 2026-08-27 — party gold convergence
+
+`progression_sync` is default ON and had never been run against a real two-instance rig
+before this round (no prior mention in `docs/live-verification.md`). A `grantgold <amount>`
+dev verb was built to reach it without a real vendor purchase (no GUI click this rig can
+reliably deliver): it calls `KotorGameBridge.TryReadProgression`/`TryWriteProgression`
+directly, agent-side — the exact `partyTable+0xFC` field read/write this doc's own "safest
+write" recommendation already describes, with no plugin/cheat-channel round trip needed. See
+`docs/CONSOLE.md`.
+
+Two-instance rig (`tools/demo.ps1`), `end_m01ab`, both starting at 0 gold:
+
+1. `grantgold 500` on the CLIENT → client reads 0 → 500. Within 5 s, the HOST independently
+   read 500 → 500 — converged.
+2. `grantgold 250` on the HOST (now 500 → 750) → within 5 s, the CLIENT read 750 → 750 —
+   converged, symmetric with step 1.
+
+**PASS, both directions, no code changes needed** — `PumpProgression`'s existing ledger merge
+(host spends every peer's outstanding contribution against the party table, publishes the
+result; a client reports its own contribution then mirrors the host) worked exactly as
+designed on the first real attempt. This also stands in for a real vendor-purchase scenario
+per the task's own framing: a `grantgold`-simulated trade is the same shape of local-gold
+change `ObserveLocalGold` infers from a real purchase (a level change with no engine "gold
+changed" event to hook), so the actual mechanism under test — does the gold LEDGER converge —
+is exercised identically whether the change came from a merchant GUI or this dev verb.

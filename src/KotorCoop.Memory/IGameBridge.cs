@@ -292,10 +292,28 @@ public static class CheatKinds
     /// docs/research/store-sync.md §1.5/§2.4. Same field layout as <see cref="StoreInsert"/>.
     /// See <c>SharedBlock.CheatKindStoreRemove</c>.
     ///
-    /// ⚠ 31 is the highest number taken now. Take the next FREE one for a new verb —
-    /// CheatKindSyncTests.NoTwoCheatKindsShareANumber will fail the build on a collision.
+    /// (see CheatKindSyncTests.NoTwoCheatKindsShareANumber)
     /// </summary>
     public const uint StoreRemove = 31;
+
+    /// LIVE-TEST PRIMITIVE (docs/research/companion-state-sync.md's live test plan §5): adds
+    /// <c>Amount</c> (signed) to <c>CSWSCreatureStats::experience</c> on the creature named by
+    /// <c>Target</c> (0 = local player), clamped at 0 — simulates a script-granted XP award
+    /// aimed at one creature only, testing <c>companion_xp_sync</c>'s merge. See
+    /// SharedBlock.CheatKindGrantXp.
+    /// </summary>
+    public const uint GrantXp = 32;
+
+    /// <summary>
+    /// LIVE-TEST PRIMITIVE (docs/research/companion-state-sync.md's live test plan §5):
+    /// re-equips the creature named by <c>Target</c> (0 = local player) with <c>Text</c> (a
+    /// resref) into inventory slot <c>Amount</c> (1 = body, 4 = right weapon, 5 = left weapon;
+    /// 0/default = right weapon), through <c>Odyssey.EquipItemFromTemplate</c>. See
+    /// SharedBlock.CheatKindEquip.
+    ///
+    /// ⚠ 33 is the highest number taken now. Take the next FREE one for a new verb.
+    /// </summary>
+    public const uint Equip = 33;
 }
 
 /// <summary>

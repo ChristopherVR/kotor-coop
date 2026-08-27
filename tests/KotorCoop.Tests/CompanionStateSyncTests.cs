@@ -396,21 +396,25 @@ public sealed class CompanionStateSyncTests
     }
 
     [Fact]
-    public void CompanionXpSyncOffByDefault()
+    public void CompanionXpSyncOnByDefault()
     {
-        Assert.False(new AgentSettings().SyncCompanionXp);
+        // Live-verified 2026-08-27 (docs/research/companion-state-sync.md §6): a host-side
+        // and a client-side script-XP grant each converged to the higher value live.
+        Assert.True(new AgentSettings().SyncCompanionXp);
     }
 
     [Fact]
     public void CompanionGearSyncOffByDefault()
     {
+        // Live-verified 2026-08-27: a real bug (the re-equip lands on the local player, not
+        // the companion) keeps this OFF — see docs/research/companion-state-sync.md §6.
         Assert.False(new AgentSettings().SyncCompanionGear);
     }
 
     [Fact]
-    public void CoopConfigDefaultsBothCompanionFlagsOff()
+    public void CoopConfigDefaultsCompanionXpOnGearOff()
     {
-        Assert.False(new CoopConfig().CompanionXpSync);
+        Assert.True(new CoopConfig().CompanionXpSync);
         Assert.False(new CoopConfig().CompanionGearSync);
     }
 

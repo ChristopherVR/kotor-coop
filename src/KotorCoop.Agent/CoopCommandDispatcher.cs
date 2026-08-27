@@ -265,6 +265,15 @@ public sealed partial class CoopCommandDispatcher(
 
         [CoopCommandKind.LootTake] = c => LootTake(c.Address ?? string.Empty),
 
+        [CoopCommandKind.PoolAdd] = c => SendCheat(new CheatRequest(
+            CheatKinds.PartyPoolAdd, Text: c.Address ?? string.Empty, Amount: c.Amount)),
+        [CoopCommandKind.PoolRemove] = c => SendCheat(new CheatRequest(
+            CheatKinds.PartyPoolRemove, Text: c.Address ?? string.Empty, Amount: c.Amount)),
+
+        [CoopCommandKind.GrantXp] = GrantXp,
+        [CoopCommandKind.Equip] = Equip,
+        [CoopCommandKind.GrantGold] = c => GrantGold(c.Amount),
+
         [CoopCommandKind.Cheats] = CheatsCommand,
     };
 

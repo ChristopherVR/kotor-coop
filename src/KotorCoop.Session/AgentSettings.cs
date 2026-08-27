@@ -235,11 +235,13 @@ public sealed record AgentSettings
     /// against every client's own reading, exactly like the PC's experience — overwrites each
     /// instance's own companion stats block. OFF by default, NEEDS-LIVE
     /// (docs/research/companion-state-sync.md): both engines already grant kill XP to every
-    /// active party member independently, so this channel is expected to matter mainly for
-    /// script-granted XP, but nothing here has been observed against the real game yet.
-    /// coop.ini <c>companion_xp_sync</c>.
+    /// active party member independently, so this channel matters mainly for script-granted
+    /// XP. Live-verified 2026-08-27 (docs/research/companion-state-sync.md §6): a host-side
+    /// grant converged to the client and a client-side grant converged to the host, each
+    /// within one heavy-pump cycle, never reverting the higher side. coop.ini
+    /// <c>companion_xp_sync</c>.
     /// </summary>
-    public bool SyncCompanionXp { get; init; }
+    public bool SyncCompanionXp { get; init; } = true;
 
     /// <summary>
     /// When true, a client dresses its own copy of a host-driven companion in that companion's
