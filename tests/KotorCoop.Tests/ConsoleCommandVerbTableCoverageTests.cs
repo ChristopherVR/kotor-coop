@@ -74,6 +74,7 @@ public class ConsoleCommandVerbTableCoverageTests
         [CoopCommandKind.SetGlobal] = "setglobal K_KOTOR_MASTER 15",
         [CoopCommandKind.Pazaak] = "pazaak",
         [CoopCommandKind.OpenStore] = "openstore kebla_yurt_shop",
+        [CoopCommandKind.PartySelectOk] = "partyselect ok",
     };
 
     /// <summary>Sentinel kinds that are outcomes of parsing (or its absence), not tied to one

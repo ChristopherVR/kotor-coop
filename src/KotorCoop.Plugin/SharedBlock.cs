@@ -747,8 +747,23 @@ internal partial struct SharedBlock
     /// <c>store_sync</c> can finally be verified without a manual click.
     /// <see cref="OffsetCheatTarget"/> is the store's object id, or <see cref="OffsetCheatText"/>
     /// its tag; one of the two is required — there is no "nearest store" sweep.
-    ///
-    /// ⚠ 36, because 7-35 are taken. Take the next FREE number.
     /// </summary>
     public const uint CheatKindOpenStore = 36;
+
+    /// <summary>
+    /// LIVE-TEST PRIMITIVE (2026-08-28, docs/research/galaxy-map-and-party-select.md's
+    /// escape-pod addendum): confirms the native party-selection screen
+    /// (<c>CSWGuiPartySelection</c>, reached from <c>CGuiInGame+0x078</c>, the same offset
+    /// <see cref="PartySelectSuppressionController"/> already reads) with its current
+    /// selection, through <c>CSWGuiPartySelection::ConfirmPartySelection</c> (0x006BEC90) —
+    /// the panel's own OK/Done handler, the same one a real click reaches — after poking the
+    /// shared <c>CSWGuiMessageBox+0x64</c> bit-0 precondition it gates on (the same
+    /// <c>msgboxpoke</c> trap <c>loadgame</c> already needs on a fresh all-console session; see
+    /// docs/research/session-save.md). Refuses if no party-selection panel is on screen, or if
+    /// its vtable does not match (guarded, never a blind write). Takes no arguments; local
+    /// only, no <see cref="SharedBlockView"/> field needed beyond the plain cheat channel.
+    ///
+    /// ⚠ 37, because 7-36 are taken. Take the next FREE number.
+    /// </summary>
+    public const uint CheatKindPartySelectOk = 37;
 }

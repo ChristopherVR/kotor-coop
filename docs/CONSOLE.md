@@ -68,6 +68,7 @@ scenario. Parsed in `ConsoleCommand`, dispatched by `CoopCommandDispatcher`, exe
 | `setglobal` | `<name> <int\|true\|false\|on\|off>` | yours only, local only | writes a script global by name through the engine's own type-checked setter (`CSWGlobalVariableTable::SetValueNumber`/`SetValueBoolean`), not a raw poke — see docs/research/quest-sync.md |
 | `pazaak` | `[npc-tag\|id] [deck]` | yours only, local only | starts a Pazaak hand through `CClientExoApp::StartPazaakGame` directly (no wager, no tutorial), so `pazaak_detect` can be verified positively — see docs/research/minigames.md |
 | `openstore` | `<resref\|tag\|id>` | yours only, local only | opens the store GUI against a resolved store through `CGuiInGame::ShowStoreGui` directly, so `store_sync` can be verified without a manual click — see docs/research/store-sync.md |
+| `partyselect` | `ok` | yours only, local only (meant for the HOST) | confirms the native party-selection screen with its current selection through the panel's own OK/Done handler (`ConfirmPartySelection`), the same code path a real click reaches — see docs/research/galaxy-map-and-party-select.md |
 | `cheats` | — | any player | prints this verb list |
 
 ### The `slay` / `destroyobject` authority split

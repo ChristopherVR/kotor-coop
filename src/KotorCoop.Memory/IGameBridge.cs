@@ -338,10 +338,23 @@ public static class CheatKinds
     /// GUI against store <c>Target</c> (object id) or <c>Text</c> (tag) through
     /// <c>CGuiInGame::ShowStoreGui</c> called directly, then writes the resolved store's object
     /// id into the new panel and forces a repopulate. See SharedBlock.CheatKindOpenStore.
-    ///
-    /// ⚠ 36 is the highest number taken now. Take the next FREE one for a new verb.
     /// </summary>
     public const uint OpenStore = 36;
+
+    /// <summary>
+    /// LIVE-TEST PRIMITIVE (docs/research/galaxy-map-and-party-select.md's 2026-08-28
+    /// addendum): confirms the native party-selection screen (<c>CSWGuiPartySelection</c>,
+    /// reached from <c>CGuiInGame+0x078</c>) with its CURRENT on-screen selection, through
+    /// <c>CSWGuiPartySelection::ConfirmPartySelection</c> (0x006BEC90) — the same handler a
+    /// real Done/Accept click reaches, which itself gates on the shared
+    /// <c>CSWGuiMessageBox+0x64</c> bit-0 precondition (session-save.md's own
+    /// <c>msgboxpoke</c> trap) before calling <c>AcceptParty</c> (0x006BE560). Pokes that same
+    /// bit first, the same established workaround `loadgame` needs on a fresh all-console
+    /// session. Takes no arguments; local only — see SharedBlock.CheatKindPartySelectOk.
+    ///
+    /// ⚠ 37 is the highest number taken now. Take the next FREE one for a new verb.
+    /// </summary>
+    public const uint PartySelectOk = 37;
 }
 
 /// <summary>

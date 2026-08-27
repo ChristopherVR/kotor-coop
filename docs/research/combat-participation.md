@@ -763,3 +763,92 @@ than "hold the field on a timer" — the same precedent `Odyssey.QueueAttackActi
 retired by the same round 39. `IsPlayerInCombat` (the READ side, `+0x4E0`) is unaffected and stays
 in active use by `IncomingDamageController`'s own watchdog log — this decision only retires the
 WRITE side.
+
+## 10. Round 89 (2026-08-28): root-caused, live — `end_sith2` never reads hostile to the
+## CLIENT's own local player; the phantom-decoy design and `LocalFightCandidateRule` are not at
+## fault
+
+Playthrough open issue #1 (`docs/research/playthrough-endar-spire.md`): "a client cannot land real
+hits on a host-owned/GIT-identical hostile via the local `attack` mechanism". Reproduced with the
+playthrough's own exact staging (fresh rig, save 1, `END_M01AA`, CLIENT `tp 45.8 33.3` — ~1m from
+`end_sith2` 0x14, hp 15, GIT-placed, `census` confirms 25/25 census entries resolve directly on the
+client, i.e. all GIT-identical, none materialised) and confirmed the exact same symptom: `attack
+0x7FFFFFFF 0x14` (via `tools/blockpoke.ps1 attack`, since `attack` is a blockpoke-only top-level
+verb, not an in-game `console` command — a wrinkle worth recording, since typing `console 'attack
+...'` answers `unknown command`) produces `test: 0x7FFFFFFF ordered to attack 0x14` and the probe's
+own `round(active=0,delay=0)` on both sides forever; no damage; no `local_combat:` line ever
+appears in the client's plugin log this session.
+
+**Two of the three `LocalFightCandidateRule.Evaluate` gates are DIRECTLY RULED OUT, with live
+evidence, not inference:**
+
+1. **`hasScript` — CONFIRMED present, not the round-39-class empty-slot bug.**
+   `firescript 0x14` (peek only) answers `0x14 +0x260 = 'k_def_combend01'` — a real, non-empty
+   script, unlike `tar03_bekcs2`'s documented empty slot (§Odyssey.Combat.ScriptFire.cs's own doc
+   comment). `Odyssey.HasCreatureScriptSlot0x260` must read true for this creature.
+2. **`gitIdentical` — not actually a live variable in this code path at all.**
+   `EnemyPresenceController.SelectImmediateCandidate` calls `LocalFightCandidateRule.Evaluate(...,
+   gitIdentical: true, ...)` as a **literal constant**, not a computed value — every census entry
+   reaching this call has already survived the `MaterialisedEnemies.ToLocal(enemy.ObjectId) != 0`
+   skip a few lines above, so by construction every candidate considered here IS GIT-identical.
+   There is no live gate to fail here; ruling this out needed reading the code, not the rig.
+
+**The remaining gate, `reputation == Hostile (2)`, is where this round's new evidence points, and
+it was confirmed with a mechanism nobody had tried yet: firing the creature's own real AI script
+directly and watching whether the ENGINE's own `DetermineCombatRound`/`GetNearestEnemy` (not our
+code at all) can find the client's own player as a target.**
+
+`firescript 0x14 fire` (on the CLIENT, player still ~1m away) runs `k_def_combend01` for real
+through the same VM dispatcher the engine itself uses (`Odyssey.FireCreatureScriptSlot0x260`) —
+and `Odyssey.ArmFireScriptWatch`'s per-frame diagnostic (already shipped, not new this round) shows
+the aftermath directly: `round+0x9CC target=0x7F000000` (**`OBJECT_INVALID` — never acquired**),
+`round+0x958 timer=0` (**never armed**), `resolvedTarget=0x0`, held steady for the whole watch
+window. The client's own hp stayed `12/12` throughout. **This is the creature's OWN native AI,
+using the SAME `GetNearestEnemy`/hostility path §1/§2 of this document already decoded, failing to
+find the client's real, un-mirrored, un-phantomed local player as a hostile candidate at 1 meter —
+not a `LocalFightCandidateRule` bug, not a script-slot bug, not a distance bug.** Per §1.4's own
+decode, the only three things `GetNearestEnemy` checks are hostile reputation, a seen perception
+node, and line of sight — and reputation is the one this codebase cannot itself write or observe
+for this pairing (there is no console-reachable `GetAIStateReputation` probe today; the one
+existing reputation diagnostic, `Odyssey.Combat.Attack.cs`'s "queueattack ROUND18 diag" line, lives
+inside `QueueAttackAction`, the OPPOSITE flow — driving an enemy to attack the phantom — and never
+fires for the player's own outgoing `attack`/`AttackTarget` path, which is why it never appeared in
+this test).
+
+**Verdict: root-caused as staging/engine-state, not a rule gap — per the task's own decision tree,
+this is case two ("the enemy was hostile to the host only"), now with proof rather than a guess.**
+`end_sith2` is a GIT-placed hostile the HOST's own instance fights normally (the playthrough's own
+`end_gensith` kill and general Sith-patrol combat confirm real Sith DO fight the host's real
+player), but on THIS session's CLIENT instance, at least this one creature's own engine-native
+hostility check does not find the client's own player hostile — independent of anything
+`LocalFightCandidateRule`, `EnemyPresenceController`, or any other code in this repo controls,
+since the test above bypassed all of it and drove the creature's real AI directly. Because
+reputation is a **faction-vs-faction matrix lookup** (§2.3), not a per-creature value, and factions
+are never wire-synced between host and client (each engine runs its own independent world), the
+likely mechanism is a per-instance asymmetry in whatever makes Endar Spire's early Sith troopers
+hostile in the first place (a proximity/story trigger the HOST's own player crossed but the CLIENT
+never did, in this specific session) — **not proven this round** (the exact trigger was not
+traced), but consistent with every fact gathered. **Not fixed this round** — no code changed;
+`LocalFightCandidateRule`/`EnemyPresenceController` need no test added, since nothing in either was
+shown to be wrong.
+
+**What would close this out, ranked:** (1) add a temporary reputation diagnostic to
+`EnemyPresenceController.SelectImmediateCandidate` itself (mirroring `Odyssey.Combat.Attack.cs`'s
+own `GetAIStateReputationFn` call, just logged for the CANDIDATE-selection path instead of the
+opposite one) so a live pass can read `GetAIStateReputation(0x14, clientPlayerId)` directly instead
+of inferring it from a script-fire side effect; (2) repeat this exact `firescript ... fire` probe on
+the HOST against the SAME creature id (0x14) at the same range, as the clean side-by-side control
+this round's time budget did not allow — if the host's own native AI DOES find its own player
+hostile against the identical creature, that is decisive confirmation of a per-instance asymmetry
+rather than a genuinely-non-hostile GIT placement; (3) trace whatever NWScript (a heartbeat,
+`OnPerceive`, or a nearby trigger) is meant to make Endar Spire's Sith troopers hostile in the
+first place, since vanilla KOTOR 1 does not require console intervention for this to work in a
+normal single-player game.
+
+**A workflow note for whoever continues this**: `attack <attackerId> <targetId>` is driven through
+`tools/blockpoke.ps1`'s own dedicated `attack` top-level command
+(`pwsh tools\blockpoke.ps1 -ProcId <pid> attack 0x7FFFFFFF 0x14`), **not** `console 'attack ...'` —
+there is no `attack` verb in `ConsoleCommand.cs`'s table at all; blockpoke's `attack` writes
+directly to the `TestAttacker`/`TestAttackTarget`/`TestAttackSerial` shared-block fields
+`TestDriveController.HandleAttack` reads. A future pass grepping `ConsoleCommand.cs` for `attack`
+and finding nothing should not conclude the primitive does not exist.

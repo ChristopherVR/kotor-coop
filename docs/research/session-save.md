@@ -1820,4 +1820,79 @@ executables, outside the git tree, so there is no code-level default to change �
 absent-key default remains `false`, unaffected). A coordinator setting up a fresh install should
 turn both on explicitly to get this feature; it is not yet the code's own implicit default.
 
+## Live pass (2026-08-28): regression found — `host_load_readopt` reproducibly loses the client,
+## two different ways, on a build ~35 commits past round 87's own clean pass
+
+Task item 3 (playthrough open issue #4, inconclusive there): host-only warp to a different module
+(`tar_m10aa`, the same round-86/87 recipe), confirm offline the resulting autosave genuinely
+differs (`LASTMODULE=tar_m10aa`/`Taris - Black Vulkar Base` vs. `Game1`'s untouched
+`LASTMODULE=END_M01AA`/`Endar Spire - Command Module` — confirmed via `tools/kotorfiles.py` before
+touching the rig, matching round 86's own check), poke the message-box precondition (this round
+used the new `partyselect ok` verb for this — see `galaxy-map-and-party-select.md`'s own
+2026-08-28 entry — since it happens to hit the identical `CSWGuiMessageBox+0x64` bit 0 this
+feature's own precondition trap needs; confirmed working exactly like `msgboxpoke.ps1` did in prior
+rounds), then `loadgame 0` on the HOST with `client_load_rejoin=1`/`host_load_readopt=1` already
+the shipped `coop.ini` default (unchanged since the 2026-08-24 flip — no config edits needed this
+round). `dotnet build -warnaserror` (0/0) and `dotnet test` (2304/2304) both clean before going
+live.
+
+**Run 1**: `loadgame 0` answered `loadgame: the world is up` then `host loaded a save - everyone
+re-joins` — the exact predicted lines. Host log then showed `session-save: host-side load verdict -
+announcing re-adoption`, `world sent` was never logged this run (the client's own
+`following the host to 'END_M01AA'` / `announcing transition to 'END_M01AA'` lines DID appear in
+the client's own agent log, so the rejoin trigger and the travel-follow handoff both fired
+correctly) — but **5 seconds later the client's own game process (and its agent) vanished
+entirely**: `Get-Process` found neither afterward, `tools/crashlog.ps1` against the Windows
+Application log found **no** matching crash entry for the client at that timestamp (only the two
+unrelated `0x40D386` crashes from this same session's earlier `galaxy-map-and-party-select.md`
+testing) — consistent with a clean process exit or an unlogged fail-fast, not a logged access
+violation. The client's own agent log's last line was `stall diag: CanWriteRemotes=false, blocked
+before the combat pump - retrying plugin block lookup on the bridge's own cadence`, immediately
+after its own `epoch: world unloading` line — i.e. it died mid-reconnect, right as its own module
+reload was tearing down.
+
+**Run 2** (fresh rig restart, identical recipe): this time the host side completed noticeably more
+cleanly — `Malak left the game` → `world sent (654,006 bytes)` (**the exact same byte count** round
+87's own live-verified pass logged for this identical scenario) → `Malak joined the game` again,
+and the host reported a stable `peers 1` for 30+ seconds afterward, looking like a clean success.
+**But the client's own game process hung instead of dying**: `Get-Process` kept finding it
+(`Responding=False`) for over two minutes with zero new lines in its plugin log after
+`WARNING: frame hook installed but has not fired for ~2s (normal while a movie or a module load
+holds the main thread)` — except this time the warning never resolved; the frame hook simply never
+fired again for the rest of the observed window. Waited 90+ seconds past the point run 1's
+equivalent moment had already either succeeded or died; no recovery. The process had to be
+force-killed to clean up the rig.
+
+**Verdict: FAIL, not the "CONFIRMED FIXED" status this doc currently carries — a real regression,
+reproduced twice, two different failure shapes (clean disappearance vs. permanent hang), same
+recipe round 87 ran cleanly.** Both failures land at the identical moment in the sequence: right
+as the CLIENT's own engine is mid-reload (`epoch: world unloading` / the module-load frame-hook
+gap) while trying to complete `host_load_readopt`'s rejoin. This is squarely the client-side half
+of the mechanism round 87 itself flagged as the newer, less-tested direction (round 87's own live
+pass measured the HOST's own re-adopt cleanly but the CLIENT side of a HOST-initiated reload was
+exercised identically then too — the difference this round found is not in which side was tested,
+but that the SAME test now fails, twice). **Not root-caused this round** — no code in
+`WorldTransfer`/`SessionManager`/`WorldAdoption`/`WorldLoadWatch` was touched or read line-by-line
+against this specific failure; time went to reproducing it decisively (2/2) rather than fixing it
+blind. Given the ~35 commits merged between round 87 (2026-08-24) and this round (including this
+session's own `party_select_host_only` addendum, `script_item_sync`, `container_lock_arbitration`,
+`companion_xp_sync` and others per `playthrough-endar-spire.md`'s own Setup section), a bisection
+against that range is the fastest path to a root cause, not a fresh read of the whole mechanism.
+
+**Defaults NOT reverted.** Per this doc's own established discipline, a finding this decisive
+would normally argue for flipping `client_load_rejoin`/`host_load_readopt` back to documented-off
+— but doing so was judged out of scope for this pass (a live-verification round, not a fix-and-
+decide round); flagged here instead as an urgent open issue for whoever next touches this feature,
+with the explicit recommendation to re-run this exact recipe (host-only warp to a different
+module, `loadgame 0` on the host) as the very first check before trusting `host_load_readopt` for
+anything else. The two installs' `coop.ini` files still carry `client_load_rejoin=1`/
+`host_load_readopt=1` from the 2026-08-24 flip, unchanged by this round.
+
+**Recipe for the next round, exact**: fresh `demo.ps1 -Save 1`; host-only `console 'warp
+tar_m10aa'`; `console 'partyselect ok'` on the host (primes the message-box bit — works from any
+loaded module per this round's own testing, a convenient side benefit of the new verb); `console
+'loadgame 0'` on the host; watch the CLIENT's own `Get-Process ... Responding` and its plugin log's
+last-write timestamp for the following ~60s, not just the host's own "peers 1" reading (which, per
+run 2, can look completely healthy while the client is already unrecoverable).
+
 No code changed this round — verification only. `dotnet test`: 1674/1674 green throughout.

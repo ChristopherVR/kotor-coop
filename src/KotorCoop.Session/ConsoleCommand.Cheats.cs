@@ -246,6 +246,14 @@ public static partial class ConsoleCommand
             ? new CoopCommand(CoopCommandKind.Invalid, Error: "quittomenu takes no arguments")
             : new CoopCommand(CoopCommandKind.QuitToMenu);
 
+    // partyselect ok  - LIVE-TEST PRIMITIVE, see CoopCommandKind.PartySelectOk. "ok" is the
+    // only recognised subcommand for now (confirm with the current selection); nothing else
+    // (cancel, pick a specific slot) is wired up.
+    private static CoopCommand ParsePartySelect(string[] rest) =>
+        rest.Length == 1 && string.Equals(rest[0], "ok", StringComparison.OrdinalIgnoreCase)
+            ? new CoopCommand(CoopCommandKind.PartySelectOk)
+            : new CoopCommand(CoopCommandKind.Invalid, Error: "usage: partyselect ok");
+
     // selectreply <slot>  - LIVE-TEST PRIMITIVE, see CoopCommandKind.SelectReply.
     private static CoopCommand ParseSelectReply(string[] rest)
     {
