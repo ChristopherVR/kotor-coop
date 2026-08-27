@@ -105,7 +105,7 @@ fails safe. **INFERRED** = a reasonable deduction, not directly proven.
 | [text-color-alpha.md](text-color-alpha.md) | Screen text with color/alpha | RE reference, implemented |
 | [native-browser-panel.md](native-browser-panel.md) | Repurposing `CSWGuiSaveLoad` as the server browser | RE reference, implemented |
 | [server-browser.md](server-browser.md) | The main-menu scrollable server list | RE reference, implemented |
-| [connect-flow.md](connect-flow.md) | The in-game Connect panel and password entry | Implemented; some on-screen display specifics remain NEEDS-LIVE |
+| [connect-flow.md](connect-flow.md) | The in-game Connect panel and password entry | Implemented; connect/password flow live-verified. Persistent connection indicator live-verified 2026-08-27 (partial) — data path and peer tracking correct, on-screen render/`status_indicator=0` unconfirmed (shot.ps1 broken), `Reconnecting` state found unreachable |
 | [disconnect-reconnect.md](disconnect-reconnect.md) | What happens when the link between two players fails | Implemented; link-outage recovery live-verified. FlagAway (main menu / no player object) live-verified 2026-08-27 as FAILED — the local read masks the failure with transitional data (§10), root cause located, fix not yet shipped |
 | [network-topology.md](network-topology.md) | Peer-to-peer vs. a dedicated host | Reference / design discussion, no build implied |
 | [mouse-cursor-input.md](mouse-cursor-input.md) | Where the engine's mouse cursor lives and how to click | RE reference; one resolution caveat NEEDS-LIVE |

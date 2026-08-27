@@ -30,7 +30,7 @@ time; everything else builds and unit-tests in parallel.
 | 15 | Container loot has no version tripwire | `680c866`, `ContainerLootStore` digest + `LootSyncRequestPacket` (NEEDS-LIVE) |
 | 16 | Packaging + CI | `.github/workflows/ci.yml`, `release.yml`, `tools/package.ps1` |
 | 17 | Reliable*Sender tests | `ReliableSenderTests.cs` covers all five senders |
-| 18 | Persistent connection indicator | `ConnectionIndicatorController` (2026-08-27, NEEDS-LIVE) — was a fading toast before |
+| 18 | Persistent connection indicator | `ConnectionIndicatorController` — was a fading toast before. Live-verified 2026-08-27 (partial): peer-count tracking and the wire/decode data path confirmed correct; the on-screen render itself and `status_indicator=0` unconfirmed (shot.ps1 still solid-black); `ConnectionIndicatorState.Reconnecting` found unreachable in the current wiring (`CoopHost.Connected` is hardcoded true, `CoopClient.IsConnected` clears atomically with the reconnect-phase flip) — see connect-flow.md's 2026-08-27 section |
 
 ## Tier 1 — what a normal two-player playthrough still hits
 
