@@ -246,4 +246,13 @@ public sealed record AgentSettings
     /// <c>companion_gear_sync</c>.
     /// </summary>
     public bool SyncCompanionGear { get; init; }
+    /// When true, <see cref="Pumps.PartyPoolPump"/> runs on the heavy pass: syncing the shared
+    /// party item pool (<c>CSWPartyTable+0x118</c>) both ways — detecting a local player's own
+    /// deposit/withdrawal and applying a peer's, through the staging-cheat channel. Off by
+    /// default (coop.ini <c>party_pool_sync</c>) — the offset chain is VERIFIED against the
+    /// symbol database and the disassembly, and the engine calls are real, verified primitives,
+    /// but neither has been watched land on a running game yet. See
+    /// docs/research/party-pool-sync.md for the full design and the NEEDS-LIVE items.
+    /// </summary>
+    public bool PartyPoolSyncEnabled { get; init; }
 }

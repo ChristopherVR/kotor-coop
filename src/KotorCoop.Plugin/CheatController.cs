@@ -194,6 +194,14 @@ internal sealed unsafe partial class CheatController(SharedBlockView block)
                 WalkTo(playerId);
                 break;
 
+            case SharedBlock.CheatKindPartyPoolAdd:
+                PartyPoolAdd(playerId);
+                break;
+
+            case SharedBlock.CheatKindPartyPoolRemove:
+                PartyPoolRemove();
+                break;
+
             default:
                 Answer(SharedBlock.CheatStatusRefused, $"unknown cheat kind {kind}");
                 break;

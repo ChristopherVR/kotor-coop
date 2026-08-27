@@ -108,8 +108,12 @@ public static class ProtocolConstants
     /// <see cref="PacketType.CompanionXpReport"/> (52) are new packet types, and
     /// <see cref="PartyMemberState"/> gained three equip fields on the existing
     /// <see cref="PacketType.PartySnapshot"/> shape. See docs/research/companion-state-sync.md.
+    ///
+    /// Version 42: <see cref="PacketType.PartyPoolOp"/> (53) / <see cref="PacketType.PartyPoolAck"/>
+    /// (54) / <see cref="PacketType.PartyPoolSyncRequest"/> (55) — the shared party item-pool
+    /// channel (<c>party_pool_sync</c>, default OFF, NEEDS-LIVE). See docs/research/party-pool-sync.md.
     /// </summary>
-    public const byte Version = 41;
+    public const byte Version = 42;
 
     /// <summary>Journal quest tags are resrefs plus a little slack.</summary>
     public const int MaxJournalTagLength = 32;
@@ -132,6 +136,15 @@ public static class ProtocolConstants
     /// than by this arithmetic.
     /// </summary>
     public const int MaxGroundItems = 16;
+
+    /// <summary>
+    /// Distinct party-pool stack keys a session remembers at once (bounded like
+    /// <see cref="MaxGroundItems"/>, not asserted against a snapshot datagram since this
+    /// channel has none — see docs/research/party-pool-sync.md). A stash rarely holds more
+    /// than a handful of genuinely distinct (resref, identity) combinations; existing keys can
+    /// still change quantity past the cap, only a brand-new key is refused.
+    /// </summary>
+    public const int MaxPartyPoolStacks = 256;
 
     /// <summary>
     /// Creatures the owner replicates per snapshot. 40 bytes each (id, health, death,

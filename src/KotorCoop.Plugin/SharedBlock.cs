@@ -557,4 +557,25 @@ internal partial struct SharedBlock
     /// </summary>
     public const uint CheatKindWalkTo = 24;
 
+    /// <summary>
+    /// Adds <see cref="OffsetCheatAmount"/> units of a resref+identity stack to the shared
+    /// party item pool (<c>CSWPartyTable+0x118</c>). <see cref="OffsetCheatText"/> is the
+    /// resref, Amount the stack size, Charges/MaxCharges/Upgrades/ItemFlags the rest of the
+    /// stack identity — the same five fields <see cref="CheatKindGiveLoot"/> and
+    /// <see cref="CheatKindSetItem"/> already carry, reused rather than duplicated.
+    /// <see cref="OffsetCheatTarget"/> is unused. See docs/research/party-pool-sync.md.
+    ///
+    /// ⚠ 25, because 7-24 are taken. Take the next FREE number.
+    /// </summary>
+    public const uint CheatKindPartyPoolAdd = 25;
+
+    /// <summary>
+    /// Removes <see cref="OffsetCheatAmount"/> units of a resref+identity stack from the shared
+    /// party item pool. Same field layout as <see cref="CheatKindPartyPoolAdd"/>. See
+    /// docs/research/party-pool-sync.md.
+    ///
+    /// ⚠ 26, because 7-25 are taken. Take the next FREE number.
+    /// </summary>
+    public const uint CheatKindPartyPoolRemove = 26;
+
 }

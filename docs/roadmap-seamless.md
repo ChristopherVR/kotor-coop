@@ -36,7 +36,7 @@ time; everything else builds and unit-tests in parallel.
 
 | # | Item | Status | Where |
 |---|---|---|---|
-| 1 | **Party shared-loot pool (`pt_item_repo`, `CSWPartyTable+0x118`) is two unrelated pools.** Gear stashed "in the party" on one instance never exists on the other. Offsets known, no channel. | Missing | new `PartyLootController` + packet; `Odyssey.Party.cs` |
+| 1 | **Party shared-loot pool (`pt_item_repo`, `CSWPartyTable+0x118`) is two unrelated pools.** Gear stashed "in the party" on one instance never exists on the other. Content-keyed op-log channel built 2026-08-27 (`party_pool_sync`, OFF until live-verified); add/remove both ways, host-relayed, `Set`-based resync on reconnect. | Built (NEEDS-LIVE) 🎮 | `Pumps/PartyPoolPump.cs`, `PartyPoolStore.cs`, `Odyssey.PartyPool.cs`, `KotorGameBridge.PartyPool.cs`; docs: [party-pool-sync.md](research/party-pool-sync.md) |
 | 2 | **Items granted by scripts outside dialogue** (OnEnter, OnDeath, cutscene, heartbeat — most quest items) reach only the engine that ran the script. `script_item_sync` pump built 2026-08-27, OFF until live-verified. | Built (NEEDS-LIVE) 🎮 | `Pumps/ScriptItemGrantPump.cs`, `ScriptItemGrantRule` |
 | 3 | 🎮 **Progression never live-verified** against a real vendor purchase (gold ledger) or a cross-side kill (XP max-merge). Code is complete. | Built (NEEDS-LIVE) | `Pumps/PartyPump.cs:159-282` |
 | 4 | 🎮 **Container-loot race**: two clicks on the same chest within one RTT can both hand out loot before either removal lands (`ContainerUseRule` is eventually consistent). Never exercised. | Partial | `Pumps/WorldStatePump.cs:24-52`, `ContainerUseRule.cs` |
@@ -82,8 +82,9 @@ wired, Pazaak detect + waiting notice, sender cap contract, missing unit tests.
 
 Wave B (rig, serial): Tier 1 items 3, 2, 5, 8, 9, 4 as one verification pass each; then 13,
 11 and 12 (`companion_gear_sync`/`companion_xp_sync`, both built 2026-08-27, both OFF pending
-their own live pass — docs/research/companion-state-sync.md has the test plan), and item 7
+their own live pass — docs/research/companion-state-sync.md has the test plan), item 7
 (behaviour-flag negotiation, built 2026-08-27 — NEEDS-LIVE list in mod-compatibility.md's
-"Behaviour-flag negotiation" section).
+"Behaviour-flag negotiation" section), and item 1 (party pool, built 2026-08-27 — see
+[party-pool-sync.md](research/party-pool-sync.md)'s own live test plan).
 
-Wave C (after B): item 1 (party pool).
+Wave C (after B): whatever B refutes.

@@ -466,4 +466,22 @@ public enum PacketType : byte
     /// max, exactly like <see cref="ProgressionReport"/>'s experience half.
     /// </summary>
     CompanionXpReport = 52,
+
+    /// any -&gt; all, relayed by the host: a content-keyed change to the shared party item pool
+    /// (<c>CSWPartyTable+0x118</c>'s <c>CItemRepository</c>) — some number of units of a
+    /// resref+identity stack were added to, or removed from, the stash. Reliable via
+    /// retransmit-until-ack, the same shape as <see cref="ContainerLoot"/>, but keyed by CONTENT
+    /// rather than by object id: a party-pool item is created independently on each instance and
+    /// never shares an engine id across peers the way a GIT-placed door or container does. See
+    /// docs/research/party-pool-sync.md. Off by default (<c>party_pool_sync</c>), NEEDS-LIVE.
+    /// </summary>
+    PartyPoolOp = 53,
+
+    /// <summary>A peer's acknowledgement of a <see cref="PartyPoolOp"/>. See
+    /// <see cref="ContainerLootAck"/> for the identical shape and reasoning.</summary>
+    PartyPoolAck = 54,
+
+    /// <summary>client -&gt; host: my party-pool version/digest disagrees, resync — the same
+    /// role <see cref="LootSyncRequest"/> plays for container loot.</summary>
+    PartyPoolSyncRequest = 55,
 }

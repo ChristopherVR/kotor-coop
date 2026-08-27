@@ -124,6 +124,7 @@ internal static class AgentComposition
             MovieRelayEnabled = config?.MovieRelayEnabled ?? false,
             SyncCompanionXp = config?.CompanionXpSync ?? false,
             SyncCompanionGear = config?.CompanionGearSync ?? false,
+            PartyPoolSyncEnabled = config?.PartyPoolSyncEnabled ?? false,
 
             // No coop.ini => the most conservative choice, matching the pattern above: today's
             // exact host-leads/client-follows behaviour, not the new lead-swap default.

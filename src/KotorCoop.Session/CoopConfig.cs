@@ -29,6 +29,8 @@ namespace KotorCoop.Session;
 ///   client_door_refusal = 1    ; refuse a client's own premature door crossing (default ON,
 ///                               ; live-verified - docs/research/transition-smoothness.md's
 ///                               ; live-pass section)
+///   party_pool_sync = 0        ; sync the shared party item pool (NEEDS-LIVE, default off) -
+///                               ; docs/research/party-pool-sync.md
 /// </code>
 /// </summary>
 public sealed record CoopConfig
@@ -369,6 +371,14 @@ public sealed record CoopConfig
     /// it on.
     /// </summary>
     public bool CompanionGearSync { get; init; }
+    /// <summary>
+    /// Syncs the shared party item pool (<c>CSWPartyTable+0x118</c>) both ways. OFF by default
+    /// (coop.ini <c>party_pool_sync = 1</c> turns it on) — the offset chain and the engine
+    /// calls this uses are researched and verified against the disassembly, but not yet watched
+    /// land on a running game, per the project's own rule that a researched write ships behind
+    /// a flag until it has. See docs/research/party-pool-sync.md.
+    /// </summary>
+    public bool PartyPoolSyncEnabled { get; init; }
 
     /// <summary>The anchor as the plugin's numeric code (0=TL, 1=TR, 2=BL, 3=BR).</summary>
     public uint ChatOverlayAnchorCode => ChatOverlayAnchor.Trim().ToLowerInvariant() switch
@@ -513,6 +523,7 @@ public sealed record CoopConfig
 
             CompanionXpSync = IsTruthy(kv.GetValueOrDefault("companion_xp_sync")),
             CompanionGearSync = IsTruthy(kv.GetValueOrDefault("companion_gear_sync")),
+            PartyPoolSyncEnabled = IsTruthy(kv.GetValueOrDefault("party_pool_sync")),
         };
     }
 

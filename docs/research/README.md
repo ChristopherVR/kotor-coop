@@ -81,6 +81,7 @@ fails safe. **INFERRED** = a reasonable deduction, not directly proven.
 | [companion-combat-credit-plan.md](companion-combat-credit-plan.md) | Live-test plan: does a released companion's swing land as credited damage? | Run; decisive result on the solo-mode hypothesis; superseded in practice by later party-reconciliation.md rounds |
 | [progression-sync.md](progression-sync.md) | Sharing party gold and character XP/level | Research/design; several policy and GUI-repaint questions remain open, NEEDS-LIVE |
 | [companion-state-sync.md](companion-state-sync.md) | Per-companion experience and equipment (roadmap items 11/12) | Built, both flags OFF, NEEDS-LIVE |
+| [party-pool-sync.md](party-pool-sync.md) | Syncing the shared party item pool (`CSWPartyTable+0x118`) | Implemented, unit-tested; `party_pool_sync` OFF by default, NEEDS-LIVE |
 
 ## World state
 
