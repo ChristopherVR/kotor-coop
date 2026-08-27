@@ -56,6 +56,7 @@ internal static unsafe partial class PluginHost
         _partyRoster = new PartyRosterController(_view);
         _controlReturn = new ControlReturnController(_view);
         _agentLiveness = new AgentLivenessController(_view);
+        _connectionIndicator = new ConnectionIndicatorController(_view);
 
         // The minimap draw runs on the render path and has no other route to peer
         // positions, so it reads the block directly.

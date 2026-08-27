@@ -120,6 +120,11 @@ internal static unsafe partial class PluginHost
         // SwapBuffers hook (OnFrame below) is dormant behind the main-menu movie.
         _agentLiveness?.OnFrame();
 
+        // Same hook, same reasoning, right after: the persistent connection indicator (item
+        // 18) shows Connecting/Failed while still at the main menu, before a session (or even
+        // the SwapBuffers hook) exists at all.
+        _connectionIndicator?.OnFrame();
+
         // The native browser first: its IsOpen gate tells the others the main-menu object
         // is currently freed (a shown child panel reclaims the menu until close rebuilds it).
         _nativeBrowser?.OnFrame();

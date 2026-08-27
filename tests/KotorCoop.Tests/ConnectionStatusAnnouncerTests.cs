@@ -138,4 +138,43 @@ public class ConnectionStatusAnnouncerTests
 
         Assert.Equal(255u, (packed >> 8) & 0xFF);
     }
+
+    // ---- Pack / Unpack round trip (item 18's on-screen indicator, 2026-08-27) -------------
+
+    [Theory]
+    [InlineData(ConnectionIndicatorState.Disconnected, 0)]
+    [InlineData(ConnectionIndicatorState.Connecting, 0)]
+    [InlineData(ConnectionIndicatorState.Connected, 0)]
+    [InlineData(ConnectionIndicatorState.Connected, 1)]
+    [InlineData(ConnectionIndicatorState.Connected, 254)]
+    [InlineData(ConnectionIndicatorState.Failed, 0)]
+    [InlineData(ConnectionIndicatorState.Reconnecting, 3)]
+    public void UnpackReversesPackForEveryState(ConnectionIndicatorState state, int peerCount)
+    {
+        ConnectionSnapshot original = new(state, peerCount);
+
+        ConnectionSnapshot roundTripped = ConnectionSnapshot.Unpack(original.Pack());
+
+        Assert.Equal(original, roundTripped);
+    }
+
+    [Fact]
+    public void UnpackClampsAnOutOfRangePeerCountTheSameWayPackDid()
+    {
+        ConnectionSnapshot original = new(ConnectionIndicatorState.Connected, 999);
+
+        ConnectionSnapshot roundTripped = ConnectionSnapshot.Unpack(original.Pack());
+
+        Assert.Equal(255, roundTripped.PeerCount);
+    }
+
+    [Fact]
+    public void UnpackOfAnUndefinedStateByteFallsBackToDisconnected()
+    {
+        // Byte value 5 has never been assigned to a ConnectionIndicatorState. A block this
+        // same process wrote should never carry it, but Unpack must not throw on one.
+        ConnectionSnapshot decoded = ConnectionSnapshot.Unpack(5u);
+
+        Assert.Equal(ConnectionIndicatorState.Disconnected, decoded.State);
+    }
 }

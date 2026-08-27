@@ -62,6 +62,7 @@ always sets it (`=1`), so this never surfaces in practice.
 | `auto_start_agent` | ON | plugin launches/attaches the agent itself | — |
 | `dinput8_next` | unset | file (relative to the game dir) the plugin forwards DirectInput calls to instead of the system `dinput8.dll` — overrides the `dinput8.chain` order; see TROUBLESHOOTING.md "Another mod already uses dinput8.dll" | [Exports.cs](../src/KotorCoop.Plugin/Exports.cs) |
 | `menu_button` | ON | plugin's own copy of the menu-button key | [menu-frame-hook.md](research/menu-frame-hook.md) |
+| `status_indicator` | ON | persistent on-screen connection summary (separate from the agent's `status_toasts`) | [connect-flow.md](research/connect-flow.md) |
 | `bark_replay` | ON | replay a peer's captured NPC bark line | [bark-replay.md](research/bark-replay.md) |
 | `bark_sync` | ON | capture and publish this instance's own barks | [bark-replay.md](research/bark-replay.md) |
 | `combat_state_sync` | OFF | (diagnostic) mirror raw combat-state bits | [combat-participation.md](research/combat-participation.md) |

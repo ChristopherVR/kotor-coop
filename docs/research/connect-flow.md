@@ -565,3 +565,36 @@ specific content has not been watched on screen); whether `netsim blackout` on t
 shows "co-op: reconnecting..." during the outage and "co-op: connected, N players" the instant
 it heals; and whether a second player joining an already-connected session visibly updates the
 peer count on both screens without the player needing to type `who`.
+
+**2026-08-27: the render side now exists too (NOT live-verified).** The paragraph above
+("this pass does not add a reader") described the state through 2026-08-21; it no longer does.
+`KotorCoop.Plugin.ConnectionIndicatorController` now reads `SharedBlockView.ConnectStatus`
+every `MainLoopHook` tick (menu AND in-world, the same hook `AgentLivenessController` uses, for
+the same reason — Connecting/Failed both happen before a session, and possibly before the
+SwapBuffers hook has ever fired) and draws a PERSISTENT one-line summary at grid cell
+(column 3, row 6) — directly under `AgentLivenessController`'s own warning line at row 5, and
+clear of the console (rows 0-2), `ConsoleAssistController`'s hint (row 3), and
+`ChatOverlayController`'s shallowest anchor (row 11) — through the same queued-text path
+(`Odyssey.PostTextLine`, re-posted every frame; see text-render-queued.md). Unlike the toast
+above, this line is CONTINUOUS while non-Idle rather than reposted only on change, so a player
+who was not looking when the toast appeared still sees the current state. It shows nothing at
+all while Idle (no session attempted).
+
+The packed-uint decode is `KotorCoop.Plugin.ConnectionIndicatorRule.Text` — a second, by-value
+duplicate of the same low-byte/next-byte layout `ConnectionSnapshot.Pack` writes (the plugin is
+a dependency-free NativeAOT win-x86 DLL and cannot reference `KotorCoop.Agent`'s assembly, the
+same reason `LivenessRule`/`AgentLiveness` duplicate their own Protocol/SharedBlock
+counterparts rather than referencing them); `ConnectionIndicatorRuleTests` pins its wording
+against `ConnectionStatusAnnouncer.Line` directly so the two surfaces cannot silently drift
+apart. `ConnectionSnapshot` also gained an `Unpack` (the inverse of `Pack`, agent-side only —
+the plugin has no use for it, since it decodes the wire bytes itself) with its own round-trip
+tests in `ConnectionStatusAnnouncerTests`. New coop.ini key: `status_indicator` (plugin-side,
+default on, independent of `status_toasts`) — `profiles/coop.ini.example` and
+`docs/CONFIG.md` document it.
+
+**NEEDS-LIVE (added by this pass):** whether the line actually renders at (3, 6) without
+clipping or overlap on a real viewport; whether it visibly tracks a live `netsim blackout`
+disconnect/recovery and a peer join/leave the same way the toast above needs verifying against;
+and whether `status_indicator = 0` in `coop.ini` actually suppresses it (the read-once-at-
+construction pattern is the same one `ConnectMenuController` uses for `menu_button`, which
+already live-verified, but this specific key has not been toggled against a live game).

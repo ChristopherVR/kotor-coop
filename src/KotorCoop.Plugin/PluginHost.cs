@@ -73,6 +73,7 @@ internal static unsafe partial class PluginHost
     private static TriggerRelayController? _triggerRelay;
     private static MidModuleMovieController? _movieRelay;
     private static AgentLivenessController? _agentLiveness;
+    private static ConnectionIndicatorController? _connectionIndicator;
     private static Thread? _worker;
     private static volatile bool _running = true;
 
