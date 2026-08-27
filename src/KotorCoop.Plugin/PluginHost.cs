@@ -244,7 +244,14 @@ internal static unsafe partial class PluginHost
         //      companion_local_combat dresses it correctly instead of wearing whatever it had
         //      when the two instances last agreed. See docs/research/companion-state-sync.md.
         //      NEEDS-LIVE.
-        _block->Version = 54;
+        // 55 = the effective-behaviour-override flags at 0x40C0..0x40C8 (no TotalSize growth —
+        //      the companion-equipment array's own tail leaves 0x40 free bytes before 0x4100):
+        //      lets a client's adopted host-authoritative overrides for effect_sync,
+        //      trigger_relay, liveness_sync, map_reveal_sync and dialogue_recruit_sync actually
+        //      reach the plugin controllers that gate on them, closing the gap
+        //      docs/research/mod-compatibility.md's "Behaviour-flag negotiation" section named.
+        //      NEEDS-LIVE.
+        _block->Version = 55;
 
         // A guard dword after the version. Magic plus version alone was not selective
         // enough: a scan once matched something else at a lower address and the agent

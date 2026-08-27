@@ -34,6 +34,7 @@
     <Compile Include="..\..\src\KotorCoop.Plugin\ConsoleCompletionEngine.cs" Link="Plugin\ConsoleCompletionEngine.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\ConsoleVerbCatalog.cs" Link="Plugin\ConsoleVerbCatalog.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\JournalTags.cs" Link="Plugin\JournalTags.cs" />
+    <Compile Include="..\..\src\KotorCoop.Plugin\BehaviourOverrideRule.cs" Link="Plugin\BehaviourOverrideRule.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\SpectateCycle.cs" Link="Plugin\SpectateCycle.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\CheatAuthority.cs" Link="Plugin\CheatAuthority.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\MovieStaging.cs" Link="Plugin\MovieStaging.cs" />
@@ -61,6 +62,7 @@
     <Compile Include="..\..\src\KotorCoop.Plugin\LivenessRule.cs" Link="Plugin\LivenessRule.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\JournalApplyRule.cs" Link="Plugin\JournalApplyRule.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\SharedBlock.cs" Link="Plugin\SharedBlock.cs" />
+    <Compile Include="..\..\src\KotorCoop.Plugin\SharedBlock.BehaviourOverrides.cs" Link="Plugin\SharedBlock.BehaviourOverrides.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\SharedBlock.Items.cs" Link="Plugin\SharedBlock.Items.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\SharedBlock.Combat.cs" Link="Plugin\SharedBlock.Combat.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\SharedBlock.Party.cs" Link="Plugin\SharedBlock.Party.cs" />

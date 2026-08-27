@@ -77,6 +77,11 @@ public sealed class CoopAgent
     /// </summary>
     private readonly RecentlySyncedItems _recentlySyncedItems = new();
 
+    /// <summary>What was last pushed through <see cref="IPlayerBridge.SetBehaviourOverrides"/>,
+    /// so an unchanged <see cref="ICapabilitySession.Overrides"/> costs nothing beyond the
+    /// encode compare — see <see cref="PumpBehaviourOverrides"/>.</summary>
+    private (uint Mask, uint Values) _lastBehaviourOverrides;
+
     public CoopAgent(IGameBridge bridge, ICoopSession session, AgentSettings settings)
     {
         _bridge = bridge;
@@ -354,6 +359,8 @@ public sealed class CoopAgent
         // globals catalogue drops world state; a different save drops enemies/doors/items)
         // while everything unaffected keeps working. Full set until a peer is judged.
         SessionCapabilities caps = _session.Capabilities;
+
+        PumpBehaviourOverrides();
 
         // --- real-time path: player position + animation, EVERY tick --------------------
         // Only filter when both ends actually know their module. A profile that has not
@@ -638,6 +645,30 @@ public sealed class CoopAgent
         {
             _partyPoolPump.Pump(caps);
         }
+    }
+
+    /// <summary>
+    /// Pushes <see cref="ICapabilitySession.Overrides"/> into the plugin's shared block
+    /// whenever it changes — docs/research/mod-compatibility.md's "Behaviour-flag negotiation"
+    /// gap, closed 2026-08-27. Cheap every tick: <see cref="BehaviourOverrideEncoding.Encode"/>
+    /// is five null checks and a couple of ORs, and the bridge write only fires on a genuine
+    /// change (a client's Welcome just landed, or a fresh <see cref="CoopAgent"/> after a
+    /// reconnect). <see cref="_lastBehaviourOverrides"/> starts at (0, 0) — "no overrides" — so
+    /// a session that never adopts anything (a host, or a client whose behaviour matched)
+    /// never writes at all, which is exactly the block's own post-teardown/never-written state
+    /// (see <c>KotorGameBridge.SessionScopedBlockLevels</c>).
+    /// </summary>
+    private void PumpBehaviourOverrides()
+    {
+        (uint mask, uint values) = BehaviourOverrideEncoding.Encode(_session.Overrides);
+
+        if (mask == _lastBehaviourOverrides.Mask && values == _lastBehaviourOverrides.Values)
+        {
+            return;
+        }
+
+        _lastBehaviourOverrides = (mask, values);
+        _bridge.SetBehaviourOverrides(mask, values);
     }
 
     /// <summary>Diffs <see cref="_knownPeerIds"/> against this tick's peer set and raises

@@ -32,7 +32,10 @@ internal sealed class LivenessReconcileController(SharedBlockView block, CombatC
     /// </summary>
     private const int MaxActionsPerPass = 4;
 
-    private readonly bool _enabled = PluginConfig.ReadBool("liveness_sync", false);
+    /// <summary>coop.ini <c>liveness_sync</c>, overridable per session by the host — see
+    /// <see cref="EffectiveBehaviourFlag"/>.</summary>
+    private readonly EffectiveBehaviourFlag _livenessSync = new(
+        "liveness_sync", SharedBlock.OverrideBitLivenessSync, PluginConfig.ReadBool("liveness_sync", false));
 
     private int _countdown;
     private bool _offLogged;
@@ -40,7 +43,7 @@ internal sealed class LivenessReconcileController(SharedBlockView block, CombatC
 
     public void OnFrame()
     {
-        if (!_enabled)
+        if (!_livenessSync.Resolve(block))
         {
             if (!_offLogged)
             {
