@@ -61,7 +61,7 @@ actually runs with.
 | `connect_timeout_ms` | `0` (keeps the built-in 15000) | ms a connect attempt waits before giving up | [connect-flow.md](research/connect-flow.md) |
 | `status_toasts` | ON | the persistent connection indicator | [disconnect-reconnect.md](research/disconnect-reconnect.md) |
 | `dialogue_item_sync` | ON | forward a reward node's item grant to the other player | [dialogue-consequences.md](research/dialogue-consequences.md) |
-| `script_item_sync` | ON | forward a script (OnEnter/OnDeath/heartbeat, outside any conversation) item grant to the other player | [dialogue-consequences.md](research/dialogue-consequences.md) |
+| `script_item_sync` | OFF³ | forward a script (OnEnter/OnDeath/heartbeat, outside any conversation) item grant to the other player | [dialogue-consequences.md](research/dialogue-consequences.md) |
 | `dialogue_fast_join` | ON | pump the dialogue channel on the real-time path, not the 150ms cadence | [dialogue-skip-desync.md](research/dialogue-skip-desync.md) |
 | `party_fast_pump` | ON | pump the party channel on the real-time path | [lag-audit.md](research/lag-audit.md) |
 | `container_fast_pump` | OFF | pump placeable open/lock state on the real-time path | [container-sync.md](research/container-sync.md) |
@@ -72,7 +72,7 @@ actually runs with.
 | `client_door_refusal` | ON¹ | refuse a client's own premature door crossing while following | [transition-smoothness.md](research/transition-smoothness.md) |
 | `follow_lead` | `any` | who may lead a transition the other follows: `any` or `host` | [transition-smoothness.md](research/transition-smoothness.md) |
 | `movie_relay` | ON² | relay a mid-module `PlayMovie` to peers (agent's own copy) | [cinematics.md](research/cinematics.md) |
-| `companion_xp_sync` | ON | share each active companion's experience the same way the PC's own is (live-verified 2026-08-27) | [companion-state-sync.md](research/companion-state-sync.md) |
+| `companion_xp_sync` | OFF³ | share each active companion's experience the same way the PC's own is (live-verified 2026-08-27) | [companion-state-sync.md](research/companion-state-sync.md) |
 | `companion_gear_sync` | OFF (live-verified FAILURE) | read each companion's real equipped gear and hand it to the plugin (agent's own copy) — live pass found the apply lands on the PLAYER, not the companion; stays off until fixed | [companion-state-sync.md](research/companion-state-sync.md) |
 | `party_pool_sync` | OFF (live-verified: one bug fixed, one remains) | sync the shared party item pool (`CSWPartyTable+0x118`) both ways | [party-pool-sync.md](research/party-pool-sync.md) |
 | `solo_segment_spectate` | OFF¹¹ | the OWNER's fight, the other player spectates during a story-forced solo segment (Bastila/Malak duels — NEEDS-LIVE) | [star-forge-finale.md](research/star-forge-finale.md) |
@@ -164,10 +164,20 @@ entirely; both now default ON, matching each other and the shipped file's explic
 | `solo_segment_spectate` | OFF¹¹ | plugin's own copy: gates both `SoloSegmentController` (owner-side detection) and `SoloSegmentSpectateController` (spectator-side input lock/camera/damage gate) | [star-forge-finale.md](research/star-forge-finale.md) |
 | `solo_segment_modules` | unset (base set only) | comma-separated extra module resrefs appended to `SoloSegmentCatalogue`'s base set (`sta_m45ac`, `sta_m45ad`) | [star-forge-finale.md](research/star-forge-finale.md) |
 
-³ The code fallback (used only if the key is entirely absent) is OFF for both
-`companion_local_combat` and `dialogue_recruit_sync`. The shipped `profiles/coop.ini.example`
-explicitly sets both to `1`. A packaged install therefore ships with both ON; only a
-hand-edited `coop.ini` with the line deleted falls back to OFF.
+³ The code fallback (used whenever the key itself is absent — whether `coop.ini` is missing
+entirely or just that one line is) is OFF for `companion_local_combat`, `dialogue_recruit_sync`,
+`script_item_sync` and `companion_xp_sync`. For the latter two this is a real inconsistency
+worth flagging precisely: their own C# doc comments and record-property initializers
+(`CoopConfig.ScriptItemSync`/`CompanionXpSync`, `AgentSettings.ScriptItemSync`/`SyncCompanionXp`)
+all say "ON by default", but `AgentComposition.Compose` builds `AgentSettings` with
+`ScriptItemSync = config?.ScriptItemSync ?? false` and `SyncCompanionXp = config?.CompanionXpSync
+?? false` — an explicit `?? false`, not `?? true` — so the property's own "ON" default is never
+actually reachable through the real construction path; an absent key resolves OFF regardless.
+The shipped `profiles/coop.ini.example` explicitly sets all four keys to `1`. A packaged install
+therefore ships with all four ON; only a hand-edited `coop.ini` with the line deleted (or no
+`coop.ini` at all) falls back to OFF, silently, with no warning that the "ON by default" comments
+promise.
+(2026-08-28: `script_item_sync` and `companion_xp_sync` were then fixed to default ON when the line is absent, matching their documented default; only the no-coop.ini-at-all fallback in `AgentComposition` stays conservative.)
 ⁴ Until 2026-08-27 the shipped `coop.ini.example` set `effect_sync=0` with a stale "OFF until
 live-verified" comment; it now ships `=1`, matching the code fallback and the live-verified
 state. A `coop.ini` installed before then keeps the old value (the installer never overwrites
@@ -194,7 +204,14 @@ disagree in practice; setting it in `coop.ini` turns both on together.
 survives a module transition with no crash, and costs nothing measurable in frame time. Flipped
 ON in both `PluginConfig.ReadBool`'s own fallback and `profiles/coop.ini.example`. The exact
 on-screen M-key appearance was not visually confirmed this round (screenshot tooling is broken
-on the rig) — see `docs/research/map-reveal.md`'s "Live pass" section.
+on the rig) — see `docs/research/map-reveal.md`'s "Live pass" section. ⚠ `CoopConfig`'s own
+digest-only copy (`CoopConfig.MapRevealSync`, read purely so this install's `BehaviourDigest` can
+compare it against a peer's) has the same `IsTruthy(...)`-with-no-`ContainsKey`-guard gap footnote³
+describes for `script_item_sync`/`companion_xp_sync`, so it falls back to OFF whenever the key
+line is absent — even though `PluginConfig`'s real gate stays ON. `map_reveal_sync` is one of the
+nine host-adopted keys (see "Behaviour-flag negotiation" above), so a HOST who deletes just that
+one line advertises OFF in the digest while its own plugin keeps running the channel ON — a real
+negotiation mismatch, not just a doc gap.
 ¹¹ `solo_segment_spectate` is read TWICE off the same key, by two independent readers, the same
 split `pazaak_detect`⁹ and `movie_relay`² already use: `CoopConfig.SoloSegmentSpectateEnabled`
 (agent side) is what makes `CoopAgent.PumpOnce`'s own peer-visibility filter hide every remote

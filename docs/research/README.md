@@ -1,6 +1,6 @@
 # Research
 
-68 write-ups behind every feature in the top-level README, plus the reverse-engineering they
+74 write-ups behind every feature in the top-level README, plus the reverse-engineering they
 stand on. Each is verified against the retail GOG `swkotor.exe` v1.0.3 (disk == memory, no
 ASLR) or the game files themselves, not folklore.
 
@@ -93,6 +93,7 @@ fails safe. **INFERRED** = a reasonable deduction, not directly proven.
 | [quest-sync.md](quest-sync.md) | Non-monotonic globals, journal removal, the Lamport-clock fix | Implemented, live-verified, ON by default |
 | [map-reveal.md](map-reveal.md) | Fog-of-war sync around a peer's position | Implemented; live-verified 2026-08-27 (engine call, peer tracking, transition survival, frame cost), default ON. On-screen M-key appearance unconfirmed (screenshot tooling broken) |
 | [trigger-relay.md](trigger-relay.md) | Making a generic trigger's `OnEnter` fire for both players | Implemented, live-verified, protocol 36; ON by default in code and (since 2026-08-27) in the shipped `coop.ini.example` |
+| [store-sync.md](store-sync.md) | Syncing merchant store stock (`CSWSStore+0x230`) both ways, roadmap item 20 | RE'd and built 2026-08-27 (`store_sync`, OFF by default); an `openstore` console verb was added the same day so the live pass no longer needs a manual click — NEEDS-LIVE |
 
 ## Session, network, menu & console
 

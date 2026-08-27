@@ -546,7 +546,7 @@ public sealed record CoopConfig
             StatusToasts = !kv.ContainsKey("status_toasts") || IsTruthy(kv.GetValueOrDefault("status_toasts")),
             DialogueItemSync = !kv.ContainsKey("dialogue_item_sync")
                 || IsTruthy(kv.GetValueOrDefault("dialogue_item_sync")),
-            ScriptItemSync = IsTruthy(kv.GetValueOrDefault("script_item_sync")),
+            ScriptItemSync = !kv.ContainsKey("script_item_sync") || IsTruthy(kv.GetValueOrDefault("script_item_sync")),
             DialogueFastJoin = !kv.ContainsKey("dialogue_fast_join")
                 || IsTruthy(kv.GetValueOrDefault("dialogue_fast_join")),
             PartyFastPump = !kv.ContainsKey("party_fast_pump")
@@ -587,7 +587,7 @@ public sealed record CoopConfig
             LivenessSync = IsTruthy(kv.GetValueOrDefault("liveness_sync")),
             MapRevealSync = IsTruthy(kv.GetValueOrDefault("map_reveal_sync")),
 
-            CompanionXpSync = IsTruthy(kv.GetValueOrDefault("companion_xp_sync")),
+            CompanionXpSync = !kv.ContainsKey("companion_xp_sync") || IsTruthy(kv.GetValueOrDefault("companion_xp_sync")),
             CompanionGearSync = IsTruthy(kv.GetValueOrDefault("companion_gear_sync")),
             PartyPoolSyncEnabled = IsTruthy(kv.GetValueOrDefault("party_pool_sync")),
             SoloSegmentSpectateEnabled = IsTruthy(kv.GetValueOrDefault("solo_segment_spectate")),

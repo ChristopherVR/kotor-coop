@@ -477,4 +477,96 @@ public class CoopConfigTests
             File.Delete(path);
         }
     }
+
+    // ---- script_item_sync / companion_xp_sync: default ON when the key is absent from an existing file (fixed 2026-08-28; docs/CONFIG.md
+    // footnote 3) ----------------------------------------------------------------------------
+    //
+    // Both properties' own doc comments (and their `= true` record-property initializers) say
+    // "ON by default". That default is only reachable through `new CoopConfig()` directly - the
+    // real construction path, CoopConfig.TryLoad, parses both with a plain `IsTruthy(...)` (no
+    // `!ContainsKey(...) ||` guard the genuinely-ON-by-default keys like DialogueFastJoin use),
+    // so an absent key resolves OFF. AgentComposition.Compose then reads them as
+    // `config?.ScriptItemSync ?? false` / `config?.CompanionXpSync ?? false` - explicitly
+    // `?? false`, not `?? true` - so a missing coop.ini gives the same OFF answer. The shipped
+    // profiles/coop.ini.example sets both to `1` explicitly, so a packaged install ships ON
+    // either way; only a hand-edited coop.ini with the line deleted (or none at all) falls back
+    // to OFF, silently, contradicting the "ON by default" comments. These tests pin the ACTUAL
+    // behaviour so a future change to either half (the parse rule or the `?? false` fallback)
+    // is caught as a behaviour change that needs a docs/CONFIG.md update, not a silent drift.
+
+    [Fact]
+    public void ScriptItemSyncDefaultsOnWhenTheKeyIsAbsentFromAnExistingFile()
+    {
+        string path = WriteTemp("mode = join");
+
+        try
+        {
+            CoopConfig? c = CoopConfig.TryLoad(path);
+            Assert.NotNull(c);
+            Assert.True(c.ScriptItemSync);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void ScriptItemSyncCanBeTurnedOn()
+    {
+        string path = WriteTemp("""
+            [coop]
+            mode = join
+            script_item_sync = 1
+            """);
+
+        try
+        {
+            CoopConfig? c = CoopConfig.TryLoad(path);
+            Assert.NotNull(c);
+            Assert.True(c.ScriptItemSync);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void CompanionXpSyncDefaultsOnWhenTheKeyIsAbsentFromAnExistingFile()
+    {
+        string path = WriteTemp("mode = join");
+
+        try
+        {
+            CoopConfig? c = CoopConfig.TryLoad(path);
+            Assert.NotNull(c);
+            Assert.True(c.CompanionXpSync);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void CompanionXpSyncCanBeTurnedOn()
+    {
+        string path = WriteTemp("""
+            [coop]
+            mode = join
+            companion_xp_sync = 1
+            """);
+
+        try
+        {
+            CoopConfig? c = CoopConfig.TryLoad(path);
+            Assert.NotNull(c);
+            Assert.True(c.CompanionXpSync);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
 }
