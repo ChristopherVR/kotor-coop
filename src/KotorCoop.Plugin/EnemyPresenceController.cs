@@ -255,7 +255,61 @@ internal sealed unsafe partial class EnemyPresenceController(SharedBlockView blo
     private static readonly double PhantomAttackerFreshSeconds =
         Math.Clamp(PluginConfig.ReadFloat("local_combat_targeting_us_fresh_s", 2f), 0.5f, 10f);
 
+    // ---- ITEM 14 (docs/roadmap-seamless.md Tier 2): surfacing the one-fight-at-a-time limit.
+    // _locallyFightingId above holds exactly one creature; everything else that clears
+    // LocalFightCandidateRule.Evaluate's gates this scan was, until now, silently deferred with
+    // nothing recording it. LocalCombatDeferralRule is the pure set arithmetic; everything below
+    // just feeds it live facts and turns "the deferred set changed" into a log line and
+    // (optionally) a HUD line.
 
+    /// <summary>Every owner id SelectImmediateCandidate found eligible THIS scan (hostile,
+    /// GIT-identical, scripted, in range — cleared every LocalFightCandidateRule.Evaluate gate),
+    /// regardless of whether it won the slot. Rebuilt from scratch each scan.</summary>
+    private readonly uint[] _eligibleOwnerId = new uint[SharedBlock.EnemyCapacity];
+
+    /// <summary>The deferred set computed from <see cref="_eligibleOwnerId"/> this scan —
+    /// <see cref="LocalCombatDeferralRule.ComputeDeferred"/>'s output.</summary>
+    private readonly uint[] _deferredOwnerId = new uint[SharedBlock.EnemyCapacity];
+    private int _deferredCount;
+
+    /// <summary>The deferred set as of the last scan that actually logged/redrew — compared
+    /// against <see cref="_deferredOwnerId"/> every scan so a genuinely new set (not merely a
+    /// census re-sort of the same ids) is what triggers the edge.</summary>
+    private readonly uint[] _lastDeferredOwnerId = new uint[SharedBlock.EnemyCapacity];
+    private int _lastDeferredCount;
+
+    /// <summary>The owner id the deferred count was computed against — whoever is fighting, or
+    /// (the frame a fresh fight is armed) about to be — for the log line and the HUD text's
+    /// framing.</summary>
+    private uint _deferredHolderOwnerId;
+
+    /// <summary>How often (frames) the deferred-set scan runs WHILE a fight is already in
+    /// progress — a separate throttle from the immediate-trigger scan above, which must stay
+    /// every-frame to arm a fresh fight without delay. "How many others are waiting" does not
+    /// need that precision: every gate here costs an engine call
+    /// (<see cref="Odyssey.GetAIStateReputation"/>, <see cref="Odyssey.HasCreatureScriptSlot0x260"/>)
+    /// per candidate, and running that at the full frame rate for the whole length of every fight
+    /// would be real, avoidable cost for a diagnostic line. 20 frames is still several times a
+    /// second at this hook's ~317 Hz — fast enough that "N deferred" never looks stuck, far
+    /// cheaper than every frame.</summary>
+    private const int DeferredScanIntervalFrames = 20;
+    private int _deferredScanCountdown;
+
+    // Row 9, column 8: the "in-world overlay" column DialogueSpectateController (row 4),
+    // InteractionLockController (rows 6/7) and MinigameNoticeController (row 8) already share —
+    // see MinigameNoticeController's own row inventory comment. Row 9 is the first free one on
+    // that column, and clear of column 3's connectivity stack (rows 3/5/6) too.
+    private const int DeferredNoticeColumn = 8;
+    private const int DeferredNoticeRow = 9;
+    private const float DeferredNoticeLife = 0.5f;
+
+    /// <summary>coop.ini `local_combat_deferred_notice` (default ON). Gates ONLY the HUD line —
+    /// the log line below always fires regardless, since surfacing the limit at all is this
+    /// item's whole point.</summary>
+    private readonly bool _deferredNoticeEnabled = PluginConfig.ReadBool("local_combat_deferred_notice", true);
+
+    private string? _deferredNoticeText;
+    private byte[] _deferredNoticeBytes = [];
 
     /// <summary>
     /// Forgets everything on a module change: ids reset across transitions, every cached
@@ -303,6 +357,16 @@ internal sealed unsafe partial class EnemyPresenceController(SharedBlockView blo
         _phantomAttackerAt = double.NegativeInfinity;
         _immediateTriggerSlot = -1;
         _lastLoggedImmediateOwnerId = 0;
+
+        // ITEM 14: a stale deferred-hostiles line must not keep drawing after the session that
+        // produced it is gone — DrawDeferredNotice runs ahead of every early return in OnFrame,
+        // so this is the only place that stops it once the session itself has ended.
+        _deferredCount = 0;
+        _lastDeferredCount = 0;
+        _deferredHolderOwnerId = 0;
+        _deferredNoticeText = null;
+        _deferredNoticeBytes = [];
+        _deferredScanCountdown = 0;
     }
 
     public void OnFrame()
@@ -345,6 +409,12 @@ internal sealed unsafe partial class EnemyPresenceController(SharedBlockView blo
         // ROUND 52: mirrored into the static field PhantomHitHook.OnDamage reads to
         // recognise "the currently locally-fighting creature" for the ground-truth log.
         _locallyFightingIdShared = _locallyFightingId;
+
+        // ITEM 14: ahead of every early return below, same discipline as MaintainLocalFight
+        // above — the queued text node fades on its own life countdown (~0.5s) the instant this
+        // stops being called, so redrawing here unconditionally is what makes the notice clear
+        // itself the moment the fight it describes ends, with no separate cleanup path needed.
+        DrawDeferredNotice();
 
         if (block.Command != SharedBlock.CommandSpawnAndDrive)
         {
@@ -475,14 +545,40 @@ internal sealed unsafe partial class EnemyPresenceController(SharedBlockView blo
     {
         _immediateTriggerSlot = -1;
 
-        if (!LocalCombat || player == 0 || _locallyFightingId != 0)
+        if (!LocalCombat || player == 0)
         {
+            _deferredScanCountdown = 0;
+            UpdateDeferredNotice(eligibleCount: 0, holderOwnerId: 0);
             return;
+        }
+
+        bool slotFree = _locallyFightingId == 0;
+
+        if (!slotFree)
+        {
+            // ITEM 14: winner selection is moot while the slot is already occupied — only the
+            // deferred-set scan below still needs to run, and it is deliberately throttled (see
+            // DeferredScanIntervalFrames's own doc comment) rather than paying an engine call per
+            // candidate every single frame for the whole length of a fight.
+            if (_deferredScanCountdown > 0)
+            {
+                _deferredScanCountdown--;
+                return;
+            }
+
+            _deferredScanCountdown = DeferredScanIntervalFrames;
+        }
+        else
+        {
+            // The instant the slot frees, the very next scan should be fresh — a fight that just
+            // ended must not wait out whatever was left of the previous countdown.
+            _deferredScanCountdown = 0;
         }
 
         uint playerId = Odyssey.GetPlayerObjectId();
         if (playerId == 0)
         {
+            UpdateDeferredNotice(eligibleCount: 0, holderOwnerId: 0);
             return;
         }
 
@@ -490,6 +586,7 @@ internal sealed unsafe partial class EnemyPresenceController(SharedBlockView blo
         LocalFightPriority bestPriority = LocalFightPriority.None;
         float bestDistance = float.MaxValue;
         uint bestOwnerId = 0;
+        int eligibleCount = 0;
 
         for (int i = 0; i < count; i++)
         {
@@ -530,8 +627,19 @@ internal sealed unsafe partial class EnemyPresenceController(SharedBlockView blo
                 reputation, gitIdentical: true, hasScript: true, distance, ImmediateEngageRange,
                 targetingUs);
 
-            if (priority != LocalFightPriority.None
-                && LocalFightCandidateRule.Beats(priority, distance, bestPriority, bestDistance))
+            if (priority == LocalFightPriority.None)
+            {
+                continue;
+            }
+
+            // ITEM 14: every candidate that clears the gates is a member of this scan's eligible
+            // set, whether or not it goes on to win the slot below.
+            if (eligibleCount < _eligibleOwnerId.Length)
+            {
+                _eligibleOwnerId[eligibleCount++] = enemy.ObjectId;
+            }
+
+            if (slotFree && LocalFightCandidateRule.Beats(priority, distance, bestPriority, bestDistance))
             {
                 bestPriority = priority;
                 bestDistance = distance;
@@ -540,7 +648,7 @@ internal sealed unsafe partial class EnemyPresenceController(SharedBlockView blo
             }
         }
 
-        if (bestOwnerId != _lastLoggedImmediateOwnerId)
+        if (slotFree && bestOwnerId != _lastLoggedImmediateOwnerId)
         {
             _lastLoggedImmediateOwnerId = bestOwnerId;
             if (bestOwnerId != 0)
@@ -551,6 +659,82 @@ internal sealed unsafe partial class EnemyPresenceController(SharedBlockView blo
                     + $"engageRange={ImmediateEngageRange:F1})");
             }
         }
+
+        // ITEM 14: the id about to hold (or already holding) the one exclusion slot — whichever
+        // this scan just picked when the slot was free, or the creature already fighting when it
+        // was not. Everything else in _eligibleOwnerId is, by definition, deferred.
+        uint holderOwnerId = slotFree ? bestOwnerId : _locallyFightingId;
+        UpdateDeferredNotice(eligibleCount, holderOwnerId);
+    }
+
+    /// <summary>
+    /// ITEM 14. Turns this scan's eligible-candidate set into the deferred set
+    /// (<see cref="LocalCombatDeferralRule"/>) and, if it genuinely changed since the last scan,
+    /// logs the edge and refreshes the HUD text <see cref="LocalCombatDeferredNoticeRule"/>
+    /// builds. Called from every path through <see cref="SelectImmediateCandidate"/> that reaches
+    /// a verdict — including "nothing eligible right now" — so the notice clears itself the same
+    /// way it was set, on the edge, with no separate cleanup path needed.
+    /// </summary>
+    private void UpdateDeferredNotice(int eligibleCount, uint holderOwnerId)
+    {
+        _deferredCount = LocalCombatDeferralRule.ComputeDeferred(
+            _eligibleOwnerId, eligibleCount, holderOwnerId, _deferredOwnerId);
+        _deferredHolderOwnerId = holderOwnerId;
+
+        if (!LocalCombatDeferralRule.HasChanged(
+                _lastDeferredOwnerId, _lastDeferredCount, _deferredOwnerId, _deferredCount))
+        {
+            return;
+        }
+
+        Array.Copy(_deferredOwnerId, _lastDeferredOwnerId, _deferredCount);
+        _lastDeferredCount = _deferredCount;
+
+        PluginHost.Log(_deferredCount > 0
+            ? $"local_combat: fighting 0x{holderOwnerId:X}, {_deferredCount} other "
+              + (_deferredCount == 1 ? "hostile" : "hostiles") + " deferred (mirrored)"
+            : "local_combat: no hostiles deferred");
+
+        _deferredNoticeText = LocalCombatDeferredNoticeRule.Text(_deferredCount);
+        _deferredNoticeBytes = _deferredNoticeText is null ? [] : EncodeAscii(_deferredNoticeText);
+    }
+
+    /// <summary>ITEM 14. Redraws the deferred-hostiles HUD line every frame while one is active —
+    /// the queued text node's own life (docs/research/text-render-queued.md) means a line that
+    /// stops being re-posted fades out within <see cref="DeferredNoticeLife"/> seconds on its
+    /// own, which is exactly the behaviour wanted the instant the last deferred hostile clears or
+    /// the fight itself ends. coop.ini <c>local_combat_deferred_notice</c> (default on) gates
+    /// ONLY this draw — the log line in <see cref="UpdateDeferredNotice"/> always fires
+    /// regardless, since surfacing the limit at all is this item's whole point.</summary>
+    private void DrawDeferredNotice()
+    {
+        if (!_deferredNoticeEnabled || _deferredNoticeBytes.Length == 0)
+        {
+            return;
+        }
+
+        fixed (byte* p = _deferredNoticeBytes)
+        {
+            Odyssey.PostTextLine(p, DeferredNoticeColumn, DeferredNoticeRow, DeferredNoticeLife);
+        }
+    }
+
+    private static byte[] EncodeAscii(string text)
+    {
+        if (text.Length == 0)
+        {
+            return [];
+        }
+
+        byte[] bytes = new byte[text.Length + 1];
+        for (int i = 0; i < text.Length; i++)
+        {
+            char c = text[i];
+            bytes[i] = c is >= (char)0x20 and <= (char)0x7E ? (byte)c : (byte)'?';
+        }
+
+        bytes[^1] = 0;
+        return bytes;
     }
 
     /// <summary>Planar distance between two resolved creatures, in world units. Shared by

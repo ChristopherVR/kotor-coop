@@ -46,6 +46,14 @@ internal static unsafe partial class Odyssey
     /// when this call changed something, so a caller can log the edge rather than every
     /// re-assertion.
     ///
+    /// ⚠ RETIRED, NO PRODUCTION CALLER as of 2026-08-27 (docs/research/combat-participation.md's
+    /// dated section; see <see cref="CombatStateController"/>'s own remarks for the full
+    /// story). The engine reverts a written +0x4E0 in 0-2 ms — this setter is not wrong, the
+    /// premise of calling it on a timer was: the field is continuously re-derived from
+    /// whether the creature is actually being fought, not a latch this can hold. Kept,
+    /// unused, the same way <c>Odyssey.QueueAttackAction</c> was kept after its own
+    /// retirement — a verified engine binding worth keeping documented rather than deleted.
+    ///
     /// MAIN THREAD ONLY.
     /// </summary>
     public static bool SetPlayerCombatState(bool inCombat)

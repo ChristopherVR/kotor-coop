@@ -125,9 +125,13 @@ enemy_materialise = 1
 ; state this instance does not own. 0 keeps them visible.
 hide_party_portraits = 1
 
-# Replicate a peer's combat state into this engine. OFF: the engine re-derives the
-# in-combat field continuously and reverts a written one within 0-2 ms (measured), so
-# this cannot hold yet. See CombatStateController for the real fix.
+# RETIRED 2026-08-27 - no-op, kept only so this key still parses. Used to re-assert a peer's
+# combat state into this engine directly; the engine re-derives the in-combat field
+# continuously and reverts a written one within 0-2 ms (measured), so it never worked. The
+# real fix - local_combat giving this engine a genuine combat round to actually be in - has
+# since shipped (ON by default) and is live-verified to raise this engine's own in-combat flag
+# with no help from this key. See CombatStateController and
+# docs/research/combat-participation.md's 2026-08-27 section.
 combat_state_sync=0
 
 # Let this instance's mirrored enemies fight for themselves, so its own combat state
@@ -145,6 +149,14 @@ combat_state_sync=0
 # dispatcher. Live-verified end to end - trigger, 25s timeout, disengage detection,
 # clean re-inclusion - see docs/research/shared-state-audit.md #2, round 39.
 local_combat=1
+
+# While local_combat has pulled one hostile out of the census to fight for real, show a short
+# "N more enemies engaged - mirrored" HUD line whenever one or more OTHER hostiles are also
+# eligible right now but waiting their turn for the single exclusion slot (roadmap-seamless.md
+# Tier 2 item 14). The log line this is built from ("local_combat: fighting X, N other hostiles
+# deferred (mirrored)") always fires regardless of this key; this only gates the on-screen text.
+# 1 (default) shows it, 0 disables the HUD line only.
+local_combat_deferred_notice=1
 
 # Activate the render window at launch. Without this an instance draws nothing until it
 # is clicked into - with two windows that means clicking both, every launch.

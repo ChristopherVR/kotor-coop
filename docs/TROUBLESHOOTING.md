@@ -76,6 +76,30 @@ client except through `companion_local_combat`, which is off by default in the c
 shipped `coop.ini.example` turns it on) — see
 [party-reconciliation.md](research/party-reconciliation.md).
 
+## My damage numbers look wrong in a swarm
+
+Not a bug — two separate, deliberate simplifications, both worth knowing about if a fight
+against several enemies at once looks like the wrong creature gets credited or blamed.
+
+The wire that reports damage a peer's phantom took carries one CUMULATIVE total plus the id of
+the LAST attacker only — not a per-hit, per-attacker breakdown
+([combat-when-apart.md](research/combat-when-apart.md) §6b,
+[combat-participation.md](research/combat-participation.md) §4.3). When two or more hostiles
+land hits in the same short window, all of that damage is folded into one number and the whole
+amount is attributed to whichever of them hit last, so a floaty number or a "took N damage from"
+log line can name the wrong enemy in a crowd even though the total itself is correct.
+
+Separately, `local_combat` only ever lets ONE mirrored enemy fight a given player's own engine
+at a time — `EnemyPresenceController`'s exclusion slot holds a single creature, by design (one
+shared-block field, one fight). Every other hostile that is in range and eligible keeps being
+mirrored (position, health, animation) exactly like normal, just not handed to this engine's own
+AI yet; whatever it deals still arrives through the ordinary forwarded-damage channel, so no
+damage goes missing — but "which enemy is actually hitting me right now" can look inconsistent
+with what is on screen during a real swarm, for the same attribution reason as above. A
+"`N` more enemies engaged - mirrored" HUD line (coop.ini `local_combat_deferred_notice`, default
+on; roadmap-seamless.md Tier 2 item 14) shows whenever this is happening, so a swarm's numbers
+not quite matching what is on screen has a visible explanation instead of looking like a desync.
+
 ## A feature that "should" be on isn't doing anything
 
 Two `coop.ini` keys (`companion_local_combat`, `dialogue_recruit_sync`) default OFF in the

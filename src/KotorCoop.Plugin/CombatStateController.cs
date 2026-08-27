@@ -1,129 +1,63 @@
 namespace KotorCoop.Plugin;
 
 /// <summary>
-/// Keeps this instance's combat state in step with the session's.
+/// RETIRED 2026-08-27 (docs/roadmap-seamless.md Tier 2 item 17;
+/// docs/research/combat-participation.md's dated section has the full evidence trail).
 ///
-/// A client cannot work out for itself that a fight is happening.
-/// <see cref="Odyssey.MarkAsMirroredEnemy"/> clears the attack-permitted bit on every
-/// mirrored enemy, deliberately, so the client's copies never swing — and combat state is
-/// derived from being fought, so the client's engine sits at "not in combat" through an
-/// entire battle. Measured live: host creature +0x4E0 = 1, client 0, same room, same
-/// second.
+/// This class used to re-assert the local PC's in-combat dword (<c>CSWSCreature+0x4E0</c>)
+/// directly through the engine's own setter every ~60 ms, to make a client's HUD, combat
+/// music, auto-pause and round timing agree that a fight was happening even though its own
+/// engine was only mirroring. Measured live 2026-08-11: a written flag on a real player with
+/// no attackers is reverted by the engine in 0–2 ms — the field is not a latch the engine
+/// consults, it is continuously RE-DERIVED from whether the creature is actually being
+/// fought (a second writer sits inside <c>CSWSCreature::ProcessPendingCombatActions</c> at
+/// <c>0x004F7C0E</c>, past the one <c>SetCombatState</c> itself performs). Re-asserting on
+/// any cadence a frame hook can manage held the field for ~2 ms out of every 60 — it never
+/// worked, and it was shipped off by default for exactly that reason.
 ///
-/// That is not a cosmetic gap. The in-combat dword is read from ~30 sites: combat round
-/// timing, the HUD and combat music, auto-pause, whether abilities queue as combat actions,
-/// and the party's own combat broadcast. A client that never enters combat is running a
-/// different ruleset from the host.
+/// This class's own remarks used to describe THE REAL FIX as: stop clearing the
+/// attack-permitted bit on enemies near the local player, so its own copies genuinely swing
+/// at it and its combat state rises for the same reason the host's does. That fix has since
+/// shipped as <c>local_combat</c> (<c>EnemyPresenceController</c>,
+/// docs/research/shared-state-audit.md round 39, ON by default) — pulling one genuinely
+/// engaging enemy out of the census and firing its own event script through the engine's
+/// real dispatcher gives it (and, once a swing lands, this player) an ACTUAL combat round.
+/// Round 52 (2026-08-21, the same document) live-verified the direct consequence this class
+/// exists to have chased: <c>this engine says in-combat=True</c> was observed on the client's
+/// own engine while a ground-truth-confirmed real local hit was landing —
+/// <c>combat_state_sync</c> never having been enabled in that session. The real fix already
+/// delivers what this class's dword poke never could, with no help from it.
 ///
-/// So the state is replicated rather than re-derived: the agent publishes "a peer standing
-/// in your module has its engine in combat", and this drives the local PC to match through
-/// <c>CSWSCreature::SetCombatState</c> — the engine's own setter, the only writer of the
-/// field on that path.
-///
-/// ⚠ THIS DOES NOT WORK YET, AND IT IS OFF BY DEFAULT. Measured 2026-08-11 on the live
-/// pair: a written in-combat flag on a real player with no attackers is reverted by the
-/// engine in <b>0–2 ms</b>, three trials —
-///
-///     trial 1 : reverted after 2 ms
-///     trial 2 : reverted after 0 ms
-///     trial 3 : reverted after 1 ms
-///
-/// — so re-asserting on any cadence a frame hook can manage holds the field for ~2 ms out
-/// of every 60. The state is not a latch the engine consults; it is continuously re-derived
-/// from whether the creature is actually being fought (there is a second writer inside
-/// CSWSCreature::ProcessPendingCombatActions at 0x004F7C0E, past the one in SetCombatState).
-///
-/// The channel below is correct and stays: publishing "a peer here is fighting" is needed
-/// whatever drives the state. What is wrong is the last step — poking the derived field.
-///
-/// THE REAL FIX is to give the client's engine a genuine reason to be in combat rather than
-/// asserting the conclusion: stop clearing the attack-permitted bit in
-/// <see cref="Odyssey.MarkAsMirroredEnemy"/> for enemies near the local player, so its own
-/// copies swing at it and its own combat state rises for the same reason the host's does.
-/// That is an ownership change, not a poke, and it needs its own pass with the damage
-/// reconciliation thought through — a client whose mirrored enemies really attack must not
-/// also apply that damage locally, or every hit lands twice.
-///
-/// Turn this on with coop.ini <c>combat_state_sync=1</c> to reproduce the measurement.
+/// So there is nothing left for a direct write to do: no cheaper engine call was found either
+/// (the symbol database has no distinct "enter combat" routine — <c>CSWSCreature::SetCombatMode</c>
+/// (<c>0x0050EE80</c>) is the weapon-draw/animation-mode switch used on target-loss, an
+/// entirely different field, not the in-combat dword this class chased). This class stays only
+/// so <c>combat_state_sync</c> keeps parsing without a config-loader error; it performs no
+/// write, no engine call, and holds no state. <see cref="Odyssey.SetPlayerCombatState"/> is
+/// kept, unused, for the same reason <c>Odyssey.QueueAttackAction</c> was kept after its own
+/// retirement — a verified engine binding worth keeping documented rather than deleted, should
+/// a future round ever need it again.
 /// </summary>
-internal sealed class CombatStateController(SharedBlockView block)
+internal sealed class CombatStateController
 {
-    /// <summary>Frames between passes; ~16 a second at the hook's ~317 Hz. Combat rounds are
-    /// three seconds long, so this re-asserts many times per round without putting an engine
-    /// call on the hot path.</summary>
-    private const int IntervalFrames = 20;
+    private readonly bool _configured = PluginConfig.ReadBool("combat_state_sync", false);
+    private bool _deprecationLogged;
 
-    private int _countdown;
-
-    /// <summary>True while the local combat state is being held up by the session rather
-    /// than by this engine's own fight, so it is released when the session's fight ends and
-    /// never when a local fight is still running.</summary>
-    private bool _held;
-
-    private int _logged;
-
-    /// <summary>Off until the engine's re-derivation is dealt with — see the class remarks.
-    /// Left wired so the measurement can be reproduced without rebuilding.</summary>
-    private readonly bool _enabled = PluginConfig.ReadBool("combat_state_sync", false);
-
-    /// <summary>A module change ends every fight; drop the claim so a stale one cannot
-    /// hold the new world in combat.</summary>
+    /// <summary>Nothing to release — this class no longer holds or writes any engine state.</summary>
     public void Invalidate()
     {
-        _held = false;
     }
 
     public void OnFrame()
     {
-        if (_countdown > 0)
-        {
-            _countdown--;
-            return;
-        }
-
-        _countdown = IntervalFrames;
-
-        if (!_enabled || block.Command != SharedBlock.CommandSpawnAndDrive || !Odyssey.HasPlayer)
-        {
-            _held = false;
-            return;
-        }
-
-        bool sessionFighting = block.SessionInCombat;
-
-        if (sessionFighting)
-        {
-            // Re-assert every pass: the engine drops a client back out on its own schedule.
-            if (Odyssey.SetPlayerCombatState(true))
-            {
-                LogFew("combat: entered combat because a peer here is fighting");
-            }
-
-            _held = true;
-            return;
-        }
-
-        if (!_held)
+        if (!_configured || _deprecationLogged)
         {
             return;
         }
 
-        _held = false;
-
-        // Only release what we imposed. If this engine has a fight of its own — the host's
-        // case, or a client that somehow drew a real attacker — its own state stands.
-        if (Odyssey.SetPlayerCombatState(false))
-        {
-            LogFew("combat: left combat; the session's fight is over");
-        }
-    }
-
-    private void LogFew(string message)
-    {
-        if (_logged < 40)
-        {
-            _logged++;
-            PluginHost.Log(message);
-        }
+        _deprecationLogged = true;
+        PluginHost.Log(
+            "combat_state_sync: retired 2026-08-27 - superseded by local_combat's own real "
+            + "fight arming (docs/research/combat-participation.md); this key is now a no-op");
     }
 }
