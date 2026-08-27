@@ -157,7 +157,9 @@ internal partial struct SharedBlock
     /// version 3 the enemy array, version 4 the door slots, version 5 the equipment
     /// resrefs, version 6 the module-travel request, version 7 shared pause, journal
     /// apply and the per-peer flags dword. Version 54 (2026-08-27) added
-    /// <see cref="OffsetCompanionEquipSlots"/> — see SharedBlock.Party.cs.
+    /// <see cref="OffsetCompanionEquipSlots"/> — see SharedBlock.Party.cs. Version 55
+    /// (2026-08-27) added <see cref="OffsetLocalInSoloSegment"/> — see
+    /// SharedBlock.SoloSegment.cs.
     /// </summary>
     [FieldOffset(0x08)] public uint Version;
     [FieldOffset(0x0C)] public uint Reserved;

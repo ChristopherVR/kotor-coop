@@ -385,6 +385,20 @@ public sealed class CoopAgent
         // statue was ever the intended experience of.
         visible = [.. visible.Where(p => !p.State.IsAway)];
 
+        // A story-forced solo segment (the Star Forge's Bastila and Malak duels — see
+        // PlayerState.FlagSoloSegment, SoloSegmentRule.ShouldHideAllPeers and
+        // docs/research/star-forge-finale.md's product decision "the OWNER's fight, the other
+        // human SPECTATES"): while the LOCAL player owns an active segment, every remote peer
+        // is hidden from what this instance writes locally, so the duel script never sees a
+        // second body. Triggered off the LOCAL flag, not a peer's own — unlike the minigame
+        // and away filters above, this is not about whether a PEER opted out, it is about
+        // whether THIS instance is mid-duel. coop.ini solo_segment_spectate, default OFF.
+        SoloSegmentRule soloSegmentRule = new(Enabled: _settings.SoloSegmentSpectateEnabled);
+        if (soloSegmentRule.ShouldHideAllPeers(local.IsInSoloSegment))
+        {
+            visible = [];
+        }
+
         // Mask the per-avatar fields a mod mismatch makes unsafe BEFORE they reach the
         // game. A different appearance.2da means a replicated row index could paint the
         // wrong body or index off the end (a crash), so the appearance is cleared and the

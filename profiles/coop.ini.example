@@ -660,3 +660,21 @@ frame_stats=0
 # database and the disassembly, but none of it has been watched land on a running game yet -
 # defaults OFF until it has. 1 turns it on.
 party_pool_sync=0
+
+# Solo-segment spectate (docs/research/star-forge-finale.md): the product decision for a
+# story-forced solo segment - the Star Forge's Bastila-chamber duel (sta_m45ac, the door
+# k45_door_bast1's nine RemovePartyMember calls) and Malak's chamber (sta_m45ad, a continuation
+# of the same forced-solo state) - is that this is the OWNER's fight; the other player
+# SPECTATES rather than entering the 1-on-1. While ON: the fighting player's own agent hides
+# every peer from what it writes locally the instant its plugin reports an active segment, and
+# the other player's plugin parks their input and camera on the fight instead. Read by two
+# independent files off this one key - CoopConfig.cs (agent side, the peer-hide filter) and
+# PluginConfig.cs (plugin side, the owner-side detection AND the spectator-side reaction) - see
+# CONFIG.md's own footnote for the split. NEEDS-LIVE: nothing here has been exercised against a
+# real Star Forge save yet. Defaults OFF; 1 turns it on.
+solo_segment_spectate=0
+
+# Extra modules appended to SoloSegmentCatalogue's base set (sta_m45ac, sta_m45ad) for
+# solo_segment_spectate, comma-separated. Only read by the plugin. Leave unset unless testing
+# against a different module or a future mod's own forced-solo content.
+;solo_segment_modules=
