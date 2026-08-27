@@ -196,6 +196,41 @@ public sealed class ExternalTargetTests : IDisposable
         Assert.Equal("Revan", name);
     }
 
+    /// <summary>
+    /// Root cause 1 of docs/research/companion-state-sync.md's 2026-08-28 round, pinned
+    /// against a REAL separate process (not self-attach): a KOTOR ResRef is a bare
+    /// <c>char[16]</c> with no required terminator, but <c>ProcessMemory.TryWriteAsciiString</c>
+    /// used to reserve the field's last byte for one anyway (<c>fieldLength - 1</c>), silently
+    /// dropping the LAST character of any value exactly as long as the field —
+    /// live-observed for a companion's real starting sidearm, <c>g_w_blstrpstl001</c> (16
+    /// characters), which crossed the shared block as <c>g_w_blstrpstl00</c> and was refused as
+    /// an unknown blueprint (failure 8).
+    ///
+    /// Writes into the SAME slot-name scratch area <see cref="WritesRemotePeersIntoTheTarget"/>
+    /// already proves is safe to write (32 bytes of real storage, 32 more bytes of stride
+    /// headroom after it), but asks for exactly 16 of those 32 bytes — the actual field width
+    /// every resref-carrying shared-block region in KotorCoop.Plugin uses
+    /// (<c>BlockCompanionEquipResrefLength</c>/<c>BlockEquipResrefLength</c>/
+    /// <c>BlockItemResrefLength</c>, all 16).
+    /// </summary>
+    [Theory]
+    [InlineData("g")] // 1 char
+    [InlineData("g_w_blstrpstl00")] // 15 chars — fit even under the old, buggy reservation
+    [InlineData("g_w_blstrpstl001")] // 16 chars — the exact live-observed truncation case
+    public void FixedWidthResrefFieldsRoundTripAtExactly16BytesWithNoReservedTerminator(string resref)
+    {
+        using ProcessMemory memory = Attach();
+        using ProfileGameBridge bridge = new(memory, SignatureProfile(), ownsMemory: false);
+        Assert.True(bridge.TryResolveAnchor(out _));
+
+        nint field = bridge.AnchorAddress + GameStateBlock.Offsets.RemoteSlots + GameStateBlock.Offsets.SlotName;
+
+        Assert.True(memory.TryWriteAsciiString(field, resref, fieldLength: 16));
+        Assert.True(memory.TryReadAsciiString(field, maxLength: 16, out string readBack));
+
+        Assert.Equal(resref, readBack);
+    }
+
     [Fact]
     public async Task SnapshotDiffNarrowsTowardsTheMovingPosition()
     {

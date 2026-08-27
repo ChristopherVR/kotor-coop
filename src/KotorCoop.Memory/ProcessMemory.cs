@@ -225,10 +225,27 @@ public sealed class ProcessMemory : IDisposable
         return TryWrite(address, buffer);
     }
 
+    /// <summary>
+    /// Writes a fixed-width ASCII field, zero-padded past whatever content fits.
+    ///
+    /// ⚠ USES THE FULL <paramref name="fieldLength"/> BYTES — do not reserve one for a
+    /// terminator. A KOTOR ResRef is a bare <c>char[16]</c>: up to 16 characters with NO
+    /// required trailing null (docs/research/companion-state-sync.md, 2026-08-28 round). This
+    /// method used to cap content at <c>fieldLength - 1</c> "to leave room for a terminator",
+    /// which silently dropped the LAST character of any value exactly <paramref
+    /// name="fieldLength"/> characters long — live-observed for a companion's real 16-char
+    /// starting sidearm, <c>g_w_blstrpstl001</c>, which crossed this same shared-block write as
+    /// <c>g_w_blstrpstl00</c> and was refused by <c>CreateItemOnObject</c> (failure 8) as an
+    /// unknown blueprint. <see cref="TryReadAsciiString"/> already tolerates a buffer with no
+    /// null in it at all (falls back to reading the full field), so nothing on the read side
+    /// needed to change — only this reservation was wrong. The buffer is a freshly allocated
+    /// zero-initialised array, so anything past the written content is still correctly
+    /// null-padded.
+    /// </summary>
     public bool TryWriteAsciiString(nint address, string value, int fieldLength)
     {
         byte[] buffer = new byte[fieldLength];
-        int count = Math.Min(value.Length, fieldLength - 1);
+        int count = Math.Min(value.Length, fieldLength);
         for (int i = 0; i < count; i++)
         {
             char c = value[i];
