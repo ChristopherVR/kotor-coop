@@ -500,13 +500,11 @@ public enum PacketType : byte
     /// asked. Unrelated to <see cref="InteractionLock"/>'s own per-tick broadcast level, which
     /// keeps working exactly as before and is what actually holds the lease once granted.
     ///
-    /// TODO(version): bump <see cref="ProtocolConstants.Version"/> the next time it moves — this
-    /// wave's version counter is owned by another agent in parallel (see AGENTS/CONTRIBUTING
-    /// parallel-session notes), so this type and <see cref="InteractionClaimPacket.RequestSerial"/>
-    /// ship without their own version bump. Both are strictly additive (a new field appended
-    /// at the end of an existing packet, one new packet type never touching an existing peer
-    /// that doesn't ask for arbitration), so an old build simply never sees a nonzero
-    /// <c>RequestSerial</c> and never receives this type.
+    /// Both are strictly additive (a new field appended at the end of an existing packet, one
+    /// new packet type never touching an existing peer that doesn't ask for arbitration), so an
+    /// old build simply never sees a nonzero <c>RequestSerial</c> and never receives this type.
+    /// See <see cref="ProtocolConstants.Version"/> 44, which covers this and
+    /// <see cref="InteractionClaimPacket.RequestSerial"/>.
     /// </summary>
     LockResponse = 56,
 
