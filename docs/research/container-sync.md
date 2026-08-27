@@ -1230,6 +1230,71 @@ Everything above is reasoned from the code and proven by tests that do not touch
 Until 1-5 run, this feature's status is **Built (NEEDS-LIVE)** — see
 docs/roadmap-seamless.md Tier 1 item 4's updated row.
 
+## Live verification (2026-08-28): items 2/3/4 of §11.5 run — outcome correct, but a real latency
+## bug found in the fast-path request/response itself
+
+Fresh rig, a genuinely fresh footlocker (`0xC6`, `Larrim`-adjacent — actually the demo save's own
+starting footlocker near `10.8, 21.87`, still holding its full 3-item stock at test time, confirmed
+via `items 61` before the race). Both players teleported onto it (`tp 10.8 21.87`, §11.5's own
+technique), `useplaceable 0xC6` fired on both instances back-to-back via two parallel PowerShell
+jobs (measured ~120ms apart from the plugin logs' own timestamps — the same order of magnitude as
+one agent tick, close to the "within 1 RTT" scenario §11.5 item 2 asks for).
+
+**Item 2 (the race itself) and item 3 (exactly one winner): PASS, run twice** (once contaminated
+by an unrelated stuck game-over-suppression loop from an earlier test on the same session — see
+below — repeated clean on a fresh session). `closeplaceable 0xC6` afterward confirmed the actual
+open state directly: the HOST's copy closed successfully (`+0x338` was 1, now cleared); the
+CLIENT's own `closeplaceable 0xC6` was **refused** ("placeable 0xC6 (0xC6) is not open") — the
+client's copy never opened at all. Exactly one winner, both times.
+
+**Item 4 (the A/B against `container_lock_arbitration=0`): PASS, confirms this feature is the
+actual fix.** Same recipe, same container, `container_lock_arbitration=0` in both `coop.ini`s,
+fresh session. This time `closeplaceable 0xC6` succeeded on **both** sides — the OLD race,
+reproduced live for the first time (the roadmap's own prior attempts never actually staged it).
+Flipped back to `container_lock_arbitration=1` immediately after (the shipped default, unchanged
+by this round).
+
+**A genuinely new finding, not predicted by §11.3's own design: the fast-path request/response
+round trip itself timed out on BOTH sides, both live runs, 2/2 — yet the outcome stayed correct
+anyway.** Plugin log, both host and client, identically: `container: arbitration timed out for
+0xC6 (no host answer within 300ms); proceeding as before`. §11.2's own design states the HOST's
+own `RequestContainerLock` resolves "synchronously, in-process" — but the plugin can only reach
+`ICoopSession` through the shared-block round trip (`LocalContainerLockRequestSerial` ->
+`WorldStatePump.PumpContainerLockArbitration`, polled once per AGENT tick -> the response written
+back -> read on the PLUGIN's next frame), which is **at least two agent-tick latencies**, not
+zero — and on this rig's own measured cadence that round trip did not land inside the 300ms
+`ContainerLockArbiter.TimeoutMs` budget, for the HOST's own request as well as the CLIENT's.
+**Why the outcome was still correct despite this**: §11.3's fail-open fallback re-issues the
+click exactly as pre-arbitration behaviour, which re-enters the OLD `ContainerUseHook` peer-held
+refusal loop first — and by the time either side's 300ms timeout elapsed, the ordinary per-tick
+claim broadcast (§2.1/§5's pre-existing eventually-consistent mechanism, the one the arbitration
+layer was built to route around) had already caught up and correctly refused the loser's
+re-issued click. **The new fast path is not doing the job §11.2 designed it to do on this rig — it
+is currently a no-op that always times out — but the OLD slower mechanism it was meant to
+supersede is still there underneath it and is what is actually winning the race.** This is not
+visible from the outcome alone (exactly one winner, every time, matching the design's own success
+criterion) — only from reading the plugin log's own timeout line. Flagged as an open item: either
+`ContainerLockArbiter.TimeoutMs` needs raising (300ms is apparently too tight for the real
+plugin<->agent round trip, not just network jitter as §11.3 assumed), or the
+`WorldStatePump.PumpContainerLockArbitration` forwarding path itself has an unmeasured extra
+delay `SharedBlock`'s version-55 offsets/write order should be checked against.
+
+**Item 1 (offset correctness) and item 5 (forced timeout path)**: item 1 is confirmed by
+construction — the arbitration mechanism visibly ran (logged timeouts, not silence), so the
+version-55 offsets are wired correctly even though the round trip itself is slow. Item 5 (forcing
+the timeout deliberately) was not run as a separate test — it happened for free, twice, unplanned.
+
+**A staging note for whoever repeats this**: the first live attempt this round was contaminated
+by a leftover, continuously-firing `death: game-over suppressed; the session decides` loop on the
+CLIENT (thousands of lines/second) from an earlier, unrelated test in the same rig session — not
+caused by anything in this feature, but it pollutes log-based verification of anything running at
+the same time. A fresh `demo.ps1 -Stop`/relaunch cycle cleared it; the second (clean) run is the
+one whose results are reported above.
+
+Build: `dotnet build -warnaserror` clean, native plugin `-WarnAsError` clean, `dotnet test`
+2339/2339. This feature's status upgrades to **Built, live-verified correct-outcome (NEEDS-FOLLOW-UP:
+fast-path latency)** — see docs/roadmap-seamless.md Tier 1 item 4's row.
+
 ### 11.6 Test suite and build
 
 `dotnet test tests/KotorCoop.Tests --no-build`: **2131/2131 passed** on a clean isolated run (see
