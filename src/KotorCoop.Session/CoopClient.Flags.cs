@@ -35,7 +35,14 @@ public sealed partial class CoopClient
             return;
         }
 
-        FlagOpPacket op = _flagSender.Enqueue(_sessionPeerId, flagId, value, SessionClock.NowMs, serial);
+        // Null means the reliable sender refused the op (its pending table is at its cap,
+        // logged there) — see RetransmitBackoff's remarks. Nothing to send; a session that
+        // far gone is not coming back, but the local store still applied the change above so
+        // this player's own game is at least correct.
+        if (_flagSender.Enqueue(_sessionPeerId, flagId, value, SessionClock.NowMs, serial) is not { } op)
+        {
+            return;
+        }
 
         if (IsConnected)
         {

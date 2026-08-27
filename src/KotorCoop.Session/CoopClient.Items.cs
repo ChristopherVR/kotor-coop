@@ -36,9 +36,11 @@ public sealed partial class CoopClient
             return 0;
         }
 
-        ItemOpPacket op = _itemSender.Enqueue(_sessionPeerId, ItemOpKind.Drop, item, SessionClock.NowMs);
-
-        if (IsConnected)
+        // Null means the reliable sender refused the op (its pending table is at its cap,
+        // logged there) — see RetransmitBackoff's remarks. The local store already has the
+        // drop, so this player's own game is still correct even though nothing goes out.
+        if (_itemSender.Enqueue(_sessionPeerId, ItemOpKind.Drop, item, SessionClock.NowMs) is { } op
+            && IsConnected)
         {
             SendItemOp(op);
         }
@@ -54,9 +56,9 @@ public sealed partial class CoopClient
         }
 
         GroundItem tombstone = new(itemId, string.Empty, string.Empty, Vector3f.Zero);
-        ItemOpPacket op = _itemSender.Enqueue(_sessionPeerId, ItemOpKind.Remove, tombstone, SessionClock.NowMs);
 
-        if (IsConnected)
+        if (_itemSender.Enqueue(_sessionPeerId, ItemOpKind.Remove, tombstone, SessionClock.NowMs) is { } op
+            && IsConnected)
         {
             SendItemOp(op);
         }

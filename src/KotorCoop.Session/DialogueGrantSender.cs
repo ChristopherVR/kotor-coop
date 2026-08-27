@@ -46,6 +46,12 @@ public sealed class DialogueGrantSender(
     private readonly Lock _gate = new();
     private uint _nextSequence = 1;
 
+    /// <summary>Latched so a sustained overload logs once, not once per refused op — see
+    /// <see cref="ReliableFlagSender"/>'s twin field. Shared by both cap checks below
+    /// (<see cref="EnqueueLocal"/> and <see cref="EnqueueRelay"/>), since either can hit the
+    /// same table.</summary>
+    private bool _capRefusalLogged;
+
     public int PendingCount
     {
         get
@@ -57,10 +63,28 @@ public sealed class DialogueGrantSender(
         }
     }
 
+    private void LogCapRefusal()
+    {
+        if (_capRefusalLogged)
+        {
+            return;
+        }
+
+        _capRefusalLogged = true;
+        Console.Error.WriteLine(
+            $"[coop] dialogue grant refused: pending table already holds {maxPending} unacked "
+            + "ops — the link has likely been down a long time.");
+    }
+
     /// <summary>
     /// Queues a LOCALLY DETECTED grant — this instance's own conversation just granted
     /// something — self-numbered under <paramref name="originPeerId"/> (the caller's own peer
-    /// id: <c>CoopHost.HostPeerId</c> on the host, the session peer id on a client).
+    /// id: <c>CoopHost.HostPeerId</c> on the host, the session peer id on a client). Refuses
+    /// (returns null) once the pending table is at its cap — see
+    /// <see cref="RetransmitBackoff"/>'s remarks for the enqueue-past-cap contract every
+    /// reliable sender in this file family shares. An empty item list is also refused, but
+    /// that is not the cap contract and is not logged, since it is routine (a reward node with
+    /// nothing to give).
     /// </summary>
     public DialogueGrantPacket? EnqueueLocal(
         uint originPeerId, string partnerTag, IReadOnlyList<MaterialisedLootItem> items, long nowMs)
@@ -74,8 +98,11 @@ public sealed class DialogueGrantSender(
         {
             if (_pending.Count >= maxPending)
             {
+                LogCapRefusal();
                 return null;
             }
+
+            _capRefusalLogged = false;
 
             uint sequence = _nextSequence++;
             DialogueGrantPacket packet = new(originPeerId, sequence, partnerTag, items);
@@ -90,7 +117,9 @@ public sealed class DialogueGrantSender(
     /// every other peer under that client's true (origin, sequence) rather than re-numbering it
     /// under the host's own identity. Returns false when this exact op has already been queued
     /// once this session (a client's retransmit arriving before its own ack does), so it is
-    /// never broadcast, and therefore never given, twice.
+    /// never broadcast, and therefore never given, twice — and also refuses (returns false)
+    /// once the pending table is at its cap, per <see cref="RetransmitBackoff"/>'s remarks on
+    /// the enqueue-past-cap contract every reliable sender in this file family shares.
     /// </summary>
     public bool EnqueueRelay(DialogueGrantPacket packet, long nowMs)
     {
@@ -102,10 +131,21 @@ public sealed class DialogueGrantSender(
         lock (_gate)
         {
             (uint, uint) key = (packet.OriginPeerId, packet.OpSequence);
-            if (_everQueued.Contains(key) || _pending.Count >= maxPending)
+            if (_everQueued.Contains(key))
             {
+                // Already relayed once this session — routine, not the cap contract, so not
+                // logged (see the class remarks: this is what stops a client's retransmit
+                // from double-giving the item).
                 return false;
             }
+
+            if (_pending.Count >= maxPending)
+            {
+                LogCapRefusal();
+                return false;
+            }
+
+            _capRefusalLogged = false;
 
             Remember(packet.OriginPeerId, packet.OpSequence);
             _pending[key] = new Pending { Packet = packet, LastSentMs = 0, Attempts = 0 };

@@ -22,8 +22,9 @@ jobs:
       - name: Build solution
         run: dotnet build KotorCoop.slnx -warnaserror
 
-      # HeavyPacketLossStillConverges is a known-flaky probabilistic test (see tests/README
-      # / project notes) - excluded here rather than made to pass on every seed.
+      # HeavyPacketLossStillConverges is a known-flaky probabilistic test (see the flaky-test
+      # note in docs/CONTRIBUTING.md's "CI and releases" section) - excluded here rather than
+      # made to pass on every seed.
       - name: Run tests
         run: >
           dotnet test tests/KotorCoop.Tests --no-build

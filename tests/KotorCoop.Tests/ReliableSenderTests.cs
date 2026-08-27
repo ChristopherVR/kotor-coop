@@ -5,18 +5,26 @@ using Xunit;
 namespace KotorCoop.Tests;
 
 /// <summary>
-/// Retry/ack coverage for the four retransmit-until-ack senders
+/// Retry/ack coverage for the five retransmit-until-ack senders
 /// (<see cref="ReliableFlagSender"/>, <see cref="ReliableItemSender"/>,
-/// <see cref="ReliableJournalSender"/>, <see cref="ReliableLootSender"/>). All four take an
-/// explicit <c>nowMs</c> on every call rather than reading a clock themselves, so the clock is
-/// already injectable — these tests just drive it directly.
+/// <see cref="ReliableJournalSender"/>, <see cref="ReliableLootSender"/>,
+/// <see cref="DialogueGrantSender"/>). All five take an explicit <c>nowMs</c> on every call
+/// rather than reading a clock themselves, so the clock is already injectable — these tests
+/// just drive it directly.
 ///
 /// The three client-&gt;host senders (Flag/Item/Journal) share one shape: <c>Enqueue</c> marks
 /// the op sent immediately (Attempts = 1, LastSentMs = nowMs), and <c>CollectDue</c> looks only
-/// at elapsed time, not a peer set. <see cref="ReliableLootSender"/> is the host-&gt;clients
-/// broadcast twin: it tracks per-peer acks and its <c>CollectDue</c> takes the current recipient
-/// set on every call, which is also how it learns a peer left (no separate Remove/Forget API —
-/// the caller simply stops naming that peer as a recipient).
+/// at elapsed time, not a peer set. <see cref="ReliableLootSender"/>/<see cref="DialogueGrantSender"/>
+/// are the host-&lt;-&gt;clients broadcast twins: they track per-peer acks and their
+/// <c>CollectDue</c> takes the current recipient set on every call, which is also how they learn
+/// a peer left (no separate Remove/Forget API — the caller simply stops naming that peer as a
+/// recipient).
+///
+/// EVERY ONE OF THE FIVE SHARES ONE ENQUEUE-PAST-CAP CONTRACT (see
+/// <see cref="RetransmitBackoff"/>'s remarks): once the pending table is at its cap,
+/// <c>Enqueue</c>/<c>EnqueueLocal</c>/<c>EnqueueRelay</c> REFUSES the op (returns
+/// <c>null</c>/<c>false</c>) rather than minting and handing back a packet nobody is tracking.
+/// The <c>*_EnqueuePastCapRefuses</c> test below each sender's section pins this.
 /// </summary>
 public class ReliableSenderTests
 {
@@ -38,7 +46,7 @@ public class ReliableSenderTests
     public void Flag_RetransmitsAfterIntervalNotBefore()
     {
         ReliableFlagSender sender = new(retransmitIntervalMs: 250);
-        FlagOpPacket op = sender.Enqueue(originPeerId: 1, flagId: 10, value: 1, nowMs: 1_000);
+        FlagOpPacket op = sender.Enqueue(originPeerId: 1, flagId: 10, value: 1, nowMs: 1_000)!;
 
         Assert.Empty(sender.CollectDue(nowMs: 1_249));
         List<FlagOpPacket> due = sender.CollectDue(nowMs: 1_250);
@@ -51,7 +59,7 @@ public class ReliableSenderTests
     public void Flag_AckStopsRetransmission()
     {
         ReliableFlagSender sender = new(retransmitIntervalMs: 250);
-        FlagOpPacket op = sender.Enqueue(originPeerId: 1, flagId: 10, value: 1, nowMs: 1_000);
+        FlagOpPacket op = sender.Enqueue(originPeerId: 1, flagId: 10, value: 1, nowMs: 1_000)!;
 
         sender.Acknowledge(op.OpSequence);
 
@@ -100,7 +108,7 @@ public class ReliableSenderTests
         HashSet<uint> enqueued = [];
         for (uint i = 0; i < count; i++)
         {
-            FlagOpPacket op = sender.Enqueue(originPeerId: 1, flagId: i, value: 1, nowMs: 1_000);
+            FlagOpPacket op = sender.Enqueue(originPeerId: 1, flagId: i, value: 1, nowMs: 1_000)!;
             enqueued.Add(op.OpSequence);
         }
 
@@ -145,6 +153,22 @@ public class ReliableSenderTests
         Assert.Empty(sender.CollectDue(nowMs: 10_000));
     }
 
+    /// <summary>Pins the shared enqueue-past-cap contract (RetransmitBackoff's remarks): once
+    /// the pending table is full, Enqueue refuses the op rather than minting an untracked
+    /// packet the caller would send once and never retry.</summary>
+    [Fact]
+    public void Flag_EnqueuePastCapRefuses()
+    {
+        ReliableFlagSender sender = new(retransmitIntervalMs: 250, maxPending: 2);
+        sender.Enqueue(originPeerId: 1, flagId: 1, value: 1, nowMs: 1_000);
+        sender.Enqueue(originPeerId: 1, flagId: 2, value: 1, nowMs: 1_000);
+
+        FlagOpPacket? refused = sender.Enqueue(originPeerId: 1, flagId: 3, value: 1, nowMs: 1_000);
+
+        Assert.Null(refused);
+        Assert.Equal(2, sender.PendingCount);
+    }
+
     // ---- ReliableItemSender ----------------------------------------------------------------
 
     private static GroundItem Item(uint id) => new(id, "g_w_lghtsbr01", "end_m01aa", new Vector3f(1, 2, 3));
@@ -163,7 +187,7 @@ public class ReliableSenderTests
     public void Item_RetransmitsAfterIntervalNotBefore()
     {
         ReliableItemSender sender = new(retransmitIntervalMs: 250);
-        ItemOpPacket op = sender.Enqueue(originPeerId: 1, ItemOpKind.Drop, Item(1), nowMs: 1_000);
+        ItemOpPacket op = sender.Enqueue(originPeerId: 1, ItemOpKind.Drop, Item(1), nowMs: 1_000)!;
 
         Assert.Empty(sender.CollectDue(nowMs: 1_249));
         List<ItemOpPacket> due = sender.CollectDue(nowMs: 1_250);
@@ -176,7 +200,7 @@ public class ReliableSenderTests
     public void Item_AckStopsRetransmission()
     {
         ReliableItemSender sender = new(retransmitIntervalMs: 250);
-        ItemOpPacket op = sender.Enqueue(originPeerId: 1, ItemOpKind.Drop, Item(1), nowMs: 1_000);
+        ItemOpPacket op = sender.Enqueue(originPeerId: 1, ItemOpKind.Drop, Item(1), nowMs: 1_000)!;
 
         sender.Acknowledge(op.OpSequence);
 
@@ -205,7 +229,7 @@ public class ReliableSenderTests
         HashSet<uint> enqueued = [];
         for (uint i = 0; i < count; i++)
         {
-            ItemOpPacket op = sender.Enqueue(originPeerId: 1, ItemOpKind.Drop, Item(i), nowMs: 1_000);
+            ItemOpPacket op = sender.Enqueue(originPeerId: 1, ItemOpKind.Drop, Item(i), nowMs: 1_000)!;
             enqueued.Add(op.OpSequence);
         }
 
@@ -226,6 +250,21 @@ public class ReliableSenderTests
         Assert.Equal(0, sender.PendingCount);
     }
 
+    /// <summary>Pins the shared enqueue-past-cap contract — see
+    /// <see cref="Flag_EnqueuePastCapRefuses"/>.</summary>
+    [Fact]
+    public void Item_EnqueuePastCapRefuses()
+    {
+        ReliableItemSender sender = new(retransmitIntervalMs: 250, maxPending: 2);
+        sender.Enqueue(originPeerId: 1, ItemOpKind.Drop, Item(1), nowMs: 1_000);
+        sender.Enqueue(originPeerId: 1, ItemOpKind.Drop, Item(2), nowMs: 1_000);
+
+        ItemOpPacket? refused = sender.Enqueue(originPeerId: 1, ItemOpKind.Drop, Item(3), nowMs: 1_000);
+
+        Assert.Null(refused);
+        Assert.Equal(2, sender.PendingCount);
+    }
+
     // ---- ReliableJournalSender -------------------------------------------------------------
 
     [Fact]
@@ -242,7 +281,7 @@ public class ReliableSenderTests
     public void Journal_RetransmitsAfterIntervalNotBefore()
     {
         ReliableJournalSender sender = new(retransmitIntervalMs: 250);
-        JournalOpPacket op = sender.Enqueue(originPeerId: 1, questTag: "end_m01aa", state: 10, nowMs: 1_000);
+        JournalOpPacket op = sender.Enqueue(originPeerId: 1, questTag: "end_m01aa", state: 10, nowMs: 1_000)!;
 
         Assert.Empty(sender.CollectDue(nowMs: 1_249));
         List<JournalOpPacket> due = sender.CollectDue(nowMs: 1_250);
@@ -255,7 +294,7 @@ public class ReliableSenderTests
     public void Journal_AckStopsRetransmission()
     {
         ReliableJournalSender sender = new(retransmitIntervalMs: 250);
-        JournalOpPacket op = sender.Enqueue(originPeerId: 1, questTag: "end_m01aa", state: 10, nowMs: 1_000);
+        JournalOpPacket op = sender.Enqueue(originPeerId: 1, questTag: "end_m01aa", state: 10, nowMs: 1_000)!;
 
         sender.Acknowledge(op.OpSequence);
 
@@ -284,7 +323,7 @@ public class ReliableSenderTests
         HashSet<uint> enqueued = [];
         for (int i = 0; i < count; i++)
         {
-            JournalOpPacket op = sender.Enqueue(originPeerId: 1, questTag: $"quest_{i}", state: i, nowMs: 1_000);
+            JournalOpPacket op = sender.Enqueue(originPeerId: 1, questTag: $"quest_{i}", state: i, nowMs: 1_000)!;
             enqueued.Add(op.OpSequence);
         }
 
@@ -302,6 +341,21 @@ public class ReliableSenderTests
         sender.Clear();
 
         Assert.Equal(0, sender.PendingCount);
+    }
+
+    /// <summary>Pins the shared enqueue-past-cap contract — see
+    /// <see cref="Flag_EnqueuePastCapRefuses"/>.</summary>
+    [Fact]
+    public void Journal_EnqueuePastCapRefuses()
+    {
+        ReliableJournalSender sender = new(retransmitIntervalMs: 250, maxPending: 2);
+        sender.Enqueue(originPeerId: 1, questTag: "quest_1", state: 1, nowMs: 1_000);
+        sender.Enqueue(originPeerId: 1, questTag: "quest_2", state: 1, nowMs: 1_000);
+
+        JournalOpPacket? refused = sender.Enqueue(originPeerId: 1, questTag: "quest_3", state: 1, nowMs: 1_000);
+
+        Assert.Null(refused);
+        Assert.Equal(2, sender.PendingCount);
     }
 
     // ---- ReliableLootSender (host -> clients broadcast, per-peer acks) --------------------
@@ -470,6 +524,22 @@ public class ReliableSenderTests
         Assert.Empty(sender.CollectDue(recipients: [2], nowMs: 10_000));
     }
 
+    /// <summary>Pins the shared enqueue-past-cap contract — see
+    /// <see cref="Flag_EnqueuePastCapRefuses"/>. Uses distinct (container, item) pairs so the
+    /// refusal is provably the cap, not the separate dedup-in-flight refusal.</summary>
+    [Fact]
+    public void Loot_EnqueuePastCapRefuses()
+    {
+        ReliableLootSender sender = new(retransmitIntervalMs: 250, maxPending: 2);
+        sender.Enqueue(originPeerId: 1, containerId: 1, itemId: 1, nowMs: 1_000);
+        sender.Enqueue(originPeerId: 1, containerId: 2, itemId: 2, nowMs: 1_000);
+
+        ContainerLootPacket? refused = sender.Enqueue(originPeerId: 1, containerId: 3, itemId: 3, nowMs: 1_000);
+
+        Assert.Null(refused);
+        Assert.Equal(2, sender.PendingCount);
+    }
+
     // ---- DialogueGrantSender (used both host->clients AND client->host, tuple-keyed) ------
 
     private static MaterialisedLootItem[] OneItem(string resref = "g_w_blstrpstl001") =>
@@ -618,5 +688,35 @@ public class ReliableSenderTests
 
         Assert.Equal(0, sender.PendingCount);
         Assert.Empty(sender.CollectDue(recipients: [2], nowMs: 10_000));
+    }
+
+    /// <summary>Pins the shared enqueue-past-cap contract — see
+    /// <see cref="Flag_EnqueuePastCapRefuses"/>.</summary>
+    [Fact]
+    public void Grant_EnqueueLocalPastCapRefuses()
+    {
+        DialogueGrantSender sender = new(retransmitIntervalMs: 250, maxPending: 2);
+        sender.EnqueueLocal(originPeerId: 1, "a", OneItem(), nowMs: 1_000);
+        sender.EnqueueLocal(originPeerId: 1, "b", OneItem(), nowMs: 1_000);
+
+        DialogueGrantPacket? refused = sender.EnqueueLocal(originPeerId: 1, "c", OneItem(), nowMs: 1_000);
+
+        Assert.Null(refused);
+        Assert.Equal(2, sender.PendingCount);
+    }
+
+    /// <summary>Same contract on the relay entry point, whose refusal signal is a bool rather
+    /// than a nullable packet (see <see cref="RetransmitBackoff"/>'s remarks). Two different
+    /// origins so the refusal is provably the cap, not the separate already-relayed refusal.</summary>
+    [Fact]
+    public void Grant_EnqueueRelayPastCapRefuses()
+    {
+        DialogueGrantSender sender = new(retransmitIntervalMs: 250, maxPending: 1);
+        Assert.True(sender.EnqueueRelay(new DialogueGrantPacket(7, 1, "a", OneItem()), nowMs: 1_000));
+
+        bool accepted = sender.EnqueueRelay(new DialogueGrantPacket(8, 1, "b", OneItem()), nowMs: 1_000);
+
+        Assert.False(accepted);
+        Assert.Equal(1, sender.PendingCount);
     }
 }

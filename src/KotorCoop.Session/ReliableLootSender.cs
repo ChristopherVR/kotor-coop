@@ -29,6 +29,12 @@ public sealed class ReliableLootSender(
     private readonly Lock _gate = new();
     private uint _nextSequence = 1;
 
+    /// <summary>Latched so a sustained overload logs once, not once per refused op — see
+    /// <see cref="ReliableFlagSender"/>'s twin field. Only the CAP refusal below sets this;
+    /// the routine dedup-in-flight refusal is not logged, since it happens constantly and
+    /// harmlessly under normal play.</summary>
+    private bool _capRefusalLogged;
+
     public int PendingCount
     {
         get
@@ -41,9 +47,12 @@ public sealed class ReliableLootSender(
     }
 
     /// <summary>
-    /// Queues a removal for reliable broadcast. Returns null when an op for the same
+    /// Queues a removal for reliable broadcast, or refuses it. See
+    /// <see cref="RetransmitBackoff"/>'s remarks for the enqueue-past-cap contract every
+    /// reliable sender in this file family shares. Also returns null when an op for the same
     /// (container, item) is already in flight, so a placeable rescan that still sees the item
-    /// missing does not enqueue a duplicate.
+    /// missing does not enqueue a duplicate — that case is not the cap contract and is not
+    /// logged, since it is routine.
     /// </summary>
     public ContainerLootPacket? Enqueue(uint originPeerId, uint containerId, uint itemId, long nowMs)
     {
@@ -62,8 +71,18 @@ public sealed class ReliableLootSender(
                 // The bound exists so a session that never sees another ack cannot grow
                 // without limit. Refusing the NEW op rather than evicting an old one is
                 // deliberate: the old ones are the removals nobody has confirmed yet.
+                if (!_capRefusalLogged)
+                {
+                    _capRefusalLogged = true;
+                    Console.Error.WriteLine(
+                        $"[coop] container-loot removal refused: pending table already holds "
+                        + $"{maxPending} unacked ops — the link has likely been down a long time.");
+                }
+
                 return null;
             }
+
+            _capRefusalLogged = false;
 
             uint sequence = _nextSequence++;
             ContainerLootPacket packet = new(originPeerId, sequence, containerId, itemId);

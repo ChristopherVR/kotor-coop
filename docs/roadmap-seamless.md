@@ -40,8 +40,8 @@ everything else builds and unit-tests in parallel.
 
 | # | Item | Status |
 |---|---|---|
-| 16 | Packaging script (drop-in zip) and CI (`dotnet test` on push). | Missing |
-| 17 | Tests for the four `Reliable*Sender` classes (retry/ack logic, zero direct tests). | Missing |
+| 16 | Packaging script (drop-in zip) and CI (`dotnet test` on push). | Done |
+| 17 | Tests for the four `Reliable*Sender` classes (retry/ack logic, zero direct tests). | Done |
 | 18 | Persistent on-screen connection indicator (today: `status` console verb only). | Missing |
 | 19 | Fog-of-war reveal sync (`SetWorldPointExplored`), merchant inventory, trigger-mines, per-object local variables, time-of-day, alignment sync, host migration, internet play. | Missing — documented out of scope until Tiers 1-2 close |
 
