@@ -675,3 +675,46 @@ requirement is confirmed correct and prompt; the wire/decode data path is proven
 there is nothing to flip), and the `Reconnecting` state gap above is a real, if low-severity,
 defect worth a follow-up round (`CoopClient` would need to distinguish "silence detected, still
 within grace" from "giving up and restarting the handshake" for that branch to ever fire).
+
+## Live pass (2026-08-27, follow-up round): `Reconnecting` fixed and confirmed — PASS
+
+The fix, per the analysis above: `SessionStats` gains a `Reconnecting` field —
+`CoopClient` sets it to `CoopClient._reconnecting` (already tracked internally, flips
+true in `ForgetSession`, false on the next Welcome), `CoopHost` always reports `false`
+(it has no single link of its own to lose). A new pure `ConnectionPhaseMapping.Resolve`
+checks `stats.Reconnecting` AHEAD of the raw `SessionPhase.Connecting` arm, so the
+distinction `SessionManager.Poll` collapsed is preserved before `AnnounceConnectionStatus`
+ever sees it.
+
+Re-ran the exact `netsim blackout` probe this round's own live pass used (host 47436,
+client 43472, both connected in `END_M01AA`), reading `ConnectStatus` (0x9EC) directly
+via a small scratchpad probe reusing `blockpoke.ps1`'s own `FindBlock`/`Read`
+primitives, polled every ~2s through a 15s blackout on the client:
+
+```
+[19:48:41.448] pid 47436 HOST   -> Connected/peers=1
+[19:48:41.696] pid 43472 CLIENT -> Connected/peers=1
+[19:48:47.639] netsim blackout 15 armed on the client
+[19:48:56.117] pid 47436 HOST   -> Connected/peers=0        <- host: only the peer count moves
+[19:48:56.362] pid 43472 CLIENT -> Reconnecting/peers=0     <- THE STATE THIS ROUND EXISTS FOR
+[19:48:58.641] pid 47436 HOST   -> Connected/peers=0
+[19:48:58.879] pid 43472 CLIENT -> Reconnecting/peers=0
+[19:49:01.161] pid 47436 HOST   -> Connected/peers=0
+[19:49:01.400] pid 43472 CLIENT -> Reconnecting/peers=0
+[19:49:03.682] pid 47436 HOST   -> Connected/peers=0
+[19:49:03.935] pid 43472 CLIENT -> Connected/peers=1        <- healed
+[19:49:06.187] pid 47436 HOST   -> Connected/peers=1
+[19:49:06.463] pid 43472 CLIENT -> Connected/peers=1
+```
+
+**PASS.** The client reads `Reconnecting/peers=0` for the entire outage past the 5s peer
+timeout, and the FULL cycle is exactly `Connected -> Reconnecting -> Connected` as
+designed. The host never shows anything but `Connected` (only its peer count moved),
+matching the design ("host = listening/hosting with N peers", never Reconnecting for
+itself). This closes the one open item from this doc's earlier live pass — the packed
+data path was already proven correct; what was missing was a state that could actually
+reach value 4, and now it does.
+
+Not re-confirmed this round: the on-screen render position/legibility (still blocked on
+`tools/shot.ps1`'s solid-black capture, per this doc's own earlier note) and
+`status_indicator=0`'s suppression toggle — neither touched by this fix.
