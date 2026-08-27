@@ -73,10 +73,10 @@ actually runs with.
 | `follow_lead` | `any` | who may lead a transition the other follows: `any` or `host` | [transition-smoothness.md](research/transition-smoothness.md) |
 | `movie_relay` | ON² | relay a mid-module `PlayMovie` to peers (agent's own copy) | [cinematics.md](research/cinematics.md) |
 | `companion_xp_sync` | OFF³ | share each active companion's experience the same way the PC's own is (live-verified 2026-08-27) | [companion-state-sync.md](research/companion-state-sync.md) |
-| `companion_gear_sync` | OFF (live-verified FAILURE) | read each companion's real equipped gear and hand it to the plugin (agent's own copy) — live pass found the apply lands on the PLAYER, not the companion; stays off until fixed | [companion-state-sync.md](research/companion-state-sync.md) |
-| `party_pool_sync` | OFF (live-verified: one bug fixed, one remains) | sync the shared party item pool (`CSWPartyTable+0x118`) both ways | [party-pool-sync.md](research/party-pool-sync.md) |
+| `companion_gear_sync` | OFF (root-caused, fix built 2026-08-28, NEEDS-LIVE) | read each companion's real equipped gear and hand it to the plugin (agent's own copy) — the 2026-08-27 live-verified FAILURE (apply lands on the PLAYER, not the companion) was root-caused to an un-drained combat-round action queue; the fix bypasses it and calls `CSWSCreature::EquipItem` directly, but stays off until re-tested live | [companion-state-sync.md](research/companion-state-sync.md) |
+| `party_pool_sync` | OFF (live-verified: one bug fixed, a second reproduced 2026-08-28) | sync the shared party item pool (`CSWPartyTable+0x118`) both ways — the second bug is a depositing-side double-apply, reproduced directly on the originating side's own log (asymmetric, not deterministic every time) | [party-pool-sync.md](research/party-pool-sync.md) |
 | `solo_segment_spectate` | OFF¹¹ | the OWNER's fight, the other player spectates during a story-forced solo segment (Bastila/Malak duels — NEEDS-LIVE) | [star-forge-finale.md](research/star-forge-finale.md) |
-| `store_sync` | OFF | sync merchant store stock (`CSWSStore+0x230`) both ways — reads only while a store's GUI is open (NEEDS-LIVE) | [store-sync.md](research/store-sync.md) |
+| `store_sync` | OFF | sync merchant store stock (`CSWSStore+0x230`) both ways — reads only while a store's GUI is open; a 2026-08-28 live pass found the `openstore` dev verb crashed the engine (`ShowStoreGui` was called with the wrong argument count), root-caused and fixed the same day (NEEDS-LIVE — fix not yet re-tested live) | [store-sync.md](research/store-sync.md) |
 | `stun_servers` | two well-known public servers¹² | HOST only: STUN servers (`host:port`, comma-separated) asked for the host's public IP:port; empty disables discovery (roadmap item 24, NEEDS-LIVE) | [network-topology.md](research/network-topology.md) |
 | `upnp` | ON | HOST only: attempt a UPnP IGD port mapping for the session (and world-transfer) port; fails soft (roadmap item 24, NEEDS-LIVE) | [network-topology.md](research/network-topology.md) |
 
@@ -136,7 +136,7 @@ entirely; both now default ON, matching each other and the shipped file's explic
 | `party_follow_refresh_final_node` | OFF | follow-AI fix candidate, live-refuted (no effect) | [party-reconciliation.md](research/party-reconciliation.md) |
 | `party_follow_extend_final_node` | OFF | follow-AI fix candidate, unconfirmed live | [party-reconciliation.md](research/party-reconciliation.md) |
 | `party_drive` | ON | drive companion positions every frame | [party-reconciliation.md](research/party-reconciliation.md) |
-| `companion_gear_sync` | OFF (live-verified FAILURE — see the agent-side row above) | dress a mirrored companion in its real equipped gear (plugin's own copy) | [companion-state-sync.md](research/companion-state-sync.md) |
+| `companion_gear_sync` | OFF (root-caused, fix built 2026-08-28, NEEDS-LIVE — see the agent-side row above) | dress a mirrored companion in its real equipped gear (plugin's own copy) | [companion-state-sync.md](research/companion-state-sync.md) |
 | `companion_local_combat` | OFF³ | release a nearby companion to fight a client through its own engine | [party-reconciliation.md](research/party-reconciliation.md) |
 | `companion_local_combat_range` | `10` | release distance for companion local combat | [party-reconciliation.md](research/party-reconciliation.md) |
 | `party_roster_sync` | ON | mirror the party roster across instances | [party-reconciliation.md](research/party-reconciliation.md) |
@@ -158,7 +158,7 @@ entirely; both now default ON, matching each other and the shipped file's explic
 | `dialogue_join_teleport` | ON | teleport a late joiner into a conversation instead of walking | [dialogue-join-latency.md](research/dialogue-join-latency.md) |
 | `dialogue_exclusive` | ON | one conversation at a time (the exclusivity lock itself) | [dialogue-sync.md](research/dialogue-sync.md) |
 | `container_locks` | ON | one-at-a-time container/corpse open lock | [container-sync.md](research/container-sync.md) |
-| `container_lock_arbitration` | ON | host-arbitrated container lock request/response, closing the race where two near-simultaneous clicks both proceed before the eventually-consistent claim lands; fails safe to the pre-arbitration behaviour after a 300ms host-answer timeout | [container-sync.md](research/container-sync.md) |
+| `container_lock_arbitration` | ON | host-arbitrated container lock request/response, closing the race where two near-simultaneous clicks both proceed before the eventually-consistent claim lands; fails safe to the pre-arbitration behaviour after a 1000ms host-answer timeout (raised from 300ms 2026-08-28 — the real plugin→agent→host round trip never fit in the original budget; live-verified 2026-08-28, correct outcome AND fast-path resolution both confirmed) | [container-sync.md](research/container-sync.md) |
 | `pazaak_detect` | ON⁹ | plugin's own copy: gates the in-process Pazaak edge log/`MinigameKind`, not the wire flag | [minigames.md](research/minigames.md) |
 | `minigame_wait_notice` | ON | "&lt;name&gt; is in a minigame - waiting" HUD line for a parked peer | [minigames.md](research/minigames.md) |
 | `solo_segment_spectate` | OFF¹¹ | plugin's own copy: gates both `SoloSegmentController` (owner-side detection) and `SoloSegmentSpectateController` (spectator-side input lock/camera/damage gate) | [star-forge-finale.md](research/star-forge-finale.md) |
@@ -198,8 +198,17 @@ says so explicitly alongside it rather than leaving the 27015/27140 gap unexplai
 `KotorGameBridge.IsInMinigame` — and therefore the wire's `PlayerState.FlagInMinigame` bit a
 peer parks on — true for a Pazaak hand; `PluginConfig.ReadBool("pazaak_detect", ...)` (plugin
 side, in-process) only gates that process's own local edge log and `MinigameKind` labelling.
-Both default OFF and the shipped `coop.ini.example` leaves it at `0`, so the two readers never
-disagree in practice; setting it in `coop.ini` turns both on together.
+Both now default ON and the shipped `coop.ini.example` sets it to `1`, so the two readers never
+disagree in practice; the two are still independent fields, and a hand-edited `coop.ini` that
+sets one without the other would let them diverge. A 2026-08-28 live pass ran the positive path
+for the first time (a real Pazaak hand started via the `pazaak` console verb): the wire flag
+latched, the peer's phantom parked, and the "in a minigame - waiting" HUD toast all fired
+correctly, and a real bug (the plugin-side edge detector's own pointer-shape guard rejected the
+field's actual bare-`1`/`0` values) was found and fixed. `pazaak_detect` was flipped to `1` (ON)
+in both `PluginConfig.ReadBool`'s fallback and `profiles/coop.ini.example` as a result — before
+this fix both readers defaulted OFF and the shipped file left it at `0`. Ending a hand while it
+is "running" (e.g. via a module transition) still does not clear the flag and remains NEEDS-LIVE,
+see `minigames.md`'s 2026-08-28 entry.
 ¹⁰ Live-verified 2026-08-27: the engine call fires correctly, follows a peer's real position,
 survives a module transition with no crash, and costs nothing measurable in frame time. Flipped
 ON in both `PluginConfig.ReadBool`'s own fallback and `profiles/coop.ini.example`. The exact
