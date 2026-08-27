@@ -73,13 +73,14 @@ the test suite (minus the known-flaky `HeavyPacketLossStillConverges`), then
 agent and uploads `kotor-coop-<git describe>.zip` as the run's artifact — so every green
 run has a ready-to-use build attached.
 
-`.github/workflows/release.yml` publishes a GitHub release: push a `v*` tag
-(`git tag v0.1.0 && git push origin v0.1.0`) and the workflow builds, tests, packages and
-creates the release with the zip and auto-generated notes. Running it by hand from the
-Actions tab produces a pre-release named `build-<git describe>` from any branch. The zip
-contains `install.ps1` and a `README.md` (`tools/package-README.md`, version-stamped by
-`package.ps1`) that explains install, play, chain mode and troubleshooting to someone who
-has never seen this repo.
+`.github/workflows/release.yml` runs **after CI succeeds** (`workflow_run`) and publishes
+the very zip that run produced — it never rebuilds. Every green push to `main` replaces the
+rolling `latest` pre-release; a `v*` tag (`git tag v0.1.0 && git push origin v0.1.0`) goes
+through the same CI run and then becomes a full release named after the tag, with
+auto-generated notes. A manual dispatch publishes the newest successful CI zip for the chosen
+ref. The zip contains `install.ps1` and a `README.md` (`tools/package-README.md`,
+version-stamped by `package.ps1`) that explains install, play, chain mode and troubleshooting
+to someone who has never seen this repo.
 
 ## Running the live rig
 

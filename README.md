@@ -77,9 +77,9 @@ module's object-id-keyed channels, a different save asks you to rejoin (or refus
 ## Quick start (players)
 
 Download `kotor-coop-<version>.zip` from the
-[releases page](https://github.com/ChristopherVR/kotor-coop/releases) (every CI run also
-attaches one as a build artifact), extract it anywhere, and install it into your GOG game
-directory:
+[releases page](https://github.com/ChristopherVR/kotor-coop/releases) — a tagged release, or
+`latest`, which is rebuilt from every push to `main` that passes build and test — extract it
+anywhere, and install it into your GOG game directory:
 
 ```powershell
 pwsh .\install.ps1 -GameDir 'C:\GOG Games\Star Wars KOTOR (GOG)'
@@ -182,7 +182,7 @@ tests/KotorCoop.Tests    unit + loopback integration tests
 profiles/                JSON offset profiles, coop.ini.example; profiles/override ships k_coop_ game files
 docs/research/           verified reverse-engineering write-ups behind each feature
 tools/                   package/install scripts, demo rig, RE helpers, the kotor1_0_3 symbol database
-.github/workflows/       ci.yml (build, test, package on every push), release.yml (v* tag -> GitHub release)
+.github/workflows/       ci.yml (build, test, package on every push), release.yml (after green CI: rolling "latest" on main, full release on a v* tag)
 ```
 
 ## Honest limitations

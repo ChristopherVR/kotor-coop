@@ -1,70 +1,86 @@
-# Publishes a ready-to-use build as a GitHub release.
+# Publishes the build CI just validated. Runs AFTER the CI workflow completes successfully
+# and reuses its packaged zip — the release is the exact artifact that passed the tests,
+# never a second build.
 #
-#   git tag v0.1.0 && git push origin v0.1.0     -> release "v0.1.0" with kotor-coop-0.1.0.zip
-#
-# Or run it by hand from the Actions tab (workflow_dispatch) to cut a pre-release from any
-# branch; the zip is then versioned by `git describe` and marked as a pre-release.
+#   push to main            -> CI green -> rolling pre-release "latest" (replaced every time)
+#   git push origin v0.1.0  -> CI green -> full release "v0.1.0" with kotor-coop-0.1.0.zip
+#   Actions tab (dispatch)  -> publishes the newest successful CI zip for the chosen ref as "latest"
 name: Release
 
 on:
-  push:
-    tags: ['v*']
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
   workflow_dispatch:
 
 permissions:
   contents: write
+  actions: read
 
 jobs:
   release:
-    runs-on: windows-latest
+    runs-on: ubuntu-latest
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
 
     steps:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
-      - name: Setup .NET 10
-        uses: actions/setup-dotnet@v6
-        with:
-          dotnet-version: '10.0.x'
-
-      - name: Build and test
-        run: >
-          dotnet build KotorCoop.slnx -warnaserror &&
-          dotnet test tests/KotorCoop.Tests --no-build
-          --filter "FullyQualifiedName!~HeavyPacketLossStillConverges"
-
-      - name: Package
-        id: package
-        shell: pwsh
-        run: |
-          pwsh tools/package.ps1 -WarnAsError -OutDir dist
-          $zip = Get-ChildItem dist/kotor-coop-*.zip | Select-Object -First 1
-          "zip=$($zip.FullName)" >> $env:GITHUB_OUTPUT
-          "name=$($zip.Name)" >> $env:GITHUB_OUTPUT
-
-      - name: Upload package artifact
-        uses: actions/upload-artifact@v7
-        with:
-          name: kotor-coop
-          path: dist/kotor-coop-*.zip
-          if-no-files-found: error
-
-      # Tag push: a full release named after the tag. Manual run: a pre-release named after
-      # git describe, so a branch build can be shared without pretending to be a version.
-      - name: Create GitHub release
-        shell: pwsh
+      # The ref CI built. For a workflow_run, head_branch is the branch name, or the tag
+      # name when the push was a tag. For a manual run, whatever the workflow was started on.
+      - name: Resolve what to publish
+        id: what
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          $zip = '${{ steps.package.outputs.zip }}'
-          if ('${{ github.ref_type }}' -eq 'tag') {
-            $tag = '${{ github.ref_name }}'
-            gh release create $tag $zip --title $tag --generate-notes --verify-tag
-          }
-          else {
-            $tag = 'build-' + (git describe --tags --always).Trim()
-            gh release create $tag $zip --title $tag --prerelease --target '${{ github.sha }}' `
-              --notes "Pre-release built from ${{ github.ref_name }} @ ${{ github.sha }}. See README.md inside the zip."
-          }
-          if ($LASTEXITCODE -ne 0) { throw "gh release create failed ($LASTEXITCODE)" }
+          if [ "${{ github.event_name }}" = "workflow_run" ]; then
+            ref='${{ github.event.workflow_run.head_branch }}'
+            sha='${{ github.event.workflow_run.head_sha }}'
+            run_id='${{ github.event.workflow_run.id }}'
+          else
+            ref='${{ github.ref_name }}'
+            sha='${{ github.sha }}'
+            run_id=$(gh run list --workflow CI --commit "$sha" --status success --limit 1 --json databaseId --jq '.[0].databaseId')
+            if [ -z "$run_id" ]; then echo "no successful CI run for $sha"; exit 1; fi
+          fi
+
+          case "$ref" in
+            v[0-9]*) kind=tag ;;
+            main)    kind=latest ;;
+            *)       echo "ref $ref is neither main nor a v* tag; nothing to publish"; kind=skip ;;
+          esac
+
+          echo "ref=$ref"       >> "$GITHUB_OUTPUT"
+          echo "sha=$sha"       >> "$GITHUB_OUTPUT"
+          echo "run_id=$run_id" >> "$GITHUB_OUTPUT"
+          echo "kind=$kind"     >> "$GITHUB_OUTPUT"
+
+      - name: Download the CI package
+        if: steps.what.outputs.kind != 'skip'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh run download '${{ steps.what.outputs.run_id }}' --name kotor-coop --dir dist
+          ls -l dist
+
+      - name: Publish release
+        if: steps.what.outputs.kind != 'skip'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          zip=$(ls dist/kotor-coop-*.zip | head -n1)
+          ref='${{ steps.what.outputs.ref }}'
+          sha='${{ steps.what.outputs.sha }}'
+
+          if [ '${{ steps.what.outputs.kind }}' = tag ]; then
+            gh release create "$ref" "$zip" --title "$ref" --generate-notes --verify-tag
+          else
+            # One rolling pre-release that always points at the newest green main build.
+            # Delete + recreate rather than upload --clobber so the tag moves to the new sha
+            # and the notes say which commit it is.
+            gh release delete latest --yes --cleanup-tag 2>/dev/null || true
+            gh release create latest "$zip" --prerelease --target "$sha" \
+              --title "latest (main @ ${sha:0:7})" \
+              --notes "Rolling build of \`main\` at $sha, from CI run ${{ steps.what.outputs.run_id }}. Every push that passes build + test replaces this release. Tagged releases are the stable ones. See README.md inside the zip."
+          fi
