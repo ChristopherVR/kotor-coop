@@ -112,6 +112,11 @@ public static class ProtocolConstants
     /// Version 42: <see cref="PacketType.PartyPoolOp"/> (53) / <see cref="PacketType.PartyPoolAck"/>
     /// (54) / <see cref="PacketType.PartyPoolSyncRequest"/> (55) — the shared party item-pool
     /// channel (<c>party_pool_sync</c>, default OFF, NEEDS-LIVE). See docs/research/party-pool-sync.md.
+    ///
+    /// TODO(version): bump to 43 on merge for <see cref="PacketType.StoreOp"/> (56) /
+    /// <see cref="PacketType.StoreAck"/> (57) / <see cref="PacketType.StoreSyncRequest"/> (58) —
+    /// the merchant/store stock channel (<c>store_sync</c>, default OFF, NEEDS-LIVE). See
+    /// docs/research/store-sync.md.
     /// </summary>
     public const byte Version = 42;
 
@@ -145,6 +150,13 @@ public static class ProtocolConstants
     /// still change quantity past the cap, only a brand-new key is refused.
     /// </summary>
     public const int MaxPartyPoolStacks = 256;
+
+    /// <summary>
+    /// Distinct store stack keys (across every store, since <see cref="StoreStackKey"/> already
+    /// carries the store's object id) a session remembers at once. Same reasoning and the same
+    /// cap value as <see cref="MaxPartyPoolStacks"/> — see docs/research/store-sync.md.
+    /// </summary>
+    public const int MaxStoreStacks = 256;
 
     /// <summary>
     /// Creatures the owner replicates per snapshot. 40 bytes each (id, health, death,

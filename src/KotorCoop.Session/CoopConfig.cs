@@ -386,6 +386,14 @@ public sealed record CoopConfig
     /// </summary>
     public bool PartyPoolSyncEnabled { get; init; }
 
+    /// <summary>
+    /// Syncs merchant store stock both ways. OFF by default (coop.ini <c>store_sync = 1</c>
+    /// turns it on) — researched and verified against the disassembly, but not yet watched land
+    /// on a running game, per the project's own rule that a researched write ships behind a flag
+    /// until it has. See docs/research/store-sync.md.
+    /// </summary>
+    public bool StoreSyncEnabled { get; init; }
+
     /// <summary>The anchor as the plugin's numeric code (0=TL, 1=TR, 2=BL, 3=BR).</summary>
     public uint ChatOverlayAnchorCode => ChatOverlayAnchor.Trim().ToLowerInvariant() switch
     {
@@ -530,6 +538,7 @@ public sealed record CoopConfig
             CompanionXpSync = IsTruthy(kv.GetValueOrDefault("companion_xp_sync")),
             CompanionGearSync = IsTruthy(kv.GetValueOrDefault("companion_gear_sync")),
             PartyPoolSyncEnabled = IsTruthy(kv.GetValueOrDefault("party_pool_sync")),
+            StoreSyncEnabled = IsTruthy(kv.GetValueOrDefault("store_sync")),
         };
     }
 

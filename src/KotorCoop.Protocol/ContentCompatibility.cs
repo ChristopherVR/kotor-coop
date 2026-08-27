@@ -270,10 +270,16 @@ public static class ContentCompatibility
 
     /// <summary>The channels that are only ever safe because both engines dealt the same
     /// object ids. Everything keyed on an id — enemies, doors and placeables, ground items,
-    /// and the party slots — lives or dies together, so the set is named once.</summary>
+    /// and the party slots — lives or dies together, so the set is named once.
+    ///
+    /// <see cref="SessionCapabilities.Store"/> belongs here (unlike
+    /// <see cref="SessionCapabilities.PartyPool"/>, which does not — see that member's own
+    /// remarks): a store is a real, GIT-placed <c>CGameObject</c> both instances share an id for
+    /// (docs/research/store-sync.md §1.2), so a save/GIT mismatch is exactly as unsafe for it as
+    /// for a door or a container.</summary>
     public const SessionCapabilities ObjectIdKeyed =
         SessionCapabilities.Enemies | SessionCapabilities.Doors
-        | SessionCapabilities.GroundItems | SessionCapabilities.Party;
+        | SessionCapabilities.GroundItems | SessionCapabilities.Party | SessionCapabilities.Store;
 
     /// <summary>
     /// Refines a verdict with world-time facts. A different globals catalogue drops world

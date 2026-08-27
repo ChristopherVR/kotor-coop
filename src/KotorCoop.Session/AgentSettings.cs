@@ -258,4 +258,14 @@ public sealed record AgentSettings
     /// docs/research/party-pool-sync.md for the full design and the NEEDS-LIVE items.
     /// </summary>
     public bool PartyPoolSyncEnabled { get; init; }
+
+    /// <summary>
+    /// When true, <see cref="Pumps.StorePump"/> runs on the heavy pass: syncing merchant store
+    /// stock both ways — detecting a local buy/sell while a store's GUI is open, and applying a
+    /// peer's, through the staging-cheat channel, for any store this instance has learned an
+    /// object id for. Off by default (coop.ini <c>store_sync</c>) — the offset chain and the
+    /// engine calls are VERIFIED against the symbol database and the disassembly, but neither
+    /// has been watched land on a running game yet. See docs/research/store-sync.md.
+    /// </summary>
+    public bool StoreSyncEnabled { get; init; }
 }

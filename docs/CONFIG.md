@@ -71,6 +71,7 @@ actually runs with.
 | `companion_xp_sync` | OFF (NEEDS-LIVE) | share each active companion's experience the same way the PC's own is | [companion-state-sync.md](research/companion-state-sync.md) |
 | `companion_gear_sync` | OFF (NEEDS-LIVE) | read each companion's real equipped gear and hand it to the plugin (agent's own copy) | [companion-state-sync.md](research/companion-state-sync.md) |
 | `party_pool_sync` | OFF | sync the shared party item pool (`CSWPartyTable+0x118`) both ways (NEEDS-LIVE) | [party-pool-sync.md](research/party-pool-sync.md) |
+| `store_sync` | OFF | sync merchant store stock (`CSWSStore+0x230`) both ways — reads only while a store's GUI is open (NEEDS-LIVE) | [store-sync.md](research/store-sync.md) |
 
 ¹ The property's own C# doc comment used to claim this was OFF by default while the actual
 parse logic (`!ContainsKey(...) || IsTruthy(...)`) already defaulted it ON, matching the

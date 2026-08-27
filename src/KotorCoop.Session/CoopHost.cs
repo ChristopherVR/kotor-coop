@@ -139,6 +139,9 @@ public sealed partial class CoopHost : ICoopSession
             [PacketType.PartyPoolOp] = HandlePartyPoolOp,
             [PacketType.PartyPoolAck] = HandlePartyPoolAck,
             [PacketType.PartyPoolSyncRequest] = HandlePartyPoolSyncRequest,
+            [PacketType.StoreOp] = HandleStoreOp,
+            [PacketType.StoreAck] = HandleStoreAck,
+            [PacketType.StoreSyncRequest] = HandleStoreSyncRequest,
             [PacketType.MaterialisedLootAck] = HandleMaterialisedLootAck,
             [PacketType.JournalOp] = HandleJournalOp,
             [PacketType.JournalSyncRequest] = HandleJournalSyncRequest,
@@ -374,6 +377,7 @@ public sealed partial class CoopHost : ICoopSession
         BroadcastContainerLoot(now, recipients);
         BroadcastMaterialisedLoot(now, recipients);
         BroadcastPartyPool(now, recipients);
+        BroadcastStore(now, recipients);
         BroadcastDialogueGrant(now, recipients);
         BroadcastPhantomDamage(recipients);
         BroadcastPeerEffects(recipients);

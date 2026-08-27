@@ -65,6 +65,7 @@ public sealed class CoopAgent
     private readonly WorldStatePump _worldStatePump;
     private readonly ScriptItemGrantPump _scriptItemGrantPump;
     private readonly PartyPoolPump _partyPoolPump;
+    private readonly StorePump _storePump;
 
     /// <summary>
     /// The suppression ledger shared by every pump that can put a new row into the local PC's
@@ -91,6 +92,7 @@ public sealed class CoopAgent
         _dialoguePump = new DialoguePump(bridge, session, settings, _log);
         _partyPump = new PartyPump(bridge, session, settings, _log);
         _partyPoolPump = new PartyPoolPump(bridge, session, _log);
+        _storePump = new StorePump(bridge, session, _log);
 
         // TriggerPump before CombatPump: CombatPump.PumpEnemies calls into it for the
         // client-triggered encounter/generic-trigger sub-steps.
@@ -638,6 +640,13 @@ public sealed class CoopAgent
         {
             _partyPoolPump.Pump(caps);
         }
+
+        // Off by default (coop.ini store_sync) — same "researched but not yet live-verified"
+        // gating as PartyPoolSyncEnabled above. See docs/research/store-sync.md.
+        if (_settings.StoreSyncEnabled)
+        {
+            _storePump.Pump(caps);
+        }
     }
 
     /// <summary>Diffs <see cref="_knownPeerIds"/> against this tick's peer set and raises
@@ -723,6 +732,21 @@ public sealed class CoopAgent
     public bool TryDequeuePendingPartyPoolApply(out PendingPartyPoolApply next)
     {
         return _partyPoolPump.TryDequeuePendingApply(out next);
+    }
+
+    /// <summary>One store buy/sell this instance's own engine still owes for a specific store
+    /// (<see cref="StoreStackKey.StoreObjectId"/>), queued for the automatic apply path — see
+    /// <see cref="PendingPartyPoolApply"/>'s own remarks for why this is public.</summary>
+    public readonly record struct PendingStoreApply(
+        KotorCoop.Protocol.StoreOpKind Kind, KotorCoop.Protocol.StoreStackKey Key, ushort Count);
+
+    /// <summary>
+    /// Called by whatever already arbitrates the single-slot staging-cheat channel, at most once
+    /// per ITS tick — mirrors <see cref="TryDequeuePendingPartyPoolApply"/> exactly.
+    /// </summary>
+    public bool TryDequeuePendingStoreApply(out PendingStoreApply next)
+    {
+        return _storePump.TryDequeuePendingApply(out next);
     }
 
     /// <summary>
