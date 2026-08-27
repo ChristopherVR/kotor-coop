@@ -2,8 +2,9 @@ using System.Text;
 
 namespace KotorCoop.Plugin;
 
-// Party-affecting verbs: MoveNear (diagnostic snap), Leader (local control switch) and
-// Recruit (dev-only NPC-roster force-add).
+// Party-affecting verbs: MoveNear (diagnostic snap), Leader (local control switch), Recruit
+// (dev-only NPC-roster force-add) and RemoveParty (dev-only RemovePartyMember trigger, see
+// docs/research/star-forge-finale.md §11).
 internal sealed unsafe partial class CheatController
 {
     /// <summary>
@@ -178,5 +179,44 @@ internal sealed unsafe partial class CheatController
         {
             Answer(SharedBlock.CheatStatusRefused, $"recruit: AddPartyMember refused NPC slot {slot} (failure {addFailure})");
         }
+    }
+
+    /// <summary>
+    /// DEV-ONLY LIVE-TEST PRIMITIVE (2026-08-28, docs/research/star-forge-finale.md §11): calls
+    /// the engine's own <c>RemovePartyMember(int nNPC)</c> — the SAME VM routine (id 575) every
+    /// script in the game reaches through <c>CSWVirtualMachineCommands::
+    /// ExecuteCommandRemovePartyMember 0x00541C00</c> — through
+    /// <see cref="Odyssey.RemovePartyMemberBySlot"/>'s existing parameter-stack dispatch (push
+    /// the argument onto the VM's own stack, dispatch through the routine table by verified
+    /// handler address, pop the return — the same pattern <c>startdialog</c> established for
+    /// <c>ActionStartConversation</c>). Built so <c>RemovePartyMemberHook</c>'s own detour can be
+    /// exercised WITHOUT reaching <c>k_sta_bastila.dlg</c>'s entry 70 (§9.3/§9.4's own one-shot-
+    /// precondition maze). See <see cref="SharedBlock.CheatKindRemoveParty"/>'s own doc comment.
+    ///
+    /// A REAL engine call, not a simulation of one: this genuinely removes the named companion
+    /// from the active party (they stay recruited — see <see cref="Odyssey.RemovePartyMemberBySlot"/>'s
+    /// own doc comment), the same as if a script had done it. NOT a staging primitive for normal
+    /// roster changes — use <c>recruit</c>/<c>leader</c> for that.
+    /// </summary>
+    private void RemoveParty()
+    {
+        int slot = block.CheatAmount;
+
+        if (slot is < 0 or >= SharedBlock.PartyRosterSlots)
+        {
+            Answer(
+                SharedBlock.CheatStatusRefused,
+                $"removeparty: slot must be 0-{SharedBlock.PartyRosterSlots - 1} (got {slot})");
+            return;
+        }
+
+        if (!Odyssey.RemovePartyMemberBySlot(slot, out int failure))
+        {
+            Answer(SharedBlock.CheatStatusEngineRefused, $"removeparty {slot} refused (failure {failure})");
+            return;
+        }
+
+        PluginHost.Log($"removeparty: RemovePartyMember({slot}) dispatched through the VM routine table");
+        Answer(SharedBlock.CheatStatusApplied, $"party slot {slot} removed");
     }
 }

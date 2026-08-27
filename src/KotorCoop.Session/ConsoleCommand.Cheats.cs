@@ -309,6 +309,19 @@ public static partial class ConsoleCommand
             CoopCommandKind.StartDialog, Address: rest[0], Password: rest.Length == 2 ? rest[1] : string.Empty);
     }
 
+    // removeparty <slot>  - DEV-ONLY LIVE-TEST PRIMITIVE, see CoopCommandKind.RemoveParty.
+    private static CoopCommand ParseRemoveParty(string[] rest)
+    {
+        if (rest.Length != 1 || !int.TryParse(rest[0], out int slot) || slot < 0 || slot > 8)
+        {
+            return new CoopCommand(
+                CoopCommandKind.Invalid,
+                Error: "removeparty needs one party-roster slot (0-8), e.g. removeparty 0");
+        }
+
+        return new CoopCommand(CoopCommandKind.RemoveParty, Amount: slot);
+    }
+
     private static CoopCommand ParseCheats(string[] rest) => new(CoopCommandKind.Cheats);
 
     /// <summary>
@@ -368,6 +381,9 @@ public static partial class ConsoleCommand
         "                      or back to 'pc'; local only, never crosses the network",
         "  recruit <slot>      dev-only: force NPC roster slot (0-8) into the local active",
         "                      party, no dialogue needed; local only, never crosses the network",
+        "  removeparty <slot>  dev-only: call the REAL RemovePartyMember(nNPC) on roster slot",
+        "                      (0-8) - exercises the solo-segment detector's script-agnostic",
+        "                      hook without reaching the Bastila dialogue; local only",
         "  skipline            finish your OWNED conversation's current line/VO right now,",
         "                      in-process (no OS input); no-op if nothing is playing",
         "  selectreply <slot>  commit a reply slot on your OWNED conversation, in-process",

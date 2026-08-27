@@ -285,6 +285,7 @@ public sealed partial class CoopCommandDispatcher(
         [CoopCommandKind.Buy] = c => Buy(c.Address ?? string.Empty, c.Password ?? string.Empty, c.Amount),
         [CoopCommandKind.Sell] = c => Sell(c.Address ?? string.Empty, c.Password ?? string.Empty, c.Amount),
         [CoopCommandKind.StartDialog] = c => StartDialog(c.Address ?? string.Empty, c.Password ?? string.Empty),
+        [CoopCommandKind.RemoveParty] = c => SendCheat(new CheatRequest(CheatKinds.RemoveParty, Amount: c.Amount)),
 
         [CoopCommandKind.Cheats] = CheatsCommand,
     };

@@ -163,6 +163,7 @@ entirely; both now default ON, matching each other and the shipped file's explic
 | `minigame_wait_notice` | ON | "&lt;name&gt; is in a minigame - waiting" HUD line for a parked peer | [minigames.md](research/minigames.md) |
 | `solo_segment_spectate` | OFF¹¹ | plugin's own copy: gates both `SoloSegmentController` (owner-side detection) and `SoloSegmentSpectateController` (spectator-side input lock/camera/damage gate) | [star-forge-finale.md](research/star-forge-finale.md) |
 | `solo_segment_modules` | unset (base set only) | comma-separated extra module resrefs appended to `SoloSegmentCatalogue`'s base set (`sta_m45ac`, `sta_m45ad`) | [star-forge-finale.md](research/star-forge-finale.md) |
+| `solo_segment_any_module` | OFF | plugin-only: drops the module gate on `RemovePartyMemberHook`'s own burst trigger ONLY (≥2 `RemovePartyMember` calls within ~1s begins a segment in ANY module, not just the catalogue) — the roster-drop-edge trigger stays catalogue-gated regardless | [star-forge-finale.md](research/star-forge-finale.md) §11 |
 
 ³ The code fallback (used whenever the key itself is absent — whether `coop.ini` is missing
 entirely or just that one line is) is OFF for `companion_local_combat`, `dialogue_recruit_sync`,

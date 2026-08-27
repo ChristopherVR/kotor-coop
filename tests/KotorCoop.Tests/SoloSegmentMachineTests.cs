@@ -202,4 +202,155 @@ public class SoloSegmentMachineTests
         machine.Invalidate();
         Assert.False(machine.Active);
     }
+
+    // ---- the script-agnostic second trigger: NoteRemovePartyMemberCall -------------------
+    //
+    // docs/research/star-forge-finale.md §11 / §9.5: a detour on the VM's own
+    // ExecuteCommandRemovePartyMember observes every RemovePartyMember call directly, and a
+    // burst of >= 2 within ~1s can begin a segment even before the roster-count poll (Step)
+    // ever sees a drop.
+
+    [Fact]
+    public void ASingleRemovePartyMemberCallNeverBegins()
+    {
+        // The debounce is the whole point: one call is an ordinary, unremarkable script action
+        // (a single companion benched), not a story-forced strip.
+        SoloSegmentMachine machine = new();
+
+        Assert.Equal(SoloSegmentEvent.None,
+            machine.NoteRemovePartyMemberCall(Catalogue, "sta_m45ac", anyModuleAllowed: false, nowTicks: 1_000));
+        Assert.False(machine.Active);
+    }
+
+    [Fact]
+    public void TwoRemovePartyMemberCallsWithinTheWindowBeginInACataloguedModule()
+    {
+        SoloSegmentMachine machine = new();
+
+        Assert.Equal(SoloSegmentEvent.None,
+            machine.NoteRemovePartyMemberCall(Catalogue, "sta_m45ac", anyModuleAllowed: false, nowTicks: 1_000));
+        Assert.Equal(SoloSegmentEvent.Began,
+            machine.NoteRemovePartyMemberCall(Catalogue, "sta_m45ac", anyModuleAllowed: false, nowTicks: 1_200));
+        Assert.True(machine.Active);
+    }
+
+    [Fact]
+    public void NineCallsInOneScriptLikeTheRealWipeBeginExactlyOnce()
+    {
+        // The real wipe fires nine RemovePartyMember calls back to back (§9.2 step 4). Only the
+        // SECOND call should read as Began; the remaining seven must be no-ops on an already-
+        // active machine — matching §9.5's own concern about "nine redundant solo segment began
+        // events" if nothing coalesces them.
+        SoloSegmentMachine machine = new();
+        int began = 0;
+
+        for (int i = 0; i < 9; i++)
+        {
+            SoloSegmentEvent evt = machine.NoteRemovePartyMemberCall(
+                Catalogue, "sta_m45ac", anyModuleAllowed: false, nowTicks: 1_000 + i);
+            if (evt == SoloSegmentEvent.Began)
+            {
+                began++;
+            }
+        }
+
+        Assert.Equal(1, began);
+        Assert.True(machine.Active);
+    }
+
+    [Fact]
+    public void TwoCallsMoreThanTheWindowApartNeverBegin()
+    {
+        // Debounce, the other direction: two calls a long way apart in time are two unrelated
+        // single removals, not one burst.
+        SoloSegmentMachine machine = new();
+
+        Assert.Equal(SoloSegmentEvent.None,
+            machine.NoteRemovePartyMemberCall(Catalogue, "sta_m45ac", anyModuleAllowed: false, nowTicks: 0));
+        Assert.Equal(SoloSegmentEvent.None,
+            machine.NoteRemovePartyMemberCall(Catalogue, "sta_m45ac", anyModuleAllowed: false, nowTicks: 5_000));
+        Assert.False(machine.Active);
+    }
+
+    [Fact]
+    public void ABurstInAnUncataloguedModuleNeverBeginsWithoutTheAnyModuleGate()
+    {
+        SoloSegmentMachine machine = new();
+
+        machine.NoteRemovePartyMemberCall(Catalogue, "tar_m03aa", anyModuleAllowed: false, nowTicks: 1_000);
+        Assert.Equal(SoloSegmentEvent.None,
+            machine.NoteRemovePartyMemberCall(Catalogue, "tar_m03aa", anyModuleAllowed: false, nowTicks: 1_100));
+        Assert.False(machine.Active);
+    }
+
+    [Fact]
+    public void ABurstInAnUncataloguedModuleBeginsWhenAnyModuleIsAllowed()
+    {
+        // solo_segment_any_module=1: the module gate is dropped entirely, matching §9.5's own
+        // "generalises to ANY future forced-solo content this mod hasn't researched yet" case.
+        SoloSegmentMachine machine = new();
+
+        machine.NoteRemovePartyMemberCall(Catalogue, "tar_m03aa", anyModuleAllowed: true, nowTicks: 1_000);
+        Assert.Equal(SoloSegmentEvent.Began,
+            machine.NoteRemovePartyMemberCall(Catalogue, "tar_m03aa", anyModuleAllowed: true, nowTicks: 1_100));
+        Assert.True(machine.Active);
+    }
+
+    [Fact]
+    public void ABurstBeginIsANoOpWhileAlreadyActive()
+    {
+        SoloSegmentMachine machine = new();
+
+        machine.NoteRemovePartyMemberCall(Catalogue, "sta_m45ac", anyModuleAllowed: false, nowTicks: 1_000);
+        machine.NoteRemovePartyMemberCall(Catalogue, "sta_m45ac", anyModuleAllowed: false, nowTicks: 1_100);
+        Assert.True(machine.Active);
+
+        Assert.Equal(SoloSegmentEvent.None,
+            machine.NoteRemovePartyMemberCall(Catalogue, "sta_m45ac", anyModuleAllowed: false, nowTicks: 1_200));
+    }
+
+    [Fact]
+    public void ABurstBeginDoesNotImmediatelyEndOnAStillStaleRosterCount()
+    {
+        // The race NoteRemovePartyMemberCall's own doc comment describes: the hook fires before
+        // the roster-count poll has caught up, so the very next Step() pass can still read the
+        // OLD (pre-wipe) companion count. That must not be misread as "the roster refilled".
+        SoloSegmentMachine machine = new();
+
+        Assert.Equal(SoloSegmentEvent.Began, NoteBurst(machine, "sta_m45ac"));
+        Assert.True(machine.Active);
+
+        // Step() runs the very next frame; the roster-count read has not caught up yet.
+        Assert.Equal(SoloSegmentEvent.None, machine.Step(Catalogue, Inputs("sta_m45ac", 1)));
+        Assert.True(machine.Active);
+
+        // Once the roster read genuinely reflects the wipe...
+        Assert.Equal(SoloSegmentEvent.None, machine.Step(Catalogue, Inputs("sta_m45ac", 0)));
+        Assert.True(machine.Active);
+
+        // ...a REAL refill afterward still ends the segment normally.
+        Assert.Equal(SoloSegmentEvent.Ended, machine.Step(Catalogue, Inputs("sta_m45ac", 1)));
+        Assert.False(machine.Active);
+    }
+
+    [Fact]
+    public void InvalidateClearsTheRecentCallHistoryToo()
+    {
+        SoloSegmentMachine machine = new();
+
+        machine.NoteRemovePartyMemberCall(Catalogue, "sta_m45ac", anyModuleAllowed: false, nowTicks: 1_000);
+        machine.Invalidate();
+
+        // Without the reset, this second call (only 100ms after the pre-Invalidate one) would
+        // wrongly read as a burst against stale history from a session/module already left.
+        Assert.Equal(SoloSegmentEvent.None,
+            machine.NoteRemovePartyMemberCall(Catalogue, "sta_m45ac", anyModuleAllowed: false, nowTicks: 1_100));
+        Assert.False(machine.Active);
+    }
+
+    private static SoloSegmentEvent NoteBurst(SoloSegmentMachine machine, string module)
+    {
+        machine.NoteRemovePartyMemberCall(Catalogue, module, anyModuleAllowed: false, nowTicks: 1_000);
+        return machine.NoteRemovePartyMemberCall(Catalogue, module, anyModuleAllowed: false, nowTicks: 1_100);
+    }
 }

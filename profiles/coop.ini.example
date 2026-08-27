@@ -729,6 +729,14 @@ solo_segment_spectate=0
 # against a different module or a future mod's own forced-solo content.
 ;solo_segment_modules=
 
+# The solo-segment detector's second, script-agnostic trigger (RemovePartyMemberHook, a detour
+# on the engine's own ExecuteCommandRemovePartyMember): a burst of 2+ RemovePartyMember calls
+# within ~1s begins a segment even before the roster-count poll catches up. This key drops that
+# burst trigger's own module gate so it fires in ANY module, not just SoloSegmentCatalogue's set
+# - the roster-drop-edge trigger stays catalogue-gated regardless. Only read by the plugin.
+# Defaults OFF; 1 turns it on. See docs/research/star-forge-finale.md #11.
+solo_segment_any_module=0
+
 # Sync merchant store stock (CSWSStore+0x230) both ways: a limited-stock item bought on one
 # instance disappears from the other's copy of that shop, and an item sold to a merchant on one
 # instance appears in the other's. Keyed by (store object id, resref + charges/max charges/

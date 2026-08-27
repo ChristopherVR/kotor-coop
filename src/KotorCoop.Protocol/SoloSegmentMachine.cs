@@ -59,6 +59,39 @@ public sealed class SoloSegmentMachine
     private int _lastCompanionCount = -1;
     private string _activeModule = string.Empty;
 
+    /// <summary>
+    /// Whether an emptied roster has actually been OBSERVED (a real <see cref="Step"/> pass
+    /// with <c>CompanionCount == 0</c>) since the segment became active — see
+    /// <see cref="NoteRemovePartyMemberCall"/>'s own remarks for why this exists: the burst
+    /// trigger can set <see cref="Active"/> true a frame or more BEFORE the roster-count read
+    /// actually reflects the wipe (the hook fires at the exact VM call; the poll that feeds
+    /// <see cref="Step"/> catches up whenever the next frame's read happens to land). Without
+    /// this guard, that very next <see cref="Step"/> call would see <c>CompanionCount &gt;= 1</c>
+    /// (still stale) and read it as "the roster refilled", ending the segment one frame after it
+    /// began. Gating <c>rosterRefilled</c> on having seen a genuine empty roster at least once
+    /// since <see cref="Active"/> went true closes that race without weakening the real end
+    /// condition: a real refill (Malak dies, the roster restores) still ends the segment exactly
+    /// as before, once the emptied state has actually been observed.
+    /// </summary>
+    private bool _sawEmptyRosterSinceActive;
+
+    /// <summary>Recent <c>Environment.TickCount</c>-style timestamps of
+    /// <see cref="NoteRemovePartyMemberCall"/> calls, oldest first, capped at
+    /// <see cref="MaxRecentCalls"/> (a real wipe fires exactly nine — see
+    /// docs/research/star-forge-finale.md §9.2 step 4 — so nine is enough to see every call of
+    /// one wipe without growing unbounded across a long session).</summary>
+    private readonly int[] _recentCallTicks = new int[MaxRecentCalls];
+
+    private int _recentCallCount;
+
+    private const int MaxRecentCalls = 9;
+
+    /// <summary>The burst trigger's own debounce window: at least two calls inside this many
+    /// milliseconds of each other. ~1s per the task brief — generous next to how fast the real
+    /// nine-call wipe actually fires (all nine land inside a single script's own execution,
+    /// effectively one frame), while still tolerant of the hook's own capture jitter.</summary>
+    private const int BurstWindowMs = 1000;
+
     /// <summary>True while a segment is active. This is the LEVEL a per-frame caller should
     /// drive off (publish the wire flag, hide peers, etc.) — <see cref="Step"/>'s return value
     /// is only the edge.</summary>
@@ -75,8 +108,17 @@ public sealed class SoloSegmentMachine
 
         if (Active)
         {
+            if (after == 0)
+            {
+                _sawEmptyRosterSinceActive = true;
+            }
+
             bool moduleChanged = !string.Equals(_activeModule, inputs.Module, StringComparison.OrdinalIgnoreCase);
-            bool rosterRefilled = after >= 1;
+
+            // See _sawEmptyRosterSinceActive's own doc comment: a segment the BURST trigger
+            // just started must not read a still-stale (not-yet-dropped) roster count as a
+            // refill on the very next pass.
+            bool rosterRefilled = after >= 1 && _sawEmptyRosterSinceActive;
 
             if (!moduleChanged && !rosterRefilled)
             {
@@ -103,6 +145,83 @@ public sealed class SoloSegmentMachine
 
         Active = true;
         _activeModule = inputs.Module;
+
+        // The drop edge itself IS the empty-roster observation (after == 0, by construction of
+        // dropEdge above) — no race to guard against here, unlike the burst trigger.
+        _sawEmptyRosterSinceActive = true;
+        return SoloSegmentEvent.Began;
+    }
+
+    /// <summary>
+    /// The script-agnostic second trigger (docs/research/star-forge-finale.md §11): called once
+    /// per real <c>ExecuteCommandRemovePartyMember</c> engine call the plugin's own detour
+    /// observes (<c>RemovePartyMemberHook</c>), independent of and in addition to
+    /// <see cref="Step"/>'s roster-count poll. A burst of at least two calls within
+    /// <see cref="BurstWindowMs"/> of each other, while in a catalogued module (or ANY module
+    /// when <paramref name="anyModuleAllowed"/>), begins a segment immediately — the same
+    /// product decision <see cref="Step"/>'s drop edge makes, reached by a different, more
+    /// direct signal (docs/research/star-forge-finale.md §9.5's own cost/benefit: "fires at the
+    /// exact moment of ground truth, not a polled diff").
+    ///
+    /// A single call never begins one — the whole point of the debounce is that ONE
+    /// <c>RemovePartyMember</c> call is an ordinary, unremarkable script action (a companion
+    /// benched normally, a single roster tidy-up); nine in one burst is what marks a story-forced
+    /// strip. Every call is still recorded even when it does not (yet) qualify, so a second
+    /// qualifying call moments later is judged against the true recent history, not a history
+    /// reset by the first call's own refusal.
+    ///
+    /// A no-op (returns <see cref="SoloSegmentEvent.None"/>, but the call is still recorded)
+    /// while <see cref="Active"/> is already true — <see cref="Step"/> alone owns the end
+    /// conditions once a segment is running, exactly as it already does for the drop-edge path.
+    /// </summary>
+    public SoloSegmentEvent NoteRemovePartyMemberCall(
+        SoloSegmentCatalogue catalogue, string module, bool anyModuleAllowed, int nowTicks)
+    {
+        if (_recentCallCount < MaxRecentCalls)
+        {
+            _recentCallTicks[_recentCallCount++] = nowTicks;
+        }
+        else
+        {
+            Array.Copy(_recentCallTicks, 1, _recentCallTicks, 0, MaxRecentCalls - 1);
+            _recentCallTicks[MaxRecentCalls - 1] = nowTicks;
+        }
+
+        if (Active)
+        {
+            return SoloSegmentEvent.None;
+        }
+
+        if (!anyModuleAllowed && !catalogue.Contains(module))
+        {
+            return SoloSegmentEvent.None;
+        }
+
+        // Wrap-safe: Environment.TickCount wraps roughly every 49.7 days, and unchecked
+        // subtraction of two nearby ticks is correct across the wrap the same way every other
+        // TickCount-lease comparison in this codebase already relies on (see
+        // DialogueGateHook.PeerHoldsConversation).
+        int withinWindow = 0;
+        for (int i = 0; i < _recentCallCount; i++)
+        {
+            if (unchecked(nowTicks - _recentCallTicks[i]) <= BurstWindowMs)
+            {
+                withinWindow++;
+            }
+        }
+
+        if (withinWindow < 2)
+        {
+            return SoloSegmentEvent.None;
+        }
+
+        Active = true;
+        _activeModule = module;
+
+        // Deliberately NOT set true here — see this field's own doc comment. The roster read
+        // that would confirm the wipe has typically not even run yet; Step's own Active-branch
+        // sets it the first time it genuinely observes CompanionCount == 0.
+        _sawEmptyRosterSinceActive = false;
         return SoloSegmentEvent.Began;
     }
 
@@ -117,5 +236,7 @@ public sealed class SoloSegmentMachine
         _lastCompanionCount = -1;
         Active = false;
         _activeModule = string.Empty;
+        _sawEmptyRosterSinceActive = false;
+        _recentCallCount = 0;
     }
 }

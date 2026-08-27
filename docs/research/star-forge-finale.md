@@ -1089,3 +1089,220 @@ throwaway Python GFF-walker script (not committed) built directly on `tools/koto
 own `GFF`/`GFFStruct` classes — no new project code, no rig, no game launched.
 `dotnet build KotorCoop.slnx -warnaserror`: clean (unaffected — nothing in `src/` changed this
 pass).
+
+## 11. Built (2026-08-28): the script-agnostic second trigger — a detour on
+## `ExecuteCommandRemovePartyMember`, a burst-trigger input on `SoloSegmentMachine`, and a
+## `removeparty` dev verb that reaches it without the Bastila dialogue
+
+§9.5 assessed this ("Recommended as the next concrete step") but did not build it. This pass
+builds it: a plugin-side detour that observes every real `RemovePartyMember` call directly,
+independent of and in addition to `SoloSegmentController`'s existing roster-count poll, plus a
+console primitive to exercise it without needing to solve the `.dlg`-node-reachability puzzle
+§9.3/§9.4 left open (the one-shot `Sta_BastTalk` precondition that made a second `startdialog`
+attempt land on a dead branch).
+
+### 11.1 Addresses
+
+**VERIFIED**, re-confirmed fresh this pass against the real GOG v1.0.3 binary (not re-derived
+from memory of §1's own table):
+
+* `CSWVirtualMachineCommands::ExecuteCommandRemovePartyMember` = **0x00541C00** — `tools/q.py
+  func RemovePartyMember` names this address itself `[__thiscall]`; `tools/disasm.py 0x54C960
+  60000` shows `mov dword ptr [edx+0x8fc], 0x541c00` at 0x0054E3C6 inside
+  `InitializeCommands` (0x8FC / 4 = **575**, matching §1's own table and `minigames.md`'s
+  independent claim).
+* The hook's own splice point is **not** the function's entry — `tools/disasm.py 0x541C00 60`,
+  read in full:
+
+  ```
+  0x00541C00  51                   push ecx
+  0x00541C01  8b0d003a7a00         mov ecx, dword ptr [0x7a3a00]      ; ecx = VM
+  0x00541C07  8d442400             lea eax, [esp]                     ; eax = &local
+  0x00541C0B  50                   push eax
+  0x00541C0C  e8eff30800           call 0x5d1000                      ; StackPopInteger(vm, &local)
+  0x00541C11  85c0                 test eax, eax
+  0x00541C13  7509                 jne 0x541c1e                       ; success -> HookSite
+  0x00541C15  b82ff8ffff           mov eax, 0xfffff82f                ; (failure path)
+  0x00541C1A  59                   pop ecx
+  0x00541C1B  c20800               ret 8
+  0x00541C1E  8b0dfc397a00         mov ecx, dword ptr [0x7a39fc]      <- HookSite (overwritten)
+  0x00541C24  53                   push ebx                           <- ResumeAt
+  ```
+
+  `nNPC` is a NWScript-side argument on the VM's own parameter stack, not the x86 call stack —
+  it is popped by `CVirtualMachine::StackPopInteger 0x005D1000` a few instructions into the
+  function, so the function's true entry (0x00541C00) does not yet know it. **HookSite =
+  0x00541C1E**, the first instruction past `StackPopInteger`'s own success branch — the
+  earliest point `nNPC` is known. `StackPopInteger` is `__thiscall(vm, int* out)`, one stack
+  arg, callee-cleaned (`ret 4`), so by the time it returns `esp` is back to exactly where it
+  was right after `push ecx` — the same local slot `lea eax,[esp]` pointed at — meaning
+  **`[esp] == nNPC` at HookSite itself**, read directly by the stub before `pushad` can disturb
+  it. **Anchor** (4 bytes immediately before HookSite, never touched): `59 C2 08 00` (the
+  failure path's own `pop ecx; ret 8` tail). **Prologue** (6 bytes overwritten):
+  `8B 0D FC 39 7A 00` (`mov ecx, [0x7a39fc]`, the same `AppManagerPtr` global
+  `Odyssey.Core.cs` already names). **ResumeAt = 0x00541C24**.
+* `Odyssey.RemovePartyMemberBySlot(int slot, out int failure)` (`src/KotorCoop.Plugin/
+  Odyssey.Party.cs`) — the `removeparty` dev verb's own dispatch — already existed before this
+  pass (built for a different purpose, party-roster reconciliation) and needed no changes: it
+  already dispatches `RemovePartyMember(int nNPC)` through the exact same parameter-stack
+  pattern `startdialog` established (routine resolved by scanning the live table for the
+  handler's address, never a hardcoded index; the VM must be idle; the call is stack-neutral).
+
+### 11.2 What was built
+
+* **`src/KotorCoop.Plugin/RemovePartyMemberHook.cs`** (new) — the detour itself. A two-anchor
+  mid-function splice (this plugin's SECOND, after `ItemTemplateSpawnHook`'s first) that reads
+  `nNPC` off `[esp]`, records `(slot, Environment.TickCount)` into a small fixed-capacity ring
+  (18 entries — a real wipe fires exactly nine calls back to back, per §9.2 step 4; doubled for
+  headroom the same way `ItemTemplateSpawnHook.Capacity` doubles `BarkHook`'s own reasoning),
+  and returns through the relocated original instruction. **Deliberately plugin-only** — no
+  `SharedBlock` field, no wire format, no agent-side consumer: `SoloSegmentController` (already
+  plugin-side) is the only reader. Installed unconditionally in `PluginHost.Startup.cs` (no
+  opt-out key), matching `BarkHook`/`PhantomHitHook`'s own precedent — its debug log and the
+  `removeparty` verb work whether or not `solo_segment_spectate` itself is on; that key still
+  gates the FEATURE (whether a captured call can actually begin a segment), unchanged.
+* **`src/KotorCoop.Protocol/SoloSegmentMachine.cs`** — a new public method,
+  `NoteRemovePartyMemberCall(catalogue, module, anyModuleAllowed, nowTicks)`: records every call
+  into a 9-entry sliding window and, on a call that brings the trailing-~1s-window count to 2 or
+  more (while not already `Active`, and while the module qualifies — the catalogue, or ANY
+  module when `anyModuleAllowed`), sets `Active = true` and returns `Began` — the identical
+  product decision `Step`'s roster-drop edge already makes, reached by a different, more direct
+  signal. A single call is always a no-op (the whole point of the debounce): one
+  `RemovePartyMember` is an ordinary, unremarkable script action; nine in a burst is a
+  story-forced strip. Every call after the first `Began` is a no-op too (`Active` already true)
+  — `Step` alone still owns the end conditions, so this closes §9.5's own "nine redundant solo
+  segment began events" cost concern for the burst path without any extra coalescing logic.
+
+  **A genuine race this pass had to close, not just describe**: the burst trigger can set
+  `Active = true` a frame or more BEFORE the roster-count poll `Step` reads has caught up to the
+  wipe (the hook fires at the exact VM call; `Step`'s own `CompanionCount` read happens on
+  whatever the next frame's poll timing is). Without a guard, the very next `Step` pass would
+  see `CompanionCount >= 1` (still stale) and misread it as "the roster refilled", ending the
+  segment one frame after it began. Fixed with a new `_sawEmptyRosterSinceActive` field:
+  `Step`'s own `rosterRefilled` check now additionally requires having actually OBSERVED
+  `CompanionCount == 0` at least once since `Active` went true (set immediately for the
+  drop-edge path, since `after == 0` there by construction; set the first time `Step` genuinely
+  sees zero for the burst path). A real refill after Malak dies still ends the segment exactly
+  as before, once the emptied state has genuinely been observed — see
+  `SoloSegmentMachineTests.ABurstBeginDoesNotImmediatelyEndOnAStillStaleRosterCount`.
+
+* **`src/KotorCoop.Plugin/SoloSegmentController.cs`** — drains `RemovePartyMemberHook`'s ring
+  every frame (`DrainRemovePartyMemberHook`, the same dedup-by-serial shape
+  `ItemTemplateSpawnController` already uses for its own hook ring, with an insertion sort by
+  serial first since ring INDEX order is not necessarily capture order once the write cursor
+  wraps and the debounce cares about relative timing), logs one **debug line per call**
+  (`solo segment debug: RemovePartyMember slot {npcSlot} in {module}`) UNCONDITIONALLY —
+  regardless of what `NoteRemovePartyMemberCall` decides — so a live pass can see the wipe fire
+  even if the machine never begins a segment from it, and feeds each capture into the machine.
+  New coop.ini key `solo_segment_any_module` (default 0/OFF) is read here and passed through as
+  the burst trigger's own module gate; the roster-drop-edge trigger is untouched and stays
+  catalogue-gated regardless — it has no equivalent "this is definitely a script, not a
+  bench/death" signal of its own. `Invalidate()` now also resets the hook's ring and the
+  controller's own drain-serial bookmark on a module change/session teardown.
+* **`src/KotorCoop.Plugin/SharedBlock.cs`** — `CheatKindRemoveParty = 43` (next free number
+  after `CheatKindStartDialog = 42`).
+* **`src/KotorCoop.Plugin/CheatController.Party.cs`** — `RemoveParty()`: validates the slot
+  (0-8), calls `Odyssey.RemovePartyMemberBySlot`, answers applied/refused. Added alongside
+  `Recruit`/`Leader` (the file's existing party-affecting verbs), not `CheatController.
+  Dialogue.cs` — this is not a dialogue verb, and building a real `RemovePartyMember` call needs
+  nothing from the dialogue system.
+* **`src/KotorCoop.Memory/IGameBridge.cs`** — `CheatKinds.RemoveParty = 43` (agent-side mirror).
+* **`src/KotorCoop.Session/ConsoleCommand.cs`** / **`ConsoleCommand.Cheats.cs`** —
+  `CoopCommandKind.RemoveParty`, `removeparty <slot>` verb-table row, `ParseRemoveParty`
+  (0-8 range check, same shape as `ParseSelectReply`), and a `CheatsText` help line marked
+  **dev-only**.
+* **`src/KotorCoop.Agent/CoopCommandDispatcher.cs`** — dispatch entry, same one-liner shape as
+  `SelectReply`'s own (`SendCheat(new CheatRequest(CheatKinds.RemoveParty, Amount: c.Amount))`).
+* **`src/KotorCoop.Plugin/ConsoleVerbCatalog.cs`** and **`FuncInterpHook.cs`** — `removeparty`
+  registered in both (Tab completion, and reachable by typing it directly at the in-game
+  console) — unlike most dev-only primitives (`recruit`/`skipline`/etc, deliberately
+  blockpoke-only per `FuncInterpHook.cs`'s own note), because this feature's own live plan
+  (§11.4) needs it typed at the console on the host, matching the `startdialog` precedent.
+* **`docs/CONSOLE.md`** — new row, marked **DEV-ONLY**. **`docs/CONFIG.md`** and
+  **`profiles/coop.ini.example`** — new `solo_segment_any_module` key.
+
+### 11.3 Tests
+
+`tests/KotorCoop.Tests/SoloSegmentMachineTests.cs` — nine new cases for the burst trigger,
+alongside the thirteen pre-existing roster-drop-edge cases (all still passing, unchanged):
+
+* `ASingleRemovePartyMemberCallNeverBegins` — the debounce, one direction.
+* `TwoRemovePartyMemberCallsWithinTheWindowBeginInACataloguedModule` — the basic positive case.
+* `NineCallsInOneScriptLikeTheRealWipeBeginExactlyOnce` — simulates the real wipe's own nine
+  calls; asserts `Began` fires exactly once, not nine times.
+* `TwoCallsMoreThanTheWindowApartNeverBegin` — the debounce, the other direction.
+* `ABurstInAnUncataloguedModuleNeverBeginsWithoutTheAnyModuleGate` /
+  `ABurstInAnUncataloguedModuleBeginsWhenAnyModuleIsAllowed` — the `solo_segment_any_module`
+  gate, both settings.
+* `ABurstBeginIsANoOpWhileAlreadyActive` — no double-`Began`.
+* `ABurstBeginDoesNotImmediatelyEndOnAStillStaleRosterCount` — the race fix (§11.2), full
+  sequence: burst begins -> `Step` sees a still-stale count (stays active) -> `Step` finally
+  sees the real zero -> a REAL refill afterward still ends it normally.
+* `InvalidateClearsTheRecentCallHistoryToo` — the sliding window is reset on `Invalidate()`, so
+  stale pre-module-change history cannot combine with a fresh call into a false burst.
+
+`ConsoleCommandVerbTableCoverageTests` — one new sample-line row (`removeparty 0`), keeping the
+existing exhaustiveness check (every non-sentinel `CoopCommandKind` has a parseable sample)
+green.
+
+Hook stub anchors: pinned the same way `ItemTemplateSpawnHook`'s own two-anchor splice is —
+`Anchor`/`Prologue` are `ReadOnlySpan<byte>` literals checked byte-for-byte before any patch, so
+a future engine-binary mismatch refuses cleanly (`RemovePartyMember hook NOT installed: ...`)
+rather than corrupting memory. No dedicated unit test exists for the raw byte patch itself (none
+exists for `ItemTemplateSpawnHook`'s either — this project's convention is a live install-time
+guard, not a byte-level unit test, for x86 machine code it cannot execute off the win-x86
+NativeAOT target).
+
+### 11.4 Full result
+
+`dotnet build KotorCoop.slnx -warnaserror`: clean, 0 warnings, 0 errors.
+`pwsh src/KotorCoop.Plugin/build.ps1 -WarnAsError`: clean — `dinput8.dll` (x86, 1992 KB).
+`dotnet test tests/KotorCoop.Tests --no-build`: **2369/2369 passing** (2360 pre-existing + 9 new
+burst-trigger cases; the one coverage-test gap the new `CoopCommandKind.RemoveParty` value
+opened — `EveryNonSentinelKindHasASampleLine` — was closed with a sample-line row, not skipped).
+
+No rig this pass (docs-and-code round, matching the task brief). The live plan, not yet run:
+
+1. `warp sta_m45ac` on the HOST (same staging §8.3/the 2026-08-28 live rounds already used).
+   `solo_segment_spectate=1` on both `coop.ini`s (the feature's own kill switch — unlike the
+   hook itself, the MACHINE deciding to begin a segment is still gated on this).
+2. `removeparty 0` on the HOST, **three times** (three companions is more than the debounce's
+   own minimum of two, and matches "roughly what a real wipe's opening calls look like" better
+   than exactly two) — no dialogue, no `setglobal`, no `Sta_BastTalk` precondition maze.
+3. Watch the HOST's own plugin log for `solo segment debug: RemovePartyMember slot 0 in
+   sta_m45ac` (once per call, all three) and then `solo segment: began in sta_m45ac — script
+   trigger (RemovePartyMember burst), roster read not required to have caught up yet` (once,
+   after the second call).
+4. Confirm `tools/partystate.ps1` shows the roster genuinely emptied (a real engine call, not a
+   simulation — the companions actually left the active party) and that `block.
+   LocalInSoloSegment` flipped (a `blockpoke`-style read, or trusting the log line).
+5. **On the CLIENT**, confirm the spectate levers §8.2 already describes fire off the SAME wire
+   flag this new trigger sets, unchanged from the roster-poll path: the chat toast, the HUD
+   line, the camera snapping to the host's phantom, and — the still-unverified headline item
+   every prior round of this doc left open — whether WASD/mouse input genuinely does nothing.
+6. Regression: with `solo_segment_any_module=0` (the shipped default), repeat step 2 in an
+   UNCATALOGUED module (e.g. the Endar Spire) and confirm no `began` line appears — only the
+   per-call debug lines. Then set `solo_segment_any_module=1` and repeat in the same
+   uncatalogued module, confirming it now DOES begin.
+7. End-condition regression: let the roster genuinely refill (`recruit <slot>` back, or a real
+   `AddPartyMember`) and confirm a real `Ended` fires — not suppressed by the race-guard fix
+   (§11.2), since the guard only ever delays a FALSE end, never a true one.
+
+### 11.5 NEEDS-LIVE
+
+Everything in this section is static analysis against the verified GOG v1.0.3 binary plus new
+unit tests — no rig this pass:
+
+* The splice site itself (`HookSite`/`Anchor`/`Prologue`/`ResumeAt`), the `[esp] == nNPC` claim,
+  and that the stub's `pushad`/`popad` genuinely leaves every register (including the relocated
+  `mov ecx, [0x7a39fc]`'s needs) exactly as the original code would have.
+* Whether `RemovePartyMemberHook.Install` actually succeeds against the real running process (a
+  byte mismatch here fails closed — a log line, no crash — but has not been observed either
+  way).
+* Whether the burst trigger's own debounce window (~1s) is well-tuned against the REAL wipe's
+  own timing — the nine-call burst is assumed to land within a few milliseconds of a single
+  script's own execution (§9.2 step 4's own reading), never measured live.
+* The full live plan (§11.4) end to end, including whether `removeparty`'s three calls actually
+  produce the same downstream spectate/input-lock behaviour (§8.2) a real dialogue-driven wipe
+  would — this hook observes the SAME engine call a real wipe makes, but has never been watched
+  firing from either source on a live process.
