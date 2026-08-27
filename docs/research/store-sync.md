@@ -1451,3 +1451,124 @@ about any new memory read/write).
 7. `store_sync` stays OFF in `coop.ini`/`docs/CONFIG.md` regardless of this live pass's outcome —
    flipping the shipped default is a separate decision this document's own established discipline
    (a full, clean multi-round live pass, not one) still gates.
+
+## Live pass (2026-08-28, later): the wipe-prevention/buy/deplete/infinite-stock/reconnect half of
+## §6's plan is CLEAN; `sell` and unguarded `buy` are found broken this round — stays OFF
+
+Ran the full §6/2026-08-28-addendum live plan against a fresh two-instance rig
+(`store_sync=1` both, `script_item_sync=0`/`dialogue_item_sync=0` both to keep this pass's own
+party-pool round isolated), `warp tar_m02aa` both, the ambient `duros` NPC cleared with `tp`
+**before** letting either conversation resolve (selecting a reply on it, even to clear it, is what
+walked a fresh client instance into the party-selection-screen trap the addendum above warns
+about — recovered by killing and relaunching that one game process fresh, see "incidental
+finding" below), `openstore Larrim_Store` on both.
+
+### Clean: wipe-prevention, buy/decrement, full depletion, infinite stock, blackout resync
+
+- **No wipe on open.** Both sides' `kotorcoop-general.log` stayed silent (zero `store:` lines) for
+  15+ seconds after both GUIs were open with zero transactions — Bug 4's own fix (the prior
+  section) holds. The prior pass's own repro produced 30-40 such lines in the same window; this
+  pass produced zero.
+- **A host buy decrements exactly the client's copy of that one resref.** `buy Larrim_Store
+  g_w_ionblstr01` → host plugin log `buy: buy 'g_w_ionblstr01' x1 from store Larrim_Store`; client
+  plugin log, the ONLY store line that session so far: `store: removed 'g_w_ionblstr01' x1 (asked
+  for 1) from store 0x74`. No other resref moved.
+- **A depleted (finite, 1-unit) stack hits zero on the client via the same op** — `g_w_ionblstr01`
+  was a 1-unit stock; the single buy above both consumed it AND is the depletion case (a follow-up
+  `buy Larrim_Store g_w_ionblstr01 10` correctly refused with "no stock matching that resref").
+- **An infinite-stock item never touches the wire**, confirmed decisively this pass (stronger than
+  planned — accidentally, not deliberately, since `g_w_blstrpstl001` turned out to be Larrim's
+  infinite entry): 23 consecutive `buy Larrim_Store g_w_blstrpstl001` calls (single + a `count=20`
+  batch) all succeeded with **zero** `store:` lines for that resref on the client, ever. §1.5's own
+  engine guarantee (the store's own stock never moves for an infinite entry) holds through the
+  sync layer's own filter.
+- **`netsim blackout 10` + reconnect leaves the transacted store exactly as converged.** Client
+  reconnected as the same peer id; zero new `store:` lines appeared on either side afterward — no
+  re-send, no doubling, no reset of `g_w_ionblstr01`'s already-converged zero.
+
+### BROKEN — `sell` cannot find an item this session's own tooling confirms is in the player's
+### inventory, every time, on a totally fresh process
+
+Never previously live-run (`docs/research/store-sync.md`'s every earlier mention of `sell` is a
+NEEDS-LIVE plan, not a result) — this is the first live attempt. `sell Larrim_Store <resref>`
+refused with `sell '<resref>' failed: no matching item in inventory` **five separate times**,
+against three different resrefs, including:
+
+- an item bought moments earlier in the same session (`g_i_medeqpmnt01`, `g_w_blstrpstl001`);
+- an item placed directly via `scriptgive g_i_medeqpmnt01` (bypassing `buy` entirely) — the plugin
+  answered `gave 'g_i_medeqpmnt01' (0xBA) to the local player, untracked`, and a same-second
+  external read confirmed it: `item 0xBA g_i_medeqpmnt01: stack 5, chg 0/0, upg 0x0, identified`
+  and the `items` sweep independently listed `0xBA g_i_medeqpmnt01 yours stack 5` — yet `sell
+  Larrim_Store g_i_medeqpmnt01` **immediately after** still answered "no matching item in
+  inventory".
+
+Three independent readers (the store's own `sell` lookup; the item-identity `item <id>` read; the
+`items` sweep) disagree about the SAME id in the SAME frame-or-two — the shape this document's own
+enemy-presence hunt (`docs/research/enemy-presence-sync.md`) has seen before with two lookups that
+are "supposed to be the same lookup" and are not. Read `src/KotorCoop.Plugin/Odyssey.Store.cs`'s
+`SellToStore`: it reads `player`'s `CreatureItemRepo` (`player` = `Odyssey.GetPlayerCreaturePointer()`,
+`CServerExoApp::GetPlayerCreature`) and walks it with `FindFirstMatchingItem` (a `Tag`-based scan,
+the SAME helper `buy`'s own repo lookup shares). Meanwhile `scriptgive`/the item that ends up
+"yours" in `items` resolves the player via `Odyssey.GetPlayerObjectId()` → `GiveItemToInventory`.
+Both are meant to name the same creature; whether they genuinely do on this build, on THIS repo
+pointer, at the moment `sell` runs, is unconfirmed and is exactly where the next round should
+look — paste `SellToStore`'s own repo pointer and item count next to `items`' at the same instant,
+the same "two lookups, one frame" discipline that closed the enemy-presence hunt.
+
+**Verdict: `sell` is functionally unusable as tested. `store_sync` cannot be flipped ON — it is one
+of this queue's own explicit acceptance items ("sell → appears on both").**
+
+### BROKEN, more seriously — `buy` has no affordability guard and can underflow the party's gold
+### to within a few billion of wrapping, silently
+
+`BuyFromStore`/`GuiBuyItemFn` (`CSWGuiStore::BuyItem`, per this doc's own §1.2/§2.5 disassembly)
+subtracts the item's price from the player's cached gold int and hands the result straight to
+`SetGold` — **unconditionally**, with no check that the player can afford it. The real in-game Buy
+button is normally guarded by the GUI graying itself out when unaffordable; calling the click
+handler directly, the way this project's own `buy` console primitive does, bypasses that
+precondition entirely. This round's own `buy Larrim_Store g_w_blstrpstl001 20` (unknowingly against
+an infinite-stock, non-trivially-priced item, well past the player's actual purse) produced, on the
+HOST's own agent log:
+
+```
+* purse: peer 2 contributed +0 -3294967077, party gold 4294967076 -> 999999999
+* purse: peer 2 contributed +0 -294966090, party gold 4294966966 -> 4000000876
+* purse: peer 2 contributed +0 -294965100, party gold 4294966746 -> 4000001646
+* purse: peer 2 contributed +0 -294951900, party gold 4294964546 -> 4000012646
+* purse: peer 2 contributed +0 -4312, party gold 4294964502 -> 4294960190
+```
+
+`party gold` is a plain `uint`; going negative wraps to just under `UINT32_MAX` (≈4.29 billion) —
+exactly what these lines show. The party-progression merge (`PartyPump.PumpProgressionHost`)
+partially self-heals by clamping toward the 999,999,999 display cap on some passes but not others,
+and the rig's shared save is now left with gold pinned at the 999,999,999 cap (`grantgold 0` reads
+back `gold 999999999 -> 999999999`) — not corrupted (a valid, in-range value), but not a value any
+real playthrough would organically reach either, and a fact worth knowing before the next round
+reuses this save. This is a gap in the `buy`/`sell` cheat wrapper's own precondition (it does not
+replicate the GUI's own affordability gate before calling the real click handler `count` times),
+not a `store_sync` wire-protocol defect — but it is severe enough on its own to block treating this
+round as clean, and the next round adding `buy` should add a price/affordability check (read the
+item's cached price the same way `PopulateStore` does, per §1.2) before calling `GuiBuyItemFn` at
+all.
+
+### Incidental finding: the `duros` party-select trap can survive a savegame reload
+
+Confirms and extends the "Incidental finding" section above. Selecting a reply on the ambient
+`duros` conversation (even `selectreply 0` used only to "clear" it) can advance straight into the
+party-selection screen exactly as documented — but this round found `partyselect ok` did NOT
+close it (repeated calls answered "confirmed" every time, with an unchanging "message-box
+precondition was already set" detail, and `openstore` kept refusing with "another modal screen is
+up"), and **a full `loadgame 0` reload of that one instance did not clear it either** — the very
+next warp-follow into the same module re-triggered the same conversation, and this time simply
+walking away with `tp` (never selecting a reply) let it resolve to `state exploring` cleanly,
+matching the addendum's own documented safe recipe. When that also failed to unblock `openstore`,
+the client's `swkotor.exe` was killed and `instance 2` relaunched fresh (`agent launch --instance
+2` → `agent load --pid <new> --load-save 1` → a fresh `agent run --join`) rather than continuing to
+fight the stuck panel — a clean process restart, not `partyselect ok`, is what actually recovered
+it. Worth a real fix (the panel object apparently outlives even a savegame reload) before this
+module is used again for an unattended run.
+
+### Files changed this pass
+
+None — this was a pure live-verification pass, no source changes. `store_sync` stays at its
+default OFF (`profiles/coop.ini.example` unchanged, `store_sync=0`).

@@ -1115,3 +1115,82 @@ round trip or the shared-block cheat-serial handshake under real game-frame timi
 category of gap §8/§10 already named and were unable to drive from C# alone, since this round's
 fix operates entirely on the `PartyPoolPump.cs` side of that boundary and cannot itself rule out
 a native-layer contribution to any residual live discrepancy.
+
+## 13. 2026-08-28, live pass — §12's live-test plan run; a NEW, more basic native-layer defect
+## found: a freshly-inserted pool item is not reliably found by the very next `poolremove`/scan,
+## independent of anything `PartyPoolPump.cs` does — stays OFF
+
+Ran §12's own closing "concrete next live-test step" on the two-instance rig
+(`party_pool_sync=1` both, `script_item_sync=0`/`dialogue_item_sync=0` both, as directed). Found
+the bug is more basic than anything §9-§12 diagnosed or fixed, and sits entirely on the
+NATIVE/engine side of the boundary §12's own closing paragraph flagged as unable to rule out from
+C# alone.
+
+### 13.1 `pooladd g_w_thermldet01` x3 host, x3 client: only 1 of the host's 3 local additions ever
+### reached the session layer at all
+
+Host issued three `pooladd g_w_thermldet01` console calls, ~2s apart. The plugin's own `cheat:
+added...` line fired for all three (the engine call itself succeeded three times) — but the
+HOST's own `agent1.log` shows exactly ONE `party pool: local add of 1x 'g_w_thermldet01' detected,
+publishing` line, for the first call only. The second and third produced no detection at all — not
+delayed, never appeared, even after 20+ seconds of settle time. Every one of the plugin's own
+three `party pool: added 'g_w_thermldet01' (0xE4) x1, ...` lines reports the SAME item id
+**and the same post-add `StackSize` of 1**, all three times — not growing to 2, then 3, the way a
+merge into one running stack would read. The client, meanwhile, logged four local `cheat: added`
+events against only three console calls typed on it — one extra, timed between the host's second
+and third call, consistent with (but not proven to be) one of the host's own ops actually arriving
+over the wire. The host never logged receiving any of the client's three.
+
+### 13.2 The same defect, isolated from `PartyPoolPump.cs` entirely: `poolremove` immediately after
+### `pooladd` of the identical resref fails outright
+
+```
+pooladd g_i_progspike01            -> added 'g_i_progspike01' x1 to the party pool
+                                       (plugin log: added 'g_i_progspike01' (0xE7) x1, ...)
+poolremove g_i_progspike01  (~2s later)
+                                    -> the engine refused it: 'g_i_progspike01' remove failed:
+                                       no matching stack found in the pool
+```
+
+Neither of these verbs touches `PartyPoolPump.cs` or the wire at all — `pooladd`/`poolremove` are
+both purely local, single-instance staging cheats (`CheatController.PartyPool.cs`,
+`Odyssey.AddItemToPartyPool`/`RemovePartyPoolStack`). A THIRD, independent reader settles that the
+item really is there: `item 0xE7` (the item-identity read primitive, unrelated code path) answered
+`item 0xE7 g_i_progspike01: stack 1, chg 0/0, upg 0x0, UNidentified` in the same breath —
+confirming the object is live, correctly tagged, and resolvable by id, while
+`RemovePartyPoolStack`'s own tag-based repo walk cannot find it two seconds later.
+
+### 13.3 Reading, not diagnosing (this round had no time budget to go further)
+
+Two candidate explanations, not distinguished this round:
+
+1. `Odyssey.PartyPool.cs`'s `AddItemToPartyPool` spawns a genuinely NEW item via
+   `GiveItemToInventory` every call (never searching for an existing matching stack to merge
+   into), then does `RepositoryRemoveItemFn(playerRepo, item)` +
+   `RepositoryInsertItemFn(repo, item, -1)` to move it from the player's own backpack into the
+   pool repo. If `RepositoryInsertItemFn(..., -1)` does not update whatever count/array field the
+   SEARCH side (`FindFirstMatchingItem`, and by extension the session's own
+   `TryScanPartyPoolTotals`) iterates, every symptom above is explained by one root cause: the
+   insert succeeds (the item object is live, tagged, and independently readable by id) but is
+   invisible to any subsequent walk of the repository.
+2. `ResolvePartyPoolRepo()` (`CSWPartyTable+0x118`'s `CItemRepository`) resolves a different
+   pointer on a call shortly after another, so `poolremove`/the scan walk a repo the just-inserted
+   item was never linked into.
+
+Either way this is a NATIVE-side defect in the party-pool repository plumbing itself, not in
+`PartyPoolPump.cs`'s C# detection/reconcile logic that §9-§12 spent four rounds fixing — those
+fixes are still believed correct for what they cover (nothing in this round contradicts them), but
+they sit downstream of a more basic problem: the plugin's own insert is not reliably visible to
+the plugin's own very next read of the same repository. The next round should paste
+`ResolvePartyPoolRepo()`'s returned pointer and the repo's own item-count field right before and
+right after one `pooladd` call, the same "two lookups, one frame" discipline that closed the
+enemy-presence-sync hunt (`docs/research/enemy-presence-sync.md`), rather than adding further
+C#-side detection logic on top of an already-lossy native read.
+
+### 13.4 Verdict
+
+`party_pool_sync` stays OFF (`profiles/coop.ini.example`/`AgentSettings.PartyPoolSyncEnabled`
+unchanged). §12's own C# fix may well be correct, but it cannot be confirmed live while the
+underlying native insert/search disagreement in §13.1-§13.2 stands — a wire-level "no under-count"
+test is meaningless when the local engine already loses track of its own inserts within a couple
+of seconds, independent of any sync code. No source changes this round; live-verification only.

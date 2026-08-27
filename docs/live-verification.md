@@ -1355,3 +1355,23 @@ possibly depending on the real `sta_bastila` NPC's spawn state) and the concrete
 tag-resolution console primitive, or pursuing the `RemovePartyMember`-hook alternative), in
 `docs/research/star-forge-finale.md`'s new §10. No crash on either instance.
 `solo_segment_spectate` stays at its default OFF.
+
+## Rig pass (2026-08-28, later): `store_sync`/`party_pool_sync` live re-test queue — both stay OFF,
+## new defects found in each
+
+Task: the queue's three items — `store_sync=1` live re-test per `store-sync.md`'s own plan,
+`party_pool_sync=1` live re-test per `party-pool-sync.md` §12's own closing plan, and a
+`verify.ps1`/full-test/native-build baseline check.
+
+| # | Item | Result | Detail |
+| --- | --- | --- | --- |
+| 1 | `store_sync=1` live re-test | **FAIL — stays OFF.** Wipe-prevention, buy/decrement, full depletion, infinite-stock no-op, and blackout-reconnect all confirmed CLEAN. `sell` refuses "no matching item in inventory" for an item three independent readers (item-identity read, `items` sweep, the sell lookup itself) agree exists — never live-run before this pass. Separately, `buy` has no affordability guard: an unaffordable buy underflowed the party's `uint` gold to within a few billion of wrapping (`party gold 4294967076 -> 999999999` and similar lines), leaving the rig's shared save pinned at the 999,999,999 display cap. | `store-sync.md`'s new "Live pass (2026-08-28, later)" section |
+| 2 | `party_pool_sync=1` live re-test | **FAIL — stays OFF.** §12's C# echo-guard fix (bench-only) could not be confirmed: the live rig found a more basic native-side defect first — a freshly-inserted party-pool item is not reliably found by the very next local `poolremove`/scan (host: 3 rapid `pooladd` calls to the same resref, only 1 ever reached the session's own local-change detection; a bare `pooladd` immediately followed by `poolremove` of the identical resref failed with "no matching stack found in the pool" while an independent `item <id>` read confirmed the item was live and correctly tagged). Sits below `PartyPoolPump.cs` entirely — the C# fix's own correctness is unconfirmed either way. | `party-pool-sync.md` §13 |
+| 3 | `verify.ps1` baseline / full suite / native build | **PASS.** Fresh two-instance session (`coop.ini` reset to `profiles/coop.ini.example` on both): **40 passed, 9 failed** — exactly the documented 40-42/7-9 baseline (the 7 core known failures plus both documented flaky substitutions, `a client hit costs the enemy real hit points` and `an item picked up here vanishes on the peer`, both landing as FAIL together this run). `dotnet test tests/KotorCoop.Tests --no-build`: 2363/2364 (the one failure is the pre-existing, CI-excluded `HeavyPacketLossStillConverges`). `dotnet build KotorCoop.slnx -warnaserror` and `src/KotorCoop.Plugin/build.ps1 -WarnAsError`: both clean, 0 warnings/errors. | this section |
+
+No crash on either instance across the whole round. Both flags stay at their default OFF
+(`profiles/coop.ini.example` unchanged); both game directories' `coop.ini` were reset back to the
+plain example template before this pass ended. An incidental finding — recovering a `tar_m02aa`
+client instance stuck behind the ambient `duros` party-selection trap needed a full process
+restart (`partyselect ok` and even a savegame reload did not clear it) — is recorded in
+`store-sync.md`'s own new section alongside the rest of this round's evidence.

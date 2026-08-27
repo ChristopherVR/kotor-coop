@@ -36,8 +36,8 @@ attaches from outside with `OpenProcess`.
 | Script-granted items outside dialogue (`script_item_sync`) | Built, live-verified, ON by default | [dialogue-consequences.md](docs/research/dialogue-consequences.md) |
 | Companion experience (`companion_xp_sync`) | Live-verified, ON by default | [companion-state-sync.md](docs/research/companion-state-sync.md) |
 | Companion equipment (`companion_gear_sync`) | Live-verified 2026-08-28, ON by default — body slot, right weapon and left weapon all confirmed (the earlier weapon-slot bug, a wrong internal slot encoding, is fixed), mid-session propagation under 3s | [companion-state-sync.md](docs/research/companion-state-sync.md) |
-| Shared party item pool (`party_pool_sync`) | Live-verified: two double-apply bugs fixed; a later live pass found a different under-count/lockout bug in the same echo guard, fixed 2026-08-28 (bench-only this round, needs a live re-test) — stays off | [party-pool-sync.md](docs/research/party-pool-sync.md) |
-| Merchant store stock (`store_sync`) | Stays off — the 2026-08-28 `PopulateStoreItemListBox` crash is root-caused and fixed (`ShowStoreGui` was missing two arguments) — NEEDS-LIVE | [store-sync.md](docs/research/store-sync.md) |
+| Shared party item pool (`party_pool_sync`) | Stays off — a 2026-08-28 live-rig pass found a native-side defect: a freshly-inserted pool item is not reliably found by the very next local read, independent of the C# sync logic | [party-pool-sync.md](docs/research/party-pool-sync.md) |
+| Merchant store stock (`store_sync`) | Stays off — a 2026-08-28 live-rig pass confirmed wipe-prevention/buy/deplete/infinite-stock/blackout-resync clean, but found `sell` broken and `buy` can underflow the party's gold | [store-sync.md](docs/research/store-sync.md) |
 | Fog-of-war reveal (`map_reveal_sync`) | Live-verified, on by default | [map-reveal.md](docs/research/map-reveal.md) |
 | Star Forge finale — Bastila/Malak duel spectate (`solo_segment_spectate`) | Built, off — a 2026-08-28 live pass opened the real door but never reached the detection precondition (the roster wipe fires from the Bastila dialogue, not the door), so the spectate machinery is still unexercised | [star-forge-finale.md](docs/research/star-forge-finale.md) |
 | Internet play — public address discovery (STUN), UPnP port mapping | Built, unit-tested, not live-verified against a real router; no relay/hole-punching | [network-topology.md](docs/research/network-topology.md) |
@@ -224,15 +224,17 @@ tools/                   package/install scripts, demo rig, RE helpers, the koto
   hostile to its own engine at a time; every other engaged enemy stays mirrored (damage still
   lands), and the damage wire names only the last attacker. See [combat-participation.md](docs/research/combat-participation.md).
 - **The party's shared item pool syncs, but keeps failing new live-verified bugs, so it stays
-  off by default** (`party_pool_sync` — status table above): two double-apply bugs and, most
-  recently, an under-count/lockout bug in the same echo guard, fixed 2026-08-28 pending a live
-  re-test.
+  off by default** (`party_pool_sync` — status table above): a 2026-08-28 live-rig pass found the
+  latest issue sits below the C# sync logic entirely — a freshly-inserted pool item is not
+  reliably found by the engine's own very next local read.
 - **The Star Forge's Bastila and Malak duels spectate, but off by default and unproven live**
   (`solo_segment_spectate`): parks the other player's input/camera on the fight instead of a
   second combatant wandering in. The detection precondition itself has not yet been reached
   live (see the status table above), so the input lock hasn't been watched stop a real press.
-- **The shared merchant store channel (`store_sync`) is built but stays off** — a real engine
-  crash was found, root-caused and fixed (see the status table above); the fix is NEEDS-LIVE.
+- **The shared merchant store channel (`store_sync`) is built but stays off** — a 2026-08-28
+  live-rig pass confirmed the wipe-prevention/buy/deplete/infinite-stock/reconnect half clean,
+  but found `sell` never finds an item confirmed to exist and `buy` has no affordability guard
+  (see the status table above).
 - **`coop.ini` divergence is negotiated, not silent.** Every behaviour flag rides a digest
   compared at join; a difference always warns on both screens (`W_CFG`), and nine
   host-authoritative keys are additionally adopted by a disagreeing client at runtime. See
