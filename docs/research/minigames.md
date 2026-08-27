@@ -3053,3 +3053,79 @@ completed hand should hit), `pazaak_detect` is flipped to `1` (ON) in
 2339/2339 passing (unchanged — this round's fix touches only plugin-side pointer-shape logic
 with no test-project counterpart, per `MinigameController`'s existing "not exercised by the
 64-bit test project" status).
+
+## Live pass (2026-08-28): `pazaak end` built, disassembled first, and confirmed clean — the
+## last open item (the CLEAR edge) is now live-verified too
+
+Task: settle §"Clear: NOT independently confirmed" above — find whether `EndPazaakGame`/the panel
+close can be driven by a dev verb so `FlagInMinigame` clears, and add it if trivial. It was not
+quite trivial (the prior round explicitly declined to call `EndPazaakGame` blind, since its own
+disassembly showed "at least two stack arguments and performs credit/gold-payout... beyond the
+simple field clear"), so this pass fully disassembled it first (`tools/disasm.py`, cross-checked
+against `tools/q.py func`, which names both halves).
+
+### `CClientExoApp::EndPazaakGame` (0x005EDDD0) / `CClientExoAppInternal::EndPazaakGame`
+### (0x005F3950) — VERIFIED, full signature and every branch traced
+
+`0x005EDDD0` is a thin thunk (`mov ecx,[ecx+4]; jmp 0x5F3950`), the identical `this`-forwarding
+shape `StartPazaakGameFn` already uses — called with `this` = the client (`GetClient()`'s own
+return value), confirmed by name in `tools/kotor1_0_3.db` for both halves. The INTERNAL function
+is `thiscall(this, uint arg1, int arg2, int arg3, uint arg4)`, `ret 0x10` (4 stack dwords):
+
+* `arg1` -> `this+0x80`, `arg2` -> `this+0x7C` — written unconditionally near the top, before
+  anything else. Passing 0/0 here is a plain field reset.
+* `arg2 > 0` gates a branch that resolves an opponent creature (`GetObjectArray`/
+  `GetCreatureByGameObjectID`-style calls on a cached object id) and does further per-creature
+  work (the "credit/gold-payout" logic the prior round correctly flagged as risky) — **skipped
+  entirely by passing `arg2 = 0`**, which is exactly right for a `nMaxWager=0` console-started
+  hand: there is nothing to pay out.
+* `arg3` selects between two mutually exclusive tails: nonzero calls
+  `CClientExoAppInternal::StartPazaakGame` (0x5F3810, the SAME internal function
+  `StartPazaakGameFn`'s own thunk reaches) — i.e. immediately start a new hand, a "play again"
+  shape; zero instead checks the global VM pointer and, if the hand's own end-script field
+  (`this+0x74`, a `CExoString`) is non-empty, runs it via the same `RunScript` dispatch
+  `Odyssey.Combat.ScriptFire.cs`/`OdysseyTriggers.cs` already use. **This pass always passes
+  `arg3 = 0`**, and `Odyssey.StartPazaak` always starts a hand with an EMPTY end-script (already
+  the case, unchanged), so this branch is a documented no-op for every hand this codebase's own
+  `pazaak` verb can start. `arg4` is only read on the (skipped) nonzero-`arg3` branch.
+* **`this+0x70` — the SAME field `IsPazaakRunning`/`ClientInternalPazaakData` reads — is cleared
+  unconditionally near the top of the function**, before either of the above branches: this is
+  the actual "hand is over" flag flip, confirmed VERIFIED and independent of every argument this
+  verb passes as 0.
+* The tail (always runs, regardless of arguments): `CSWGuiManager::PlayGuiSound(index 5)` and
+  `CExoSoundInternal::SetSoundMode(...)` — cosmetic/audio only.
+
+**Conclusion: `EndPazaakGame(this, 0, 0, 0, 0)` is safe** — clears the running flag, resets two
+otherwise-inert fields, skips the one genuinely risky (payout) branch by construction, and runs
+only a documented no-op on the other. Built as `Odyssey.EndPazaak()`
+(`src/KotorCoop.Plugin/Odyssey.Pazaak.cs`), `CheatController.PazaakEnd()`
+(`src/KotorCoop.Plugin/CheatController.Pazaak.cs`), `SharedBlock.CheatKindPazaakEnd = 39` /
+`IGameBridge.CheatKinds.PazaakEnd = 39`, console verb `pazaak end`
+(`ConsoleCommand.Items.cs`'s `ParsePazaak` now special-cases the literal `end` token,
+`CoopCommandKind.PazaakEnd`, `CoopCommandDispatcher.cs`). `docs/CONSOLE.md` gained a row; 1 new
+sample-line in `ConsoleCommandVerbTableCoverageTests.cs`. `dotnet build KotorCoop.slnx
+-warnaserror` and `src/KotorCoop.Plugin/build.ps1 -WarnAsError`: both clean. `dotnet test
+tests/KotorCoop.Tests --no-build`: 2340/2340 (+1 from baseline).
+
+### Live-verified clean — the exact gap the prior round left open is now closed
+
+Two-instance rig, `pazaak_detect=1`, host fired `pazaak` then `pazaak end` a few seconds apart.
+Both console replies came back clean (`pazaak hand started ...` / `pazaak hand ended`), the host
+process stayed `Responding=True` throughout, and the plugin log shows the full round trip for the
+first time:
+
+```
+[05:07:55.755] pazaak: StartPazaakGame(...) called - running now: True
+[05:07:55.758] pazaak: entered (CPazaakData field 0x1) - peers will park this player's phantom
+[05:07:55.759] minigame: entered (Pazaak) - peers will park this player's phantom
+[05:08:06.254] pazaak: EndPazaakGame() called - running now: False
+[05:08:06.255] pazaak: left - back in the shared world
+[05:08:06.256] minigame: exited - back in the shared world
+```
+
+`running now: False` confirms `IsPazaakRunning()` (a separate, freshly-computed read of the same
+`this+0x70` offset) genuinely flips after the call, and `pazaak: left` / `minigame: exited` are
+exactly the two lines the prior round's own module-transition workaround never produced. **All
+four of the original checklist items (latch, park, toast, clear) are now live-PASS.** No crash,
+no hang. `pazaak_detect` was already ON (from the prior round); no further default change follows
+from this pass — it closes a documented gap in the same already-shipped channel, not a new one.

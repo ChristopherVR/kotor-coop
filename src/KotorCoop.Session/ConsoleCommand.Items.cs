@@ -362,11 +362,17 @@ public static partial class ConsoleCommand
         return new CoopCommand(CoopCommandKind.SetGlobal, Address: rest[0], Password: "number", Amount: value);
     }
 
-    // pazaak [npc-tag|id] [deck]  - LIVE-TEST PRIMITIVE, see CoopCommandKind.Pazaak.
+    // pazaak [npc-tag|id] [deck] | pazaak end  - LIVE-TEST PRIMITIVE, see CoopCommandKind.Pazaak
+    // / CoopCommandKind.PazaakEnd.
     private static CoopCommand ParsePazaak(string[] rest)
     {
-        const string usage = "pazaak [npc-tag|id] [deck]  e.g. pazaak, or pazaak my_npc_tag, or "
-            + "pazaak 0x42 2";
+        const string usage = "pazaak [npc-tag|id] [deck] | pazaak end  e.g. pazaak, or pazaak "
+            + "my_npc_tag, or pazaak 0x42 2, or pazaak end";
+
+        if (rest.Length == 1 && string.Equals(rest[0], "end", StringComparison.OrdinalIgnoreCase))
+        {
+            return new CoopCommand(CoopCommandKind.PazaakEnd);
+        }
 
         if (rest.Length > 2)
         {

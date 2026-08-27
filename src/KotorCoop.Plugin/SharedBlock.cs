@@ -784,4 +784,27 @@ internal partial struct SharedBlock
     /// ⚠ 38, because 7-37 are taken. Take the next FREE number.
     /// </summary>
     public const uint CheatKindFaction = 38;
+
+    /// <summary>
+    /// LIVE-TEST PRIMITIVE (2026-08-28, docs/research/minigames.md's live-pass entry): ends the
+    /// current Pazaak hand through <c>CClientExoApp::EndPazaakGame</c> (0x005EDDD0, a thin
+    /// thunk — <c>mov ecx,[ecx+4]; jmp CClientExoAppInternal::EndPazaakGame</c>, the same
+    /// <c>this</c>-forwarding shape <c>StartPazaakGameFn</c> already uses) so
+    /// <c>FlagInMinigame</c> can finally be watched clearing without needing a real wagered hand
+    /// played to completion through the (uninjectable) GUI. Fresh disasm this pass of
+    /// <c>CClientExoAppInternal::EndPazaakGame</c> (0x005F3950, confirmed by name in
+    /// <c>tools/kotor1_0_3.db</c>) found a 4-stack-arg thiscall (<c>ret 0x10</c>): arg1/arg2
+    /// (this pass calls both 0) are written to <c>this+0x80</c>/<c>+0x7C</c> unconditionally and
+    /// otherwise only feed a gold/opponent-payout branch gated on <c>arg2 &gt; 0</c> (skipped by
+    /// passing 0 — there is nothing to pay out for a <c>nMaxWager=0</c> console-started hand);
+    /// arg3 (also 0) selects between re-starting a new hand (<c>CClientExoAppInternal::
+    /// StartPazaakGame</c>, skipped) and running the hand's own end-script (a documented no-op —
+    /// <see cref="Odyssey.StartPazaak"/> always starts with an EMPTY end-script) — arg4 is only
+    /// read on the skipped branch. <c>this+0x70</c> (the SAME field <c>IsPazaakRunning</c> reads
+    /// as "a hand is running") is unconditionally cleared to 0 near the top, before any of the
+    /// above. Refuses cleanly if no hand is running. Takes no arguments; local only.
+    ///
+    /// ⚠ 39, because 7-38 are taken. Take the next FREE number.
+    /// </summary>
+    public const uint CheatKindPazaakEnd = 39;
 }

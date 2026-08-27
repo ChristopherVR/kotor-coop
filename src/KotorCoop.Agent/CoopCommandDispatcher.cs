@@ -281,6 +281,7 @@ public sealed partial class CoopCommandDispatcher(
         [CoopCommandKind.OpenStore] = c => OpenStore(c.Address ?? string.Empty),
         [CoopCommandKind.PartySelectOk] = _ => SendCheat(new CheatRequest(CheatKinds.PartySelectOk)),
         [CoopCommandKind.Faction] = FactionCommand,
+        [CoopCommandKind.PazaakEnd] = _ => SendCheat(new CheatRequest(CheatKinds.PazaakEnd)),
 
         [CoopCommandKind.Cheats] = CheatsCommand,
     };
