@@ -167,7 +167,6 @@ public sealed partial class KotorGameBridge
             InvalidateCreatureCache();
             _itemTags.Clear();
             _itemAddresses.Clear();
-            _itemTagMisses.Clear();
             _itemTagsBuiltAtMs = 0;
         }
 
