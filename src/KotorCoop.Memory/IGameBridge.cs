@@ -355,6 +355,17 @@ public static class CheatKinds
     /// ⚠ 37 is the highest number taken now. Take the next FREE one for a new verb.
     /// </summary>
     public const uint PartySelectOk = 37;
+
+    /// <summary>
+    /// LIVE-TEST/DIAGNOSTIC PRIMITIVE (docs/research/combat-participation.md §10): reads the
+    /// engine's own <c>GetAIStateReputation</c> verdict (and the raw <c>faction_id</c> dword at
+    /// <c>stats+0x78</c>) for creature <c>Target</c> (0 = local player) versus <c>Amount</c>
+    /// (0 = local player), both directions. Read-only, no engine write. See
+    /// SharedBlock.CheatKindFaction.
+    ///
+    /// ⚠ 38 is the highest number taken now. Take the next FREE one for a new verb.
+    /// </summary>
+    public const uint Faction = 38;
 }
 
 /// <summary>

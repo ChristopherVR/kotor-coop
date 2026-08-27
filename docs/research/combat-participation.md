@@ -852,3 +852,65 @@ there is no `attack` verb in `ConsoleCommand.cs`'s table at all; blockpoke's `at
 directly to the `TestAttacker`/`TestAttackTarget`/`TestAttackSerial` shared-block fields
 `TestDriveController.HandleAttack` reads. A future pass grepping `ConsoleCommand.cs` for `attack`
 and finding nothing should not conclude the primitive does not exist.
+
+## Live pass (2026-08-28): ROOT-CAUSED with exact reads — `end_sith2` (0x14) is a FRIENDLY faction
+## in its GIT starting state; this was never a client/host asymmetry at all
+
+Task: settle round 89's own open question with exact reads instead of an inferred guess. Built the
+`faction <id|me> [vsId|me]` read-only diagnostic verb this pass needed and round 89 itself
+recommended (`SharedBlock.CheatKindFaction = 38`; see `galaxy-map-and-party-select.md`'s own
+2026-08-28 entry for the build details — it lives there since that doc owns this session's other
+new-verb bookkeeping). Ran round 89's own ranked follow-up items 1 and 2 together, on a fresh rig,
+same staging (`end_m01aa`, `tp 45.8 33.3`, ~1m from `end_sith2` / object id `0x14`).
+
+**The exact reads, IDENTICAL on both host and client:**
+
+```
+faction: 0x14(faction 2) vs 0x7FFFFFFF(faction 0): GetAIStateReputation(0x14,0x7FFFFFFF)=1
+GetAIStateReputation(0x7FFFFFFF,0x14)=1 (0=neutral,1=friendly,2=hostile)
+```
+
+Cross-checked against `repute.2da` (`tools/kotorfiles.py extract repute.2da`, read fresh this
+round): **row 2's own label is `Friendly_1`** (row 0 = `Player`, row 1 = `Hostile_1`, row 2 =
+`Friendly_1`, row 3 = `Hostile_2`, ...). `end_sith2`'s own `CSWSCreatureStats::faction_id` reads a
+plain `2` — **this specific GIT-placed creature starts in a FRIENDLY faction, not a hostile one**,
+and the engine's own `GetAIStateReputation` matrix lookup for faction-2-vs-faction-0 (PLAYER)
+correctly returns 1 (friendly) — this is not a bug in the read, it is the retail matrix working
+exactly as designed against the creature's real starting membership.
+
+**The host and client results are byte-for-byte identical.** `GetAIStateReputation` in both
+directions read `1` on the HOST's own instance, and `1` on the CLIENT's own instance, for the
+IDENTICAL pairing (`0x14` vs each instance's own local player id, `0x7FFFFFFF`). **This directly
+rules out round 89's own working hypothesis (a per-instance asymmetry — "the host's own player
+reads hostile, the client's does not")**: neither side reads this creature as hostile, so there
+was never an asymmetry to explain in the first place, for THIS creature.
+
+**Confirmed the creature's own combat-end script does not arm it either.** `firescript 0x14 fire`
+(re-fires `k_def_combend01` for real, the same probe round 89 used) produced no change: `faction
+0x14` read the identical `faction 2` / `GetAIStateReputation=1` result immediately afterward.
+`k_def_combend01` is what runs at the END of a combat round already in progress (perception,
+targeting, retreat logic) — it is not the trigger that ARMS hostility on a creature that starts
+friendly, and this pass confirms it directly rather than assuming it from the name.
+
+**Verdict: NOT a co-op bug, not a `LocalFightCandidateRule`/`EnemyPresenceController` defect, not
+a client-vs-host divergence of any kind.** `end_sith2` genuinely is friendly at the moment either
+instance's staging (`tp` directly to the creature, bypassing the Endar Spire's own story
+progression) reaches it. Round 89's original symptom — a client's `attack` never lands on this
+creature — is the CORRECT engine behaviour for a friendly-faction body, the same way a
+single-player character could not "properly" fight a friendly NPC either without whatever normally
+arms Sith hostility on Endar Spire first (a story trigger, a different creature already IN a
+hostile faction, or a script elsewhere that this pass did not trace — `k_def_combend01` itself is
+now ruled out). The playthrough's own successful `end_gensith` kill and general Sith-patrol combat
+must involve a DIFFERENT creature or a story state this specific staging skips past.
+
+**What this closes, and what is still open**: closes round 89's own "root-caused as
+staging/engine-state, not a rule gap" verdict with PROOF rather than an inference — the "likely
+per-instance asymmetry" language in that entry is now superseded; there is no asymmetry. Still
+open, unchanged: which script/trigger actually arms Endar Spire's Sith hostility in a real
+playthrough (round 89's own item 3), and whether the ORIGINAL playthrough's own reported "client
+cannot land hits" symptom reproduces against a creature independently confirmed hostile by this
+same `faction` verb — that follow-up test was not run this pass (no hostile-faction Endar Spire
+creature was independently located this round to test it against) and is the natural next step.
+
+Build: `dotnet build -warnaserror` clean, native plugin `-WarnAsError` clean, `dotnet test`
+2339/2339.

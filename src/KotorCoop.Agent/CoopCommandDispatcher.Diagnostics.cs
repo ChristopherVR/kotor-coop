@@ -51,6 +51,23 @@ public sealed partial class CoopCommandDispatcher
     }
 
     /// <summary>
+    /// <c>faction &lt;id|me&gt; [vsId|me]</c> — read-only, no engine write. See
+    /// <c>CoopCommandKind.Faction</c> and docs/research/combat-participation.md §10.
+    /// <c>command.Address</c> is "0" for the local player (the parser's own convention, matching
+    /// <c>grantxp</c>); <c>command.Amount</c> carries the vsId (0 = local player too).
+    /// </summary>
+    private void FactionCommand(CoopCommand command)
+    {
+        if (!ConsoleCommand.TryParseObjectId(command.Address ?? "0", out uint targetId))
+        {
+            Reply($"faction: '{command.Address}' is not an object id (try 0x14, or 'me')");
+            return;
+        }
+
+        SendCheat(new CheatRequest(CheatKinds.Faction, Target: targetId, Amount: command.Amount));
+    }
+
+    /// <summary>
     /// Resolves what <c>slay</c> should aim at and hands it over. A bare <c>slay</c> means
     /// "the nearest hostile", which only the agent can answer — it is the side that runs the
     /// enemy census — so the nearest id is picked here and the plugin is given a number

@@ -740,6 +740,34 @@ invalidate the most:
    change must report "plugin shared block not found" rather than attaching and reading the
    wrong offsets — the intended effect of the 57 -&gt; 58 bump.
 
+### 13.3.1 Live re-verification (2026-08-28) — every NEEDS-LIVE item closed positive
+
+Fresh rig session (`demo.ps1 -Save 1`, both installs freshly `build.ps1 -Install`ed). All checks
+below run in the same session, in order.
+
+1. **The splice installs.** Plugin log: `item-template spawns: item-template spawns at
+   0x52F748 (stub 0x17EB0000)` — present on both host and client, matching §13.1's disassembly
+   exactly. **VERIFIED.**
+2. **The id captured is final, not `OBJECT_INVALID`.** `scriptgive g_i_progspike01` on the host
+   (reaches the identical `ExecuteCommandCreateItemOnObject` VM command §13.1 hooks) produced
+   item `0x131` on the host; `item 0x131` read back `g_i_progspike01`, correctly identified, no
+   `OBJECT_INVALID`/`0x7F000000` anywhere in the plugin log (`grep -c` for both spellings: 0
+   hits). **VERIFIED.**
+3. **The resref decodes correctly, end to end.** The peer (client) received the item through the
+   normal `script_item_sync` grant channel (agent log: `materialised loot: submitting
+   'g_i_progspike01' for target 0x7FFFFFFF through the giveloot channel`) and the client's own
+   `item 0x123` (its local id for the same body) read back `g_i_progspike01` — not
+   `k_computer_spike`, not a failure-8 refusal. **This is the actual fix, confirmed.**
+4. **No stray `OBJECT_INVALID` ids in the ring** — 0 occurrences of `OBJECT_INVALID`/`0x7F000000`
+   in the host's plugin log across the whole test. **VERIFIED.**
+5. Burst/overrun and the version-skew check (items 5/6) were not separately exercised this round
+   (a single `scriptgive` is nowhere near the ring's 64-entry capacity, and both installs were
+   freshly matched-version this round by construction) — left as still-NEEDS-LIVE for a round
+   that specifically wants to stress either.
+
+**Verdict: the `k_computer_spike` gap is CLOSED**, live-confirmed exactly as this section
+predicted from static analysis alone. `dotnet test`: 2339/2339.
+
 ### 13.4 What this does NOT change
 
 `RememberSpawnedItemResref`'s "first writer wins" rule (§12.2) is unchanged: whichever of the

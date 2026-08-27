@@ -44,6 +44,41 @@ public static partial class ConsoleCommand
             ? new CoopCommand(CoopCommandKind.Invalid, Error: "movenear <id>  (e.g. movenear 0x127)")
             : new CoopCommand(CoopCommandKind.MoveNear, Address: rest[0]);
 
+    // faction <id|me> [vsId|me]  - LIVE-TEST/DIAGNOSTIC PRIMITIVE, see CoopCommandKind.Faction.
+    // Read-only: reports GetAIStateReputation (both directions) plus each side's raw
+    // faction_id. vsId defaults to the local player when omitted.
+    private static CoopCommand ParseFaction(string[] rest)
+    {
+        const string usage = "faction <id|me> [vsId|me]  e.g. faction 0x14, or faction 0x14 me";
+
+        if (rest.Length is 0 or > 2)
+        {
+            return new CoopCommand(CoopCommandKind.Invalid, Error: usage);
+        }
+
+        string targetToken = IsSelfWord(rest[0]) ? "0" : rest[0];
+        if (!TryParseObjectId(targetToken, out _))
+        {
+            return new CoopCommand(
+                CoopCommandKind.Invalid, Error: $"'{rest[0]}' is not an object id or 'me' - {usage}");
+        }
+
+        int vsId = 0;
+        if (rest.Length == 2)
+        {
+            string vsToken = IsSelfWord(rest[1]) ? "0" : rest[1];
+            if (!TryParseObjectId(vsToken, out uint vs))
+            {
+                return new CoopCommand(
+                    CoopCommandKind.Invalid, Error: $"'{rest[1]}' is not an object id or 'me' - {usage}");
+            }
+
+            vsId = (int)vs;
+        }
+
+        return new CoopCommand(CoopCommandKind.Faction, Address: targetToken, Amount: vsId);
+    }
+
     // netsim off | status | loss <pct> | latency <ms> [jitter] | blackout <secs> [in|out|both]
     //
     // Validated here rather than in the dispatcher for the same reason `warp` is: a typo in a

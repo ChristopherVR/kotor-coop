@@ -246,6 +246,10 @@ internal sealed unsafe partial class CheatController(SharedBlockView block)
                 PartySelectOk();
                 break;
 
+            case SharedBlock.CheatKindFaction:
+                Faction(playerId);
+                break;
+
             default:
                 Answer(SharedBlock.CheatStatusRefused, $"unknown cheat kind {kind}");
                 break;

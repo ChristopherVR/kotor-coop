@@ -104,6 +104,7 @@ Lower-level probes used to stage or observe a live test; not day-to-day player c
 | `useplaceable` | `[tag\|id]` (blank = nearest container) | uses a chest/corpse/switch through the engine's own input |
 | `closeplaceable` | `[tag\|id]` (blank = nearest container) | closes what `useplaceable` opened |
 | `movieplay` | `<resref>` | plays a movie right now (blocks the main thread) |
+| `faction` | `<id\|me> [vsId\|me]` | read-only: reports the engine's own `GetAIStateReputation` verdict (both directions) plus each side's raw faction id, for narrowing a "why won't this creature fight" question — see docs/research/combat-participation.md §10 |
 
 ## Notes
 
