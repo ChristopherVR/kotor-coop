@@ -168,6 +168,11 @@ public sealed partial class KotorGameBridge
             _itemTags.Clear();
             _itemAddresses.Clear();
             _itemTagsBuiltAtMs = 0;
+
+            // Engine object ids are only meaningful within the module that minted them; a
+            // stale (id -> resref) fact surviving a module change would be actively wrong
+            // rather than merely uninformative — see the cache's own doc comment.
+            ClearSpawnedItemResrefCache();
         }
 
         // Visible equipment travels as blueprint resrefs. An item's tag matches its

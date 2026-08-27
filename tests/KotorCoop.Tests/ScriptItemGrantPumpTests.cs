@@ -208,6 +208,66 @@ public sealed class ScriptItemGrantPumpTests
         Assert.Equal(0x5u, item.Identity.Upgrades);
     }
 
+    /// <summary>
+    /// docs/research/playthrough-endar-spire.md's live-confirmed failure: a stock KOTOR 1
+    /// quest item's Tag (<c>k_trask_item</c> here, echoing <c>k_computer_spike</c>) genuinely
+    /// diverges from its blueprint resref (<c>g_i_medeqpmnt01</c>, echoing
+    /// <c>g_i_progspike01</c>). <see cref="IGameBridge.ReadPossessedItems"/>'s contract is
+    /// already resref-keyed (the field is literally called <c>Resref</c>) — this pins that a
+    /// bridge answering with the item's REAL resref (what <c>KotorGameBridge.TryGetItemResref</c>
+    /// now prefers, via its own spawn-record cache, over the Tag proxy — see
+    /// docs/research/item-identity.md §12) is granted exactly once and forwarded under THAT
+    /// resref, never the diverging tag, so the receiving `giveloot` has a blueprint it can
+    /// actually spawn.
+    /// </summary>
+    [Fact]
+    public void AScriptGrantWhoseTagDivergesFromItsResrefIsPublishedOnceUnderItsRealResref()
+    {
+        (CoopAgent agent, ScriptItemBridge bridge, ScriptItemSession session) = Build();
+
+        agent.PumpOnce(); // seeds an empty baseline
+
+        // The bridge answers with the item's REAL resref, exactly as KotorGameBridge now does
+        // for a body it holds a spawn record for — never the diverging tag (k_trask_item),
+        // which IGameBridge's contract never even exposes.
+        bridge.Possessed = [("g_i_medeqpmnt01", new ItemIdentity(1, 0, 0, 0, ItemIdentity.FlagKnown))];
+        agent.PumpOnce();
+
+        (string partnerTag, IReadOnlyList<MaterialisedLootItem> items) = Assert.Single(session.PublishedGrants);
+        Assert.Equal(string.Empty, partnerTag);
+        MaterialisedLootItem item = Assert.Single(items);
+        Assert.Equal("g_i_medeqpmnt01", item.Resref);
+
+        // A further sample with nothing new must not re-report the same grant.
+        agent.PumpOnce();
+        Assert.Single(session.PublishedGrants);
+    }
+
+    /// <summary>
+    /// The architectural limit this round's fix does NOT close, named so a regression in either
+    /// direction is visible: an item a VANILLA engine script placed directly into the PC's
+    /// inventory (never something this session asked the plugin to spawn) has no spawn record
+    /// for <c>KotorGameBridge</c> to prefer, so it still falls back to reporting whatever the
+    /// Tag proxy says — here standing in for that fallback string directly, since
+    /// <see cref="IGameBridge.ReadPossessedItems"/> only ever carries one string per row. The
+    /// grant must still be forwarded (better a maybe-wrong blueprint name than silence), not
+    /// silently dropped — docs/research/playthrough-endar-spire.md's "Root cause, live-confirmed,
+    /// not fixed (architectural, not a bug)".
+    /// </summary>
+    [Fact]
+    public void ATagOnlyFallbackGrantIsStillPublishedNotSilentlyDropped()
+    {
+        (CoopAgent agent, ScriptItemBridge bridge, ScriptItemSession session) = Build();
+
+        agent.PumpOnce(); // seeds an empty baseline
+
+        bridge.Possessed = [("k_trask_item", new ItemIdentity(1, 0, 0, 0, ItemIdentity.FlagKnown))];
+        agent.PumpOnce();
+
+        MaterialisedLootItem item = Assert.Single(Assert.Single(session.PublishedGrants).Items);
+        Assert.Equal("k_trask_item", item.Resref);
+    }
+
     [Fact]
     public void WhileOwningAConversationNothingIsSampledOrPublished()
     {

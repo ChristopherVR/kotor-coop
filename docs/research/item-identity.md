@@ -523,3 +523,70 @@ half and the thing nothing had ever observed.
 8. **A bad blueprint is caught.** `dropitem g_w_notathing` should answer
    `'g_w_notathing' is not a blueprint here - 0xID spawned EMPTY` rather than reporting a
    successful drop. Cheap to run, and it is the check that would have saved the first pass.
+
+---
+
+## 12. There is still no `TemplateResRef` on a live `CSWSItem` — re-confirmed, and what the
+## codebase does about it now (2026-08-28)
+
+`docs/research/playthrough-endar-spire.md` (step 5) live-confirmed that §8.2's known limitation
+fires on stock, unmodded content: `g_i_progspike01`'s in-game Tag is `k_computer_spike`, and every
+"resref" this codebase reported for a POSSESSED item (as opposed to a ground body, which carries
+its resref on the wire directly — §7) was really that Tag. This section re-verifies the negative
+one more time, from fresh evidence rather than repeating §8.2's citation, and records the fix
+built on top of it.
+
+### 12.1 Re-verification: **VERIFIED, no new field exists**
+
+- `python tools/q.py offsets CSWSItem` lists every known field of the class (`+0x0C` BaseItem
+  through `+0x294` Upgrades, per §1's own table) — no resref, no template pointer, nothing GFF
+  labels as `TemplateResRef`.
+- `python tools/q.py offsets CSWSObject` (the embedded object at `+0x10`, i.e. item `+0x18`
+  onward) lists `tag` (`CExoString`, item `+0x28` — matches §8.2) and nothing else
+  string-shaped except `portrait` (a `CResRef`, but that names the PORTRAIT icon, not the
+  blueprint).
+- `python tools/q.py func TemplateResRef` and `func GetTemplate` return **nothing** — there is no
+  `CSWSItem::GetTemplateResRef` or equivalent accessor anywhere in the image.
+- A fresh disassembly of `CSWSItem::LoadFromTemplate` (`0x005608B0`, the function `CreateItemOnFloor`
+  and `CreateItemOnObject` both eventually call) shows the incoming resref used only to open and
+  parse the GFF resource (`call 0x6fa7e6` then the GFF constructor at `0x411240`) before handing
+  off to `LoadDataFromGff` (`0x0055FCD0`) at `0x00560946` — the resref string itself is never
+  written into the object being built. This matches §8.2's citation of `SaveItem` never writing a
+  `TemplateResRef` field, from the other direction: the LOADER doesn't either.
+
+So the premise "read the item's template resref off the live object" has no answer — not a gap in
+this round's research, a genuine fact about the engine. The only per-instance name a live
+`CSWSItem` carries is its Tag, and Tag is a proxy that happens to equal the resref (uppercased)
+for base-game items but is not required to and, per the live-confirmed case, sometimes does not.
+
+### 12.2 What WAS available and unused: our own spawn record
+
+Nothing on the live object helps, but this codebase is not always a bystander to item creation —
+`ItemController` (the plugin) spawns every ground-item body itself, via `SpawnItemOnFloor`, from a
+resref the agent (`KotorGameBridge.TryWriteGroundItems`) wrote into the plugin's shared block one
+instant earlier. That resref is not an inference; it is the literal string this session commanded.
+`KotorGameBridge.TryGetSpawnedItemResref` already read it back out of the block's per-slot status —
+but only while the slot still reported `ItemStateAlive`, which `ItemController.ProbeOneSlot`
+clears to `Vanished` (object id zeroed) the INSTANT it detects the body has left the floor, i.e.
+exactly when it gets picked up and becomes a possessed item worth asking about.
+
+**The fix.** `KotorGameBridge.GroundItems.cs` now keeps a second, longer-lived cache —
+`_spawnedItemResrefs: Dictionary<uint, string>`, object id to resref, capped at 256 entries and
+cleared on module change (an object id means nothing across a module boundary, same reasoning as
+the existing tag/address caches) — populated in `CollectVanishedItems` the moment a slot is FIRST
+observed `Alive` with a resolvable object id, before the pickup transition can ever happen.
+`KotorGameBridge.TryGetItemResref` checks this cache before the Tag cache, falling back to Tag (and
+then to the still-alive-slot read `TryGetSpawnedItemResref` covers) exactly as before when nothing
+is known. `ReadPossessedItems`/`ListItems` needed no change — both already route every resref
+through `TryGetItemResref`, so `ScriptItemGrantPump`, `DialoguePump`'s reward-item diff, and
+`CombatPump`'s materialised-loot capture (§6's "owner-authoritative enemies die" case, when the
+dead creature happens to be holding a body this session spawned) all pick up the improvement for
+free.
+
+**Scope, stated plainly.** This closes the gap for anything THIS SESSION spawned onto the floor —
+a peer's ground drop, a `dropitem`/`setitem` test body — once it is picked up and later re-sampled.
+It does **not** close the `k_computer_spike` case itself: an item a vanilla script places directly
+into an inventory was never something this session told the plugin to create, so there is no spawn
+record for it on either side, and the sender still has only the Tag to report. See
+`docs/research/dialogue-consequences.md`'s 2026-08-28 round for why that remaining gap does not
+change the case for keeping `script_item_sync` on, and for the NEEDS-LIVE re-test plan.
