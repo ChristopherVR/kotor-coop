@@ -870,3 +870,72 @@ single `ShowStoreGui` call:
 7. `store_sync`/`coop.ini` stays default OFF regardless of this fix's outcome — this document's
    own existing discipline for flipping a shipped default (a clean `openstore` session is not
    the bar; the full §6 buy/sell/reconnect loop is) is unchanged.
+
+## Live pass (2026-08-28): the `ShowStoreGui` fix confirmed clean — the crash is gone; the
+## buy/sell/reconnect loop remains blocked by the pre-existing click-injection gap, not this fix
+
+Two-instance rig (`tools/demo.ps1`), `pwsh src\KotorCoop.Plugin\build.ps1 -Install -WarnAsError`
+on both game directories first (deployed `dinput8.dll` hash-confirmed identical to the fresh
+build on both installs). Both instances `warp tar_m02aa` together (confirmed via `where` on both:
+host `92.1 128.9`, client `92.0 132.7`, same module).
+
+### Items 1-3 of the re-test plan: PASS, live-confirmed
+
+The same ambient conversation the prior crash-finding pass hit was active again on arrival;
+`openstore Larrim_Store` correctly refused it cleanly (`the engine refused it: openstore
+'Larrim_Store' refused: a conversation is active`, twice, while the conversation was still
+running) rather than crashing — the precondition gate this fix left unchanged still works.
+`selectreply 0`/`skipline` cleared it after a few rounds (this particular ambient conversation
+took more turns to close than the prior pass's — not investigated further, not relevant to the
+fix under test). With the conversation clear, `openstore Larrim_Store` returned `store
+'Larrim_Store': opened`, and the plugin log recorded `openstore: store 'Larrim_Store' -
+ShowStoreGui called, panel populated` — **no crash**, matching the fix's own claim exactly. The
+HOST process (`Get-Process swkotor`) stayed alive and `Responding=True` throughout and for several
+minutes after. `tools/crashlog.ps1` confirmed no new crash entry from this session — the most
+recent `0xc0000005` at `0x002c1872` (the exact `PopulateStoreItemListBox` address this fix
+targets) is timestamped from the PRIOR round's session, before the fix landed, not this one.
+**Item 1 of the addendum's original checklist — "confirm the GUI opens with the right
+inventory" — is now genuinely reachable and clean**, closing the crash this doc's own prior two
+entries chased.
+
+A `tools/shot.ps1` capture was attempted but returned a black frame (the rig's background/hidden
+window is not the true foreground surface `BitBlt` needs — a capture-tooling limitation, not a
+game-state one); the log-line evidence above (`ShowStoreGui called, panel populated`, no crash,
+process alive) is treated as sufficient given `openstore`'s own code path leaves nothing else that
+could silently fail between those two log points.
+
+### Item 5 (the other precondition gate — galaxy map/party select): not attempted this pass
+
+Out of time budget for this round; only the conversation gate (already proven working, above) was
+re-confirmed. The galaxy-map/party-select gate remains exactly as untested as the prior pass left
+it.
+
+### Items 2-4 (host buys/sells a finite/infinite item, client reconciles): NOT REACHED — same
+### pre-existing limitation this document has always named, not a gap in this fix
+
+`CheatKinds.StoreInsert`/`StoreRemove` (`CheatController.Store.cs`) are the sync channel's own
+automatic-apply primitives — they exist to let one instance's agent replay a PEER's already-
+detected buy/sell locally, and are wired only to that internal drain path
+(`CoopCommandDispatcher.Store.cs`'s `DrainAutomaticStore`), not to any console verb a human or a
+scripted test can call directly (confirmed by grep: no `CoopCommandKind` maps to either). The
+channel's own stock-change DETECTION (§2.3) only runs "while the store's GUI is open," reading a
+real before/after delta — so exercising the buy/sell/reconnect loop needs a REAL purchase to
+happen through the actual GUI, which needs a real mouse click. §6's own original write-up already
+named this precisely ("driving the real click path... blocked by the same mouse-click-injection
+gap `docs/research/session-save.md` already documents") and this pass confirms nothing has
+changed: there is still no way to stage a real store transaction from this project's own console
+primitives. **This is not a new finding and not something this fix could have addressed** — it is
+the same limitation `openstore` itself was built to work around for item 1 only (confirming the
+GUI opens), and buying/selling has no equivalent workaround yet. `store_sync` stays OFF.
+
+### Verdict
+
+The `ShowStoreGui` argument-count fix is **live-confirmed correct and safe**: `openstore` opens
+the right store's GUI, populated, with no crash, across two separate live attempts (the
+conversation-gate refusal and the successful open). The remaining §6 items (2-5, the actual
+sync-channel behaviour) stay unverified for the same reason they always have — no click-injection
+primitive exists in this codebase yet. `store_sync` stays at its default OFF in `coop.ini`/
+`docs/CONFIG.md`; no default was flipped this round. `dotnet build KotorCoop.slnx -warnaserror`
+and `src/KotorCoop.Plugin/build.ps1 -WarnAsError`: both clean (no source changed this pass beyond
+the unrelated `build.ps1` `$env:Platform` environment fix recorded in `companion-state-sync.md`'s
+own 2026-08-28 entry).
