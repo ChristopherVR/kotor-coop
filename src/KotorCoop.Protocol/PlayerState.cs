@@ -74,6 +74,19 @@ public readonly record struct PlayerState(
     /// </summary>
     public const uint FlagInMinigame = 32;
 
+    /// <summary>
+    /// The player is AWAY: <c>CoopAgent.PumpOnce</c> has failed to read their local state for
+    /// <see cref="KotorCoop.Session.AwayRule.ConsecutiveFailuresThreshold"/> consecutive ticks
+    /// — the main menu, a load screen, the character/export screen, or anywhere else there is
+    /// no live player object to sample. Set on the last known state and kept published every
+    /// tick while the drought continues, so peers do not merely stop hearing from this player
+    /// (indistinguishable from ordinary jitter) but are told why: a peer's instance treats an
+    /// away flag the same way it already treats <see cref="FlagInMinigame"/> — the phantom is
+    /// parked rather than mirrored, since a stale position is worse than none. Cleared the
+    /// instant a read succeeds again. See docs/research/disconnect-reconnect.md.
+    /// </summary>
+    public const uint FlagAway = 64;
+
     /// <summary>True while this player is asking to end a shared pause they did not start.</summary>
     public bool HasReleasedPause => (Flags & FlagPauseReleased) != 0;
 
@@ -91,6 +104,8 @@ public readonly record struct PlayerState(
     public bool IsDowned => (Flags & FlagDowned) != 0;
 
     public bool IsInMinigame => (Flags & FlagInMinigame) != 0;
+
+    public bool IsAway => (Flags & FlagAway) != 0;
 }
 
 /// <summary>A remote player as seen locally, after interpolation.</summary>

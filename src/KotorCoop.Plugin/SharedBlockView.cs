@@ -15,11 +15,23 @@ internal readonly record struct RemoteView(
     /// docs/research/minigames.md).</summary>
     public const uint FlagInMinigame = 32;
 
+    /// <summary>Matches <c>PlayerState.FlagAway</c> — the peer's agent has stopped reading
+    /// their game (main menu, load screen, character screen) and is republishing their last
+    /// known state with this bit set. Carried verbatim through the existing
+    /// <see cref="Flags"/> dword like <see cref="FlagInMinigame"/>; no block layout change.
+    /// The agent already omits an away peer from what it writes to this block (same idiom as
+    /// a minigame/module-filtered peer — see <c>CoopAgent.PumpOnce</c>), so
+    /// <see cref="RemoteView.Active"/> is what actually parks the phantom; this bit exists for
+    /// any future plugin-side consumer (a HUD indicator) that wants the reason.</summary>
+    public const uint FlagAway = 64;
+
     public bool InCombat => (Flags & FlagInCombat) != 0;
 
     public bool Paused => (Flags & FlagPaused) != 0;
 
     public bool InMinigame => (Flags & FlagInMinigame) != 0;
+
+    public bool Away => (Flags & FlagAway) != 0;
 }
 
 /// <summary>One enemy's authoritative state, as published by the owning peer.

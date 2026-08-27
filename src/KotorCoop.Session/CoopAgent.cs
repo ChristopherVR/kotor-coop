@@ -110,6 +110,21 @@ public sealed class CoopAgent
 
     public long ReadFailureCount { get; private set; }
 
+    /// <summary>
+    /// True once local reads have failed for <see cref="AwayRule"/>'s threshold in a row —
+    /// this instance's own player is being published with <see cref="PlayerState.FlagAway"/>
+    /// set. Distinct from <see cref="LastReadSucceeded"/>, which flips on the very first
+    /// failed tick: this is the sustained, ~1 s-debounced signal peers actually see. See
+    /// <see cref="AwayRule"/>.
+    /// </summary>
+    public bool IsAway { get; private set; }
+
+    /// <summary>Consecutive failed local reads since the last success — reset to 0 the moment
+    /// <see cref="IGameBridge.TryReadLocalState"/> succeeds again, unlike the cumulative
+    /// <see cref="ReadFailureCount"/> above. What <see cref="AwayRule.IsAway"/> is judged
+    /// against.</summary>
+    private int _consecutiveReadFailures;
+
     public PlayerState LastLocalState
     {
         get
@@ -236,6 +251,18 @@ public sealed class CoopAgent
         if (_bridge.TryReadLocalState(out PlayerState local))
         {
             LastReadSucceeded = true;
+            _consecutiveReadFailures = 0;
+
+            if (IsAway)
+            {
+                // The drought ended: back from the main menu, a load screen finished, a
+                // character was re-selected. local is a fresh read and by construction
+                // carries no FlagAway of its own, so publishing it as-is IS the "cleared"
+                // announcement peers see.
+                IsAway = false;
+                Log?.Invoke("away: local reads resumed - no longer away");
+            }
+
             _session.PublishLocalState(local);
 
             lock (_snapshotGate)
@@ -249,7 +276,34 @@ public sealed class CoopAgent
         {
             LastReadSucceeded = false;
             ReadFailureCount++;
+            _consecutiveReadFailures++;
             local = LastLocalState;
+
+            // Below AwayRule's threshold this is left exactly as it always was: a transient
+            // blip publishes nothing new, and the session's own snapshot buffer keeps
+            // whatever it last sent. Only a SUSTAINED drought earns the away flag — see
+            // AwayRule's remarks for why this must be wall-clock-scaled, not a bare tick
+            // count.
+            if (AwayRule.IsAway(_consecutiveReadFailures, _settings.PollRate))
+            {
+                if (!IsAway)
+                {
+                    IsAway = true;
+                    Log?.Invoke("away: local reads have failed for ~1s; publishing last known state as away");
+                }
+
+                // Carried on `local` itself (not just the publish below) so every pump this
+                // tick that reads the local parameter — death, travel, pause — sees the same
+                // away state a peer's instance will.
+                local = local with { Flags = local.Flags | PlayerState.FlagAway };
+
+                _session.PublishLocalState(local);
+
+                lock (_snapshotGate)
+                {
+                    _lastLocalState = local;
+                }
+            }
         }
 
         IReadOnlyList<RemotePeer> peers = _session.GetRemotePeers();
@@ -305,6 +359,16 @@ public sealed class CoopAgent
         visible = _settings.HidePeersInMinigame
             ? [.. visible.Where(p => !minigameRule.ShouldHidePeer(p.State.IsInMinigame))]
             : visible;
+
+        // A peer whose OWN agent has judged them away (AwayRule — quit to the main menu, a
+        // load screen, the character screen) is exactly as "not meaningfully standing here"
+        // as one in a minigame, and gets the identical treatment: simply absent from what
+        // TryWriteRemotePeers writes, which is what already parks/despawns a slot's phantom
+        // (PhantomController.OnFrame destroys a slot the instant RemoteView.Active goes
+        // false) instead of leaving it frozen at its last position. Unlike the minigame
+        // filter this has no coop.ini escape hatch — there is no "old behaviour" a frozen
+        // statue was ever the intended experience of.
+        visible = [.. visible.Where(p => !p.State.IsAway)];
 
         // Mask the per-avatar fields a mod mismatch makes unsafe BEFORE they reach the
         // game. A different appearance.2da means a replicated row index could paint the
@@ -494,9 +558,21 @@ public sealed class CoopAgent
             _bridge.WorldLoadSerial));
 
         _worldStatePump.PumpItems(local, caps);
-        _partyPump.PumpProgression(caps);
+
+        // Progression and journal are both DERIVED from the local player's own read (gold/XP
+        // off the party table, quest state off the globals catalogue reachable only through a
+        // live player object) rather than taking `local` as a parameter, so nothing upstream
+        // already gates them on this tick's read having actually succeeded. Skipping both
+        // while the last read failed stops a stale republish while away — see
+        // docs/research/disconnect-reconnect.md — though each also fails its own internal
+        // bridge read gracefully on its own, so this is defence in depth, not the only guard.
+        if (LastReadSucceeded)
+        {
+            _partyPump.PumpProgression(caps);
+            _worldStatePump.PumpJournal(caps);
+        }
+
         _worldStatePump.PumpWorldState(caps);
-        _worldStatePump.PumpJournal(caps);
         _worldStatePump.PumpDoors(caps);
 
         // Moved to the 150 ms combat cadence above when settings.ContainerFastPump is on —

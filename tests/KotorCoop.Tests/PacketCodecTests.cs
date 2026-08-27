@@ -236,6 +236,41 @@ public class PacketCodecTests
     }
 
     [Fact]
+    public void AwayFlagRoundTripsIndependentlyOfTheOtherPresenceFlags()
+    {
+        // FlagAway (Version 39) rides the same Flags dword every other presence bit already
+        // does — this pins it exactly like MinigameFlagRoundTrips above.
+        Span<byte> buffer = stackalloc byte[ProtocolConstants.MaxPacketSize];
+        PlayerState away = SampleState with
+        {
+            Flags = PlayerState.FlagInDialogue | PlayerState.FlagAway,
+        };
+
+        int length = PacketCodec.Write(buffer, new StateUpdatePacket(1, 1, 1, away));
+        StateUpdatePacket? decoded = PacketCodec.ReadStateUpdate(buffer[..length]);
+
+        Assert.NotNull(decoded);
+        Assert.True(decoded.State.IsAway);
+        Assert.True(decoded.State.IsInDialogue);
+        Assert.False(decoded.State.IsInMinigame);
+        Assert.False(decoded.State.IsInCombat);
+    }
+
+    [Fact]
+    public void ClearingTheAwayFlagRoundTrips()
+    {
+        // A stuck bit on the wire would leave a returned player parked forever.
+        Span<byte> buffer = stackalloc byte[ProtocolConstants.MaxPacketSize];
+        PlayerState backAgain = SampleState with { Flags = PlayerState.FlagInCombat };
+
+        int length = PacketCodec.Write(buffer, new StateUpdatePacket(1, 1, 1, backAgain));
+        StateUpdatePacket? decoded = PacketCodec.ReadStateUpdate(buffer[..length]);
+
+        Assert.NotNull(decoded);
+        Assert.False(decoded.State.IsAway);
+    }
+
+    [Fact]
     public void WorldSnapshotRoundTripsAllEntries()
     {
         Span<byte> buffer = stackalloc byte[ProtocolConstants.MaxPacketSize];

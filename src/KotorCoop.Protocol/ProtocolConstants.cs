@@ -90,8 +90,14 @@ public static class ProtocolConstants
     /// <c>Forced</c>, so <c>dialogue_auto_join</c> can tell an engine-forced conversation (an
     /// ambush, a scripted cutscene) from an ordinary player-clicked chat. See
     /// docs/research/dialogue-sync.md's Item 1.
+    /// Version 39: <see cref="PlayerState.FlagAway"/> — set on a player's last known state once
+    /// <c>CoopAgent</c> has failed to read them for a sustained streak (main menu, load screen,
+    /// character screen), so a peer's instance parks their phantom instead of leaving a frozen
+    /// statue behind and the session can announce "away"/"back". Rides the existing
+    /// <c>Flags</c> dword, so nothing in <see cref="PacketCodec"/> changes shape. See
+    /// docs/research/disconnect-reconnect.md.
     /// </summary>
-    public const byte Version = 38;
+    public const byte Version = 39;
 
     /// <summary>Journal quest tags are resrefs plus a little slack.</summary>
     public const int MaxJournalTagLength = 32;

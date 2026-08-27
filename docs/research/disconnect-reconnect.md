@@ -537,3 +537,86 @@ chest empty for the reconnecting player (item 4 in §6's existing NEEDS-LIVE lis
 covers the scenario; it now also exercises the digest path, not just the retransmit path,
 though the two are not distinguishable by eye on the rig — only in the test above, which
 constructs the tie directly).
+
+## 9. Away flag: quitting to the main menu is not a link failure (2026-08-27, NEEDS-LIVE)
+
+Everything above this section is about the transport lying dormant while the process, and the
+game underneath it, stay alive and reachable. There is a third shape neither §0's "process
+killed" nor "link dropped" covers: **the agent process is alive and still pinging, but the
+player is not in the world at all** — they quit to the main menu, are sitting at a load
+screen, or are on the character/export screen. `CoopAgent.PumpOnce`'s `TryReadLocalState`
+simply has no player object to sample.
+
+Before this pass that looked exactly like nothing happening: the read failed, `PumpOnce` fell
+back to `LastLocalState` and kept silently doing so forever, the session's own snapshot
+buffer kept re-sending that last known avatar because nothing told it to stop, and the peer
+timeout (`ProtocolConstants.PeerTimeoutMs`) never fired because the agent was, correctly,
+still alive and still talking. The partner's screen showed a **frozen statue standing exactly
+where the player last was**, indefinitely, with no signal distinguishing "briefly alt-tabbed"
+from "quit twenty minutes ago" from "the link actually died".
+
+**The mechanism.** `KotorCoop.Session.AwayRule` is the pure threshold: `CoopAgent` now counts
+*consecutive* failed reads (reset to 0 the instant one succeeds — a separate counter from the
+pre-existing, cumulative `ReadFailureCount`) and treats a run reaching `AwayRule.Threshold`
+(scaled to the configured poll rate to keep a ~1 s wall-clock window, the same
+tick-vs-wall-clock lesson the heavy-pump cadence already learned) as genuinely away rather
+than a transient blip — a module mid-store or an object freed between two reads recovers
+within a tick or two and must never flip this. Once the threshold is crossed, `PumpOnce`
+publishes the *last known* `PlayerState` with the new `PlayerState.FlagAway` bit set, and
+keeps republishing it every subsequent tick for as long as reads keep failing — peers must
+keep hearing from an away player, not merely be told once. The instant a read succeeds again,
+the flag clears on that same tick's fresh state.
+
+**Wire.** `FlagAway` (64) rides the existing `PlayerState.Flags` dword exactly the way
+`FlagInMinigame` does — no `PacketCodec` shape change, since `WritePlayerState`/
+`ReadPlayerState` already carry the whole dword verbatim. Protocol version is now **39**.
+
+**Hiding the phantom reuses the minigame path exactly.** An away peer gets the identical
+"park, do not mirror" treatment `FlagInMinigame` already has: `CoopAgent.PumpOnce` filters
+`p.State.IsAway` peers out of what it hands to `TryWriteRemotePeers`, the same "simply
+absent" idiom the minigame/module filters already use. On the plugin side that is enough by
+itself — `PhantomController.OnFrame` destroys any slot whose `RemoteView.Active` goes false
+(`WriteToPlugin` writes 0 to a slot's active dword for any peer missing from the write), the
+same "peer left" path a genuine disconnect already takes — so no plugin-side gating code was
+needed beyond mirroring the flag constant onto `SharedBlockView.RemoteView` for a future
+consumer. Unlike the minigame filter, there is no coop.ini escape hatch for this: a frozen
+statue was never anyone's intended experience of "away", so there is nothing to opt back
+into.
+
+**Local channels stop publishing stale derived state too.** `PartyPump.PumpProgression` and
+`WorldStatePump.PumpJournal` are gated on `CoopAgent.LastReadSucceeded` at their call sites —
+both already fail their own internal bridge reads gracefully while genuinely at the main
+menu, so this is defence in depth rather than the only guard, but it stops a stale republish
+riding the heavy pass during the ~1 s grace window before the away flag itself latches.
+
+**Toast.** `KotorCoop.Agent.AwayAnnouncer`, the same shape as `PeerAnnouncer` and
+`ConnectionStatusAnnouncer` (a diff over the last observation, announced only on change) but
+deliberately a *separate* diff from `PeerAnnouncer`'s join/leave: going away is a presence
+change, not a roster change — the peer is still admitted and still counted. Posts
+`"<name> left the world (main menu / loading)"` on the away edge and `"<name> is back"` on
+the clear, through the same `Reply` path every other toast uses, wired into the existing
+`AnnouncePeerChanges` per-tick pass (`CoopCommandDispatcher.Announcers.cs`) rather than a new
+call site.
+
+**Tests.** `AwayRuleTests` (the pure threshold, including the poll-rate scaling and the
+zero/negative-poll-rate fallback), `AwayStateTests` (`CoopAgent.PumpOnce` end to end: a brief
+blip publishes nothing, a sustained drought publishes-and-keeps-publishing the away state, a
+resumed read clears it on the very next tick, and an away peer is omitted from
+`TryWriteRemotePeers`), `PacketCodecTests` (`AwayFlagRoundTripsIndependentlyOfTheOtherPresenceFlags`
+/ `ClearingTheAwayFlagRoundTrips`, modelled on the existing minigame-flag pins),
+`SessionIntegrationTests.AnAwayPeerIsSeenAsAwayByTheOtherSide` (real host, real client, real
+sockets — the one thing a codec-level round trip cannot prove: that `RemotePeer` as handed out
+by the OTHER side's session actually carries the bit), and `AwayAnnouncerTests` (both toast
+edges, a peer already away on first observation announcing nothing since there is no edge to
+fire on yet, and a peer leaving the roster while away announcing nothing of its own since
+`PeerAnnouncer` already covers "left the game").
+
+**NEEDS-LIVE.** Nothing in this section was run against the game or the rig — the phantom-hide
+path in particular is inferred from reading `PhantomController.OnFrame`/`WriteToPlugin`, not
+watched happen. Confirm on the rig: quit one instance to the main menu and watch the other
+instance's phantom for that player actually despawn (not just stop moving) within about a
+second, watch both screens for the "left the world" / "is back" toast on the way out and the
+way back in, and confirm reloading a save or crossing to the character-export screen does not
+itself spuriously trip the flag mid-transition (a save load briefly has no player object
+either, and the ~1 s threshold exists specifically to survive that without live confirmation
+it actually does on real timings).
