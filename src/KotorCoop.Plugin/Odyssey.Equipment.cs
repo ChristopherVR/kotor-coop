@@ -244,15 +244,39 @@ internal static unsafe partial class Odyssey
     /// <summary>
     /// CSWSCreature::EquipItem(int nInternalSlot, object oItem, int p3, int p4, int p5) —
     /// the engine's own SYNCHRONOUS "put this on now" primitive (0x004FEB90; confirmed by name
-    /// in tools/kotor1_0_3.db, __thiscall, param_size 20 bytes = 5 dwords). Runs to completion
-    /// inside the call itself: <c>CanEquipWeapon</c> (0x5A4950), <c>UnequipItem</c> on whatever
-    /// already occupies the slot (0x4FAA70), the stat/appearance apply (0x553BB0), the
-    /// inventory-slot write (0x5A4BE0), a creature-stats recompute (0x5ADDC0) and the
-    /// client-update broadcast — VERIFIED by full disassembly this round. This is the SAME
-    /// primitive the workbench's install path and the AI's own
-    /// <c>ForceEquipClothing</c>/<c>EquipMostDamagingMeleeWeapon</c>/etc. helpers call
-    /// (15 xrefs, all inside those two families) — it is the engine's own answer to "equip
-    /// this creature right now," not a script action.
+    /// in tools/kotor1_0_3.db, __thiscall, param_size 20 bytes = 5 dwords). Fully disassembled
+    /// this round (0x004FEB90-0x004FECDC, single entry/exit, no early return): calls
+    /// <c>CSWInventory::GetItemInInventory(item)</c> (0x5A4950 — DB name, but its actual
+    /// behaviour, read from the disassembly, is "is this exact item object already sitting in
+    /// one of my 18 equip slots", NOT a can-equip/proficiency gate — the earlier version of
+    /// this comment calling it <c>CanEquipWeapon</c> was wrong), and if true calls
+    /// <c>UnequipItem(creature, item)</c> (0x4FAA70) first so the same item is not left
+    /// double-referenced when moved between slots; then unconditionally calls
+    /// <c>CSWSItem::ApplyItemProperties</c> (0x553BB0, gated on p3), <c>CSWInventory::
+    /// PutItemInSlot(slot, item)</c> (0x5A4BE0), a stat recompute
+    /// (<c>ComputeArmourClass</c>/<c>UpdateCombatInformation</c>) and a client-update broadcast
+    /// — VERIFIED. **The function has exactly one `ret` and it always sets eax=1**: there is no
+    /// refusal path, no CanEquip/proficiency/two-handed check, and no handling for "the target
+    /// slot already holds a DIFFERENT item" (only the incoming item's own prior slot, if any,
+    /// is vacated) — this is a bare, unchecked "put this in this slot" primitive, matching how
+    /// its only other callers (<c>ForceEquipClothing</c>/<c>EquipMostDamagingMeleeWeapon</c>/
+    /// etc., 15 xrefs total, all inside those two AI-helper families) use it: on state they
+    /// already know is clean, calling exactly the internal slot value the engine itself
+    /// computes (see <see cref="EquipSlotMap"/>), never a caller-supplied guess.
+    ///
+    /// **<c>PutItemInSlot</c>'s own write is conditional and silent**: it resolves the slot
+    /// argument through a private helper (0x5A49C0, disassembled and its jump tables read as
+    /// data this round — see <see cref="EquipSlotMap"/>'s doc comment for the full bit-flag
+    /// table) and, if that resolves to a NULL pointer (an unrecognised slot value), skips the
+    /// write entirely with no signal to the caller — <c>EquipItem</c> still runs to completion
+    /// and still returns 1. This is the actual mechanism behind the "equip reports success but
+    /// the raw slot never changes" symptom docs/research/companion-state-sync.md §10.2 found:
+    /// the OLD <see cref="EquipSlotMap"/> passed 5/6 for the weapon slots, both of which hit
+    /// this helper's invalid path. Checking <c>EquipItem</c>'s return value (§10.2's leading
+    /// hypothesis) cannot detect this — the return is unconditionally 1 regardless of whether
+    /// the write landed; <see cref="EquipItemFromTemplateDirect"/> instead reads the raw slot
+    /// back after the call to confirm it, the same "verify a researched offset live" rule
+    /// docs/ARCHITECTURE.md's engine-write rules already require.
     ///
     /// This is deliberately NOT what <see cref="EquipItemFromTemplate"/> uses.
     /// <c>ActionEquipItem</c>'s VM dispatch (0x005355F0) does not equip synchronously either:
@@ -298,9 +322,23 @@ internal static unsafe partial class Odyssey
     ///
     /// <paramref name="nwscriptSlot"/> is the same 1/4/5 convention every other equip caller in
     /// this codebase already uses (<see cref="InventorySlotBody"/> etc.); mapped through
-    /// <see cref="EquipSlotMap"/>, itself unit-tested.
+    /// <see cref="EquipSlotMap"/> to the engine's own BIT-FLAG internal slot value (2/0x10/0x20)
+    /// — VERIFIED by disassembly this round (see <see cref="EquipSlotMap"/>'s own doc comment).
+    /// The OLD "byte offset / 4" mapping (2/5/6) silently no-opped both weapon slots — 5 and 6
+    /// are not valid bit-flags, so <c>CSWInventory</c>'s own slot resolver returned NULL and the
+    /// write never happened, while <see cref="EquipItemFn"/> still reported success.
     ///
-    /// MAIN THREAD ONLY. NEEDS-LIVE.
+    /// Never trusts <see cref="EquipItemFn"/>'s own return value — VERIFIED by full disassembly
+    /// to be unconditionally 1 regardless of whether the write landed (see its own doc comment).
+    /// Instead this reads the raw <c>CSWInventory</c> slot back
+    /// (<see cref="EquipSlotMap.ToSlotByteOffset"/>) after the call and confirms it now holds
+    /// the item id <see cref="GiveItemToInventory"/> just created, so an unresolved slot or any
+    /// other silent engine-side no-op is reported to the caller as a genuine failure instead of
+    /// a false "equipped" — never silently fail.
+    ///
+    /// MAIN THREAD ONLY. NEEDS-LIVE — the corrected slot values and the readback verification
+    /// have never been exercised against a running game; see companion-state-sync.md's live
+    /// test plan.
     /// </summary>
     public static bool EquipItemFromTemplateDirect(
         uint creatureObjectId, byte* resrefAscii, int resrefLength, int nwscriptSlot, out int failure)
@@ -308,7 +346,8 @@ internal static unsafe partial class Odyssey
         failure = 0;
 
         int internalSlot = EquipSlotMap.ToInternalSlot(nwscriptSlot);
-        if (internalSlot < 0)
+        int slotByteOffset = EquipSlotMap.ToSlotByteOffset(nwscriptSlot);
+        if (internalSlot < 0 || slotByteOffset < 0)
         {
             failure = 20;
             return false;
@@ -338,7 +377,39 @@ internal static unsafe partial class Odyssey
         // p3/p4/p5 read as (1, 0, 0) at every clean call site this round's disassembly found
         // (CSWSCreature::ForceEquipClothing's own 0x00501D69). NEEDS-LIVE: their exact meaning
         // is inferred from position, not confirmed against a name.
-        EquipItemFn(creature, internalSlot, item, 1, 0, 0);
+        int result = EquipItemFn(creature, internalSlot, item, 1, 0, 0);
+        if (result == 0)
+        {
+            // Never observed in this build's disassembly — EquipItem has a single,
+            // unconditional `mov eax,1` return (see EquipItemFn's own doc comment) — but the
+            // delegate is typed as int and the check is free, so a future build (or a call
+            // path this round's static pass did not reach) that DOES refuse is still caught
+            // here rather than silently reported as success.
+            failure = 24;
+            return false;
+        }
+
+        // The real gate: EquipItem's own return is unconditionally 1 even when
+        // CSWInventory::PutItemInSlot's internal write silently no-ops on an unresolved slot
+        // (see EquipItemFn's own doc comment). Read the raw slot back — creature+0xA2C is the
+        // creature's CSWInventory*, VERIFIED and already load-bearing elsewhere in this file
+        // (Odyssey.Combat.Attack.cs, Odyssey.PartyPool.cs) — and confirm the write actually
+        // landed before reporting success. docs/ARCHITECTURE.md's engine-write rules: verify a
+        // researched offset live before shipping the write.
+        nint inventory = *(nint*)(creature + 0xA2C);
+        if (inventory == 0)
+        {
+            failure = 25;
+            return false;
+        }
+
+        uint slotContent = *(uint*)(inventory + slotByteOffset);
+        if (slotContent != itemId)
+        {
+            failure = 26;
+            return false;
+        }
+
         return true;
     }
 }
