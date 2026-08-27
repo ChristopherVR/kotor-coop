@@ -1193,3 +1193,32 @@ byte-identical deploys), both `coop.ini`s reset from `profiles/coop.ini.example`
 `companion_gear_sync` stays OFF — see `companion-state-sync.md` §10.5 for the verdict and the
 concrete next step (capture `EquipItemFn`'s real return value on a weapon-slot call that
 reports success but does not land).
+
+## Rig pass (2026-08-28): `store_sync` — three narrow bugs found and fixed, a fourth critical
+## defect found and left open
+
+Task: run `store-sync.md`'s own queue item 1 (`warp tar_m02aa` both, `openstore Larrim_Store`,
+`buy`/`sell` a finite item, confirm the client's copy reconciles, no double gold charge, an
+infinite-stock buy replicates nothing), flip `store_sync` ON if clean.
+
+**Not flipped ON.** Full detail in `docs/research/store-sync.md`'s own 2026-08-28 "Live pass"
+section. Summary:
+
+| # | Bug | Status |
+| --- | --- | --- |
+| 1 | `Odyssey.Store.cs`'s `ResolveStoreRepo` returned the `item_list` FIELD's address, not the pointer VALUE it holds — every store repo consumer (insert/remove/buy/sell) silently failed to find any matching stock | **FIXED** |
+| 2 | `KotorGameBridge.Store.cs`'s `TryReadStoreRepo` made the identical mistake, independently, on the agent-side reader `StorePump` depends on | **FIXED** |
+| 3 | `KotorGameBridge.Store.cs`'s `StoreGuiObjectId` read panel `+0x227C` (the PC's id) instead of `+0x2278` (the store's id) — a stale mirror of a field this doc's own earlier "Root cause and fix" pass had already corrected on the PLUGIN side but never carried over to the agent side | **FIXED** |
+| 4 | With 1-3 fixed, `StorePump` finally ran end to end — and immediately wiped a store's ENTIRE stock on both instances the moment each opened it, with NO buy/sell ever issued (a virgin store's local baseline is diffed against an empty wire-side "desired" total, and "nobody has told me" reads as "should be zero") | **OPEN, CRITICAL** — see store-sync.md for why the obvious fix is not safe to rush |
+
+Also found live: `tar_m02aa`'s ambient "duros" NPC drags a nearby player into a
+conversation → Taris swoop-registration → native party-select-screen cascade (blocks
+`openstore`'s modal-screen gate); and a `tp <x> <y> 0` with an explicit `z=0` landed a player
+below the walkmesh, producing a "party is down" fall-death and a crash on the next warp while
+downed — a known-poison transition (`tp`'s own doc string: "no walkmesh check"), not a
+`store_sync` defect. Both recorded in `store-sync.md`'s own live pass so the next round does
+not rediscover them.
+
+`profiles/coop.ini.example`'s `store_sync=0` default is unchanged. `dotnet build
+KotorCoop.slnx -warnaserror`, `src/KotorCoop.Plugin/build.ps1 -WarnAsError`, `dotnet test`
+(2355/2355): all clean after each of the three fixes.

@@ -1104,3 +1104,175 @@ src\KotorCoop.Plugin\build.ps1 -Install -WarnAsError` first.
 
 Watch for in the plugin log: `buy:`/`sell:` lines from `CheatController.Store.cs`, and any
 `... failed - <LastStoreNote>` refusal, which names exactly which guard fired.
+
+## Live pass (2026-08-28): three real bugs found and fixed; a fourth, more serious design
+## defect found and left OPEN — `store_sync` is not merely untested, it is ACTIVELY DESTRUCTIVE
+
+Task: run this doc's own §6/queue-item-1 live test plan (`warp tar_m02aa` both, `openstore
+Larrim_Store`, `buy`/`sell` a finite item, confirm the CLIENT's copy reconciles, `netsim
+blackout 10` reconnect, an infinite-stock buy replicates nothing) with `store_sync=1` on both
+installs, flip ON if clean. Two-instance rig (`tools/demo.ps1`), host `C:\GOG Games\Star Wars
+KOTOR (GOG)`, client `D:\Games\swkotor-gog-p2`, both freshly built and installed
+(`build.ps1 -Install -WarnAsError`) before each round below.
+
+**Result: NOT flipped ON. Three narrow bugs were found and fixed live (all VERIFIED, all still
+in the tree). A fourth, much more serious defect was found and is NOT fixed — merely opening a
+store on two `store_sync=1` instances with ZERO buy/sell activity empties that store's entire
+stock on BOTH instances.** Do not attempt to flip `store_sync` on again until bug 4 below is
+fixed and re-verified live.
+
+### Bug 1 (FIXED): `Odyssey.Store.cs`'s `ResolveStoreRepo` took the FIELD's address, not its VALUE
+
+`CSWSStore.item_list` at `+0x230` is documented (§1.1) as a pointer type
+(`CItemRepository *`) — the field HOLDS a pointer, it is not itself the repository. The plugin's
+`ResolveStoreRepo` returned `store + StoreItemRepo` (the address of that field) instead of
+`*(nint*)(store + StoreItemRepo)` (the pointer value stored there). Every consumer
+(`InsertItemIntoStore`, `RemoveStoreStack`, and this pass's own `BuyFromStore`/`SellToStore`
+via `FindFirstMatchingItem`) then read `count`/`ids` from garbage bytes past the real
+`CSWSStore` struct tail, tripped the `count <= 0 or > 4096`/`ids == 0` guard, and failed safe
+with "no stock matching that resref" — silent, never a crash, which is exactly why three prior
+live passes (the `openstore` crash-and-fix rounds, and the `buy`/`sell` addendum's own build)
+never caught it: nothing had walked the array live before this pass's own `buy` attempt.
+**First live-observed**: `buy Larrim_Store g_w_ionblstr01` against a store the `items` cheat
+itself could see held that exact resref (`0x82 g_w_ionblstr01 held by 0x74`) refused with "no
+stock matching that resref in store 0x74". The container/placeable read side
+(`Odyssey.Items.cs`'s `PlaceableRepository`) already dereferences correctly
+(`*(nint*)(placeable + PlaceableRepository)`) — the store path was the one place this pattern
+was wrong. **Fixed**: `src/KotorCoop.Plugin/Odyssey.Store.cs`'s `ResolveStoreRepo` now
+dereferences. Re-tested live after the fix: `buy Larrim_Store g_w_ionblstr01` succeeded
+(`buy 'g_w_ionblstr01' x1 from store Larrim_Store`), the item genuinely left store 0x74's own
+`item_list` and appeared in the buyer's inventory (`items` before/after).
+
+### Bug 2 (FIXED): the SAME mistake, independently duplicated in the agent-side reader
+
+`KotorGameBridge.Store.cs`'s `TryReadStoreRepo` (the C# out-of-process reader `StorePump`'s
+`bridge.TryScanOpenStore` depends on) made the IDENTICAL error, independently: `repo = address
++ StoreItemRepo` instead of dereferencing through `_memory.TryReadPointer`. Effect: every
+subsequent `count`/`ids` read landed on garbage, tripped the same guard, and
+`TryScanOpenStore` silently reported "no store open" even with a real store GUI on screen —
+total, unconditional silence (no `store: local ... detected` log line, ever, on either side,
+across a live buy that genuinely moved an item through the engine). **Fixed**: dereferences via
+`_memory.TryReadPointer`, matching every other pointer-field read in this file.
+
+### Bug 3 (FIXED): the agent-side reader read the WRONG panel field for the store id
+
+Independent of bugs 1/2. This doc's own 2026-08-28 "Root cause and fix" pass (above) corrected
+the PLUGIN side's belief about which `CSWGuiStore` panel field holds the store id:
+`ShowStoreGui`'s first argument (the store id) is written to panel `+0x2278`, its second
+(the shopping PC's id) to `+0x227C` — the ORIGINAL 2026-08-27 addendum had these swapped, and
+that fix corrected `Odyssey.Store.cs`'s own `StorePanelObjectIdOffset` accordingly. **The
+agent-side mirror, `KotorGameBridge.Store.cs`'s `StoreGuiObjectId`, was never updated to
+match** — it kept reading `+0x227C`, i.e. the PLAYER's own object id, not the store's. Every
+`TryReadStoreRepo(id, ...)` call then searched for a `CSWSStore` whose own id equalled the
+PLAYER's id — never matches anything — so `TryScanOpenStore` again silently reported "no store
+open". This is exactly the cross-process mirror-sync hazard `docs/CONTRIBUTING.md`'s "Adding a
+feature end-to-end" step 5 names by name ("the two are transcribed by hand and a mismatch is a
+silent 'plugin not found'"), and it is why bugs 2 and 3 together produced IDENTICAL, totally
+silent symptoms — fixing bug 2 alone was not enough to unblock detection; bug 3 also had to be
+found and fixed before `TryScanOpenStore` worked at all. **Fixed**: `StoreGuiObjectId` corrected
+to `0x2278`.
+
+All three fixes: `dotnet build KotorCoop.slnx -warnaserror` and
+`src/KotorCoop.Plugin/build.ps1 -WarnAsError` clean; `dotnet test` 2355/2355 (no regressions —
+none of the three bugs had a unit test that could have caught a wrong raw-pointer offset against
+real engine memory shape, since the test suite has no live process to check the arithmetic
+against; this is a known, accepted gap the CONTRIBUTING.md engine-write rules already name:
+"verify a researched offset live before shipping the write").
+
+### Bug 4 (NOT FIXED, OPEN, CRITICAL): a virgin store's entire stock is wiped by the mere act of
+
+### opening it on two `store_sync=1` instances, with no buy/sell at all
+
+With bugs 1-3 fixed, `StorePump`'s detect/reconcile finally ran end to end for the first time —
+and immediately did the wrong thing. Reproduction, live, twice (once on the HOST, once
+independently on the CLIENT, in the same session): `warp tar_m02aa` both, `tp` both away from
+the module's ambient "duros" swoop-registration NPC (see the note below — this NPC is an
+unrelated hazard this module carries), `openstore Larrim_Store` on the HOST, then
+`openstore Larrim_Store` on the CLIENT. **No `buy`/`sell` was issued by anyone.** Within
+seconds, BOTH instances' plugin logs showed a rapid-fire sequence of automatic `StoreRemove`
+applies against their OWN store, one per stocked resref, driving the entire finite-stock
+inventory to zero:
+
+```
+[07:15:03.083] store: removed 'g_w_rptnblstr01' x1 (asked for 1) from store 0x74
+[07:15:03.240] store: removed 'g_a_class7001' x1 (asked for 1) from store 0x74
+[07:15:03.378] store: removed 'k_computer_spike' x2 (asked for 2) from store 0x74
+... (40 lines on the host, 28 on the client — nearly every finite-stock entry in Larrim's shop)
+```
+
+**Root cause, read from `StorePump.Pump`'s own step 2 (reconcile)**: step 2 diffs
+`_knownEngineTotals` (`expected`, this instance's own local scan) against `session.StoreTotals`
+(`actual`, the WIRE-SYNCED "desired" truth — populated ONLY by an explicit `Add`/`Remove`/`Set`
+op, from this instance's own step-1 detection of a genuine CHANGE, or from a peer). The very
+FIRST time a store is baselined locally (`_openStoreBaselined` false→true), step 1 seeds
+`_knownEngineTotals` with a full scan **but publishes nothing** — there is no corresponding
+entry in `session.StoreTotals` for any of those keys, because nobody has ever bought, sold, or
+resynced this store yet. `StoreDiffRule.Diff`'s own "keys present in `expected` but absent from
+`actual`" branch then reads that silence as "the session desires ZERO of this" and emits a
+`Remove` for the ENTIRE quantity, for every single key — i.e. **"nobody has told me what this
+key should be" and "this key should be zero" are indistinguishable to step 2 as written**, and
+it resolves that ambiguity by deleting real, pre-existing, .utm-template game content that was
+never meant to be wire-synced from empty in the first place (the store's own PRISTINE stock,
+unlike the party pool's genuinely-starts-at-zero shared inventory, which is why
+`PartyPoolPump`'s identical-shaped step 2 has never shown this symptom).
+
+**Why the obvious fix ("only reconcile a key already present in `session.StoreTotals`") is not
+safe to ship blind**: `StoreStore.cs` (the wire-side bookkeeping `session.StoreTotals` reads
+from) **prunes a key from its own dictionary the moment its tracked total reaches zero**
+(`StoreStore.cs` line ~99, `_totals.Remove(key)`) — the same convention `PartyPoolStore` uses.
+So "absent from `session.StoreTotals`" is genuinely ambiguous between two very different facts:
+(a) "nobody has ever told the session anything about this key" (the virgin-store case above,
+where the local engine scan must NOT be reconciled toward zero), and (b) "the session already
+knows this key was reduced to exactly zero by a real, already-applied op" (a legitimate case
+where THIS instance's own local copy — if it still shows a nonzero scan, because its own GUI
+hasn't been open to observe the depletion — genuinely SHOULD be reconciled down to zero). A
+filter that excludes case (a) from step 2 also silently excludes case (b), which would trade
+one correctness bug (wipes a virgin store) for a different, quieter one (a fully-depleted stack
+never reconciles down on an instance that was never present to see it happen locally). Telling
+the two apart needs the session to track "has this key EVER been named by a genuine op", not
+merely "what is its CURRENT total" — `StoreStore`'s public surface does not currently expose
+that distinction, and adding it (or an equivalent "first-baseline publishes an implicit
+host-only `Set` resync of its own scan", mirroring `ResyncStore`'s existing Hello-time
+behaviour, extended to also fire on a store's first LOCAL baseline rather than only a peer's
+reconnect) is real design work this pass did not attempt under live-rig time pressure — a
+wrong, rushed fix here has the same blast radius as the bug itself (deleting real store
+content), so it is being left OPEN and clearly flagged rather than guessed at.
+
+**Verdict**: `store_sync` stays at its shipped default OFF (`profiles/coop.ini.example`
+unchanged, still `store_sync=0`) — this was never close to being flipped ON this pass despite
+three real, narrow bugs being found and fixed, because the fourth defect they unblocked is
+strictly worse than "not yet verified": it is confirmed-live DESTRUCTIVE the moment two
+`store_sync=1` instances merely LOOK at the same store, with no buy/sell involved. Anyone
+picking this back up should treat bug 4 as the blocking item, not bugs 1-3 (already fixed) and
+not the buy/sell mechanism itself (bug-1-fixed, confirmed working correctly in isolation — a
+single-instance `buy`/`sell` round trip with `store_sync` OFF is completely unaffected by any of
+this, since that mechanism never touches `StorePump`).
+
+### Incidental finding: `tar_m02aa` has an ambient "duros" swoop-registration NPC that
+
+### repeatedly drags a nearby player into a conversation → party-select-screen cascade
+
+Unrelated to `store_sync` itself, but cost real time this pass and is worth recording so the
+next live round on this module does not re-discover it from scratch. An ambient NPC tagged
+(dialogue partner name) `duros`, positioned near both players' `tar_m02aa` warp-in point,
+re-initiates conversation on a nearby idle player repeatedly (the same "Trask re-initiates"
+shape `dialogue-sync.md` already documents for the Endar Spire, a different NPC/module).
+Clearing it with `selectreply 0` in a loop eventually succeeds, but its `Yes`-shaped default
+reply (slot 0) advances into what reads as a Taris swoop-race REGISTRATION flow, which opens the
+native PARTY-SELECTION screen — matching `galaxy-map-and-party-select.md`'s own finding that
+this module's swoop-taxi system is a confirmed party-select trigger. Once open, that screen
+gates `openstore` (and everything else `ShowStoreGui`'s own `+0x30` "another modal screen"
+precondition covers) behind `partyselect ok` (the existing dev verb) rather than any dialogue
+verb. Cheapest known workaround, used successfully this pass: `tp <x> <y>` (no `z` argument) to
+a spot 20-30 units from the warp-in point BEFORE letting the ambient conversation resolve, so
+`duros` cannot re-trigger repeatedly. **⚠ Do not pass an explicit `z` to `tp` without knowing
+the real ground height at that x/y** — this pass's own `tp 60 90 0` (explicit `z=0`) landed a
+player below/through the walkmesh, produced "your party is down" (a fall-damage-shaped death),
+and warping a downed player crashed the client instance outright (`0xc0000005`, though the
+specific crashed address logged by `crashlog.ps1` turned out to be a STALE entry from hours
+earlier, not this crash's own — `crashlog.ps1`'s newest-entry-first output can be misleading
+when Windows Error Reporting is slow to flush a fresh one; cross-check the timestamp before
+attributing a crash address to the session that just ended). This matches the memory note "the
+min-1-hp warp artifact" — warping while downed is already a known-poison transition, and `tp`'s
+own doc string already says "no walkmesh check" for exactly this reason. Omit `z` (`tp <x>
+<y>`) unless the real ground height is already known.
