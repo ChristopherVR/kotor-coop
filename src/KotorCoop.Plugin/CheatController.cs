@@ -262,6 +262,10 @@ internal sealed unsafe partial class CheatController(SharedBlockView block)
                 Sell(player);
                 break;
 
+            case SharedBlock.CheatKindStartDialog:
+                StartDialog(playerId);
+                break;
+
             default:
                 Answer(SharedBlock.CheatStatusRefused, $"unknown cheat kind {kind}");
                 break;

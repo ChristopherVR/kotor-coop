@@ -839,4 +839,27 @@ internal partial struct SharedBlock
     /// ⚠ 41, because 7-40 are taken. Take the next FREE number.
     /// </summary>
     public const uint CheatKindStoreSell = 41;
+
+    /// <summary>
+    /// DEV VERB (2026-08-28, docs/research/dialogue-sync.md's 2026-08-28 addendum): starts a
+    /// conversation between the local player and an NPC through the engine's own
+    /// <c>ActionStartConversation</c> VM routine (id 204), dispatched the SAME verified
+    /// routine-table path <c>Odyssey.MoveToLocation</c> already established for
+    /// <c>ActionMoveToLocation</c> — not a hand-crafted <c>CSWSObject::StartDialog</c> call
+    /// (that function's own 2nd/3rd arguments are caller-owned structs this plugin cannot
+    /// safely fabricate; see <c>Odyssey.StartConversation</c>'s own header comment). Runs
+    /// through the real action-queue -&gt; <c>BeginConversation</c> -&gt; <c>StartDialog</c>
+    /// chain, so the existing dialogue hooks observe it exactly as a real click.
+    ///
+    /// <see cref="OffsetCheatTarget"/> nonzero = the NPC's object id, and
+    /// <see cref="OffsetCheatText"/> is then the (optional) dialog resref override, or empty to
+    /// use the NPC's own default. <see cref="OffsetCheatTarget"/> zero means the NPC was given
+    /// as a TAG: <see cref="OffsetCheatText"/> then packs <c>"&lt;tag&gt;"</c> or
+    /// <c>"&lt;tag&gt;|&lt;dlg-resref&gt;"</c> — the same one-string-field packing convention
+    /// <see cref="CheatKindStoreBuy"/> uses, for the identical reason (an NPC's identity and an
+    /// optional dialog override are two independent pieces of text).
+    ///
+    /// ⚠ 42, because 7-41 are taken. Take the next FREE number.
+    /// </summary>
+    public const uint CheatKindStartDialog = 42;
 }

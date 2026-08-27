@@ -100,6 +100,10 @@ internal static unsafe class FuncInterpHook
         // addendum): registered here, same as setglobal/pazaak/openstore above, so a rig
         // session can type them directly at the in-game console. None shadows a retail verb.
         "buy", "sell",
+
+        // A third live-test primitive (2026-08-28, docs/research/dialogue-sync.md's 2026-08-28
+        // addendum), registered the same way. Does not shadow a retail verb.
+        "startdialog",
     ];
 
     /// <summary>

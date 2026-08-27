@@ -120,5 +120,8 @@ internal static class ConsoleVerbCatalog
         // Two more live-test primitives (2026-08-28): none shadows a retail verb.
         ("buy", "buy <store-tag|id> <resref> [count]  (the store's own GUI must already be open)"),
         ("sell", "sell <store-tag|id> <resref> [count]  (the store's own GUI must already be open)"),
+
+        // A third live-test primitive (2026-08-28): does not shadow a retail verb.
+        ("startdialog", "startdialog <npc-tag|id> [dlg-resref]  (starts a conversation with the local player)"),
     ];
 }

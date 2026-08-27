@@ -399,6 +399,19 @@ public static class CheatKinds
     /// ⚠ 41 is the highest number taken now. Take the next FREE one for a new verb.
     /// </summary>
     public const uint StoreSell = 41;
+
+    /// <summary>
+    /// DEV VERB (docs/research/dialogue-sync.md's 2026-08-28 addendum): starts a conversation
+    /// between the local player and an NPC through the engine's own
+    /// <c>ActionStartConversation</c> VM routine (id 204), dispatched through the real
+    /// action-queue so the existing dialogue hooks observe it like a real click. <c>Target</c>
+    /// nonzero = the NPC's object id (<c>Text</c> then the optional dialog resref override, or
+    /// empty for the NPC's own default); <c>Target</c> zero means the NPC was a TAG (<c>Text</c>
+    /// packs <c>"tag"</c> or <c>"tag|dlg-resref"</c>). See <c>SharedBlock.CheatKindStartDialog</c>.
+    ///
+    /// ⚠ 42 is the highest number taken now. Take the next FREE one for a new verb.
+    /// </summary>
+    public const uint StartDialog = 42;
 }
 
 /// <summary>

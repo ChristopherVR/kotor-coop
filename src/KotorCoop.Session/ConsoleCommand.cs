@@ -540,6 +540,20 @@ public enum CoopCommandKind
     /// layout and same open-GUI requirement as <see cref="Buy"/>. Local only.
     /// </summary>
     Sell,
+
+    /// <summary>
+    /// <c>startdialog &lt;npc-tag|id&gt; [dlg-resref]</c> — LIVE-TEST PRIMITIVE
+    /// (docs/research/dialogue-sync.md's 2026-08-28 addendum). Starts a conversation between
+    /// the local player and the named NPC through the engine's own
+    /// <c>ActionStartConversation</c> VM routine, queued on the player exactly as a real click
+    /// would be — so scripted conversations (e.g. <c>k_sta_bastila.dlg</c>) can be triggered
+    /// without walking into their trigger, through the SAME action-queue/<c>BeginConversation</c>/
+    /// <c>StartDialog</c> chain a real click reaches, observed by the existing dialogue hooks
+    /// normally. <see cref="CoopCommand.Address"/> is the NPC's tag or object id;
+    /// <see cref="CoopCommand.Password"/> is the optional dialog resref override (blank = the
+    /// NPC's own default <c>Conversation</c> field). Local only.
+    /// </summary>
+    StartDialog,
 }
 
 /// <summary>
@@ -740,6 +754,7 @@ public static partial class ConsoleCommand
         new(["faction"], ParseFaction),
         new(["buy"], ParseBuy),
         new(["sell"], ParseSell),
+        new(["startdialog"], ParseStartDialog),
         new(["cheats"], ParseCheats),
     ];
 

@@ -1,8 +1,11 @@
+using System.Text;
+
 namespace KotorCoop.Plugin;
 
-// Dialogue verbs: SkipLine (forces the current conversation line to finish) and SelectReply
+// Dialogue verbs: SkipLine (forces the current conversation line to finish), SelectReply
 // (commits a reply slot) — both in-process substitutes for OS input the game never receives
-// (see SkipLine's own doc for why).
+// (see SkipLine's own doc for why) — and StartDialog (2026-08-28: queues a real
+// ActionStartConversation on the player, see that method's own doc comment).
 internal sealed unsafe partial class CheatController
 {
     /// <summary>
@@ -63,5 +66,93 @@ internal sealed unsafe partial class CheatController
 
         PluginHost.Log($"dialogue: selectreply committed slot {slot}");
         Answer(SharedBlock.CheatStatusApplied, $"reply slot {slot} committed");
+    }
+
+    /// <summary>CSWSObject + this = the object id, following <see cref="CreatureFinder"/>'s own
+    /// convention — redeclared here per this codebase's established "duplicate a small offset
+    /// per file" rule (see CheatController.Pazaak.cs's identical PazaakOpponentObjectIdOffset
+    /// and EngineHandles.cs's own header comment on the precedent).</summary>
+    private const int NpcObjectIdOffset = 0x04;
+
+    /// <summary>
+    /// LIVE-TEST PRIMITIVE (2026-08-28, docs/research/dialogue-sync.md's 2026-08-28 addendum):
+    /// starts a conversation between the LOCAL PLAYER and an NPC through
+    /// <see cref="Odyssey.StartConversation"/> — the engine's own <c>ActionStartConversation</c>
+    /// VM routine, queued on the player exactly as a real click would be, so the real
+    /// action-queue -&gt; <c>BeginConversation</c> -&gt; <c>StartDialog</c> chain runs and the
+    /// existing dialogue hooks (<c>DialogueGateHook</c>/<c>DialogStateWatchHook</c>) observe it
+    /// normally — see <see cref="Odyssey.StartConversation"/>'s own header comment for why this
+    /// goes through the VM routine table rather than a hand-crafted <c>StartDialog</c> call.
+    ///
+    /// See <see cref="SharedBlock.CheatKindStartDialog"/> for the field packing:
+    /// <see cref="SharedBlock.CheatTarget"/> nonzero names the NPC by object id and
+    /// <see cref="SharedBlock.CheatText"/> is then the optional dialog resref override (empty =
+    /// the NPC's own default); <see cref="SharedBlock.CheatTarget"/> zero means the NPC was a
+    /// tag, packed in <see cref="SharedBlock.CheatText"/> as <c>"tag"</c> or
+    /// <c>"tag|dlg-resref"</c>.
+    /// </summary>
+    private void StartDialog(uint playerId)
+    {
+        uint npcId = block.CheatTarget;
+
+        byte* text = block.CheatText;
+        int totalLength = 0;
+        while (totalLength < SharedBlock.CheatTextLength - 1 && text[totalLength] != 0)
+        {
+            totalLength++;
+        }
+
+        string dialogResref;
+        string what;
+
+        if (npcId != 0)
+        {
+            dialogResref = totalLength > 0 ? Encoding.ASCII.GetString(text, totalLength) : string.Empty;
+            what = $"0x{npcId:X}";
+        }
+        else
+        {
+            int pipe = -1;
+            for (int i = 0; i < totalLength; i++)
+            {
+                if (text[i] == (byte)'|')
+                {
+                    pipe = i;
+                    break;
+                }
+            }
+
+            int tagLength = pipe < 0 ? totalLength : pipe;
+            if (tagLength == 0)
+            {
+                Answer(SharedBlock.CheatStatusRefused, "startdialog: no npc tag or id given");
+                return;
+            }
+
+            string tag = Encoding.ASCII.GetString(text, tagLength);
+            nint npc = CreatureFinder.FindByTag(new ReadOnlySpan<byte>(text, tagLength));
+            if (npc == 0)
+            {
+                Answer(SharedBlock.CheatStatusNoTarget, $"no npc tagged '{tag}' found here");
+                return;
+            }
+
+            npcId = *(uint*)(npc + NpcObjectIdOffset);
+            what = $"'{tag}' (0x{npcId:X})";
+
+            dialogResref = pipe < 0
+                ? string.Empty
+                : Encoding.ASCII.GetString(text + pipe + 1, totalLength - pipe - 1);
+        }
+
+        if (!Odyssey.StartConversation(playerId, npcId, dialogResref, out int failure))
+        {
+            Answer(SharedBlock.CheatStatusEngineRefused, $"startdialog {what} refused (failure {failure})");
+            return;
+        }
+
+        string resrefNote = dialogResref.Length > 0 ? $" (dlg '{dialogResref}')" : " (npc's own default dlg)";
+        PluginHost.Log($"startdialog: ActionStartConversation queued on the player, targeting {what}{resrefNote}");
+        Answer(SharedBlock.CheatStatusApplied, $"conversation with {what} queued{resrefNote}");
     }
 }
