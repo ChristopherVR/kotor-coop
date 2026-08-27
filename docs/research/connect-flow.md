@@ -598,3 +598,80 @@ disconnect/recovery and a peer join/leave the same way the toast above needs ver
 and whether `status_indicator = 0` in `coop.ini` actually suppresses it (the read-once-at-
 construction pattern is the same one `ConnectMenuController` uses for `menu_button`, which
 already live-verified, but this specific key has not been toggled against a live game).
+
+## Live pass (2026-08-27): the DATA path is correct; the `Reconnecting` state is unreachable
+
+Ran against the two-instance rig (block version 53), reading `SharedBlockView.ConnectStatus`
+(`SharedBlock.OffsetConnectStatus`, 0x9EC) directly out of process memory on both instances every
+300 ms — no existing tool exposed this offset, so a small standalone probe was written reusing
+`blockpoke.ps1`'s own `FindBlock`/`Read` primitives (kept in the session scratchpad, not the
+repo, since it duplicates `blockpoke.ps1`'s signature-scan rather than adding a new verb).
+
+**Steady state confirmed correct.** Both instances read `state=Connected (2), peers=1` while
+genuinely connected in `END_M01AA` — matches `ConnectionIndicatorRule.Text`'s "co-op: connected,
+1 player" exactly.
+
+**`netsim blackout 15` on the client, polled through the whole outage:**
+
+```
+[18:37:32.554] pid40524 (HOST)   -> Connected/peers=1
+[18:37:32.554] pid29688 (CLIENT) -> Connected/peers=1
+[18:37:39.759] pid40524 (HOST)   -> Connected/peers=0        <- host: only the peer count moves
+[18:37:39.759] pid29688 (CLIENT) -> Connecting/peers=0       <- client: NOT "Reconnecting"
+[18:37:49.769] pid29688 (CLIENT) -> Connected/peers=1
+[18:37:50.080] pid40524 (HOST)   -> Connected/peers=1
+```
+
+The peer-count half of the design works exactly as intended, both directions, and matches
+`agent2.log`'s own toasts for the same window (`* Lanik left the game` / `* co-op:
+connecting...` at 18:35:50, `* connected...` / `* Lanik joined the game` / `* co-op: connected,
+1 player` at 18:35:55 in an earlier identical run) — a peer join/leave is tracked correctly and
+promptly.
+
+**`ConnectionIndicatorState.Reconnecting` (state 4) — the state this whole feature was written
+to add — was never observed on either side, and code inspection shows it cannot be:**
+
+- `CoopHost.GetStats()` (`src/KotorCoop.Session/CoopHost.cs:199`) hardcodes `Connected = true`
+  unconditionally. The host can never report anything but Connecting (its own startup)/Connected/
+  Failed/Disconnected — never Reconnecting, no matter what a peer's link is doing. Losing a peer
+  only ever moves the peer-count byte, confirmed above.
+- `CoopClient.IsConnected` (`CoopClient.cs:184`) is `_localPeerId != 0`, and the ONLY place that
+  clears `_localPeerId` is the same timeout check that also drives the session into a fresh
+  handshake (`CoopClient.cs:279`, `if (IsConnected && ... now - _lastInboundMs >
+  _settings.PeerTimeoutMs)` → `ForgetSession`), which is what flips `SessionManager.Phase` to
+  `SessionPhase.Connecting`. Both happen in the same operation, so by the time
+  `stats.Connected` (`= IsConnected`) would read false, `manager.Phase` has already left the
+  branch that even LOOKS at `stats.Connected` — `AnnounceConnectionStatus`'s switch matches
+  `SessionPhase.Connecting => Connecting` first and never reaches the `stats.Connected ?
+  Connected : Reconnecting` arm at all. There is no intermediate tick where the phase stays
+  "live session" while the live stats say disconnected.
+
+Net effect on what a player actually sees: a real outage that crosses `PeerTimeoutMs` (5 s)
+shows the CLIENT "co-op: connecting..." — **the identical wording as the very first handshake**,
+not "co-op: reconnecting..." — while the HOST shows no phase change at all, only the peer count
+dropping to 0 and back. The distinct "reconnecting" wording this section's own design doc
+motivates ("nothing there ever told a player their partner's connection was degraded") is dead
+code as wired: nothing in either `CoopHost` or `CoopClient` can currently produce
+`ConnectionIndicatorState.Reconnecting`. **Not a crash, not a data-corruption risk — fails
+safe exactly as intended (a player still gets an accurate, if less specific, in-flight
+indication of trouble) — but the state this pass was named for cannot be exercised because
+nothing sets it.**
+
+**Not confirmed this pass: the on-screen render itself, and `status_indicator = 0`'s
+suppression.** `tools/shot.ps1` is still the documented solid-black capture
+(`session-save.md`'s 2026-08-24 finding, re-confirmed here with a fresh capture: 800×600, every
+sampled pixel black bar one stray artifact pixel) — this pass did not chase it further, per the
+standing instruction not to. The DATA this controller reads and decodes is now proven correct
+end to end (`ConnectStatus` packs/unpacks exactly as `ConnectionIndicatorRule.Text` expects, at
+every state this rig could produce), and `Odyssey.PostTextLine` is independently already
+live-verified for other content going through the identical render path — but neither the exact
+on-screen position/legibility nor the `status_indicator = 0` suppression toggle (a
+read-once-at-construction gate, requiring a full instance restart with the key set to exercise)
+were visually checked this round.
+
+**Verdict:** partially live-verified. The peer-count tracking that satisfies most of item 2's
+requirement is confirmed correct and prompt; the wire/decode data path is proven correct; but
+`status_indicator=0` was NOT flipped ON as a default change (it already defaults ON in code, so
+there is nothing to flip), and the `Reconnecting` state gap above is a real, if low-severity,
+defect worth a follow-up round (`CoopClient` would need to distinguish "silence detected, still
+within grace" from "giving up and restarting the handshake" for that branch to ever fire).

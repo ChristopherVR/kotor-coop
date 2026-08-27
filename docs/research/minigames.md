@@ -2798,3 +2798,31 @@ Recommended plan, next round with rig access:
 1816/1816 green, including the 4 new `MinigameNoticeRuleTests`. No live verification was
 performed this round — everything in 23.1-23.4 is static-audited (read against its own source,
 traced end to end) but NEEDS-LIVE per 23.6 above.
+
+## Live pass (2026-08-27): the negative check only — `pazaak_detect` stays OFF
+
+Ran with `pazaak_detect=1` on both instances of the two-instance rig (block version 53). `warp
+tar_m03aa` moved both players into the Upper City cantina module cleanly (both processes stayed
+`Responding=True`, both blocks reported `module 'tar_m03aa'`) — the reachable-module premise
+from §23.6 item 1 holds.
+
+**No hand was started.** Actually opening a Pazaak table needs a click on an NPC to start the
+wager dialogue, and this rig's own standing finding (mouse-click injection does not land on a
+`demo.ps1`-repositioned window — `docs/research/session-save.md`'s "Attempted, not achieved"
+section) applies here exactly as it did there; this round did not attempt to work around it, so
+§23.6 item 1's positive check (`pazaak: entered`, the peer's phantom parking, `pazaak: left` on
+exit) remains unrun.
+
+**The negative check (§23.6 item 1's own fallback, and item 4) is confirmed clean.** Sat in the
+cantina, connected, for roughly a minute of wall-clock time (a `netsim`/pazaak soak plus the
+travel back out) with `pazaak_detect=1` the whole time: **zero** `pazaak:`-prefixed lines
+appeared in either plugin log. `MinigameController`'s edge-detected `_wasInPazaak` never flipped,
+so there is no false-positive risk from simply standing near a cantina's Pazaak furniture without
+playing — the read is null/safe exactly as §23.6's fallback asked to confirm.
+
+**Verdict: `pazaak_detect` stays OFF by default.** The positive detection path (§23.6 items 1-4)
+remains entirely unexercised; only the negative/safety property was confirmed this round. Next
+round needs either a working click path into a wager dialogue, or a console primitive built the
+same way `usedoor`/`scriptgive` were — no such primitive exists for Pazaak yet, since the
+GUI panel it needs (`CSWGuiPazaakStart`) has no known console-reachable "start a hand" call in
+this codebase.

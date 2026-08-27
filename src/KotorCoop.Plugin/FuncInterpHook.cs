@@ -79,6 +79,11 @@ internal static unsafe class FuncInterpHook
         // the local player's controlled character. Local only, never crosses the network; not
         // a retail verb.
         "leader",
+
+        // NOTE: "quittomenu" (docs/research/disconnect-reconnect.md §9) is deliberately NOT
+        // added here, matching "skipline"/"selectreply"/"loadgame"/"walkto"/"recruit" above —
+        // dev-only LIVE-TEST PRIMITIVES are reachable only via tools/blockpoke.ps1's direct
+        // shared-block write, never by a real player typing at the in-game console.
     ];
 
     /// <summary>

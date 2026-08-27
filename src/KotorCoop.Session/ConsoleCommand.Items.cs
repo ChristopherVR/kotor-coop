@@ -184,4 +184,25 @@ public static partial class ConsoleCommand
         return new CoopCommand(
             CoopCommandKind.GiveLoot, Address: $"#{ownerId:x}", Password: rest[1], Amount: stack);
     }
+
+    // scriptgive <resref> [stack]  - LIVE-TEST PRIMITIVE, see CoopCommandKind.ScriptGive.
+    // Deliberately simpler than giveloot: always the local player, never an owner id.
+    private static CoopCommand ParseScriptGive(string[] rest)
+    {
+        if (rest.Length < 1 || !IsResRef(rest[0], maxLength: 31))
+        {
+            return new CoopCommand(
+                CoopCommandKind.Invalid,
+                Error: "scriptgive needs a resref, e.g. scriptgive g_w_blstrpstl001 [stack]");
+        }
+
+        int stack = 1;
+        if (rest.Length > 1 && (!int.TryParse(rest[1], out stack) || stack <= 0))
+        {
+            return new CoopCommand(
+                CoopCommandKind.Invalid, Error: $"stack '{rest[1]}' is not a positive number");
+        }
+
+        return new CoopCommand(CoopCommandKind.ScriptGive, Address: rest[0], Amount: stack);
+    }
 }

@@ -98,3 +98,51 @@ this call leaves nothing behind for `StoreCurrentModule` to serialise.
    it ships off by the same "OFF until live-verified" convention `effect_sync` and
    `dialog_state_watch` already use) and confirm the M-screen shows the partner's explored
    trail without any visible cost to frame time.
+
+## Live pass (2026-08-27): default flipped ON
+
+Ran with `map_reveal_sync=1` on both instances of the two-instance rig (block version 53),
+connected in `END_M01AA`.
+
+**Fires correctly on connect and follows real movement.** Both plugin logs show a reveal the
+instant each side's remote-peer slot went active:
+
+```
+[18:49:13.894] map reveal: slot 0 revealed at (20.0, 22.2, -1.3)     <- host, at connect
+[18:49:13.963] map reveal: slot 0 revealed at (20.0, 22.2, -1.3)     <- client, at connect
+```
+
+`tp 47.4 116 -0.04` on the client (a real position change, ~95 m away) produced a second reveal
+on the HOST tracking the new position within the next heavy-pass tick:
+
+```
+[18:53:13.031] map reveal: slot 0 revealed at (47.4, 116.0, 0.0)
+```
+
+**Survives a module transition cleanly.** `warp end_m01ab` on the host moved both instances
+(`travel: moving to module 'end_m01ab' on the session's authority` → `epoch: world unloading` →
+both blocks report `module 'end_m01ab'`, both processes still `Responding=True`). The reveal
+resumed in the new module within ~4.5 s of the transition landing, with no `map reveal: slot 0
+skipped — no area map yet` line at any point — `TryGetAreaMap` re-resolved the new module's
+area map cleanly, closing check 4 of the live-pass list above:
+
+```
+[18:53:42.134] map reveal: slot 0 revealed at (50.0, 120.0, -0.0)
+[18:53:49.006] map reveal: slot 0 revealed at (50.0, 120.0, -0.0)   <- same point, re-asserted; harmless
+```
+
+**No measurable frame cost.** `frame stats` around the transition show the expected transition
+stall (`182.0 ms worst`, `189.9 ms worst` — the module load itself, matching the 5.1-5.3 s
+bare-load baseline other rounds have measured) and otherwise 1.7-2.0 ms average with 0-7 ms
+worst — no different from every other round's baseline with this controller OFF.
+
+**Not confirmed this pass: the M-screen itself.** `tools/shot.ps1` is still the documented
+solid-black capture (re-confirmed the same session, `disconnect-reconnect.md`/`connect-flow.md`
+live passes) — visually seeing the fog actually clear around the peer's pin was not possible.
+Everything upstream of the render (the engine call firing, with real coordinates, repeatably,
+surviving a transition, at negligible cost) is now proven; only the pixels themselves are not.
+
+**Verdict: default flipped ON.** `PluginConfig.ReadBool("map_reveal_sync", true)` in
+`MapRevealController.cs` and `profiles/coop.ini.example`'s `map_reveal_sync=1`, matching
+`docs/CONFIG.md`. The `0` (un-reveal) path remains untested and unused by this design, as
+expected.

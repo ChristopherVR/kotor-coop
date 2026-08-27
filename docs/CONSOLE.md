@@ -56,6 +56,8 @@ scenario. Parsed in `ConsoleCommand`, dispatched by `CoopCommandDispatcher`, exe
 | `skipline` | — | yours to stage, local | finishes the current dialogue line/VO immediately (conversation owner only) |
 | `selectreply` | `<slot>` | yours to stage, local | commits a reply on your own conversation, like a real click |
 | `loadgame` | `<slot>` | yours only | runs the real engine Load Game path against save slot `<slot>` (0-based, most-recent-first) |
+| `quittomenu` | — | yours only, local only | tears THIS instance down to the main menu through the engine's own `ShutDownToMainMenu` — the same call a real "Quit Game → Yes" click reaches; built to exercise the Away flag without click-navigating the pause menu (blockpoke-only, see docs/research/disconnect-reconnect.md §9) |
+| `scriptgive` | `<resref> [stack]` | yours only, local only | gives an item straight into your own inventory with NO suppression-ledger entry, simulating an untracked script (OnEnter/OnDeath/heartbeat) grant to test `script_item_sync` (blockpoke-only, see docs/research/dialogue-consequences.md) |
 | `cheats` | — | any player | prints this verb list |
 
 ### The `slay` / `destroyobject` authority split

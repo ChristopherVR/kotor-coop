@@ -620,3 +620,130 @@ way back in, and confirm reloading a save or crossing to the character-export sc
 itself spuriously trip the flag mid-transition (a save load briefly has no player object
 either, and the ~1 s threshold exists specifically to survive that without live confirmation
 it actually does on real timings).
+
+## 10. Live pass (2026-08-27): FlagAway — Live result: FAILED, and exactly why
+
+### The blocker this round had to solve first: no coordinate-free way to reach the main menu
+
+Every prior attempt at this on the rig hit the same wall (`session-save.md`'s "Attempted, not
+achieved" section): `demo.ps1`-repositioned windows do not accept injected clicks (0 of 36
+candidate clicks landed), and blind keyboard-only pause-menu navigation once wedged an instance
+badly enough to need a full rig restart. This round built a coordinate-free primitive instead of
+retrying either: a new dev-only console verb `quittomenu` (`CheatKinds.QuitToMenu` = 25,
+`SharedBlock.CheatKindQuitToMenu`, `CoopCommandKind.QuitToMenu`) that calls
+`CClientExoAppInternal::ShutDownToMainMenu` (0x005FCBD0) directly —
+the SAME function `CClientExoAppInternal::StallServerCode` (0x00602CDE) calls once
+`CSWGuiInGameOptions::ReallyQuit`'s `SetEndGamePending(1,0,1)` is noticed, i.e. exactly what a
+real "Quit Game → Yes" click reaches, confirmed via `xrefs.py` (its only two callers are that
+site and `CClientExoApp::ShutDownToMainMenu`'s thin jmp-forward wrapper). Thiscall, one argument
+(`this`), bare `ret`, verified by disassembly before shipping. New files touched:
+`src/KotorCoop.Plugin/Odyssey.Menu.cs` (the engine-call wrapper), `CheatController.World.cs`/
+`CheatController.cs` (the cheat handler), `SharedBlock.cs`/`IGameBridge.cs` (the kind constant,
+both halves), `ConsoleCommand.cs`/`ConsoleCommand.Cheats.cs` (the verb), `CoopCommandDispatcher.cs`
+(the agent-side send), `docs/CONSOLE.md`. `dotnet test tests/KotorCoop.Tests`: 1979/1979 green
+(one coverage-test row added, `ConsoleCommandVerbTableCoverageTests`). Local only, blockpoke-only
+by convention (deliberately absent from `FuncInterpHook.Verbs`/`ConsoleVerbCatalog`, matching
+`skipline`/`selectreply`/`loadgame`/`walkto`/`recruit` — a real player should never see it).
+
+### What actually happened
+
+Both instances connected in `END_M01AA` (block version 53). `pwsh tools\blockpoke.ps1 -ProcId
+<client> console 'quittomenu'` at 18:28:49.8 answered `quit to main menu requested`. The CLIENT's
+own plugin log confirms a clean, fast, crash-free teardown:
+
+```
+[18:28:50.677] quittomenu: tearing down to the main menu (CClientExoAppInternal::ShutDownToMainMenu)
+[18:28:50.729] cheat: quit to main menu requested (status 1)
+[18:28:50.730] menu: Co-op button shown, labelled and bound        <- proves the main menu is really up
+[18:28:50.733] world: unannounced teardown - treating as a load, not a transition
+[18:28:50.733] epoch: world unloading; clearing phantom, item, combat and door state
+[18:28:50.751] agent reports 0 remote peer(s)
+[18:28:50.751] 0 phantom(s) alive
+```
+
+Both `swkotor.exe` processes and both `KotorCoop.Agent.exe` processes stayed up and responding
+throughout — no crash, no hang. The HOST's own plugin block read `phantoms 0  remotes 0` within
+20 seconds of the call (block state), and its own phantom controller had already dropped the
+client's slot. **On the surface this looks exactly like FlagAway working.** It is not.
+
+### The client's own agent never saw a failed read — so `AwayRule` never latched
+
+The client's own `agent2.log` (the log that actually decides whether `IsAway` fires, per
+`CoopAgent.PumpOnce`) tells a different story:
+
+```
+[18:28:50.689] [resolve] player 0x1960A858: vtable 0x7457A0 != 0x7470C8      <- ONE failure, the instant of teardown
+[18:28:51.110] [resolve] TryFindPlugin: scan found 1 candidate(s): 0x17E50000
+[18:28:51.175] [resolve] TryFindPlugin: 0x17E50000 heartbeat 1937 -> 1940 (second read ok=True, advanced=True)
+[18:28:51] * quit to main menu requested
+[18:28:52] * local combat diag (agent): moduleClean=False censusModule='area1' local.Module='area1'
+[18:28:52] connected to 127.0.0.1:27140 as peer 2  peers 1  ...  module area1  hp 30/30  ...
+```
+
+and it kept reading `module='area1' hp 30/30` successfully, once or more per second, for the
+entire observed window — **over two minutes** (18:28:52 through 18:30:55, the last line
+captured). `TryReadLocalState` never failed a second time. Consequently:
+
+- `AwayRule.IsAway`'s consecutive-failure counter reached 1 and then reset to 0 on the very next
+  tick — nowhere near `AwayRule.Threshold`.
+- `IsAway` never became true. **No `away:` log line, no "left the world" toast, no "is back"
+  toast, on either instance, across the whole window.**
+- The HOST's `agent1.log` shows exactly why nothing downstream noticed either: `peers 1` and
+  `peers-here 1` at 18:28:52, 18:29:22, 18:29:52, 18:30:22 and 18:30:52 — unchanged for the
+  entire 2+ minutes. The session-level roster never registered anything wrong.
+
+**The phantom disappearing on the host was not FlagAway.** It was the pre-existing, unrelated
+"peer not in this module" filter every remote-peer write already carries (the same "same module
+gate" `IEnemySession.cs`/`WorldStatePump` document elsewhere): the client kept publishing a
+`PlayerState` whose module read `'area1'`, which never matches the host's `'END_M01AA'`, so the
+peer was filtered out of `TryWriteRemotePeers` and its phantom slot went inactive — coincidentally
+producing the same visible symptom (phantom gone) FlagAway is designed to produce, for a
+completely different, already-shipped reason.
+
+### Root cause, located precisely
+
+`'area1'` is not garbage and not a coincidence. `KotorGameBridge.Encounters.cs` already has a
+named helper for exactly this value:
+
+```csharp
+/// True for "area1"/"area1F"-style names: what the module reads as while a transition is
+/// in flight. Not a module on disk — an object id wearing a module's clothes — and every
+/// pointer the scan holds while one is showing belongs to a world being freed.
+private static bool IsTransitionalModuleName(string module) { ... }
+```
+
+— built for, and only used by, the encounter-disarm feature (`KotorGameBridge.Encounters.cs:107`).
+**`TryReadLocalState` (`KotorGameBridge.Player.cs`) never calls it.** What happens instead,
+traced against that file's own code: the cached player pointer correctly fails
+`StillLooksLikeThePlayer` the instant the world tears down (the single `vtable 0x7457A0 !=
+0x7470C8` line above) and `_player` is set to `null`; the very next tick's fallback,
+`TryResolve` (`KotorGameBridge.Attach.cs`, a pattern scan of committed memory), reacquires
+*something* that passes every cheap validation the scan applies — a body whose module field reads
+`'area1'` and whose hp reads `30/30` (neither value matches this session's real PC, who was at
+`hp 12/12` in `END_M01AA`) — and adopts it as the player. The file's own doc comment already
+names this exact failure class in the abstract ("the scan can latch a FREED COPY of the
+player... every cheap validation passes while its position and health stay frozen"); this round
+is the first live measurement of it firing specifically off a genuine main-menu teardown rather
+than a module transition.
+
+### Verdict
+
+**Live result: FAILED.** The Away flag's third shape (main menu / load screen / character-export
+screen — no player object at all) does not reliably latch on this engine build, because the
+local read that is supposed to fail instead succeeds with transitional-looking data the codebase
+already has a name and a detector for (`IsTransitionalModuleName`) but does not apply here. No
+`coop.ini` default exists to flip for this item — `FlagAway` is unconditional agent behaviour,
+not gated by a key — so nothing was flipped ON.
+
+**The fix, not attempted this round** (scope): gate `KotorGameBridge.Player.cs`'s
+`StillLooksLikeThePlayer`/`TryReadLocalState` on `IsTransitionalModuleName` the same way
+`KotorGameBridge.Encounters.cs` already does — promote the helper out of the Encounters partial
+into a shared location (e.g. `KotorGameBridge.cs` proper) and treat a transitional-name module
+exactly like a failed read, so `AwayRule`'s counter actually advances. Until that lands, a real
+"quit to the main menu" is silently misreported to peers as "still in `END_M01AA` at whatever the
+scan's frozen copy last held" rather than either a clean Away or a clean disconnect — worth
+flagging in `docs/roadmap-seamless.md` as a Tier 1 item alongside the container-loot race (§6 of
+the 2026-08-27 rig pass in `docs/live-verification.md`).
+
+The `quittomenu` primitive itself is reusable for the next round straight away — no rig-tooling
+work is needed to reproduce or re-check this.

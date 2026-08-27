@@ -226,6 +226,30 @@ public static class CheatKinds
     /// SharedBlock.CheatKindPartyPoolRemove and docs/research/party-pool-sync.md.
     /// </summary>
     public const uint PartyPoolRemove = 26;
+
+    /// LIVE-TEST PRIMITIVE (2026-08-27, docs/research/disconnect-reconnect.md §9): tears the
+    /// world down and shows the main menu, via the engine's own
+    /// <c>CClientExoAppInternal::ShutDownToMainMenu</c> — the same function a real "Quit Game
+    /// -&gt; Yes" click reaches. Built to exercise the Away flag's third shape (no player object
+    /// at all) without navigating the vanilla pause menu by mouse, which a prior round found
+    /// does not land clicks on a demo.ps1-repositioned window and once wedged an instance via
+    /// blind keyboard navigation (docs/research/session-save.md). See
+    /// <c>SharedBlock.CheatKindQuitToMenu</c>. Takes no arguments; local only.
+    ///
+    /// ⚠ 27 is the highest number taken now. Take the next FREE one for a new verb.
+    /// </summary>
+    public const uint QuitToMenu = 27;
+
+    /// <summary>
+    /// LIVE-TEST PRIMITIVE (2026-08-27, docs/research/dialogue-consequences.md's script-item-sync
+    /// round): gives an item straight into the local player's inventory with NO suppression-ledger
+    /// entry recorded, simulating an untracked script grant (OnEnter/OnDeath/heartbeat) for
+    /// testing <c>script_item_sync</c>. See <c>SharedBlock.CheatKindScriptGive</c>. <c>Address</c>
+    /// is the resref, <c>Amount</c> the stack size. Local only.
+    ///
+    /// ⚠ 28 is the highest number taken now. Take the next FREE one for a new verb.
+    /// </summary>
+    public const uint ScriptGive = 28;
 }
 
 /// <summary>

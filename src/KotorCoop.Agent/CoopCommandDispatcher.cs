@@ -254,6 +254,14 @@ public sealed partial class CoopCommandDispatcher(
         [CoopCommandKind.SkipLine] = _ => SendCheat(new CheatRequest(CheatKinds.SkipLine)),
         [CoopCommandKind.SelectReply] = c => SendCheat(new CheatRequest(CheatKinds.SelectReply, Amount: c.Amount)),
         [CoopCommandKind.LoadGame] = c => TriggerMidSessionLoad(c.Amount),
+        [CoopCommandKind.QuitToMenu] = _ => SendCheat(new CheatRequest(CheatKinds.QuitToMenu)),
+
+        // ⚠ Deliberately does NOT call NoteLocalItemGiven, unlike CoopCommandKind.GiveLoot's own
+        // dispatcher entry just above — see CoopCommandKind.ScriptGive's own doc comment
+        // (ConsoleCommand.cs) for why an UNTRACKED grant is the entire point of this verb.
+        [CoopCommandKind.ScriptGive] = c => SendCheat(new CheatRequest(
+            CheatKinds.ScriptGive, Text: c.Address ?? string.Empty, Amount: c.Amount)),
+
         [CoopCommandKind.Cheats] = CheatsCommand,
     };
 

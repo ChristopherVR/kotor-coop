@@ -240,6 +240,12 @@ public static partial class ConsoleCommand
             ? new CoopCommand(CoopCommandKind.Invalid, Error: "skipline takes no arguments")
             : new CoopCommand(CoopCommandKind.SkipLine);
 
+    // quittomenu  - LIVE-TEST PRIMITIVE, see CoopCommandKind.QuitToMenu.
+    private static CoopCommand ParseQuitToMenu(string[] rest) =>
+        rest.Length > 0
+            ? new CoopCommand(CoopCommandKind.Invalid, Error: "quittomenu takes no arguments")
+            : new CoopCommand(CoopCommandKind.QuitToMenu);
+
     // selectreply <slot>  - LIVE-TEST PRIMITIVE, see CoopCommandKind.SelectReply.
     private static CoopCommand ParseSelectReply(string[] rest)
     {

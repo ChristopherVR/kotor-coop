@@ -578,4 +578,39 @@ internal partial struct SharedBlock
     /// </summary>
     public const uint CheatKindPartyPoolRemove = 26;
 
+    /// LIVE-TEST PRIMITIVE (2026-08-27, docs/research/disconnect-reconnect.md §9): tears the
+    /// world down and shows the main menu, through
+    /// <c>CClientExoAppInternal::ShutDownToMainMenu</c> (0x005FCBD0) — the SAME function
+    /// <c>CClientExoAppInternal::StallServerCode</c> (0x00602CDE) calls once
+    /// <c>CSWGuiInGameOptions::ReallyQuit</c>'s <c>SetEndGamePending(1,0,1)</c> is noticed on a
+    /// later frame, i.e. exactly what a real "Quit Game -&gt; Yes" click ultimately reaches.
+    /// Built because reaching a genuine "no player object at all" state (the Away flag's third
+    /// shape — main menu / load screen / character-export screen) by navigating the vanilla
+    /// pause menu with injected mouse clicks is a documented dead end on a demo.ps1-repositioned
+    /// window (docs/research/session-save.md's "Attempted, not achieved" section: 36 candidate
+    /// clicks, zero landed, and blind keyboard navigation once wedged an instance requiring a
+    /// full rig restart). Calling the engine function directly, the same way <c>usedoor</c>/
+    /// <c>skipline</c> route around missing OS input, needs no coordinates and cannot wedge
+    /// anything. Takes no arguments; local only, never crosses the network.
+    ///
+    /// ⚠ 27, because 7-26 are taken. Take the next FREE number.
+    /// </summary>
+    public const uint CheatKindQuitToMenu = 27;
+
+    /// <summary>
+    /// LIVE-TEST PRIMITIVE (2026-08-27, docs/research/dialogue-consequences.md's
+    /// script-item-sync round): gives an item straight into THIS instance's own player's
+    /// inventory through <c>Odyssey.GiveItemToInventory</c> with NO agent-side suppression-ledger
+    /// entry recorded, ON PURPOSE — simulating exactly what an OnEnter/OnDeath/heartbeat script
+    /// granting an item looks like to <c>ScriptItemGrantPump</c>'s sampling diff, which this
+    /// codebase otherwise has no console primitive to trigger on demand. <c>CheatText</c> is the
+    /// resref, <c>CheatAmount</c> the stack size. See <c>CheatController.Items.cs</c>'s own
+    /// <c>ScriptGive</c> doc comment for the full reasoning and why <c>giveloot</c>'s existing
+    /// local-player sentinel cannot be reused for this (it IS suppressed, on purpose — it is the
+    /// feature's own negative control).
+    ///
+    /// ⚠ 28, because 7-27 are taken. Take the next FREE number.
+    /// </summary>
+    public const uint CheatKindScriptGive = 28;
+
 }

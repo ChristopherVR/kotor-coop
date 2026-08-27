@@ -67,7 +67,7 @@ fails safe. **INFERRED** = a reasonable deduction, not directly proven.
 | [dialogue-sync.md](dialogue-sync.md) | Synchronizing conversations across two instances | Implemented, live-verified |
 | [dialogue-join-latency.md](dialogue-join-latency.md) | Why a joiner's subtitles lag | Measured; this doc's own A/B found no confirmed improvement (superseded in practice by dialogue-skip-desync.md's decisive case) |
 | [dialogue-skip-desync.md](dialogue-skip-desync.md) | Rapid mid-sentence skip desyncing a peer | Root-caused, fixed, live-verified; `dialogue_fast_join=1` flipped ON the same day |
-| [dialogue-consequences.md](dialogue-consequences.md) | Getting a reward node's effect and a recruit onto the peer | Design → implemented; recruit sync live-confirmed for two companions, code default OFF (shipped ini ON) |
+| [dialogue-consequences.md](dialogue-consequences.md) | Getting a reward node's effect and a recruit onto the peer | Design → implemented; recruit sync live-confirmed for two companions, code default OFF (shipped ini ON). `script_item_sync` live-verified 2026-08-27 (partial): core grant + one of three controls confirmed clean, container/corpse loot control unrun — stays OFF |
 | [click-to-join-and-vo.md](click-to-join-and-vo.md) | Click-to-join annulment, and a voice-over gag | Both root-caused, fixed |
 | [bark-replay.md](bark-replay.md) | Why replaying an NPC bark crashed the process | Root-caused, fixed, live-verified |
 
@@ -91,7 +91,7 @@ fails safe. **INFERRED** = a reasonable deduction, not directly proven.
 | [container-sync.md](container-sync.md) | Container/corpse open-close sync and the use-lock | Implemented, live-verified, ON by default; `container_fast_pump` off pending a live A/B |
 | [item-identity.md](item-identity.md) | What a `CSWSItem` carries that its blueprint does not | Implemented; apply path live-tested via the console item-identity loop |
 | [quest-sync.md](quest-sync.md) | Non-monotonic globals, journal removal, the Lamport-clock fix | Implemented, live-verified, ON by default |
-| [map-reveal.md](map-reveal.md) | Fog-of-war sync around a peer's position | Implemented; pinned VERIFIED by static RE, OFF by default pending a live pass |
+| [map-reveal.md](map-reveal.md) | Fog-of-war sync around a peer's position | Implemented; live-verified 2026-08-27 (engine call, peer tracking, transition survival, frame cost), default ON. On-screen M-key appearance unconfirmed (screenshot tooling broken) |
 | [trigger-relay.md](trigger-relay.md) | Making a generic trigger's `OnEnter` fire for both players | Implemented, live-verified, protocol 36; ON by default in code and (since 2026-08-27) in the shipped `coop.ini.example` |
 
 ## Session, network, menu & console
@@ -109,8 +109,8 @@ fails safe. **INFERRED** = a reasonable deduction, not directly proven.
 | [text-color-alpha.md](text-color-alpha.md) | Screen text with color/alpha | RE reference, implemented |
 | [native-browser-panel.md](native-browser-panel.md) | Repurposing `CSWGuiSaveLoad` as the server browser | RE reference, implemented |
 | [server-browser.md](server-browser.md) | The main-menu scrollable server list | RE reference, implemented |
-| [connect-flow.md](connect-flow.md) | The in-game Connect panel and password entry | Implemented; some on-screen display specifics remain NEEDS-LIVE |
-| [disconnect-reconnect.md](disconnect-reconnect.md) | What happens when the link between two players fails | Implemented; some live-rig specifics remain NEEDS-LIVE |
+| [connect-flow.md](connect-flow.md) | The in-game Connect panel and password entry | Implemented; connect/password flow live-verified. Persistent connection indicator live-verified 2026-08-27 (partial) — data path and peer tracking correct, on-screen render/`status_indicator=0` unconfirmed (shot.ps1 broken), `Reconnecting` state found unreachable |
+| [disconnect-reconnect.md](disconnect-reconnect.md) | What happens when the link between two players fails | Implemented; link-outage recovery live-verified. FlagAway (main menu / no player object) live-verified 2026-08-27 as FAILED — the local read masks the failure with transitional data (§10), root cause located, fix not yet shipped |
 | [network-topology.md](network-topology.md) | Peer-to-peer vs. a dedicated host | Reference / design discussion, no build implied |
 | [mouse-cursor-input.md](mouse-cursor-input.md) | Where the engine's mouse cursor lives and how to click | RE reference; one resolution caveat NEEDS-LIVE |
 
@@ -126,7 +126,7 @@ fails safe. **INFERRED** = a reasonable deduction, not directly proven.
 
 | Doc | Subject | Status |
 | --- | --- | --- |
-| [minigames.md](minigames.md) | Swoop races, forced turret sequences, and Pazaak | Swoop-race entry gate found and solved; the terminal transition call is BLOCKED, needs a real debugger this project doesn't have; turret sequence confirmed working as designed |
+| [minigames.md](minigames.md) | Swoop races, forced turret sequences, and Pazaak | Swoop-race entry gate found and solved; the terminal transition call is BLOCKED, needs a real debugger this project doesn't have; turret sequence confirmed working as designed. `pazaak_detect` live-verified 2026-08-27 as negative-only (no false positives over ~1 min in a cantina); positive path (an actual hand) still unrun — stays OFF |
 
 ## Mods
 

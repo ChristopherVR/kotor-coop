@@ -111,7 +111,7 @@ entirely; both now default ON, matching each other and the shipped file's explic
 | `dialogue_auto_join_range` | `20` | distance for `near` auto-join mode | [dialogue-sync.md](research/dialogue-sync.md) |
 | `journal_remove_sync` | ON | replicate a journal entry's removal | [quest-sync.md](research/quest-sync.md) |
 | `liveness_sync` | OFF | reconcile a body alive on one screen, dead on the other | [creature-liveness.md](research/creature-liveness.md) |
-| `map_reveal_sync` | OFF | reveal fog-of-war around a peer's live position | [map-reveal.md](research/map-reveal.md) |
+| `map_reveal_sync` | ON¹⁰ | reveal fog-of-war around a peer's live position | [map-reveal.md](research/map-reveal.md) |
 | `enemy_materialise` | ON | build a mirror body for an enemy the mirror has none for yet | [enemy-materialisation.md](research/enemy-materialisation.md) |
 | `movement` | direct placement unless `walk` | phantom movement: direct placement (seamless) or pathfinding walk | [realtime-creature-movement.md](research/realtime-creature-movement.md) |
 | `smooth_ms` | `60` | phantom position-smoothing time constant, ms, clamped 0-400 | [phantom-locomotion.md](research/phantom-locomotion.md) |
@@ -177,6 +177,11 @@ peer parks on — true for a Pazaak hand; `PluginConfig.ReadBool("pazaak_detect"
 side, in-process) only gates that process's own local edge log and `MinigameKind` labelling.
 Both default OFF and the shipped `coop.ini.example` leaves it at `0`, so the two readers never
 disagree in practice; setting it in `coop.ini` turns both on together.
+¹⁰ Live-verified 2026-08-27: the engine call fires correctly, follows a peer's real position,
+survives a module transition with no crash, and costs nothing measurable in frame time. Flipped
+ON in both `PluginConfig.ReadBool`'s own fallback and `profiles/coop.ini.example`. The exact
+on-screen M-key appearance was not visually confirmed this round (screenshot tooling is broken
+on the rig) — see `docs/research/map-reveal.md`'s "Live pass" section.
 
 ## CLI flags (`KotorCoop.Agent`, `AgentOptions.cs`)
 

@@ -330,4 +330,42 @@ internal static unsafe partial class Odyssey
     public static void BindControlAccept(nint control, nint owner, nint callback) =>
         AddEventFn(control, GuiEventAccept, owner, callback);
 
+    // ---- quit to main menu (LIVE-TEST PRIMITIVE, docs/research/disconnect-reconnect.md §9) --
+    //
+    // CClientExoAppInternal::ShutDownToMainMenu(this) - thiscall, NO stack args (bare `ret`,
+    // verified at 0x005FCBD0: push ecx/ebx/esi, ..., pop esi/ebx/ecx, ret). This is exactly what
+    // CClientExoAppInternal::StallServerCode (0x00602CDE) calls once
+    // CSWGuiInGameOptions::ReallyQuit's SetEndGamePending(1,0,1) is noticed on a later frame -
+    // i.e. the SAME function a real "Quit Game -> Yes" click ultimately reaches (confirmed via
+    // xrefs.py: the only two callers are CClientExoApp::ShutDownToMainMenu's thin jmp-forward
+    // wrapper at 0x005ED890 and StallServerCode). It tears the current server/module down,
+    // clears the client's dialogue/GUI state and calls DisplayMainMenu (0x005FCA30) /
+    // StartMenuMusic (0x005F9AF0) along the way.
+    //
+    // Built because reaching a genuine "no player object at all" state by clicking through the
+    // vanilla pause menu is a documented dead end on this rig: docs/research/session-save.md's
+    // "Attempted, not achieved" section measured ZERO of 36 candidate clicks landing on a
+    // demo.ps1-repositioned window, and a blind keyboard-only navigation attempt (Escape/Enter
+    // guesses) wedged an instance badly enough to need a full rig restart. Calling the engine
+    // function directly needs no coordinates and no guessing, the same way `usedoor`/`skipline`
+    // already route around missing OS input elsewhere in this codebase.
+    private static readonly delegate* unmanaged[Thiscall]<nint, void> ShutDownToMainMenuFn =
+        (delegate* unmanaged[Thiscall]<nint, void>)0x005FCBD0;
+
+    /// <summary>
+    /// Quits the local instance straight to the main menu, exactly as a real "Quit Game -&gt;
+    /// Yes" would. Returns false (harmlessly) if the client internal is not resolvable. MAIN
+    /// THREAD ONLY - do not call while the script VM is mid-call.
+    /// </summary>
+    public static bool ShutDownToMainMenu()
+    {
+        nint internalClient = GetClientInternal();
+        if (internalClient == 0)
+        {
+            return false;
+        }
+
+        ShutDownToMainMenuFn(internalClient);
+        return true;
+    }
 }

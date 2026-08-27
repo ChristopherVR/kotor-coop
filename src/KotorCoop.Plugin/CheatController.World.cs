@@ -503,4 +503,25 @@ internal sealed unsafe partial class CheatController
     /// engine resolves range/reach itself once the input reaches it, but a request aimed at a
     /// container across the map is a mistake worth catching here rather than silently sent.</summary>
     private const float PlaceableUseRange = 15f;
+
+    /// <summary>
+    /// LIVE-TEST PRIMITIVE (docs/research/disconnect-reconnect.md §9): quits THIS instance
+    /// straight to the main menu through <see cref="Odyssey.ShutDownToMainMenu"/> — the same
+    /// engine call a real "Quit Game -&gt; Yes" click reaches. Exists to exercise the Away
+    /// flag's third shape (agent alive, no player object) without navigating the vanilla pause
+    /// menu by mouse, which a prior round found does not land clicks on a demo.ps1-repositioned
+    /// window (docs/research/session-save.md).
+    /// </summary>
+    private void QuitToMenu()
+    {
+        PluginHost.Log("quittomenu: tearing down to the main menu (CClientExoAppInternal::ShutDownToMainMenu)");
+
+        if (!Odyssey.ShutDownToMainMenu())
+        {
+            Answer(SharedBlock.CheatStatusNoWorld, "client internal not resolvable - nothing to tear down");
+            return;
+        }
+
+        Answer(SharedBlock.CheatStatusApplied, "quit to main menu requested");
+    }
 }

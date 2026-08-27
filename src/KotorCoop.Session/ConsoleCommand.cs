@@ -344,6 +344,32 @@ public enum CoopCommandKind
     /// <c>client_load_rejoin</c>/<c>host_load_readopt</c> exactly as it would for a real click.
     /// </summary>
     LoadGame,
+
+    /// <summary>
+    /// <c>quittomenu</c> — LIVE-TEST PRIMITIVE (docs/research/disconnect-reconnect.md §9).
+    /// Tears THIS instance's world down and shows the main menu, through the engine's own
+    /// <c>CClientExoAppInternal::ShutDownToMainMenu</c> — the same function a real "Quit Game
+    /// -&gt; Yes" click ultimately reaches. Built for exactly the reason <c>loadgame</c> was:
+    /// docs/research/session-save.md measured zero of 36 candidate clicks landing on a
+    /// demo.ps1-repositioned window, and a blind keyboard-only navigation attempt wedged an
+    /// instance badly enough to need a full rig restart. Exercises the Away flag's third shape
+    /// (agent alive, no player object) without any of that risk. Takes no arguments. Local
+    /// only: this never crosses the network by itself.
+    /// </summary>
+    QuitToMenu,
+
+    /// <summary>
+    /// <c>scriptgive &lt;resref&gt; [stack]</c> — LIVE-TEST PRIMITIVE
+    /// (docs/research/dialogue-consequences.md's script-item-sync round). Gives an item straight
+    /// into THIS instance's own player's inventory with no suppression-ledger entry recorded, on
+    /// purpose — simulating exactly what a script (OnEnter/OnDeath/heartbeat) granting an item
+    /// looks like to <c>ScriptItemGrantPump</c>'s own sampling diff, since this codebase has no
+    /// other way to trigger that scenario on demand. <see cref="CoopCommand.Address"/> is the
+    /// resref, <see cref="CoopCommand.Amount"/> the stack size (default 1). NOT the same as
+    /// <c>giveloot</c>'s local-player sentinel, which IS suppressed on purpose (the feature's own
+    /// negative control) — this verb exists specifically to bypass that. Local only.
+    /// </summary>
+    ScriptGive,
 }
 
 /// <summary>
@@ -528,6 +554,8 @@ public static partial class ConsoleCommand
         new(["skipline"], ParseSkipLine),
         new(["selectreply"], ParseSelectReply),
         new(["loadgame"], ParseLoadGame),
+        new(["quittomenu"], ParseQuitToMenu),
+        new(["scriptgive"], ParseScriptGive),
         new(["cheats"], ParseCheats),
     ];
 
