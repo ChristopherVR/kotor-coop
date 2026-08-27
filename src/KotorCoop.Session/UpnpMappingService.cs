@@ -40,7 +40,12 @@ public sealed class UpnpMappingService : IDisposable
 
     private UpnpClient.ControlPoint? _controlPoint;
 
-    public UpnpMappingStatus Status { get; private set; } = UpnpMappingStatus.Pending;
+    // volatile: written by the background TryMapAsync task, read from whatever thread asks
+    // for the status line (CoopHost.UpnpStatus) — the same cross-thread-visibility reasoning
+    // PublicAddressDiscovery._publicEndPoint documents for its own identical shape.
+    private volatile UpnpMappingStatus _status = UpnpMappingStatus.Pending;
+
+    public UpnpMappingStatus Status => _status;
 
     public UpnpMappingService(int port, string description = "KotorCoop")
     {
@@ -58,7 +63,7 @@ public sealed class UpnpMappingService : IDisposable
             {
                 await TryMapAsync(cancellationToken).ConfigureAwait(false);
 
-                if (Status != UpnpMappingStatus.Mapped)
+                if (_status != UpnpMappingStatus.Mapped)
                 {
                     return; // nothing mapped, so nothing to keep renewing — one attempt is enough
                 }
@@ -81,7 +86,7 @@ public sealed class UpnpMappingService : IDisposable
 
         if (point is not { } found || localIp is null)
         {
-            Status = UpnpMappingStatus.Unavailable;
+            _status = UpnpMappingStatus.Unavailable;
             return;
         }
 
@@ -98,7 +103,7 @@ public sealed class UpnpMappingService : IDisposable
             .ConfigureAwait(false);
 
         _controlPoint = found;
-        Status = udpMapped || tcpMapped ? UpnpMappingStatus.Mapped : UpnpMappingStatus.Unavailable;
+        _status = udpMapped || tcpMapped ? UpnpMappingStatus.Mapped : UpnpMappingStatus.Unavailable;
     }
 
     public void Dispose()

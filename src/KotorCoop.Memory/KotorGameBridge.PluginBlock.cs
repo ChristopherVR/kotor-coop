@@ -675,7 +675,7 @@ public sealed partial class KotorGameBridge
 
     private const int BlockHostPartyRosterObjectIds = 0x3F4C;
 
-    // Effective behaviour-override flags (shared block version 57, region 0x40C0..0x40C8, no
+    // Effective behaviour-override flags (shared block version 55, region 0x40C0..0x40C8, no
     // TotalSize growth — the tail after the companion-equipment array at 0x4000..0x40C0 has
     // 0x40 free bytes). Mirrors SharedBlock.OffsetBehaviourOverride*. See
     // docs/research/mod-compatibility.md's "Behaviour-flag negotiation" gap.

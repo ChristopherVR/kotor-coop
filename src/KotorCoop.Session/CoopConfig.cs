@@ -297,7 +297,7 @@ public sealed record CoopConfig
     /// end_m01ab door crossing, and the movie-carrying case was also exercised with no
     /// regression). Set <c>transition_announce = 0</c> to opt out.
     /// </summary>
-    public bool TransitionAnnounceEnabled { get; init; }
+    public bool TransitionAnnounceEnabled { get; init; } = true;
 
     /// <summary>
     /// Whether a client's own engine-native door crossing is refused early (before the load
@@ -307,7 +307,7 @@ public sealed record CoopConfig
     /// own <c>CSWParty</c> hits an unrelated party-together gate first — see the doc's live-pass
     /// section.
     /// </summary>
-    public bool ClientDoorRefusalEnabled { get; init; }
+    public bool ClientDoorRefusalEnabled { get; init; } = true;
 
     /// <summary>
     /// Who may lead an area transition that the OTHER side follows immediately via the announce
@@ -329,7 +329,7 @@ public sealed record CoopConfig
     /// both the play-now and defer paths. coop.ini <c>movie_relay</c>. See
     /// docs/research/trigger-relay.md §6 and docs/research/cinematics.md.
     /// </summary>
-    public bool MovieRelayEnabled { get; init; }
+    public bool MovieRelayEnabled { get; init; } = true;
 
     /// <summary>
     /// coop.ini <c>stun_servers</c> (roadmap item 24, "public address discovery"): comma-
@@ -546,7 +546,8 @@ public sealed record CoopConfig
             StatusToasts = !kv.ContainsKey("status_toasts") || IsTruthy(kv.GetValueOrDefault("status_toasts")),
             DialogueItemSync = !kv.ContainsKey("dialogue_item_sync")
                 || IsTruthy(kv.GetValueOrDefault("dialogue_item_sync")),
-            ScriptItemSync = !kv.ContainsKey("script_item_sync") || IsTruthy(kv.GetValueOrDefault("script_item_sync")),
+            ScriptItemSync = !kv.ContainsKey("script_item_sync")
+                || IsTruthy(kv.GetValueOrDefault("script_item_sync")),
             DialogueFastJoin = !kv.ContainsKey("dialogue_fast_join")
                 || IsTruthy(kv.GetValueOrDefault("dialogue_fast_join")),
             PartyFastPump = !kv.ContainsKey("party_fast_pump")
@@ -587,7 +588,8 @@ public sealed record CoopConfig
             LivenessSync = IsTruthy(kv.GetValueOrDefault("liveness_sync")),
             MapRevealSync = IsTruthy(kv.GetValueOrDefault("map_reveal_sync")),
 
-            CompanionXpSync = !kv.ContainsKey("companion_xp_sync") || IsTruthy(kv.GetValueOrDefault("companion_xp_sync")),
+            CompanionXpSync = !kv.ContainsKey("companion_xp_sync")
+                || IsTruthy(kv.GetValueOrDefault("companion_xp_sync")),
             CompanionGearSync = IsTruthy(kv.GetValueOrDefault("companion_gear_sync")),
             PartyPoolSyncEnabled = IsTruthy(kv.GetValueOrDefault("party_pool_sync")),
             SoloSegmentSpectateEnabled = IsTruthy(kv.GetValueOrDefault("solo_segment_spectate")),
