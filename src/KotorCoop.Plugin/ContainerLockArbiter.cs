@@ -64,13 +64,15 @@ internal sealed class ContainerLockArbiter
     /// own peer-held check still runs on the re-issued click either way, so a fallback can never
     /// steal an object a peer genuinely holds).
     ///
-    /// 300ms is comfortably more than a LAN round trip (the existing container-close latency
-    /// work, docs/research/container-sync.md's round 78/round 10 sections, measured a full
-    /// claim+broadcast round trip at 250-440ms even before this feature's synchronous reply
-    /// exists) while still being short enough that a lost request or response reads as "briefly
-    /// slower to open," not "container appears not to work."
+    /// 1000ms, raised from 300ms on 2026-08-28: the reply is not one LAN round trip but
+    /// plugin -> shared block -> agent pump tick -> UDP -> host -> UDP -> agent pump tick ->
+    /// shared block -> plugin, and the live pass in docs/research/container-sync.md's 2026-08-28
+    /// section saw the 300ms budget expire on EVERY request (the outcome stayed correct only
+    /// because the per-tick broadcast level won underneath the fallback). One second covers two
+    /// agent ticks each way with margin while still reading as "briefly slower to open," not
+    /// "container appears not to work."
     /// </summary>
-    public const long TimeoutMs = 300;
+    public const long TimeoutMs = 1000;
 
     private ContainerLockArbiterState _state = ContainerLockArbiterState.Idle;
     private uint _targetId;

@@ -1303,3 +1303,11 @@ independently confirmed non-reproducing when filtered to its own test class alon
 `dotnet build KotorCoop.slnx -warnaserror`: clean, 0 warnings, 0 errors.
 `src/KotorCoop.Plugin/build.ps1 -WarnAsError` (no `-Install`, no live rig this round): clean, 0
 warnings, 0 errors, x86 architecture confirmed on the produced `dinput8.dll`.
+
+### 2026-08-28 follow-up: fallback budget raised to 1000ms
+
+The live pass above showed every explicit request expiring at 300ms — the budget was sized for
+one LAN round trip, but the real path is plugin → shared block → agent tick → UDP → host → UDP →
+agent tick → shared block → plugin. `ContainerLockArbiter.TimeoutMs` is now 1000ms (two agent
+ticks each way with margin). NEEDS-LIVE: re-run the two-click race and confirm the fast path now
+resolves inside the budget (`granted`/`denied` log lines instead of `0xC6 no host answer`).
