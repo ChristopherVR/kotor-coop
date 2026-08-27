@@ -197,10 +197,35 @@ public static class CheatKinds
     /// <see cref="Teleport"/> snap crosses nothing — and reaching a trigger polygon that has no
     /// door on it (a swoop-track entrance) had no walk primitive before this.
     ///
-    /// ⚠ 24 is the highest number taken. Take the next FREE one for a new verb —
+    /// ⚠ 26 is the highest number taken (25/26: PartyPoolAdd/Remove, below). Take the next
+    /// FREE one for a new verb —
     /// CheatKindSyncTests.NoTwoCheatKindsShareANumber will fail the build on a collision.
     /// </summary>
     public const uint WalkTo = 24;
+
+    /// <summary>
+    /// Adds <c>Amount</c> units of a resref+identity stack to the shared party pool
+    /// (<c>CSWPartyTable+0x118</c>): spawns the item straight into the local player's own
+    /// inventory (the same <c>CreateItemOnObject</c> VM routine <see cref="GiveLoot"/> already
+    /// uses — there is no VM path that targets the pool directly, since it is not a scriptable
+    /// object), applies its identity exactly like <see cref="SetItem"/>, then unlinks it from
+    /// the player's own backpack and links it into the pool's repository through the engine's
+    /// own <c>CItemRepository::InsertItem</c>. <c>Text</c> is the resref, <c>Amount</c> the
+    /// stack size, Charges/MaxCharges/Upgrades/ItemFlags the rest of the stack identity — the
+    /// same five fields <see cref="GiveLoot"/> and <see cref="SetItem"/> already carry. See
+    /// SharedBlock.CheatKindPartyPoolAdd and docs/research/party-pool-sync.md.
+    /// </summary>
+    public const uint PartyPoolAdd = 25;
+
+    /// <summary>
+    /// Removes <c>Amount</c> units of a resref+identity stack from the shared party pool,
+    /// through the engine's own <c>CItemRepository::RemoveItem</c> — greedily over whichever
+    /// live items in the pool match the requested resref (by Tag, case-insensitive) and
+    /// identity, reducing or deleting entries until the requested count is accounted for or the
+    /// pool runs out of matches. Same field layout as <see cref="PartyPoolAdd"/>. See
+    /// SharedBlock.CheatKindPartyPoolRemove and docs/research/party-pool-sync.md.
+    /// </summary>
+    public const uint PartyPoolRemove = 26;
 }
 
 /// <summary>
@@ -215,6 +240,7 @@ public interface IGameBridge :
     IDoorBridge,
     IPlaceableBridge,
     IContainerLootBridge,
+    IPartyPoolBridge,
     IMenuBridge,
     ITravelBridge,
     IDialogueBridge,

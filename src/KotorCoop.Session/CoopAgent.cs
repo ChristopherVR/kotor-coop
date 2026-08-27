@@ -64,6 +64,7 @@ public sealed class CoopAgent
     private readonly DeathPump _deathPump;
     private readonly WorldStatePump _worldStatePump;
     private readonly ScriptItemGrantPump _scriptItemGrantPump;
+    private readonly PartyPoolPump _partyPoolPump;
 
     /// <summary>
     /// The suppression ledger shared by every pump that can put a new row into the local PC's
@@ -89,6 +90,7 @@ public sealed class CoopAgent
         _lootPump = new LootPump(bridge, session, _recentlySyncedItems, _log);
         _dialoguePump = new DialoguePump(bridge, session, settings, _log);
         _partyPump = new PartyPump(bridge, session, settings, _log);
+        _partyPoolPump = new PartyPoolPump(bridge, session, _log);
 
         // TriggerPump before CombatPump: CombatPump.PumpEnemies calls into it for the
         // client-triggered encounter/generic-trigger sub-steps.
@@ -608,6 +610,14 @@ public sealed class CoopAgent
         }
 
         _lootPump.PumpContainerLoot(caps);
+
+        // Off by default (coop.ini party_pool_sync) — a researched-but-not-yet-live-verified
+        // offset chain and engine calls, per the project's engine-write rules. See
+        // docs/research/party-pool-sync.md.
+        if (_settings.PartyPoolSyncEnabled)
+        {
+            _partyPoolPump.Pump(caps);
+        }
     }
 
     /// <summary>Diffs <see cref="_knownPeerIds"/> against this tick's peer set and raises
@@ -673,6 +683,26 @@ public sealed class CoopAgent
     public bool TryDequeuePendingLoot(out PendingMaterialisedLootGive next)
     {
         return _lootPump.TryDequeuePendingLoot(out next);
+    }
+
+    /// <summary>One party-pool add/remove this instance's own engine still owes, queued for the
+    /// automatic apply path to submit through the same arbitrated cheat channel a human's own
+    /// party-pool console verb would use — see <see cref="TryDequeuePendingPartyPoolApply"/>.
+    /// Public (rather than living on the internal <c>PartyPoolPump</c>) for the same reason
+    /// <see cref="PendingMaterialisedLootGive"/> is: <c>KotorCoop.Agent</c>, a separate
+    /// assembly, needs to see it.</summary>
+    public readonly record struct PendingPartyPoolApply(
+        KotorCoop.Protocol.PartyPoolOpKind Kind, KotorCoop.Protocol.PartyPoolStackKey Key, ushort Count);
+
+    /// <summary>
+    /// Called by whatever already arbitrates the single-slot staging-cheat channel, at most
+    /// once per ITS tick, so an automatic party-pool apply is submitted through the same call
+    /// path a human's own party-pool console verb would take and can never be filed alongside
+    /// one in flight. Mirrors <see cref="TryDequeuePendingLoot"/> exactly.
+    /// </summary>
+    public bool TryDequeuePendingPartyPoolApply(out PendingPartyPoolApply next)
+    {
+        return _partyPoolPump.TryDequeuePendingApply(out next);
     }
 
     /// <summary>

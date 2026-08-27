@@ -110,6 +110,7 @@ public sealed partial class CoopCommandDispatcher(
                     DrainChat();
                     ReflectCheatAnswer();
                     DrainAutomaticLoot();
+                    DrainAutomaticPartyPool();
                     PumpPeerEffectLog();
                 }
                 catch (Exception ex) when (ex is not OperationCanceledException)

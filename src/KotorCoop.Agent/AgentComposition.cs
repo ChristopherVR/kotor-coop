@@ -122,6 +122,7 @@ internal static class AgentComposition
             TransitionAnnounceEnabled = config?.TransitionAnnounceEnabled ?? false,
             ClientDoorRefusalEnabled = config?.ClientDoorRefusalEnabled ?? false,
             MovieRelayEnabled = config?.MovieRelayEnabled ?? false,
+            PartyPoolSyncEnabled = config?.PartyPoolSyncEnabled ?? false,
 
             // No coop.ini => the most conservative choice, matching the pattern above: today's
             // exact host-leads/client-follows behaviour, not the new lead-swap default.

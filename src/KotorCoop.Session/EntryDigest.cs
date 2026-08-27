@@ -101,6 +101,19 @@ public static class EntryDigest
         return MixUInt32(h, itemId);
     }
 
+    /// <summary>One party-pool stack: the content key plus its current aggregate quantity.
+    /// Unlike <see cref="GroundItem"/> there is no id to mix in — the key IS the identity, and
+    /// two peers that agree on "resref X, this identity, N units" agree completely.</summary>
+    public static ulong PartyPoolEntry(Protocol.PartyPoolStackKey key, int count)
+    {
+        ulong h = MixStringIgnoreCase(Offset, key.Resref);
+        h = MixByte(h, key.Charges);
+        h = MixByte(h, key.MaxCharges);
+        h = MixUInt32(h, key.Upgrades);
+        h = MixByte(h, key.Flags);
+        return MixUInt32(h, unchecked((uint)count));
+    }
+
     /// <summary>One creature-liveness entry: id plus its reported state. XOR-summed over the
     /// WHOLE publish cycle's entries (every page, before pagination splits them across
     /// datagrams) by <c>CreatureLivenessPaging.Paginate</c>, so every page of one cycle

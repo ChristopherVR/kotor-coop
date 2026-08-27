@@ -36,7 +36,7 @@ time; everything else builds and unit-tests in parallel.
 
 | # | Item | Status | Where |
 |---|---|---|---|
-| 1 | **Party shared-loot pool (`pt_item_repo`, `CSWPartyTable+0x118`) is two unrelated pools.** Gear stashed "in the party" on one instance never exists on the other. Offsets known, no channel. | Missing | new `PartyLootController` + packet; `Odyssey.Party.cs` |
+| 1 | **Party shared-loot pool (`pt_item_repo`, `CSWPartyTable+0x118`) is two unrelated pools.** Gear stashed "in the party" on one instance never exists on the other. Content-keyed op-log channel built 2026-08-27 (`party_pool_sync`, OFF until live-verified); add/remove both ways, host-relayed, `Set`-based resync on reconnect. | Built (NEEDS-LIVE) 🎮 | `Pumps/PartyPoolPump.cs`, `PartyPoolStore.cs`, `Odyssey.PartyPool.cs`, `KotorGameBridge.PartyPool.cs`; docs: [party-pool-sync.md](research/party-pool-sync.md) |
 | 2 | **Items granted by scripts outside dialogue** (OnEnter, OnDeath, cutscene, heartbeat — most quest items) reach only the engine that ran the script. `script_item_sync` pump built 2026-08-27, OFF until live-verified. | Built (NEEDS-LIVE) 🎮 | `Pumps/ScriptItemGrantPump.cs`, `ScriptItemGrantRule` |
 | 3 | 🎮 **Progression never live-verified** against a real vendor purchase (gold ledger) or a cross-side kill (XP max-merge). Code is complete. | Built (NEEDS-LIVE) | `Pumps/PartyPump.cs:159-282` |
 | 4 | 🎮 **Container-loot race**: two clicks on the same chest within one RTT can both hand out loot before either removal lands (`ContainerUseRule` is eventually consistent). Never exercised. | Partial | `Pumps/WorldStatePump.cs:24-52`, `ContainerUseRule.cs` |
@@ -79,5 +79,7 @@ Away flag, persistent indicator, `script_item_sync`, mid-session log rotation, `
 wired, Pazaak detect + waiting notice, sender cap contract, missing unit tests.
 
 Wave B (rig, serial): Tier 1 items 3, 2, 5, 8, 9, 4 as one verification pass each; then 13, 11.
+Item 1 (party pool, built 2026-08-27) joins this wave's live-verify queue — see
+[party-pool-sync.md](research/party-pool-sync.md)'s own live test plan.
 
-Wave C (after B): item 1 (party pool), item 7 (config negotiation), item 12 (companion XP).
+Wave C (after B): item 7 (config negotiation), item 12 (companion XP).

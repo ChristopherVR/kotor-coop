@@ -32,6 +32,7 @@ attaches from outside with `OpenProcess`.
 | Peer at the main menu (`FlagAway`), persistent connection indicator, protocol-mismatch reject | Built 2026-08-27, not live-verified | [disconnect-reconnect.md](docs/research/disconnect-reconnect.md), [connect-flow.md](docs/research/connect-flow.md) |
 | Script-granted items outside dialogue (`script_item_sync`) | Built, off until live-verified | [dialogue-consequences.md](docs/research/dialogue-consequences.md) |
 | Fog-of-war reveal (`map_reveal_sync`) | Built, off until live-verified | [map-reveal.md](docs/research/map-reveal.md) |
+| Shared party item pool (`party_pool_sync`) | Built, off until live-verified | [party-pool-sync.md](docs/research/party-pool-sync.md) |
 
 "Live-verified" means watched working on two real GOG instances; "Off by default" means built
 and unit-tested but not shipped enabled. See "Honest limitations" below and `docs/research/`
@@ -226,10 +227,14 @@ tools/                   package/install scripts, demo rig, RE helpers, the koto
   forwarded damage still lands, and the damage wire names only the last attacker. In a swarm
   the fight you see and the damage you take come from two mechanisms. See
   [combat-participation.md](docs/research/combat-participation.md).
-- **The party's shared item pool is not shared.** Gear moved into the party pool on one
-  instance exists only there; items change hands through the ground, containers, corpses and
-  dialogue/script grants. Merchants, the galaxy map and the pre-departure party-select screen
-  are plain single-player UI on each instance. See [docs/roadmap-seamless.md](docs/roadmap-seamless.md).
+- **The party's shared item pool syncs, but is off by default and unproven live.** A channel
+  now exists (`party_pool_sync`, off by default) that shares an add/remove to the pool both
+  ways; every offset and engine call it uses is verified against the disassembly, but none of
+  it has been watched land on a running game yet. Until it is turned on and live-verified,
+  gear moved into the party pool on one instance still exists only there. Merchants, the
+  galaxy map and the pre-departure party-select screen are plain single-player UI on each
+  instance either way. See [party-pool-sync.md](docs/research/party-pool-sync.md) and
+  [docs/roadmap-seamless.md](docs/roadmap-seamless.md).
 - **`coop.ini` is not negotiated.** Game content is fingerprinted per channel at join, but
   each side runs its own behaviour flags; keep the two files the same. The host's tick rate
   is adopted automatically.

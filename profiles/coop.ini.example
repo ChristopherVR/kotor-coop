@@ -600,3 +600,14 @@ movie_relay=1
 # the phantom interpolation delay in use and the real send/recv cadence instead of the
 # configured tick rate.
 frame_stats=0
+
+# Sync the shared party item pool (CSWPartyTable+0x118, the "party inventory" both players'
+# stash panels read from) both ways: an item deposited on one instance appears on the other's,
+# and a withdrawal removes it from both. Content-keyed (resref + charges/max charges/upgrades/
+# identified-stolen-nonequippable, NOT engine object id - a party-pool item is spawned
+# independently on each instance and never shares an id the way a GIT-placed door or container
+# does), reliable, with a two-layer anti-echo design (docs/research/party-pool-sync.md).
+# NEEDS-LIVE: the offset chain and every engine call this uses are verified against the symbol
+# database and the disassembly, but none of it has been watched land on a running game yet -
+# defaults OFF until it has. 1 turns it on.
+party_pool_sync=0

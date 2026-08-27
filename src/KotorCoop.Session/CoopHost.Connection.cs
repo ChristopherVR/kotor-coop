@@ -169,6 +169,15 @@ public sealed partial class CoopHost
             // already fully retired before it came back is not resent.
             _dialogueGrantSender.ResetBackoff();
 
+            // Same reasoning again, for the shared party item pool: a peer away long enough to
+            // lose its live entry has also missed however many add/remove ops happened while
+            // it was gone, and this channel — like container loot — has no version tripwire of
+            // its own to notice the gap. ResyncPartyPool re-offers every stack as an ABSOLUTE
+            // fact (PartyPoolOpKind.Set), not a replay of history, so it is safe even if this
+            // peer's own store still holds a stale nonzero total for some key.
+            ResyncPartyPool(now);
+            _partyPoolSender.ResetBackoff();
+
             // A returning client's FIRST liveness packet is a full snapshot (every cycle
             // already is one), so all this needs is to not make them wait out the ordinary
             // 2-second interval for it — see BroadcastCreatureLiveness.

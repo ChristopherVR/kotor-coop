@@ -488,6 +488,48 @@ public class PacketCodecTests
     }
 
     [Fact]
+    public void PartyPoolOpPacketsRoundTrip()
+    {
+        Span<byte> buffer = stackalloc byte[ProtocolConstants.MaxPacketSize];
+
+        PartyPoolStackKey key = new("g_w_blstrpstl001", 3, 50, 0x5, ItemIdentity.FlagKnown);
+
+        PartyPoolOpPacket add = new(1, 42, PartyPoolOpKind.Add, key, 20);
+        int addLength = PacketCodec.Write(buffer, add);
+        Assert.Equal(add, PacketCodec.ReadPartyPoolOp(buffer[..addLength]));
+
+        PartyPoolOpPacket remove = new(2, 7, PartyPoolOpKind.Remove, key, 5);
+        int removeLength = PacketCodec.Write(buffer, remove);
+        Assert.Equal(remove, PacketCodec.ReadPartyPoolOp(buffer[..removeLength]));
+
+        // Set (resync) carries an ABSOLUTE count, which is legitimately 0 (a key that no
+        // longer exists at all — the resync still names it so a stale peer clears it).
+        PartyPoolOpPacket set = new(1, 3, PartyPoolOpKind.Set, key, 0);
+        int setLength = PacketCodec.Write(buffer, set);
+        Assert.Equal(set, PacketCodec.ReadPartyPoolOp(buffer[..setLength]));
+
+        PartyPoolAckPacket ack = new(3, 42);
+        int ackLength = PacketCodec.Write(buffer, ack);
+        Assert.Equal(ack, PacketCodec.ReadPartyPoolAck(buffer[..ackLength]));
+
+        PartyPoolSyncRequestPacket sync = new(3, 12, 0xDEADBEEFCAFEBABEUL);
+        int syncLength = PacketCodec.Write(buffer, sync);
+        Assert.Equal(sync, PacketCodec.ReadPartyPoolSyncRequest(buffer[..syncLength]));
+    }
+
+    [Fact]
+    public void PartyPoolOpWithZeroCountDeltaIsRejectedForAddAndRemove()
+    {
+        // A non-Set op with a zero delta is not a real event and would never legitimately be
+        // sent — the codec refuses it as malformed rather than silently accepting a no-op.
+        Span<byte> buffer = stackalloc byte[ProtocolConstants.MaxPacketSize];
+        PartyPoolStackKey key = new("g_w_blstrpstl001", 0, 0, 0, ItemIdentity.FlagKnown);
+
+        int length = PacketCodec.Write(buffer, new PartyPoolOpPacket(1, 1, PartyPoolOpKind.Add, key, 0));
+        Assert.Null(PacketCodec.ReadPartyPoolOp(buffer[..length]));
+    }
+
+    [Fact]
     public void MaterialisedLootPacketsRoundTrip()
     {
         Span<byte> buffer = stackalloc byte[ProtocolConstants.MaxPacketSize];

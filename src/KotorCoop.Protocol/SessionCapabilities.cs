@@ -59,6 +59,14 @@ public enum SessionCapabilities
     /// progress together regardless of their exact installs.</summary>
     Progression = 1 << 10,
 
+    /// <summary>The shared party item pool (<c>CSWPartyTable+0x118</c>). Content-keyed
+    /// (resref + identity, not object id — see docs/research/party-pool-sync.md), so it is not
+    /// part of <see cref="ContentCompatibility.ObjectIdKeyed"/>: a party-pool item is created
+    /// independently on each instance and never shares an engine id across peers the way a
+    /// GIT-placed door or container does, so a save/module mismatch does not touch it. Off by
+    /// default until live-verified (<c>party_pool_sync</c>).</summary>
+    PartyPool = 1 << 11,
+
     All = Phantoms | WorldState | Doors | Enemies | GroundItems | Journal | Appearance | Equipment
-        | Party | Dialogue | Progression,
+        | Party | Dialogue | Progression | PartyPool,
 }

@@ -96,6 +96,10 @@ public static class ProtocolConstants
     /// statue behind and the session can announce "away"/"back". Rides the existing
     /// <c>Flags</c> dword, so nothing in <see cref="PacketCodec"/> changes shape. See
     /// docs/research/disconnect-reconnect.md.
+    ///
+    /// TODO(version): bump — Version 40: PartyPoolOp (51) / PartyPoolAck (52) /
+    /// PartyPoolSyncRequest (53) — the shared party item-pool channel (<c>party_pool_sync</c>,
+    /// default OFF, NEEDS-LIVE). See docs/research/party-pool-sync.md.
     /// </summary>
     public const byte Version = 39;
 
@@ -120,6 +124,15 @@ public static class ProtocolConstants
     /// than by this arithmetic.
     /// </summary>
     public const int MaxGroundItems = 16;
+
+    /// <summary>
+    /// Distinct party-pool stack keys a session remembers at once (bounded like
+    /// <see cref="MaxGroundItems"/>, not asserted against a snapshot datagram since this
+    /// channel has none — see docs/research/party-pool-sync.md). A stash rarely holds more
+    /// than a handful of genuinely distinct (resref, identity) combinations; existing keys can
+    /// still change quantity past the cap, only a brand-new key is refused.
+    /// </summary>
+    public const int MaxPartyPoolStacks = 256;
 
     /// <summary>
     /// Creatures the owner replicates per snapshot. 40 bytes each (id, health, death,
