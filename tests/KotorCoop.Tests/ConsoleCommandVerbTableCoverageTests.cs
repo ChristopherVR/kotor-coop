@@ -35,6 +35,7 @@ public class ConsoleCommandVerbTableCoverageTests
         [CoopCommandKind.MoveNear] = "movenear 0x35",
         [CoopCommandKind.NetSim] = "netsim status",
         [CoopCommandKind.LagStats] = "lagstats",
+        [CoopCommandKind.PublicAddress] = "public_address",
         [CoopCommandKind.God] = "god on",
         [CoopCommandKind.TopUp] = "topup",
         [CoopCommandKind.StandUp] = "standup",

@@ -790,3 +790,154 @@ CoopAgent.cs:328,1142          the control lock and the swap suppression (Phase 
 KotorGameBridge.cs:3145,3788,3821,1211   the four `_player is not null` authority gates
 KotorGameBridge.cs:3300-3309   the valid-bit precedent: absent is not empty
 ```
+
+## 15. Internet play, 2026-08-27
+
+Roadmap item 24, the achievable half: this document's own §8 verdict ("keep the star relay")
+already established that peer-to-peer is not the missing piece — discovery past the LAN
+broadcast and NAT traversal for the one host connection are. This round builds both, without a
+relay or hole-punching, and states exactly where that stops.
+
+**VERIFIED** = read from the source in this worktree or covered by a passing test ·
+**NEEDS-LIVE** = reasoned and unit-tested against a fake responder, but not yet watched work
+against a real consumer router · **INFERRED** = a reasonable deduction, not directly proven.
+
+### What was built
+
+1. **Public address discovery — a minimal STUN client (VERIFIED, unit-tested).**
+   `src/KotorCoop.Session/StunClient.cs` is a ~180-line RFC 5389 codec (Binding Request build,
+   Binding Success parse, XOR-MAPPED-ADDRESS with a plain MAPPED-ADDRESS fallback for an older
+   server) — no authentication, none needed for a bare Binding Request. It is pure and
+   socket-free: every test in `StunClientTests.cs` exercises it against hand-built or captured
+   bytes with no network at all.
+
+   The wiring that sends a probe and waits for the answer lives in
+   `UdpChannel.SendStunRequestAsync` (`src/KotorCoop.Session/UdpChannel.cs`) — and it sends from
+   **the same socket the session already listens on**, which matters: a NAT's mapping is keyed
+   per local-port, so a STUN query from a *different* socket would report a mapping nobody's
+   game traffic actually uses. Because the host's receive loop (`ReceiveAsync`) is the only
+   reader of that socket, a STUN reply is intercepted inside that same loop (matched by
+   transaction id against a single pending waiter) rather than requiring a second socket — and
+   is never handed to the session as a "malformed" game packet.
+   `PublicAddressDiscovery.cs` wraps this into a background loop: try each configured server in
+   order, keep the first answer, refresh every 5 minutes (`RefreshIntervalMs`). Wired into
+   `CoopHost`'s constructor, gated on `SessionSettings.StunServers` being non-empty.
+
+   Config: coop.ini `stun_servers` (default `stun.l.google.com:19302,stun1.l.google.com:19302`
+   when the key is absent; **an explicit empty value disables discovery entirely**).
+
+   ⚠ **Privacy.** Every STUN query is a UDP datagram to a third party — by default Google's
+   public STUN infrastructure — that gets to see this host's socket talk to it. Nothing else is
+   sent (no player name, no session content), but it is real third-party contact a fully
+   offline/LAN-only host would not otherwise make. The empty-list opt-out exists specifically so
+   a player who cares can turn this off without losing anything else co-op does — hosting still
+   works on a LAN with `stun_servers=`.
+
+2. **UPnP IGD port mapping (NEEDS-LIVE — unit-tested against a fake router, never against a
+   real one).** `src/KotorCoop.Session/UpnpClient.cs`: SSDP M-SEARCH for
+   `WANIPConnection:1`/`WANPPPConnection:1` (target address is a parameter, so a test can point
+   it at a loopback fake router instead of joining the real multicast group — multicast in a
+   sandboxed CI network is unreliable, and this sidesteps it entirely), a device-description
+   fetch (`System.Xml.Linq`, already in the BCL — no new dependency), and hand-rolled SOAP
+   `AddPortMapping`/`DeletePortMapping` calls (`System.Net.Http.HttpClient`, also BCL). A SOAP
+   *fault* still carries HTTP 200 or 500 depending on the router, so success is judged by the
+   response body (absence of a `Fault` element), not the status code alone.
+
+   `UpnpMappingService.cs` owns one host session's mapping lifecycle: discover once, map the
+   game's UDP port **and** the world-transfer TCP listener sharing that same port number (see
+   `WorldTransfer.cs`'s own doc comment on why they share one — a player who has forwarded a
+   port for co-op has already forwarded the save-transfer channel too), renew the lease every 55
+   minutes, delete both mappings on host stop/disconnect. Fails soft at every step — a router
+   with UPnP off (common; frequently disabled deliberately) or simply absent leaves
+   `UpnpMappingStatus.Unavailable`, not an exception.
+
+   Config: coop.ini `upnp` (default on; `upnp = 0` disables it and a player forwards by hand).
+
+   **NAT-PMP (RFC 6886) was evaluated as the fallback and not built.** UPnP IGD covers the large
+   majority of consumer routers still running any auto-mapping protocol at all; NAT-PMP is
+   principally an Apple/older-router protocol that has been mostly superseded by its own
+   successor (PCP) where it still exists, and building a second parallel port-mapping client for
+   a shrinking minority of routers was judged not worth the added surface for this round — a
+   router with neither is exactly the "forward the port yourself" case the status line already
+   names. Left here as a documented gap, not a plan.
+
+3. **Surfaced in-game.** `CoopCommandDispatcher`'s `status` verb now appends the host's public
+   address and UPnP verdict; a new `public_address` console verb (aliases `publicaddress`,
+   `pubaddr`) prints it on demand and best-effort-copies it to the clipboard on Windows (via the
+   `clip` tool that ships with the OS — silently skipped if unavailable). A
+   `PublicAddressAnnouncer` (the same diff-and-repost shape `HostSaveAnnouncer`/
+   `ConnectionStatusAnnouncer` already use) posts the line once, unprompted, the moment STUN and
+   UPnP have an answer — matching the task's example wording: *"hosting on port N - public
+   address A.B.C.D:N (UPnP mapped)"* or *"... (UPnP unavailable - forward UDP+TCP N manually)"*.
+   The verb is registered in the plugin's console catalogs too (`FuncInterpHook.Verbs`,
+   `ConsoleVerbCatalog.Entries`) so the in-game `~` console recognises it instead of handing it
+   to the engine's own "function not found". The packed `ConnectionSnapshot` (the on-screen
+   indicator's shared-block word) is unchanged — this rides the existing reply/chat-overlay
+   path, not a new field.
+
+4. **Join-by-address robustness.** `CoopCommand.TryResolveEndpoint` (`ConsoleCommand.cs`)
+   already handled a plain hostname (DNS resolution, `ResolvesAPlainHostname` test) and a
+   bracketed IPv6 literal with a port (`[::1]:9100`, via `IPEndPoint.TryParse`'s native support
+   for that syntax — `ResolvesABracketedIPv6LiteralWithAPort` test) before this round; both are
+   now pinned by tests rather than merely assumed. **IPv6 is untested beyond that parse-level
+   check** — nothing downstream (the UDP socket, `IsLikelyLan`'s NAT-forwarding heuristic, UPnP,
+   STUN's IPv4-only XOR-MAPPED-ADDRESS decode) has been exercised over IPv6, so treat it as
+   INFERRED, not verified.
+
+   `SessionManager.TimeoutConnect` now appends a hint — *"is UDP port N forwarded on the
+   host?"* — when a silent connect attempt's endpoint is not loopback/RFC 1918/link-local
+   (`IsLikelyLan`), since a genuinely unreachable LAN address is far more likely a typo or a
+   host that isn't up, while a silent *internet* address is disproportionately likely to mean
+   the port was never forwarded.
+
+5. **NAT keepalive — already sufficient, confirmed by reading rather than by a new write.**
+   `CoopClient.cs`'s `PingIntervalMs = 1000` sends a `Ping` to the host at least once a second
+   whenever no `StateUpdate` has gone out more recently (and a connected client's `StateUpdate`
+   itself goes out at the session tick rate, 30 Hz default) — client→host traffic is therefore
+   at least 1 Hz, comfortably under the ~30 s idle timeout most consumer NATs use before
+   dropping a UDP mapping. `CoopHost.Tick()` broadcasts a `WorldSnapshotPacket` to every
+   connected peer every tick (30 Hz default) unconditionally, so the host→client direction is
+   equally covered — no new packet was needed either way. This is a reading, not a build: no
+   code changed for this item.
+
+### What a player actually has to do
+
+- **Hosting**: nothing extra, by default. `stun_servers` and `upnp` are both on out of the box;
+  `status` or `public_address` shows the address to share once discovery lands (seconds, in the
+  ordinary case). If UPnP mapping fails (router has it off, or is absent), the same line says
+  "forward UDP+TCP N manually" — port-forward the game port for **both** protocols in the
+  router's admin page and share the address STUN found (or a static/DDNS hostname, since
+  `connect` accepts one).
+- **Joining**: `connect <host[:port]>` exactly as before; a hostname or a bracketed IPv6
+  literal with a port both parse. A join that goes silent for the full timeout against a
+  non-LAN address now says so ("is UDP port N forwarded on the host?") instead of leaving the
+  player to guess.
+- **Privacy-conscious hosts**: `stun_servers=` (blank) disables the one piece of this that talks
+  to a third party; UPnP never leaves the LAN (it talks only to the router) and needs no
+  separate opt-out for that reason, though `upnp = 0` is available for a host who does not want
+  their router touched automatically at all.
+
+### NEEDS-LIVE — what only a real router can confirm
+
+Everything above is unit-tested against fake STUN/SSDP/HTTP responders, which proves the wire
+format and control flow but not real-router behaviour. Confirmed still open:
+
+| Id | Check |
+| --- | --- |
+| internet-1 | A STUN query against a real public server (the shipped default, `stun.l.google.com:19302`) returns this host's actual public IP:port, observed correct from outside the host's own network. |
+| internet-2 | `AddPortMapping` against a real consumer router (a common brand — not just a compliant test rig) succeeds, and a second machine on the real internet can then reach the mapped port. |
+| internet-3 | `DeletePortMapping` on host stop actually clears the entry from the router's own mapping table (checked in the router's admin UI), not just reported success. |
+| internet-4 | A join across a real NAT (not loopback) exercises the whole path end to end: STUN-discovered address shared, UPnP-forwarded port, a second player's `connect` reaching it. |
+| internet-5 | The 55-minute UPnP lease-renewal loop actually re-asserts the mapping before a router's own lease timer would drop it, over a session long enough to cross that boundary. |
+| internet-6 | IPv6 end to end — join, NAT/forwarding heuristics, UPnP (most IGD implementations are IPv4-only in practice) — genuinely untested, not merely unverified. |
+
+### What remains out, by design
+
+No relay and no UDP hole-punching. §4/§5 above already inventoried what a hole punch would
+need and found most of the ingredients already present in the protocol (a rendezvous, a
+reflexive address, an identity, simultaneous open); what is missing is the rendezvous SERVICE
+itself and a relay fallback for the NAT pairs (symmetric NAT paired with a router that also has
+UPnP off) that neither STUN nor UPnP can reach on their own. That is a materially bigger
+project — a hosted or peer-elected rendezvous point, plus the fallback relay for when punching
+fails — and is left for a future round, not attempted here. Roadmap item 24 is updated to
+reflect exactly this split.

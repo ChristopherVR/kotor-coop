@@ -173,6 +173,31 @@ public class ConsoleCommandTests
         Assert.False(c.TryResolveEndpoint(7777, out _));
     }
 
+    /// <summary>Roadmap item 24, "join by address robustness": a hostname (not an IP literal)
+    /// must resolve through DNS. "localhost" is used because it resolves in every environment
+    /// without depending on external network access.</summary>
+    [Fact]
+    public void ResolvesAPlainHostname()
+    {
+        CoopCommand c = ConsoleCommand.Parse("connect localhost:9100");
+        Assert.True(c.TryResolveEndpoint(7777, out IPEndPoint endpoint));
+        Assert.Equal(9100, endpoint.Port);
+        Assert.True(IPAddress.IsLoopback(endpoint.Address));
+    }
+
+    /// <summary>Roadmap item 24: a bracketed IPv6 literal with an explicit port must resolve —
+    /// documented as untested beyond this parse-level check (docs/research/network-topology.md,
+    /// "Internet play" section): nothing downstream (the UDP socket, NAT/UPnP) has been
+    /// exercised over IPv6.</summary>
+    [Fact]
+    public void ResolvesABracketedIPv6LiteralWithAPort()
+    {
+        CoopCommand c = ConsoleCommand.Parse("connect [::1]:9100");
+        Assert.True(c.TryResolveEndpoint(7777, out IPEndPoint endpoint));
+        Assert.Equal(IPAddress.IPv6Loopback, endpoint.Address);
+        Assert.Equal(9100, endpoint.Port);
+    }
+
     [Fact]
     public void WarpCarriesTheModuleLowercased()
     {

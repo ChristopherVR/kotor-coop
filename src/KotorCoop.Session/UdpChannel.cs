@@ -27,6 +27,16 @@ public sealed class UdpChannel : IDisposable
     private long _malformed;
     private long _versionMismatch;
 
+    // STUN interception (see StunClient/PublicAddressDiscovery): a STUN probe has to be sent
+    // from THIS socket so the NAT mapping it observes is the game port's own mapping, not a
+    // throwaway one — but the receive loop below is the only reader of this socket, so a STUN
+    // reply is pulled out of that same loop rather than requiring a second socket. Only one
+    // probe is ever in flight at a time (PublicAddressDiscovery tries one STUN server at a
+    // time), so a single waiter slot is enough.
+    private readonly Lock _stunGate = new();
+    private TaskCompletionSource<byte[]?>? _stunWaiter;
+    private byte[]? _stunTransactionId;
+
     public UdpChannel(int listenPort)
     {
         _socket = new Socket(AddressFamily.InterNetwork, SocketType.Dgram, ProtocolType.Udp);
@@ -186,6 +196,17 @@ public sealed class UdpChannel : IDisposable
                     }
                 }
 
+                // A STUN reply (see StunClient/SendStunRequestAsync) shares this socket with
+                // ordinary game traffic. Hand it to whatever is waiting on it and keep
+                // listening — it must never reach the session as a "malformed" game packet,
+                // and nothing but the STUN prober ever expects it.
+                if (result.ReceivedBytes >= StunClient.HeaderLength
+                    && StunClient.LooksLikeStunMessage(buffer.AsSpan(0, result.ReceivedBytes))
+                    && TryCompleteStunWaiter(buffer.AsSpan(0, result.ReceivedBytes)))
+                {
+                    continue;
+                }
+
                 Interlocked.Increment(ref _packetsReceived);
                 Interlocked.Add(ref _bytesReceived, result.ReceivedBytes);
 
@@ -217,8 +238,98 @@ public sealed class UdpChannel : IDisposable
         return null;
     }
 
+    /// <summary>
+    /// Sends a STUN Binding Request (<see cref="StunClient.BuildBindingRequest"/>) to
+    /// <paramref name="stunServer"/> from THIS socket — the game port's own socket, so the NAT
+    /// mapping STUN observes is the mapping a joining player's traffic will actually hit — and
+    /// waits for the matching response, intercepted out of the ordinary receive loop above.
+    /// Bypasses <see cref="Sim"/> deliberately: a STUN probe is infrastructure, not simulated
+    /// game traffic, and a live netsim blackout must never look like "STUN is broken".
+    ///
+    /// Returns null on a send failure, a timeout, or cancellation — never throws for those, so
+    /// a caller (<see cref="PublicAddressDiscovery"/>) can simply try the next configured
+    /// server.
+    /// </summary>
+    public async Task<byte[]?> SendStunRequestAsync(
+        IPEndPoint stunServer, byte[] request, byte[] transactionId, int timeoutMs, CancellationToken cancellationToken)
+    {
+        TaskCompletionSource<byte[]?> tcs = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        lock (_stunGate)
+        {
+            _stunWaiter = tcs;
+            _stunTransactionId = transactionId;
+        }
+
+        try
+        {
+            try
+            {
+                _socket.SendTo(request, SocketFlags.None, stunServer);
+            }
+            catch (SocketException)
+            {
+                return null;
+            }
+            catch (ObjectDisposedException)
+            {
+                return null;
+            }
+
+            using CancellationTokenSource timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            timeoutCts.CancelAfter(timeoutMs);
+
+            using (timeoutCts.Token.Register(() => tcs.TrySetResult(null)))
+            {
+                return await tcs.Task.ConfigureAwait(false);
+            }
+        }
+        finally
+        {
+            lock (_stunGate)
+            {
+                if (ReferenceEquals(_stunWaiter, tcs))
+                {
+                    _stunWaiter = null;
+                    _stunTransactionId = null;
+                }
+            }
+        }
+    }
+
+    /// <summary>Matches an incoming STUN-shaped datagram against the pending waiter's
+    /// transaction id and completes it. Returns false (leaving the datagram untouched by this
+    /// method) when nothing is waiting or the transaction id does not match — a STUN-shaped
+    /// datagram with no matching waiter is simply stray traffic, dropped like any other.</summary>
+    private bool TryCompleteStunWaiter(ReadOnlySpan<byte> data)
+    {
+        TaskCompletionSource<byte[]?>? waiter;
+        lock (_stunGate)
+        {
+            if (_stunWaiter is null || _stunTransactionId is null
+                || data.Length < 8 + StunClient.TransactionIdLength
+                || !data.Slice(8, StunClient.TransactionIdLength).SequenceEqual(_stunTransactionId))
+            {
+                return false;
+            }
+
+            waiter = _stunWaiter;
+            _stunWaiter = null;
+            _stunTransactionId = null;
+        }
+
+        waiter.TrySetResult(data.ToArray());
+        return true;
+    }
+
     public void Dispose()
     {
+        lock (_stunGate)
+        {
+            _stunWaiter?.TrySetResult(null);
+            _stunWaiter = null;
+            _stunTransactionId = null;
+        }
+
         try
         {
             _socket.Dispose();

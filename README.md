@@ -36,6 +36,7 @@ attaches from outside with `OpenProcess`.
 | Shared party item pool (`party_pool_sync`) | Live-verified, one bug fixed, one open — stays off | [party-pool-sync.md](docs/research/party-pool-sync.md) |
 | Fog-of-war reveal (`map_reveal_sync`) | Live-verified, on by default | [map-reveal.md](docs/research/map-reveal.md) |
 | Star Forge finale — Bastila/Malak duel spectate (`solo_segment_spectate`) | Built, off until live-verified | [star-forge-finale.md](docs/research/star-forge-finale.md) |
+| Internet play — public address discovery (STUN), UPnP port mapping | Built, unit-tested, not live-verified against a real router; no relay/hole-punching | [network-topology.md](docs/research/network-topology.md) |
 
 "Live-verified" means watched working on two real GOG instances; "Off by default" means built
 and unit-tested but not shipped enabled. See "Honest limitations" below and `docs/research/`
@@ -268,6 +269,14 @@ tools/                   package/install scripts, demo rig, RE helpers, the koto
   typed/clicked input only, with no controller navigation or button-glyph prompts. This is a
   co-op-added limitation, not a change to the base game's own (also mouse/keyboard-oriented)
   controls.
+- **Internet play works without a relay for most home routers, not all.** A host's public
+  address is found automatically (STUN) and the port is forwarded automatically when the
+  router supports UPnP (most do); a router with UPnP off needs the port forwarded by hand,
+  named in the `status`/`public_address` output when that happens. There is no relay and no
+  UDP hole-punching, so the minority of connections behind a restrictive ("symmetric") NAT with
+  UPnP also off cannot be reached at all short of a manual forward. Built and unit-tested
+  against fake STUN/UPnP responders; not yet watched work against a real consumer router. See
+  [network-topology.md](docs/research/network-topology.md).
 
 ## Documentation map
 

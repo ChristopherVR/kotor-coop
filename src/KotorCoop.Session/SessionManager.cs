@@ -325,7 +325,44 @@ public sealed class SessionManager(IGameBridge bridge, AgentSettings agentSettin
 
         TearDownSession();
         _connectDeadlineMs = 0;
-        Fail($"no reply from {(endpoint is null ? "the host" : endpoint.ToString())}", SessionPhase.Idle);
+
+        // A silent LAN address usually means a typo or the host simply isn't up; a silent
+        // address that had to cross a router is much more likely to mean the port was never
+        // forwarded, so name that possibility explicitly rather than leaving a player who
+        // typed a real internet address stuck guessing what "no reply" could mean.
+        string hint = endpoint is not null && !IsLikelyLan(endpoint.Address)
+            ? $" - is UDP port {endpoint.Port} forwarded on the host?"
+            : string.Empty;
+
+        Fail($"no reply from {(endpoint is null ? "the host" : endpoint.ToString())}{hint}", SessionPhase.Idle);
+    }
+
+    /// <summary>
+    /// Whether <paramref name="address"/> looks like it stays on a local network (loopback,
+    /// link-local, or one of the three RFC 1918 private ranges) — used only to decide whether
+    /// <see cref="TimeoutConnect"/>'s port-forwarding hint is worth printing, since that
+    /// question only makes sense for an address that had to cross a router in the first place.
+    /// IPv6 always answers false (no hint either way): NAT/forwarding over IPv6 is untested by
+    /// this project (docs/research/network-topology.md's "Internet play" section), so guessing
+    /// either way here would be worse than saying nothing.
+    /// </summary>
+    private static bool IsLikelyLan(IPAddress address)
+    {
+        if (IPAddress.IsLoopback(address))
+        {
+            return true;
+        }
+
+        if (address.AddressFamily != AddressFamily.InterNetwork)
+        {
+            return false;
+        }
+
+        byte[] bytes = address.GetAddressBytes();
+        return bytes[0] == 10
+            || (bytes[0] == 172 && bytes[1] is >= 16 and <= 31)
+            || (bytes[0] == 192 && bytes[1] == 168)
+            || (bytes[0] == 169 && bytes[1] == 254); // link-local
     }
 
     /// <summary>

@@ -45,6 +45,23 @@ menu_button = 1
 ; delay (80 ms).
 # interp_ms = -1
 
+; --- hosting over the internet (roadmap item 24) -----------------------------------
+; A relay-free approach: STUN tells you your own public address, UPnP tries to forward the
+; port automatically. Neither replaces port forwarding by hand if your router does not
+; support UPnP (or has it turned off) - the in-game `status`/`public_address` commands say
+; which case you are in. See docs/research/network-topology.md's "Internet play" section.
+
+; STUN servers (host:port, comma-separated) asked for this host's public IP:port. This is the
+; default when the key is absent entirely; set it to nothing (stun_servers = ) to disable
+; discovery - every query is a UDP datagram to a third party (here, Google's public STUN
+; infrastructure), so a privacy-conscious LAN-only host may prefer to turn it off.
+stun_servers = stun.l.google.com:19302,stun1.l.google.com:19302
+
+; Attempt a UPnP router port mapping for the session port (and the world-transfer port, which
+; shares the same number) when hosting. Fails soft - a router with UPnP off or absent just
+; means "forward the port yourself" in the status line, not an error. 0 disables the attempt.
+upnp = 1
+
 ; --- in-game chat overlay ---------------------------------------------------------
 ; An always-on, unobtrusive readout of chat (say <msg> in the ~ console). Lines fade out
 ; after a delay so the screen is clear the rest of the time.

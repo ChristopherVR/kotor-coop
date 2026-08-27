@@ -21,6 +21,7 @@ format, and the live-verification checklist — this page is the short reference
 | `say` / `chat` / `msg` | `<message>` | any player | send a line to every player |
 | `status` / `stat` | — | any player | connection state, player count |
 | `lagstats` | — | any player | interpolation delay, real send/recv intervals, agent pump cost |
+| `public_address` / `publicaddress` / `pubaddr` | — | host only | this host's public IP:port (STUN) and UPnP mapping verdict, for sharing with a joiner over the internet — see [network-topology.md](research/network-topology.md) |
 | `who` / `peers` | — | any player | list connected peers |
 | `where` | — | any player | print your own coordinates |
 | `servers` / `browse` / `list` | — | any player | list discovered servers |

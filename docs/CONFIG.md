@@ -77,6 +77,8 @@ actually runs with.
 | `party_pool_sync` | OFF (live-verified: one bug fixed, one remains) | sync the shared party item pool (`CSWPartyTable+0x118`) both ways | [party-pool-sync.md](research/party-pool-sync.md) |
 | `solo_segment_spectate` | OFF¹¹ | the OWNER's fight, the other player spectates during a story-forced solo segment (Bastila/Malak duels — NEEDS-LIVE) | [star-forge-finale.md](research/star-forge-finale.md) |
 | `store_sync` | OFF | sync merchant store stock (`CSWSStore+0x230`) both ways — reads only while a store's GUI is open (NEEDS-LIVE) | [store-sync.md](research/store-sync.md) |
+| `stun_servers` | two well-known public servers¹² | HOST only: STUN servers (`host:port`, comma-separated) asked for the host's public IP:port; empty disables discovery (roadmap item 24, NEEDS-LIVE) | [network-topology.md](research/network-topology.md) |
+| `upnp` | ON | HOST only: attempt a UPnP IGD port mapping for the session (and world-transfer) port; fails soft (roadmap item 24, NEEDS-LIVE) | [network-topology.md](research/network-topology.md) |
 
 ¹ The property's own C# doc comment used to claim this was OFF by default while the actual
 parse logic (`!ContainsKey(...) || IsTruthy(...)`) already defaulted it ON, matching the
@@ -199,6 +201,10 @@ peer while the local player owns an active segment; `PluginConfig.ReadBool("solo
 ...)` (plugin side, in-process) gates both the owner-side detection that sets the wire flag in
 the first place AND the spectator-side reaction (input lock, camera, damage gate) on the OTHER
 player's instance. Both default OFF; setting it in `coop.ini` turns every half on together.
+¹² `stun.l.google.com:19302,stun1.l.google.com:19302` — this is `CoopConfig`'s fallback when
+the key is entirely absent; a `stun_servers = ` line present but empty is what actually turns
+discovery off (see `PublicAddressDiscovery.ParseServers` and `network-topology.md`'s privacy
+note — every query is a UDP datagram to a third party).
 
 ## CLI flags (`KotorCoop.Agent`, `AgentOptions.cs`)
 
