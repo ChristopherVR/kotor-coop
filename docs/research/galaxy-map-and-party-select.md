@@ -683,6 +683,58 @@ so no new test was added here; the existing `PartyRosterController` design alrea
 case by construction, and that reasoning is what is recorded above rather than a speculative
 test of the plugin-agnostic parts.
 
+## Live re-verification (2026-08-28): the write-storm fix confirmed clean, and the STUNT_00 crash
+## confirmed NOT reproducible across three independent fresh sessions
+
+Task: confirm the dangling-pointer write-storm fix (`PartySelectSuppressionRule.IsAlreadyHandled`,
+shipped the same day) holds on a fresh session, and re-run the STUNT_00 escape-pod leg three
+times, per this doc's own recipe above.
+
+**Write storm: PASS.** A fresh `demo.ps1 -Save 1` session's client plugin log carried exactly
+ONE `party-select: client copy suppressed`/`swept away` pair across the whole session (roughly
+15 minutes of wall-clock, spanning several module transitions) — not the 43,436 pairs in under 4
+minutes ("roughly one pair per frame, non-stop") the original bug report measured. The single
+pair fired once, for the real party-select panel this session's own module load constructed,
+matching the fix's own "touch each panel once per module" design exactly.
+
+**STUNT_00 escape-pod leg: PASS, 3/3, no crash.** Three independent fresh rig sessions (each a
+clean `demo.ps1 -Stop` / clear logs / `demo.ps1 -Save 1` cycle, no state carried over), the exact
+recipe run each time: host-only `warp end_m01ab`, `tp 85.29 41.13`, `useplaceable end_pod`,
+`selectreply 0` (needed every time this round — the always-present entry conversation blocking
+dialogue, as this doc's own prior round already found), ride the `.\movies\01c.bik` transition
+into `STUNT_00`, then the module hand-off's own forced dialogue (`node -1 -> 2`,
+`forced=True` twice, `forced=False` once — the exact flag varied, the crash risk this doc
+previously pinned did not care which). All three runs sailed past the previously-documented
+~11.7s post-dialogue-node crash window with no access violation, and all three landed the HOST
+cleanly at `tar_m02af` (Taris) — once even with the CLIENT following all the way to the same
+module and coordinates, both at full hp, contrary to this doc's own earlier assumption that a
+client never follows a `stunt*`-adjacent chain to its real destination (it does, once the chain
+reaches a genuine non-`stunt*` module again). `Get-Process swkotor` confirmed `Responding=True`
+on both sides throughout every run; no minidump, no Windows Application-log crash entry for
+`swkotor.exe` at any point during these three runs specifically (a LATER, unrelated crash this
+same overall session — see `store-sync.md`'s 2026-08-28 entry — is not this crash: different
+module, different address, different trigger).
+
+**Verdict: this doc's own "STUNT_00 crash not reproduced" finding from the earlier fix entry is
+now independently confirmed a third time (fourth, counting the fix entry's own two runs), by a
+separate session with no prior manual state manipulation** — exactly the confirmation that
+entry's own "Open" note asked for. The regression is CLOSED.
+
+**A new diagnostic verb built this same session, unrelated to this item but reachable from the
+same rig**: `faction <id|me> [vsId|me]` (`SharedBlock.CheatKindFaction = 38`,
+`IGameBridge.CheatKinds.Faction = 38`; `src/KotorCoop.Plugin/CheatController.Faction.cs`, console
+verb in `ConsoleCommand.Debug.cs`/`CoopCommandDispatcher.Diagnostics.cs`) — read-only, reports
+`Odyssey.GetAIStateReputation` both directions plus each side's raw `CSWSCreatureStats::faction_id`
+(reusing `Odyssey.GetCreatureFaction`, already shipped in `Odyssey.Faction.cs` for the phantom
+faction-flip feature — no duplicate engine reader was added). Built for
+`docs/research/combat-participation.md` §10's own follow-up list item 1; see that doc's own
+2026-08-28 entry for what it found. Live-confirmed working (correct, non-truncated detail in the
+plugin log; the 96-byte console-reply channel truncates the same as every other cheat's answer,
+by design). `dotnet test`: 2339/2339 (`ConsoleCommandVerbTableCoverageTests` gained the new verb's
+sample line).
+
+Build: `dotnet build -warnaserror` clean, native plugin `-WarnAsError` clean.
+
 ### Galaxy-map gating (part of §4, task 2)
 
 **Pure rule + tests only, no live plugin wiring.** `GalaxyMapConfirmRefusalRule.ShouldRefuse
