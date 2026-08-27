@@ -41,6 +41,7 @@ fails safe. **INFERRED** = a reasonable deduction, not directly proven.
 | [ingame-gui-transition.md](ingame-gui-transition.md) | Why an in-process load never leaves the main menu | Root-caused, fixed |
 | [cinematics.md](cinematics.md) | What a mid-module movie does to a live pair | Implemented, live-verified, ON by default |
 | [session-save.md](session-save.md) | Mid-session save/load: rejoin gates and the `loadgame` verb | Design → implemented, live-verified both directions, ON by default |
+| [star-forge-finale.md](star-forge-finale.md) | Lehon through the Star Forge and both endings: every forced solo/party-split beat, the Malak drain mechanic | First RE coverage of this content; design gaps identified, NEEDS-LIVE throughout |
 
 ## Combat
 
