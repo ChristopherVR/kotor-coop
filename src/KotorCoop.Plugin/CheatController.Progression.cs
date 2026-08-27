@@ -40,7 +40,7 @@ internal sealed unsafe partial class CheatController
     }
 
     /// <summary>
-    /// Re-equips the named creature with a real item through <c>Odyssey.EquipItemFromTemplate</c>
+    /// Re-equips the named creature with a real item through <c>Odyssey.EquipItemFromTemplateDirect</c> (the synchronous <c>CSWSCreature::EquipItem</c> path — see companion-state-sync.md §7)
     /// — the exact call the phantom equipment channel already ships, aimed here at an ordinary
     /// party-roster companion body, the one case companion-state-sync.md §2.2 names as
     /// INFERRED-not-VERIFIED (the call takes a bare object id and never inspects what kind of
@@ -68,7 +68,7 @@ internal sealed unsafe partial class CheatController
         int slot = block.CheatAmount > 0 ? block.CheatAmount : Odyssey.InventorySlotRightWeapon;
         string resref = Encoding.ASCII.GetString(text, length);
 
-        bool applied = Odyssey.EquipItemFromTemplate(targetId, text, length, slot, out int failure);
+        bool applied = Odyssey.EquipItemFromTemplateDirect(targetId, text, length, slot, out int failure);
 
         if (!applied)
         {

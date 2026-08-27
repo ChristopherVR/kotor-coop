@@ -776,7 +776,21 @@ internal sealed unsafe class PartyPresenceController(SharedBlockView block)
             _appliedEquip[slot, j] = hash;
             _equipCooldownFrames = 30;
 
-            bool ok = Odyssey.EquipItemFromTemplate(
+            // NOT Odyssey.EquipItemFromTemplate (the phantom channel's own, proven-live call):
+            // that method equips through ActionEquipItem's VM dispatch, which does not equip
+            // synchronously — it queues the equip onto the creature's OWN CSWSCombatRound
+            // pending list (round+0x9B0, CSWSCreature::AddEquipItemActions ->
+            // CSWSCombatRound::AddEquipAction, VERIFIED by disassembly), and nothing in that
+            // call chain ever arms the round's own processing gate the way
+            // Odyssey.Combat.Attack.cs's QueueAttackAction has to for an attack. A phantom is
+            // never claimed (PhantomController never calls Odyssey.ClaimCreature), so nothing
+            // here is racing it; a MIRRORED companion is re-claimed every DriveOne pass, a few
+            // frames after the equip is queued, with no engine tick ever having drained it.
+            // EquipItemFromTemplateDirect equips through the engine's own synchronous
+            // CSWSCreature::EquipItem (0x004FEB90) instead — no queue, nothing left pending.
+            // See docs/research/companion-state-sync.md and Odyssey.Equipment.cs's own doc
+            // comment on EquipItemFromTemplateDirect. NEEDS-LIVE.
+            bool ok = Odyssey.EquipItemFromTemplateDirect(
                 objectId, resref, length, EquipInventorySlots[j], out int failure);
 
             if (_equipsLogged < 12)
