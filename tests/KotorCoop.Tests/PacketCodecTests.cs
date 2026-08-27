@@ -356,7 +356,7 @@ public class PacketCodecTests
         ];
 
         WorldSnapshotPacket original = new(
-            555L, 9, 4, 7, 2,
+            555L, 0, 1, 9, 4, 7, 2,
             0x1122334455667788UL,
             0x99AABBCCDDEEFF00UL,
             0x0102030405060708UL,
@@ -368,6 +368,8 @@ public class PacketCodecTests
 
         Assert.NotNull(decoded);
         Assert.Equal(555L, decoded.ServerTimeMs);
+        Assert.Equal(0, decoded.PageIndex);
+        Assert.Equal(1, decoded.PageCount);
         Assert.Equal(9u, decoded.FlagVersion);
         Assert.Equal(4u, decoded.ItemVersion);
         Assert.Equal(7u, decoded.JournalVersion);
@@ -414,9 +416,16 @@ public class PacketCodecTests
                 worstCase))];
 
         int length = PacketCodec.Write(
-            buffer, new WorldSnapshotPacket(1, 1, 1, 1, 1, ulong.MaxValue, ulong.MaxValue, ulong.MaxValue, ulong.MaxValue, entries));
+            buffer,
+            new WorldSnapshotPacket(
+                1, 0, 1, 1, 1, 1, 1,
+                ulong.MaxValue, ulong.MaxValue, ulong.MaxValue, ulong.MaxValue, entries));
 
-        // A snapshot that does not fit is dropped every tick, so nobody moves.
+        // A snapshot that does not fit is dropped every tick, so nobody moves. This packet is
+        // built directly (bypassing WorldSnapshotPaging, which would never hand a single page
+        // this many entries — see WorldSnapshotPagingTests), so it also stands as the wire
+        // format's own hard ceiling: even an unpaged worst-case page 0 with a full MaxPeers
+        // roster still fits.
         Assert.True(length > 0, "worst-case snapshot must fit inside one packet");
         Assert.True(length <= ProtocolConstants.MaxPacketSize);
 
@@ -426,6 +435,50 @@ public class PacketCodecTests
         Assert.NotNull(decoded);
         Assert.Equal(ProtocolConstants.MaxPeers, decoded.Entries.Count);
         Assert.Equal(worstCase.EquippedRightWeapon, decoded.Entries[^1].State.EquippedRightWeapon);
+    }
+
+    /// <summary>
+    /// The flag/item/journal/loot version+digest tripwires ride on page 0 only — a later page
+    /// must not put them on the wire at all, and a decoded later page must report them as
+    /// 0/default rather than whatever the caller happened to pass in.
+    /// </summary>
+    [Fact]
+    public void WorldSnapshotTripwireFieldsAreDroppedOnANonZeroPage()
+    {
+        Span<byte> buffer = stackalloc byte[ProtocolConstants.MaxPacketSize];
+
+        List<SnapshotEntry> page1Entries = [new(6, "Jolee", SampleState)];
+        WorldSnapshotPacket page1 = new(
+            777L, 1, 2, 9, 4, 7, 2,
+            0x1122334455667788UL,
+            0x99AABBCCDDEEFF00UL,
+            0x0102030405060708UL,
+            0xFEDCBA9876543210UL,
+            page1Entries);
+
+        int page0Length = PacketCodec.Write(
+            buffer,
+            new WorldSnapshotPacket(777L, 0, 2, 9, 4, 7, 2, 0, 0, 0, 0, page1Entries));
+        int page1Length = PacketCodec.Write(buffer, page1);
+
+        // Carrying the tripwire fields costs exactly 4 uint32s + 4 uint64s = 48 bytes; a
+        // non-zero page must be smaller by exactly that much, not merely "smaller".
+        Assert.Equal(48, page0Length - page1Length);
+
+        WorldSnapshotPacket? decoded = PacketCodec.ReadWorldSnapshot(buffer[..page1Length]);
+        Assert.NotNull(decoded);
+        Assert.Equal(1, decoded.PageIndex);
+        Assert.Equal(2, decoded.PageCount);
+        Assert.Equal(0u, decoded.FlagVersion);
+        Assert.Equal(0u, decoded.ItemVersion);
+        Assert.Equal(0u, decoded.JournalVersion);
+        Assert.Equal(0u, decoded.LootVersion);
+        Assert.Equal(0UL, decoded.FlagDigest);
+        Assert.Equal(0UL, decoded.ItemDigest);
+        Assert.Equal(0UL, decoded.JournalDigest);
+        Assert.Equal(0UL, decoded.LootDigest);
+        Assert.Single(decoded.Entries);
+        Assert.Equal("Jolee", decoded.Entries[0].Name);
     }
 
     [Fact]

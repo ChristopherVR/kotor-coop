@@ -147,6 +147,11 @@ public sealed partial class CoopClient
         }
     }
 
+    /// <summary>Accumulates a tick's <see cref="WorldSnapshotPacket"/> page(s) as they arrive —
+    /// see its own remarks for why a page's positions apply the instant it lands, independent
+    /// of any sibling page of the same tick.</summary>
+    private readonly WorldSnapshotAssembler _worldSnapshotAssembler = new();
+
     private void HandleWorldSnapshot(IPEndPoint from, ReadOnlySpan<byte> span, long now)
     {
         if (PacketCodec.ReadWorldSnapshot(span) is not { } snapshot)
@@ -155,18 +160,16 @@ public sealed partial class CoopClient
             return;
         }
 
-        HashSet<uint> present = [];
-        bool listed = false;
-
-        foreach (SnapshotEntry entry in snapshot.Entries)
+        // This page's own entries are complete and ready to apply right now — never gated on
+        // whether a sibling page of the same tick has (or has not) arrived. See
+        // WorldSnapshotAssembler's and WorldSnapshotPacket's remarks.
+        foreach (SnapshotEntry entry in _worldSnapshotAssembler.Apply(snapshot, _localPeerId))
         {
             if (entry.PeerId == _localPeerId)
             {
-                listed = true;
                 continue;
             }
 
-            present.Add(entry.PeerId);
             _buffer.Push(entry.PeerId, entry.Name, entry.State, now);
         }
 
@@ -174,7 +177,7 @@ public sealed partial class CoopClient
         // _absentFromSnapshotSinceMs. Given a grace period rather than acted on immediately,
         // because a snapshot can also arrive in the window between our Welcome and the host's
         // next tick.
-        if (listed)
+        if (_worldSnapshotAssembler.SelfListed)
         {
             _absentFromSnapshotSinceMs = 0;
         }
@@ -194,7 +197,25 @@ public sealed partial class CoopClient
         // The snapshot is the complete roster, so anyone missing from it has left — drop them
         // now rather than holding a phantom for another peer timeout. That window is what put
         // two copies of the same player on screen when one of them reconnected during it.
-        _buffer.RetainOnly(present);
+        //
+        // Only run once every page of THIS tick has been accounted for — pruning off a
+        // partial picture would wrongly evict a peer whose entry simply lives on a page that
+        // has not arrived yet. A page that never arrives (lost) just means this tick's prune
+        // is skipped; the very next tick starts a fresh, independent cycle, so nothing stalls
+        // waiting for it.
+        if (_worldSnapshotAssembler.TickComplete)
+        {
+            _buffer.RetainOnly(_worldSnapshotAssembler.PresentPeerIds);
+        }
+
+        // The flag/item/journal/loot tripwires below ride on page 0 only — see
+        // WorldSnapshotPacket's remarks — so a later page carries nothing meaningful in these
+        // fields and none of the resync logic below runs for it. If page 0 itself is lost,
+        // the check simply waits for next tick's fresh page 0.
+        if (snapshot.PageIndex != 0)
+        {
+            return;
+        }
 
         // A reconnection asks for everything once, regardless of what the versions say. The
         // request is only disarmed once all four senders are quiet, because a forced resync

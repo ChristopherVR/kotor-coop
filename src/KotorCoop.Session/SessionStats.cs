@@ -71,5 +71,16 @@ public sealed record SessionStats
     /// <summary>The last few real gaps between successive inbound packets, OLDEST first.</summary>
     public IReadOnlyList<long> RecentRecvIntervalsMs { get; init; } = [];
 
+    /// <summary>
+    /// HOST ONLY: total <c>WorldSnapshotPacket</c> pages actually written and sent, across
+    /// every tick this host has run. A small lobby (up to <c>MaxSnapshotEntriesPerPage</c>
+    /// peers) increments this by one per tick, same as before pagination existed; a fuller
+    /// lobby whose aggregate entry size spans several pages (a full 8-peer roster needs two)
+    /// increments it by more, which is the visible signal that pagination is actually doing
+    /// real work rather than sitting dormant. Always 0 on a client, which never sends this
+    /// packet. See docs/research/lag-audit.md.
+    /// </summary>
+    public long WorldSnapshotPagesSent { get; init; }
+
     public string Status { get; init; } = "idle";
 }
