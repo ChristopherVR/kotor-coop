@@ -648,3 +648,75 @@ should, per §6's own plan (Kebla Yurt, `tar_m02aa`):
    a real click fires but this bypass does not) — worth a few minutes watching whether a store
    with a nonzero `on_open_store` (`+0x228`, §1.1) behaves differently opened this way versus by
    a real click.
+
+## Live pass (2026-08-28): item 1 run — a new, reproducible engine crash found inside
+## `CSWGuiStore::PopulateStoreItemListBox`
+
+Task: run §6's own item 1 (`openstore <tag>`, confirm the GUI opens with the right inventory).
+Found the real store on the rig's save first (`Kebla Yurt` was never confirmed — this pass reads
+the module's actual data instead of guessing): `tools/kotorfiles.py list
+"modules\tar_m02aa.rim"` names the module's own GIT resref `m02aa` (not `tar_m02aa` —
+a naming trap worth recording for the next static read); `tools/kotorfiles.py gff
+"modules\tar_m02aa.rim:m02aa.git" --path StoreList/0` gives exactly one store, resref `larrim`,
+position `(86.9, 101.7)`; `tools/kotorfiles.py gff "modules\tar_m02aa_s.rim:larrim.utm"` names
+its real `Tag`: **`Larrim_Store`**, not `kebla_yurt_shop` (this doc's own earlier guess, never
+confirmed live — corrected here).
+
+Host warped to `tar_m02aa` (`warp tar_m02aa`), a real ambient conversation with a nearby NPC was
+already active on arrival (an ordinary ARRIVAL trigger, not the "forced" kind — `selectreply 0`
+a few times cleared it, confirming this pass's own instance of §6 item 3's "another modal screen
+up" refusal gate working correctly first: `openstore Larrim_Store` refused cleanly with "a
+conversation is active" while the conversation was still running, no crash). Once the
+conversation ended, `openstore Larrim_Store` was issued again — **and the HOST process crashed**
+(`Get-Process` afterward: gone; the CLIENT stayed up and healthy throughout, `Responding=True`).
+
+**Symbolicated, `tools/crashlog.ps1` + `tools/q.py sql`**: `FIRST-CHANCE access violation
+(0xC0000005) at 0x002C1872` (module offset; real address `0x6C1872`, `swkotor.exe` base
+`0x400000`). Bracketing functions from the symbol database:
+
+```
+CSWGuiStore  PopulateStoreItemListBox  0x6C1840
+CSWGuiStore  OnControlXButton          0x6C1B00
+```
+
+`0x6C1872` is `0x32` (50) bytes into `CSWGuiStore::PopulateStoreItemListBox`, well inside its
+body (the next function starts `0x2C0` bytes later). **This is a new, real engine crash, not
+previously documented anywhere in this tree**, distinct from the unrelated `0x40D386` STUNT_00
+crash (`galaxy-map-and-party-select.md`) — different module, different function, different
+trigger, and this pass's own STUNT_00-adjacent testing earlier the same session confirmed THAT
+crash is fixed/not reproducing, ruling out any connection between the two.
+
+**Likely cause, not confirmed this pass (no time to trace `PopulateStoreItemListBox`'s own
+disassembly)**: `OpenStore`'s own implementation (§2, `CheatController.Store.cs`) writes the
+store's object id directly into the panel's `+0x227C` field and calls
+`CSWGuiStore::PopulateStore` (0x006C0610) to force the refresh, bypassing whatever a REAL click's
+full open sequence (`ShowStoreGui` -> panel construction -> the store repository actually being
+attached/populated in the normal order) would have set up first. `PopulateStoreItemListBox` is
+very plausibly downstream of `PopulateStore` and dereferences something (an item-list widget, a
+repository pointer) that is not yet in the state a real click would have left it in. This is
+exactly the class of gap §1.6's own original write-up flagged as untraced risk in the direct-write
+approach, now observed as a real crash rather than a theoretical one.
+
+**Not fixed this pass** — out of scope for a live-verification round; flagged for whoever next
+touches `openstore`/`store_sync`. `store_sync`/`openstore` should NOT be trusted for anything
+beyond further diagnosis until `PopulateStoreItemListBox`'s own preconditions are traced and
+either satisfied by `OpenStore`'s write sequence or the direct-write approach is abandoned in
+favour of driving the real click path. `coop.ini`'s `store_sync` default is unaffected (already
+`0`, unchanged by this finding) — this crash was reached through the diagnostic `openstore`
+console verb specifically, not through the (still off-by-default) automatic sync apply path,
+though the underlying `CSWGuiStore` machinery is shared and the automatic path should be assumed
+at risk until this is traced.
+
+**A/B pazaak, tested the same session, for comparison — clean, no crash.** `pazaak_detect=1` on
+both installs, `pazaak` (deck 0, default opponent) on the host: hand started cleanly (`pazaak:
+StartPazaakGame(...) called - running now: True`), the CLIENT's own agent correctly showed
+`Lanik is in a minigame - waiting` (the shipped `MinigameAnnouncer` notice, `minigames.md`
+§23.3's own fix, confirmed live for the first time — `pazaak_detect`'s own offset read,
+previously NEEDS-LIVE per §23.1, is now watched flipping in a real running session). No crash,
+no desync. `pazaak_detect` stays default OFF per this doc's own established discipline (one
+clean session is not the live-verification bar this codebase sets for flipping a shipped
+default), but this is a positive data point for a future round that wants to flip it.
+
+Build: `dotnet build -warnaserror` clean, native plugin `-WarnAsError` clean, `dotnet test`
+2339/2339 (unaffected by this crash — it is a live-engine finding, not a code defect this repo's
+own suite could catch).
