@@ -1,83 +1,42 @@
-# Builds the in-process plugin as a native 32-bit dinput8.dll and optionally installs it.
+# Builds the in-process plugin as a native 32-bit dinput8.dll and optionally installs it,
+# together with the agent and the k_coop_ override assets, into a game directory.
 #
 # NativeAOT shells out to link.exe and vswhere.exe, neither of which is reachable outside
-# a Visual Studio developer environment, so this imports the MSVC x86 environment first.
+# a Visual Studio developer environment, so this imports the MSVC x86 environment first
+# (tools/devenv.ps1). No -Install: just builds. -Uninstall removes everything -Install placed.
+#
+#   pwsh src\KotorCoop.Plugin\build.ps1                                   # build only
+#   pwsh src\KotorCoop.Plugin\build.ps1 -Install                          # build + deploy to the GOG default
+#   pwsh src\KotorCoop.Plugin\build.ps1 -Install -GameDir 'D:\Games\swkotor-gog-p2'
+#   pwsh src\KotorCoop.Plugin\build.ps1 -WarnAsError                      # what CI runs
 param(
-    [string]$GameDir = 'C:\Program Files (x86)\Steam\steamapps\common\swkotor',
+    # The DRM-free GOG build is the only supported target (README: Requirements).
+    [string]$GameDir = 'C:\GOG Games\Star Wars KOTOR (GOG)',
     [switch]$Install,
-    [switch]$Uninstall
+    [switch]$Uninstall,
+    # Fail the build on any compiler/analyzer warning (CA2014 & co.), so a warning that
+    # only shows up in a log never ships. CI passes this.
+    [switch]$WarnAsError
 )
 
 $ErrorActionPreference = 'Stop'
 $projectDir = $PSScriptRoot
-
-# Locate VS2022 via vswhere rather than hardcoding the Community edition path: a dev box
-# normally has Community, but CI runners (GitHub's windows-latest included) ship Enterprise,
-# and the two editions live at different paths. Community is tried first only as a fallback
-# for a machine where vswhere itself is not installed yet.
-$vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
-$vsRoot = 'C:\Program Files\Microsoft Visual Studio\2022\Community'
-if (Test-Path $vswhere) {
-    $found = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
-    if ($found) { $vsRoot = ($found | Select-Object -First 1).Trim() }
-}
-$vcvars = "$vsRoot\VC\Auxiliary\Build\vcvarsall.bat"
-
-function Import-MsvcEnvironment {
-    if (-not (Test-Path $vcvars)) { throw "vcvarsall.bat not found at $vcvars" }
-
-    $output = cmd /c "`"$vcvars`" x86 >nul 2>&1 && set" 2>$null
-    foreach ($line in $output) {
-        if ($line -match '^([^=]+)=(.*)$' -and $matches[1] -notin @('PROMPT', 'TERM')) {
-            Set-Item -Path "Env:$($matches[1])" -Value $matches[2] -ErrorAction SilentlyContinue
-        }
-    }
-
-    $installer = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer"
-    if ((Test-Path $installer) -and ($env:PATH -notlike "*$installer*")) {
-        $env:PATH = "$installer;$env:PATH"
-    }
-}
+$repo = Split-Path (Split-Path $projectDir -Parent) -Parent
 
 if ($Uninstall) {
-    $proxy = Join-Path $GameDir 'dinput8.dll'
-    if (Test-Path $proxy) {
-        Remove-Item $proxy -Force
-        "removed $proxy"
-    }
-    else {
-        "nothing installed at $proxy"
-    }
-
-    $log = Join-Path $GameDir 'kotorcoop-plugin.log'
-    if (Test-Path $log) { Remove-Item $log -Force; "removed $log" }
-
-    # The agent -Install deploys. Every file is KotorCoop.*, so this can never touch a
-    # game file or a user's mod.
-    foreach ($ours in Get-ChildItem $GameDir -File -Filter 'KotorCoop.*' -ErrorAction SilentlyContinue) {
-        Remove-Item $ours.FullName -Force
-        "removed agent file $($ours.FullName)"
-    }
-
-    # Remove only the override assets we installed — every one is a k_coop_ resref, so
-    # this can never delete a user's mod file.
-    $overrideTarget = Join-Path $GameDir 'Override'
-    if (Test-Path $overrideTarget) {
-        foreach ($ours in Get-ChildItem $overrideTarget -File -Filter 'k_coop_*') {
-            Remove-Item $ours.FullName -Force
-            "removed override $($ours.FullName)"
-        }
-    }
-
+    # Same removal rules as the packaged installer, so a dev install and a player install
+    # come out the same way: only files we put there, identified by marker/prefix.
+    & (Join-Path $repo 'tools\install.ps1') -GameDir $GameDir -Uninstall
     return
 }
 
-Import-MsvcEnvironment
-"MSVC x86 environment imported (cl: $((Get-Command cl.exe).Source))"
+. (Join-Path $repo 'tools\devenv.ps1') -Arch x86
 
 Push-Location $projectDir
 try {
-    dotnet publish -r win-x86 -c Release
+    $publishArgs = @('publish', '-r', 'win-x86', '-c', 'Release')
+    if ($WarnAsError) { $publishArgs += '-warnaserror' }
+    dotnet @publishArgs
     if ($LASTEXITCODE -ne 0) { throw "publish failed with exit code $LASTEXITCODE" }
 }
 finally {
@@ -104,67 +63,52 @@ $arch = switch ($machine) { 0x14C { 'x86 (correct)' } 0x8664 { 'x64 (WRONG)' } d
 "architecture: $arch"
 if ($machine -ne 0x14C) { throw 'plugin must be x86 to load into swkotor.exe' }
 
-if ($Install) {
-    if (-not (Test-Path $GameDir)) { throw "game directory not found: $GameDir" }
+if (-not $Install) { return }
 
-    $target = Join-Path $GameDir 'dinput8.dll'
-    Copy-Item $built.FullName $target -Force
-    "installed -> $target"
+if (-not (Test-Path $GameDir)) { throw "game directory not found: $GameDir" }
 
-    # Deploy the co-op override assets (the phantom blueprint, etc.). Every file we ship
-    # uses a k_coop_ resref, so it can never collide with a user's mods; we only ever ADD
-    # to the override folder, never touch a file we did not put there.
-    $overrideSource = Join-Path (Split-Path (Split-Path $projectDir -Parent) -Parent) 'profiles\override'
-    if (Test-Path $overrideSource) {
-        $overrideTarget = Join-Path $GameDir 'Override'
-        if (-not (Test-Path $overrideTarget)) { New-Item -ItemType Directory -Path $overrideTarget | Out-Null }
-
-        foreach ($asset in Get-ChildItem $overrideSource -File) {
-            Copy-Item $asset.FullName (Join-Path $overrideTarget $asset.Name) -Force
-            "installed override -> $(Join-Path $overrideTarget $asset.Name)"
-        }
-    }
-
-    # Deploy the AGENT beside the game too. The plugin's AgentLauncher auto-starts
-    # KotorCoop.Agent.exe from the game directory (or kotorcoop\/coop\ under it) — that is
-    # what makes "launch the game and play" the whole experience. Until now the agent was
-    # hand-copied once and silently went stale on every rebuild, which is the worst kind of
-    # version skew: the plugin and agent meet over a signature-checked shared block, so a
-    # stale agent either refuses the block or, worse, drives it with last week's semantics.
-    # Installing the plugin without the agent it launches is half an install.
-    $agentProject = Join-Path (Split-Path $projectDir -Parent) 'KotorCoop.Agent'
-    Push-Location $agentProject
-    try {
-        dotnet build -v q --nologo
-        if ($LASTEXITCODE -ne 0) { throw "agent build failed with exit code $LASTEXITCODE" }
-    }
-    finally {
-        Pop-Location
-    }
-
-    $agentBin = Join-Path $agentProject 'bin\Debug\net10.0-windows'
-    if (-not (Test-Path (Join-Path $agentBin 'KotorCoop.Agent.exe'))) {
-        throw "agent build succeeded but KotorCoop.Agent.exe not found in $agentBin"
-    }
-
-    # Game root, not a subfolder: AgentLauncher searches the game dir FIRST, so a loose
-    # copy there (which every existing install has) would shadow anything we put deeper.
-    $agentInstalled = 0
-    foreach ($file in Get-ChildItem $agentBin -File) {
-        try {
-            Copy-Item $file.FullName (Join-Path $GameDir $file.Name) -Force
-            $agentInstalled++
-        }
-        catch [System.IO.IOException] {
-            # A running agent holds its own image; the plugin and overrides above still
-            # installed. Say so rather than half-failing silently.
-            throw "agent file locked ($($file.Name)) - stop KotorCoop.Agent.exe and re-run -Install"
-        }
-    }
-
-    "installed agent -> $GameDir ($agentInstalled files)"
-
-    ''
-    'The game loads DirectInput from its own directory before the system one, so this'
-    'is picked up on next launch. Nothing else was modified; remove it with -Uninstall.'
+# Deploy the AGENT beside the game too. The plugin's AgentLauncher auto-starts
+# KotorCoop.Agent.exe from the game directory — that is what makes "launch the game and
+# play" the whole experience. A hand-copied agent silently goes stale on every rebuild,
+# which is the worst kind of version skew: the plugin and agent meet over a
+# signature-checked shared block, so a stale agent either refuses the block or, worse,
+# drives it with last week's semantics. Installing the plugin without the agent it
+# launches is half an install. Debug configuration on purpose: it is the same build
+# tools/demo.ps1 launches by hand, so the rig and the auto-started agent never differ.
+$agentProject = Join-Path (Split-Path $projectDir -Parent) 'KotorCoop.Agent'
+Push-Location $agentProject
+try {
+    dotnet build -v q --nologo
+    if ($LASTEXITCODE -ne 0) { throw "agent build failed with exit code $LASTEXITCODE" }
 }
+finally {
+    Pop-Location
+}
+
+$agentBin = Join-Path $agentProject 'bin\Debug\net10.0-windows'
+if (-not (Test-Path (Join-Path $agentBin 'KotorCoop.Agent.exe'))) {
+    throw "agent build succeeded but KotorCoop.Agent.exe not found in $agentBin"
+}
+
+# One code path for "put these files into a game directory": the same installer the
+# packaged zip ships, pointed at a staging layout that mirrors the package.
+$staging = Join-Path $env:TEMP 'kotorcoop-dev-install'
+if (Test-Path $staging) { Remove-Item $staging -Recurse -Force }
+New-Item -ItemType Directory -Path (Join-Path $staging 'plugin') | Out-Null
+New-Item -ItemType Directory -Path (Join-Path $staging 'agent') | Out-Null
+Copy-Item $built.FullName (Join-Path $staging 'plugin\dinput8.dll')
+Copy-Item (Join-Path $agentBin '*') (Join-Path $staging 'agent') -Recurse -Force
+Copy-Item (Join-Path $repo 'profiles\override') (Join-Path $staging 'override') -Recurse
+Copy-Item (Join-Path $repo 'profiles\coop.ini.example') (Join-Path $staging 'coop.ini')
+
+$loaderDll = Join-Path $repo 'src\KotorCoop.Loader\bin\dinput8.dll'
+if (Test-Path $loaderDll) {
+    New-Item -ItemType Directory -Path (Join-Path $staging 'loader') | Out-Null
+    Copy-Item $loaderDll (Join-Path $staging 'loader\dinput8.dll')
+}
+
+Copy-Item (Join-Path $repo 'tools\install.ps1') (Join-Path $staging 'install.ps1')
+
+& (Join-Path $staging 'install.ps1') -GameDir $GameDir
+if ($LASTEXITCODE -ne 0 -and $null -ne $LASTEXITCODE) { throw "install failed with exit code $LASTEXITCODE" }
+Remove-Item $staging -Recurse -Force

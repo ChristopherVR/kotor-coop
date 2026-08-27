@@ -29,22 +29,57 @@ UDP ports, so two concurrent `dotnet test` runs on one machine can flake
 ## Plugin build and install
 
 ```powershell
-pwsh src\KotorCoop.Plugin\build.ps1 -Install -GameDir 'C:\GOG Games\Star Wars KOTOR (GOG)'
+pwsh src\KotorCoop.Plugin\build.ps1 -Install                                    # GOG default directory
+pwsh src\KotorCoop.Plugin\build.ps1 -Install -GameDir 'D:\Games\swkotor-gog-p2'  # the rig's second copy
 ```
 
-`build.ps1`'s own `-GameDir` default is a Steam path — always pass your GOG directory
-explicitly. Without `-Install` it only builds `dinput8.dll`; with it, the DLL and the
-override assets are copied into the game directory too, which is what `demo.ps1` needs to
-find a current plugin (`demo.ps1` itself does **not** deploy the plugin — see the memory
-note "demo.ps1 does not deploy the plugin"). `-Uninstall` removes what `-Install` placed.
-The script imports the MSVC x86 developer environment itself (`tools/devenv.ps1` does the
-same thing standalone, if you need `link.exe`/`vswhere.exe` on `PATH` for something else).
+`-GameDir` defaults to `C:\GOG Games\Star Wars KOTOR (GOG)`. Without `-Install` it only
+builds `dinput8.dll`; with it, the plugin, a freshly built (Debug) agent, the `k_coop_`
+override assets and a `coop.ini` template (only if none exists) all go into the game
+directory through the same `tools/install.ps1` the packaged zip ships — there is no separate
+"copy the agent" step any more. `demo.ps1` itself does **not** deploy the plugin, so run this
+for every game copy the rig uses before trusting a live result. `-Uninstall` removes what
+`-Install` placed (and only that: the installer recognises its own `dinput8.dll` by a marker
+and leaves any other mod's alone). `-WarnAsError` turns compiler/analyzer warnings into
+build failures — CI passes it, so run it before pushing plugin changes.
 
-After building the agent, copy it beside the game so the plugin can auto-start it:
+Both native builds dot-source `tools/devenv.ps1`, which locates Visual Studio through
+`vswhere` (Community, Enterprise or Build Tools) and imports the x86 developer environment;
+use it standalone (`. tools\devenv.ps1`) when you need `cl.exe`/`link.exe` on `PATH`.
+
+## The chain loader (`KotorCoop.Loader`)
 
 ```powershell
-Copy-Item src\KotorCoop.Agent\bin\Debug\net10.0-windows\* 'C:\GOG Games\Star Wars KOTOR (GOG)' -Recurse -Force
+pwsh src\KotorCoop.Loader\build.ps1     # -> src\KotorCoop.Loader\bin\dinput8.dll (~6 KB)
 ```
+
+A single C file compiled with `cl.exe`, no CRT. It exists so a player whose `dinput8.dll`
+slot is already taken by another mod can run both: `install.ps1 -Chain` installs the loader
+as `dinput8.dll`, the plugin as `KotorCoop.Plugin.dll`, and writes `dinput8.chain`. The
+loader `LoadLibrary`s every entry and forwards the six dinput8 exports to the first entry
+that exports `DirectInput8Create`; the plugin (`Exports.cs`) reads the same file and forwards
+to the entry after itself, then the system DLL. Because of this the plugin resolves the game
+directory from `swkotor.exe`'s own path (`NativeMethods.GetGameDirectory`), never from "where
+is dinput8.dll". The forward decision is logged at the top of `kotorcoop-plugin.log`
+(`forwarding to ...`), the loader's in `dinput8-chain.log`. Live-verified 2026-08-27 with
+the loader → plugin → a renamed copy of the system DLL: every hook installed, all three
+modules visible in the process.
+
+## CI and releases
+
+`.github/workflows/ci.yml` runs on every push and pull request: `dotnet build -warnaserror`,
+the test suite (minus the known-flaky `HeavyPacketLossStillConverges`), then
+`tools/package.ps1 -WarnAsError`, which builds the NativeAOT plugin, the C loader and the
+agent and uploads `kotor-coop-<git describe>.zip` as the run's artifact — so every green
+run has a ready-to-use build attached.
+
+`.github/workflows/release.yml` publishes a GitHub release: push a `v*` tag
+(`git tag v0.1.0 && git push origin v0.1.0`) and the workflow builds, tests, packages and
+creates the release with the zip and auto-generated notes. Running it by hand from the
+Actions tab produces a pre-release named `build-<git describe>` from any branch. The zip
+contains `install.ps1` and a `README.md` (`tools/package-README.md`, version-stamped by
+`package.ps1`) that explains install, play, chain mode and troubleshooting to someone who
+has never seen this repo.
 
 ## Running the live rig
 
@@ -81,6 +116,7 @@ src/KotorCoop.Memory     OpenProcess, AOB scanner, engine bridge, GameFiles/ (KE
 src/KotorCoop.Session    UDP transport, host/client, interpolation, stores, agent pumps
 src/KotorCoop.Agent      CLI: launch, load, run, scan, track, info; the command dispatcher
 src/KotorCoop.Plugin     in-process plugin (NativeAOT win-x86, installs as dinput8.dll)
+src/KotorCoop.Loader     generic dinput8 chain loader (one C file) for coexisting with other dinput8 mods
 src/KotorCoop.MockGame   stand-in game process for testing without KOTOR
 tests/KotorCoop.Tests    unit + loopback integration tests
 profiles/                JSON offset profiles; profiles/override ships k_coop_ game files

@@ -180,6 +180,13 @@ internal sealed unsafe class PortraitController(SharedBlockView block)
     /// <paramref name="shift"/> (0 = restore), through each control's own SetExtent.</summary>
     private void Apply(nint mainInterface, int shift)
     {
+        // One scratch rect for the whole walk, allocated ONCE. A stackalloc inside the loop
+        // body grows the frame by 16 bytes per control per widget on every call (the stack is
+        // only reclaimed on return), which the CA2014 analyzer flags as a potential stack
+        // overflow — and this runs on the game's own main thread. Every field is rewritten
+        // before each SetExtent call, so nothing leaks between iterations.
+        int* rect = stackalloc int[4];
+
         for (int w = FirstHiddenWidget; w < PartyWidgetCount; w++)
         {
             nint widget = mainInterface + PartyMembersOffset + (w * CharWidgetStride);
@@ -199,7 +206,6 @@ internal sealed unsafe class PortraitController(SharedBlockView block)
                     continue;
                 }
 
-                int* rect = stackalloc int[4];
                 rect[0] = _savedExtent[w, c, 0];
                 rect[1] = _savedExtent[w, c, 1] + shift;
                 rect[2] = _savedExtent[w, c, 2];

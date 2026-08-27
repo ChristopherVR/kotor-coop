@@ -98,7 +98,7 @@ internal static unsafe partial class PluginHost
 
         try
         {
-            string directory = NativeMethods.GetModuleDirectory("dinput8.dll");
+            string directory = NativeMethods.GetGameDirectory();
             _logPath = Path.Combine(directory, "kotorcoop-plugin.log");
             _channelPathPrefix = Path.Combine(directory, "kotorcoop-");
 

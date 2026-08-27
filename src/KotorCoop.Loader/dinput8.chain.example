@@ -1,0 +1,14 @@
+# dinput8.chain - DLLs the kotor-coop loader (installed as dinput8.dll) loads, in order.
+#
+# Copy this to the game directory as "dinput8.chain" (install.ps1 -Chain writes one for
+# you). One path per line, relative to the game directory; # and ; start a comment.
+#
+# The FIRST entry that exports DirectInput8Create receives the game's DirectInput calls.
+# The kotor-coop plugin forwards them to the entry after itself, then to the system
+# dinput8.dll, so a second proxy (ReShade, a widescreen fix...) belongs AFTER the plugin.
+# A DLL that just needs to be loaded (ASI-style) can go anywhere.
+
+KotorCoop.Plugin.dll
+# dinput8.prev.dll        # another mod's dinput8.dll, renamed
+# ReShade32.dll
+# some-mod.asi

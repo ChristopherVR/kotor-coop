@@ -579,7 +579,7 @@ internal sealed unsafe partial class NativeBrowserController
     {
         try
         {
-            string saves = Path.Combine(NativeMethods.GetModuleDirectory("dinput8.dll"), "saves");
+            string saves = Path.Combine(NativeMethods.GetGameDirectory(), "saves");
             if (!Directory.Exists(saves))
             {
                 Directory.CreateDirectory(saves);

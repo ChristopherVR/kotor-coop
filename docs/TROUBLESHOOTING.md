@@ -6,12 +6,30 @@ see [CONFIG.md](CONFIG.md) for its default and where it's read; for a console ve
 
 ## "Co-op" button doesn't appear on the main menu
 
-`menu_button` defaults ON in the code (both readers — see CONFIG.md), but the shipped
-`profiles/coop.ini.example` explicitly sets `menu_button=0`, with a comment describing the
-menu rebind as awaiting live verification. That comment predates the live-verified Connect
-flow this project ships today ([menu-frame-hook.md](research/menu-frame-hook.md),
-[connect-flow.md](research/connect-flow.md)). Set `menu_button=1` in your `coop.ini` if the
-button is missing.
+`menu_button` defaults ON in the code (both readers — see CONFIG.md) and the shipped
+`coop.ini` sets `menu_button = 1`. A `coop.ini` from before 2026-08-27 shipped with
+`menu_button = 0` and a stale "awaiting live verification" comment — the installer never
+overwrites an existing `coop.ini`, so an upgraded install keeps the old value. Set
+`menu_button = 1`. If it is set and the button is still missing, the plugin never loaded:
+see the next two sections.
+
+## Nothing happens at all — no `kotorcoop-plugin.log` beside the game
+
+The plugin did not load. `dinput8.dll` must sit in the same directory as `swkotor.exe`
+(not a subfolder), and must be the x86 build (`build.ps1` checks this). In chain mode, read
+`dinput8-chain.log`: it lists every entry the loader tried and which one it forwards to.
+
+## Another mod already uses `dinput8.dll` (ReShade, an ASI loader, ...)
+
+`install.ps1` refuses to overwrite a `dinput8.dll` it does not recognise as its own. Install
+with `-Chain`: the small `KotorCoop.Loader` wrapper becomes `dinput8.dll`, the plugin is
+installed as `KotorCoop.Plugin.dll`, the other mod is renamed `dinput8.prev.dll`, and
+`dinput8.chain` lists all of them in load order (edit it by hand to add more; `-Load a.dll`
+does the same). The game's DirectInput calls go to the first proxy in the list (ours), which
+forwards to the next entry, and so on to the system DLL — so a proxy that always loads the
+system DLL itself must be the last proxy. `coop.ini`'s `dinput8_next = <file>` forces the
+plugin's next hop regardless of the list. `-Uninstall` puts the other mod back under its
+original name.
 
 ## Second KOTOR instance won't launch, or refuses to run alongside the first
 
@@ -21,11 +39,12 @@ build**. The Steam build's own DRM wrapper refuses a second instance outright an
 binary means none of this project's engine addresses apply to it. See Requirements in the
 top-level README.
 
-## `build.ps1` installs into the wrong game directory
+## `build.ps1 -Install` deployed into the wrong game directory
 
-`src/KotorCoop.Plugin/build.ps1`'s own `-GameDir` default is a Steam path
-(`C:\Program Files (x86)\Steam\steamapps\common\swkotor`). Always pass your GOG directory
-explicitly with `-GameDir`.
+`src/KotorCoop.Plugin/build.ps1`'s `-GameDir` defaults to
+`C:\GOG Games\Star Wars KOTOR (GOG)`; pass `-GameDir` for any other copy (the rig's second
+instance lives at `D:\Games\swkotor-gog-p2` by `demo.ps1`'s defaults). Before 2026-08-27 the
+default was a Steam path.
 
 ## Client can't connect / "no reply from \<host\>"
 

@@ -38,7 +38,13 @@ plugin" below.
 ```
 
 Each `swkotor.exe` loads the plugin as a `dinput8.dll` proxy the game itself resolves — no
-game file is modified. The plugin allocates a block of unmanaged memory
+game file is modified. The proxy is chainable: it forwards the six dinput8 exports to
+`coop.ini`'s `dinput8_next`, else to the entry after itself in `dinput8.chain`, else to the
+system DLL (`Exports.cs`). When another mod already owns the `dinput8.dll` name, the
+`KotorCoop.Loader` wrapper (one C file, no CRT) takes the name instead, loads every
+`dinput8.chain` entry and forwards to the first proxy among them — the plugin, installed as
+`KotorCoop.Plugin.dll`. Because of this the plugin locates the game directory from
+`swkotor.exe`'s own module path, never from its own file name. The plugin allocates a block of unmanaged memory
 (`SharedBlock`/`SharedBlockView`) and never talks to the network; the external agent attaches
 with `OpenProcess`, finds that block by scanning for a signature, and pumps it every tick.
 Only the agent speaks UDP; one instance hosts (a star relay, not a mesh).

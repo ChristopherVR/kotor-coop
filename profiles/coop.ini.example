@@ -22,9 +22,9 @@ password =
 ; Name shown to the other players. Optional.
 name = Malak
 
-; Enable the main-menu "Co-op" button. Off by default because the menu rebind is engine
-; code awaiting live verification; set to 1 once confirmed on your build.
-menu_button = 0
+; Show the main-menu "Co-op" button (Host / Connect / server browser). Live-verified; set 0
+; to hide it and connect from the ~ console instead.
+menu_button = 1
 
 ; --- in-game chat overlay ---------------------------------------------------------
 ; An always-on, unobtrusive readout of chat (say <msg> in the ~ console). Lines fade out
@@ -417,12 +417,12 @@ companion_local_combat_range=10
 # choke, Force push/whirlwind) that land on a peer's phantom, so their real character feels
 # them too - the gap plain damage (always forwarded) leaves open: today a Force-Stun on a
 # peer's phantom leaves them free to act on their own screen, and a client's Stasis on an
-# enemy only affects their private mirror, which the host drives anyway. OFF until live-
-# verified: capture, forward AND apply all gate on this, not just the apply half. Knockdown,
-# Paralyze and Sleep are captured but never replayed regardless of this flag - see
-# docs/research/effect-sync.md for why (an unverified engine-call signature for Knockdown, and
-# two OnApplySetState sub-codes this pass could not match to an English name at all).
-effect_sync=0
+# enemy only affects their private mirror, which the host drives anyway. Live-verified in both
+# directions (docs/research/effect-sync.md); capture, forward AND apply all gate on this, not
+# just the apply half. Knockdown, Paralyze and Sleep are captured but never replayed
+# regardless of this flag - see the doc for why (an unverified engine-call signature for
+# Knockdown, and two OnApplySetState sub-codes not yet matched to an English name).
+effect_sync=1
 
 # Reveal fog-of-war on this instance's map around each remote peer's position (roadmap item
 # 19) - so ground your partner already walked does not stay black just because you never
@@ -471,11 +471,11 @@ journal_remove_sync=1
 # Relay a GENERIC trigger's OnEnter (a CSWSTrigger whose script starts a cutscene, dialogue or
 # scripted event - the classic "walk into the room, the scene starts") so the enemy owner's
 # engine also runs it, keeping its object-id counter in lockstep with whatever the script
-# creates or destroys. Parallel to client_encounters, and OFF for a different reason: an
-# encounter's engine field (started) gives firing free idempotence, while a generic trigger's
-# OnEnter has none - this pass's own TriggerRelayStore does the bookkeeping instead, and it has
-# not been run against the live game yet. See docs/research/trigger-relay.md.
-trigger_relay=0
+# creates or destroys. Parallel to client_encounters: an encounter's engine field (started)
+# gives firing free idempotence, while a generic trigger's OnEnter has none, so
+# TriggerRelayStore does the bookkeeping instead. Live-verified; see
+# docs/research/trigger-relay.md. Set 0 to relay encounters only.
+trigger_relay=1
 
 # Comma-separated globs (only * is special) matched against a trigger's OnEnter script resref
 # before its id is ever reported - traps and area transitions are excluded by the engine field

@@ -13,10 +13,11 @@ game files — no running game needed.
 | `demo3.ps1` | The same, for three instances (one host, two joiners) — exercises peer-list and slot-table paths two players can't. |
 | `verify.ps1` | Runs the full co-op verification battery against a live `demo.ps1` session and prints PASS/FAIL per feature. |
 | `verify3.ps1` | The three-player battery, against `demo3.ps1` — checks only two players could not fail. |
-| `install.ps1` | Installs a packaged release (plugin, agent, override assets, `coop.ini` template) into a game directory — what a player runs. |
-| `package.ps1` | Builds the release zip `install.ps1` unpacks: the NativeAOT plugin, the agent, and the `coop.ini` template. |
+| `install.ps1` | Installs a packaged release (plugin, agent, override assets, `coop.ini` template) into a game directory — what a player runs, and what `build.ps1 -Install` runs too. Refuses to overwrite a foreign `dinput8.dll`; `-Chain` (optionally `-Load a.dll,b.asi`) installs the chain loader as `dinput8.dll` beside the plugin and the other mod instead. `-Uninstall` removes only what it placed, recognising its own DLLs by marker. |
+| `package.ps1` | Builds the release zip `install.ps1` unpacks: the NativeAOT plugin, the C chain loader, the agent, the `coop.ini` template, the override assets, the installer and a version-stamped `README.md` (`package-README.md`). `-WarnAsError` is what CI runs. |
+| `package-README.md` | Not a script: the README staged into the release zip, with `{{VERSION}}` filled in by `package.ps1`. |
 | `session.ps1` | An earlier two-instance launcher with the same shape as `demo.ps1`. `demo3.ps1` still calls it "the recipe that survives repetition" for its own instance-1 launch. **Note:** `verify.ps1`'s own header comment says it assumes `session.ps1` brought the rig up, but the rest of that file consistently references `demo.ps1` (its `--drop-file` convention, its starting save/footlocker) — that one header line looks stale. |
-| `devenv.ps1` | Imports the MSVC x86 developer environment into the current shell, so `link.exe`/`vswhere.exe` resolve — needed before a NativeAOT plugin build outside a VS developer prompt. |
+| `devenv.ps1` | Imports the MSVC developer environment (vswhere-located, any VS edition) into the current shell, so `cl.exe`/`link.exe`/`vswhere.exe` resolve. Dot-sourced by both native build scripts; `. tools\devenv.ps1` standalone. |
 
 ## Live probes
 

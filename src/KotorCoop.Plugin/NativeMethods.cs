@@ -17,6 +17,18 @@ internal static partial class NativeMethods
     [LibraryImport("kernel32.dll", EntryPoint = "GetModuleHandleW", SetLastError = true, StringMarshalling = StringMarshalling.Utf16)]
     public static partial nint GetModuleHandle(string? name);
 
+    public const uint GetModuleHandleExFlagFromAddress = 0x4;
+    public const uint GetModuleHandleExFlagUnchangedRefcount = 0x2;
+
+    /// <summary>
+    /// With <see cref="GetModuleHandleExFlagFromAddress"/>, resolves the module that contains
+    /// a code address — the only way THIS DLL can learn its own handle, since it may not be
+    /// called dinput8.dll at all when a chain loader owns that name (see Exports).
+    /// </summary>
+    [LibraryImport("kernel32.dll", EntryPoint = "GetModuleHandleExW", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static unsafe partial bool GetModuleHandleEx(uint flags, nint address, nint* module);
+
     // Raw pointers rather than char[]: array parameters would require the runtime
     // marshalling layer, which a NativeAOT library deliberately does without.
     [LibraryImport("kernel32.dll", EntryPoint = "GetModuleFileNameW", SetLastError = true)]
@@ -152,22 +164,48 @@ internal static partial class NativeMethods
         return length == 0 ? @"C:\Windows\System32" : new string(buffer, 0, (int)length);
     }
 
-    public static unsafe string GetModuleDirectory(string moduleName)
+    /// <summary>
+    /// The game directory: where swkotor.exe itself lives. This is deliberately NOT "the
+    /// directory of dinput8.dll" — when a chain loader (src/KotorCoop.Loader) owns the
+    /// dinput8.dll name this plugin is loaded under another file name, and the executable's
+    /// own directory is the one thing that is the same in every layout. coop.ini, the logs,
+    /// the agent and the saves folder are all found relative to it.
+    /// </summary>
+    public static string GetGameDirectory() => GetModulePathDirectory(GetModuleHandle(null));
+
+    /// <summary>Full path of the module that contains <paramref name="codeAddress"/>, or
+    /// null. Pass the address of one of this DLL's own exports to find this DLL.</summary>
+    public static unsafe string? GetModulePathContaining(nint codeAddress)
     {
-        nint module = GetModuleHandle(moduleName);
+        nint module = 0;
+        if (!GetModuleHandleEx(GetModuleHandleExFlagFromAddress | GetModuleHandleExFlagUnchangedRefcount, codeAddress, &module) || module == 0)
+        {
+            return null;
+        }
+
+        return GetModulePath(module);
+    }
+
+    public static unsafe string? GetModulePath(nint module)
+    {
         if (module == 0)
         {
-            return ".";
+            return null;
         }
 
         char* buffer = stackalloc char[512];
         uint length = GetModuleFileName(module, buffer, 512);
-        if (length == 0)
+        return length == 0 ? null : new string(buffer, 0, (int)length);
+    }
+
+    private static string GetModulePathDirectory(nint module)
+    {
+        string? path = GetModulePath(module);
+        if (path is null)
         {
             return ".";
         }
 
-        string path = new(buffer, 0, (int)length);
         int lastSlash = path.LastIndexOf('\\');
         return lastSlash > 0 ? path[..lastSlash] : ".";
     }

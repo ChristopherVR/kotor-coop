@@ -9,26 +9,38 @@ jobs:
     runs-on: windows-latest
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
+        with:
+          # package.ps1 versions the zip with `git describe --tags`; a shallow clone has no tags.
+          fetch-depth: 0
 
       - name: Setup .NET 10
-        uses: actions/setup-dotnet@v4
+        uses: actions/setup-dotnet@v6
         with:
           dotnet-version: '10.0.x'
 
       - name: Build solution
-        run: dotnet build KotorCoop.slnx
+        run: dotnet build KotorCoop.slnx -warnaserror
 
       # HeavyPacketLossStillConverges is a known-flaky probabilistic test (see tests/README
       # / project notes) - excluded here rather than made to pass on every seed.
       - name: Run tests
         run: >
-          dotnet test tests/KotorCoop.Tests
+          dotnet test tests/KotorCoop.Tests --no-build
           --filter "FullyQualifiedName!~HeavyPacketLossStillConverges"
 
-      # win-x86 NativeAOT needs the MSVC x86 toolset, which build.ps1 imports itself
-      # (windows-latest ships Visual Studio with the C++ workload preinstalled). No
-      # -Install: CI has no game to install into.
-      - name: Build plugin (NativeAOT win-x86)
+      # Builds the NativeAOT win-x86 plugin, the C chain loader and the agent, and zips them
+      # with the installer and README exactly as a release would. -WarnAsError: an analyzer
+      # warning in the plugin (a CA2014 stackalloc-in-loop, say) fails the job rather than
+      # scrolling past in a log. The MSVC x86 toolset the native builds need ships on
+      # windows-latest; tools/devenv.ps1 finds it through vswhere.
+      - name: Package release zip
         shell: pwsh
-        run: pwsh src/KotorCoop.Plugin/build.ps1
+        run: pwsh tools/package.ps1 -WarnAsError -OutDir dist
+
+      - name: Upload package
+        uses: actions/upload-artifact@v7
+        with:
+          name: kotor-coop
+          path: dist/kotor-coop-*.zip
+          if-no-files-found: error

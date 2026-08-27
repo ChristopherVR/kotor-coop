@@ -1,11 +1,15 @@
 # kotor-coop
 
+[![CI](https://github.com/ChristopherVR/kotor-coop/actions/workflows/ci.yml/badge.svg)](https://github.com/ChristopherVR/kotor-coop/actions/workflows/ci.yml)
+
 Seamless-style two-player co-op for **Star Wars: Knights of the Old Republic** (retail
 GOG build), in C#. Two full copies of the game run side by side — locally or across a
 network — and an external agent plus a tiny in-process plugin bridge them into one shared
 world, the way FromSoftware's Seamless Co-op mod bridges Elden Ring.
 
-No game file is modified. The plugin installs as a `dinput8.dll` proxy the game loads itself; everything else attaches from outside with `OpenProcess`.
+No game file is modified. The plugin installs as a `dinput8.dll` proxy the game loads itself
+(or behind a tiny chain loader when another mod already owns that name); everything else
+attaches from outside with `OpenProcess`.
 
 ## Status at a glance
 
@@ -16,11 +20,12 @@ No game file is modified. The plugin installs as a `dinput8.dll` proxy the game 
 | Combat — mirrored enemies, damage, effects | Live-verified | [combat-participation.md](docs/research/combat-participation.md) |
 | World state — containers, items, journal | Live-verified | [shared-state-audit.md](docs/research/shared-state-audit.md) |
 | Dialogue — spectate, late-join, skip-fix | Live-verified | [dialogue-sync.md](docs/research/dialogue-sync.md) |
-| Dialogue recruitment sync | Off by default | [dialogue-consequences.md](docs/research/dialogue-consequences.md) |
+| Dialogue recruitment sync | Live-verified for two companions; one fix unconfirmed | [dialogue-consequences.md](docs/research/dialogue-consequences.md) |
 | Session lifecycle — menu, connect, save/load rejoin | Live-verified | [session-save.md](docs/research/session-save.md) |
 | Companion follow-AI | Live-verified, one known stall left | [party-reconciliation.md](docs/research/party-reconciliation.md) |
-| Companion local combat | Off by default, narrow case live-verified | [party-reconciliation.md](docs/research/party-reconciliation.md) |
+| Companion local combat | Narrow case live-verified | [party-reconciliation.md](docs/research/party-reconciliation.md) |
 | Mod compatibility | Live-verified for most mismatch categories | [mod-compatibility.md](docs/research/mod-compatibility.md) |
+| Sharing `dinput8.dll` with another mod | Live-verified (chain loader) | [src/KotorCoop.Loader](src/KotorCoop.Loader/dinput8_loader.c) |
 | Minigames — swoop race | Blocked, needs a debugger | [minigames.md](docs/research/minigames.md) |
 | Creature liveness reconciliation | Off by default, open | [creature-liveness.md](docs/research/creature-liveness.md) |
 
@@ -38,10 +43,11 @@ Both players, each in their own full game:
   loading screens overlap instead of running back to back. `follow_lead=host` restores
   host-only leading, `--no-follow` opts out.
 - **Fight the same fight**: enemy health/death are host-authoritative and mirrored live; a
-  hit on your partner's phantom lands for real through the engine's own damage pipeline.
-- **Share the world.** Dropped items, doors, containers and locks, and quest/journal state
-  all merge upward for everyone. **Pause** and **downed/revive** (with spectate camera,
-  `spectate_on_down=0` to opt out) work the same way, together.
+  hit on your partner's phantom lands for real through the engine's own damage pipeline,
+  and non-damage effects (stun, slow, choke, ...) follow it.
+- **Share the world.** Dropped items, doors, containers and locks, story triggers, and
+  quest/journal state all merge upward for everyone. **Pause** and **downed/revive** (with
+  spectate camera, `spectate_on_down=0` to opt out) work the same way, together.
 - **Share one party**, host-driven AI mirrored to clients (`--no-party-sync` opts out), and
   **start from the game's own menu** — a "Co-op" button, password-protected, auto-reconnect.
 - **Type commands in-game** (`~` — see [docs/CONSOLE.md](docs/CONSOLE.md)) and **hold one
@@ -59,54 +65,79 @@ module's object-id-keyed channels, a different save asks you to rejoin (or refus
 
 ## Requirements
 
-- Windows. The packaged zip needs nothing else; building from source needs the .NET 10 SDK
-  and the Visual Studio 2022 MSVC x86 C++ toolset for the plugin (NativeAOT `win-x86`).
+- Windows. The packaged zip needs only the .NET 10 runtime; building from source needs the
+  .NET 10 SDK and the Visual Studio 2022 MSVC x86 C++ toolset (NativeAOT `win-x86` plugin,
+  C chain loader).
 - **The DRM-free GOG build of KOTOR 1** (v1.0.3), not Steam — Steam's DRM refuses a second
   instance and its packed binary defeats static analysis. Addresses are verified against this
   binary (no ASLR). KOTOR 2 is untouched.
 - For two instances on one machine: a second copy of the game directory — the single-instance
   guard is just a named mutex, renamed in memory by `agent launch --instance 2`.
 
-## Quick start
+## Quick start (players)
 
-Grab `kotor-coop-<version>.zip` (built with `pwsh tools\package.ps1`, or from a release),
-extract it anywhere, and install it into your GOG game directory:
+Download `kotor-coop-<version>.zip` from the
+[releases page](https://github.com/ChristopherVR/kotor-coop/releases) (every CI run also
+attaches one as a build artifact), extract it anywhere, and install it into your GOG game
+directory:
 
 ```powershell
-pwsh tools\install.ps1 -GameDir 'C:\GOG Games\Star Wars KOTOR (GOG)'
+pwsh .\install.ps1 -GameDir 'C:\GOG Games\Star Wars KOTOR (GOG)'
 ```
 
-That's the plugin, the agent and the co-op override files in place in one step —
-`-Uninstall` takes them back out. No .NET SDK or MSVC toolset needed for this path.
+That's the plugin, the agent, the co-op override files and a `coop.ini` template in place in
+one step; `-Uninstall` takes them back out and never touches your `coop.ini`. The zip's own
+`README.md` walks through play, configuration and troubleshooting without needing this repo.
 
 Then just play: launch KOTOR, click **Co-op** on the main menu, and one of you presses
-**Host** while the other picks that server and presses **Connect**. The packaged
-`coop.ini` ships with `menu_button = 0` (the template's own comment is stale — the button
-is live-verified); set `menu_button = 1` to see it. See [docs/CONFIG.md](docs/CONFIG.md).
+**Host** while the other picks that server and presses **Connect**. Everything else lives in
+`coop.ini` — see [docs/CONFIG.md](docs/CONFIG.md).
 
-### Building from source
+### Sharing `dinput8.dll` with another mod
+
+Only one file can be called `dinput8.dll`. If another mod already owns it (ReShade, an ASI
+loader, a widescreen fix), `install.ps1` refuses rather than overwrite it and offers chain
+mode:
 
 ```powershell
-dotnet build KotorCoop.slnx
-pwsh src\KotorCoop.Plugin\build.ps1 -Install -GameDir 'C:\GOG Games\Star Wars KOTOR (GOG)'
-
-# copy the agent next to the game so the mod can start it itself
-Copy-Item src\KotorCoop.Agent\bin\Debug\net10.0-windows\* 'C:\GOG Games\Star Wars KOTOR (GOG)' -Recurse -Force
+pwsh .\install.ps1 -GameDir '...' -Chain                          # keep the other mod
+pwsh .\install.ps1 -GameDir '...' -Chain -Load ReShade32.dll,x.asi # and load extra DLLs too
 ```
 
-`build.ps1`'s own `-GameDir` default is a Steam path — always pass your GOG directory
-explicitly (see Requirements above). `pwsh tools\package.ps1` builds the same zip
-`tools\install.ps1` unpacks, to `dist\kotor-coop-<version>.zip`.
+Chain mode installs the [`KotorCoop.Loader`](src/KotorCoop.Loader/dinput8_loader.c) wrapper —
+6 KB of plain C, no runtime — as `dinput8.dll`, our plugin as `KotorCoop.Plugin.dll`, renames
+the other mod to `dinput8.prev.dll`, and writes a `dinput8.chain` list. The loader loads every
+entry and forwards the game's DirectInput calls to the first proxy (ours); the plugin forwards
+to the entry after itself, and the last one reaches Windows' real `dinput8.dll`.
+`coop.ini`'s `dinput8_next` overrides the plugin's next hop explicitly. `-Uninstall` restores
+the other mod under its original name.
+
+## Building from source
+
+```powershell
+dotnet build KotorCoop.slnx                     # agent, session, protocol, memory, tests
+dotnet test  tests\KotorCoop.Tests
+pwsh src\KotorCoop.Plugin\build.ps1 -Install    # plugin (NativeAOT x86) + agent + overrides -> the GOG default dir
+pwsh src\KotorCoop.Loader\build.ps1             # the chain loader (only needed for chain mode)
+pwsh tools\package.ps1                          # everything, zipped: dist\kotor-coop-<version>.zip
+```
+
+`build.ps1 -Install` deploys into `C:\GOG Games\Star Wars KOTOR (GOG)` by default; pass
+`-GameDir` for another copy. Both native builds import the MSVC x86 environment themselves via
+`tools\devenv.ps1` (vswhere-located, so any VS edition works). `-WarnAsError` on any of them is
+what CI runs: an analyzer warning fails the build instead of scrolling past.
 
 For development — two instances driven unattended on one machine:
 
 ```powershell
 pwsh tools\demo.ps1          # launch both instances, load saves, connect the agents
+pwsh tools\verify.ps1        # PASS/FAIL per feature against the live pair
 pwsh tools\demo.ps1 -Stop    # shut everything down
 ```
 
-Driving the agent by hand instead of through `demo.ps1`, and `KotorCoop.MockGame` (a
-stand-in process for testing without KOTOR): see [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md).
+`demo.ps1` does **not** deploy the plugin — run `build.ps1 -Install` first for every game copy
+the rig uses. Driving the agent by hand, `KotorCoop.MockGame` (a stand-in process for testing
+without KOTOR), and the CI/release pipeline: see [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md).
 
 ## Console
 
@@ -145,11 +176,13 @@ src/KotorCoop.Memory     OpenProcess, AOB scanner, engine bridge, GameFiles/ (KE
 src/KotorCoop.Session    UDP transport, host/client, interpolation, stores, agent pump
 src/KotorCoop.Agent      CLI: launch, load, run, scan, track, info
 src/KotorCoop.Plugin     in-process plugin (NativeAOT win-x86, installs as dinput8.dll)
+src/KotorCoop.Loader     generic dinput8 chain loader (C) for coexisting with other dinput8 mods
 src/KotorCoop.MockGame   stand-in game process for testing without KOTOR
 tests/KotorCoop.Tests    unit + loopback integration tests
-profiles/                JSON offset profiles; profiles/override ships k_coop_ game files
+profiles/                JSON offset profiles, coop.ini.example; profiles/override ships k_coop_ game files
 docs/research/           verified reverse-engineering write-ups behind each feature
-tools/                   RE helpers, demo scripts, the kotor1_0_3 symbol database
+tools/                   package/install scripts, demo rig, RE helpers, the kotor1_0_3 symbol database
+.github/workflows/       ci.yml (build, test, package on every push), release.yml (v* tag -> GitHub release)
 ```
 
 ## Honest limitations
@@ -161,14 +194,15 @@ tools/                   RE helpers, demo scripts, the kotor1_0_3 symbol databas
 - **Companion follow-AI still stalls at the last waypoint of a leg**, in a narrow,
   well-characterised case; two fix candidates exist but neither is confirmed live, so both
   ship off by default. See [party-reconciliation.md](docs/research/party-reconciliation.md).
-- **A mirrored companion can't fight for a client** except through `companion_local_combat`,
-  which releases a companion standing close enough to both players and the enemy to its own
-  engine AI. See [party-reconciliation.md](docs/research/party-reconciliation.md).
+- **A mirrored companion can't fight for a client** except through `companion_local_combat`
+  (on in the shipped `coop.ini`), which releases a companion standing close enough to both
+  players and the enemy to its own engine AI. See
+  [party-reconciliation.md](docs/research/party-reconciliation.md).
 - **One conversation at a time**, by design — the other player spectates rather than
   getting a separate copy.
-- **Dialogue recruitment sync ships off by default.** The core mechanism is live-confirmed
-  for two companions; a fix for a stale pre-recruit body (companions who are also placed
-  NPCs) is implemented and unit-tested but not yet confirmed live. See
+- **Dialogue recruitment sync is live-confirmed for two companions** (`dialogue_recruit_sync`,
+  on in the shipped `coop.ini`); a fix for a stale pre-recruit body (companions who are also
+  placed NPCs) is implemented and unit-tested but not yet confirmed live. See
   [dialogue-consequences.md](docs/research/dialogue-consequences.md).
 - **Mod-compatibility mismatch handling is live-verified for most categories**, but
   module-GIT and globals-catalogue mismatches are deliberately unforced in testing, and two
@@ -181,6 +215,9 @@ tools/                   RE helpers, demo scripts, the kotor1_0_3 symbol databas
 - **Creature liveness reconciliation** (a body alive on one screen, dead on the other) ships
   off by default. The correction mechanism itself works; a separate freshness theory
   remains unconfirmed either way. See [creature-liveness.md](docs/research/creature-liveness.md).
+- **Chain mode serialises proxies, it doesn't merge them.** A second `dinput8` proxy after
+  ours works because ours forwards to it; a proxy that always loads the system DLL itself
+  must be the last proxy in `dinput8.chain`. Plain "load me" DLLs (`.asi`) go anywhere.
 - **The Endar Spire's command deck floors damage at 1 hp for everyone** — KOTOR's own tutorial
   script, not this mod ([min-one-hitpoint.md](docs/research/min-one-hitpoint.md)). Enemies
   target purely by proximity; alignment is per-player by design, no sync channel needed.
@@ -189,7 +226,7 @@ tools/                   RE helpers, demo scripts, the kotor1_0_3 symbol databas
 
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — the design and why it looks like this.
 - [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md) — prerequisites, build, test, the live rig,
-  repo layout, code conventions, and how to add a feature end-to-end.
+  the CI/release pipeline, repo layout, code conventions, and how to add a feature end-to-end.
 - [docs/CONFIG.md](docs/CONFIG.md) — every `coop.ini` key and CLI flag, with defaults.
 - [docs/CONSOLE.md](docs/CONSOLE.md) — every in-game console verb.
 - [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) — common problems and their causes.
@@ -199,3 +236,4 @@ tools/                   RE helpers, demo scripts, the kotor1_0_3 symbol databas
   addresses were found, and the core RE (movement, object model, rendering, frame hook, spawn) independent of any one feature.
 - [docs/research/README.md](docs/research/README.md) — the full per-feature research index.
 - [tools/README.md](tools/README.md) — what every helper script in `tools/` does.
+- [tools/package-README.md](tools/package-README.md) — the README that ships inside the zip.

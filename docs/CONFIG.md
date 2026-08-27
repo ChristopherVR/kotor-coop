@@ -60,6 +60,7 @@ always sets it (`=1`), so this never surfaces in practice.
 | Key | Default (code) | Meaning | Doc |
 | --- | --- | --- | --- |
 | `auto_start_agent` | ON | plugin launches/attaches the agent itself | — |
+| `dinput8_next` | unset | file (relative to the game dir) the plugin forwards DirectInput calls to instead of the system `dinput8.dll` — overrides the `dinput8.chain` order; see TROUBLESHOOTING.md "Another mod already uses dinput8.dll" | [Exports.cs](../src/KotorCoop.Plugin/Exports.cs) |
 | `menu_button` | ON | plugin's own copy of the menu-button key | [menu-frame-hook.md](research/menu-frame-hook.md) |
 | `bark_replay` | ON | replay a peer's captured NPC bark line | [bark-replay.md](research/bark-replay.md) |
 | `bark_sync` | ON | capture and publish this instance's own barks | [bark-replay.md](research/bark-replay.md) |
@@ -123,16 +124,16 @@ always sets it (`=1`), so this never surfaces in practice.
 `companion_local_combat` and `dialogue_recruit_sync`. The shipped `profiles/coop.ini.example`
 explicitly sets both to `1`. A packaged install therefore ships with both ON; only a
 hand-edited `coop.ini` with the line deleted falls back to OFF.
-⁴ The shipped `coop.ini.example` explicitly sets `effect_sync=0`, overriding the plugin's own
-ON fallback — a packaged install ships with this OFF despite the code default being ON.
-⁵ Same pattern: the shipped file sets `trigger_relay=0`, overriding the plugin's ON fallback.
-⁷ Same pattern again, in the direction that matters most for a first run: the shipped
-`coop.ini.example` sets `menu_button=0` with a comment saying the menu rebind is "awaiting
-live verification" — but that verification happened long ago (the in-game Co-op button is
-listed live-verified elsewhere in this project's own history) and the comment is stale. A
-player who installs the packaged release and follows this project's own Quick Start
-("click Co-op on the main menu") will not see the button until they edit `coop.ini` and set
-`menu_button = 1`.
+⁴ Until 2026-08-27 the shipped `coop.ini.example` set `effect_sync=0` with a stale "OFF until
+live-verified" comment; it now ships `=1`, matching the code fallback and the live-verified
+state. A `coop.ini` installed before then keeps the old value (the installer never overwrites
+an existing one).
+⁵ Same history: `trigger_relay` shipped `=0` with a "not yet run against the live game"
+comment; now `=1`, matching the plugin's ON fallback.
+⁷ Same history, in the direction that matters most for a first run: the shipped file set
+`menu_button=0` with a comment describing the menu rebind as "awaiting live verification"
+long after it had been verified; it now ships `=1`. An upgraded install with an older
+`coop.ini` still needs `menu_button = 1` set by hand (see TROUBLESHOOTING.md).
 ⁸ The shipped `coop.ini.example` sets `port = 27140`, not the code's own 27015. Two peers
 using the packaged release without editing `coop.ini` will actually connect on 27140 — that
 is the real shipped default, not 27015. (`CoopConfig.cs`'s own header-comment example also

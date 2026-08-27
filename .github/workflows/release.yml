@@ -1,0 +1,70 @@
+# Publishes a ready-to-use build as a GitHub release.
+#
+#   git tag v0.1.0 && git push origin v0.1.0     -> release "v0.1.0" with kotor-coop-0.1.0.zip
+#
+# Or run it by hand from the Actions tab (workflow_dispatch) to cut a pre-release from any
+# branch; the zip is then versioned by `git describe` and marked as a pre-release.
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Setup .NET 10
+        uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Build and test
+        run: >
+          dotnet build KotorCoop.slnx -warnaserror &&
+          dotnet test tests/KotorCoop.Tests --no-build
+          --filter "FullyQualifiedName!~HeavyPacketLossStillConverges"
+
+      - name: Package
+        id: package
+        shell: pwsh
+        run: |
+          pwsh tools/package.ps1 -WarnAsError -OutDir dist
+          $zip = Get-ChildItem dist/kotor-coop-*.zip | Select-Object -First 1
+          "zip=$($zip.FullName)" >> $env:GITHUB_OUTPUT
+          "name=$($zip.Name)" >> $env:GITHUB_OUTPUT
+
+      - name: Upload package artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: kotor-coop
+          path: dist/kotor-coop-*.zip
+          if-no-files-found: error
+
+      # Tag push: a full release named after the tag. Manual run: a pre-release named after
+      # git describe, so a branch build can be shared without pretending to be a version.
+      - name: Create GitHub release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $zip = '${{ steps.package.outputs.zip }}'
+          if ('${{ github.ref_type }}' -eq 'tag') {
+            $tag = '${{ github.ref_name }}'
+            gh release create $tag $zip --title $tag --generate-notes --verify-tag
+          }
+          else {
+            $tag = 'build-' + (git describe --tags --always).Trim()
+            gh release create $tag $zip --title $tag --prerelease --target '${{ github.sha }}' `
+              --notes "Pre-release built from ${{ github.ref_name }} @ ${{ github.sha }}. See README.md inside the zip."
+          }
+          if ($LASTEXITCODE -ne 0) { throw "gh release create failed ($LASTEXITCODE)" }

@@ -349,7 +349,7 @@ internal sealed unsafe partial class MenuLoadController(SharedBlockView block)
 
         try
         {
-            string directory = NativeMethods.GetModuleDirectory("dinput8.dll");
+            string directory = NativeMethods.GetGameDirectory();
             string carried = Path.Combine(directory, "Temp", CarriedCharacterFile);
             string pifo = Path.Combine(directory, "Temp", "pifo.ifo");
 

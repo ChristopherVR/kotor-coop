@@ -56,7 +56,7 @@ fails safe. **INFERRED** = a reasonable deduction, not directly proven.
 | [death-handling.md](death-handling.md) | The death pipeline, control-swap, game-over, revival | RE reference; downed/revive implemented and live-verified elsewhere |
 | [spectate-camera.md](spectate-camera.md) | The camera handoff to a downed player's partner | Implemented, live-verified, ON by default |
 | [creature-liveness.md](creature-liveness.md) | Reconciling a body alive on one screen, dead on the other | Design → live-verified for the first time; OFF by default; one sub-theory open, blocked on a missing `spawncreature` verb |
-| [effect-sync.md](effect-sync.md) | The generic non-damage effect dispatcher | Implemented, live-verified both directions; code default ON, shipped `coop.ini.example` OFF |
+| [effect-sync.md](effect-sync.md) | The generic non-damage effect dispatcher | Implemented, live-verified both directions; ON by default in code and (since 2026-08-27) in the shipped `coop.ini.example` |
 
 ## Dialogue
 
@@ -88,7 +88,7 @@ fails safe. **INFERRED** = a reasonable deduction, not directly proven.
 | [item-identity.md](item-identity.md) | What a `CSWSItem` carries that its blueprint does not | Implemented; apply path live-tested via the console item-identity loop |
 | [quest-sync.md](quest-sync.md) | Non-monotonic globals, journal removal, the Lamport-clock fix | Implemented, live-verified, ON by default |
 | [map-reveal.md](map-reveal.md) | Fog-of-war sync around a peer's position | Implemented; pinned VERIFIED by static RE, OFF by default pending a live pass |
-| [trigger-relay.md](trigger-relay.md) | Making a generic trigger's `OnEnter` fire for both players | Implemented, live-verified, protocol 36; code default ON, shipped `coop.ini.example` OFF |
+| [trigger-relay.md](trigger-relay.md) | Making a generic trigger's `OnEnter` fire for both players | Implemented, live-verified, protocol 36; ON by default in code and (since 2026-08-27) in the shipped `coop.ini.example` |
 
 ## Session, network, menu & console
 
