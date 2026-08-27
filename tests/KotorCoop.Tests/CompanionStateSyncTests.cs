@@ -101,6 +101,40 @@ public sealed class CompanionStateSyncTests
         Assert.Equal(string.Empty, decoded.Members[1].EquippedBody);
     }
 
+    /// <summary>
+    /// Root cause 1 of docs/research/companion-state-sync.md's 2026-08-28 round: an exactly
+    /// 16-character resref (KOTOR's own ResRef limit, no terminator required) used to be
+    /// silently truncated to 15 characters crossing the shared-block boundary
+    /// (<c>ProcessMemory.TryWriteAsciiString</c> reserved a byte for a terminator no field
+    /// actually needs — see that method's own remarks). The WIRE codec exercised here was
+    /// never the truncating half — <see cref="PacketWriter.WriteString"/> is length-prefixed,
+    /// not fixed-width, so a 16-byte cap already round-trips a 16-character value correctly —
+    /// but this pins that fact explicitly, at all three sizes the task named, rather than
+    /// leaving it merely implied by the fix living elsewhere.
+    /// </summary>
+    [Theory]
+    [InlineData("g")] // 1 char
+    [InlineData("g_w_blstrpstl00")] // 15 chars
+    [InlineData("g_w_blstrpstl001")] // 16 chars — KOTOR's own ResRef limit, the live-observed case
+    public void PartySnapshotCompanionEquipmentRoundTripsAtEveryResrefBoundaryLength(string resref)
+    {
+        Span<byte> buffer = stackalloc byte[ProtocolConstants.MaxPacketSize];
+        PartySnapshotPacket original = new(1L,
+        [
+            new PartyMemberState(
+                0, Vector3f.Zero, 0f, 0, 20,
+                EquippedBody: resref, EquippedRightWeapon: resref, EquippedLeftWeapon: resref),
+        ]);
+
+        int length = PacketCodec.Write(buffer, original);
+        PartySnapshotPacket? decoded = PacketCodec.ReadPartySnapshot(buffer[..length]);
+
+        Assert.NotNull(decoded);
+        Assert.Equal(resref, decoded.Members[0].EquippedBody);
+        Assert.Equal(resref, decoded.Members[0].EquippedRightWeapon);
+        Assert.Equal(resref, decoded.Members[0].EquippedLeftWeapon);
+    }
+
     // ---- pure rule: max-merge (roadmap item 11) -----------------------------------------
 
     [Fact]

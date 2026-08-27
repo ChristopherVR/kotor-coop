@@ -709,3 +709,139 @@ flipped this round. `dotnet build KotorCoop.slnx -warnaserror` and `src/KotorCoo
 build.ps1 -WarnAsError`: both clean (no source changed this pass — live rig verification and a
 build-script environment fix only, see `src/KotorCoop.Plugin/build.ps1`'s own `$env:Platform`
 comment for the latter, unrelated to this feature).
+
+---
+
+## 9. Both §8 bugs fixed (2026-08-28, worktree round, disassembly/static only — no rig)
+
+Both of §8's findings are code-inspection-confirmed root causes with in-tree fixes this round.
+No rig was available; every VERIFIED-by-test claim below is a passing unit/loopback test in
+`tests/KotorCoop.Tests`, not a live observation. `companion_gear_sync` **stays OFF** — see §9.3.
+
+### 9.1 Root cause A: the 16-character resref truncation
+
+**Not the wire codec.** `PacketWriter.WriteString`/`PacketReader.ReadString`
+(`src/KotorCoop.Protocol/PacketWriter.cs:140`/`PacketReader.cs:128`) are length-PREFIXED (one
+length byte, then that many bytes) — a 16-character value writes length byte `16` and 16 content
+bytes, and the reader's `length > maxLength` guard passes at exactly `16 == 16`. Confirmed by a
+new pinning test at all three sizes the task named
+(`CompanionStateSyncTests.PartySnapshotCompanionEquipmentRoundTripsAtEveryResrefBoundaryLength`,
+1/15/16 chars). This channel was never the bug.
+
+**The real bug: `ProcessMemory.TryWriteAsciiString`**
+(`src/KotorCoop.Memory/ProcessMemory.cs:228`, pre-fix), the helper every FIXED-WIDTH shared-block
+ASCII field goes through — `BlockCompanionEquipResrefLength`/`BlockEquipResrefLength`/
+`BlockItemResrefLength` (all 16, `KotorGameBridge.Party.cs:545` /
+`KotorGameBridge.PluginBlock.cs:39,50`), `BlockCheatTextLength` (32), journal tags, browser
+entries, and every other `TryWriteAsciiString` call site in `KotorCoop.Memory`. It capped
+content at `Math.Min(value.Length, fieldLength - 1)` — reserving the field's LAST byte for a
+null terminator that a KOTOR `CResRef` (a bare `char[16]`, up to 16 characters, no terminator
+required) never needs. Any value exactly `fieldLength` characters long silently lost its last
+character on the way into the block. `ProcessMemory.TryReadAsciiString`
+(`ProcessMemory.cs:172`) was never the problem — it already falls back to the full field width
+when no null byte is found (`end < 0 → end = maxLength`), which is exactly why the live symptom
+was a truncated STRING (`g_w_blstrpstl00`) rather than a crash or a read failure: the write
+dropped a byte, and the correctly-lenient read faithfully reported what was actually there.
+
+**Fix**: `TryWriteAsciiString` now writes up to the full `fieldLength` bytes
+(`Math.Min(value.Length, fieldLength)`); the buffer is a freshly allocated, zero-initialised
+array, so anything past the written content is still correctly null-padded for a shorter value.
+No other file needed to change — `TryReadAsciiString`, the plugin's own C-side resref readers
+(`PartyPresenceController.ApplyCompanionEquipment`'s `while (length < 16 && resref[length] != 0)`,
+`PhantomController.Drive.cs`, `Odyssey.CreatureAnim.cs`, all already capped at the true field
+width `16` with no `-1`), the `ItemTemplateSpawnHook` ring (`ResRefBytes = 16`, copies exactly 16
+raw bytes both into its own capture ring and `SharedBlockView.PublishItemTemplateSpawn`'s shared-
+block ring — never null-terminator-aware), and `KotorGameBridge.ItemTemplateSpawns.cs`'s drain
+(reads via `TryReadAsciiString`) were all already correct. **Audited and left alone**:
+`CheatController.*.cs`'s `while (length < SharedBlock.CheatTextLength - 1 && text[length] != 0)`
+(`CheatTextLength = 32`) reads one byte short of that field's own 32-byte width — a real
+inconsistency with the field's own size, but not a resref-affecting one (every legitimate
+`CheatText` payload — a 16-char resref, a tag, a global's name, capped at 22 characters per
+`SharedBlock.cs`'s own remark on `OffsetCheatText` — fits comfortably under the 31-byte cap it
+actually enforces), so left as a latent, non-triggering oversight rather than touched blind this
+round.
+
+**Tests** (new): `CompanionStateSyncTests.PartySnapshotCompanionEquipmentRoundTripsAtEveryResrefBoundaryLength`
+(wire, 1/15/16 chars — pins the codec was already correct);
+`ExternalTargetTests.FixedWidthResrefFieldsRoundTripAtExactly16BytesWithNoReservedTerminator`
+(the actual fix, against a REAL separate process via `ProcessMemory.TryWriteAsciiString`/
+`TryReadAsciiString` directly at `fieldLength: 16`, 1/15/16 chars — this test fails against the
+pre-fix code, since the 16-char case used to round-trip as 15 characters).
+
+### 9.2 Root cause B: mid-session re-equip never propagating
+
+`PartyPump.PumpParty`'s host branch (`src/KotorCoop.Session/Pumps/PartyPump.cs:20,50`) publishes
+`bridge.ReadPartyMembers(settings.SyncCompanionGear)`, which for a companion reads each equip
+slot through `KotorGameBridge.ReadEquippedResref` (`KotorGameBridge.Items.cs:38`, pre-fix). That
+method — written 2026-08-27, before `_spawnedItemResrefs`/`ItemTemplateSpawnHook` existed
+(item-identity.md §12/§13, 2026-08-28) — duplicated only HALF of `TryGetItemResref`'s own
+precedence: it went straight to `_itemTags` (the vtable/Tag committed-memory scan) and, on a
+miss, was gated to at most one rescan per `ItemTagRebuildMs` (15 seconds) **regardless of how
+many lookups miss** — the exact rate-limit `TryGetItemResref` also has, but reached WITHOUT ever
+first checking `_spawnedItemResrefs`, the cache `RememberSpawnedItemResref` populates and
+`DrainItemTemplateSpawns` feeds the instant the plugin's `ItemTemplateSpawnHook` ring reports a
+freshly-created item. A companion re-equip's item id is, by construction, exactly the kind of id
+that cache learns about immediately (`EquipItemFromTemplateDirect`'s own `CreateItemOnObject`
+call is the SAME VM command the hook watches) — but `ReadEquippedResref` never asked it.
+
+A second, compounding ordering bug: `CoopAgent.PumpOnce` (`src/KotorCoop.Session/CoopAgent.cs`)
+called `_bridge.DrainItemTemplateSpawns()` AFTER both of `PartyPump.PumpParty`'s call sites (the
+`party_fast_pump` fast path and the `!PartyFastPump` fallback), so even a fixed
+`ReadEquippedResref` would have read one tick stale on the exact tick a re-equip's spawn record
+first became available — no live-observable gap on its own (party read next tick would still
+resolve it, at 30-60 Hz), but backwards from the "feed the cache before the read that consumes
+it" ordering this file's own `PumpContainerLoot`/`PumpScriptItemGrants` ordering already
+establishes for the identical reason, and worth fixing on the same principle rather than leaving
+a one-tick race for later.
+
+Neither `PartyPresenceDirtyCheck.CanSkipWrite` (`PartyPresenceDirtyCheck.cs`, agent-side, gates
+the whole-slot block write) nor `EquipApplyDecision.ShouldApply` (plugin-side, gates the actual
+engine equip call) has a "stale last-published snapshot" bug — both were checked by inspection:
+`PartyMemberState` is a `record struct`, so `CanSkipWrite`'s `candidate == lastWritten` compares
+the equip fields too, and correctly does NOT skip a slot whose reported gear differs from what
+was last written; `EquipApplyDecision` compares a freshly-computed hash against the plugin's own
+per-slot `_appliedEquip` every pass with no snapshot to go stale. The propagation gap was
+entirely upstream of both, inside the read that decides WHAT to publish in the first place.
+
+**Fix**: `ReadEquippedResref` now delegates to `TryGetItemResref` (spawn-cache-first, then
+Tag-cache, then the same rate-limited rescan) instead of duplicating half of it — made `internal`
+(from `private`) for direct testability, the same test-seam pattern
+`RememberSpawnedItemResref`/`HasSpawnedItemResref` already use. `CoopAgent.PumpOnce` now calls
+`_bridge.DrainItemTemplateSpawns()` once, before either `PartyPump.PumpParty` call site (moved
+from after `PumpParty`/`PumpContainerLoot` to immediately after the client control-lock block,
+ahead of the "combat path" section), so a re-equip's spawn record is available to the SAME tick's
+party read.
+
+**Tests** (new): `CompanionEquipResrefCachePrecedenceTests.AFreshlyEquippedItemResolvesImmediately
+FromTheSpawnCache` (self-attached, fabricates a creature/inventory in the test host's own
+unmanaged memory; fails against the pre-fix `ReadEquippedResref`, which would have hit the
+15-second gate and returned empty — and would additionally have risked triggering a real
+committed-memory sweep of the test process, which is why the class deliberately never tests the
+uncached-miss path); `CompanionGearLoopbackTests.AMidSessionReEquipOnTheHostReachesTheClient
+WithinAFewTicks` (real `CoopHost`/`CoopClient`/`CoopAgent` over loopback UDP, a fake bridge
+standing in for `KotorGameBridge` — proves the SESSION layer above the bridge (dirty check, wire,
+apply-gating) has no propagation gap of its own once the bridge reports a change, complementing
+rather than reproducing the actual root cause, which lives entirely inside the bridge the fake
+replaces).
+
+### 9.3 `companion_gear_sync` stays OFF
+
+Both fixes are disassembly/code-inspection-confirmed and unit/loopback-tested, but NEITHER has
+been observed against the real game — no rig this round. §8's own live test plan (its numbered
+steps 1-4) is unchanged and still what the next rig pass should run, extended with:
+
+1. Re-run §8's step with `g_w_blstrpstl001` specifically (Trask's real starting sidearm, 16
+   characters) at CONNECT time — confirm the client's log no longer shows
+   `party drive: g_w_blstrpstl00 refused for companion 0x... (failure 8)`, and instead shows the
+   full 16-character name applied.
+2. Re-run §8's mid-session re-equip step (`equip <trask-id> g_w_vbrdblswd01 4` on the HOST while
+   connected) and confirm the CLIENT's log shows the new gear applied within a few seconds — not
+   the 8-plus-minute stall (or worse) §8 observed.
+3. Confirm `LastItemTemplateSpawnLostCount` (`KotorGameBridge`) stays at 0 across the session —
+   a nonzero count would mean the ring's 64-entry capacity is being outrun between drains, which
+   would reintroduce a version of the same gap from a different angle.
+
+`dotnet build KotorCoop.slnx -warnaserror` and `src/KotorCoop.Plugin/build.ps1 -WarnAsError`:
+both clean. `dotnet test tests/KotorCoop.Tests --no-build`: **2352 passed, 0 failed**, including
+this round's 10 new tests (3 wire-codec boundary cases, 3 fixed-width-block boundary cases
+against a real external process, 3 cache-precedence unit tests, 1 loopback test).

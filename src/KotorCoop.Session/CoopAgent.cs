@@ -479,6 +479,23 @@ public sealed class CoopAgent
             _bridge.LockControlToPlayer();
         }
 
+        // Drains KotorCoop.Plugin's item-template-spawn ring (docs/research/item-identity.md
+        // §13) BEFORE anything below samples an item resref, for the same "order matters"
+        // reason PumpContainerLoot's own comment (further down) gives for THAT ordering: a
+        // resref this call learns feeds TryGetItemResref, which ScriptItemGrantPump's diff,
+        // DialoguePump's reward diff, AND (2026-08-28) PartyPump's companion-equipment read
+        // (KotorGameBridge.ReadEquippedResref, via ReadPartyMembers(includeEquipment: true) a
+        // few lines below in both the fast- and slow-pump branches) all read through —
+        // recording it a tick late would mean a companion re-equipped THIS tick still
+        // publishes its OLD gear (or an empty "leave it alone" placeholder) on the one sample
+        // that matters, exactly the mid-session propagation gap
+        // docs/research/companion-state-sync.md's 2026-08-28 round observed live (an 8-plus-
+        // minute stall, since ReadEquippedResref used to skip this cache entirely — see that
+        // method's own remarks). Cheap when nothing is new: one dword read, unconditionally,
+        // every tick, regardless of which capabilities/settings are on — the same "always keep
+        // the cache warm" treatment the tag/address caches already get.
+        _bridge.DrainItemTemplateSpawns();
+
         // --- combat path: a few times a second -------------------------------------------
         //
         // Enemy presence, damage in both directions, and the party mirror. Fast enough that
@@ -577,17 +594,6 @@ public sealed class CoopAgent
         // it just now ALWAYS gets to run, and record, before the script-item pump can sample
         // past it. See docs/research/dialogue-consequences.md's script-item-sync section for
         // the live evidence (Controls 2/3).
-        // Drains KotorCoop.Plugin's item-template-spawn ring (docs/research/item-identity.md
-        // §13) BEFORE the loot/script-item pumps below sample anything, for the same "order
-        // matters" reason as the comment on PumpContainerLoot: a resref this call learns feeds
-        // TryGetItemResref, which ScriptItemGrantPump's diff (and DialoguePump's) reads through
-        // ReadPossessedItems — recording it a tick late would mean an item created THIS tick
-        // gets reported with its Tag proxy instead of its real blueprint on the one sample that
-        // matters. Cheap when nothing is new: one dword read, unconditionally, every tick,
-        // regardless of which capabilities/settings are on — the same "always keep the cache
-        // warm" treatment the tag/address caches already get.
-        _bridge.DrainItemTemplateSpawns();
-
         _lootPump.PumpContainerLoot(caps);
 
         // Script-item grants: called every tick, same as the two fast-path calls above, so it

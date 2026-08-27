@@ -31,11 +31,27 @@ public sealed partial class KotorGameBridge
     /// player has nothing equipped" — the first live run of equipment sync published
     /// three empty resrefs and nothing was ever equipped on a phantom.
     ///
-    /// Ids are resolved through a tag cache built by scanning for the CSWSItem vtable,
-    /// because the external agent has no GetGameObject. Both item layouts are accepted
-    /// (id at +0x14 = CSWSItem base, at +0x04 = the CSWSObject inside it).
+    /// Ids are resolved through <see cref="TryGetItemResref"/> — the SAME (spawn-cache-first,
+    /// then Tag-cache, then a rate-limited rescan) precedence every other resref consumer in
+    /// this bridge uses, because the external agent has no GetGameObject.
+    ///
+    /// ⚠ ROOT CAUSE, 2026-08-28: this method used to duplicate only HALF of that precedence —
+    /// it went straight to <c>_itemTags</c> (the vtable/Tag scan) and never consulted
+    /// <c>_spawnedItemResrefs</c> (fed by <see cref="RememberSpawnedItemResref"/>, including
+    /// the <c>ItemTemplateSpawnHook</c> ring — docs/research/item-identity.md §13 — the instant
+    /// a companion's re-equip creates a brand-new item via <c>CreateItemOnObject</c>). A
+    /// mid-session re-equip's item id is, by construction, one the vtable scan has never seen;
+    /// this method's own 15-second rebuild gate then denied it a chance to resolve until the
+    /// NEXT whole-memory rescan — live-observed (docs/research/companion-state-sync.md,
+    /// 2026-08-28 round) as an 8-plus-minute propagation gap for a host-side companion
+    /// re-equip. Delegating to <see cref="TryGetItemResref"/> gives this the same
+    /// spawn-cache-first answer <c>TryGetItemResref</c>'s own callers (ScriptItemGrantPump,
+    /// DialoguePump's reward diff) already get, so a freshly-created item resolves as soon as
+    /// <see cref="DrainItemTemplateSpawns"/> has drained the ring — the same tick it was
+    /// created on, once <c>CoopAgent.PumpOnce</c> drains the ring before reading party members
+    /// — instead of waiting on a rate-limited full sweep.
     /// </summary>
-    private string ReadEquippedResref(nint creature, int slotOffset)
+    internal string ReadEquippedResref(nint creature, int slotOffset)
     {
         if (!_memory.TryReadPointer(creature + OffInventory, out nint inventory) || inventory == 0
             || !_memory.TryReadUInt32(inventory + slotOffset, out uint itemId)
@@ -44,44 +60,7 @@ public sealed partial class KotorGameBridge
             return string.Empty;
         }
 
-        if (_itemTags.TryGetValue(itemId, out string? cached))
-        {
-            return cached;
-        }
-
-        // ⚠ A MISS MUST NOT COST A SCAN. RebuildItemTagCache walks the game's committed
-        // memory looking for the item vtable; this method runs three times per tick (body,
-        // right hand, left hand), so a single id that never resolves — an empty slot holding
-        // a stale id, or an item whose tag cannot be read — meant three full memory scans
-        // EVERY TICK. That pinned a CPU core, dropped the pump from 60 Hz to about 4, and
-        // measured end to end as a peer taking 3-7 seconds to move. It was the single
-        // biggest cause of the "everything lags by seconds" report.
-        //
-        // So: rate-limit rebuilds regardless of how many lookups miss (below), rather than
-        // remembering which specific ids missed.
-        //
-        // ⚠ THIS USED TO ALSO PERMANENTLY BLACKLIST A MISSED id (a HashSet<uint>, checked and
-        // added to right here, short-circuiting every future lookup for that id before ever
-        // reaching the rebuild below). That is wrong for a GENUINELY NEW item: `companion_
-        // gear_sync`'s live-verification round (docs/research/companion-state-sync.md)
-        // observed a freshly created item's id miss on the very first read after
-        // `EquipItemFromTemplate` created it — before the periodic scan below had a chance to
-        // include it — and then never resolve again for the rest of the session, because the
-        // blacklist check returned early on every subsequent tick and no code path ever
-        // retried it. The time-gate immediately below already does the ONLY thing the
-        // blacklist was for (stopping a miss from costing a scan on every tick); removing the
-        // blacklist costs nothing extra and lets a new item resolve on the next scheduled scan
-        // instead of never.
-        long nowMs = Environment.TickCount64;
-        if (nowMs - _itemTagsBuiltAtMs < ItemTagRebuildMs)
-        {
-            return string.Empty;
-        }
-
-        _itemTagsBuiltAtMs = nowMs;
-        RebuildItemTagCache();
-
-        return _itemTags.TryGetValue(itemId, out string? found) ? found : string.Empty;
+        return TryGetItemResref(itemId, out string resref) ? resref : string.Empty;
     }
 
     /// <summary>Minimum gap between item-tag scans, however many lookups miss.</summary>
