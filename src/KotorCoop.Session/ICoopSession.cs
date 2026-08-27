@@ -27,6 +27,7 @@ public interface ICoopSession :
     ILootSession,
     IJournalSession,
     IPartyPoolSession,
+    IStoreSession,
     IDisposable
 {
 }

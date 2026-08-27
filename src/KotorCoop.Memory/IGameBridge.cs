@@ -265,9 +265,37 @@ public static class CheatKinds
     /// <c>SharedBlock.CheatKindLootTake</c>. <c>Address</c>/<c>Target</c> name the container
     /// (tag or object id; blank = nearest), same shape as <c>UsePlaceable</c>. Local only.
     ///
-    /// ⚠ 29 is the highest number taken now. Take the next FREE one for a new verb.
     /// </summary>
     public const uint LootTake = 29;
+
+    /// <summary>
+    /// Inserts <c>Amount</c> units of a resref+identity stack into store <c>Target</c>'s stock
+    /// (<c>CSWSStore+0x230</c>): spawns the item into the local player's own inventory (the
+    /// SAME <c>CreateItemOnObject</c> VM routine <see cref="PartyPoolAdd"/> already uses),
+    /// applies its identity exactly like <see cref="SetItem"/>, then unlinks it from the
+    /// player's own backpack and links it into the RESOLVED store's repository through
+    /// <c>CItemRepository::InsertItem</c> — the store is resolved from <c>Target</c> (its
+    /// object id) via the engine's own type-checked
+    /// <c>CServerExoAppInternal::GetStoreByGameObjectID</c>, needing no GUI open. <c>Text</c> is
+    /// the resref, <c>Amount</c> the stack size, Charges/MaxCharges/Upgrades/ItemFlags the rest
+    /// of the stack identity. See <c>SharedBlock.CheatKindStoreInsert</c> and
+    /// docs/research/store-sync.md.
+    /// </summary>
+    public const uint StoreInsert = 30;
+
+    /// <summary>
+    /// Removes <c>Amount</c> units of a resref+identity stack from store <c>Target</c>'s stock,
+    /// through the engine's own <c>CItemRepository::RemoveItem</c> — greedily over whichever
+    /// live items in that store's repository match the requested resref (by Tag) and identity,
+    /// reducing or deleting entries until the requested count is accounted for. An item whose
+    /// Infinite bit is set (item flags <c>+0x288</c> bit 2) is skipped during matching — see
+    /// docs/research/store-sync.md §1.5/§2.4. Same field layout as <see cref="StoreInsert"/>.
+    /// See <c>SharedBlock.CheatKindStoreRemove</c>.
+    ///
+    /// ⚠ 31 is the highest number taken now. Take the next FREE one for a new verb —
+    /// CheatKindSyncTests.NoTwoCheatKindsShareANumber will fail the build on a collision.
+    /// </summary>
+    public const uint StoreRemove = 31;
 }
 
 /// <summary>
@@ -283,6 +311,7 @@ public interface IGameBridge :
     IPlaceableBridge,
     IContainerLootBridge,
     IPartyPoolBridge,
+    IStoreBridge,
     IMenuBridge,
     ITravelBridge,
     IDialogueBridge,

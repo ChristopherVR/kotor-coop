@@ -184,6 +184,13 @@ public sealed partial class CoopHost
             ResyncPartyPool(now);
             _partyPoolSender.ResetBackoff();
 
+            // Same reasoning again, for merchant store stock: a peer away long enough to lose
+            // its live entry has also missed however many buy/sell ops happened while it was
+            // gone. ResyncStore re-offers every (store, stack) entry as an ABSOLUTE fact
+            // (StoreOpKind.Set), safe even if this peer's own store still holds a stale total.
+            ResyncStore(now);
+            _storeSender.ResetBackoff();
+
             // A returning client's FIRST liveness packet is a full snapshot (every cycle
             // already is one), so all this needs is to not make them wait out the ordinary
             // 2-second interval for it — see BroadcastCreatureLiveness.

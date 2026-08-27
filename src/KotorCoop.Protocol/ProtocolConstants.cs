@@ -124,8 +124,12 @@ public static class ProtocolConstants
     /// Version 44: container-lock explicit arbitration — <see cref="PacketType.LockResponse"/> (56)
     /// is new and <c>InteractionClaimPacket</c> gained <c>RequestSerial</c>. See
     /// docs/research/container-sync.md.
+    ///
+    /// Version 45: <see cref="PacketType.StoreOp"/> (57) / <see cref="PacketType.StoreAck"/> (58) /
+    /// <see cref="PacketType.StoreSyncRequest"/> (59) — the merchant/store stock channel
+    /// (<c>store_sync</c>, default OFF, NEEDS-LIVE). See docs/research/store-sync.md.
     /// </summary>
-    public const byte Version = 44;
+    public const byte Version = 45;
 
     /// <summary>Journal quest tags are resrefs plus a little slack.</summary>
     public const int MaxJournalTagLength = 32;
@@ -157,6 +161,13 @@ public static class ProtocolConstants
     /// still change quantity past the cap, only a brand-new key is refused.
     /// </summary>
     public const int MaxPartyPoolStacks = 256;
+
+    /// <summary>
+    /// Distinct store stack keys (across every store, since <see cref="StoreStackKey"/> already
+    /// carries the store's object id) a session remembers at once. Same reasoning and the same
+    /// cap value as <see cref="MaxPartyPoolStacks"/> — see docs/research/store-sync.md.
+    /// </summary>
+    public const int MaxStoreStacks = 256;
 
     /// <summary>
     /// Creatures the owner replicates per snapshot. 40 bytes each (id, health, death,

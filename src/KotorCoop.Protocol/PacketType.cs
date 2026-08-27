@@ -509,4 +509,22 @@ public enum PacketType : byte
     /// <c>RequestSerial</c> and never receives this type.
     /// </summary>
     LockResponse = 56,
+
+    /// any -&gt; all, relayed by the host: a change to a merchant store's stock
+    /// (<c>CSWSStore+0x230</c>'s <c>CItemRepository</c>) — some number of units of a
+    /// resref+identity stack were added to (a sell), or removed from (a buy), the named store.
+    /// Reliable via retransmit-until-ack, the same shape as <see cref="PartyPoolOp"/>, keyed by
+    /// STORE OBJECT ID plus content: unlike a party-pool item, a store is a real GIT-placed
+    /// <c>CGameObject</c> both instances share an id for. See docs/research/store-sync.md. Off
+    /// by default (<c>store_sync</c>), NEEDS-LIVE.
+    /// </summary>
+    StoreOp = 57,
+
+    /// <summary>A peer's acknowledgement of a <see cref="StoreOp"/>. See
+    /// <see cref="PartyPoolAck"/> for the identical shape and reasoning.</summary>
+    StoreAck = 58,
+
+    /// <summary>client -&gt; host: my store version/digest disagrees, resync — the same role
+    /// <see cref="PartyPoolSyncRequest"/> plays for the party pool.</summary>
+    StoreSyncRequest = 59,
 }

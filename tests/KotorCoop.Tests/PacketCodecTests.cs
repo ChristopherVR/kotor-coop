@@ -678,6 +678,48 @@ public class PacketCodecTests
     }
 
     [Fact]
+    public void StoreOpPacketsRoundTrip()
+    {
+        Span<byte> buffer = stackalloc byte[ProtocolConstants.MaxPacketSize];
+
+        StoreStackKey key = new(0x1000, "g_w_blstrpstl001", 3, 50, 0x5, ItemIdentity.FlagKnown);
+
+        StoreOpPacket add = new(1, 42, StoreOpKind.Add, key, 20);
+        int addLength = PacketCodec.Write(buffer, add);
+        Assert.Equal(add, PacketCodec.ReadStoreOp(buffer[..addLength]));
+
+        StoreOpPacket remove = new(2, 7, StoreOpKind.Remove, key, 5);
+        int removeLength = PacketCodec.Write(buffer, remove);
+        Assert.Equal(remove, PacketCodec.ReadStoreOp(buffer[..removeLength]));
+
+        // Set (resync) carries an ABSOLUTE count, which is legitimately 0 (a key that no
+        // longer exists at all — the resync still names it so a stale peer clears it).
+        StoreOpPacket set = new(1, 3, StoreOpKind.Set, key, 0);
+        int setLength = PacketCodec.Write(buffer, set);
+        Assert.Equal(set, PacketCodec.ReadStoreOp(buffer[..setLength]));
+
+        StoreAckPacket ack = new(3, 42);
+        int ackLength = PacketCodec.Write(buffer, ack);
+        Assert.Equal(ack, PacketCodec.ReadStoreAck(buffer[..ackLength]));
+
+        StoreSyncRequestPacket sync = new(3, 12, 0xDEADBEEFCAFEBABEUL);
+        int syncLength = PacketCodec.Write(buffer, sync);
+        Assert.Equal(sync, PacketCodec.ReadStoreSyncRequest(buffer[..syncLength]));
+    }
+
+    [Fact]
+    public void StoreOpWithZeroCountDeltaIsRejectedForAddAndRemove()
+    {
+        // A non-Set op with a zero delta is not a real event and would never legitimately be
+        // sent — the codec refuses it as malformed rather than silently accepting a no-op.
+        Span<byte> buffer = stackalloc byte[ProtocolConstants.MaxPacketSize];
+        StoreStackKey key = new(0x1000, "g_w_blstrpstl001", 0, 0, 0, ItemIdentity.FlagKnown);
+
+        int length = PacketCodec.Write(buffer, new StoreOpPacket(1, 1, StoreOpKind.Add, key, 0));
+        Assert.Null(PacketCodec.ReadStoreOp(buffer[..length]));
+    }
+
+    [Fact]
     public void MaterialisedLootPacketsRoundTrip()
     {
         Span<byte> buffer = stackalloc byte[ProtocolConstants.MaxPacketSize];

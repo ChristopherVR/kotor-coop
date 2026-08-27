@@ -633,4 +633,21 @@ internal partial struct SharedBlock
     /// </summary>
     public const uint CheatKindLootTake = 29;
 
+    /// <summary>
+    /// Inserts a resref+identity stack into a store's stock. Mirrors
+    /// <c>IGameBridge.CheatKinds.StoreInsert</c> exactly — see that constant's own doc comment
+    /// for the full reasoning. <c>CheatTarget</c> is the store's object id, <c>CheatText</c> the
+    /// resref, <c>CheatAmount</c> the stack size, Charges/MaxCharges/Upgrades/ItemFlags the rest
+    /// of the stack identity. See docs/research/store-sync.md.
+    /// </summary>
+    public const uint CheatKindStoreInsert = 30;
+
+    /// <summary>
+    /// Removes a resref+identity stack from a store's stock. Mirrors
+    /// <c>IGameBridge.CheatKinds.StoreRemove</c> exactly. Same field layout as
+    /// <see cref="CheatKindStoreInsert"/>.
+    ///
+    /// ⚠ 31, because 7-30 are taken. Take the next FREE number.
+    /// </summary>
+    public const uint CheatKindStoreRemove = 31;
 }

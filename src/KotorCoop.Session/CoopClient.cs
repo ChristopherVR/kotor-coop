@@ -172,6 +172,8 @@ public sealed partial class CoopClient : ICoopSession
             [PacketType.MaterialisedLoot] = HandleMaterialisedLoot,
             [PacketType.PartyPoolOp] = HandlePartyPoolOp,
             [PacketType.PartyPoolAck] = HandlePartyPoolAck,
+            [PacketType.StoreOp] = HandleStoreOp,
+            [PacketType.StoreAck] = HandleStoreAck,
             [PacketType.CreatureLiveness] = HandleCreatureLiveness,
             [PacketType.Pong] = HandlePong,
             [PacketType.None] = HandleNone,
@@ -368,6 +370,16 @@ public sealed partial class CoopClient : ICoopSession
             }
         }
 
+        // Same one-recipient shape as ContainerLoot above.
+        foreach (StoreOpPacket op in _storeSender.CollectDue(LootRecipients, now))
+        {
+            int storeLength = PacketCodec.Write(_sendBuffer, op);
+            if (storeLength > 0)
+            {
+                _channel.Send(_hostEndPoint, _sendBuffer.AsSpan(0, storeLength));
+            }
+        }
+
         // Report our in-world digest so the host can judge the world-time match (globals,
         // save, module GIT). Mostly stable — only the module fields move, on a module
         // change — so a low rate is plenty; only once at least one field has resolved.
@@ -483,7 +495,7 @@ public sealed partial class CoopClient : ICoopSession
         // traffic the host sends to MEMBERS counts: the snapshots, the levels, the handshake.
         if (type is not (PacketType.Pong or PacketType.FlagAck or PacketType.ItemAck
             or PacketType.JournalAck or PacketType.ContainerLootAck or PacketType.DialogueGrantAck
-            or PacketType.PartyPoolAck))
+            or PacketType.PartyPoolAck or PacketType.StoreAck))
         {
             _lastInboundMs = now;
             _recvIntervals.Record(now);

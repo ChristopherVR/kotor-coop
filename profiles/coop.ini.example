@@ -707,3 +707,15 @@ solo_segment_spectate=0
 # solo_segment_spectate, comma-separated. Only read by the plugin. Leave unset unless testing
 # against a different module or a future mod's own forced-solo content.
 ;solo_segment_modules=
+
+# Sync merchant store stock (CSWSStore+0x230) both ways: a limited-stock item bought on one
+# instance disappears from the other's copy of that shop, and an item sold to a merchant on one
+# instance appears in the other's. Keyed by (store object id, resref + charges/max charges/
+# upgrades/identified-stolen-nonequippable) - a store IS a real GIT-placed object both instances
+# share an id for, unlike the party pool. Reads a store's stock only while a local player has
+# that store's GUI open (docs/research/store-sync.md); an infinite-stock item's buys never
+# replicate (the engine's own stock never changes for one). Gold is NOT touched by this channel -
+# the existing gold ledger already reconciles what a buy/sell costs. NEEDS-LIVE: same status as
+# party_pool_sync above - researched and verified against the disassembly, not yet watched land
+# on a running game. 1 turns it on.
+store_sync=0
