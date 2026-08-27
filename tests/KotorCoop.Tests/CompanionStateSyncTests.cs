@@ -247,28 +247,41 @@ public sealed class CompanionStateSyncTests
     // ---- pure rule: NWScript slot id -> CSWSCreature::EquipItem's internal slot index -----
 
     [Fact]
-    public void EquipSlotMapMapsBodyToTheVerifiedInternalIndex()
+    public void EquipSlotMapMapsBodyToTheVerifiedBitFlag()
     {
-        // Cross-checked live-in-the-binary: CSWSCreature::ForceEquipClothing's own call site
-        // (0x00501D69) pushes slot=2 for a body/clothing equip.
+        // 1 << 1 = 2. VERIFIED by full disassembly of CSWInventory's slot resolver (0x5A49C0)
+        // and cross-checked live-in-the-binary: CSWSCreature::ForceEquipClothing's own call
+        // site (0x00501D69) pushes slot=2 for a body/clothing equip. Body's value happens to
+        // equal the old (wrong) "byte offset / 4" formula's result too — coincidence, not
+        // corroboration.
         Assert.Equal(EquipSlotMap.InternalSlotBody, EquipSlotMap.ToInternalSlot(nwscriptSlot: 1));
         Assert.Equal(2, EquipSlotMap.ToInternalSlot(1));
+        Assert.Equal(0x08, EquipSlotMap.ToSlotByteOffset(1));
     }
 
     [Fact]
-    public void EquipSlotMapMapsRightWeaponToTheOffsetDerivedIndex()
+    public void EquipSlotMapMapsRightWeaponToTheVerifiedBitFlag()
     {
-        // +0x14 / 4 = 5. NEEDS-LIVE: not cross-checked against a second literal call site.
+        // 1 << 4 = 0x10 (16) — NOT 5 (the old, wrong "+0x14 / 4" formula). VERIFIED two
+        // independent ways by disassembly this round: CSWInventory's slot resolver (0x5A49C0)
+        // maps bit-flag 0x10 to creature->inventory+0x14, and
+        // ExecuteCommandActionEquipItem (0x005355F0) converts NWScript slot 4 to 2^4=16 via an
+        // explicit FPU pow() call before ever reaching AddEquipItemActions.
         Assert.Equal(EquipSlotMap.InternalSlotRightWeapon, EquipSlotMap.ToInternalSlot(nwscriptSlot: 4));
-        Assert.Equal(5, EquipSlotMap.ToInternalSlot(4));
+        Assert.Equal(0x10, EquipSlotMap.ToInternalSlot(4));
+        Assert.Equal(0x14, EquipSlotMap.ToSlotByteOffset(4));
     }
 
     [Fact]
-    public void EquipSlotMapMapsLeftWeaponToTheOffsetDerivedIndex()
+    public void EquipSlotMapMapsLeftWeaponToTheVerifiedBitFlag()
     {
-        // +0x18 / 4 = 6. NEEDS-LIVE: not cross-checked against a second literal call site.
+        // 1 << 5 = 0x20 (32) — NOT 6 (the old, wrong "+0x18 / 4" formula). Same two-way
+        // verification as the right-weapon slot: CSWInventory's slot resolver maps bit-flag
+        // 0x20 to creature->inventory+0x18, and the 2^slot conversion gives 2^5=32 for
+        // NWScript slot 5.
         Assert.Equal(EquipSlotMap.InternalSlotLeftWeapon, EquipSlotMap.ToInternalSlot(nwscriptSlot: 5));
-        Assert.Equal(6, EquipSlotMap.ToInternalSlot(5));
+        Assert.Equal(0x20, EquipSlotMap.ToInternalSlot(5));
+        Assert.Equal(0x18, EquipSlotMap.ToSlotByteOffset(5));
     }
 
     [Theory]
@@ -283,6 +296,7 @@ public sealed class CompanionStateSyncTests
         // 5) are known — anything else must refuse rather than guess an internal index and
         // silently equip into the wrong slot.
         Assert.Equal(-1, EquipSlotMap.ToInternalSlot(nwscriptSlot));
+        Assert.Equal(-1, EquipSlotMap.ToSlotByteOffset(nwscriptSlot));
     }
 
     // ---- PartyPump: settings/capability gating and anti-echo -----------------------------

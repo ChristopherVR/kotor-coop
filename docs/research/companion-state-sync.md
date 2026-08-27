@@ -977,3 +977,185 @@ default (`0`, OFF) in `coop.ini`/`AgentSettings`/`CoopConfig`/`profiles/coop.ini
 capture `EquipItemFn`'s real return value (a one-line diagnostic log is enough) on a weapon-slot
 call that reports success but does not land, and follow whatever non-zero code comes back into
 `CanEquipWeapon`'s own disassembly (`0x5A4950`) rather than guessing further.
+
+---
+
+## 11. §10's weapon-slot bug, root-caused (2026-08-28, worktree round, disassembly/static only —
+## no rig): `EquipItemFn`'s return value was a red herring; the real bug is `EquipSlotMap`'s slot
+## encoding, and the fix is fully disassembly-VERIFIED, not INFERRED
+
+No rig was available this round (`Get-Process swkotor,KotorCoop.Agent` showed a live pair at the
+start of the round — another session's, per this repo's own parallel-session hazard rules — and
+it was gone by the time this round's builds finished; nothing here was exercised against a
+running game). Every claim below is either read directly out of `C:\GOG Games\Star Wars KOTOR
+(GOG)\swkotor.exe` with `tools/disasm.py`/`tools/q.py`/raw jump-table extraction, or a passing
+unit test — tagged VERIFIED/INFERRED/NEEDS-LIVE throughout, same discipline as every other
+section here.
+
+### 11.1 `CSWSCreature::EquipItem` (0x004FEB90), fully disassembled: single entry, single exit,
+### unconditional success
+
+The complete function body is `0x004FEB90`-`0x004FECDC` (`ret 0x14` — 20 bytes of stack args,
+matching the 5-dword signature `EquipItem(int nInternalSlot, object oItem, int p3, int p4, int
+p5)` used from C#). Tracing every jump target in that range: **every branch lands inside
+0x004FEB90-0x004FECDC, and the function has exactly one `ret`, which unconditionally sets
+`eax = 1` first** (`0x004FECCC: mov eax, 1`). There is no refusal path, no `CanEquip`/feat/
+proficiency check, and no two-handed-conflict check anywhere in this function. VERIFIED.
+
+The calls inside, identified against `tools/kotor1_0_3.db` (all `param_size_bytes` cross-checked
+against the binary's own `ret` immediate by `tools/q.py`'s built-in auditor, no mismatch
+warnings):
+
+| Address | Call | What it actually does (VERIFIED by disassembly, this round) |
+| --- | --- | --- |
+| 0x005A4950 | `CSWInventory::GetItemInInventory(item)` | **Not** a can-equip gate — despite the DB name and this doc's own earlier (§7) comment calling it `CanEquipWeapon`. Loops the inventory's 18 equip-slot dwords (`inv+4` .. `inv+0x4C`) comparing each to the incoming item's own id (`item+0x14`) and returns whether the item is ALREADY equipped somewhere on this creature. |
+| 0x004FAA70 | `CSWSCreature::UnequipItem(creature, item)` | Called ONLY if the check above was true — i.e. only to detach the INCOMING item from wherever it was already equipped when moving it to a new slot. Never called on whatever currently occupies the DESTINATION slot. |
+| 0x00553BB0 | `CSWSItem::ApplyItemProperties(item, creature, slot, p4)` | Gated on `p3` (the call site's third trailing arg, `1` at every clean call site found). |
+| 0x005A4BE0 | `CSWInventory::PutItemInSlot(slot, item)` | The actual write — see §11.2, this is where the bug lives. |
+| 0x004ECE80, 0x005ADDC0 | `ComputeArmourClass`, `UpdateCombatInformation` (stat recompute) | Unconditional, no return checked. |
+
+This is a bare "put this item in this slot right now" primitive with no validation of its own —
+consistent with its only other 15 xrefs, all inside the AI-helper families `ForceEquipClothing`/
+`EquipMostDamagingMeleeWeapon`/etc., which call it only on state they already control.
+
+### 11.2 The actual bug: `CSWInventory::PutItemInSlot`'s write is silently conditional on the
+### slot argument resolving to a valid pointer — VERIFIED by disassembling its slot resolver and
+### reading its jump tables as raw data
+
+`PutItemInSlot` (0x005A4BE0) itself is three instructions: call a private slot-to-pointer helper
+(0x005A49C0) with the slot argument, and if the returned pointer is non-NULL, write the item's id
+(`item+0x14`) there; if NULL, `ret 8` with **no signal to the caller** — `EquipItem` still runs
+every subsequent step (stat recompute, broadcast) and still returns 1.
+
+The resolver, 0x005A49C0, was fully disassembled and its two jump tables (at 0x5A4A88 and
+0x5A4AA8, plus the byte-remap table at 0x5A4ABC) read as raw dwords/bytes with a small script
+(not disassembled as code — capstone mis-decodes table data as garbage instructions, which is
+what produced nonsense like `loope`/`add al,4` runs in a naive linear disassembly of that range).
+**The slot argument is a single-bit BIT-FLAG, not an array index or a byte-offset-divided-by-4
+value**:
+
+| Bit-flag value | `CSWInventory` offset | NWScript `INVENTORY_SLOT_*` (nwscript.nss) |
+| --- | --- | --- |
+| 0x0001 | +0x04 | HEAD (0) |
+| **0x0002** | **+0x08** | **BODY (1)** |
+| 0x0004 | +0x0C | (unused slot 2) |
+| 0x0008 | +0x10 | HANDS (3) |
+| **0x0010** | **+0x14** | **RIGHTWEAPON (4)** |
+| **0x0020** | **+0x18** | **LEFTWEAPON (5)** |
+| 0x0040 | +0x1C | LEFTARM (6) |
+| 0x0080 | +0x20 | RIGHTARM (7) |
+| 0x0200 | +0x28 | BELT (9) |
+| 0x0400 | +0x2C | (unused slot 10) |
+| 0x1000 | — (explicitly invalid) | (unused slot 12) |
+| 0x4000 | +0x30 | CWEAPON_L (14) |
+| 0x8000 | +0x34 | CWEAPON_R (15) |
+| 0x10000 | +0x38 | CWEAPON_B (16) |
+| 0x20000 | +0x3C | CARMOUR (17) |
+
+Every value that is NOT one of these single bits (3, 5, 6, 7, 0x1000, ...) hits the resolver's
+own invalid path and returns NULL. VERIFIED — read directly from the resolver's own jump-table
+bytes.
+
+**`EquipSlotMap`'s old formula — internal slot = `CSWInventory` byte offset ÷ 4 — gave 2/5/6 for
+body/right-weapon/left-weapon.** Body's value (2) is correct by pure coincidence: `0x08 ÷ 4 == 2`
+and BODY's real bit-flag is also `2`. The two weapon slots were NOT so lucky: `0x14 ÷ 4 == 5` and
+`0x18 ÷ 4 == 6`, and **neither 5 nor 6 is a valid bit-flag** — both hit the resolver's invalid
+path every time, so `PutItemInSlot`'s write silently never happened for a weapon slot, while
+`EquipItem` kept reporting success. This fully explains §10.2's live symptom (a weapon-slot raw
+`CSWInventory` dword that never changed across repeated "successful" equip calls) without needing
+any `CanEquipWeapon`/proficiency theory at all — no such gate exists in this call path (§11.1).
+
+### 11.3 Independent, second confirmation: the engine's own NWScript-to-internal-slot conversion
+
+`CSWVirtualMachineCommands::ExecuteCommandActionEquipItem` (0x005355F0 — the VM handler for
+NWScript's `ActionEquipItem`, confirmed by name in `tools/kotor1_0_3.db`) validates its
+`nInventorySlot` argument is in `[0, 18)` (`cmp eax, 0x12; jge <fail>`) and then, at
+`0x00535667`-`0x0053567B`, converts it with an explicit floating-point computation:
+`fld qword ptr [0x741df8]` (loads the constant `2.0`), `fild dword ptr [esp+8]` (loads the
+NWScript slot as a double), `call 0x6fc1f0` (`pow`), `call 0x6fae8c` (double→int), storing the
+result back over the original slot value — i.e. **the engine itself computes
+`internalSlot = 1 << nwscriptSlot`** before ever calling `CSWSCreature::AddEquipItemActions`
+(0x004F0420). VERIFIED by disassembly.
+
+`AddEquipItemActions`'s own refusal gate (0x004F043C-0x004F044D, "if item is already equipped in
+one of these slots AND the slot is one of {...}, refuse") compares its slot argument against the
+literals `2`, `1`, `0x10`, `0x20` — the identical four bit-flag values from §11.2's table, not
+5/6. Third independent confirmation of the same scheme.
+
+**`1 << nwscriptSlot` for NWScript slots 1/4/5 gives 2/0x10(16)/0x20(32)** — exactly the values
+the task's own framing named as the thing to check ("a bit-flag mask like NWScript's
+INVENTORY_SLOT_RIGHTWEAPON=16 / LEFTWEAPON=32 / BODY=2"). VERIFIED, three independent ways, all
+from this round's own disassembly of the GOG 1.0.3 binary — no longer INFERRED/NEEDS-LIVE the way
+§7's original slot table was.
+
+### 11.4 The fix
+
+`EquipSlotMap.ToInternalSlot` (`src/KotorCoop.Plugin/EquipSlotMap.cs`) now computes
+`InternalSlotBody = 1 << 1 = 2`, `InternalSlotRightWeapon = 1 << 4 = 0x10`,
+`InternalSlotLeftWeapon = 1 << 5 = 0x20`, replacing the old "byte offset ÷ 4" formula. A new
+`EquipSlotMap.ToSlotByteOffset(nwscriptSlot)` exposes the same three raw `CSWInventory` offsets
+(0x08/0x14/0x18) for verification reads (§11.5) — kept as a second, independent function rather
+than derived from the bit-flag value, so a test can catch the two ever disagreeing.
+
+`Odyssey.EquipItemFromTemplateDirect` (`src/KotorCoop.Plugin/Odyssey.Equipment.cs`) no longer
+trusts `EquipItemFn`'s return value alone (it is VERIFIED, §11.1, to always be 1) — it checks it
+anyway (defensive, in case a future build or an untraced call path ever does refuse) and then, on
+top of that, reads the raw slot back (`creature+0xA2C` → `CSWInventory*`, offset from
+`EquipSlotMap.ToSlotByteOffset`) and confirms it now holds the newly created item's id before
+reporting success. A mismatch (unresolved slot, or any other silent engine-side no-op) is now a
+real, distinct failure code (25 = inventory pointer null, 26 = the slot did not end up holding the
+new item) surfaced through the existing `out int failure` — which `PartyPresenceController
+.ApplyCompanionEquipment` and `CheatController.Progression.Equip()` already log and report to the
+caller (`party drive: ... refused ... (failure N)` / the cheat reply), unchanged this round. No
+call site needed to change: both already treated a `false` return as a real failure — the bug was
+that `EquipItemFromTemplateDirect` itself never returned `false` for this specific case.
+
+### 11.5 What is VERIFIED vs still NEEDS-LIVE
+
+**VERIFIED** (read directly from the GOG 1.0.3 binary this round, or a passing test): the full
+`CSWSCreature::EquipItem` disassembly and its single unconditional-success return (§11.1); that
+`0x5A4950` is `GetItemInInventory`/"is already equipped", not a can-equip gate; the `PutItemInSlot`
+→ slot-resolver call chain and its complete bit-flag table (§11.2), read as raw table data, not
+guessed; the `2^slot` conversion inside `ExecuteCommandActionEquipItem` (§11.3); the matching
+literals in `AddEquipItemActions`'s own refusal gate; `EquipSlotMap`'s new values and
+`ToSlotByteOffset` (`CompanionStateSyncTests.EquipSlotMapMaps*`); `dotnet build
+KotorCoop.slnx -warnaserror` and `src/KotorCoop.Plugin/build.ps1 -WarnAsError` both clean;
+`dotnet test tests/KotorCoop.Tests --no-build`: **2355 passed, 0 failed**.
+
+**NEEDS-LIVE** (reasoned from a fully-disassembled call chain, not yet observed running — no rig
+this round): that the corrected bit-flag values actually make a live weapon-slot equip land on a
+running game exactly as the disassembly predicts; that the new readback verification
+(`creature+0xA2C` → slot dword) reads what is expected on a live creature immediately after the
+call (the same offset is already load-bearing elsewhere — `Odyssey.Combat.Attack.cs`,
+`Odyssey.PartyPool.cs` — but not yet read back in THIS specific sequence, same call, same frame);
+that failure 24 (`EquipItemFn` returning 0) never actually fires in practice, matching the
+disassembly's single-`ret` finding. `companion_gear_sync` **stays OFF** — this round is
+disassembly/code-inspection-confirmed and unit-tested only, not live-verified, the same standard
+§9 held itself to before its own live pass.
+
+### 11.6 Live test plan for the next rig pass (re-runs §10.2's exact failing scenario)
+
+1. Build and install both instances fresh (`src/KotorCoop.Plugin/build.ps1 -Install
+   -WarnAsError` on both game directories — a stale plugin re-tests the OLD 5/6 encoding).
+2. On the HOST, with `companion_gear_sync` still OFF: `equip 0x127 g_w_lghtsbr01 4` (right
+   weapon, nwscript slot 4 → internal slot now `0x10`) via the `equip` dev verb, targeting Trask.
+   Confirm the plugin log's `equip: 'g_w_lghtsbr01' equipped on 0x127 slot 4` line, same as
+   before.
+3. **Read the raw `CSWInventory` weapon slot on the HOST directly**, the same technique §10.2's
+   own rig round used: `creature (0x127) + 0xA2C` → inventory pointer → `+0x14` for right weapon.
+   Confirm it now holds the NEW item's object id (not the pre-existing `0x129`/whatever was there
+   before) — this is the exact assertion §10.2 found broken.
+4. Repeat step 2-3 immediately with a SECOND different resref to the SAME slot (the specific
+   thing that never worked in §10.2 even once past the first attempt) — confirm the raw slot
+   updates to the second item's id, not stuck on the first.
+5. Repeat for the left-weapon slot (`equip 0x127 <resref> 5`, internal `0x20`, raw offset
+   `+0x18`) with two consecutive different resrefs the same way.
+6. If any of 3-5 fails: capture `EquipItemFromTemplateDirect`'s `out int failure` value directly
+   (a console read or a temporary log line) — failure 25/26 means the readback itself caught a
+   real remaining issue (worth its own root-cause pass); a still-successful `true` return with a
+   raw slot that does not match means this round's verification logic itself has a bug, not the
+   underlying equip.
+7. Only once 2-6 are clean: flip `companion_gear_sync=1` on both instances and re-run §8's
+   original "Companion equipment" live test plan (re-equip on host, confirm client's mirrored
+   copy updates for a WEAPON slot specifically, confirm anti-echo) — the body slot half of that
+   plan is already live-confirmed (§10.2); this closes the loop for weapons.
