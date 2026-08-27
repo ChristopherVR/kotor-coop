@@ -277,7 +277,9 @@ internal sealed class DialoguePump(IGameBridge bridge, ICoopSession session, Age
     /// </summary>
     private void PumpDialogueItemGrants(bool ownsActiveConversation, string partnerTag)
     {
-        if (!settings.DialogueItemSync)
+        // A client adopts the host's dialogue_item_sync at runtime when they differ —
+        // docs/research/mod-compatibility.md's "Behaviour-flag negotiation".
+        if (!(session.Overrides.DialogueItemSync ?? settings.DialogueItemSync))
         {
             return;
         }

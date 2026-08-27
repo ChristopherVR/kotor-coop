@@ -166,6 +166,36 @@ internal static class AgentComposition
             resolveDiag.CensusDiagnostic = message => Console.WriteLine($"[census] {message}");
         }
 
+        // Behaviour-flag negotiation (docs/roadmap-seamless.md Tier 1 item 7): fingerprint
+        // this install's coop.ini/CLI behaviour the same way ComputeInstallDigest already
+        // fingerprints its content, so a divergent peer gets a warning instead of two engines
+        // silently running different rules. Sourced from `agentSettings` wherever a key
+        // already resolved there (the CLI-vs-coop.ini precedence that record embodies), and
+        // from `config` directly for the plugin-only keys CoopConfig parses purely for this
+        // (see CoopConfig.cs's "Digest-only keys" section) plus the two load-rejoin gates,
+        // which live outside AgentSettings entirely.
+        BehaviourDigest behaviourDigest = BehaviourDigest.Compute(
+            localCombat: config?.LocalCombat ?? true,
+            companionLocalCombat: config?.CompanionLocalCombat ?? false,
+            partyFastPump: agentSettings.PartyFastPump,
+            partySync: agentSettings.SyncParty,
+            clientDoorRefusal: agentSettings.ClientDoorRefusalEnabled,
+            transitionAnnounce: agentSettings.TransitionAnnounceEnabled,
+            clientLoadRejoin: config?.ClientLoadRejoin ?? true,
+            hostLoadReadopt: config?.HostLoadReadopt ?? true,
+            effectSync: config?.EffectSync ?? true,
+            triggerRelay: config?.TriggerRelay ?? true,
+            clientEncounters: config?.ClientEncounters ?? true,
+            dialogueItemSync: agentSettings.DialogueItemSync,
+            dialogueRecruitSync: config?.DialogueRecruitSync ?? false,
+            scriptItemSync: agentSettings.ScriptItemSync,
+            movieRelay: agentSettings.MovieRelayEnabled,
+            livenessSync: config?.LivenessSync ?? false,
+            mapRevealSync: config?.MapRevealSync ?? false,
+            requireIdenticalSave: options.RequireIdenticalSave,
+            interpolationMs: interpolationMs,
+            followLead: agentSettings.FollowLeadMode == FollowLeadMode.Host ? "host" : "any");
+
         SessionManager manager = new(bridge, agentSettings);
 
         SessionSettings SettingsFor(string sessionPassword) => new()
@@ -176,6 +206,7 @@ internal static class AgentComposition
             TickRate = tickRate,
             InterpolationDelayMs = interpolationMs,
             Digest = digest,
+            Behaviour = behaviourDigest,
             RequireIdenticalSave = options.RequireIdenticalSave,
             Password = sessionPassword.Length > 0 ? sessionPassword : fallbackPassword,
             PeerIdentity = peerIdentity,

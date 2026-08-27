@@ -96,8 +96,15 @@ public static class ProtocolConstants
     /// statue behind and the session can announce "away"/"back". Rides the existing
     /// <c>Flags</c> dword, so nothing in <see cref="PacketCodec"/> changes shape. See
     /// docs/research/disconnect-reconnect.md.
+    /// Version 40: <see cref="HelloPacket"/>/<see cref="WelcomePacket"/> gain a <see
+    /// cref="BehaviourDigest"/> — coop.ini/CLI behaviour flags (local_combat, party_sync,
+    /// follow_lead, interp_ms and 16 more) are now negotiated the way game content already
+    /// is: a difference always warns (<c>W_CFG</c>); a difference on a host-authoritative
+    /// channel additionally makes the client adopt the host's value at runtime. See
+    /// docs/research/mod-compatibility.md's "Behaviour-flag negotiation" section and
+    /// docs/roadmap-seamless.md Tier 1 item 7.
     /// </summary>
-    public const byte Version = 39;
+    public const byte Version = 40;
 
     /// <summary>Journal quest tags are resrefs plus a little slack.</summary>
     public const int MaxJournalTagLength = 32;

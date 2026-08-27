@@ -66,7 +66,9 @@ internal sealed class ScriptItemGrantPump(
     /// </summary>
     public void PumpScriptItemGrants(string module, bool ownedByDialoguePump)
     {
-        if (!settings.ScriptItemSync)
+        // A client adopts the host's script_item_sync at runtime when they differ —
+        // docs/research/mod-compatibility.md's "Behaviour-flag negotiation".
+        if (!(session.Overrides.ScriptItemSync ?? settings.ScriptItemSync))
         {
             return;
         }

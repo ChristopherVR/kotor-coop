@@ -313,6 +313,46 @@ public sealed record CoopConfig
     /// </summary>
     public bool MovieRelayEnabled { get; init; }
 
+    // ── Digest-only keys ────────────────────────────────────────────────────────────────
+    // Everything below is a PLUGIN-side key (docs/CONFIG.md's "Plugin-side keys" table,
+    // PluginConfig.cs + per-controller reads) that this agent-side reader never acted on
+    // before now. They are parsed here ONLY so AgentComposition can fold them into this
+    // install's outgoing BehaviourDigest (docs/research/mod-compatibility.md,
+    // "Behaviour-flag negotiation") — coop.ini is one shared file both readers already parse
+    // independently, and CoopConfig is the one component that builds Hello/Welcome, so it is
+    // the natural (if slightly unusual) place to also read a key it does not otherwise
+    // consume. None of these fields feed any pump or write in KotorCoop.Session; PluginConfig
+    // remains the sole consumer that actually acts on them locally.
+
+    /// <summary>coop.ini <c>local_combat</c> (plugin key; read here only for negotiation —
+    /// see "Digest-only keys" above). Default ON, matching the plugin's own fallback.</summary>
+    public bool LocalCombat { get; init; } = true;
+
+    /// <summary>coop.ini <c>companion_local_combat</c> (plugin key; digest-only here).
+    /// Default OFF, matching the plugin's own code fallback (the shipped coop.ini.example
+    /// sets it to 1 — see docs/CONFIG.md footnote 3).</summary>
+    public bool CompanionLocalCombat { get; init; }
+
+    /// <summary>coop.ini <c>effect_sync</c> (plugin key; digest-only here). Default ON.</summary>
+    public bool EffectSync { get; init; } = true;
+
+    /// <summary>coop.ini <c>trigger_relay</c> (plugin key; digest-only here). Default ON.</summary>
+    public bool TriggerRelay { get; init; } = true;
+
+    /// <summary>coop.ini <c>client_encounters</c> (plugin key; digest-only here). Default ON.</summary>
+    public bool ClientEncounters { get; init; } = true;
+
+    /// <summary>coop.ini <c>dialogue_recruit_sync</c> (plugin key; digest-only here). Default
+    /// OFF, matching the plugin's own code fallback (the shipped coop.ini.example sets it to
+    /// 1 — see docs/CONFIG.md footnote 3).</summary>
+    public bool DialogueRecruitSync { get; init; }
+
+    /// <summary>coop.ini <c>liveness_sync</c> (plugin key; digest-only here). Default OFF.</summary>
+    public bool LivenessSync { get; init; }
+
+    /// <summary>coop.ini <c>map_reveal_sync</c> (plugin key; digest-only here). Default OFF.</summary>
+    public bool MapRevealSync { get; init; }
+
     /// <summary>The anchor as the plugin's numeric code (0=TL, 1=TR, 2=BL, 3=BR).</summary>
     public uint ChatOverlayAnchorCode => ChatOverlayAnchor.Trim().ToLowerInvariant() switch
     {
@@ -441,6 +481,18 @@ public sealed record CoopConfig
                 ? FollowLeadMode.Host
                 : FollowLeadMode.Any,
             MovieRelayEnabled = !kv.ContainsKey("movie_relay") || IsTruthy(kv.GetValueOrDefault("movie_relay")),
+
+            // Digest-only (see the field group's own doc comment above): plugin-owned keys,
+            // parsed here purely so the outgoing BehaviourDigest can compare them.
+            LocalCombat = !kv.ContainsKey("local_combat") || IsTruthy(kv.GetValueOrDefault("local_combat")),
+            CompanionLocalCombat = IsTruthy(kv.GetValueOrDefault("companion_local_combat")),
+            EffectSync = !kv.ContainsKey("effect_sync") || IsTruthy(kv.GetValueOrDefault("effect_sync")),
+            TriggerRelay = !kv.ContainsKey("trigger_relay") || IsTruthy(kv.GetValueOrDefault("trigger_relay")),
+            ClientEncounters = !kv.ContainsKey("client_encounters")
+                || IsTruthy(kv.GetValueOrDefault("client_encounters")),
+            DialogueRecruitSync = IsTruthy(kv.GetValueOrDefault("dialogue_recruit_sync")),
+            LivenessSync = IsTruthy(kv.GetValueOrDefault("liveness_sync")),
+            MapRevealSync = IsTruthy(kv.GetValueOrDefault("map_reveal_sync")),
         };
     }
 

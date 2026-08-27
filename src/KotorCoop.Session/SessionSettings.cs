@@ -37,6 +37,16 @@ public sealed record SessionSettings
     public ContentDigest Digest { get; init; } = ContentDigest.Unknown;
 
     /// <summary>
+    /// This install's behaviour-flag fingerprint (coop.ini/CLI settings that gate a wire
+    /// channel or a locally-visible behaviour difference — docs/roadmap-seamless.md Tier 1
+    /// item 7), announced to the peer so a divergence gets a warning (and, for a
+    /// host-authoritative channel, gets adopted by a client) instead of running silently from
+    /// local disk. Defaults to <see cref="BehaviourDigest.Default"/> for a caller (test fakes,
+    /// the mock harness) that never built a real one.
+    /// </summary>
+    public BehaviourDigest Behaviour { get; init; } = BehaviourDigest.Default;
+
+    /// <summary>
     /// Whether a peer on a different save is refused outright rather than admitted with the
     /// object-id-keyed channels switched off. Off by default: world adoption makes the saves
     /// match by construction, so a mismatch is a failed adoption to be reported and worked

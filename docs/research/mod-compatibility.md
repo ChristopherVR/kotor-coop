@@ -621,3 +621,160 @@ PowerShell commands above (`Remove-Item -Recurse -Force` on a `saves\...AUTOSAVE
 one `demo.ps1` invocation) hit a transient tool-classifier block on the first attempt and
 succeeded on retry with no changes — environment noise, not a product or recipe issue, but
 worth knowing if a future round sees the same thing.
+
+---
+
+# Behaviour-flag negotiation, 2026-08-27
+
+Everything above this section is about GAME CONTENT — the exe, Override, appearance.2da, the
+save. It is fingerprinted per channel and compared at join time. `coop.ini`/CLI BEHAVIOUR
+FLAGS — `local_combat`, `party_fast_pump`, `follow_lead`, the load-rejoin gates, and 16 more —
+were the opposite: each side read its own disk and ran with whatever it found, with no
+comparison and no warning if the two installs disagreed. That was roadmap-seamless.md Tier 1
+item 7 ("Partial" since 2026-08-27's tick-rate adoption; this round closes it).
+
+## What is negotiated
+
+Twenty keys, picked from `CoopConfig.cs`/`AgentSettings.cs` (plus eight PLUGIN-only keys —
+`local_combat`, `companion_local_combat`, `effect_sync`, `trigger_relay`, `client_encounters`,
+`liveness_sync`, `map_reveal_sync`, `dialogue_recruit_sync` — that `CoopConfig` did not parse
+before this round) because each one gates a wire channel or a locally-visible behaviour
+difference worth a line on screen. The full list, and why each one made the cut, is the doc
+comment on `BehaviourFlags` (`src/KotorCoop.Protocol/BehaviourDigest.cs`) — restating it here
+would just be a second copy that goes stale.
+
+`BehaviourDigest` (`src/KotorCoop.Protocol/BehaviourDigest.cs`) packs all eighteen booleans
+into one `uint` bitfield, plus `interp_ms` (an `int`) and `follow_lead` (a short string — the
+one field that is not a bool, per the task's own "strings only for follow_lead" instruction),
+and a stable FNV-1a-32 `Hash` recomputed on read rather than trusted off the wire (the same
+discipline `ContentDigest`'s producers already follow: a corrupted/truncated field must never
+silently pass a same-hash comparison). Unlike `ContentDigest` there is no per-field
+`KnownMask` — every key comes from a parsed coop.ini/CLI value with a built-in default, so
+there is no filesystem-dependent "could not be computed" state to represent; a key is always
+resolvable.
+
+Carried in `HelloPacket` (client → host) and `WelcomePacket` (host → client) — Version 40.
+Built once per install, in `AgentComposition.Compose`, sourced from the already-resolved
+`AgentSettings`/`CoopConfig` values wherever a key already lives there (so the digest can
+never disagree with what the session is actually doing), and read directly off `CoopConfig`
+for the eight plugin-only keys and the two load-rejoin gates that live outside
+`AgentSettings` entirely.
+
+## Policy
+
+`BehaviourCompatibility.Compare` (`src/KotorCoop.Protocol/BehaviourCompatibility.cs`) is pure
+and deterministic, mirroring `ContentCompatibility`'s shape: same two digests, same result on
+either peer. Always in HOST-then-PEER argument order regardless of which side is calling it,
+so the produced line — `W_CFG <key> host=<v> you=<v>` — means the same thing whether the host
+or the client printed it.
+
+* **Every difference is a WARNING, never a refusal, never a capability drop.** `CoopHost`
+  compares on `HandleHello`; `CoopClient` compares on `HandleWelcome`. Announced once per key,
+  through `BehaviourAnnouncer` (`src/KotorCoop.Agent/BehaviourAnnouncer.cs`) — the same
+  stdout/`~`-console/in-game-overlay trio `CompatibilityAnnouncer` already posts through.
+  Unlike a content mismatch's `ModuleGit` case, nothing here legitimately clears mid-session
+  (coop.ini/CLI settings do not change while connected), so a key is announced exactly once
+  for the life of the connection.
+* **`require_identical_save` is carried but not specially refused here.** The hard refusal it
+  drives already runs on its own path (`ContentCompatibility.RequireIdenticalSave`,
+  independent of this digest) — this negotiation only makes a MISMATCH OF INTENT visible (a
+  host demanding identical saves while a client did not expect a refusal is worth a warning
+  even though the refusal itself needs no negotiation to fire).
+* **Nine keys are HOST-AUTHORITATIVE**: `party_sync`, `effect_sync`, `trigger_relay`,
+  `liveness_sync`, `map_reveal_sync`, `script_item_sync`, `dialogue_item_sync`,
+  `dialogue_recruit_sync`, `movie_relay`. Each one gates a channel the host already drives by
+  design — see `BehaviourFlags`' doc comments for the per-key reasoning. A CLIENT reading a
+  difference on one of these adopts the host's value at runtime; a HOST reading the same
+  difference never acts on it (a host is authoritative by definition).
+
+## Runtime adoption: `SessionOverrides`
+
+Adoption does **not** mutate the parsed `CoopConfig`/`AgentSettings` record — those keep
+describing what THIS install's coop.ini/CLI actually said, which stays correct for `agent
+info`, diagnostics, and a future reconnect to a *different* host whose values might not need
+overriding at all. Instead `CoopClient.HandleWelcome` builds a `SessionOverrides`
+(`src/KotorCoop.Session/SessionOverrides.cs`) — one nullable bool per host-authoritative key,
+`null` meaning "no override, read the local value" — exposed as `ICoopSession.Overrides`
+(default `SessionOverrides.None` for a host, which never overrides anything).
+
+Four of the nine host-authoritative keys are consulted **live** by the pumps that can act on
+them — the same places `AgentSettings` already flows into:
+
+| Key | Pump | Gate |
+| --- | --- | --- |
+| `party_sync` | `PartyPump.PumpParty` / `PumpPartyRoster` | `session.Overrides.PartySync ?? settings.SyncParty` |
+| `script_item_sync` | `ScriptItemGrantPump.PumpScriptItemGrants` | `session.Overrides.ScriptItemSync ?? settings.ScriptItemSync` |
+| `dialogue_item_sync` | `DialoguePump.PumpDialogueItemGrants` | `session.Overrides.DialogueItemSync ?? settings.DialogueItemSync` |
+| `movie_relay` | `TransitionPump.PumpMidModuleMovies` | `session.Overrides.MovieRelay ?? settings.MovieRelayEnabled` |
+
+⚠ **Open gap, stated plainly: the other five host-authoritative keys** (`effect_sync`,
+`trigger_relay`, `liveness_sync`, `map_reveal_sync`, `dialogue_recruit_sync`) are compared,
+warned on, and recorded on `SessionOverrides` exactly like the four above — but nothing in
+`KotorCoop.Session` currently READS those five fields. Those channels are gated entirely
+inside the separate PLUGIN process (`PluginConfig.cs` + per-controller reads —
+`PeerEffectController`, `TriggerRelayController`, `LivenessReconcileController`,
+`MapRevealController`, `PartyRosterRecruitRule`), which this round's negotiation does not
+reach. `AgentComposition` already bridges a couple of OTHER coop.ini settings across that
+same process boundary today (`KotorGameBridge.SetChatOverlayConfig`,
+`KotorGameBridge.PazaakDetectEnabled` — both write into the shared-memory block the plugin
+reads every frame), so the pattern to extend is known; it just was not attempted in this round
+because it means growing `SharedBlock` (a native-adjacent struct shared between two
+independently-built binaries — the win-x86 NativeAOT plugin and the x64 agent), which the
+project's own engine-write rules ask to be verified live before shipping, and this round had
+no live rig time budgeted for it. Tracked as the concrete next step here rather than in the
+roadmap alone, so whoever picks it up does not have to rediscover the gap.
+
+## Tests
+
+`tests/KotorCoop.Tests/BehaviourDigestTests.cs` — digest construction (`Compute`/`FromFields`),
+the null/empty `follow_lead` → `"any"` normalisation, hash stability, and
+`BehaviourCompatibility.Compare`'s WARN/host-authoritative classification for every one of the
+eighteen boolean keys plus `interp_ms`/`follow_lead`.
+
+`tests/KotorCoop.Tests/PacketCodecTests.cs` — `HelloCarriesTheBehaviourDigest`,
+`WelcomeCarriesTheBehaviourDigest`, `WelcomeWithDefaultBehaviourRoundTrips` pin the wire shape
+(scheme byte, flags uint32, interp int32, follow_lead string; Hash recomputed on read, never
+trusted off the wire). `HelloRoundTrips` was updated to build its `BehaviourDigest` through
+`BehaviourDigest.Default` rather than the bare positional-parameter fallback (`default`),
+because a `BehaviourDigest` whose `Hash` was never derived from its own fields in the first
+place — which is what a bare `default(BehaviourDigest)` is — legitimately does not survive a
+round trip that recomputes `Hash` on read; `BehaviourDigestTests` covers that normalisation on
+its own without a wire round trip in the way.
+
+`tests/KotorCoop.Tests/BehaviourNegotiationTests.cs` — real loopback UDP, mirroring
+`WelcomeTickRateTests`' proven shape:
+* `ClientWarnsOnBothDifferencesAndAdoptsOnlyTheHostAuthoritativeOne` — host and client differ
+  on `effect_sync` (host-authoritative) and `local_combat` (not); the client's
+  `BehaviourWarnings` reports both, `Overrides.EffectSync` becomes the host's value, and
+  `Overrides.PartySync`/`Overrides.MovieRelay` (keys that did not differ) stay `null`.
+* `IdenticalBehaviourProducesNoWarningsAndNoOverrides` — matching digests on both ends produce
+  an empty (non-null) comparison and `SessionOverrides.None`, on BOTH the client's and the
+  host's own side.
+* `HostNeverAdoptsAnythingFromAPeer` — a host with a peer that disagrees on a host-authoritative
+  key still reports `SessionOverrides.None` for itself.
+
+`dotnet test` after this round: 1994/1994 (0 skipped), no regressions in the pre-existing
+suite (the one intentional change, `PacketCodecTests.HelloRoundTrips`, is explained above).
+
+## ⚠ NEEDS-LIVE
+
+Like the content-digest handshake above, this has only been exercised as pure unit tests and
+one real-loopback-UDP integration test (`BehaviourNegotiationTests`) — no two-instance rig
+pass yet.
+
+1. **A real coop.ini divergence on the rig.** Set `effect_sync=0` on one of the two installs'
+   `coop.ini` (Player2 = `D:\Games\swkotor-gog-p2`, additive edit, easy to undo), run
+   `demo.ps1`, and confirm BOTH dashboards show `co-op [W_CFG] effect_sync host=1 you=0` (or
+   the reverse, depending on who is host) and that the client's own console logs `adopted
+   host's effect_sync (on; local setting was off)` — the `Console.Error.WriteLine` in
+   `CoopClient.ApplyBehaviourComparison`.
+2. **A live-authoritative gate actually flips behaviour**, not just a log line: set
+   `party_fast_pump`/`script_item_sync`/`dialogue_item_sync`/`movie_relay` differently on the
+   two installs and confirm the CLIENT's channel genuinely follows the host's value (e.g. a
+   client that had `script_item_sync=0` locally starts forwarding script grants once it
+   adopts a host running `script_item_sync=1`), not just that `Overrides` reports the right
+   value.
+3. **The five-key plugin-bridge gap above**, once someone picks it up: confirm the new
+   `SharedBlock` fields round-trip through a real build of the win-x86 plugin, not just the
+   x64 agent side (see the project's own note on why `KotorCoop.slnx` cannot build the plugin
+   at all, in `docs/CONTRIBUTING.md`).

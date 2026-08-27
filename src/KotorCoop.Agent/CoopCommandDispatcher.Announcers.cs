@@ -27,6 +27,10 @@ public sealed partial class CoopCommandDispatcher
     /// indistinguishable from a bug.</summary>
     private readonly CompatibilityAnnouncer _compatibilityAnnouncer = new();
 
+    /// <summary>Behaviour-flag (coop.ini/CLI) differences become lines on screen too —
+    /// docs/roadmap-seamless.md Tier 1 item 7. See <see cref="BehaviourAnnouncer"/>.</summary>
+    private readonly BehaviourAnnouncer _behaviourAnnouncer = new();
+
     /// <summary>The persistent connection indicator (item 18) — see
     /// <see cref="ConnectionStatusAnnouncer"/> for why the <c>status</c> console verb was not
     /// enough on its own.</summary>
@@ -84,10 +88,12 @@ public sealed partial class CoopCommandDispatcher
         if (manager.Current is not { } session)
         {
             _compatibilityAnnouncer.Reset();
+            _behaviourAnnouncer.Reset();
             return;
         }
 
         _compatibilityAnnouncer.Observe(session.Compatibility, Reply);
+        _behaviourAnnouncer.Observe(session.BehaviourWarnings, Reply);
     }
 
     /// <summary>

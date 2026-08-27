@@ -6,6 +6,25 @@ in-process plugin (`src/KotorCoop.Plugin/PluginConfig.cs` plus direct per-contro
 A few keys are read by both sides. The agent's `KotorCoop.Agent` CLI also takes its own
 flags, independent of `coop.ini`.
 
+**Behaviour-flag negotiation (2026-08-27).** Twenty of the keys below (and two CLI-only ones,
+`--no-party-sync` and `--require-identical-save`) are now compared between the two peers at
+join time — `coop.ini`/CLI settings used to run purely from local disk with no way to tell a
+player their partner had a different value, unlike the game-content fingerprint further down
+this doc. A difference is always a **warning** (`W_CFG <key> host=<v> you=<v>`, once per key,
+through the same stdout/`~`-console/in-game-overlay path a content warning uses) — never a
+refusal, never a dropped channel. For nine keys that gate a channel the HOST already drives by
+design, a CLIENT additionally **adopts the host's value at runtime** rather than keep running
+its own: `party_sync`, `effect_sync`, `trigger_relay`, `liveness_sync`, `map_reveal_sync`,
+`script_item_sync`, `dialogue_item_sync`, `dialogue_recruit_sync`, `movie_relay`. Four of those
+nine (`party_sync`, `script_item_sync`, `dialogue_item_sync`, `movie_relay`) are live-consulted
+by the pump that runs the channel; the other five are recorded on the adopted-overrides object
+but not yet read by anything (they are gated entirely inside the separate plugin process,
+which this negotiation does not reach yet) — see
+[mod-compatibility.md](research/mod-compatibility.md)'s "Behaviour-flag negotiation" section
+for the full design, the exact wire shape, and that open gap. Nothing here changes what a key
+is READ as locally (`CoopConfig`/`AgentSettings` still describe this install's own coop.ini/
+CLI exactly as before); adoption lives in a separate, session-scoped `SessionOverrides` layer.
+
 Every default below is the CODE's own fallback — what applies if the key is absent from
 `coop.ini` entirely. **The file that actually ships** (`profiles/coop.ini.example`, staged
 verbatim as `coop.ini` by `tools/package.ps1`) sets several keys explicitly, which overrides

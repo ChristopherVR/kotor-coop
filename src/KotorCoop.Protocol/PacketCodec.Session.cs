@@ -15,6 +15,7 @@ public static partial class PacketCodec
         w.WriteUInt32(packet.ClientNonce);
         w.WriteUInt32(packet.PasswordHash);
         WriteDigest(ref w, packet.Digest);
+        WriteBehaviourDigest(ref w, packet.Behaviour);
         return w.Failed ? 0 : w.Position;
     }
 
@@ -31,7 +32,8 @@ public static partial class PacketCodec
         uint nonce = r.ReadUInt32();
         uint passwordHash = r.ReadUInt32();
         ContentDigest digest = ReadDigest(ref r);
-        return r.Failed ? null : new HelloPacket(name, module, nonce, digest, passwordHash);
+        BehaviourDigest behaviour = ReadBehaviourDigest(ref r);
+        return r.Failed ? null : new HelloPacket(name, module, nonce, digest, passwordHash, behaviour);
     }
 
     public static int Write(Span<byte> buffer, WelcomePacket packet)
@@ -43,6 +45,7 @@ public static partial class PacketCodec
         w.WriteUInt8(packet.TickRate);
         w.WriteUInt8(packet.MaxPeers);
         WriteDigest(ref w, packet.Digest);
+        WriteBehaviourDigest(ref w, packet.Behaviour);
         return w.Failed ? 0 : w.Position;
     }
 
@@ -59,8 +62,43 @@ public static partial class PacketCodec
         byte tickRate = r.ReadUInt8();
         byte maxPeers = r.ReadUInt8();
         ContentDigest digest = ReadDigest(ref r);
-        return r.Failed ? null : new WelcomePacket(peerId, sessionId, tickRate, maxPeers, digest);
+        BehaviourDigest behaviour = ReadBehaviourDigest(ref r);
+        return r.Failed ? null : new WelcomePacket(peerId, sessionId, tickRate, maxPeers, digest, behaviour);
     }
+
+    /// <summary>Version 40: appended after the existing Hello/Welcome fields, same reason
+    /// every prior handshake addition (e.g. the content digest itself) was appended rather
+    /// than interleaved — a strict version check already rejects a mismatched peer before
+    /// either side tries to parse the other's body, so there is no old-shape reader to keep
+    /// working here the way <see cref="Write(Span{byte}, WorldDigestPacket)"/>'s comment
+    /// discusses for a periodic packet.</summary>
+    private static void WriteBehaviourDigest(ref PacketWriter w, in BehaviourDigest digest)
+    {
+        w.WriteUInt8(BehaviourDigest.CurrentScheme);
+        w.WriteUInt32(digest.Flags);
+        w.WriteInt32(digest.InterpolationMs);
+        w.WriteString(digest.FollowLead, MaxFollowLeadLength);
+    }
+
+    private static BehaviourDigest ReadBehaviourDigest(ref PacketReader r)
+    {
+        byte scheme = r.ReadUInt8();
+        uint flags = r.ReadUInt32();
+        int interp = r.ReadInt32();
+        string followLead = r.ReadString();
+
+        // An unrecognised scheme means a build we cannot interpret the fields of — treat it
+        // as "no information" (everything off, matching BehaviourDigest's zero value) rather
+        // than misreading, the same rule ReadDigest already follows for ContentDigest.
+        return scheme != BehaviourDigest.CurrentScheme
+            ? default
+            : BehaviourDigest.FromFields(flags, interp, followLead);
+    }
+
+    /// <summary>follow_lead is either "any" or "host" today (<see
+    /// cref="FollowLeadMode"/>) — bounded generously above that so a future mode fits without
+    /// another wire bump.</summary>
+    private const int MaxFollowLeadLength = 16;
 
     private static void WriteDigest(ref PacketWriter w, in ContentDigest digest)
     {
