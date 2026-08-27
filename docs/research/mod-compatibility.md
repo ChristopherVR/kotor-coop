@@ -830,7 +830,9 @@ pass yet.
    non-damage effect starts/stops forwarding; a relayed generic trigger starts/stops firing;
    liveness reconciliation starts/stops killing bodies to match; a peer's extra companion
    starts/stops recruiting locally) — not just that the SharedBlock dwords round-trip, which
-   only unit tests have exercised so far.
+   only unit tests have exercised so far. **`map_reveal_sync`/`effect_sync`: DONE, both PASS
+   — see "Live-verified 2026-08-28" below.** `trigger_relay`/`liveness_sync`/
+   `dialogue_recruit_sync` still untested live.
 
 ## Live-verified 2026-08-27
 
@@ -889,3 +891,62 @@ gap) also not attempted this round.
 **Verdict: PASS** for the negotiation/announce/adopt mechanism itself — both `W_CFG` lines
 appear on both screens for a real divergence, and the host-authoritative adoption genuinely
 changes engine behaviour on the client, not just an `Overrides` field.
+
+## Live-verified 2026-08-28: item 3, the five-key plugin bridge — `map_reveal_sync` and
+
+## `effect_sync` both PASS, both the log line and the actual behaviour change
+
+Task: item 3 of the ⚠ NEEDS-LIVE list above — set `map_reveal_sync=0` on the CLIENT only
+(`D:\Games\swkotor-gog-p2`, host stays default `1`), confirm the client's plugin log shows
+`behaviour: adopted host's map_reveal_sync=1 (local coop.ini says 0)` and fog still reveals
+around the peer; repeat for `effect_sync` (an `applyeffect` from the host should still land).
+
+Two-instance rig, both freshly `build.ps1 -Install -WarnAsError`ed, client's `coop.ini` edited
+to `map_reveal_sync=0` AND `effect_sync=0` together (both mismatched from the host's default
+`1`s), host's `coop.ini` left at the shipped template defaults, both restarted (coop.ini reads
+only at plugin load).
+
+**Both PASS, clean, both log line and behaviour change confirmed:**
+
+The client's plugin log showed both adoption lines immediately on connect, exactly as
+predicted:
+
+```
+[07:29:47.683] behaviour: adopted host's effect_sync=1 (local coop.ini says 0)
+[07:29:47.683] behaviour: adopted host's map_reveal_sync=1 (local coop.ini says 0)
+```
+
+**`map_reveal_sync`, behaviour check**: both players `END_M01AA`, `tp`'d the host to a new
+position (`20.0,22.2` → `5.0,5.0`) and read the client's own map-reveal log across the move:
+
+```
+[07:29:47.834] map reveal: slot 0 revealed at (20.0, 22.2, -1.3)
+[07:30:26.461] map reveal: slot 0 revealed at (5.0, 5.0, 0.0)
+```
+
+The client's own fog genuinely reveals around the PEER's new position — real engine behaviour
+change, not just a log line — despite the client's own `coop.ini` saying `map_reveal_sync=0`.
+
+**`effect_sync`, behaviour check**: `applyeffect 1` on the host (`applied kind 1 to the
+nearest phantom (0x12E), 6000ms, mag 0` — auto-resolved to the client's phantom, the nearest
+one) forwarded and landed on the client:
+
+```
+[07:30:51.197] effect: applied kind 1 from peer 0x1 (duration 6000ms, magnitude 0)
+```
+
+Both `swkotor.exe` processes stayed alive and `Responding=True` throughout and afterward. No
+crash.
+
+**Not attempted this round** (out of the item's own explicit ask, which named only
+`map_reveal_sync`/`effect_sync`): `trigger_relay`, `liveness_sync`, `dialogue_recruit_sync` —
+the remaining three of the five plugin-bridged keys. Each would need its own scenario staging
+(a generic trigger to relay, a liveness-reconciliation kill, a companion recruit) on top of a
+coop.ini divergence, the same shape this round used for the two tested keys; the mechanism
+itself (`EffectiveBehaviourFlag`/`BehaviourOverrideRule.Resolve`, shared by all five
+controllers) is now live-confirmed working for two of five, which is strong evidence — but not
+proof — that the shared mechanism works for the other three too, since they all resolve
+through the identical `(mask, values)` wire pair and the identical per-controller wrapper.
+
+`dotnet build KotorCoop.slnx -warnaserror` and `src/KotorCoop.Plugin/build.ps1 -WarnAsError`:
+both clean (no source changed this round — a config-only live rig session).

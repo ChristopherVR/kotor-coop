@@ -1244,3 +1244,21 @@ each reply actually says. Concrete next step recorded in `star-forge-finale.md`:
 script-walker, or live-capturing each node's reply text via the `CSWGuiDialog` panel fields
 `dialogue-sync.md` already documents. No crash; both processes stayed healthy throughout.
 `solo_segment_spectate` stays at its default OFF.
+
+## Rig pass (2026-08-28): behaviour-override plugin bridge — `map_reveal_sync`/`effect_sync`
+
+## both PASS
+
+Task: `docs/research/mod-compatibility.md`'s ⚠ NEEDS-LIVE item 3. Set `map_reveal_sync=0`
+and `effect_sync=0` on the CLIENT only (host stays default `1` for both). Confirm the client's
+plugin log shows the adoption line and the behaviour genuinely changes at runtime.
+
+**Both PASS.** Client log, immediately on connect:
+`behaviour: adopted host's effect_sync=1 (local coop.ini says 0)` and
+`behaviour: adopted host's map_reveal_sync=1 (local coop.ini says 0)`. Behaviour, not just the
+log line: moving the host produced a matching fresh `map reveal: slot 0 revealed at ...` on
+the CLIENT tracking the host's new position; `applyeffect 1` on the host produced
+`effect: applied kind 1 from peer 0x1` on the client. No crash. Full detail in
+`docs/research/mod-compatibility.md`'s 2026-08-28 "Live-verified" section.
+`trigger_relay`/`liveness_sync`/`dialogue_recruit_sync` (the other three of the five bridged
+keys) remain untested live.
