@@ -233,10 +233,11 @@ public class TransitionMovieTests
         // docs/research/companion-state-sync.md), 55 the effective-behaviour-override flags
         // (docs/research/mod-compatibility.md's "Behaviour-flag negotiation" gap), 56 the
         // solo-segment spectate flag (docs/research/star-forge-finale.md), 57 the container-lock
-        // explicit arbitration region (docs/research/container-sync.md) — 45 and 46 are
-        // reserved by other agents working this tree concurrently) — see the changelog
-        // comments beside `_block->Version` and `PluginSignature` for the full history.
-        Assert.Equal(57, int.Parse(version.Groups[1].Value));
+        // explicit arbitration region (docs/research/container-sync.md), 58 the
+        // item-template-spawn ring (block grown to 0x4700, docs/research/item-identity.md §13)
+        // — 45 and 46 are reserved by other agents working this tree concurrently) — see the
+        // changelog comments beside `_block->Version` and `PluginSignature` for the full history.
+        Assert.Equal(58, int.Parse(version.Groups[1].Value));
     }
 
     private static string RepositoryRoot()

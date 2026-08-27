@@ -205,6 +205,7 @@ internal static unsafe partial class PluginHost
         _movieRelay?.Invalidate();
         PendingMoviePlay.Cancel();
         _barks?.Invalidate();
+        _itemTemplateSpawns?.Invalidate();
         _interactionLocks?.Invalidate();
         ContainerUseHook.Invalidate();
         ContainerCloseHook.Invalidate();

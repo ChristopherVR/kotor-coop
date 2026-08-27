@@ -1782,3 +1782,74 @@ lower risk by construction (`WorldStatePump.PumpItems`'s suppression feed runs o
 SAME already-per-tick-adjacent cadence issue does not apply to it the way it did to the
 heavy-pass-gated container scan), and every control that WAS run passed clean on the
 first try after the ordering fix, so this was not chased further this round.
+
+## Round (2026-08-28): key on the REAL resref, not the Tag proxy, wherever this session
+## knows it — `script_item_sync` STAYS ON (strictly safer, not a regression)
+
+The previous round's own live playthrough (`docs/research/playthrough-endar-spire.md`, step 5)
+found the one case this channel could not cover: `scriptgive g_i_progspike01` (a stock KOTOR 1
+quest item whose Tag `k_computer_spike` diverges from its blueprint resref) forwarded correctly
+over the wire but the receiving `giveloot` failed — `'k_computer_spike' did not spawn onto
+0x7FFFFFFF (failure 8; wrong resref?)` — because `KotorGameBridge.TryGetItemResref` (which
+`ReadPossessedItems`, and therefore both `ScriptItemGrantPump` and `DialoguePump`'s own item-grant
+diff, are built on) had exactly one source for a possessed item's "resref": the item's Tag,
+lowercased and cut. That is a genuine engine limit, not a bug in the lookup — see
+`docs/research/item-identity.md` §12 below for the re-confirmation — but it was also not the ONLY
+source available: this session already knows the true resref of any ground-item body it told the
+plugin to spawn (a peer's drop materialised locally, `dropitem`), because it wrote that resref
+into the plugin's shared block itself. `TryGetItemResref` never consulted that fact.
+
+**What changed.** `KotorGameBridge.GroundItems.cs` now remembers (engine object id -> the resref
+we spawned it with) the moment a ground-item slot first reports its body alive — a new
+`_spawnedItemResrefs` cache, bounded at 256 entries and cleared on module change exactly like the
+existing tag/address caches (an object id is only meaningful within the module that minted it).
+Recorded there rather than read back from the plugin's own per-slot status because
+`ItemController`'s pickup probe clears the slot's object id and flips it to `Vanished` the instant
+a pickup is detected — precisely the moment a possessed-item sweep would want the answer, and
+precisely the moment the OLD `TryGetSpawnedItemResref` fallback (which requires the slot to still
+read `Alive`) goes blind. `KotorGameBridge.TryGetItemResref` now checks this cache FIRST, falling
+back to the Tag proxy exactly as before when it has nothing — "keep Tag as a fallback only when
+the resref is empty," not a replacement for it. `ReadPossessedItems`/`ListItems` needed no changes
+of their own: both already route through `TryGetItemResref`, so every consumer — `ScriptItemGrantPump`,
+`DialoguePump`'s reward-item diff, and `CombatPump`'s materialised-corpse-loot capture — benefits
+from the same one fix.
+
+**What this does NOT fix.** The live-confirmed `k_computer_spike` case itself: that item was
+placed into Trask's inventory by the game's OWN script, never something this session asked the
+plugin to spawn, so there is no spawn record for it on either side and the sender still has
+nothing but the Tag to report. Confirmed again this round, not merely assumed: no
+`CSWSItem`/`CGameObject`/`CSWSObject` field or accessor in `tools/kotor1_0_3.db` names a template
+resref, and a fresh disassembly of `CSWSItem::LoadFromTemplate` (`0x005608B0`) shows the incoming
+resref is used only to open the GFF resource, never written into the object. That remains
+`docs/research/playthrough-endar-spire.md`'s own verdict — "architectural, not fixed... a
+genuinely open design question" — and this round does not close it. Recovering a vanilla script's
+own resref would need a NEW live-verified hook on the engine's item-creation commands (something
+outside this round's scope: no rig this round).
+
+**Why this is strictly safer, and `script_item_sync` stays ON.** The new lookup can only ever
+answer with a resref THIS SESSION itself wrote — never an inference, never invented data — so it
+cannot make an already-correct answer wrong. Every case where Tag already agreed with resref
+(the overwhelming majority of base-game items) is unaffected: the cache is consulted first but
+simply misses for anything this session did not spawn, and the Tag fallback path is untouched
+byte-for-byte. The cases it DOES change are the ones a Tag proxy always under-served: an item this
+session materialised (a peer's ground drop, a `dropitem` test body) that gets picked up and later
+re-scanned by `ScriptItemGrantPump`/`DialoguePump`/materialised-loot capture now reports its real
+blueprint name instead of a possibly-diverging tag — which can only IMPROVE the suppression
+ledger's own resref-to-resref matching (`ScriptItemGrantRuleTests.
+ANewRowExplainedByAFeederThatOnlyEverKnowsTheRealResrefStillSuppresses` pins exactly this: a feeder
+that only ever learns the real resref, e.g. `g_i_medeqpmnt01`, matches correctly against a
+possessed-items sample that now also reports the real resref rather than a diverging tag like
+`k_trask_item`). Since the change is additive-only over an already-ON feature with no new failure
+mode, there is no reason to flip it off; the (unchanged, already-accepted) risk it ships with is
+exactly the one `docs/research/playthrough-endar-spire.md` already named and left open.
+
+**NEEDS-LIVE.** Nothing in this round could be live-verified (no rig this round). The concrete
+thing worth checking next session: drop a stock item whose Tag differs from its resref (any
+`.uti` with a hand-set `Tag`, or simplest, re-run this same `g_i_progspike01`/`k_computer_spike`
+pair via `dropitem` instead of `scriptgive` — a DROPPED copy is one this session DOES hold a spawn
+record for), have a peer pick it up, wait for `ScriptItemGrantPump`'s sample to run, and confirm
+the plugin log's `item slot N: identity applied to 0xID` line together with a `giveloot`-side
+`items`/`item 0x<id>` read shows the receiving side spawning the REAL blueprint
+(`g_i_progspike01`), not the tag string — where before this round it would have reported
+`k_computer_spike` and failed with `failure 8`. See `docs/research/item-identity.md` §12's own
+NEEDS-LIVE list for the exact sequence.

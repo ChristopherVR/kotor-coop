@@ -152,6 +152,34 @@ public sealed class ScriptItemGrantRuleTests
         Assert.Equal(after, result.NewBaseline);
     }
 
+    /// <summary>
+    /// docs/research/playthrough-endar-spire.md's live-confirmed case, pinned at this layer
+    /// too: a stock quest item's Tag (<c>k_trask_item</c>) diverges from its blueprint resref
+    /// (<c>g_i_medeqpmnt01</c>). Suppression is keyed on whatever string BOTH sides agree to
+    /// call "Resref" — a feeder that only ever learns the item's real resref (a ground pickup,
+    /// container loot, a peer grant applied through giveloot — none of which ever see a Tag)
+    /// still matches correctly here, because the possessed-items row on the other side of this
+    /// rule now carries that same real resref too (KotorGameBridge.TryGetItemResref's
+    /// spawn-record cache, docs/research/item-identity.md §12) rather than the diverging tag a
+    /// pre-fix sweep would have reported — the two would never have matched at all.
+    /// </summary>
+    [Fact]
+    public void ANewRowExplainedByAFeederThatOnlyEverKnowsTheRealResrefStillSuppresses()
+    {
+        List<(string, ItemIdentity)> before = [];
+        List<(string, ItemIdentity)> after = [Row("g_i_medeqpmnt01")];
+        RecentlySyncedItems ledger = new();
+
+        // The feeder never saw "k_trask_item" — a ground-pickup/container-loot/giveloot feeder
+        // only ever has the real resref to record.
+        ledger.Record("g_i_medeqpmnt01", 1, nowMs: 0);
+
+        ScriptItemGrantRule.Result result =
+            ScriptItemGrantRule.Evaluate(before, after, rebaselineOnly: false, ledger, nowMs: 0);
+
+        Assert.Empty(result.ToPublish);
+    }
+
     /// <summary>A ledger entry for a DIFFERENT resref must never suppress an unrelated genuine
     /// script grant landing in the same window.</summary>
     [Fact]

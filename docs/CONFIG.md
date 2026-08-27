@@ -98,6 +98,7 @@ entirely; both now default ON, matching each other and the shipped file's explic
 | `status_indicator` | ON | persistent on-screen connection summary (separate from the agent's `status_toasts`) | [connect-flow.md](research/connect-flow.md) |
 | `bark_replay` | ON | replay a peer's captured NPC bark line | [bark-replay.md](research/bark-replay.md) |
 | `bark_sync` | ON | capture and publish this instance's own barks | [bark-replay.md](research/bark-replay.md) |
+| `item_template_spawn_sync` | ON | capture the real blueprint resref of every item `CreateItemOnObject` creates (vanilla scripts, `giveloot`/`scriptgive`/`storeinsert`/`partypooladd`), so `script_item_sync` can forward it instead of a possibly-diverging Tag | [item-identity.md §13](research/item-identity.md) |
 | `combat_state_sync` | OFF | RETIRED 2026-08-27 (no-op, kept only so the key still parses) — see [combat-participation.md](research/combat-participation.md)'s dated section | [combat-participation.md](research/combat-participation.md) |
 | `control_return` | ON | return control to your own character on connect | [control-return.md](research/control-return.md) |
 | `client_encounters` | ON | a client's own encounter trigger fires it on the host too | [client-encounters.md](research/client-encounters.md) |

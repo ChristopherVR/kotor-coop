@@ -52,6 +52,7 @@ internal static unsafe partial class PluginHost
         _mapReveal = new MapRevealController(_view);
         _portraits = new PortraitController(_view);
         _barks = new BarkController(_view);
+        _itemTemplateSpawns = new ItemTemplateSpawnController(_view);
         _interactionLocks = new InteractionLockController(_view);
         _partyRoster = new PartyRosterController(_view);
         _partySelectSuppression = new PartySelectSuppressionController(_view);

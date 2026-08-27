@@ -68,6 +68,7 @@ internal static unsafe partial class PluginHost
     private static MapRevealController? _mapReveal;
     private static PortraitController? _portraits;
     private static BarkController? _barks;
+    private static ItemTemplateSpawnController? _itemTemplateSpawns;
     private static InteractionLockController? _interactionLocks;
     private static PartyRosterController? _partyRoster;
     private static PartySelectSuppressionController? _partySelectSuppression;
@@ -264,7 +265,15 @@ internal static unsafe partial class PluginHost
         //      leaving it to the eventually-consistent per-tick claim/lock level to converge.
         //      See docs/roadmap-seamless.md Tier 1 item 4 and docs/research/container-sync.md's
         //      container_lock_arbitration section. NEEDS-LIVE.
-        _block->Version = 57;
+        // 58 = the item-template-spawn ring at 0x4100..0x4604 (TotalSize grown to 0x4700): a
+        //      bounded (id, resref) ring with a write cursor, fed by ItemTemplateSpawnHook's
+        //      detour on CSWVirtualMachineCommands::ExecuteCommandCreateItemOnObject
+        //      (0x0052F570) — closes the case a live CSWSItem can never answer on its own
+        //      (docs/research/item-identity.md §12: no TemplateResRef field exists), for any
+        //      item a vanilla script (or scriptgive/giveloot) creates directly in inventory.
+        //      See SharedBlock.ItemTemplateSpawns.cs and docs/research/item-identity.md §13.
+        //      NEEDS-LIVE.
+        _block->Version = 58;
 
         // A guard dword after the version. Magic plus version alone was not selective
         // enough: a scan once matched something else at a lower address and the agent
