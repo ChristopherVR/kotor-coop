@@ -27,14 +27,34 @@ public sealed partial class KotorGameBridge
         && inputClass == InputClassDialog;
 
     /// <summary>
-    /// True while the local player is in the engine's own minigame mode (swoop race or
-    /// turret sequence). See <see cref="EngineGlobals.TryIsInMiniGame"/> for the pointer
-    /// chain and docs/research/minigames.md for the RE behind it. A read failure (no client
-    /// world yet) reports false — the same "not in a minigame" default every other
+    /// Gate for the Pazaak half of <see cref="IsInMinigame"/> — coop.ini <c>pazaak_detect</c>,
+    /// default OFF (NEEDS-LIVE per docs/research/minigames.md's item-8 dated section; see
+    /// <see cref="EngineGlobals.TryIsInPazaak"/>'s own doc comment for why). Set from
+    /// <c>CoopConfig.PazaakDetect</c> in <c>AgentComposition.Compose</c>, the same place
+    /// <c>SetChatOverlayConfig</c> pushes other coop.ini-only settings onto this bridge —
+    /// deliberately NOT threaded through <c>AgentSettings</c>/<c>CoopAgent</c>, since the
+    /// wire flag this feeds is computed here, not decided by the pump loop.
+    /// </summary>
+    public bool PazaakDetectEnabled { get; set; }
+
+    /// <summary>
+    /// True while the local player is in the engine's own minigame mode: swoop race, forced
+    /// turret sequence (<see cref="EngineGlobals.TryIsInMiniGame"/>), or — when
+    /// <see cref="PazaakDetectEnabled"/> opts in — a running Pazaak hand
+    /// (<see cref="EngineGlobals.TryIsInPazaak"/>, docs/research/minigames.md §4: a
+    /// <c>CSWGuiPazaakGame</c> GUI panel, not a <c>CSWCModule::GetMiniGame</c> state, so it
+    /// needs its own read rather than showing up in the first check). Pazaak rides the exact
+    /// same <see cref="PlayerState.FlagInMinigame"/> wire bit swoop/turret already sets — no
+    /// protocol change, because the flag was always "is this player meaningfully absent from
+    /// the shared world", not "is a swoop race specifically running". A read failure (no
+    /// client world yet) reports false — the same "not in a minigame" default every other
     /// presence-style flag in <see cref="ReadLocalFlags"/> uses.
     /// </summary>
     public bool IsInMinigame =>
-        EngineGlobals.TryIsInMiniGame(_memory, out bool inMiniGame) && inMiniGame;
+        (EngineGlobals.TryIsInMiniGame(_memory, out bool inMiniGame) && inMiniGame)
+        || (PazaakDetectEnabled
+            && EngineGlobals.TryIsInPazaak(_memory, out bool inPazaak)
+            && inPazaak);
 
     /// <summary>
     /// Reads the speaker + line the plugin has published for the local player's current

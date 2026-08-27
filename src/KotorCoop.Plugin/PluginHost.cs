@@ -87,6 +87,7 @@ internal static unsafe partial class PluginHost
     private static MidModuleMovieController? _movieRelay;
     private static AgentLivenessController? _agentLiveness;
     private static ConnectionIndicatorController? _connectionIndicator;
+    private static MinigameNoticeController? _minigameNotice;
     private static Thread? _worker;
     private static volatile bool _running = true;
 

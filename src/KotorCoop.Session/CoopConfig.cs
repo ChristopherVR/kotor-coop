@@ -23,6 +23,7 @@ namespace KotorCoop.Session;
 ///   menu_button = 1    ; the in-game Co-op menu button (default on; 0 hides it)
 ///   minigame_hide_peer = 1   ; park a peer's phantom while they swoop-race/man a turret
 ///   minigame_spectate = 0    ; watch a racing/turret peer instead (not yet wired)
+///   pazaak_detect = 0        ; treat Pazaak as "in a minigame" too (NEEDS-LIVE, default off)
 ///   transition_announce = 1    ; race a follow ahead of the settle debounce (default ON,
 ///                               ; live-verified - docs/research/transition-smoothness.md)
 ///   client_door_refusal = 1    ; refuse a client's own premature door crossing (default ON,
@@ -106,6 +107,20 @@ public sealed record CoopConfig
     /// exists in coop.ini ahead of that work landing. Off by default.
     /// </summary>
     public bool SpectateMinigame { get; init; }
+
+    /// <summary>
+    /// Treat Pazaak (a GUI panel, not <c>CSWCModule::GetMiniGame</c> — docs/research/
+    /// minigames.md §4) as "in a minigame" too: a non-null <c>CClientExoAppInternal+0x70</c>
+    /// (<c>CPazaakData*</c>) sets <see cref="PlayerState.FlagInMinigame"/> through the exact
+    /// same wire path swoop/turret already uses, so a Pazaak game parks the peer's phantom
+    /// (or shows the wait notice) the same way a race does. <b>NEEDS-LIVE</b>: the offset is
+    /// read from the symbol database and cross-checked against the disassembled
+    /// <c>CClientExoApp::GetPazaakIsRunning</c>, but has not been watched flip live in a
+    /// running session — off by default until it has. <c>pazaak_detect = 1</c> turns it on.
+    /// The plugin reads the identical key in-process (<c>PluginConfig</c>) for its own local
+    /// edge log; this copy is what actually makes the WIRE flag true for peers.
+    /// </summary>
+    public bool PazaakDetect { get; init; }
 
     /// <summary>Show the always-on in-game chat overlay.</summary>
     public bool ChatOverlay { get; init; } = true;
@@ -388,6 +403,7 @@ public sealed record CoopConfig
             HidePeersInMinigame = !kv.ContainsKey("minigame_hide_peer")
                 || IsTruthy(kv.GetValueOrDefault("minigame_hide_peer")),
             SpectateMinigame = IsTruthy(kv.GetValueOrDefault("minigame_spectate")),
+            PazaakDetect = IsTruthy(kv.GetValueOrDefault("pazaak_detect")),
             ChatOverlay = !kv.ContainsKey("chat_overlay") || IsTruthy(kv.GetValueOrDefault("chat_overlay")),
             ChatOverlayOpacity = int.TryParse(kv.GetValueOrDefault("chat_overlay_opacity"), out int op)
                 ? Math.Clamp(op, 0, 100)

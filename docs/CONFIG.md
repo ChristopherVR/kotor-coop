@@ -29,6 +29,7 @@ actually runs with.
 | `pause_sync` | ON | mirror a peer's pause into this game | — |
 | `minigame_hide_peer` | ON | park a peer's phantom while they race/man a turret | [minigames.md](research/minigames.md) |
 | `minigame_spectate` | OFF | hand the camera to a racing/turret peer (not yet wired) | [minigames.md](research/minigames.md) |
+| `pazaak_detect` | OFF⁹ | treat a running Pazaak hand as "in a minigame" too (NEEDS-LIVE) | [minigames.md](research/minigames.md) |
 | `chat_overlay` | ON | show the always-on chat overlay | [chat-input-scroll.md](research/chat-input-scroll.md) |
 | `chat_overlay_opacity` | `75` | overlay opacity, 0-100 | [chat-input-scroll.md](research/chat-input-scroll.md) |
 | `chat_overlay_anchor` | `bottom-left` | overlay corner | [chat-input-scroll.md](research/chat-input-scroll.md) |
@@ -122,6 +123,8 @@ entirely; both now default ON, matching each other and the shipped file's explic
 | `dialogue_join_teleport` | ON | teleport a late joiner into a conversation instead of walking | [dialogue-join-latency.md](research/dialogue-join-latency.md) |
 | `dialogue_exclusive` | ON | one conversation at a time (the exclusivity lock itself) | [dialogue-sync.md](research/dialogue-sync.md) |
 | `container_locks` | ON | one-at-a-time container/corpse open lock | [container-sync.md](research/container-sync.md) |
+| `pazaak_detect` | OFF⁹ | plugin's own copy: gates the in-process Pazaak edge log/`MinigameKind`, not the wire flag | [minigames.md](research/minigames.md) |
+| `minigame_wait_notice` | ON | "&lt;name&gt; is in a minigame - waiting" HUD line for a parked peer | [minigames.md](research/minigames.md) |
 
 ³ The code fallback (used only if the key is entirely absent) is OFF for both
 `companion_local_combat` and `dialogue_recruit_sync`. The shipped `profiles/coop.ini.example`
@@ -142,6 +145,13 @@ using the packaged release without editing `coop.ini` will actually connect on 2
 is the real shipped default, not 27015. `CoopConfig.cs`'s own header-comment example also
 shows `port = 27140` (it is illustrating the shipped file, not the code fallback), and now
 says so explicitly alongside it rather than leaving the 27015/27140 gap unexplained.
+⁹ `pazaak_detect` is read TWICE off the same key, by two independent readers, the same split
+`movie_relay`² has: `CoopConfig.PazaakDetect` (agent side) is what actually makes
+`KotorGameBridge.IsInMinigame` — and therefore the wire's `PlayerState.FlagInMinigame` bit a
+peer parks on — true for a Pazaak hand; `PluginConfig.ReadBool("pazaak_detect", ...)` (plugin
+side, in-process) only gates that process's own local edge log and `MinigameKind` labelling.
+Both default OFF and the shipped `coop.ini.example` leaves it at `0`, so the two readers never
+disagree in practice; setting it in `coop.ini` turns both on together.
 
 ## CLI flags (`KotorCoop.Agent`, `AgentOptions.cs`)
 

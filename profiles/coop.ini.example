@@ -82,6 +82,22 @@ minigame_hide_peer = 1
 ; player already spectates a living one. NOT YET WIRED — read and stored, but the camera
 ; handoff has no trigger yet (docs/research/minigames.md).
 minigame_spectate = 0
+
+; Treat Pazaak as "in a minigame" too, the same way a swoop race or turret sequence is:
+; a non-null CClientExoAppInternal+0x70 (CPazaakData*) sets the same wire flag, so a Pazaak
+; hand parks the peer's phantom (or shows the wait notice below) exactly like a race does.
+; NEEDS-LIVE: the offset is read from the symbol database and static disassembly, not yet
+; watched flip in a running session, so this defaults OFF until it has been. 1 turns it on.
+pazaak_detect = 0
+
+; While a REMOTE peer's phantom is parked because their PlayerState.FlagInMinigame is set,
+; show a persistent "<name> is in a minigame - waiting" line so it is obvious why they
+; vanished instead of it looking like a desync. 1 (default) shows it, 0 disables it.
+; NOTE: this can currently only fire while minigame_hide_peer = 0 (the peer stays mirrored
+; and the flag stays visible in the shared block) — under the default hide/park behaviour
+; the block never carries the flag for an excluded slot, so the notice will not show. See
+; docs/research/minigames.md's dated section for the full explanation.
+minigame_wait_notice = 1
 ; --- persistent connection indicator ------------------------------------------------
 ; Before this the only way to see connection state in-game was typing `status` at the ~
 ; console. This posts a short line ("co-op: connected, 2 players" / "reconnecting..." /

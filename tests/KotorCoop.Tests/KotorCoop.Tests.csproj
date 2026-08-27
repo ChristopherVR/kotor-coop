@@ -52,6 +52,7 @@
     <Compile Include="..\..\src\KotorCoop.Plugin\CompanionLocalFightRule.cs" Link="Plugin\CompanionLocalFightRule.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\AgentLiveness.cs" Link="Plugin\AgentLiveness.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\ConnectionIndicatorRule.cs" Link="Plugin\ConnectionIndicatorRule.cs" />
+    <Compile Include="..\..\src\KotorCoop.Plugin\MinigameNoticeRule.cs" Link="Plugin\MinigameNoticeRule.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\MapRevealRule.cs" Link="Plugin\MapRevealRule.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\LocalFightCandidateRule.cs" Link="Plugin\LocalFightCandidateRule.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\LivenessRule.cs" Link="Plugin\LivenessRule.cs" />

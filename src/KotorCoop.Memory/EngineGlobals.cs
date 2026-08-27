@@ -371,6 +371,45 @@ public static class EngineGlobals
         return true;
     }
 
+    // ---- Pazaak: a GUI panel, not CSWCModule::GetMiniGame -----------------------------
+
+    /// <summary>CClientExoAppInternal + this = CPazaakData*, or 0 when no hand is running
+    /// (symbol database: <c>CClientExoAppInternal.pazaak @ 112</c> = 0x70). The pointer
+    /// itself IS the running flag — <c>CClientExoApp::GetPazaakIsRunning</c> 0x005EE140 is
+    /// exactly <c>[[ecx+4]+0x70]</c>, nothing more. See docs/research/minigames.md §4.</summary>
+    private const int ClientPazaakOffset = 0x70;
+
+    /// <summary>
+    /// A transcription of <c>CClientExoApp::GetPazaakIsRunning</c> 0x005EE140: nonzero at
+    /// <c>[clientInternal+0x70]</c> means a Pazaak hand is running. Deliberately a SEPARATE
+    /// reader from <see cref="TryIsInMiniGame"/> rather than folded into its walk — Pazaak is
+    /// a <c>CSWGuiPazaakGame</c> GUI panel, not a <c>CSWCModule/CSWCArea/CSWMiniGame</c>
+    /// chain at all (docs/research/minigames.md §4). <b>NEEDS-LIVE</b>: the offset is read
+    /// from the symbol database and cross-checked against the disassembled
+    /// <c>GetPazaakIsRunning</c>, not yet watched flip in a running session — callers gate
+    /// this behind an explicit opt-in (<see cref="KotorGameBridge"/>'s
+    /// <c>PazaakDetectEnabled</c>, coop.ini <c>pazaak_detect</c>) until it has. False only
+    /// means "could not be read" (no client yet); a successful read with no game running
+    /// reports true with <paramref name="inPazaak"/> false.
+    /// </summary>
+    public static bool TryIsInPazaak(ProcessMemory memory, out bool inPazaak)
+    {
+        inPazaak = false;
+
+        if (!TryGetClientInternal(memory, out nint clientInternal))
+        {
+            return false;
+        }
+
+        if (!memory.TryReadPointer(clientInternal + ClientPazaakOffset, out nint pazaak))
+        {
+            return false;
+        }
+
+        inPazaak = pazaak != 0;
+        return true;
+    }
+
     private static bool TryStep(ProcessMemory memory, nint root, int offset, out nint result)
     {
         result = 0;

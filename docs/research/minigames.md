@@ -2572,3 +2572,220 @@ matching every prior round's own convention); `000002 - Game1` was never touched
 tests/KotorCoop.Tests` (Release): 1737/1737 green (this round's own production changes were entirely in
 `party-reconciliation.md`'s own thread — see that doc's latest entry — and touch no code this doc's own
 subject exercises).
+
+## 23. Pazaak detection, minigame kind, and the "waiting" HUD line (2026-08-27)
+
+Roadmap item 8's follow-up round: three small, independent additions layered on top of
+everything above, none of them touching the wire protocol, `CoopAgent.cs`, or
+`MinigameRule.cs` (another agent was mid-flight wiring that file this same round).
+
+### 23.1 Pazaak detection — a second, opt-in reader alongside the existing one
+
+§4 documented Pazaak as architecturally separate from `CSWCModule::GetMiniGame` and
+deliberately left undetected. This round adds detection, gated OFF by default because the
+offset, while read from the symbol database and cross-checked against a real disassembly of
+`CClientExoApp::GetPazaakIsRunning` (0x005EE140, `[[ecx+4]+0x70]`), has not itself been
+watched flip in a running session — the project's own rule for a READ of a not-yet-live-
+verified offset (ship it behind a flag defaulting OFF, marked NEEDS-LIVE).
+
+Two independent readers of the same `coop.ini pazaak_detect` key, following the exact split
+`movie_relay` already established (§5, and `docs/CONFIG.md`'s footnote ⁹):
+
+* **Plugin, in-process** (`MinigameController.cs`): reads `CClientExoAppInternal+0x70` —
+  the SAME `AppManager -> CClientExoApp (+0x04) -> CClientExoAppInternal (+0x04)` walk this
+  file already resolves for the swoop/turret chain, one field over. The pointer value
+  itself is the running flag (nonzero = a hand is in progress), validated with this
+  codebase's usual range-only "readable pointer" guard (`p is > 0x10000 and < 0x7FFF0000`,
+  the same check `Odyssey.Dialogue.Spectate.cs`'s `LooksLikeDataPointer` uses) before being
+  trusted, though it is never dereferenced — only compared to null-ness. Logs its own edge,
+  separately from the combined minigame edge and carrying the raw pointer value specifically
+  so a live pass can confirm the offset: `pazaak: entered (CPazaakData* 0x...)` /
+  `pazaak: left`. Feeds `MinigameController.LocalInMinigame`/`LocalKind` (see 23.2) through
+  the exact same latch the swoop/turret read already drives — no separate mechanism.
+* **Agent, out-of-process** (`KotorCoop.Memory/EngineGlobals.TryIsInPazaak`, called from
+  `KotorGameBridge.IsInMinigame`, gated by the new `KotorGameBridge.PazaakDetectEnabled`
+  property): the reader that actually matters for co-op, because `IsInMinigame` — not
+  anything the plugin computes — is what `KotorGameBridge.Player.cs`'s `ReadLocalFlags`
+  turns into `PlayerState.FlagInMinigame` on the wire (§5 already establishes this split for
+  swoop/turret: "the wire flag is computed by the agent reading the target process
+  directly"). `PazaakDetectEnabled` is set once, in `AgentComposition.Compose`
+  (`src/KotorCoop.Agent/AgentComposition.cs`), from `CoopConfig.PazaakDetect` — the same
+  place and the same one-shot pattern `ApplyChatOverlayConfig` already uses to push a
+  coop.ini-only setting onto the bridge, chosen specifically so this needed **no change to
+  `CoopAgent.cs`, `AgentSettings`, or the wire protocol**: `IsInMinigame` already existed as
+  a bridge property `CoopAgent.cs` reads (peer filter, `PumpEnemies`, `PumpParty`,
+  `PumpPhantomDamage`) via `MinigameRule`'s three questions; OR-ing a second engine read
+  into that ONE property is invisible to every caller. `PlayerState.FlagInMinigame`'s
+  meaning does not change ("this player is meaningfully absent from the shared world"), it
+  just now has a second real-world cause.
+
+Both readers default OFF (`coop.ini pazaak_detect = 0`, matching `profiles/coop.ini.example`
+and the code fallback — no drift between shipped file and code default, unlike some older
+keys `docs/CONFIG.md` documents footnotes for).
+
+### 23.2 Minigame kind — a local-only label, deliberately never sent over the wire
+
+§3 read `CSWMiniGame+0x80` (`type`, INFERRED 1=swoop/2=turret in some order, or left at its
+constructor default for any other GFF value) and explicitly declined to act on it: "this
+item's whole gating decision only needs 'is a minigame running', not 'which kind'." This
+round finally consumes it, but strictly locally: `MinigameController.LocalKind`
+(`MinigameKind`: `None`/`Swoop`/`Turret`/`Pazaak`/`Unknown`) is computed every frame
+alongside `LocalInMinigame` and folded into the existing edge log
+(`minigame: entered (Swoop) — peers will park this player's phantom`, replacing the old
+generic `(swoop/turret)` text — the literal prefix `"minigame: entered"` that §8.2/§8.3's
+live-test recipes grep for is unchanged) purely so a live pass can see, from the log alone,
+whether type `1`/`2` really do split swoop from turret as INFERRED.
+
+**Never carried to a peer.** The task brief for this round was explicit: if naming the kind
+on a REMOTE peer's HUD needed a wire change, don't make one — derive the remote-facing
+message from the flag alone. `MinigameKind` lives entirely in `MinigameController`'s own
+static state; nothing reads it outside that file except the local edge-log string. The
+"waiting" notice below (23.3) says only "in a minigame", never which kind, for exactly this
+reason — a REMOTE peer's kind is not information this instance has, and manufacturing it
+(e.g. guessing from context) was explicitly out of scope.
+
+### 23.3 The "waiting" HUD line — and a real architectural limit found while building it
+
+`MinigameNoticeController.cs` (new) posts a persistent one-line notice —
+`"<name> is in a minigame - waiting"`, row 8 column 8, `Odyssey.PostTextLine`'s usual queued-
+text path — for a remote slot whose `PlayerState.FlagInMinigame` was last observed true,
+cleared once it is seen to clear. Behind `coop.ini minigame_wait_notice` (default ON). The
+decision itself is a pure, tested rule (`MinigameNoticeRule.NextWaiting`, 4 tests in
+`MinigameNoticeRuleTests.cs`, added to `KotorCoop.Tests.csproj`'s linked-source list the same
+way `MinigameRule.cs` already is): while a slot is `Active`, the notice mirrors
+`RemoteView.InMinigame` exactly; while it is not `Active`, the rule **preserves** whatever
+the notice last showed rather than trusting a stale read.
+
+**That "preserve" behaviour is not a stylistic choice — it is forced by something this round
+found while tracing the write path, and it has a real consequence worth recording plainly.**
+`KotorGameBridge.WriteToPlugin` (`src/KotorCoop.Memory/KotorGameBridge.PluginBlock.cs`), for
+any slot whose peer is not in this tick's filtered `visible` list, does exactly one write:
+zero the `Active` dword. It does **not** touch that slot's `Flags` dword (offset `+0x3C`,
+which `RemoteView.InMinigame` reads). Meanwhile `CoopAgent.cs`'s peer-visibility filter —
+
+```csharp
+visible = _settings.HidePeersInMinigame
+    ? [.. visible.Where(p => !p.State.IsInMinigame)]
+    : visible;
+...
+LastWriteSucceeded = _bridge.TryWriteRemotePeers(visible);
+```
+
+— excludes a peer from `visible` using the SAME `p.State.Flags` snapshot that would have
+been written for them had they stayed included, and does so in the exact same call that
+performs the write. The consequence: **under the shipped default (`minigame_hide_peer = 1`),
+there is provably no tick at which a peer's slot is simultaneously `Active` and carries
+`InMinigame = true` in the block.** The tick their flag turns true is the same tick they
+drop out of `visible`, so the write that zeroes `Active` never carries the newly-true flag
+alongside it — the flag transition is invisible to anything reading the shared block from
+that point on, forever, for that peer, until they reconnect. This was verified by reading
+the code, not merely reasoned about: `WriteToPlugin`'s `index < 0` branch is literally two
+lines (`TryWrite(slot + 0x00, 0u); continue;`), and the filter and the write use the
+identical `peer.State` object in the same method call, so there is no scheduling window in
+which the two could observe different flag values.
+
+**What this means in practice**: the wait notice can only ever fire while
+`minigame_hide_peer = 0` — the peer stays mirrored (not parked) and the flag stays directly
+observable in the block the whole time it is set. Under the DEFAULT `minigame_hide_peer = 1`
+— the setting under which a phantom is actually destroyed and a "waiting" notice would be
+most useful — the notice currently does not fire, because the plugin has no way to tell "this
+slot went inactive because the peer left a minigame flag" apart from "this slot went inactive
+because the peer disconnected" from the data available to it. `MinigameNoticeController`
+deliberately does NOT guess at this distinction (e.g. "any phantom destroyed via the `peer
+left` reason string was probably a minigame park") — a wrong guess would show a misleading
+"in a minigame — waiting" line for a player who simply quit, which is worse than the notice
+never showing. Closing this gap for real needs one of: a `CoopAgent.cs`-level change to carry
+"why a slot went inactive" into the block (out of scope this round — another agent owns that
+file), or a new wire-carried "leaving reason", which the task brief for this round explicitly
+ruled out. **Left for a future round**, flagged here rather than worked around.
+
+Nothing about the EXISTING park/hide behaviour changed: `PhantomController.Drive.cs`'s
+`!remote.Active` branch (destroy on the way out, respawn on the way back — §8's own static
+audit, confirmed unaffected) is untouched. This is purely an additional, best-effort HUD line
+layered on top, not a new gating mechanism.
+
+### 23.4 Row budget
+
+`MinigameNoticeController` claims screen row 8 (column 8), documented in its own class
+comment and cross-referenced against every other row this plugin's queued-text lines already
+use: 0-2 the console itself, 3 `ConsoleAssistController`'s hint, 4
+`DialogueSpectateController`'s "click to join", 5 `AgentLivenessController`'s stale-agent
+warning, 6 `InteractionLockController`'s "walk over to join" far notice, 7 that same
+controller's container-lock notice. Row 8 was free on the in-world HUD at the time of this
+round; `ServerBrowserController.FirstEntryRow` is also 8 but only ever draws while the
+main-menu browser panel is open, a screen this notice is never live on at the same time as.
+
+### 23.5 Files changed
+
+* `src/KotorCoop.Plugin/MinigameController.cs` — Pazaak read + edge log, `MinigameKind` enum
+  and `LocalKind` property, combined edge log now names the kind.
+* `src/KotorCoop.Plugin/MinigameNoticeRule.cs` (new) — the pure "should the notice be showing"
+  decision.
+* `src/KotorCoop.Plugin/MinigameNoticeController.cs` (new) — the per-frame HUD line.
+* `src/KotorCoop.Plugin/PluginHost.cs` / `PluginHost.Controllers.cs` / `PluginHost.Frame.cs` —
+  field, construction, and per-frame call (right after `PhantomController.OnFrame`) for the
+  new controller.
+* `src/KotorCoop.Memory/EngineGlobals.cs` — `TryIsInPazaak` (agent-side Pazaak pointer read).
+* `src/KotorCoop.Memory/KotorGameBridge.Dialogue.cs` — `PazaakDetectEnabled` property;
+  `IsInMinigame` ORs in the Pazaak read when enabled.
+* `src/KotorCoop.Agent/AgentComposition.cs` — sets `PazaakDetectEnabled` from
+  `CoopConfig.PazaakDetect`, next to the existing `ApplyChatOverlayConfig` call.
+* `src/KotorCoop.Session/CoopConfig.cs` — `PazaakDetect` property + `pazaak_detect` parse.
+* `tests/KotorCoop.Tests/MinigameNoticeRuleTests.cs` (new, 4 tests) + `KotorCoop.Tests.csproj`
+  linked-source entry for `MinigameNoticeRule.cs`.
+* `profiles/coop.ini.example`, `docs/CONFIG.md` — both new keys documented, defaults matching
+  code (no example-vs-default drift introduced).
+
+Not touched, per this round's brief: `CoopAgent.cs`, `MinigameRule.cs`, `ProtocolConstants.cs`
+(no version bump — no wire layout change), `SharedBlock.cs`/`SharedBlockView.cs` (the
+`RemoteView.Flags`/`InMinigame` field this round reads already existed from item 8's original
+work).
+
+### 23.6 NEEDS-LIVE — the live test plan
+
+None of this round's three additions have been run against a live two-instance session.
+Recommended plan, next round with rig access:
+
+1. **Pazaak offset itself.** `pazaak_detect = 1` in both `coop.ini`s. Reach a Pazaak table —
+   the Upper City cantina on Taris (`tar_m03aa`, reachable by ordinary early-game play or a
+   console `warp`; the game's own Pazaak side-bets there need no story progress) is the
+   obvious candidate, matching this project's own past preference for `warp`-reachable,
+   no-story-progress test sites (§8.2's swoop recipe, §9.2's `warp m12ab` for the turret).
+   Start a hand via the normal in-game prompt. Check:
+   * **This instance's own log**: `pazaak: entered (CPazaakData* 0x...)` fires the instant
+     the table screen comes up (`CSWGuiPazaakStart`/`CSWGuiPazaakGame`), and
+     `minigame: entered (Pazaak) — peers will park this player's phantom` fires on the same
+     frame or the one after.
+   * **The peer's screen** (`minigame_hide_peer = 1`, the default): this player's phantom
+     disappears within one spawn-cooldown window (30 frames), the same "destroyed, not
+     frozen" behaviour §9.4 already confirmed for swoop/turret — Pazaak rides the identical
+     mechanism, so this is really confirming the FLAG fires correctly, not a new code path.
+   * **On ending the hand** (win, lose, or leaving the table): `pazaak: left` and
+     `minigame: exited — back in the shared world` both fire, and the peer's phantom respawns.
+   * **False-positive check**: play an UNRELATED conversation or minigame-free stretch with
+     `pazaak_detect = 1` and confirm neither log line fires spuriously — the same category of
+     check §7 item 5 asks for the swoop/turret reader.
+2. **Minigame kind.** During the SAME swoop/turret live pass a future round eventually
+   manages to run to completion (§9.3/§10's navigation work applies directly here — this round
+   did not attempt it, focusing on Pazaak and the notice instead), confirm the log's
+   `(Swoop)`/`(Turret)` label actually matches which one is running, settling §3's own
+   INFERRED "1 and 2 are swoop and turret in SOME ORDER" for good.
+3. **The wait notice, positive case.** `minigame_hide_peer = 0`, `minigame_wait_notice = 1`,
+   either instance enters ANY minigame (Pazaak is the easiest to reach deliberately — see
+   item 1). Confirm the OTHER player's screen shows `"<name> is in a minigame - waiting"` at
+   row 8 the moment the flag goes up, and it clears the moment the hand/race/turret sequence
+   ends. This is the config this round's own static analysis (23.3) says SHOULD work; live
+   confirmation is still owed.
+4. **The wait notice, default config — expected to NOT fire, confirm that expectation.**
+   `minigame_hide_peer = 1` (default), `minigame_wait_notice = 1`, enter a minigame. Per
+   23.3's static finding, the notice should NOT appear (the flag is structurally unobservable
+   for a hidden peer) while the phantom is still destroyed/respawned exactly as before. A live
+   round should confirm this negative result rather than assume it — if the notice DOES fire
+   under the default config, that would mean 23.3's read of `WriteToPlugin` is wrong somewhere
+   and needs revisiting.
+
+`dotnet build KotorCoop.slnx -warnaserror`: clean, 0 warnings/errors. Plugin build
+(`src/KotorCoop.Plugin/build.ps1 -WarnAsError`): clean. `dotnet test tests/KotorCoop.Tests`:
+1816/1816 green, including the 4 new `MinigameNoticeRuleTests`. No live verification was
+performed this round — everything in 23.1-23.4 is static-audited (read against its own source,
+traced end to end) but NEEDS-LIVE per 23.6 above.
