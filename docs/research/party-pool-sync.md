@@ -632,3 +632,87 @@ in this pass changed that default) — root cause 2 is still open.
    wire itself carried the op (or the automatic-apply queue drained) twice, that is now a
    further C#-testable lead this pass did not find a way to trigger, and is worth a regression
    test once identified. Everything else in §6 (tests 4-8) is still bench-only/not yet run.
+
+## 9. Live pass (2026-08-28) — the depositing-side duplicate reproduced directly, on the
+## ORIGINATING side's own log, not the receiving side; asymmetric, not deterministic
+
+Two-instance rig, `party_pool_sync=1` on both `coop.ini`s, fresh connect. §7's baseline-read
+test (test 1) reconfirmed clean: both sides independently reconciled the save's pre-existing
+pool contents identically (`removed 'g_i_adrnaline003' x1`, `removed 'g_i_medeqpmnt01' x2`,
+`removed 'g_w_blstrrfl001' x1`, matching §7's own recorded baseline exactly — this save's own
+pool state has not changed across sessions).
+
+**Test 2 (host deposits `pooladd g_w_thermldet01 3`, watch the CLIENT/receiver) re-confirmed
+root cause 1's fix still holds**: the client's own log shows exactly ONE `party pool: added
+'g_w_thermldet01' (0x131) x3...` line. Clean, as §7's own fix predicted.
+
+**But the HOST's OWN log — the ORIGINATING side, for its OWN direct console deposit — shows the
+identical add applied TWICE**, 1.34 seconds apart, same resref, same quantity, same format
+(`CheatController.PartyPool.cs`'s own `PartyPoolAdd` log line, not a cosmetic duplicate — two
+separate `cheat: added ... (status 1)` replies, meaning `Odyssey.AddItemToPartyPool` genuinely
+ran twice):
+
+```
+[03:47:45.466] party pool: added 'g_w_thermldet01' (0x131) x3, charges 0/0, upgrades 0x0
+[03:47:45.467] cheat: added 'g_w_thermldet01' x3 to the party pool (status 1)
+[03:47:46.807] party pool: added 'g_w_thermldet01' (0x131) x3, charges 0/0, upgrades 0x0
+[03:47:46.808] cheat: added 'g_w_thermldet01' x3 to the party pool (status 1)
+```
+
+**This is the first direct, live reproduction of a depositing-side duplicate** — every prior
+round (§7 test 3, §8's whole investigation) looked for it on the RECEIVING side after a peer's
+deposit and either found it there (§7) or could not reproduce it under any synthetic
+configuration (§8). This round found it on the OPPOSITE side: the instance that itself issued
+the `pooladd` console command, applied through the exact same single-slot arbitrated cheat
+channel (`CheatKinds.PartyPoolAdd`) both `pooladd` and the automatic per-peer apply drain share
+(`docs/CONSOLE.md`'s own note: *"submit through the exact same channel `DrainAutomaticPartyPool`
+already used for the automatic apply half"*). The leading, still-unconfirmed hypothesis, now
+narrower than §8's own "bridge scan cache" guess (§8 stress-tested that specific mechanism and
+found it innocent): `PartyPoolPump`'s own step 1 (detect a local change vs. `_lastScan`) and
+step 2 (reconcile vs. `session.PartyPoolTotals`) are documented to "never fight... because step
+2 always reads the store AFTER step 1's publishes have already updated it" (the class's own doc
+comment) — but that invariant is stated for a GUI-dragged deposit, which the pump discovers
+entirely on its own. A `pooladd` deposit is different in exactly the way §8's own closing
+paragraph named: it lands through the single-slot CHEAT channel, asynchronously, on a frame the
+pump's own tick does not control — if the cheat's own engine-level apply and the pump's step-1
+scan land close enough together, the HOST being locally authoritative (its own `PartyPoolStore`
+updates in-process, no network round trip) could plausibly let step 2 see a "session total" that
+already reflects step 1's own just-published change while `_lastScan` itself has not yet
+advanced past the pre-deposit baseline for that specific tick — reading as "the engine is behind
+what the session knows" and queuing a SECOND apply of the same delta. **Reasoned from the
+evidence and the class's own documented design, not confirmed by adding instrumentation to
+`PartyPoolPump` itself** — this round prioritised getting a second real reproduction over
+chasing the mechanism further, given the time already spent finding this one.
+
+**Test 3 (client deposits `pooladd g_i_medeqpmnt01 4`, watched from both sides in the SAME
+session) did NOT double, on either side** — clean single applies on both the client's own log
+and the host's (receiver's) log. This is the asymmetry worth naming plainly: the exact same
+mechanism, exercised twice in the same session (once for the host's own deposit, once for the
+client's), doubled once and not the other time. **This reads as a genuine timing race, not a
+deterministic bug** — consistent with the hypothesis above (a race between two independently-
+scheduled tick cadences), and consistent with §8's own repeated stress-testing failing to
+force it on demand under a controlled, compressed timing ratio.
+
+**Not independently re-verified this round**: whether the pool's actual resulting STACK SIZE
+ended up doubled (6 instead of 3) or whether the second apply was itself a no-op once the
+repository already held the stack (`InsertItem`'s own append-only behaviour, §1.3, would make a
+second call genuinely add a SECOND stack entry, not merge — so the honest expectation is a real
+functional double-count, not just a duplicate log line, but this round did not read the pool
+back through `items`/a repository dump to confirm the number directly).
+
+**`party_pool_sync` stays OFF** (unchanged shipped default — this round only enabled it in the
+live rig's own `coop.ini` for the test, per usual practice, and left the setting where it found
+it). This is now the THIRD independent round narrowing the same bug (§7 found it once on the
+receiving side and fixed root cause 1; §8 investigated root cause 2 and ruled out the bridge
+cache; this round reproduced root cause 2 directly, on the originating side, and proposes a
+concrete mechanism — the step1/step2 tick-timing race for a cheat-applied, not GUI-dragged,
+local change) without yet landing a fix. **Concrete next step**: add direct instrumentation to
+`PartyPoolPump.Pump()` (log `_lastScan`/`session.PartyPoolTotals`/`_pendingApplyTarget` for the
+specific key on every tick around a `pooladd` call) to catch the race in the act the way
+`party-reconciliation.md`'s own `party follow extend`/`phase6advance` write-logging did for a
+similarly elusive live-only race — reasoning about the mechanism from the code got this round to
+a strong hypothesis but not a confirmed one.
+
+`dotnet build KotorCoop.slnx -warnaserror` and `src/KotorCoop.Plugin/build.ps1 -WarnAsError`:
+both clean (no code changed this round). `dotnet test tests/KotorCoop.Tests --no-build`:
+2339/2339 passing (unchanged).

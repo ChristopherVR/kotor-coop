@@ -544,3 +544,108 @@ all, which is itself the evidence the hide filter worked (an absent peer produce
 same "removed" ambiguity `client-control-lock.md`'s own spawn-drain story flags as worth a
 positive "nothing left standing" report rather than silence — here the positive signal is the
 `RemoteCount`/peer-slot readout, not a dedicated log line).
+
+## Live pass (2026-08-28): the door opened for real, the roster never wiped — and §3.3's own
+## citation for the trigger is corrected, one level short of the actual answer
+
+Two-instance rig, `solo_segment_spectate=1` on both `coop.ini`s, both `warp sta_m45ac` (landed
+together, confirmed via `where`). `k45_door_bast1` sits ~112m from the module's warp-in point —
+too far for `opendoor`'s own 40m range gate — so this pass read the door's real coordinates
+directly out of the module's own GIT data (`tools/kotorfiles.py gff
+"...\modules\sta_m45ac.rim:m45ac.git" --path "Door List"`, no live game touched for this part):
+`k45_door_bast1` at `(-15.97, -82.24, 12.16)`, a different Z than the warp-in point — a vertical
+section this pass did not otherwise map. Both players `tp`'d there directly (bypassing the
+unmapped walk); `opendoor k45_door_bast1` on the host succeeded through the real engine call
+(`door 0x3E: opened (state 0 -> 2)`, `Odyssey.OpenDoorFully`/`CSWSDoor::OpenDoor 0x00589C70` —
+per that function's own doc comment in `Odyssey.Doors.cs`, this is NOT a state poke; it resolves
+the opener, picks a swing side, and **runs the door's real OnOpen script** through
+`CVirtualMachine::RunScript`, exactly the "genuine engine call" §8.3 step 2 asks for).
+
+**No `solo segment: began` line ever appeared, on either side, and the party roster never
+changed** — the host's own party-follow diagnostics (`party follow: 0x105 ... inParty=1
+...leaderPos=(-14.0,-83.0,12.1)`) show Trask still an active, in-party companion both before and
+after the door opened. `sTA_BASTILA_DEAD`/`G_FinalChoice` were not read this pass, but the
+absence of any roster-count drop is unambiguous from the follow-diagnostics alone.
+
+### Root cause, read directly from the module's own template data (not re-derived from bytecode)
+
+`k45_door_bast1.utd`'s own `OnOpen` field (`tools/kotorfiles.py gff
+"...\sta_m45ac_s.rim:k45_door_bast1.utd"`) is **`k_psta_bast_wor`**, not `k_psta_door` — a
+**correction to §3.3's own citation**, which named `k_psta_door.ncs` as "at the door tagged
+`k45_door_bast1`" from a blind bytecode sweep for `RemovePartyMember` calls, associated to the
+door by NAME similarity, not by tracing the actual GFF wiring (§3.3's own method section is
+explicit that the `.dlg` files were never walked node-by-node — this pass closes exactly that
+gap, one level further than §3.3 reached). `k_psta_bast_wor.ncs`'s own string constants
+(`sta_bastila`, `sta_invis_bast_conv`, `k45_door_bast2`, `Bastila`) read as scene setup — moving
+an invisible conversation trigger into place — not a party-roster operation; no companion tag
+appears in it.
+
+**A full sweep of every script and template resource in `sta_m45ac_s.rim`** (193 `.ncs`, 104
+`On*`-bearing templates) for a literal reference to `k_psta_door` found exactly two hits, both
+false leads (`k45_door_malak`/`sta_door_freeze`'s `OnFailToOpen = k_psta_doorbark`, a
+similarly-named but different, far smaller script) — **`k_psta_door.ncs` is not wired as an
+`On*` field on any door, placeable, creature or trigger template in this module.** It IS
+referenced, though: a sweep of the module's 18 `.dlg` files for the literal string found it in
+**`k_sta_bastila.dlg`** (the Bastila conversation itself) — i.e. `k_psta_door.ncs` fires as a
+dialogue NODE's own action script somewhere inside the Bastila conversation, not from the door
+opening at all. This matches the vanilla design better than the door-OnOpen reading did: the
+duel is gated behind actually TALKING to Bastila after the door opens, not the door swing itself
+— `k45_door_bast1`'s `OnOpen` merely stages the scene (moving `k45_door_bast2` and the invisible
+conversation trigger into position) for a conversation the player has not yet started.
+
+**Not resolved this pass**: which node inside `k_sta_bastila.dlg` calls `k_psta_door.ncs`, or
+whether it fires unconditionally the moment the conversation starts (matching the task's own
+"unconditionally, every possible companion" reading of the 9x `RemovePartyMember` calls) or only
+on a specific branch. This project has no `.dlg`-node-to-script GFF walker built yet (the byte
+offset of each node's own `Script`/`Script2` fields inside `DialogList`/`EntryList`/`ReplyList`
+was not traced this pass) — the string-literal sweep above proves the REFERENCE exists, not
+which node holds it or under what condition. Actually STARTING that conversation live needs
+either a real click on Bastila's NPC body (blocked by the same mouse-injection gap
+`docs/research/session-save.md` already documents) or a console primitive this project does not
+yet have for forcing a specific NPC's specific `.dlg` to start (`pazaak`/`openstore` are the
+precedent for "call the engine's real entry point directly instead of clicking," but no
+`.dlg`-start equivalent exists yet).
+
+### A second finding: `firescript` on a DOOR object is unsafe — do not use it there
+
+Before finding the `.dlg` lead, this pass tried the task briefing's own documented fallback
+(`console-cheats.md`'s "if `opendoor` doesn't reach the script, try `firescript <id> fire`") on
+the door object id (`firescript 0x3E fire`). **This produced a tight, repeating burst of
+first-chance access violations** (`0xC0000005` at a fixed address outside the game's own image,
+`~12` per burst, lasting ~200ms) before self-resolving — the process survived (confirmed
+`Responding=True` and normal logging resumed 7 seconds later), but this is now a **live-confirmed
+negative result**, not the "untested for a DOOR specifically" open question `docs/CONSOLE.md`'s
+own `firescript` entry names. Root cause, read from `Odyssey.Doors.cs`'s own doc comment on
+`OpenDoorFn`: a `CSWSDoor`'s OnOpen script is invoked internally by `CSWSDoor::OpenDoor` itself,
+through `CVirtualMachine::RunScript` directly — **there is no `+0x260`/`+0x270`-style script-slot
+field on a door the way a creature has one**, so `firescript`'s generic offset read against a
+door object dereferences whatever unrelated field actually lives there. **Do not use `firescript`
+against a door id** — `opendoor`'s own real engine call already runs the OnOpen script correctly
+(confirmed working, above); there is nothing for `firescript` to add for a door, and this pass's
+own evidence is that trying costs a crash-loop for no benefit.
+
+### Verdict: `solo_segment_spectate` stays OFF — the detection precondition itself was never
+### reached, so none of the spectate/input-lock machinery this feature is actually about was
+### exercised
+
+The task's headline question (does the input lock actually stop a real WASD press or attack)
+remains **exactly as unverified as §8.2's own design doc left it** — this pass never got as far
+as the party roster actually dropping to zero, which is the trigger `SoloSegmentController`
+watches for. What this pass adds is a corrected, one-level-deeper map of the real trigger chain
+(door OnOpen stages the scene; the roster wipe fires from within the Bastila conversation, not
+the door) and a live-confirmed hazard (`firescript` on a door) for the next round to avoid.
+`solo_segment_spectate` stays at its default OFF; `docs/research/star-forge-finale.md`'s own §8
+design is unchanged (the detection mechanism itself — a roster count dropping from ≥1 to 0 in
+`sta_m45ac`/`sta_m45ad` — is still believed correct; it simply was never fed a real drop this
+pass, and the code path that would drive it end to end was never reached).
+
+**Concrete next step**: either build a `.dlg`-node script-walker (a natural extension of
+`NcsReader`'s own resolved-action-table approach, this time reading `DialogList`/`ReplyList`
+struct fields instead of bytecode) to find and confirm `k_psta_door.ncs`'s exact firing
+condition inside `k_sta_bastila.dlg`, or find another way to start that conversation live (a
+console `.dlg`-start primitive, or a save with genuine story progress that reaches this point
+through ordinary play) so the actual `RemovePartyMember` sweep can be observed directly.
+
+`dotnet build KotorCoop.slnx -warnaserror` and `src/KotorCoop.Plugin/build.ps1 -WarnAsError`:
+both clean (no code changed this pass — static RE plus a live rig session only).
+`dotnet test tests/KotorCoop.Tests --no-build`: 2339/2339 passing (unchanged).

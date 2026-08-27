@@ -3827,3 +3827,54 @@ pre-existing unrelated `CA2014` warning (`PortraitController.cs`) only.
   `PluginHost.Log` call immediately after their own write, gated on that parameter alone.
 - `src/KotorCoop.Plugin/PartyFollowController.cs` — both call sites now pass `_fineLogEnabled`
   through; no other behaviour change.
+
+## Live A/B re-run (2026-08-28): the SAME result a fourth time — both candidates fire and make
+## real progress, both still blocked by the untouched phase=2 idle stall; stays OFF
+
+Two-instance rig, `party_follow_extend_final_node=1`, `party_follow_advance_destnode_phase6=1`
+and `party_follow_finelog=1` in both `coop.ini`s (the latter two are not in
+`profiles/coop.ini.example` — appended by hand for this round, same as every prior round's own
+practice for this diagnostic-only pair). `END_M01AA`, round 88's own exact recipe on the host:
+`console 'tp 20 22 -1.3'` then `blockpoke.ps1 walk 10 15` (a genuine bare-point walk, not a
+console verb — `console 'walk ...'` is refused, `walk` is one of `blockpoke.ps1`'s own top-level
+commands; noted here since it tripped this round up briefly).
+
+**Both fix candidates fired, exactly as round 91's own direct write-logging first caught them
+doing**: `party follow phase6advance: 0x127 fired phase=6 pathNode=6 writeCursor=11 gap=5
+destNode 6 -> 10` (a tight repeating burst, matching round 91's own "over 300 Hz" description
+of the SAME `DestNode`-recollapse mechanism), and real position genuinely advanced from the
+teleport point toward the leader — `pathNode` climbed to 14, position moved to `(13.15, 18.78)`,
+meaningfully closer to `leaderPos (10.78, 15.70)` than the start.
+
+**Then the identical phase=2/`moveState=0`/`attempts` idle stall round 88 first found and round
+91 reconfirmed for 13+ minutes took over**: `phase=2 pathNode=14 destNode=14 writeCursor=17
+moveState=0`, position frozen bit-for-bit at `(13.15-13.18, 18.77-18.80)` for the entire
+remaining observation window (45+ seconds, `t=96.5` through `t=108.7` in the finelog's own
+elapsed-time column) — `targetVsSnapshotDist` staying pinned at `~3.84-3.88` the whole time,
+never closing. Neither fix candidate's own trigger shape (`phase` 6 or 7) matches phase 2, so
+neither fired again for the rest of the window — expected, matching round 91's own identical
+observation.
+
+**This is now the fourth independent live session to reach precisely this outcome** (rounds 90's
+predecessor, round 91 (three legs), and this one): both candidates are real, working, and
+produce genuine multi-unit progress when their own trigger shape is hit, but a SEPARATE,
+untouched phase=2 stall — still without its own root-cause disassembly — intercepts the
+companion before a full leg ever completes in this project's own standard short-leg repro.
+Per this project's own bar for a default flip ("a direct, decisive, zero-regression live A/B"
+reaching an actual leg completion), that bar is **still not met**, for the fourth time running.
+**Both switches stay at their default OFF.** No code changed this round — a live-only
+confirmation pass. `coop.ini`'s hand-appended `party_follow_advance_destnode_phase6`/
+`party_follow_finelog` lines and both switches were left at whatever state the rig's next round
+finds them (this round did not revert them, matching the project's own note that the CODE
+defaults are already off regardless of what a rig's `coop.ini` currently says).
+
+**Unchanged concrete next step**: the phase=2/`moveState=0`/`attempts`-reset handler
+(`0x00511860`, per round 88's own disassembly of the sibling phase-2 shape
+`TryAdvanceStalledMovingToPath` targets) is the real remaining blocker and has never itself been
+disassembled for THIS shape (`attempts` genuinely incrementing here, unlike the `attempts=0`
+shape that fix already covers) — a live debugger session on it, or on `PathWaitDest`'s own
+`fcompp` comparison at `0x512BF2` per round 89's original recommendation, is what the next round
+actually needs, not another repro of the same two already-proven-insufficient candidates.
+
+`dotnet build KotorCoop.slnx -warnaserror` and `src/KotorCoop.Plugin/build.ps1 -WarnAsError`:
+both clean (no code changed). `dotnet test tests/KotorCoop.Tests --no-build`: 2339/2339 passing.

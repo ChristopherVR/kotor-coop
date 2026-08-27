@@ -1311,3 +1311,47 @@ one LAN round trip, but the real path is plugin → shared block → agent tick 
 agent tick → shared block → plugin. `ContainerLockArbiter.TimeoutMs` is now 1000ms (two agent
 ticks each way with margin). NEEDS-LIVE: re-run the two-click race and confirm the fast path now
 resolves inside the budget (`granted`/`denied` log lines instead of `0xC6 no host answer`).
+
+### 2026-08-28, later same day — re-run with the 1000ms budget: PASS, the fast path now resolves
+
+Fresh `tools/demo.ps1` rig, both installs rebuilt/reinstalled from this commit
+(`f69cc2d` + this branch's own merge), `dotnet build -warnaserror` and `dotnet test
+tests/KotorCoop.Tests --no-build` both clean (2339/2339) before touching the rig.
+`container_lock_arbitration=1` is the shipped default in both `coop.ini`s (untouched this round).
+Both players teleported onto the same footlocker used in the two prior live passes
+(`tp 10.8 21.87`; §5.7's own known gap means the bare `useplaceable` sweep still tags 0xC6 as
+`none with inventory` — `HasInventory` reads false for this container live, same as every prior
+round — so the race was staged with the explicit-id form, `useplaceable 0xC6`, which does not
+depend on that filter). Fired `useplaceable 0xC6` on both instances from two parallel
+`Start-Job`/`blockpoke.ps1 console` calls (host send logged `03:12:05.136`, client send logged
+`03:12:04.888` — ~250ms apart, the same order of magnitude as the prior round's ~120ms stagger).
+
+**Result: PASS.** Both sides resolved through the fast path, no fallback, no timeout:
+
+```
+HOST   [03:12:06.325] container: arbitration denied 0xC6 (a peer got there first)
+CLIENT [03:12:06.170] container: arbitration granted 0xC6; re-issuing open
+```
+
+A full-log grep for `timed out` on both sides across the whole session returned nothing — every
+prior round (§11.4 above) saw `0xC6 no host answer within 300ms` on **both** sides, every time;
+this round saw it on **neither** side. `closeplaceable 0xC6` succeeded on both instances
+afterward (`+0x338 cleared` on each) — expected and not a second independent open: the client
+held the real lock (`granted`) while the host's own copy carries the existing cross-instance
+open-animation mirror (§2.3/§5.1), so both sides have a legitimately clearable `+0x338`, but only
+one side (`granted`) ever re-issued a real click — the host's `denied` line means its own attempt
+was refused before reaching `OpenInventory` a second time, exactly the "exactly one winner"
+property §5.1/§11.4 already established, now reached via the fast path instead of the slower
+fallback that used to carry it.
+
+**Verdict**: `ContainerLockArbiter.TimeoutMs = 1000` is confirmed live to fix the fast-path
+latency gap §11.4 found — the request/response round trip (plugin → shared block → agent tick →
+UDP → host → UDP → agent tick → shared block → plugin) now lands inside the budget. This
+feature's status upgrades to **Built, live-verified correct-outcome AND fast-path-confirmed** —
+no further follow-up item outstanding for this specific gap. `container_lock_arbitration` stays
+at its shipped default (`1`, ON) — this round did not change it, only confirmed the 1000ms raise
+that shipped ahead of it.
+
+Build/test this round: `dotnet build KotorCoop.slnx -warnaserror` clean; `src/KotorCoop.Plugin
+/build.ps1 -WarnAsError -Install` clean on both GOG installs (x86 confirmed); `dotnet test
+tests/KotorCoop.Tests --no-build` 2339/2339 passing before the live pass.
