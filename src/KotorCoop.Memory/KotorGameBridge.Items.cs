@@ -336,6 +336,13 @@ public sealed partial class KotorGameBridge
     /// what makes the proxy work; a mod that tags items differently breaks it, in the same
     /// way and for the same reason every other blueprint-keyed channel here breaks.
     /// </summary>
+    /// <summary>The <see cref="IItemBridge"/> member: same lookup, cache-only (no forced
+    /// sweep) — a pump resolving a container/corpse-loot removal's resref runs every tick
+    /// this scan is throttled to, so it should never itself trigger the sweep
+    /// <paramref name="force"/> would.</summary>
+    bool IItemBridge.TryGetItemResref(uint itemObjectId, out string resref) =>
+        TryGetItemResref(itemObjectId, out resref);
+
     public bool TryGetItemResref(uint itemObjectId, out string resref, bool force = false)
     {
         if (_itemTags.TryGetValue(itemObjectId, out string? cached))

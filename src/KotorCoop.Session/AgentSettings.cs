@@ -106,6 +106,33 @@ public sealed record AgentSettings
     public bool DialogueItemSync { get; init; } = true;
 
     /// <summary>
+    /// When true, <see cref="Pumps.ScriptItemGrantPump"/> samples the local PC's inventory
+    /// whenever this instance is NOT in a conversation and forwards whatever a script (an
+    /// OnEnter trigger, an OnDeath script, a cutscene, a heartbeat script) just placed into it
+    /// — the gap <see cref="DialogueItemSync"/> leaves, since that channel only ever diffs
+    /// while THIS instance owns a conversation. coop.ini <c>script_item_sync</c>. OFF by
+    /// default, live-verification pending — docs/research/dialogue-consequences.md's
+    /// script-item-sync section has the design and the concrete live test plan; unlike every
+    /// other item channel here, a false positive on this one (an ordinary ground/container
+    /// pickup misread as a script grant) mints a real duplicate item on the peer's engine, not
+    /// just a cosmetic desync, so it stays opt-in until the suppression ledger has been proven
+    /// against a live rig.
+    /// </summary>
+    public bool ScriptItemSync { get; init; }
+
+    /// <summary>How often <see cref="Pumps.ScriptItemGrantPump"/> re-samples the local PC's
+    /// inventory once it has a baseline, in milliseconds — independent of
+    /// <see cref="HeavyPumpIntervalMs"/> for the same reason
+    /// <c>DialoguePump.DialogueGrantSampleIntervalMs</c> is: this is a full possessed-items
+    /// sweep (<see cref="KotorCoop.Memory.IItemBridge.ReadPossessedItems"/>'s own doc calls it
+    /// "not free"), and tying it to the heavy pass would mean an unrelated change to that
+    /// interval silently changes how quickly a script grant is caught. Not a coop.ini key —
+    /// exposed here purely so a test can zero it and observe a diff on the very next call
+    /// instead of waiting on a real clock, the same reason <see cref="CombatPumpIntervalMs"/>
+    /// and <see cref="HeavyPumpIntervalMs"/> are themselves settable.</summary>
+    public int ScriptItemGrantSampleIntervalMs { get; init; } = 1000;
+
+    /// <summary>
     /// When true, the dialogue channel (<see cref="Pumps.DialoguePump.PumpDialogue"/>) runs on
     /// the real-time (every-poll-tick) path instead of the <see cref="CombatPumpIntervalMs"/>
     /// cadence, and an unchanged read is deduped against a resend rather than republished on

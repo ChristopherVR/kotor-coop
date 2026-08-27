@@ -62,6 +62,22 @@ internal sealed class DialoguePump(IGameBridge bridge, ICoopSession session, Age
     private bool? _lastLoggedIsInDialogue;
 
     /// <summary>
+    /// Whether THIS instance currently owns an active conversation — the same debounced
+    /// <c>active</c> flag <see cref="PumpDialogueItemGrants"/> diffs against, mirrored here so
+    /// <c>KotorCoop.Session.Pumps.ScriptItemGrantPump</c> can tell "the dialogue pump already
+    /// owns whatever is happening to the PC's inventory this tick" apart from "nothing is
+    /// claiming it, sample as usual" — see docs/research/dialogue-consequences.md's
+    /// script-item-sync section. Updated on EVERY <see cref="PumpDialogue"/> call, ahead of
+    /// the <see cref="AgentSettings.DialogueFastJoin"/> tick-gate's possible early return, so
+    /// an unchanged-fingerprint tick mid-conversation never leaves this stale — the property
+    /// still reflects this tick's true state even when nothing else about the call runs. Set
+    /// unconditionally, independent of <see cref="AgentSettings.DialogueItemSync"/>: the two
+    /// channels must never both diff the same inventory change regardless of whether the
+    /// dialogue channel itself is configured to report from it.
+    /// </summary>
+    public bool IsOwningConversation { get; private set; }
+
+    /// <summary>
     /// Edge-triggered log of <see cref="IGameBridge.IsInDialogue"/> on THIS instance, every poll
     /// tick — no cadence gate of its own, called ahead of every other pump so the logged edge
     /// is as close to the engine's own true transition as this process can see. On the enemy
@@ -154,6 +170,13 @@ internal sealed class DialoguePump(IGameBridge bridge, ICoopSession session, Age
 
         bool active = rawInDialogue
             || (_dialogueLastActiveMs > 0 && (nowMs - _dialogueLastActiveMs) < DialogueLingerMs);
+
+        // Set here, ahead of the tick-gate's possible early return below, so it tracks the
+        // engine every call the way _dialogueLastActiveMs/_dialogueHeldPartnerTag above do —
+        // see the property's own doc for why staleness here would be a real bug, not just an
+        // inefficiency.
+        IsOwningConversation = active;
+
         if (!active)
         {
             _dialogueHeldPartnerTag = string.Empty;

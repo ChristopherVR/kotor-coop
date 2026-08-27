@@ -147,6 +147,19 @@ public sealed record CoopConfig
     public bool DialogueItemSync { get; init; } = true;
 
     /// <summary>
+    /// Whether an item a KOTOR script places directly into the local PC's inventory OUTSIDE
+    /// any conversation (an OnEnter trigger, an OnDeath script, a cutscene, a heartbeat
+    /// script) is diffed and forwarded the same way <see cref="DialogueItemSync"/> already
+    /// forwards a reward node's grant — docs/research/dialogue-consequences.md's
+    /// script-item-sync section. OFF by default, live-verification pending: unlike the other
+    /// item channels, a false positive here (an ordinary pickup misread as a script grant)
+    /// mints a real duplicate item on the peer's engine rather than a cosmetic desync, so it
+    /// stays opt-in until the suppression ledger has been proven live.
+    /// <c>script_item_sync = 1</c> turns it on.
+    /// </summary>
+    public bool ScriptItemSync { get; init; }
+
+    /// <summary>
     /// Whether the dialogue channel is pumped on the agent's real-time (per-poll-tick) path
     /// instead of the ~150 ms combat cadence, and whether an unchanged read is deduped against
     /// a resend rather than republished on a fixed timer — docs/research/dialogue-join-latency.md
@@ -392,6 +405,7 @@ public sealed record CoopConfig
             StatusToasts = !kv.ContainsKey("status_toasts") || IsTruthy(kv.GetValueOrDefault("status_toasts")),
             DialogueItemSync = !kv.ContainsKey("dialogue_item_sync")
                 || IsTruthy(kv.GetValueOrDefault("dialogue_item_sync")),
+            ScriptItemSync = IsTruthy(kv.GetValueOrDefault("script_item_sync")),
             DialogueFastJoin = !kv.ContainsKey("dialogue_fast_join")
                 || IsTruthy(kv.GetValueOrDefault("dialogue_fast_join")),
             PartyFastPump = !kv.ContainsKey("party_fast_pump")

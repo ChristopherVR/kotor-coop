@@ -21,4 +21,20 @@ public interface IItemBridge
     /// </summary>
     IReadOnlyList<(uint Possessor, string Resref, ItemIdentity Identity)> ReadPossessedItems(
         IReadOnlySet<uint> possessorIds) => [];
+
+    /// <summary>
+    /// The blueprint resref of a live item, by object id — the same lookup
+    /// <c>KotorGameBridge.TryGetItemResref</c> already offers the console's <c>item</c>/
+    /// <c>giveloot</c> staging verbs, exposed here so a pump can resolve what a container/
+    /// corpse-loot removal (an object id with no resref of its own) is ABOUT to add to the
+    /// local PC's inventory, for <see cref="KotorCoop.Protocol.RecentlySyncedItems"/>. False
+    /// (with an empty resref) is a safe default: a bridge that cannot answer simply never
+    /// feeds the suppression ledger for that path, which only costs an occasional
+    /// unsuppressed false-positive report, never a wrong write.
+    /// </summary>
+    bool TryGetItemResref(uint itemObjectId, out string resref)
+    {
+        resref = string.Empty;
+        return false;
+    }
 }

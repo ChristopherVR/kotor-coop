@@ -266,6 +266,19 @@ dialogue_auto_join_range=20
 # GetItemPossessedBy(GetFirstPC()) on the OTHER instance silently fail three areas later.
 dialogue_item_sync=1
 
+# Most quest items are NOT granted through a conversation at all - an OnEnter trigger, an
+# OnDeath script, a cutscene or a heartbeat script creates one straight into the local PC's
+# inventory with nobody's dialogue token involved, so dialogue_item_sync above never sees it.
+# This samples the local PC's inventory whenever this instance is not in a conversation and
+# forwards whatever a script placed into it through the same giveloot channel, with a
+# suppression ledger fed by the ground-item, container/corpse-loot and peer-grant channels so
+# an ordinary pickup is never mistaken for a script grant. OFF by default,
+# live-verification pending - docs/research/dialogue-consequences.md's script-item-sync
+# section has the design and the live test plan. Unlike the other item channels, a false
+# positive here mints a real duplicate item on the peer's engine rather than a cosmetic
+# desync, so it stays opt-in until proven on the live rig.
+script_item_sync=0
+
 # Moves the dialogue channel (who is talking to whom, which line, which node) off the agent's
 # ~150 ms combat cadence onto its real-time per-poll-tick path, event-driven on change rather
 # than resent only on that cadence - see docs/research/dialogue-join-latency.md for the

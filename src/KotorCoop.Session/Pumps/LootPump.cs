@@ -9,7 +9,9 @@ namespace KotorCoop.Session.Pumps;
 /// (docs/research/dialogue-consequences.md §3) — plus shared-container loot dedup so a chest
 /// or corpse does not duplicate its contents between peers.
 /// </summary>
-internal sealed class LootPump(IGameBridge bridge, ICoopSession session, Action<string> log)
+internal sealed class LootPump(
+    IGameBridge bridge, ICoopSession session, RecentlySyncedItems recentlySyncedItems,
+    Action<string> log)
 {
     /// <summary>
     /// One item still owed to a target, queued for the automatic give-loot path to submit
@@ -101,6 +103,15 @@ internal sealed class LootPump(IGameBridge bridge, ICoopSession session, Action<
                     return;
                 }
 
+                // This is a PEER's grant — either a genuine dialogue reward or (now that
+                // script-item-sync exists) that peer's OWN script grant, relayed through the
+                // exact same DialogueGrantPacket channel. Either way it is about to be applied
+                // to the LOCAL PC's inventory through the give-loot cheat channel
+                // (TryDequeuePendingLoot below), which ScriptItemGrantPump's own sweep would
+                // otherwise see as a brand-new row and re-broadcast right back — see
+                // docs/research/dialogue-consequences.md's script-item-sync section.
+                recentlySyncedItems.Record(item.Resref, 1, Environment.TickCount64);
+
                 _pendingLoot.Enqueue(new CoopAgent.PendingMaterialisedLootGive(
                     AgentWellKnownIds.LocalPlayerObjectId, item));
             }
@@ -134,6 +145,17 @@ internal sealed class LootPump(IGameBridge bridge, ICoopSession session, Action<
         // own scan and a client's own scan are treated identically now.
         foreach (ContainerLootRemoval removal in bridge.CollectContainerLootRemovals())
         {
+            // A removal this instance discovered for itself means the item is about to be (or
+            // just was) in the local PC's own inventory — a chest or a corpse is a container
+            // either way. Resolved by object id, best-effort: a miss (an untagged body, a mod
+            // whose tag proxy does not hold) simply means this one removal cannot be
+            // suppressed, not that anything here is wrong — see IItemBridge.TryGetItemResref's
+            // own doc. See docs/research/dialogue-consequences.md's script-item-sync section.
+            if (bridge.TryGetItemResref(removal.ItemId, out string resref) && resref.Length > 0)
+            {
+                recentlySyncedItems.Record(resref, 1, Environment.TickCount64);
+            }
+
             session.PublishContainerLoot(removal.ContainerId, removal.ItemId);
         }
 
