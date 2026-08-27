@@ -181,10 +181,10 @@ public sealed record AgentSettings
     /// <summary>
     /// When true, a mid-module <c>PlayMovie</c> call (no transition involved) captured by this
     /// instance's own <c>MoviePlayHook</c> is announced to peers, and an announcement received
-    /// from a peer is forwarded into the plugin for it to act on. Off by default,
-    /// live-verification pending — the same posture <c>PeerEffect</c> and
-    /// <c>CreatureLiveness</c> shipped with. coop.ini <c>movie_relay</c>. See
-    /// docs/research/trigger-relay.md §6 and docs/research/cinematics.md.
+    /// from a peer is forwarded into the plugin for it to act on. ON by default (an absent
+    /// <c>coop.ini</c> key enables it; <c>movie_relay = 0</c> disables), matching the plugin's
+    /// own copy of this flag — live-verified end to end for both the play-now and defer paths.
+    /// See docs/research/trigger-relay.md §6 and docs/research/cinematics.md.
     /// </summary>
     public bool MovieRelayEnabled { get; init; }
 

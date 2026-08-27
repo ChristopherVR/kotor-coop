@@ -355,4 +355,46 @@ public class CoopConfigTests
             File.Delete(path);
         }
     }
+
+    [Fact]
+    public void MovieRelayDefaultsOnWhenKeyIsAbsent()
+    {
+        // Matches the plugin's own copy of this flag (MidModuleMovieController's
+        // PluginConfig.ReadBool("movie_relay", true)) — an absent key must land on the same
+        // answer on both sides, following the same "!ContainsKey || IsTruthy" rule
+        // client_door_refusal and transition_announce already use.
+        string path = WriteTemp("mode = join");
+
+        try
+        {
+            CoopConfig? c = CoopConfig.TryLoad(path);
+            Assert.NotNull(c);
+            Assert.True(c.MovieRelayEnabled);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void MovieRelayCanBeTurnedOff()
+    {
+        string path = WriteTemp("""
+            [coop]
+            mode = join
+            movie_relay = 0
+            """);
+
+        try
+        {
+            CoopConfig? c = CoopConfig.TryLoad(path);
+            Assert.NotNull(c);
+            Assert.False(c.MovieRelayEnabled);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
 }

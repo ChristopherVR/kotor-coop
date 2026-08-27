@@ -15,7 +15,9 @@ namespace KotorCoop.Session;
 ///   [coop]
 ///   mode = join        ; or host
 ///   host = 192.168.1.20
-///   port = 27140
+///   port = 27140       ; the shipped profiles/coop.ini.example sets this explicitly; the
+///                       ; code's own fallback when the key is absent is
+///                       ; ProtocolConstants.DefaultPort (27015) — see docs/CONFIG.md footnote 8
 ///   password = swordfish
 ///   name = Malak
 ///   menu_button = 1    ; the in-game Co-op menu button (default on; 0 hides it)
@@ -275,9 +277,11 @@ public sealed record CoopConfig
 
     /// <summary>
     /// Relays a mid-module <c>PlayMovie</c> call (no transition involved) to peers, and acts
-    /// on one a peer announces. Off by default, live-verification pending — the same posture
-    /// <c>PeerEffect</c> and <c>CreatureLiveness</c> shipped with. coop.ini <c>movie_relay</c>.
-    /// See docs/research/trigger-relay.md §6 and docs/research/cinematics.md.
+    /// on one a peer announces. ON by default (an absent key enables it; <c>movie_relay = 0</c>
+    /// disables) — matching the plugin's own copy of this flag
+    /// (<see cref="KotorCoop.Plugin.MidModuleMovieController"/>), live-verified end to end for
+    /// both the play-now and defer paths. coop.ini <c>movie_relay</c>. See
+    /// docs/research/trigger-relay.md §6 and docs/research/cinematics.md.
     /// </summary>
     public bool MovieRelayEnabled { get; init; }
 
@@ -406,7 +410,7 @@ public sealed record CoopConfig
                 .Trim().Equals("host", StringComparison.OrdinalIgnoreCase)
                 ? FollowLeadMode.Host
                 : FollowLeadMode.Any,
-            MovieRelayEnabled = IsTruthy(kv.GetValueOrDefault("movie_relay")),
+            MovieRelayEnabled = !kv.ContainsKey("movie_relay") || IsTruthy(kv.GetValueOrDefault("movie_relay")),
         };
     }
 
