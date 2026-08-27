@@ -648,4 +648,74 @@ through ordinary play) so the actual `RemovePartyMember` sweep can be observed d
 
 `dotnet build KotorCoop.slnx -warnaserror` and `src/KotorCoop.Plugin/build.ps1 -WarnAsError`:
 both clean (no code changed this pass — static RE plus a live rig session only).
+
+## Live pass (2026-08-28): a real trigger lead found and tried — `k45_init_bastila` — still no
+## roster wipe; the search space is narrower but the conversation still was not reached
+
+Two-instance rig, `solo_segment_spectate=1` on both `coop.ini`s, both `warp sta_m45ac` together
+(confirmed via `where`). Before touching the game, this pass read the module's own data further
+than the prior round did: `tools/kotorfiles.py gff "...\sta_m45ac.rim:m45ac.git" --path "Trigger
+List"` lists all 12 triggers by template/position, and one of them is a genuinely new, specific
+lead the prior round's blind `.ncs`/`.dlg` string sweep did not surface — **`k45_init_bastila`**,
+a trigger at `(-8.08, -54.49, 12.53)` (`~28m` from the door, matching the "different Z, a vertical
+section" gap the prior round flagged) whose own template (`k45_init_bastila.utt`)
+names `ScriptOnEnter = k_psta_init_bast`. Extracted and string-scanned that script
+(`tools/kotorfiles.py extract ...`): it references `sta_invis_bast_conv`, `Bastila`,
+`k45_door_bast1` and `k45_door_bast2` by name — the same conversation-trigger tag the door's own
+`k_psta_bast_wor.ncs` references, plus Bastila herself — a much more direct candidate for
+"the thing that actually starts her conversation" than the door was ever likely to be. (The
+`sta_invis_bast_conv`-tagged object itself is NOT a static GIT entry — none of the 12 placed
+triggers or 94 placeables carries that tag — so it is created or repositioned by script at
+runtime, consistent with the "moving an invisible conversation trigger into place" reading
+`galaxy-map-and-party-select.md`'s prior round already gave `k_psta_bast_wor.ncs`.)
+
+**Tried live, twice, both negative.** (1) `opendoor k45_door_bast1` first (`door 0x3E: opened
+(state 0 -> 2)`, the same real engine call confirmed safe before), then `tp`'d just outside
+`k45_init_bastila`'s own coordinates and `walkto -8.08 -54.49 12.53` — synthetic WALKED input,
+not a teleport landing, specifically so the engine's own boundary-crossing OnEnter check (not
+just "am I inside") gets a real chance to fire, the same reasoning `usedoor`/`useplaceable`
+already document for why this project drives input rather than poking state. `where` confirmed
+arrival exactly on the trigger's own coordinates. No `dialogue: engine reached StartDialog` line,
+no `solo segment: began`, and `party roster`/`party follow` kept reporting Trask (`0x107`)
+unchanged (`inParty=1`, `soloMode=0`) for the whole observation window. (2) Walked on to
+`sta_way_bastila`, the GIT's own waypoint for Bastila's actual spawn point (`-32.77, -39.33,
+12.39`, a separate room past the trigger) — same negative result, and `census` reported the same
+`7` creatures both before and after (Bastila, if spawned at all here, does not read as hostile so
+would not show up in this specific count either way — inconclusive on its own, not strong
+evidence she never appeared). Both `swkotor.exe` processes and the client's own `party follow`
+diagnostics stayed healthy throughout; no crash, no state corruption.
+
+**What this narrows, and what it does not.** `k45_init_bastila`'s OnEnter is a strong, code-
+verified (string-reference) candidate for the thing that stages `sta_invis_bast_conv` into its
+final position, but entering it — even via real synthetic walking input, not a teleport — was not
+enough on its own to start a conversation or move the roster within this pass's observation
+window. Two readings, neither confirmed: (a) `k_psta_init_bast.ncs` only relocates/prepares
+`sta_invis_bast_conv` without itself starting anything, and the ACTUAL start trigger is
+`sta_invis_bast_conv` itself, now sitting at some position this pass never located (its own
+post-relocation coordinates are not static GIT data — nothing to read without either tracing
+`k_psta_init_bast.ncs`'s own bytecode for the `CreateObject`/`ActionMoveToLocation`-style call
+that places it, or walking the room more exhaustively than this pass's two waypoint-guided
+attempts did); or (b) the conversation genuinely needs a real click on Bastila's own NPC body
+(which may not even be present/visible yet, matching hypothesis (a)) and no amount of walking
+alone reaches it, matching this doc's own long-standing "needs a human for one click" class of
+gap. **Not settled this pass.**
+
+### Verdict: `solo_segment_spectate` stays OFF — same as every prior round, narrower evidence
+
+The detection precondition (a roster drop from >=1 to 0) was still never fed a real edge, so the
+input-lock/spectate machinery this feature is actually about remains exactly as unverified as
+before. This pass adds one genuinely new, code-verified lead (`k45_init_bastila` /
+`k_psta_init_bast.ncs`, distinct from and more targeted than the door itself) and two more
+negative live data points (walked-input entry into that trigger, and into Bastila's own spawn
+waypoint) without a positive result. `solo_segment_spectate` stays at its default OFF.
+**Concrete next step, more specific than the prior round's**: disassemble
+`k_psta_init_bast.ncs`'s own bytecode (not just its string table) to find exactly what it does
+with `sta_invis_bast_conv` — where it places it, and whether that placement is itself the
+trigger a player needs to walk through, or whether it does something else (e.g. spawning Bastila
+directly) that this pass's two waypoint guesses did not intersect.
+
+`pwsh src\KotorCoop.Plugin\build.ps1 -Install -WarnAsError` on both game directories (hash-
+confirmed identical to the fresh build) and `dotnet build KotorCoop.slnx -warnaserror`: both
+clean — no source changed this pass, static RE (`tools/kotorfiles.py`) plus a live rig session
+only.
 `dotnet test tests/KotorCoop.Tests --no-build`: 2339/2339 passing (unchanged).
