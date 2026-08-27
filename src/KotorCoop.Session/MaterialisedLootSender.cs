@@ -28,6 +28,11 @@ public sealed class MaterialisedLootSender(
     private readonly Lock _gate = new();
     private uint _nextSequence = 1;
 
+    /// <summary>Latched so a sustained overload logs once, not once per refused op — see
+    /// <see cref="ReliableFlagSender"/>'s twin field. Only the CAP refusal below sets this;
+    /// the routine same-owner dedup refusal is not logged.</summary>
+    private bool _capRefusalLogged;
+
     public int PendingCount
     {
         get
@@ -40,9 +45,12 @@ public sealed class MaterialisedLootSender(
     }
 
     /// <summary>
-    /// Queues one enemy's captured loot for reliable broadcast. Returns null when an op for
-    /// the same owner enemy id is already in flight, so a death-detection loop that fires
-    /// twice for the same creature does not enqueue a duplicate.
+    /// Queues one enemy's captured loot for reliable broadcast, or refuses it. Returns null
+    /// when an op for the same owner enemy id is already in flight, so a death-detection loop
+    /// that fires twice for the same creature does not enqueue a duplicate (routine, not
+    /// logged), and also once the pending table is at its cap — see
+    /// <see cref="RetransmitBackoff"/>'s remarks for the enqueue-past-cap contract every
+    /// reliable sender in this file family shares.
     /// </summary>
     public MaterialisedLootPacket? Enqueue(
         uint originPeerId, uint ownerEnemyId, IReadOnlyList<MaterialisedLootItem> items, long nowMs)
@@ -62,8 +70,18 @@ public sealed class MaterialisedLootSender(
                 // The bound exists so a session that never sees another ack cannot grow
                 // without limit. Refusing the NEW op rather than evicting an old one is
                 // deliberate: the old ones are the deaths nobody has confirmed yet.
+                if (!_capRefusalLogged)
+                {
+                    _capRefusalLogged = true;
+                    Console.Error.WriteLine(
+                        $"[coop] materialised-loot capture refused: pending table already holds "
+                        + $"{maxPending} unacked ops — the link has likely been down a long time.");
+                }
+
                 return null;
             }
+
+            _capRefusalLogged = false;
 
             uint sequence = _nextSequence++;
             MaterialisedLootPacket packet = new(originPeerId, sequence, ownerEnemyId, items);

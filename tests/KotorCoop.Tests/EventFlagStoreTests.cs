@@ -324,7 +324,7 @@ public class ReliableFlagSenderTests
     {
         ReliableFlagSender sender = new(retransmitIntervalMs: 100);
 
-        FlagOpPacket op = sender.Enqueue(originPeerId: 2, flagId: 1001, value: 1, nowMs: 0);
+        FlagOpPacket op = sender.Enqueue(originPeerId: 2, flagId: 1001, value: 1, nowMs: 0)!;
         Assert.Equal(1, sender.PendingCount);
 
         sender.Acknowledge(op.OpSequence);
@@ -405,8 +405,8 @@ public class ReliableFlagSenderTests
     {
         ReliableFlagSender sender = new();
 
-        uint first = sender.Enqueue(2, 1, 1, 0).OpSequence;
-        uint second = sender.Enqueue(2, 2, 1, 0).OpSequence;
+        uint first = sender.Enqueue(2, 1, 1, 0)!.OpSequence;
+        uint second = sender.Enqueue(2, 2, 1, 0)!.OpSequence;
 
         Assert.NotEqual(first, second);
     }
@@ -416,7 +416,7 @@ public class ReliableFlagSenderTests
     {
         ReliableFlagSender sender = new();
 
-        FlagOpPacket op = sender.Enqueue(2, 1001, 1, nowMs: 0, serial: 77);
+        FlagOpPacket op = sender.Enqueue(2, 1001, 1, nowMs: 0, serial: 77)!;
 
         Assert.Equal(77u, op.Serial);
     }

@@ -31,6 +31,11 @@ public sealed class ReliableFlagSender(
     private readonly Lock _gate = new();
     private uint _nextSequence = 1;
 
+    /// <summary>Latched so a sustained overload logs once, not once per refused op — same
+    /// idea as <c>CoopHost</c>'s <c>_snapshotOverflowLogged</c>. Reset the moment there is
+    /// room again, so a second bad episode is reported too.</summary>
+    private bool _capRefusalLogged;
+
     public int PendingCount
     {
         get
@@ -42,24 +47,45 @@ public sealed class ReliableFlagSender(
         }
     }
 
-    public FlagOpPacket Enqueue(uint originPeerId, uint flagId, sbyte value, long nowMs, uint serial = 0)
+    private void LogCapRefusal(string what)
+    {
+        if (_capRefusalLogged)
+        {
+            return;
+        }
+
+        _capRefusalLogged = true;
+        Console.Error.WriteLine(
+            $"[coop] {what} refused: pending table already holds {maxPending} unacked ops — "
+            + "the link has likely been down a long time.");
+    }
+
+    /// <summary>
+    /// Mints and tracks a flag op, or refuses it. See <see cref="RetransmitBackoff"/>'s remarks
+    /// for the enqueue-past-cap contract every reliable sender in this file family shares.
+    /// </summary>
+    public FlagOpPacket? Enqueue(uint originPeerId, uint flagId, sbyte value, long nowMs, uint serial = 0)
     {
         lock (_gate)
         {
-            uint sequence = _nextSequence++;
-            FlagOpPacket packet = new(originPeerId, sequence, flagId, value, serial);
-
             // The cap is the only thing that discards world truth, and it takes thousands of
             // unacked changes to reach — a session that far gone is not coming back.
-            if (_pending.Count < maxPending)
+            if (_pending.Count >= maxPending)
             {
-                _pending[sequence] = new Pending
-                {
-                    Packet = packet,
-                    LastSentMs = nowMs,
-                    Attempts = 1,
-                };
+                LogCapRefusal("flag op");
+                return null;
             }
+
+            _capRefusalLogged = false;
+
+            uint sequence = _nextSequence++;
+            FlagOpPacket packet = new(originPeerId, sequence, flagId, value, serial);
+            _pending[sequence] = new Pending
+            {
+                Packet = packet,
+                LastSentMs = nowMs,
+                Attempts = 1,
+            };
 
             return packet;
         }
@@ -134,6 +160,28 @@ public sealed class ReliableFlagSender(
 /// instead of forty, and an op can be kept alive indefinitely for the price of one datagram
 /// every few seconds.
 /// </summary>
+/// <remarks>
+/// ENQUEUE-PAST-CAP CONTRACT, shared by every reliable sender that backs off through this
+/// class (<see cref="ReliableFlagSender"/>, <see cref="ReliableItemSender"/>,
+/// <see cref="ReliableJournalSender"/>, <see cref="ReliableLootSender"/>,
+/// <see cref="MaterialisedLootSender"/>, <see cref="DialogueGrantSender"/>): an
+/// <c>Enqueue*</c> call made while the pending table is already at its cap REFUSES the op —
+/// it returns <c>null</c> (<c>false</c> for <see cref="DialogueGrantSender.EnqueueRelay"/>,
+/// which has no packet of its own to hand back) rather than minting and returning a packet
+/// the sender is not tracking.
+///
+/// This used to be inconsistent: the three simplest senders (Flag/Item/Journal) still built
+/// and returned a packet on a full table, so the caller sent it once anyway — a datagram
+/// that looks delivered to whichever peer receives it, but that nothing here will ever
+/// retransmit or report if it is lost, because the sender never added it to
+/// <c>_pending</c>. That is strictly worse than refusing outright, so every sender in this
+/// family now agrees: a caller MUST treat a null/false result as "not sent, and not going to
+/// be retried on its own" and must not construct or forward the would-be packet itself. The
+/// cap takes thousands of unacked ops to reach — a session that far gone is not coming
+/// back — so refusing here is the correct behaviour, not a missing feature; see the ⚠ note
+/// on <see cref="ReliableFlagSender"/> for why the retry policy underneath the cap never
+/// gives up on its own.
+/// </remarks>
 public static class RetransmitBackoff
 {
     public static int IntervalMs(int attempts, int baseIntervalMs, int maxIntervalMs)

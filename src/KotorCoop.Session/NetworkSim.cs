@@ -62,6 +62,20 @@ public sealed class NetworkSim
     private Rules _rules = Rules.None;
 
     /// <summary>
+    /// The source of randomness for loss/jitter judgements. Defaults to
+    /// <see cref="System.Random.Shared"/> — the thread-safe shared instance every production
+    /// caller gets exactly as before this field existed. A test that needs a reproducible
+    /// sequence (a fixed loss/jitter pattern instead of "probably about right") passes a seeded
+    /// <see cref="System.Random"/> to the constructor instead; <see cref="System.Random.Shared"/>
+    /// is safe to call from multiple threads at once, a plain seeded instance is not, so an
+    /// injected one should only be exercised from a single thread, which is exactly how a test
+    /// drives it.
+    /// </summary>
+    private readonly Random _random;
+
+    public NetworkSim(Random? random = null) => _random = random ?? Random.Shared;
+
+    /// <summary>
     /// The fast-path gate. False means the channel does not even read the rules. Set true by
     /// any configuration change and cleared again the first time a packet is judged after
     /// everything has lapsed, so a finished blackout costs nothing forever after.
@@ -141,7 +155,7 @@ public sealed class NetworkSim
             return 0;
         }
 
-        int delay = rules.LatencyMs + (rules.JitterMs > 0 ? Random.Shared.Next(rules.JitterMs + 1) : 0);
+        int delay = rules.LatencyMs + (rules.JitterMs > 0 ? _random.Next(rules.JitterMs + 1) : 0);
         if (delay > 0)
         {
             Interlocked.Increment(ref _delayed);
@@ -206,7 +220,7 @@ public sealed class NetworkSim
         }
 
         bool drop = nowMs < rules.BlackoutUntilMs
-            || (rules.LossPercent > 0 && Random.Shared.NextDouble() * 100.0 < rules.LossPercent);
+            || (rules.LossPercent > 0 && _random.NextDouble() * 100.0 < rules.LossPercent);
 
         if (!drop)
         {

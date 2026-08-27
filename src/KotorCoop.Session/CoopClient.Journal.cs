@@ -30,9 +30,11 @@ public sealed partial class CoopClient
             return;
         }
 
-        JournalOpPacket op = _journalSender.Enqueue(_sessionPeerId, questTag, state, SessionClock.NowMs, serial);
-
-        if (IsConnected)
+        // Null means the reliable sender refused the op (its pending table is at its cap,
+        // logged there) — see RetransmitBackoff's remarks. The local store already has the
+        // advance, so this player's own game is still correct even though nothing goes out.
+        if (_journalSender.Enqueue(_sessionPeerId, questTag, state, SessionClock.NowMs, serial) is { } op
+            && IsConnected)
         {
             SendJournalOp(op);
         }
@@ -57,10 +59,9 @@ public sealed partial class CoopClient
             return;
         }
 
-        JournalOpPacket op = _journalSender.Enqueue(
-            _sessionPeerId, questTag, 0, SessionClock.NowMs, serial, removed: true);
-
-        if (IsConnected)
+        if (_journalSender.Enqueue(
+                _sessionPeerId, questTag, 0, SessionClock.NowMs, serial, removed: true) is { } op
+            && IsConnected)
         {
             SendJournalOp(op);
         }

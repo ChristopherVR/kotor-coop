@@ -654,76 +654,11 @@ public class DisconnectRecoveryTests
     }
 }
 
-/// <summary>The fault injector itself: it must be inert until asked, and exact when asked.</summary>
-public class NetworkSimTests
-{
-    [Fact]
-    public void ItIsDisarmedUntilConfigured()
-    {
-        NetworkSim sim = new();
-
-        Assert.False(sim.Armed);
-        Assert.False(sim.DropOutbound(SessionClock.NowMs));
-        Assert.Equal(0, sim.DelayMs());
-        Assert.Contains("off", sim.Describe());
-    }
-
-    [Fact]
-    public void TotalLossDropsEverythingAndClearingRestoresTheLink()
-    {
-        NetworkSim sim = new();
-        sim.SetLoss(100);
-
-        Assert.True(sim.Armed);
-        Assert.True(sim.DropOutbound(SessionClock.NowMs));
-        Assert.True(sim.DropInbound(SessionClock.NowMs));
-
-        sim.Clear();
-        Assert.False(sim.Armed);
-        Assert.False(sim.DropOutbound(SessionClock.NowMs));
-    }
-
-    [Fact]
-    public void ABlackoutEndsOnItsOwnAndDisarmsTheFastPath()
-    {
-        NetworkSim sim = new();
-        sim.StartBlackout(40);
-
-        Assert.True(sim.DropOutbound(SessionClock.NowMs));
-
-        // Judged against an absolute deadline, so no timer has to fire for it to end.
-        long after = SessionClock.NowMs + 1000;
-        Assert.False(sim.DropOutbound(after));
-        Assert.False(sim.Armed);
-    }
-
-    [Fact]
-    public void ADirectionalBlackoutOnlyTouchesItsOwnHalf()
-    {
-        NetworkSim sim = new();
-        sim.StartBlackout(5_000, NetSimDirection.Outbound);
-
-        long now = SessionClock.NowMs;
-        Assert.True(sim.DropOutbound(now));
-        Assert.False(sim.DropInbound(now));
-
-        sim.StartBlackout(5_000, NetSimDirection.Inbound);
-        Assert.False(sim.DropOutbound(now));
-        Assert.True(sim.DropInbound(now));
-    }
-
-    [Fact]
-    public void LatencyAndJitterStayWithinTheirBounds()
-    {
-        NetworkSim sim = new();
-        sim.SetLatency(100, 50);
-
-        for (int i = 0; i < 200; i++)
-        {
-            Assert.InRange(sim.DelayMs(), 100, 150);
-        }
-    }
-}
+// The fault injector's own direct unit tests (armed/disarmed, loss, latency/jitter, blackout,
+// direction, Clear) moved to the dedicated NetworkSimTests.cs — "file per class" — and grew a
+// good deal more thorough there (an injectable Random pins loss/jitter boundary draws exactly
+// instead of only bounding them). This file keeps only what genuinely needs a real host/client
+// pair talking over it.
 
 /// <summary>Parsing the runtime verb. A typo in a command that deliberately breaks the
 /// network must never be read as something else that also breaks it.</summary>

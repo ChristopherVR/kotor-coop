@@ -22,6 +22,10 @@ public sealed class ReliableJournalSender(
     private readonly Lock _gate = new();
     private uint _nextSequence = 1;
 
+    /// <summary>Latched so a sustained overload logs once, not once per refused op — see
+    /// <see cref="ReliableFlagSender"/>'s twin field.</summary>
+    private bool _capRefusalLogged;
+
     public int PendingCount
     {
         get
@@ -33,23 +37,45 @@ public sealed class ReliableJournalSender(
         }
     }
 
-    public JournalOpPacket Enqueue(
+    private void LogCapRefusal()
+    {
+        if (_capRefusalLogged)
+        {
+            return;
+        }
+
+        _capRefusalLogged = true;
+        Console.Error.WriteLine(
+            $"[coop] journal op refused: pending table already holds {maxPending} unacked ops — "
+            + "the link has likely been down a long time.");
+    }
+
+    /// <summary>
+    /// Mints and tracks a journal op, or refuses it. See <see cref="RetransmitBackoff"/>'s
+    /// remarks for the enqueue-past-cap contract every reliable sender in this file family
+    /// shares.
+    /// </summary>
+    public JournalOpPacket? Enqueue(
         uint originPeerId, string questTag, int state, long nowMs, uint serial = 0, bool removed = false)
     {
         lock (_gate)
         {
+            if (_pending.Count >= maxPending)
+            {
+                LogCapRefusal();
+                return null;
+            }
+
+            _capRefusalLogged = false;
+
             uint sequence = _nextSequence++;
             JournalOpPacket packet = new(originPeerId, sequence, questTag, state, serial, removed);
-
-            if (_pending.Count < maxPending)
+            _pending[sequence] = new Pending
             {
-                _pending[sequence] = new Pending
-                {
-                    Packet = packet,
-                    LastSentMs = nowMs,
-                    Attempts = 1,
-                };
-            }
+                Packet = packet,
+                LastSentMs = nowMs,
+                Attempts = 1,
+            };
 
             return packet;
         }
