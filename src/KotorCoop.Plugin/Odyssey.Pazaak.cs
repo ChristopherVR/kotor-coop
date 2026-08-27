@@ -36,6 +36,29 @@ internal static unsafe partial class Odyssey
     private static readonly delegate* unmanaged[Thiscall]<nint, int, byte*, int, int, uint, void> StartPazaakGameFn =
         (delegate* unmanaged[Thiscall]<nint, int, byte*, int, int, uint, void>)0x005EDDC0;
 
+    /// <summary>
+    /// CClientExoApp::EndPazaakGame(this, uint arg1, int arg2, int arg3, uint arg4) -> void.
+    /// VERIFIED, fresh disasm this pass (docs/research/minigames.md's live-pass entry,
+    /// SharedBlock.CheatKindPazaakEnd's own doc comment has the full breakdown):
+    ///
+    /// * The thunk itself (0x005EDDD0: `mov ecx,[ecx+4]; jmp 0x5F3950` — tail-jumps to
+    ///   <c>CClientExoAppInternal::EndPazaakGame</c>) — called with <c>this</c> = the CLIENT,
+    ///   the same convention <see cref="StartPazaakGameFn"/> uses, confirmed by name in
+    ///   <c>tools/kotor1_0_3.db</c>.
+    /// * `ret 0x10` (4 stack dwords popped) — arg1/arg2 are written to the internal object's
+    ///   <c>+0x80</c>/<c>+0x7C</c> unconditionally and otherwise only feed a gold/opponent-payout
+    ///   branch gated on `arg2 &gt; 0`; arg3 selects re-starting a new hand (nonzero) versus
+    ///   running the existing hand's own end-script (zero — a documented no-op here, since
+    ///   <see cref="StartPazaak"/> always starts with an empty one); arg4 is only read on the
+    ///   skipped (nonzero-arg3) branch. All four are safely 0 for this dev verb's purpose: clear
+    ///   the running flag, pay out nothing, do not restart, run the (empty) end-script.
+    /// * `this+0x70` (the SAME field <see cref="ClientInternalPazaakData"/> reads, via the
+    ///   internal client) is unconditionally cleared near the top of the internal function,
+    ///   before any of the above — the actual "a hand is running" flag flip this verb exists for.
+    /// </summary>
+    private static readonly delegate* unmanaged[Thiscall]<nint, uint, int, int, uint, void> EndPazaakGameFn =
+        (delegate* unmanaged[Thiscall]<nint, uint, int, int, uint, void>)0x005EDDD0;
+
     /// <summary>True while a Pazaak hand is running on this instance. VERIFIED,
     /// <see cref="ClientInternalPazaakData"/>'s own remarks.</summary>
     internal static bool IsPazaakRunning()
@@ -95,6 +118,36 @@ internal static unsafe partial class Odyssey
         StartPazaakGameFn(client, opponentDeck, endScript, 0, 0, opponent);
         CExoStringDtorFn(endScript);
 
+        return true;
+    }
+
+    /// <summary>
+    /// Ends whatever Pazaak hand is currently running on this instance through
+    /// <see cref="EndPazaakGameFn"/>, all four of its arguments 0 — see that field's own doc
+    /// comment for exactly why every branch that reads a nonzero value there is safely skipped
+    /// for a console-started, no-wager hand. The live-test primitive
+    /// <c>docs/CONSOLE.md</c>'s <c>pazaak end</c> row documents.
+    ///
+    /// MAIN THREAD ONLY.
+    /// </summary>
+    internal static bool EndPazaak(out string reason)
+    {
+        reason = string.Empty;
+
+        nint client = GetClient();
+        if (client == 0)
+        {
+            reason = "no client (not in a loaded module)";
+            return false;
+        }
+
+        if (!IsPazaakRunning())
+        {
+            reason = "no Pazaak hand is running on this instance";
+            return false;
+        }
+
+        EndPazaakGameFn(client, 0, 0, 0, 0);
         return true;
     }
 }

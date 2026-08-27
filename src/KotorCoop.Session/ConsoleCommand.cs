@@ -511,6 +511,15 @@ public enum CoopCommandKind
     /// since a signed int has no room for a second id/`me` token). Local only.
     /// </summary>
     Faction,
+
+    /// <summary>
+    /// <c>pazaak end</c> — LIVE-TEST PRIMITIVE (docs/research/minigames.md's live-pass entry).
+    /// Ends whatever Pazaak hand is currently running on this instance through
+    /// <c>CClientExoApp::EndPazaakGame</c> called directly, so <c>FlagInMinigame</c> can be
+    /// watched clearing without a real wagered hand played to completion through the
+    /// (uninjectable) GUI. Takes no arguments beyond the literal <c>end</c>. Local only.
+    /// </summary>
+    PazaakEnd,
 }
 
 /// <summary>

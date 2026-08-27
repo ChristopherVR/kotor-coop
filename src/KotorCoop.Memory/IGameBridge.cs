@@ -366,6 +366,17 @@ public static class CheatKinds
     /// ⚠ 38 is the highest number taken now. Take the next FREE one for a new verb.
     /// </summary>
     public const uint Faction = 38;
+
+    /// <summary>
+    /// LIVE-TEST PRIMITIVE (docs/research/minigames.md's live-pass entry): ends the current
+    /// Pazaak hand through <c>CClientExoApp::EndPazaakGame</c> (0x005EDDD0), so
+    /// <c>FlagInMinigame</c> can be watched clearing without a real wagered hand played to
+    /// completion through the GUI. Takes no arguments; local only. See
+    /// SharedBlock.CheatKindPazaakEnd.
+    ///
+    /// ⚠ 39 is the highest number taken now. Take the next FREE one for a new verb.
+    /// </summary>
+    public const uint PazaakEnd = 39;
 }
 
 /// <summary>

@@ -67,4 +67,27 @@ internal sealed unsafe partial class CheatController
                 : $"StartPazaakGame called but CPazaakData is still null (deck {deck} may be "
                     + "invalid, or another gate refused it - see the plugin log)");
     }
+
+    /// <summary>
+    /// Ends whatever Pazaak hand is currently running on this instance through
+    /// <see cref="Odyssey.EndPazaak"/>, so <c>FlagInMinigame</c> can be watched clearing. Takes
+    /// no arguments.
+    /// </summary>
+    private void PazaakEnd()
+    {
+        if (!Odyssey.EndPazaak(out string reason))
+        {
+            Answer(SharedBlock.CheatStatusRefused, $"pazaak end refused: {reason}");
+            return;
+        }
+
+        bool running = Odyssey.IsPazaakRunning();
+        PluginHost.Log($"pazaak: EndPazaakGame() called - running now: {running}");
+
+        Answer(
+            running ? SharedBlock.CheatStatusEngineRefused : SharedBlock.CheatStatusApplied,
+            running
+                ? "EndPazaakGame called but CPazaakData is still non-null (see the plugin log)"
+                : "pazaak hand ended");
+    }
 }

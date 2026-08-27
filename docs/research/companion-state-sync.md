@@ -602,3 +602,110 @@ the new one.
    the client's mirrored copy updates, confirm the gear survives a `companion_local_combat`
    release, confirm anti-echo) — that plan's steps are unchanged by this fix; only the
    underlying primitive `ApplyCompanionEquipment` calls changed.
+
+## 8. Live pass (2026-08-28): §7.3's fix confirmed for the direct primitive — the item lands
+## on the companion, not the player — but the auto-sync channel itself found a NEW live gap
+
+Two-instance rig (`tools/demo.ps1`), `END_M01AA`, Trask (party-roster slot 0) confirmed live
+object id `0x127` on both instances again this round (`leader 0` — a dev-only, local verb —
+reports `control switched to party slot 0 (0x127)`, then `leader pc` restored control before
+anything else ran). `pwsh src\KotorCoop.Plugin\build.ps1 -Install -WarnAsError` on both game
+directories first (hashes of the deployed `dinput8.dll` on both installs confirmed byte-identical
+to the fresh build).
+
+### §6.4 steps 1-5 (the direct primitive, `companion_gear_sync` still OFF): PASS, live-confirmed
+
+`equip 0x127 g_w_lghtsbr01 4` (right weapon) on the HOST — no crash, `equip:
+'g_w_lghtsbr01' equipped on 0x127 slot 4` in the plugin log, and `items` confirmed the NEW item
+(`0x132`) `held by 0x127`, not the PC (`0x9`, which still only held its own original
+`0xA g_w_lghtsbr01`) — the exact assertion the prior round's own live FAILURE got wrong.
+Repeated for the body slot (`equip 0x127 g_a_class4001 1` -> new item `0x133 held by 0x127`) and
+the left-weapon slot (`equip 0x127 g_w_lghtsbr02 5` -> new item `0x134 held by 0x127`) — both
+clean, no crash, both correctly possessed by the companion. §7.3's fix
+(`Odyssey.EquipItemFromTemplateDirect`, `CSWSCreature::EquipItem` called directly instead of
+queuing through `ActionEquipItem`) is confirmed working for a live, AI-active party member, not
+just a phantom, closing the "NEEDS-LIVE" tag §7.3 shipped it under. `CheatController.Progression
+.Equip()` (the console verb) already calls the fixed primitive on `main`, so no forward-port was
+needed this round.
+
+### §5 (the auto-sync channel, `companion_gear_sync=1` on both instances): NOT clean — a real,
+### reproducible propagation gap, distinct from the original "lands on the player" bug
+
+Restarted the rig with `companion_gear_sync=1` written into both `coop.ini`s first (the flag is
+read once at agent start, so this needs a fresh `demo.ps1`, not a mid-session toggle). Confirmed
+the channel is wired correctly for gear present **at connect time**: the CLIENT's plugin log
+showed, within the first second of the session, `party drive: companion 0x127 equips
+g_a_clothes01 (slot 1)` (Trask's starting body slot, applied to the mirrored copy, matching the
+host's real gear) — the whole pipeline (host reads gear -> publishes -> client writes to its
+plugin block -> `PartyPresenceController.ApplyCompanionEquipment` calls the same
+`EquipItemFromTemplateDirect` fix -> succeeds) genuinely works for gear the companion is already
+wearing when the client joins.
+
+**A re-equip made mid-session did NOT propagate, observed over an 8-minute window.**
+`equip 0x127 g_w_vbrdblswd01 4` on the HOST at `04:33:48` (confirmed live: `items` on the host
+showed the new item `0x133 g_w_vbrdblswd01 held by 0x127`, so the underlying engine-side equip
+genuinely succeeded, same as the direct-primitive test above). The CLIENT's plugin log
+(`kotorcoop-general.log` and `kotorcoop-plugin.log`, checked repeatedly) never showed a second
+`party drive: companion 0x127 equips ...` or `... refused ...` line for this weapon at any point
+through `04:41` — both `swkotor.exe` processes and both `KotorCoop.Agent.exe` processes stayed
+alive and `Responding=True` throughout (the client's own gait/animation lines kept appearing every
+few seconds, so the plugin's per-frame loop was genuinely still running — this is not a hang).
+**This is a real propagation gap in the auto-sync channel, separate from and downstream of the
+already-fixed "equip lands on the player" bug**: the primitive that APPLIES a change (confirmed
+working, above) never got asked to, because the change never reached the client's shared block in
+an applicable form.
+
+**Root cause not isolated this pass** (no time for a debugger attach); the leading, unconfirmed
+suspect is the AGENT-side item-tag cache `KotorGameBridge.Items.cs`'s `ReadEquippedResref` uses to
+turn a companion's raw equipped-slot OBJECT ID into a resref string on the HOST. That cache
+resolves a freshly-created item's id by scanning committed memory for the `CSWSItem` vtable, rate
+limited to one rebuild scan per `ItemTagRebuildMs` (15 seconds) **regardless of how many lookups
+miss** — a deliberate anti-thrash design (this same file's own doc comment records the OPPOSITE
+failure mode, a permanent per-id blacklist, being removed for exactly this reason on an earlier
+round). A NEWLY EQUIPPED item is, by construction, an id the cache has never seen: if the miss
+happens to land inside the 15-second cooldown window since the last rebuild (plausible here, since
+the client's own connect-time equipment read would have primed a rebuild only ~58 seconds before
+this test's `equip` call), the read returns `string.Empty` for a full cooldown cycle, and an empty
+resref is `PartyMemberState`'s own documented "leave it alone" convention
+(`EquipApplyDecision.ShouldApply`'s `length > 0` gate) — meaning the host would keep publishing
+its OLD equipped-gear reading indefinitely rather than eventually catching up once the cooldown
+lapses. This is a plausible mechanism, not a confirmed one: it does not by itself explain why the
+gap persisted for the FULL 8 minutes (several rebuild windows) rather than resolving within 15-30
+seconds once the cooldown first lapsed, so something else may also be involved (the AGENT-side
+`_appliedProgression`-style caches were not audited this round for a "successfully read once,
+never re-read" bug of their own). **Flagged for the next round to attach a debugger or add a
+throwaway diagnostic log (the same technique `minigames.md`'s 2026-08-28 pazaak round used to find
+its own range-guard bug) rather than guess further.**
+
+### A second, independent bug found along the way: exact-16-character resrefs are silently
+### truncated crossing the wire/shared-block boundary
+
+At connect time, the CLIENT's plugin log recorded `party drive: g_w_blstrpstl00 refused for
+companion 0x127 (failure 8)` — Trask's real starting sidearm is `g_w_blstrpstl001` (16
+characters, VERIFIED by counting), but the name that reached the client's `ApplyCompanionEquipment`
+is missing its trailing `1`. `BlockCompanionEquipResrefLength` (`KotorGameBridge.Party.cs`) and
+`ProtocolConstants.MaxResrefLength` (the wire codec, `PacketCodec.Party.cs`/`PacketWriter.cs`) are
+both exactly `16` — a resref that is itself 16 characters long has no room left for the buffer's
+own null terminator once it crosses either boundary, and whichever write path is doing the
+truncation (not isolated this pass — either `TryWriteAsciiString`'s own 16-byte contract or the
+wire codec's `WriteString(_, 16)`) drops the last character rather than the byte that should have
+been the terminator. The truncated name is not a valid blueprint resref, so
+`EquipItemFromTemplateDirect`'s own `CreateItemOnObject` half correctly refuses it (`failure 8`) —
+a fail-safe outcome, not a crash, but a real, reproducible bug: **any companion gear whose resref
+is exactly 16 characters can never be synced correctly** by this channel as it stands. Not fixed
+this pass (out of scope for a live-verification round); left for whoever next touches this
+channel, alongside the propagation gap above.
+
+### Verdict: `companion_gear_sync` stays OFF; the direct-primitive fix is confirmed and durable
+
+The fix `§7.3` shipped is real and now live-confirmed for a live, AI-active companion body across
+all three equip slots — that half of this round's task is closed. The auto-sync channel built on
+top of it is not yet safe to ship: it correctly seeds a companion's STARTING gear on connect, but
+a live gear CHANGE was observed, live, to not propagate within an 8-minute window, and a second,
+independent truncation bug affects any exactly-16-character resref regardless of the propagation
+gap. `companion_gear_sync` stays at its existing default (`0`, OFF) in `coop.ini`/
+`AgentSettings`/`CoopConfig`/`profiles/coop.ini.example`/`docs/CONFIG.md` — no default was
+flipped this round. `dotnet build KotorCoop.slnx -warnaserror` and `src/KotorCoop.Plugin/
+build.ps1 -WarnAsError`: both clean (no source changed this pass — live rig verification and a
+build-script environment fix only, see `src/KotorCoop.Plugin/build.ps1`'s own `$env:Platform`
+comment for the latter, unrelated to this feature).
