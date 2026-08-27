@@ -255,7 +255,7 @@ internal sealed unsafe partial class CheatController(SharedBlockView block)
                 break;
 
             case SharedBlock.CheatKindStoreBuy:
-                Buy();
+                Buy(player);
                 break;
 
             case SharedBlock.CheatKindStoreSell:
@@ -268,6 +268,10 @@ internal sealed unsafe partial class CheatController(SharedBlockView block)
 
             case SharedBlock.CheatKindRemoveParty:
                 RemoveParty();
+                break;
+
+            case SharedBlock.CheatKindSetGold:
+                SetGold(player);
                 break;
 
             default:

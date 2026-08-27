@@ -1572,3 +1572,202 @@ module is used again for an unattended run.
 
 None — this was a pure live-verification pass, no source changes. `store_sync` stays at its
 default OFF (`profiles/coop.ini.example` unchanged, `store_sync=0`).
+
+## Fix (2026-08-28, no rig this round): `sell`'s wrong-repository bug and `buy`'s missing
+## affordability guard — root-caused and fixed by static RE
+
+Task: root-cause the two defects the live pass immediately above found (`sell` refuses "no
+matching item in inventory" for an item three independent readers agree is present; an
+unaffordable `buy` underflows the party's `uint` gold) and fix both, plus add a `setgold` dev
+verb to repair the shared rig save's own poisoned gold. No live rig was available this round —
+everything below is fresh static disassembly (`tools/disasm.py`/`tools/xrefs.py`/`tools/q.py`
+against the sha256-matched GOG `swkotor.exe` v1.0.3) plus unit/build verification. Every claim
+below is tagged; the fixes themselves are **NEEDS-LIVE** until the next rig round re-runs this
+document's own live test plan (§ "Live test plan" above).
+
+### `sell`'s root cause: KOTOR 1's inventory is PARTY-SHARED, not per-creature (VERIFIED, fresh
+### disasm of `CSWSCreature::GetItemRepository`)
+
+The prior pass's own closing question, restated exactly: "Read `src/KotorCoop.Plugin/
+Odyssey.Store.cs`'s `SellToStore`: it reads `player`'s `CreatureItemRepo`... whether they
+genuinely [name the same creature]... is unconfirmed and is exactly where the next round should
+look." The next round looked — not at which creature, but at which REPOSITORY.
+
+`SellToStore` used to resolve the player's inventory by dereferencing `CSWSCreature+0xA30`
+(`item_repo`, VERIFIED pointer-typed member, `tools/q.py offsets CSWSCreature`) directly. Fresh
+disasm this pass of the ACTUAL accessor other engine code uses instead —
+**`CSWSCreature::GetItemRepository 0x004EF770`**, `__thiscall(this, int wantShared) -> CItemRepository*`,
+`ret 4` — full trace:
+
+```
+0x004EF770  eax = [esp+4]                    ; wantShared (every real caller below passes 1)
+0x004EF777  esi = ecx                        ; this = creature
+0x004EF779  je 0x4ef808                      ; wantShared==0 -> straight to the +0xA30 fallback
+0x004EF77F  eax = [esi+0xA88]                ; a creature flag, unnamed in tools/kotor1_0_3.db
+0x004EF785  test eax,eax
+0x004EF787  je 0x4ef7a1                      ; +0xA88==0 -> a second gate chain (below)
+0x004EF789  server = [0x7a39fc]->+8
+0x004EF791  call 0x4aee70                    ; CServerExoApp::GetPartyTable(server)
+0x004EF798  call 0x563340                    ; CSWPartyTable::GetPartyItems  <- RETURNS HERE
+0x004EF808  eax = [esi+0xA30]                ; the ONLY path that reads the per-creature field
+```
+
+When `wantShared == 1` (every real caller — see below) AND the creature's own `+0xA88` flag is
+nonzero — true for a live, in-party PC, i.e. virtually always true during real play — the
+function does **not** read `+0xA30` at all: it tail-calls `CSWPartyTable::GetPartyItems
+0x00563340`, the exact same shared party-wide `CItemRepository` `Odyssey.PartyPool.cs`'s
+`ResolvePartyPoolRepo` already reaches directly for `pooladd`/`poolremove`
+(`docs/research/party-pool-sync.md` §1.5). A second branch, reached only when `+0xA88` is clear,
+ALSO falls through to `GetPartyItems` unless a further chain of gates fails (an "is this creature
+the effective party leader" check via `CSWPartyTable::GetIsAvailable 0x563790`, then
+`CGuiInGame::GetPartyAccessPanelUp 0x62B4D0` — both named in `tools/kotor1_0_3.db`). **Only when
+every one of those checks fails does the function fall back to the bare `+0xA30` read.** In plain
+words: KOTOR 1's own inventory model is party-shared, not per-creature — a real player's "own"
+backpack genuinely IS the party pool, for all practical purposes, and `CSWSCreature+0xA30` is the
+individual-creature fallback the engine itself reaches only for a creature that is NOT the live,
+in-party PC.
+
+Two independent confirmations this is the same repository every other caller uses, not a guess:
+
+- **`CSWGuiStore::PopulateInventoryItemListBox 0x006C0850`** — the SELL LIST's own population
+  routine, i.e. exactly what the task brief asked to be mirrored — resolves the PC via panel
+  `+0x227C` -> `GetCreatureByGameObjectID 0x4AE770`, then calls `GetItemRepository(creature, 1)`
+  and reads the result's `+0x10` (item count) to build the on-screen sell list. VERIFIED, fresh
+  disasm this pass.
+- **`CSWSCreature::AcquireItem 0x005158E0`** — the routine `CSWSStore::SellItem` (the store's own
+  "hand the bought item to the buyer" routine, §1.4) calls at EVERY one of its three return paths
+  to actually deposit a bought item — when the target possessor argument is `OBJECT_INVALID`
+  (i.e. "put it in the buyer's own inventory", the normal case), it calls
+  `GetItemRepository(buyerCreature, 1)` and inserts into THAT repository via `CItemRepository::
+  AddItem 0x0055D330` (the same "heavier" sibling of `InsertItem` `Odyssey.PartyPool.cs`'s own
+  comment already names). VERIFIED, fresh disasm this pass. A bought item, for a live party
+  member, lands in the SHARED PARTY POOL — not `player+0xA30`.
+
+**Independently confirmed a third way**: `CSWSCreature::GetGold 0x004EDD60`/`SetGold 0x004EDD90`
+(the same two functions §"buy"/"sell" already names) gate on the IDENTICAL `+0xA88` check —
+VERIFIED, fresh disasm of both this pass — and when set, read/write `CSWPartyTable+0xFC` (the
+party wallet) rather than a per-creature field. Same engine, same "the party is one shared
+wallet/backpack" model, confirmed by two completely independent fields (items and gold) built the
+same way.
+
+**The fix**: `SellToStore` now calls `GetItemRepositoryFn(player, 1)` instead of reading `+0xA30`
+directly — mirroring `PopulateInventoryItemListBox`'s own enumeration exactly, per the task
+brief. `src/KotorCoop.Plugin/Odyssey.Store.cs`.
+
+**Not fixed this pass, flagged as a related risk**: `Odyssey.PartyPool.cs`'s `AddItemToPartyPool`
+and this file's own `InsertItemIntoStore` (the sync-apply path, `store_sync`'s own automatic
+insert/remove) still read `player+0xA30` directly for their "unlink a freshly-spawned item from
+the player's own backpack" step, and very likely share this exact defect for a live party member
+— the unlink would silently no-op (its return value is not checked), leaving a spawned item
+referenced from BOTH the party pool (where `AcquireItem`'s own internal deposit already put it)
+and the destination repository the code inserts it into a second time. Out of this task's scope
+(the sync-apply path is separately gated behind `store_sync`'s existing default-OFF, and both
+call sites are unit/loopback-tested rather than live-reproduced the way `sell` was) — flagged here
+for whoever next touches `store_sync`'s own apply path or `party_pool_sync`.
+
+### `buy`'s missing affordability guard — VERIFIED by full fresh disasm, confirming the prior
+### pass's live finding exactly; `BuyItem` itself genuinely has no guard
+
+Full disasm this pass of `CSWGuiStore::BuyItem 0x006C0BE0` (previously only partially quoted):
+resolve player, resolve store, `GetItemRepository(player, 1)` (a precondition check — refuses if
+null, its result otherwise unused by this function), `PlayGuiSound`, `GetItemBuyValue(panel,
+item)`, `edx = cachedGold - price`, `SetGold(player, edx)`, `CSWSStore::SellItem(store, item,
+player)` (the item actually moves), refresh both list boxes. **There is no `cmp`/conditional
+branch anywhere between the subtraction and the `SetGold` call** — confirming the task brief's own
+question ("double-check whether `BuyItem` itself guards") with a NO, definitively: the engine
+relies entirely on the GUI graying its own Buy button out when unaffordable, a precondition
+calling the click handler directly (as this project's own `buy` dev verb does) bypasses.
+
+`CSWSCreature::SetGold 0x004EDD90` itself, also fully disassembled this pass: clamps the
+INCOMING value to an UPPER bound of 999,999,999 (`0x3B9AC9FF`) only —
+
+```
+0x004EDD95  cmp esi, 0x3b9ac9ff
+0x004EDD9B  jle 0x4edda2
+0x004EDD9D  mov esi, 0x3b9ac9ff
+0x004EDDA2  ; ... [+0xA88] gate, then writes esi to either CSWPartyTable+0xFC or creature+0x9D0
+```
+
+— there is no lower-bound/underflow guard anywhere in the function. This is EXACTLY how the prior
+pass's rig session drove the party's plain `uint` gold to just under `UINT32_MAX` and left it
+pinned at the 999,999,999 clamp afterward.
+
+**The fix**: a new pure rule, `src/KotorCoop.Plugin/StoreAffordabilityRule.cs`
+(`CanAfford(price, gold) => price <= 0 || gold >= price` — dependency-free, qualifies for
+`docs/ARCHITECTURE.md`'s "plugin compile-include trick", unit-tested directly in
+`tests/KotorCoop.Tests/StoreAffordabilityRuleTests.cs`). `Odyssey.BuyFromStore` now takes the
+buyer's `CSWSCreature*` (threaded from `CheatController.Execute`'s already-resolved `player`,
+the same value every other per-player cheat kind uses) and, before each unit's own `GuiBuyItemFn`
+call, reads the price (`GetItemBuyValueFn 0x6C0790`) and current gold (`GetGoldFn 0x4EDD60`) and
+refuses — naming the price and gold — the moment a unit is unaffordable, rather than letting
+`SetGold` go negative. `src/KotorCoop.Plugin/Odyssey.Store.cs`, `CheatController.Store.cs`,
+`CheatController.cs`.
+
+### `setgold <amount>` added — repairs the rig save's own poisoned gold
+
+New DEV VERB, `CheatKindSetGold = 44` (mirrored `SharedBlock.cs`/`IGameBridge.cs`, covered by
+`CheatKindSyncTests` by construction): sets the party's gold directly through the real
+`CSWSCreature::SetGold` call — an ABSOLUTE target, clamped server-side the same as any other
+caller. Unlike the pre-existing `grantgold <delta>` (a signed DELTA the agent writes directly to
+`KotorGameBridge`'s progression fields, no plugin round trip, no upper clamp), `setgold` goes
+through the real engine call and sets an absolute value — the shape a "repair this specific
+poisoned reading" task needs, and consistent with `buy`/`sell` driving gold through the engine's
+own path rather than a raw poke. Reachable at the real `~` console (`ConsoleVerbCatalog.cs`/
+`FuncInterpHook.cs`), same as `buy`/`sell`/`openstore`. `docs/CONSOLE.md` gained a row;
+`docs/live-verification.md` gained a note on repairing the shared rig save's own poisoned gold
+with it.
+
+### Files changed this pass
+
+`src/KotorCoop.Plugin/Odyssey.Store.cs` — `GetItemRepositoryFn` (0x4EF770), `GetGoldFn`
+(0x4EDD60), `SetGoldFn` (0x4EDD90), `GetItemBuyValueFn` (0x6C0790); `SellToStore` now resolves
+the repo via `GetItemRepositoryFn(player, 1)`; `BuyFromStore` gained a `player` parameter and the
+per-unit affordability guard; new `SetGold(nint player, int amount, out int before, out int
+after)`. `src/KotorCoop.Plugin/StoreAffordabilityRule.cs` (new, dependency-free pure rule).
+`src/KotorCoop.Plugin/CheatController.Store.cs` — `Buy` now takes `player`; new `SetGold(nint
+player)` handler. `src/KotorCoop.Plugin/CheatController.cs` — `Buy(player)`, new
+`CheatKindSetGold` dispatch case. `src/KotorCoop.Plugin/SharedBlock.cs` /
+`src/KotorCoop.Memory/IGameBridge.cs` — `CheatKindSetGold`/`SetGold = 44`.
+`src/KotorCoop.Session/ConsoleCommand.cs`/`ConsoleCommand.Items.cs` — `CoopCommandKind.SetGold`,
+`ParseSetGold`. `src/KotorCoop.Agent/CoopCommandDispatcher.cs` — the dispatch entry.
+`src/KotorCoop.Plugin/ConsoleVerbCatalog.cs`/`FuncInterpHook.cs` — the `setgold` verb, reachable
+at the real console. `docs/CONSOLE.md`, `docs/live-verification.md`, `docs/research/README.md` —
+rows/notes updated. `tests/KotorCoop.Tests/StoreAffordabilityRuleTests.cs` (new),
+`KotorCoop.Tests.csproj` (compile-include), `ConsoleCommandVerbTableCoverageTests.cs` (sample
+line for `SetGold`).
+
+### VERIFIED / INFERRED / NEEDS-LIVE summary
+
+| Item | Status |
+| --- | --- |
+| `CSWSCreature::GetItemRepository 0x004EF770`'s full branch structure (party-pool-first for a live in-party creature, `+0xA30` only as a last-resort fallback) | VERIFIED, fresh disasm |
+| `PopulateInventoryItemListBox`/`AcquireItem` both call `GetItemRepository(creature, 1)`, never read `+0xA30` directly | VERIFIED, fresh disasm |
+| `GetGold`/`SetGold` gate on the same `+0xA88` flag and read/write the party wallet, not a per-creature field | VERIFIED, fresh disasm |
+| `BuyItem` has no affordability check of any kind | VERIFIED, full fresh disasm (confirms the prior live pass's own finding) |
+| `SetGold` clamps only the upper bound, no underflow guard | VERIFIED, fresh disasm |
+| `SellToStore`'s fix (`GetItemRepositoryFn` instead of `+0xA30`) | Implemented, build clean; **NEEDS-LIVE** |
+| `BuyFromStore`'s affordability guard | Implemented, unit-tested (`StoreAffordabilityRuleTests`), build clean; **NEEDS-LIVE** for the engine-call integration |
+| `setgold` | Implemented, build clean; **NEEDS-LIVE** |
+| `InsertItemIntoStore`/`AddItemToPartyPool`'s own `+0xA30` reads likely sharing `sell`'s old defect | Flagged, NOT fixed this pass (out of scope) |
+
+### Live re-test plan (adds to, does not replace, this document's existing §6/2026-08-28-addendum
+### plan)
+
+1. Build and install on both game directories (`build.ps1 -Install -WarnAsError` — `demo.ps1`
+   does not deploy the plugin itself).
+2. If the shared rig save's gold is still pinned near the 999,999,999 clamp from the prior pass,
+   `setgold 500` (or any sane amount) on whichever instance holds it loaded first — confirm the
+   plugin log's `setgold: gold <before> -> <after>` line and that the reply matches.
+3. `warp tar_m02aa`, clear the ambient `duros` conversation with `tp <x> <y>` (no `z`) per this
+   doc's own established recipe, `openstore Larrim_Store`.
+4. `buy Larrim_Store <a real stocked resref>` — confirm it still succeeds normally (the
+   affordability guard must not refuse an affordable purchase).
+5. `sell Larrim_Store <the resref just bought>` — confirm it now SUCCEEDS (the actual bug this
+   pass fixes) rather than "no matching item in inventory", and that the item leaves the
+   player's inventory and gold increases by the sell price.
+6. `buy Larrim_Store <resref> <a count large enough to exceed the party's current gold>` —
+   confirm the reply/log names the item's price and the party's current gold, gold is unchanged
+   past the point of refusal (no wrap), and the store's stock only decreased by however many
+   units WERE affordable.
+7. `store_sync` stays OFF regardless of this pass's outcome — unaffected by this fix (it touches
+   `SellToStore`/`BuyFromStore`, not the wire sync channel's own diff/apply logic or Bug 4).

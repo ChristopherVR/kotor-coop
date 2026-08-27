@@ -1375,3 +1375,68 @@ plain example template before this pass ended. An incidental finding — recover
 client instance stuck behind the ambient `duros` party-selection trap needed a full process
 restart (`partyselect ok` and even a savegame reload did not clear it) — is recorded in
 `store-sync.md`'s own new section alongside the rest of this round's evidence.
+
+## Fix pass (2026-08-28, no rig this round): `sell`'s wrong-repository bug and `buy`'s missing
+## affordability guard, root-caused and fixed by static RE; `setgold` added to repair the rig save
+
+Task: root-cause the two `sell`/`buy` defects the previous rig pass above found and fix them, add
+a `setgold` dev verb, and note how to repair the shared rig save's own poisoned gold. No live rig
+was available this round — everything below is static disassembly plus unit/build verification;
+the fixes are **NEEDS-LIVE** until the next rig round re-runs `store-sync.md`'s own live test plan.
+
+**`sell`'s root cause, VERIFIED by fresh disasm**: `Odyssey.Store.cs`'s `SellToStore` used to read
+the player's inventory repository by dereferencing `CSWSCreature+0xA30` directly. Fresh disasm of
+`CSWSCreature::GetItemRepository 0x004EF770` — the SAME accessor `CSWGuiStore::
+PopulateInventoryItemListBox` (the sell list's own population routine) and `CSWSCreature::
+AcquireItem 0x005158E0` (the routine a bought item is actually handed to the buyer through) both
+call with argument `1` — shows that for a live, in-party PC (the overwhelmingly common case)
+this accessor does NOT read `+0xA30` at all: it resolves `CSWPartyTable::GetPartyItems`, the
+SAME shared party-wide item repository `Odyssey.PartyPool.cs` already reaches directly for
+`pooladd`/`poolremove`. KOTOR 1's own inventory model is party-shared, not per-creature — a real
+player's "own" backpack IS the party pool. `CSWSCreature::GetGold`/`SetGold` (0x4EDD60/0x4EDD90)
+independently confirm the same thing: both gate on the identical creature `+0xA88` flag and read/
+write `CSWPartyTable+0xFC` (the party wallet) rather than a per-creature field. Fixed: `SellToStore`
+now calls `GetItemRepositoryFn(player, 1)` instead of reading `+0xA30` — full detail and the
+complete disassembly trace in `docs/research/store-sync.md`'s new addendum.
+
+**`buy`'s missing affordability guard, VERIFIED by fresh disasm**: full disassembly of
+`CSWGuiStore::BuyItem 0x006C0BE0` this pass confirms the previous rig pass's live finding exactly
+— price lookup, subtract from the cached gold int, `CSWSCreature::SetGold`, with NO comparison or
+branch anywhere between the subtraction and the `SetGold` call. `SetGold` itself (0x004EDD90) only
+clamps the incoming value to an UPPER bound (999,999,999) — there is no lower-bound/underflow
+guard at all, confirming exactly how the rig's own gold got driven to just under `UINT32_MAX`.
+The real in-game Buy button is guarded only by the GUI graying its own button out when
+unaffordable; `Odyssey.BuyFromStore` calls the click handler directly, bypassing that
+precondition, so it now applies the same check itself (`StoreAffordabilityRule.CanAfford`,
+`price <= 0 || gold >= price`) before every single unit, refusing with the price and current gold
+named rather than letting the purchase through.
+
+**`setgold <amount>` added** (`CheatKindSetGold = 44`, mirrored in both `SharedBlock.cs` and
+`IGameBridge.cs`): sets the party's gold directly through the real `CSWSCreature::SetGold` call —
+an ABSOLUTE target, unlike the pre-existing `grantgold <delta>` (a signed delta written directly
+by the agent). Reachable at the real `~` console (registered in `ConsoleVerbCatalog.cs`/
+`FuncInterpHook.cs`, not blockpoke-only), same as `buy`/`sell`/`openstore`.
+
+**⚠ The shared rig save's gold is poisoned.** The previous rig pass's own unaffordable `buy` left
+the shared rig save's party gold pinned at the engine's own 999,999,999 `SetGold` clamp (reached
+via the underflow-then-partial-self-heal sequence `store-sync.md`'s live pass logged) — not
+corrupted (a valid, in-range value), but not one any real playthrough would organically reach, and
+worth resetting before the next round trusts a "gold converged" result against this save. **Fix**:
+once the fixed plugin is installed on both game directories (`build.ps1 -Install -WarnAsError` —
+`demo.ps1` does not deploy the plugin itself), run `setgold <sane-amount>` (e.g. `setgold 500`) on
+whichever instance holds the shared save loaded, or on both if `progression_sync`/the gold ledger
+is not yet converging them. `grantgold 0` (a no-op delta) can be used first to read the current
+value back without changing it, if confirming the poisoned reading is wanted before repairing it.
+
+**Build and test result**: `dotnet build KotorCoop.slnx -warnaserror` and `src/KotorCoop.Plugin/
+build.ps1 -WarnAsError` both clean (0 warnings, 0 errors). `dotnet test tests/KotorCoop.Tests
+--no-build`: full suite green (see `docs/research/store-sync.md`'s own addendum for the exact
+count) — new `StoreAffordabilityRuleTests` (the pure guard rule, pulled into the plugin build's
+compile-include list per `docs/ARCHITECTURE.md`'s trick) plus the console verb-table coverage
+tests for `setgold` and the `CheatKindSyncTests` mirror check, none of which needed a reinvented
+copy of the rule. **NEEDS-LIVE**: the next rig round should re-run `store-sync.md`'s own §6/
+2026-08-28-addendum live test plan (`sell` an item just bought, confirm it now finds it; a `buy`
+past the party's real gold, confirm the refusal names the price/gold and gold is unchanged) —
+`store_sync` itself stays at its default OFF regardless, unrelated to this fix (it touches only
+the `buy`/`sell` dev verbs and `SellToStore`'s repo resolution, not the wire sync channel or its
+own separately-tracked Bug 4).

@@ -881,4 +881,20 @@ internal partial struct SharedBlock
     /// ⚠ 43, because 7-42 are taken. Take the next FREE number.
     /// </summary>
     public const uint CheatKindRemoveParty = 43;
+
+    /// <summary>
+    /// DEV VERB (2026-08-28, docs/research/store-sync.md's live pass): sets the party's gold
+    /// directly to <see cref="OffsetCheatAmount"/> through <c>CSWSCreature::SetGold 0x4EDD90</c>
+    /// (<c>Odyssey.SetGold</c>) — clamped server-side to 999,999,999, same as any other caller
+    /// of that engine function. Built to repair a save whose gold was driven
+    /// negative-then-wrapped by an unguarded <c>buy</c> (before this pass added
+    /// <c>Odyssey.BuyFromStore</c>'s own affordability guard) — see
+    /// docs/live-verification.md for the shared rig save's own poisoned reading. Unlike
+    /// <c>grantgold</c> (a signed DELTA the agent writes directly, no plugin round trip), this
+    /// sets an ABSOLUTE target, which is what repairing a specific poisoned value needs. Local
+    /// only — never crosses the network by itself.
+    ///
+    /// ⚠ 44, because 1-43 are taken. Take the next FREE number.
+    /// </summary>
+    public const uint CheatKindSetGold = 44;
 }

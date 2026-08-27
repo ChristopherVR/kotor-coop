@@ -320,6 +320,20 @@ public static partial class ConsoleCommand
         return new CoopCommand(CoopCommandKind.GrantGold, Amount: amount);
     }
 
+    // setgold <amount>  - DEV VERB, see CoopCommandKind.SetGold. An ABSOLUTE, non-negative
+    // target (unlike grantgold's signed delta) - the shape a poisoned-save repair needs.
+    private static CoopCommand ParseSetGold(string[] rest)
+    {
+        if (rest.Length != 1 || !int.TryParse(rest[0], out int amount) || amount < 0)
+        {
+            return new CoopCommand(
+                CoopCommandKind.Invalid,
+                Error: "setgold needs one non-negative amount, e.g. setgold 5000");
+        }
+
+        return new CoopCommand(CoopCommandKind.SetGold, Amount: amount);
+    }
+
     // setglobal <name> <int|true|false|on|off>  - LIVE-TEST PRIMITIVE, see CoopCommandKind.SetGlobal.
     private static CoopCommand ParseSetGlobal(string[] rest)
     {
