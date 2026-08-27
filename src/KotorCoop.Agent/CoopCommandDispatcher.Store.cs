@@ -48,4 +48,27 @@ public sealed partial class CoopCommandDispatcher
             Upgrades: next.Key.Upgrades,
             ItemFlags: next.Key.Flags));
     }
+
+    /// <summary>
+    /// LIVE-TEST PRIMITIVE (docs/research/store-sync.md's 2026-08-27 addendum): opens the store
+    /// GUI against <paramref name="token"/> (an object id or a tag — required, no "nearest
+    /// store" fallback), through <c>CheatKinds.OpenStore</c>. Same id-or-tag dispatch shape as
+    /// <see cref="UsePlaceable"/>. See <c>CoopCommandKind.OpenStore</c>.
+    /// </summary>
+    private void OpenStore(string token)
+    {
+        if (token.Length == 0)
+        {
+            Reply("openstore: no store tag or id given");
+            return;
+        }
+
+        if (ConsoleCommand.TryParseObjectId(token, out uint objectId) && objectId != 0)
+        {
+            SendCheat(new CheatRequest(CheatKinds.OpenStore, Target: objectId));
+            return;
+        }
+
+        SendCheat(new CheatRequest(CheatKinds.OpenStore, Text: token));
+    }
 }

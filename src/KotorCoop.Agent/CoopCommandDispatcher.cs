@@ -276,6 +276,10 @@ public sealed partial class CoopCommandDispatcher(
         [CoopCommandKind.Equip] = Equip,
         [CoopCommandKind.GrantGold] = c => GrantGold(c.Amount),
 
+        [CoopCommandKind.SetGlobal] = SetGlobal,
+        [CoopCommandKind.Pazaak] = Pazaak,
+        [CoopCommandKind.OpenStore] = c => OpenStore(c.Address ?? string.Empty),
+
         [CoopCommandKind.Cheats] = CheatsCommand,
     };
 

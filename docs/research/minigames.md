@@ -2826,3 +2826,118 @@ round needs either a working click path into a wager dialogue, or a console prim
 same way `usedoor`/`scriptgive` were — no such primitive exists for Pazaak yet, since the
 GUI panel it needs (`CSWGuiPazaakStart`) has no known console-reachable "start a hand" call in
 this codebase.
+
+## Addendum (2026-08-27): `pazaak` — the console primitive the prior round asked for
+
+Builds exactly the primitive the previous section's verdict named as missing: a console verb
+that starts a Pazaak hand directly, so `pazaak_detect`'s positive path can finally be exercised
+without a click this rig cannot inject.
+
+### A correction, found before anything else: this doc's own address for `ExecuteCommandPlayPazaak` was wrong
+
+§4 (above) cites `CSWVirtualMachineCommands::ExecuteCommandPlayPazaak (0x0053B1E0)`. Querying the
+symbol database directly this pass (`tools/q.py func Pazaak ""`) shows that address is actually
+**`ExecuteCommandGetLastPazaakResult`**; the real `ExecuteCommandPlayPazaak` is at
+**`0x00540FD0`**:
+
+```
+0x0053B1E0  CSWVirtualMachineCommands::ExecuteCommandGetLastPazaakResult   [__thiscall]
+0x00540FD0  CSWVirtualMachineCommands::ExecuteCommandPlayPazaak            [__thiscall]
+```
+
+§4's other addresses (`StartPazaakGame 0x005EDDC0`, `EndPazaakGame 0x005EDDD0`,
+`GetPazaakIsRunning 0x005EE140`, `CClientExoAppInternal+0x70 = CPazaakData*`) all re-verified
+correct by fresh disassembly this pass — only the VM entry point's address was wrong. Left in
+§4 unedited (struck through in spirit, not in fact) so the mistake stays on the record, matching
+this document's own established convention (§8.1's escape-pod correction, §10's precedent).
+
+### `PlayPazaak`'s real signature, read from shipped script source
+
+`tools/kotorfiles.py extract nwscript.nss` (ground truth, not inferred from disassembly alone):
+
+```c
+// - sEndScript: Script to be run when game finishes.
+// - nMaxWager: Max player wager.  If <= 0, the player's credits won't be modified by the
+//   result of the game and the wager screen will not show up.
+// - bShowTutorial: Plays in tutorial mode (nMaxWager should be 0).
+void PlayPazaak(int nOpponentPazaakDeck, string sEndScript, int nMaxWager,
+                int bShowTutorial=FALSE, object oOpponent=OBJECT_INVALID);
+```
+
+**VERIFIED**, and this itself corrects an assumption this whole document has carried since §4:
+`nOpponentPazaakDeck` is a small INTEGER selecting a deck TEMPLATE, not the object reference the
+task brief's own framing ("make the verb accept a tag") assumed it would be — the object
+reference is a SEPARATE, later parameter, `oOpponent` (default `OBJECT_INVALID`), almost
+certainly used only for the opponent's displayed name/portrait/AI, not the deck itself. `pazaak`
+therefore accepts a tag/id for `oOpponent` (exactly matching the brief) plus a SEPARATE, optional
+deck-index argument, rather than trying to derive one from the other.
+
+### `ExecuteCommandPlayPazaak`'s own body, fully traced (fresh disasm, this pass)
+
+Pops all five VM arguments in the declared order (`nOpponentPazaakDeck` and `sEndScript` and
+`nMaxWager` genuinely required — the function refuses outright if any of the first three is
+missing; `bShowTutorial` defaults to `0`, `oOpponent` defaults to `0x7F000000` —
+**`OBJECT_INVALID`**, confirming the nwscript.nss default literally, not just by name), then calls:
+
+```
+StartPazaakGameFn(ecx = client, nOpponentPazaakDeck, &sEndScript, nMaxWager, bShowTutorial, oOpponent)
+```
+
+— `CClientExoApp::StartPazaakGame` (`0x005EDDC0`), a thin thunk (`ecx=[ecx+4]`, tail-jump to
+`CClientExoAppInternal::StartPazaakGame 0x005F3810`), called with `ecx` = the **CLIENT**
+(`GetClient()`'s own return value — `[appMgr+4]`), not the client-internal directly. This is the
+exact five-argument, five-push sequence `pazaak` now calls directly.
+
+### What was built
+
+`src/KotorCoop.Plugin/Odyssey.Pazaak.cs` — `StartPazaakGameFn` (`0x005EDDC0`, the five-argument
+signature above), `IsPazaakRunning()` (`CPazaakData*` at `client-internal+0x70`, re-verifying §4's
+own `GetPazaakIsRunning 0x005EE140`), and `StartPazaak(opponentDeck, opponent, out reason)` —
+refuses if there is no client, or a hand is already running; otherwise builds an empty
+`sEndScript` CExoString and calls `StartPazaakGameFn` with `nMaxWager=0` (per the script header:
+skips the wager screen, no credits move) and `bShowTutorial=0`.
+`src/KotorCoop.Plugin/CheatController.Pazaak.cs` (`Pazaak()`): resolves the opponent by
+`CheatTarget` (object id) or `CheatText` (tag, via `CreatureFinder.FindByTag` — the SAME sweep
+`recruit`/`goto` already use), falling back to `ObjectInvalid` when neither is given; reports
+`IsPazaakRunning()`'s value both to decide the answer and in the log line, since
+`StartPazaakGame` itself returns nothing this plugin can read.
+`SharedBlock.CheatKindPazaak = 35` / `IGameBridge.CheatKinds.Pazaak = 35`.
+
+Console: `pazaak [npc-tag|id] [deck]` (`ConsoleCommand.cs`'s `CoopCommandKind.Pazaak`,
+`ConsoleCommand.Items.cs`'s `ParsePazaak`) — both arguments optional; a bare `pazaak` starts a
+hand against the engine's own default opponent with deck index 0.
+`CoopCommandDispatcher.Progression.cs`'s `Pazaak(CoopCommand)` resolves the tag/id the same way
+`UsePlaceable`/`LootTake` already do. Registered in `ConsoleVerbCatalog.cs` and
+`FuncInterpHook.cs` — reachable by a real player/rig typing at the `~` console, not
+blockpoke-only, per this round's task brief.
+
+### What remains open, honestly
+
+* **Which deck index is "correct" for a given save/NPC was not resolved this pass.** No
+  per-creature "which pazaak deck" field or lookup was found (`CSWSCreature::AddPazaakCard`/
+  `RemovePazaakCard` exist in the symbol database but were not disassembled this pass — they
+  read as runtime hand-manipulation methods, not a static "this creature's assigned deck"
+  accessor). `pazaak`'s deck argument defaults to `0`, an UNCONFIRMED guess — the live pass below
+  is what settles whether that produces a sane hand or garbage.
+* **The Taris Upper City cantina** (`tar_m03aa`, per §23's own live-verified negative-check
+  location) remains the recommended save/location for a live attempt — reachable, already
+  confirmed to hold Pazaak GUI furniture, and the same module the prior round's negative check
+  used, so a positive-path pass can reuse that round's exact staging.
+
+### NEEDS-LIVE
+
+Nothing in this addendum has been run against the game.
+
+1. In `tar_m03aa` (or any module), `pazaak` bare (no arguments) — confirm the plugin log's
+   `pazaak: StartPazaakGame(...) called - running now: True` line, and that
+   `MinigameController`'s own `pazaak:`-prefixed edge-detection line fires (§23.6's positive
+   path, still unexercised as of this addendum). This is the actual answer `pazaak_detect` needs.
+2. `pazaak` while a hand is already running — confirm the "already running" refusal, not a
+   second, conflicting `StartPazaakGame` call.
+3. `pazaak <a real cantina NPC's tag>` — confirm the opponent argument reaches the hand (visible
+   opponent name/portrait, if the GUI actually appears) and that deck index 0 produces something
+   playable; if not, try a few small integers and record which one (if any) worked, closing the
+   "which deck index" question above for the next round.
+4. Whether the hand, once started, can be ended cleanly (`EndPazaakGame 0x005EDDC0`+`0x10`
+   sibling — not wired to a verb this pass, since ending was out of scope for "verify detection
+   fires") or whether it needs to run to completion / be quit through its own GUI.

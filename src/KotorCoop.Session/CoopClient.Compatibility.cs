@@ -103,17 +103,19 @@ public sealed partial class CoopClient
             return;
         }
 
+        // ⚠ NOT Console.Error.WriteLine here (fixed 2026-08-27): that reached nobody on the
+        // rig — not the --log file, not the chat overlay, only a console window that may not
+        // exist. BehaviourAnnouncer already receives this exact result via _behaviourComparison
+        // (AnnounceCompatibilityChanges below), so it announces the adoption itself, through the
+        // same trio the W_CFG lines already use, once it observes a HostAuthoritative
+        // difference. See BehaviourAnnouncer.Observe.
         bool? Adopt(string key)
         {
             foreach (BehaviourDifference diff in result.Differences)
             {
                 if (diff.HostAuthoritative && diff.Key == key)
                 {
-                    bool value = diff.HostValue == "1";
-                    Console.Error.WriteLine(
-                        $"[coop] adopted host's {key} ({(value ? "on" : "off")}; local setting was "
-                        + $"{(diff.YourValue == "1" ? "on" : "off")})");
-                    return value;
+                    return diff.HostValue == "1";
                 }
             }
 

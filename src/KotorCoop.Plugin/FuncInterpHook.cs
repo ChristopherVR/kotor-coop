@@ -88,6 +88,13 @@ internal static unsafe class FuncInterpHook
         // added here, matching "skipline"/"selectreply"/"loadgame"/"walkto"/"recruit" above —
         // dev-only LIVE-TEST PRIMITIVES are reachable only via tools/blockpoke.ps1's direct
         // shared-block write, never by a real player typing at the in-game console.
+
+        // Three more live-test primitives (2026-08-27), registered here (unlike the block
+        // above) so a rig session can also type them directly at the in-game console, not only
+        // via blockpoke: setglobal (docs/research/quest-sync.md), pazaak
+        // (docs/research/minigames.md) and openstore (docs/research/store-sync.md). None
+        // shadows a retail verb — checked the same way every other staging cheat above was.
+        "setglobal", "pazaak", "openstore",
     ];
 
     /// <summary>

@@ -40,10 +40,12 @@ internal static unsafe partial class Odyssey
     /// has to say what it saw" discipline as <see cref="LastPartyPoolNote"/>.</summary>
     public static string LastStoreNote = string.Empty;
 
-    /// <summary>Resolves a store's repository pointer by object id. Returns 0 (with
-    /// <see cref="LastStoreNote"/> set) when there is no server, or the id does not resolve to a
-    /// live store.</summary>
-    private static nint ResolveStoreRepo(uint storeObjectId)
+    /// <summary>Resolves a store's BASE pointer by object id (unlike <see cref="ResolveStoreRepo"/>,
+    /// which returns the <c>+0x230</c> repository offset — <see cref="OpenStore"/> needs the base
+    /// pointer itself, for the bonus markup/markdown fields and the object-id field). Returns 0
+    /// (with <see cref="LastStoreNote"/> set) when there is no server, or the id does not resolve
+    /// to a live store.</summary>
+    internal static nint ResolveStoreBase(uint storeObjectId)
     {
         nint server = GetServer();
         if (server == 0)
@@ -56,10 +58,18 @@ internal static unsafe partial class Odyssey
         if (store == 0)
         {
             LastStoreNote = $"0x{storeObjectId:X} did not resolve to a live store";
-            return 0;
         }
 
-        return store + StoreItemRepo;
+        return store;
+    }
+
+    /// <summary>Resolves a store's repository pointer by object id. Returns 0 (with
+    /// <see cref="LastStoreNote"/> set) when there is no server, or the id does not resolve to a
+    /// live store.</summary>
+    private static nint ResolveStoreRepo(uint storeObjectId)
+    {
+        nint store = ResolveStoreBase(storeObjectId);
+        return store == 0 ? 0 : store + StoreItemRepo;
     }
 
     /// <summary>
@@ -217,6 +227,141 @@ internal static unsafe partial class Odyssey
             return false;
         }
 
+        return true;
+    }
+
+    // ---- openstore: opens the store GUI directly, bypassing ExecuteCommandOpenStore --------
+    //
+    // docs/research/store-sync.md §1.6/§6 read ExecuteCommandOpenStore (0x00540300) far enough
+    // to find it resolves oStore (§1.2's GetStoreByGameObjectID) and calls CGuiInGame::
+    // ShowStoreGui (0x0062E310), but deliberately declined to build a verb on that reading
+    // alone: "the call chain from there... was not traced far enough to be confident it is a
+    // direct call rather than a queued client/server GUI message." This pass finished the trace
+    // (fresh disasm, both functions, this session):
+    //
+    //   * ShowStoreGui takes ONLY `this` (CGuiInGame*) — no stack args at all. It checks three
+    //     gates (+0x108 initialised, +0x30 clear, +0xB4 clear — the SAME dialogue-active flag
+    //     GuiConversationActive already names in Odyssey.Dialogue.Spectate.cs), then allocates
+    //     (or reuses) the CSWGuiStore panel at CGuiInGame+0x84. It does NOT read a store id
+    //     anywhere in its own body.
+    //   * ExecuteCommandOpenStore writes the resolved store's bonus markup/markdown ints
+    //     (+0x250/+0x24C — correcting store-sync.md §1.6's own "different resolve chain"
+    //     inference: fresh disasm this pass shows `eax` at the write site IS the SAME
+    //     vtable-cast CSWSStore* GetStoreByGameObjectID already returns, not a separate
+    //     structure) DIRECTLY INTO THE STORE, then calls ShowStoreGui, THEN separately
+    //     allocates a 0x34-byte message (tagged 0x16) and posts it through 0x4AEA40 — a second,
+    //     unrelated step this pass did not chase further (very likely the retail client/server
+    //     message-bus family docs/research/container-sync.md already documents for
+    //     OpenInventory/CloseInventory, not something ShowStoreGui itself needs).
+    //   * The store id that CSWGuiStore::PopulateStore (0x006C0610, §1.2) reads back off
+    //     CSWGuiStore+0x227C is never written by ShowStoreGui or by the VM handler in the
+    //     window this pass read — so OpenStore below writes it directly (the SAME field
+    //     PopulateStore's own disasm names) and calls PopulateStore directly to force the
+    //     refresh, rather than depend on whatever the 0x34-byte message eventually does.
+    //
+    // See docs/research/store-sync.md's 2026-08-27 addendum for the full disassembly.
+
+    /// <summary>CGuiInGame + this = nonzero once the HUD is built. VERIFIED, already relied on
+    /// unnamed at this literal offset in Odyssey.PauseReconciliation.cs/Odyssey.Travel.cs; named
+    /// <c>InGameGuiInitialized</c> in MenuLoadController.MainMenuPhase.cs (a different class).
+    /// ShowStoreGui's own first precondition check.</summary>
+    private const int InGameGuiInitializedOffset = 0x108;
+
+    /// <summary>CGuiInGame + this = nonzero while another modal screen (galaxy map, party
+    /// select, ...) is up. VERIFIED, fresh disasm this pass of ShowStoreGui's own second
+    /// precondition check.</summary>
+    private const int InGameGuiBusyOffset = 0x30;
+
+    /// <summary>CGuiInGame + this = CSWGuiStore* while a store panel is open, 0 otherwise.
+    /// VERIFIED, docs/research/store-sync.md §1.3 (fresh disasm of HideStoreGui 0x0062E4A0).</summary>
+    private const int InGameGuiStoreOffset = 0x84;
+
+    /// <summary>CSWGuiStore + this = the currently-open store's OBJECT ID. VERIFIED, fresh
+    /// disasm of CSWGuiStore::PopulateStore 0x006C0610 (docs/research/store-sync.md §1.2).</summary>
+    private const int StorePanelObjectIdOffset = 0x227C;
+
+    /// <summary>CSWSStore + this = the session-scoped bonus mark-up/mark-down ints
+    /// ExecuteCommandOpenStore's VM handler writes (both clamped [-100,100] there — this call
+    /// writes 0/0, matching a bare <c>OpenStore(oStore, oPC)</c> with no bonus args). VERIFIED,
+    /// fresh disasm this pass — see the section header above for the correction to
+    /// store-sync.md §1.6's own inference.</summary>
+    private const int StoreBonusMarkUp = 0x250;
+
+    private const int StoreBonusMarkDown = 0x24C;
+
+    /// <summary>CGuiInGame::ShowStoreGui(this) -&gt; void. VERIFIED, fresh disasm this pass
+    /// (0x0062E310): thiscall, no stack parameters read anywhere in the function body. See the
+    /// section header above for the full trace.</summary>
+    private static readonly delegate* unmanaged[Thiscall]<nint, void> ShowStoreGuiFn =
+        (delegate* unmanaged[Thiscall]<nint, void>)0x0062E310;
+
+    /// <summary>CSWGuiStore::PopulateStore(this) -&gt; void. VERIFIED, docs/research/store-sync.md
+    /// §1.2 — reads the panel's own <see cref="StorePanelObjectIdOffset"/>, resolves it through
+    /// the SAME safe, type-checked accessor <see cref="ResolveStoreBase"/> wraps, and refreshes
+    /// the displayed item list.</summary>
+    private static readonly delegate* unmanaged[Thiscall]<nint, void> PopulateStoreFn =
+        (delegate* unmanaged[Thiscall]<nint, void>)0x006C0610;
+
+    /// <summary>
+    /// Opens the store GUI for the local player against <paramref name="store"/> (a base
+    /// CSWSStore* — see <see cref="ResolveStoreBase"/> or <see cref="CreatureFinder.FindStoreByTag"/>)
+    /// — the C++ entry point <c>ExecuteCommandOpenStore</c>'s own VM handler ultimately reaches
+    /// (<c>ShowStoreGui</c>), called directly here instead of through the VM's own
+    /// argument-popping machinery. See the section header above for the full reasoning.
+    ///
+    /// MAIN THREAD ONLY.
+    /// </summary>
+    internal static bool OpenStore(nint store, out string reason)
+    {
+        reason = string.Empty;
+
+        if (store == 0)
+        {
+            reason = "no store resolved";
+            return false;
+        }
+
+        nint gui = GetInGameGui();
+        if (gui == 0)
+        {
+            reason = "no in-game GUI resolved (not in a loaded module)";
+            return false;
+        }
+
+        if (*(int*)(gui + InGameGuiInitializedOffset) == 0)
+        {
+            reason = "the HUD is not initialised yet (still loading)";
+            return false;
+        }
+
+        if (*(int*)(gui + InGameGuiBusyOffset) != 0)
+        {
+            reason = "another modal screen is up (galaxy map / party select / ...)";
+            return false;
+        }
+
+        if (*(int*)(gui + GuiConversationActive) != 0)
+        {
+            reason = "a conversation is active";
+            return false;
+        }
+
+        *(int*)(store + StoreBonusMarkUp) = 0;
+        *(int*)(store + StoreBonusMarkDown) = 0;
+
+        ShowStoreGuiFn(gui);
+
+        nint panel = *(nint*)(gui + InGameGuiStoreOffset);
+        if (panel == 0)
+        {
+            reason = "ShowStoreGui did not produce a panel (allocation failed)";
+            return false;
+        }
+
+        uint storeObjectId = *(uint*)(store + 0x04); // CSWSObject + this = the object id.
+        *(uint*)(panel + StorePanelObjectIdOffset) = storeObjectId;
+
+        PopulateStoreFn(panel);
         return true;
     }
 }
