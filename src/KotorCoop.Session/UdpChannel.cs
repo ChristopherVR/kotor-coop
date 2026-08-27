@@ -25,6 +25,7 @@ public sealed class UdpChannel : IDisposable
     private long _bytesSent;
     private long _bytesReceived;
     private long _malformed;
+    private long _versionMismatch;
 
     public UdpChannel(int listenPort)
     {
@@ -80,6 +81,14 @@ public sealed class UdpChannel : IDisposable
     public long MalformedPackets => Interlocked.Read(ref _malformed);
 
     public void NoteMalformed() => Interlocked.Increment(ref _malformed);
+
+    /// <summary>A datagram with our magic and a well-formed known type, but a protocol
+    /// version we do not speak — a real peer running different co-op code, not the garbage
+    /// <see cref="NoteMalformed"/> counts. Kept separate so a run of these (a lobby full of
+    /// mismatched builds) reads as "wrong version", not "wrong version, and also noisy".</summary>
+    public long VersionMismatchPackets => Interlocked.Read(ref _versionMismatch);
+
+    public void NoteVersionMismatch() => Interlocked.Increment(ref _versionMismatch);
 
     public void Send(IPEndPoint destination, ReadOnlySpan<byte> data)
     {
