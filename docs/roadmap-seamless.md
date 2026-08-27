@@ -71,6 +71,7 @@ time; everything else builds and unit-tests in parallel.
 | 22 | Creature-liveness scan freshness (`DestroyObject`'d bodies) — `liveness_sync` stays OFF |
 | 23 | Per-object local variables, time-of-day, floor mines (deliberately excluded from the trigger relay) |
 | 24 | Internet play: discovery past LAN broadcast, NAT traversal/relay, WAN jitter tuning (`interp_ms` is LAN-tuned), host migration |
+| 25 | **The Star Forge finale has RE coverage now** (`star-forge-finale.md`) but its headline gap isn't new RE — it's a product decision: neither the stunt-module refusal nor `MinigameController`'s park/hide engages for the Bastila-chamber/Malak-duel doors (ordinary same-module `RemovePartyMember`, not a `StartNewModule` funnel), so whether a second real player can walk into the game's one-on-one Malak duel is currently undecided by this mod's own rules, not merely untested. |
 
 ## Execution order
 
