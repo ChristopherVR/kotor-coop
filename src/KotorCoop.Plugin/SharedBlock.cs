@@ -681,4 +681,62 @@ internal partial struct SharedBlock
     /// </summary>
     public const uint CheatKindEquip = 33;
 
+    /// <summary>
+    /// LIVE-TEST PRIMITIVE (2026-08-27, docs/research/quest-sync.md's 2026-08-27 addendum):
+    /// writes a script global by NAME through the engine's own type-checked setter
+    /// (<c>CSWGlobalVariableTable::SetValueBoolean</c> 0x00529570 /
+    /// <c>SetValueNumber</c> 0x00529680) — the SAME two functions
+    /// <c>CSWVirtualMachineCommands::ExecuteCommandSetGlobalNumber</c> (0x00542B60) calls once
+    /// it has popped its own two VM arguments, called directly here instead of through that
+    /// machinery (the same reasoning <see cref="CheatKindOpenStore"/> uses for
+    /// <c>ShowStoreGui</c>). Built so the rig can drive a galaxy-map leg (or any other
+    /// global-gated dispatch, e.g. <c>firescript k_pebn_galaxy</c>) without a GUI click.
+    /// <see cref="OffsetCheatText"/> is the global's name (max 22 chars — the catalogue's own
+    /// identifier length), <see cref="OffsetCheatAmount"/> the signed value,
+    /// <see cref="OffsetCheatItemFlags"/> 1 for the boolean setter / 0 for the number setter
+    /// (reused rather than a new field — this cheat never touches an item).
+    ///
+    /// ⚠ 34, because 7-33 are taken. Take the next FREE number.
+    /// </summary>
+    public const uint CheatKindSetGlobal = 34;
+
+    /// <summary>
+    /// LIVE-TEST PRIMITIVE (2026-08-27, docs/research/minigames.md's 2026-08-27 addendum):
+    /// starts a Pazaak hand through <c>CClientExoApp::StartPazaakGame</c> (0x005EDDC0) — the
+    /// SAME function <c>CSWVirtualMachineCommands::ExecuteCommandPlayPazaak</c> (0x00540FD0,
+    /// NOT 0x0053B1E0 — that address is <c>ExecuteCommandGetLastPazaakResult</c>, a correction
+    /// to this doc's own earlier reading) calls once it has popped its five VM arguments,
+    /// called directly instead so <c>pazaak_detect</c> can finally be verified POSITIVELY (the
+    /// prior live pass — docs/roadmap-seamless.md item 9 — only ever confirmed the negative
+    /// case, since nothing could inject the click that starts a hand). No wager
+    /// (<c>nMaxWager=0</c>, so the wager screen never shows and no credits move — the script
+    /// header's own documented behaviour) and no tutorial mode.
+    /// <see cref="OffsetCheatTarget"/> is the opponent NPC's object id, or
+    /// <see cref="OffsetCheatText"/> its tag (both empty means the engine's own default
+    /// opponent, <c>OBJECT_INVALID</c>); <see cref="OffsetCheatAmount"/> is the opponent's
+    /// pazaak-deck index (default 0 when the request field is 0 — NEEDS-LIVE which index is
+    /// "correct" for a given NPC; no per-creature deck lookup was found this pass, see the
+    /// research doc).
+    ///
+    /// ⚠ 35, because 7-34 are taken. Take the next FREE number.
+    /// </summary>
+    public const uint CheatKindPazaak = 35;
+
+    /// <summary>
+    /// LIVE-TEST PRIMITIVE (2026-08-27, docs/research/store-sync.md's 2026-08-27 addendum):
+    /// opens the store GUI against a store resolved by object id or tag, through
+    /// <c>CGuiInGame::ShowStoreGui</c> (0x0062E310) called directly — the C++ entry
+    /// <c>ExecuteCommandOpenStore</c> (0x00540300) itself reaches, but through its own VM
+    /// arg-popping machinery store-sync.md's original pass deliberately declined to build a
+    /// verb against (§1.6/§6 there: "the call chain... was not traced far enough"). This pass
+    /// traced the remaining hop (<c>ShowStoreGui</c> takes only <c>this</c>; the open store's
+    /// object id is written separately into the new panel's own <c>+0x227C</c> field, then
+    /// <c>CSWGuiStore::PopulateStore</c> 0x006C0610 is called directly to force the refresh) so
+    /// <c>store_sync</c> can finally be verified without a manual click.
+    /// <see cref="OffsetCheatTarget"/> is the store's object id, or <see cref="OffsetCheatText"/>
+    /// its tag; one of the two is required — there is no "nearest store" sweep.
+    ///
+    /// ⚠ 36, because 7-35 are taken. Take the next FREE number.
+    /// </summary>
+    public const uint CheatKindOpenStore = 36;
 }

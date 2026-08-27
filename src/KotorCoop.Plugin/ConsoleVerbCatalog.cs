@@ -111,5 +111,10 @@ internal static class ConsoleVerbCatalog
         // completion may offer the verb while recall can never replay the secret.
         ("password", "password <pw>"),
         ("pw", "pw <pw>"),
+
+        // Three live-test primitives (2026-08-27): none shadows a retail verb.
+        ("setglobal", "setglobal <name> <int|true|false|on|off>  (writes a script global by name)"),
+        ("pazaak", "pazaak [npc-tag|id] [deck]  (starts a Pazaak hand; blank = engine's own default opponent)"),
+        ("openstore", "openstore <resref|tag|id>  (opens the store GUI against a resolved store)"),
     ];
 }

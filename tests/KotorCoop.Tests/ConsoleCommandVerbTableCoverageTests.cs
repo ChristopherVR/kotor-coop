@@ -71,6 +71,9 @@ public class ConsoleCommandVerbTableCoverageTests
         [CoopCommandKind.GrantXp] = "grantxp me 500",
         [CoopCommandKind.Equip] = "equip me g_w_blstrpstl001",
         [CoopCommandKind.GrantGold] = "grantgold 500",
+        [CoopCommandKind.SetGlobal] = "setglobal K_KOTOR_MASTER 15",
+        [CoopCommandKind.Pazaak] = "pazaak",
+        [CoopCommandKind.OpenStore] = "openstore kebla_yurt_shop",
     };
 
     /// <summary>Sentinel kinds that are outcomes of parsing (or its absence), not tied to one

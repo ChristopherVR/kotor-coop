@@ -319,4 +319,98 @@ public static partial class ConsoleCommand
 
         return new CoopCommand(CoopCommandKind.GrantGold, Amount: amount);
     }
+
+    // setglobal <name> <int|true|false|on|off>  - LIVE-TEST PRIMITIVE, see CoopCommandKind.SetGlobal.
+    private static CoopCommand ParseSetGlobal(string[] rest)
+    {
+        const string usage = "setglobal <name> <int|true|false|on|off>  e.g. setglobal "
+            + "K_KOTOR_MASTER 15, or setglobal K_SWOOP_UNLOCKED true";
+
+        if (rest.Length != 2)
+        {
+            return new CoopCommand(CoopCommandKind.Invalid, Error: usage);
+        }
+
+        if (!IsResRef(rest[0], maxLength: 22))
+        {
+            return new CoopCommand(
+                CoopCommandKind.Invalid,
+                Error: $"'{rest[0]}' is not a valid global name (1-22 letters/digits/underscore) - {usage}");
+        }
+
+        string token = rest[1];
+
+        if (token.Equals("true", StringComparison.OrdinalIgnoreCase)
+            || token.Equals("on", StringComparison.OrdinalIgnoreCase))
+        {
+            return new CoopCommand(CoopCommandKind.SetGlobal, Address: rest[0], Password: "bool", Amount: 1);
+        }
+
+        if (token.Equals("false", StringComparison.OrdinalIgnoreCase)
+            || token.Equals("off", StringComparison.OrdinalIgnoreCase))
+        {
+            return new CoopCommand(CoopCommandKind.SetGlobal, Address: rest[0], Password: "bool", Amount: 0);
+        }
+
+        if (!int.TryParse(token, out int value))
+        {
+            return new CoopCommand(
+                CoopCommandKind.Invalid,
+                Error: $"'{token}' is not an integer or true/false/on/off - {usage}");
+        }
+
+        return new CoopCommand(CoopCommandKind.SetGlobal, Address: rest[0], Password: "number", Amount: value);
+    }
+
+    // pazaak [npc-tag|id] [deck]  - LIVE-TEST PRIMITIVE, see CoopCommandKind.Pazaak.
+    private static CoopCommand ParsePazaak(string[] rest)
+    {
+        const string usage = "pazaak [npc-tag|id] [deck]  e.g. pazaak, or pazaak my_npc_tag, or "
+            + "pazaak 0x42 2";
+
+        if (rest.Length > 2)
+        {
+            return new CoopCommand(CoopCommandKind.Invalid, Error: usage);
+        }
+
+        string? opponent = null;
+        if (rest.Length >= 1)
+        {
+            if (!TryParseObjectId(rest[0], out _) && !IsResRef(rest[0], maxLength: 31))
+            {
+                return new CoopCommand(
+                    CoopCommandKind.Invalid, Error: $"'{rest[0]}' is not an npc tag or object id - {usage}");
+            }
+
+            opponent = rest[0];
+        }
+
+        int deck = 0;
+        if (rest.Length == 2 && (!int.TryParse(rest[1], out deck) || deck < 0))
+        {
+            return new CoopCommand(
+                CoopCommandKind.Invalid, Error: $"'{rest[1]}' is not a valid deck index - {usage}");
+        }
+
+        return new CoopCommand(CoopCommandKind.Pazaak, Address: opponent, Amount: deck);
+    }
+
+    // openstore <resref|tag|id>  - LIVE-TEST PRIMITIVE, see CoopCommandKind.OpenStore.
+    private static CoopCommand ParseOpenStore(string[] rest)
+    {
+        const string usage = "openstore <resref|tag|id>  e.g. openstore kebla_yurt_shop";
+
+        if (rest.Length != 1)
+        {
+            return new CoopCommand(CoopCommandKind.Invalid, Error: usage);
+        }
+
+        if (!TryParseObjectId(rest[0], out _) && !IsResRef(rest[0], maxLength: 31))
+        {
+            return new CoopCommand(
+                CoopCommandKind.Invalid, Error: $"'{rest[0]}' is not a store tag or object id - {usage}");
+        }
+
+        return new CoopCommand(CoopCommandKind.OpenStore, Address: rest[0]);
+    }
 }

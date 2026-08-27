@@ -647,3 +647,97 @@ DECREASE half's own live confirmation (both the ON-path genuine move and the OFF
 refusal) and the CROSS-INSTANCE wire proof the prior pass's "Cross-instance wire propagation: not
 independently re-verified" note left open — no default changes as a result, since the flag
 already covered both paths and both are now independently confirmed live.
+
+## Addendum (2026-08-27): `setglobal` — a live-test primitive to write globals directly
+
+Roadmap need: the live-verification queue wants to drive a globals-gated dispatch (a galaxy-map
+leg, `firescript k_pebn_galaxy`-style content) without a GUI click. `GlobalVariableTable.cs`
+(`KotorCoop.Memory`, agent-side, out-of-process) already reads the catalogue and has
+`TryWriteBoolean`/`TryWriteNumber` — a raw byte/bit poke at a fixed table offset, correct but not
+the engine's own code path. This pass adds a PLUGIN-side (in-process) `setglobal` console verb
+that calls the engine's own type-checked setters instead, per this project's engine-write
+discipline (docs/CONTRIBUTING.md).
+
+### The setters, VERIFIED by fresh disassembly this pass
+
+`tools/q.py func "" CSWGlobalVariableTable`:
+
+```
+0x00529570  CSWGlobalVariableTable::SetValueBoolean   [__thiscall]
+0x00529680  CSWGlobalVariableTable::SetValueNumber    [__thiscall]
+0x00529110  CSWGlobalVariableTable::GetValueBoolean   [__thiscall]
+0x00529240  CSWGlobalVariableTable::GetValueNumber    [__thiscall]
+0x00529030  CSWGlobalVariableTable::FindIdentifierIndex   [__thiscall]
+```
+
+`SetValueBoolean`/`SetValueNumber` both `ret 8` (two stack args: `CExoString* name, int value`).
+Both call `FindIdentifierIndex(this, name)` first (a hash-based catalogue lookup — VERIFIED
+identical call shape in both), refuse (log internally, return) if the name is undeclared, and
+otherwise re-read the packed type/index word from the catalogue entry (the SAME `packed = type<<14
+| index` layout `GlobalVariableTable.cs`'s own `TryResolve` already documents) to confirm the
+declared type matches before writing — a number-typed global cannot be hit by the boolean setter
+or vice versa. `GetValueBoolean`/`GetValueNumber` share the identical lookup and zero their
+out-parameter unconditionally before the type check, so a refusal and a genuine `0` are NOT
+distinguishable from the read alone (a documented gap, not fixed this pass — see
+`Odyssey.TryWriteGlobal`'s own remarks).
+
+**The table itself**: `CServerExoApp::GetGlobalVariableTable` (`0x004AEE60`, fresh disasm this
+pass) is `mov eax,[ecx+4]; add eax,0x100FC; ret` — a bare accessor, no stack args — confirming
+`GlobalVariableTable.cs`'s independently-derived `GlobalTableOffset = 0x000100FC` is exactly
+right (two independent readings converging on the same offset, the same corroboration this
+project's other research docs already treat as evidence).
+
+**Confirmed as the C++ setter `ExecuteCommandSetGlobalNumber` (`0x00542B60`) itself calls**: read
+in full this pass — pops its name/value VM arguments, resolves the table via `0x4AEE60`, and
+calls `0x00529680` (`SetValueNumber`) with the resolved table as `this`. `setglobal` calls
+`SetValueNumber`/`SetValueBoolean` directly instead, the same choice this round's `openstore`
+verb makes for `ShowStoreGui` over `ExecuteCommandOpenStore` (docs/research/store-sync.md's own
+2026-08-27 addendum).
+
+### What was built
+
+`src/KotorCoop.Plugin/Odyssey.Globals.cs` — `SetGlobalValueNumberFn`/`SetGlobalValueBooleanFn`/
+`GetGlobalValueNumberFn`/`GetGlobalValueBooleanFn` (all four addresses above), `GetGlobalVariableTable`,
+`BuildGlobalNameExoString` (the same CExoString-on-the-stack idiom `Odyssey.Travel.cs`'s
+`QueueTransitionMovie` and `Odyssey.Party.cs`'s NPC-name calls already use), and
+`TryWriteGlobal(nameAscii, nameLength, asBoolean, value, out before, out after, out reason)` —
+reads the value back through the matching getter both before and after the write, so the answer
+reports what it actually saw rather than trusting a void-returning setter blindly.
+`src/KotorCoop.Plugin/CheatController.Globals.cs` (`SetGlobal()`), wired into
+`CheatController.cs`'s dispatch switch. `SharedBlock.CheatKindSetGlobal = 34` /
+`IGameBridge.CheatKinds.SetGlobal = 34` (34 is the next free number after 33). No `SharedBlock`
+layout change — `CheatText` (name, max 22 chars — the catalogue's own identifier length),
+`CheatAmount` (the signed value) and `CheatItemFlags` (1 = boolean setter, 0/unset = number
+setter) are all reused fields.
+
+Console: `setglobal <name> <int|true|false|on|off>` (`ConsoleCommand.cs`'s
+`CoopCommandKind.SetGlobal`, `ConsoleCommand.Items.cs`'s `ParseSetGlobal`) —
+`true`/`false`/`on`/`off` selects the boolean setter, any other parseable integer selects the
+number setter. `CoopCommandDispatcher.Progression.cs`'s `SetGlobal(CoopCommand)` sends the cheat.
+Registered in `ConsoleVerbCatalog.cs` and `FuncInterpHook.cs` (unlike the dev-only/blockpoke-only
+primitives like `quittomenu`, this one is reachable by a real player/rig typing at the `~`
+console, per the task brief for this round).
+
+### Honesty about what the answer means
+
+`setglobal`'s reply reads `'<name>' (<kind>) <before> -> <after>`. Because the getters zero their
+out-parameter on ANY refusal (undeclared name, wrong declared type), a refusal that happens to
+land on a global already holding the requested value is indistinguishable from success by the
+read-back alone — the reply says so explicitly when `after != requested`
+(`CheatStatusEngineRefused`), and is honest, not falsely confident, when `after == requested`
+(the common, correct case). No live pass has confirmed this distinguishes correctly against a
+genuinely wrong-typed global name — see NEEDS-LIVE below.
+
+### NEEDS-LIVE
+
+Nothing in this addendum has been run against the game. A live pass should:
+
+1. `setglobal K_KOTOR_MASTER 15` (a real story-progress number global, per `k_pebn_galaxy.nss`'s
+   own branch at `nMain == 15` — read in `galaxy-map-and-party-select.md` §1.2) and confirm via
+   `firescript k_pebn_galaxy fire` (or opening the galaxy map for real, if reachable) that the
+   unlock branch it gates actually took.
+2. A genuine boolean global (e.g. one of the `K_*_DONE` latches this project's own trigger sweep
+   docs already name) with `setglobal <name> true`, confirmed by whatever the flag gates.
+3. A deliberately WRONG name (typo, or a real number global hit with `true`/`false`) to see what
+   the reply actually reads when refused — confirms whether the "after != requested" signal is
+   reliable in practice, not just in theory.

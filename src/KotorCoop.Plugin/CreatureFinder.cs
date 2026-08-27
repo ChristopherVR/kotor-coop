@@ -118,6 +118,19 @@ internal static unsafe partial class CreatureFinder
     public static nint FindPlaceableByTag(ReadOnlySpan<byte> tag) =>
         tag.IsEmpty ? 0 : Sweep(0, tag, PlaceableVtable);
 
+    /// <summary>CSWSStore vtable (docs/research/placeables-containers.md §4: "CSWSStore vtable
+    /// 0x0074BDB8 (size 0x258)"). Redeclared here rather than exposed from Odyssey.Store.cs, the
+    /// same "self-contained sweep helpers" convention <see cref="DoorVtable"/>/
+    /// <see cref="PlaceableVtable"/> already follow.</summary>
+    public const nint StoreVtable = 0x0074BDB8;
+
+    /// <summary>Finds a STORE by tag, for the <c>openstore</c> live-test verb — the
+    /// human-typed form; the automatic apply half always has an object id already (§2.3/§2.6,
+    /// docs/research/store-sync.md). Like <see cref="FindDoorByTag"/>/<see cref="FindPlaceableByTag"/>,
+    /// stops at the first match.</summary>
+    public static nint FindStoreByTag(ReadOnlySpan<byte> tag) =>
+        tag.IsEmpty ? 0 : Sweep(0, tag, StoreVtable);
+
     /// <summary>
     /// Copies every object with <paramref name="vtable"/> into <paramref name="into"/> and
     /// returns how many were written (never more than <paramref name="capacity"/>).

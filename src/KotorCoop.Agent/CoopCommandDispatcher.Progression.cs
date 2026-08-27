@@ -73,4 +73,45 @@ public sealed partial class CoopCommandDispatcher
 
         Reply($"gold {gold} -> {after}");
     }
+
+    /// <summary>Writes script global <c>Address</c> to <c>Amount</c> through the engine's own
+    /// type-checked setter — <c>Password</c> ("bool"/"number", set by the parser) selects which
+    /// one. See <c>CoopCommandKind.SetGlobal</c> and docs/research/quest-sync.md's 2026-08-27
+    /// addendum.</summary>
+    private void SetGlobal(CoopCommand command)
+    {
+        string name = command.Address ?? string.Empty;
+        if (name.Length == 0)
+        {
+            Reply("setglobal: no name given");
+            return;
+        }
+
+        bool asBoolean = command.Password == "bool";
+
+        SendCheat(new CheatRequest(
+            CheatKinds.SetGlobal, Text: name, Amount: command.Amount, ItemFlags: asBoolean ? 1u : 0u));
+    }
+
+    /// <summary>Starts a Pazaak hand against <c>Address</c> (an npc tag or object id, blank for
+    /// the engine's own default opponent) with deck index <c>Amount</c>. See
+    /// <c>CoopCommandKind.Pazaak</c> and docs/research/minigames.md's 2026-08-27 addendum.</summary>
+    private void Pazaak(CoopCommand command)
+    {
+        string token = command.Address ?? string.Empty;
+
+        if (token.Length == 0)
+        {
+            SendCheat(new CheatRequest(CheatKinds.Pazaak, Amount: command.Amount));
+            return;
+        }
+
+        if (ConsoleCommand.TryParseObjectId(token, out uint objectId) && objectId != 0)
+        {
+            SendCheat(new CheatRequest(CheatKinds.Pazaak, Target: objectId, Amount: command.Amount));
+            return;
+        }
+
+        SendCheat(new CheatRequest(CheatKinds.Pazaak, Text: token, Amount: command.Amount));
+    }
 }

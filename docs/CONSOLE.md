@@ -65,6 +65,9 @@ scenario. Parsed in `ConsoleCommand`, dispatched by `CoopCommandDispatcher`, exe
 | `grantxp` | `<id\|me> <amount>` | yours to stage, local | adds a signed XP delta to a creature's `CSWSCreatureStats::experience`, simulating a script-granted award aimed at one creature — the live-test primitive for `companion_xp_sync`'s merge (see docs/research/companion-state-sync.md) |
 | `equip` | `<id\|me> <resref> [slot]` | yours to stage, local | re-equips a creature (1 body, 4 right weapon — default, 5 left weapon) through `Odyssey.EquipItemFromTemplate`, the same call the phantom equipment channel already ships, aimed at a live companion body — the live-test primitive for `companion_gear_sync` |
 | `grantgold` | `<amount>` | yours to stage, local | adds a signed delta to the party wallet through the same agent-side field read/write `progression_sync` already uses — the live-test primitive for gold convergence (no GUI vendor purchase needed) |
+| `setglobal` | `<name> <int\|true\|false\|on\|off>` | yours only, local only | writes a script global by name through the engine's own type-checked setter (`CSWGlobalVariableTable::SetValueNumber`/`SetValueBoolean`), not a raw poke — see docs/research/quest-sync.md |
+| `pazaak` | `[npc-tag\|id] [deck]` | yours only, local only | starts a Pazaak hand through `CClientExoApp::StartPazaakGame` directly (no wager, no tutorial), so `pazaak_detect` can be verified positively — see docs/research/minigames.md |
+| `openstore` | `<resref\|tag\|id>` | yours only, local only | opens the store GUI against a resolved store through `CGuiInGame::ShowStoreGui` directly, so `store_sync` can be verified without a manual click — see docs/research/store-sync.md |
 | `cheats` | — | any player | prints this verb list |
 
 ### The `slay` / `destroyobject` authority split

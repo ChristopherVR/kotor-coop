@@ -314,6 +314,34 @@ public static class CheatKinds
     /// ⚠ 33 is the highest number taken now. Take the next FREE one for a new verb.
     /// </summary>
     public const uint Equip = 33;
+
+    /// <summary>
+    /// LIVE-TEST PRIMITIVE (docs/research/quest-sync.md's 2026-08-27 addendum): writes script
+    /// global <c>Text</c> (the name, max 22 chars) to <c>Amount</c> (a signed value) through the
+    /// engine's own type-checked setter — <c>ItemFlags</c> 1 selects the boolean setter, 0 (or
+    /// unset) the number setter (reused fields, no new ones — this cheat never touches an item).
+    /// See SharedBlock.CheatKindSetGlobal.
+    /// </summary>
+    public const uint SetGlobal = 34;
+
+    /// <summary>
+    /// LIVE-TEST PRIMITIVE (docs/research/minigames.md's 2026-08-27 addendum): starts a Pazaak
+    /// hand against opponent <c>Target</c> (object id) or <c>Text</c> (tag) — both empty means
+    /// the engine's own default opponent — with pazaak-deck index <c>Amount</c> (default 0),
+    /// through <c>CClientExoApp::StartPazaakGame</c>, no wager, no tutorial. See
+    /// SharedBlock.CheatKindPazaak.
+    /// </summary>
+    public const uint Pazaak = 35;
+
+    /// <summary>
+    /// LIVE-TEST PRIMITIVE (docs/research/store-sync.md's 2026-08-27 addendum): opens the store
+    /// GUI against store <c>Target</c> (object id) or <c>Text</c> (tag) through
+    /// <c>CGuiInGame::ShowStoreGui</c> called directly, then writes the resolved store's object
+    /// id into the new panel and forces a repopulate. See SharedBlock.CheatKindOpenStore.
+    ///
+    /// ⚠ 36 is the highest number taken now. Take the next FREE one for a new verb.
+    /// </summary>
+    public const uint OpenStore = 36;
 }
 
 /// <summary>

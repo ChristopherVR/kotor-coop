@@ -130,4 +130,64 @@ internal sealed unsafe partial class CheatController
         PluginHost.Log($"store: removed '{resref}' x{removed} (asked for {count}) from store 0x{storeObjectId:X}");
         Answer(SharedBlock.CheatStatusApplied, $"removed '{resref}' x{removed} from store 0x{storeObjectId:X}");
     }
+
+    /// <summary>
+    /// LIVE-TEST PRIMITIVE (docs/research/store-sync.md's 2026-08-27 addendum): opens the store
+    /// GUI against <see cref="SharedBlock.CheatTarget"/> (object id) or
+    /// <see cref="SharedBlock.CheatText"/> (tag) through <see cref="Odyssey.OpenStore"/> — one
+    /// of the two is required, there is no "nearest store" sweep.
+    /// </summary>
+    private void OpenStore()
+    {
+        uint requestedId = block.CheatTarget;
+        string text = ReadCheatText();
+
+        nint store;
+        string what;
+
+        if (requestedId != 0)
+        {
+            store = Odyssey.ResolveStoreBase(requestedId);
+            what = $"0x{requestedId:X}";
+
+            if (store == 0)
+            {
+                Answer(SharedBlock.CheatStatusNoTarget, $"openstore: {Odyssey.LastStoreNote}");
+                return;
+            }
+        }
+        else if (text.Length > 0)
+        {
+            byte* tag = block.CheatText;
+            int length = 0;
+            while (length < SharedBlock.CheatTextLength - 1 && tag[length] != 0)
+            {
+                length++;
+            }
+
+            store = CreatureFinder.FindStoreByTag(new ReadOnlySpan<byte>(tag, length));
+            what = $"'{text}'";
+
+            if (store == 0)
+            {
+                Answer(SharedBlock.CheatStatusNoTarget, $"no store tagged '{text}' found here");
+                return;
+            }
+        }
+        else
+        {
+            Answer(SharedBlock.CheatStatusRefused, "openstore needs a store object id or tag");
+            return;
+        }
+
+        if (!Odyssey.OpenStore(store, out string reason))
+        {
+            PluginHost.Log($"openstore: {what} refused - {reason}");
+            Answer(SharedBlock.CheatStatusEngineRefused, $"openstore {what} refused: {reason}");
+            return;
+        }
+
+        PluginHost.Log($"openstore: store {what} - ShowStoreGui called, panel populated");
+        Answer(SharedBlock.CheatStatusApplied, $"store {what}: opened");
+    }
 }

@@ -513,3 +513,138 @@ Yurt's shop, a base-game store with a mix of finite and infinite stock).
 Watch for in the plugin log: `store: inserted/removed '<resref>' into/from store 0x<id>...` lines
 from `CheatController.Store.cs`, and any `store: ... failed — <LastStoreNote>` refusal, which
 names exactly which of §2.4's guards fired.
+
+## Addendum (2026-08-27): `openstore` — finishing the trace §1.6/§6 declined to build a verb on
+
+§1.6/§6's own words: "the call chain from there [`ExecuteCommandOpenStore`] to `ShowStoreGui`...
+was not traced far enough to be confident it is a direct call rather than a queued client/server
+GUI message." This pass finished that trace with fresh disassembly of both functions and built
+the verb.
+
+### `ShowStoreGui` (`0x0062E310`) — VERIFIED, takes only `this`
+
+Full disassembly, this pass: `mov esi,ecx` (the only parameter read is `this`, a `CGuiInGame*`),
+then three precondition checks —
+
+```
+test [esi+0x108]   ; nonzero required — HUD initialised (same offset MenuLoadController.
+                    ; MainMenuPhase.cs names InGameGuiInitialized, a different class)
+test [esi+0x30]    ; must be ZERO — another modal screen (galaxy map, party select, ...)
+test [esi+0xB4]    ; must be ZERO — a conversation is active (the SAME flag
+                    ; DialogStateWatchHook.cs / Odyssey.Dialogue.Spectate.cs's
+                    ; GuiConversationActive already names, VERIFIED consistent)
+```
+
+— then allocates (or reuses, if `+0x84` is already non-null) a `CSWGuiStore` panel and calls its
+constructor with an argument from `CGuiInGame+0x38`. **No stack argument anywhere in the
+function's body carries a store id.** `ShowStoreGui` is a pure "put the panel on screen"
+operation, unconditional on which store.
+
+### `ExecuteCommandOpenStore` (`0x00540300`) — VERIFIED, the store id never reaches `ShowStoreGui` directly
+
+Full disassembly, this pass, the relevant tail:
+
+```
+0x005403DF  mov eax,[0x7a39fc]                 ; appMgr
+0x005403E4  mov ecx,[eax+8]                    ; ecx = server (matches GetServer())
+0x005403E7  push edx                            ; oStore's VM id
+0x005403E8  call 0x4ae750                       ; a GetXByGameObjectID sibling — vtable-cast
+0x005403F9  call [edx+0x64]                     ;   via slot 0x64, the SAME cast pattern §1.2's
+                                                 ;   own GetStoreByGameObjectID disasm shows
+0x00540404  mov [eax+0x250],ecx                 ; store->+0x250 = bonusMarkUp   <- eax IS the
+0x0054040E  mov [eax+0x24c],edx                 ; store->+0x24c = bonusMarkDown    resolved store
+...
+0x00540418  mov eax,[0x7a39fc]                  ; OVERWRITES eax — the store pointer above is
+                                                 ; NEVER SAVED anywhere past this line
+0x00540421  mov ecx,[eax+4]                     ; ecx = client
+0x0054042B  call 0x5ed690                       ; -> CGuiInGame* (client_internal + 0x40)
+0x00540430  mov ecx,eax
+0x00540432  call 0x62e310                       ; ShowStoreGui(gui) — UNCONDITIONAL, right here
+0x00540437  push 0x34
+0x00540439  call 0x6fa7e6                       ; allocates a SEPARATE 0x34-byte object
+0x00540468  mov word ptr [esi],0x16              ; tags it 0x16
+...                                              ; posted through 0x4aea40 — a client/server
+                                                 ; message, not chased further this pass
+```
+
+**Confirms and corrects §1.6/§1.7 in one pass**: `ShowStoreGui` IS called directly, unconditionally
+(not gated behind the 0x34-byte message), settling the "direct call vs. queued message" question
+§1.6 left open — but the resolved store pointer is discarded (never spilled to the stack) the
+moment `eax` is reused to resolve the GUI, so **the store id genuinely never reaches the panel
+through this call path** at all. Also corrects §1.6's own "INFERRED: a different resolve chain"
+about `+0x250`/`+0x24c`: fresh disasm shows the write lands on the SAME vtable-cast `CSWSStore*`
+`GetStoreByGameObjectID` returns — these two ints are ordinary fields inside the documented
+`0x258`-byte struct (§1.1), not a separate structure.
+
+The 0x34-byte, tag-`0x16` object posted through `0x4aea40` is very likely how the retail client
+actually learns which store to show (the same client/server message-bus family
+docs/research/container-sync.md already documents for `OpenInventory`/`CloseInventory`) — not
+chased further this pass, because it is not needed: `CSWGuiStore::PopulateStore` (§1.2) already
+names exactly where the panel reads its store id from (`CSWGuiStore+0x227C`), and that field can
+be written directly.
+
+### The verb: write the id, then force the read
+
+`Odyssey.OpenStore(store, out reason)`:
+
+1. Resolve `CGuiInGame*` (the same `GetInGameGui()` chain `Odyssey.Dialogue.Spectate.cs` already
+   has, reused unqualified — same partial class).
+2. Check the same three gates `ShowStoreGui` itself checks (`+0x108`/`+0x30`/`+0xB4`) — refusing
+   BEFORE calling in, with a specific reason, rather than calling into a state the engine itself
+   would have refused silently.
+3. Write `0`/`0` into the resolved store's `+0x250`/`+0x24C` (the bonus markup/markdown fields —
+   matching a bare `OpenStore(oStore, oPC)` with no bonus arguments, not whatever a PRIOR VM-driven
+   open left there).
+4. Call `ShowStoreGuiFn(gui)`.
+5. Read the panel pointer back off `gui+0x84` (0 means allocation failed — refuse).
+6. Write the store's own object id (`CSWSObject`'s embedded id, `store+0x04`) into
+   `panel+0x227C` — the exact field `PopulateStore` reads.
+7. Call `PopulateStoreFn(panel)` directly to force the item list to refresh from the id just
+   written, rather than trust whatever the 0x34-byte message eventually does.
+
+`CreatureFinder.FindStoreByTag` (new: `StoreVtable = 0x0074BDB8`, per
+docs/research/placeables-containers.md §4's own citation) resolves a store by TAG the same way
+`FindDoorByTag`/`FindPlaceableByTag` already do, for the human-typed form; the automatic
+`store_sync` apply path (§2.4) keeps using `ResolveStoreBase`/`GetStoreByGameObjectID` by id, since
+it always already has one.
+
+### What was built
+
+`src/KotorCoop.Plugin/Odyssey.Store.cs` — `ResolveStoreRepo` refactored to call a new, exposed
+`ResolveStoreBase` (returns the store's BASE pointer, not the `+0x230` repo offset —
+`OpenStore` needs the base for the bonus fields and the object-id field; behaviour unchanged for
+`InsertItemIntoStore`/`RemoveStoreStack`, which still only ever see the repo pointer). New:
+`ShowStoreGuiFn` (`0x0062E310`), `PopulateStoreFn` (`0x006C0610`), and `OpenStore(store, out
+reason)` per the seven steps above. `src/KotorCoop.Plugin/CreatureFinder.cs` — `StoreVtable`,
+`FindStoreByTag`. `src/KotorCoop.Plugin/CheatController.Store.cs` — `OpenStore()`: resolves by
+`CheatTarget` (id) or `CheatText` (tag, via `FindStoreByTag`) — refuses if neither is given, there
+is no "nearest store" sweep. `SharedBlock.CheatKindOpenStore = 36` /
+`IGameBridge.CheatKinds.OpenStore = 36`.
+
+Console: `openstore <resref|tag|id>` (`ConsoleCommand.cs`'s `CoopCommandKind.OpenStore`,
+`ConsoleCommand.Items.cs`'s `ParseOpenStore`) — one required argument.
+`CoopCommandDispatcher.Store.cs`'s `OpenStore(string)` resolves id-vs-tag the same way
+`UsePlaceable` does. Registered in `ConsoleVerbCatalog.cs` and `FuncInterpHook.cs` — reachable at
+the real `~` console, not blockpoke-only.
+
+### NEEDS-LIVE
+
+Nothing in this addendum has been run against the game — everything above is fresh static
+disassembly plus the already-shipped, tested `store_sync` primitives it reuses. A live pass
+should, per §6's own plan (Kebla Yurt, `tar_m02aa`):
+
+1. `openstore kebla_yurt_shop` (or whatever the real tag/id turns out to be on the rig's save —
+   `census`/`resolve` can find it first) and confirm the store GUI genuinely opens on screen
+   with the RIGHT store's inventory, not empty or a stale one.
+2. Confirm the SAME store, reached this way, is now known to `StorePump` — i.e. §6's "both
+   instances must open the SAME store at least once" requirement is satisfied by `openstore` the
+   same way a manual click satisfies it, unblocking §6 items 2-5 without a human driving the
+   mouse.
+3. Confirm the three refusal gates (another modal screen up, a conversation active, HUD not yet
+   initialised) actually refuse cleanly rather than crash, by trying `openstore` while, e.g., the
+   galaxy map is open.
+4. Whether the 0x34-byte/`0x4aea40` message this pass left untouched does anything OBSERVABLE
+   that `openstore`'s direct-write approach misses (e.g. a server-side `OnOpenStore` script that
+   a real click fires but this bypass does not) — worth a few minutes watching whether a store
+   with a nonzero `on_open_store` (`+0x228`, §1.1) behaves differently opened this way versus by
+   a real click.

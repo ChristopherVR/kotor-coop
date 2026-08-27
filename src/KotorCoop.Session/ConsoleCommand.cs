@@ -450,6 +450,43 @@ public enum CoopCommandKind
     /// is the signed delta. Local only.
     /// </summary>
     GrantGold,
+
+    /// <summary>
+    /// <c>setglobal &lt;name&gt; &lt;int|true|false|on|off&gt;</c> — LIVE-TEST PRIMITIVE
+    /// (docs/research/quest-sync.md's 2026-08-27 addendum). Writes a script global by name
+    /// through the engine's own type-checked setter (<c>CSWGlobalVariableTable::SetValueNumber</c>/
+    /// <c>SetValueBoolean</c>), not a raw table poke, so a rig can drive a globals-gated
+    /// dispatch (a galaxy-map leg, <c>firescript k_pebn_galaxy</c>-style) without a GUI.
+    /// <see cref="CoopCommand.Address"/> is the global's name; <c>true</c>/<c>false</c>/
+    /// <c>on</c>/<c>off</c> selects the boolean setter (carried in <see cref="CoopCommand.Password"/>
+    /// as <c>"bool"</c>), any other parseable integer selects the number setter (carried as
+    /// <c>"number"</c>); <see cref="CoopCommand.Amount"/> is the value (0/1 for a boolean). Local
+    /// only.
+    /// </summary>
+    SetGlobal,
+
+    /// <summary>
+    /// <c>pazaak [npc-tag|id] [deck]</c> — LIVE-TEST PRIMITIVE (docs/research/minigames.md's
+    /// 2026-08-27 addendum). Starts a Pazaak hand through <c>CClientExoApp::StartPazaakGame</c>
+    /// directly (no wager, no tutorial), so <c>pazaak_detect</c> can finally be verified with a
+    /// real running game instead of only the negative (never-started) case. <see cref="CoopCommand.Address"/>
+    /// is the opponent's tag or object id (blank means the engine's own default opponent);
+    /// <see cref="CoopCommand.Amount"/> is the opponent's pazaak-deck index (default 0 — NEEDS-LIVE
+    /// which index is right for a given save/NPC; see the research doc for the Taris Upper City
+    /// cantina recipe). Local only.
+    /// </summary>
+    Pazaak,
+
+    /// <summary>
+    /// <c>openstore &lt;resref|tag|id&gt;</c> — LIVE-TEST PRIMITIVE (docs/research/store-sync.md's
+    /// 2026-08-27 addendum). Opens the store GUI against a store resolved by object id or tag,
+    /// through <c>CGuiInGame::ShowStoreGui</c> called directly (the same C++ entry
+    /// <c>ExecuteCommandOpenStore</c> reaches, minus the VM's own argument-popping machinery
+    /// store-sync.md's original pass declined to build a verb against), so <c>store_sync</c> can
+    /// finally be verified without a manual click. <see cref="CoopCommand.Address"/> is the
+    /// store's tag or object id — required, there is no "nearest store" sweep. Local only.
+    /// </summary>
+    OpenStore,
 }
 
 /// <summary>
@@ -643,6 +680,9 @@ public static partial class ConsoleCommand
         new(["grantxp"], ParseGrantXp),
         new(["equip"], ParseEquip),
         new(["grantgold"], ParseGrantGold),
+        new(["setglobal"], ParseSetGlobal),
+        new(["pazaak"], ParsePazaak),
+        new(["openstore"], ParseOpenStore),
         new(["cheats"], ParseCheats),
     ];
 
