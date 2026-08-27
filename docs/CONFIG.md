@@ -198,9 +198,17 @@ says so explicitly alongside it rather than leaving the 27015/27140 gap unexplai
 `KotorGameBridge.IsInMinigame` — and therefore the wire's `PlayerState.FlagInMinigame` bit a
 peer parks on — true for a Pazaak hand; `PluginConfig.ReadBool("pazaak_detect", ...)` (plugin
 side, in-process) only gates that process's own local edge log and `MinigameKind` labelling.
-Both now default ON and the shipped `coop.ini.example` sets it to `1` (see the 2026-08-28 note
-below), so the two readers never disagree in practice; the two are still independent fields, and
-a hand-edited `coop.ini` that sets one without the other would let them diverge.
+Both now default ON and the shipped `coop.ini.example` sets it to `1`, so the two readers never
+disagree in practice; the two are still independent fields, and a hand-edited `coop.ini` that
+sets one without the other would let them diverge. A 2026-08-28 live pass ran the positive path
+for the first time (a real Pazaak hand started via the `pazaak` console verb): the wire flag
+latched, the peer's phantom parked, and the "in a minigame - waiting" HUD toast all fired
+correctly, and a real bug (the plugin-side edge detector's own pointer-shape guard rejected the
+field's actual bare-`1`/`0` values) was found and fixed. `pazaak_detect` was flipped to `1` (ON)
+in both `PluginConfig.ReadBool`'s fallback and `profiles/coop.ini.example` as a result — the
+previous paragraph's "both default OFF" history describes the pre-2026-08-28 state; ending a
+hand while it is "running" (e.g. via a module transition) still does not clear the flag and
+remains NEEDS-LIVE, see `minigames.md`'s 2026-08-28 entry.
 ¹⁰ Live-verified 2026-08-27: the engine call fires correctly, follows a peer's real position,
 survives a module transition with no crash, and costs nothing measurable in frame time. Flipped
 ON in both `PluginConfig.ReadBool`'s own fallback and `profiles/coop.ini.example`. The exact
