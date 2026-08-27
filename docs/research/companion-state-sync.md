@@ -1233,14 +1233,38 @@ Items 1 and 2 are both clean. Per this document's own §11.6 step 7 and the task
 `CoopConfig.CompanionGearSync` changed from `IsTruthy(...)` (default OFF) to
 `!kv.ContainsKey("companion_gear_sync") || IsTruthy(...)` (default ON, matching
 `CompanionXpSync`'s own pattern); `AgentComposition.Compose`'s `SyncCompanionGear = config?.
-CompanionGearSync ?? false` left unchanged (a session with NO coop.ini at all still defaults to
-OFF, same as every other flag's `?? false`/`?? true` fallback — only the *parsed* default
-changed); `profiles/coop.ini.example`'s `companion_gear_sync=0` -> `=1`; `docs/CONFIG.md`'s row
-updated to ON; `README.md`'s status table and roadmap row updated;
-`docs/research/README.md`'s index row updated. `CompanionStateSyncTests.
-CompanionGearSyncOffByDefault`/`CoopConfigDefaultsCompanionXpOnGearOff` updated to match the new
-default (renamed/re-asserted, see the test file's own diff) — `dotnet test
-tests/KotorCoop.Tests --no-build` green after the change (see item 4 below for the full-suite
-number). Item 3 (a `companion_local_combat` release with re-equipped gear) was not re-attempted
-this round — it is a pre-existing, already-documented follow-AI stall (§10.3) unrelated to gear
-sync, and this round's time budget went to the weapon-slot closure above instead.
+CompanionGearSync ?? false` changed to `?? true` (matching `SyncCompanionXp`'s own `?? true`
+fallback, so a session with NO coop.ini at all now also defaults to ON, consistent with every
+other already-ON flag rather than a special case); `AgentSettings.SyncCompanionGear`'s own C#
+property default changed to `= true` to match; `PartyPresenceController`'s
+`PluginConfig.ReadBool("companion_gear_sync", false)` changed to `true` (the plugin-side gate,
+independently read); `IPartyBridge.cs`'s doc comment corrected. `profiles/coop.ini.example`'s
+`companion_gear_sync=0` -> `=1`; `docs/CONFIG.md`'s two rows updated to ON; `README.md`'s status
+table, roadmap row and limitations paragraph updated; `docs/roadmap-seamless.md`'s Tier-1 item 11
+row and Wave B summary updated; `docs/research/README.md`'s index row updated.
+`CompanionStateSyncTests.CompanionGearSyncOffByDefault`/`CoopConfigDefaultsCompanionXpOnGearOff`
+renamed to `CompanionGearSyncOnByDefault`/`CoopConfigDefaultsCompanionXpAndGearOn` and
+re-asserted against the new default — `dotnet build KotorCoop.slnx -warnaserror` and
+`src/KotorCoop.Plugin/build.ps1 -WarnAsError` both clean, `dotnet test tests/KotorCoop.Tests
+--no-build`: **2355 passed, 0 failed**. Item 3 of the original queue (a `companion_local_combat`
+release with re-equipped gear) was not re-attempted this round — it is a pre-existing,
+already-documented follow-AI stall (§10.3) unrelated to gear sync, and this round's time budget
+went to the weapon-slot closure above instead.
+
+### Item 4: `verify.ps1` baseline, full test suite, native build — PASS, no regression
+
+Both game directories reinstalled from the post-flip build (`build.ps1 -Install -WarnAsError`,
+hash-confirmed byte-identical deploys on both sides) and the rig relaunched fresh for this check.
+`pwsh tools\verify.ps1` against a freshly-connected, untouched session: **40 passed, 9 failed.**
+Seven of the nine failures match the long-standing documented baseline exactly (`phantom
+damageable, not a sink`; `the peer really loses those hit points`; `a downed player is reported
+to the agent`; `the co-op revive stands the player back up`; `every engine call signature matches
+the binary` (187/189); `a container opened on the client is held and shown open on the host`; `no
+per-frame spam`). The other two (`a client hit costs the enemy real hit points`,
+`an item picked up here vanishes on the peer`) are the SAME two checks this document's own prior
+"item 5" round (2026-08-28) flagged as environment-flaky substitutions that swap in and out
+between runs — squarely inside the documented 40-42/7-9 range, no new failure and no regression
+from `companion_gear_sync` now being ON. `dotnet test tests/KotorCoop.Tests --no-build`:
+**2355 passed, 0 failed** (same run reported in the verdict above — no source changed between
+the two checks). `dotnet build KotorCoop.slnx -warnaserror` and `src/KotorCoop.Plugin/
+build.ps1 -WarnAsError`: both clean. No crash on either instance across the whole round.

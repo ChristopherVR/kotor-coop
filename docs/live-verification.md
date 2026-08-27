@@ -1320,3 +1320,18 @@ landed).
 No crash on either instance across the whole session's several rig rounds (`store_sync`,
 `solo_segment_spectate`, the behaviour-override bridge, `party_pool_sync`, and this baseline
 pass). This closes the task's item 5.
+
+## Rig pass (2026-08-28): `companion_gear_sync` — the weapon-slot bit-flag fix (§11) confirmed
+## live across all three equip slots, `companion_gear_sync` flipped ON
+
+Task: `companion-state-sync.md` §11.6's live test plan, then the task's own item 3 (flip the
+default if clean) and item 4 (baseline/tests/build).
+
+| # | Item | Result | Detail |
+| --- | --- | --- | --- |
+| 1 | Direct primitive across right weapon (twice, incl. a 16-char resref), left weapon, body | **PASS**, all four calls — raw `CSWInventory` slot confirmed changed after every call, no crash | `companion-state-sync.md` §12 |
+| 2 | Mid-session propagation of each to the client | **PASS**, all four — 1.0-2.6s latency, confirmed via the client's log and independent raw slot reads | `companion-state-sync.md` §12 |
+| 3 | Flip `companion_gear_sync` ON | **Done** — `CoopConfig`/`AgentSettings`/`AgentComposition`/`PartyPresenceController` defaults, `coop.ini.example`, `CONFIG.md`, `README.md`, roadmap, research README all updated; tests re-asserted, 2355/2355 green | `companion-state-sync.md` §12 |
+| 4 | `verify.ps1` baseline / full suite / native build (post-flip, fresh rig) | **PASS** — 40/9 verify.ps1 result matches the documented 40-42/7-9 baseline (the 2 non-baseline failures are the same documented flaky substitutions); `dotnet test` 2355/2355; both native builds clean | `companion-state-sync.md` §12 |
+
+`companion_gear_sync` is now ON by default. No crash on either instance across the whole round.
