@@ -122,7 +122,7 @@ fails safe. **INFERRED** = a reasonable deduction, not directly proven.
 
 | Doc | Subject | Status |
 | --- | --- | --- |
-| [minigames.md](minigames.md) | Swoop races, forced turret sequences, and Pazaak | Swoop-race entry gate found and solved; the terminal transition call is BLOCKED, needs a real debugger this project doesn't have; turret sequence confirmed working as designed |
+| [minigames.md](minigames.md) | Swoop races, forced turret sequences, and Pazaak | Swoop-race entry gate found and solved; the terminal transition call is BLOCKED, needs a real debugger this project doesn't have; turret sequence confirmed working as designed. `pazaak_detect` live-verified 2026-08-27 as negative-only (no false positives over ~1 min in a cantina); positive path (an actual hand) still unrun — stays OFF |
 
 ## Mods
 
