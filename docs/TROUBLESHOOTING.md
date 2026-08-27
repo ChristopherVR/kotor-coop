@@ -97,6 +97,29 @@ Confirmed, currently unresolved engine-level block, not a co-op regression — s
 [minigames.md](research/minigames.md)'s "blocked" entry for the exact mechanism and why
 diagnosing it further needs a native debugger this project doesn't have.
 
+## `kotorcoop-*.log` keeps growing / disk usage from logs
+
+`kotorcoop-plugin.log` and every per-channel split (`kotorcoop-combat.log` etc.) rotate to a
+single `*.1.log` sibling once they cross `coop.ini`'s `log_max_mb` (default 8) — both at
+plugin startup and roughly every 30 seconds during play (`PluginHost.RotateLogsIfNeededMidSession`,
+`LogRotation.PeriodicCheckIntervalMs`), so a session that runs long enough to cross the cap on
+its own no longer has to wait for a restart to shrink back down. Only one prior generation is
+kept; a `*.1.log` from before the most recent rotation is gone.
+
+`kotorcoop-agent.log` (the log for the agent process the plugin auto-starts) is different: it
+only rotates once, right before that agent process is launched (`AgentLauncher.RotateAgentLogIfNeeded`).
+It cannot rotate mid-session from either side — the agent's console output is a raw OS file
+handle inherited from the plugin's `CreateProcess` call (see the comment on
+`AgentLauncher.Launch`'s `StartupInfo.StdOutput` assignment), not a stream either side can
+safely re-point at a fresh file while the process is running. In practice this rarely matters:
+the plugin only relaunches the agent on a crash/hang (`AgentLiveness`), which is also when the
+log rotates. A single agent process kept alive for an unusually long session is the one case
+where this file can grow past the cap before the next relaunch.
+
+The `--log` file `tools/demo.ps1`/`verify.ps1` point the agent at directly (`agent1.log`,
+`agent2.log` under `$env:TEMP\kotorcoop-demo\`) is a plain scratch file the agent writes with
+its own `File.AppendAllText`, and rotates the same once-at-launch way as the other two.
+
 ## Where to look next
 
 `docs/live-verification.md` has the two-instance checklist this project's own "live-verified"

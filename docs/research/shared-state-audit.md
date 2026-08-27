@@ -6960,6 +6960,23 @@ NEXT: find the HUD pause button's handler and either hook it (the click is the i
 we already own the pause) or give the mouse the same fallback the key has. Do NOT "fix" this
 by re-asserting in the reconciler — that is the loop that made the banner unclearable before.
 
+**2026-08-27 follow-up: FIXED.** `PauseButtonHook` (`src/KotorCoop.Plugin/PauseButtonHook.cs`)
+now detours both `CSWGuiMainInterface::OnPauseButtonPressed` (0x00688590, the HUD hourglass)
+and the PAUSED overlay's own unpause button (0x006C0350) directly, exactly the "hook it" branch
+of the NEXT item above, with the toggle deferred to the next frame the same way the engine's
+own does (see `Odyssey.SetPlayerPause`/`CClientExoAppInternal+0x37C`). The root cause this
+section diagnosed is confirmed live in `PauseButtonHook`'s own class doc: the button's oracle
+(`CClientExoApp::GetPausedByCombat`, actually server pause-mask bit 0x02) reads the same bit
+`FocusKeeper` clears every 30 frames, so every click asked to PAUSE — measured live, the shared
+block's `PausesCleared` counter went 0 → 1 → 2, exactly one per hourglass click, while both
+masks stayed at the mod's own 0x01. The fix does not touch that bit at all; it owns the click
+the same way `PauseKeyController` already owns the space bar. A click-driven pause with no
+`PausedBy` entry behind it is exactly the case `PauseSanityPatch`
+(`src/KotorCoop.Plugin/PauseSanityPatch.cs`) separately fixed — the engine's own
+`CSWSModule::TimeStopSanityCheck` force-unpausing anything unbacked within one server tick
+(measured live: masks went 1 and back to 0 in 2.75 ms) — so together the two are what makes a
+HUD-button pause both take effect and hold.
+
 ---
 
 ## §4 answered: the per-object interaction lock (2026-08-11, live-verified)

@@ -1,4 +1,4 @@
-using KotorCoop.Plugin;
+using KotorCoop.Protocol;
 using Xunit;
 
 namespace KotorCoop.Tests;

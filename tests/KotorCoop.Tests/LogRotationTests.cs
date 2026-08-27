@@ -73,4 +73,32 @@ public class LogRotationTests
     {
         Assert.Equal("kotorcoop-plugin.txt", LogRotation.RotatedPath("kotorcoop-plugin.txt"));
     }
+
+    [Fact]
+    public void PeriodicCheckIsNotDueBeforeTheIntervalElapses()
+    {
+        Assert.False(LogRotation.ShouldCheckPeriodically(lastCheckMs: 1000, nowMs: 1000 + LogRotation.PeriodicCheckIntervalMs - 1, LogRotation.PeriodicCheckIntervalMs));
+    }
+
+    [Fact]
+    public void PeriodicCheckIsDueExactlyAtTheInterval()
+    {
+        Assert.True(LogRotation.ShouldCheckPeriodically(lastCheckMs: 1000, nowMs: 1000 + LogRotation.PeriodicCheckIntervalMs, LogRotation.PeriodicCheckIntervalMs));
+    }
+
+    [Fact]
+    public void PeriodicCheckIsDueWellPastTheInterval()
+    {
+        Assert.True(LogRotation.ShouldCheckPeriodically(lastCheckMs: 1000, nowMs: 1000 + LogRotation.PeriodicCheckIntervalMs * 10, LogRotation.PeriodicCheckIntervalMs));
+    }
+
+    [Fact]
+    public void PeriodicCheckIsDueOnceElapsedFromALastCheckMsOfZero()
+    {
+        // _lastPeriodicLogCheckMs starts at its default (0) the first time WorkerLoop runs;
+        // Environment.TickCount64 (the real nowMs) is system-uptime-scaled, not zero-based,
+        // so in practice this is already true the first time WorkerLoop calls it.
+        Assert.True(LogRotation.ShouldCheckPeriodically(lastCheckMs: 0, nowMs: LogRotation.PeriodicCheckIntervalMs, LogRotation.PeriodicCheckIntervalMs));
+        Assert.False(LogRotation.ShouldCheckPeriodically(lastCheckMs: 0, nowMs: LogRotation.PeriodicCheckIntervalMs - 1, LogRotation.PeriodicCheckIntervalMs));
+    }
 }

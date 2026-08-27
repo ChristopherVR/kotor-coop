@@ -54,8 +54,10 @@ internal sealed partial class CombatPump
         // level-state design already gives every other consumer of GetIncomingPhantomDamage.
         // A hit taken elsewhere DURING a minigame therefore still lands once the player is
         // back in the world; see docs/research/minigames.md.
+        // MinigameRule.ShouldSuppressIncomingDamage ignores both of its toggles by design
+        // (see MinigameRuleTests) so a default instance answers it correctly.
         (uint owed, uint from) = session.GetIncomingPhantomDamage();
-        if (owed > 0 && !bridge.IsInMinigame)
+        if (owed > 0 && !default(MinigameRule).ShouldSuppressIncomingDamage(bridge.IsInMinigame))
         {
             bridge.TryWriteIncomingDamage(owed, from);
         }
