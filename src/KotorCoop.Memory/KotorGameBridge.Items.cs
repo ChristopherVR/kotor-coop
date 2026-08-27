@@ -57,15 +57,21 @@ public sealed partial class KotorGameBridge
         // measured end to end as a peer taking 3-7 seconds to move. It was the single
         // biggest cause of the "everything lags by seconds" report.
         //
-        // So: remember the ids that did not resolve and never scan for them again, and
-        // rate-limit rebuilds regardless. A genuinely new item (one just picked up) is found
-        // by the next scheduled rebuild rather than instantly, which is imperceptible for
-        // what this feeds — the resref a peer's phantom wears.
-        if (_itemTagMisses.Contains(itemId))
-        {
-            return string.Empty;
-        }
-
+        // So: rate-limit rebuilds regardless of how many lookups miss (below), rather than
+        // remembering which specific ids missed.
+        //
+        // ⚠ THIS USED TO ALSO PERMANENTLY BLACKLIST A MISSED id (a HashSet<uint>, checked and
+        // added to right here, short-circuiting every future lookup for that id before ever
+        // reaching the rebuild below). That is wrong for a GENUINELY NEW item: `companion_
+        // gear_sync`'s live-verification round (docs/research/companion-state-sync.md)
+        // observed a freshly created item's id miss on the very first read after
+        // `EquipItemFromTemplate` created it — before the periodic scan below had a chance to
+        // include it — and then never resolve again for the rest of the session, because the
+        // blacklist check returned early on every subsequent tick and no code path ever
+        // retried it. The time-gate immediately below already does the ONLY thing the
+        // blacklist was for (stopping a miss from costing a scan on every tick); removing the
+        // blacklist costs nothing extra and lets a new item resolve on the next scheduled scan
+        // instead of never.
         long nowMs = Environment.TickCount64;
         if (nowMs - _itemTagsBuiltAtMs < ItemTagRebuildMs)
         {
@@ -75,19 +81,11 @@ public sealed partial class KotorGameBridge
         _itemTagsBuiltAtMs = nowMs;
         RebuildItemTagCache();
 
-        if (_itemTags.TryGetValue(itemId, out string? found))
-        {
-            return found;
-        }
-
-        _itemTagMisses.Add(itemId);
-        return string.Empty;
+        return _itemTags.TryGetValue(itemId, out string? found) ? found : string.Empty;
     }
 
     /// <summary>Minimum gap between item-tag scans, however many lookups miss.</summary>
     private const int ItemTagRebuildMs = 15_000;
-
-    private readonly HashSet<uint> _itemTagMisses = [];
 
     /// <summary>Which module the address caches were built for.</summary>
     private string _cachedForModule = string.Empty;
@@ -148,10 +146,6 @@ public sealed partial class KotorGameBridge
     {
         _itemTags.Clear();
         _itemAddresses.Clear();
-
-        // A fresh scan can resolve ids that missed before (an item just picked up), so the
-        // miss list must not outlive it.
-        _itemTagMisses.Clear();
 
         BytePattern pattern = BytePattern.FromBytes(BitConverter.GetBytes(ItemVtable));
         PatternScanner scanner = new(_memory);

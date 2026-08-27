@@ -67,6 +67,12 @@ public enum SessionCapabilities
     /// default until live-verified (<c>party_pool_sync</c>).</summary>
     PartyPool = 1 << 11,
 
+    /// <summary>Merchant store stock (<c>CSWSStore+0x230</c>). Object-id keyed (a store is a
+    /// real, GIT-placed <c>CGameObject</c> — see docs/research/store-sync.md §1.2) plus the same
+    /// content key the party pool uses for a stack's identity. Off by default until live-verified
+    /// (<c>store_sync</c>).</summary>
+    Store = 1 << 12,
+
     All = Phantoms | WorldState | Doors | Enemies | GroundItems | Journal | Appearance | Equipment
-        | Party | Dialogue | Progression | PartyPool,
+        | Party | Dialogue | Progression | PartyPool | Store,
 }

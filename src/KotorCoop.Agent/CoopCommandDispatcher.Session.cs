@@ -26,7 +26,88 @@ public sealed partial class CoopCommandDispatcher
         string livenessSuffix = manager.Current is { } statusSession
             ? $" - liveness anomalies: {statusSession.GetStats().LivenessAnomalies}"
             : string.Empty;
-        Reply($"{manager.Phase.ToString().ToLowerInvariant()} - {manager.Detail}{livenessSuffix}");
+
+        // Roadmap item 24: a hosting player's own status line names how reachable they are
+        // from outside the LAN, not just whether the local socket bound.
+        string publicSuffix = manager.Current is CoopHost host
+            ? $" - {(host.PublicEndPoint is { } ep ? $"public {ep}" : "public address unknown")}"
+              + $" ({UpnpStatusLine(host.UpnpStatus, host.ListenEndPoint.Port)})"
+            : string.Empty;
+
+        Reply($"{manager.Phase.ToString().ToLowerInvariant()} - {manager.Detail}{livenessSuffix}{publicSuffix}");
+    }
+
+    /// <summary>
+    /// `public_address` (roadmap item 24): prints the host's own internet-reachable address
+    /// for sharing with a joiner, and copies it to the clipboard when one is known (Windows
+    /// only, best-effort). A no-op verdict on a client, or before STUN has answered — never a
+    /// session action, so it is always safe to run.
+    /// </summary>
+    private void PublicAddressCommand()
+    {
+        if (manager.Current is not CoopHost host)
+        {
+            Reply("public_address: not hosting - only a host has a public address to share");
+            return;
+        }
+
+        string upnp = UpnpStatusLine(host.UpnpStatus, host.ListenEndPoint.Port);
+
+        if (host.PublicEndPoint is not { } endpoint)
+        {
+            Reply($"public address: unknown yet (STUN still discovering, or stun_servers is empty) - {upnp}");
+            return;
+        }
+
+        Reply($"public address: {endpoint} - {upnp}");
+        TryCopyToClipboard(endpoint.ToString());
+    }
+
+    private static string UpnpStatusLine(UpnpMappingStatus status, int port) => status switch
+    {
+        UpnpMappingStatus.Mapped => "UPnP mapped",
+        UpnpMappingStatus.Unavailable => $"UPnP unavailable - forward UDP+TCP {port} manually",
+        UpnpMappingStatus.Pending => "UPnP still checking",
+        _ => $"UPnP disabled - forward UDP+TCP {port} manually",
+    };
+
+    /// <summary>
+    /// Best-effort clipboard copy via the `clip` console tool that ships with Windows.
+    /// Deliberately silent on any failure (no `clip.exe` on PATH, no console session, a
+    /// headless/CI run): this is a convenience on top of the printed line above, never the
+    /// only way to learn the address.
+    /// </summary>
+    private static void TryCopyToClipboard(string text)
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        try
+        {
+            using System.Diagnostics.Process? process = System.Diagnostics.Process.Start(
+                new System.Diagnostics.ProcessStartInfo
+                {
+                    FileName = "clip",
+                    RedirectStandardInput = true,
+                    UseShellExecute = false,
+                    CreateNoWindow = true,
+                });
+
+            if (process is null)
+            {
+                return;
+            }
+
+            process.StandardInput.Write(text);
+            process.StandardInput.Close();
+            process.WaitForExit(2000);
+        }
+        catch
+        {
+            // Best-effort only - see this method's own doc comment.
+        }
     }
 
     private void WhoCommand(CoopCommand command)
@@ -164,6 +245,14 @@ public sealed partial class CoopCommandDispatcher
 
         Reply($"  send intervals (ms, oldest first): {FormatIntervals(stats.RecentSendIntervalsMs)}");
         Reply($"  recv intervals (ms, oldest first): {FormatIntervals(stats.RecentRecvIntervalsMs)}");
+
+        // Host only (see SessionStats.WorldSnapshotPagesSent) - a client never sends this
+        // packet, so 0 there just means "not the host", not "nothing is happening".
+        if (stats.WorldSnapshotPagesSent > 0)
+        {
+            Reply($"  world snapshot pages sent: {stats.WorldSnapshotPagesSent} "
+                + "(more than one per tick means the lobby is paging, not dropping)");
+        }
 
         if (manager.Agent is { } agent)
         {

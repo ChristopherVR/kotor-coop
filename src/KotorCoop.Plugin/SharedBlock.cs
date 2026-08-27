@@ -157,7 +157,11 @@ internal partial struct SharedBlock
     /// version 3 the enemy array, version 4 the door slots, version 5 the equipment
     /// resrefs, version 6 the module-travel request, version 7 shared pause, journal
     /// apply and the per-peer flags dword. Version 54 (2026-08-27) added
-    /// <see cref="OffsetCompanionEquipSlots"/> — see SharedBlock.Party.cs.
+    /// <see cref="OffsetCompanionEquipSlots"/> — see SharedBlock.Party.cs. Version 55
+    /// (2026-08-27) added <see cref="OffsetBehaviourOverrideMask"/>/
+    /// <see cref="OffsetBehaviourOverrideValues"/> — see SharedBlock.BehaviourOverrides.cs.
+    /// (2026-08-27, v56) added <see cref="OffsetLocalInSoloSegment"/> — see
+    /// SharedBlock.SoloSegment.cs.
     /// </summary>
     [FieldOffset(0x08)] public uint Version;
     [FieldOffset(0x0C)] public uint Reserved;
@@ -628,5 +632,53 @@ internal partial struct SharedBlock
     /// ⚠ 29, because 7-28 are taken. Take the next FREE number.
     /// </summary>
     public const uint CheatKindLootTake = 29;
+
+    /// <summary>
+    /// Inserts a resref+identity stack into a store's stock. Mirrors
+    /// <c>IGameBridge.CheatKinds.StoreInsert</c> exactly — see that constant's own doc comment
+    /// for the full reasoning. <c>CheatTarget</c> is the store's object id, <c>CheatText</c> the
+    /// resref, <c>CheatAmount</c> the stack size, Charges/MaxCharges/Upgrades/ItemFlags the rest
+    /// of the stack identity. See docs/research/store-sync.md.
+    /// </summary>
+    public const uint CheatKindStoreInsert = 30;
+
+    /// <summary>
+    /// Removes a resref+identity stack from a store's stock. Mirrors
+    /// <c>IGameBridge.CheatKinds.StoreRemove</c> exactly. Same field layout as
+    /// <see cref="CheatKindStoreInsert"/>.
+    ///
+    /// 
+    /// </summary>
+    public const uint CheatKindStoreRemove = 31;
+
+    /// LIVE-TEST PRIMITIVE (2026-08-27, docs/research/companion-state-sync.md's live test plan
+    /// §5): pokes <c>CSWSCreatureStats::experience</c> (<c>creature+0xA74</c> then <c>+0x068</c>,
+    /// the same offset chain <c>progression-sync.md</c>/<c>companion-state-sync.md</c> already
+    /// verified) on the creature named by <c>CheatTarget</c> by adding <c>CheatAmount</c>
+    /// (signed) to its current experience, clamped at 0 — simulating exactly what a
+    /// conversation/stealth-award/<c>GivePlotXP</c> script grant aimed at one creature only
+    /// looks like to <c>companion_xp_sync</c>'s merge, which this codebase otherwise has no way
+    /// to trigger on demand against a companion body specifically (kill XP already agrees
+    /// without the channel per that doc's §1.2). <c>CheatTarget</c> = 0 means the local player.
+    ///
+    /// ⚠ 32, because 7-31 are taken. Take the next FREE number.
+    /// </summary>
+    public const uint CheatKindGrantXp = 32;
+
+    /// <summary>
+    /// LIVE-TEST PRIMITIVE (2026-08-27, docs/research/companion-state-sync.md's live test plan
+    /// §5): re-equips the creature named by <c>CheatTarget</c> with a real item, through
+    /// <c>Odyssey.EquipItemFromTemplate</c> — the exact call the phantom equipment channel
+    /// already ships and live-verified, aimed at an ordinary party-roster companion body
+    /// instead, which that doc names as the one untested case (the call takes a bare object id
+    /// and never inspects what kind of body it is). <c>CheatText</c> is the resref,
+    /// <c>CheatAmount</c> the NWScript inventory slot (1 = body, 4 = right weapon,
+    /// 5 = left weapon — <c>Odyssey.InventorySlotBody/RightWeapon/LeftWeapon</c>; blank/0
+    /// defaults to the right-weapon slot, the visible, easy-to-confirm case the live test plan
+    /// actually asks for). <c>CheatTarget</c> = 0 means the local player.
+    ///
+    /// ⚠ 33, because 7-32 are taken. Take the next FREE number.
+    /// </summary>
+    public const uint CheatKindEquip = 33;
 
 }

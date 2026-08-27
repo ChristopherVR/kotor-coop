@@ -87,6 +87,26 @@ public readonly record struct PlayerState(
     /// </summary>
     public const uint FlagAway = 64;
 
+    /// <summary>
+    /// The player is the OWNER of a story-forced solo segment currently in progress —
+    /// <c>KotorCoop.Protocol.SoloSegmentMachine</c>, gated to
+    /// <c>KotorCoop.Protocol.SoloSegmentCatalogue</c>'s modules (the Star Forge's Bastila and
+    /// Malak duels — docs/research/star-forge-finale.md §3.3/§3.5). The product decision
+    /// recorded there: this is the OWNER's fight; the other human SPECTATES rather than
+    /// entering the 1-on-1. A peer seeing this flag set, while standing in the same module,
+    /// parks its own input, points its camera at the owner's phantom
+    /// (<c>SpectateController</c>'s follow reused) and stops crediting its own damage against
+    /// the owner's enemy mirror. This instance, while its OWN copy of the flag is set, hides
+    /// every remote peer from what it writes locally — <c>SoloSegmentRule.ShouldHideAllPeers</c>
+    /// — so the duel script never sees a second body. coop.ini <c>solo_segment_spectate</c>
+    /// (agent-side key, default OFF, NEEDS-LIVE).
+    ///
+    /// TODO(version): this is a new wire bit on an existing dword (no packet shape changed),
+    /// so nothing here requires a <c>ProtocolConstants.Version</c> bump by itself — flag it at
+    /// merge time in case the reviewer wants one anyway for the changelog.
+    /// </summary>
+    public const uint FlagSoloSegment = 128;
+
     /// <summary>True while this player is asking to end a shared pause they did not start.</summary>
     public bool HasReleasedPause => (Flags & FlagPauseReleased) != 0;
 
@@ -106,6 +126,8 @@ public readonly record struct PlayerState(
     public bool IsInMinigame => (Flags & FlagInMinigame) != 0;
 
     public bool IsAway => (Flags & FlagAway) != 0;
+
+    public bool IsInSoloSegment => (Flags & FlagSoloSegment) != 0;
 }
 
 /// <summary>A remote player as seen locally, after interpolation.</summary>

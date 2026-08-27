@@ -189,6 +189,43 @@ public class SessionManagerTests
         Assert.Contains(endpoint.Port.ToString(), manager.Detail);
         Assert.Null(manager.Current);
         Assert.Null(manager.Agent);
+
+        // A LAN/loopback address must NOT get roadmap item 24's port-forwarding hint: that
+        // question only makes sense for an address that had to cross a router.
+        Assert.DoesNotContain("forwarded", manager.Detail, StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// Roadmap item 24: a silent connect attempt against an address that had to cross a router
+    /// (anything outside loopback/RFC 1918/link-local) gets an actionable hint appended, since
+    /// "no reply" from a real internet address is disproportionately likely to mean the UDP
+    /// port was never forwarded.
+    /// </summary>
+    [Fact]
+    public async Task JoiningANonLanAddressThatNeverAnswersHintsAtPortForwarding()
+    {
+        // 203.0.113.0/24 is TEST-NET-3 (RFC 5737): reserved for documentation, never routed,
+        // so nothing will ever answer this - exactly the "silent host" case, without depending
+        // on any real external service.
+        IPEndPoint endpoint = new(IPAddress.Parse("203.0.113.5"), 27015);
+
+        LifecycleBridge bridge = new();
+        using SessionManager manager = new(bridge, new AgentSettings { PollRate = 30 });
+
+        manager.Connect(host: false, endpoint, new SessionSettings
+        {
+            PlayerName = "Malak",
+            TickRate = 30,
+            ConnectTimeoutMs = 300,
+        });
+
+        Assert.True(
+            await WaitForPhase(manager, SessionPhase.Idle, TimeSpan.FromSeconds(5)),
+            "the manager never gave up and returned to idle");
+
+        Assert.Contains("no reply from", manager.Detail, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("forwarded", manager.Detail, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("27015", manager.Detail);
     }
 
     /// <summary>A host that answers within the deadline must reach Connected as normal —

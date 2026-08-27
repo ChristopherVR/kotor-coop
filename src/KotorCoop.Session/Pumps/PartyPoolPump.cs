@@ -75,8 +75,39 @@ internal sealed class PartyPoolPump(IGameBridge bridge, ICoopSession session, Ac
             return;
         }
 
-        // Resolve applies that have landed: a key whose fresh scan value now matches what its
-        // queued apply was supposed to produce is done, and rejoins ordinary tracking.
+        // ---- step 1: detect a genuine local action ---------------------------------------
+        //
+        // ⚠ ECHO BUG, LIVE-VERIFIED (2026-08-27, docs/research/party-pool-sync.md's live pass):
+        // "resolve applies that have landed" USED TO run here, BEFORE this step, removing a
+        // just-landed key from _pendingApplyTarget the SAME tick its apply's own fresh scan
+        // confirms it. That let this step's own exclusion set (Without(..., _pendingApplyTarget
+        // .Keys)) go right back to including that key on the very tick it landed — so step 1
+        // diffed the STALE _lastScan (captured before the apply) against the NEW engine value
+        // the pump itself just produced, "detected" its own automatic apply as a fresh local
+        // player action, and republished it. Measured live: every deposit/withdrawal on either
+        // instance was silently applied TWICE (once as the real reconcile, once as this bogus
+        // echo) before the numbers stopped moving — a real party-pool total left double what
+        // was actually deposited, not a log-only cosmetic issue. Landed-key resolution now runs
+        // AFTER this step instead (below), so a key stays excluded for the ENTIRE tick its
+        // apply is confirmed and only rejoins ordinary detection on the NEXT tick, once
+        // _lastScan already reflects the applied value.
+        Dictionary<PartyPoolStackKey, int> prevForDetect = Without(_lastScan, _pendingApplyTarget.Keys);
+        Dictionary<PartyPoolStackKey, int> engineForDetect = Without(engine, _pendingApplyTarget.Keys);
+
+        foreach (PartyPoolDiffRule.Delta delta in PartyPoolDiffRule.Diff(prevForDetect, engineForDetect))
+        {
+            log($"party pool: local {delta.Kind.ToString().ToLowerInvariant()} of {delta.Count}x "
+                + $"'{delta.Key.Resref}' detected, publishing");
+            session.PublishPartyPoolOp(delta.Kind, delta.Key, delta.Count);
+        }
+
+        _lastScan = new Dictionary<PartyPoolStackKey, int>(engine);
+
+        // Resolve applies that have landed, now that step 1 has safely run against a baseline
+        // that still excluded them: a key whose fresh scan value now matches what its queued
+        // apply was supposed to produce is done, and rejoins ordinary tracking starting NEXT
+        // tick (_lastScan above already reflects the landed value, so next tick's diff sees no
+        // change).
         if (_pendingApplyTarget.Count > 0)
         {
             List<PartyPoolStackKey>? landed = null;
@@ -96,19 +127,6 @@ internal sealed class PartyPoolPump(IGameBridge bridge, ICoopSession session, Ac
                 }
             }
         }
-
-        // ---- step 1: detect a genuine local action ---------------------------------------
-        Dictionary<PartyPoolStackKey, int> prevForDetect = Without(_lastScan, _pendingApplyTarget.Keys);
-        Dictionary<PartyPoolStackKey, int> engineForDetect = Without(engine, _pendingApplyTarget.Keys);
-
-        foreach (PartyPoolDiffRule.Delta delta in PartyPoolDiffRule.Diff(prevForDetect, engineForDetect))
-        {
-            log($"party pool: local {delta.Kind.ToString().ToLowerInvariant()} of {delta.Count}x "
-                + $"'{delta.Key.Resref}' detected, publishing");
-            session.PublishPartyPoolOp(delta.Kind, delta.Key, delta.Count);
-        }
-
-        _lastScan = new Dictionary<PartyPoolStackKey, int>(engine);
 
         // ---- step 2: reconcile toward the (now-updated) merged truth ----------------------
         IReadOnlyDictionary<PartyPoolStackKey, int> desired = session.PartyPoolTotals;

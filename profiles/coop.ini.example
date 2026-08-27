@@ -45,6 +45,23 @@ menu_button = 1
 ; delay (80 ms).
 # interp_ms = -1
 
+; --- hosting over the internet (roadmap item 24) -----------------------------------
+; A relay-free approach: STUN tells you your own public address, UPnP tries to forward the
+; port automatically. Neither replaces port forwarding by hand if your router does not
+; support UPnP (or has it turned off) - the in-game `status`/`public_address` commands say
+; which case you are in. See docs/research/network-topology.md's "Internet play" section.
+
+; STUN servers (host:port, comma-separated) asked for this host's public IP:port. This is the
+; default when the key is absent entirely; set it to nothing (stun_servers = ) to disable
+; discovery - every query is a UDP datagram to a third party (here, Google's public STUN
+; infrastructure), so a privacy-conscious LAN-only host may prefer to turn it off.
+stun_servers = stun.l.google.com:19302,stun1.l.google.com:19302
+
+; Attempt a UPnP router port mapping for the session port (and the world-transfer port, which
+; shares the same number) when hosting. Fails soft - a router with UPnP off or absent just
+; means "forward the port yourself" in the status line, not an error. 0 disables the attempt.
+upnp = 1
+
 ; --- in-game chat overlay ---------------------------------------------------------
 ; An always-on, unobtrusive readout of chat (say <msg> in the ~ console). Lines fade out
 ; after a delay so the screen is clear the rest of the time.
@@ -191,6 +208,21 @@ interaction_locks=1
 # arrives the way it already does, from the same conversation running on both instances; this
 # fixes the party seat, which is what a partial or aborted conversation gets wrong.
 party_roster_sync=1
+
+# Suppress a CLIENT's own copy of the retail party-selection screen (CSWGuiPartySelection -
+# the pre-departure "who's coming with you" picker; its only positively-confirmed trigger is
+# the Taris swoop-taxi system, k_pebn_loc01..09) the instant it opens, instead of letting the
+# player pick: this instance's own choice is not the one that matters, since party_roster_sync
+# above converges the client's roster from whatever the HOST picks through the unmodified
+# retail screen regardless. Uses the same panel-teardown idiom the native server-browser panel
+# already ships with (mark the panel for the engine's own next-frame sweep) rather than poking
+# anything in the party table directly. Posts "party is chosen by the host" once. NEEDS-LIVE:
+# the panel/vtable offset itself is verified, but whether suppressing via the sweep (instead of
+# the retail Back/Done path) skips something the panel's own exit_script would otherwise run is
+# an open question - see docs/research/galaxy-map-and-party-select.md's dated 2026-08-27
+# section. ON by default; per-instance and only meaningful on a client (a host's own read of
+# "am I a client with a live host roster" is always false, so its own screen is left alone).
+party_select_host_only=1
 
 # --- companion follow-AI fix candidates (unverified) --------------------------------
 # Two candidate fixes for the companion follow-AI's terminal-stall shape
@@ -369,6 +401,20 @@ party_fast_pump=1
 # has recently touched is unaffected either way.
 container_fast_pump=0
 
+# Closes the container-loot race (docs/roadmap-seamless.md Tier 1 item 4): without this, two
+# clicks on the same chest inside one RTT both read "not held yet" from the eventually-
+# consistent per-tick claim/lock level and both let the engine's own loot panel open, before
+# either claim has actually crossed the wire. With this ON, a fresh click on an object nobody
+# is KNOWN to hold is DEFERRED - the local open is swallowed exactly like a peer-held refusal -
+# while the plugin asks the host to arbitrate the SAME InteractionLockStore.Claim decision
+# synchronously; the loser's panel never opens and "<name> is looting that" appears instead.
+# ON by default because the fallback FAILS SAFE: if the host does not answer within 300ms (a
+# lost request/response, or an old build on the other end that never replies), the deferred
+# click simply proceeds exactly as it did before this flag existed - see
+# docs/research/container-sync.md's container_lock_arbitration section for the measured
+# request/response latency this timeout is sized against. Meaningless when container_locks=0.
+container_lock_arbitration=1
+
 # The DISTANCE half of the join-latency report, not the cadence half above: a joiner who is not
 # already standing near the NPC when they join (dialogue_auto_join's automatic join, or the
 # test hook) never reaches the engine's own StartDialog at all in this build, because the player
@@ -524,11 +570,11 @@ companion_local_combat_range=10
 # docs/research/companion-state-sync.md. Both engines already grant kill XP to every ACTIVE
 # party member independently (CSWPartyTable::DistributeExperience hands the full amount to
 # each member in the active-slot array, not just the PC - docs/research/progression-sync.md
-# section 2), so this channel is expected to matter mainly for script-granted XP aimed at a
-# specific companion; kill XP should already agree without it. OFF by default, NEEDS-LIVE:
-# the read/write mechanism is the identical stats+0x068 field poke the PC's own progression
-# channel already ships with, but nothing here has been observed against the real game yet.
-companion_xp_sync=0
+# section 2), so this channel matters mainly for script-granted XP aimed at a specific
+# companion; kill XP already agrees without it. Live-verified 2026-08-27, default ON:
+# a host-side and a client-side script-XP grant each converged to the higher value within
+# one heavy-pump cycle - docs/research/companion-state-sync.md section 6.
+companion_xp_sync=1
 
 # When companion_local_combat releases a companion to a CLIENT's own engine AI, that AI
 # attacks with whatever gear the CLIENT's copy of the body happens to be wearing - which can
@@ -660,3 +706,33 @@ frame_stats=0
 # database and the disassembly, but none of it has been watched land on a running game yet -
 # defaults OFF until it has. 1 turns it on.
 party_pool_sync=0
+
+# Solo-segment spectate (docs/research/star-forge-finale.md): the product decision for a
+# story-forced solo segment - the Star Forge's Bastila-chamber duel (sta_m45ac, the door
+# k45_door_bast1's nine RemovePartyMember calls) and Malak's chamber (sta_m45ad, a continuation
+# of the same forced-solo state) - is that this is the OWNER's fight; the other player
+# SPECTATES rather than entering the 1-on-1. While ON: the fighting player's own agent hides
+# every peer from what it writes locally the instant its plugin reports an active segment, and
+# the other player's plugin parks their input and camera on the fight instead. Read by two
+# independent files off this one key - CoopConfig.cs (agent side, the peer-hide filter) and
+# PluginConfig.cs (plugin side, the owner-side detection AND the spectator-side reaction) - see
+# CONFIG.md's own footnote for the split. NEEDS-LIVE: nothing here has been exercised against a
+# real Star Forge save yet. Defaults OFF; 1 turns it on.
+solo_segment_spectate=0
+
+# Extra modules appended to SoloSegmentCatalogue's base set (sta_m45ac, sta_m45ad) for
+# solo_segment_spectate, comma-separated. Only read by the plugin. Leave unset unless testing
+# against a different module or a future mod's own forced-solo content.
+;solo_segment_modules=
+
+# Sync merchant store stock (CSWSStore+0x230) both ways: a limited-stock item bought on one
+# instance disappears from the other's copy of that shop, and an item sold to a merchant on one
+# instance appears in the other's. Keyed by (store object id, resref + charges/max charges/
+# upgrades/identified-stolen-nonequippable) - a store IS a real GIT-placed object both instances
+# share an id for, unlike the party pool. Reads a store's stock only while a local player has
+# that store's GUI open (docs/research/store-sync.md); an infinite-stock item's buys never
+# replicate (the engine's own stock never changes for one). Gold is NOT touched by this channel -
+# the existing gold ledger already reconciles what a buy/sell costs. NEEDS-LIVE: same status as
+# party_pool_sync above - researched and verified against the disassembly, not yet watched land
+# on a running game. 1 turns it on.
+store_sync=0

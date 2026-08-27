@@ -35,14 +35,14 @@ fails safe. **INFERRED** = a reasonable deduction, not directly proven.
 | Doc | Subject | Status |
 | --- | --- | --- |
 | [transition-window-races.md](transition-window-races.md) | Four crash/desync races found by warping a live pair | Root-caused, fixed; established the project's four safe-write patterns |
-| [transition-smoothness.md](transition-smoothness.md) | Closing the gap between the host's door and the follower's warp | Door path implemented, live-verified, ~9x faster follower warp, ON by default; §11 extends the announce to every non-door `StartNewModule()` (galaxy map, Leviathan, Star Forge), ON by default, NEEDS-LIVE |
+| [transition-smoothness.md](transition-smoothness.md) | Closing the gap between the host's door and the follower's warp | Door path implemented, live-verified, ~9x faster follower warp, ON by default; §11 extends the announce to every non-door `StartNewModule()` (galaxy map, Leviathan, Star Forge), ON by default; §12 (2026-08-27) live-verified the de-dup gate on a real door crossing, the galaxy-map/escape-pod legs still NEEDS-LIVE |
 | [world-adoption.md](world-adoption.md) | A joiner plays the host's world with their own character | Implemented, live-verified (`agent adopt`) |
 | [character-login-chain.md](character-login-chain.md) | Why an in-process load spawns a default-level-0 PC | Root-caused, fixed |
 | [ingame-gui-transition.md](ingame-gui-transition.md) | Why an in-process load never leaves the main menu | Root-caused, fixed |
 | [cinematics.md](cinematics.md) | What a mid-module movie does to a live pair | Implemented, live-verified, ON by default |
 | [session-save.md](session-save.md) | Mid-session save/load: rejoin gates and the `loadgame` verb | Design → implemented, live-verified both directions, ON by default |
 | [galaxy-map-and-party-select.md](galaxy-map-and-party-select.md) | Galaxy map travel and the pre-departure party-select screen (roadmap Tier 2 #18) | RE + design; the movie/roster channels already cover it for free, the announce edge and client-side suppression are the real, unbuilt gaps |
-| [star-forge-finale.md](star-forge-finale.md) | Lehon through the Star Forge and both endings: every forced solo/party-split beat, the Malak drain mechanic | First RE coverage of this content; design gaps identified, NEEDS-LIVE throughout |
+| [star-forge-finale.md](star-forge-finale.md) | Lehon through the Star Forge and both endings: every forced solo/party-split beat, the Malak drain mechanic | RE coverage complete; the headline gap (Bastila/Malak duel co-op behaviour) is decided and BUILT as `solo_segment_spectate` (§8), default OFF, NEEDS-LIVE — everything else stays NEEDS-LIVE throughout |
 
 ## Combat
 
@@ -79,16 +79,16 @@ fails safe. **INFERRED** = a reasonable deduction, not directly proven.
 | [client-control-lock.md](client-control-lock.md) | Pinning a client to its own PC, never a shared companion | RE reference; implemented |
 | [control-return.md](control-return.md) | Regression: a client locked onto a companion at connect | Root-caused, fixed, live-verified |
 | [companion-combat-credit-plan.md](companion-combat-credit-plan.md) | Live-test plan: does a released companion's swing land as credited damage? | Run; decisive result on the solo-mode hypothesis; superseded in practice by later party-reconciliation.md rounds |
-| [progression-sync.md](progression-sync.md) | Sharing party gold and character XP/level | Research/design; several policy and GUI-repaint questions remain open, NEEDS-LIVE |
-| [companion-state-sync.md](companion-state-sync.md) | Per-companion experience and equipment (roadmap items 11/12) | Built, both flags OFF, NEEDS-LIVE |
-| [party-pool-sync.md](party-pool-sync.md) | Syncing the shared party item pool (`CSWPartyTable+0x118`) | Implemented, unit-tested; `party_pool_sync` OFF by default, NEEDS-LIVE |
+| [progression-sync.md](progression-sync.md) | Sharing party gold and character XP/level | Gold convergence live-verified 2026-08-27, ON by default; GUI-repaint/policy questions remain open |
+| [companion-state-sync.md](companion-state-sync.md) | Per-companion experience and equipment (roadmap items 11/12) | Live-verified 2026-08-27: `companion_xp_sync` PASS, ON by default; `companion_gear_sync` FAILED (real bug — equip lands on the player, not the companion), stays OFF |
+| [party-pool-sync.md](party-pool-sync.md) | Syncing the shared party item pool (`CSWPartyTable+0x118`) | Live-verified 2026-08-27: one real double-apply bug found and fixed, a second found and open; `party_pool_sync` stays OFF |
 
 ## World state
 
 | Doc | Subject | Status |
 | --- | --- | --- |
 | [placeables-containers.md](placeables-containers.md) | Extending door-style sync to placeables, containers, traps | Design + implemented (unit-tested); NOT live-verified on the two-instance rig |
-| [container-sync.md](container-sync.md) | Container/corpse open-close sync and the use-lock | Implemented, live-verified, ON by default; `container_fast_pump` off pending a live A/B |
+| [container-sync.md](container-sync.md) | Container/corpse open-close sync and the use-lock | Implemented, live-verified, ON by default; `container_fast_pump` off pending a live A/B; `container_lock_arbitration` (closes the container-loot race) built + unit-tested 2026-08-27, ON by default (fails safe), NEEDS-LIVE |
 | [item-identity.md](item-identity.md) | What a `CSWSItem` carries that its blueprint does not | Implemented; apply path live-tested via the console item-identity loop |
 | [quest-sync.md](quest-sync.md) | Non-monotonic globals, journal removal, the Lamport-clock fix | Implemented, live-verified, ON by default |
 | [map-reveal.md](map-reveal.md) | Fog-of-war sync around a peer's position | Implemented; live-verified 2026-08-27 (engine call, peer tracking, transition survival, frame cost), default ON. On-screen M-key appearance unconfirmed (screenshot tooling broken) |
@@ -111,7 +111,7 @@ fails safe. **INFERRED** = a reasonable deduction, not directly proven.
 | [server-browser.md](server-browser.md) | The main-menu scrollable server list | RE reference, implemented |
 | [connect-flow.md](connect-flow.md) | The in-game Connect panel and password entry | Implemented; connect/password flow live-verified. Persistent connection indicator live-verified 2026-08-27 (partial) — data path and peer tracking correct, on-screen render/`status_indicator=0` unconfirmed (shot.ps1 broken), `Reconnecting` state found unreachable |
 | [disconnect-reconnect.md](disconnect-reconnect.md) | What happens when the link between two players fails | Implemented; link-outage recovery live-verified. FlagAway (main menu / no player object) live-verified 2026-08-27 as FAILED — the local read masks the failure with transitional data (§10), root cause located, fix not yet shipped |
-| [network-topology.md](network-topology.md) | Peer-to-peer vs. a dedicated host | Reference / design discussion, no build implied |
+| [network-topology.md](network-topology.md) | Peer-to-peer vs. a dedicated host; internet play (STUN + UPnP, roadmap item 24) | STUN/UPnP built and unit-tested (2026-08-27) — NEEDS-LIVE against a real router; relay/hole-punching not planned |
 | [mouse-cursor-input.md](mouse-cursor-input.md) | Where the engine's mouse cursor lives and how to click | RE reference; one resolution caveat NEEDS-LIVE |
 
 ## Engine reverse-engineering
@@ -132,7 +132,7 @@ fails safe. **INFERRED** = a reasonable deduction, not directly proven.
 
 | Doc | Subject | Status |
 | --- | --- | --- |
-| [mod-compatibility.md](mod-compatibility.md) | Mod compatibility audit and the digest-handshake design | Design + implemented; live-exercised 7 of 8 mismatch categories |
+| [mod-compatibility.md](mod-compatibility.md) | Mod compatibility audit and the digest-handshake design | Design + implemented; live-exercised 7 of 8 mismatch categories; behaviour-flag negotiation live-verified 2026-08-27 (core mechanism PASS) |
 
 ## Crashes
 
@@ -148,4 +148,4 @@ fails safe. **INFERRED** = a reasonable deduction, not directly proven.
 | --- | --- | --- |
 | [shared-state-audit.md](shared-state-audit.md) | What actually replicates, and what only looks like it does | **Master append-only log** — live-verified findings across many rounds |
 | [symmetry.md](symmetry.md) | Auditing that every shared action is symmetric regardless of host/client | Audited; no new asymmetry found, click-to-join symmetry live-verified for all four `dialogue_auto_join` modes |
-| [lag-audit.md](lag-audit.md) | Static + live audit of every per-frame cost and latency budget | `party_fast_pump` shipped ON by default off a measured win; its heavy-combat frame-time regression found and closed |
+| [lag-audit.md](lag-audit.md) | Static + live audit of every per-frame cost and latency budget | `party_fast_pump` shipped ON by default off a measured win, its heavy-combat frame-time regression found and closed; `WorldSnapshotPacket` now pages a full lobby across several datagrams instead of silently dropping the whole tick (protocol v43), loopback-verified for 8 peers, NEEDS-LIVE against real `swkotor.exe` |

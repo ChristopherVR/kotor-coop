@@ -235,11 +235,13 @@ public sealed record AgentSettings
     /// against every client's own reading, exactly like the PC's experience — overwrites each
     /// instance's own companion stats block. OFF by default, NEEDS-LIVE
     /// (docs/research/companion-state-sync.md): both engines already grant kill XP to every
-    /// active party member independently, so this channel is expected to matter mainly for
-    /// script-granted XP, but nothing here has been observed against the real game yet.
-    /// coop.ini <c>companion_xp_sync</c>.
+    /// active party member independently, so this channel matters mainly for script-granted
+    /// XP. Live-verified 2026-08-27 (docs/research/companion-state-sync.md §6): a host-side
+    /// grant converged to the client and a client-side grant converged to the host, each
+    /// within one heavy-pump cycle, never reverting the higher side. coop.ini
+    /// <c>companion_xp_sync</c>.
     /// </summary>
-    public bool SyncCompanionXp { get; init; }
+    public bool SyncCompanionXp { get; init; } = true;
 
     /// <summary>
     /// When true, a client dresses its own copy of a host-driven companion in that companion's
@@ -258,4 +260,26 @@ public sealed record AgentSettings
     /// docs/research/party-pool-sync.md for the full design and the NEEDS-LIVE items.
     /// </summary>
     public bool PartyPoolSyncEnabled { get; init; }
+
+    /// <summary>
+    /// When true, a story-forced solo segment (the Star Forge's Bastila and Malak duels — see
+    /// <see cref="KotorCoop.Protocol.SoloSegmentCatalogue"/> and
+    /// docs/research/star-forge-finale.md §3.3/§3.5) makes the OWNER's agent hide every remote
+    /// peer from what it writes locally (<see cref="KotorCoop.Protocol.SoloSegmentRule.ShouldHideAllPeers"/>,
+    /// applied in <see cref="CoopAgent.PumpOnce"/>'s own peer-visibility filter) while the
+    /// plugin's own copy of this same coop.ini key gates the OWNER-side detection
+    /// (<c>SoloSegmentController</c>) and the SPECTATOR-side reaction (input lock, camera
+    /// follow, damage gate — <c>SoloSegmentSpectateController</c>). OFF by default,
+    /// NEEDS-LIVE — nothing here has been exercised against a real Star Forge save yet. coop.ini
+    /// <c>solo_segment_spectate</c>.
+    /// </summary>
+    public bool SoloSegmentSpectateEnabled { get; init; }
+    /// When true, <see cref="Pumps.StorePump"/> runs on the heavy pass: syncing merchant store
+    /// stock both ways — detecting a local buy/sell while a store's GUI is open, and applying a
+    /// peer's, through the staging-cheat channel, for any store this instance has learned an
+    /// object id for. Off by default (coop.ini <c>store_sync</c>) — the offset chain and the
+    /// engine calls are VERIFIED against the symbol database and the disassembly, but neither
+    /// has been watched land on a running game yet. See docs/research/store-sync.md.
+    /// </summary>
+    public bool StoreSyncEnabled { get; init; }
 }

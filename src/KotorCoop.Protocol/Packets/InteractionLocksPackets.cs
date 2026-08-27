@@ -35,9 +35,21 @@ public enum InteractionKind : byte
 ///
 /// Sent every tick while the claim is live. <paramref name="Active"/> false is a release; it
 /// is an optimisation, not the safety net (see <see cref="PacketType.InteractionClaim"/>).
+///
+/// <paramref name="RequestSerial"/> (0 by default — TODO(version), see
+/// <see cref="PacketType.LockResponse"/>) distinguishes the ordinary per-tick republish (0,
+/// unchanged since version 20) from an explicit, ONE-SHOT arbitration request the container-lock
+/// deferral state machine issues on a fresh click
+/// (<c>container_lock_arbitration</c>, docs/research/container-sync.md): nonzero asks the host to
+/// answer THIS specific request with a <see cref="PacketType.LockResponse"/>, unicast back to the
+/// requester, instead of waiting for the requester to notice its claim landed (or did not) on the
+/// next <see cref="InteractionLockPacket"/> broadcast. The host still runs the SAME
+/// <c>InteractionLockStore.Claim</c> either way — a granted request is simply the ordinary claim,
+/// answered immediately rather than left to converge.
 /// </summary>
 public sealed record InteractionClaimPacket(
-    uint PeerId, string Module, string Tag, InteractionKind Kind, bool Active, uint TargetId = 0);
+    uint PeerId, string Module, string Tag, InteractionKind Kind, bool Active, uint TargetId = 0,
+    uint RequestSerial = 0);
 
 /// <summary>One granted lock, as the host's arbiter sees it. <see cref="TargetId"/> is only
 /// meaningful for <see cref="InteractionKind.Container"/> — see <see cref="InteractionKind"/>.</summary>
@@ -52,3 +64,18 @@ public readonly record struct InteractionLock(uint PeerId, string Tag, Interacti
 /// </summary>
 public sealed record InteractionLockPacket(
     long ServerTimeMs, string Module, IReadOnlyList<InteractionLock> Locks);
+
+/// <summary>
+/// host -&gt; the single requesting peer: the answer to one explicit
+/// <see cref="InteractionClaimPacket.RequestSerial"/> request. See
+/// <see cref="PacketType.LockResponse"/> for why this rides its own packet rather than folding
+/// into the <see cref="InteractionLockPacket"/> level.
+///
+/// A ONE-SHOT reply, not a level — unlike every other channel in this file, losing this packet
+/// is safe to just time out on: the requester's own deferral state machine falls back to
+/// "proceed as before" after <c>container_lock_arbitration</c>'s short deadline (300ms), the same
+/// fail-open default this whole feature ships with. Sent exactly once per request, never
+/// retransmitted.
+/// </summary>
+public sealed record LockResponsePacket(
+    uint PeerId, InteractionKind Kind, uint TargetId, uint RequestSerial, bool Granted);

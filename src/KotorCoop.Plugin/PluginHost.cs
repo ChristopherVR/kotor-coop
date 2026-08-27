@@ -70,6 +70,7 @@ internal static unsafe partial class PluginHost
     private static BarkController? _barks;
     private static InteractionLockController? _interactionLocks;
     private static PartyRosterController? _partyRoster;
+    private static PartySelectSuppressionController? _partySelectSuppression;
     private static ControlReturnController? _controlReturn;
     private static MenuLoadController? _menuLoad;
     private static ConnectMenuController? _connectMenu;
@@ -88,6 +89,8 @@ internal static unsafe partial class PluginHost
     private static AgentLivenessController? _agentLiveness;
     private static ConnectionIndicatorController? _connectionIndicator;
     private static MinigameNoticeController? _minigameNotice;
+    private static SoloSegmentController? _soloSegment;
+    private static SoloSegmentSpectateController? _soloSegmentSpectate;
     private static Thread? _worker;
     private static volatile bool _running = true;
 
@@ -244,7 +247,24 @@ internal static unsafe partial class PluginHost
         //      companion_local_combat dresses it correctly instead of wearing whatever it had
         //      when the two instances last agreed. See docs/research/companion-state-sync.md.
         //      NEEDS-LIVE.
-        _block->Version = 54;
+        // 55 = the effective-behaviour-override flags at 0x40C0..0x40C8 (no TotalSize growth —
+        //      the companion-equipment array's own tail leaves 0x40 free bytes before 0x4100):
+        //      lets a client's adopted host-authoritative overrides for effect_sync,
+        //      trigger_relay, liveness_sync, map_reveal_sync and dialogue_recruit_sync actually
+        //      reach the plugin controllers that gate on them, closing the gap
+        //      docs/research/mod-compatibility.md's "Behaviour-flag negotiation" section named.
+        //      NEEDS-LIVE.
+        // 56 = solo-segment spectate at 0x40C8 (one dword level, "this instance's local player
+        //      is the active owner of a story-forced solo segment"). See
+        //      SharedBlock.SoloSegment.cs and docs/research/star-forge-finale.md. NEEDS-LIVE.
+        // 57 = container-lock explicit arbitration at 0x40D0..0x40E0 (no TotalSize growth): a
+        //      plugin -> agent request (target id + serial) and an agent -> plugin response
+        //      (serial + granted bit), closing the container-loot race by asking the host to
+        //      arbitrate a fresh click BEFORE the engine's own OpenInventory runs, instead of
+        //      leaving it to the eventually-consistent per-tick claim/lock level to converge.
+        //      See docs/roadmap-seamless.md Tier 1 item 4 and docs/research/container-sync.md's
+        //      container_lock_arbitration section. NEEDS-LIVE.
+        _block->Version = 57;
 
         // A guard dword after the version. Magic plus version alone was not selective
         // enough: a scan once matched something else at a lower address and the agent

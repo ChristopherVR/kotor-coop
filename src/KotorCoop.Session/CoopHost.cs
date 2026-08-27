@@ -119,12 +119,43 @@ public sealed partial class CoopHost : ICoopSession
     /// <summary>Real gaps between successive inbound packets from any peer.</summary>
     private readonly IntervalTracker _recvIntervals = new();
 
+    /// <summary>
+    /// This host's public IP:port as observed via STUN (roadmap item 24), or null until
+    /// discovered — or forever, when <see cref="SessionSettings.StunServers"/> is empty. See
+    /// <see cref="PublicAddressDiscovery"/>.
+    /// </summary>
+    public IPEndPoint? PublicEndPoint => _publicAddress?.PublicEndPoint;
+
+    /// <summary>Whether a UPnP router mapping was found for this session's port. See
+    /// <see cref="UpnpMappingService"/>; <see cref="UpnpMappingStatus.Disabled"/> means
+    /// <see cref="SessionSettings.UpnpEnabled"/> was off.</summary>
+    public UpnpMappingStatus UpnpStatus => _upnp?.Status ?? UpnpMappingStatus.Disabled;
+
+    private readonly PublicAddressDiscovery? _publicAddress;
+    private readonly UpnpMappingService? _upnp;
+
     public CoopHost(SessionSettings settings)
     {
         _settings = settings;
         _channel = new UdpChannel(settings.Port);
         _buffer = new SnapshotBuffer(settings.InterpolationDelayMs);
         _sessionId = (uint)Random.Shared.Next(1, int.MaxValue);
+
+        // Roadmap item 24: hosting over the internet without a relay. Both are best-effort and
+        // additive — neither can make a session fail to start, only fail to be reachable from
+        // outside the LAN, which is exactly the pre-existing behaviour when both are disabled.
+        if (settings.StunServers.Count > 0)
+        {
+            _publicAddress = new PublicAddressDiscovery(_channel, settings.StunServers);
+            _publicAddress.Start();
+        }
+
+        if (settings.UpnpEnabled)
+        {
+            _upnp = new UpnpMappingService(settings.Port);
+            _upnp.Start();
+        }
+
         _handlers = new Dictionary<PacketType, PacketHandler>
         {
             [PacketType.Hello] = HandleHello,
@@ -139,6 +170,9 @@ public sealed partial class CoopHost : ICoopSession
             [PacketType.PartyPoolOp] = HandlePartyPoolOp,
             [PacketType.PartyPoolAck] = HandlePartyPoolAck,
             [PacketType.PartyPoolSyncRequest] = HandlePartyPoolSyncRequest,
+            [PacketType.StoreOp] = HandleStoreOp,
+            [PacketType.StoreAck] = HandleStoreAck,
+            [PacketType.StoreSyncRequest] = HandleStoreSyncRequest,
             [PacketType.MaterialisedLootAck] = HandleMaterialisedLootAck,
             [PacketType.JournalOp] = HandleJournalOp,
             [PacketType.JournalSyncRequest] = HandleJournalSyncRequest,
@@ -191,6 +225,13 @@ public sealed partial class CoopHost : ICoopSession
     /// <summary>Latched so an over-full lobby writes one line, not one per tick.</summary>
     private bool _snapshotOverflowLogged;
 
+    /// <summary>Total <see cref="WorldSnapshotPacket"/> pages actually written and sent, across
+    /// every tick this host has run — see <see cref="SessionStats.WorldSnapshotPagesSent"/>.
+    /// A healthy single-page lobby increments this by one per tick, same as before pagination
+    /// existed; a lobby spanning several pages increments it by more, which is the visible
+    /// signal that pagination is doing real work rather than sitting dormant.</summary>
+    private long _worldSnapshotPagesSent;
+
     public SessionStats GetStats()
     {
         int peerCount;
@@ -217,6 +258,7 @@ public sealed partial class CoopHost : ICoopSession
             PhantomInterpolationDelayMs = _settings.InterpolationDelayMs,
             RecentSendIntervalsMs = _sendIntervals.Snapshot(),
             RecentRecvIntervalsMs = _recvIntervals.Snapshot(),
+            WorldSnapshotPagesSent = _worldSnapshotPagesSent,
             Status = peerCount == 0
                 ? $"hosting on {_channel.LocalEndPoint} (waiting for players)"
                 : $"hosting on {_channel.LocalEndPoint}",
@@ -332,35 +374,56 @@ public sealed partial class CoopHost : ICoopSession
 
         _sendIntervals.Record(now);
 
-        WorldSnapshotPacket snapshot = new(
+        // ⚠ Page rather than drop-whole. A full lobby with long names, long module names and
+        // equipped gear used to overrun MaxPacketSize outright, and the old early return took
+        // every other channel down with it - enemies, party, dialogue, progression, loot,
+        // damage, chat and the stale-peer prune all stopped, silently, for as long as the
+        // lobby stayed full. Losing player positions for a tick is bad; losing the entire
+        // session's state machine and not logging it is worse. Pagination
+        // (WorldSnapshotPaging, the same fix already shipped for CreatureLiveness's own wider
+        // publish) means that failure mode can only recur if even MaxPages datagrams cannot
+        // hold the roster - bounded and logged below, rather than unbounded and silent.
+        List<WorldSnapshotPacket> pages = WorldSnapshotPaging.Paginate(
             now, Flags.Version, Items.Version, Journal.Version, _lootStore.Version,
-            Flags.Digest, Items.Digest, Journal.Digest, _lootStore.Digest, entries);
-        int length = PacketCodec.Write(_sendBuffer, snapshot);
+            Flags.Digest, Items.Digest, Journal.Digest, _lootStore.Digest, entries,
+            out int droppedEntries);
 
-        if (length == 0)
+        bool anyPageFailedToFit = false;
+        foreach (WorldSnapshotPacket page in pages)
         {
-            // ⚠ Say so, and carry on. A full lobby with long names, long module names and
-            // equipped gear overruns MaxPacketSize, and the old early return took every other
-            // channel down with it - enemies, party, dialogue, progression, loot, damage,
-            // chat and the stale-peer prune all stopped, silently, for as long as the lobby
-            // stayed full. Losing player positions for a tick is bad; losing the entire
-            // session's state machine and not logging it is worse.
-            if (!_snapshotOverflowLogged)
+            int length = PacketCodec.Write(_sendBuffer, page);
+            if (length == 0)
             {
-                _snapshotOverflowLogged = true;
-                Console.Error.WriteLine(
-                    $"[coop] world snapshot for {snapshot.Entries.Count} peers does not fit in "
-                    + "one packet; positions are not being sent. Shorter player names help.");
+                // A single page that still does not fit - should not happen given
+                // MaxSnapshotEntriesPerPage's own headroom, but fail safe exactly like the
+                // old whole-snapshot guard: skip just this page and keep every other channel
+                // (and every other page) running.
+                anyPageFailedToFit = true;
+                continue;
             }
-        }
-        else
-        {
-            _snapshotOverflowLogged = false;
+
+            _worldSnapshotPagesSent++;
 
             foreach (PeerConnection peer in recipients)
             {
                 _channel.Send(peer.EndPoint, _sendBuffer.AsSpan(0, length));
             }
+        }
+
+        if (droppedEntries > 0 || anyPageFailedToFit)
+        {
+            if (!_snapshotOverflowLogged)
+            {
+                _snapshotOverflowLogged = true;
+                Console.Error.WriteLine(
+                    $"[coop] world snapshot for {entries.Count} peers needs more than "
+                    + $"{WorldSnapshotPacket.MaxPages} pages ({droppedEntries} peer entries "
+                    + "dropped this tick); shorter player names help.");
+            }
+        }
+        else
+        {
+            _snapshotOverflowLogged = false;
         }
 
         BroadcastEnemies(now, recipients);
@@ -374,6 +437,7 @@ public sealed partial class CoopHost : ICoopSession
         BroadcastContainerLoot(now, recipients);
         BroadcastMaterialisedLoot(now, recipients);
         BroadcastPartyPool(now, recipients);
+        BroadcastStore(now, recipients);
         BroadcastDialogueGrant(now, recipients);
         BroadcastPhantomDamage(recipients);
         BroadcastPeerEffects(recipients);
@@ -455,5 +519,13 @@ public sealed partial class CoopHost : ICoopSession
         _channel.NoteMalformed();
     }
 
-    public void Dispose() => _channel.Dispose();
+    public void Dispose()
+    {
+        // Both best-effort and independent of the channel: UpnpMappingService's own Dispose
+        // deletes the router mapping (a network call) before the channel it mapped a port for
+        // goes away, and PublicAddressDiscovery has no mapping to clean up, only a loop to stop.
+        _publicAddress?.Dispose();
+        _upnp?.Dispose();
+        _channel.Dispose();
+    }
 }

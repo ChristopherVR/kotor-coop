@@ -116,7 +116,10 @@ internal sealed unsafe class MapRevealController(SharedBlockView block)
     private readonly long[] _lastRevealedAtMs = new long[SharedBlock.SlotCapacity];
     private readonly Vec3[] _lastRevealedPosition = new Vec3[SharedBlock.SlotCapacity];
 
-    private readonly bool _enabled = PluginConfig.ReadBool("map_reveal_sync", true);
+    /// <summary>coop.ini <c>map_reveal_sync</c>, overridable per session by the host — see
+    /// <see cref="EffectiveBehaviourFlag"/>.</summary>
+    private readonly EffectiveBehaviourFlag _mapRevealSync = new(
+        "map_reveal_sync", SharedBlock.OverrideBitMapRevealSync, PluginConfig.ReadBool("map_reveal_sync", true));
 
     private int _loggedFailures;
     private int _loggedReveals;
@@ -136,7 +139,7 @@ internal sealed unsafe class MapRevealController(SharedBlockView block)
 
     public void OnFrame()
     {
-        if (!_enabled)
+        if (!_mapRevealSync.Resolve(block))
         {
             return;
         }

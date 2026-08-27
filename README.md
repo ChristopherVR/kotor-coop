@@ -31,9 +31,12 @@ attaches from outside with `OpenProcess`.
 | Creature liveness reconciliation | Off by default, open | [creature-liveness.md](docs/research/creature-liveness.md) |
 | Peer at the main menu (`FlagAway`), persistent connection indicator, protocol-mismatch reject | Built 2026-08-27, not live-verified | [disconnect-reconnect.md](docs/research/disconnect-reconnect.md), [connect-flow.md](docs/research/connect-flow.md) |
 | Script-granted items outside dialogue (`script_item_sync`) | Built, live-verified, ON by default | [dialogue-consequences.md](docs/research/dialogue-consequences.md) |
-| Companion experience and equipment (`companion_xp_sync`, `companion_gear_sync`) | Built, off until live-verified | [companion-state-sync.md](docs/research/companion-state-sync.md) |
-| Shared party item pool (`party_pool_sync`) | Built, off until live-verified | [party-pool-sync.md](docs/research/party-pool-sync.md) |
+| Companion experience (`companion_xp_sync`) | Live-verified, ON by default | [companion-state-sync.md](docs/research/companion-state-sync.md) |
+| Companion equipment (`companion_gear_sync`) | Live-verified FAILURE, stays off | [companion-state-sync.md](docs/research/companion-state-sync.md) |
+| Shared party item pool (`party_pool_sync`) | Live-verified, one bug fixed, one open — stays off | [party-pool-sync.md](docs/research/party-pool-sync.md) |
 | Fog-of-war reveal (`map_reveal_sync`) | Live-verified, on by default | [map-reveal.md](docs/research/map-reveal.md) |
+| Star Forge finale — Bastila/Malak duel spectate (`solo_segment_spectate`) | Built, off until live-verified | [star-forge-finale.md](docs/research/star-forge-finale.md) |
+| Internet play — public address discovery (STUN), UPnP port mapping | Built, unit-tested, not live-verified against a real router; no relay/hole-punching | [network-topology.md](docs/research/network-topology.md) |
 
 "Live-verified" means watched working on two real GOG instances; "Off by default" means built
 and unit-tested but not shipped enabled. See "Honest limitations" below and `docs/research/`
@@ -205,12 +208,13 @@ tools/                   package/install scripts, demo rig, RE helpers, the koto
   [party-reconciliation.md](docs/research/party-reconciliation.md).
 - **One conversation at a time**, by design — the other player spectates rather than
   getting a separate copy.
-- **Companion experience and equipment sync ship off by default.** `companion_xp_sync` shares
-  each active companion's XP the same way the party's shared PC XP already is;
-  `companion_gear_sync` dresses a companion released under `companion_local_combat` in its
-  real, current gear instead of a client's stale copy. Both reuse mechanisms already
-  live-verified for the PC (the `stats+0x068` field poke, `Odyssey.EquipItemFromTemplate`),
-  but neither channel itself has been run against the live game yet. See
+- **Companion experience sync is live-verified and on by default.** `companion_xp_sync`
+  shares each active companion's XP the same way the party's shared PC XP already is; a
+  host-side and a client-side script-XP grant each converged to the higher value live.
+  **Companion equipment sync (`companion_gear_sync`) stays off — a real bug.** Live-verified
+  2026-08-27: re-equipping a companion lands the item on the local PLAYER instead, not the
+  companion — `Odyssey.EquipItemFromTemplate`'s caller-object redirect, proven for a phantom,
+  does not appear to hold for a live AI-active party member. See
   [companion-state-sync.md](docs/research/companion-state-sync.md).
 - **Dialogue recruitment sync is live-confirmed for two companions** (`dialogue_recruit_sync`,
   on in the shipped `coop.ini`); a fix for a stale pre-recruit body (companions who are also
@@ -235,17 +239,28 @@ tools/                   package/install scripts, demo rig, RE helpers, the koto
   forwarded damage still lands, and the damage wire names only the last attacker. In a swarm
   the fight you see and the damage you take come from two mechanisms. See
   [combat-participation.md](docs/research/combat-participation.md).
-- **The party's shared item pool syncs, but is off by default and unproven live.** A channel
-  now exists (`party_pool_sync`, off by default) that shares an add/remove to the pool both
-  ways; every offset and engine call it uses is verified against the disassembly, but none of
-  it has been watched land on a running game yet. Until it is turned on and live-verified,
-  gear moved into the party pool on one instance still exists only there. Merchants, the
+- **The party's shared item pool syncs, but a live-verified bug keeps it off by default.**
+  A channel exists (`party_pool_sync`, off by default) that shares an add/remove to the pool
+  both ways. Live-verified 2026-08-27: one real double-apply bug was found and fixed (a
+  receiving instance could misdetect its own just-landed apply as a fresh local action); a
+  second, distinct double-apply on the depositing side was found and is NOT yet fixed. Until
+  that second bug is closed, gear moved into the party pool can land doubled. Merchants, the
   galaxy map and the pre-departure party-select screen are plain single-player UI on each
   instance either way. See [party-pool-sync.md](docs/research/party-pool-sync.md) and
   [docs/roadmap-seamless.md](docs/roadmap-seamless.md).
-- **`coop.ini` is not negotiated.** Game content is fingerprinted per channel at join, but
-  each side runs its own behaviour flags; keep the two files the same. The host's tick rate
-  is adopted automatically.
+- **The Star Forge's Bastila and Malak duels spectate, but off by default and unproven live.**
+  `solo_segment_spectate` parks the other player's input and camera on the fighting player's
+  duel instead of letting a second real combatant wander into a fight the base game designed
+  for one; the input lock in particular reuses two levers (`commandable`, `HoldCreatureStill`)
+  neither of which has been watched stop a real WASD press yet. Until it is turned on and
+  live-verified, a peer physically present in `sta_m45ac`/`sta_m45ad` mirrors normally, same
+  as every other module. See [star-forge-finale.md](docs/research/star-forge-finale.md).
+- **`coop.ini` divergence is negotiated, not silent.** Every behaviour flag rides a digest
+  compared at join; a difference always warns on both screens (`W_CFG`), and nine
+  host-authoritative keys (`party_sync`, `effect_sync`, `script_item_sync` and six more) are
+  additionally adopted by a disagreeing client at runtime. Live-verified 2026-08-27 — see
+  [mod-compatibility.md](docs/research/mod-compatibility.md)'s "Behaviour-flag negotiation"
+  section. The host's tick rate is adopted automatically, as before.
 - **The Endar Spire's command deck floors damage at 1 hp for everyone** — KOTOR's own tutorial
   script, not this mod ([min-one-hitpoint.md](docs/research/min-one-hitpoint.md)). Enemies
   target purely by proximity; alignment is per-player by design, no sync channel needed.
@@ -254,6 +269,14 @@ tools/                   package/install scripts, demo rig, RE helpers, the koto
   typed/clicked input only, with no controller navigation or button-glyph prompts. This is a
   co-op-added limitation, not a change to the base game's own (also mouse/keyboard-oriented)
   controls.
+- **Internet play works without a relay for most home routers, not all.** A host's public
+  address is found automatically (STUN) and the port is forwarded automatically when the
+  router supports UPnP (most do); a router with UPnP off needs the port forwarded by hand,
+  named in the `status`/`public_address` output when that happens. There is no relay and no
+  UDP hole-punching, so the minority of connections behind a restrictive ("symmetric") NAT with
+  UPnP also off cannot be reached at all short of a manual forward. Built and unit-tested
+  against fake STUN/UPnP responders; not yet watched work against a real consumer router. See
+  [network-topology.md](docs/research/network-topology.md).
 
 ## Documentation map
 

@@ -330,6 +330,28 @@ public class PacketCodecTests
     }
 
     [Fact]
+    public void SoloSegmentFlagRoundTripsIndependentlyOfTheOtherPresenceFlags()
+    {
+        // FlagSoloSegment (docs/research/star-forge-finale.md) rides the same Flags dword
+        // every other presence bit already does — pins it exactly like the minigame/away
+        // flags above.
+        Span<byte> buffer = stackalloc byte[ProtocolConstants.MaxPacketSize];
+        PlayerState soloSegment = SampleState with
+        {
+            Flags = PlayerState.FlagInCombat | PlayerState.FlagSoloSegment,
+        };
+
+        int length = PacketCodec.Write(buffer, new StateUpdatePacket(1, 1, 1, soloSegment));
+        StateUpdatePacket? decoded = PacketCodec.ReadStateUpdate(buffer[..length]);
+
+        Assert.NotNull(decoded);
+        Assert.True(decoded.State.IsInSoloSegment);
+        Assert.True(decoded.State.IsInCombat);
+        Assert.False(decoded.State.IsInMinigame);
+        Assert.False(decoded.State.IsAway);
+    }
+
+    [Fact]
     public void ClearingTheAwayFlagRoundTrips()
     {
         // A stuck bit on the wire would leave a returned player parked forever.
@@ -356,7 +378,7 @@ public class PacketCodecTests
         ];
 
         WorldSnapshotPacket original = new(
-            555L, 9, 4, 7, 2,
+            555L, 0, 1, 9, 4, 7, 2,
             0x1122334455667788UL,
             0x99AABBCCDDEEFF00UL,
             0x0102030405060708UL,
@@ -368,6 +390,8 @@ public class PacketCodecTests
 
         Assert.NotNull(decoded);
         Assert.Equal(555L, decoded.ServerTimeMs);
+        Assert.Equal(0, decoded.PageIndex);
+        Assert.Equal(1, decoded.PageCount);
         Assert.Equal(9u, decoded.FlagVersion);
         Assert.Equal(4u, decoded.ItemVersion);
         Assert.Equal(7u, decoded.JournalVersion);
@@ -414,9 +438,16 @@ public class PacketCodecTests
                 worstCase))];
 
         int length = PacketCodec.Write(
-            buffer, new WorldSnapshotPacket(1, 1, 1, 1, 1, ulong.MaxValue, ulong.MaxValue, ulong.MaxValue, ulong.MaxValue, entries));
+            buffer,
+            new WorldSnapshotPacket(
+                1, 0, 1, 1, 1, 1, 1,
+                ulong.MaxValue, ulong.MaxValue, ulong.MaxValue, ulong.MaxValue, entries));
 
-        // A snapshot that does not fit is dropped every tick, so nobody moves.
+        // A snapshot that does not fit is dropped every tick, so nobody moves. This packet is
+        // built directly (bypassing WorldSnapshotPaging, which would never hand a single page
+        // this many entries — see WorldSnapshotPagingTests), so it also stands as the wire
+        // format's own hard ceiling: even an unpaged worst-case page 0 with a full MaxPeers
+        // roster still fits.
         Assert.True(length > 0, "worst-case snapshot must fit inside one packet");
         Assert.True(length <= ProtocolConstants.MaxPacketSize);
 
@@ -426,6 +457,50 @@ public class PacketCodecTests
         Assert.NotNull(decoded);
         Assert.Equal(ProtocolConstants.MaxPeers, decoded.Entries.Count);
         Assert.Equal(worstCase.EquippedRightWeapon, decoded.Entries[^1].State.EquippedRightWeapon);
+    }
+
+    /// <summary>
+    /// The flag/item/journal/loot version+digest tripwires ride on page 0 only — a later page
+    /// must not put them on the wire at all, and a decoded later page must report them as
+    /// 0/default rather than whatever the caller happened to pass in.
+    /// </summary>
+    [Fact]
+    public void WorldSnapshotTripwireFieldsAreDroppedOnANonZeroPage()
+    {
+        Span<byte> buffer = stackalloc byte[ProtocolConstants.MaxPacketSize];
+
+        List<SnapshotEntry> page1Entries = [new(6, "Jolee", SampleState)];
+        WorldSnapshotPacket page1 = new(
+            777L, 1, 2, 9, 4, 7, 2,
+            0x1122334455667788UL,
+            0x99AABBCCDDEEFF00UL,
+            0x0102030405060708UL,
+            0xFEDCBA9876543210UL,
+            page1Entries);
+
+        int page0Length = PacketCodec.Write(
+            buffer,
+            new WorldSnapshotPacket(777L, 0, 2, 9, 4, 7, 2, 0, 0, 0, 0, page1Entries));
+        int page1Length = PacketCodec.Write(buffer, page1);
+
+        // Carrying the tripwire fields costs exactly 4 uint32s + 4 uint64s = 48 bytes; a
+        // non-zero page must be smaller by exactly that much, not merely "smaller".
+        Assert.Equal(48, page0Length - page1Length);
+
+        WorldSnapshotPacket? decoded = PacketCodec.ReadWorldSnapshot(buffer[..page1Length]);
+        Assert.NotNull(decoded);
+        Assert.Equal(1, decoded.PageIndex);
+        Assert.Equal(2, decoded.PageCount);
+        Assert.Equal(0u, decoded.FlagVersion);
+        Assert.Equal(0u, decoded.ItemVersion);
+        Assert.Equal(0u, decoded.JournalVersion);
+        Assert.Equal(0u, decoded.LootVersion);
+        Assert.Equal(0UL, decoded.FlagDigest);
+        Assert.Equal(0UL, decoded.ItemDigest);
+        Assert.Equal(0UL, decoded.JournalDigest);
+        Assert.Equal(0UL, decoded.LootDigest);
+        Assert.Single(decoded.Entries);
+        Assert.Equal("Jolee", decoded.Entries[0].Name);
     }
 
     [Fact]
@@ -600,6 +675,48 @@ public class PacketCodecTests
 
         int length = PacketCodec.Write(buffer, new PartyPoolOpPacket(1, 1, PartyPoolOpKind.Add, key, 0));
         Assert.Null(PacketCodec.ReadPartyPoolOp(buffer[..length]));
+    }
+
+    [Fact]
+    public void StoreOpPacketsRoundTrip()
+    {
+        Span<byte> buffer = stackalloc byte[ProtocolConstants.MaxPacketSize];
+
+        StoreStackKey key = new(0x1000, "g_w_blstrpstl001", 3, 50, 0x5, ItemIdentity.FlagKnown);
+
+        StoreOpPacket add = new(1, 42, StoreOpKind.Add, key, 20);
+        int addLength = PacketCodec.Write(buffer, add);
+        Assert.Equal(add, PacketCodec.ReadStoreOp(buffer[..addLength]));
+
+        StoreOpPacket remove = new(2, 7, StoreOpKind.Remove, key, 5);
+        int removeLength = PacketCodec.Write(buffer, remove);
+        Assert.Equal(remove, PacketCodec.ReadStoreOp(buffer[..removeLength]));
+
+        // Set (resync) carries an ABSOLUTE count, which is legitimately 0 (a key that no
+        // longer exists at all — the resync still names it so a stale peer clears it).
+        StoreOpPacket set = new(1, 3, StoreOpKind.Set, key, 0);
+        int setLength = PacketCodec.Write(buffer, set);
+        Assert.Equal(set, PacketCodec.ReadStoreOp(buffer[..setLength]));
+
+        StoreAckPacket ack = new(3, 42);
+        int ackLength = PacketCodec.Write(buffer, ack);
+        Assert.Equal(ack, PacketCodec.ReadStoreAck(buffer[..ackLength]));
+
+        StoreSyncRequestPacket sync = new(3, 12, 0xDEADBEEFCAFEBABEUL);
+        int syncLength = PacketCodec.Write(buffer, sync);
+        Assert.Equal(sync, PacketCodec.ReadStoreSyncRequest(buffer[..syncLength]));
+    }
+
+    [Fact]
+    public void StoreOpWithZeroCountDeltaIsRejectedForAddAndRemove()
+    {
+        // A non-Set op with a zero delta is not a real event and would never legitimately be
+        // sent — the codec refuses it as malformed rather than silently accepting a no-op.
+        Span<byte> buffer = stackalloc byte[ProtocolConstants.MaxPacketSize];
+        StoreStackKey key = new(0x1000, "g_w_blstrpstl001", 0, 0, 0, ItemIdentity.FlagKnown);
+
+        int length = PacketCodec.Write(buffer, new StoreOpPacket(1, 1, StoreOpKind.Add, key, 0));
+        Assert.Null(PacketCodec.ReadStoreOp(buffer[..length]));
     }
 
     [Fact]
@@ -957,9 +1074,80 @@ public class PacketCodecTests
             buffer,
             new InteractionClaimPacket(5, "end_m01aa", "end_trask", InteractionKind.Conversation, true));
 
-        buffer[length - 6] = 0x7F; // the kind byte: TargetId(4) + Active(1) trail it now
+        // the kind byte: Active(1) + TargetId(4) + RequestSerial(4) trail it now
+        buffer[length - 10] = 0x7F;
 
         Assert.Null(PacketCodec.ReadInteractionClaim(buffer[..length]));
+    }
+
+    [Fact]
+    public void InteractionClaimRoundTripsAnExplicitRequestSerial()
+    {
+        // The container-loot race fix (docs/roadmap-seamless.md Tier 1 item 4): a nonzero
+        // RequestSerial is what turns an ordinary per-tick republish into an explicit,
+        // synchronously-answered arbitration request — see PacketType.LockResponse's remarks.
+        Span<byte> buffer = stackalloc byte[ProtocolConstants.MaxPacketSize];
+        InteractionClaimPacket original = new(
+            PeerId: 5, "end_m01aa", Tag: string.Empty, InteractionKind.Container, Active: true,
+            TargetId: 0x131, RequestSerial: 0x9001);
+
+        int length = PacketCodec.Write(buffer, original);
+        Assert.True(length > 0);
+        Assert.Equal(original, PacketCodec.ReadInteractionClaim(buffer[..length]));
+    }
+
+    [Fact]
+    public void InteractionClaimDefaultsRequestSerialToZero()
+    {
+        // Every pre-existing caller (the ordinary per-tick republish) constructs this packet
+        // without naming RequestSerial at all; it must keep meaning "not an explicit request".
+        Span<byte> buffer = stackalloc byte[ProtocolConstants.MaxPacketSize];
+        InteractionClaimPacket original = new(5, "end_m01aa", "end_trask", InteractionKind.Conversation, true);
+
+        Assert.Equal(0u, original.RequestSerial);
+
+        int length = PacketCodec.Write(buffer, original);
+        InteractionClaimPacket? decoded = PacketCodec.ReadInteractionClaim(buffer[..length]);
+
+        Assert.NotNull(decoded);
+        Assert.Equal(0u, decoded.RequestSerial);
+    }
+
+    [Fact]
+    public void LockResponseRoundTripsGranted()
+    {
+        Span<byte> buffer = stackalloc byte[ProtocolConstants.MaxPacketSize];
+        LockResponsePacket original = new(
+            PeerId: 3, InteractionKind.Container, TargetId: 0x131, RequestSerial: 0x9001, Granted: true);
+
+        int length = PacketCodec.Write(buffer, original);
+        Assert.True(length > 0);
+        Assert.Equal(original, PacketCodec.ReadLockResponse(buffer[..length]));
+    }
+
+    [Fact]
+    public void LockResponseRoundTripsDenied()
+    {
+        Span<byte> buffer = stackalloc byte[ProtocolConstants.MaxPacketSize];
+        LockResponsePacket original = new(
+            PeerId: 3, InteractionKind.Container, TargetId: 0x131, RequestSerial: 0x9001, Granted: false);
+
+        int length = PacketCodec.Write(buffer, original);
+        Assert.True(length > 0);
+        Assert.Equal(original, PacketCodec.ReadLockResponse(buffer[..length]));
+    }
+
+    [Fact]
+    public void LockResponseRejectsAnUnknownKind()
+    {
+        Span<byte> buffer = stackalloc byte[ProtocolConstants.MaxPacketSize];
+        int length = PacketCodec.Write(
+            buffer, new LockResponsePacket(3, InteractionKind.Container, 0x131, 0x9001, true));
+
+        // the kind byte: TargetId(4) + RequestSerial(4) + Granted(1) trail it now
+        buffer[length - 10] = 0x7F;
+
+        Assert.Null(PacketCodec.ReadLockResponse(buffer[..length]));
     }
 
     [Fact]

@@ -65,6 +65,7 @@ public sealed class CoopAgent
     private readonly WorldStatePump _worldStatePump;
     private readonly ScriptItemGrantPump _scriptItemGrantPump;
     private readonly PartyPoolPump _partyPoolPump;
+    private readonly StorePump _storePump;
 
     /// <summary>
     /// The suppression ledger shared by every pump that can put a new row into the local PC's
@@ -76,6 +77,11 @@ public sealed class CoopAgent
     /// resref, not by object id or channel.
     /// </summary>
     private readonly RecentlySyncedItems _recentlySyncedItems = new();
+
+    /// <summary>What was last pushed through <see cref="IPlayerBridge.SetBehaviourOverrides"/>,
+    /// so an unchanged <see cref="ICapabilitySession.Overrides"/> costs nothing beyond the
+    /// encode compare — see <see cref="PumpBehaviourOverrides"/>.</summary>
+    private (uint Mask, uint Values) _lastBehaviourOverrides;
 
     public CoopAgent(IGameBridge bridge, ICoopSession session, AgentSettings settings)
     {
@@ -91,6 +97,7 @@ public sealed class CoopAgent
         _dialoguePump = new DialoguePump(bridge, session, settings, _log);
         _partyPump = new PartyPump(bridge, session, settings, _log);
         _partyPoolPump = new PartyPoolPump(bridge, session, _log);
+        _storePump = new StorePump(bridge, session, _log);
 
         // TriggerPump before CombatPump: CombatPump.PumpEnemies calls into it for the
         // client-triggered encounter/generic-trigger sub-steps.
@@ -355,6 +362,8 @@ public sealed class CoopAgent
         // while everything unaffected keeps working. Full set until a peer is judged.
         SessionCapabilities caps = _session.Capabilities;
 
+        PumpBehaviourOverrides();
+
         // --- real-time path: player position + animation, EVERY tick --------------------
         // Only filter when both ends actually know their module. A profile that has not
         // located the module-name field reports an empty string, and treating "unknown"
@@ -384,6 +393,20 @@ public sealed class CoopAgent
         // filter this has no coop.ini escape hatch — there is no "old behaviour" a frozen
         // statue was ever the intended experience of.
         visible = [.. visible.Where(p => !p.State.IsAway)];
+
+        // A story-forced solo segment (the Star Forge's Bastila and Malak duels — see
+        // PlayerState.FlagSoloSegment, SoloSegmentRule.ShouldHideAllPeers and
+        // docs/research/star-forge-finale.md's product decision "the OWNER's fight, the other
+        // human SPECTATES"): while the LOCAL player owns an active segment, every remote peer
+        // is hidden from what this instance writes locally, so the duel script never sees a
+        // second body. Triggered off the LOCAL flag, not a peer's own — unlike the minigame
+        // and away filters above, this is not about whether a PEER opted out, it is about
+        // whether THIS instance is mid-duel. coop.ini solo_segment_spectate, default OFF.
+        SoloSegmentRule soloSegmentRule = new(Enabled: _settings.SoloSegmentSpectateEnabled);
+        if (soloSegmentRule.ShouldHideAllPeers(local.IsInSoloSegment))
+        {
+            visible = [];
+        }
 
         // Mask the per-avatar fields a mod mismatch makes unsafe BEFORE they reach the
         // game. A different appearance.2da means a replicated row index could paint the
@@ -638,6 +661,37 @@ public sealed class CoopAgent
         {
             _partyPoolPump.Pump(caps);
         }
+
+        // Off by default (coop.ini store_sync) — same "researched but not yet live-verified"
+        // gating as PartyPoolSyncEnabled above. See docs/research/store-sync.md.
+        if (_settings.StoreSyncEnabled)
+        {
+            _storePump.Pump(caps);
+        }
+    }
+
+    /// <summary>
+    /// Pushes <see cref="ICapabilitySession.Overrides"/> into the plugin's shared block
+    /// whenever it changes — docs/research/mod-compatibility.md's "Behaviour-flag negotiation"
+    /// gap, closed 2026-08-27. Cheap every tick: <see cref="BehaviourOverrideEncoding.Encode"/>
+    /// is five null checks and a couple of ORs, and the bridge write only fires on a genuine
+    /// change (a client's Welcome just landed, or a fresh <see cref="CoopAgent"/> after a
+    /// reconnect). <see cref="_lastBehaviourOverrides"/> starts at (0, 0) — "no overrides" — so
+    /// a session that never adopts anything (a host, or a client whose behaviour matched)
+    /// never writes at all, which is exactly the block's own post-teardown/never-written state
+    /// (see <c>KotorGameBridge.SessionScopedBlockLevels</c>).
+    /// </summary>
+    private void PumpBehaviourOverrides()
+    {
+        (uint mask, uint values) = BehaviourOverrideEncoding.Encode(_session.Overrides);
+
+        if (mask == _lastBehaviourOverrides.Mask && values == _lastBehaviourOverrides.Values)
+        {
+            return;
+        }
+
+        _lastBehaviourOverrides = (mask, values);
+        _bridge.SetBehaviourOverrides(mask, values);
     }
 
     /// <summary>Diffs <see cref="_knownPeerIds"/> against this tick's peer set and raises
@@ -723,6 +777,21 @@ public sealed class CoopAgent
     public bool TryDequeuePendingPartyPoolApply(out PendingPartyPoolApply next)
     {
         return _partyPoolPump.TryDequeuePendingApply(out next);
+    }
+
+    /// <summary>One store buy/sell this instance's own engine still owes for a specific store
+    /// (<see cref="StoreStackKey.StoreObjectId"/>), queued for the automatic apply path — see
+    /// <see cref="PendingPartyPoolApply"/>'s own remarks for why this is public.</summary>
+    public readonly record struct PendingStoreApply(
+        KotorCoop.Protocol.StoreOpKind Kind, KotorCoop.Protocol.StoreStackKey Key, ushort Count);
+
+    /// <summary>
+    /// Called by whatever already arbitrates the single-slot staging-cheat channel, at most once
+    /// per ITS tick — mirrors <see cref="TryDequeuePendingPartyPoolApply"/> exactly.
+    /// </summary>
+    public bool TryDequeuePendingStoreApply(out PendingStoreApply next)
+    {
+        return _storePump.TryDequeuePendingApply(out next);
     }
 
     /// <summary>

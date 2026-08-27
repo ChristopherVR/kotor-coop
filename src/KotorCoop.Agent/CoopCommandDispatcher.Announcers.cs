@@ -22,6 +22,11 @@ public sealed partial class CoopCommandDispatcher
     /// filter keeps the plugin from ever seeing the flag (see <see cref="MinigameAnnouncer"/>).</summary>
     private readonly MinigameAnnouncer _minigameAnnouncer = new();
 
+    /// <summary>A peer's <see cref="KotorCoop.Protocol.PlayerState.FlagSoloSegment"/> edge:
+    /// "Malak is fighting alone - spectating" / "Malak's fight is over" — see
+    /// <see cref="SoloSegmentAnnouncer"/>.</summary>
+    private readonly SoloSegmentAnnouncer _soloSegmentAnnouncer = new();
+
     /// <summary>Content differences become lines on screen too — see
     /// <see cref="CompatibilityAnnouncer"/> for why a degradation that is only logged is
     /// indistinguishable from a bug.</summary>
@@ -39,6 +44,10 @@ public sealed partial class CoopCommandDispatcher
     /// <summary>Whether a hosting player has anything to share yet — see
     /// <see cref="HostSaveAnnouncer"/> for the silent-no-op it closes.</summary>
     private readonly HostSaveAnnouncer _hostSaveAnnouncer = new();
+
+    /// <summary>A hosting player's internet reachability (roadmap item 24) — see
+    /// <see cref="PublicAddressAnnouncer"/>.</summary>
+    private readonly PublicAddressAnnouncer _publicAddressAnnouncer = new();
 
     /// <summary>
     /// coop.ini's <c>status_toasts</c>, read once and cached rather than reloaded off disk
@@ -61,6 +70,7 @@ public sealed partial class CoopCommandDispatcher
             _peerAnnouncer.Reset();
             _awayAnnouncer.Reset();
             _minigameAnnouncer.Reset();
+            _soloSegmentAnnouncer.Reset();
             _kotor?.PublishSessionPeerCount(0);
             return;
         }
@@ -69,6 +79,7 @@ public sealed partial class CoopCommandDispatcher
         _peerAnnouncer.Observe(peers, Reply);
         _awayAnnouncer.Observe(peers, Reply);
         _minigameAnnouncer.Observe(peers, Reply);
+        _soloSegmentAnnouncer.Observe(peers, Reply);
 
         // The seamless-arrival gate's signal: written here, every tick, because THIS loop
         // never depends on the player resolve — the pump's RemoteCount does, and its 1 Hz
@@ -154,5 +165,23 @@ public sealed partial class CoopCommandDispatcher
             saveDirectory is not null,
             saveDirectory is not null ? Path.GetFileName(saveDirectory) : null,
             Reply);
+    }
+
+    /// <summary>
+    /// Roadmap item 24's "surface it": announces a hosting player's public IP:port (once STUN
+    /// finds one) and UPnP mapping verdict — see <see cref="PublicAddressAnnouncer"/>.
+    /// Unconditional like <see cref="AnnounceHostSaveAvailability"/>: this is the one piece of
+    /// onboarding information that tells a host whether a remote friend can actually reach them
+    /// at all, not a toast a returning player already knows to re-enable.
+    /// </summary>
+    private void AnnouncePublicAddress()
+    {
+        if (manager.Current is not CoopHost host)
+        {
+            _publicAddressAnnouncer.Reset();
+            return;
+        }
+
+        _publicAddressAnnouncer.Observe(host.ListenEndPoint.Port, host.PublicEndPoint, host.UpnpStatus, Reply);
     }
 }

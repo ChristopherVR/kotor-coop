@@ -1219,3 +1219,31 @@ waypoint)` call, which is exactly what §11.2 does.
    change, but a combined live pass (item 1 above) is the first chance to confirm both the
    announce and the movie relay fire together correctly for a REAL galaxy-map departure, not
    just the synthetic `moviewarp` staging prior passes used.
+
+## 12. Live pass, 2026-08-27 — the de-dup gate, confirmed; the two announced-content legs, not reached
+
+Two-instance rig (`tools/demo.ps1`), a real `end_m01aa` → `end_m01ab` crossing via
+`end_door10` (`tp 44.5 120.1 -0.04` then `usedoor end_door10` — the same recipe §6 and prior
+live-verification.md passes already used successfully).
+
+**§11.7 item 3 (the de-dup gate's own timing claim): CONFIRMED.** Both plugin logs, grepped
+across the full crossing, show exactly the expected `Door`-kind announce
+(`announce: door 0x4A transition beginning -> 'end_m01ab' at waypoint 'from_01a'`) on the host
+and the expected `travel: moving to module 'end_m01ab' on the session's authority` on the
+client (arriving ~2.3 s after the announce — the same order-of-magnitude improvement over the
+5.6-5.8 s bare-load baseline earlier passes measured), and **zero** `scripted transition
+beginning` lines on either side. `_doorTransitionAnnouncedThisEpoch` correctly suppresses the
+second (`Script`-tagged) publish §11.1 found the door's own phase-2 handler also raises,
+exactly as designed.
+
+**§11.7 items 1 and 2 (the galaxy-map departure and the Endar Spire escape pod): NOT
+attempted this round.** Both need either driving the galaxy-map GUI (no click reliably lands
+on this rig's windows, and no `setglobal`-style console primitive exists yet to fire
+`k_pebn_galaxy`'s confirm handler without one) or progressing the story to `end_m01ab`'s own
+escape-pod trigger, neither of which fit in this round's time budget alongside the rest of
+that round's queue. `transition_announce_scripted` itself is unexercised beyond the negative
+(de-dup) check above — still open for whoever picks this back up next. Building a `setglobal`
+dev verb (mirroring `grantxp`/`grantgold`'s own shape — a bare field write, no engine call)
+would very likely be the fastest path to the galaxy-map leg specifically, since
+`k_sup_galaxymap.nss`'s commit path is a single `SetGlobalNumber("K_CURRENT_PLANET", ...)`
+call per `galaxy-map-and-party-select.md` §1.3.

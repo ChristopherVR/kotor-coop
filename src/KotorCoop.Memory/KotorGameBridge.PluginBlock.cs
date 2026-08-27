@@ -623,6 +623,16 @@ public sealed partial class KotorGameBridge
     private const int BlockLocalDialogueForced = 0x3F1C;
     private const int BlockRemoteDialogueForced = 0x3F20;
 
+    // Container-lock explicit arbitration (SharedBlock version 57, region 0x40D0..0x40E0) —
+    // closes the container-loot race, docs/roadmap-seamless.md Tier 1 item 4. See
+    // SharedBlock.Dialogue.cs's own region comment for the full "cheat-style request/serial"
+    // reasoning — the plugin can only ever ASK this agent for an arbitration decision across
+    // the process boundary, never call ICoopSession directly.
+    private const int BlockLocalContainerLockRequestTargetId = 0x40D0;
+    private const int BlockLocalContainerLockRequestSerial = 0x40D4;
+    private const int BlockContainerLockResponseSerial = 0x40D8;
+    private const int BlockContainerLockResponseGranted = 0x40DC;
+
     private const int BlockLocalDialogueNode = 0x1320;
     private const int BlockLocalDialogueNodeSerial = 0x1324;
     private const int BlockRemoteDialogueNode = 0x1328;
@@ -652,6 +662,30 @@ public sealed partial class KotorGameBridge
     private const int BlockLocalPartyRosterObjectIds = 0x3F28;
 
     private const int BlockHostPartyRosterObjectIds = 0x3F4C;
+
+    // Effective behaviour-override flags (shared block version 57, region 0x40C0..0x40C8, no
+    // TotalSize growth — the tail after the companion-equipment array at 0x4000..0x40C0 has
+    // 0x40 free bytes). Mirrors SharedBlock.OffsetBehaviourOverride*. See
+    // docs/research/mod-compatibility.md's "Behaviour-flag negotiation" gap.
+    private const int BlockBehaviourOverrideMask = 0x40C0;
+    private const int BlockBehaviourOverrideValues = 0x40C4;
+
+    /// <summary>
+    /// Pushes this session's effective behaviour-override bits (see
+    /// <see cref="BehaviourOverrideBits"/>) into the plugin's shared block. Values written
+    /// before mask: a reader that checks the mask first never sees a bit newly set with the
+    /// paired value dword still holding whatever the last session left there.
+    /// </summary>
+    public void SetBehaviourOverrides(uint overrideMask, uint overrideValues)
+    {
+        if (_pluginBlock == 0)
+        {
+            return;
+        }
+
+        _memory.TryWrite(_pluginBlock + BlockBehaviourOverrideValues, overrideValues);
+        _memory.TryWrite(_pluginBlock + BlockBehaviourOverrideMask, overrideMask);
+    }
 
     /// <summary>Diagnostics the plugin publishes back to us.</summary>
     public (uint Frames, uint Phantoms, int LastStatus) ReadPluginState()

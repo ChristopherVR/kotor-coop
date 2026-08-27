@@ -83,4 +83,22 @@ public interface IDialogueBridge
     /// <summary>Hands the game every object currently held by anyone, so it can hold the ones
     /// it owns still. Default false.</summary>
     bool WriteInteractionLocks(IReadOnlyList<InteractionLock> locks) => false;
+
+    /// <summary>
+    /// Reads a pending explicit container-lock arbitration request the plugin's deferral state
+    /// machine just published — closes the container-loot race (docs/roadmap-seamless.md Tier 1
+    /// item 4, docs/research/container-sync.md's <c>container_lock_arbitration</c> section). A
+    /// zero <paramref name="requestSerial"/> means nothing is pending. Default "nothing
+    /// pending" for bridges without a plugin.
+    /// </summary>
+    bool TryReadContainerLockRequest(out uint targetId, out uint requestSerial)
+    {
+        targetId = 0;
+        requestSerial = 0;
+        return false;
+    }
+
+    /// <summary>Hands the plugin the arbiter's answer to the request named by
+    /// <paramref name="requestSerial"/>. Default false.</summary>
+    bool WriteContainerLockResponse(uint requestSerial, bool granted) => false;
 }

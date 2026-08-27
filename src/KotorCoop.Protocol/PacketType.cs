@@ -484,4 +484,47 @@ public enum PacketType : byte
     /// <summary>client -&gt; host: my party-pool version/digest disagrees, resync — the same
     /// role <see cref="LootSyncRequest"/> plays for container loot.</summary>
     PartyPoolSyncRequest = 55,
+
+    /// <summary>
+    /// host -&gt; the requesting peer: the answer to an explicit
+    /// <see cref="InteractionClaimPacket.RequestSerial"/> arbitration request — closes the
+    /// container-loot race (docs/roadmap-seamless.md Tier 1 item 4): two near-simultaneous
+    /// clicks on the same container no longer both proceed locally before either removal
+    /// lands, because the plugin's <c>ContainerUseHook</c>-side deferral
+    /// (<c>container_lock_arbitration</c>, docs/research/container-sync.md) now waits for THIS
+    /// packet (or a timeout) before letting the engine's own open through.
+    ///
+    /// Deliberately NOT a new claim/level packet — <see cref="InteractionClaimPacket"/> already
+    /// carries everything the REQUEST needs (this just adds <c>RequestSerial</c> to it), so this
+    /// type only carries the one-shot synchronous REPLY half, unicast to the single peer that
+    /// asked. Unrelated to <see cref="InteractionLock"/>'s own per-tick broadcast level, which
+    /// keeps working exactly as before and is what actually holds the lease once granted.
+    ///
+    /// TODO(version): bump <see cref="ProtocolConstants.Version"/> the next time it moves — this
+    /// wave's version counter is owned by another agent in parallel (see AGENTS/CONTRIBUTING
+    /// parallel-session notes), so this type and <see cref="InteractionClaimPacket.RequestSerial"/>
+    /// ship without their own version bump. Both are strictly additive (a new field appended
+    /// at the end of an existing packet, one new packet type never touching an existing peer
+    /// that doesn't ask for arbitration), so an old build simply never sees a nonzero
+    /// <c>RequestSerial</c> and never receives this type.
+    /// </summary>
+    LockResponse = 56,
+
+    /// any -&gt; all, relayed by the host: a change to a merchant store's stock
+    /// (<c>CSWSStore+0x230</c>'s <c>CItemRepository</c>) — some number of units of a
+    /// resref+identity stack were added to (a sell), or removed from (a buy), the named store.
+    /// Reliable via retransmit-until-ack, the same shape as <see cref="PartyPoolOp"/>, keyed by
+    /// STORE OBJECT ID plus content: unlike a party-pool item, a store is a real GIT-placed
+    /// <c>CGameObject</c> both instances share an id for. See docs/research/store-sync.md. Off
+    /// by default (<c>store_sync</c>), NEEDS-LIVE.
+    /// </summary>
+    StoreOp = 57,
+
+    /// <summary>A peer's acknowledgement of a <see cref="StoreOp"/>. See
+    /// <see cref="PartyPoolAck"/> for the identical shape and reasoning.</summary>
+    StoreAck = 58,
+
+    /// <summary>client -&gt; host: my store version/digest disagrees, resync — the same role
+    /// <see cref="PartyPoolSyncRequest"/> plays for the party pool.</summary>
+    StoreSyncRequest = 59,
 }

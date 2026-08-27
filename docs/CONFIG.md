@@ -17,13 +17,17 @@ design, a CLIENT additionally **adopts the host's value at runtime** rather than
 its own: `party_sync`, `effect_sync`, `trigger_relay`, `liveness_sync`, `map_reveal_sync`,
 `script_item_sync`, `dialogue_item_sync`, `dialogue_recruit_sync`, `movie_relay`. Four of those
 nine (`party_sync`, `script_item_sync`, `dialogue_item_sync`, `movie_relay`) are live-consulted
-by the pump that runs the channel; the other five are recorded on the adopted-overrides object
-but not yet read by anything (they are gated entirely inside the separate plugin process,
-which this negotiation does not reach yet) — see
-[mod-compatibility.md](research/mod-compatibility.md)'s "Behaviour-flag negotiation" section
-for the full design, the exact wire shape, and that open gap. Nothing here changes what a key
-is READ as locally (`CoopConfig`/`AgentSettings` still describe this install's own coop.ini/
-CLI exactly as before); adoption lives in a separate, session-scoped `SessionOverrides` layer.
+directly by the `KotorCoop.Session` pump that runs the channel; the other five
+(`effect_sync`, `trigger_relay`, `liveness_sync`, `map_reveal_sync`, `dialogue_recruit_sync`)
+are gated entirely inside the separate PLUGIN process, so adoption for them crosses that
+process boundary instead — the agent pushes the adopted bits into the plugin's shared block
+every tick they change, and each of the five plugin controllers resolves its effective value
+from there instead of its own construction-time `coop.ini` read. All nine are host-adopted
+end to end as of 2026-08-27. See [mod-compatibility.md](research/mod-compatibility.md)'s
+"Behaviour-flag negotiation" section for the full design and the exact wire shape. Nothing
+here changes what a key is READ as locally (`CoopConfig`/`AgentSettings` still describe this
+install's own coop.ini/CLI exactly as before); adoption lives in a separate, session-scoped
+`SessionOverrides` layer.
 
 Every default below is the CODE's own fallback — what applies if the key is absent from
 `coop.ini` entirely. **The file that actually ships** (`profiles/coop.ini.example`, staged
@@ -68,9 +72,13 @@ actually runs with.
 | `client_door_refusal` | ON¹ | refuse a client's own premature door crossing while following | [transition-smoothness.md](research/transition-smoothness.md) |
 | `follow_lead` | `any` | who may lead a transition the other follows: `any` or `host` | [transition-smoothness.md](research/transition-smoothness.md) |
 | `movie_relay` | ON² | relay a mid-module `PlayMovie` to peers (agent's own copy) | [cinematics.md](research/cinematics.md) |
-| `companion_xp_sync` | OFF (NEEDS-LIVE) | share each active companion's experience the same way the PC's own is | [companion-state-sync.md](research/companion-state-sync.md) |
-| `companion_gear_sync` | OFF (NEEDS-LIVE) | read each companion's real equipped gear and hand it to the plugin (agent's own copy) | [companion-state-sync.md](research/companion-state-sync.md) |
-| `party_pool_sync` | OFF | sync the shared party item pool (`CSWPartyTable+0x118`) both ways (NEEDS-LIVE) | [party-pool-sync.md](research/party-pool-sync.md) |
+| `companion_xp_sync` | ON | share each active companion's experience the same way the PC's own is (live-verified 2026-08-27) | [companion-state-sync.md](research/companion-state-sync.md) |
+| `companion_gear_sync` | OFF (live-verified FAILURE) | read each companion's real equipped gear and hand it to the plugin (agent's own copy) — live pass found the apply lands on the PLAYER, not the companion; stays off until fixed | [companion-state-sync.md](research/companion-state-sync.md) |
+| `party_pool_sync` | OFF (live-verified: one bug fixed, one remains) | sync the shared party item pool (`CSWPartyTable+0x118`) both ways | [party-pool-sync.md](research/party-pool-sync.md) |
+| `solo_segment_spectate` | OFF¹¹ | the OWNER's fight, the other player spectates during a story-forced solo segment (Bastila/Malak duels — NEEDS-LIVE) | [star-forge-finale.md](research/star-forge-finale.md) |
+| `store_sync` | OFF | sync merchant store stock (`CSWSStore+0x230`) both ways — reads only while a store's GUI is open (NEEDS-LIVE) | [store-sync.md](research/store-sync.md) |
+| `stun_servers` | two well-known public servers¹² | HOST only: STUN servers (`host:port`, comma-separated) asked for the host's public IP:port; empty disables discovery (roadmap item 24, NEEDS-LIVE) | [network-topology.md](research/network-topology.md) |
+| `upnp` | ON | HOST only: attempt a UPnP IGD port mapping for the session (and world-transfer) port; fails soft (roadmap item 24, NEEDS-LIVE) | [network-topology.md](research/network-topology.md) |
 
 ¹ The property's own C# doc comment used to claim this was OFF by default while the actual
 parse logic (`!ContainsKey(...) || IsTruthy(...)`) already defaulted it ON, matching the
@@ -127,12 +135,13 @@ entirely; both now default ON, matching each other and the shipped file's explic
 | `party_follow_refresh_final_node` | OFF | follow-AI fix candidate, live-refuted (no effect) | [party-reconciliation.md](research/party-reconciliation.md) |
 | `party_follow_extend_final_node` | OFF | follow-AI fix candidate, unconfirmed live | [party-reconciliation.md](research/party-reconciliation.md) |
 | `party_drive` | ON | drive companion positions every frame | [party-reconciliation.md](research/party-reconciliation.md) |
-| `companion_gear_sync` | OFF (NEEDS-LIVE) | dress a mirrored companion in its real equipped gear (plugin's own copy) | [companion-state-sync.md](research/companion-state-sync.md) |
+| `companion_gear_sync` | OFF (live-verified FAILURE — see the agent-side row above) | dress a mirrored companion in its real equipped gear (plugin's own copy) | [companion-state-sync.md](research/companion-state-sync.md) |
 | `companion_local_combat` | OFF³ | release a nearby companion to fight a client through its own engine | [party-reconciliation.md](research/party-reconciliation.md) |
 | `companion_local_combat_range` | `10` | release distance for companion local combat | [party-reconciliation.md](research/party-reconciliation.md) |
 | `party_roster_sync` | ON | mirror the party roster across instances | [party-reconciliation.md](research/party-reconciliation.md) |
 | `dialogue_recruit_sync` | OFF³ | recruit a companion through the real network path on the peer | [dialogue-consequences.md](research/dialogue-consequences.md) |
 | `party_together_fix` | ON | fix for the party-together gate blocking a legitimate crossing | [party-reconciliation.md](research/party-reconciliation.md) |
+| `party_select_host_only` | ON (NEEDS-LIVE) | suppress a client's own copy of the party-selection screen; the host picks | [galaxy-map-and-party-select.md](research/galaxy-map-and-party-select.md) |
 | `pause_button_hook` | ON | hook the in-game pause button | — |
 | `effect_sync` | ON⁴ | forward non-damage effects (stun, slow, knockdown, ...) | [effect-sync.md](research/effect-sync.md) |
 | `dialog_state_watch` | OFF | opt-in diagnostic: logs every writer of the dialogue global-state flag (`CGuiInGame+0xB4`), to find why a wedged instance's conversation flag comes straight back | [dialogue-sync.md](research/dialogue-sync.md) |
@@ -148,8 +157,11 @@ entirely; both now default ON, matching each other and the shipped file's explic
 | `dialogue_join_teleport` | ON | teleport a late joiner into a conversation instead of walking | [dialogue-join-latency.md](research/dialogue-join-latency.md) |
 | `dialogue_exclusive` | ON | one conversation at a time (the exclusivity lock itself) | [dialogue-sync.md](research/dialogue-sync.md) |
 | `container_locks` | ON | one-at-a-time container/corpse open lock | [container-sync.md](research/container-sync.md) |
+| `container_lock_arbitration` | ON | host-arbitrated container lock request/response, closing the race where two near-simultaneous clicks both proceed before the eventually-consistent claim lands; fails safe to the pre-arbitration behaviour after a 300ms host-answer timeout | [container-sync.md](research/container-sync.md) |
 | `pazaak_detect` | OFF⁹ | plugin's own copy: gates the in-process Pazaak edge log/`MinigameKind`, not the wire flag | [minigames.md](research/minigames.md) |
 | `minigame_wait_notice` | ON | "&lt;name&gt; is in a minigame - waiting" HUD line for a parked peer | [minigames.md](research/minigames.md) |
+| `solo_segment_spectate` | OFF¹¹ | plugin's own copy: gates both `SoloSegmentController` (owner-side detection) and `SoloSegmentSpectateController` (spectator-side input lock/camera/damage gate) | [star-forge-finale.md](research/star-forge-finale.md) |
+| `solo_segment_modules` | unset (base set only) | comma-separated extra module resrefs appended to `SoloSegmentCatalogue`'s base set (`sta_m45ac`, `sta_m45ad`) | [star-forge-finale.md](research/star-forge-finale.md) |
 
 ³ The code fallback (used only if the key is entirely absent) is OFF for both
 `companion_local_combat` and `dialogue_recruit_sync`. The shipped `profiles/coop.ini.example`
@@ -182,6 +194,17 @@ survives a module transition with no crash, and costs nothing measurable in fram
 ON in both `PluginConfig.ReadBool`'s own fallback and `profiles/coop.ini.example`. The exact
 on-screen M-key appearance was not visually confirmed this round (screenshot tooling is broken
 on the rig) — see `docs/research/map-reveal.md`'s "Live pass" section.
+¹¹ `solo_segment_spectate` is read TWICE off the same key, by two independent readers, the same
+split `pazaak_detect`⁹ and `movie_relay`² already use: `CoopConfig.SoloSegmentSpectateEnabled`
+(agent side) is what makes `CoopAgent.PumpOnce`'s own peer-visibility filter hide every remote
+peer while the local player owns an active segment; `PluginConfig.ReadBool("solo_segment_spectate",
+...)` (plugin side, in-process) gates both the owner-side detection that sets the wire flag in
+the first place AND the spectator-side reaction (input lock, camera, damage gate) on the OTHER
+player's instance. Both default OFF; setting it in `coop.ini` turns every half on together.
+¹² `stun.l.google.com:19302,stun1.l.google.com:19302` — this is `CoopConfig`'s fallback when
+the key is entirely absent; a `stun_servers = ` line present but empty is what actually turns
+discovery off (see `PublicAddressDiscovery.ParseServers` and `network-topology.md`'s privacy
+note — every query is a UDP datagram to a third party).
 
 ## CLI flags (`KotorCoop.Agent`, `AgentOptions.cs`)
 

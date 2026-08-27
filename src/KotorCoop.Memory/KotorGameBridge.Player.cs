@@ -167,7 +167,6 @@ public sealed partial class KotorGameBridge
             InvalidateCreatureCache();
             _itemTags.Clear();
             _itemAddresses.Clear();
-            _itemTagMisses.Clear();
             _itemTagsBuiltAtMs = 0;
         }
 
@@ -288,6 +287,14 @@ public sealed partial class KotorGameBridge
             flags |= PlayerState.FlagDowned;
         }
 
+        // Plugin-published (SoloSegmentController): this player's own local roster just got
+        // stripped by story script in a catalogued module (the Bastila/Malak duels — see
+        // docs/research/star-forge-finale.md). A LEVEL, republished every tick like FlagDowned.
+        if (IsLocalPlayerInSoloSegment)
+        {
+            flags |= PlayerState.FlagSoloSegment;
+        }
+
         // A release of a MIRRORED pause, announced for a short window so a lost datagram
         // does not lose it. The plugin counts them; the transition to a new count starts the
         // window. See PlayerState.FlagPauseReleased.
@@ -397,6 +404,15 @@ public sealed partial class KotorGameBridge
         ("door census", BlockDoorCount),
         ("placeable census", BlockPlaceableCount),
         ("ground loot", BlockLootCount),
+
+        // A leftover override would keep telling the plugin the host still wants
+        // effect_sync/trigger_relay/liveness_sync/map_reveal_sync/dialogue_recruit_sync
+        // overridden on behalf of a session that has ended — see
+        // docs/research/mod-compatibility.md's "Behaviour-flag negotiation" gap and
+        // SetBehaviourOverrides. Values before mask, same reasoning as the write itself: a
+        // reader must never see a stale value dword paired with a freshly-zeroed mask.
+        ("behaviour override values", BlockBehaviourOverrideValues),
+        ("behaviour override mask", BlockBehaviourOverrideMask),
 
         // LAST, always. See the remarks.
         ("command", BlockCommand),

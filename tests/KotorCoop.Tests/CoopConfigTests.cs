@@ -80,6 +80,86 @@ public class CoopConfigTests
         Assert.Null(CoopConfig.TryLoad(Path.Combine(Path.GetTempPath(), "definitely-not-there.ini")));
     }
 
+    // ---- roadmap item 24: public address discovery / UPnP -------------------------------
+
+    [Fact]
+    public void AbsentStunServersKeyKeepsTheDefaultTwoServerList()
+    {
+        string path = WriteTemp("mode = host");
+        try
+        {
+            CoopConfig? c = CoopConfig.TryLoad(path);
+            Assert.NotNull(c);
+            Assert.Equal(PublicAddressDiscovery.DefaultServers, c.StunServers);
+
+            // And that default actually parses to two servers - the whole point of shipping
+            // a redundant pair rather than one.
+            Assert.Equal(2, PublicAddressDiscovery.ParseServers(c.StunServers).Count);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void AnExplicitlyBlankStunServersLineDisablesDiscovery()
+    {
+        string path = WriteTemp("""
+            mode = host
+            stun_servers =
+            """);
+        try
+        {
+            CoopConfig? c = CoopConfig.TryLoad(path);
+            Assert.NotNull(c);
+            Assert.Equal(string.Empty, c.StunServers);
+            Assert.Empty(PublicAddressDiscovery.ParseServers(c.StunServers));
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void AConfiguredStunServersListIsReadVerbatim()
+    {
+        string path = WriteTemp("stun_servers = stun.example.org:3478,stun2.example.org:3478");
+        try
+        {
+            CoopConfig? c = CoopConfig.TryLoad(path);
+            Assert.NotNull(c);
+            Assert.Equal<string[]>(
+                ["stun.example.org:3478", "stun2.example.org:3478"],
+                [.. PublicAddressDiscovery.ParseServers(c.StunServers)]);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void UpnpDefaultsOnAndCanBeDisabled()
+    {
+        string onPath = WriteTemp("mode = host");
+        string offPath = WriteTemp("""
+            mode = host
+            upnp = 0
+            """);
+        try
+        {
+            Assert.True(CoopConfig.TryLoad(onPath)!.Upnp);
+            Assert.False(CoopConfig.TryLoad(offPath)!.Upnp);
+        }
+        finally
+        {
+            File.Delete(onPath);
+            File.Delete(offPath);
+        }
+    }
+
     [Fact]
     public void DefaultsAreSaneWhenKeysAreAbsent()
     {

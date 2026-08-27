@@ -21,6 +21,7 @@ format, and the live-verification checklist — this page is the short reference
 | `say` / `chat` / `msg` | `<message>` | any player | send a line to every player |
 | `status` / `stat` | — | any player | connection state, player count |
 | `lagstats` | — | any player | interpolation delay, real send/recv intervals, agent pump cost |
+| `public_address` / `publicaddress` / `pubaddr` | — | host only | this host's public IP:port (STUN) and UPnP mapping verdict, for sharing with a joiner over the internet — see [network-topology.md](research/network-topology.md) |
 | `who` / `peers` | — | any player | list connected peers |
 | `where` | — | any player | print your own coordinates |
 | `servers` / `browse` / `list` | — | any player | list discovered servers |
@@ -59,6 +60,11 @@ scenario. Parsed in `ConsoleCommand`, dispatched by `CoopCommandDispatcher`, exe
 | `quittomenu` | — | yours only, local only | tears THIS instance down to the main menu through the engine's own `ShutDownToMainMenu` — the same call a real "Quit Game → Yes" click reaches; built to exercise the Away flag without click-navigating the pause menu (blockpoke-only, see docs/research/disconnect-reconnect.md §9) |
 | `scriptgive` | `<resref> [stack]` | yours only, local only | gives an item straight into your own inventory with NO suppression-ledger entry, simulating an untracked script (OnEnter/OnDeath/heartbeat) grant to test `script_item_sync` (blockpoke-only, see docs/research/dialogue-consequences.md) |
 | `loottake` | `[tag\|id]` (blank = nearest container) | yours only, local only | removes a container/corpse's first item through the real engine `RemoveItem` call and gives an equivalent copy to you — reproduces a genuine container/corpse take (both a real removal and a real new inventory row) for `script_item_sync`'s container/corpse-loot control, since no injected click can drive the container GUI (blockpoke-only, see docs/research/dialogue-consequences.md) |
+| `pooladd` | `<resref> [stack]` | yours to stage, local | adds a resref stack to the shared party item pool, through the same `CItemRepository::InsertItem` channel a peer's own pool deposit uses — the live-test primitive for `party_pool_sync` (see docs/research/party-pool-sync.md) |
+| `poolremove` | `<resref> [stack]` | yours to stage, local | removes a resref stack from the shared party item pool, the removal counterpart to `pooladd` |
+| `grantxp` | `<id\|me> <amount>` | yours to stage, local | adds a signed XP delta to a creature's `CSWSCreatureStats::experience`, simulating a script-granted award aimed at one creature — the live-test primitive for `companion_xp_sync`'s merge (see docs/research/companion-state-sync.md) |
+| `equip` | `<id\|me> <resref> [slot]` | yours to stage, local | re-equips a creature (1 body, 4 right weapon — default, 5 left weapon) through `Odyssey.EquipItemFromTemplate`, the same call the phantom equipment channel already ships, aimed at a live companion body — the live-test primitive for `companion_gear_sync` |
+| `grantgold` | `<amount>` | yours to stage, local | adds a signed delta to the party wallet through the same agent-side field read/write `progression_sync` already uses — the live-test primitive for gold convergence (no GUI vendor purchase needed) |
 | `cheats` | — | any player | prints this verb list |
 
 ### The `slay` / `destroyobject` authority split

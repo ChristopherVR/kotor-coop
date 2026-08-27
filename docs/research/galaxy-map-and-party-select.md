@@ -615,3 +615,141 @@ all and needs its own pass before any coverage claim can be made.
 3. **Do not attempt the Star Forge finale (item 7) as part of this work** — it needs its own
    dedicated RE pass first; folding it into this design would mean shipping a claim ("existing
    mechanisms cover it") this pass found no evidence for either way.
+
+## Shipped 2026-08-27: party-select suppression (§4 item 3) and galaxy-map gating (part of §4)
+
+Both halves of the roadmap item's remaining recommendations #2-4 that do not need a live rig
+to ship a first cut. Item 1 (`move_to_module_pending` announce) shipped separately behind
+`transition_announce_scripted`, see `transition-smoothness.md` §11.
+
+### Party-select suppression (`party_select_host_only`, plugin key, default ON, NEEDS-LIVE)
+
+Ships §2.4's **recommended** design exactly: suppress the client's own copy of
+`CSWGuiPartySelection` outright with the same panel-teardown idiom `native-browser-panel.md`
+proves for the native server-browser panel, and let `PartyRosterController`'s existing poll
+converge the roster. Nothing calls into the engine beyond the one `+0x44` state write; nothing
+new is added to the wire.
+
+**Why no new `SharedBlock` field, no session-side role computation, and no `ITravelBridge`-style
+arm channel were needed** (unlike `client_door_refusal`'s `ClientDoorRefusalReason` channel,
+which this doc's own §4 item 3 originally assumed this would need too): the plugin already has
+a purely local, already-proven stand-in for "am I a client in a live session right now" —
+`SharedBlockView.TryGetHostPartyRoster`'s own valid bit, which `PartyRosterController.
+SyncClientPartyTogetherState`'s own doc comment already calls "the cleanest... signal this
+plugin has - it is only ever written for a client." Reusing it means this feature is entirely
+plugin-side: `PartySelectSuppressionRule.ShouldSuppress(enabled, isClientInLiveSession)` (pure,
+4 tests, `PartySelectSuppressionRuleTests.cs`) and `PartySelectSuppressionController` (the
+per-frame engine-facing half). No `ProtocolConstants.Version` bump, no `SharedBlock` region —
+the block instructions for this task ("0x40C0..0x40E0 are taken, take 0x40E0.. if you need a
+field") did not apply because no field was needed.
+
+**Addresses used, verification status:**
+
+| Address / offset | What | Status |
+| --- | --- | --- |
+| `CGuiInGame+0x078` | `CSWGuiPartySelection*` while the panel is open | VERIFIED §2.1, cross-checked twice this doc, plus the live postmortem `Odyssey.Dialogue.Follow.cs` already carries about this exact offset |
+| `CSWGuiPartySelection` vtable `0x00756D28` | guard that `+0x78` really is this class | VERIFIED (symbol database), used here as a read-only compare, never dereferenced past the vtable slot itself |
+| `CSWGuiPanel+0x18` (gui manager pointer) | the manager the panel was constructed with | VERIFIED for `CSWGuiSaveLoad` (`native-browser-panel.md` §1); **INFERRED, not independently re-verified, for `CSWGuiPartySelection`** — assumed to hold because both are `CSWGuiPanel` subclasses sharing the same base constructor; guarded with a heap-pointer range check before use, and a mismatch here latches the whole controller off for the session (logged) rather than writing through a wrong guess |
+| `CSWGuiPanel+0x44` (state bits) | `(state & ~0x300) \| 0x400` marks the panel for the manager's next-frame sweep | VERIFIED mechanism for `CSWGuiSaveLoad` (`native-browser-panel.md` §2's full state-machine trace); same INFERRED-by-base-class caveat as `+0x18` |
+| `CSWGuiManager::PanelExists 0x0040BD70` | liveness check that never dereferences the panel | VERIFIED (already proven live by `NativeBrowserController`) |
+| `CClientExoAppInternal+0x40` (`CGuiInGame*`) | reached via the app-manager → client → client-internal chain | VERIFIED, same chain `Odyssey.Dialogue.Spectate.cs`'s `GetInGameGui` already uses live |
+
+**NEEDS-LIVE, everything named above that says so, plus:**
+
+* Whether the client's copy of `CSWGuiPartySelection` actually opens at all in an ordinary
+  session (the doc's own §2.2 finding: the only *positively confirmed* trigger for this screen
+  is the Taris swoop-taxi system, `k_pebn_loc01`..`09` → `ShowPartySelectionGUI("k_pebn_swoop")`
+  — not confirmed on any interplanetary departure leg).
+* §2.4's own open question, unchanged by this pass: does suppressing via the sweep (rather than
+  the retail Back/Done path) skip running the panel's own `exit_script` field? If the Taris
+  swoop-taxi's own dispatch (`k_pebn_swoop`) depends on that script firing locally on the
+  suppressed client, this ships incomplete for that one trigger and needs the §2.4 item 4
+  fallback (mirror the host's picks and synthesize a real Accept click) built next.
+* `CSWGuiPanel+0x18`/`+0x44` for `CSWGuiPartySelection` specifically (INFERRED-by-base-class,
+  see the table above).
+
+**Roster convergence verified by reading the code, no gap found.** The task asked to confirm
+that a roster change on the host while the client's panel was suppressed is still applied, and
+to add a unit test on the pure roster-reconcile rule if a gap showed. `PartyRosterController.
+Reconcile` (`src/KotorCoop.Plugin/PartyRosterController.cs`) is driven entirely by
+`block.TryGetHostPartyRoster` (the agent's published masks) against a fresh local
+`Odyssey.TryReadPartyRoster` every ~30 frames — it has **no dependency on GUI/panel state at
+all**, the same "poll, not hook" property §2.4 already documents. Suppressing the client's copy
+of the screen cannot desync this: whatever the host's screen writes through `SpawnNPC`/
+`AddMember` reaches the roster masks the poll already reads regardless of what, if anything, the
+client's own (now-closed) panel would have shown. No isolable "pure roster-reconcile rule"
+exists to add a test to — `Reconcile` itself is an engine-calling method, not a pure function —
+so no new test was added here; the existing `PartyRosterController` design already covers this
+case by construction, and that reasoning is what is recorded above rather than a speculative
+test of the plugin-agnostic parts.
+
+### Galaxy-map gating (part of §4, task 2)
+
+**Pure rule + tests only, no live plugin wiring.** `GalaxyMapConfirmRefusalRule.ShouldRefuse
+(isClient, mode)` (`src/KotorCoop.Session/GalaxyMapConfirmRefusalRule.cs`, 3 tests,
+`GalaxyMapConfirmRefusalRuleTests.cs`) mirrors `ClientDoorRefusalRule`'s `follow_lead=host`
+case exactly (`isClient && mode == FollowLeadMode.Host`) but — by design, see the rule's own
+doc comment — does **not** reach for `ClientDoorRefusalRule`'s extra "is the host busy right
+now" gate: confirming a planet is not the moment the host would have to interrupt anything, it
+only starts the same announce-then-follow chain (§1.4) an ordinary door crossing already uses,
+so the host's own busy-ness is checked once, at the point it would actually follow
+(`LeadFollowRule.DecideHostFollow`), not a second time at confirm.
+
+**Why no plugin wiring shipped this pass**: §2.1's own table names `accept_button 0x1F24` on
+`CSWGuiInGameGalaxyMap`, but this doc never independently traced *which* function is bound to
+that button's click event the way §2.1 traced `CSWGuiPartySelection::ConfirmPartySelection` →
+`AcceptParty` for the party-select screen — `k_sup_galaxymap.nss` (§1.3) is the NWScript-side
+confirm handler, not the native button dispatch. Wiring a live refusal correctly needs that
+address/ABI pinned down and guarded with the same rigor as every other detour in this plugin
+(prologue/vtable checks, a registered-panel liveness check) — exactly the kind of researched-
+but-unexercised write this project's own engine-write rules hold back behind a live pass. Task
+scope for this item was explicitly "pure rule + tests," so that is what shipped; wiring the
+plugin side (intercepting the accept button, posting "only the host can choose a destination")
+is left as follow-up work, tracked in the roadmap row below.
+
+### Files changed
+
+* `src/KotorCoop.Plugin/PartySelectSuppressionRule.cs` (new) — the pure suppression decision.
+* `src/KotorCoop.Plugin/PartySelectSuppressionController.cs` (new) — panel detection + teardown.
+* `src/KotorCoop.Plugin/PluginHost.cs`, `PluginHost.Controllers.cs`, `PluginHost.Frame.cs`,
+  `PluginHost.SessionLifecycle.cs` — construction, per-frame call (after `_partyRoster`),
+  module-invalidation reset.
+* `src/KotorCoop.Session/GalaxyMapConfirmRefusalRule.cs` (new) — the pure gating decision.
+* `tests/KotorCoop.Tests/PartySelectSuppressionRuleTests.cs` (new, 4 tests),
+  `tests/KotorCoop.Tests/GalaxyMapConfirmRefusalRuleTests.cs` (new, 3 tests),
+  `KotorCoop.Tests.csproj` linked-source entry for `PartySelectSuppressionRule.cs`.
+* `docs/CONFIG.md`, `profiles/coop.ini.example`, `docs/roadmap-seamless.md` — new key
+  documented, shipped default, roadmap row updated.
+
+### Live test plan (needs a two-instance rig)
+
+Prerequisite: an Ebon Hawk save, or `warp ebo_m12aa` from the console
+(`docs/research/console-overlay.md`) to reach the galaxy map console (`infoterm001`, `Tag =
+"GalaxyMap"`); the Taris swoop-taxi party-select trigger needs a save on Taris near one of the
+`k_pebn_loc01`..`09` drop-off points (or `warp tar_m03aa` and walking to one).
+
+1. **Party-select suppression, the confirmed trigger.** Host and client both on Taris, host
+   free to roam; walk the CLIENT character onto a `k_pebn_loc0N` swoop-taxi trigger. Expect:
+   the client's screen never appears (or appears and is torn down within a frame or two), the
+   chat line "party is chosen by the host" posts once, and the plugin log shows `party-select:
+   client copy suppressed`. Confirm no crash and no leftover input-locked state. Separately,
+   trigger the SAME swoop-taxi drop-off with the HOST's own character and confirm the host's
+   screen behaves exactly as vanilla (unsuppressed) — `TryGetHostPartyRoster` should read
+   invalid for the host, so nothing should fire.
+2. **`exit_script` question.** With the client's screen suppressed in test 1, confirm whatever
+   `k_pebn_swoop` normally dispatches (the taxi ride itself) still happens correctly for the
+   client. If it does not, §2.4 item 4 (synthesize a real Accept click instead of just tearing
+   the panel down) needs to be built next.
+3. **`CSWGuiPanel+0x18`/`+0x44` for `CSWGuiPartySelection`.** Confirm the guard in
+   `PartySelectSuppressionController` (the `panel+0x18` heap-pointer check) does not fire
+   `guard refused` in the log during test 1 — if it does, the base-class-inferred offset does
+   not hold for this panel class and needs re-derivation.
+4. **Galaxy-map departure, both legs, with the existing `transition_announce_scripted`
+   announce** (already shipped, separately NEEDS-LIVE per `transition-smoothness.md` §11): walk
+   both instances to `ebo_m12aa`'s `infoterm001`, pick a planet, confirm, walk the exit
+   corridor — this exercises the pre-existing item 1 announce edge, unrelated to the two new
+   pieces above, but worth re-confirming in the same session since it shares the rig setup.
+5. **Galaxy-map gating, once the plugin-side wiring above is built** (not this pass): under
+   `follow_lead=host`, a client's own galaxy-map confirm should be refused with "only the host
+   can choose a destination"; under `follow_lead=any`, the client's confirm should proceed
+   normally and become an announce the host follows via the existing chain.

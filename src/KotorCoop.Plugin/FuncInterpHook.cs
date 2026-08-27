@@ -37,6 +37,10 @@ internal static unsafe class FuncInterpHook
         "password", "pw",
         "stat", "commands", "?", "warp", "who", "peers", "where", "lagstats",
 
+        // Roadmap item 24 ("hosting over the internet"): prints a hosting player's public
+        // IP:port and UPnP verdict for sharing with a joiner. Not a retail verb.
+        "public_address", "publicaddress", "pubaddr",
+
         // A diagnostic, not a cheat: prints what this instance's enemy census holds and what
         // its own engine says about each id. It shadows nothing the retail console owns.
         "census", "resolve", "firescript",

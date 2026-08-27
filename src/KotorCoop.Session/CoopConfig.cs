@@ -31,6 +31,16 @@ namespace KotorCoop.Session;
 ///                               ; live-pass section)
 ///   party_pool_sync = 0        ; sync the shared party item pool (NEEDS-LIVE, default off) -
 ///                               ; docs/research/party-pool-sync.md
+///   solo_segment_spectate = 0  ; the OWNER's fight, the other player spectates during a
+///                               ; story-forced solo segment (NEEDS-LIVE, default off) -
+///                               ; docs/research/star-forge-finale.md
+///   stun_servers = stun.l.google.com:19302,stun1.l.google.com:19302   ; HOST only: public
+///                               ; address discovery (roadmap item 24). This is the default
+///                               ; when the key is absent; set `stun_servers = ` (empty) to
+///                               ; disable it - see docs/research/network-topology.md's
+///                               ; privacy note (contacts a third party).
+///   upnp = 1                   ; HOST only: attempt a UPnP router port mapping. Default on,
+///                               ; fails soft (0 to disable and forward the port by hand).
 /// </code>
 /// </summary>
 public sealed record CoopConfig
@@ -321,6 +331,27 @@ public sealed record CoopConfig
     /// </summary>
     public bool MovieRelayEnabled { get; init; }
 
+    /// <summary>
+    /// coop.ini <c>stun_servers</c> (roadmap item 24, "public address discovery"): comma-
+    /// separated STUN servers (<c>host:port</c>) a HOST asks for its own public IP:port, so the
+    /// status line and <c>public_address</c> can show an internet-reachable address to share.
+    /// Defaults to <see cref="PublicAddressDiscovery.DefaultServers"/> when the key is ABSENT;
+    /// an explicitly EMPTY value (<c>stun_servers = </c>) is what actually disables discovery —
+    /// see <see cref="PublicAddressDiscovery.ParseServers"/>, which turns either form of
+    /// "nothing configured" into an empty list, and this class's own <see cref="TryLoad"/>,
+    /// which is the only place that can tell "absent" apart from "present and blank". Ignored
+    /// by a client. ⚠ This contacts a third party — see docs/research/network-topology.md's
+    /// 2026-08-27 "Internet play" section for the privacy note.
+    /// </summary>
+    public string StunServers { get; init; } = PublicAddressDiscovery.DefaultServers;
+
+    /// <summary>
+    /// coop.ini <c>upnp</c> (roadmap item 24): whether a HOST attempts a UPnP IGD port mapping
+    /// for its session port. ON by default; fails soft — a router with UPnP off or absent just
+    /// gets "forward the port yourself" in the status line, not an error. Ignored by a client.
+    /// </summary>
+    public bool Upnp { get; init; } = true;
+
     // ── Digest-only keys ────────────────────────────────────────────────────────────────
     // Everything below is a PLUGIN-side key (docs/CONFIG.md's "Plugin-side keys" table,
     // PluginConfig.cs + per-controller reads) that this agent-side reader never acted on
@@ -363,11 +394,11 @@ public sealed record CoopConfig
 
     /// <summary>
     /// Whether each active companion's experience is shared like the PC's own —
-    /// see <see cref="KotorCoop.Session.AgentSettings.SyncCompanionXp"/>. OFF by default,
-    /// NEEDS-LIVE (docs/research/companion-state-sync.md). <c>companion_xp_sync = 1</c> turns
-    /// it on.
+    /// see <see cref="KotorCoop.Session.AgentSettings.SyncCompanionXp"/>. Live-verified
+    /// 2026-08-27, default ON (docs/research/companion-state-sync.md §6). <c>companion_xp_sync
+    /// = 0</c> turns it off.
     /// </summary>
-    public bool CompanionXpSync { get; init; }
+    public bool CompanionXpSync { get; init; } = true;
 
     /// <summary>
     /// Whether a client dresses its own copy of a host-driven companion in that companion's
@@ -385,6 +416,27 @@ public sealed record CoopConfig
     /// a flag until it has. See docs/research/party-pool-sync.md.
     /// </summary>
     public bool PartyPoolSyncEnabled { get; init; }
+
+    /// <summary>
+    /// Story-forced solo segments (the Star Forge's Bastila and Malak duels —
+    /// <see cref="KotorCoop.Protocol.SoloSegmentCatalogue"/>, docs/research/star-forge-finale.md
+    /// §3.3/§3.5): while ON, the fighting player's OWN agent hides every peer from what it
+    /// writes locally the instant its plugin reports it owns an active segment, and the other
+    /// player's plugin parks their input/camera on the fight instead of letting them wander
+    /// into a 1-on-1 duel the base game designed for one player. OFF by default, NEEDS-LIVE —
+    /// nothing here has been exercised against a real Star Forge save yet. coop.ini
+    /// <c>solo_segment_spectate = 1</c> turns it on. Shares the SAME key with the plugin's own
+    /// independent read (<c>SoloSegmentController</c>/<c>SoloSegmentSpectateController</c>,
+    /// <c>PluginConfig.ReadBool</c>), the same "one coop.ini key, two files" pattern
+    /// <c>minigame_hide_peer</c>/<c>pazaak_detect</c> already use.
+    /// </summary>
+    public bool SoloSegmentSpectateEnabled { get; init; }
+    /// Syncs merchant store stock both ways. OFF by default (coop.ini <c>store_sync = 1</c>
+    /// turns it on) — researched and verified against the disassembly, but not yet watched land
+    /// on a running game, per the project's own rule that a researched write ships behind a flag
+    /// until it has. See docs/research/store-sync.md.
+    /// </summary>
+    public bool StoreSyncEnabled { get; init; }
 
     /// <summary>The anchor as the plugin's numeric code (0=TL, 1=TR, 2=BL, 3=BR).</summary>
     public uint ChatOverlayAnchorCode => ChatOverlayAnchor.Trim().ToLowerInvariant() switch
@@ -515,6 +567,14 @@ public sealed record CoopConfig
                 : FollowLeadMode.Any,
             MovieRelayEnabled = !kv.ContainsKey("movie_relay") || IsTruthy(kv.GetValueOrDefault("movie_relay")),
 
+            // Absent key -> the default server list; PRESENT-but-empty ("stun_servers = ")
+            // -> the empty string, which PublicAddressDiscovery.ParseServers turns into an
+            // empty list and therefore disables discovery. See StunServers's own doc comment.
+            StunServers = kv.TryGetValue("stun_servers", out string? stunServers)
+                ? stunServers
+                : PublicAddressDiscovery.DefaultServers,
+            Upnp = !kv.ContainsKey("upnp") || IsTruthy(kv.GetValueOrDefault("upnp")),
+
             // Digest-only (see the field group's own doc comment above): plugin-owned keys,
             // parsed here purely so the outgoing BehaviourDigest can compare them.
             LocalCombat = !kv.ContainsKey("local_combat") || IsTruthy(kv.GetValueOrDefault("local_combat")),
@@ -530,6 +590,8 @@ public sealed record CoopConfig
             CompanionXpSync = IsTruthy(kv.GetValueOrDefault("companion_xp_sync")),
             CompanionGearSync = IsTruthy(kv.GetValueOrDefault("companion_gear_sync")),
             PartyPoolSyncEnabled = IsTruthy(kv.GetValueOrDefault("party_pool_sync")),
+            SoloSegmentSpectateEnabled = IsTruthy(kv.GetValueOrDefault("solo_segment_spectate")),
+            StoreSyncEnabled = IsTruthy(kv.GetValueOrDefault("store_sync")),
         };
     }
 

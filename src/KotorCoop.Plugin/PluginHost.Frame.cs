@@ -493,6 +493,11 @@ internal static unsafe partial class PluginHost
         // follows a living peer instead of their own corpse.
         _spectate?.OnFrame();
 
+        // Right after the down-spectate camera, and checking the same downed state itself so
+        // the two never fight for SetCameraFollow on the same frame: a peer publishing a
+        // solo-segment owner flag gets this instance parked on their fight instead.
+        _soloSegmentSpectate?.OnFrame();
+
         _controller?.OnFrame();
 
         // Right after the phantom drive, on the block reads/slot state it just processed:
@@ -519,6 +524,13 @@ internal static unsafe partial class PluginHost
         // body, and it should be driven by the mirror on the NEXT frame with the block already
         // read rather than half-way through this one.
         _partyRoster?.OnFrame();
+
+        // After the roster reconciliation: this reads the SAME live party-table roster pass
+        // just settled, so it never judges a drop against a mid-reconcile transient count.
+        _soloSegment?.OnFrame();
+        // After the roster poll, not before: suppression only decides whether to close the
+        // client's own screen, and never blocks the reconcile pass above from converging.
+        _partySelectSuppression?.OnFrame();
 
         // After death handling has published whether we are down, so damage that would
         // arrive on an already-downed player is skipped rather than fighting the revive.

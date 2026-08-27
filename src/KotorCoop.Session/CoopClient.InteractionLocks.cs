@@ -107,4 +107,78 @@ public sealed partial class CoopClient
             }
         }
     }
+
+    // ---- explicit arbitration: closes the container-loot race, docs/roadmap-seamless.md
+    // Tier 1 item 4 ----------------------------------------------------------------------
+    //
+    // See CoopHost.InteractionLocks.cs's identical header remark. This half sends the ONE-SHOT
+    // request over the wire (the ordinary per-tick claim above is unaffected — it keeps
+    // republishing exactly as before) and remembers the last answer that arrived so
+    // TryGetLockResponse can hand it back on the next poll.
+
+    private uint _lastLockResponseSerial;
+    private bool _lastLockResponseGranted;
+
+    /// <summary>
+    /// Sends one explicit arbitration request to the host — see
+    /// <see cref="KotorCoop.Session.IInteractionLockSession.RequestContainerLock"/>'s own remarks
+    /// for why this exists alongside the ordinary per-tick claim. Fire-and-forget: no retry, no
+    /// ack of the request itself, because the caller's own deferral state machine already has a
+    /// timeout that covers a lost request exactly the way it covers a lost reply.
+    /// </summary>
+    public void RequestContainerLock(string module, uint targetId, uint requestSerial)
+    {
+        if (targetId == 0 || requestSerial == 0)
+        {
+            return;
+        }
+
+        // A PRIVATE buffer, not _sendBuffer: this is called from the plugin-pump thread while
+        // RunAsync's tick loop is encoding its own packets into _sendBuffer on another thread.
+        // Sharing it corrupted the request (the host dropped it as malformed), so the first
+        // click silently lost the race it was supposed to win.
+        byte[] buffer = new byte[ProtocolConstants.MaxPacketSize];
+        int length = PacketCodec.Write(
+            buffer,
+            new InteractionClaimPacket(
+                _localPeerId, module, string.Empty, InteractionKind.Container, true, targetId,
+                requestSerial));
+        if (length > 0)
+        {
+            _channel.Send(_hostEndPoint, buffer.AsSpan(0, length));
+        }
+    }
+
+    /// <summary>The most recent <see cref="LockResponsePacket"/> the host sent us, if its
+    /// serial matches <paramref name="requestSerial"/> — false while the round trip is still in
+    /// flight (or was lost), which the caller's own timeout is what covers.</summary>
+    public bool TryGetLockResponse(uint requestSerial, out bool granted)
+    {
+        lock (_gate)
+        {
+            if (requestSerial != 0 && requestSerial == _lastLockResponseSerial)
+            {
+                granted = _lastLockResponseGranted;
+                return true;
+            }
+        }
+
+        granted = false;
+        return false;
+    }
+
+    private void HandleLockResponse(IPEndPoint from, ReadOnlySpan<byte> span, long now)
+    {
+        if (PacketCodec.ReadLockResponse(span) is not { } response)
+        {
+            _channel.NoteMalformed();
+            return;
+        }
+
+        lock (_gate)
+        {
+            _lastLockResponseSerial = response.RequestSerial;
+            _lastLockResponseGranted = response.Granted;
+        }
+    }
 }

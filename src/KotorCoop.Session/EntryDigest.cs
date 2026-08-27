@@ -114,6 +114,21 @@ public static class EntryDigest
         return MixUInt32(h, unchecked((uint)count));
     }
 
+    /// <summary>One store stock entry: the store's object id, the content key, plus its current
+    /// aggregate quantity — <see cref="PartyPoolEntry"/> widened by the store id, for the
+    /// identical reason <see cref="Protocol.StoreStackKey"/> widens
+    /// <see cref="Protocol.PartyPoolStackKey"/> (docs/research/store-sync.md).</summary>
+    public static ulong StoreEntry(Protocol.StoreStackKey key, int count)
+    {
+        ulong h = MixUInt32(Offset, key.StoreObjectId);
+        h = MixStringIgnoreCase(h, key.Resref);
+        h = MixByte(h, key.Charges);
+        h = MixByte(h, key.MaxCharges);
+        h = MixUInt32(h, key.Upgrades);
+        h = MixByte(h, key.Flags);
+        return MixUInt32(h, unchecked((uint)count));
+    }
+
     /// <summary>One creature-liveness entry: id plus its reported state. XOR-summed over the
     /// WHOLE publish cycle's entries (every page, before pagination splits them across
     /// datagrams) by <c>CreatureLivenessPaging.Paginate</c>, so every page of one cycle

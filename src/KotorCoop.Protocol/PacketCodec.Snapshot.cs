@@ -36,14 +36,24 @@ public static partial class PacketCodec
         PacketWriter w = new(buffer);
         w.WriteHeader(PacketType.WorldSnapshot);
         w.WriteInt64(packet.ServerTimeMs);
-        w.WriteUInt32(packet.FlagVersion);
-        w.WriteUInt32(packet.ItemVersion);
-        w.WriteUInt32(packet.JournalVersion);
-        w.WriteUInt32(packet.LootVersion);
-        w.WriteUInt64(packet.FlagDigest);
-        w.WriteUInt64(packet.ItemDigest);
-        w.WriteUInt64(packet.JournalDigest);
-        w.WriteUInt64(packet.LootDigest);
+        w.WriteUInt8(packet.PageIndex);
+        w.WriteUInt8(packet.PageCount);
+
+        // The flag/item/journal/loot tripwires ride on page 0 only — see
+        // WorldSnapshotPacket's remarks. A later page never puts them on the wire at all,
+        // whatever the caller happened to pass in those fields, so pagination cannot leak a
+        // stale or duplicated tripwire onto a page a receiver must not read it from.
+        if (packet.PageIndex == 0)
+        {
+            w.WriteUInt32(packet.FlagVersion);
+            w.WriteUInt32(packet.ItemVersion);
+            w.WriteUInt32(packet.JournalVersion);
+            w.WriteUInt32(packet.LootVersion);
+            w.WriteUInt64(packet.FlagDigest);
+            w.WriteUInt64(packet.ItemDigest);
+            w.WriteUInt64(packet.JournalDigest);
+            w.WriteUInt64(packet.LootDigest);
+        }
 
         int count = Math.Min(packet.Entries.Count, ProtocolConstants.MaxPeers);
         w.WriteUInt8((byte)count);
@@ -68,14 +78,30 @@ public static partial class PacketCodec
         }
 
         long serverTime = r.ReadInt64();
-        uint flagVersion = r.ReadUInt32();
-        uint itemVersion = r.ReadUInt32();
-        uint journalVersion = r.ReadUInt32();
-        uint lootVersion = r.ReadUInt32();
-        ulong flagDigest = r.ReadUInt64();
-        ulong itemDigest = r.ReadUInt64();
-        ulong journalDigest = r.ReadUInt64();
-        ulong lootDigest = r.ReadUInt64();
+        byte pageIndex = r.ReadUInt8();
+        byte pageCount = r.ReadUInt8();
+
+        uint flagVersion = 0;
+        uint itemVersion = 0;
+        uint journalVersion = 0;
+        uint lootVersion = 0;
+        ulong flagDigest = 0;
+        ulong itemDigest = 0;
+        ulong journalDigest = 0;
+        ulong lootDigest = 0;
+
+        if (pageIndex == 0)
+        {
+            flagVersion = r.ReadUInt32();
+            itemVersion = r.ReadUInt32();
+            journalVersion = r.ReadUInt32();
+            lootVersion = r.ReadUInt32();
+            flagDigest = r.ReadUInt64();
+            itemDigest = r.ReadUInt64();
+            journalDigest = r.ReadUInt64();
+            lootDigest = r.ReadUInt64();
+        }
+
         byte count = r.ReadUInt8();
 
         if (r.Failed || count > ProtocolConstants.MaxPeers)
@@ -98,7 +124,7 @@ public static partial class PacketCodec
         }
 
         return new WorldSnapshotPacket(
-            serverTime, flagVersion, itemVersion, journalVersion, lootVersion,
+            serverTime, pageIndex, pageCount, flagVersion, itemVersion, journalVersion, lootVersion,
             flagDigest, itemDigest, journalDigest, lootDigest, entries);
     }
 }

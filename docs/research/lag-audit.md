@@ -755,3 +755,83 @@ rather than real OS input, per this document's own long-standing caveat.
 ### Test suite and build
 
 `dotnet test`: no production code changed this pass (a live-verification run only).
+
+## P0-2: `WorldSnapshotPacket` graceful degradation — paged like `CreatureLiveness` (2026-08-27)
+
+A protocol audit finding, not a live-verification round: `WorldSnapshotPacket` was all-or-
+nothing per tick. `CoopHost.Tick()` built ONE packet for the whole peer roster and, if
+`PacketCodec.Write` returned 0 (the aggregate entry size overran
+`ProtocolConstants.MaxPacketSize`), it logged once and simply did not send it — for as long as
+the lobby stayed that full, EVERY peer's position sync stopped, silently, every tick, with only
+a single log line marking the moment it started. `MaxPacketSize` had already been raised once
+before (1200 → 1400, see its own doc comment) for exactly this failure shape; raising it again
+only ever buys back one more growth cycle before the next field on `PlayerState`, a longer
+`MaxNameLength`, or a larger `MaxPeers` reopens the identical bug.
+
+The fix generalises the pattern `CreatureLivenessPacket` already uses for its own wider publish:
+page the per-peer entries across multiple datagrams per tick instead of dropping the tick
+whole. `WorldSnapshotPacket` gains `PageIndex`/`PageCount`, protocol version 43. Two differences
+from `CreatureLiveness`'s pagination, both deliberate:
+
+- **The tick id is `ServerTimeMs` itself, not a separate `Generation` counter.** `CoopHost.Tick()`
+  already computes `now` once and stamps it on the packet; `CreatureLiveness`'s broadcast is
+  throttled to one cycle every ~2 s and needed its own counter, but `WorldSnapshotPacket` is sent
+  every tick at up to 30 Hz, so the existing per-tick timestamp is already a free, adequate
+  grouping key — no extra wire bytes spent on a redundant counter.
+- **Pages apply independently, not accumulate-then-replace.** `CreatureLiveness`'s receiver
+  replaces its whole accumulated set only once a cycle looks complete; `WorldSnapshotPacket`'s
+  pages are read every tick and carry AVATAR POSITIONS, so a peer named only on page 2 must not
+  wait on page 1 — `WorldSnapshotAssembler.Apply` hands back that page's own entries
+  unconditionally, and `CoopClient.HandleWorldSnapshot` pushes them into `SnapshotBuffer`
+  immediately. Only the roster-wide decisions (pruning a peer who is genuinely gone via
+  `SnapshotBuffer.RetainOnly`; trusting the flag/item/journal/loot version+digest tripwires) wait
+  for `WorldSnapshotAssembler.TickComplete` — and even those just skip a tick rather than block,
+  since the very next tick starts an independent cycle regardless of whether the last one ever
+  completed.
+
+The four world-store tripwires (`FlagVersion`/`ItemVersion`/`JournalVersion`/`LootVersion` and
+their four digests) ride on page 0 only: `PacketCodec.Write(WorldSnapshotPacket)` does not even
+put them on the wire for a later page, and `ReadWorldSnapshot` reports them as 0/default off
+anything but page 0 — 48 bytes saved per non-zero page, and a receiver simply cannot read a
+stale or duplicated tripwire off a page it should not trust.
+
+`ProtocolConstants.MaxSnapshotEntriesPerPage = 5`, sized against page 0's own tighter per-page
+budget (it additionally carries the 48 bytes of tripwire fields a later page does not), with the
+fit asserted by `WorldSnapshotPagingTests.AFullEightPeerLobbyAtWorstCaseSizeSpansPagesWithNoneDropped`
+rather than trusted by arithmetic alone — the same discipline `FullPeerSnapshotFitsInOneDatagram`'s
+own doc comment warns is easy to get wrong by accident. A full 8-peer lobby now needs two pages
+per tick; `WorldSnapshotPacket.MaxPages = 4` bounds it well beyond that, and a tick that somehow
+still overflows drops the excess entries and logs once (latched, like the old whole-snapshot
+guard), rather than growing the send unboundedly. `SessionStats.WorldSnapshotPagesSent` (host
+only) makes the actual per-tick page count visible alongside `lagstats`'s other counters, so a
+live round can confirm pagination is doing real work rather than sitting dormant.
+
+The single-page case (a lobby of `MaxSnapshotEntriesPerPage` or fewer peers) is two bytes larger
+on the wire than before this change (`PageIndex`/`PageCount`) but otherwise unchanged — the
+pinning tests were updated deliberately for the new constructor shape rather than left byte-
+identical, since adding the paging fields is itself the wire-format change protocol version 43
+exists to mark.
+
+### Verification tags (this pass)
+
+- VERIFIED (unit test, this pass): `WorldSnapshotPagingTests` (host-side pagination arithmetic,
+  including the full 8-peer worst-case-size scenario and the `MaxPages` overflow/drop/log path);
+  `WorldSnapshotAssemblerTests` (client-side reassembly, including
+  `ALostPageDoesNotStallTheOthers` and the fresh-cycle-per-tick-id reset);
+  `PacketCodecTests.WorldSnapshotTripwireFieldsAreDroppedOnANonZeroPage` (the exact 48-byte
+  saving and the 0/default read-back on a non-zero page).
+- VERIFIED (loopback integration test, this pass): `EightPeerSessionTests
+  .AllEightPeersSeeEachOthersPositionsAcrossSeveralPages` — a real host and seven real clients
+  over loopback UDP, each peer's own distinct position, asserting every one of the 8 peers sees
+  every other peer's real (not origin, not swapped) position, and that
+  `SessionStats.WorldSnapshotPagesSent` actually climbs across several ticks rather than staying
+  at the single-page-per-tick figure a coincidental fit would produce.
+- NEEDS-LIVE, not yet observed running: an actual live 8-peer (or even 3+ peer) session against
+  real `swkotor.exe` instances confirming positions still converge smoothly under real network
+  conditions with pagination active — this pass is a protocol-layer audit finding plus loopback
+  UDP verification, not a live-rig round.
+
+### Test suite and build
+
+`dotnet build KotorCoop.slnx -warnaserror`: clean. `dotnet test tests/KotorCoop.Tests --no-build`:
+full suite, see this task's own report for the pass/fail tally.

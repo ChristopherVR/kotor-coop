@@ -106,12 +106,14 @@ public sealed partial class CoopCommandDispatcher(
                     AnnounceCompatibilityChanges();
                     AnnounceConnectionStatus();
                     AnnounceHostSaveAvailability();
+                    AnnouncePublicAddress();
                     MaintainSessionSave();
                     MaintainWorldServing();
                     DrainChat();
                     ReflectCheatAnswer();
                     DrainAutomaticLoot();
                     DrainAutomaticPartyPool();
+                    DrainAutomaticStore();
                     PumpPeerEffectLog();
                 }
                 catch (Exception ex) when (ex is not OperationCanceledException)
@@ -225,6 +227,7 @@ public sealed partial class CoopCommandDispatcher(
         [CoopCommandKind.Where] = WhereCommand,
         [CoopCommandKind.Census] = c => Census(c.Address),
         [CoopCommandKind.LagStats] = _ => LagStats(manager),
+        [CoopCommandKind.PublicAddress] = _ => PublicAddressCommand(),
 
         // Straight to the plugin: these questions can only be answered on the game thread,
         // and the value of the answer is that it is taken in ONE frame.
@@ -263,6 +266,15 @@ public sealed partial class CoopCommandDispatcher(
             CheatKinds.ScriptGive, Text: c.Address ?? string.Empty, Amount: c.Amount)),
 
         [CoopCommandKind.LootTake] = c => LootTake(c.Address ?? string.Empty),
+
+        [CoopCommandKind.PoolAdd] = c => SendCheat(new CheatRequest(
+            CheatKinds.PartyPoolAdd, Text: c.Address ?? string.Empty, Amount: c.Amount)),
+        [CoopCommandKind.PoolRemove] = c => SendCheat(new CheatRequest(
+            CheatKinds.PartyPoolRemove, Text: c.Address ?? string.Empty, Amount: c.Amount)),
+
+        [CoopCommandKind.GrantXp] = GrantXp,
+        [CoopCommandKind.Equip] = Equip,
+        [CoopCommandKind.GrantGold] = c => GrantGold(c.Amount),
 
         [CoopCommandKind.Cheats] = CheatsCommand,
     };

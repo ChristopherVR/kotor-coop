@@ -58,6 +58,20 @@ public static class ItemIdentityLayout
     private const uint BitNonEquippable = 1u << 6;
 
     /// <summary>
+    /// Bit 2 (mask <c>0x4</c>) of <see cref="BitFlags"/> — NOT one of the three bits
+    /// <see cref="Decode"/> carries onto the wire, and not a persisted item field at all (it is
+    /// absent from <c>SaveItem</c>/<c>LoadDataFromGff</c>'s own field list). This is a STORE-STOCK
+    /// property: the .utm store template's per-entry <c>Infinite</c> GFF field, VERIFIED this
+    /// pass (docs/research/store-sync.md §1.5) from fresh disassembly of <c>CSWSStore::SellItem
+    /// 0x005C6F70</c> and <c>CSWSStore::AcquireItem 0x005C7610</c> — both test exactly this bit
+    /// to decide whether a store-stock entry's quantity may change. Public here (rather than
+    /// private, like the three bits above) because the store-sync bridge/plugin need to test it
+    /// directly on an item outside a store's repository too — a store-stock item is still a
+    /// plain <c>CSWSItem</c> at this same offset.
+    /// </summary>
+    public const uint BitInfinite = 1u << 2;
+
+    /// <summary>
     /// Decodes <see cref="WindowLength"/> bytes read from <c>item + <see cref="WindowStart"/></c>.
     ///
     /// Always returns a KNOWN identity — the caller has the bytes, so there is nothing left

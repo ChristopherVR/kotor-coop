@@ -20,7 +20,10 @@ internal sealed unsafe class PeerEffectController(SharedBlockView block)
 {
     private const int IntervalFrames = 5;
 
-    private readonly bool _enabled = PluginConfig.ReadBool("effect_sync", true);
+    /// <summary>coop.ini <c>effect_sync</c>, overridable per session by the host — see
+    /// <see cref="EffectiveBehaviourFlag"/>.</summary>
+    private readonly EffectiveBehaviourFlag _effectSync = new(
+        "effect_sync", SharedBlock.OverrideBitEffectSync, PluginConfig.ReadBool("effect_sync", true));
 
     private int _countdown;
 
@@ -51,7 +54,7 @@ internal sealed unsafe class PeerEffectController(SharedBlockView block)
 
     public void OnFrame()
     {
-        if (!_enabled || block.Command != SharedBlock.CommandSpawnAndDrive)
+        if (!_effectSync.Resolve(block) || block.Command != SharedBlock.CommandSpawnAndDrive)
         {
             return;
         }

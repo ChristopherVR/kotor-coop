@@ -35,6 +35,7 @@ public class ConsoleCommandVerbTableCoverageTests
         [CoopCommandKind.MoveNear] = "movenear 0x35",
         [CoopCommandKind.NetSim] = "netsim status",
         [CoopCommandKind.LagStats] = "lagstats",
+        [CoopCommandKind.PublicAddress] = "public_address",
         [CoopCommandKind.God] = "god on",
         [CoopCommandKind.TopUp] = "topup",
         [CoopCommandKind.StandUp] = "standup",
@@ -65,6 +66,11 @@ public class ConsoleCommandVerbTableCoverageTests
         [CoopCommandKind.QuitToMenu] = "quittomenu",
         [CoopCommandKind.ScriptGive] = "scriptgive g_w_blstrpstl001",
         [CoopCommandKind.LootTake] = "loottake",
+        [CoopCommandKind.PoolAdd] = "pooladd g_w_blstrpstl001",
+        [CoopCommandKind.PoolRemove] = "poolremove g_w_blstrpstl001",
+        [CoopCommandKind.GrantXp] = "grantxp me 500",
+        [CoopCommandKind.Equip] = "equip me g_w_blstrpstl001",
+        [CoopCommandKind.GrantGold] = "grantgold 500",
     };
 
     /// <summary>Sentinel kinds that are outcomes of parsing (or its absence), not tied to one

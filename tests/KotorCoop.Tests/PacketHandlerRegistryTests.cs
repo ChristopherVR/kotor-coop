@@ -28,6 +28,7 @@ public class PacketHandlerRegistryTests
         PacketType.TransitionMovies, PacketType.TransitionAnnounce, PacketType.InteractionClaim,
         PacketType.DialogueGrant, PacketType.DialogueGrantAck, PacketType.Ping, PacketType.Bye,
         PacketType.PartyPoolOp, PacketType.PartyPoolAck, PacketType.PartyPoolSyncRequest,
+        PacketType.StoreOp, PacketType.StoreAck, PacketType.StoreSyncRequest,
         PacketType.None,
     ];
 
@@ -40,11 +41,12 @@ public class PacketHandlerRegistryTests
         PacketType.PartySnapshot, PacketType.PartyRoster, PacketType.DialogueSnapshot,
         PacketType.TriggerRelay, PacketType.PhantomDamage, PacketType.PeerEffect, PacketType.Bark,
         PacketType.TransitionMovies, PacketType.TransitionAnnounce, PacketType.MidModuleMovie,
-        PacketType.InteractionLock, PacketType.Chat, PacketType.ProgressionSnapshot,
+        PacketType.InteractionLock, PacketType.LockResponse, PacketType.Chat, PacketType.ProgressionSnapshot,
         PacketType.CompanionXpSnapshot,
         PacketType.ItemSnapshot, PacketType.ContainerLoot, PacketType.MaterialisedLoot,
         PacketType.CreatureLiveness, PacketType.Pong,
-        PacketType.PartyPoolOp, PacketType.PartyPoolAck, PacketType.None,
+        PacketType.PartyPoolOp, PacketType.PartyPoolAck,
+        PacketType.StoreOp, PacketType.StoreAck, PacketType.None,
     ];
 
     private static IReadOnlyDictionary<PacketType, object> ReadHandlers(object session)

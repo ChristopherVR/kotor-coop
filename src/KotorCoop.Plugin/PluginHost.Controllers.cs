@@ -54,10 +54,13 @@ internal static unsafe partial class PluginHost
         _barks = new BarkController(_view);
         _interactionLocks = new InteractionLockController(_view);
         _partyRoster = new PartyRosterController(_view);
+        _partySelectSuppression = new PartySelectSuppressionController(_view);
         _controlReturn = new ControlReturnController(_view);
         _agentLiveness = new AgentLivenessController(_view);
         _connectionIndicator = new ConnectionIndicatorController(_view);
         _minigameNotice = new MinigameNoticeController(_view);
+        _soloSegment = new SoloSegmentController(_view);
+        _soloSegmentSpectate = new SoloSegmentSpectateController(_view);
 
         // The minimap draw runs on the render path and has no other route to peer
         // positions, so it reads the block directly.

@@ -707,22 +707,69 @@ them — the same places `AgentSettings` already flows into:
 | `dialogue_item_sync` | `DialoguePump.PumpDialogueItemGrants` | `session.Overrides.DialogueItemSync ?? settings.DialogueItemSync` |
 | `movie_relay` | `TransitionPump.PumpMidModuleMovies` | `session.Overrides.MovieRelay ?? settings.MovieRelayEnabled` |
 
-⚠ **Open gap, stated plainly: the other five host-authoritative keys** (`effect_sync`,
-`trigger_relay`, `liveness_sync`, `map_reveal_sync`, `dialogue_recruit_sync`) are compared,
-warned on, and recorded on `SessionOverrides` exactly like the four above — but nothing in
-`KotorCoop.Session` currently READS those five fields. Those channels are gated entirely
-inside the separate PLUGIN process (`PluginConfig.cs` + per-controller reads —
-`PeerEffectController`, `TriggerRelayController`, `LivenessReconcileController`,
-`MapRevealController`, `PartyRosterRecruitRule`), which this round's negotiation does not
-reach. `AgentComposition` already bridges a couple of OTHER coop.ini settings across that
-same process boundary today (`KotorGameBridge.SetChatOverlayConfig`,
-`KotorGameBridge.PazaakDetectEnabled` — both write into the shared-memory block the plugin
-reads every frame), so the pattern to extend is known; it just was not attempted in this round
-because it means growing `SharedBlock` (a native-adjacent struct shared between two
-independently-built binaries — the win-x86 NativeAOT plugin and the x64 agent), which the
-project's own engine-write rules ask to be verified live before shipping, and this round had
-no live rig time budgeted for it. Tracked as the concrete next step here rather than in the
-roadmap alone, so whoever picks it up does not have to rediscover the gap.
+**CLOSED, 2026-08-27 (later the same day) — see "Closing the plugin-side gap" below.** The
+other five host-authoritative keys (`effect_sync`, `trigger_relay`, `liveness_sync`,
+`map_reveal_sync`, `dialogue_recruit_sync`) are compared, warned on, and recorded on
+`SessionOverrides` exactly like the four above, and — since the follow-up below — now also
+carried across the plugin process boundary and consulted by every controller that gates on
+them.
+
+## Closing the plugin-side gap, 2026-08-27
+
+`SessionOverrides` lives in `KotorCoop.Session`, which the win-x86 NativeAOT plugin cannot
+reference (see `docs/CONTRIBUTING.md`'s note on the two independently-built binaries). Every
+other cross-process bridge in this project (`KotorGameBridge.SetChatOverlayConfig`,
+`PazaakDetectEnabled`, the whole `SharedBlock` channel family) solves this by duplicating a
+small, hand-written contract on both sides and pinning the two copies together with a
+regex-reading unit test — the same discipline `SharedBlock.CheatKind*`/`CheatKinds` already
+uses, cross-checked by `CheatKindSyncTests.cs`. This follow-up is that same shape, applied to
+the five plugin-gated keys.
+
+**Wire.** Two new dwords in `SharedBlock` (version 55, `0x40C0`/`0x40C4` — the companion-
+equipment array's own tail leaves exactly enough free space before `TotalSize`, so no growth
+was needed): `OffsetBehaviourOverrideMask` (bit N set = key N is overridden for this session)
+and `OffsetBehaviourOverrideValues` (the value each overridden key was overridden to). One bit
+per key — `EffectSync=1`, `TriggerRelay=2`, `LivenessSync=4`, `MapRevealSync=8`,
+`DialogueRecruitSync=16` — declared as `SharedBlock.OverrideBit*` in the plugin
+(`SharedBlock.BehaviourOverrides.cs`) and mirrored as `KotorCoop.Memory.BehaviourOverrideBits`
+in the agent, cross-checked by `BehaviourOverrideBitsSyncTests.cs`.
+
+**Agent side.** `BehaviourOverrideEncoding.Encode` (`src/KotorCoop.Session/`) is a pure
+function packing a `SessionOverrides` into the (mask, values) pair — a `null` field on either
+side leaves both bits 0 for that key, matching what `SessionOverrides.None` already means
+everywhere else. `CoopAgent.PumpBehaviourOverrides` calls it every tick and only writes
+through `IPlayerBridge.SetBehaviourOverrides` when the encoded pair actually changes from what
+was last written — cheap when idle (a host, or a client whose behaviour matched the host's),
+and correctly re-writes `(0, 0)` if an override that was in effect goes away (a reconnect, or
+`SessionOverrides` recomputing to `None`). `KotorGameBridge.SetBehaviourOverrides` writes the
+values dword before the mask dword, so a reader checking the mask first never sees a bit newly
+set with a stale paired value. `KotorGameBridge.SessionScopedBlockLevels` (the disconnect
+teardown list — see `SessionTeardownTests.cs`) now clears both dwords, so a disconnected
+session's overrides cannot outlive it.
+
+**Plugin side.** Each of the five controllers (`PeerEffectController`, `TriggerRelayController`,
+`LivenessReconcileController`, `MapRevealController`, `PartyRosterController`) used to read its
+coop.ini key exactly once, at construction, into a plain `bool` field. That field is now an
+`EffectiveBehaviourFlag` (constructed once with the same coop.ini value `PluginConfig` already
+read), whose `Resolve(block)` runs the pure decision (`BehaviourOverrideRule.Resolve`: the
+host's adopted value when the session overrides this key, otherwise the local coop.ini value —
+exactly the `session.Overrides.X ?? settings.Y` shape the four `KotorCoop.Session`-side pumps
+already use, mirrored on the plugin side of the process boundary) every frame the controller
+runs, and logs once per genuine change: `behaviour: adopted host's map_reveal_sync=1 (local
+coop.ini says 0)` the first time an override takes hold, and `behaviour: map_reveal_sync
+reverted to local coop.ini=0` if it later goes away.
+
+**Files:** `src/KotorCoop.Plugin/SharedBlock.BehaviourOverrides.cs` (wire offsets + bit
+constants), `BehaviourOverrideRule.cs` (pure decision), `EffectiveBehaviourFlag.cs` (read +
+log-on-change wrapper); `src/KotorCoop.Memory/BehaviourOverrideBits.cs` (mirrored bit
+constants), `KotorGameBridge.PluginBlock.cs`/`KotorGameBridge.Player.cs` (write + teardown);
+`src/KotorCoop.Session/BehaviourOverrideEncoding.cs` (pure encode), `CoopAgent.cs`
+(`PumpBehaviourOverrides`). Tests: `BehaviourOverrideBitsSyncTests.cs` (the cross-check),
+`BehaviourOverrideChannelTests.cs` (pure resolve/encode round-trip, and `CoopAgent`
+writes-on-change/silent-when-unchanged/reverts-are-written-too), and two new
+`SessionTeardownTests.cs` facts (the disconnect clear). See the NEEDS-LIVE list below for what
+this has NOT yet been checked against — a real build of the win-x86 plugin, and the two-
+instance rig.
 
 ## Tests
 
@@ -774,7 +821,71 @@ pass yet.
    client that had `script_item_sync=0` locally starts forwarding script grants once it
    adopts a host running `script_item_sync=1`), not just that `Overrides` reports the right
    value.
-3. **The five-key plugin-bridge gap above**, once someone picks it up: confirm the new
-   `SharedBlock` fields round-trip through a real build of the win-x86 plugin, not just the
-   x64 agent side (see the project's own note on why `KotorCoop.slnx` cannot build the plugin
-   at all, in `docs/CONTRIBUTING.md`).
+3. **The five-key plugin bridge (built below, "Closing the plugin-side gap, 2026-08-27"):**
+   confirm on the live rig that a client which adopts a host's `map_reveal_sync`/`effect_sync`/
+   `trigger_relay`/`liveness_sync`/`dialogue_recruit_sync` (differing from its own coop.ini)
+   actually sees the PLUGIN log `behaviour: adopted host's <key>=<v> (local coop.ini says
+   <v>)` and the corresponding controller visibly changes behaviour (fog reveals around a
+   peer when the client's own `map_reveal_sync=0`, or stops when the host's is 0; a peer's
+   non-damage effect starts/stops forwarding; a relayed generic trigger starts/stops firing;
+   liveness reconciliation starts/stops killing bodies to match; a peer's extra companion
+   starts/stops recruiting locally) — not just that the SharedBlock dwords round-trip, which
+   only unit tests have exercised so far.
+
+## Live-verified 2026-08-27
+
+Item 1 above (`effect_sync` was the doc's suggested key; `party_sync`/`interp_ms` were used
+instead, since both are already live-consulted — see the table below). Two-instance rig
+(`tools/demo.ps1`), Player2 (`D:\Games\swkotor-gog-p2`) launched as `--no-party-sync` (the
+client) with `interp_ms = 120` in its `coop.ini` against the host's default `interp_ms = 0`
+and default (on) `party_sync`.
+
+**Both dashboards showed both `W_CFG` lines**, agent1.log and agent2.log identically:
+
+```
+* co-op [W_CFG] party_sync host=1 you=0
+* co-op [W_CFG] interp_ms host=0 you=120
+```
+
+**The client's own `[coop] adopted host's party_sync` line could not be captured this
+session** — it goes to `Console.Error` on the actual OS console window
+(`CoopClient.ApplyBehaviourComparison`, not `AgentDashboard`'s own `--log` file, which only
+receives the announcer trio's lines), and this environment's `pwsh -NoExit` agent consoles
+render with no `MainWindowHandle` (`Get-Process pwsh | select MainWindowTitle` came back
+empty for every agent console pid), so neither `movewin.ps1`'s API nor `shot.ps1`'s
+screenshot could reach them. Not a product bug — an environment gap in this specific
+non-interactive session — worth a note for whoever automates this check next (route
+`Console.Error` into the `--log` file too, or add the adoption line to the announcer trio
+instead of a bare `Console.Error.WriteLine`, so it is capturable the same way the `W_CFG`
+lines already are).
+
+**What the log line would have only claimed, `partystate.ps1` measured directly instead — the
+stronger check.** `party_sync` is host-authoritative (see the table above): a client that
+disagrees adopts the host's value at runtime. Read both instances' party tables:
+
+```
+pid <host>    partyTable 0x18C80778   companions 1   soloMode 0
+pid <client>  partyTable 0x188B0778   companions 1   soloMode 1
+```
+
+`soloMode` on the CLIENT is the tell — a client only ever sets solo mode while it is actively
+mirroring the host's party (`docs/research/party-reconciliation.md`), so this is exactly the
+behaviour `party_sync` gates, genuinely running on the client, DESPITE its own `coop.ini`/CLI
+saying not to. `interp_ms` is not host-authoritative (a warning-only key, per the policy
+above), so there was nothing further to check for it beyond the `W_CFG` line already shown.
+
+**Negative control (identical configs → no warning)**: not re-run live this session — already
+covered by `BehaviourNegotiationTests.IdenticalBehaviourProducesNoWarningsAndNoOverrides`
+(real loopback UDP, both `CoopHost`/`CoopClient` sides asserted empty), which is pure protocol
+logic with no game-state dependency, so a live re-run would not exercise anything the unit
+test does not already cover.
+
+**Item 2's live-authoritative-gate check** was exercised for `party_sync` specifically (above,
+`soloMode`) rather than `script_item_sync`/`dialogue_item_sync`/`movie_relay` — those three
+would need their own scenario staging (a script grant, a dialogue reward, a mid-module movie)
+on top of a coop.ini divergence, not attempted this round. Item 3 (the five-key plugin-bridge
+gap) also not attempted this round.
+
+**Verdict: PASS** for the negotiation/announce/adopt mechanism itself — both `W_CFG` lines
+appear on both screens for a real divergence, and the host-authoritative adoption genuinely
+changes engine behaviour on the client, not just an `Overrides` field.

@@ -78,4 +78,26 @@ public sealed record SessionSettings
     /// has nobody to be admitted by, so there is nothing to time out waiting for.
     /// </summary>
     public int ConnectTimeoutMs { get; init; } = ProtocolConstants.DefaultConnectTimeoutMs;
+
+    /// <summary>
+    /// STUN servers (<c>host:port</c>, comma-separated) a HOST asks for its own public
+    /// IP:port — coop.ini <c>stun_servers</c> (roadmap item 24, "public address discovery").
+    /// Empty disables discovery entirely; ignored by a client. See
+    /// <see cref="PublicAddressDiscovery"/> for the privacy note.
+    /// </summary>
+    public IReadOnlyList<string> StunServers { get; init; } = [];
+
+    /// <summary>
+    /// Whether a HOST attempts a UPnP IGD port mapping for its session port (and the
+    /// world-transfer TCP listener sharing it) — coop.ini <c>upnp</c>. Fails soft when the
+    /// router has UPnP off or absent (see <see cref="UpnpMappingService"/>). Ignored by a
+    /// client.
+    ///
+    /// Defaults OFF at THIS layer deliberately — real hosting defaults it ON via coop.ini
+    /// (<see cref="CoopConfig.Upnp"/>, applied explicitly in <c>AgentComposition</c>), but a
+    /// bare <c>new SessionSettings()</c> (which most of this project's own tests build
+    /// directly, never through coop.ini) must not spontaneously start a background SSDP
+    /// multicast search — the same reasoning behind <see cref="StunServers"/> defaulting empty.
+    /// </summary>
+    public bool UpnpEnabled { get; init; }
 }

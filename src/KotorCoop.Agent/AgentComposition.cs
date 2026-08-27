@@ -125,6 +125,8 @@ internal static class AgentComposition
             SyncCompanionXp = config?.CompanionXpSync ?? false,
             SyncCompanionGear = config?.CompanionGearSync ?? false,
             PartyPoolSyncEnabled = config?.PartyPoolSyncEnabled ?? false,
+            SoloSegmentSpectateEnabled = config?.SoloSegmentSpectateEnabled ?? false,
+            StoreSyncEnabled = config?.StoreSyncEnabled ?? false,
 
             // No coop.ini => the most conservative choice, matching the pattern above: today's
             // exact host-leads/client-follows behaviour, not the new lead-swap default.
@@ -216,6 +218,13 @@ internal static class AgentComposition
             ConnectTimeoutMs = config is { ConnectTimeoutMs: > 0 }
                 ? config.ConnectTimeoutMs
                 : ProtocolConstants.DefaultConnectTimeoutMs,
+
+            // Roadmap item 24: hosting over the internet without a relay. Both ignored by a
+            // client (SessionSettings' own doc comments); a host with neither configured keeps
+            // exactly the pre-existing LAN-only behaviour.
+            StunServers = PublicAddressDiscovery.ParseServers(
+                config?.StunServers ?? PublicAddressDiscovery.DefaultServers),
+            UpnpEnabled = config?.Upnp ?? true,
         };
 
         // The dispatcher owns every command surface and the one LAN listener. It re-reads
