@@ -37,4 +37,30 @@ public class PartySelectSuppressionRuleTests
     {
         Assert.False(PartySelectSuppressionRule.ShouldSuppress(enabled: false, isClientInLiveSession: false));
     }
+
+    // IsAlreadyHandled: the 2026-08-28 live-pass fix for CGuiInGame+0x78 never going null after
+    // this controller's own sweep-teardown — a re-detected address identical to one already
+    // torn down this module/session must not be written through again. See the rule's own doc
+    // comment for the full evidence (70,000+ suppress/sweep pairs on one client, ~500/second).
+
+    [Fact]
+    public void ANeverBeforeSeenPanelIsNotAlreadyHandled()
+    {
+        Assert.False(PartySelectSuppressionRule.IsAlreadyHandled(candidate: 0x1000, lastHandled: 0));
+    }
+
+    [Fact]
+    public void TheIdenticalAddressAlreadyTornDownIsAlreadyHandled()
+    {
+        Assert.True(PartySelectSuppressionRule.IsAlreadyHandled(candidate: 0x1000, lastHandled: 0x1000));
+    }
+
+    [Fact]
+    public void ADifferentAddressThanTheOneAlreadyTornDownIsNotAlreadyHandled()
+    {
+        // A genuinely different panel (e.g. after a module change reset lastHandled to 0 and a
+        // fresh CGuiInGame allocated its own party-select object at a new address) must still
+        // get suppressed.
+        Assert.False(PartySelectSuppressionRule.IsAlreadyHandled(candidate: 0x2000, lastHandled: 0x1000));
+    }
 }

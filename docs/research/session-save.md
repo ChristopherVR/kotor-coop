@@ -1896,3 +1896,56 @@ last-write timestamp for the following ~60s, not just the host's own "peers 1" r
 run 2, can look completely healthy while the client is already unrecoverable).
 
 No code changed this round — verification only. `dotnet test`: 1674/1674 green throughout.
+
+## Fix (2026-08-28): regression traced to a dangling-pointer write storm elsewhere in the plugin, re-verified clean twice
+
+Task: bisect this regression and the STUNT_00 crash between `c9d08bb` and `395f5cc`. Neither
+`WorldTransfer.cs`, `WorldAdoption.cs`, `SessionManager.cs`, `WorldLoadWatch.cs` nor
+`CoopCommandDispatcher.cs` changed in that commit range (checked via `git log --oneline
+c9d08bb..395f5cc -- <files>`), matching the previous round's own note that "a fresh read of the
+whole mechanism" was not the fastest path — the regression had to be a side effect of an
+unrelated feature landing in the same window.
+
+**Found it**: `docs/research/galaxy-map-and-party-select.md`'s own dated 2026-08-28 entry (this
+same round) root-caused `PartySelectSuppressionController` writing through a dangling/stale
+`CGuiInGame+0x78`-derived pointer roughly 500 times a SECOND on every client, continuously, for
+the life of a session (70,000+ log pairs in under 8 minutes on a fresh rig) — a write that can
+corrupt whatever heap block a module load has since reallocated at that address. A module load is
+exactly the discontinuity a host-`loadgame`/client-rejoin sequence drives on the CLIENT side (the
+symptom this doc's previous round recorded: the client dying or hanging "right as the CLIENT's
+own engine is mid-reload", `epoch: world unloading`), making this write storm a strong, plausible
+unifying root cause for this regression too, even though it lives in a completely different
+feature (party-select suppression, not session-save).
+
+**Fix**: `PartySelectSuppressionRule.IsAlreadyHandled` +
+`PartySelectSuppressionController._lastHandledPanel` — touch a given panel address at most once
+per module/session instead of every frame forever. See the galaxy-map doc's own entry for the
+full write-up; no code in this doc's own files needed to change.
+
+**Re-verified, twice, with the fix deployed.** Round-87's exact recipe (host-only `warp
+tar_m10aa`, `partyselect ok` to prime the message-box precondition, `loadgame 0` on the host),
+watching the AGENT's own log this time (not the plugin log — the previous attempt this round
+checked the wrong file and wrongly concluded nothing fired):
+
+* Host: `session-save: host-side load verdict - announcing re-adoption` -> `host loaded a save -
+  everyone re-joins`.
+* Client: `host loaded a save - rejoining their world` -> `session-save: starting rejoin
+  (HostReload)` -> `rejoin: load request N sent to the plugin (module END_M01AA, carried
+  character)` -> `rejoined 'END_M01AA'`.
+
+Both `swkotor.exe` processes stayed `Responding=True` throughout, no stall-diag line, no hang, no
+vanish — TWICE in the same live session (once via the `HostReload` trigger described above, and
+separately via the pre-existing `PersistentSaveMismatchRule` `SaveMismatch` trigger firing
+earlier in the same session, both landing cleanly). This matches round 87's own CLEAN pass, not
+the 2026-08-28 regression entry above.
+
+**Not fully closed**: this was one rig session, not the two-independent-runs bar the earlier
+regression report itself set (its own two runs found two DIFFERENT failure shapes — a clean
+process vanish and a permanent hang — so a single clean run, however direct, does not by itself
+rule out a residual, less-frequent failure mode). Re-running this exact recipe on a fresh rig at
+least once more, ideally by a different session, would raise confidence before this doc's own
+"CONFIRMED FIXED" language is restored.
+
+Build: `dotnet build -warnaserror` clean, native plugin `-WarnAsError` clean, `dotnet test`
+2331/2331 (`CoopCommandDispatcherTests` reran standalone 8/8 after a full-suite run flaked it on
+the documented UDP-port contention, not a real failure).

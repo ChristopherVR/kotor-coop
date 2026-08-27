@@ -91,6 +91,14 @@ internal sealed unsafe class PartySelectSuppressionController(SharedBlockView bl
 
     private nint _guiManager;
 
+    /// <summary>The last panel address this controller has ever torn down this module/session,
+    /// or 0. See <see cref="PartySelectSuppressionRule.IsAlreadyHandled"/> — live pass
+    /// 2026-08-28 found <c>GetPartySelectionPanel()</c> re-detecting the SAME address hundreds
+    /// of times a second forever after the first teardown (a dangling <c>CGuiInGame+0x78</c>
+    /// that nothing ever nulls), so this is remembered across the <c>_panel == 0</c> gap too,
+    /// unlike <see cref="_panel"/> itself which only tracks the CURRENT in-flight teardown.</summary>
+    private nint _lastHandledPanel;
+
     public void OnFrame()
     {
         if (!_enabled || _guardFailed)
@@ -117,6 +125,15 @@ internal sealed unsafe class PartySelectSuppressionController(SharedBlockView bl
             return;
         }
 
+        if (PartySelectSuppressionRule.IsAlreadyHandled(panel, _lastHandledPanel))
+        {
+            // The identical address we already tore down this module/session — CGuiInGame+0x78
+            // was never observed to clear afterward (see the rule's own doc comment), so this is
+            // near-certainly a dangling re-read of already-freed (or never-really-reopened)
+            // memory, not a fresh screen opening. Do not write through it again.
+            return;
+        }
+
         if (!PartySelectSuppressionRule.ShouldSuppress(_enabled, block.TryGetHostPartyRoster(out _, out _)))
         {
             // Either the feature is off, or this instance is the host (or not in a live
@@ -139,6 +156,7 @@ internal sealed unsafe class PartySelectSuppressionController(SharedBlockView bl
 
         _panel = panel;
         _guiManager = guiManager;
+        _lastHandledPanel = panel;
 
         block.PostLocalChatLine("party is chosen by the host");
         PluginHost.Log("party-select: client copy suppressed - the host is picking "
@@ -148,13 +166,17 @@ internal sealed unsafe class PartySelectSuppressionController(SharedBlockView bl
     /// <summary>Forgets any in-flight teardown bookkeeping without touching engine memory — a
     /// module transition (or a session ending) has already torn down or is about to tear down
     /// the whole <c>CGuiInGame</c>/panel/manager chain itself, so re-checking a cached pointer
-    /// afterward would risk asking a freed manager about a freed panel. Does NOT reset
-    /// <see cref="_guardFailed"/>: a wrong offset assumption is wrong for the whole process, not
-    /// per-module.</summary>
+    /// afterward would risk asking a freed manager about a freed panel. Also forgets
+    /// <see cref="_lastHandledPanel"/>: a fresh module gets a fresh <c>CGuiInGame</c>, so a
+    /// genuinely new panel there deserves the same one-time suppression a first-ever panel
+    /// would, even if its address happens to coincide with one from a previous module. Does NOT
+    /// reset <see cref="_guardFailed"/>: a wrong offset assumption is wrong for the whole
+    /// process, not per-module.</summary>
     public void Invalidate()
     {
         _panel = 0;
         _guiManager = 0;
+        _lastHandledPanel = 0;
     }
 
     /// <summary>The live CSWGuiPartySelection*, vtable-verified, or 0 (no module loaded, the
