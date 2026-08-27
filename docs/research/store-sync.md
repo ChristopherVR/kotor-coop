@@ -720,3 +720,153 @@ default), but this is a positive data point for a future round that wants to fli
 Build: `dotnet build -warnaserror` clean, native plugin `-WarnAsError` clean, `dotnet test`
 2339/2339 (unaffected by this crash — it is a live-engine finding, not a code defect this repo's
 own suite could catch).
+
+## Root cause and fix (2026-08-28): `ShowStoreGui` takes two more arguments than the
+## 2026-08-27 addendum claimed — the missing store id, not a downstream engine bug
+
+Task: root-cause the `PopulateStoreItemListBox` crash the live pass above found, by disassembly.
+Finished it — fresh disasm of `CSWGuiStore::PopulateStoreItemListBox`, `CSWGuiStore::
+InitializeStoreType`, `CSWGuiStore::OnPanelAdded`, `CSWGuiStore::Constructor`, and (the
+load-bearing correction) a full re-read of `CGuiInGame::ShowStoreGui` itself, all `tools/
+disasm.py` against the sha256-matched GOG `swkotor.exe` v1.0.3, cross-checked with `tools/
+xrefs.py` and `tools/q.py`.
+
+### The bug in one sentence
+
+**The 2026-08-27 addendum's own claim — "`ShowStoreGui` takes only `this`... no stack argument
+anywhere in the function's body carries a store id" — was wrong.** Fresh disasm this pass shows
+`CGuiInGame::ShowStoreGui 0x0062E310` is `__thiscall(CGuiInGame* this, uint storeObjectId, uint
+pcObjectId) -> void`, **`ret 8`** (VERIFIED: the trailing `ret 8`, and `[esp+0x30]`/`[esp+0x34]`
+resolve to `[ESP_entry+4]`/`[ESP_entry+8]` — the two caller-pushed stack args — once the
+function's own prologue displacement, 0x2C bytes (three SEH pushes + `sub esp,0x1C` + `push
+esi`), is worked out by hand). Because `Odyssey.Store.cs`'s old `ShowStoreGuiFn` delegate was
+declared `this`-only, the native call pushed **zero** stack bytes against a callee that reads
+two dwords and pops 8 bytes on return — the two "arguments" `ShowStoreGui` read were whatever
+stale bytes happened to already be on the native call stack, and the function's own `ret 8`
+then desynced the caller's stack by 8 extra bytes on every return, a second, independent hazard
+riding along with the crash.
+
+### The full call chain, VERIFIED this pass
+
+```
+CGuiInGame::ShowStoreGui 0x0062E310  (this, uint storeObjectId, uint pcObjectId), ret 8
+  ... three precondition gates (+0x108/+0x30/+0xB4 — unchanged from the addendum, still correct)
+  panel = CGuiInGame+0x84   ; alloc + CSWGuiStore::Constructor 0x6C1C00 if null, else reused
+  panel+0x2278 = storeObjectId        <-- VERIFIED: arg1, NOT `this`-only as the addendum said
+  panel+0x227C = pcObjectId           <-- VERIFIED: arg2 — the SHOPPING CREATURE's id, not the
+                                           store's (corrects the addendum's own mis-attribution
+                                           of this field, made from PopulateStore's disasm alone)
+  AddPanel 0x40BC70(gm, panel, 3, 1)  ; synchronously invokes the panel's own OnPanelAdded
+    -> CSWGuiStore::OnPanelAdded 0x006C2170                                       (VERIFIED)
+         InitializeStoreType(this)     0x6C1B50   reads panel+0x2278 (NOT +0x227C), resolves via
+                                                   GetStoreByGameObjectID 0x4AE7B0 (type-checked,
+                                                   fails safe to 0 — the same function §1.2
+                                                   already verifies), reads the resolved store's
+                                                   +0x256 buy_sell_flag, tail-jumps into
+                                                   ShowBuyGUI 0x6C1A50 / ShowSellGUI 0x6C13C0
+         ShowBuyGUI/ShowSellGUI                    ... own per-mode setup, tail-jumps into
+                                                   PopulateStoreItemListBox 0x6C1840 at its end
+         PopulateStoreItemListBox 0x6C1840         ALSO reads panel+0x2278 (not +0x227C), calls
+                                                   the SAME GetStoreByGameObjectID, then
+                                                   IMMEDIATELY dereferences the result:
+                                                   `mov ebx, dword ptr [eax + 0x230]` @ 0x6C1872
+                                                   -- **the exact crashing instruction**
+         PopulateStore(this)          0x6C0610   reads panel+0x227C (the PC id), resolves via
+                                                   GetCreatureByGameObjectID 0x4AE770 (VERIFIED
+                                                   by name in tools/kotor1_0_3.db, and by the
+                                                   same fail-safe type-check shape at 0x4B1790),
+                                                   builds a description string — unrelated to the
+                                                   item list
+         base OnPanelAdded            0x40B870   generic mouse-over/focus revalidation (same as
+                                                   every other panel, docs/research/
+                                                   native-browser-panel.md already documents)
+         jmp ShowBuyGUI               0x6C1A50   unconditional — tail-jumps into
+                                                   PopulateStoreItemListBox a SECOND time
+```
+
+`CSWGuiStore::Constructor 0x6C1C00` (VERIFIED, fresh disasm) explicitly zeroes `panel+0x2270`
+and `panel+0x2274` but **deliberately leaves `+0x2278`/`+0x227C` untouched** — proof these two
+fields are the caller's job (`ShowStoreGui`'s own two stack args), not the constructor's, the
+same pattern `docs/research/native-browser-panel.md` documents for `CSWGuiSaveLoad` leaving row
+population to its own self-called `PopulateGameList` rather than the constructor initializing
+rows directly.
+
+### Why the old verb crashed exactly where it did, and why its own follow-up code never ran
+
+The old `Odyssey.OpenStore` called `ShowStoreGuiFn(gui)` (no store id), which — per the chain
+above — ran `AddPanel` -> `OnPanelAdded` -> `InitializeStoreType`/`PopulateStoreItemListBox`
+**synchronously, inside that single call**, using whatever garbage was on the stack at
+`panel+0x2278`. `GetStoreByGameObjectID`'s own type check (VERIFIED fail-safe, §1.2) either
+returned 0 outright or resolved to an unrelated live object that then failed the `mov al,
+[ecx+8]; cmp al, [type_constant]` check and ALSO returned 0 — either way `eax` was 0 (or, on a
+run where the stale bytes coincidentally passed the type check, a wrong object) by the time
+`PopulateStoreItemListBox` executed `mov ebx, [eax+0x230]` at `0x6C1872`, producing the observed
+access violation. **This happened before the old verb's own subsequent code (writing the store
+id to `panel+0x227C` and calling `PopulateStore`) ever had a chance to run** — that code was
+already too late, and even if it had run first, `+0x227C` is the PC-id field `PopulateStore`
+uses for its description string, not the store-id field `PopulateStoreItemListBox` actually
+reads. The old fallback was doubly wrong, not just late.
+
+### The fix
+
+Pass `ShowStoreGui` the same two arguments the real engine path (`ExecuteCommandOpenStore`'s own
+resolved `oStore`/`oPC`, or a real click) supplies, so `AddPanel`'s internal `OnPanelAdded`
+populates the item list and description exactly as retail does — no manual field write, no extra
+`PopulateStore` call, because the engine's own sequence already does both, correctly, inside the
+single `ShowStoreGui` call:
+
+- `src/KotorCoop.Plugin/Odyssey.Store.cs` — `ShowStoreGuiFn` redeclared
+  `delegate* unmanaged[Thiscall]<nint, uint, uint, void>` (was `<nint, void>`);
+  `StorePanelObjectIdOffset` corrected from `0x227C` to `0x2278` (now documented as the field
+  `InitializeStoreType`/`PopulateStoreItemListBox` actually read, written by `ShowStoreGui`
+  itself — not by this code); new `StorePanelPcIdOffset = 0x227C` (the field `PopulateStore`
+  reads, also documented as the PC id, not the store id); `OpenStore(nint store, uint
+  playerObjectId, out string reason)` gained the `playerObjectId` parameter, resolves
+  `storeObjectId` from the store base BEFORE the call (was after), calls
+  `ShowStoreGuiFn(gui, storeObjectId, playerObjectId)`, and no longer writes any panel field or
+  calls `PopulateStoreFn` manually (the delegate and the manual `PopulateStore` call are both
+  removed — the real `ShowStoreGui` call already does everything they were standing in for).
+- `src/KotorCoop.Plugin/CheatController.Store.cs` — `OpenStore()` -> `OpenStore(uint playerId)`,
+  threads the dispatcher's already-resolved local player object id through to
+  `Odyssey.OpenStore(store, playerId, out reason)`.
+- `src/KotorCoop.Plugin/CheatController.cs` — the `CheatKindOpenStore` dispatch case now calls
+  `OpenStore(playerId)` (the `playerId` local `Execute` already resolves and null-checks before
+  the switch, the same value every other per-player cheat kind in that switch already uses).
+
+### VERIFIED / INFERRED / NEEDS-LIVE
+
+| Item | Status |
+| --- | --- |
+| `ShowStoreGui 0x0062E310` signature `(this, uint storeObjectId, uint pcObjectId)`, `ret 8` | VERIFIED (fresh disasm, corrects the 2026-08-27 addendum) |
+| `ShowStoreGui` writes `storeObjectId` -> panel `+0x2278`, `pcObjectId` -> panel `+0x227C`, then calls `AddPanel` | VERIFIED (fresh disasm) |
+| `AddPanel` synchronously invokes `CSWGuiStore::OnPanelAdded 0x006C2170` (`InitializeStoreType`, `PopulateStore`, base `OnPanelAdded`, then an unconditional `ShowBuyGUI`->`PopulateStoreItemListBox` tail-jump) | VERIFIED (fresh disasm; `AddPanel`->`OnPanelAdded` dispatch itself already documented for `CSWGuiSaveLoad` in `docs/research/native-browser-panel.md`) |
+| `InitializeStoreType`/`PopulateStoreItemListBox` read panel `+0x2278` (the store id) via `GetStoreByGameObjectID 0x4AE7B0`; `PopulateStoreItemListBox`'s `mov ebx,[eax+0x230]` @ `0x6C1872` is the exact crashing instruction on a bad/null resolve | VERIFIED (fresh disasm) |
+| `PopulateStore 0x6C0610` reads panel `+0x227C` (the PC id, not the store id) via `GetCreatureByGameObjectID 0x4AE770` | VERIFIED (fresh disasm + `tools/kotor1_0_3.db` naming `0x4AE770` `CServerExoApp::GetCreatureByGameObjectID`) |
+| `CSWGuiStore::Constructor 0x6C1C00` zeroes `+0x2270`/`+0x2274`, leaves `+0x2278`/`+0x227C` for the caller | VERIFIED (fresh disasm) |
+| The fix (corrected delegate signature, corrected offsets, `playerObjectId` threaded through `CheatController`) | Implemented; build + full test suite green |
+| The fix resolves the crash and `openstore` opens the RIGHT store's GUI, populated, without a manual field write | **NEEDS-LIVE** — this pass was static RE + a code fix only, no live process was run |
+| Whether `ShowStoreGui`'s stack-cleanup mismatch (`ret 8` against zero pushed bytes) caused any OTHER, still-unobserved corruption before the crash reliably intercepted it every time | Moot after the fix (the call now pushes the matching two dwords), not otherwise investigated |
+
+### Live re-test plan (supersedes the prior pass's reproduction steps)
+
+1. Build and install: `pwsh src\KotorCoop.Plugin\build.ps1 -Install -WarnAsError` (both rig game
+   directories per `docs/CONTRIBUTING.md`'s "run this for every game copy the rig uses" rule —
+   `demo.ps1` does not deploy the plugin itself).
+2. `pwsh tools\demo.ps1`, host warps to `tar_m02aa` (`warp tar_m02aa`), waits out or clears any
+   ambient conversation (`selectreply 0`), then `openstore Larrim_Store` (the real tag this doc's
+   own prior live pass found — Kebla Yurt was never the store's own tag).
+3. Confirm the HOST process survives (`Get-Process swkotor` — both PIDs still present,
+   `Responding=True`) and the plugin log shows `openstore: 'Larrim_Store' - ShowStoreGui called,
+   panel populated` with no crash line in `kotorcoop-general.log`/`crashlog.ps1`'s output.
+4. Confirm the store GUI genuinely shows on screen with Larrim's real inventory (a screenshot via
+   `tools/shot.ps1`, or a live description) — §6/the addendum's original item 1, now actually
+   completable.
+5. Repeat item 2 while the galaxy map or party select is up, and while a conversation is active,
+   to confirm the three precondition gates (unchanged by this fix) still refuse cleanly rather
+   than crash — this doc's prior pass already observed the conversation gate working; the other
+   gate is untested live.
+6. Once `openstore` is confirmed safe, resume §6's own items 2-5 (host buys/sells, client
+   reconciles) — these were never reached because item 1 crashed every prior attempt.
+7. `store_sync`/`coop.ini` stays default OFF regardless of this fix's outcome — this document's
+   own existing discipline for flipping a shipped default (a clean `openstore` session is not
+   the bar; the full §6 buy/sell/reconnect loop is) is unchanged.
