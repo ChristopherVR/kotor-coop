@@ -1008,3 +1008,39 @@ PASS is symmetric: the FOLLOWER must log `cinematic: the module transition has q
 movie(s)` BEFORE its `travel:` line, and both sides must stall well past the 5.1-5.3 s
 bare-load baseline. Run the negative control too — with nothing queued, neither side may stall
 beyond baseline and `staged N of M` must appear nowhere.
+
+## Rig pass (2026-08-27): seven NEEDS-LIVE items from the same day's builds
+
+Ran the pair (`tools/demo.ps1`, `end_m01aa`, block version 53) through the roadmap's seven
+Tier-1 NEEDS-LIVE items in order. Full evidence and per-item detail lives in each feature's own
+research doc; this is the session index.
+
+| # | Item | Result | Detail |
+| --- | --- | --- | --- |
+| 1 | `FlagAway` | **FAILED**, root cause located | `disconnect-reconnect.md` §10 |
+| 2 | Persistent connection indicator | Partial — data path correct, `Reconnecting` state unreachable | `connect-flow.md`, 2026-08-27 section |
+| 3 | `script_item_sync` | Partial — core grant + 1 of 3 controls confirmed, stays OFF | `dialogue-consequences.md`, 2026-08-27 round |
+| 4 | `map_reveal_sync` | **Clean pass, default flipped ON** | `map-reveal.md`, "Live pass" |
+| 5 | `pazaak_detect` | Negative check only (no false positives); positive path unrun | `minigames.md`, "Live pass" |
+| 6 | Container-loot race | Attempted, blocked (no container with remaining loot in range) | `roadmap-seamless.md` Tier 1 item 4 |
+| 7 | `demo3.ps1` (3 instances) | Not run this session (time) | — |
+
+Two new dev-only test primitives were built to unblock items that had no way to reach the
+scenario under test without unreliable click/OS input, following the exact pattern `usedoor`/
+`skipline`/`moviewarp` already established: `quittomenu` (`CheatKinds.QuitToMenu` = 25) calls
+`CClientExoAppInternal::ShutDownToMainMenu` directly, and `scriptgive` (`CheatKinds.ScriptGive` =
+26) gives an item into the local player's inventory with no suppression-ledger entry — see
+`docs/CONSOLE.md`.
+
+**Verify.ps1, twice.** First against the session as left after items 1-6 (heavily warped/tp'd
+through three modules and a main-menu teardown): 38 passed, 11 failed — several failures were a
+single root cause (`stats host 0x0 client 0x0`) plausibly caused by that unusual session history.
+Re-ran against a **freshly launched, untouched session** immediately after connecting: **41
+passed, 8 failed** — squarely inside the documented 40-42/7-9 baseline, and every failing check
+(`phantom damageable, not a sink`; `the peer really loses those hit points`; `a client hit costs
+the enemy real hit points`; `a downed player is reported to the agent`; `the co-op revive stands
+the player back up`; `every engine call signature matches the binary` (171/173); `a container
+opened on the client is held and shown open on the host`; `no per-frame spam`) reproduced
+identically in character on both runs. No regression from this session's changes.
+`dotnet test tests/KotorCoop.Tests`: 1980/1980 green throughout (the one `CoopCommandDispatcherTests`
+UDP-port flake noted in CONTRIBUTING.md reproduced once and cleared on a solo rerun).
