@@ -45,6 +45,37 @@ the top-left always shows the connection state.
 **No gamepad/controller support.** The server browser, the password box and the `~` console
 all assume mouse and keyboard; a controller can't navigate them.
 
+## Play over the internet
+
+The server browser only finds games on your own network. To play with someone elsewhere:
+
+1. The **host** presses Host as usual, then checks `status` (or types `public_address`) at
+   the `~` console. It prints something like:
+
+   > `public address: 203.0.113.5:27140 - UPnP mapped`
+
+   That means it worked automatically — nothing else to do. If it instead says
+   `UPnP unavailable - forward UDP+TCP 27140 manually`, open your router's admin page and
+   forward that port (both UDP and TCP — TCP carries the initial save transfer, UDP carries
+   the session) to this PC, for both. Most home routers support UPnP and this step is
+   automatic; if yours doesn't, forwarding by hand is the only alternative — there's no relay.
+2. Share the address the host was given (or a hostname/DDNS address pointing at it — `connect`
+   accepts either) with the other player.
+3. The **joiner** presses Connect and types that address (or picks it from a saved shortcut —
+   there's nothing to browse for an internet game).
+
+If a join just sits there and eventually says "no reply... is UDP port N forwarded on the
+host?", that usually means the port really isn't reachable from outside the host's network yet
+— re-check the router's port forward (or UPnP status) before trying again.
+
+**Privacy note:** discovering the host's own public address contacts a small, fixed list of
+public STUN servers (Google's, by default) over UDP — nothing about your session or characters
+is sent, only enough to ask "what does the internet see me as". Set `stun_servers =` (empty) in
+`coop.ini` to turn this off if you'd rather not; you can still play by sharing a manually
+port-forwarded address instead. There is currently no relay or NAT hole-punching, so a router
+with UPnP off *and* a restrictive ("symmetric") NAT type will need the manual port forward —
+see `docs/research/network-topology.md` if you want the full picture.
+
 ## Requirements
 
 - Windows, and the **.NET 10 runtime** (Windows offers to install it the first time
@@ -68,6 +99,8 @@ the useful keys:
 | `host` / `mode` | Address to join and host/join mode — the in-game menu sets these for you; they matter for the console `connect`. |
 | `menu_button` | `1` shows the Co-op button on the main menu. |
 | `auto_start_agent` | `1` (default) lets the game start `KotorCoop.Agent.exe` for you. |
+| `stun_servers` | STUN servers asked for the host's public address (see "Play over the internet"). Empty disables it. |
+| `upnp` | `1` (default) tries to forward the port automatically when hosting. |
 
 Every other key is documented in the file itself and in the project's `docs/CONFIG.md`.
 

@@ -40,6 +40,10 @@ public sealed partial class CoopCommandDispatcher
     /// <see cref="HostSaveAnnouncer"/> for the silent-no-op it closes.</summary>
     private readonly HostSaveAnnouncer _hostSaveAnnouncer = new();
 
+    /// <summary>A hosting player's internet reachability (roadmap item 24) — see
+    /// <see cref="PublicAddressAnnouncer"/>.</summary>
+    private readonly PublicAddressAnnouncer _publicAddressAnnouncer = new();
+
     /// <summary>
     /// coop.ini's <c>status_toasts</c>, read once and cached rather than reloaded off disk
     /// every 150 ms tick. <c>null</c> means "not read yet"; the value itself is a plain bool
@@ -154,5 +158,23 @@ public sealed partial class CoopCommandDispatcher
             saveDirectory is not null,
             saveDirectory is not null ? Path.GetFileName(saveDirectory) : null,
             Reply);
+    }
+
+    /// <summary>
+    /// Roadmap item 24's "surface it": announces a hosting player's public IP:port (once STUN
+    /// finds one) and UPnP mapping verdict — see <see cref="PublicAddressAnnouncer"/>.
+    /// Unconditional like <see cref="AnnounceHostSaveAvailability"/>: this is the one piece of
+    /// onboarding information that tells a host whether a remote friend can actually reach them
+    /// at all, not a toast a returning player already knows to re-enable.
+    /// </summary>
+    private void AnnouncePublicAddress()
+    {
+        if (manager.Current is not CoopHost host)
+        {
+            _publicAddressAnnouncer.Reset();
+            return;
+        }
+
+        _publicAddressAnnouncer.Observe(host.ListenEndPoint.Port, host.PublicEndPoint, host.UpnpStatus, Reply);
     }
 }

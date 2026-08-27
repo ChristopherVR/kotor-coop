@@ -115,6 +115,14 @@ public enum CoopCommandKind
     /// </summary>
     LagStats,
 
+    /// <summary>
+    /// Prints this HOST's public IP:port (as STUN found it) and whether UPnP mapped the port,
+    /// for sharing with a joiner over the internet — roadmap item 24. A no-op verdict ("not
+    /// hosting", "unknown yet") on a client or before discovery has answered; never a session
+    /// action. Best-effort clipboard copy on Windows when an address is known.
+    /// </summary>
+    PublicAddress,
+
     // ---- staging cheats ---------------------------------------------------------
     //
     // Only the verbs whose ANSWER DEPENDS ON WHO TYPED THEM, plus the two that stage a
@@ -534,6 +542,7 @@ public static partial class ConsoleCommand
         new(["servers", "browse", "list"], ParseServers),
         new(["status", "stat"], ParseStatus),
         new(["lagstats"], ParseLagStats),
+        new(["public_address", "publicaddress", "pubaddr"], ParsePublicAddress),
         new(["help", "?", "commands"], ParseHelp),
         new(["warp"], ParseWarp),
         new(["netsim", "net"], ParseNetSim),
@@ -624,5 +633,5 @@ public static partial class ConsoleCommand
 
     /// <summary>One-line help listing the commands, for the overlay and dashboard.</summary>
     public const string HelpText =
-        "commands: servers | connect <ip|#n> [password] | password <pw> | host | disconnect | reconnect | say <msg> | clear | status | lagstats | warp <module> | who | where | census | resolve <id> | cheats | netsim <off|status|loss|latency|blackout> | help (see `cheats` for applyeffect/effects and the rest of the staging verbs)";
+        "commands: servers | connect <ip|#n> [password] | password <pw> | host | disconnect | reconnect | say <msg> | clear | status | lagstats | public_address | warp <module> | who | where | census | resolve <id> | cheats | netsim <off|status|loss|latency|blackout> | help (see `cheats` for applyeffect/effects and the rest of the staging verbs)";
 }

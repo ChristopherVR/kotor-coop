@@ -71,6 +71,8 @@ actually runs with.
 | `companion_xp_sync` | OFF (NEEDS-LIVE) | share each active companion's experience the same way the PC's own is | [companion-state-sync.md](research/companion-state-sync.md) |
 | `companion_gear_sync` | OFF (NEEDS-LIVE) | read each companion's real equipped gear and hand it to the plugin (agent's own copy) | [companion-state-sync.md](research/companion-state-sync.md) |
 | `party_pool_sync` | OFF | sync the shared party item pool (`CSWPartyTable+0x118`) both ways (NEEDS-LIVE) | [party-pool-sync.md](research/party-pool-sync.md) |
+| `stun_servers` | two well-known public servers¹¹ | HOST only: STUN servers (`host:port`, comma-separated) asked for the host's public IP:port; empty disables discovery (roadmap item 24, NEEDS-LIVE) | [network-topology.md](research/network-topology.md) |
+| `upnp` | ON | HOST only: attempt a UPnP IGD port mapping for the session (and world-transfer) port; fails soft (roadmap item 24, NEEDS-LIVE) | [network-topology.md](research/network-topology.md) |
 
 ¹ The property's own C# doc comment used to claim this was OFF by default while the actual
 parse logic (`!ContainsKey(...) || IsTruthy(...)`) already defaulted it ON, matching the
@@ -182,6 +184,10 @@ survives a module transition with no crash, and costs nothing measurable in fram
 ON in both `PluginConfig.ReadBool`'s own fallback and `profiles/coop.ini.example`. The exact
 on-screen M-key appearance was not visually confirmed this round (screenshot tooling is broken
 on the rig) — see `docs/research/map-reveal.md`'s "Live pass" section.
+¹¹ `stun.l.google.com:19302,stun1.l.google.com:19302` — this is `CoopConfig`'s fallback when
+the key is entirely absent; a `stun_servers = ` line present but empty is what actually turns
+discovery off (see `PublicAddressDiscovery.ParseServers` and `network-topology.md`'s privacy
+note — every query is a UDP datagram to a third party).
 
 ## CLI flags (`KotorCoop.Agent`, `AgentOptions.cs`)
 

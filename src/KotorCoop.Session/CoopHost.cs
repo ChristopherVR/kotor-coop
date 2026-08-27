@@ -119,12 +119,43 @@ public sealed partial class CoopHost : ICoopSession
     /// <summary>Real gaps between successive inbound packets from any peer.</summary>
     private readonly IntervalTracker _recvIntervals = new();
 
+    /// <summary>
+    /// This host's public IP:port as observed via STUN (roadmap item 24), or null until
+    /// discovered — or forever, when <see cref="SessionSettings.StunServers"/> is empty. See
+    /// <see cref="PublicAddressDiscovery"/>.
+    /// </summary>
+    public IPEndPoint? PublicEndPoint => _publicAddress?.PublicEndPoint;
+
+    /// <summary>Whether a UPnP router mapping was found for this session's port. See
+    /// <see cref="UpnpMappingService"/>; <see cref="UpnpMappingStatus.Disabled"/> means
+    /// <see cref="SessionSettings.UpnpEnabled"/> was off.</summary>
+    public UpnpMappingStatus UpnpStatus => _upnp?.Status ?? UpnpMappingStatus.Disabled;
+
+    private readonly PublicAddressDiscovery? _publicAddress;
+    private readonly UpnpMappingService? _upnp;
+
     public CoopHost(SessionSettings settings)
     {
         _settings = settings;
         _channel = new UdpChannel(settings.Port);
         _buffer = new SnapshotBuffer(settings.InterpolationDelayMs);
         _sessionId = (uint)Random.Shared.Next(1, int.MaxValue);
+
+        // Roadmap item 24: hosting over the internet without a relay. Both are best-effort and
+        // additive — neither can make a session fail to start, only fail to be reachable from
+        // outside the LAN, which is exactly the pre-existing behaviour when both are disabled.
+        if (settings.StunServers.Count > 0)
+        {
+            _publicAddress = new PublicAddressDiscovery(_channel, settings.StunServers);
+            _publicAddress.Start();
+        }
+
+        if (settings.UpnpEnabled)
+        {
+            _upnp = new UpnpMappingService(settings.Port);
+            _upnp.Start();
+        }
+
         _handlers = new Dictionary<PacketType, PacketHandler>
         {
             [PacketType.Hello] = HandleHello,
@@ -455,5 +486,13 @@ public sealed partial class CoopHost : ICoopSession
         _channel.NoteMalformed();
     }
 
-    public void Dispose() => _channel.Dispose();
+    public void Dispose()
+    {
+        // Both best-effort and independent of the channel: UpnpMappingService's own Dispose
+        // deletes the router mapping (a network call) before the channel it mapped a port for
+        // goes away, and PublicAddressDiscovery has no mapping to clean up, only a loop to stop.
+        _publicAddress?.Dispose();
+        _upnp?.Dispose();
+        _channel.Dispose();
+    }
 }

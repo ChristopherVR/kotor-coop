@@ -49,6 +49,8 @@ public static partial class ConsoleCommand
 
     private static CoopCommand ParseLagStats(string[] rest) => new(CoopCommandKind.LagStats);
 
+    private static CoopCommand ParsePublicAddress(string[] rest) => new(CoopCommandKind.PublicAddress);
+
     private static CoopCommand ParseHelp(string[] rest) => new(CoopCommandKind.Help);
 
     // Validated here rather than in the dispatcher so a typo is caught with a message instead

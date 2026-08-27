@@ -31,6 +31,13 @@ namespace KotorCoop.Session;
 ///                               ; live-pass section)
 ///   party_pool_sync = 0        ; sync the shared party item pool (NEEDS-LIVE, default off) -
 ///                               ; docs/research/party-pool-sync.md
+///   stun_servers = stun.l.google.com:19302,stun1.l.google.com:19302   ; HOST only: public
+///                               ; address discovery (roadmap item 24). This is the default
+///                               ; when the key is absent; set `stun_servers = ` (empty) to
+///                               ; disable it - see docs/research/network-topology.md's
+///                               ; privacy note (contacts a third party).
+///   upnp = 1                   ; HOST only: attempt a UPnP router port mapping. Default on,
+///                               ; fails soft (0 to disable and forward the port by hand).
 /// </code>
 /// </summary>
 public sealed record CoopConfig
@@ -321,6 +328,27 @@ public sealed record CoopConfig
     /// </summary>
     public bool MovieRelayEnabled { get; init; }
 
+    /// <summary>
+    /// coop.ini <c>stun_servers</c> (roadmap item 24, "public address discovery"): comma-
+    /// separated STUN servers (<c>host:port</c>) a HOST asks for its own public IP:port, so the
+    /// status line and <c>public_address</c> can show an internet-reachable address to share.
+    /// Defaults to <see cref="PublicAddressDiscovery.DefaultServers"/> when the key is ABSENT;
+    /// an explicitly EMPTY value (<c>stun_servers = </c>) is what actually disables discovery —
+    /// see <see cref="PublicAddressDiscovery.ParseServers"/>, which turns either form of
+    /// "nothing configured" into an empty list, and this class's own <see cref="TryLoad"/>,
+    /// which is the only place that can tell "absent" apart from "present and blank". Ignored
+    /// by a client. ⚠ This contacts a third party — see docs/research/network-topology.md's
+    /// 2026-08-27 "Internet play" section for the privacy note.
+    /// </summary>
+    public string StunServers { get; init; } = PublicAddressDiscovery.DefaultServers;
+
+    /// <summary>
+    /// coop.ini <c>upnp</c> (roadmap item 24): whether a HOST attempts a UPnP IGD port mapping
+    /// for its session port. ON by default; fails soft — a router with UPnP off or absent just
+    /// gets "forward the port yourself" in the status line, not an error. Ignored by a client.
+    /// </summary>
+    public bool Upnp { get; init; } = true;
+
     // ── Digest-only keys ────────────────────────────────────────────────────────────────
     // Everything below is a PLUGIN-side key (docs/CONFIG.md's "Plugin-side keys" table,
     // PluginConfig.cs + per-controller reads) that this agent-side reader never acted on
@@ -514,6 +542,14 @@ public sealed record CoopConfig
                 ? FollowLeadMode.Host
                 : FollowLeadMode.Any,
             MovieRelayEnabled = !kv.ContainsKey("movie_relay") || IsTruthy(kv.GetValueOrDefault("movie_relay")),
+
+            // Absent key -> the default server list; PRESENT-but-empty ("stun_servers = ")
+            // -> the empty string, which PublicAddressDiscovery.ParseServers turns into an
+            // empty list and therefore disables discovery. See StunServers's own doc comment.
+            StunServers = kv.TryGetValue("stun_servers", out string? stunServers)
+                ? stunServers
+                : PublicAddressDiscovery.DefaultServers,
+            Upnp = !kv.ContainsKey("upnp") || IsTruthy(kv.GetValueOrDefault("upnp")),
 
             // Digest-only (see the field group's own doc comment above): plugin-owned keys,
             // parsed here purely so the outgoing BehaviourDigest can compare them.
