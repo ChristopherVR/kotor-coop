@@ -96,6 +96,12 @@ public static class ProtocolConstants
     /// statue behind and the session can announce "away"/"back". Rides the existing
     /// <c>Flags</c> dword, so nothing in <see cref="PacketCodec"/> changes shape. See
     /// docs/research/disconnect-reconnect.md.
+    ///
+    /// TODO(version): bump for the 2026-08-27 companion-state-sync round —
+    /// <see cref="PacketType.CompanionXpSnapshot"/> (51) / <see cref="PacketType.CompanionXpReport"/>
+    /// (52) are new packet types, and <see cref="PartyMemberState"/> gained three equip fields
+    /// on the existing <see cref="PacketType.PartySnapshot"/> shape. See
+    /// docs/research/companion-state-sync.md.
     /// </summary>
     public const byte Version = 39;
 

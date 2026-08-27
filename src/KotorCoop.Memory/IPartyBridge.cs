@@ -31,8 +31,14 @@ public interface IPartyBridge
     /// <summary>
     /// Host side: reads the active party companions (keyed by NPC slot), whose movement
     /// the host's own engine AI drives. The client mirrors these.
+    ///
+    /// <paramref name="includeEquipment"/> (2026-08-27, docs/research/companion-state-sync.md,
+    /// roadmap item 12): when true, each companion's visibly equipped gear (body/right
+    /// weapon/left weapon) is read too and carried on <see cref="PartyMemberState"/>'s own
+    /// equip fields. Off by default because it is an extra per-companion resref lookup this
+    /// method's every-tick callers should not pay unless <c>companion_gear_sync</c> is on.
     /// </summary>
-    List<PartyMemberState> ReadPartyMembers() => [];
+    List<PartyMemberState> ReadPartyMembers(bool includeEquipment = false) => [];
 
     /// <summary>
     /// The portrait resrefs of this instance's party, PC first — what a host advertises so a
@@ -67,4 +73,38 @@ public interface IPartyBridge
     /// <summary>Client side: overwrites local gold and PC experience with the host's absolute
     /// values, so both parties progress together.</summary>
     bool TryWriteProgression(uint gold, uint experience) => false;
+
+    /// <summary>False when this bridge cannot see or drive per-companion experience.</summary>
+    bool SupportsCompanionProgressionSync => false;
+
+    /// <summary>
+    /// Host side: reads the experience of every currently-active (spawned) party companion,
+    /// keyed by NPC roster slot. <paramref name="xpBySlot"/> must be at least
+    /// <c>KotorCoop.Protocol.ProtocolConstants.PartyRosterSlots</c> long and is cleared first;
+    /// a set bit in <paramref name="presentMask"/> means that slot's entry is meaningful (a
+    /// recruited-but-benched companion has no live body and so no bit).
+    /// </summary>
+    bool TryReadCompanionExperience(uint[] xpBySlot, out ushort presentMask)
+    {
+        presentMask = 0;
+        return false;
+    }
+
+    /// <summary>
+    /// Client side: overwrites each present slot's companion experience with the host's
+    /// absolute value. A slot the mask does not name is left untouched.
+    /// </summary>
+    bool TryWriteCompanionExperience(IReadOnlyList<uint> xpBySlot, ushort presentMask) => false;
+
+    /// <summary>
+    /// Client side: mirrors the host's companions (same as <see cref="TryWritePartyMembers"/>),
+    /// and — when <paramref name="applyEquipment"/> is true — also hands each companion's
+    /// desired gear to the plugin so it can dress the body through the same
+    /// <c>Odyssey.EquipItemFromTemplate</c> path the phantom equipment channel already uses.
+    /// The default overload keeps today's behaviour (position/health/animation only); this
+    /// overload exists so a bridge that cannot drive companion gear at all does not need a
+    /// second member. coop.ini <c>companion_gear_sync</c>, OFF by default.
+    /// </summary>
+    int TryWritePartyMembers(IReadOnlyList<PartyMemberState> members, bool applyEquipment) =>
+        TryWritePartyMembers(members);
 }

@@ -141,6 +141,7 @@ public sealed partial class CoopHost : ICoopSession
             [PacketType.JournalSyncRequest] = HandleJournalSyncRequest,
             [PacketType.EnemyDamage] = HandleEnemyDamage,
             [PacketType.ProgressionReport] = HandleProgressionReport,
+            [PacketType.CompanionXpReport] = HandleCompanionXpReport,
             [PacketType.WorldDigest] = HandleWorldDigest,
             [PacketType.PhantomDamage] = HandlePhantomDamage,
             [PacketType.PeerEffect] = HandlePeerEffect,
@@ -365,6 +366,7 @@ public sealed partial class CoopHost : ICoopSession
         BroadcastPartyRoster(now, recipients);
         BroadcastDialogue(now, recipients);
         BroadcastProgression(now, recipients);
+        BroadcastCompanionExperience(now, recipients);
         BroadcastContainerLoot(now, recipients);
         BroadcastMaterialisedLoot(now, recipients);
         BroadcastDialogueGrant(now, recipients);

@@ -38,15 +38,20 @@ internal sealed class PartyPump(IGameBridge bridge, ICoopSession session, AgentS
             }
 
             // The host: publish, do not freeze. Its companions follow through the game's
-            // own AI exactly as in single-player.
-            session.PublishParty(bridge.ReadPartyMembers());
+            // own AI exactly as in single-player. companion_gear_sync (roadmap item 12,
+            // docs/research/companion-state-sync.md) additionally reads each companion's real
+            // equipped gear onto the same snapshot — off by default, so ordinary sessions pay
+            // nothing extra here.
+            session.PublishParty(bridge.ReadPartyMembers(settings.SyncCompanionGear));
             return;
         }
 
         // A client: freeze the local party AI and mirror the host's companions. The freeze
         // is re-asserted inside TryWritePartyMembers every pass. (The input control-lock that
         // stops the client controlling those companions runs every tick in the fast path.)
-        bridge.TryWritePartyMembers(session.GetPartyMembers());
+        // companion_gear_sync hands the host's published gear on to the plugin too; anti-echo
+        // is structural here — a client never calls ReadPartyMembers to publish its own.
+        bridge.TryWritePartyMembers(session.GetPartyMembers(), settings.SyncCompanionGear);
     }
 
     /// <summary>
@@ -282,5 +287,90 @@ internal sealed class PartyPump(IGameBridge bridge, ICoopSession session, AgentS
         {
             _goldSpent += (uint)-delta;
         }
+    }
+
+    /// <summary>
+    /// Shares each active companion's experience, keyed by NPC roster slot — the companion
+    /// sibling of <see cref="PumpProgression"/>'s PC-experience half. coop.ini
+    /// <c>companion_xp_sync</c>, OFF by default (NEEDS-LIVE — see
+    /// docs/research/companion-state-sync.md).
+    ///
+    /// No ledger, unlike gold: experience only ever goes up and both engines already grant
+    /// kill XP to every ACTIVE party member independently
+    /// (<c>CSWPartyTable::DistributeExperience</c>, docs/research/progression-sync.md §2), so a
+    /// plain per-slot max-merge is enough — the same reasoning <see cref="PumpProgression"/>'s
+    /// own doc comment gives for the PC's XP.
+    ///
+    /// Gated on BOTH <see cref="SessionCapabilities.Progression"/> (a content-independent
+    /// scalar channel) and <see cref="SessionCapabilities.Party"/> (the slot keying needs the
+    /// same save both instances loaded) — <see cref="PumpProgression"/> only needs the former
+    /// because the PC's own single scalar carries no roster key at all.
+    /// </summary>
+    public void PumpCompanionExperience(SessionCapabilities caps)
+    {
+        if (!settings.SyncCompanionXp
+            || !bridge.SupportsCompanionProgressionSync
+            || (caps & SessionCapabilities.Progression) == 0
+            || (caps & SessionCapabilities.Party) == 0)
+        {
+            return;
+        }
+
+        uint[] localXp = new uint[ProtocolConstants.PartyRosterSlots];
+        if (!bridge.TryReadCompanionExperience(localXp, out ushort localMask))
+        {
+            return;
+        }
+
+        if (session.IsEnemyAuthority)
+        {
+            PumpCompanionExperienceHost(localMask, localXp);
+            return;
+        }
+
+        // A client: report our own reading, then mirror whatever the host makes of it.
+        session.ReportCompanionExperience(localMask, localXp);
+
+        if (!session.TryGetCompanionExperience(out ushort hostMask, out uint[] hostXp))
+        {
+            return;
+        }
+
+        // Never below our own reading: a max on both ends means neither instance can pull the
+        // other backwards while a report is in flight — same guarantee PumpProgression already
+        // gives the PC's own XP.
+        uint[] merged = new uint[ProtocolConstants.PartyRosterSlots];
+        ushort mergedMask = 0;
+        CompanionExperienceMerge.MergeInto(ref mergedMask, merged, localMask, localXp);
+        CompanionExperienceMerge.MergeInto(ref mergedMask, merged, hostMask, hostXp);
+
+        if (mergedMask != 0)
+        {
+            bridge.TryWriteCompanionExperience(merged, mergedMask);
+        }
+    }
+
+    /// <summary>
+    /// The host: merge every fresh client report upward by max against its own reading, apply
+    /// the result to its own party table (a client-only script grant otherwise never reaches
+    /// the host's own companion), then publish the merged truth.
+    /// </summary>
+    private void PumpCompanionExperienceHost(ushort localMask, uint[] localXp)
+    {
+        uint[] merged = new uint[ProtocolConstants.PartyRosterSlots];
+        ushort mergedMask = 0;
+        CompanionExperienceMerge.MergeInto(ref mergedMask, merged, localMask, localXp);
+
+        foreach (PeerCompanionXp report in session.GetCompanionExperienceReports())
+        {
+            CompanionExperienceMerge.MergeInto(ref mergedMask, merged, report.PresentMask, report.Xp);
+        }
+
+        if (mergedMask != 0)
+        {
+            bridge.TryWriteCompanionExperience(merged, mergedMask);
+        }
+
+        session.PublishCompanionExperience(mergedMask, merged);
     }
 }

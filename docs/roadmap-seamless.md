@@ -46,8 +46,8 @@ time; everything else builds and unit-tests in parallel.
 | 8 | **Fog-of-war reveal** (`map_reveal_sync`) — built against the statically verified `SetWorldPointExplored`, OFF, never run. | Built (NEEDS-LIVE) 🎮 | `MapRevealController.cs`, `MapRevealRule.cs` |
 | 9 | **Pazaak is invisible to the mod** (GUI panel, not `GetMiniGame`). `pazaak_detect` read built 2026-08-27, OFF until live-verified; "partner is in a minigame — waiting" HUD line built. Swoop/turret park-and-hide unchanged; co-visible swoop never observed. | Built (NEEDS-LIVE) 🎮 | `MinigameController.cs`, `MinigameNoticeRule` |
 | 10 | **Companion follow-AI last-waypoint stall** — two fix candidates (`party_follow_refresh_final_node`, `party_follow_extend_final_node`), both OFF, A/B inconclusive. Now documented in `coop.ini.example`. | Partial 🎮 | `PartyFollowController.cs` |
-| 11 | 🎮 **Companion released under `companion_local_combat` fights with the client's stale copy of its gear** — no equipment channel for companions. Unmeasured. | Missing | `PartyPresenceController.cs`, `Odyssey.Equipment.cs` |
-| 12 | **Companion XP** is outside the progression channel (only the local PC's `CSWSCreatureStats+0x068`). | Missing | `KotorGameBridge.Party.cs:154-186` |
+| 11 | 🎮 **Companion released under `companion_local_combat` fights with the client's stale copy of its gear.** `companion_gear_sync` built 2026-08-27: the host's real per-companion equip resrefs ride `PartySnapshotPacket`/`PartyMemberState`, a new shared-block region carries them to the plugin, and `PartyPresenceController.ApplyCompanionEquipment` dresses the mirrored body through the existing `Odyssey.EquipItemFromTemplate` path. OFF by default, never run against the live game. | Built (NEEDS-LIVE) 🎮 | `PartyPresenceController.cs`, `SharedBlock.Party.cs`, `KotorGameBridge.Party.cs`, docs/research/companion-state-sync.md |
+| 12 | **Companion XP** is outside the progression channel (only the local PC's `CSWSCreatureStats+0x068`). `companion_xp_sync` built 2026-08-27: per-slot companion XP read/written through the identical `stats+0x068` field poke, published/reported/merged (max) the same shape as the PC's own XP. Kill XP is expected to already agree independently on both sides (`DistributeExperience` grants every active member the same full amount); the channel is expected to matter mainly for script-granted XP. OFF by default, never run against the live game. | Built (NEEDS-LIVE) 🎮 | `KotorGameBridge.Party.cs`, `Pumps/PartyPump.cs`, `CompanionExperienceMerge.cs`, docs/research/companion-state-sync.md |
 | 13 | **Mid-dialogue partner transition**: whether the spectator's copy of the conversation is left orphaned is NEEDS-LIVE. | Partial 🎮 | `DialogueSpectateController.cs`, `Pumps/TransitionPump*.cs` |
 
 ## Tier 2 — structural limits worth stating to players (design decisions, not bugs)
@@ -78,6 +78,8 @@ honoured by the menu agent, undocumented keys), `E_PROTO` reject, Welcome tick-r
 Away flag, persistent indicator, `script_item_sync`, mid-session log rotation, `MinigameRule`
 wired, Pazaak detect + waiting notice, sender cap contract, missing unit tests.
 
-Wave B (rig, serial): Tier 1 items 3, 2, 5, 8, 9, 4 as one verification pass each; then 13, 11.
+Wave B (rig, serial): Tier 1 items 3, 2, 5, 8, 9, 4 as one verification pass each; then 13, 11,
+12 (`companion_gear_sync`/`companion_xp_sync`, both built 2026-08-27, both OFF pending their
+own live pass — docs/research/companion-state-sync.md has the test plan).
 
-Wave C (after B): item 1 (party pool), item 7 (config negotiation), item 12 (companion XP).
+Wave C (after B): item 1 (party pool), item 7 (config negotiation).

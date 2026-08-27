@@ -225,4 +225,25 @@ public sealed record AgentSettings
     /// still show something, so the delegate is expected to fall back to its own input.
     /// </summary>
     public Func<string, string>? ModuleDisplayName { get; init; }
+
+    /// <summary>
+    /// When true, each active companion's experience is shared the same way the PC's already
+    /// is (<see cref="SyncProgression"/>): the host's per-slot reading — merged upward by max
+    /// against every client's own reading, exactly like the PC's experience — overwrites each
+    /// instance's own companion stats block. OFF by default, NEEDS-LIVE
+    /// (docs/research/companion-state-sync.md): both engines already grant kill XP to every
+    /// active party member independently, so this channel is expected to matter mainly for
+    /// script-granted XP, but nothing here has been observed against the real game yet.
+    /// coop.ini <c>companion_xp_sync</c>.
+    /// </summary>
+    public bool SyncCompanionXp { get; init; }
+
+    /// <summary>
+    /// When true, a client dresses its own copy of a host-driven companion in that companion's
+    /// REAL equipped gear (body armor, right weapon, left weapon) through the same
+    /// <c>Odyssey.EquipItemFromTemplate</c> path the phantom equipment channel already uses.
+    /// OFF by default, NEEDS-LIVE — see docs/research/companion-state-sync.md. coop.ini
+    /// <c>companion_gear_sync</c>.
+    /// </summary>
+    public bool SyncCompanionGear { get; init; }
 }

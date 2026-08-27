@@ -229,10 +229,11 @@ public class TransitionMovieTests
         // mid-session-load-request flag (the `loadgame` verb, docs/research/session-save.md's
         // dated entry), 53 the party-roster body identity region (two nine-slot object-id
         // arrays, docs/research/dialogue-consequences.md's 2026-08-24 "stale mirrored body"
-        // entry) — 45 and 46 are reserved by other agents working this tree
-        // concurrently) — see the changelog comments beside `_block->Version` and
-        // `PluginSignature` for the full history.
-        Assert.Equal(53, int.Parse(version.Groups[1].Value));
+        // entry), 54 the companion-equipment channel (block grown to 0x4100,
+        // docs/research/companion-state-sync.md) — 45 and 46 are reserved by other agents
+        // working this tree concurrently) — see the changelog comments beside
+        // `_block->Version` and `PluginSignature` for the full history.
+        Assert.Equal(54, int.Parse(version.Groups[1].Value));
     }
 
     private static string RepositoryRoot()

@@ -313,6 +313,23 @@ public sealed record CoopConfig
     /// </summary>
     public bool MovieRelayEnabled { get; init; }
 
+    /// <summary>
+    /// Whether each active companion's experience is shared like the PC's own —
+    /// see <see cref="KotorCoop.Session.AgentSettings.SyncCompanionXp"/>. OFF by default,
+    /// NEEDS-LIVE (docs/research/companion-state-sync.md). <c>companion_xp_sync = 1</c> turns
+    /// it on.
+    /// </summary>
+    public bool CompanionXpSync { get; init; }
+
+    /// <summary>
+    /// Whether a client dresses its own copy of a host-driven companion in that companion's
+    /// real equipped gear — see
+    /// <see cref="KotorCoop.Session.AgentSettings.SyncCompanionGear"/>. OFF by default,
+    /// NEEDS-LIVE (docs/research/companion-state-sync.md). <c>companion_gear_sync = 1</c> turns
+    /// it on.
+    /// </summary>
+    public bool CompanionGearSync { get; init; }
+
     /// <summary>The anchor as the plugin's numeric code (0=TL, 1=TR, 2=BL, 3=BR).</summary>
     public uint ChatOverlayAnchorCode => ChatOverlayAnchor.Trim().ToLowerInvariant() switch
     {
@@ -441,6 +458,8 @@ public sealed record CoopConfig
                 ? FollowLeadMode.Host
                 : FollowLeadMode.Any,
             MovieRelayEnabled = !kv.ContainsKey("movie_relay") || IsTruthy(kv.GetValueOrDefault("movie_relay")),
+            CompanionXpSync = IsTruthy(kv.GetValueOrDefault("companion_xp_sync")),
+            CompanionGearSync = IsTruthy(kv.GetValueOrDefault("companion_gear_sync")),
         };
     }
 

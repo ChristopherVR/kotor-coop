@@ -24,6 +24,13 @@ public static partial class PacketCodec
             w.WriteInt32(m.Health);
             w.WriteUInt32(m.OneShotSerial);
             w.WriteUInt16(m.OneShotAnimation);
+
+            // Companion gear (2026-08-27, docs/research/companion-state-sync.md): empty
+            // strings when companion_gear_sync is off or the slot is unreadable, same
+            // "absent = leave it alone" convention PlayerState's own equip fields use.
+            w.WriteString(m.EquippedBody, ProtocolConstants.MaxResrefLength);
+            w.WriteString(m.EquippedRightWeapon, ProtocolConstants.MaxResrefLength);
+            w.WriteString(m.EquippedLeftWeapon, ProtocolConstants.MaxResrefLength);
         }
 
         return w.Failed ? 0 : w.Position;
@@ -55,6 +62,9 @@ public static partial class PacketCodec
             int health = r.ReadInt32();
             uint oneShotSerial = r.ReadUInt32();
             ushort oneShotAnimation = r.ReadUInt16();
+            string equippedBody = r.ReadString(ProtocolConstants.MaxResrefLength);
+            string equippedRightWeapon = r.ReadString(ProtocolConstants.MaxResrefLength);
+            string equippedLeftWeapon = r.ReadString(ProtocolConstants.MaxResrefLength);
 
             if (r.Failed)
             {
@@ -62,7 +72,8 @@ public static partial class PacketCodec
             }
 
             members.Add(new PartyMemberState(
-                slot, position, facing, animation, health, oneShotSerial, oneShotAnimation));
+                slot, position, facing, animation, health, oneShotSerial, oneShotAnimation,
+                equippedBody, equippedRightWeapon, equippedLeftWeapon));
         }
 
         return new PartySnapshotPacket(serverTime, members);

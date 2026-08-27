@@ -22,7 +22,7 @@ public class PacketHandlerRegistryTests
         PacketType.ItemOp, PacketType.ItemSyncRequest, PacketType.ContainerLoot,
         PacketType.ContainerLootAck, PacketType.LootSyncRequest, PacketType.MaterialisedLootAck,
         PacketType.JournalOp, PacketType.JournalSyncRequest, PacketType.EnemyDamage,
-        PacketType.ProgressionReport, PacketType.WorldDigest, PacketType.PhantomDamage,
+        PacketType.ProgressionReport, PacketType.CompanionXpReport, PacketType.WorldDigest, PacketType.PhantomDamage,
         PacketType.PeerEffect, PacketType.EncounterTrigger, PacketType.TriggerRelay,
         PacketType.MidModuleMovie, PacketType.DialogueRequest, PacketType.Chat, PacketType.Bark,
         PacketType.TransitionMovies, PacketType.TransitionAnnounce, PacketType.InteractionClaim,
@@ -40,6 +40,7 @@ public class PacketHandlerRegistryTests
         PacketType.TriggerRelay, PacketType.PhantomDamage, PacketType.PeerEffect, PacketType.Bark,
         PacketType.TransitionMovies, PacketType.TransitionAnnounce, PacketType.MidModuleMovie,
         PacketType.InteractionLock, PacketType.Chat, PacketType.ProgressionSnapshot,
+        PacketType.CompanionXpSnapshot,
         PacketType.ItemSnapshot, PacketType.ContainerLoot, PacketType.MaterialisedLoot,
         PacketType.CreatureLiveness, PacketType.Pong, PacketType.None,
     ];

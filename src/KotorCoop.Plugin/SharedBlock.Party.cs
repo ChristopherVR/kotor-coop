@@ -129,4 +129,38 @@ internal partial struct SharedBlock
     /// word is.</summary>
     public const int OffsetHostPartyRosterObjectIds = 0x3F4C;
 
+
+    // ---- companion equipment (version 54, region 0x4000..0x40C0) -----------------
+    //
+    // docs/research/companion-state-sync.md (2026-08-27, roadmap item 12): the gap left by
+    // party_drive mirroring only position/health/animation. When companion_local_combat
+    // releases a companion to a CLIENT's own engine AI, that AI attacks with whatever gear the
+    // CLIENT's copy of the body happens to be wearing — which can be stale the moment the host
+    // player has re-equipped that companion (a workbench upgrade, a looted weapon) since the
+    // two instances last agreed. This region lets the host publish the companion's REAL
+    // equipped gear (agent -> plugin) so PartyPresenceController can dress the mirrored body
+    // through the identical Odyssey.EquipItemFromTemplate path OffsetEquipSlots already drives
+    // for a peer's phantom.
+    //
+    // Keyed by PRESENCE SLOT INDEX (0..3, PartyPresenceCapacity — the same index
+    // OffsetPartyPresenceSlots uses, i.e. the position in PartySnapshotPacket.Members the host
+    // sent it at), NOT by NPC roster slot: this is a separate, parallel array rather than a
+    // widened PartyPresenceStride so the existing 0x28-byte movement layout at
+    // OffsetPartyPresenceSlots does not have to move (nothing else in this file relocates an
+    // existing offset for a later addition — see every "region... no TotalSize growth" comment
+    // above). Growing TotalSize by 0x100 costs one more page of the game's own heap and nothing
+    // else; the agent finds the block by signature and reads fixed offsets regardless of size.
+    //
+    // Empty resref = "leave the slot alone" (companion_gear_sync off, an unreadable slot, or
+    // the sender predates this field) — the exact same "absent is a no-op, never a strip"
+    // convention OffsetEquipSlots already uses for a phantom.
+
+    /// <summary>Agent -&gt; plugin. 4 presence slots x 3 resrefs (body, right weapon, left
+    /// weapon) x 16 ascii bytes, same order as <see cref="EquipBody"/>/
+    /// <see cref="EquipRightWeapon"/>/<see cref="EquipLeftWeapon"/>. Occupies
+    /// 0x4000..0x40C0.</summary>
+    public const int OffsetCompanionEquipSlots = 0x4000;
+
+    public const int CompanionEquipSlotStride = 0x30;
+
 }
