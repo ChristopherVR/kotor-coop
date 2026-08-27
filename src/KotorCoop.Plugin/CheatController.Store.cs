@@ -201,9 +201,13 @@ internal sealed unsafe partial class CheatController
     /// <see cref="SharedBlock.CheatTarget"/> nonzero names the store by object id and
     /// <see cref="SharedBlock.CheatText"/> is then the bare resref; <see cref="SharedBlock.CheatTarget"/>
     /// zero means the store was a tag, packed as <c>"tag|resref"</c> in
-    /// <see cref="SharedBlock.CheatText"/>.
+    /// <see cref="SharedBlock.CheatText"/>. <paramref name="player"/> (resolved by
+    /// <see cref="Execute"/> the same way every other per-player cheat kind already is) is
+    /// threaded through to <see cref="Odyssey.BuyFromStore"/> for its own affordability guard
+    /// (docs/research/store-sync.md's live-found gold-underflow bug — <c>BuyItem</c> itself has
+    /// none).
     /// </summary>
-    private void Buy() => Trade(isBuy: true, player: 0);
+    private void Buy(nint player) => Trade(isBuy: true, player);
 
     /// <summary>Sell side of <see cref="Buy"/> — see that method's own doc comment and
     /// <see cref="SharedBlock.CheatKindStoreSell"/>.</summary>
@@ -300,7 +304,7 @@ internal sealed unsafe partial class CheatController
         string resref = Encoding.ASCII.GetString(resrefBytes, resrefLength);
 
         bool applied = isBuy
-            ? Odyssey.BuyFromStore(storeId, resrefBytes, resrefLength, count, out int moved)
+            ? Odyssey.BuyFromStore(player, storeId, resrefBytes, resrefLength, count, out int moved)
             : Odyssey.SellToStore(player, storeId, resrefBytes, resrefLength, count, out moved);
 
         if (!applied)
@@ -314,5 +318,30 @@ internal sealed unsafe partial class CheatController
         string direction = isBuy ? "from" : "to";
         PluginHost.Log($"{verb}: {verb} '{resref}' x{moved} {direction} store {what}{note}");
         Answer(SharedBlock.CheatStatusApplied, $"{verb} '{resref}' x{moved} {direction} store {what}{note}");
+    }
+
+    /// <summary>
+    /// DEV VERB: sets the party's gold directly to <see cref="SharedBlock.CheatAmount"/>
+    /// through <see cref="Odyssey.SetGold"/> (the real <c>CSWSCreature::SetGold</c> call,
+    /// clamped server-side to 999,999,999). Built to repair a save whose gold was driven
+    /// negative-then-wrapped by an unguarded <c>buy</c> before this pass added
+    /// <see cref="Odyssey.BuyFromStore"/>'s own affordability guard — see
+    /// docs/live-verification.md for the shared rig save's own poisoned reading and how this
+    /// verb fixes it.
+    /// </summary>
+    private void SetGold(nint player)
+    {
+        int amount = block.CheatAmount;
+
+        bool applied = Odyssey.SetGold(player, amount, out int before, out int after);
+        if (!applied)
+        {
+            PluginHost.Log($"setgold: failed - {Odyssey.LastStoreNote}");
+            Answer(SharedBlock.CheatStatusEngineRefused, $"setgold failed: {Odyssey.LastStoreNote}");
+            return;
+        }
+
+        PluginHost.Log($"setgold: gold {before} -> {after} (asked for {amount})");
+        Answer(SharedBlock.CheatStatusApplied, $"gold {before} -> {after}");
     }
 }

@@ -503,6 +503,129 @@ internal static unsafe partial class Odyssey
     private static readonly delegate* unmanaged[Thiscall]<nint, nint, void> GuiSellItemFn =
         (delegate* unmanaged[Thiscall]<nint, nint, void>)0x006C0D80;
 
+    // ---- root cause + fix (2026-08-28): `sell` walked the WRONG repository ----------------
+    //
+    // `sell` refused "no matching item in inventory" for an item three independent readers
+    // (the store's own `sell` lookup, `item <id>`, and `items`) agreed was genuinely present —
+    // docs/research/store-sync.md's own live pass flagged this as unconfirmed and asked the
+    // next round to compare `SellToStore`'s repo pointer against `items`' at the same instant.
+    // Root-caused by fresh disasm of `CSWSCreature::GetItemRepository 0x004EF770` instead
+    // (`__thiscall(this, int wantShared) -> CItemRepository*`, `ret 4`) — the SAME accessor
+    // `CSWGuiStore::PopulateInventoryItemListBox 0x006C0850` (the sell list's own population
+    // routine) and `CSWSCreature::AcquireItem 0x005158E0` (the routine `CSWSStore::SellItem`
+    // hands a bought item to via, at every one of its three return paths) both call with the
+    // literal argument 1 — never `player + CreatureItemRepo` (0xA30) directly, which is what
+    // `SellToStore` used to do.
+    //
+    // VERIFIED, full disasm of `GetItemRepository` this pass: when `arg == 1` (every caller
+    // above always passes 1) AND the creature's own `+0xA88` flag is nonzero — true for a live,
+    // in-party PC, which is virtually always the case during real play — it does NOT read
+    // `+0xA30` at all. It resolves `CServerExoApp::GetPartyTable` and tail-calls
+    // `CSWPartyTable::GetPartyItems 0x00563340` — the SHARED PARTY-WIDE item repository at
+    // `CSWPartyTable+0x118`, the EXACT SAME repository `Odyssey.PartyPool.cs`'s
+    // `ResolvePartyPoolRepo` already reaches directly. A second branch (reached when `+0xA88`
+    // is clear) ALSO falls through to `GetPartyItems` unless a chain of other gates fail (an
+    // "is server mode"/"is this creature the effective party leader" check via
+    // `CSWPartyTable::GetIsAvailable 0x563790`, then a GUI-state check via
+    // `CGuiInGame::GetPartyAccessPanelUp 0x62B4D0`). ONLY when every one of those checks fails
+    // does the function fall back to a bare `mov eax, [esi+0xA30]` read. In other words:
+    // **KOTOR 1's own inventory model is party-shared, not per-creature** — a real player's
+    // "own" backpack IS the party pool for all practical purposes, and `CSWSCreature+0xA30` is
+    // the individual-creature fallback the engine itself only reaches for a creature that is
+    // NOT the live, in-party PC. `SellToStore`'s old direct `+0xA30` read was walking a
+    // repository that, for a real player mid-game, the engine's own code never populates —
+    // matching the observed symptom exactly (a permanently "empty" lookup that a bought/given
+    // item never appears in, however many readers agree it exists).
+    //
+    // This is independently confirmed by `CSWSCreature::GetGold 0x004EDD60`/`SetGold
+    // 0x004EDD90` (below): BOTH gate on the identical `+0xA88` check and, when set, read/write
+    // `CSWPartyTable+0xFC` instead of a per-creature field — i.e. gold ALSO lives on the party
+    // table, not the creature, for exactly the same reason. Same engine, same "the party is one
+    // shared wallet/backpack" model, two independent fields confirming it.
+    //
+    // The fix: `SellToStore` now calls `GetItemRepositoryFn(player, 1)` — the real accessor,
+    // mirroring `PopulateInventoryItemListBox`'s own enumeration exactly — instead of reading
+    // `+0xA30` itself. `Odyssey.PartyPool.cs`'s `AddItemToPartyPool` and this file's own
+    // `InsertItemIntoStore` still read `+0xA30` directly for the PLAYER'S side of their own
+    // spawn-then-relink step; they are NOT touched by this pass (out of the task's scope, and
+    // both are unit/loopback-tested rather than live-reproduced the way `sell` was) but very
+    // likely share this exact same defect for a live party member — flagged here, and again in
+    // docs/research/store-sync.md, for whoever next touches the sync-apply path. Both live
+    // behind `store_sync`'s existing default-OFF gate.
+
+    /// <summary>CSWSCreature::GetItemRepository(this, int wantShared) 0x004EF770, ret 4.
+    /// VERIFIED, fresh disasm this pass — see the section header above for the full trace and
+    /// root-cause finding. Always call this with <paramref name="wantShared"/> = 1 to match
+    /// every other caller in the retail binary (the GUI's own sell-list population, and the
+    /// buy-deposit path) — it resolves the SHARED PARTY POOL for a live, in-party creature,
+    /// falling back to that creature's own individual repository only when it genuinely is
+    /// not one.</summary>
+    private static readonly delegate* unmanaged[Thiscall]<nint, int, nint> GetItemRepositoryFn =
+        (delegate* unmanaged[Thiscall]<nint, int, nint>)0x004EF770;
+
+    /// <summary>CSWSCreature::GetGold(this) 0x004EDD60, ret (no stack cleanup — the function
+    /// takes no arguments beyond <c>this</c>). VERIFIED, fresh disasm this pass: gates on the
+    /// SAME creature <c>+0xA88</c> flag <see cref="GetItemRepositoryFn"/> does and, when set,
+    /// returns <c>CSWPartyTable+0xFC</c> (the party-wide wallet) rather than a per-creature
+    /// field — see the section header above. Also documented in docs/research/console-cheats.md
+    /// (the retail cheat-function table, independently cross-checked against this pass's own
+    /// disasm).</summary>
+    private static readonly delegate* unmanaged[Thiscall]<nint, int> GetGoldFn =
+        (delegate* unmanaged[Thiscall]<nint, int>)0x004EDD60;
+
+    /// <summary>CSWSCreature::SetGold(this, int amount) 0x004EDD90, ret 4. VERIFIED, fresh
+    /// disasm this pass: clamps the INCOMING value to an UPPER bound of 999,999,999
+    /// (<c>0x3B9AC9FF</c>) only — there is no lower-bound/underflow guard anywhere in the
+    /// function, confirming docs/research/store-sync.md's own live-observed finding (an
+    /// unaffordable `buy`, called before this pass added <see cref="StoreAffordabilityRule"/>,
+    /// drove this exact call negative and wrapped the party's plain <c>uint</c> gold to just
+    /// under <c>UINT32_MAX</c>). Routes to the same party-shared wallet <see cref="GetGoldFn"/>
+    /// reads. This is the primitive the <c>setgold</c> dev verb below uses to repair a save
+    /// poisoned that way.</summary>
+    private static readonly delegate* unmanaged[Thiscall]<nint, int, void> SetGoldFn =
+        (delegate* unmanaged[Thiscall]<nint, int, void>)0x004EDD90;
+
+    /// <summary>CSWGuiStore::GetItemBuyValue(panel, item) 0x006C0790, ret 4 — VERIFIED, fresh
+    /// disasm of <c>BuyItem</c>'s own price lookup (the section header's "buy/sell" trace,
+    /// above). The price <see cref="BuyFromStore"/>'s own affordability guard compares against
+    /// <see cref="GetGoldFn"/> before ever calling <see cref="GuiBuyItemFn"/> — <c>BuyItem</c>
+    /// itself has NO such guard (see the section header's disasm-backed note on
+    /// <see cref="SetGoldFn"/>): the real Buy button relies entirely on the GUI graying itself
+    /// out when unaffordable, a precondition calling the click handler directly bypasses.</summary>
+    private static readonly delegate* unmanaged[Thiscall]<nint, nint, int> GetItemBuyValueFn =
+        (delegate* unmanaged[Thiscall]<nint, nint, int>)0x006C0790;
+
+    /// <summary>
+    /// Sets the party's gold directly to <paramref name="amount"/> through the real engine
+    /// setter (<see cref="SetGoldFn"/>, clamped server-side to 999,999,999 like any other
+    /// caller). Built to repair a save whose gold was driven negative-then-wrapped by an
+    /// unguarded <c>buy</c> before this pass (docs/research/store-sync.md's 2026-08-28 live
+    /// pass; docs/live-verification.md). <c>grantgold</c> (a signed DELTA written directly by
+    /// the agent, <c>KotorCoop.Agent</c>'s own <c>CoopCommandDispatcher.Progression.cs</c>)
+    /// cannot cleanly zero a poisoned near-<c>UINT32_MAX</c> reading without first reading it
+    /// back exactly; this sets an ABSOLUTE target instead, through the same call the real GUI
+    /// uses.
+    ///
+    /// MAIN THREAD ONLY.
+    /// </summary>
+    internal static bool SetGold(nint player, int amount, out int before, out int after)
+    {
+        before = 0;
+        after = 0;
+        LastStoreNote = string.Empty;
+
+        if (player == 0)
+        {
+            LastStoreNote = "no player resolved";
+            return false;
+        }
+
+        before = GetGoldFn(player);
+        SetGoldFn(player, amount);
+        after = GetGoldFn(player);
+        return true;
+    }
+
     /// <summary>Walks a <c>CItemRepository</c> for the first live item whose Tag matches
     /// (the same resref proxy <see cref="TagEqualsIgnoreCase"/> already relies on), or 0.
     /// Re-walked fresh by every caller rather than cached: a prior buy/sell in the same loop
@@ -539,10 +662,21 @@ internal static unsafe partial class Odyssey
     /// one is exactly what a real click would do (§1.5: the engine spawns a copy, the store's
     /// own stock never moves).
     ///
+    /// <paramref name="player"/> (the buyer's <c>CSWSCreature*</c>) is used ONLY for this
+    /// method's own affordability guard (<see cref="StoreAffordabilityRule"/>) — the engine's
+    /// own <c>BuyItem</c> re-resolves the acting player internally and never sees this pointer.
+    /// <c>BuyItem</c> itself has NO affordability check (VERIFIED, fresh disasm — see
+    /// <see cref="SetGoldFn"/>'s own doc comment): a real click is guarded only by the GUI
+    /// graying its own Buy button out, a precondition calling the handler directly bypasses.
+    /// This guard reproduces that check before every single unit, refusing (with the price and
+    /// current gold named) rather than letting <see cref="SetGoldFn"/> drive the party's gold
+    /// negative and silently wrap — the exact failure docs/research/store-sync.md's 2026-08-28
+    /// live pass observed.
+    ///
     /// MAIN THREAD ONLY.
     /// </summary>
     internal static bool BuyFromStore(
-        uint storeObjectId, byte* resrefAscii, int resrefLength, int count, out int bought)
+        nint player, uint storeObjectId, byte* resrefAscii, int resrefLength, int count, out int bought)
     {
         bought = 0;
         LastStoreNote = string.Empty;
@@ -561,6 +695,12 @@ internal static unsafe partial class Odyssey
             return false;
         }
 
+        if (player == 0)
+        {
+            LastStoreNote = "no player resolved";
+            return false;
+        }
+
         nint repo = ResolveStoreRepo(storeObjectId);
         if (repo == 0)
         {
@@ -575,13 +715,25 @@ internal static unsafe partial class Odyssey
                 break;
             }
 
+            int price = GetItemBuyValueFn(panel, item);
+            int gold = GetGoldFn(player);
+            if (!StoreAffordabilityRule.CanAfford(price, gold))
+            {
+                LastStoreNote = $"cannot afford: price {price}, gold {gold}";
+                break;
+            }
+
             GuiBuyItemFn(panel, item);
             bought++;
         }
 
         if (bought == 0)
         {
-            LastStoreNote = $"no stock matching that resref in store 0x{storeObjectId:X}";
+            if (LastStoreNote.Length == 0)
+            {
+                LastStoreNote = $"no stock matching that resref in store 0x{storeObjectId:X}";
+            }
+
             return false;
         }
 
@@ -623,7 +775,16 @@ internal static unsafe partial class Odyssey
             return false;
         }
 
-        nint repo = *(nint*)(player + CreatureItemRepo);
+        // BUG FIX (2026-08-28, live-found): this used to read `player + CreatureItemRepo`
+        // (`+0xA30`) directly. VERIFIED, fresh disasm this pass (see the section header above,
+        // "root cause + fix"): a live, in-party PC's actual inventory is the SHARED PARTY POOL
+        // repository, reached only through `GetItemRepositoryFn(player, 1)` — the same accessor
+        // `PopulateInventoryItemListBox` (the sell list's own population routine) calls to
+        // enumerate what a real click would show. Reading `+0xA30` directly walked a repository
+        // the engine itself never populates for a real party member, which is why `sell`
+        // refused "no matching item in inventory" for an item every other reader agreed was
+        // present.
+        nint repo = GetItemRepositoryFn(player, 1);
         if (repo == 0)
         {
             LastStoreNote = "player has no item repository";

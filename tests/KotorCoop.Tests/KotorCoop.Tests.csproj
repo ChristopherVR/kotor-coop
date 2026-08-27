@@ -92,6 +92,7 @@
     <Compile Include="..\..\src\KotorCoop.Plugin\TransitionAnnounceKind.cs" Link="Plugin\TransitionAnnounceKind.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\ContainerLockArbiter.cs" Link="Plugin\ContainerLockArbiter.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\PartyPoolStackMatcher.cs" Link="Plugin\PartyPoolStackMatcher.cs" />
+    <Compile Include="..\..\src\KotorCoop.Plugin\StoreAffordabilityRule.cs" Link="Plugin\StoreAffordabilityRule.cs" />
   </ItemGroup>
 
   <ItemGroup>

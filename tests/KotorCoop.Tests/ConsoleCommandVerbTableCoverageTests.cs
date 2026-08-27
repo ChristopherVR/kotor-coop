@@ -81,6 +81,7 @@ public class ConsoleCommandVerbTableCoverageTests
         [CoopCommandKind.Sell] = "sell Larrim_Store g_w_blstrpstl001",
         [CoopCommandKind.StartDialog] = "startdialog sta_invis_bast_conv",
         [CoopCommandKind.RemoveParty] = "removeparty 0",
+        [CoopCommandKind.SetGold] = "setgold 5000",
     };
 
     /// <summary>Sentinel kinds that are outcomes of parsing (or its absence), not tied to one

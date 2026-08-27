@@ -127,5 +127,9 @@ internal static class ConsoleVerbCatalog
         // Dev-only, script-agnostic solo-segment detector test primitive (2026-08-28): calls the
         // real RemovePartyMember(nNPC) directly, no dialogue needed. Does not shadow a retail verb.
         ("removeparty", "removeparty <slot>  (dev-only: calls the real RemovePartyMember on roster slot 0-8)"),
+
+        // A fifth live-test primitive (2026-08-28, docs/research/store-sync.md's live pass):
+        // registered the same way. Does not shadow a retail verb.
+        ("setgold", "setgold <amount>  (dev-only: sets party gold directly via CSWSCreature::SetGold; repairs a poisoned save)"),
     ];
 }

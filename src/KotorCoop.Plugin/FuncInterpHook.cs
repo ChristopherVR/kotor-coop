@@ -111,6 +111,12 @@ internal static unsafe class FuncInterpHook
         // in-game console (`removeparty 0` on the host), not only via blockpoke. Does not
         // shadow a retail verb.
         "removeparty",
+
+        // A fifth live-test primitive (2026-08-28, docs/research/store-sync.md's live pass):
+        // registered here so a rig session can repair a poisoned gold value directly at the
+        // in-game console. Does not shadow a retail verb (retail's own credits verb is
+        // `givecredits`).
+        "setgold",
     ];
 
     /// <summary>

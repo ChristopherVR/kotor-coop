@@ -567,6 +567,17 @@ public enum CoopCommandKind
     /// same as a real script call. Local only.
     /// </summary>
     RemoveParty,
+
+    /// <summary>
+    /// <c>setgold &lt;amount&gt;</c> — DEV VERB (docs/research/store-sync.md's live pass). Sets
+    /// the party's gold directly to <c>amount</c> (non-negative) through the real engine
+    /// <c>CSWSCreature::SetGold</c> call, clamped server-side to 999,999,999. Exists to repair a
+    /// save whose gold an unaffordable <c>buy</c> drove negative-then-wrapped, before this pass
+    /// added <see cref="Buy"/>'s own affordability guard. Unlike <see cref="GrantGold"/> (a
+    /// signed DELTA), this is an ABSOLUTE target — the shape a repair needs.
+    /// <see cref="CoopCommand.Amount"/> carries the target value. Local only.
+    /// </summary>
+    SetGold,
 }
 
 /// <summary>
@@ -769,6 +780,7 @@ public static partial class ConsoleCommand
         new(["sell"], ParseSell),
         new(["startdialog"], ParseStartDialog),
         new(["removeparty"], ParseRemoveParty),
+        new(["setgold"], ParseSetGold),
         new(["cheats"], ParseCheats),
     ];
 

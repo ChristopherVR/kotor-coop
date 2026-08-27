@@ -422,6 +422,17 @@ public static class CheatKinds
     /// ⚠ 43 is the highest number taken now. Take the next FREE one for a new verb.
     /// </summary>
     public const uint RemoveParty = 43;
+
+    /// <summary>
+    /// DEV VERB (docs/research/store-sync.md's live pass): sets the party's gold directly to
+    /// <c>Amount</c> through <c>CSWSCreature::SetGold 0x4EDD90</c>, clamped server-side to
+    /// 999,999,999. Repairs a save whose gold was driven negative-then-wrapped by an
+    /// unaffordable <c>buy</c> before <c>Odyssey.BuyFromStore</c>'s own affordability guard
+    /// existed — see docs/live-verification.md. See <c>SharedBlock.CheatKindSetGold</c>.
+    ///
+    /// ⚠ 44 is the highest number taken now. Take the next FREE one for a new verb.
+    /// </summary>
+    public const uint SetGold = 44;
 }
 
 /// <summary>
