@@ -17,15 +17,27 @@ public sealed partial class CoopHost
     private readonly ReliableStoreSender _storeSender = new();
     private readonly StoreStore _storeStore = new();
 
+    /// <summary>Every REMOTE store op this host's own <c>ApplyOp</c> has accepted since the last
+    /// drain — see <see cref="DrainStoreOps"/>/<see cref="HandleStoreOp"/>'s own remarks. Guarded
+    /// by <see cref="_storeOpDrainQueueGate"/> because it is written from this host's own
+    /// packet-receive path and read from <c>Pumps.StorePump</c>'s tick, which run on different
+    /// threads (the same cross-thread boundary <see cref="StoreStore"/>'s own <c>_gate</c>
+    /// protects).</summary>
+    private readonly Queue<StoreOpPacket> _storeOpDrainQueue = new();
+    private readonly Lock _storeOpDrainQueueGate = new();
+    private const int MaxStoreOpDrainQueue = 1024;
+
     public StoreStore Store => _storeStore;
 
     /// <summary>Someone's local store scan found a change; broadcast it reliably. Gated on the
     /// store: a delta the store already reflects (this host's own earlier publish echoing, or a
-    /// peer op already applied) reports no change and is never re-sent.</summary>
-    public void PublishStoreOp(StoreOpKind kind, StoreStackKey key, uint countDelta)
+    /// peer op already applied) reports no change and is never re-sent. See
+    /// <see cref="IStoreSession.PublishStoreOp"/>'s own remarks for <paramref
+    /// name="localBaselineIfUnknown"/>.</summary>
+    public void PublishStoreOp(StoreOpKind kind, StoreStackKey key, uint countDelta, int localBaselineIfUnknown = 0)
     {
         ushort clamped = (ushort)Math.Min(countDelta, ushort.MaxValue);
-        if (clamped == 0 || !_storeStore.Record(kind, key, clamped))
+        if (clamped == 0 || !_storeStore.Record(kind, key, clamped, localBaselineIfUnknown))
         {
             return;
         }
@@ -34,6 +46,28 @@ public sealed partial class CoopHost
     }
 
     public IReadOnlyDictionary<StoreStackKey, int> StoreTotals => _storeStore.Snapshot();
+
+    public IReadOnlySet<StoreStackKey> StoreKnownKeys => _storeStore.KnownKeys;
+
+    /// <summary>See <see cref="IStoreSession.DrainStoreOps"/>'s own remarks — every op queued
+    /// here comes from <see cref="HandleStoreOp"/>'s own successful <c>ApplyOp</c> call, i.e. a
+    /// CLIENT-originated fact this host's engine also owes (the host is never its own client, so
+    /// there is no self-echo risk to filter here the way <see cref="CoopClient.HandleStoreOp"/>
+    /// must).</summary>
+    public IReadOnlyList<StoreOpPacket> DrainStoreOps()
+    {
+        lock (_storeOpDrainQueueGate)
+        {
+            if (_storeOpDrainQueue.Count == 0)
+            {
+                return [];
+            }
+
+            List<StoreOpPacket> drained = [.. _storeOpDrainQueue];
+            _storeOpDrainQueue.Clear();
+            return drained;
+        }
+    }
 
     /// <summary>Retransmits store ops to every client until each has acked — the same shape as
     /// <see cref="BroadcastPartyPool"/>.</summary>
@@ -76,6 +110,20 @@ public sealed partial class CoopHost
         if (_storeStore.ApplyOp(op))
         {
             _storeSender.Enqueue(op.OriginPeerId, op.Kind, op.Key, op.CountDelta, now);
+
+            lock (_storeOpDrainQueueGate)
+            {
+                if (_storeOpDrainQueue.Count < MaxStoreOpDrainQueue)
+                {
+                    _storeOpDrainQueue.Enqueue(op);
+                }
+                else
+                {
+                    Console.Error.WriteLine(
+                        "[coop] store op drain queue refused: already holding "
+                        + $"{MaxStoreOpDrainQueue} unapplied ops — the drain has fallen behind.");
+                }
+            }
         }
 
         // Ack unconditionally: a duplicate op means the previous ack was lost.
@@ -102,16 +150,25 @@ public sealed partial class CoopHost
     }
 
     /// <summary>
-    /// Re-offers every (store, stack) entry this session knows about, as absolute
+    /// Re-offers every (store, stack) entry this session has EVER transacted, as absolute
     /// <see cref="StoreOpKind.Set"/> facts under the host's own id — identical reasoning to
     /// <see cref="ResyncPartyPool"/>: no per-contributor history to replay, and a peer being
     /// resynced may already hold a different total for a key. Two callers: <see cref="HandleHello"/>
     /// on (re-)admission, and <see cref="HandleStoreSyncRequest"/> for a still-connected peer
     /// whose digest disagrees.
+    ///
+    /// Deliberately <see cref="StoreStore.SnapshotKnown"/>, NOT <see cref="StoreStore.Snapshot"/>:
+    /// the latter excludes a key legitimately depleted to zero (pruned once its total hits zero),
+    /// which would silently omit that fact from the resync and leave a peer who never locally
+    /// scanned the depleted item believing it is still pristine forever
+    /// (docs/research/store-sync.md's "Bug 4" write-up — the SAME "absent means unknown, not
+    /// zero" rule <c>Pumps.StorePump</c>'s reconcile step now also honours). A store nobody has
+    /// ever transacted contributes NOTHING here — its keys were never recorded — so this resync
+    /// never touches a store this session has no business asserting anything about.
     /// </summary>
     private void ResyncStore(long nowMs)
     {
-        foreach ((StoreStackKey key, int count) in _storeStore.Snapshot())
+        foreach ((StoreStackKey key, int count) in _storeStore.SnapshotKnown())
         {
             _storeSender.Enqueue(
                 HostPeerId, StoreOpKind.Set, key, (ushort)Math.Min(count, ushort.MaxValue), nowMs);

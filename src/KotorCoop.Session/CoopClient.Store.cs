@@ -13,14 +13,23 @@ public sealed partial class CoopClient
     private readonly StoreStore _storeStore = new();
     private readonly ReliableStoreSender _storeSender = new();
 
+    /// <summary>Every REMOTE store op this client's own <c>ApplyOp</c> has accepted since the
+    /// last drain — see <see cref="DrainStoreOps"/>/<see cref="HandleStoreOp"/>'s own remarks.
+    /// Guarded the same cross-thread way <see cref="CoopHost"/>'s own drain queue is.</summary>
+    private readonly Queue<StoreOpPacket> _storeOpDrainQueue = new();
+    private readonly Lock _storeOpDrainQueueGate = new();
+    private const int MaxStoreOpDrainQueue = 1024;
+
     public StoreStore Store => _storeStore;
 
     /// <summary>This client's own store scan found a change. Reliable, like every world-truth
-    /// channel here: a change is a one-shot fact, not a level the next tick re-sends.</summary>
-    public void PublishStoreOp(StoreOpKind kind, StoreStackKey key, uint countDelta)
+    /// channel here: a change is a one-shot fact, not a level the next tick re-sends. See
+    /// <see cref="IStoreSession.PublishStoreOp"/>'s own remarks for
+    /// <paramref name="localBaselineIfUnknown"/>.</summary>
+    public void PublishStoreOp(StoreOpKind kind, StoreStackKey key, uint countDelta, int localBaselineIfUnknown = 0)
     {
         ushort clamped = (ushort)Math.Min(countDelta, ushort.MaxValue);
-        if (clamped == 0 || !_storeStore.Record(kind, key, clamped))
+        if (clamped == 0 || !_storeStore.Record(kind, key, clamped, localBaselineIfUnknown))
         {
             return;
         }
@@ -32,6 +41,27 @@ public sealed partial class CoopClient
 
     public IReadOnlyDictionary<StoreStackKey, int> StoreTotals => _storeStore.Snapshot();
 
+    public IReadOnlySet<StoreStackKey> StoreKnownKeys => _storeStore.KnownKeys;
+
+    /// <summary>See <see cref="IStoreSession.DrainStoreOps"/>'s own remarks — every op queued
+    /// here comes from <see cref="HandleStoreOp"/>'s own successful <c>ApplyOp</c> call, which
+    /// that method's own origin check already restricts to a genuinely REMOTE fact (a peer's
+    /// buy/sell, or the host's resync).</summary>
+    public IReadOnlyList<StoreOpPacket> DrainStoreOps()
+    {
+        lock (_storeOpDrainQueueGate)
+        {
+            if (_storeOpDrainQueue.Count == 0)
+            {
+                return [];
+            }
+
+            List<StoreOpPacket> drained = [.. _storeOpDrainQueue];
+            _storeOpDrainQueue.Clear();
+            return drained;
+        }
+    }
+
     /// <summary>
     /// Records a store op from the host and acks it.
     ///
@@ -39,8 +69,11 @@ public sealed partial class CoopClient
     /// broadcast (<see cref="CoopHost.HandleStoreOp"/> relays under the ORIGINAL contributor's id
     /// specifically so this check can work). If so, the store already reflects it — recorded the
     /// moment <see cref="PublishStoreOp"/> queued it — so applying the relay again would
-    /// double-count it. Still ack unconditionally: the host's sender is waiting for this specific
-    /// peer's ack to retire the op regardless of who originated it.
+    /// double-count it (and, per the same reasoning, must NOT be queued into
+    /// <see cref="_storeOpDrainQueue"/> — this instance's own engine already reflects it, that is
+    /// literally what triggered the original publish). Still ack unconditionally: the host's
+    /// sender is waiting for this specific peer's ack to retire the op regardless of who
+    /// originated it.
     /// </summary>
     private void HandleStoreOp(IPEndPoint from, ReadOnlySpan<byte> span, long now)
     {
@@ -50,9 +83,21 @@ public sealed partial class CoopClient
             return;
         }
 
-        if (op.OriginPeerId != _localPeerId)
+        if (op.OriginPeerId != _localPeerId && _storeStore.ApplyOp(op))
         {
-            _storeStore.ApplyOp(op);
+            lock (_storeOpDrainQueueGate)
+            {
+                if (_storeOpDrainQueue.Count < MaxStoreOpDrainQueue)
+                {
+                    _storeOpDrainQueue.Enqueue(op);
+                }
+                else
+                {
+                    Console.Error.WriteLine(
+                        "[coop] store op drain queue refused: already holding "
+                        + $"{MaxStoreOpDrainQueue} unapplied ops — the drain has fallen behind.");
+                }
+            }
         }
 
         int length = PacketCodec.Write(_replyBuffer, new StoreAckPacket(_localPeerId, op.OpSequence));

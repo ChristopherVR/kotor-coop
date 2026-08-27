@@ -1276,3 +1276,178 @@ attributing a crash address to the session that just ended). This matches the me
 min-1-hp warp artifact" — warping while downed is already a known-poison transition, and `tp`'s
 own doc string already says "no walkmesh check" for exactly this reason. Omit `z` (`tp <x>
 <y>`) unless the real ground height is already known.
+
+## Fix (2026-08-28): Bug 4, the virgin-store wipe — closed with a redesign, not a filter; a
+## second, independent defect found and closed in the same pass
+
+Task: fix the prior pass's own Bug 4 ("a virgin store's entire stock is wiped by the mere act of
+opening it on two `store_sync=1` instances") with a correct design, per the invariant the prior
+pass itself named but did not implement: **the wire store never holds an absolute truth for a
+store nobody has transacted in — an absent key means "unknown", not "zero".**
+
+### Root cause, restated precisely
+
+`Pumps/StorePump.cs`'s step 2 (reconcile) used to diff this pump's ENTIRE local engine belief
+(`_knownEngineTotals` — every key it has ever locally scanned, including a store's pristine,
+never-transacted stock) against `session.StoreTotals` (`StoreStore.Snapshot()`, a dictionary that
+only ever holds a key someone has actually transacted) via `StoreDiffRule.Diff`. `Diff`'s own
+logic treats "a key present in `expected` but absent from `actual`" as "remove the full quantity"
+— correct when both sides are complete snapshots of the SAME thing (which is exactly how step 1
+already used it, comparing two consecutive LOCAL scans of the same store), but wrong here: a
+virgin store's pristine stock is present in `expected` (the local scan) and absent from `actual`
+(nobody has told the session anything about it) for a completely different reason than "it was
+deleted" — nobody has ever transacted it. `StoreDiffRule.Diff` cannot tell the two apart from the
+dictionaries alone, and the old step 2 handed it dictionaries that made them genuinely
+indistinguishable.
+
+### The design (implemented this pass)
+
+Four rules, matching the task brief's own numbering:
+
+**(a) A store's first local read publishes nothing; it becomes a local baseline.**
+`Pumps/StorePump.cs`'s `!_openStoreBaselined` branch already did this correctly before this pass
+(seeds `_knownEngineTotals` from the fresh scan, no diff, no publish) — this was never the bug.
+
+**(b) Only local deltas become ops.** Step 1 diffs two consecutive LOCAL scans of the currently
+open store and publishes only the delta — also already correct; unchanged in shape.
+
+**(c) A peer op adjusts local stock by a DELTA, never "set to wire total" — except `Set`
+(resync), scoped to stores the sender has transacted in.** This is the actual redesign. Step 2 no
+longer diffs two absolute snapshots at all. `IStoreSession` gained `DrainStoreOps()` — previously
+declared but never implemented anywhere in this codebase (`IPartyPoolSession.DrainPartyPoolOps`
+is its identically-unused sibling) — now backed by a real per-side queue (`CoopHost`/
+`CoopClient`'s new `_storeOpDrainQueue`, `Lock`-guarded for the cross-thread boundary between the
+packet-receive path and `Pumps.StorePump`'s own tick): every op this instance's `ApplyOp` call
+genuinely accepts (a REMOTE fact — origin-filtered on `CoopClient`, and the host is never its own
+client so needs no such filter) is queued there. `StorePump`'s step 2 now drains this queue every
+tick and applies each op DIRECTLY: `Add`/`Remove` adjust whatever the local engine currently holds
+by the op's raw `CountDelta` — needing no knowledge of the store's true pristine baseline at all,
+correct regardless of whether this instance has ever locally scanned the affected store. A
+virgin store's keys never generate an op (rule b), so `DrainStoreOps()` never contains anything
+for them — Bug 4 is closed STRUCTURALLY, not by a filter bolted onto the old diffing shape.
+
+`Set` (resync) is the one case that IS an absolute target, and is applied by computing the delta
+needed to reach it from this pump's own existing engine belief (`_knownEngineTotals`) — but ONLY
+if that belief already exists for the key; a `Set` for a key this instance has never locally
+observed is left alone rather than guessed at (see "Known limitation" below). `CoopHost.ResyncStore`
+emits a `Set` only for keys the host has ITSELF transacted (`StoreStore.SnapshotKnown()`, see (d)).
+
+**(d) A legitimate full depletion drives a receiver to zero via an explicit delta; `StoreStore`
+may prune afterward without implying "absent = zero" later.** `StoreStore` gained a `_known`
+`HashSet<StoreStackKey>` — every key ever the target of a real `Record`/`ApplyOp` call, added
+regardless of whether the total ends up zero, never removed except by `Clear()`. `Snapshot()`
+(nonzero-only, unchanged) still powers `StoreTotals`; the new `SnapshotKnown()` returns EVERY
+known key mapped to its current total (0 for a pruned, fully-depleted one) and is what
+`ResyncStore` now sends — so a rejoining peer who never saw the original depleting op live still
+learns "this key is known, and currently zero" via an explicit `Set(key, 0)`, rather than the
+resync silently omitting it (which would leave that peer's own pristine copy wrong forever). A
+store nobody has transacted contributes NOTHING to `SnapshotKnown()` — its keys were never added
+to `_known` — so the resync genuinely never touches an untransacted store, closing the "leaves
+untransacted stores alone" requirement structurally as well.
+
+### A second, independent defect found while implementing the fix: the floored first Remove
+
+Investigating the redesign surfaced a second, previously-undetected bug the OLD snapshot-diffing
+shape had been incidentally masking: `StoreStore.Mutate`'s `Remove` branch computed
+`Math.Max(0, before - countDelta)`. The very FIRST op ever recorded for a key is, for many real
+shops, a BUY (`Remove`) — and `before` for a never-before-recorded key is 0 (nothing has ever
+publishd anything for it). `Math.Max(0, 0 - delta) == 0 == before` — `Mutate` reported "no
+change", `Record` returned `false`, and `PublishStoreOp` — which gates the actual wire send on
+`Record`'s return value — silently dropped the packet. **A buy as the first transaction on a
+store's stock would never even reach the wire.** Two fixes, both shipped this pass:
+
+1. `Mutate`'s `Remove` arithmetic no longer floors (`before - (int)countDelta`, allowed to go
+   negative); a non-positive `after` is pruned exactly like a legitimately-zeroed key already was
+   (negative and zero are `Snapshot`/digest-equivalent: "not present"). This alone makes `Record`
+   return `true` for any genuine delta, closing the silent drop as a defence-in-depth measure.
+2. The PRIMARY fix: `StoreStore.Record` gained a `localBaselineIfUnknown` parameter — the true
+   local engine total the delta was computed against, which `Pumps.StorePump`'s step 1 always
+   already knows (it is the "before" side of the very diff that produced the delta). The first
+   time a key is recorded, this seeds `_totals[key]` (and pre-XORs the digest so the seed does not
+   corrupt it) BEFORE the delta is applied — so `SnapshotKnown()`/resync report the TRUE absolute
+   stock (e.g. 39 after a buy off a pristine 40) rather than a wire-relative "0". `IStoreSession
+   .PublishStoreOp` gained the same parameter (default 0, source-compatible with every pre-existing
+   call site), threaded from step 1's own `priorForDetect.GetValueOrDefault(delta.Key)`.
+
+### Files changed
+
+- `src/KotorCoop.Session/StoreStore.cs` — `_known` set, `KnownKeys`/`SnapshotKnown()`, the
+  `Record` baseline-seeding parameter, the un-floored `Remove` arithmetic.
+- `src/KotorCoop.Session/IStoreSession.cs` — `PublishStoreOp`'s new parameter, `StoreKnownKeys`,
+  `DrainStoreOps`'s corrected doc (it excludes self-originated ops, contrary to its own stale
+  pre-existing comment).
+- `src/KotorCoop.Session/CoopHost.Store.cs` / `CoopClient.Store.cs` — the `_storeOpDrainQueue`
+  (`DrainStoreOps()`, populated from `HandleStoreOp`'s successful `ApplyOp`), `PublishStoreOp`'s
+  threaded baseline, `ResyncStore` switched to `SnapshotKnown()`.
+- `src/KotorCoop.Session/Pumps/StorePump.cs` — step 2 rewritten around `DrainStoreOps()`; step 1
+  threads the local baseline into `PublishStoreOp`.
+- `tests/KotorCoop.Tests/StoreLoopbackTests.cs` (new) — five real host/client/socket loopback
+  tests (see below), each independently confirmed to FAIL against the pre-fix code (a genuine
+  regression test, not merely a green check against the new code): opening a virgin store touches
+  nothing; a host buy decrements the client's copy without touching an unrelated stack in the same
+  store; a full depletion drives the client to zero; a reconnecting peer's resync converges the
+  store it transacted in while leaving an entirely separate, never-transacted store untouched; an
+  infinite-stock item's unchanged scan produces no op. `tests/KotorCoop.Tests/StoreTests.cs`'s
+  existing 15 unit tests all still pass unmodified (the new `Record` parameter is
+  source-compatible; `Remove`'s un-floored arithmetic still reports `Get`/`Count` identically for
+  every existing assertion, which only ever checks the PUBLIC, floor-equivalent surface).
+
+### Build and test result
+
+`dotnet build KotorCoop.slnx -warnaserror`: clean, 0 warnings, 0 errors.
+`dotnet test tests/KotorCoop.Tests --no-build`: **2360/2360 passing** (2355 pre-existing + 5 new
+loopback tests), full suite, foreground, no regressions.
+
+### Known limitation, honestly stated (not solved this pass)
+
+A `Set` (resync) for a key this instance has NEVER locally scanned is left alone rather than
+guessed at (see (c) above) — applying it as `Add[target]` from a zero belief would very likely be
+WRONG, since this instance's own true pristine baseline for that key is unknown to the resync
+message (the wire never carries a virgin store's pristine value, by design (a)). This is a
+narrower restatement of this document's own pre-existing §5 risk 1 ("a store neither instance has
+opened cannot sync until someone opens it"): a peer who reconnects having NEVER opened the
+transacted store itself will not have that key corrected until it opens that store for the first
+time (at which point its own first-scan baseline picks up the truth directly, matching the
+pristine local engine value at that moment). Every test this pass wrote deliberately stays within
+the well-defined, correctly-handled case (a peer who was online during the transaction, or who
+independently baselined the same store before reconnecting) — this narrower gap is flagged here
+rather than silently left broken or guessed at with an unverified "best-effort" apply.
+
+### Live re-test plan (supersedes nothing prior — §6/the 2026-08-28 buy/sell pass's own plan is
+### still the right shape; this section only adds what to re-check given this fix)
+
+`store_sync` stays at its default OFF (`profiles/coop.ini.example` unchanged, `store_sync=0`) —
+this fix is unit/loopback-tested only, not yet live-verified, per this project's own engine-write
+discipline (`docs/CONTRIBUTING.md`: "verify a researched offset live before shipping the write" —
+though note this particular fix touches NO researched offset or engine call at all, purely
+session/protocol-layer C# logic; the NEEDS-LIVE items below are about the SYNC BEHAVIOUR, not
+about any new memory read/write).
+
+1. Two `tools/demo.ps1` instances, `store_sync=1` on both, both freshly built/installed
+   (`build.ps1 -Install -WarnAsError`). `warp tar_m02aa` both, clear the ambient `duros`
+   conversation (`tp <x> <y>` without `z`, per this doc's own prior-pass warning), `openstore
+   Larrim_Store` on both (the real store/tag this doc's own prior passes already found and
+   live-confirmed opens cleanly).
+2. **Bug 4's own repro, re-run.** With BOTH instances' store GUI open and ZERO buy/sell issued,
+   watch `kotorcoop-general.log` on both for several seconds — confirm NO `store: removed ...`
+   lines appear at all (the prior pass's own repro produced ~30-40 such lines within seconds on
+   each side; this fix should produce zero).
+3. `buy Larrim_Store <a real stocked resref>` on the host — confirm the plugin log shows exactly
+   one `buy:` line, the HOST's own on-screen stock count decreases by exactly 1, and — once the
+   CLIENT's `StorePump` has had a tick to drain the resulting op — the CLIENT's on-screen copy of
+   the SAME store (already open) also shows the decrease, with NO other stocked resref in that
+   store changing on either side.
+4. Buy out an entire finite stack in one or more `buy` calls — confirm the item disappears from
+   BOTH sides' on-screen list once fully depleted, matching this pass's own
+   `DepletingAStackOnHostDrivesItToZeroOnClient` loopback test.
+5. `netsim blackout 10` (or an actual network drop) on the client mid-session with the transacted
+   store's depletion already converged, reconnect, confirm the stock stays exactly as converged
+   (no doubling, no reset) — matching `ReconnectResyncLeavesUntransactedStoresAlone`'s "transacted
+   store" half. Separately, confirm a THIRD store neither instance ever opened stays silently
+   unknown to both (no crash, no log line) — matching this doc's own pre-existing §5 risk 1.
+6. An infinite-stock `buy` — confirm the store's own on-screen stock count for that resref is
+   IDENTICAL before and after (§1.5's own engine guarantee), and no `store: local add/remove...
+   detected` log line appears for it.
+7. `store_sync` stays OFF in `coop.ini`/`docs/CONFIG.md` regardless of this live pass's outcome —
+   flipping the shipped default is a separate decision this document's own established discipline
+   (a full, clean multi-round live pass, not one) still gates.
